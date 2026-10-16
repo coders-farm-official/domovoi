@@ -49,7 +49,8 @@
 #   4. Re-sync the venv the LINUX_HOST.md way if pyproject.toml or a
 #      requirements lock changed: through pip's resolver, as before the
 #      lock existed, unless DOMOVOI_USE_LOCK=1; then from the hash-pinned
-#      requirements-linux-py314.lock when the checkout has one for the
+#      requirements-linux-py314.lock (and requirements-linux-py314-no-deps.lock,
+#      installed --no-deps) when the checkout has one for the
 #      venv's Python, otherwise through the resolver as a `warn` step
 #      ("lock not applied: <why>", shown on the Version card). After a
 #      re-sync, packages a release stopped using are uninstalled
@@ -163,6 +164,12 @@ USE_LOCK=${DOMOVOI_USE_LOCK:-0}
 # The hash-pinned production lock, relative to the checkout
 # (sync_deps_locked). Empty: never use one, always the resolver.
 DEPS_LOCK=${DOMOVOI_DEPS_LOCK-requirements-linux-py314.lock}
+# Beside it, the packages installed without their declared dependencies
+# (faster-whisper, resemblyzer: requirements-no-deps.in says why), pinned
+# and hashed by the same compile. A checkout from before 2026-10-15 has
+# neither file; then that step is skipped.
+DEPS_NODEPS_LOCK=${DOMOVOI_DEPS_NODEPS_LOCK-requirements-linux-py314-no-deps.lock}
+NODEPS_REQS=requirements-no-deps.in
 # The extras that lock was compiled with (scripts/linux/compile-linux-lock.sh).
 LOCK_EXTRAS=real-clients,voice-profile
 UPDATE_DIR=${DOMOVOI_UPDATE_DIR:-/var/lib/domovoi-update}
@@ -264,7 +271,7 @@ FREEZE_FILE=$UPDATE_DIR/pip-freeze-pre.txt
 
 # What counts as "the dependencies changed" / "the MPD image changed".
 # Git pathspecs, relative to the repo root.
-DEPS_PATHS=(pyproject.toml 'requirements*.lock' 'plugins/*/requirements*.lock')
+DEPS_PATHS=(pyproject.toml 'requirements*.lock' 'requirements*.in' 'plugins/*/requirements*.lock')
 MPD_PATHS=(domovoi/Dockerfile.mpd domovoi/mpd.conf)
 # The compose file whose `image:` pins decide what domovoi-db (and the
 # search helper) pull: a moved digest is a download.
@@ -1461,6 +1468,9 @@ sync_deps_locked() {
   rm -f "$reqs"
   [ "$rc" -eq 0 ] || return 1
   (cd "$REPO_DIR" && pip_as install --require-hashes --no-build-isolation -r "$lock") || return 1
+  if [ -n "$DEPS_NODEPS_LOCK" ] && as_user test -f "$REPO_DIR/$DEPS_NODEPS_LOCK"; then
+    (cd "$REPO_DIR" && pip_as install --require-hashes --no-deps -r "$REPO_DIR/$DEPS_NODEPS_LOCK") || return 1
+  fi
   (cd "$REPO_DIR" && pip_as install --no-deps --no-build-isolation -e .) || return 1
   DEPS_FROM_LOCK=1
   STEP_DETAIL="installed from $DEPS_LOCK, every package hash-checked"
@@ -1474,15 +1484,20 @@ sync_deps_locked() {
 
 # Without a usable lock: CPU torch first when the extras pull torch in (so
 # pip never fetches the CUDA build), then the editable install with the
-# extras. resemblyzer is not re-run: pyproject doesn't declare it, so no
-# pyproject change can require it (the lock does carry it).
+# extras, then (with real-clients or voice-profile) faster-whisper and
+# resemblyzer without their declared dependencies, as requirements-no-deps.in
+# lists them.
 sync_deps_resolved() {
   local target=.
   if [ -n "$TORCH_INDEX_URL" ] && [[ ",$PIP_EXTRAS," == *,voice-profile,* ]]; then
     (cd "$REPO_DIR" && pip_as install torch --index-url "$TORCH_INDEX_URL") || return 1
   fi
   if [ -n "$PIP_EXTRAS" ]; then target=".[$PIP_EXTRAS]"; fi
-  (cd "$REPO_DIR" && pip_as install -e "$target")
+  (cd "$REPO_DIR" && pip_as install -e "$target") || return 1
+  if [[ ",$PIP_EXTRAS," == *,real-clients,* || ",$PIP_EXTRAS," == *,voice-profile,* ]] \
+    && [ -f "$REPO_DIR/$NODEPS_REQS" ]; then
+    (cd "$REPO_DIR" && pip_as install --no-deps -r "$NODEPS_REQS") || return 1
+  fi
 }
 
 # ─── Packages a release stopped using ────────────────────────────────────

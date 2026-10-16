@@ -22,7 +22,7 @@ consumes_optional = []                     # detection→download degrades if no
 # No `python` pins and no lockfile: the bundled radio plugin runs in the
 # core's own interpreter and is loaded from the checkout, never through pip.
 # Its heavy dependencies are imported lazily and degrade when absent; they
-# come from the core's extras (`fingerprint` for numpy/scipy/librosa,
+# come from the core's extras (`fingerprint` for numpy/scipy; ffmpeg decodes,
 # `shazam` for shazamio) and the core's requirements.lock. httpx is a core
 # dependency. See docs/PLUGIN_DEVELOPMENT.md §5.1.
 system = [

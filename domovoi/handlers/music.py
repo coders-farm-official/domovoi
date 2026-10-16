@@ -1357,7 +1357,7 @@ class MusicHandler(MusicChoiceMixin, Handler):
         Raises ``_PlayerUnreachable`` when the queue read itself fails: the
         client answers a refused ``playlistinfo`` with an empty list, so a
         raise here is the connection — refused, or a frozen daemon that
-        never sends its hello (python-mpd2 gives up after 5 s)."""
+        never sends its hello (the MPD client gives up after 5 s)."""
         try:
             mpd = get_mpd_client_for(room_id)
         except MPDNotProvisioned:

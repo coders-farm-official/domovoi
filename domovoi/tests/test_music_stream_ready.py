@@ -233,7 +233,7 @@ async def test_a_stream_that_never_opens_is_bounded(real_mode) -> None:
 
 async def test_a_daemon_that_never_answers_is_bounded_too(real_mode) -> None:
     """A frozen container: its control port accepts and MPD says nothing
-    (python-mpd2 waits 5 s for the hello, and has no bound at all on a
+    (the MPD client waits 5 s for the hello, and has no bound at all on a
     command after it). The music_start must not wait past the budget for
     it — measured on a paused real container before this bound: 5.0 s."""
 

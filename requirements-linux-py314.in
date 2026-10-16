@@ -8,17 +8,25 @@
 # scripts/linux/apply-update.sh, sync_deps). Regenerate it with
 # scripts/linux/compile-linux-lock.sh, which runs pip-compile in a pinned
 # python:3.14-slim container so the resolver sees Linux and Python 3.14
-# whatever machine you run it on, and commit both files together.
+# whatever machine you run it on, and commit the files together: this one,
+# the lock, and requirements-linux-py314-no-deps.lock (written beside it).
 
-# The speaker encoder behind voice profiles (domovoi/clients/voice_embedder.py).
-# pyproject does not declare it (its webrtcvad pin has no Windows wheels);
-# on Linux it installs normally, so the production lock carries it.
-resemblyzer>=0.1.4
+# The speaker encoder's weights (resemblyzer) and faster-whisper are not
+# here: they are installed without their declared dependencies, from
+# requirements-linux-py314-no-deps.lock, which compile-linux-lock.sh writes
+# from requirements-no-deps.in (PyAV, librosa, soxr, soundfile: LGPL
+# libraries Domovoi doesn't use).
+
+# The bundled radio plugin's fingerprinter (pyproject's fingerprint extra:
+# numpy and scipy). librosa brought scipy until 2026-10-15; listed here so
+# a Linux server keeps fingerprinting radio samples.
+scipy>=1.11
 
 # The build backend: of this project (pip install --no-deps -e .) and of the
 # few pins that publish only an sdist. The install builds them with
 # --no-build-isolation against this hash-checked copy, so no build step
-# downloads an unchecked setuptools of its own. Below 82: webrtcvad (under
-# resemblyzer) imports pkg_resources, which setuptools 82 removed.
+# downloads an unchecked setuptools of its own. Below 82: webrtcvad, which
+# imports pkg_resources (gone in setuptools 82), was built this way until
+# 2026-10-15; the bound stays until a lock is tested with 82.
 setuptools>=68,<82
 wheel>=0.43

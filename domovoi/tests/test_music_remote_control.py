@@ -256,7 +256,7 @@ async def test_the_queue_place_is_read_by_songid_then_by_position() -> None:
 
 
 class _Frozen(MPDStubClient):
-    """A room's MPD that never answers: refused, or frozen so python-mpd2
+    """A room's MPD that never answers: refused, or frozen so the MPD client
     gives up on its hello after 5 s. Each attempt is logged — live, each
     one is another 5 s before the room hears anything."""
 
@@ -366,7 +366,7 @@ async def test_the_stub_walks_its_queue() -> None:
 
 
 class _Daemon:
-    """python-mpd2's asyncio client as RealMPDClient uses it, logging."""
+    """The MPD protocol client as RealMPDClient uses it, logging."""
 
     def __init__(self, state: str) -> None:
         self.state = state

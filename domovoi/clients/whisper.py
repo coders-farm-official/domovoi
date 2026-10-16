@@ -7,6 +7,16 @@ Input contract: PCM bytes (16 kHz mono 16-bit). The WebSocket ingestion
 path produces this format directly; other callers can pass a WAV via the
 convenience `transcribe_wav_bytes` entrypoint.
 
+faster-whisper is handed the audio as a float32 array (the 16-bit samples
+scaled by 1/32768, what its own decoder made of the temporary WAV this
+used to write), so it never decodes a file and PyAV (``av``, which bundles
+FFmpeg's libraries) is not needed: since 2026-10-15 faster-whisper is
+installed without it (requirements-no-deps.in). faster-whisper still
+imports ``av`` when it loads; :func:`import_faster_whisper` stands in a
+placeholder module when PyAV is absent, and that placeholder fails loudly
+if anything ever reaches for it. A WAV in another format is converted by
+the system ``ffmpeg``, run as its own program.
+
 On an English-only (``.en``) model, a capture of up to
 :data:`SHORT_WINDOW_MAX_AUDIO_SEC` — every spoken command — is decoded on a
 :data:`SHORT_WINDOW_SEC` window by :class:`ShortWindowDecoder`, calling
@@ -36,14 +46,19 @@ that says so.
 from __future__ import annotations
 
 import asyncio
+import importlib.machinery
+import importlib.util
+import io
 import logging
 import os
-import tempfile
+import shutil
+import subprocess
+import sys
 import time
+import types
 import wave
 import zlib
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Callable, Protocol
 
 import numpy as np
@@ -446,6 +461,7 @@ class ShortWindowDecoder:
                 "short-window decoding is for English-only (.en) models; a "
                 "multilingual model keeps the 30 s window"
             )
+        import_faster_whisper()
         from faster_whisper.tokenizer import Tokenizer
 
         fe = whisper_model.feature_extractor
@@ -515,6 +531,66 @@ def _ctranslate2_version() -> str:
         return "unknown"
 
 
+def _no_pyav_module() -> types.ModuleType:
+    """A stand-in for PyAV: importable, and every use of it raises."""
+    mod = types.ModuleType("av")
+    mod.__spec__ = importlib.machinery.ModuleSpec("av", None)
+
+    def __getattr__(name: str) -> Any:
+        # AttributeError, not ImportError: code that walks sys.modules
+        # probes modules with getattr(mod, "__file__", None) and the like.
+        raise AttributeError(
+            f"av.{name}: PyAV is not installed. Domovoi gives faster-whisper "
+            "audio arrays, never files, so nothing should reach for it"
+        )
+
+    mod.__getattr__ = __getattr__  # type: ignore[method-assign]
+    return mod
+
+
+def import_faster_whisper() -> Any:
+    """``faster_whisper``, imported without PyAV. Its audio module imports
+    ``av`` at load time but uses it only to decode a file or a file-like
+    object, which Domovoi never passes (:func:`pcm_to_float32`). With PyAV
+    installed (an older install keeps it) the real one is used."""
+    if importlib.util.find_spec("av") is None:      # absent, or blocked (None in sys.modules)
+        sys.modules["av"] = _no_pyav_module()
+    import faster_whisper
+
+    return faster_whisper
+
+
+def pcm_to_float32(pcm_bytes: bytes) -> np.ndarray:
+    """16 kHz mono int16 PCM as the float32 array faster-whisper decodes
+    audio to: each sample / 32768."""
+    return np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+
+
+def wav_to_float32(wav_bytes: bytes) -> np.ndarray:
+    """A WAV file's audio as 16 kHz mono float32. A 16 kHz mono 16-bit WAV
+    is read directly; anything else is converted to that by ``ffmpeg``
+    (channels averaged, resampled, then the same 1/32768 scaling), which
+    is what faster-whisper's own decoder did with PyAV."""
+    try:
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+            if (wf.getframerate(), wf.getnchannels(), wf.getsampwidth()) == (SAMPLE_RATE, 1, SAMPLE_WIDTH_BYTES):
+                return pcm_to_float32(wf.readframes(wf.getnframes()))
+    except (wave.Error, EOFError):
+        pass                               # not plain PCM (float, extensible ...): ffmpeg reads it
+    exe = shutil.which("ffmpeg")
+    if exe is None:
+        raise RuntimeError("this WAV is not 16 kHz mono 16-bit, and converting it needs ffmpeg on PATH")
+    proc = subprocess.run(
+        [exe, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
+         "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "s16le", "pipe:1"],
+        input=wav_bytes, capture_output=True, timeout=120,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError("ffmpeg could not read the WAV: "
+                           + (proc.stderr or b"").decode("utf-8", "replace").strip()[-200:])
+    return pcm_to_float32(proc.stdout)
+
+
 class FasterWhisperClient:
     """Wraps `faster_whisper.WhisperModel` with an async interface.
 
@@ -527,7 +603,7 @@ class FasterWhisperClient:
 
     def __init__(self, model: str, device: str, compute_type: str) -> None:
         # Import lazily so USE_STUBS=true doesn't require faster-whisper installed.
-        from faster_whisper import WhisperModel
+        WhisperModel = import_faster_whisper().WhisperModel
 
         # CPU threads only on a cpu device (whisper_cpu_threads). On cuda
         # the argument is left out, exactly as before, so a GPU host loads
@@ -665,29 +741,13 @@ class FasterWhisperClient:
         return self._transcribe_full_sync(pcm_bytes), FULL_WINDOW_SEC
 
     def _transcribe_full_sync(self, pcm_bytes: bytes) -> str:
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            tmp = f.name
-            with wave.open(f, "wb") as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(SAMPLE_WIDTH_BYTES)
-                wf.setframerate(SAMPLE_RATE)
-                wf.writeframes(pcm_bytes)
-        try:
-            return self._run_model(tmp)
-        finally:
-            Path(tmp).unlink(missing_ok=True)
+        return self._run_model(pcm_to_float32(pcm_bytes))
 
     def _transcribe_wav_sync(self, wav_bytes: bytes) -> str:
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            tmp = f.name
-            f.write(wav_bytes)
-        try:
-            return self._run_model(tmp)
-        finally:
-            Path(tmp).unlink(missing_ok=True)
+        return self._run_model(wav_to_float32(wav_bytes))
 
-    def _run_model(self, path: str) -> str:
-        segments, _info = self._model.transcribe(path, beam_size=5)
+    def _run_model(self, audio: np.ndarray) -> str:
+        segments, _info = self._model.transcribe(audio, beam_size=5)
         return " ".join(seg.text.strip() for seg in segments).strip()
 
 

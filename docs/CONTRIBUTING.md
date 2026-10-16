@@ -1,10 +1,10 @@
 # Contributing to Domovoi
 
 Thanks for helping look after the house spirit. This guide covers setting up
-a development environment, running the tests, the code conventions the repo
-actually follows, migration discipline, what we expect from pull requests,
-how to publish a plugin, and the repository gates every change must keep
-green.
+a development environment, running the tests, which dependencies (and
+licences) we take, the code conventions the repo actually follows,
+migration discipline, what we expect from pull requests, how to publish a
+plugin, and the repository gates every change must keep green.
 
 Related reading: [Architecture](ARCHITECTURE.md) ·
 [Plugin Development](PLUGIN_DEVELOPMENT.md) ·
@@ -46,7 +46,7 @@ from `domovoi/` (where the compose file lives):
 
 ```powershell
 pip install -e ".[dev,real-clients,voice-profile]"
-pip install --no-deps resemblyzer         # Windows quirk — see below
+pip install --no-deps -r requirements-no-deps.in   # faster-whisper, resemblyzer (see below)
 cd domovoi
 docker compose up -d postgres
 docker compose run --rm flyway            # prod-DB migrations
@@ -268,6 +268,58 @@ functions get plain unit tests, handler fast-paths get regex + behavior
 tests, worker `tick()`s run against recording doubles
 (`domovoi/sdk/testing.py`), and DB-touching code uses the shared fixtures
 with per-test truncation.
+
+---
+
+## Dependencies and licences
+
+Domovoi is MIT, and an install has to stay something anyone may run, copy
+and ship: a household, the Windows installer, Coders Farm. So, for anything
+installed with Domovoi (core, dashboard, satellite, bundled plugins):
+
+* **Permissive licences only**: MIT, BSD, ISC, Apache-2.0, PSF, public
+  domain. **No GPL.** **Avoid LGPL** wherever a modest amount of our own
+  code does the job; when one can't be avoided, raise it with the
+  maintainer instead of adding it. MPL-2.0 is acceptable for third-party
+  code we use unmodified (certifi and tqdm on the server, Eigen inside the
+  phone's native libraries); never patch such files.
+* **Check the licence at the source**: the package's own LICENSE / COPYING
+  and file headers, and what its wheel bundles, not only the PyPI
+  classifier. A BSD wrapper can carry an LGPL library (soundfile ships
+  libsndfile, PyAV ships FFmpeg's libraries).
+* **Check the wheels**: cp314 manylinux x86_64 (a Linux server's Python),
+  or pure Python ([LINUX_HOST.md](LINUX_HOST.md)).
+* **An external program is not a dependency.** ffmpeg / ffprobe, mpg123 and
+  fpcalc are separate programs the OS package manager installs; Domovoi
+  runs them and links nothing. Prefer that to a Python binding of a
+  copyleft library.
+
+Replaced so far:
+
+| Package | Licence | Replaced by |
+|---|---|---|
+| mutagen | GPL-2.0-or-later | `domovoi/media_tags`, Domovoi's own tag reader (2026-10-15) |
+| python-mpd2 | LGPL-3.0-or-later | `domovoi/clients/mpd_protocol.py` (2026-10-15) |
+| lameenc | LGPL-3.0, bundles LAME | the system `ffmpeg`, run as a program (2026-10-15) |
+| librosa → soxr, soundfile | LGPL-2.1 libsoxr, libsndfile inside | numpy mel spectrogram in `domovoi/clients/speaker_encoder.py`; `ffmpeg` decode in the radio fingerprinter (2026-10-15) |
+| av (PyAV, via faster-whisper) | FFmpeg's LGPL libraries inside | audio arrays handed to faster-whisper, installed `--no-deps` (2026-10-15) |
+| piper-tts, piper-phonemize | GPL-3.0 (espeak-ng inside) | `domovoi/phonemizer` on ONNX Runtime (2026-10) |
+| edge-tts | LGPL-3.0 | dropped with the online voices (2026-10-12) |
+| Unidecode / num2words | GPL / LGPL | anyascii / `spoken_names.int_to_words` |
+
+`domovoi/tests/test_dependency_licences.py` fails if a replaced package
+comes back as an import in shipped code, a requirement or a lock pin.
+
+Installed without their declared dependencies (`requirements-no-deps.in`,
+since 2026-10-15): faster-whisper, which declares PyAV (`av`, FFmpeg's
+LGPL libraries inside) though Domovoi hands it arrays and never a file,
+and resemblyzer, which declares librosa (with soxr and soundfile:
+libsoxr and libsndfile, LGPL) though Domovoi computes the one mel
+spectrogram it needs with numpy (`domovoi/clients/speaker_encoder.py`).
+So none of PyAV, librosa, soxr or soundfile is installed. The wake-word trainer
+image (`scripts/wake_word/docker`) is a separate tool built on the server
+when training is turned on, not part of an install; its upstream training
+code uses mutagen and espeak-ng.
 
 ---
 

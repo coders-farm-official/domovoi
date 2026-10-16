@@ -2541,6 +2541,59 @@ case_lock_missing_when_opted_in_is_a_warn() {
   end_case
 }
 
+# 2026-10-15: faster-whisper and resemblyzer are installed without their
+# declared dependencies (PyAV, librosa), from the no-deps lock compiled
+# beside the main one: hash-checked, --no-deps, after the main lock (which
+# holds what they do use) and before the checkout.
+case_deps_from_the_lock_and_the_no_deps_lock() {
+  new_case deps_from_the_lock_and_the_no_deps_lock
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_linux_lock numpy==2.4.7 setuptools==81.0.0 wheel==0.48.0
+  printf 'faster-whisper==1.2.1 \\\n    --hash=sha256:%064d\n' 0 >"$REPO/requirements-linux-py314-no-deps.lock"
+  commit_all "B: a lock and a no-deps lock" >/dev/null
+  write_root_shims "$CASE/rootbin"
+  USE_LOCK=1 run_update "$CASE/rootbin"
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the no-deps lock, hash-checked, without dependencies" \
+    called "$PIP_RUN --require-hashes --no-deps -r $REPO/requirements-linux-py314-no-deps.lock"
+  check "after the main lock" before "--no-build-isolation -r $REPO/requirements-linux-py314.lock" "--no-deps -r $REPO/requirements-linux-py314-no-deps.lock"
+  check "before the checkout" before "--no-deps -r $REPO/requirements-linux-py314-no-deps.lock" "--no-deps --no-build-isolation -e ."
+  check "nothing through the resolver" not_called "requirements-no-deps.in"
+  end_case
+}
+
+# The resolver path (the default): with the production extras, the
+# editable install, then requirements-no-deps.in without dependencies; a
+# change to that file counts as a dependency change.
+case_resolved_installs_the_no_deps_requirements() {
+  new_case resolved_installs_the_no_deps_requirements
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'faster-whisper>=1.0,<2\nresemblyzer>=0.1.4\n' >"$REPO/requirements-no-deps.in"
+  local sha_b; sha_b=$(commit_all "B: no-deps requirements")
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a requirements .in change is a dependency change" eq "$(field deps_changed)" true
+  check "the extras" called "$PIP_RUN -e .[real-clients,voice-profile]"
+  check "then the no-deps requirements" called "$PIP_RUN --no-deps -r requirements-no-deps.in"
+  check "in that order" before "-e .[real-clients,voice-profile]" "--no-deps -r requirements-no-deps.in"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+case_resolved_without_speech_extras_skips_the_no_deps_requirements() {
+  new_case resolved_without_speech_extras_skips_the_no_deps_requirements
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'faster-whisper>=1.0,<2\n' >"$REPO/requirements-no-deps.in"
+  commit_all "B: no-deps requirements" >/dev/null
+  DOMOVOI_PIP_EXTRAS="" run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the bare install" called "$PIP_RUN -e ."
+  check "no speech packages" not_called "requirements-no-deps.in"
+  end_case
+}
+
 case_extras_beyond_the_lock_are_resolved_and_said_to_be() {
   new_case extras_beyond_the_lock_are_resolved_and_said_to_be
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
@@ -3529,6 +3582,9 @@ CASES=(
   case_lock_for_another_python_falls_back_loudly
   case_lock_missing_when_opted_in_is_a_warn
   case_extras_beyond_the_lock_are_resolved_and_said_to_be
+  case_deps_from_the_lock_and_the_no_deps_lock
+  case_resolved_installs_the_no_deps_requirements
+  case_resolved_without_speech_extras_skips_the_no_deps_requirements
   case_empty_deps_lock_opts_out
   case_lock_is_opt_in_and_off_by_default
   case_use_lock_other_than_1_stays_off

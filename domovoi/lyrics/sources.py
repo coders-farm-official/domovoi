@@ -22,9 +22,8 @@ LYRICS, SYNCEDLYRICS), the MP4 ``©lyr`` atom, ASF ``WM/Lyrics``, APEv2
 ``Lyrics`` — the first of them with TIMED lyrics, else the first with
 words (timed beats plain, [M1]). LRC-formatted text in a tag counts as
 timed; a SYLT frame synced by syllable or word (the ID3 way: a newline in
-front of the first syllable of each line) is read line by line. mutagen
-is optional (the ``real-clients`` extra): without it this source yields
-nothing.
+front of the first syllable of each line) is read line by line. The tags
+are read by Domovoi's own reader, ``domovoi.media_tags``.
 
 Everything here reads; nothing writes, renames or deletes a file. Every
 function is blocking (the scan runs them in a worker thread) and never
@@ -42,6 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Sequence
 
+from domovoi import media_tags
 from domovoi.handlers.shared.spoken_names import alias_key, split_credit
 from domovoi.lyrics.lrc import (
     EMPTY,
@@ -65,6 +65,8 @@ AUDIO_EXTENSIONS: frozenset[str] = frozenset(_AUDIO_EXTENSIONS)
 VORBIS_LYRIC_KEYS = ("LYRICS", "UNSYNCEDLYRICS", "UNSYNCED LYRICS", "SYNCEDLYRICS")
 #: SYLT timestamp format 2: absolute milliseconds (1 = MPEG frames, ignored).
 SYLT_MILLISECONDS = 2
+#: An APEv2 item holding text (1 is binary, 2 an external link).
+APE_TEXT = 0
 
 
 # ─── Names ────────────────────────────────────────────────────────────────
@@ -468,30 +470,22 @@ def _asf_candidates(tags: Any) -> Iterator[EmbeddedLyrics | None]:
 
 
 def _ape_candidates(tags: Any) -> Iterator[EmbeddedLyrics | None]:
-    from mutagen.apev2 import TEXT
-
-    value = tags.get("Lyrics")
-    if value is not None and getattr(value, "kind", None) == TEXT:
-        yield _from_text("APE Lyrics", "\n".join(str(v) for v in value))
+    value = tags.item("Lyrics")
+    if value is not None and value.kind == APE_TEXT:
+        yield _from_text("APE Lyrics", "\n".join(str(v) for v in value.values))
 
 
 def _candidates(tags: Any) -> Iterator[EmbeddedLyrics | None]:
     """[E3]: every place lyrics may sit in ``tags``, in order."""
-    from mutagen._vorbis import VComment
-    from mutagen.apev2 import APEv2
-    from mutagen.asf import ASFTags
-    from mutagen.id3 import ID3
-    from mutagen.mp4 import MP4Tags
-
-    if isinstance(tags, ID3):
+    if isinstance(tags, media_tags.ID3Tags):
         yield from _id3_candidates(tags)
-    elif isinstance(tags, VComment):
+    elif isinstance(tags, media_tags.VorbisTags):
         yield from _vorbis_candidates(tags)
-    elif isinstance(tags, MP4Tags):
+    elif isinstance(tags, media_tags.MP4Tags):
         yield from _mp4_candidates(tags)
-    elif isinstance(tags, ASFTags):
+    elif isinstance(tags, media_tags.ASFTags):
         yield from _asf_candidates(tags)
-    elif isinstance(tags, APEv2):
+    elif isinstance(tags, media_tags.APETags):
         yield from _ape_candidates(tags)
 
 
@@ -518,12 +512,8 @@ def read_embedded(path: str | os.PathLike[str], *, track_id: int | None = None) 
     never raises — a problem is logged at DEBUG as its exception type and
     the track id."""
     try:
-        import mutagen
-    except ImportError:
-        return None
-    try:
-        f = mutagen.File(os.fspath(path))
-        tags = getattr(f, "tags", None) if f is not None else None
+        f = media_tags.read(path)
+        tags = f.tags if f is not None else None
         if tags is None:
             return None
         return best_candidate(_candidates(tags))

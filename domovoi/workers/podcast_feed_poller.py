@@ -321,24 +321,24 @@ async def enforce_keep_n(session, subscription_id: int, keep_n: int) -> int:
 
 
 def _read_id3_chapters(path: Path) -> list[dict[str, Any]] | None:
-    """ID3 CHAP frames → ordered chapter list. Best-effort via mutagen."""
+    """ID3 CHAP frames → ordered chapter list (``domovoi.media_tags``);
+    a chapter's title is its TIT2 sub-frame. Best-effort: None when the
+    file has no ID3 tag or no chapters."""
+    from domovoi import media_tags
+
     try:
-        from mutagen.id3 import ID3
-    except ImportError:
-        return None
-    try:
-        tags = ID3(str(path))
+        tags = media_tags.read_id3(path)
     except Exception:
+        return None
+    if tags is None:
         return None
     chaps = []
     for frame in tags.getall("CHAP"):
         title = ""
-        for sub in getattr(frame, "sub_frames", {}).values() if hasattr(frame, "sub_frames") else []:
-            if getattr(sub, "FrameID", "") == "TIT2":
-                title = str(sub.text[0]) if sub.text else ""
-        start_ms = getattr(frame, "start_time", None)
-        if start_ms is not None:
-            chaps.append({"title": title, "start_sec": int(start_ms / 1000)})
+        for sub in frame.sub_frames:
+            if sub.id == "TIT2":
+                title = str(sub.text[0]) if getattr(sub, "text", None) else ""
+        chaps.append({"title": title, "start_sec": int(frame.start_time / 1000)})
     chaps.sort(key=lambda c: c["start_sec"])
     return chaps or None
 

@@ -21,9 +21,12 @@ share every algorithm parameter (FFT size, peak threshold, target
 zone). Drift between the two silently kills match rates — keep them
 coupled.
 
-Heavy imports (numpy, scipy, librosa) are deferred to function bodies;
-absence is handled by returning empty/None so the sampler degrades to
-online-identify-only without an exception.
+Heavy imports (numpy, scipy) are deferred to function bodies; absence is
+handled by returning empty/None so the sampler degrades to
+online-identify-only without an exception. Audio is decoded to 16 kHz mono
+by the system ``ffmpeg`` (a required tool of this plugin), run as its own
+program in a worker thread; until 2026-10-15 it was ``librosa.load``, whose
+import brings soxr and soundfile (LGPL libraries) and numba.
 
 DB access notes: ``track_fingerprints`` is schema-qualified as
 ``plugin_radio.*`` so these helpers work on ANY session regardless of
@@ -35,7 +38,10 @@ read can't violate the "plugins never DDL/write core tables" policy.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -130,9 +136,9 @@ class FingerprintIdentity:
 
 async def fingerprint_file(file_path: str | Path) -> list[FingerprintRow]:
     """Compute landmark hashes for one audio file. Empty list on any
-    failure (missing scipy/librosa, unreadable file, audio too short)."""
+    failure (missing numpy/scipy/ffmpeg, unreadable file, audio too short)."""
     try:
-        samples = _load_audio_to_mono_16k(Path(file_path))
+        samples = await asyncio.to_thread(_load_audio_to_mono_16k, Path(file_path))
     except _DepMissingError as e:
         log.debug("fingerprint deps missing for %s: %s", file_path, e)
         return []
@@ -165,7 +171,7 @@ async def match_sample(
     ``min_confidence`` (callers pass
     ``config.fingerprinter_match_threshold``), else ``None``."""
     try:
-        samples = _load_audio_to_mono_16k(Path(wav_path))
+        samples = await asyncio.to_thread(_load_audio_to_mono_16k, Path(wav_path))
     except _DepMissingError as e:
         log.debug("match_sample deps missing: %s", e)
         return None
@@ -252,30 +258,47 @@ async def match_sample(
 
 
 class _DepMissingError(Exception):
-    """numpy/scipy/librosa not importable — 'fingerprinting unavailable',
-    explicitly traceable to this subsystem."""
+    """numpy/scipy not importable or ffmpeg not on PATH — 'fingerprinting
+    unavailable', explicitly traceable to this subsystem."""
+
+
+# Cap library tracks at ~5 min to bound CPU. Longer tracks still match —
+# radio samples come from the middle of songs anyway.
+_MAX_DECODE_SEC = 300
+_DECODE_TIMEOUT_SEC = 120.0
 
 
 def _load_audio_to_mono_16k(file_path: Path) -> "Any":
-    """Decode an audio file to a mono 16 kHz float32 array; None for
-    unreadable files."""
+    """Decode an audio file to a mono 16 kHz float32 array (the first
+    :data:`_MAX_DECODE_SEC` seconds) with ffmpeg: channels averaged,
+    resampled by ffmpeg's resampler, 16-bit samples scaled by 1/32768.
+    None for a file that isn't there or that ffmpeg can't decode. Blocking
+    — the callers run it in a worker thread."""
     try:
-        import librosa  # type: ignore[import]
         import numpy as np  # type: ignore[import]
     except ImportError as e:
         raise _DepMissingError(str(e)) from e
+    exe = shutil.which("ffmpeg")
+    if exe is None:
+        raise _DepMissingError("ffmpeg is not on PATH")
 
     if not file_path.exists():
         return None
-    samples, _ = librosa.load(
-        str(file_path),
-        sr=_SAMPLE_RATE,
-        mono=True,
-        # Cap library tracks at ~5 min to bound CPU. Longer tracks still
-        # match — radio samples come from the middle of songs anyway.
-        duration=300.0,
-    )
-    return samples.astype(np.float32, copy=False)
+    try:
+        proc = subprocess.run(
+            [exe, "-nostdin", "-hide_banner", "-loglevel", "error",
+             "-t", str(_MAX_DECODE_SEC), "-i", str(file_path),
+             "-vn", "-ac", "1", "-ar", str(_SAMPLE_RATE), "-f", "f32le", "pipe:1"],
+            capture_output=True, timeout=_DECODE_TIMEOUT_SEC,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log.debug("ffmpeg decode failed for %s: %s", file_path, e)
+        return None
+    if proc.returncode != 0:
+        log.debug("ffmpeg could not decode %s: %s", file_path,
+                  (proc.stderr or b"").decode("utf-8", "replace").strip()[-200:])
+        return None
+    return np.frombuffer(proc.stdout, dtype=np.float32).copy()
 
 
 def _hash_samples(samples: "Any") -> list[FingerprintRow]:

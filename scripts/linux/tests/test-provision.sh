@@ -167,6 +167,12 @@ setuptools==81.0.0 \
     --hash=sha256:33
     # via -r requirements-linux-py314.in
 LOCK
+  cat >"$o/requirements-linux-py314-no-deps.lock" <<'LOCK'
+# Installed with --no-deps (requirements-no-deps.in says why).
+faster-whisper==1.2.1 \
+    --hash=sha256:44
+    # via -r requirements-no-deps.in
+LOCK
   printf '[project]\nname = "domovoi"\n' >"$o/pyproject.toml"
   printf 'FROM debian:bookworm-slim\n' >"$o/domovoi/Dockerfile.mpd"
   printf 'services: {}\n' >"$o/domovoi/docker-compose.yml"
@@ -189,6 +195,11 @@ LOCK
   git -C "$o" checkout -q -b no-wheel-lock
   sed -i '/^wheel==/,/# via/d' "$o/requirements-linux-py314.lock"
   git -C "$o" commit -q -am "lock without wheel"
+  git -C "$o" checkout -q main
+  # A branch without the no-deps lock (faster-whisper, resemblyzer).
+  git -C "$o" checkout -q -b no-nodeps-lock
+  git -C "$o" rm -q requirements-linux-py314-no-deps.lock
+  git -C "$o" commit -q -m "no no-deps lock"
   git -C "$o" checkout -q main
   # A branch not on main's history.
   git -C "$o" checkout -q --orphan elsewhere
@@ -976,7 +987,11 @@ case_help_and_usage_errors() {
 
 # The install's import check names only what the release installs: the
 # Microsoft Edge voices' edge-tts and its MP3 decoder miniaudio were
-# dropped on 2026-10-12, so a fresh venv without them must pass it.
+# dropped on 2026-10-12; mutagen (GPL), python-mpd2 and lameenc (LGPL) on
+# 2026-10-15 (domovoi/media_tags reads the tags, domovoi/clients/mpd_protocol.py
+# speaks to MPD, the system ffmpeg encodes the clips), and librosa and PyAV
+# with them (faster-whisper and resemblyzer installed --no-deps), so a fresh
+# venv without them must pass it.
 case_import_check_names_no_dropped_package() {
   new_case import_check_names_no_dropped_package
   local mods
@@ -984,6 +999,12 @@ case_import_check_names_no_dropped_package() {
   check "found the import check" grep -qF '"onnxruntime"' <<<"$mods"
   check "no edge_tts" eq "$(grep -c 'edge_tts' <<<"$mods")" 0
   check "no miniaudio" eq "$(grep -c 'miniaudio' <<<"$mods")" 0
+  check "no mutagen" eq "$(grep -c 'mutagen' <<<"$mods")" 0
+  check "no librosa" eq "$(grep -c 'librosa' <<<"$mods")" 0
+  check "resemblyzer is not imported (its package imports librosa)" eq "$(grep -c '"resemblyzer"' <<<"$mods")" 0
+  check "faster-whisper only through Domovoi's import (no PyAV)" eq "$(grep -c '"faster_whisper"' <<<"$mods")" 0
+  check "no python-mpd2" eq "$(grep -c '"mpd"' <<<"$mods")" 0
+  check "no lameenc" eq "$(grep -c 'lameenc' <<<"$mods")" 0
   end_case
 }
 
@@ -1121,7 +1142,11 @@ case_full_run_wsl() {
   check "no install option before the subcommand" not_called "--progress-bar off install"
   check "pip's progress bar off through the environment" called "PIP_PROGRESS_BAR=off"
   check "every pin, hash-checked" called "install --require-hashes --no-build-isolation -r requirements-linux-py314.lock"
+  check "faster-whisper and resemblyzer hash-checked, without their deps" \
+    called "install --require-hashes --no-deps -r requirements-linux-py314-no-deps.lock"
+  check "after the lock" before "--no-build-isolation -r requirements-linux-py314.lock" "--no-deps -r requirements-linux-py314-no-deps.lock"
   check "domovoi itself, no deps" called "install --no-deps --no-build-isolation -e ."
+  check "domovoi last" before "--no-deps -r requirements-linux-py314-no-deps.lock" "--no-deps --no-build-isolation -e ."
   # .env
   local envf=$CHECKOUT/domovoi/.env
   check ".env: internet answer" has_line "$envf" "INTERNET_ACCESS=always"
@@ -1395,6 +1420,17 @@ case_lock_without_build_tools_stops() {
   check "venv failed" eq "$(state_of venv)" fail
   check "says why" said "has no hash-pinned setuptools and wheel to build with"
   check "pip never ran an install" not_called "-m pip --disable-pip-version-check --no-input install"
+  end_case
+}
+
+case_lock_without_the_no_deps_lock_stops() {
+  new_case lock_without_the_no_deps_lock_stops
+  run_prov "${wsl_args[@]}" --ref no-nodeps-lock --skip-models
+  check "exit 1" eq "$RC" 1
+  check "venv failed" eq "$(state_of venv)" fail
+  check "says why" said "the checkout has no requirements-linux-py314-no-deps.lock"
+  check "the main lock went in first" called "install --require-hashes --no-build-isolation -r requirements-linux-py314.lock"
+  check "domovoi itself never did" not_called "install --no-deps --no-build-isolation -e ."
   end_case
 }
 
@@ -2594,6 +2630,7 @@ case_gpu_runtime_helper_interface() {
 CASES=(
   case_help_and_usage_errors
   case_import_check_names_no_dropped_package
+  case_lock_without_the_no_deps_lock_stops
   case_harness_vars_need_each_other
   case_not_root_refuses
   case_dry_run_changes_nothing

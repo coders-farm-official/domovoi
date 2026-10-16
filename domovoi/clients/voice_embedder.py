@@ -83,12 +83,13 @@ class RealVoiceEmbedder:
         with self._load_lock:
             if self._encoder is not None:
                 return
-            # Imported lazily so USE_STUBS=true can run without the heavy
-            # resemblyzer + librosa stack installed.
-            from resemblyzer import VoiceEncoder
+            # Imported lazily so USE_STUBS=true can run without torch.
+            # Resemblyzer's encoder and weights, without librosa (soxr,
+            # soundfile): domovoi/clients/speaker_encoder.py, 2026-10-15.
+            from domovoi.clients.speaker_encoder import SpeakerEncoder
 
             log.info("loading Resemblyzer VoiceEncoder (one-time)")
-            self._encoder = VoiceEncoder()
+            self._encoder = SpeakerEncoder()
 
     async def preload(self) -> bool:
         """Load the encoder and run it once on a short silence, in a worker

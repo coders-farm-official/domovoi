@@ -424,6 +424,9 @@ OLLAMA_API=http://127.0.0.1:11434
 CORE_HEALTH_URL=http://127.0.0.1:6370/v1/health
 WEB_HEALTH_URL=http://127.0.0.1:6369/api/health
 LOCK_NAME=requirements-linux-py314.lock
+# faster-whisper and resemblyzer, installed without their declared
+# dependencies (requirements-no-deps.in says why).
+NODEPS_LOCK_NAME=requirements-linux-py314-no-deps.lock
 
 # ─── Options ─────────────────────────────────────────────────────────────
 
@@ -1695,25 +1698,39 @@ pip_svc() { svc_py -m pip --disable-pip-version-check --no-input "$@"; }
 
 inputs_venv() {
   file_sig "$CHECKOUT/$LOCK_NAME"
+  file_sig "$CHECKOUT/$NODEPS_LOCK_NAME"
   file_sig "$CHECKOUT/pyproject.toml"
   system_python
   echo "$CHECKOUT $SVC_USER"
 }
-check_venv() { [ -x "$VENV_PY" ] && svc_py -c 'import domovoi.config, fastapi, faster_whisper' >/dev/null 2>&1; }
-plan_venv() { echo "venv $CHECKOUT/.venv; pip install --require-hashes from $LOCK_NAME (three installs, docs/LINUX_HOST.md Install)"; }
+check_venv() { [ -x "$VENV_PY" ] && svc_py -c 'import domovoi.config, fastapi; from domovoi.clients.whisper import import_faster_whisper; import_faster_whisper()' >/dev/null 2>&1; }
+plan_venv() { echo "venv $CHECKOUT/.venv; pip install --require-hashes from $LOCK_NAME and $NODEPS_LOCK_NAME (four installs, docs/LINUX_HOST.md Install)"; }
 
 PY_IMPORT_CHECK='#provision:import-check
 import importlib, sys
 mods = ["fastapi", "uvicorn", "sqlalchemy", "asyncpg", "pydantic_settings", "ollama",
-        "mpd", "argon2", "PIL", "psutil", "httpx", "faster_whisper", "ctranslate2",
-        "onnxruntime", "domovoi.phonemizer", "lameenc", "mutagen", "acoustid",
-        "feedparser", "librosa", "torch", "resemblyzer", "domovoi.config"]
+        "argon2", "PIL", "psutil", "httpx", "ctranslate2",
+        "onnxruntime", "domovoi.phonemizer", "acoustid",
+        "feedparser", "torch", "scipy", "domovoi.config",
+        "domovoi.clients.whisper", "domovoi.clients.speaker_encoder"]
 bad = []
 for m in mods:
     try:
         importlib.import_module(m)
     except Exception as e:
         bad.append("%s: %s" % (m, e))
+# faster-whisper, without PyAV; the speaker encoder weights, without
+# importing resemblyzer (whose package imports librosa).
+try:
+    from domovoi.clients.whisper import import_faster_whisper
+    import_faster_whisper().WhisperModel
+except Exception as e:
+    bad.append("faster_whisper: %s" % e)
+try:
+    from domovoi.clients.speaker_encoder import weights_path
+    weights_path()
+except Exception as e:
+    bad.append("speaker encoder weights: %s" % e)
 import torch
 if torch.version.cuda is not None:
     bad.append("torch is a CUDA build; the lock pins the +cpu wheel")
@@ -1734,8 +1751,9 @@ do_venv() {
     log "created $CHECKOUT/.venv"
   fi
   # docs/LINUX_HOST.md "Install from the hash-pinned lock": the build tools
-  # from the lock, every pin (sdist-only ones built with those tools), then
-  # Domovoi itself and nothing else. The build tools go in as their own
+  # from the lock, every pin (sdist-only ones built with those tools), the
+  # no-deps lock's packages without their dependencies, then Domovoi itself
+  # and nothing else. The build tools go in as their own
   # stanzas of the lock (name==version and every --hash) in a requirements
   # file: the pip that Ubuntu 26.04's venv ships (25.1) takes no hashes
   # from a constraints file, so "-c <lock> setuptools wheel" is refused
@@ -1758,6 +1776,10 @@ do_venv() {
   rm -f "$reqs"
   emit_frac 100 "Installing the locked packages (CPU torch, Whisper, ONNX Runtime, ...)"
   pip_svc install --require-hashes --no-build-isolation -r "$LOCK_NAME" || die "pip install -r $LOCK_NAME failed"
+  # faster-whisper and resemblyzer, pinned and hashed, without what they
+  # declare (PyAV, librosa: requirements-no-deps.in).
+  [ -f "$CHECKOUT/$NODEPS_LOCK_NAME" ] || die "the checkout has no $NODEPS_LOCK_NAME"
+  pip_svc install --require-hashes --no-deps -r "$NODEPS_LOCK_NAME" || die "pip install --no-deps -r $NODEPS_LOCK_NAME failed"
   emit_frac 900 "Installing Domovoi"
   pip_svc install --no-deps --no-build-isolation -e . || die "pip install -e . failed"
   svc_py -c "$PY_IMPORT_CHECK" || die "the venv does not import what the services need"

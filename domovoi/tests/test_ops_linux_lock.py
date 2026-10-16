@@ -7,8 +7,11 @@ no network, never skips.
 * The lock is pip-compile output for CPython 3.14 with a SHA-256 on every
   pin, CPU torch from PyTorch's CPU index (no CUDA runtime), and it covers
   everything a server runs: the core dependencies, the ``real-clients`` and
-  ``voice-profile`` extras, resemblyzer, and the build tools the sdist-only
-  pins are built with.
+  ``voice-profile`` extras, and the build tools the sdist-only pins are
+  built with. Beside it, ``requirements-linux-py314-no-deps.lock`` pins and
+  hashes exactly the packages of ``requirements-no-deps.in`` (faster-whisper,
+  resemblyzer), installed without their declared dependencies; neither lock
+  holds PyAV, librosa or what only they bring (2026-10-15).
 * Its pins satisfy pyproject (a pyproject change without a regenerated lock
   fails here) and stay above the advisory lines.
 * ``apply-update.sh`` and the compile script agree on the lock's name and
@@ -29,6 +32,8 @@ from packaging.version import Version
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOCK = REPO_ROOT / "requirements-linux-py314.lock"
+NODEPS_LOCK = REPO_ROOT / "requirements-linux-py314-no-deps.lock"
+NODEPS_IN = REPO_ROOT / "requirements-no-deps.in"
 LOCK_IN = REPO_ROOT / "requirements-linux-py314.in"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 APPLY_UPDATE = REPO_ROOT / "scripts" / "linux" / "apply-update.sh"
@@ -48,11 +53,11 @@ ADVISORY_FLOORS = {
 PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.-]*)==(\S+?)(?:\s*\\)?$")
 
 
-def _blocks() -> dict[str, tuple[Version, list[str]]]:
+def _blocks(lock: Path = LOCK) -> dict[str, tuple[Version, list[str]]]:
     """name -> (pinned version, its hashes)."""
     out: dict[str, tuple[Version, list[str]]] = {}
     current: str | None = None
-    for raw in LOCK.read_text(encoding="utf-8").splitlines():
+    for raw in lock.read_text(encoding="utf-8").splitlines():
         m = PIN.match(raw)
         if m:
             current = canonicalize_name(m.group(1))
@@ -109,12 +114,40 @@ def test_lock_covers_everything_a_server_runs() -> None:
         {canonicalize_name(r.name) for r in _server_requirements()} - set(blocks)
     )
     assert missing == [], f"in pyproject (core + {', '.join(LOCKED_EXTRAS)}) but not locked: {missing}"
-    # Not in pyproject, but on every server: the speaker encoder, and the
-    # build tools the sdist-only pins and `pip install -e .` build with.
-    for name in ("resemblyzer", "setuptools", "wheel"):
+    # Not in pyproject, but on every server: the build tools the sdist-only
+    # pins and `pip install -e .` build with, and scipy for the bundled
+    # radio plugin's fingerprinter (librosa brought it until 2026-10-15).
+    for name in ("setuptools", "wheel", "scipy"):
         assert name in blocks, f"{name} is not in the lock"
-    # webrtcvad (under resemblyzer) imports pkg_resources, gone in setuptools 82.
     assert blocks["setuptools"][0] < Version("82")
+
+
+def _no_deps_requirements() -> list[Requirement]:
+    reqs = []
+    for line in NODEPS_IN.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            reqs.append(Requirement(line))
+    return reqs
+
+
+def test_the_no_deps_lock_pins_exactly_the_no_deps_packages() -> None:
+    text = NODEPS_LOCK.read_text(encoding="utf-8")
+    assert "\r" not in text and "bash scripts/linux/compile-linux-lock.sh" in text
+    blocks = _blocks(NODEPS_LOCK)
+    reqs = {canonicalize_name(r.name): r for r in _no_deps_requirements()}
+    assert set(blocks) == set(reqs) == {"faster-whisper", "resemblyzer"}
+    for name, (version, hashes) in blocks.items():
+        assert hashes, f"{name} has no --hash"
+        assert reqs[name].specifier.contains(version, prereleases=True), f"{name}=={version} vs {reqs[name]}"
+    assert not set(blocks) & set(_blocks()), "a no-deps package is in the main lock too"
+
+
+@pytest.mark.parametrize("lock", [LOCK, NODEPS_LOCK], ids=["lock", "no-deps-lock"])
+def test_no_lock_holds_pyav_librosa_or_what_only_they_bring(lock: Path) -> None:
+    gone = {"av", "librosa", "soxr", "soundfile", "numba", "llvmlite",
+            "scikit-learn", "pooch", "lazy-loader", "webrtcvad", "mutagen", "python-mpd2", "lameenc"}
+    assert sorted(set(_blocks(lock)) & gone) == []
 
 
 def test_lock_pins_satisfy_pyproject() -> None:
@@ -150,6 +183,11 @@ def test_update_unit_and_compile_script_agree_on_the_lock() -> None:
     assert "--generate-hashes" in compile_sh and "--allow-unsafe" in compile_sh
     assert re.search(r"python:3\.14-slim@sha256:[0-9a-f]{64}", compile_sh), "the compile image is not pinned by digest"
     assert "requirements-linux-py314.in" in compile_sh and LOCK_IN.is_file()
+    # The no-deps lock: written by the same compile, installed by the update.
+    assert "NODEPS_LOCK=requirements-linux-py314-no-deps.lock" in compile_sh
+    assert "requirements-no-deps.in" in compile_sh and NODEPS_IN.is_file()
+    assert "DEPS_NODEPS_LOCK=${DOMOVOI_DEPS_NODEPS_LOCK-requirements-linux-py314-no-deps.lock}" in script
+    assert 'pip_as install --require-hashes --no-deps -r "$REPO_DIR/$DEPS_NODEPS_LOCK"' in script
 
 
 def test_an_update_uses_the_lock_only_when_opted_in() -> None:
@@ -176,6 +214,7 @@ def test_linux_install_docs_install_from_the_lock() -> None:
     # (test_provision_script holds the list of names to the lock).
     assert "pip install --require-hashes -r /tmp/build-tools.txt" in doc
     assert "pip install --require-hashes --no-build-isolation -r requirements-linux-py314.lock" in doc
+    assert "pip install --require-hashes --no-deps -r requirements-linux-py314-no-deps.lock" in doc
     assert "pip install --no-deps --no-build-isolation -e ." in doc
 
 

@@ -20,8 +20,12 @@ runtime artifact dir under ``~/.domovoi/`` — NOT the repo's ``satellite/``
 tree) so each satellite syncs its own voice's clips and the greeting voice
 always matches the response voice. Rendering goes through the engine-aware
 TTS client (Piper, per the voice's ``model_ref``), and the resulting
-WAV is encoded to MP3 (``lameenc``) because the Pi plays clips via
-``mpg123``.
+WAV is encoded to MP3 because the Pi plays clips via ``mpg123``. The
+encoder is the system's ``ffmpeg`` (its LAME encoder), run as a separate
+program, the way the audiobook indexer runs ``ffprobe`` — not the
+``lameenc`` Python package (LGPL, carrying LAME), which this used until
+2026-10-15. Without ``ffmpeg`` on PATH no clip is rendered and the Pi keeps
+the clips it has (its bundled greetings on a fresh install).
 
 How it works:
 
@@ -55,6 +59,8 @@ import asyncio
 import io
 import logging
 import re
+import shutil
+import subprocess
 import wave
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -163,37 +169,49 @@ def _greeting_entries(rows: list[tuple[str, str]]) -> list[tuple[str, str, str]]
     return entries
 
 
+#: How long one clip's encode may take (a clip is seconds of speech; the
+#: encode is a fraction of a second).
+_ENCODE_TIMEOUT_SEC = 60.0
+_warned_no_ffmpeg = False
+
+
 def _wav_to_mp3(wav_bytes: bytes, *, bitrate: int = 128) -> bytes | None:
-    """Encode int16 WAV bytes (what the TTS client returns) to MP3 via
-    lameenc. Returns None on empty audio or a missing/failing encoder so
-    the caller falls through to the existing (possibly stale) clip."""
-    try:
-        import lameenc
-    except ImportError:
-        log.warning("lameenc not installed; cannot encode clips to MP3")
-        return None
+    """Encode int16 WAV bytes (what the TTS client returns) to MP3 with the
+    system's ``ffmpeg`` (libmp3lame, LAME quality 2, constant ``bitrate``
+    kbps, no ID3 tag or Xing frame: the bare stream mpg123 plays). Blocking
+    — the caller runs it in a worker thread. Returns None on empty audio or
+    a missing/failing encoder so the caller falls through to the existing
+    (possibly stale) clip."""
+    global _warned_no_ffmpeg
     try:
         with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
-            nch = wf.getnchannels()
-            sr = wf.getframerate()
             sampwidth = wf.getsampwidth()
-            pcm = wf.readframes(wf.getnframes())
+            frames = wf.getnframes()
     except (wave.Error, EOFError) as e:
         log.warning("clip WAV could not be read for MP3 encode: %s", e)
         return None
-    if not pcm or sampwidth != 2:
+    if not frames or sampwidth != 2:
         return None
+    exe = shutil.which("ffmpeg")
+    if exe is None:
+        if not _warned_no_ffmpeg:
+            _warned_no_ffmpeg = True
+            log.warning("ffmpeg not found on PATH; cannot encode clips to MP3 "
+                        "(the satellites keep the clips they have)")
+        return None
+    cmd = [exe, "-hide_banner", "-loglevel", "error", "-f", "wav", "-i", "pipe:0",
+           "-vn", "-c:a", "libmp3lame", "-b:a", f"{bitrate}k", "-compression_level", "2",
+           "-id3v2_version", "0", "-write_xing", "0", "-f", "mp3", "pipe:1"]
     try:
-        enc = lameenc.Encoder()
-        enc.set_bit_rate(bitrate)
-        enc.set_in_sample_rate(sr)
-        enc.set_channels(nch)
-        enc.set_quality(2)
-        mp3 = enc.encode(pcm) + enc.flush()
-    except Exception as e:
-        log.warning("lameenc encode failed: %s", e)
+        proc = subprocess.run(cmd, input=wav_bytes, capture_output=True, timeout=_ENCODE_TIMEOUT_SEC)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log.warning("ffmpeg MP3 encode failed: %s", e)
         return None
-    return bytes(mp3) or None
+    if proc.returncode != 0:
+        err = (proc.stderr or b"").decode("utf-8", "replace").strip()[-300:]
+        log.warning("ffmpeg MP3 encode failed (exit %s): %s", proc.returncode, err)
+        return None
+    return bytes(proc.stdout) or None
 
 
 async def _synth_detailed(text: str, engine: str, model_ref: str | None) -> "SynthResult":
@@ -230,7 +248,7 @@ async def _synth_clip_mp3(
         return None
     if not result.engine:
         return None  # every rung failed: the WAV is empty
-    mp3 = _wav_to_mp3(result.wav)
+    mp3 = await asyncio.to_thread(_wav_to_mp3, result.wav)
     if mp3 is None:
         return None
     return mp3, _rendered_marker(result)

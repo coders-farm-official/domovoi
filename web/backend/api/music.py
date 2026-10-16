@@ -502,7 +502,7 @@ async def delete_track(
 
 # Audio extensions accepted for upload. Mirrors
 # domovoi/workers/library_indexer.py:_AUDIO_EXTENSIONS — the formats
-# mutagen can tag-read and the indexer will pick up. Kept as a local copy
+# domovoi.media_tags reads and the indexer will pick up. Kept as a local copy
 # so the web process doesn't import the indexer's worker chain (MPD /
 # MusicBrainz clients) just for a constant; if you add a format in the
 # indexer, add it here too.
@@ -1423,29 +1423,23 @@ def _asf_picture(raw: bytes) -> tuple[int | None, bytes] | None:
 
 
 def _embedded_pictures(path: Path) -> list[tuple[int | None, bytes]]:
-    """Every picture mutagen finds in ``path``, as ``(picture type, bytes)``
-    in file order. The type is None where the container has no such notion
-    (MP4 ``covr``, a legacy Vorbis ``COVERART``). Empty when the file has
-    none, won't parse, or mutagen isn't installed — it ships in the
-    ``[real-clients]`` extra, and the album-folder image still works
-    without it."""
-    try:
-        import mutagen
-    except ImportError:  # pragma: no cover - env without mutagen
-        return []
+    """Every picture the tag reader (``domovoi.media_tags``) finds in
+    ``path``, as ``(picture type, bytes)`` in file order. The type is None
+    where the container has no such notion (MP4 ``covr``, a legacy Vorbis
+    ``COVERART``). Empty when the file has none or won't parse; the
+    album-folder image still works then."""
+    from domovoi import media_tags
 
     try:
-        audio = mutagen.File(str(path))
+        audio = media_tags.read(path)
     except Exception:
         audio = None
-    tags = getattr(audio, "tags", None)
+    tags = audio.tags if audio is not None else None
     if tags is None:
-        # A file mutagen couldn't identify, or a format whose class carries
-        # no tags of its own (raw ADTS .aac), can still start with ID3.
+        # A file the reader couldn't identify, or one it found broken past
+        # its first bytes, can still start with a readable ID3 tag.
         try:
-            from mutagen.id3 import ID3
-
-            tags = ID3(str(path))
+            tags = media_tags.read_id3(path)
         except Exception:
             tags = None
 
@@ -1455,9 +1449,8 @@ def _embedded_pictures(path: Path) -> list[tuple[int | None, bytes]]:
         pics.append((pic.type, bytes(pic.data)))
     if tags is None:
         return pics
-    if hasattr(tags, "getall"):
-        # ID3 (mp3, wav, aiff). mutagen upgrades a v2.2 PIC frame to APIC
-        # when it loads the tag.
+    if isinstance(tags, media_tags.ID3Tags):
+        # ID3 (mp3, wav, aiff). A v2.2 PIC frame is read as APIC.
         for frame in tags.getall("APIC"):
             pics.append((frame.type, bytes(frame.data)))
         return pics
@@ -1474,12 +1467,10 @@ def _embedded_pictures(path: Path) -> list[tuple[int | None, bytes]]:
     import base64
     import binascii
 
-    from mutagen.flac import Picture
-
     for raw in _tag_values(tags, "metadata_block_picture"):
         try:
-            pic = Picture(base64.b64decode(raw))
-        except (binascii.Error, ValueError, TypeError, mutagen.MutagenError):
+            pic = media_tags.parse_picture(base64.b64decode(raw))
+        except (binascii.Error, ValueError, TypeError):
             continue
         pics.append((pic.type, bytes(pic.data)))
     for raw in _tag_values(tags, "coverart"):
@@ -1500,7 +1491,7 @@ def _read_embedded_cover(path: Path) -> tuple[bytes, str] | None:
     usable: list[tuple[int | None, bytes, str]] = []
     try:
         pictures = _embedded_pictures(path)
-    except Exception as e:  # a tag mutagen chokes on halfway through
+    except Exception as e:  # a tag the reader chokes on halfway through
         log.debug("cover: could not read embedded pictures from %s: %s", path, e)
         return None
     for ptype, data in pictures:
@@ -2068,13 +2059,9 @@ async def _read_mpd(
     """
     import asyncio
 
-    try:
-        from mpd.asyncio import MPDClient as _MPDClient  # type: ignore[import]
-    except Exception as e:
-        log.debug("python-mpd2 not importable: %s", e)
-        return "stop", None, None
+    from domovoi.clients.mpd_protocol import MPDConnection
 
-    client = _MPDClient()
+    client = MPDConnection()
     try:
         await asyncio.wait_for(client.connect(host, port), timeout=timeout)
     except Exception as e:

@@ -26,7 +26,7 @@ from domovoi.clients.mpd import MPDStubClient, RealMPDClient
 
 
 class _RecordingMPD:
-    """The python-mpd2 calls prepare_tracks makes, recorded in order.
+    """The MPD client calls prepare_tracks makes, recorded in order.
 
     ``library`` holds the titles a search can find; ``refuse_seek`` makes
     ``seek`` fail the way MPD does past the end of a file."""
