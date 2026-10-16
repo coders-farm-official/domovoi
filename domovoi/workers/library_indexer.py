@@ -46,16 +46,28 @@ Metadata strategy:
 Files are recorded under ``added_via='manual'`` so the audit trail
 distinguishes hand-placed files from provider downloads (which stamp
 ``added_via='voice'``).
+
+Never on the event loop, and never twice (2026-10-16 delta review B2):
+the walk and every tag read run in worker threads (the read in
+``domovoi.executors``' bounded ``tags`` pool), and a file whose path is
+already in ``library_tracks`` is skipped BEFORE its tags are read. An
+indexed row is never updated from the file (a changed file keeps its row,
+as it always has), so its path is all "already indexed" means, and a boot
+re-reads only the files that are new since the last one. (Before, every
+boot read every file's tags on the loop just to find each row already
+there, and one slow file could stall the core past its loop watchdog.)
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Iterable
 
 from sqlalchemy import text
 
+from domovoi import executors
 from domovoi.config import settings
 from domovoi.db.session import session_scope
 from domovoi.library_naming import parse_title_artist as _parse_title_artist
@@ -132,7 +144,8 @@ def _fallback_filename_parse(path: Path) -> tuple[str | None, str | None]:
 def _resolve_metadata_for(path: Path) -> dict[str, Any]:
     """Best-effort metadata pulled from tags first, filename fallback
     second. Always returns a dict with at least ``title`` populated
-    (worst case: the bare filename stem)."""
+    (worst case: the bare filename stem). Blocking: the indexer runs it in
+    the ``tags`` pool (:func:`read_metadata`)."""
     tags = _read_tags(path)
     title = tags.get("title")
     artist = tags.get("artist")
@@ -150,10 +163,32 @@ def _resolve_metadata_for(path: Path) -> dict[str, Any]:
     }
 
 
-async def _insert_track(session: Any, path: Path) -> bool:
+async def read_metadata(path: Path) -> dict[str, Any]:
+    """:func:`_resolve_metadata_for`, in the ``tags`` pool: off the event
+    loop, two files at a time at most."""
+    return await executors.run("tags", _resolve_metadata_for, path)
+
+
+async def _is_indexed(session: Any, path: Path) -> bool:
+    row = (await session.execute(
+        text("SELECT 1 FROM library_tracks WHERE file_path = :fp"), {"fp": str(path)},
+    )).first()
+    return row is not None
+
+
+async def _indexed_paths(session: Any) -> set[str]:
+    """Every ``file_path`` already in the library, in one query (a sweep
+    checks each file it finds against it before reading any tags)."""
+    rows = await session.execute(text("SELECT file_path FROM library_tracks"))
+    return {r[0] for r in rows}
+
+
+async def _insert_track(session: Any, path: Path, *, known_new: bool = False) -> bool:
     """INSERT one audio file into ``library_tracks``; no-op when its
-    ``file_path`` is already there. Returns True when a row was really
-    added (so callers can tell inserted from skipped).
+    ``file_path`` is already there, which is checked BEFORE the file's
+    tags are read (``known_new``: the caller just checked). Returns True
+    when a row was really added (so callers can tell inserted from
+    skipped).
 
     Split out of :func:`index_music_dir` so the bounded post-write path
     (:func:`index_paths`) writes rows exactly the way the full sweep
@@ -173,9 +208,12 @@ async def _insert_track(session: Any, path: Path) -> bool:
 
     The SELECT/WHERE-NOT-EXISTS form only calls ``nextval()`` when the
     SELECT yields a row, so the sequence advances exactly once per real
-    insert. Still uses rowcount to distinguish actual insert vs. no-op.
+    insert. Still uses rowcount to distinguish actual insert vs. no-op
+    (a row another writer added between the check and the insert).
     """
-    meta = _resolve_metadata_for(path)
+    if not known_new and await _is_indexed(session, path):
+        return False
+    meta = await read_metadata(path)
     result = await session.execute(
         text(
             """
@@ -288,6 +326,12 @@ async def index_paths(paths: Iterable[Path | str]) -> dict[str, int]:
     }
 
 
+def _audio_files(music_dir: Path) -> list[Path]:
+    """Every audio file under ``music_dir`` (blocking: a worker thread)."""
+    return [p for p in music_dir.rglob("*")
+            if p.suffix.lower() in _AUDIO_EXTENSIONS and p.is_file()]
+
+
 async def index_music_dir() -> dict[str, int]:
     """Walk ``MUSIC_DIR`` and INSERT ... ON CONFLICT DO NOTHING into
     library_tracks for every audio file. Returns counts:
@@ -310,17 +354,17 @@ async def index_music_dir() -> dict[str, int]:
 
     log.info("library indexer: walking %s", music_dir)
     scanned = inserted = skipped = errors = 0
+    found = await asyncio.to_thread(_audio_files, music_dir)
 
     async with session_scope() as session:
-        for path in music_dir.rglob("*"):
-            if not path.is_file():
-                continue
-            if path.suffix.lower() not in _AUDIO_EXTENSIONS:
-                continue
+        known = await _indexed_paths(session)
+        for path in found:
             scanned += 1
-
+            if str(path) in known:
+                skipped += 1        # already indexed: its tags are not read again
+                continue
             try:
-                if await _insert_track(session, path):
+                if await _insert_track(session, path, known_new=True):
                     inserted += 1
                 else:
                     skipped += 1

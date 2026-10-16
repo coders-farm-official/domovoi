@@ -113,10 +113,19 @@ def _read_tags(path: Path) -> dict[str, Any]:
     return out
 
 
+async def read_tags(path: Path) -> dict[str, Any]:
+    """:func:`_read_tags` in the ``tags`` pool, never on the event loop
+    (2026-10-16 delta review B2: a slow file had stalled the core's loop
+    at every sweep)."""
+    from domovoi import executors
+
+    return await executors.run("tags", _read_tags, path)
+
+
 async def _resolve_book_file(path: Path) -> dict[str, Any]:
     """Metadata for a single-file audiobook."""
     chapters, ff_dur = await _ffprobe_chapters(path)
-    tags = _read_tags(path)
+    tags = await read_tags(path)
     return {
         "title": tags.get("title") or path.stem,
         "author": tags.get("author"),
@@ -141,7 +150,7 @@ async def _resolve_book_folder(folder: Path) -> dict[str, Any] | None:
     cursor = 0
     author = narrator = None
     for i, f in enumerate(files):
-        tags = _read_tags(f)
+        tags = await read_tags(f)
         author = author or tags.get("author")
         narrator = narrator or tags.get("narrator")
         chapters.append({

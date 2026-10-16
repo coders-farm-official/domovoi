@@ -5,6 +5,10 @@ from __future__ import annotations
 from typing import BinaryIO
 
 _RATES = (96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350)
+#: Frames counted one by one before the rest of a stream is estimated from
+#: their average size: about 77 minutes at 44.1 kHz (a file of millions of
+#: tiny frames had kept a reader busy for as long as the file was big).
+MAX_COUNTED_FRAMES = 200_000
 
 
 def adts_header(b: bytes) -> tuple[int, int, int] | None:
@@ -23,13 +27,14 @@ def adts_header(b: bytes) -> tuple[int, int, int] | None:
 
 def adts_length(f: BinaryIO, start: int, size: int) -> float | None:
     """Seconds of audio in the ADTS stream at ``start``: every frame
-    counted; when the stream breaks off, the rest estimated at the average
-    frame size so far."""
+    counted, up to :data:`MAX_COUNTED_FRAMES`; when the stream breaks off
+    (or that many are counted), the rest estimated at the average frame
+    size so far."""
     f.seek(start)
     pos = start
     frames = samples = 0
     rate = 0
-    while pos + 7 <= size:
+    while pos + 7 <= size and frames < MAX_COUNTED_FRAMES:
         f.seek(pos)
         head = adts_header(f.read(7))
         if head is None:

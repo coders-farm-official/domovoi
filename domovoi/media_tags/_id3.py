@@ -8,6 +8,13 @@ everything else is kept as raw bytes under its frame id.
 A v2.2 tag's three-letter ids are reported as their v2.3/v2.4 names (TT2
 as TIT2, PIC as APIC, ULT as USLT, SLT as SYLT), so a caller asks for one
 name whatever the version.
+
+What a tag may cost is bounded (2026-10-16 delta review B1/S2): compressed
+frames are inflated only up to :data:`INFLATE_FRAME_MAX` each and
+:data:`INFLATE_TAG_MAX` per tag, and only when the frame is one this reader
+interprets; a chapter is not read inside another chapter; and the frames,
+values and synced-lyrics entries count against the read's item budget
+(``_util.MAX_ITEMS``), past which the rest of the tag is left unread.
 """
 
 from __future__ import annotations
@@ -18,7 +25,29 @@ from dataclasses import dataclass, field
 from typing import Any, BinaryIO
 
 from domovoi.media_tags._model import Tags
-from domovoi.media_tags._util import MAX_BLOCK, TagError, syncsafe, u32be
+from domovoi.media_tags._util import (
+    MAX_BLOCK,
+    MAX_ITEMS,
+    BudgetExceeded,
+    TagError,
+    budget,
+    one_read,
+    syncsafe,
+    u32be,
+)
+
+#: The most one compressed frame may inflate to. A cover picture the
+#: dashboard shows is at most 8 MiB, and text, lyrics and chapters are far
+#: smaller; a frame that inflates past this is dropped, as one that doesn't
+#: inflate at all always was.
+INFLATE_FRAME_MAX = 8 * 1024 * 1024
+#: The most all of one tag's compressed frames may inflate to together.
+INFLATE_TAG_MAX = 16 * 1024 * 1024
+#: The most values one text frame, and entries one synced-lyrics frame, may
+#: have; a frame with more is dropped, so one such frame can't use up the
+#: read's item budget and cost the frames after it.
+MAX_FRAME_VALUES = 1024
+MAX_SYNCED_ENTRIES = 8192
 
 # ─── frames ──────────────────────────────────────────────────────────────
 
@@ -247,7 +276,11 @@ def _split_values(encoding: int, data: bytes) -> list[str]:
     term = _terminator(encoding)
     parts: list[bytes] = []
     pos = 0
+    allowance = budget()
     while pos <= len(data):
+        if len(parts) >= MAX_FRAME_VALUES:
+            raise TagError("too many values in one frame")
+        allowance.item()
         end = _find_terminator(encoding, data, pos)
         if end < 0:
             parts.append(data[pos:])
@@ -284,9 +317,13 @@ _V22_IDS = {
 _PIC_FORMATS = {"JPG": "image/jpeg", "PNG": "image/png", "GIF": "image/gif", "BMP": "image/bmp"}
 
 
-def _parse_frame(fid: str, body: bytes, major: int, bpi: int) -> Frame | None:
+def _parse_frame(fid: str, body: bytes, major: int, bpi: int, depth: int = 0,
+                 state: "_TagState | None" = None) -> Frame | None:
     """One frame's body as a :class:`Frame`; None when it is too short to be
-    one (a malformed frame is dropped, not fatal to the tag)."""
+    one (a malformed frame is dropped, not fatal to the tag), and for a
+    chapter inside a chapter (``depth`` > 0): the addendum's chapters hold
+    titles and pictures, and nesting them let every level copy the rest of
+    the tag again (the review's 4 MiB file reached 3 GiB)."""
     try:
         if fid == "TXXX":
             enc = body[0]
@@ -324,7 +361,11 @@ def _parse_frame(fid: str, body: bytes, major: int, bpi: int) -> Frame | None:
             desc, pos = _take_string(enc, body, 6)
             entries: list[tuple[str, int]] = []
             order: list[str] = []
+            allowance = budget()
             while pos < len(body):
+                if len(entries) >= MAX_SYNCED_ENTRIES:
+                    raise TagError("too many synced lyrics entries")
+                allowance.item()
                 end = _find_terminator(enc, body, pos)
                 if end < 0:
                     break
@@ -336,13 +377,16 @@ def _parse_frame(fid: str, body: bytes, major: int, bpi: int) -> Frame | None:
                 pos += 4
             return SyncedLyricsFrame(fid, enc, lang, fmt, ctype, desc, entries)
         if fid == "CHAP":
+            if depth > 0:
+                return None
             end = body.find(b"\x00")
             if end < 0 or end + 17 > len(body):
                 return None
             element = body[:end].decode("latin-1")
             pos = end + 1
             times = [u32be(body, pos + 4 * i) for i in range(4)]
-            subs = list(_walk_frames(body[pos + 16:], major, False, bpi))
+            subs = list(_walk_frames(body, major, False, bpi, pos + 16, len(body),
+                                     depth=depth + 1, state=state))
             return ChapterFrame(fid, element, times[0], times[1], times[2], times[3], subs)
     except (IndexError, TagError):
         return None
@@ -359,15 +403,19 @@ def _deunsync(data: bytes) -> bytes:
     return data.replace(b"\xff\x00", b"\xff")
 
 
-def _headers(data: bytes, major: int, bpi: int):
-    """``(frame id, flags, body)`` for each frame header in ``data``, until
-    padding, the end, or something that is not a frame header. The last
-    item may be ``None`` to say the walk ran into a header that doesn't fit
-    (used to pick how a v2.4 tag's frame sizes are written)."""
+def _headers(data: bytes, major: int, bpi: int, start: int = 0, end: int | None = None):
+    """``(frame id, flags, body start, body size)`` for each frame header in
+    ``data[start:end]``, until padding, the end, something that is not a
+    frame header, or :data:`MAX_ITEMS` headers. The last item may be
+    ``None`` to say the walk ran into a header that doesn't fit (used to
+    pick how a v2.4 tag's frame sizes are written). Offsets, not slices:
+    walking a tag copies none of it."""
+    end = len(data) if end is None else min(end, len(data))
     size_len, head = (3, 6) if major == 2 else (4, 10)
     valid = _ID3 if major == 2 else _ID4
-    pos = 0
-    while pos + head <= len(data):
+    pos = start
+    seen = 0
+    while pos + head <= end and seen < MAX_ITEMS:
         if data[pos] == 0:
             return
         fid = data[pos:pos + size_len]
@@ -381,41 +429,92 @@ def _headers(data: bytes, major: int, bpi: int):
             raw = data[pos + 4:pos + 8]
             size = syncsafe(raw) if bpi == 7 else u32be(raw)
             flags = int.from_bytes(data[pos + 8:pos + 10], "big")
-        start = pos + head
-        if start + size > len(data):
+        body = pos + head
+        if body + size > end:
             yield None
             return
-        yield fid.decode("ascii"), flags, data[start:start + size]
-        pos = start + size
+        yield fid.decode("ascii"), flags, body, size
+        seen += 1
+        pos = body + size
 
 
-def _clean_walk(data: bytes, major: int, bpi: int) -> bool:
-    for item in _headers(data, major, bpi):
+def _clean_walk(data: bytes, major: int, bpi: int, start: int = 0, end: int | None = None) -> bool:
+    for item in _headers(data, major, bpi, start, end):
         if item is None:
             return False
     return True
 
 
-def _frame_bits(data: bytes, major: int) -> int:
+def _frame_bits(data: bytes, major: int, start: int = 0, end: int | None = None) -> int:
     """How this tag writes frame sizes: v2.4 says syncsafe (7 bits a byte),
     but some writers used plain 32-bit sizes. Syncsafe unless only the plain
     reading walks the tag cleanly."""
     if major != 4:
         return 8
-    if _clean_walk(data, major, 7):
+    if _clean_walk(data, major, 7, start, end):
         return 7
-    if _clean_walk(data, major, 8):
+    if _clean_walk(data, major, 8, start, end):
         return 8
     return 7
 
 
-def _walk_frames(data: bytes, major: int, tag_unsync: bool, bpi: int):
-    for item in _headers(data, major, bpi):
+class _TagState:
+    """What one tag has left to inflate (shared with its chapters' frames)."""
+
+    __slots__ = ("inflate_left",)
+
+    def __init__(self) -> None:
+        self.inflate_left = INFLATE_TAG_MAX
+
+
+def _interpreted(fid: str) -> bool:
+    """A frame this reader makes something of; any other is kept raw."""
+    return fid.startswith("T") or fid in ("APIC", "USLT", "COMM", "SYLT", "CHAP")
+
+
+def _inflate(fid: str, data: bytes, state: _TagState) -> bytes | None:
+    """A compressed frame's body, inflated; None drops the frame: one this
+    reader doesn't interpret (its inflated bytes would only be kept, never
+    read), one that isn't a whole zlib stream, or one that would inflate
+    past :data:`INFLATE_FRAME_MAX`, what is left of :data:`INFLATE_TAG_MAX`
+    or what is left of the read's budget. No more than that is ever made to
+    find out (``zlib.decompress`` had made all of it: delta review B1)."""
+    if not _interpreted(fid):
+        return None
+    allowance = budget()
+    limit = min(INFLATE_FRAME_MAX, state.inflate_left, allowance.bytes_left)
+    if limit <= 0:
+        return None
+    d = zlib.decompressobj()
+    try:
+        # One byte past the limit tells "exactly the limit" from "more".
+        out = d.decompress(data, limit + 1)
+    except zlib.error:
+        return None
+    if len(out) > limit or not d.eof:
+        return None          # bigger than allowed, or cut short
+    state.inflate_left -= len(out)
+    allowance.spend(len(out))
+    return out
+
+
+def _walk_frames(data: bytes, major: int, tag_unsync: bool, bpi: int, start: int = 0,
+                 end: int | None = None, *, depth: int = 0, state: _TagState | None = None):
+    """The frames in ``data[start:end]``, each counted against the read's
+    item budget: :class:`BudgetExceeded` ends the walk, and the caller keeps
+    the frames that came before."""
+    state = state or _TagState()
+    allowance = budget()
+    for item in _headers(data, major, bpi, start, end):
         if item is None:
             return
-        fid, flags, body = item
+        allowance.item()
+        fid, flags, at, size = item
+        if depth and fid == "CHAP":
+            continue               # a chapter in a chapter: not read (_parse_frame)
         if major == 2:
             fid = _V22_IDS.get(fid, fid)
+            body = data[at:at + size]
         elif major == 3:
             fmt = flags & 0xFF
             pos = 0
@@ -425,11 +524,10 @@ def _walk_frames(data: bytes, major: int, tag_unsync: bool, bpi: int):
                 continue           # encrypted: unreadable
             if fmt & 0x20:
                 pos += 1           # group id
-            body = body[pos:]
+            body = data[at + min(pos, size):at + size]
             if fmt & 0x80:
-                try:
-                    body = zlib.decompress(body)
-                except zlib.error:
+                body = _inflate(fid, body, state)
+                if body is None:
                     continue
         else:
             fmt = flags & 0xFF
@@ -440,15 +538,14 @@ def _walk_frames(data: bytes, major: int, tag_unsync: bool, bpi: int):
                 continue           # encrypted: unreadable
             if fmt & 0x01:
                 pos += 4           # data length indicator
-            body = body[pos:]
+            body = data[at + min(pos, size):at + size]
             if fmt & 0x02 or tag_unsync:
                 body = _deunsync(body)
             if fmt & 0x08:
-                try:
-                    body = zlib.decompress(body)
-                except zlib.error:
+                body = _inflate(fid, body, state)
+                if body is None:
                     continue
-        frame = _parse_frame(fid, body, major, bpi)
+        frame = _parse_frame(fid, body, major, bpi, depth, state)
         if frame is not None:
             yield frame
 
@@ -469,28 +566,35 @@ def tag_size(header: bytes) -> int | None:
     return size
 
 
+@one_read
 def parse_id3v2(data: bytes) -> ID3Tags | None:
     """The tag that ``data`` starts with (the whole tag, header included);
-    None when it isn't an ID3v2 tag of a version this reads (2, 3, 4)."""
+    None when it isn't an ID3v2 tag of a version this reads (2, 3, 4). A
+    tag of more frames than one read may make (``_util.MAX_ITEMS``) gives
+    the frames that fit."""
     size = tag_size(data[:10])
     if size is None:
         return None
     major, minor, flags = data[3], data[4], data[5]
     if major not in (2, 3, 4):
         return None
-    body = data[10:10 + syncsafe(data[6:10])]
+    body, start, end = data, 10, min(len(data), 10 + syncsafe(data[6:10]))
     tags = ID3Tags(version=(major, minor))
     if major == 2 and flags & 0x40:
         return tags            # v2.2 "compression": no scheme was ever defined
     if flags & 0x80 and major < 4:
-        body = _deunsync(body)
-    if flags & 0x40 and major == 3 and len(body) >= 4:
-        body = body[4 + u32be(body):]
-    elif flags & 0x40 and major == 4 and len(body) >= 4:
-        body = body[syncsafe(body[:4]):]
-    bpi = _frame_bits(body, major)
-    for frame in _walk_frames(body, major, bool(flags & 0x80) and major == 4, bpi):
-        tags.add(frame)
+        body = _deunsync(data[start:end])
+        start, end = 0, len(body)
+    if flags & 0x40 and major == 3 and end - start >= 4:
+        start += 4 + u32be(body, start)
+    elif flags & 0x40 and major == 4 and end - start >= 4:
+        start += syncsafe(body[start:start + 4])
+    bpi = _frame_bits(body, major, start, end)
+    try:
+        for frame in _walk_frames(body, major, bool(flags & 0x80) and major == 4, bpi, start, end):
+            tags.add(frame)
+    except BudgetExceeded:
+        pass
     return tags
 
 
@@ -501,6 +605,7 @@ def read_id3v2_at(f: BinaryIO, offset: int = 0) -> tuple[ID3Tags | None, int]:
     size = tag_size(header)
     if size is None or size > MAX_BLOCK:
         return None, 0
+    budget().spend(size)
     f.seek(offset)
     data = f.read(size)          # a truncated file gives what is there
     return parse_id3v2(data), size

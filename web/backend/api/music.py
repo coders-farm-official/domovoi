@@ -16,12 +16,16 @@ at ``/api/acquisitions``.
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import hashlib
 import io
 import logging
 import os
 import stat
+import threading
 import zipfile
+from collections import OrderedDict
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Any, Literal
 
@@ -1347,12 +1351,15 @@ async def _iter_file(path: Path, start: int, end: int):
 # directory: a stale sentinel hid art forever, and a track id reused after a
 # library rebuild would have been served the old track's picture.)
 #
-# What keeps that cheap is HTTP caching rather than a cache of our own. The
-# response carries a strong ETag built from the audio file's path, mtime and
-# size plus the album-folder image's, so re-tagging the file or swapping its
-# cover.jpg changes it, and Cache-Control lets the client keep the picture
-# for a day. A request whose If-None-Match still matches is a 304 answered
-# from a stat and one directory listing, before any tag is parsed.
+# What keeps that cheap is HTTP caching first. The response carries a strong
+# ETag built from the audio file's path, mtime and size plus the album-folder
+# image's, so re-tagging the file or swapping its cover.jpg changes it, and
+# Cache-Control lets the client keep the picture for a day. A request whose
+# If-None-Match still matches is a 304 answered from a stat and one
+# directory listing, before any tag is parsed. Behind that, a small memory
+# of what each file version's embedded picture is (_embedded_cover, delta
+# review S2), so a client without a cache doesn't make the tags be read
+# again; nothing is written to disk.
 
 # A picture bigger than this is ignored (an embedded print scan, a poster
 # someone dropped in the folder): the dashboard draws covers at 40-220 px,
@@ -1510,6 +1517,77 @@ def _read_embedded_cover(path: Path) -> tuple[bytes, str] | None:
     return data, mime
 
 
+# The route is open and reads tags on request, so anyone on the network can
+# ask for any track's cover as often as they like (2026-10-16 delta review
+# S2: 40 parses of one big file at once). So the answer for a file — its
+# picture, or that it has none — is kept per (path, ETag, size cap): the
+# ETag changes whenever the file's mtime or size does. At most
+# _COVER_MEMO_MAX_BYTES of pictures are kept, least recently used dropped
+# first. A file several requests want at once is read once, and reads run in
+# domovoi.executors' two-thread "tags" pool, not in the web's forty threads,
+# each keeping to the tag reader's own budget.
+_COVER_MEMO_MAX_BYTES = 32 * 1024 * 1024
+_COVER_MEMO_MAX_ENTRIES = 4096
+_cover_memo: OrderedDict[tuple, tuple[bytes, str] | None] = OrderedDict()
+_cover_memo_bytes = 0
+_cover_inflight: dict[tuple, concurrent.futures.Future] = {}
+_cover_lock = threading.Lock()
+
+
+def _cover_memo_get(key: tuple) -> tuple[bool, tuple[bytes, str] | None]:
+    with _cover_lock:
+        if key not in _cover_memo:
+            return False, None
+        _cover_memo.move_to_end(key)
+        return True, _cover_memo[key]
+
+
+def _cover_memo_put(key: tuple, value: tuple[bytes, str] | None) -> None:
+    global _cover_memo_bytes
+    size = len(value[0]) if value else 0
+    if size > _COVER_MEMO_MAX_BYTES:
+        return
+    with _cover_lock:
+        old = _cover_memo.pop(key, None)
+        _cover_memo_bytes -= len(old[0]) if old else 0
+        _cover_memo[key] = value
+        _cover_memo_bytes += size
+        while _cover_memo and (_cover_memo_bytes > _COVER_MEMO_MAX_BYTES
+                               or len(_cover_memo) > _COVER_MEMO_MAX_ENTRIES):
+            _, dropped = _cover_memo.popitem(last=False)
+            _cover_memo_bytes -= len(dropped[0]) if dropped else 0
+
+
+def _read_and_memo_cover(path: Path, key: tuple) -> tuple[bytes, str] | None:
+    value = _read_embedded_cover(path)
+    _cover_memo_put(key, value)
+    return value
+
+
+async def _embedded_cover(path: Path, etag: str) -> tuple[bytes, str] | None:
+    """:func:`_read_embedded_cover`, kept per file version, read once for
+    every request that wants it at the same time, in the ``tags`` pool."""
+    from domovoi import executors
+
+    key = (str(path), etag, COVER_MAX_BYTES)
+    hit, value = _cover_memo_get(key)
+    if hit:
+        return value
+    with _cover_lock:
+        fut = _cover_inflight.get(key)
+        if fut is None:
+            fut = executors.pool("tags").submit(_read_and_memo_cover, path, key)
+            _cover_inflight[key] = fut
+
+            def _done(f: concurrent.futures.Future, k: tuple = key) -> None:
+                with _cover_lock:
+                    if _cover_inflight.get(k) is f:
+                        del _cover_inflight[k]
+
+            fut.add_done_callback(_done)
+    return await asyncio.wrap_future(fut)
+
+
 def _folder_image(audio: Path, music_root: Path) -> tuple[Path, os.stat_result, str] | None:
     """The album-folder image for ``audio`` as ``(path, stat, content
     type)``: a file in the track's own folder named cover / folder / front /
@@ -1603,7 +1681,8 @@ async def track_cover(track_id: int, request: Request):
     Open, like the library listing it decorates: an ``<img>`` tag and the
     phone's lock screen can't send a credential. The id resolves the path
     from the database, containment-checked inside MUSIC_DIR (400 outside
-    it, as for ``/audio``); nothing is stored."""
+    it, as for ``/audio``); nothing is stored on disk. Tags are read in the
+    two-thread ``tags`` pool, once per file version (:func:`_embedded_cover`)."""
     import anyio
 
     from domovoi.config import settings as core_settings
@@ -1618,7 +1697,7 @@ async def track_cover(track_id: int, request: Request):
     if _etag_matches(request.headers.get("if-none-match"), etag):
         return Response(status_code=304, headers=headers)
 
-    embedded = await anyio.to_thread.run_sync(_read_embedded_cover, target)
+    embedded = await _embedded_cover(target, etag)
     if embedded is not None:
         data, mime = embedded
         return Response(content=data, media_type=mime, headers=headers)

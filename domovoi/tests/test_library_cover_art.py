@@ -21,6 +21,7 @@ import base64
 import os
 import struct
 import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -496,6 +497,101 @@ def test_the_tag_read_and_the_folder_scan_run_off_the_event_loop(library, monkey
 
     assert asyncio.run(go()).status_code == 200
     assert seen["probe"] != seen["loop"] and seen["read"] != seen["loop"]
+
+
+# ── read once per file version, two at a time (delta review S2) ──────
+
+@pytest.fixture
+def fresh_memo(monkeypatch):
+    monkeypatch.setattr(music_api, "_cover_memo", music_api.OrderedDict())
+    monkeypatch.setattr(music_api, "_cover_memo_bytes", 0)
+    monkeypatch.setattr(music_api, "_cover_inflight", {})
+
+
+def _url(tid: int) -> str:
+    return f"/api/music/library/{tid}/cover"
+
+
+def test_a_file_many_ask_for_at_once_is_read_once(library, monkeypatch, fresh_memo):
+    """The route is open: forty requests for one big file had parsed it
+    forty times, on forty threads. Now one read answers all of them, and
+    the answer is kept for the file's version."""
+    mp3 = tagged_mp3(library.root / "a" / "t.mp3", [(3, "image/jpeg", JPEG)])
+    tid = library.add(mp3)
+    calls: list[str] = []
+    gate = threading.Event()
+    real = music_api._read_embedded_cover
+
+    def read(path):
+        calls.append(threading.current_thread().name)
+        gate.wait(10)
+        return real(path)
+
+    monkeypatch.setattr(music_api, "_read_embedded_cover", read)
+
+    async def go():
+        async with AsyncClient(transport=ASGITransport(app=web_app), base_url="http://test") as c:
+            tasks = [asyncio.create_task(c.get(_url(tid))) for _ in range(20)]
+            await asyncio.sleep(0.3)
+            gate.set()
+            return await asyncio.gather(*tasks)
+
+    answers = asyncio.run(go())
+    assert [(r.status_code, r.content) for r in answers] == [(200, JPEG)] * 20
+    assert len(calls) == 1 and calls[0].startswith("domovoi-tags"), calls
+    assert get(tid).content == JPEG and len(calls) == 1          # from memory now
+
+    st = mp3.stat()
+    os.utime(mp3, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))   # re-tagged
+    assert get(tid).status_code == 200 and len(calls) == 2
+
+
+def test_a_file_without_a_picture_is_remembered_too(library, monkeypatch, fresh_memo):
+    mp3 = mw.write_mp3(library.root / "b" / "t.mp3", [mw.text_frame("TIT2", "No Art")])
+    tid = library.add(mp3)
+    calls: list[Path] = []
+    real = music_api._read_embedded_cover
+    monkeypatch.setattr(music_api, "_read_embedded_cover", lambda p: calls.append(p) or real(p))
+    assert get(tid).status_code == 404
+    assert get(tid).status_code == 404
+    assert len(calls) == 1
+
+
+def test_different_files_are_read_two_at_a_time(library, monkeypatch, fresh_memo):
+    tids = [library.add(tagged_mp3(library.root / f"d{i}" / "t.mp3", [(3, "image/jpeg", JPEG)]))
+            for i in range(8)]
+    running = {"now": 0, "most": 0}
+    lock = threading.Lock()
+    real = music_api._read_embedded_cover
+
+    def read(path):
+        with lock:
+            running["now"] += 1
+            running["most"] = max(running["most"], running["now"])
+        time.sleep(0.1)
+        with lock:
+            running["now"] -= 1
+        return real(path)
+
+    monkeypatch.setattr(music_api, "_read_embedded_cover", read)
+
+    async def go():
+        async with AsyncClient(transport=ASGITransport(app=web_app), base_url="http://test") as c:
+            return await asyncio.gather(*(c.get(_url(t)) for t in tids))
+
+    assert all(r.status_code == 200 for r in asyncio.run(go()))
+    assert running["most"] <= 2
+
+
+def test_the_memory_of_covers_is_bounded(monkeypatch, fresh_memo):
+    monkeypatch.setattr(music_api, "_COVER_MEMO_MAX_BYTES", 1000)
+    for i in range(3):
+        music_api._cover_memo_put(("p", i), (b"x" * 400, "image/jpeg"))
+    assert list(music_api._cover_memo) == [("p", 1), ("p", 2)]
+    assert music_api._cover_memo_bytes == 800
+    music_api._cover_memo_put(("big",), (b"x" * 1001, "image/jpeg"))   # never kept
+    assert ("big",) not in music_api._cover_memo
+    assert music_api._cover_memo_get(("p", 1)) == (True, (b"x" * 400, "image/jpeg"))
 
 
 # ── the tier ─────────────────────────────────────────────────────────

@@ -31,11 +31,24 @@ def _music(tmp_path):
     return root
 
 
+class _NoRows:
+    rowcount = 0
+
+    def first(self):
+        return None
+
+    def __iter__(self):
+        return iter(())
+
+
 class _Session:
     def __init__(self) -> None:
         self.inserted: list[str] = []
 
     async def execute(self, statement, params=None):
+        if str(statement).lstrip().startswith("SELECT"):
+            # The indexer's "already indexed?" checks: nothing is.
+            return _NoRows()
         if params and "fp" in params:
             self.inserted.append(params["fp"])
         return SimpleNamespace(rowcount=1)

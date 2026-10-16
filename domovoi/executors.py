@@ -11,9 +11,11 @@ connects (a ``localhost`` lookup each) could no longer get a thread
 (reproduced in the maintainers' functional test harness, kept outside this repo).
 
 So the heavy users get pools of their own, each with a fixed number of
-threads: speech recognition and voice analysis, speech synthesis, and
-plugin installs. When one of them is saturated, only its own work waits;
-the default pool, and the database behind it, are left alone.
+threads: speech recognition and voice analysis, speech synthesis,
+plugin installs, and reading audio files' tags (in the dashboard's
+process too, which uses the same pools). When one of them is saturated,
+only its own work waits; the default pool, and the database behind it,
+are left alone.
 
 :func:`run` is ``asyncio.to_thread`` for a named pool: same semantics
 (context variables copied, the result or exception returned to the
@@ -52,6 +54,12 @@ POOL_SIZES: dict[str, int] = {
     "downloads": 2,
     # Plugin installs, upgrades and packaging: pip, unzip, hashing.
     "plugins": 2,
+    # Reading the tags inside audio files (domovoi.media_tags): the library
+    # and audiobook indexers, a downloaded episode's chapters, the
+    # dashboard's cover-art route. Two at a time bounds what crafted files
+    # can make the process hold (each read keeps to the reader's budget),
+    # and a slow file can't hold the event loop (delta review B2, S2).
+    "tags": 2,
 }
 
 _pools: dict[str, ThreadPoolExecutor] = {}

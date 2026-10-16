@@ -441,7 +441,11 @@ async def download_episode(session, episode: dict[str, Any]) -> bool | None:
         )
         return False
 
-    chapters = _read_id3_chapters(dest)
+    # In the tags pool, never on the event loop: the file is whatever the
+    # feed served (2026-10-16 delta review B1).
+    from domovoi import executors
+
+    chapters = await executors.run("tags", _read_id3_chapters, dest)
     await session.execute(
         text(
             """
