@@ -148,6 +148,12 @@ class Context(BaseModel):
     # turn: {"title", "artist", "kind", "playing"} — any key may be missing.
     # Read by "what's playing" on a phone turn. Empty everywhere else.
     device_player: dict[str, Any] = Field(default_factory=dict)
+    # Set on the copy of a turn's context that acts on ANOTHER room — "play
+    # jazz in the garage" said in the dining room runs the play with
+    # room_id "garage" (domovoi/handlers/music_rooms.py): the room, or the
+    # phone, the person spoke in. A "did you mean …?" asked there remembers
+    # the garage, so the answer plays there too. None on every other turn.
+    asked_from_room: str | None = None
 
     @property
     def from_phone(self) -> bool:

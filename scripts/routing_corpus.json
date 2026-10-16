@@ -615,6 +615,145 @@
       "path": "fast",
       "tags": ["action", "lyrics"],
       "note": "2026-10-06 lyric review: a line may start with 'before'; only 'goes before this one' said whole is a place in a list (invented words)"
+    },
+    {
+      "utterance": "Play some music in the garage.",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-14 incident: a room after the play; the catch-all used to search for 'some music in the garage' in the asking room"
+    },
+    {
+      "utterance": "play weezer in the garage",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-14 music in another room: an artist, then the room"
+    },
+    {
+      "utterance": "put on some jazz in the dining room",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-14 music in another room: 'put on' (music_rooms.py; routed on when the words name nothing in the library)"
+    },
+    {
+      "utterance": "put weezer on in the office",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-14 music in another room: 'put X on'"
+    },
+    {
+      "utterance": "in the garage, play some jazz",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-14 music in another room: the place said first"
+    },
+    {
+      "utterance": "play some music everywhere",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-14 music in another room: everywhere (answered one room at a time)"
+    },
+    {
+      "utterance": "play in the garage",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-14: no words before the place: the song 'In the Garage', never a room"
+    },
+    {
+      "utterance": "play the boys in the band",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-14: a song that ends in a place that is no room: today's search, whole"
+    },
+    {
+      "utterance": "stop the music in the garage",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-14 music in another room: a control, then the room"
+    },
+    {
+      "utterance": "pause the music in the dining room",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-14 music in another room: pause"
+    },
+    {
+      "utterance": "skip this song in the garage",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-14 music in another room: skip"
+    },
+    {
+      "utterance": "skip the song in the garage",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-15 ft run: how Whisper heard 'skip this song in the garage'"
+    },
+    {
+      "utterance": "turn it up in the garage",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-14 music in another room: the room's own volume"
+    },
+    {
+      "utterance": "what's playing in the garage",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-14 music in another room: what's playing"
+    },
+    {
+      "utterance": "turn off the music in the garage",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-14 music in another room: 'turn off the music' only with a room after it"
+    },
+    {
+      "utterance": "could you put something relaxing on in the garage",
+      "handler": "music",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-14 music in another room: the room path declines it ('something relaxing' names nothing in the library), so the tool model routes it, its 'room' argument carrying the place"
+    },
+    {
+      "utterance": "play the latest episode of the daily in the garage",
+      "handler": "spoken_audio",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-15 a podcast in another room: the place is no part of the show's name"
+    },
+    {
+      "utterance": "resume the podcast in the kitchen",
+      "handler": "spoken_audio",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-15 a podcast in another room: resume picks up that room's own place"
+    },
+    {
+      "utterance": "play my audiobook in the office",
+      "handler": "spoken_audio",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-15 an audiobook in another room ('play my audiobook' is a resume)"
+    },
+    {
+      "utterance": "play my audiobook",
+      "handler": "spoken_audio",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-15: a resume of the book in progress; it used to reach music's catch-all as 'my audiobook'"
     }
   ]
 }

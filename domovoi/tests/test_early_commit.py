@@ -16,7 +16,11 @@ allowed to live ("set a timer for ten minutes" before "… for the pasta",
 "stop" before "stop the timer"). A continuation that turns the whole
 utterance into a language-model question ("what time is it … in Tokyo")
 is the owner-accepted cost of early commit, except for the ones listed in
-KNOWN_LLM_CONTINUATIONS, which must never sit on tier A.
+KNOWN_LLM_CONTINUATIONS, which must never sit on tier A. So is a place
+after a closed music control ("stop the music … in the kitchen", music in
+another room, 2026-10-14): those utterances went to the language model
+before, and a pause before the place still acts here, as it did then
+(_is_room_continuation; the owner keeps the short hold on the controls).
 
 Also here: the predicate's own rules (punctuation, trailing off, dangling
 words, one-word commands, confirmations), and that the router dry run it
@@ -362,6 +366,25 @@ KNOWN_LLM_CONTINUATIONS = [
 ]
 
 
+# A closed music control continued by a place: the whole is a command for
+# another room (domovoi/handlers/music_rooms.py), the prefix the same
+# control here. Before rooms were understood the whole went to the
+# language model (the accepted cost above); a pause before the place still
+# commits on the short hold. Pinned so a new kind of continuation is seen.
+KNOWN_ROOM_CONTINUATIONS = [
+    ("what's playing", "what's playing in the kitchen"),
+    ("pause the music", "pause the music in the kitchen"),
+    ("stop the music", "stop the music in the kitchen"),
+]
+_ROOM_PATHS = ("_room_control_from_match", "_room_play_from_match")
+
+
+def _is_room_continuation(prefix: str, whole: tuple) -> bool:
+    """The whole utterance is ``prefix`` with a place after it, routed to
+    MusicHandler's room paths."""
+    return len(whole) > 2 and whole[:2] == ("fast", "music") and whole[2] in _ROOM_PATHS
+
+
 def _voice_plan_utterances() -> list[str]:
     """The voice test plan's spoken steps, when the plan is next to the
     repo (it lives outside it, in functional-testing/) or named by
@@ -432,7 +455,7 @@ def test_no_short_hold_prefix_is_a_different_command() -> None:
             if ec is None:
                 continue
             checked += 1
-            if ec.tier != TIER_A or whole == ("llm",):
+            if ec.tier != TIER_A or whole == ("llm",) or _is_room_continuation(prefix, whole):
                 continue
             if _route_key(ec.plan) != whole:
                 hazards.append(f"{prefix!r} (tier A) is a prefix of {utterance!r} -> {whole[:3]}")
@@ -450,6 +473,8 @@ def test_the_tier_b_prefix_hazards_are_the_ones_the_design_names() -> None:
         for n in range(1, len(words)):
             prefix = " ".join(words[:n])
             ec = early_commit_for(prefix)
+            if _is_room_continuation(prefix, whole):
+                continue
             if ec is not None and whole != ("llm",) and _route_key(ec.plan) != whole:
                 assert ec.tier == TIER_B
                 found.add(prefix)
@@ -457,6 +482,33 @@ def test_the_tier_b_prefix_hazards_are_the_ones_the_design_names() -> None:
         "stop", "cancel", "next", "skip", "resume", "continue", "shuffle", "previous",
         "set a timer for 10 minutes", "go back", "forget that", "stop the timer",
     }
+
+
+def test_the_room_continuations_are_a_control_and_a_place() -> None:
+    """Every tier-A prefix whose whole utterance is a command for another
+    room is that same command here: the whole without its place routes as
+    the prefix does ("skip this … song in the garage" is a skip either
+    way). Nothing else rides on _is_room_continuation; the listed ones are
+    among them."""
+    from domovoi.handlers.shared.rooms import place_splits
+
+    found = set()
+    for utterance in _all_utterances():
+        whole = _route_key(plan_route(utterance))
+        if not _is_room_continuation("", whole):
+            continue
+        words = utterance.split()
+        for n in range(1, len(words)):
+            prefix = " ".join(words[:n])
+            ec = early_commit_for(prefix)
+            if ec is None or ec.tier != TIER_A:
+                continue
+            found.add((prefix, utterance))
+            heads = [" ".join(words[:i]) for i, _place in place_splits(words)]
+            assert any(_route_key(plan_route(h)) == _route_key(ec.plan) for h in heads), (
+                prefix, utterance,
+            )
+    assert set(KNOWN_ROOM_CONTINUATIONS) <= found
 
 
 @pytest.mark.parametrize(("prefix", "whole"), KNOWN_LLM_CONTINUATIONS)

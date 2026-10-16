@@ -211,7 +211,7 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
         },
         "double_check": {"core.self_doubt_offer", "core.prefs_offer"},
         "memory": {"core.pending_memory_offer"},
-        "music": {"core.music_choice"},
+        "music": {"core.music_choice", "core.music_room_or_title"},
         "playlist": {"core.playlist_choice", "core.playlist_add_choice"},
         "news": {"core.news_fetch", "core.news_fetch_topics"},
         "dropin": {"core.dropin_invite"},

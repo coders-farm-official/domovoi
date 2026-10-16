@@ -375,6 +375,16 @@ def parse_choice_reply(transcript: str, n: int) -> ChoiceReply:
 # ─── The parked payload ────────────────────────────────────────────────────
 
 
+def _play_room(ctx: Context) -> dict[str, str]:
+    """``{"play_room": <room>}`` for a question asked about a play in
+    ANOTHER room ("play glass harber in the garage"): the answer plays
+    there, not where it is said (music_rooms.py). Empty otherwise."""
+    if getattr(ctx, "asked_from_room", None) and ctx.room_id:
+        return {"play_room": ctx.room_id}
+    return {}
+
+
+
 def _expired(data: Mapping[str, Any]) -> bool:
     try:
         return time.time() > float(data.get("expires_at"))  # type: ignore[arg-type]
@@ -495,6 +505,7 @@ class MusicChoiceMixin:
             "heard": res.heard,
             "room_id": ctx.room_id,
             "expires_at": time.time() + CHOICE_TTL_SEC,
+            **_play_room(ctx),
         }
         try:
             await request_confirmation(
@@ -555,6 +566,7 @@ class MusicChoiceMixin:
             "heard": phrase,
             "room_id": ctx.room_id,
             "expires_at": time.time() + CHOICE_TTL_SEC,
+            **_play_room(ctx),
         }
         try:
             await request_confirmation(

@@ -20,7 +20,13 @@ from domovoi.clients.mpd import (
 )
 from domovoi.db.repositories import SessionRepository
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
-from domovoi.handlers.music_choice import MusicChoiceMixin
+from domovoi.handlers.music_choice import MUSIC_CHOICE_KIND, MusicChoiceMixin
+from domovoi.handlers.music_rooms import (
+    ROOM_OR_TITLE_KIND,
+    ROOM_PLAY_RE,
+    MusicRoomsMixin,
+    control_room_patterns,
+)
 from domovoi.handlers.shared import phone_play
 from domovoi.handlers.shared.play_history import record_media_play
 from domovoi.models import Context, Intent, Response
@@ -218,6 +224,16 @@ _VOLUME_DOWN_RE = re.compile(
     r"|turn down the (?:volume|music|sound))$"
 )
 
+# The same controls for a named room: "stop the music in the garage",
+# "what's playing in the office", "turn it up in the den" (music_rooms.py).
+# _CONTROL_HEAD_RE is the control alone, for telling the command from its
+# place when the words split more than one way.
+# _ROOM_FIRST_RE: the place said first — "in the garage, play some jazz".
+_ROOM_CONTROL_RE, _CONTROL_HEAD_RE, _ROOM_FIRST_RE = control_room_patterns([
+    _PLAY_RANDOM_RE, _PAUSE_RE, _RESUME_RE, _STOP_RE, _NEXT_RE, _PREV_RE,
+    _NOW_PLAYING_RE, _VOLUME_SET_RE, _VOLUME_UP_RE, _VOLUME_DOWN_RE,
+])
+
 # Volume is presented to the user as a 1-10 knob — people say "set it to 5",
 # not "to 50%". Level 1 maps to 50% hardware (below that the line-level output
 # is unusably quiet) and level 10 to 100%, evenly spaced. A spoken number
@@ -331,11 +347,15 @@ def _format_song(song: dict) -> str:
     return title
 
 
-class MusicHandler(MusicChoiceMixin, Handler):
+class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
     name = "music"
     # band rationale: greedy "^play (.+)$" catch-all — after every anchored media band
     #   (spoken_audio 270, radio plugin 280, playlist 290).
     priority_band = 300
+    # "Did you mean …?" (music_choice.py), and "the song, or that in the
+    # garage?" (music_rooms.py). Only the first takes a free-text reply.
+    confirmation_kinds = (MUSIC_CHOICE_KIND, ROOM_OR_TITLE_KIND)
+    choice_kinds = (MUSIC_CHOICE_KIND,)
     display = HandlerDisplay(label="Music", tone="media")
     chat_exposed = True  # organic media tool in chat mode (#8)
     requires_network = "no"
@@ -367,6 +387,10 @@ class MusicHandler(MusicChoiceMixin, Handler):
                     "type": "integer", "minimum": 1, "maximum": 10,
                     "description": "Volume level on a 1-10 knob (1≈50%, 10=max). Numbers above 10 clamp to 10.",
                 },
+                "room": {
+                    "type": "string",
+                    "description": "Only when the person names a room, e.g. 'garage' or 'everywhere'",
+                },
             },
             "required": ["action"],
         },
@@ -381,6 +405,14 @@ class MusicHandler(MusicChoiceMixin, Handler):
             FastPath(_LYRIC_FIND_RE, MusicHandler._lyrics_find_from_match),
             FastPath(_LYRIC_PLAY_BY_RE, MusicHandler._lyrics_play_by_from_match),
             FastPath(_LYRIC_PLAY_ARTISTS_RE, MusicHandler._lyrics_play_by_from_match),
+            # A command that ends with a place: "play jazz in the garage",
+            # "stop the music in the office" (music_rooms.py) — before the
+            # "by" split and the catch-all, which would search for "jazz in
+            # the garage". A place that isn't one ("the boys in the band")
+            # runs the paths below unchanged. Open slots: never early.
+            FastPath(ROOM_PLAY_RE, MusicHandler._room_play_from_match),
+            FastPath(_ROOM_CONTROL_RE, MusicHandler._room_control_from_match),
+            FastPath(_ROOM_FIRST_RE, MusicHandler._room_first_from_match),
             FastPath(_PLAY_ARTIST_RE, MusicHandler._play_artist_from_match),
             # Random/shuffle BEFORE _PLAY_ANY_RE so "play a song" hits the
             # local-library random pick rather than falling through to
@@ -413,6 +445,9 @@ class MusicHandler(MusicChoiceMixin, Handler):
         )
 
     async def execute_from_tool(self, args: dict, ctx: Context, session: AsyncSession) -> Response:
+        if isinstance(args.get("room"), str) and args["room"].strip():
+            # "Play jazz in the garage" as the model read it (music_rooms.py).
+            return await self.room_tool_call(args, ctx, session)
         action = args.get("action")
         title = args.get("title")
         artist = args.get("artist")

@@ -459,7 +459,12 @@ same room history; the server side doesn't change at all.
 - **Music is per-room by design.** The server lazily provisions one MPD
   instance per room (control ports 6650+N, stream ports 8050+N) the first
   time a room plays something — no setup on your part. Different rooms,
-  different queues, simultaneously.
+  different queues, simultaneously. Any room can drive another by naming
+  it: "play jazz in the garage", "stop the music in the office", "what's
+  playing in the kitchen" — the reply comes from the room you asked, the
+  music from the one you named. To stop, pause or skip in another room,
+  say the room first ("in the garage, stop the music"): those commands
+  act the moment you pause, so a pause before the room name acts here.
 - **Intercom and drop-in** turn the fleet into a house-wide comm system:
   announce to one room or all of them, or open a two-way drop-in between
   rooms. How a target room answers a drop-in (mic opens immediately vs.

@@ -108,7 +108,7 @@ internal val MANUAL_FAQ = listOf(
     ),
     FaqRow(
         "How do rooms play different music?",
-        "Each room gets its own music daemon, so the kitchen and the garage can play completely independent tracks at the same time.",
+        "Each room gets its own music daemon, so the kitchen and the garage can play completely independent tracks at the same time. Any room can start or control another’s by naming it: “play some music in the garage”.",
     ),
     FaqRow(
         "How do I add features?",
@@ -207,6 +207,8 @@ internal val MANUAL_HOWTO = listOf(
         "music playback",
         listOf(
             "Play, queue and favorite music from the Music page — each room is independent.",
+            "By voice, from any room, name the room: “play jazz in the garage”, “stop the music in the office”, “what’s playing in the kitchen”, “turn it up in the den”, “resume my audiobook in the office”.",
+            "To stop, pause or skip in another room, saying the room first is safest: “in the garage, stop the music”.",
         ),
         listOf(
             "\"port not listening\" usually just means nothing is playing (it binds lazily).",

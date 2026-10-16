@@ -24,11 +24,11 @@ Condensed band map — core handlers occupy exactly the design §4.2 table:
     240 memory
     250 homelab
     260 news             before all greedy media
-    270 spoken_audio     anchored media before playlist/music
+    270 spoken_audio     anchored media before playlist/music (its "... in the garage" room path first)
     280 (radio plugin)   before music so "play 97.5 fm" isn't poached
     290 playlist         before music's ^play catch-all
     295 music_alias      "when i say X i mean Y" names, before music's ^play
-    300 music            greedy ^play catch-all
+    300 music            greedy ^play catch-all (its "... in the garage" room paths first)
     310 library          "find X in my library" before greedier "find X"
     900 (media-provider plugin)  greedy ^find catch-all — LAST band
 

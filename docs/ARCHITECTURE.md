@@ -275,10 +275,10 @@ map (from `domovoi/handlers/__init__.py`):
 | 240 | `memory` | |
 | 250 | `homelab` | |
 | 260 | `news` | Before all greedy media |
-| 270 | `spoken_audio` | Anchored media before playlist/music |
+| 270 | `spoken_audio` | Anchored media before playlist/music; its room path ("… in the garage") comes first within it |
 | 280 | *(radio plugin)* | Before music so "play 97.5 fm" isn't poached |
 | 290 | `playlist` | Before music's `^play` catch-all |
-| 300 | `music` | Greedy `^play` catch-all |
+| 300 | `music` | Greedy `^play` catch-all; its room paths ("… in the garage") come first within it |
 | 310 | `library` | "Find X in my library" before a greedier "find X" |
 | 900 | *(media-provider plugin)* | Greedy `^find` catch-all — LAST band |
 
@@ -679,6 +679,76 @@ only).
 * **The gate** (`scripts/eval_lyric_search.py`): a held-out request set
   built from the household's library and LRCLIB, kept outside the repo
   (it holds real lyrics), measured once and never used to tune anything.
+
+### Music in another room (`handlers/music_rooms.py`, `handlers/shared/rooms.py`, `room_music.py`)
+
+A music command may end with a place: "play jazz in the garage", "put
+Weezer on in the office", "stop / pause / skip / turn it up in the
+garage", "what's playing in the garage", "… in here", "… everywhere", or
+say it first: "in the garage, play jazz". Three of `MusicHandler`'s fast
+paths read them, after the lyric paths (a lyric is read whole) and before
+"play X by Y" and the `^play (.+)` catch-all, so the catch-all no longer
+searches for "jazz in the garage" in the asking room. Never an early
+commit (open slots); a pause before the place still commits a closed
+control ("stop the music … in the garage") on its short hold, as before
+(owner decision 2026-10-15: the controls stay instant). Tip for people:
+to stop, pause or skip in another room, say the room first ("in the
+garage, stop the music").
+
+* **Which place.** `rooms.household_rooms` lists the house's rooms: every
+  room id in `satellites`, `mpd_rooms` or `satellite_pairings`, plus the
+  rooms connected now (room-mode phones and laptop satellites included;
+  the chat mic's `phone-…` ids never). A place matches a room's id or its
+  label from Settings → Satellites, with "the", case, spaces/underscores,
+  a plural or possessive "s" and word order forgiven — nothing fuzzier.
+  Every split of the words is tried, the longest place first; a place
+  that is no room and doesn't sound like one ("the boys in the band",
+  "live at carnegie hall") leaves the turn to today's paths unchanged.
+  Satellites sharing a label: the connected voice satellite with a player.
+* **Song or room.** A play whose whole object is a sure name in the
+  library (the spoken-name resolver) is that name, here — unless the words
+  before the place are a name too, when Domovoi asks ("Did you mean
+  Dancing in the Garage by …? Say no to play dancing in the garage
+  instead.", the `core.music_room_or_title` yes/no). "play in the garage"
+  (no words before the place) is always the song.
+* **The rules.** Another room: a satellite connected without a pairing
+  token may only pause, resume, skip, go back or ask what's playing, and
+  only while that room is actively playing (the guest rule,
+  `guest_queue.py`); a play, a stop or a volume change there is refused,
+  as intercom and drop-in refuse it (CORE-11). A play, resume, skip or
+  volume change needs the target's satellite connected. A play in a room
+  without a running music player starts one (`mpd_provisioner.ensure_room`
+  by the room's own id — one container per room, as the container guard
+  expects — and only for a room the house has). `/v1/intent` has no
+  satellite to reach and says so. An unknown room that sounds like one
+  ("the attic") is answered with the rooms the house has.
+* **Doing it.** The command runs on a copy of the turn's context with the
+  target's `room_id` (`Context.asked_from_room` = where it was asked, so a
+  "did you mean …?" parks `play_room` and its answer plays there too);
+  the target's `music_start` / `music_stop` and `set_volume` go to ITS
+  satellite (`room_music.deliver_later`, beside the reply, through the
+  same `dispatch_music` the dashboard's casts use), and the reply is said
+  where it was asked ("Playing Weezer in the garage, shuffled."). The
+  asking room's own music resumes after the turn as after any other.
+  Playlists go through too ("play my road trip playlist in the garage").
+* **Podcasts and audiobooks** (`handlers/spoken_audio_rooms.py`, the
+  first fast path of `spoken_audio` at band 270, which would otherwise
+  read the place as part of a show's or a book's name): "play the latest
+  episode of X in the garage", "play the audiobook X in the office",
+  "resume the podcast in the kitchen", "play my audiobook in the office"
+  ("play my audiobook" alone is now a resume, not a music search). The
+  same place reading and checks (`handlers/room_commands.py`, shared with
+  music); a show or book whose whole name ends in the place, and whose
+  words before it name nothing else, is that show or book, here. It plays
+  with the target room's own resume position for the person (positions
+  never roam) and without the asking conversation's session; only
+  commands that start playback take a room. Radio stations don't: the
+  radio plugin's paths (band 280) take the place as part of a station's
+  name, and a plugin has no room surface in the SDK yet.
+* **Everywhere.** A stop or a pause applies to every room that is playing;
+  a play is "one room at a time".
+* **The tool.** The `music` tool's optional `room` argument takes the same
+  place for phrasings no fast path reads.
 
 ---
 

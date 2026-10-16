@@ -93,7 +93,9 @@ const UM_HOWTO = {
     diag: ['State missing or errors? Confirm the Postgres container is up and reachable.',
            'Check the latest V### migration has been applied to both prod and test DBs.'] },
   mpd: {
-    act: ['Play, queue and favorite music from the Music page — each room is independent.'],
+    act: ['Play, queue and favorite music from the Music page — each room is independent.',
+          'By voice, from any room, name the room: “play jazz in the garage”, “stop the music in the office”, “what’s playing in the kitchen”, “turn it up in the den”, “resume my audiobook in the office”.',
+          'To stop, pause or skip in another room, saying the room first is safest: “in the garage, stop the music”.'],
     diag: ["'port not listening' usually just means nothing is playing (it binds lazily).",
            "No music in a room? Check that room's MPD container is running."] },
   workers: {
@@ -453,7 +455,7 @@ const UserManualPage = () => {
     ['Can I add my own voice?', <>Pick one of the three public-domain voices, upload a Piper <span className="mono">.onnx</span> trained on English phonemes (American “en-us”, what most voices people train use, or British “en”) — Settings → Voices.</>],
     ['It says a name wrong. Can I fix it?', <>Yes: Settings → Voices → <b>Say it like</b>. Type the word and how it sounds, the stressed part in capitals (Siobhan = shiv-AWN), and press play to hear it first.</>],
     ['Why two different LLMs?', 'A small fast model handles open questions; a stronger model routes tool calls, where strict schema adherence matters more than speed.'],
-    ['How do rooms play different music?', 'Each room gets its own music daemon, so the kitchen and the garage can play completely independent tracks at the same time.'],
+    ['How do rooms play different music?', 'Each room gets its own music daemon, so the kitchen and the garage can play completely independent tracks at the same time. Any room can start or control another’s by naming it: “play some music in the garage”.'],
   ];
   const faqPanel = (
     <Card title="frequently asked">
