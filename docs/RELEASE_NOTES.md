@@ -4,6 +4,31 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-16 — Phone photos in chat: HEIC converted, refusals in words
+
+Dashboard update (the web process; no migration) and a new Android APK.
+
+* **The Android app converts photos the server can't read.** Many phones
+  save camera photos as HEIC (some as AVIF), which the chat refused with a
+  bare "upload failed". Now a HEIC, HEIF, AVIF or BMP picture, or a JPEG,
+  PNG, GIF or WebP over the chat's 40 megapixels or 20 MB, is decoded on
+  the phone, turned upright and sent as a JPEG of at most 2560 px on its
+  long edge (about 1 MB; twice what the vision model is given). **A
+  converted photo carries no metadata: its location, time and camera
+  details stay on the phone.** A JPEG, PNG, GIF or WebP within the limits
+  is still sent exactly as it is, metadata included. The kind is read
+  from the file's bytes, not its name. Converting HEIC needs Android 9 or
+  newer (AVIF, Android 12); an older phone says so and asks for a JPEG.
+* **A refused picture says why, in the app and on the dashboard.**
+  `POST /api/chat/uploads` answers a refusal with `{detail, code, ...}`:
+  `415 unsupported_format` with `format` (`"HEIC"`, `"AVIF"`, ... from
+  the file's magic bytes, or `null`), `413 too_many_pixels` with
+  `max_megapixels`, `413 file_too_large` with `max_mb`. `detail` is
+  still a plain sentence; a wrong file name's refusal is now one too (it
+  was "unsupported image type .heic"). A browser can't convert HEIC, so
+  the dashboard tells a HEIC photo to go through the app or be saved as a
+  JPEG. The server decodes nothing new: the kinds it takes are unchanged.
+
 ## 2026-10-16 — Android app: "a newer app is available from your server"
 
 A new APK, and a small change to the server's join page (`/join`); no

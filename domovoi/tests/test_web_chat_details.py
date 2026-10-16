@@ -83,6 +83,32 @@ CASES = {
 }
 
 
+def _server_refusal(data: bytes) -> dict:
+    """The body the chat upload really answers ``data`` with (named .jpg)."""
+    import web.backend.api.chat as chat_api
+
+    return json.loads(chat_api._unsupported(data).body)
+
+
+_HEIC = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic" + b"\x00" * 32
+_AVIF = b"\x00\x00\x00\x1cftypavif\x00\x00\x00\x00mif1avifmiaf" + b"\x00" * 32
+_PIXELS = {"detail": "That picture is too large for the chat: 9000 x 6000 is 54 megapixels; at most 40 "
+                     "are decoded.", "code": "too_many_pixels", "max_megapixels": 40}
+# A picture the chat can't take (2026-10-16): the upload's refusal, worded.
+CASES.update({
+    "up_heic": {"call": "uploadRefusalText", "args": [415, _server_refusal(_HEIC)]},
+    "up_heif": {"call": "uploadRefusalText", "args": [415, {**_server_refusal(_HEIC), "format": "HEIF"}]},
+    "up_avif": {"call": "uploadRefusalText", "args": [415, _server_refusal(_AVIF)]},
+    "up_unknown": {"call": "uploadRefusalText", "args": [415, _server_refusal(b"%PDF-1.7\n")]},
+    "up_pixels": {"call": "uploadRefusalText", "args": [413, _PIXELS]},
+    "up_old_415": {"call": "uploadRefusalText", "args": [415, {"detail": "unsupported image type .heic"}]},
+    "up_old_413": {"call": "uploadRefusalText", "args": [413, {"detail": "request body too large (limit 1 bytes)"}]},
+    "up_no_body": {"call": "uploadRefusalText", "args": [415, None]},
+    "up_500": {"call": "uploadRefusalText", "args": [500, None]},
+    "up_other_code": {"call": "uploadRefusalText", "args": [409, {"detail": "x", "code": "something_else"}]},
+})
+
+
 @pytest.fixture(scope="module")
 def out() -> dict:
     node = shutil.which("node")
@@ -194,3 +220,31 @@ def test_the_speaker_marker_reads_like_the_apps(out) -> None:
     assert out["mark_forgotten"]["label"] == "someone it knows"
     for typed in ("mark_typed", "mark_old_row", "mark_reply"):
         assert out[typed] is None
+
+
+def test_a_heic_photo_says_what_to_do_instead(out) -> None:
+    """A browser can't convert a phone's HEIC photo as the app does: the
+    refusal says to send it from the app or save it as a JPEG."""
+    assert out["up_heic"] == (
+        "This photo is in HEIC format, which the chat can't read. "
+        "Send it from the Domovoi app (it converts photos), or save it as a JPEG and try again."
+    )
+    assert out["up_heif"].startswith("This photo is in HEIF format")
+
+
+def test_other_refusals_are_the_servers_own_words(out) -> None:
+    assert out["up_avif"] == ("That picture is in AVIF format, which the chat can't read. "
+                              "Send a JPEG, PNG, GIF, WebP or BMP.")
+    assert out["up_unknown"] == ("That file isn't a picture the chat can read. "
+                                 "Send a JPEG, PNG, GIF, WebP or BMP.")
+    assert out["up_pixels"] == _PIXELS["detail"]
+
+
+def test_an_older_servers_refusal_still_reads_plainly(out) -> None:
+    """Worded as the app's ChatPhotoPlan.kt uploadRefusalText (its unit test
+    holds the same strings)."""
+    assert out["up_old_415"] == out["up_no_body"] == (
+        "That file isn't a picture the chat can read. Send a JPEG, PNG, GIF, WebP or BMP."
+    )
+    assert out["up_old_413"] == "That picture is too large for the chat."
+    assert out["up_500"] is None and out["up_other_code"] is None

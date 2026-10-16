@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import io
+import json
 import struct
 import threading
 import tracemalloc
@@ -29,7 +30,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
 from PIL import EpsImagePlugin, Image
 from starlette.datastructures import UploadFile
 
@@ -189,24 +192,121 @@ async def _upload(name: str, data: bytes) -> dict:
     return await chat_api.upload(UploadFile(io.BytesIO(data), filename=name))
 
 
+async def _refused(name: str, data: bytes) -> tuple[int, dict]:
+    """The status and JSON body of an upload the route refuses."""
+    r = await _upload(name, data)
+    assert isinstance(r, JSONResponse), r
+    return r.status_code, json.loads(r.body)
+
+
 @pytest.mark.parametrize("name,data", [
     ("cat.png", EPS),
     ("notes.png", b"just some text, named like a picture"),
     ("cat.jpg", b"\xff\xd8\xff\xe0 but nothing after"),
 ])
 async def test_an_upload_that_isnt_a_picture_is_refused(uploads, no_ghostscript, name, data) -> None:
-    with pytest.raises(HTTPException) as e:
-        await _upload(name, data)
-    assert e.value.status_code == 415 and "JPEG, PNG, GIF, WebP or BMP" in e.value.detail
+    status, body = await _refused(name, data)
+    assert status == 415 and "JPEG, PNG, GIF, WebP or BMP" in body["detail"]
+    assert body["code"] == "unsupported_format" and body["format"] is None
     assert list(uploads.iterdir()) == [] and no_ghostscript == []
 
 
 async def test_an_upload_over_40_megapixels_is_refused_with_its_size(uploads) -> None:
-    with pytest.raises(HTTPException) as e:
-        await _upload("huge.png", bomb_png(13000, 13000))
-    assert e.value.status_code == 413
-    assert "megapixels" in e.value.detail and "at most 40" in e.value.detail
+    status, body = await _refused("huge.png", bomb_png(13000, 13000))
+    assert status == 413
+    assert "megapixels" in body["detail"] and "at most 40" in body["detail"]
+    assert body["code"] == "too_many_pixels" and body["max_megapixels"] == 40
     assert list(uploads.iterdir()) == []
+
+
+# ─── the upload's refusal, for the clients to word (2026-10-16) ──────────
+# Many phones save camera photos as HEIC (some as AVIF). The app converts
+# them; the dashboard can't, so it words the refusal from `code` and
+# `format`. The bytes below are each format's real opening box/marker.
+
+def _ftyp(major: bytes, *compatible: bytes) -> bytes:
+    body = major + b"\x00\x00\x00\x00" + b"".join(compatible)
+    return (8 + len(body)).to_bytes(4, "big") + b"ftyp" + body + b"\x00\x00\x00\x08free" + b"\x00" * 64
+
+
+HEIC = _ftyp(b"heic", b"mif1", b"heic")
+HEIF = _ftyp(b"mif1", b"mif1")
+AVIF = _ftyp(b"avif", b"mif1", b"avif", b"miaf")
+# Samsung's and others' HEIC: a generic major brand, HEVC among the compatible ones.
+HEIC_MIF1_MAJOR = _ftyp(b"mif1", b"mif1", b"heic", b"miaf")
+AVIF_SEQUENCE = _ftyp(b"avis", b"avis", b"msf1")
+
+
+@pytest.mark.parametrize("name,data,fmt,word", [
+    ("IMG_0001.HEIC", HEIC, "HEIC", "HEIC"),
+    ("photo.jpg", HEIC, "HEIC", "HEIC"),          # what the app used to send
+    ("photo.jpg", HEIC_MIF1_MAJOR, "HEIC", "HEIC"),
+    ("x.heif", HEIF, "HEIF", "HEIF"),
+    ("pic.avif", AVIF, "AVIF", "AVIF"),
+    ("pic.png", AVIF_SEQUENCE, "AVIF", "AVIF"),
+    ("scan.tif", b"II*\x00" + b"\x00" * 60, "TIFF", "TIFF"),
+    ("p.jxl", b"\x00\x00\x00\x0cJXL \r\n\x87\n" + b"\x00" * 20, "JPEG XL", "JPEG XL"),
+])
+async def test_a_camera_format_is_refused_by_name(uploads, name, data, fmt, word) -> None:
+    status, body = await _refused(name, data)
+    assert status == 415
+    assert body == {
+        "code": "unsupported_format", "format": fmt,
+        "detail": f"That picture is in {word} format, which the chat can't read. "
+                  "Send a JPEG, PNG, GIF, WebP or BMP.",
+    }
+    assert list(uploads.iterdir()) == []
+
+
+@pytest.mark.parametrize("name,data", [
+    ("cat.pdf", b"%PDF-1.7\n"),
+    ("nothing", b""),
+    # An allowed kind under a name the chat doesn't take is not named as
+    # "its format" (that would read "JPEG, which the chat can't read").
+    ("cat.jfif", small("JPEG")),
+])
+async def test_an_unnamed_kind_is_refused_plainly(uploads, name, data) -> None:
+    status, body = await _refused(name, data)
+    assert status == 415 and body["code"] == "unsupported_format" and body["format"] is None
+    assert body["detail"] == ("That file isn't a picture the chat can read. "
+                              "Send a JPEG, PNG, GIF, WebP or BMP.")
+
+
+def test_the_file_cap_is_20_mb() -> None:
+    assert chat_api._MAX_UPLOAD_BYTES == 20 * 2**20
+
+
+async def test_a_file_over_the_cap_is_refused_with_the_cap(uploads, monkeypatch) -> None:
+    monkeypatch.setattr(chat_api, "_MAX_UPLOAD_BYTES", 2**20)       # 1 MB here, 20 on a server
+    status, body = await _refused("big.jpg", small("JPEG", (400, 400)) + b"\x00" * 2**20)
+    assert status == 413
+    assert body == {"code": "file_too_large", "max_mb": 1,
+                    "detail": "That picture is too large for the chat: more than 1 MB."}
+    assert list(uploads.iterdir()) == []
+
+
+def test_every_refusal_code_is_one_the_clients_word() -> None:
+    assert chat_api.UPLOAD_REFUSAL_CODES == ("unsupported_format", "too_many_pixels", "file_too_large")
+
+
+def test_the_refusal_body_over_http(uploads) -> None:
+    """The same body over HTTP, as the dashboard and the phone read it (the
+    chat router alone, its device check waived: DB-free)."""
+    from domovoi.admin_auth import require_device
+
+    app = FastAPI()
+    app.include_router(chat_api.router)
+    app.dependency_overrides[require_device] = lambda: None
+    with TestClient(app) as c:
+        r = c.post("/api/chat/uploads", files={"file": ("IMG_0001.heic", io.BytesIO(HEIC), "image/heic")})
+    assert r.status_code == 415
+    assert r.json()["code"] == "unsupported_format" and r.json()["format"] == "HEIC"
+    assert r.json()["detail"].startswith("That picture is in HEIC format")
+
+
+@pytest.mark.parametrize("fmt", ["JPEG", "PNG", "GIF", "WEBP", "BMP"])
+def test_the_sniffer_names_every_kind_the_chat_takes(fmt) -> None:
+    assert chat_api.picture_format_of(small(fmt)[:64]) == fmt
 
 
 @pytest.mark.parametrize("fmt,ext", [("JPEG", ".jpg"), ("PNG", ".png"), ("GIF", ".gif"),

@@ -518,7 +518,8 @@ const ChatPage = () => {
         const up = await apiUpload('/api/chat/uploads', form);
         setAttachments((cur) => [...cur, up]);
       } catch (e) {
-        fire(e.status === 415 ? 'chat takes PNG, JPEG, GIF, WebP or BMP pictures' : 'upload failed');
+        // The server's reason in words (a HEIC photo: what to do instead).
+        fire(ChatDetails.uploadRefusalText(e.status, e.detail) || 'upload failed');
       }
     }
   };

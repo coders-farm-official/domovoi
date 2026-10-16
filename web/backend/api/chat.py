@@ -857,31 +857,117 @@ def _check_picture(data: bytes) -> None:
         pass
 
 
-@router.post("/uploads", dependencies=DEVICE)
+# ISO base media file brands (the `ftyp` box) of the camera formats a phone
+# saves: HEIC (HEVC inside HEIF), plain HEIF, AVIF.
+_HEIC_BRANDS = frozenset({b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs"})
+_HEIF_BRANDS = frozenset({b"mif1", b"msf1"})
+_AVIF_BRANDS = frozenset({b"avif", b"avis"})
+
+
+def picture_format_of(head: bytes) -> str | None:
+    """What kind of picture ``head`` (a file's first bytes) is, by its
+    magic bytes alone (nothing is decoded and no decoder is asked), to name
+    it in an upload's refusal: ``"JPEG"``, ``"PNG"``, ``"GIF"``, ``"WEBP"``,
+    ``"BMP"``, or a camera format the chat doesn't take: ``"HEIC"``,
+    ``"HEIF"``, ``"AVIF"``, ``"JPEG XL"``, ``"TIFF"``. None for anything
+    else. The same rules as the Android app's ``sniffPicture``."""
+    if head[:3] == b"\xff\xd8\xff":
+        return "JPEG"
+    if head[:8] == b"\x89PNG\r\n\x1a\n":
+        return "PNG"
+    if head[:6] in (b"GIF87a", b"GIF89a"):
+        return "GIF"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "WEBP"
+    if head[:2] == b"BM" and len(head) >= 14:
+        return "BMP"
+    if head[4:8] == b"ftyp":
+        size = int.from_bytes(head[:4], "big")
+        end = min(len(head), size if 16 <= size <= 4096 else 16)
+        # The major brand, then the compatible ones (minor version skipped).
+        brands = [head[8:12]] + [head[i:i + 4] for i in range(16, end - 3, 4)]
+        if any(b in _AVIF_BRANDS for b in brands):
+            return "AVIF"
+        if any(b in _HEIC_BRANDS for b in brands):
+            return "HEIC"
+        if any(b in _HEIF_BRANDS for b in brands):
+            return "HEIF"
+        return None
+    if head[:2] == b"\xff\x0a" or head[:12] == b"\x00\x00\x00\x0cJXL \r\n\x87\n":
+        return "JPEG XL"
+    if head[:4] in (b"II*\x00", b"MM\x00*"):
+        return "TIFF"
+    return None
+
+
+#: The ``code`` of each refusal of a chat upload, beside its ``detail``
+#: sentence (2026-10-16, chat photos from phones): the clients word the
+#: refusal from it, so these never change meaning.
+UPLOAD_REFUSAL_CODES = ("unsupported_format", "too_many_pixels", "file_too_large")
+_FORMAT_WORDS = {"WEBP": "WebP"}
+
+
+def _upload_refused(status: int, code: str, detail: str, **extra: Any) -> JSONResponse:
+    """A refused upload's answer: ``{detail, code, ...}`` — the plain
+    sentence a client shows, and the stable code it can word itself."""
+    return JSONResponse(status_code=status, content={"detail": detail, "code": code, **extra})
+
+
+def _unsupported(data: bytes) -> JSONResponse:
+    """415 for an upload that isn't a picture the chat reads, naming its
+    kind when the bytes show one (``format``; null when they don't)."""
+    fmt = picture_format_of(data[:64])
+    if fmt is not None and fmt.upper() in image_safety.PICTURE_FORMATS:
+        fmt = None      # a broken one, or a good one with a wrong name: not "its kind"
+    what = (
+        f"That picture is in {_FORMAT_WORDS.get(fmt, fmt)} format, which the chat can't read."
+        if fmt else "That file isn't a picture the chat can read."
+    )
+    return _upload_refused(
+        415, "unsupported_format", f"{what} Send a JPEG, PNG, GIF, WebP or BMP.", format=fmt,
+    )
+
+
+@router.post(
+    "/uploads",
+    dependencies=DEVICE,
+    responses={
+        413: {"description": 'Too large: {"detail": "...", "code": "too_many_pixels", "max_megapixels": 40} '
+                             'or {"detail": "...", "code": "file_too_large", "max_mb": 20}'},
+        415: {"description": 'Not a picture the chat reads: {"detail": "...", "code": "unsupported_format", '
+                             '"format": "HEIC" | "HEIF" | "AVIF" | "JPEG XL" | "TIFF" | null}'},
+    },
+)
 async def upload(file: UploadFile = File(...)) -> dict[str, Any]:
     """Stage one image for a chat message. Returns the server-generated
     token the send call references; files are capped, extension-checked,
     and must really be a JPEG, PNG, GIF, WebP or BMP of at most
     ``image_safety.MAX_IMAGE_PIXELS`` (read from the header, off the loop;
-    nothing is decoded and no other kind is tried: delta review S7)."""
+    nothing is decoded and no other kind is tried: delta review S7).
+
+    A refusal is ``{detail, code, ...}`` (:func:`_upload_refused`):
+    ``415 unsupported_format`` with ``format`` (``"HEIC"``, ``"AVIF"``, …
+    from the bytes, or null), ``413 too_many_pixels`` with
+    ``max_megapixels``, ``413 file_too_large`` with ``max_mb``."""
     ext = Path(file.filename or "").suffix.lower()
-    if ext not in _UPLOAD_EXTS:
-        raise HTTPException(status_code=415, detail=f"unsupported image type {ext or '(none)'}")
     data = await file.read()
+    if ext not in _UPLOAD_EXTS:
+        return _unsupported(data)
     if len(data) > _MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="image too large (20 MB cap)")
+        return _upload_refused(
+            413, "file_too_large",
+            f"That picture is too large for the chat: more than {_MAX_UPLOAD_BYTES // 2**20} MB.",
+            max_mb=_MAX_UPLOAD_BYTES // 2**20,
+        )
     try:
         await executors.run("pictures", _check_picture, data)
     except image_safety.PictureRefused as e:
         if e.too_large:
-            raise HTTPException(
-                status_code=413,
-                detail=f"That picture is too large for the chat: {e}.",
-            ) from None
-        raise HTTPException(
-            status_code=415,
-            detail="That file isn't a picture the chat can read. Send a JPEG, PNG, GIF, WebP or BMP.",
-        ) from None
+            return _upload_refused(
+                413, "too_many_pixels", f"That picture is too large for the chat: {e}.",
+                max_megapixels=image_safety.MAX_IMAGE_PIXELS // 1_000_000,
+            )
+        return _unsupported(data)
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     token = uuid.uuid4().hex
     (UPLOADS_DIR / f"{token}{ext}").write_bytes(data)
