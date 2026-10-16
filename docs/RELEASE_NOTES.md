@@ -19,15 +19,19 @@ Android app only (a new APK); nothing changes on the server.
   CameraX 1.4.2 for it.
 * **Report this reply** (the on-device assistant): long-press a reply.
   The report shows exactly what it holds and takes a note; **save on this
-  phone** keeps it (model settings → reports), **share as text** opens
-  the share menu. The app sends no report anywhere itself: where reports
-  go is still to be decided.
+  phone** keeps it (model settings → reports), **email draft to coders
+  farm** opens your email app with it addressed to codersfarm@gmail.com
+  (sent only when you press send there), **share as text** opens the
+  share menu. The app itself sends nothing.
 * **The microphone** is asked for with a one-line reason first; after a
   refusal Android won't ask about again, the mic button leads to the app's
   settings instead of doing nothing.
-* **Settings → About → Privacy**: what the app keeps and where it goes.
-  The privacy policy link appears once its page is published (the app has
-  no address for it yet).
+* **Settings → About → Privacy**: what the app keeps and where it goes,
+  and a link to the privacy policy (`docs/PRIVACY_POLICY.md` on GitHub).
+* **Timers on Android 14 and later** ring exactly once you allow "Alarms
+  & reminders": Home's timers card offers it when it is off. Until then
+  they can ring a few minutes late. (The app no longer asks for the
+  alarm-clock-only permission Google Play restricts.)
 * **Settings → About → Open-source licences** now lists every library in
   the app (139 in a debug build), with its licence and notices, made from
   the build itself.
