@@ -130,6 +130,12 @@ def from_ft(a) -> int:
     while True:
         time.sleep(3)
         st, doc = _api(ft, "GET", "/api/satellites/usb-stick")
+        if st != 200 or not isinstance(doc, dict):
+            # A poll that failed (a busy box: the web's call to the core
+            # timed out) says nothing about the job; the dashboard keeps
+            # its last view the same way.
+            print(f"  +{time.time() - t0:5.0f}s poll answered {st}; trying again", flush=True)
+            continue
         job = doc.get("job") or {}
         print(f"  +{time.time() - t0:5.0f}s {job.get('stage')} {job.get('bytes_done')}/{job.get('bytes_todo')}",
               flush=True)
