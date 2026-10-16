@@ -144,13 +144,25 @@ def _payload_cores(payloads: list[str]) -> list[str]:
     return out
 
 
+def _join_link(payload: str) -> bool:
+    """The QR code's join link (<core>/join#<payload>, 2026-10-15): step 1
+    takes one, but install-pc.sh's own argument is only ever a
+    ``domovoi-room:`` payload (anything else is "unknown argument"), so
+    payload_core never sees a link, and gives no address for one."""
+    return payload.strip(" \t\r\n").lower().startswith(("http://", "https://"))
+
+
 def test_payload_core_agrees_with_the_shared_fixture():
     """Every payload step 1 takes gives its own core address; every one it
     refuses gives none, but for the room-name rules left to step 1."""
     doc = json.loads(FIXTURE.read_text(encoding="utf-8"))
     valid, invalid = doc["valid"], doc["invalid"]
     got = _payload_cores([c["payload"] for c in valid] + [c["payload"] for c in invalid])
+    assert any(_join_link(c["payload"]) for c in valid), "the fixture has join links"
     for case, core in zip(valid, got[:len(valid)]):
+        if _join_link(case["payload"]):
+            assert core == "", (case["name"], core)
+            continue
         assert core == case["expect"]["core"], (case["name"], core)
     for case, core in zip(invalid, got[len(valid):]):
         if case["reason"] in ROOM_ONLY or ROOM_UTF8 in case["payload"]:
