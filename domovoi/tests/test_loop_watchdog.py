@@ -202,21 +202,14 @@ def test_a_database_error_resets_the_no_answer_count(tmp_path) -> None:
         await asyncio.sleep(30)
 
     with Harness(tmp_path, probe=probe) as h:
-        assert wait_until(lambda: len(seen) >= 5, 10)
-        fired_early = h.exited.is_set()
-        assert h.exited.wait(10)            # the next no-answer makes three
+        assert h.exited.wait(20)
         out = h.output()
-    assert not fired_early, f"fired after {seen}: an error must reset the count"
+    # The watchdog stops probing when it fires, so `seen` is every probe
+    # it started: three no-answers in a row only from the sixth (counted
+    # through the error, it would have fired at the fourth). No timing in
+    # it, so a busy box can't make it flaky.
+    assert len(seen) == 6, f"fired after {seen}: an error must reset the count"
     assert "3 database probes in a row got no answer" in out
-
-
-def wait_until(pred, secs: float) -> bool:
-    end = time.monotonic() + secs
-    while time.monotonic() < end:
-        if pred():
-            return True
-        time.sleep(0.02)
-    return pred()
 
 
 def test_a_database_that_refuses_is_not_a_stall(tmp_path) -> None:

@@ -481,7 +481,12 @@ def test_the_uvicorn_launcher_caps_concurrency(monkeypatch, which):
     monkeypatch.setattr("sys.argv", ["domovoi"])
 
     if which == "core":
+        from domovoi import loop_watchdog
         from domovoi.main import main
+
+        # Never the real one in a test (conftest's guard): it writes under
+        # ~/.domovoi and leaves its thread in the worker.
+        monkeypatch.setattr(loop_watchdog, "install", lambda core_settings: None)
     else:
         from web.backend.main import main
 
