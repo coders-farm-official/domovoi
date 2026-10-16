@@ -87,7 +87,11 @@ We build Domovoi in public. Here's where it stands.
   speech, two local Ollama models (and a small vision model for pictures in
   chat), and Piper for the voice. It runs on Linux or Windows, with an NVIDIA
   GPU or on CPU alone, and on Ubuntu 26.04 one script installs all of it
-  ([Linux host](docs/LINUX_HOST.md) · [CPU host](docs/CPU_HOST.md)).
+  ([Linux host](docs/LINUX_HOST.md) · [CPU host](docs/CPU_HOST.md)). If its
+  core ever freezes, it ends itself and systemd starts it again, and an
+  admin can restart a core that has stopped answering from the dashboard;
+  the Satellites page then says the core is down instead of showing every
+  room offline ([the loop watchdog](docs/LINUX_HOST.md#the-loop-watchdog)).
 - **Raspberry Pi satellites** put a voice in every room, with wake word,
   barge-in, and intercom and drop-in between rooms. The dashboard prepares
   a Pi's SD card, and you finish its setup from your phone over the Pi's
@@ -118,8 +122,9 @@ We build Domovoi in public. Here's where it stands.
   for text chat and push-to-talk voice, in airplane mode too once its
   2.45 GB of models are downloaded. It needs a 64-bit phone with 8 GB of
   memory or more ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)).
-  A bad reply can be reported (an email draft you send yourself), and its
-  controls, like room mode's, are labelled for screen readers.
+  It answers the time and date from the phone's own clock. A bad reply can
+  be reported (an email draft you send yourself), and its controls, like
+  room mode's, are labelled for screen readers.
 - **A Windows installer, as a test build.** `DomovoiSetup.exe` puts the Linux
   server inside WSL2 on a Windows 11 PC. It is an unsigned test build;
   download it from the
@@ -129,11 +134,18 @@ We build Domovoi in public. Here's where it stands.
   phone or tablet through the Android app's room mode, can be a room instead
   of a Raspberry Pi. Each joins with a one-line command or a QR code from the
   dashboard ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md)).
+  Older Linux laptops (Ubuntu 22.04, Mint 21, Debian 11) and Fedora,
+  openSUSE or Arch get the satellite's own pinned Python
+  ([older Linux](docs/SPARE_DEVICE_SATELLITES.md#older-linux-and-fedora-opensuse-arch)),
+  and a processor from before about 2009 is turned away before anything
+  is downloaded.
 
 **Coming next** (being finished now)
 
-1. **Fixes for a rare server freeze:** the core restarts itself when it
-   stalls, and the dashboard can restart a core that has stopped answering.
+1. **Domovoi v1.0.0,** after the
+   [v1.0.0-rc1](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc1)
+   pre-release: once the freeze fixes above have run for a few days and
+   the spare-device hardware checks are done.
 
 **Later**
 
@@ -362,8 +374,9 @@ Satellites** on the dashboard (as admin) to make it a room. Three routes:
   the [Satellite hardware guide](docs/SATELLITE_HARDWARE.md).
 - **A spare Linux or Windows laptop or PC.** **Settings → Satellites → add
   a spare device**: type the room's name, press **make the code**, and run
-  the one-line command it shows on that computer. The computer checks it
-  reached *your* server, then shows its approval code
+  the one-line command it shows on that computer (an older Linux, or
+  Fedora, openSUSE or Arch, gets the satellite's own Python). The computer
+  checks it reached *your* server, then shows its approval code
   ([Linux](docs/SPARE_DEVICE_SATELLITES.md#linux-laptops-and-mini-pcs) ·
   [Windows](docs/SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)).
 - **An old phone or tablet** (Android 8.0 or later). The same **add a spare
