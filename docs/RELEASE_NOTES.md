@@ -30,9 +30,17 @@ nothing to do by hand). Delta security review 2026-10-16, S4 / REV-10.
   (`ExecStartPre`/`ExecStart` through the verifier,
   `Environment=DOMOVOI_REPO_DIR`, `RuntimeDirectory=domovoi-update`; still
   `Type=oneshot`, `TimeoutStartSec=30min`) and **last update** shows an
-  `update-unit` step. A unit edited by hand is left alone with a `warn`
-  step; `install-update-unit.sh` replaces it. The first run fetches the
-  whole history into the mirror once (about 30 MB, some seconds).
+  `update-unit` step. A unit edited by hand is replaced too, kept beside it
+  as `domovoi-update.service.bak-<time>` (a `warn` step says where). The
+  first run fetches the whole history into the mirror once (about 30 MB,
+  some seconds); the fetch is bounded (`DOMOVOI_VERIFY_FETCH_TIMEOUT`,
+  `DOMOVOI_VERIFY_FETCH_MAX_KB`).
+* **`install-update-unit.sh` run from the checkout re-runs itself from the
+  verified copy** once the box has a verifier (it says so), so a by-hand
+  re-run can't install the checkout's own `update-verifier.sh`; the docs'
+  by-hand commands all use `verify-update.sh export`. **The search
+  helper** starts from the copy's compose file, by `docker compose`
+  running as the service user.
 * **New refusals**, before anything is touched: a commit with a symbolic
   link or a submodule under `scripts/linux` (`failed`, step `verify`); a
   HEAD that moved between the verifier's copy and the update (`refused`,

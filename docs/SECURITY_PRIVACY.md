@@ -1154,9 +1154,13 @@ mirror only root can write (every object checked; the checkout is read by
 its SSH signature there while signed updates are enforced, and writes the
 commit's `scripts/linux` and `docs/LINUX_HOST.md` into
 `/run/domovoi-update/<sha>`, plain files only. The update script, its
-helpers, the units, the drop-ins and the verifier itself all come from
-that copy; so do `provision.sh`'s reads on every run. Root's git never
-follows a replacement object or a graft. Said plainly:
+helpers, the units, the drop-ins, the verifier itself and the compose
+file the search helper starts from all come from that copy; so do
+`provision.sh`'s reads on every run, and a by-hand
+`install-update-unit.sh` run from the checkout re-runs itself from it.
+What root hands to Docker (the room image's build, the search helper's
+compose) runs as the service user. Root's git never follows a replacement
+object or a graft. Said plainly:
 
 - **With signed updates enforced** (`/etc/domovoi/allowed_signers`,
   [LINUX_HOST.md, Signed updates](LINUX_HOST.md#signed-updates)), root runs
@@ -1171,6 +1175,13 @@ follows a replacement object or a graft. Said plainly:
   nothing root runs, but anyone who can write the checkout (code running as
   the service user included) can commit and move HEAD, and that commit
   runs as root at the next Restart. Turning signing on is what closes it.
+  The branch pin (`DOMOVOI_UPSTREAM_BRANCH`) is no bound here either: it is
+  checked against the branches the checkout last fetched, which that user
+  can rewrite.
+- **What signing doesn't bound yet: an older signed commit.** Moving HEAD
+  back to a commit that was signed then, and has since been fixed, is not
+  refused (a rollback needs older commits). Bounding that is for 1.1's
+  signed releases.
 - **What signing doesn't bound: the service user's own processes.** Code
   running as the service user can still change the core, the dashboard and
   the plugins that account runs (their code is in its checkout and its

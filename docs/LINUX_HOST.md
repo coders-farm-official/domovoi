@@ -1460,20 +1460,47 @@ from the checkout one last time, and that script hands over to the
 verifier beside it, which makes the copy and goes on from it; the copy's
 `apply-update.sh` then puts the verifier in place and replaces the unit
 with the one above (a `update-unit` step in **last update** says so). A
-unit someone changed by hand is left as it is, with a `warn` step: run
-`install-update-unit.sh` to replace it (it keeps the old one beside it).
+unit someone changed by hand is replaced the same way, after a copy of it
+is kept beside it as `domovoi-update.service.bak-<time>` (a name systemd
+ignores; the `warn` step says where): put any change of yours back as a
+drop-in in `/etc/systemd/system/domovoi-update.service.d/`.
+
+The search helper is started from the copy's `domovoi/docker-compose.yml`
+(kept for it as `/var/lib/domovoi-update/searxng-compose.yml`), by `docker
+compose` running as the service user, in the foreground or in its
+transient unit; the project directory (`domovoi/.env`, `domovoi/searxng`)
+is the checkout's, read by that user.
+
+The fetch into the mirror is bounded: `DOMOVOI_VERIFY_FETCH_TIMEOUT`
+seconds (default 900) and `DOMOVOI_VERIFY_FETCH_MAX_KB` per file it
+writes (default 2097152, 2 GB), in `/etc/default/domovoi-update`; past
+either, the run fails at `verify` with nothing changed.
 
 `provision.sh` does the same on every run, re-runs included: right after
 its checkout step it makes the verified copy (the same code, carried in
 `provision.sh` itself) in `/run/domovoi-provision/<sha>` and reads the pin
 manifest, the Ollama pin, the units, the drop-ins and its helpers only from
-there. To run `provision.sh` or `install-update-unit.sh` by hand from
-verified files rather than the checkout:
+there; the files it only hashes or reads a line of (the locks, the compose
+file) it reads as the service user.
+
+**By hand, run root's scripts from a verified copy, never from the
+checkout.** The installed verifier makes one (`export`); before the first
+install there is none yet, and the checkout's own `update-verifier.sh`
+makes it, as trusted as the checkout itself at that moment. Every command
+on this page that runs `install-update-unit.sh` or `provision.sh` by hand
+takes this form:
 
 ```bash
-COPY=$(sudo DOMOVOI_REPO_DIR=/opt/domovoi bash /usr/local/lib/domovoi-update/verify-update.sh export /root/domovoi-copy)
+V=/usr/local/lib/domovoi-update/verify-update.sh
+sudo test -f "$V" || V=/opt/domovoi/scripts/linux/update-verifier.sh   # before the first install only
+COPY=$(sudo DOMOVOI_REPO_DIR=/opt/domovoi bash "$V" export /run/domovoi-update-install)
 sudo bash "$COPY/scripts/linux/install-update-unit.sh" --dry-run
 ```
+
+Run from inside the checkout on a box that has the verifier,
+`install-update-unit.sh` does this itself: it says so, makes the copy with
+the installed verifier and runs that copy's installer with the same
+options. Only the very first install runs it from the checkout as it is.
 
 **`/etc/default/domovoi-update`** is optional. Every setting defaults to the
 layout on this page, so you only need the file to change one:
@@ -1539,6 +1566,9 @@ layout on this page, so you only need the file to change one:
 # DOMOVOI_UPDATE_TRAINER_TIMEOUT=1800
 # 0: leave the journal where it is (The loop watchdog). Default: kept on disk (journald's own size limits).
 # DOMOVOI_MANAGE_JOURNAL=1
+# The update verifier's fetch into root's mirror (The update verifier): seconds, and KB a file.
+# DOMOVOI_VERIFY_FETCH_TIMEOUT=900
+# DOMOVOI_VERIFY_FETCH_MAX_KB=2097152
 ```
 
 **The sudoers grant.** The button needs one more single-command rule,
@@ -1679,7 +1709,10 @@ from it first:
 
    ```bash
    echo 'DOMOVOI_USE_LOCK=1' | sudo tee -a /etc/default/domovoi-update
-   sudo bash /opt/domovoi/scripts/linux/install-update-unit.sh --dry-run
+   V=/usr/local/lib/domovoi-update/verify-update.sh
+   sudo test -f "$V" || V=/opt/domovoi/scripts/linux/update-verifier.sh   # before the first install only
+   COPY=$(sudo DOMOVOI_REPO_DIR=/opt/domovoi bash "$V" export /run/domovoi-update-install)
+   sudo bash "$COPY/scripts/linux/install-update-unit.sh" --dry-run
    ```
 
    It reports `dependency lock: on` when an update would install from
@@ -1811,13 +1844,15 @@ update has to: the verifier itself, which makes a copy and changes nothing
 else, then the installer's pre-flight from that copy:
 
 ```bash
-COPY=$(sudo DOMOVOI_REPO_DIR=/opt/domovoi bash /usr/local/lib/domovoi-update/verify-update.sh export /root/domovoi-copy)
+V=/usr/local/lib/domovoi-update/verify-update.sh
+sudo test -f "$V" || V=/opt/domovoi/scripts/linux/update-verifier.sh   # before the first install only
+COPY=$(sudo DOMOVOI_REPO_DIR=/opt/domovoi bash "$V" export /run/domovoi-update-install)
 sudo bash "$COPY/scripts/linux/install-update-unit.sh" --dry-run
 ```
 
-The first says `HEAD is signed by alex (SHA256:...), listed in /etc/domovoi/allowed_signers`
+The `export` says `HEAD is signed by alex (SHA256:...), listed in /etc/domovoi/allowed_signers`
 (or `refused:` and why) and prints the copy's directory.
-The second reports `signed updates enforced: HEAD ... is signed by alex`,
+The installer's pre-flight reports `signed updates enforced: HEAD ... is signed by alex`,
 or stops, changing nothing, if HEAD would be refused. If the checkout is
 still on a commit from before you started signing, pull a signed one first
 (**Pull the latest** verifies it), then restart. Several people can sign:
@@ -1853,6 +1888,14 @@ only [signed updates](#signed-updates) bound what root runs. Root's git
 calls (here, in `provision.sh` and in the installer) ignore `refs/replace`
 and grafts (`GIT_NO_REPLACE_OBJECTS=1`, `GIT_GRAFT_FILE=/dev/null`), so a
 signature check always sees the commit HEAD names.
+Until signed updates are switched on, the pin catches a mistake (a
+checkout pointed at the wrong branch), not code on the box: the branches
+it checks HEAD against are the ones the checkout last fetched, copied into
+root's mirror from the checkout, and the service user can rewrite those
+(the review of the root verifier, case R4). With signing enforced it is
+the signature that bounds what runs. What signing doesn't block yet
+(planned with 1.1's signed releases): moving HEAD back to an older commit
+that was signed too.
 Keep the file readable by the service user (`0644`; it holds no secrets):
 the core reads the pin and the signers path from it, and while it can't,
 the dashboard offers no channel switch and says why. All four settings are optional and read from that
@@ -1891,13 +1934,18 @@ first server. One command sets it up. Over SSH, as your admin user:
    something restarts it, and that old SHA is the one the installer records
    as the rollback baseline.
 
-2. Run the installer. `--dry-run` says what it would do and changes
-   nothing; `--apply` goes on to run the update once, the way the button
-   will:
+2. Run the installer, from a verified copy of the checkout
+   ([The update verifier](#the-update-verifier)). `--dry-run` says what it
+   would do and changes nothing (the copy and the mirror it comes from are
+   root's own cache); `--apply` goes on to run the update once, the way the
+   button will:
 
    ```bash
-   sudo bash /opt/domovoi/scripts/linux/install-update-unit.sh --dry-run
-   sudo bash /opt/domovoi/scripts/linux/install-update-unit.sh --apply
+   V=/usr/local/lib/domovoi-update/verify-update.sh
+   sudo test -f "$V" || V=/opt/domovoi/scripts/linux/update-verifier.sh   # before the first install only
+   COPY=$(sudo DOMOVOI_REPO_DIR=/opt/domovoi bash "$V" export /run/domovoi-update-install)
+   sudo bash "$COPY/scripts/linux/install-update-unit.sh" --dry-run
+   sudo bash "$COPY/scripts/linux/install-update-unit.sh" --apply
    ```
 
 It does what the manual steps below do, after checking that the box can
