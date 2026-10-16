@@ -21,9 +21,14 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 command -v uv >/dev/null 2>&1 || { echo "needs uv (pip install uv)" >&2; exit 1; }
 
 OUT=satellite/locks
-# The oldest glibc the installer supports (Debian 12): a wheel the list
-# names installs on every supported release.
-GLIBC=2_36
+# The oldest glibc the installer supports: 2.28, since a computer whose own
+# Python is too old (Ubuntu 22.04: glibc 2.35, Debian 11: 2.31) installs
+# these lists with the satellite's own Python (satellite/locks/
+# linux-python.txt), and numpy, scipy and onnxruntime publish
+# manylinux_2_28 wheels. A version the list names then has a wheel for
+# every supported release (on 2026-10-15, resolving at 2_28 and at 2_36
+# picked the same versions).
+GLIBC=2_28
 PYTHONS="3.11 3.12 3.13 3.14"
 MACHINES="x86_64 aarch64"
 

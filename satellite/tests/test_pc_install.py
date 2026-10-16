@@ -422,7 +422,16 @@ def test_root_never_works_inside_the_satellite_s_home():
     text = SCRIPT.read_text(encoding="utf-8")
     assert '$SUDO /usr/bin/install -d -o "$SAT_ACCOUNT"' not in text and '$SUDO install' not in text
     assert 'as_sat /usr/bin/mkdir -p "$PREFIX"' in text
-    assert "chown" not in text.replace("# ", "") and "$SUDO /usr/bin/rm -rf" not in text
+    assert "chown" not in text.replace("# ", "")
+    # Root removes a tree only at its own fixed paths: the satellite's own
+    # Python and its working names, all inside $ROOT_LIB (pinned Python,
+    # 2026-10-15).
+    for line in (ln for ln in text.splitlines() if "$SUDO /usr/bin/rm -rf" in ln):
+        targets = line.split("$SUDO /usr/bin/rm -rf", 1)[1].split(";")[0].split()
+        assert targets and set(targets) <= {'"$PYTHON_HOME"', '"$PY_NEW"', '"$PY_OLD"'}, line
+    for name in ("PYTHON_HOME=$ROOT_LIB/python", "PY_NEW=$ROOT_LIB/.python.new",
+                 "PY_OLD=$ROOT_LIB/.python.old", "PY_PART=$ROOT_LIB/.python.tar.gz"):
+        assert re.search("^" + re.escape(name) + "$", text, re.M), name
 
 
 # ─── as_sat (review S3: root + headless) ──────────────────────────────────
@@ -472,7 +481,8 @@ def test_a_fixed_path_and_no_caller_functions_before_anything_runs():
     code = [ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
     tools = ("sudo|python3|setsid|runuser|install|apt-get|env|useradd|usermod|userdel|stat|chmod|mkdir|tee|"
              "systemctl|loginctl|rm|rmdir|cp|cat|cut|date|dirname|basename|dpkg-query|getent|grep|id|ls|mktemp|"
-             "sed|tr|awk|sleep|pkill|find|uname|sh|test")
+             "sed|tr|awk|sleep|pkill|find|uname|sh|test|mv|tar|head|sha256sum|getconf|curl|wget|dnf|zypper|"
+             "pacman|rpm")
     bare = re.compile(r"(^|[;&|({]|\$\(|\bthen|\bdo|\bas_sat|\$SUDO|\|\||&&)\s*(" + tools + r")\s")
     offenders = [ln for ln in code if bare.search(ln.split(' say "')[0].split(' die "')[0])
                  and not ln.lstrip().startswith(("say ", "die "))]
@@ -575,6 +585,6 @@ def test_the_lists_hold_what_the_requirements_ask_for():
 def test_the_installer_installs_only_from_the_list_with_hashes():
     text = SCRIPT.read_text(encoding="utf-8")
     assert "--require-hashes --only-binary=:all: --no-deps -r \"$PREFIX/$LOCK_REL\"" in text
-    assert "LOCK_REL=satellite/locks/pc-$PYTAG-$(/usr/bin/uname -m).txt" in text
+    assert "LOCK_REL=satellite/locks/pc-$PYTAG-$MACHINE.txt" in text and "MACHINE=$(/usr/bin/uname -m)" in text
     pip_lines = [ln for ln in text.splitlines() if "pip\" install" in ln or "/pip install" in ln]
     assert len(pip_lines) == 1, pip_lines
