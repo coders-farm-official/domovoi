@@ -21,7 +21,7 @@
 
 <p align="center">
   <a href="https://discord.gg/pg8QQPwhq"><img alt="Join us on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white"></a>
-  <a href="EMAIL_SIGNUP_URL"><img alt="Get updates by email" src="https://img.shields.io/badge/Get%20updates%20by%20email-F2A618?style=for-the-badge"></a>
+  <a href="https://forms.gle/wbz194RhuLmJdg3D8"><img alt="Get updates by email" src="https://img.shields.io/badge/Get%20updates%20by%20email-F2A618?style=for-the-badge"></a>
 </p>
 
 <p align="center">
@@ -29,8 +29,6 @@
   <a href="https://learn.codersfarm.org">Learn to code, free</a> ·
   <a href="https://donate.codersfarm.org">Support Coders Farm</a>
 </p>
-<!-- TODO(owner): replace EMAIL_SIGNUP_URL (in the button above and in Status
-     and roadmap) with the real signup link before merging. -->
 
 Domovoi runs entirely on your own hardware: a server on your network does the
 listening, thinking, and speaking, and small Raspberry Pi satellites put a
@@ -118,7 +116,7 @@ same bar Coders Farm teaches: automated tests, review, and a written
 [security model](docs/SECURITY_PRIVACY.md). The code is all here; read it.
 
 **Follow along and get help.** Updates go out on [Discord](https://discord.gg/pg8QQPwhq)
-and by [email](EMAIL_SIGNUP_URL). For questions and install help, use
+and by [email](https://forms.gle/wbz194RhuLmJdg3D8). For questions and install help, use
 [Discussions](https://github.com/coders-farm-official/domovoi/discussions);
 replies can take a few days while we build.
 
