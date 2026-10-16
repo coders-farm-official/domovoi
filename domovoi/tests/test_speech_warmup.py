@@ -7,7 +7,7 @@ the room's Piper voice inside the first reply (tts_first_ms 638 against
 44-99). Worse, the encoder loaded synchronously ON THE EVENT LOOP
 (``RealVoiceEmbedder._ensure_encoder`` ran before the worker thread), so
 every room's socket stood still for it. Pinned here, with doubles for
-resemblyzer and piper and no database:
+the speaker encoder and piper and no database:
 
 * the encoder loads in a worker thread, on an embed as on a preload, and
   once between a preload and a turn racing it;
@@ -43,8 +43,11 @@ PCM_2S = np.full(32_000, 800, dtype=np.int16).tobytes()
 
 @pytest.fixture
 def fake_resemblyzer(monkeypatch):
-    """A `resemblyzer` whose VoiceEncoder records the thread it was built
-    on and takes a while to build, like the real one."""
+    """A speaker encoder (domovoi/clients/speaker_encoder.py, Resemblyzer's
+    network) that records the thread it was built on and takes a while to
+    build, like the real one."""
+    from domovoi.clients import speaker_encoder
+
     seen: dict = {"built_on": [], "embedded": 0}
 
     class VoiceEncoder:
@@ -57,7 +60,7 @@ def fake_resemblyzer(monkeypatch):
             v = np.ones(256, dtype=np.float32)
             return v / np.linalg.norm(v)
 
-    monkeypatch.setitem(sys.modules, "resemblyzer", types.SimpleNamespace(VoiceEncoder=VoiceEncoder))
+    monkeypatch.setattr(speaker_encoder, "SpeakerEncoder", VoiceEncoder)
     monkeypatch.setattr(settings, "voice_profile_min_utterance_sec", 1.0)
     return seen
 
@@ -101,7 +104,18 @@ def test_a_preload_and_a_racing_turn_load_the_encoder_once(fake_resemblyzer) -> 
 
 
 def test_a_missing_resemblyzer_degrades_to_no_embedding(monkeypatch) -> None:
-    monkeypatch.setitem(sys.modules, "resemblyzer", None)    # import fails
+    from domovoi.clients import speaker_encoder
+
+    def no_weights():
+        raise FileNotFoundError("Resemblyzer's voice encoder weights are not installed")
+
+    monkeypatch.setattr(speaker_encoder, "weights_path", no_weights)
+    monkeypatch.setattr(settings, "voice_profile_min_utterance_sec", 1.0)
+    assert asyncio.run(RealVoiceEmbedder().embed(PCM_2S)) is None
+
+
+def test_a_missing_torch_degrades_to_no_embedding(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "torch", None)          # import fails
     monkeypatch.setattr(settings, "voice_profile_min_utterance_sec", 1.0)
     assert asyncio.run(RealVoiceEmbedder().embed(PCM_2S)) is None
 
