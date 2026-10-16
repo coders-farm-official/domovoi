@@ -833,30 +833,59 @@ SIGKILL, and `Restart=` starts it again. The dashboard is ordered after
 `domovoi-db`, not after the core, so it stays up while the core starts or
 is stuck.
 
-**A unit you wrote yourself** (from an older copy of this page) needs at
-least `Restart=on-failure` (or `always`), or the core stays down after the
-watchdog ends it. You don't have to add it: every run of the [update
-unit](#updates-from-the-dashboard) checks `systemctl show -p Restart
-domovoi-core` and, when it is anything else, writes
+**A unit you wrote yourself** (from an older copy of this page) with no
+restart policy at all (`Restart=no`, systemd's default) leaves the core
+down after the watchdog ends it. You don't have to fix that: every run of
+the [update unit](#updates-from-the-dashboard) checks `systemctl show -p
+Restart domovoi-core` and, only when it is `no`, writes
 `/etc/systemd/system/domovoi-core.service.d/50-domovoi-restart.conf`
-(`Restart=on-failure`, `RestartSec=5`) and reloads systemd; the Version
-card's last update says so. `Type=notify` and `WatchdogSec=` are added
-only by installing the shipped unit (above, or
+(`Restart=on-failure`, plus `RestartSec=5` unless the unit sets a
+`RestartSec=` of its own) and reloads systemd; the Version card's last
+update says so. A policy of your own (`on-abnormal`, `on-watchdog`,
+`on-success`) is never replaced: the run leaves it and its last update
+carries a warning that it won't start a core that exited with 70. Neither
+is `always` or `on-failure` touched. `Type=notify` and `WatchdogSec=` are
+added only by installing the shipped unit (above, or
 `scripts/linux/provision.sh`), never into a unit you wrote: a different
 `ExecStart` could leave systemd waiting for a READY that never comes.
-To decide `Restart=` yourself, put it in a drop-in that sorts after
-`50-domovoi-restart.conf`.
+To decide `Restart=` yourself, put it in the unit or in a drop-in that
+sorts after `50-domovoi-restart.conf`.
 
-**The dashboard's Restart the core.** When the core doesn't answer
-(`/v1/health` gives no 200 within 3 s), an admin gets **Restart the core**
-on Settings → Version, on the Satellites page and on Home's "isn't
-answering" row. The web checks the admin session itself (the shared
-`admin_sessions` table; the core can't), then signals the core's main
-process: SIGUSR1 (every stack into the faulthandler log), then SIGKILL,
-and systemd starts it again. It needs no sudoers line: core and web run as
-the same user. It is offered only where it works, the core unit restarts
-after a kill, the process is the core's and this account's, and it isn't
-starting; otherwise the dashboard shows why and the command to run by
+**The dashboard's Restart the core.** When the core doesn't answer, an
+admin gets **Restart the core** on Settings → Version, on the Satellites
+page and on Home's "isn't answering" row. It ends only a core that is
+truly stuck, never one that is busy, slow or missing its database:
+
+- **Liveness, not health.** The web asks `GET /v1/alive`, which the
+  core's event loop answers by itself, with no database. Any answer at all,
+  a `503` included, means the core runs: nothing is ended, and the button
+  isn't offered. A core whose database is down says so (the Satellites
+  banner reads *the database isn't answering*): restarting it can't help.
+- **Silent for longer than the core's own watchdog waits.** A press ends
+  the core only after `/v1/alive` has given no answer, asked every second
+  (3 s each), for `LOOP_WATCHDOG_STALL_SEC` + 15 s (45 s by default; never
+  under 45): a loop busy for a few seconds answers again within that, and
+  a core truly frozen has usually ended itself first. The page reads the
+  status every 5 s while the core is silent, and that silence counts, so a
+  press after a minute of watching acts at once; otherwise the button says
+  *making sure it's stuck* while it waits.
+- **Not while it starts.** A core systemd reports as starting, one that
+  restarted meanwhile (a new main PID) and, under a unit changed to
+  `Type=simple`, one that hasn't said it is ready
+  (`~/.domovoi/run/core-ready.json`) and started less than
+  `LOOP_WATCHDOG_STARTUP_SEC` (900 s) ago are left alone.
+- **Every guard again, right before the kill.** The unit restarts after a
+  kill, the main PID is still that process, it is `python -m domovoi.main`
+  and this account's: read fresh after the wait, before SIGUSR1 and again
+  before SIGKILL. One press at a time; a second (another admin) is told one
+  is under way.
+
+The web checks the admin session itself (the shared `admin_sessions`
+table; the core can't), then signals the core's main process: SIGUSR1
+(every stack into the faulthandler log), then SIGKILL, and systemd starts
+it again. It needs no sudoers line: core and web run as the same user.
+Where it can't work (a unit systemd wouldn't restart, a core under another
+account, no systemd), the dashboard shows why and the command to run by
 hand. When the process can't be signalled but the web may use the core's
 [restart grant](#2b-restart-from-the-dashboard-needs-one-sudoers-line)
 (a web unit you wrote without `NoNewPrivileges`), it runs that instead.
@@ -865,11 +894,14 @@ hand. When the process can't be signalled but the web may use the core's
 lost at the power cycle that ends it. `provision.sh` and every update run
 install
 [`scripts/linux/units/journald-domovoi.conf`](../scripts/linux/units/journald-domovoi.conf)
-as `/etc/systemd/journald.conf.d/50-domovoi.conf` (`Storage=persistent`,
-`SystemMaxUse=1G`) and restart `systemd-journald` once. To keep the
-journal your own way, set `DOMOVOI_MANAGE_JOURNAL=0` in
-`/etc/default/domovoi-update` and delete the file, or put your own drop-in
-after it.
+as `/etc/systemd/journald.conf.d/50-domovoi.conf`, which sets
+`Storage=persistent` and nothing else, and restart `systemd-journald`
+once. Its size stays journald's to decide (by default at most 10% of the
+file system, capped at 4 GB) or yours: a `SystemMaxUse=` in
+`/etc/systemd/journald.conf` or a drop-in of your own still applies. To
+keep the journal your own way, set `DOMOVOI_MANAGE_JOURNAL=0` in
+`/etc/default/domovoi-update` and delete the file, or put your own
+`Storage=` in a drop-in after it.
 
 **By hand, over SSH** (nothing else answering):
 
@@ -1244,7 +1276,7 @@ layout on this page, so you only need the file to change one:
 # DOMOVOI_UPSTREAM_BRANCH=main
 # 0: leave Ubuntu's background jobs alone (step 11, Internet or not). Default: they follow the answer.
 # DOMOVOI_MANAGE_OS_JOBS=1
-# 0: leave the journal where it is (The loop watchdog). Default: kept on disk, at most 1 GB.
+# 0: leave the journal where it is (The loop watchdog). Default: kept on disk (journald's own size limits).
 # DOMOVOI_MANAGE_JOURNAL=1
 ```
 

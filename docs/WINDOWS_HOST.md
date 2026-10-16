@@ -331,7 +331,8 @@ you share them.
   `provision.sh` installs the `Type=notify` core unit with `WatchdogSec=`,
   and keeps the distro's journal on disk, so the record of a freeze
   survives a restart of the PC. A distro installed before 2026-10-15 gets
-  the journal setting, and `Restart=` if its core unit lacked it, from the
+  the journal setting, and `Restart=on-failure` if its core unit had no
+  restart policy at all, from the
   next update run (Settings > Version, **Restart Domovoi**); the
   `Type=notify` unit itself comes with the next run of Setup. By hand, from
   an administrator PowerShell, `Restart-Service DomovoiHost` stops

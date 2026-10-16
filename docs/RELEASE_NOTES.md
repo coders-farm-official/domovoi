@@ -17,12 +17,18 @@ journal in RAM). What changed:
   track, more per real song; a decode that never returned froze it for
   good). It now runs in a child process, below normal priority, killed
   after `RADIO_FINGERPRINTER_TIMEOUT_SEC` (300 s; a sample 60 s), two at
-  a time; a track that runs out of time is skipped from then on. Loop lag
-  while fingerprinting went from 1.8 s to 0.02 s. And database connects
-  no longer wait for a free thread: a `localhost` database host is dialed
-  at 127.0.0.1, and speech, synthesis and plugin installs have thread
-  pools of their own (a Piper voice's first download no longer holds up
-  every other voice).
+  a time. Only a file the decoder refuses is skipped for good at once;
+  any other failure (a `systemctl stop` mid-track, a crash, the audio
+  libraries missing, a timeout) is tried again later (10 min, doubling to
+  a day; a track that times out 3 times is then skipped), and 3 failures
+  in a row pause the fingerprinter (an hour, doubling to a day), said in
+  the log and on the Plugins page under the radio plugin (`worker_notes`,
+  new on `/v1/plugins` and `/api/plugins`). Loop lag while fingerprinting
+  went from 1.8 s to 0.02 s. And database connects no longer wait for a
+  free thread: a `localhost` database host is dialed at 127.0.0.1, and
+  speech, synthesis, voice downloads and plugin installs have thread pools
+  of their own (a Piper voice's first download no longer holds up a reply
+  in a voice already on disk).
 * **The core watches itself** (`domovoi/loop_watchdog.py`): an event loop
   stuck for 30 s, or three database probes without an answer, writes
   every thread's stack to the journal and `~/.domovoi/logs/core-watchdog.log`
@@ -31,11 +37,19 @@ journal in RAM). What changed:
   `domovoi/.env.example`.
 * **Restart the core**, for an admin, on Settings → Version, the
   Satellites page and Home, while the core doesn't answer: the dashboard
-  ends it and systemd starts it again. No sudoers change.
+  ends it and systemd starts it again. No sudoers change. It ends only a
+  core whose event loop gives no answer at all (`GET /v1/alive`, new; no
+  database) for longer than the core's own watchdog waits (45 s by
+  default), never one that is busy, slow, starting, or whose database is
+  down; one press at a time.
 * **Settings → Satellites says the core is down** instead of showing every
   room "offline · 19d ago" (that date was when the room's music player was
-  first set up). Cards show when each room was last heard from
-  (`last_seen_at`, new on `/api/satellites`).
+  first set up), and says when it is the database instead, or a core that
+  runs but can't answer (`core_alive`, new on `/api/health`), which a
+  restart won't fix. Cards show when each room was last heard from
+  (`last_seen_at`, new on `/api/satellites`; the 24 h health prune now
+  keeps each room's newest sample, so it stays right for a room silent
+  longer).
 * **The units** (`scripts/linux/units/`): the core is `Type=notify` with
   `WatchdogSec=90` and `TimeoutStartSec=15min`; the dashboard no longer
   waits for the core to start.
@@ -43,11 +57,14 @@ journal in RAM). What changed:
 **What an existing box gets on its next update** (Settings → Version,
 **Restart Domovoi** or **Restart to apply changes**, with the update
 unit): the new code (watchdog, fixes, button), a
-`domovoi-core.service.d/50-domovoi-restart.conf` drop-in if the core unit
-has no `Restart=on-failure` or `always` (a hand-written unit), and the
-journal kept on disk (`/etc/systemd/journald.conf.d/50-domovoi.conf`,
-at most 1 GB; `DOMOVOI_MANAGE_JOURNAL=0` in `/etc/default/domovoi-update`
-opts out). **What it needs by hand, and only if wanted:** the
+`domovoi-core.service.d/50-domovoi-restart.conf` drop-in
+(`Restart=on-failure`, and `RestartSec=5` unless the unit has its own)
+only if the core unit has no restart policy at all (`Restart=no`, a
+hand-written unit; a policy of its own, `on-abnormal` say, is kept, with a
+warning on the Version card), and the journal kept on disk
+(`/etc/systemd/journald.conf.d/50-domovoi.conf`, `Storage=persistent`
+only: its size stays journald's, or yours; `DOMOVOI_MANAGE_JOURNAL=0` in
+`/etc/default/domovoi-update` opts out). **What it needs by hand, and only if wanted:** the
 `Type=notify` + `WatchdogSec=` unit (systemd's own backstop for a core so
 stuck its watchdog thread can't run) comes only from installing the
 shipped unit (`docs/LINUX_HOST.md`, Make it an appliance) or re-running
