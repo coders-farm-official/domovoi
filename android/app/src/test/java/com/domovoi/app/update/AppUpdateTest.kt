@@ -57,6 +57,21 @@ class AppUpdateTest {
         assertFalse(AppUpdate.shows(older, null))
     }
 
+    @Test fun theRc2SchemeGoesUpByVersionCodeAlone() {
+        // 1.0.0-rc2 (26101602) < 1.0.0 < 1.0.1. As text "1.0.0-rc2" sorts
+        // after "1.0.0"; the notice never compares names, only versionCode.
+        val rc2 = install(code = 26101602, name = "1.0.0-rc2")
+        assertTrue(AppUpdate.decide(rc2, offer(code = 26101501, name = "1.0.0-rc1")) is UpdateState.UpToDate)
+        assertTrue(AppUpdate.decide(rc2, offer(code = 26101602, name = "1.0.0-rc2")) is UpdateState.UpToDate)
+        assertEquals(
+            UpdateState.Available("1.0.0", 26102401, "arm64-v8a", "$joinUrl?abi=arm64-v8a&update=1"),
+            AppUpdate.decide(rc2, offer(code = 26102401, name = "1.0.0")),
+        )
+        val final = install(code = 26102401, name = "1.0.0")
+        assertTrue(AppUpdate.decide(final, offer(code = 26101602, name = "1.0.0-rc2")) is UpdateState.UpToDate)
+        assertTrue(AppUpdate.decide(final, offer(code = 26110101, name = "1.0.1")) is UpdateState.Available)
+    }
+
     @Test fun aNewerReleaseOnTheServerIsAvailableWithItsJoinPage() {
         val state = AppUpdate.decide(install(), offer())
         assertEquals(
