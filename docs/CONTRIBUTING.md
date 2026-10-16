@@ -405,7 +405,7 @@ wrong unless that migration has never shipped anywhere.
 * **Keep the suite green.** All tests pass locally before you push; new
   behavior comes with tests that fail without your change.
 * **Keep the gates green** (see below) — branding, media-provider
-  vocabulary, and port rules are enforced, not aspirational.
+  vocabulary, port and local-machine rules are enforced, not aspirational.
 * Small, focused diffs. Refactors and behavior changes travel separately.
 * **Don't break the invariants** listed in the repo's `AGENTS.md` and
   [Architecture](ARCHITECTURE.md): local-first (`requires_network` +
@@ -503,6 +503,16 @@ that must name them.
    never appear as service-default ports.
 4. **Config dirs.** Server: `~/.domovoi/`. Satellite: `~/.domovoi/` on the
    Pi. Databases `domovoi` / `domovoi_test`.
+5. **No local machine details.** The repo is public: no home-folder path
+   with a real user name, no path into a maintainer's own workspace or
+   their functional test harness (it lives outside the repo; a test that
+   reads its files takes the folder from an environment variable and
+   skips without one), and no real home-network addresses, host names or
+   Wi-Fi names. Examples use the user `alex` (`C:/Users/alex`,
+   `/home/alex`, `%USERPROFILE%`) and the example network `192.168.1.0/24`:
+   router `.1`, server `.20`, PC `.30`, satellites `.4x`. The
+   `192.168.0.0/16` block itself is fine. Enforced by
+   `domovoi/tests/test_repo_privacy.py`.
 
 If you're writing a gate script: scan case-insensitively over the whole
 tree, join the bracket-split fragments to build the actual patterns at

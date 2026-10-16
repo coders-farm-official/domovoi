@@ -68,6 +68,15 @@ reviews enforce them.
    Postgres publishes host port 6432. Ollama 11434.
 4. **Config dirs:** server-side `~/.domovoi/`; satellite `~/.domovoi/` on
    the Pi. Database `domovoi` (test DB `domovoi_test`).
+5. **No local machine details:** the repo is public. No home-folder path
+   with a real user name, no path into your workspace, worktree, temp
+   folder or the maintainers' functional test harness (it lives outside
+   the repo; a test that reads its files takes the folder from an
+   environment variable, never a default path), no real home-network
+   addresses, host names or Wi-Fi names. Examples use the user `alex`
+   (`C:/Users/alex`, `/home/alex`, `%USERPROFILE%`) and the example
+   network `192.168.1.0/24`: router `.1`, server `.20`, PC `.30`,
+   satellites `.4x`. `domovoi/tests/test_repo_privacy.py` enforces it.
 
 ## Common commands
 
