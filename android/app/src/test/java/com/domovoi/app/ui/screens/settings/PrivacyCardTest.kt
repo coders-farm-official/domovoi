@@ -29,6 +29,17 @@ class PrivacyCardTest {
             PRIVACY_POLICY_URL.isBlank() || privacyPolicyLink(PRIVACY_POLICY_URL) != null)
     }
 
+    /** The link is the repo's own policy as GitHub shows it on main: the
+     *  file must be in the repo it points at (it goes live when pushed). */
+    @Test fun aGithubPolicyLinkPointsAtAFileInTheRepo() {
+        val prefix = "https://github.com/coders-farm-official/domovoi/blob/main/"
+        if (!PRIVACY_POLICY_URL.startsWith(prefix)) return
+        val repo = java.io.File(System.getProperty("domovoi.repo.dir") ?: error("domovoi.repo.dir is not set"))
+        val file = java.io.File(repo, PRIVACY_POLICY_URL.removePrefix(prefix))
+        assertTrue("$file is missing", file.isFile)
+        assertTrue("the policy names the app", file.readText().contains("Domovoi"))
+    }
+
     @Test fun theCardSaysWhatTheAppKeepsAndLinksThePolicyOnlyWhenThereIsOne() {
         val tree = NodeTree()
         var shown = emptyList<String>()

@@ -18,12 +18,13 @@ import com.domovoi.app.ui.theme.Domovoi
  * The privacy policy's web address, linked from Settings → About (Google
  * Play wants it in the app as well as on the store listing).
  *
- * THE OWNER FILLS THIS IN: the Coders Farm page the assistant plan names (on
- * codersfarm.org), once it is published. Until then it is blank and the card
- * shows no link (owner rule: no control that cannot do what it says); the
- * card's own summary of what the app keeps shows either way. Must be https.
+ * docs/PRIVACY_POLICY.md as GitHub shows it on main (Kamron's choice,
+ * 2026-10-15): live once that file is pushed to main, which has to happen
+ * before the store listing is submitted (android/play/PUBLISH-CHECKLIST.md).
+ * The owner may replace it with a Coders Farm page; blank shows no link
+ * (owner rule: no control that cannot do what it says). Must be https.
  */
-internal const val PRIVACY_POLICY_URL: String = ""
+internal const val PRIVACY_POLICY_URL: String = "https://github.com/coders-farm-official/domovoi/blob/main/docs/PRIVACY_POLICY.md"
 
 /** The policy link to show, or null while [url] is not a published https page. */
 internal fun privacyPolicyLink(url: String = PRIVACY_POLICY_URL): String? =
