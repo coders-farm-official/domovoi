@@ -69,6 +69,12 @@
 set -euo pipefail
 umask 022
 
+# Every git this script runs, the service user's upload-pack included,
+# reads objects as they are: no refs/replace and no grafts (rc2 review C3),
+# as apply-update.sh, provision.sh and install-update-unit.sh do. vx_git
+# pins the same again for root's own git.
+export GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null
+
 PROG=update-verifier
 
 ROOT=""

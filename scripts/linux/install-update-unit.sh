@@ -82,6 +82,11 @@
 
 set -euo pipefail
 
+# Every git this script runs reads objects as they are: no refs/replace and
+# no grafts. Both live in the service user's .git, and with them an unsigned
+# commit could pass for a signed one under its SHA (rc2 review C3).
+export GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null
+
 PROG=install-update-unit
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SCRIPT_PATH=$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")

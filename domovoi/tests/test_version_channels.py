@@ -181,20 +181,31 @@ def test_before_the_first_release_there_is_no_latest_release(repos):
     assert res["latest_release"] is None and res["channel"] == "main"
 
 
-def test_a_tag_that_moved_upstream_is_an_error_not_a_rewrite(repos):
-    """A published tag never moves: if upstream's did, the fetch refuses
-    to clobber the local one, and the card shows that."""
+def test_a_tag_that_moved_upstream_warns_and_never_blocks_an_update(repos):
+    """rc2 review C1: a published tag never moves, but if upstream's did,
+    this server keeps its copy (git refuses to clobber it) and says so as a
+    warning about the labels; the check, the pull and the switch go on.
+    One moved tag used to stop every box from updating."""
     work, server, sha_a = repos
-    _commit(work, "b")
+    sha_b = _commit(work, "b")
     _git(work, "tag", "-f", "v1.0.0")                       # moved to B
+    _git(work, "tag", "v1.0.1-rc1")                          # a new one, also at B
     res = _run(git_version.commits_behind())
-    assert res["error"] and "clobber" in res["error"]
-    assert _git(server, "rev-parse", "v1.0.0^{commit}") == sha_a
+    assert res["error"] is None and res["upstream"] is True
+    assert (res["behind"], res["upstream_sha"]) == (1, sha_b)
+    assert "a published release tag moved upstream (v1.0.0)" in res["tag_warning"]
+    assert "Updates are not affected" in res["tag_warning"]
+    assert _git(server, "rev-parse", "v1.0.0^{commit}") == sha_a   # its copy stays
+    assert _git(server, "rev-parse", "v1.0.1-rc1^{commit}") == sha_b  # new tags still arrive
     pulled = _run(git_version.pull())
-    assert pulled["pulled"] is False and "clobber" in pulled["error"]
+    assert pulled["pulled"] is True and pulled["error"] is None
+    assert "v1.0.0" in pulled["tag_warning"]
+    assert _git(server, "rev-parse", "HEAD") == sha_b
+    assert git_version.version_label() == "1.0.1-rc1"
+    assert _run(git_version.switch_channel("stable"))["ok"] is True
 
 
-def test_the_fetch_asks_for_tags(monkeypatch):
+def test_the_fetch_takes_branches_then_tags(monkeypatch):
     calls = []
 
     def fake_run(*args):
@@ -203,8 +214,33 @@ def test_the_fetch_asks_for_tags(monkeypatch):
 
     monkeypatch.setattr(git_version, "_run", fake_run)
     with egress.override_policy("always"):
-        assert _run(git_version.fetch()) == {"ok": True, "error": None}
-    assert calls == [("fetch", "--tags")]
+        assert _run(git_version.fetch()) == {"ok": True, "error": None, "tag_warning": None}
+    assert calls == [("fetch", "--no-tags"), ("fetch", "--no-tags", "origin", "refs/tags/*:refs/tags/*")]
+
+
+def test_no_tags_are_fetched_when_the_branches_fail(monkeypatch):
+    calls = []
+
+    def fake_run(*args):
+        calls.append(args)
+        return subprocess.CompletedProcess(["git", *args], 128, "", "fatal: unable to access")
+
+    monkeypatch.setattr(git_version, "_run", fake_run)
+    with egress.override_policy("always"):
+        res = _run(git_version.fetch())
+    assert res["ok"] is False and "unable to access" in res["error"]
+    assert calls == [("fetch", "--no-tags")]
+
+
+def test_git_reads_no_replace_refs(repos):
+    """rc2 review C3: a commit can't be swapped for another under its SHA
+    (refs/replace) when the core reads it, a signature check included."""
+    work, server, sha_a = repos
+    _git(server, "commit", "-q", "--allow-empty", "-m", "other")
+    other = _git(server, "rev-parse", "HEAD")
+    _git(server, "replace", sha_a, other)
+    assert _git(server, "log", "-1", "--format=%s", sha_a) == "other"      # plain git follows it
+    assert git_version._run("log", "-1", "--format=%s", sha_a).stdout.strip() == "A"
 
 
 # ─── switching ────────────────────────────────────────────────────────────
@@ -359,6 +395,47 @@ def test_with_a_pin_the_check_and_the_pull_name_the_branch_not_at_u(repos, monke
     assert _run(git_version.commits_behind())["upstream"] is True
 
 
+def test_with_a_pin_the_named_branch_wins_over_a_remapped_at_u(repos, monkeypatch, tmp_path):
+    """The service user's config can map the followed branch onto another
+    remote-tracking ref (here origin/sneaky, which @{u} then names). With
+    root's pin the check still counts against refs/remotes/origin/main."""
+    work, server, sha_a = repos
+    _pin(monkeypatch, tmp_path, "stable main")
+    _git(server, "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/sneaky")
+    sha_b = _commit(work, "b")
+    res = _run(git_version.commits_behind())
+    assert _git(server, "rev-parse", "@{u}") == sha_b                 # @{u} is origin/sneaky now
+    assert _git(server, "rev-parse", "refs/remotes/origin/main") == sha_a
+    assert (res["upstream_sha"], res["behind"]) == (sha_a, 0)
+
+
+def test_with_a_pin_a_followed_branch_outside_it_is_refused(repos, monkeypatch, tmp_path):
+    """Pinned to main alone, a checkout someone pointed at origin/stable by
+    hand is refused by the check and the pull."""
+    _, server, _ = repos
+    _pin(monkeypatch, tmp_path, "main")
+    _git(server, "checkout", "-q", "-B", "stable")
+    _git(server, "branch", "-q", "--set-upstream-to", "origin/stable", "stable")
+    res = _run(git_version.commits_behind())
+    assert res["upstream"] is False and "only follows origin/main" in res["error"]
+    pulled = _run(git_version.pull())
+    assert pulled["pulled"] is False and "only follows origin/main" in pulled["error"]
+
+
+def test_a_box_behind_both_channels_may_still_switch(repos, monkeypatch, tmp_path):
+    """Code behind every pinned tip (an ancestor of them, equal to none) is
+    on the pinned branches: the switch goes ahead."""
+    work, server, sha_a = repos
+    _commit(work, "b")
+    _release(work, "1.0.1")                                   # stable: B
+    _commit(work, "c")                                        # main: C
+    _pin(monkeypatch, tmp_path, "stable main")
+    assert _git(server, "rev-parse", "HEAD") == sha_a
+    res = _run(git_version.switch_channel("stable"))
+    assert res["ok"] is True, res
+    assert _git(server, "rev-parse", "HEAD") == sha_a
+
+
 def test_a_switch_root_would_then_refuse_is_refused(repos, monkeypatch, tmp_path):
     """Pinned to stable alone, a box on main past the latest release can't
     move to stable: its code is on no pinned branch, so the update unit
@@ -414,6 +491,16 @@ def test_the_channel_asked_for_is_remembered_and_the_switch_updates_it(repos):
     assert _git(server, "config", "domovoi.intendedChannel") == "main"
     _git(server, "config", "domovoi.intendedChannel", "nonsense")
     assert _run(git_version.version_state())["channel_intended"] is None
+
+
+def test_a_tag_named_like_the_branch_does_not_hide_the_channel(repos):
+    """A tag "stable" makes git shorten the branch to "heads/stable"; the
+    channel is still read from the full name."""
+    _, server, _ = repos
+    assert _run(git_version.switch_channel("stable"))["ok"] is True
+    _git(server, "tag", "stable", "HEAD")
+    assert git_version.tracking()["channel"] == "stable"
+    assert _run(git_version.version_state())["channel"] == "stable"
 
 
 def test_refused_while_an_update_runs(repos, monkeypatch):

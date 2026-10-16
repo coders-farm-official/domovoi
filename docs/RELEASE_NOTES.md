@@ -95,13 +95,21 @@ Nothing moves on an existing box: it keeps following `main`.
   the core can't read it, the card offers no channel switch.
 * **`provision.sh --ref` is read by its shape** (delta security review
   S3): a full SHA is that commit, `v<digit>...` or `refs/tags/NAME` is that
-  tag only, anything else a branch; a branch named like a tag or a SHA no
-  longer wins. After the checkout HEAD must be the commit it named. A
+  tag only, `stable`, `main` and `refs/heads/NAME` the branch, any other
+  name the tag of that name when there is one, else the branch; a branch
+  named like a tag or a SHA no longer wins. After the checkout HEAD must be the commit it named. A
   tag's commit is recorded, and a resumed install that finds the tag moved
   stops.
-* **Tags are fetched explicitly** (`git fetch --tags`). A published tag
-  that moved upstream is git's "would clobber existing tag" error on the
-  card, never a silent rewrite.
+* **Tags are fetched on their own**, after the branches and never forced.
+  A published tag that moved upstream stays as this server had it, and the
+  card shows a warning about the labels; the check, the pull and the
+  switch go on.
+* **A pinned branch rewritten upstream** no longer stops **Restart
+  Domovoi**: the commit the box last applied restarts with a warning; an
+  update to anything else off the pinned branches is refused.
+* **Root's git ignores `refs/replace` and grafts** (update unit,
+  `provision.sh`, `install-update-unit.sh`, and the core's own git), so a
+  signature check sees the commit HEAD names.
 * **Windows installer:** `pins.iss` gains `DomovoiChannel`;
   `windows\build.ps1 -Pin <tag|SHA>` moves the commit, the channel,
   `provision.sh`'s pin and the tab-address flag together; Setup now

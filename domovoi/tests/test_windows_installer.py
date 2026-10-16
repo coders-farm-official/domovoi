@@ -291,6 +291,30 @@ def test_the_pin_tool_refuses_a_branch_and_a_stable_non_release(tmp_path):
     assert copy.read_bytes() == PINS.read_bytes()
 
 
+@requires_pin_tool
+def test_the_pin_tool_fails_without_origin_main(tmp_path):
+    """rc2 review C9: a clone with no origin/main can't tell whether the
+    commit is on main's history, so it refuses rather than skip the check."""
+    repo = tmp_path / "repo"
+    (repo / "windows" / "installer").mkdir(parents=True)
+    (repo / "windows" / "build.ps1").write_bytes(BUILD.read_bytes())
+    (repo / "windows" / "installer" / "pins.iss").write_bytes(PINS.read_bytes())
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+           "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+    for args in (["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", "x"]):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, env=env, capture_output=True)
+    sha = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, env=env,
+                         capture_output=True, text=True).stdout.strip()
+    proc = subprocess.run(
+        [POWERSHELL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+         str(repo / "windows" / "build.ps1"), "-Pin", sha, "-Channel", "main", "-PinOnly"],
+        capture_output=True, text=True, timeout=120, env=env,
+    )
+    assert proc.returncode != 0 and "has no origin/main" in proc.stdout + proc.stderr
+    assert (repo / "windows" / "installer" / "pins.iss").read_bytes() == PINS.read_bytes()
+
+
 def test_every_download_estimate_agrees():
     """Setup's pages, the helper's no-internet message and the doc give the
     same "about X-Y GB" for what an install downloads."""

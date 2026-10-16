@@ -1754,6 +1754,7 @@ case_update_defaults_opt_into_the_lock() {
   check "symlink: still a link" test -L "$f"
   check "symlink: the file it points to untouched" eq "$(cat "$CASE/managed/domovoi-update")" "DOMOVOI_UPDATE_KEEP_BACKUPS=3"
   check "symlink: warned" said "/etc/default/domovoi-update is a symlink, left as it is"
+  check "symlink: and no channel pin, said" said "no channel pin (DOMOVOI_UPSTREAM_BRANCH=\"stable main\") written through it"
   run_prov --internet always --skip-models
   check "symlink: the next run skips update-unit" eq "$(state_of update-unit)" skip
   end_case
@@ -3067,6 +3068,33 @@ case_dry_run_with_a_checkout_changes_nothing() {
   end_case
 }
 
+# rc2 review C7: a tag whose name doesn't start with v is that tag, not a
+# branch of the same name; stable and main stay the branches whatever tags
+# exist; refs/heads/NAME asks for the branch.
+case_a_tag_not_named_v_wins_over_a_branch() {
+  new_case a_tag_not_named_v_wins_over_a_branch
+  local o; o=$(release_origin)
+  git -C "$o" tag release-1 "$FIXTURE_A"
+  git -C "$o" branch release-1 "$FIXTURE_ELSEWHERE"
+  git -C "$o" tag stable "$FIXTURE_ELSEWHERE"
+  run_prov "${wsl_args[@]}" --repo-url "$o" --ref release-1
+  check "the tag: exit 0" eq "$RC" 0
+  check "HEAD is the tag's commit" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$FIXTURE_A"
+  # (Plain rev-parse --abbrev-ref would say heads/stable: a tag is named stable here.)
+  check "on stable" eq "$(git -C "$CHECKOUT" symbolic-ref HEAD) $(git -C "$CHECKOUT" config branch.stable.merge)" "refs/heads/stable refs/heads/stable"
+  check "said which commit" said "the tag release-1 is commit $FIXTURE_A"
+  rm -rf "$CHECKOUT"
+  run_prov "${wsl_args[@]}" --repo-url "$o"
+  check "default: exit 0" eq "$RC" 0
+  check "stable is the branch, not the tag named stable" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$FIXTURE_A"
+  rm -rf "$CHECKOUT"
+  run_prov "${wsl_args[@]}" --repo-url "$o" --ref refs/heads/release-1
+  check "refs/heads/: exit 0" eq "$RC" 0
+  check "refs/heads/ is the branch, asked for by name" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$FIXTURE_ELSEWHERE"
+  check "and it follows it" eq "$(git -C "$CHECKOUT" symbolic-ref HEAD) $(git -C "$CHECKOUT" config branch.release-1.merge)" "refs/heads/release-1 refs/heads/release-1"
+  end_case
+}
+
 CASES=(
   case_rerun_takes_nothing_from_the_working_tree
   case_rerun_refuses_an_unverified_head
@@ -3115,6 +3143,7 @@ CASES=(
   case_a_branch_named_like_the_pinned_commit_is_not_used
   case_a_branch_named_like_a_tag_is_not_used
   case_a_tag_that_moved_since_the_first_run_stops
+  case_a_tag_not_named_v_wins_over_a_branch
   case_clone_from_a_bundle
   case_update_unit_failure_stops
   case_core_not_healthy_stops

@@ -437,6 +437,26 @@ wrong unless that migration has never shipped anywhere.
 
 ---
 
+## Tags and the release branches never move back
+
+Every Domovoi server follows `stable` or `main` and fast-forwards only
+([LINUX_HOST.md, Release channels](LINUX_HOST.md#release-channels)), so:
+
+- **Never move or delete a published tag** (`v1.0.0`, `v1.0.1-rc1`): no
+  `git tag -f`, no `git push -f` of a tag. Servers keep the copy they
+  fetched and show a warning about the labels; a bad release gets a
+  warning in its notes and a new version, never a re-tag.
+- **Never force-push `main` or `stable`**, and never rewind them. A server
+  past the rewound tip can't fast-forward any more: it keeps restarting
+  the code it has, with a warning, and takes no update until the branch
+  holds that code again.
+- **`stable` stays on `main`'s history.** Release commits are made on
+  `main` and tagged there; `stable` only fast-forwards to a release's
+  commit (`git push origin "vX.Y.Z^{commit}:refs/heads/stable"`). A release
+  commit made only on `stable`, or a `release/1.0` hotfix not merged back,
+  leaves every server that switched channels unable to fast-forward until
+  `main` holds it.
+
 ## Publishing a plugin
 
 Plugins developed against this repo can live anywhere (only bundled plugins

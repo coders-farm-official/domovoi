@@ -96,7 +96,15 @@ def _run(*args: str) -> subprocess.CompletedProcess[str]:
         timeout=_GIT_TIMEOUT_SEC,
         check=False,
         creationflags=_NO_WINDOW,
+        env={**os.environ, **_GIT_ENV},
     )
+
+
+# Every git call reads the objects as they are: no refs/replace and no
+# grafts, so a commit can't be swapped for another one under its SHA when
+# its signature is checked (rc2 review C3; the update unit's root git does
+# the same).
+_GIT_ENV = {"GIT_NO_REPLACE_OBJECTS": "1", "GIT_GRAFT_FILE": os.devnull}
 
 
 async def current_sha() -> str:
@@ -419,8 +427,11 @@ def tracking() -> dict:
     try:
         intended = _config("domovoi.intendedChannel")
         out["intended"] = intended if intended in CHANNELS else None
-        head = _run("symbolic-ref", "--short", "-q", "HEAD")
-        branch = head.stdout.strip() if head.returncode == 0 else ""
+        # The full name, not --short: a tag of the same name (a tag
+        # "stable") would make git shorten it to "heads/stable".
+        head = _run("symbolic-ref", "-q", "HEAD")
+        full = head.stdout.strip() if head.returncode == 0 else ""
+        branch = full.removeprefix("refs/heads/") if full.startswith("refs/heads/") else ""
         if not branch or not _BRANCH_RE.match(branch):
             return out
         out["branch"] = branch
@@ -517,8 +528,7 @@ def _channel_answer(ok: bool, error: str | None, channel: str | None = None,
 
 def _switch_channel(channel: str, pin: list[str] | None = None) -> dict:
     """Blocking half of :func:`switch_channel`."""
-    fetched = _run(*_FETCH, "origin")
-    invalidate_label_cache()
+    fetched, _tag_warning_ignored = _fetch_branches_and_tags("origin")
     if fetched.returncode != 0:
         return _channel_answer(False, (fetched.stderr or "git fetch failed").strip()[:_ERROR_MAX_CHARS])
     target = _full_sha(f"refs/remotes/origin/{channel}")
@@ -926,6 +936,9 @@ _WARN_DETAIL_STEPS = frozenset(
         "core-restart",
         "journal",
         "update-unit",
+        # "HEAD ... is on none of the pinned branches ...; it is the commit
+        # this box last applied, so this restart goes on" (rc2 review C2).
+        "upstream",
     }
 )
 _WARN_DETAIL_MAX_CHARS = 300
@@ -1066,29 +1079,65 @@ def _warn_detail(step: dict) -> str | None:
     return line[:_WARN_DETAIL_MAX_CHARS] or None
 
 
-# Tags explicitly, not by auto-follow: the release labels come from them.
-# A published tag never moves, so a fetch that would move one is an error
-# git reports ("would clobber existing tag") and the dashboard shows.
-_FETCH = ("fetch", "--tags")
+# The branches first, on their own: they are what the check counts and the
+# pull merges. Then the tags, explicitly and never forced: the release
+# labels come from them. A published tag never moves; if one upstream ever
+# did, git refuses to overwrite this server's copy ("would clobber existing
+# tag"), and that is a warning about the labels on the card, never a failed
+# fetch: one moved tag must not stop every box from updating (rc2 review C1).
+_FETCH = ("fetch", "--no-tags")
+_FETCH_TAGS = ("fetch", "--no-tags", "origin", "refs/tags/*:refs/tags/*")
+_REJECTED_TAG_RE = re.compile(r"\[rejected\]\s+(\S+)\s+->\s+\S+\s+\(would clobber existing tag\)")
+
+
+def _tag_warning(stderr: str) -> str:
+    moved = sorted(set(_REJECTED_TAG_RE.findall(stderr or "")))
+    if moved:
+        names = ", ".join(moved[:5]) + (" and more" if len(moved) > 5 else "")
+        return (
+            f"a published release tag moved upstream ({names}); this server keeps the copy it "
+            "had, so a version label may be off. Updates are not affected. Published tags "
+            "never move: tell Domovoi's maintainers"
+        )[:_ERROR_MAX_CHARS]
+    return (
+        f"the release tags could not be fetched ({_last_line(stderr) or 'git fetch failed'}); "
+        "updates are not affected, but a version label may be out of date"
+    )[:_ERROR_MAX_CHARS]
+
+
+def _fetch_branches_and_tags(*remote: str) -> tuple[subprocess.CompletedProcess, str | None]:
+    """Blocking. ``(the branch fetch, tag_warning)``: the tags are fetched
+    only after the branches, and their failure is ``tag_warning``, never the
+    fetch's."""
+    branches = _run(*_FETCH, *remote)
+    warning = None
+    if branches.returncode == 0:
+        tags = _run(*_FETCH_TAGS)
+        if tags.returncode != 0:
+            warning = _tag_warning(tags.stderr)
+            log.warning("update check: %s", warning)
+    invalidate_label_cache()
+    return branches, warning
 
 
 async def fetch() -> dict:
-    """`git fetch --tags` so subsequent behind/ahead counts compare against
-    the live upstream, and the release labels know every tag. Returns
-    ``{"ok": bool, "error": str|None}`` — offline / no remote, or a tag
-    upstream that moved, surfaces as ``ok=False`` with the git stderr,
-    never an exception.
+    """`git fetch --no-tags`, then the tags on their own
+    (:func:`_fetch_branches_and_tags`), so subsequent behind/ahead counts
+    compare against the live upstream and the release labels know every
+    tag. Returns ``{"ok": bool, "error": str|None, "tag_warning":
+    str|None}``: offline / no remote surfaces as ``ok=False`` with the git
+    stderr; tags that could not be fetched (one that moved upstream) only as
+    ``tag_warning``. Never an exception.
 
     Under ``INTERNET_ACCESS=never`` it reports ``ok=False`` with the
     turned-off reason and runs no git at all."""
     if egress.internet_turned_off():
         return {"ok": False, "error": egress.TURNED_OFF_REASON}
     try:
-        proc = await asyncio.to_thread(_run, *_FETCH)
-        invalidate_label_cache()
+        proc, warning = await asyncio.to_thread(_fetch_branches_and_tags)
         if proc.returncode != 0:
-            return {"ok": False, "error": (proc.stderr or "git fetch failed").strip()}
-        return {"ok": True, "error": None}
+            return {"ok": False, "error": (proc.stderr or "git fetch failed").strip(), "tag_warning": None}
+        return {"ok": True, "error": None, "tag_warning": warning}
     except FileNotFoundError:
         return {"ok": False, "error": "git not installed"}
     except subprocess.TimeoutExpired:
@@ -1102,7 +1151,8 @@ async def commits_behind() -> dict:
 
     Returns ``{"behind": int, "ahead": int, "upstream": bool,
     "upstream_sha": str|None, "error": str|None, "channel": str|None,
-    "upstream_version": str|None, "latest_release": str|None}``.
+    "upstream_version": str|None, "latest_release": str|None,
+    "tag_warning": str|None}`` (the last: :func:`fetch`'s).
     ``upstream_sha`` is the full SHA a pull would move to, which the version
     panel compares with a rolled-back ``bad_sha``. ``channel`` is the
     branch followed (:func:`tracking`), ``upstream_version`` the release
@@ -1159,6 +1209,7 @@ async def commits_behind() -> dict:
             "upstream": True,
             "upstream_sha": upstream_sha,
             "error": fetched["error"],
+            "tag_warning": fetched.get("tag_warning"),
             **release,
         }
     except ValueError as e:
@@ -1219,8 +1270,7 @@ async def pull() -> dict:
     except Exception:  # noqa: BLE001 — the pull matters more than the record
         baseline = None
     try:
-        fetched = await asyncio.to_thread(_run, *_FETCH)
-        invalidate_label_cache()
+        fetched, tag_warning = await asyncio.to_thread(_fetch_branches_and_tags)
         if fetched.returncode != 0:
             return _not_pulled((fetched.stderr or "git fetch failed").strip())
         upstream, refusal = await asyncio.to_thread(_upstream_target)
@@ -1284,4 +1334,7 @@ async def pull() -> dict:
         "error": None,
         "prev_sha": baseline,
         "signature": signature,
+        # Tags that could not be fetched (one moved upstream): the labels
+        # may be off; the pull itself went ahead.
+        "tag_warning": tag_warning,
     }
