@@ -228,6 +228,13 @@ function Publish-Release([string]$ReleaseCommit, [bool]$Exists) {
         [IO.File]::WriteAllText((Join-Path $repo $notesFile), ($notes -join "`n") + "`n", $utf8)
         [IO.File]::WriteAllText((Join-Path $repo $sumsFile), (($manifest.apks | ForEach-Object { "$($_.sha256)  $($_.file)" }) -join "`n") + "`n", $utf8)
 
+        # gh attaches a release to a tag that already exists, wherever it points.
+        $remoteTag = Invoke-Tool 'git' @('ls-remote', '--tags', 'origin', "refs/tags/$tag")
+        if ($null -eq $remoteTag) { Die 'git ls-remote origin failed' }
+        $remoteTag = @($remoteTag | Where-Object { $_.Trim() })
+        if ($remoteTag.Count -gt 0 -and -not $remoteTag[0].StartsWith($ReleaseCommit)) {
+            Die "the tag $tag already exists on GitHub at another commit ($($remoteTag[0].Split()[0])): a published tag never moves"
+        }
         $kind = if ($isPrerelease) { 'a pre-release' } else { 'the Latest release' }
         Say "publishing $tag on $RepoSlug at $($ReleaseCommit.Substring(0, 12)), $kind..."
         $assets = @($manifest.apks | ForEach-Object { Join-Path $signed $_.file }) + @($sumsFile)

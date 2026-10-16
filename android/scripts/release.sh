@@ -185,6 +185,11 @@ for e in json.load(open("android/release.json", encoding="utf-8"))["release"]["a
       printf '%s  %s\n' "$sha" "$file" >> "$signed/SHA256SUMS"
       assets+=("$signed/$file")
     done < "$work/apks"
+    # gh attaches a release to a tag that already exists, wherever it points.
+    remote_tag="$(git ls-remote --tags origin "refs/tags/$tag")" || die "git ls-remote origin failed"
+    remote_tag="${remote_tag%%[[:space:]]*}"
+    [ -z "$remote_tag" ] || [ "$remote_tag" = "$release_commit" ] \
+      || die "the tag $tag already exists on GitHub at another commit ($remote_tag): a published tag never moves"
     flag=--latest; kind="the Latest release"
     if [ "$is_prerelease" = 1 ]; then flag=--prerelease; kind="a pre-release"; fi
     say "publishing $tag on $REPO_SLUG at ${release_commit:0:12}, $kind…"
