@@ -27,6 +27,16 @@ migration.
 * **The join page** takes `?abi=arm64-v8a|armeabi-v7a` (that APK first,
   when the server holds it) and `?update=1` (worded as an update).
 
+## 2026-10-16 — Android app: reply reports go to info@codersfarm.org
+
+Android app only (versionCode 26101601, still 1.0.0-rc1); nothing changes
+on the server.
+
+* **Email draft to coders farm** (report this reply) now addresses the
+  report to info@codersfarm.org, Coders Farm's public contact on Google
+  Play. Earlier builds (26101501 and before) still address it to
+  codersfarm@gmail.com.
+
 ## 2026-10-15 — Android app: Android 16, report a reply, privacy, licences
 
 Android app only (a new APK); nothing changes on the server.
