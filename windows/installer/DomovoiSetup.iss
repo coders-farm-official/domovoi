@@ -1,4 +1,4 @@
-; DomovoiSetup.exe: the Windows installer's first test build (step 2).
+; DomovoiSetup.exe: the Windows installer, a preview (owner decision 2, 2026-10-16).
 ;
 ; Setup is only the user interface. Every change to the PC is made by
 ; DomovoiSetupHelper.exe, run elevated from C:\Program Files\Domovoi
@@ -40,7 +40,7 @@
 AppId={{8F3C2A61-5D4B-4E7A-9C1F-2B6D0E4A7C35}
 AppName=Domovoi
 AppVersion={#AppVersion}
-AppVerName=Domovoi {#AppVersion} (test build, {#Copy(DomovoiCommit, 1, 7)})
+AppVerName=Domovoi {#AppVersion} (preview, {#Copy(DomovoiCommit, 1, 7)})
 AppPublisher=Coders Farm
 AppPublisherURL={#DomovoiRepoUrl}
 AppSupportURL={#DomovoiRepoUrl}/blob/main/docs/WINDOWS_HOST.md
@@ -64,7 +64,7 @@ UninstallDisplayName=Domovoi
 VersionInfoVersion=1.0.0.0
 VersionInfoProductTextVersion={#AppVersion}
 VersionInfoCompany=Coders Farm
-VersionInfoDescription=Domovoi Setup (test build)
+VersionInfoDescription=Domovoi Setup (preview)
 VersionInfoProductName=Domovoi
 ; Domovoi's own mark, made by art\make_art.py from docs/assets/domovoi-icon.png:
 ; Setup's and the uninstaller's icon, the Installed apps entry, and the
@@ -375,7 +375,7 @@ begin
     if not Ran or (Code <> 0) then
     begin
       if MsgBox('Setup could not check this PC (' + KvValue(Preflight, 'error') + ').' + #13#10#13#10 +
-        'If Windows blocked DomovoiSetupHelper.exe, Smart App Control or an antivirus program is stopping unsigned programs: this test build is unsigned (see docs/WINDOWS_HOST.md, "Unsigned").',
+        'If Windows blocked DomovoiSetupHelper.exe, Smart App Control or an antivirus program is stopping unsigned programs: this preview is unsigned (see docs/WINDOWS_HOST.md, "Unsigned").',
         mbError, MB_RETRYCANCEL) = IDRETRY then
         Continue;
       Exit;
@@ -451,8 +451,8 @@ begin
   N := N + 1;
   S := S + IntToStr(N) + '. Setup''s install record in the registry, HKLM\SOFTWARE\Domovoi: what Setup changed, so the uninstaller can undo it.' + #13#10#13#10;
   S := S + 'Downloads: about 10.5-13.5 GB (the AI models are most of it; the size depends on the models this PC''s memory gets). Ubuntu (418 MB) now; then, inside the distro, Domovoi''s code at commit {#Copy(DomovoiCommit, 1, 7)}, Docker Engine, Python packages and the AI models (one of them reads pictures in chat), each checked against a pinned hash.' + #13#10#13#10;
-  S := S + 'Not changed: power and sleep settings (this test build doesn''t ask), Windows Update, Smart App Control, your user accounts and files.' + #13#10#13#10;
-  S := S + 'This test build is not code-signed: Windows SmartScreen may have warned before Setup started, and Windows may ask again about its programs.' + #13#10#13#10;
+  S := S + 'Not changed: power and sleep settings (this preview doesn''t ask), Windows Update, Smart App Control, your user accounts and files.' + #13#10#13#10;
+  S := S + 'This preview is not code-signed: Windows SmartScreen may have warned before Setup started, and Windows may ask again about its programs.' + #13#10#13#10;
   S := S + 'Uninstalling never deletes files in your media folders: a media folder is removed only if it is empty.';
   Result := S;
 end;
@@ -1009,14 +1009,14 @@ function InitializeSetup: Boolean;
 var
   Sac: Cardinal;
 begin
-  { Smart App Control blocks unsigned programs, and this test build is
+  { Smart App Control blocks unsigned programs, and this preview is
     unsigned (code signing is on hold). If Setup is running at all, Windows
     let it start; the helper and the service it unpacks would still be
     blocked, so say so now rather than fail later. 0 off, 1 on, 2
     evaluation. }
   if RegQueryDWordValue(HKLM, 'SYSTEM\CurrentControlSet\Control\CI\Policy', 'VerifiedAndReputablePolicyState', Sac) and (Sac = 1) then
   begin
-    SuppressibleMsgBox('Smart App Control is on, and this test build of Domovoi is not code-signed. Windows would block Setup''s helper and the Domovoi service, so Setup stops here.' + #13#10#13#10 +
+    SuppressibleMsgBox('Smart App Control is on, and this preview of Domovoi is not code-signed. Windows would block Setup''s helper and the Domovoi service, so Setup stops here.' + #13#10#13#10 +
       'To install it anyway, turn Smart App Control off in Windows Security > App & browser control > Smart App Control settings. On many Windows 11 builds it can only be turned back on by resetting or reinstalling Windows; read what Windows Security says first (docs/WINDOWS_HOST.md, "Unsigned").',
       mbCriticalError, MB_OK, IDOK);
     Result := False;

@@ -1,4 +1,4 @@
-# Running the Domovoi server on Windows with the installer (test build)
+# Running the Domovoi server on Windows with the installer (preview)
 
 `DomovoiSetup.exe` puts the whole Linux server from
 [LINUX_HOST.md](LINUX_HOST.md) on a Windows 11 PC: the same systemd units,
@@ -7,7 +7,7 @@ distro that belongs to a hidden Windows account. Windows supplies only the
 installer, one service that keeps the distro running, and firewall rules.
 After setup the dashboard at `http://localhost:6369` is the only interface.
 
-**This is a test build.** It is not code-signed (see [Unsigned](#unsigned)),
+**This is a preview.** It ships with Domovoi 1.0 but isn't yet held to its promise. It is not code-signed (see [Unsigned](#unsigned)),
 it installs a pinned commit of `main`, and some of the finished product is
 not in it yet (see [Not in this build](#not-in-this-build)). The native
 Windows install in the

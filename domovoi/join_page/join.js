@@ -196,7 +196,7 @@
     if (code && !code.bad) {
       document.title = 'Domovoi room: ' + code.room;
       text('title', 'Make this phone a Domovoi room');
-      text('lede', 'It becomes the room “' + code.room + '” of this home’s Domovoi. Two steps, about ten minutes, on the phone’s charger and your home Wi-Fi.');
+      text('lede', 'It becomes the room “' + code.room + '” of this home’s Domovoi. Two steps, about ten minutes, on the phone’s charger and your home Wi-Fi. Phones as rooms are a preview: they work, but have been tried on fewer phones than the rest of Domovoi.');
       text('room-name', '“' + code.room + '”');
       $('open-room').href = roomLink(code.payload);
       show('step-room', true);

@@ -346,6 +346,9 @@ one credential the app has. The rules, all unit-tested under
 
 ## On-device assistant
 
+**A preview** in Domovoi 1.0 (owner decision 2026-10-16): the setup card
+says so beside the download (`PreviewLabel`, `ui/components/Kit.kt`).
+
 Domovoi can answer **on the phone itself**, with no server and, once its
 model is downloaded, no internet: a language model (Gemma 4 E2B, run by
 LiteRT-LM) on the phone's CPU, by text or by push-to-talk voice. The
@@ -726,6 +729,9 @@ leaves the home network). What the phone does, exactly:
   in forced Doze the exact tick did the same (see above).
 
 ## Room mode
+
+**A preview** in Domovoi 1.0, labelled on Settings → Satellites' "Use this
+device as a room" card and at the top of the explainer.
 
 A spare phone or tablet as a room satellite (the person's guide:
 [docs/SPARE_DEVICE_SATELLITES.md](../docs/SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode)).

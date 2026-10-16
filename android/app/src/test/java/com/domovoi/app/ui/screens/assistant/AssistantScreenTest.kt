@@ -113,6 +113,8 @@ class AssistantScreenTest {
         assertTrue(shown.any { it.startsWith("Needs 2.65 GB of free space; this phone has 50.00 GB free.") })
         assertTrue("Off: the download waits for Wi-Fi." in shown)
         assertTrue("on this phone" in shown)
+        // A preview (owner decision 2, 2026-10-16), said where it is chosen.
+        assertTrue(shown.toString(), "preview" in shown && com.domovoi.app.ui.components.PREVIEW_MEANS in shown)
         assertEquals(listOf("download"), calls)
     }
 
