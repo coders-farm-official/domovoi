@@ -61,7 +61,12 @@ android {
         applicationId = "com.domovoi.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
+        // One sequence for GitHub releases and Google Play: YYMMDDNN, the
+        // build's date and that day's number (the assistant plan's M4).
+        // Play refuses an upload whose versionCode is not above the last
+        // one, and a phone refuses an update that goes down, so it only
+        // ever goes up; release.ps1 and play-bundle.ps1 both read it here.
+        versionCode = 26101501
         versionName = "1.0.0"
         // The ABIs above. One APK per ABI filters by splits (below)
         // instead of here.
