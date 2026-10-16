@@ -146,9 +146,10 @@ uninstalls it once before the first release build goes on.
    that day's number (`26101501` is the first build of 2026-10-15), one
    sequence for the GitHub releases and Google Play. The script refuses a
    `versionCode` of another shape, one that is not above the last
-   release's, and a commit that is not on GitHub (the release's tag points
-   at it).
-2. Run the script from a clean checkout (it says what it does as it goes):
+   release's, and a checkout that is not its branch's tip on GitHub (pull
+   or push first: the release is committed on top of it).
+2. Run the script from a clean checkout of that branch (it says what it
+   does as it goes):
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File android\scripts\release.ps1
@@ -166,22 +167,33 @@ uninstalls it once before the first release build goes on.
    them: `apksigner verify` (v2 present, one RSA signer, not a debug key,
    the same key as the last release), 16 KB page alignment, and the
    server's own check (`python -m domovoi.android_app check`). Then it
-   publishes the GitHub release `v<versionName>` (the project-wide tag,
-   e.g. `v1.0.0-rc1`; a full release, or a pre-release with `-Prerelease` /
-   `--prerelease`) on
-   `coders-farm-official/domovoi` with `gh` (the two APKs and `SHA256SUMS`,
-   with the certificate's SHA-256 in the notes), downloads each file back by
-   the URL the manifest names to prove it is there, and writes
-   `android/release.json`.
-3. Commit and push the manifest (the script prints the lines):
-   `git add android/release.json && git commit -m "android: release <v> [skip ci]" && git push`.
-   Each server starts handing out the release once it runs that commit.
+   writes `android/release.json`, commits it (`android: release <v> [skip
+   ci]`) and pushes it, and publishes the GitHub release `v<versionName>`
+   (the project-wide tag, e.g. `v1.0.0-rc2`) on
+   `coders-farm-official/domovoi` with `gh`, **tagged at that commit**: the
+   tag holds the manifest naming its own APKs, so a server installed at
+   the tag hands them out. The release carries the two APKs and an
+   APK-only `SHA256SUMS`, with the certificate's SHA-256 in the notes. A
+   version with a suffix (`1.0.0-rc2`) is always a pre-release; a plain
+   one is marked Latest (`-Prerelease` / `--prerelease` makes it a
+   pre-release too). Last it checks the tag is that commit and downloads
+   each file back by the URL the manifest names.
 
-`-NoPublish` (`--no-publish`) stops after the checks, leaving the signed
-APKs, `SHA256SUMS` and the manifest it would commit in
-`app/build/outputs/apk/release-signed/`; `-SkipBuild` (`--skip-build`)
-signs what the last build left. Needs a JDK, the SDK's build-tools 35.0.0,
-Python 3.11+, git and `gh auth login` with permission to publish releases.
+   If the run stops after the commit (the push, `gh` or a download
+   failed), run it again from the same checkout: it sees the release
+   commit at HEAD and carries on from there with the signed files it left
+   (nothing is built or signed again).
+3. The rest of the release (the Windows Setup, one `SHA256SUMS` for every
+   file, the notes, the `stable` branch) is
+   `scripts/release/finish-release.ps1`: [docs/CONTRIBUTING.md,
+   "Releasing"](../docs/CONTRIBUTING.md#releasing).
+
+`-NoPublish` (`--no-publish`) stops after the checks (nothing is
+committed, pushed or published), leaving the signed APKs, `SHA256SUMS` and
+the manifest it would commit in `app/build/outputs/apk/release-signed/`;
+`-SkipBuild` (`--skip-build`) signs what the last build left. Needs a JDK,
+the SDK's build-tools 35.0.0, Python 3.11+, git with push access and `gh
+auth login` with permission to publish releases.
 
 **Google Play:** `android/scripts/play-bundle.ps1` (or `.sh`) builds the
 App Bundle and signs it with the same key (jarsigner; its prompts and
