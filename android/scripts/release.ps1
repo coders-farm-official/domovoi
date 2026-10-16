@@ -310,7 +310,7 @@ $notesFile = Join-Path $signed 'NOTES.md'
 Say "publishing $tag on $RepoSlug..."
 $assets = @($Abis | ForEach-Object { Join-Path $signed "domovoi-$versionName-$_.apk" }) + @(Join-Path $signed 'SHA256SUMS')
 $ghArgs = @('release', 'create', $tag) + $assets + @('--repo', $RepoSlug, '--target', $commit,
-    '--title', "Domovoi for Android $versionName", '--notes-file', $notesFile)
+    '--title', "Domovoi v$versionName", '--notes-file', $notesFile)
 if ($Prerelease) { $ghArgs += '--prerelease' }
 $created = Invoke-Tool 'gh' $ghArgs
 if ($null -eq $created) { $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }; Die 'gh release create failed' }

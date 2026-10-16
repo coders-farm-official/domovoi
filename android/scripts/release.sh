@@ -257,7 +257,7 @@ assets=()
 for abi in "${ABIS[@]}"; do assets+=("$signed/domovoi-$version_name-$abi.apk"); done
 pre=(); [ "$prerelease" = 1 ] && pre=(--prerelease)
 gh release create "$tag" "${assets[@]}" "$signed/SHA256SUMS" --repo "$REPO_SLUG" --target "$commit" \
-  --title "Domovoi for Android $version_name" --notes-file "$notes" ${pre[@]+"${pre[@]}"} || die "gh release create failed"
+  --title "Domovoi v$version_name" --notes-file "$notes" ${pre[@]+"${pre[@]}"} || die "gh release create failed"
 
 say "checking the published files by their manifest URLs…"
 check_dir="$(mktemp -d)"
