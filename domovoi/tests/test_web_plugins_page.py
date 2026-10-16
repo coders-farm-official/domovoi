@@ -87,6 +87,10 @@ SCENARIOS = {
                                     RADIO_WAITING),
     "row_waiting": _row(True),
     "row_not_waiting": _row(False),
+    # Review 2026-10-15: a worker's own note (the radio fingerprinter paused).
+    "row_worker_note": _row(False, slug="radio", worker_notes=[
+        {"worker": "track_fingerprinter",
+         "note": "paused for 1 h: 3 tracks in a row failed, the last because the audio libraries are missing"}]),
     "controls_zip": _controls(),
     "controls_github": _controls(install_source="github"),
     "controls_bundled": _controls(slug="radio", bundled=True, install_source="bundled"),
@@ -180,6 +184,12 @@ def test_nothing_waiting_renders_no_card(rendered) -> None:
 def test_the_row_of_a_staged_upgrade_says_so(rendered) -> None:
     assert "restart to finish the upgrade" in _texts(rendered["row_waiting"])
     assert "restart to finish the upgrade" not in _texts(rendered["row_not_waiting"])
+
+
+def test_a_workers_note_is_on_its_plugins_row(rendered) -> None:
+    texts = " | ".join(_texts(rendered["row_worker_note"]))
+    assert "track_fingerprinter: paused for 1 h: 3 tracks in a row failed" in texts, texts
+    assert "track_fingerprinter" not in " | ".join(_texts(rendered["row_not_waiting"]))
 
 
 # ─── bundled plugins update with the core ─────────────────────────────────

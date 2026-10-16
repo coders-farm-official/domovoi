@@ -42,6 +42,12 @@ def _write_wav(path: Path, seconds: float, freqs: list[float]) -> Path:
     return path
 
 
+# What a child that hashed nothing writes: a valid answer with no rows.
+_EMPTY_ANSWER = ("import sys\n"
+                 "sys.stdout.buffer.write(b'DOMOVOI-FP1\\n\\x00\\x00\\x00\\x00')\n"
+                 "sys.stdout.flush()\n")
+
+
 def _stand_in(monkeypatch, code: str) -> None:
     """Replace the child with ``python -c code`` (argv[1] is the file)."""
     monkeypatch.setattr(fp, "_child_command", lambda path: [sys.executable, "-c", code, str(path)])
@@ -154,15 +160,16 @@ async def test_children_are_bounded(tmp_path, monkeypatch) -> None:
     # One file per child: appends from several processes to one file
     # lose lines on Windows.
     _stand_in(monkeypatch, (
-        "import os, time\n"
+        "import os, sys, time\n"
         "t0 = time.time()\n"
         "time.sleep(0.8)\n"
         f"open(os.path.join(r'{spans}', str(os.getpid())), 'w').write(f'{{t0}} {{time.time()}}')\n"
+        + _EMPTY_ANSWER
     ))
     audio = tmp_path / "track.mp3"
     audio.write_bytes(b"x")
     results = await asyncio.gather(*(fp.fingerprint_file(audio, timeout_sec=60) for _ in range(5)))
-    assert results == [[]] * 5   # no answer on stdout: treated as nothing usable
+    assert results == [[]] * 5   # a valid answer with no rows
     events = sorted(
         ev
         for f in spans.iterdir()
@@ -176,13 +183,79 @@ async def test_children_are_bounded(tmp_path, monkeypatch) -> None:
     assert peak <= fp.MAX_CHILDREN
 
 
-async def test_a_child_that_fails_or_garbles_its_answer_is_an_empty_result(tmp_path, monkeypatch) -> None:
+async def test_only_a_verdict_about_the_file_is_an_empty_result(tmp_path, monkeypatch) -> None:
+    """Review 2026-10-15: one failed run used to mark a track for good.
+    Now only "the decoder refused this file" (exit 4) is an empty result
+    (final); a crash, missing libraries, a garbled answer, a child that
+    can't start or is stopped is FingerprintFailed: try again later."""
     audio = tmp_path / "track.mp3"
     audio.write_bytes(b"x")
-    _stand_in(monkeypatch, "import sys; sys.stderr.write('boom'); sys.exit(4)")
+    _stand_in(monkeypatch, "import sys; sys.stderr.write('not audio'); sys.exit(4)")
     assert await fp.fingerprint_file(audio) == []
-    _stand_in(monkeypatch, "import sys; sys.stdout.buffer.write(b'DOMOVOI-FP1\\n\\x05\\x00\\x00\\x00short')")
-    assert await fp.fingerprint_file(audio) == []
+    for code in ("import sys; sys.exit(3)",          # the audio libraries are missing
+                 "import sys; sys.exit(5)",          # hashing crashed
+                 "import sys; sys.exit(9)",          # anything else
+                 "import sys; sys.stdout.buffer.write(b'DOMOVOI-FP1\\n\\x05\\x00\\x00\\x00short')",
+                 "pass"):                            # no answer at all
+        _stand_in(monkeypatch, code)
+        with pytest.raises(fp.FingerprintFailed):
+            await fp.fingerprint_file(audio)
+    monkeypatch.setattr(fp, "_child_command", lambda path: [str(tmp_path / "no-such-python"), str(path)])
+    with pytest.raises(fp.FingerprintFailed, match="didn't start"):
+        await fp.fingerprint_file(audio)
+    # A sample that can't be hashed is simply no local match.
+    assert await fp.match_sample(None, audio) is None  # type: ignore[arg-type]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+async def test_a_child_stopped_by_a_signal_is_a_failure_not_a_verdict(tmp_path, monkeypatch) -> None:
+    """``systemctl stop`` SIGTERMs the core's whole cgroup, the child too."""
+    pid_file = tmp_path / "pid.txt"
+    _stand_in(monkeypatch, (
+        "import os, time\n"
+        f"open(r'{pid_file}', 'w').write(str(os.getpid()))\n"
+        "time.sleep(60)\n"
+    ))
+    audio = tmp_path / "track.mp3"
+    audio.write_bytes(b"x")
+    task = asyncio.create_task(fp.fingerprint_file(audio, timeout_sec=60.0))
+    pid = int(await _wait_for_file(pid_file))
+    import os
+    import signal as sig
+    os.kill(pid, sig.SIGTERM)
+    with pytest.raises(fp.FingerprintFailed, match="stopped by signal 15"):
+        await task
+
+
+async def test_a_grandchild_holding_the_pipes_does_not_hold_the_answer(tmp_path, monkeypatch) -> None:
+    """Review note 6: the child answered and exited, but something it
+    started kept its stdout open. The answer must not wait out the time
+    limit: the child's group is killed (POSIX) after a short grace; on
+    Windows, where an orphan can't be found from a dead parent, the attempt
+    fails promptly instead."""
+    pids = tmp_path / "pids.txt"
+    _stand_in(monkeypatch, (
+        "import os, subprocess, sys\n"
+        "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],\n"
+        "                     stdout=sys.stdout.fileno(), stderr=sys.stderr.fileno())\n"
+        f"open(r'{pids}', 'w').write(f'{{os.getpid()}} {{g.pid}}')\n"
+        + _EMPTY_ANSWER
+    ))
+    audio = tmp_path / "track.mp3"
+    audio.write_bytes(b"x")
+    t0 = time.monotonic()
+    if sys.platform == "win32":
+        with pytest.raises(fp.FingerprintFailed, match="kept its output open"):
+            await fp.fingerprint_file(audio, timeout_sec=60.0)
+        took = time.monotonic() - t0
+        grandchild = int((await _wait_for_file(pids)).split()[1])
+        psutil.Process(grandchild).kill()
+    else:
+        assert await fp.fingerprint_file(audio, timeout_sec=60.0) == []
+        took = time.monotonic() - t0
+        grandchild = int((await _wait_for_file(pids)).split()[1])
+        assert await _wait_gone(grandchild), "the grandchild holding the pipes was left running"
+    assert took < 20, f"waited {took:.0f} s for pipes held by a grandchild"
 
 
 def test_child_output_round_trips() -> None:

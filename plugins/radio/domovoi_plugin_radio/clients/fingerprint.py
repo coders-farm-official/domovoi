@@ -157,16 +157,26 @@ MAX_CHILDREN = 2
 
 class FingerprintTimeout(Exception):
     """Decoding and hashing one file ran past its time limit; the child
-    doing it (and anything it started) was killed."""
+    doing it (and anything it started) was killed. A verdict about the
+    file: the fingerprinter does not try it again."""
+
+
+class FingerprintFailed(Exception):
+    """This attempt failed for a reason other than the file itself: the
+    child could not start, was stopped (a ``systemctl stop`` sends SIGTERM
+    to it too) or crashed, the audio libraries are missing, or its answer
+    was garbled. Try the file again later; it says nothing about the file."""
 
 
 async def fingerprint_file(
     file_path: str | Path, *, timeout_sec: float = FINGERPRINT_TIMEOUT_SEC
 ) -> list[FingerprintRow]:
     """Compute landmark hashes for one audio file, in a child process.
-    Empty list on any failure (missing scipy/librosa, unreadable file,
-    audio too short). Raises :class:`FingerprintTimeout` when the work
-    ran past ``timeout_sec`` and was killed."""
+    Empty list when the file gives none: missing, unreadable (the decoder
+    refused it), too short or silent, all verdicts about the file. Raises
+    :class:`FingerprintTimeout` when the work ran past ``timeout_sec`` and
+    was killed, and :class:`FingerprintFailed` when the attempt failed for
+    any other reason (try again later)."""
     return await _hash_file_in_child(Path(file_path), timeout_sec)
 
 
@@ -184,7 +194,7 @@ async def match_sample(
     hashing the sample ran past ``timeout_sec``)."""
     try:
         rows = await _hash_file_in_child(Path(wav_path), timeout_sec)
-    except FingerprintTimeout as e:
+    except (FingerprintTimeout, FingerprintFailed) as e:
         log.warning("radio sample not matched locally: %s", e)
         return None
 
@@ -273,6 +283,9 @@ _EXIT_HASH = 5
 _STDERR_MAX = 600
 # How long a killed child gets to be reaped before it is left to the OS.
 _REAP_SEC = 5.0
+# After the child has exited, how long its pipes may stay open (something
+# it started still holding them) before that group is killed too.
+_PIPE_GRACE_SEC = 2.0
 # The child runs below normal priority, so the core's own work (speech
 # above all) comes first: a nice value on POSIX, a priority class on
 # Windows.
@@ -350,6 +363,16 @@ async def _kill_tree(proc: "asyncio.subprocess.Process") -> None:
         await asyncio.wait_for(proc.wait(), _REAP_SEC)
 
 
+def _kill_group(proc: "asyncio.subprocess.Process") -> None:
+    """What the child left behind once it has exited itself: its process
+    group (POSIX; the group outlives its leader while a member lives).
+    On Windows an orphan can't be found from a dead parent: nothing."""
+    if sys.platform == "win32":
+        return
+    with contextlib.suppress(OSError):
+        os.killpg(proc.pid, signal.SIGKILL)
+
+
 def _kill_now(proc: "asyncio.subprocess.Process") -> None:
     """:func:`_kill_tree` without awaiting anything (a cancelled caller)."""
     if proc.returncode is not None:
@@ -383,10 +406,14 @@ def _parse_child_output(out: bytes) -> list[FingerprintRow] | None:
 
 
 async def _hash_file_in_child(path: Path, timeout_sec: float) -> list[FingerprintRow]:
-    """Decode and hash ``path`` in a child process: the rows, [] for every
-    failure the in-process code used to swallow, :class:`FingerprintTimeout`
-    when the child ran past ``timeout_sec`` (killed first). A caller
-    cancelled while it waits takes the child down with it."""
+    """Decode and hash ``path`` in a child process. The rows; [] for a
+    verdict about the file (missing, the decoder refused it, nothing to
+    hash); :class:`FingerprintTimeout` when the child ran past
+    ``timeout_sec`` (killed first); :class:`FingerprintFailed` for any
+    other failure. The time limit is the child's: once it has exited, what
+    it started may not hold its pipes open past :data:`_PIPE_GRACE_SEC`
+    (that group is killed). A caller cancelled while it waits takes the
+    child down with it."""
     if not path.exists():
         return []
     async with _child_slot():
@@ -397,26 +424,54 @@ async def _hash_file_in_child(path: Path, timeout_sec: float) -> list[Fingerprin
                 stderr=subprocess.PIPE, env=_child_env(), **_spawn_kwargs(),
             )
         except OSError as e:
-            log.debug("fingerprint child for %s didn't start: %s", path, e)
-            return []
+            raise FingerprintFailed(f"the fingerprint child for {path} didn't start: {e}") from None
+        talk = asyncio.ensure_future(proc.communicate())
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_sec
         try:
-            out, err = await asyncio.wait_for(proc.communicate(), timeout_sec)
-        except asyncio.TimeoutError:
-            await _kill_tree(proc)
-            raise FingerprintTimeout(
-                f"decoding {path} took longer than {timeout_sec:.0f} s; stopped"
-            ) from None
+            # Until the answer is in, or the child has exited (watched by
+            # its return code: Process.wait() also waits for every pipe to
+            # close, which something the child started can hold forever).
+            while not talk.done() and proc.returncode is None:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    await _kill_tree(proc)
+                    talk.cancel()
+                    raise FingerprintTimeout(
+                        f"decoding {path} took longer than {timeout_sec:.0f} s; stopped")
+                await asyncio.wait({talk}, timeout=min(0.2, remaining))
+        except FingerprintTimeout:
+            raise
         except BaseException:
             _kill_now(proc)
+            talk.cancel()
             raise
+        try:
+            out, err = await asyncio.wait_for(asyncio.shield(talk), _PIPE_GRACE_SEC)
+        except asyncio.TimeoutError:
+            _kill_group(proc)
+            try:
+                out, err = await asyncio.wait_for(asyncio.shield(talk), _REAP_SEC)
+            except asyncio.TimeoutError:
+                talk.cancel()
+                raise FingerprintFailed(
+                    f"the fingerprint child for {path} exited, but something it started "
+                    "kept its output open") from None
     detail = (err or b"")[-_STDERR_MAX:].decode("utf-8", "replace").strip()
-    if proc.returncode != 0:
-        log.debug("fingerprint child for %s exited %s: %s", path, proc.returncode, detail)
+    code = proc.returncode
+    if code == _EXIT_LOAD:
+        # The decoder refused the file: a verdict, not worth another try.
+        log.debug("fingerprint child for %s: unreadable: %s", path, detail)
         return []
+    if code != 0:
+        why = (f"stopped by signal {-code}" if code is not None and code < 0
+               else {_EXIT_DEPS: "the audio libraries are missing",
+                     _EXIT_HASH: "hashing crashed",
+                     _EXIT_USAGE: "it was started wrongly"}.get(code, f"exit {code}"))
+        raise FingerprintFailed(f"fingerprinting {path} failed ({why}): {detail[-200:]}")
     rows = _parse_child_output(out or b"")
     if rows is None:
-        log.debug("fingerprint child for %s wrote no usable answer: %s", path, detail)
-        return []
+        raise FingerprintFailed(f"the fingerprint child for {path} wrote no usable answer: {detail[-200:]}")
     return rows
 
 

@@ -4624,8 +4624,11 @@ async def capabilities() -> dict[str, Any]:
 async def list_plugins() -> dict[str, Any]:
     """Plugin registry rows (open read; design §12). ``pending_restart`` is
     ``{slug, from_version, to_version, since, where}`` for an upgrade whose
-    new code loads at the next restart, else null."""
+    new code loads at the next restart, else null. ``worker_notes`` is what
+    the plugin's running workers say about themselves (``[{worker, note}]``,
+    e.g. the radio fingerprinter's pause), empty when they say nothing."""
     from domovoi.plugins_runtime.loader import LOADER
+    from domovoi.plugins_runtime.workers import WORKERS
 
     async with session_scope() as s:
         rows = (
@@ -4650,6 +4653,7 @@ async def list_plugins() -> dict[str, Any]:
                 "installed_at": r.installed_at.isoformat() if r.installed_at else None,
                 "updated_at": r.updated_at.isoformat() if r.updated_at else None,
                 "pending_restart": LOADER.pending_restart.get(r.slug),
+                "worker_notes": WORKERS.notes(r.slug),
             }
             for r in rows
         ]

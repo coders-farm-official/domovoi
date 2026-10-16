@@ -709,9 +709,10 @@ async def test_capabilities_and_plugins_endpoints(db_session) -> None:
             # default, locked 14) — assert shape, not emptiness.
             assert all(p["slug"] != "providerx" for p in listed)
             assert all(
-                {"slug", "name", "version", "enabled", "status"} <= set(p)
+                {"slug", "name", "version", "enabled", "status", "worker_notes"} <= set(p)
                 for p in listed
             )
+            assert all(isinstance(p["worker_notes"], list) for p in listed)
 
             r = await client.get("/v1/plugins/ghost/status")
             assert r.status_code == 404

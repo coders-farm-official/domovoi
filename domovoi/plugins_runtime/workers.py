@@ -47,6 +47,11 @@ _STOP_TIMEOUT_SEC = 10.0
 _CANCEL_GRACE_SEC = 0.5
 
 
+def _note_of(worker: Any) -> str | None:
+    note = getattr(worker, "status_note", None)
+    return str(note)[:300] if note else None
+
+
 @dataclass
 class StartupHook:
     name: str                      # full "<slug>.<name>"
@@ -209,6 +214,10 @@ class WorkerRunner:
                 "last_error": e.last_error,
                 "consecutive_failures": e.consecutive_failures,
                 "next_attempt_at": e.next_attempt_at.isoformat() if e.next_attempt_at else None,
+                # A worker's own word on its state (a plain ``status_note``
+                # attribute, None when all is well): the radio fingerprinter
+                # says when and why it paused.
+                "note": _note_of(e.worker),
             }
             for e in self._workers.get(owner, [])
         ]
@@ -217,6 +226,17 @@ class WorkerRunner:
             for h in self._hooks.get(owner, [])
         ]
         return {"workers": workers, "startup_hooks": hooks}
+
+    def notes(self, owner: str) -> list[dict[str, str]]:
+        """What the owner's workers say about themselves, where they say
+        anything (``status_note``): ``[{worker, note}]``, for the plugin
+        list (the dashboard's Plugins page shows each one)."""
+        out = []
+        for e in self._workers.get(owner, []):
+            note = _note_of(e.worker)
+            if note:
+                out.append({"worker": e.worker.name, "note": note})
+        return out
 
     def worker_names(self, owner: str) -> dict[str, str]:
         """name → kind, for the §13.2 manifest cross-check."""

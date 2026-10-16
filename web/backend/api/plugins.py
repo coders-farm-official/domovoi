@@ -102,12 +102,46 @@ async def _proxy_post(request: Request, core_path: str) -> JSONResponse:
 # literal path wins over the ``/{slug}`` matchers below.
 
 
+# The core's word on its running workers costs the list this long at
+# most: a core that is down or frozen leaves the notes out, nothing else.
+_NOTES_TIMEOUT_SEC = 1.5
+
+
+async def _worker_notes() -> dict[str, list[dict[str, str]]]:
+    """slug -> what that plugin's running workers say about themselves
+    (``[{worker, note}]``: the radio fingerprinter paused after failures
+    in a row, say), from the core's GET /v1/plugins, which runs them.
+    Best effort: {} when the core doesn't answer."""
+    url = f"{_core_url().rstrip('/')}/v1/plugins"
+    try:
+        async with httpx.AsyncClient(timeout=_NOTES_TIMEOUT_SEC) as client:
+            r = await client.get(url)
+        rows = r.json().get("plugins") if r.status_code == 200 else None
+    except Exception:  # noqa: BLE001 - down, frozen, or an older core
+        return {}
+    out: dict[str, list[dict[str, str]]] = {}
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or not isinstance(row.get("slug"), str):
+            continue
+        notes = [
+            {"worker": str(n.get("worker") or "")[:100], "note": str(n["note"])[:300]}
+            for n in (row.get("worker_notes") or [])
+            if isinstance(n, dict) and n.get("note")
+        ]
+        if notes:
+            out[row["slug"]] = notes
+    return out
+
+
 @router.get("")
 async def list_installed() -> dict[str, Any]:
     """Installed plugins for the admin page: registry row + the fields
-    the list renders (permissions, capabilities, pages). Open read —
-    §12 keeps the registry list open; errors show for everyone."""
+    the list renders (permissions, capabilities, pages), and what the
+    plugin's running workers say about themselves (``worker_notes``, from
+    the core). Open read — §12 keeps the registry list open; errors show
+    for everyone."""
     plugins: list[dict[str, Any]] = []
+    notes = await _worker_notes()
     for slug in sorted(HOST.rows):
         r = HOST.rows[slug]
         m = r["manifest"] or {}
@@ -140,6 +174,7 @@ async def list_installed() -> dict[str, Any]:
                     "capabilities"
                 ) or [],
                 "web_load_error": HOST.load_errors.get(slug),
+                "worker_notes": notes.get(slug, []),
                 # The container guard (SDK 1.5): what the plugin declares it
                 # runs, and whether a plugin that needs Docker declared
                 # nothing — it still works, it just isn't watched.

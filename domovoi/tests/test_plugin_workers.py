@@ -85,6 +85,27 @@ async def test_tick_exceptions_never_kill_the_loop() -> None:
     assert status["consecutive_failures"] >= 2
 
 
+async def test_a_workers_own_note_reaches_the_status_and_the_plugin_list() -> None:
+    """Review 2026-10-15: the radio fingerprinter's pause is "logged and
+    shown": a worker's ``status_note`` is in its status, and every worker
+    that has one is in ``notes`` (the core's GET /v1/plugins
+    ``worker_notes``, shown on the dashboard's Plugins page)."""
+    runner = WorkerRunner()
+    quiet, talking = _Ticker(), _FailingTicker()
+    talking.status_note = "paused for 1 h: 3 tracks in a row failed"
+    runner.add_worker(quiet, owner="t5", settings_source=_Settings())
+    runner.add_worker(talking, owner="t5", settings_source=_Settings())
+    by_name = {w["name"]: w for w in runner.status("t5")["workers"]}
+    assert by_name["ticker"]["note"] is None
+    assert by_name["failing_ticker"]["note"] == "paused for 1 h: 3 tracks in a row failed"
+    assert runner.notes("t5") == [{"worker": "failing_ticker",
+                                   "note": "paused for 1 h: 3 tracks in a row failed"}]
+    talking.status_note = "x" * 1000
+    assert len(runner.notes("t5")[0]["note"]) == 300        # capped
+    talking.status_note = None
+    assert runner.notes("t5") == [] and runner.notes("nobody") == []
+
+
 async def test_enabled_setting_gates_start() -> None:
     runner = WorkerRunner()
     settings_obj = _Settings()
