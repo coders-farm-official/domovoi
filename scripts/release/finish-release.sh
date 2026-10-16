@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # Finish a Domovoi release: the Windows Setup, one SHA256SUMS, the notes,
 # then stable. Run by the owner after android/scripts/release.sh (or .ps1)
-# has published v<version> and the Windows Setup's pins have been moved to
-# the tag's commit and pushed, from a clean checkout at the pins commit.
+# has published v<version>, from a clean checkout at the tag or after it.
 # The twin of finish-release.ps1; the work is finish_release.py beside it
 # (Python 3.11+, standard library), which says what each step checks.
 #
 #   bash scripts/release/finish-release.sh                    # check, build Setup, SHA256SUMS, notes, publish, stable
 #   bash scripts/release/finish-release.sh --no-publish       # all but GitHub: what it would do
 #   bash scripts/release/finish-release.sh --tag v1.0.0       # default: v + the Android versionName
-#   bash scripts/release/finish-release.sh --setup FILE       # a DomovoiSetup.exe built from this commit
+#   bash scripts/release/finish-release.sh --setup FILE       # a DomovoiSetup.exe built by build.ps1 -Pin <tag> from the tag
 #   bash scripts/release/finish-release.sh --since v1.0.0-rc2 # the tag the notes count from
 #
-# The Setup builds on Windows only (windows/build.ps1, run through Windows
-# PowerShell from Git Bash); elsewhere pass --setup. Needs git with push
+# The Setup builds on Windows only (windows/build.ps1 -Pin in a clean
+# worktree of the tag, run through Windows PowerShell from Git Bash);
+# elsewhere pass --setup. Needs git with push
 # access and gh signed in. Never touches a keystore or a password.
 set -euo pipefail
 

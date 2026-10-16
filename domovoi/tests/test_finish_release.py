@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -139,25 +140,30 @@ def _write(root: Path, rel: str, data: str | bytes) -> None:
     p.write_bytes(data if isinstance(data, bytes) else data.encode("utf-8"))
 
 
-def _manifest(version: str, apks: list[dict]) -> str:
+def _manifest(version: str, apks: list[dict], commit: str) -> str:
     return json.dumps({"manifest_version": 1, "release": {
         "package": "com.domovoi.app", "version_name": version, "version_code": 26101602,
-        "tag": f"v{version}", "commit": "0" * 40, "published": "2026-10-16", "cert_sha256": CERT, "apks": apks,
+        "tag": f"v{version}", "commit": commit, "published": "2026-10-16", "cert_sha256": CERT, "apks": apks,
     }}, indent=2) + "\n"
 
 
-def _pins(commit: str, provision_sha: str) -> str:
+def _pins(commit: str, provision_sha: str, bundled: bool = True) -> str:
     return (f'#define DomovoiRepoUrl "https://github.com/coders-farm-official/domovoi"\n'
             f'#define DomovoiCommit "{commit}"\n'
             f'#define ProvisionUrl "https://raw.githubusercontent.com/x/" + DomovoiCommit + "/p.sh"\n'
-            f'#define ProvisionSha256 "{provision_sha}"\n')
+            f'#define ProvisionSha256 "{provision_sha}"\n'
+            + ("#define ProvisionBundled\n" if bundled else "; #define ProvisionBundled\n"))
+
+
+def _pyproject(version: str) -> str:
+    return f'[project]\nname = "domovoi"\nversion = "{fr.pep440(version)}"\n'
 
 
 class World:
-    """A checkout at the pins commit after the release commit, its bare origin, and a fake release."""
+    """A checkout after the release commit (a later commit on top), its bare origin, and a fake release."""
 
     def __init__(self, tmp_path: Path, monkeypatch, version: str = "1.0.0-rc2", stable: str | None = None,
-                 hand_notes: str | None = None, github_prerelease: bool = False):
+                 hand_notes: str | None = None, github_prerelease: bool = False, annotated: bool = False):
         self.tmp = tmp_path
         self.version = version
         self.tag = f"v{version}"
@@ -171,39 +177,46 @@ class World:
                      ("commit.gpgsign", "false"), ("tag.gpgsign", "false")):
             _git(w, "config", k, v)
         _git(w, "remote", "add", "origin", str(self.origin))
+        monkeypatch.setenv("DOMOVOI_RELEASE_ORIGIN_URL", str(self.origin))
         _write(w, ".gitignore", "build/\n")
+        _write(w, "pyproject.toml", _pyproject("1.0.0-rc1"))
         _write(w, "android/app/build.gradle.kts", '        versionName = "1.0.0-rc1"\n')
         _write(w, "android/release.json", '{"manifest_version": 1, "release": null}\n')
         _write(w, "docs/RELEASE_NOTES.md", NOTES_RC1)
         _write(w, "scripts/linux/provision.sh", PROVISION)
         _write(w, "windows/installer/pins.iss", _pins("1" * 40, "0" * 64))
+        _write(w, "windows/build.ps1", "param([string]$Pin)\n")
         _git(w, "add", "-A"); _git(w, "commit", "--quiet", "-m", "rc1")
         _git(w, "tag", "v1.0.0-rc1")
         self.rc1 = _git(w, "rev-parse", "HEAD")
         # The build commit: the new version and its notes.
+        _write(w, "pyproject.toml", _pyproject(version))
         _write(w, "android/app/build.gradle.kts", f'        versionName = "{version}"\n')
         _write(w, "docs/RELEASE_NOTES.md", NOTES_RC2)
-        _git(w, "commit", "--quiet", "-am", "release: Domovoi")
+        if hand_notes is not None:
+            _write(w, f"docs/release/{self.tag}.md", hand_notes)
+        _git(w, "add", "-A"); _git(w, "commit", "--quiet", "-m", "release: Domovoi")
         self.build = _git(w, "rev-parse", "HEAD")
-        # The release commit: android/release.json naming its own APKs, tagged.
+        # The release commit: android/release.json naming its own APKs, on the build commit, tagged.
         self.apk_bytes = {f"domovoi-{version}-{abi}.apk": f"apk {abi}".encode() for abi in ("arm64-v8a", "armeabi-v7a")}
         self.apks = [{"abi": abi, "file": f"domovoi-{version}-{abi}.apk",
                       "url": f"https://github.com/coders-farm-official/domovoi/releases/download/v{version}/domovoi-{version}-{abi}.apk",
                       "sha256": hashlib.sha256(f"apk {abi}".encode()).hexdigest(), "size": len(f"apk {abi}".encode())}
                      for abi in ("arm64-v8a", "armeabi-v7a")]
-        _write(w, "android/release.json", _manifest(version, self.apks))
-        if hand_notes is not None:
-            _write(w, f"docs/release/{self.tag}.md", hand_notes)
-        _git(w, "add", "-A"); _git(w, "commit", "--quiet", "-m", "android: release")
-        _git(w, "tag", self.tag)
+        _write(w, "android/release.json", _manifest(version, self.apks, self.build))
+        _git(w, "commit", "--quiet", "-am", "android: release")
+        if annotated:
+            _git(w, "tag", "-a", "-m", "a signed release, one day", self.tag)
+        else:
+            _git(w, "tag", self.tag)
         self.tag_commit = _git(w, "rev-parse", "HEAD")
-        # The pins commit.
+        # Main moves on: a later commit (an old-style pins commit, say).
         _write(w, "windows/installer/pins.iss", _pins(self.tag_commit, hashlib.sha256(PROVISION).hexdigest()))
         _git(w, "commit", "--quiet", "-am", "windows: Setup installs it")
         self.head = _git(w, "rev-parse", "HEAD")
         _git(w, "push", "--quiet", "origin", "main", "--tags")
         if stable:
-            _git(w, "push", "--quiet", "origin", f"{stable}:refs/heads/stable")
+            _git(w, "push", "--quiet", "origin", f"{stable}^{{commit}}:refs/heads/stable")
         _git(w, "fetch", "--quiet", "origin")
         _git(w, "branch", "--quiet", "--set-upstream-to=origin/main")
 
@@ -225,6 +238,7 @@ class World:
         self.gh = [sys.executable, str(fake)]
         monkeypatch.setenv("FAKE_GH_STATE", str(self.state_file))
         self.said: list[str] = []
+        self.saw: list[str] = []
 
     def save(self) -> None:
         self.state_file.write_text(json.dumps(self.state, indent=1), encoding="utf-8")
@@ -238,6 +252,19 @@ class World:
 
     def run(self, *extra: str, cls=None) -> int:
         return fr.run(["--setup", str(self.setup), *extra], tools=self.tools(cls), repo=self.work)
+
+    def pin_build(self, src: Path, tag: str, repo: Path) -> Path:
+        """What windows/build.ps1 -Pin does, in the worktree it is given:
+        the pins moved to its commit (provision.sh fetched), then a Setup."""
+        self.saw = sorted(p.relative_to(src).as_posix() for p in src.rglob("*") if p.is_file() and p.name != ".git")
+        sha = _git(src, "rev-parse", "HEAD")
+        provision = (src / "scripts" / "linux" / "provision.sh").read_bytes()
+        _write(src, "windows/installer/pins.iss", _pins(sha, hashlib.sha256(provision).hexdigest(), bundled=False))
+        _write(src, "windows/build/DomovoiSetup.exe", b"MZ built from " + sha.encode())
+        return src / "windows" / "build" / "DomovoiSetup.exe"
+
+    def run_built(self, *extra: str, builder=None, cls=None) -> int:
+        return fr.run(list(extra), tools=self.tools(cls), repo=self.work, build_setup=builder or self.pin_build)
 
     def stable(self) -> str:
         return subprocess.run(["git", "--git-dir", str(self.origin), "rev-parse", "--verify", "--quiet", "refs/heads/stable"],
@@ -265,7 +292,8 @@ def test_a_dry_run_stages_everything_and_changes_nothing_on_github(tmp_path, mon
     assert sums.decode("ascii").splitlines() == [f"{e['sha256']}  {e['file']}" for e in w.apks] + [f"{setup_sha}  DomovoiSetup.exe"]
     assert (w.stage / "DomovoiSetup.exe").read_bytes() == w.setup.read_bytes()
     notes = (w.stage / "NOTES.md").read_text(encoding="utf-8")
-    assert w.tag_commit in notes and w.head in notes and CERT in notes and setup_sha in notes
+    assert w.tag_commit in notes and CERT in notes and setup_sha in notes
+    assert "handed to it (`--setup`)" in notes and w.head not in notes
     assert "is a candidate for 1.0.0" in notes and "Servers that follow `stable` don't get it." in notes
     assert "## What's new since v1.0.0-rc1" in notes
     base = f"https://github.com/coders-farm-official/domovoi/blob/{w.tag}/docs/RELEASE_NOTES.md"
@@ -367,47 +395,208 @@ def test_a_second_run_replaces_the_files_and_leaves_stable(tmp_path, monkeypatch
     assert any("already at" in s for s in w.said)
 
 
-# ─── what it refuses ─────────────────────────────────────────────────────
+# ─── the Setup, built from the tag's own files ───────────────────────────
 
-def _commit_pins(w: World, text: str) -> None:
-    _write(w.work, "windows/installer/pins.iss", text)
-    _git(w.work, "commit", "--quiet", "-am", "pins again")
+@requires_git
+def test_the_setup_is_built_from_the_tag_alone_and_pinned_to_it(tmp_path, monkeypatch):
+    """Review R3: commits after the tag never reach the Setup. It is built in
+    a clean worktree of the tag's commit, where build.ps1 -Pin moves the pins
+    to it; the worktree is gone afterwards."""
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    _write(w.work, "windows/helper/Evil.cs", "// not in the tag\n")
+    _git(w.work, "add", "-A"); _git(w.work, "commit", "--quiet", "-m", "an installer change after the tag")
     _git(w.work, "push", "--quiet", "origin", "main")
+    assert w.run_built() == 0
+    assert "windows/helper/Evil.cs" not in w.saw and "android/release.json" in w.saw
+    built = w.load()["files"]["DomovoiSetup.exe"]
+    assert built == hashlib.sha256(b"MZ built from " + w.tag_commit.encode()).hexdigest()
+    values, flags = fr.read_pins((w.stage / "pins.iss").read_text(encoding="utf-8"))
+    assert values["DomovoiCommit"] == w.tag_commit and "ProvisionBundled" not in flags
+    notes = w.state["releases"][w.tag]["body"]
+    assert f"built from the tag's own files by `windows/build.ps1 -Pin {w.tag}`" in notes
+    assert w.head not in notes
+    assert _git(w.work, "worktree", "list", "--porcelain").count("worktree ") == 1
+    assert w.stable() == w.tag_commit
+
+
+def _unpinned(w, src, tag, repo):
+    exe = w.pin_build(src, tag, repo)
+    _write(src, "windows/installer/pins.iss", _pins(w.build, hashlib.sha256(PROVISION).hexdigest(), bundled=False))
+    return exe
+
+
+def _bundling(w, src, tag, repo):
+    exe = w.pin_build(src, tag, repo)
+    _write(src, "windows/installer/pins.iss", _pins(w.tag_commit, hashlib.sha256(PROVISION).hexdigest(), bundled=True))
+    return exe
+
+
+def _wrong_provision(w, src, tag, repo):
+    exe = w.pin_build(src, tag, repo)
+    _write(src, "windows/installer/pins.iss", _pins(w.tag_commit, "f" * 64, bundled=False))
+    return exe
+
+
+def _more_than_pins(w, src, tag, repo):
+    exe = w.pin_build(src, tag, repo)
+    _write(src, "scripts/linux/provision.sh", PROVISION + b"echo not the tag's\n")
+    return exe
+
+
+def _nothing_pinned(w, src, tag, repo):
+    _write(src, "windows/build/DomovoiSetup.exe", b"MZ")
+    return src / "windows" / "build" / "DomovoiSetup.exe"
+
+
+@pytest.mark.parametrize("builder, why", [
+    (_unpinned, "not the tag's commit"),
+    (_bundling, "bundles a provision.sh"),
+    (_wrong_provision, "ProvisionSha256"),
+    (_more_than_pins, "changed beyond"),
+    (_nothing_pinned, "nothing pinned"),
+])
+@requires_git
+def test_a_setup_that_is_not_the_tag_pinned_to_itself_is_refused(tmp_path, monkeypatch, builder, why):
+    w = World(tmp_path, monkeypatch)
+    with pytest.raises(fr.Refused, match=why):
+        w.run_built(builder=lambda src, tag, repo: builder(w, src, tag, repo))
+    assert w.calls("upload") == [] and w.calls("edit") == []
+    assert _git(w.work, "worktree", "list", "--porcelain").count("worktree ") == 1
 
 
 @requires_git
-def test_pins_that_install_another_commit_are_refused(tmp_path, monkeypatch):
+def test_a_tag_without_build_ps1_pin_says_how_to_build_it(tmp_path, monkeypatch):
     w = World(tmp_path, monkeypatch)
-    _commit_pins(w, _pins(w.build, hashlib.sha256(PROVISION).hexdigest()))
-    with pytest.raises(fr.Refused, match="move the Setup's pins"):
-        w.run("--no-publish")
+    src = tmp_path / "src"
+    (src / "windows").mkdir(parents=True)
+    (src / "windows" / "build.ps1").write_text("param([switch]$SkipInstaller)\n", encoding="utf-8")
+    with pytest.raises(fr.Refused, match=r"has no -Pin.*build\.ps1 -Pin v1\.0\.0-rc2.*--setup"):
+        fr._build_setup(src, w.tag, w.work)
 
 
-@requires_git
-def test_a_provision_pin_that_is_not_the_script_setup_runs_is_refused(tmp_path, monkeypatch):
-    w = World(tmp_path, monkeypatch)
-    _commit_pins(w, _pins(w.tag_commit, "f" * 64))
-    with pytest.raises(fr.Refused, match="ProvisionSha256"):
-        w.run("--no-publish")
-
-
-@requires_git
-def test_a_bundled_provision_script_is_the_one_pinned(tmp_path, monkeypatch):
-    w = World(tmp_path, monkeypatch)
-    newer = PROVISION + b"echo a fix\n"
-    _write(w.work, "scripts/linux/provision.sh", newer)
-    pins = _pins(w.tag_commit, hashlib.sha256(newer).hexdigest())
-    pins += '#define ProvisionBundled\n#define ProvisionSource "..\\..\\scripts\\linux\\provision.sh"\n'
-    _commit_pins(w, pins)
-    assert w.run("--no-publish") == 0
-    assert any("differs from the tag's" in s for s in w.said)
-
+# ─── what it refuses ─────────────────────────────────────────────────────
 
 @requires_git
 def test_a_tag_made_before_its_manifest_is_refused(tmp_path, monkeypatch):
     w = World(tmp_path, monkeypatch)
     with pytest.raises(fr.Refused, match="names 1.0.0-rc1|names no release"):
         w.run("--no-publish", "--tag", "v1.0.0-rc1")
+
+
+@requires_git
+def test_a_tagged_commit_that_is_not_the_manifest_on_its_build_commit_is_refused(tmp_path, monkeypatch):
+    """Review R1, finish-release's half: the tag's parent is the commit the
+    manifest names, and the tag's commit changes that file only."""
+    w = World(tmp_path, monkeypatch)
+    # A commit slipped in between the build and the manifest, then the tag moved onto a rebuilt chain.
+    _git(w.work, "checkout", "--quiet", w.build)
+    _write(w.work, "unreviewed.txt", "an agent's change\n")
+    _git(w.work, "add", "-A"); _git(w.work, "commit", "--quiet", "-m", "unreviewed")
+    _write(w.work, "android/release.json", _manifest(w.version, w.apks, w.build))
+    _git(w.work, "commit", "--quiet", "-am", "android: release")
+    _git(w.work, "tag", "-f", w.tag)
+    _git(w.work, "push", "--quiet", "--force", "origin", f"refs/tags/{w.tag}")
+    with pytest.raises(fr.Refused, match="not android/release.json on top of the commit its APKs were built from"):
+        w.run("--no-publish")
+    # The manifest committed together with another file.
+    _git(w.work, "checkout", "--quiet", w.build)
+    _write(w.work, "android/release.json", _manifest(w.version, w.apks, w.build))
+    _write(w.work, "also.txt", "and this\n")
+    _git(w.work, "add", "-A"); _git(w.work, "commit", "--quiet", "-m", "android: release, and more")
+    _git(w.work, "tag", "-f", w.tag)
+    _git(w.work, "push", "--quiet", "--force", "origin", f"refs/tags/{w.tag}")
+    with pytest.raises(fr.Refused, match="changes more than android/release.json"):
+        w.run("--no-publish")
+
+
+@requires_git
+def test_an_annotated_tag_is_peeled_to_its_commit(tmp_path, monkeypatch):
+    """Review R4: a signed (annotated) tag is a release like any other."""
+    w = World(tmp_path, monkeypatch, version="1.0.0", annotated=True)
+    assert _git(w.work, "rev-parse", w.tag) != w.tag_commit
+    assert w.run() == 0
+    assert w.stable() == w.tag_commit
+
+
+@requires_git
+def test_an_origin_that_is_not_the_github_repository_is_refused_first(tmp_path, monkeypatch):
+    """Review R5: every URL of origin, push URLs included."""
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    other = tmp_path / "other.git"
+    subprocess.run(["git", "init", "--quiet", "--bare", str(other)], check=True)
+    _git(w.work, "config", "remote.origin.pushurl", str(other))
+    with pytest.raises(fr.Refused, match="origin is .*other.git"):
+        w.run()
+    assert w.load()["calls"] == []
+    _git(w.work, "config", "--unset", "remote.origin.pushurl")
+    monkeypatch.delenv("DOMOVOI_RELEASE_ORIGIN_URL")
+    with pytest.raises(fr.Refused, match="not github.com/coders-farm-official/domovoi"):
+        w.run("--no-publish")
+    for url in ("https://github.com/coders-farm-official/domovoi", "https://github.com/coders-farm-official/domovoi.git",
+                "git@github.com:coders-farm-official/domovoi.git", "ssh://git@github.com/coders-farm-official/domovoi"):
+        assert fr.ORIGIN_RE.fullmatch(url), url
+    for url in ("https://github.com/someone/domovoi", "https://github.com/coders-farm-official/domovoi-fork",
+                "https://example.com/coders-farm-official/domovoi"):
+        assert not fr.ORIGIN_RE.fullmatch(url), url
+
+
+def test_tags_and_versions_are_read_strictly():
+    """Review R7: ASCII digits only, the whole string, and the pyproject spelling."""
+    for good, suffix in (("v1.0.0", None), ("v1.0.0-rc2", "-rc2"), ("v10.2.33-beta1", "-beta1")):
+        m = fr.TAG_RE.fullmatch(good)
+        assert m and m.group(2) == suffix, good
+    for bad in ("v1.0.0\n", " v1.0.0", "v1.0", "V1.0.0", "v١.٠.٠", "v1.0.0+build", "v1.0.0rc2"):
+        assert not fr.TAG_RE.fullmatch(bad), ascii(bad)
+    assert [fr.pep440(v) for v in ("1.0.0", "1.0.0-rc2", "1.0.0-alpha1", "1.0.0-beta.3", "1.0.0-preview")] == \
+        ["1.0.0", "1.0.0rc2", "1.0.0a1", "1.0.0b3", None]
+
+
+@requires_git
+def test_a_pyproject_that_disagrees_with_the_tag_is_refused(tmp_path, monkeypatch):
+    """The tag's own pyproject.toml must say its version (a release has no suffix there either)."""
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    _git(w.work, "checkout", "--quiet", w.rc1)
+    _write(w.work, "android/release.json", _manifest(w.version, w.apks, w.rc1))
+    _git(w.work, "commit", "--quiet", "-am", "android: release over rc1's files")
+    _git(w.work, "tag", "-f", w.tag)
+    _git(w.work, "push", "--quiet", "--force", "origin", f"refs/tags/{w.tag}")
+    with pytest.raises(fr.Refused, match="pyproject.toml says 1.0.0rc1, not 1.0.0"):
+        w.run("--no-publish", "--tag", w.tag)
+
+
+@requires_git
+def test_stable_goes_to_the_commit_checked_even_if_the_tag_moves_here(tmp_path, monkeypatch):
+    """Review R2: the local tag re-pointed while the Setup builds; stable
+    still gets the SHA that was checked, never the name again."""
+    w = World(tmp_path, monkeypatch, version="1.0.0", stable="v1.0.0-rc1")
+    _write(w.work, "unreviewed.txt", "not part of the release\n")
+    _git(w.work, "add", "-A"); _git(w.work, "commit", "--quiet", "-m", "unreviewed change on main")
+    unreviewed = _git(w.work, "rev-parse", "HEAD")
+    _git(w.work, "push", "--quiet", "origin", "main")
+
+    class Racy(fr.Tools):
+        def git(self, *args, check=True):
+            if args[:1] == ("push",):
+                _git(w.work, "tag", "-f", w.tag, unreviewed)
+            return super().git(*args, check=check)
+
+    assert w.run(cls=Racy) == 0
+    assert w.stable() == w.tag_commit
+
+
+@requires_git
+def test_stable_stays_if_the_tag_on_github_moves_before_the_push(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch, version="1.0.0", stable="v1.0.0-rc1")
+
+    class Moved(fr.Tools):
+        def gh(self, *args, check=True):
+            if args[:2] == ("release", "edit"):
+                subprocess.run(["git", "--git-dir", str(w.origin), "update-ref", f"refs/tags/{w.tag}", w.rc1], check=True)
+            return super().gh(*args, check=check)
+
+    with pytest.raises(fr.Refused, match="no longer names"):
+        w.run(cls=Moved)
+    assert w.stable() == w.rc1
 
 
 @pytest.mark.parametrize("change, why", [
@@ -449,12 +638,20 @@ def test_a_dirty_checkout_or_a_head_before_the_tag_is_refused(tmp_path, monkeypa
 
 
 @requires_git
-def test_a_head_github_lacks_is_refused(tmp_path, monkeypatch):
+def test_git_and_gh_never_come_from_the_checkout(tmp_path, monkeypatch):
+    """Review R8: a git.exe planted in the checkout is never the git run."""
     w = World(tmp_path, monkeypatch)
-    _write(w.work, "windows/README.txt", "local only\n")
-    _git(w.work, "add", "-A"); _git(w.work, "commit", "--quiet", "-m", "not pushed")
-    with pytest.raises(fr.Refused, match="not on GitHub yet"):
-        w.run()
+    planted = w.work / ("git.exe" if os.name == "nt" else "git")
+    planted.write_bytes(b"MZ planted")
+    planted.chmod(0o755)
+    (w.work / ("gh.bat" if os.name == "nt" else "gh")).write_bytes(b"echo planted\n")
+    monkeypatch.chdir(w.work)
+    monkeypatch.setenv("PATH", str(w.work) + os.pathsep + os.environ["PATH"])
+    with pytest.raises(fr.Refused, match="inside the checkout"):
+        fr.find_exe("git", w.work)
+    monkeypatch.setenv("PATH", os.environ["PATH"].split(os.pathsep, 1)[1])
+    assert not Path(fr.find_exe("git", w.work)).is_relative_to(w.work)
+    assert fr.find_exe("gh", w.work) is None or not Path(fr.find_exe("gh", w.work)).is_relative_to(w.work)
 
 
 @requires_git
@@ -539,7 +736,7 @@ def test_the_whole_body_of_the_real_notes_fits():
     text = (REPO / "docs" / "RELEASE_NOTES.md").read_text(encoding="utf-8")
     new = fr.new_entries(text, None)
     assert len(new) > 20
-    rel = fr.Release(tag="v9.9.9", version="9.9.9", prerelease=False, tag_commit="a" * 40, setup_commit="b" * 40,
+    rel = fr.Release(tag="v9.9.9", version="9.9.9", prerelease=False, tag_commit="a" * 40,
                      cert=CERT, apks=[{"abi": "arm64-v8a", "file": "x.apk", "sha256": "c" * 64}], setup_sha256="d" * 64)
     frame = len(fr.body(rel))
     rel.notes = fr.summary(new, tag=rel.tag, since=None, budget=fr.BODY_BUDGET - frame)
@@ -555,7 +752,7 @@ def test_first_paragraph_only_when_it_is_prose_and_short():
 
 
 def test_sums_are_lf_two_spaces_and_every_asset():
-    rel = fr.Release(tag="v1.0.0", version="1.0.0", prerelease=False, tag_commit="a" * 40, setup_commit="b" * 40,
+    rel = fr.Release(tag="v1.0.0", version="1.0.0", prerelease=False, tag_commit="a" * 40,
                      cert=CERT, apks=[{"abi": "arm64-v8a", "file": "a.apk", "sha256": "1" * 64},
                                       {"abi": "armeabi-v7a", "file": "b.apk", "sha256": "2" * 64}], setup_sha256="3" * 64)
     assert fr.sums_text(rel) == f"{'1' * 64}  a.apk\n{'2' * 64}  b.apk\n{'3' * 64}  DomovoiSetup.exe\n"
@@ -593,27 +790,40 @@ def test_the_bash_scripts_parse():
 
 @pytest.mark.parametrize("script", ["android/scripts/release.ps1", "android/scripts/release.sh"])
 def test_release_commits_the_manifest_then_tags_that_commit(script):
-    """The manifest is committed and pushed before gh makes the tag, the tag
-    goes on the release commit (not the build commit), a version with a
-    suffix is a pre-release, and the tag is checked to be that commit."""
+    """The manifest is committed on the build commit (plumbing, HEAD moved
+    only from the build commit: review R1), the release commit is checked to
+    be that file on that commit before anything is pushed, the branch and the
+    tag go up in one atomic push before gh makes the release on that tag
+    (--verify-tag: review R6), a release is a full one unless -Prerelease,
+    and the tag is checked to be the release commit afterwards."""
     text = (REPO / script).read_text(encoding="utf-8")
-    commit = text.index("'commit', '--quiet', '-m'" if script.endswith(".ps1") else 'git commit --quiet -m "android: release')
-    create = text.index("release', 'create'" if script.endswith(".ps1") else "gh release create")
-    push = text.index("'push', '--quiet', 'origin'" if script.endswith(".ps1") else "git push --quiet origin")
-    assert push < create, "the release commit is pushed before the release is made"
-    fn_end = text.index("# --- carry on" if script.endswith(".ps1") else "# ─── carry on")
-    assert create < fn_end < commit, "publishing is one function, called after the commit"
-    if script.endswith(".ps1"):
-        assert "'--target', $ReleaseCommit" in text
-        # A full release unless -Prerelease, whatever the version's suffix.
+    ps1 = script.endswith(".ps1")
+    commit = text.index("'commit-tree'" if ps1 else "git commit-tree")
+    cas = text.index("'update-ref', '-m'" if ps1 else "git update-ref -m")
+    guard = text.index("is not android/release.json on top of")
+    push = text.index("'push', '--atomic', '--quiet', 'origin'" if ps1 else "git push --atomic --quiet origin")
+    create = text.index("release', 'create'" if ps1 else "gh release create")
+    assert guard < push < create, "checked, then pushed with its tag, then the release is made"
+    fn_end = text.index("# --- carry on" if ps1 else "# ─── carry on")
+    assert create < fn_end < commit < cas, "publishing is one function, called after the commit"
+    if ps1:
+        assert "'HEAD', $releaseCommit, $commit))" in text, "HEAD moves only from the build commit"
+        assert "'--target', $ReleaseCommit, '--verify-tag'" in text
+        assert "$refspecs += \"$($ReleaseCommit):refs/tags/$tag\"" in text
         assert text.count("$isPrerelease = [bool]$Prerelease") == 2
         assert "Contains('-')" not in text
         assert "-ne $ReleaseCommit) { Die" in text
+        assert "'git commit'" not in text and "@('commit', " not in text
     else:
-        assert '--target "$release_commit"' in text
+        assert 'HEAD "$release_commit" "$commit"' in text, "HEAD moves only from the build commit"
+        assert '--target "$release_commit" --verify-tag' in text
+        assert 'refspecs+=("$release_commit:refs/tags/$tag")' in text
         assert text.count('is_prerelease="$prerelease"\n') == 2
         assert "*-*) is_prerelease=1" not in text
         assert '[ "$tagged" = "$release_commit" ]' in text
+        assert "git commit --quiet" not in text
     assert "--latest" in text and "--prerelease" in text
+    assert "refs/tags/$tag^{}" in text, "a remote tag is read peeled"
+    assert "DOMOVOI_RELEASE_ORIGIN_URL" in text and "coders-farm-official/domovoi(" in text
     # A run that stopped after the commit carries on (nothing signed again).
     assert "carries on from" in text

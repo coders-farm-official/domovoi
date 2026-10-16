@@ -142,18 +142,43 @@ foreach ($candidate in @('python', 'py', 'python3')) {
     if ((Test-Tool $cmd.Source @('-c', 'import sys; sys.exit(sys.version_info < (3, 11))')) -eq 0) { $python = $cmd.Source; break }
 }
 if (-not $python) { Die 'no Python 3.11+ (it runs the server''s own check of the APKs)' }
+
+# git, gh and curl by their absolute paths, never a program inside this checkout.
+function Resolve-Tool([string]$name) {
+    $cmd = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $cmd) { return $null }
+    $path = (Resolve-Path -LiteralPath $cmd.Source).Path
+    if ($path.StartsWith($repo + '\', [StringComparison]::OrdinalIgnoreCase)) { Die "$name resolves to $path, inside the checkout: refusing to run it" }
+    return $path
+}
+$Git = Resolve-Tool 'git'
+if (-not $Git) { Die 'no git' }
+$Gh = $null; $Curl = $null
 if (-not $NoPublish) {
-    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { Die 'no gh (GitHub CLI): install it and run gh auth login, or use -NoPublish' }
-    if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) { Die 'no curl.exe (it checks the published files)' }
+    $Gh = Resolve-Tool 'gh'
+    if (-not $Gh) { Die 'no gh (GitHub CLI): install it and run gh auth login, or use -NoPublish' }
+    $Curl = Resolve-Tool 'curl.exe'
+    if (-not $Curl) { Die 'no curl.exe (it checks the published files)' }
+    # origin, every fetch and push URL, is the GitHub repository: the release
+    # commit and its tag are pushed there, and gh makes the release on GitHub.
+    foreach ($query in @(@('remote', 'get-url', '--all', 'origin'), @('remote', 'get-url', '--push', '--all', 'origin'))) {
+        $urls = Invoke-Tool $Git $query
+        if ($null -eq $urls) { Die 'this checkout has no remote named origin' }
+        foreach ($url in @($urls | Where-Object { $_.Trim() } | ForEach-Object { $_.Trim() })) {
+            $ok = if ($env:DOMOVOI_RELEASE_ORIGIN_URL) { $url.TrimEnd('/') -eq $env:DOMOVOI_RELEASE_ORIGIN_URL.TrimEnd('/') }
+                  else { $url -match '^(https://github\.com/|ssh://git@github\.com/|git@github\.com:)coders-farm-official/domovoi(\.git)?/?$' }
+            if (-not $ok) { Die "origin is $url, not github.com/$RepoSlug`: the release commit and its tag go there, the release to GitHub" }
+        }
+    }
 }
 
 function Get-Sha256([string]$path) { (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant() }
 
 # --- the source ----------------------------------------------------------
-$dirty = Invoke-Tool 'git' @('status', '--porcelain')
+$dirty = Invoke-Tool $Git @('status', '--porcelain')
 if ($null -eq $dirty) { Die 'git status failed (is this a checkout?)' }
 if (@($dirty | Where-Object { $_ }).Count -gt 0) { Die 'the checkout has uncommitted changes: commit or stash them first, so the release is one commit' }
-$commit = (Invoke-Tool 'git' @('rev-parse', 'HEAD'))[0].Trim()
+$commit = (Invoke-Tool $Git @('rev-parse', 'HEAD'))[0].Trim()
 
 # A release commit at HEAD: android/release.json, committed on top of the
 # commit its APKs were built from (and nothing else changed), by an earlier
@@ -165,8 +190,8 @@ try {
     if ($headRelease -and $headRelease.PSObject.Properties['commit']) { $builtFrom = [string]$headRelease.commit }
 } catch { $headRelease = $null }
 if ($builtFrom -match '^[0-9a-f]{40}$' -and $builtFrom -ne $commit -and
-        (Test-Tool 'git' @('merge-base', '--is-ancestor', $builtFrom, $commit)) -eq 0) {
-    $changed = Invoke-Tool 'git' @('diff', '--name-only', $builtFrom, $commit)
+        (Test-Tool $Git @('merge-base', '--is-ancestor', $builtFrom, $commit)) -eq 0) {
+    $changed = Invoke-Tool $Git @('diff', '--name-only', $builtFrom, $commit)
     if ($null -ne $changed -and (@($changed | Where-Object { $_ }) -join ',') -eq 'android/release.json') { $resume = $headRelease }
 }
 
@@ -174,16 +199,16 @@ if ($builtFrom -match '^[0-9a-f]{40}$' -and $builtFrom -ne $commit -and
 # (the release is committed on top of it, and the tag points there).
 $branch = $null; $upstream = $null
 if (-not $NoPublish) {
-    if ($null -eq (Invoke-Tool 'git' @('fetch', '--quiet', 'origin'))) { Die 'git fetch origin failed' }
-    $onBranch = Invoke-Tool 'git' @('symbolic-ref', '--quiet', '--short', 'HEAD')
+    if ($null -eq (Invoke-Tool $Git @('fetch', '--quiet', 'origin'))) { Die 'git fetch origin failed' }
+    $onBranch = Invoke-Tool $Git @('symbolic-ref', '--quiet', '--short', 'HEAD')
     if ($null -eq $onBranch) { Die 'HEAD is not on a branch: switch to the branch the release goes on (git switch main)' }
     $branch = $onBranch[0].Trim()
-    $tracks = Invoke-Tool 'git' @('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}')
+    $tracks = Invoke-Tool $Git @('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}')
     if ($null -eq $tracks -or $tracks[0].Trim() -ne "origin/$branch") { Die "$branch does not track origin/$branch (git branch --set-upstream-to=origin/$branch)" }
-    $upstream = (Invoke-Tool 'git' @('rev-parse', "origin/$branch"))[0].Trim()
+    $upstream = (Invoke-Tool $Git @('rev-parse', "origin/$branch"))[0].Trim()
     $atTip = if ($resume) { @($resume.commit, $commit) } else { @($commit) }
     if ($atTip -notcontains $upstream) {
-        if ((Test-Tool 'git' @('merge-base', '--is-ancestor', $commit, $upstream)) -eq 0) {
+        if ((Test-Tool $Git @('merge-base', '--is-ancestor', $commit, $upstream)) -eq 0) {
             Die "origin/$branch has commits this checkout lacks: git pull --ff-only, then run again"
         }
         if ($resume) {
@@ -197,19 +222,59 @@ $signed = 'android\app\build\outputs\apk\release-signed'
 $sumsFile = Join-Path $signed 'SHA256SUMS'
 $isPrerelease = $false
 
-# Push the release commit (unless GitHub has it), publish the release at it
-# (unless it exists), check its tag is that commit, and download each file
-# back by the URL android/release.json names. The manifest at HEAD is the
-# release's from here on.
-function Publish-Release([string]$ReleaseCommit, [bool]$Exists) {
-    if ($script:upstream -ne $ReleaseCommit) {
-        Say "pushing the release commit $($ReleaseCommit.Substring(0, 12)) to origin/$branch..."
-        if ($null -eq (Invoke-Tool 'git' @('push', '--quiet', 'origin', "$($ReleaseCommit):refs/heads/$branch"))) {
+# The commit the tag names on GitHub (an annotated tag peeled to its
+# commit), or $null.
+function Get-RemoteTag {
+    $lines = Invoke-Tool $Git @('ls-remote', 'origin', "refs/tags/$tag", "refs/tags/$tag^{}")
+    if ($null -eq $lines) { Die 'git ls-remote origin failed' }
+    $plain = $null; $peeled = $null
+    foreach ($line in @($lines | Where-Object { $_.Trim() })) {
+        $parts = $line.Trim() -split '\s+'
+        if ($parts.Count -ne 2) { continue }
+        if ($parts[1] -eq "refs/tags/$tag^{}") { $peeled = $parts[0] } elseif ($parts[1] -eq "refs/tags/$tag") { $plain = $parts[0] }
+    }
+    if ($peeled) { return $peeled }
+    return $plain
+}
+
+# Check the release commit is exactly android/release.json on top of the
+# commit the APKs were built from, push it and its tag to GitHub together
+# (unless GitHub has them), publish the release at that tag (unless it
+# exists), check the tag is that commit, and download each file back by the
+# URL android/release.json names.
+function Publish-Release([string]$ReleaseCommit, [string]$BuiltFrom, [bool]$Exists) {
+    $parent = Invoke-Tool $Git @('rev-parse', '--verify', '--quiet', "$ReleaseCommit^")
+    $changed = Invoke-Tool $Git @('diff', '--name-only', $BuiltFrom, $ReleaseCommit)
+    if ($null -eq $parent -or $parent[0].Trim() -ne $BuiltFrom -or $null -eq $changed -or
+            (@($changed | Where-Object { $_ }) -join ',') -ne 'android/release.json') {
+        Die "the release commit $($ReleaseCommit.Substring(0, 12)) is not android/release.json on top of $($BuiltFrom.Substring(0, 12)), the commit the APKs were built from: refusing to tag it"
+    }
+    $manifestText = Invoke-Tool $Git @('show', "$($ReleaseCommit):android/release.json")
+    if ($null -eq $manifestText) { Die "the release commit has no android/release.json" }
+    $manifest = (($manifestText -join "`n") | ConvertFrom-Json).release
+    if (-not $manifest -or [string]$manifest.commit -ne $BuiltFrom) { Die "the release commit's android/release.json doesn't name $BuiltFrom as the commit its APKs were built from" }
+
+    $remoteTag = Get-RemoteTag
+    if ($remoteTag -and $remoteTag -ne $ReleaseCommit) {
+        Die "the tag $tag already exists on GitHub at another commit ($remoteTag): a published tag never moves"
+    }
+    # A tag of that name only here would stop the tag being fetched after publishing.
+    $localTag = Invoke-Tool $Git @('rev-parse', '--quiet', '--verify', "refs/tags/$tag^{commit}")
+    if ($null -ne $localTag -and $localTag[0].Trim() -ne $ReleaseCommit) {
+        Die "this checkout has a tag $tag at $($localTag[0].Trim().Substring(0, 12)) that GitHub doesn't: delete it (git tag -d $tag) and run again"
+    }
+    # The branch and the tag in one atomic push: a tag pushed meanwhile by
+    # anyone else fails both, so gh never attaches the release elsewhere.
+    $refspecs = @()
+    if ($script:upstream -ne $ReleaseCommit) { $refspecs += "$($ReleaseCommit):refs/heads/$branch" }
+    if (-not $remoteTag) { $refspecs += "$($ReleaseCommit):refs/tags/$tag" }
+    if ($refspecs.Count -gt 0) {
+        Say "pushing the release commit $($ReleaseCommit.Substring(0, 12)) to origin/$branch and tagging it $tag, together..."
+        if ($null -eq (Invoke-Tool $Git (@('push', '--atomic', '--quiet', 'origin') + $refspecs))) {
             $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }
-            Die 'the push failed: android/release.json is committed here but not on GitHub. Fix that and run this script again; it carries on from the release commit (nothing is signed again)'
+            Die 'the push failed (nothing was pushed): android/release.json is committed here but not on GitHub. Fix that and run this script again; it carries on from the release commit (nothing is signed again)'
         }
     }
-    $manifest = (Get-Content -Raw -Encoding UTF8 'android\release.json' | ConvertFrom-Json).release
     if (-not $Exists) {
         $rows = foreach ($entry in $manifest.apks) {
             $who = if ($entry.abi -eq 'arm64-v8a') { 'most phones (64-bit)' } else { 'older or cheaper phones (32-bit)' }
@@ -228,25 +293,13 @@ function Publish-Release([string]$ReleaseCommit, [bool]$Exists) {
         [IO.File]::WriteAllText((Join-Path $repo $notesFile), ($notes -join "`n") + "`n", $utf8)
         [IO.File]::WriteAllText((Join-Path $repo $sumsFile), (($manifest.apks | ForEach-Object { "$($_.sha256)  $($_.file)" }) -join "`n") + "`n", $utf8)
 
-        # gh attaches a release to a tag that already exists, wherever it points.
-        $remoteTag = Invoke-Tool 'git' @('ls-remote', '--tags', 'origin', "refs/tags/$tag")
-        if ($null -eq $remoteTag) { Die 'git ls-remote origin failed' }
-        $remoteTag = @($remoteTag | Where-Object { $_.Trim() })
-        if ($remoteTag.Count -gt 0 -and -not $remoteTag[0].StartsWith($ReleaseCommit)) {
-            Die "the tag $tag already exists on GitHub at another commit ($($remoteTag[0].Split()[0])): a published tag never moves"
-        }
-        # A tag of that name only here would stop the tag being fetched after publishing.
-        $localTag = Invoke-Tool 'git' @('rev-parse', '--quiet', '--verify', "refs/tags/$tag^{commit}")
-        if ($null -ne $localTag -and $localTag[0].Trim() -ne $ReleaseCommit) {
-            Die "this checkout has a tag $tag at $($localTag[0].Trim().Substring(0, 12)) that GitHub doesn't: delete it (git tag -d $tag) and run again"
-        }
         $kind = if ($isPrerelease) { 'a pre-release' } else { 'the Latest release' }
         Say "publishing $tag on $RepoSlug at $($ReleaseCommit.Substring(0, 12)), $kind..."
         $assets = @($manifest.apks | ForEach-Object { Join-Path $signed $_.file }) + @($sumsFile)
-        $ghArgs = @('release', 'create', $tag) + $assets + @('--repo', $RepoSlug, '--target', $ReleaseCommit,
+        $ghArgs = @('release', 'create', $tag) + $assets + @('--repo', $RepoSlug, '--target', $ReleaseCommit, '--verify-tag',
             '--title', "Domovoi v$versionName", '--notes-file', $notesFile)
         $ghArgs += if ($isPrerelease) { '--prerelease' } else { '--latest' }
-        $created = Invoke-Tool 'gh' $ghArgs
+        $created = Invoke-Tool $Gh $ghArgs
         if ($null -eq $created) {
             $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }
             Die 'gh release create failed: run this script again; it carries on from the release commit'
@@ -256,12 +309,12 @@ function Publish-Release([string]$ReleaseCommit, [bool]$Exists) {
         Say "$tag is already on $RepoSlug, so checking it"
     }
 
-    # The tag (GitHub makes it at --target) must be the release commit.
-    if ($null -eq (Invoke-Tool 'git' @('fetch', '--quiet', 'origin', "refs/tags/$($tag):refs/tags/$tag"))) {
+    # The tag must be the release commit.
+    if ($null -eq (Invoke-Tool $Git @('fetch', '--quiet', 'origin', "refs/tags/$($tag):refs/tags/$tag"))) {
         $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }
         Die "can't fetch the tag $tag from GitHub (a different tag $tag here? git tag -d $tag, then run again to check)"
     }
-    $tagged = (Invoke-Tool 'git' @('rev-parse', "$tag^{commit}"))[0].Trim()
+    $tagged = (Invoke-Tool $Git @('rev-parse', "$tag^{commit}"))[0].Trim()
     if ($tagged -ne $ReleaseCommit) { Die "the tag $tag is $tagged, not the release commit $ReleaseCommit" }
 
     Say 'checking the published files by their manifest URLs...'
@@ -270,14 +323,13 @@ function Publish-Release([string]$ReleaseCommit, [bool]$Exists) {
     try {
         foreach ($entry in $manifest.apks) {
             $dest = Join-Path $checkDir $entry.file
-            if ((Test-Tool 'curl.exe' @('-fsSL', '--retry', '3', '-o', $dest, $entry.url)) -ne 0) { Die "can't download $($entry.url) (run this script again to check once more)" }
+            if ((Test-Tool $Curl @('-fsSL', '--retry', '3', '-o', $dest, $entry.url)) -ne 0) { Die "can't download $($entry.url) (run this script again to check once more)" }
             if ((Get-Sha256 $dest) -ne $entry.sha256) { Die "$($entry.url) is not the file that was signed" }
         }
     } finally { Remove-Item -Recurse -Force $checkDir -ErrorAction SilentlyContinue }
 
     Say "done: $tag is published at $($ReleaseCommit.Substring(0, 12)), with the android/release.json naming its APKs."
-    Write-Host 'Next: move the Windows Setup''s pins to that commit (windows\installer\pins.iss), commit and push them, then:'
-    Write-Host '    git pull --ff-only'
+    Write-Host 'Next: the Windows Setup (built from the tag, pinned to it), one SHA256SUMS and the notes:'
     Write-Host "    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\finish-release.ps1 -Tag $tag"
 }
 
@@ -289,7 +341,7 @@ if ($resume) {
     Say "Domovoi $versionName (versionCode $versionCode): HEAD $($commit.Substring(0, 12)) is its release commit (android/release.json on top of $($resume.commit.Substring(0, 12)), which the APKs were built from), so this run carries on from there; nothing is built or signed again"
     # The first run's checks against the release before it, on what is committed.
     $prevCode = 0; $prevCert = $null
-    $prevText = Invoke-Tool 'git' @('show', "$($resume.commit):android/release.json")
+    $prevText = Invoke-Tool $Git @('show', "$($resume.commit):android/release.json")
     if ($null -ne $prevText) {
         try {
             $prev = (($prevText -join "`n") | ConvertFrom-Json).release
@@ -298,7 +350,7 @@ if ($resume) {
     }
     if ($versionCode -le $prevCode) { Die "android/release.json at HEAD names versionCode $versionCode, not above the last release's ($prevCode)" }
     if ($prevCert -and $prevCert -ne [string]$resume.cert_sha256) { Die "android/release.json at HEAD names another key ($($resume.cert_sha256)) than the last release's ($prevCert)" }
-    $exists = (-not $NoPublish) -and ((Test-Tool 'gh' @('release', 'view', $tag, '--repo', $RepoSlug)) -eq 0)
+    $exists = (-not $NoPublish) -and ((Test-Tool $Gh @('release', 'view', $tag, '--repo', $RepoSlug)) -eq 0)
     if (-not $exists) {
         $checked = Invoke-Tool $python @('-m', 'domovoi.android_app', 'check', 'android\release.json', $signed)
         if ($null -eq $checked) {
@@ -311,7 +363,7 @@ if ($resume) {
         Say "not published (-NoPublish). A real run pushes the release commit if GitHub lacks it, publishes $tag at it unless it exists, and checks the files."
         exit 0
     }
-    Publish-Release -ReleaseCommit $commit -Exists $exists
+    Publish-Release -ReleaseCommit $commit -BuiltFrom ([string]$resume.commit) -Exists $exists
     exit 0
 }
 
@@ -368,11 +420,11 @@ if ($versionCode -le $prevCode) {
     Die "versionCode $versionCode is not above the last release's ($prevCode): raise versionCode (YYMMDDNN: the build's date and that day's number) and versionName in android\app\build.gradle.kts, commit, and run again"
 }
 if (-not $NoPublish) {
-    if ((Test-Tool 'gh' @('release', 'view', $tag, '--repo', $RepoSlug)) -eq 0) { Die "a release $tag already exists on $RepoSlug" }
-    $remoteTag = Invoke-Tool 'git' @('ls-remote', '--tags', 'origin', "refs/tags/$tag")
+    if ((Test-Tool $Gh @('release', 'view', $tag, '--repo', $RepoSlug)) -eq 0) { Die "a release $tag already exists on $RepoSlug" }
+    $remoteTag = Invoke-Tool $Git @('ls-remote', '--tags', 'origin', "refs/tags/$tag")
     if ($null -eq $remoteTag) { Die 'git ls-remote origin failed' }
     if (@($remoteTag | Where-Object { $_.Trim() }).Count -gt 0) { Die "the tag $tag already exists on GitHub (a published tag never moves: raise the version)" }
-    if ($null -ne (Invoke-Tool 'git' @('rev-parse', '--quiet', '--verify', "refs/tags/$tag"))) {
+    if ($null -ne (Invoke-Tool $Git @('rev-parse', '--quiet', '--verify', "refs/tags/$tag"))) {
         Die "this checkout has a tag $tag that GitHub doesn't: delete it (git tag -d $tag) and run again"
     }
 }
@@ -466,13 +518,37 @@ if ($NoPublish) {
     exit 0
 }
 
-# --- publish: commit the manifest, push it, tag that commit ---------------
-Copy-Item -LiteralPath $staged -Destination 'android\release.json' -Force
-if ($null -eq (Invoke-Tool 'git' @('add', '--', 'android/release.json'))) { Die 'git add android/release.json failed' }
-if ($null -eq (Invoke-Tool 'git' @('commit', '--quiet', '-m', "android: release $versionName [skip ci]", '--', 'android/release.json'))) {
-    $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }
-    Die 'git commit failed (android/release.json is written, not committed: git checkout -- android/release.json undoes it)'
+# --- publish: commit the manifest on the build commit, push, tag it --------
+# The release commit is made with git's plumbing on the build commit itself,
+# and HEAD moves to it only if HEAD is still the build commit: a commit made
+# in this checkout meanwhile (another terminal, an agent) is refused, never
+# released on top of.
+$blob = Invoke-Tool $Git @('hash-object', '-w', '--', $staged)
+if ($null -eq $blob) { Die 'git hash-object failed' }
+$index = Join-Path $repo (Join-Path $signed 'release.index')
+Remove-Item -LiteralPath $index -Force -ErrorAction SilentlyContinue
+$env:GIT_INDEX_FILE = $index
+try {
+    $tree = $null
+    if ($null -ne (Invoke-Tool $Git @('read-tree', $commit)) -and
+            $null -ne (Invoke-Tool $Git @('update-index', '--add', '--cacheinfo', "100644,$($blob[0].Trim()),android/release.json"))) {
+        $tree = Invoke-Tool $Git @('write-tree')
+    }
+} finally {
+    Remove-Item Env:GIT_INDEX_FILE -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $index -Force -ErrorAction SilentlyContinue
 }
-$releaseCommit = (Invoke-Tool 'git' @('rev-parse', 'HEAD'))[0].Trim()
-Say "committed android/release.json as $($releaseCommit.Substring(0, 12)) (android: release $versionName [skip ci]): the tag goes there"
-Publish-Release -ReleaseCommit $releaseCommit -Exists $false
+if ($null -eq $tree) { $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }; Die 'making the release commit failed' }
+$made = Invoke-Tool $Git @('commit-tree', $tree[0].Trim(), '-p', $commit, '-m', "android: release $versionName [skip ci]")
+if ($null -eq $made) { $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }; Die 'git commit-tree failed' }
+$releaseCommit = $made[0].Trim()
+if ($null -eq (Invoke-Tool $Git @('update-ref', '-m', "release: android/release.json for $versionName", 'HEAD', $releaseCommit, $commit))) {
+    $now = Invoke-Tool $Git @('rev-parse', 'HEAD')
+    $nowText = if ($now) { $now[0].Trim().Substring(0, 12) } else { 'unknown' }
+    Die "HEAD moved while the release was being made (it is $nowText now; the APKs are built from $($commit.Substring(0, 12))): nothing was committed or pushed. Look at that commit, then release again from a clean checkout of the branch's tip"
+}
+# The working tree and the index follow HEAD for that one file.
+Copy-Item -LiteralPath $staged -Destination 'android\release.json' -Force
+$null = Invoke-Tool $Git @('reset', '--quiet', '--', 'android/release.json')
+Say "committed android/release.json as $($releaseCommit.Substring(0, 12)) (android: release $versionName [skip ci]) on $($commit.Substring(0, 12)): the tag goes there"
+Publish-Release -ReleaseCommit $releaseCommit -BuiltFrom $commit -Exists $false

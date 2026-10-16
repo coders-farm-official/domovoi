@@ -97,6 +97,26 @@ if [ "$publish" = 1 ]; then
   command -v gh >/dev/null 2>&1 || die "no gh (GitHub CLI): install it and run gh auth login, or use --no-publish"
   command -v curl >/dev/null 2>&1 || die "no curl (it checks the published files)"
 fi
+# No program from inside this checkout (a PATH entry pointing into it).
+for tool in git gh curl; do
+  found="$(command -v "$tool" 2>/dev/null || true)"
+  case "$found" in "$repo"/*) die "$tool resolves to $found, inside the checkout: refusing to run it" ;; esac
+done
+if [ "$publish" = 1 ]; then
+  # origin, every fetch and push URL, is the GitHub repository: the release
+  # commit and its tag are pushed there, and gh makes the release on GitHub.
+  urls="$(git remote get-url --all origin && git remote get-url --push --all origin)" \
+    || die "this checkout has no remote named origin"
+  while read -r url; do
+    [ -n "$url" ] || continue
+    if [ -n "${DOMOVOI_RELEASE_ORIGIN_URL:-}" ]; then
+      [ "${url%/}" = "${DOMOVOI_RELEASE_ORIGIN_URL%/}" ] && continue
+    elif printf '%s\n' "$url" | grep -Eqi '^(https://github\.com/|ssh://git@github\.com/|git@github\.com:)coders-farm-official/domovoi(\.git)?/?$'; then
+      continue
+    fi
+    die "origin is $url, not github.com/$REPO_SLUG: the release commit and its tag go there, the release to GitHub"
+  done <<<"${urls//$'\r'/}"
+fi
 
 sha256() { "$python" -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
 
@@ -146,24 +166,58 @@ fi
 signed="android/app/build/outputs/apk/release-signed"
 is_prerelease=0
 
-# Push the release commit (unless GitHub has it), publish the release at it
-# (unless it exists), check its tag is that commit, and download each file
-# back by the URL android/release.json names. The manifest at HEAD is the
-# release's from here on.
-publish_release() {  # publish_release RELEASE_COMMIT EXISTS(0|1)
-  local release_commit="$1" exists="$2" work m_commit m_cert notes flag kind tagged
-  if [ "$upstream" != "$release_commit" ]; then
-    say "pushing the release commit ${release_commit:0:12} to origin/$branch…"
-    git push --quiet origin "$release_commit:refs/heads/$branch" \
-      || die "the push failed: android/release.json is committed here but not on GitHub. Fix that and run this script again; it carries on from the release commit (nothing is signed again)"
+# The commit the tag names on GitHub (an annotated tag peeled to its
+# commit), or nothing; fails when ls-remote does.
+remote_tag_commit() {
+  local out sha ref plain="" peeled=""
+  out="$(git ls-remote origin "refs/tags/$tag" "refs/tags/$tag^{}")" || return 1
+  while read -r sha ref; do
+    [ "$ref" = "refs/tags/$tag^{}" ] && peeled="$sha"
+    [ "$ref" = "refs/tags/$tag" ] && plain="$sha"
+  done <<<"$out"
+  printf '%s' "${peeled:-$plain}"
+}
+
+# Check the release commit is exactly android/release.json on top of the
+# commit the APKs were built from, push it and its tag to GitHub together
+# (unless GitHub has them), publish the release at that tag (unless it
+# exists), check the tag is that commit, and download each file back by the
+# URL android/release.json names.
+publish_release() {  # publish_release RELEASE_COMMIT BUILT_FROM EXISTS(0|1)
+  local release_commit="$1" built_from_commit="$2" exists="$3" work m_commit m_cert notes flag kind tagged parent remote_tag local_tag
+  local refspecs=()
+  parent="$(git rev-parse --verify --quiet "$release_commit^" || true)"
+  if [ "$parent" != "$built_from_commit" ] \
+      || [ "$(git diff --name-only "$built_from_commit" "$release_commit")" != "android/release.json" ]; then
+    die "the release commit ${release_commit:0:12} is not android/release.json on top of ${built_from_commit:0:12}, the commit the APKs were built from: refusing to tag it"
+  fi
+  m_commit="$(git show "$release_commit:android/release.json" | release_fields - commit)"
+  [ "$m_commit" = "$built_from_commit" ] \
+    || die "the release commit's android/release.json doesn't name $built_from_commit as the commit its APKs were built from"
+
+  remote_tag="$(remote_tag_commit)" || die "git ls-remote origin failed"
+  [ -z "$remote_tag" ] || [ "$remote_tag" = "$release_commit" ] \
+    || die "the tag $tag already exists on GitHub at another commit ($remote_tag): a published tag never moves"
+  # A tag of that name only here would stop the tag being fetched after publishing.
+  local_tag="$(git rev-parse --quiet --verify "refs/tags/$tag^{commit}" || true)"
+  [ -z "$local_tag" ] || [ "$local_tag" = "$release_commit" ] \
+    || die "this checkout has a tag $tag at ${local_tag:0:12} that GitHub doesn't: delete it (git tag -d $tag) and run again"
+  # The branch and the tag in one atomic push: a tag pushed meanwhile by
+  # anyone else fails both, so gh never attaches the release elsewhere.
+  [ "$upstream" = "$release_commit" ] || refspecs+=("$release_commit:refs/heads/$branch")
+  [ -n "$remote_tag" ] || refspecs+=("$release_commit:refs/tags/$tag")
+  if [ "${#refspecs[@]}" -gt 0 ]; then
+    say "pushing the release commit ${release_commit:0:12} to origin/$branch and tagging it $tag, together…"
+    git push --atomic --quiet origin "${refspecs[@]}" \
+      || die "the push failed (nothing was pushed): android/release.json is committed here but not on GitHub. Fix that and run this script again; it carries on from the release commit (nothing is signed again)"
   fi
   work="$(mktemp -d)"
   # (tr: a Windows Python ends its lines with CR LF.)
-  "$python" -c 'import json
-for e in json.load(open("android/release.json", encoding="utf-8"))["release"]["apks"]:
+  git show "$release_commit:android/release.json" | "$python" -c 'import json, sys
+for e in json.load(sys.stdin)["release"]["apks"]:
     print(e["abi"], e["file"], e["sha256"], e["url"])' | tr -d '\r' > "$work/apks"
   if [ "$exists" = 0 ]; then
-    read -r m_commit m_cert <<<"$(release_fields android/release.json commit cert_sha256)"
+    read -r m_commit m_cert <<<"$(git show "$release_commit:android/release.json" | release_fields - commit cert_sha256)"
     notes="$signed/NOTES.md"
     {
       echo "Domovoi $version_name. The Android app (versionCode $version_code), built from $m_commit; the release is tagged at $release_commit, which adds android/release.json naming these files. scripts/release/finish-release adds the Windows Setup, SHA256SUMS for every file and the release notes."
@@ -185,26 +239,17 @@ for e in json.load(open("android/release.json", encoding="utf-8"))["release"]["a
       printf '%s  %s\n' "$sha" "$file" >> "$signed/SHA256SUMS"
       assets+=("$signed/$file")
     done < "$work/apks"
-    # gh attaches a release to a tag that already exists, wherever it points.
-    remote_tag="$(git ls-remote --tags origin "refs/tags/$tag")" || die "git ls-remote origin failed"
-    remote_tag="${remote_tag%%[[:space:]]*}"
-    [ -z "$remote_tag" ] || [ "$remote_tag" = "$release_commit" ] \
-      || die "the tag $tag already exists on GitHub at another commit ($remote_tag): a published tag never moves"
-    # A tag of that name only here would stop the tag being fetched after publishing.
-    local_tag="$(git rev-parse --quiet --verify "refs/tags/$tag^{commit}" || true)"
-    [ -z "$local_tag" ] || [ "$local_tag" = "$release_commit" ] \
-      || die "this checkout has a tag $tag at ${local_tag:0:12} that GitHub doesn't: delete it (git tag -d $tag) and run again"
     flag=--latest; kind="the Latest release"
     if [ "$is_prerelease" = 1 ]; then flag=--prerelease; kind="a pre-release"; fi
     say "publishing $tag on $REPO_SLUG at ${release_commit:0:12}, $kind…"
-    gh release create "$tag" "${assets[@]}" "$signed/SHA256SUMS" --repo "$REPO_SLUG" --target "$release_commit" \
+    gh release create "$tag" "${assets[@]}" "$signed/SHA256SUMS" --repo "$REPO_SLUG" --target "$release_commit" --verify-tag \
       --title "Domovoi v$version_name" --notes-file "$notes" "$flag" \
       || die "gh release create failed: run this script again; it carries on from the release commit"
   else
     say "$tag is already on $REPO_SLUG, so checking it"
   fi
 
-  # The tag (GitHub makes it at --target) must be the release commit.
+  # The tag must be the release commit.
   git fetch --quiet origin "refs/tags/$tag:refs/tags/$tag" \
     || die "can't fetch the tag $tag from GitHub (a different tag $tag here? git tag -d $tag, then run again to check)"
   tagged="$(git rev-parse "$tag^{commit}")"
@@ -218,9 +263,8 @@ for e in json.load(open("android/release.json", encoding="utf-8"))["release"]["a
   rm -rf "$work"
 
   say "done: $tag is published at ${release_commit:0:12}, with the android/release.json naming its APKs."
-  echo "Next: move the Windows Setup's pins to that commit (windows/installer/pins.iss), commit and push them, then:"
-  echo "    git pull --ff-only"
-  echo "    bash scripts/release/finish-release.sh --tag $tag      # or finish-release.ps1 -Tag $tag on Windows"
+  echo "Next: the Windows Setup (built from the tag, pinned to it), one SHA256SUMS and the notes, on Windows:"
+  echo "    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\release\\finish-release.ps1 -Tag $tag"
 }
 
 # ─── carry on from a release commit ──────────────────────────────────────
@@ -244,7 +288,7 @@ if [ "$resume" = 1 ]; then
     say "not published (--no-publish). A real run pushes the release commit if GitHub lacks it, publishes $tag at it unless it exists, and checks the files."
     exit 0
   fi
-  publish_release "$commit" "$exists"
+  publish_release "$commit" "$built_from" "$exists"
   exit 0
 fi
 
@@ -391,11 +435,25 @@ if [ "$publish" = 0 ]; then
   exit 0
 fi
 
-# ─── publish: commit the manifest, push it, tag that commit ──────────────
+# ─── publish: commit the manifest on the build commit, push, tag it ──────
+# The release commit is made with git's plumbing on the build commit itself,
+# and HEAD moves to it only if HEAD is still the build commit: a commit made
+# in this checkout meanwhile (another terminal, an agent) is refused, never
+# released on top of.
+blob="$(git hash-object -w -- "$staged")" || die "git hash-object failed"
+index="$repo/$signed/release.index"
+rm -f "$index"
+tree="$(GIT_INDEX_FILE="$index" git read-tree "$commit" \
+  && GIT_INDEX_FILE="$index" git update-index --add --cacheinfo "100644,$blob,android/release.json" \
+  && GIT_INDEX_FILE="$index" git write-tree)" || { rm -f "$index"; die "making the release commit failed"; }
+rm -f "$index"
+release_commit="$(git commit-tree "$tree" -p "$commit" -m "android: release $version_name [skip ci]")" \
+  || die "git commit-tree failed"
+if ! git update-ref -m "release: android/release.json for $version_name" HEAD "$release_commit" "$commit"; then
+  die "HEAD moved while the release was being made (it is $(git rev-parse --short=12 HEAD) now; the APKs are built from ${commit:0:12}): nothing was committed or pushed. Look at that commit, then release again from a clean checkout of the branch's tip"
+fi
+# The working tree and the index follow HEAD for that one file.
 cp "$staged" android/release.json
-git add -- android/release.json || die "git add android/release.json failed"
-git commit --quiet -m "android: release $version_name [skip ci]" -- android/release.json \
-  || die "git commit failed (android/release.json is written, not committed: git checkout -- android/release.json undoes it)"
-release_commit="$(git rev-parse HEAD)"
-say "committed android/release.json as ${release_commit:0:12} (android: release $version_name [skip ci]): the tag goes there"
-publish_release "$release_commit" 0
+git reset --quiet -- android/release.json
+say "committed android/release.json as ${release_commit:0:12} (android: release $version_name [skip ci]) on ${commit:0:12}: the tag goes there"
+publish_release "$release_commit" "$commit" 0

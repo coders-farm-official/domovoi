@@ -465,43 +465,46 @@ starts no workflow. Every pushed commit carries `[skip ci]`. In order:
    release has a hand-written summary (the GitHub body; kept under 20 KB).
 2. **`android/scripts/release.ps1`** (or `.sh`) from a clean, pushed
    checkout of `main`: builds and signs the APKs with the release key,
-   commits `android/release.json` and pushes it, and publishes
-   `v<versionName>` tagged at that commit, as a full release marked Latest
-   (release candidates too; `-Prerelease` makes it a pre-release).
-   `-NoPublish` is its dry run.
+   commits `android/release.json` on the commit they were built from (it
+   refuses if anything else was committed meanwhile), pushes that commit
+   and its tag `v<versionName>` together, and publishes the release on
+   that tag, as a full release marked Latest (release candidates too;
+   `-Prerelease` makes it a pre-release). `-NoPublish` is its dry run.
    [android/README.md, "Publishing a release"](../android/README.md#publishing-a-release-the-app-every-domovoi-server-hands-out)
    has the details.
-3. **The Setup's pins**: a commit on top of the tag that moves
-   `windows/installer/pins.iss` to the tag's commit (`DomovoiCommit`,
-   `ProvisionSha256` and what moves with them). The tag is the commit
-   households run; the Setup is built from this commit.
-4. **`scripts/release/finish-release.ps1`** from a clean checkout at the
-   pins commit (`git pull --ff-only`):
+3. **`scripts/release/finish-release.ps1`** from a clean checkout at the
+   tag or after it, `origin` being the GitHub repository:
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\finish-release.ps1 -NoPublish   # dry run
    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\finish-release.ps1
    ```
 
-   It checks the tag, its manifest, the pins and the published APKs first,
-   and, for a version without a suffix, that `stable` can fast-forward;
-   nothing on GitHub changes until all of that passes. Then it builds
-   `DomovoiSetup.exe` with `windows\build.ps1`, writes one `SHA256SUMS` (LF)
+   It checks the tag (an annotated one is fine), its `pyproject.toml`
+   version, that its commit is only `android/release.json` on the commit
+   the APKs were built from, the published APKs, and, for a version
+   without a suffix, that `stable` can fast-forward; nothing on GitHub
+   changes until all of that passes. Then it builds `DomovoiSetup.exe`
+   from the tag's own files: a clean worktree of the tag, where
+   `windows\build.ps1 -Pin <tag>` moves the Setup's pins to the tag's
+   commit and builds, and anything but `pins.iss` changed, or a bundled
+   `provision.sh`, is refused. No pins commit is needed; the pinned
+   `pins.iss` is kept beside the Setup. It writes one `SHA256SUMS` (LF)
    for every file, sets the notes (`docs/release/v<version>.md`, or a
    summary of the `docs/RELEASE_NOTES.md` entries since the previous tag
    with links into the full file at the tag), uploads the Setup and
    `SHA256SUMS`, checks every file on GitHub against `SHA256SUMS`, and
    **last**, for a version without a suffix that GitHub doesn't mark a
-   pre-release, runs
-   `git push origin "v<version>^{commit}:refs/heads/stable"` (never
+   pre-release, checks the tag on GitHub once more and pushes the commit
+   it checked, `git push origin <that SHA>:refs/heads/stable` (never
    forced). Run again, it replaces the two files and leaves `stable` where
    it is. `finish-release.sh` is the same for bash; it needs `--setup FILE`
-   off Windows. `-NoPublish` leaves the files in
+   (a Setup built that way) off Windows. `-NoPublish` leaves the files in
    `windows\build\release\<tag>\`.
 
 The finished release holds the two APKs, `DomovoiSetup.exe` (not
-code-signed), `SHA256SUMS`, and notes naming the tag's commit, the commit
-Setup was built from and the app's signing certificate. Neither script
+code-signed), `SHA256SUMS`, and notes naming the tag's commit, how the
+Setup was built and the app's signing certificate. Neither script
 touches a keystore or a password outside `release.ps1`'s own prompts.
 
 ---

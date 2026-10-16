@@ -1,10 +1,9 @@
 """Finish a Domovoi release: the Windows Setup, one SHA256SUMS, the notes, then ``stable``.
 
-Run by the owner, after ``android/scripts/release.ps1`` (or ``.sh``) has
+Run by the owner after ``android/scripts/release.ps1`` (or ``.sh``) has
 published ``v<version>`` with the two APKs, tagged at the commit that adds
-``android/release.json``, and after the Windows Setup's pins
-(``windows/installer/pins.iss``) have been moved to that commit and pushed.
-From a clean checkout at that pins commit (``git pull --ff-only``)::
+``android/release.json`` to the commit they were built from. From a clean
+checkout at that tag or after it (``git pull --ff-only``)::
 
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\release\\finish-release.ps1 [-Tag v1.0.0] [-NoPublish]
     bash scripts/release/finish-release.sh [--tag v1.0.0] [--no-publish] [--setup FILE]
@@ -12,42 +11,59 @@ From a clean checkout at that pins commit (``git pull --ff-only``)::
 In order, refusing at the first problem (nothing on GitHub changes until
 every check has passed):
 
-1. The checks. The checkout is clean. The tag (default ``v`` + the
-   Android versionName) is on GitHub, and HEAD is that tag or comes after
-   it. The tag's ``android/release.json`` names this release. The pins at
-   HEAD install the tag's commit, with ``provision.sh``'s SHA-256 right.
-   The GitHub release exists, holds the APKs the manifest pins (size and
-   GitHub's SHA-256 digest), and nothing finish-release doesn't know. For
-   a release without a suffix, ``stable`` can fast-forward to the tag.
-2. ``DomovoiSetup.exe``, built by the installer's own script,
-   ``windows/build.ps1`` (``--setup FILE`` takes one built from this same
-   commit instead, e.g. when this runs on Linux).
+1. The checks.
+   - ``origin`` is the GitHub repository, every fetch and push URL of it.
+   - The checkout is clean, and HEAD is the tag's commit or after it.
+   - The tag (default ``v`` + the Android versionName; lightweight or
+     annotated, peeled to its commit) is on GitHub at that same commit,
+     and its ``pyproject.toml`` says the same version.
+   - The tag's commit is ``android/release.json`` on top of the commit that
+     file names (the one the APKs were built from), and nothing else.
+   - The GitHub release exists, holds the APKs the manifest pins (size and
+     GitHub's SHA-256 digest), and nothing finish-release doesn't know.
+   - For a release without a suffix, ``stable`` can fast-forward to the
+     tag's commit.
+2. ``DomovoiSetup.exe``, built from the tag's own files: a clean, detached
+   worktree at the tag's commit, where the installer's own script runs as
+   ``windows/build.ps1 -Pin <tag>`` (it moves that worktree's pins to the
+   tag's commit, provision.sh fetched from it, then builds). The worktree
+   must then differ from the tag in ``windows/installer/pins.iss`` only,
+   and those pins must install the tag's commit with the SHA-256 of its
+   ``provision.sh`` and nothing bundled; anything else is refused. The
+   worktree is removed afterwards; its ``pins.iss`` is kept beside the
+   Setup. ``--setup FILE`` takes one built that way elsewhere (on Linux,
+   say), and the notes say it was.
 3. One ``SHA256SUMS`` (LF line endings) for every asset: the APKs (from
    the manifest) and the Setup.
 4. The release notes: ``docs/release/v<version>.md`` at the tag if there is
    one, otherwise a summary of the ``docs/RELEASE_NOTES.md`` entries added
    since the previous tag (a release candidate counts from the tag before
-   it; a release from the release before it), with links into the full file at
-   the tag. Then the files, their SHA-256, the commit the tag is, the
-   commit Setup was built from, the app's signing certificate. Kept under
+   it; a release from the release before it), with links into the full
+   file at the tag. Then the files, their SHA-256, the commit the tag is,
+   how the Setup was built, the app's signing certificate. Kept under
    20 KB, and never over GitHub's 125,000-character cap.
 5. Upload the Setup and ``SHA256SUMS`` (``--clobber``, so a second run
    replaces them), set the title and the notes, and keep a pre-release one
-   (only one GitHub already marks so: every release is a full one by default,
-   release candidates included, owner decision 2026-10-15) or mark it Latest.
+   (only one GitHub already marks so: every release is a full one by
+   default, release candidates included, owner decision 2026-10-15) or
+   mark it Latest.
 6. Check every asset on GitHub against ``SHA256SUMS``.
 7. LAST, only for a release without a suffix that is not a pre-release:
-   fast-forward ``stable`` to
-   the tag's commit, ``git push origin "v<version>^{commit}:refs/heads/stable"``,
-   never forced: a ``stable`` that is not an ancestor of the tag is refused.
+   the tag on GitHub is checked once more, then
+   ``git push origin <the tag's commit>:refs/heads/stable`` (the SHA that
+   was checked, never the tag's name again), never forced: a ``stable``
+   that is not an ancestor of it is refused.
 
 ``--no-publish`` runs 1-4 (it fetches and reads the GitHub release, never
-changes it), leaves the Setup, ``SHA256SUMS`` and ``NOTES.md`` in
-``windows/build/release/<tag>/``, and prints what a real run would do.
+changes it), leaves the Setup, its ``pins.iss``, ``SHA256SUMS`` and
+``NOTES.md`` in ``windows/build/release/<tag>/``, and prints what a real
+run would do.
 
-Standard library only. Never touches a keystore or a password; the only
-writes outside ``windows/build/`` are the GitHub release's assets and
-notes, and the ``stable`` branch.
+git, gh and Windows PowerShell are run by their absolute paths, never from
+the checkout (Windows would look in the current folder first). Standard
+library only. Never touches a keystore or a password; the only writes
+outside ``windows/build/`` are a temporary worktree's registration in
+``.git``, the GitHub release's assets and notes, and the ``stable`` branch.
 """
 
 from __future__ import annotations
@@ -60,6 +76,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 import unicodedata
 import urllib.request
 from dataclasses import dataclass
@@ -77,10 +94,14 @@ BODY_LIMIT = 125_000
 BODY_BUDGET = 20_000
 #: A first paragraph longer than this is left out of the summary.
 PARAGRAPH_MAX = 400
-TAG_RE = re.compile(r"^v(\d+\.\d+\.\d+)(-[0-9A-Za-z.]+)?$")
+#: A release tag, whole (use with fullmatch): ASCII digits only.
+TAG_RE = re.compile(r"v([0-9]+\.[0-9]+\.[0-9]+)(-[0-9A-Za-z.]+)?", re.ASCII)
+#: origin's URLs that are the GitHub repository (or DOMOVOI_RELEASE_ORIGIN_URL, for the tests).
+ORIGIN_RE = re.compile(r"(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)"
+                       r"coders-farm-official/domovoi(?:\.git)?/?", re.ASCII | re.IGNORECASE)
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+PINS = "windows/installer/pins.iss"
 STABLE_STAYS = "only a release without a suffix, not marked a pre-release, moves it"
-
 
 class Refused(Exception):
     """A check failed: the message says what and what to do."""
@@ -235,10 +256,10 @@ class Release:
     version: str
     prerelease: bool         # GitHub marks it a pre-release
     tag_commit: str
-    setup_commit: str
     cert: str
     apks: list[dict[str, Any]]
     setup_sha256: str
+    setup_built: bool = True  # built here from the tag (False: --setup)
     previous_tag: str | None = None
     notes: str = ""          # the summary part, from docs/release or RELEASE_NOTES.md
     candidate_of: str | None = None   # X.Y.Z, when the version has a suffix
@@ -262,12 +283,17 @@ def body(rel: Release) -> str:
     for e in rel.apks:
         files.append(f"| {e['file']} | {_who(e['abi'])} | `{e['sha256']}` |")
     files.append(f"| {SETUP_ASSET} | the Windows installer (preview, not code-signed) | `{rel.setup_sha256}` |")
+    if rel.setup_built:
+        how = (f"It was built from the tag's own files by `windows/build.ps1 -Pin {rel.tag}`, which sets its pins "
+               "(`windows/installer/pins.iss`) to that commit; nothing else differs from the tag.")
+    else:
+        how = (f"It was built outside this script and handed to it (`--setup`); `windows/build.ps1 -Pin {rel.tag}` "
+               "on the tag's own files builds the same installer.")
     facts = [
         "",
         f"- The tag `{rel.tag}` is commit `{rel.tag_commit}`: the code a server installed from this release runs. "
         "Its `android/release.json` names the two APKs above, which a server hands to the household's phones.",
-        f"- `{SETUP_ASSET}` installs that commit. It was built from `{rel.setup_commit}`, the tag plus the commit "
-        "that pins it (`windows/installer/pins.iss`). It is not code-signed, so Windows says \"Unknown publisher\": "
+        f"- `{SETUP_ASSET}` installs that commit. {how} It is not code-signed, so Windows says \"Unknown publisher\": "
         f"[docs/WINDOWS_HOST.md]({REPO_URL}/blob/{rel.tag}/docs/WINDOWS_HOST.md).",
         f"- The Android app's signing certificate SHA-256: `{rel.cert}` (check with `apksigner verify --print-certs <file>`).",
         "- Check a download: `sha256sum -c SHA256SUMS --ignore-missing` (Linux, macOS, Git Bash), "
@@ -293,11 +319,23 @@ def sums_text(rel: Release) -> str:
     return "\n".join(lines) + "\n"
 
 
-# ─── the Setup's pins ────────────────────────────────────────────────────
+# ─── versions and pins ───────────────────────────────────────────────────
+
+def pep440(version: str) -> str | None:
+    """The tag's version as pyproject.toml spells it: ``1.0.0`` stays,
+    ``1.0.0-rc2`` is ``1.0.0rc2`` (``-alphaN`` aN, ``-betaN`` bN); None for
+    any other suffix."""
+    m = re.fullmatch(r"([0-9]+\.[0-9]+\.[0-9]+)(?:-(alpha|beta|rc)\.?([0-9]+))?", version, re.ASCII)
+    if not m:
+        return None
+    base, pre, n = m.groups()
+    return base if not pre else f"{base}{ {'alpha': 'a', 'beta': 'b', 'rc': 'rc'}[pre] }{n}"
+
 
 def read_pins(text: str) -> tuple[dict[str, str], set[str]]:
     """``#define Name "value"`` pairs and bare ``#define Name`` flags of
-    pins.iss (expressions, like ProvisionUrl, are left out)."""
+    pins.iss (expressions, like ProvisionUrl, and commented-out lines are
+    left out)."""
     values = dict(re.findall(r'^#define\s+(\w+)\s+"([^"]*)"\s*$', text, re.M))
     flags = set(re.findall(r"^#define\s+(\w+)\s*$", text, re.M))
     return values, flags
@@ -317,30 +355,48 @@ def sha256_file(path: Path) -> str:
 
 # ─── git and gh ──────────────────────────────────────────────────────────
 
+def find_exe(name: str, repo: Path) -> str | None:
+    """A program on PATH by its absolute path, never one inside the
+    checkout: Windows looks in the current folder first unless told not to
+    (NoDefaultCurrentDirectoryInExePath, which shutil.which and
+    CreateProcess both honour)."""
+    os.environ["NoDefaultCurrentDirectoryInExePath"] = "1"
+    found = shutil.which(name)
+    if not found:
+        return None
+    path = Path(found).resolve()
+    if path.is_relative_to(Path(repo).resolve()):
+        die(f"{name} resolves to {path}, inside the checkout: refusing to run it")
+    return str(path)
+
+
 class Tools:
     """git, gh and the downloads, in one place (tests replace gh and the
     downloader)."""
 
-    def __init__(self, repo: Path, gh: list[str] | None, say: Callable[[str], None]):
+    def __init__(self, repo: Path, gh: list[str] | None, say: Callable[[str], None], git: str | None = None):
         self.repo = repo
         self.gh_cmd = gh
         self.say = say
+        self.git_exe = git or find_exe("git", repo)
+        if not self.git_exe:
+            die("no git on PATH")
+
+    def git_run(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run([self.git_exe, *args], cwd=self.repo, capture_output=True)
 
     def git(self, *args: str, check: bool = True) -> str:
-        p = subprocess.run(["git", *args], cwd=self.repo, capture_output=True)
+        p = self.git_run(*args)
         if check and p.returncode != 0:
             why = p.stderr.decode("utf-8", "replace").strip().splitlines()
             die(f"git {' '.join(args)} failed" + (f": {why[-1]}" if why else ""))
         return p.stdout.decode("utf-8", "replace")
 
-    def git_run(self, *args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(["git", *args], cwd=self.repo, capture_output=True)
-
     def git_ok(self, *args: str) -> bool:
         return self.git_run(*args).returncode == 0
 
     def git_bytes(self, *args: str) -> bytes | None:
-        p = subprocess.run(["git", *args], cwd=self.repo, capture_output=True)
+        p = self.git_run(*args)
         return p.stdout if p.returncode == 0 else None
 
     def gh(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -360,14 +416,14 @@ class Tools:
         return h.hexdigest()
 
 
-def default_gh() -> list[str] | None:
+def default_gh(repo: Path) -> list[str] | None:
     """The gh to run: ``DOMOVOI_RELEASE_GH`` (a path, or a JSON list of the
     command and its first arguments; the script's tests use it), else gh on
-    PATH."""
+    PATH by its absolute path."""
     env = os.environ.get("DOMOVOI_RELEASE_GH")
     if env:
         return json.loads(env) if env.lstrip().startswith("[") else [env]
-    found = shutil.which("gh")
+    found = find_exe("gh", repo)
     return [found] if found else None
 
 
@@ -378,6 +434,23 @@ def _version_name(text: str) -> str:
     if len(found) != 1:
         die("android/app/build.gradle.kts names no single versionName: pass --tag")
     return found[0]
+
+
+def _check_origin(t: Tools) -> None:
+    """Every fetch and push URL of origin is the GitHub repository (git
+    pushes stable and reads tags there; gh writes the release on GitHub)."""
+    expected = os.environ.get("DOMOVOI_RELEASE_ORIGIN_URL")
+    urls: list[str] = []
+    for args in (("remote", "get-url", "--all", "origin"), ("remote", "get-url", "--push", "--all", "origin")):
+        p = t.git_run(*args)
+        if p.returncode != 0:
+            die("this checkout has no remote named origin")
+        urls += [u.strip() for u in p.stdout.decode("utf-8", "replace").splitlines() if u.strip()]
+    for url in urls:
+        ok = url.rstrip("/") == expected.rstrip("/") if expected else bool(ORIGIN_RE.fullmatch(url))
+        if not ok:
+            die(f"origin is {url}, not {expected or 'github.com/' + REPO_SLUG}: the tag and stable live there, "
+                "the release on GitHub")
 
 
 def _previous_tag(t: Tools, tag_commit: str, prerelease: bool) -> str | None:
@@ -395,8 +468,9 @@ def _previous_tag(t: Tools, tag_commit: str, prerelease: bool) -> str | None:
 
 
 def _remote_ref(t: Tools, ref: str) -> str | None:
-    """The commit a ref on origin points at (a tag peeled), or None."""
-    out = t.git("ls-remote", "origin", ref)
+    """The commit a ref on origin points at, or None. A tag is peeled: an
+    annotated (or signed) tag's ``^{}`` line names its commit."""
+    out = t.git("ls-remote", "origin", ref, f"{ref}^{{}}")
     found: dict[str, str] = {}
     for line in out.splitlines():
         parts = line.split()
@@ -480,35 +554,80 @@ def _verify_published(t: Tools, tag: str, sums: str) -> None:
             die(f"{name} on GitHub is not the file finish-release made (SHA-256 {got}, not {sha})")
 
 
+def _check_pinned_worktree(t: Tools, src: Path, tag_commit: str, provision: bytes) -> None:
+    """After ``build.ps1 -Pin``: the worktree differs from the tag in
+    pins.iss only, and those pins install the tag's commit, with its own
+    provision.sh fetched (its SHA-256, nothing bundled)."""
+    status = t.git("-C", str(src), "status", "--porcelain", "--untracked-files=all")
+    changed = sorted(line[3:] for line in status.splitlines() if line.strip())
+    if changed != [PINS]:
+        die(f"building the Setup left the tag's files changed beyond {PINS}: {', '.join(changed) or 'nothing pinned'}")
+    values, flags = read_pins((src / PINS).read_text(encoding="utf-8"))
+    if values.get("DomovoiCommit") != tag_commit:
+        die(f"{PINS} installs {values.get('DomovoiCommit') or 'nothing'}, not the tag's commit {tag_commit}")
+    if "ProvisionBundled" in flags:
+        die(f"{PINS} bundles a provision.sh: the Setup must fetch the tag's own (build.ps1 -Pin turns bundling off)")
+    if values.get("ProvisionSha256") != sha256_bytes(provision):
+        die(f"{PINS}'s ProvisionSha256 is not the SHA-256 of the tag's provision.sh ({sha256_bytes(provision)})")
+
+
+def _build_setup(src: Path, tag: str, repo: Path) -> Path:
+    """DomovoiSetup.exe, by the installer's own script in the tag's
+    worktree: ``windows/build.ps1 -Pin <tag>``."""
+    script = src / "windows" / "build.ps1"
+    command = f"powershell -NoProfile -ExecutionPolicy Bypass -File windows\\build.ps1 -Pin {tag}"
+    if "[string]$Pin" not in script.read_text(encoding="utf-8"):
+        die(f"the tag's windows/build.ps1 has no -Pin, so the Setup can't be pinned to the tag and built from it. "
+            f"Build it by hand in a clean worktree of the tag ({command}) and pass it with --setup")
+    if os.name != "nt":
+        die(f"the Windows Setup builds on Windows only: run finish-release.ps1 there, or build it in a clean "
+            f"worktree of the tag ({command}) and pass it with --setup")
+    shell = find_exe("powershell.exe", repo)
+    if not shell:
+        die("no Windows PowerShell to run windows/build.ps1")
+    print(f"finish-release: building the Windows Setup from the tag ({command})...", flush=True)
+    p = subprocess.run([shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-Pin", tag], cwd=src)
+    if p.returncode != 0:
+        die("windows/build.ps1 -Pin failed")
+    exe = src / "windows" / "build" / SETUP_ASSET
+    if not exe.is_file():
+        die(f"windows/build.ps1 left no {exe}")
+    return exe
+
+
 def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None,
-        build_setup: Callable[[Path], Path] | None = None) -> int:
+        build_setup: Callable[[Path, str, Path], Path] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="finish-release", description=(
-        "Finish a Domovoi release after android/scripts/release: build and attach the Windows Setup, "
-        "write one SHA256SUMS, set the notes, then (a release without a suffix) fast-forward stable."))
+        "Finish a Domovoi release after android/scripts/release: build the Windows Setup from the tag and attach "
+        "it, write one SHA256SUMS, set the notes, then (a release without a suffix) fast-forward stable."))
     ap.add_argument("--tag", help="the release, v<version> (default: v + the Android versionName)")
     ap.add_argument("--no-publish", action="store_true", help="check, build and write everything; change nothing on GitHub")
-    ap.add_argument("--setup", help="a DomovoiSetup.exe built by windows/build.ps1 from this commit, instead of building it")
+    ap.add_argument("--setup", help="a DomovoiSetup.exe built by windows/build.ps1 -Pin <tag> from the tag, instead of building it")
     ap.add_argument("--since", help="the tag the notes' summary counts from (default: the previous one)")
     args = ap.parse_args(argv)
 
     repo = Path(repo or REPO)
     say = (tools.say if tools else (lambda m: print(f"finish-release: {m}", flush=True)))
-    t = tools or Tools(repo, default_gh(), say)
+    t = tools or Tools(repo, default_gh(repo), say)
     publish = not args.no_publish
 
     # 1. The checks. --------------------------------------------------------
+    _check_origin(t)
     if t.git("status", "--porcelain").strip():
         die("the checkout has uncommitted changes: commit or stash them first")
     head = t.git("rev-parse", "HEAD").strip()
     gradle = (repo / "android" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
     tag = args.tag or f"v{_version_name(gradle)}"
-    m = TAG_RE.match(tag)
+    m = TAG_RE.fullmatch(tag)
     if not m:
-        die(f"{tag} is not v<X.Y.Z> or v<X.Y.Z>-<suffix>")
+        die(f"{tag!r} is not v<X.Y.Z> or v<X.Y.Z>-<suffix>")
     version = tag[1:]
     by_name = bool(m.group(2))
+    want_py = pep440(version)
+    if want_py is None:
+        die(f"{tag}: a suffix must be -alphaN, -betaN or -rcN (what pyproject.toml can say)")
 
-    fetch = t.git_run("fetch", "--quiet", "--tags", "origin")
+    fetch = t.git_run("fetch", "--tags", "origin")
     fetched = fetch.returncode == 0
     if not fetched:
         err = fetch.stderr.decode("utf-8", "replace").strip()
@@ -519,7 +638,7 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
         say("warning: git fetch origin failed; checking against what this checkout has")
     if not t.git_ok("rev-parse", "--verify", "--quiet", f"refs/tags/{tag}"):
         die(f"no tag {tag}: android/scripts/release.ps1 publishes the release and makes it")
-    tag_commit = t.git("rev-parse", f"{tag}^{{commit}}").strip()
+    tag_commit = t.git("rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}").strip()
     on_github = _remote_ref(t, f"refs/tags/{tag}") if fetched else None
     if fetched and on_github != tag_commit:
         if on_github is None and not publish:
@@ -527,12 +646,15 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
         else:
             die(f"the tag {tag} here is {tag_commit[:12]}, on GitHub {on_github or 'missing'}")
     if not t.git_ok("merge-base", "--is-ancestor", tag_commit, head):
-        die(f"HEAD {head[:12]} does not come after the tag {tag} ({tag_commit[:12]}): git switch to the commit that pins Setup to it")
-    if publish and head != tag_commit and not t.git("branch", "-r", "--contains", head).strip():
-        die(f"HEAD {head[:12]} is not on GitHub yet: push it first (the notes name it as the commit Setup was built from)")
-    between = t.git("log", "--format=%h %s", f"{tag_commit}..{head}").strip()
-    say(f"Domovoi {version}: the tag is {tag_commit[:12]}; Setup is built from {head[:12]}"
-        + (f", the tag plus:\n    " + "\n    ".join(between.splitlines()) if between else ""))
+        die(f"HEAD {head[:12]} does not come after the tag {tag} ({tag_commit[:12]}): git pull, or check out the tag")
+
+    raw = t.git_bytes("show", f"{tag_commit}:pyproject.toml")
+    try:
+        py_version = tomllib.loads(raw.decode("utf-8"))["project"]["version"] if raw is not None else None
+    except (ValueError, KeyError):
+        py_version = None
+    if py_version != want_py:
+        die(f"the tag's pyproject.toml says {py_version or 'no version'}, not {want_py} ({tag})")
 
     raw = t.git_bytes("show", f"{tag_commit}:android/release.json")
     try:
@@ -547,32 +669,16 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
     cert = str(rel.get("cert_sha256") or "")
     if not apks or not cert:
         die("the tag's android/release.json names no APKs or no certificate")
-
-    pins_path = repo / "windows" / "installer" / "pins.iss"
-    values, flags = read_pins(pins_path.read_text(encoding="utf-8"))
-    pinned = values.get("DomovoiCommit")
-    if pinned != tag_commit:
-        die(f"windows/installer/pins.iss installs {pinned or 'nothing'}, not the tag's commit {tag_commit}: "
-            "move the Setup's pins to it (DomovoiCommit, ProvisionSha256 and what moves with them), commit, push, "
-            "git pull, and run again")
-    provision_pin = values.get("ProvisionSha256")
-    if not provision_pin:
-        die("windows/installer/pins.iss names no ProvisionSha256")
+    parent = t.git("rev-parse", "--verify", "--quiet", f"{tag_commit}^", check=False).strip()
+    if not parent or rel.get("commit") != parent:
+        die(f"the tag's commit is not android/release.json on top of the commit its APKs were built from: "
+            f"its parent is {parent[:12] or 'none'}, the manifest names {str(rel.get('commit'))[:12]}")
+    changed = t.git("diff", "--name-only", parent, tag_commit).split()
+    if changed != ["android/release.json"]:
+        die(f"the tag's commit changes more than android/release.json: {', '.join(changed)}")
     tag_provision = t.git_bytes("show", f"{tag_commit}:scripts/linux/provision.sh")
     if tag_provision is None:
         die(f"the tag {tag} has no scripts/linux/provision.sh")
-    if "ProvisionBundled" in flags:
-        src = values.get("ProvisionSource", "").replace("\\", "/")
-        bundled = (pins_path.parent / src).resolve()
-        if not src or not bundled.is_file():
-            die(f"pins.iss bundles provision.sh from {src or '(nothing)'}, which is not here")
-        data = bundled.read_bytes()
-        if data != tag_provision:
-            say("warning: Setup carries a provision.sh that differs from the tag's (ProvisionBundled)")
-    else:
-        data = tag_provision
-    if sha256_bytes(data) != provision_pin:
-        die(f"pins.iss's ProvisionSha256 is not the SHA-256 of the provision.sh Setup runs ({sha256_bytes(data)})")
 
     release = _release_json(t, tag) if (publish or t.gh_cmd) else None
     if release is None:
@@ -596,30 +702,41 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
             die(f"stable on GitHub is {stable[1]}, which the tag's commit doesn't come after: refusing "
                 "(stable only ever fast-forwards to a release; it is never rewound or forced)")
 
-    # 2. The Setup. ---------------------------------------------------------
+    # 2. The Setup, from the tag's own files. ----------------------------------
     stage = repo / "windows" / "build" / "release" / tag
-    if args.setup:
-        setup = Path(args.setup).resolve()
-        if not setup.is_file():
-            die(f"no Setup at {args.setup}")
-        say(f"using {setup} (built by windows/build.ps1 from {head[:12]}, it is taken to be)")
-    else:
-        setup = (build_setup or _build_setup)(repo)
-        if t.git("status", "--porcelain").strip():
-            die("building the Setup changed tracked files: look at git status")
     if stage.exists():
         shutil.rmtree(stage)
     stage.mkdir(parents=True)
     staged_setup = stage / SETUP_ASSET
-    shutil.copyfile(setup, staged_setup)
+    if args.setup:
+        setup = Path(args.setup).resolve()
+        if not setup.is_file():
+            die(f"no Setup at {args.setup}")
+        say(f"using {setup} (--setup: built by windows/build.ps1 -Pin {tag} from the tag, it is taken to be)")
+        shutil.copyfile(setup, staged_setup)
+    else:
+        src = repo / "windows" / "build" / "release" / f"{tag}-source"
+        if src.exists():
+            t.git_run("worktree", "remove", "--force", str(src))
+            shutil.rmtree(src, ignore_errors=True)
+        t.git_run("worktree", "prune")
+        t.git("worktree", "add", "--quiet", "--detach", str(src), tag_commit)
+        try:
+            exe = (build_setup or _build_setup)(src, tag, repo)
+            _check_pinned_worktree(t, src, tag_commit, tag_provision)
+            shutil.copyfile(exe, staged_setup)
+            shutil.copyfile(src / PINS, stage / "pins.iss")
+        finally:
+            if not t.git_ok("worktree", "remove", "--force", str(src)):
+                say(f"warning: couldn't remove the build worktree {src}: git worktree remove --force it later")
 
     # 3 and 4. SHA256SUMS and the notes. --------------------------------------
     if args.since and not t.git_ok("rev-parse", "--verify", "--quiet", f"refs/tags/{args.since}"):
         die(f"no tag {args.since} (--since)")
     since = args.since or _previous_tag(t, tag_commit, not moves_stable)
     hand = t.git_bytes("show", f"{tag_commit}:docs/release/{tag}.md")
-    info = Release(tag=tag, version=version, prerelease=prerelease, tag_commit=tag_commit, setup_commit=head,
-                   cert=cert, apks=apks, setup_sha256=sha256_file(staged_setup), previous_tag=since,
+    info = Release(tag=tag, version=version, prerelease=prerelease, tag_commit=tag_commit, cert=cert, apks=apks,
+                   setup_sha256=sha256_file(staged_setup), setup_built=not args.setup, previous_tag=since,
                    candidate_of=m.group(1) if by_name else None)
     if hand is not None:
         info.notes = hand.decode("utf-8")
@@ -642,7 +759,7 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
     kind = "a pre-release" if prerelease else "the Latest release"
     say(f"staged in {stage}: {SETUP_ASSET} ({staged_setup.stat().st_size} bytes), {SUMS_ASSET}, NOTES.md ({len(text)} characters)")
 
-    stable_push = f"{tag}^{{commit}}:refs/heads/stable"
+    stable_push = f"{tag_commit}:refs/heads/stable"
     if not publish:
         say("not published (--no-publish). A real run then:")
         print(f"    gh release upload {tag} {SETUP_ASSET} {SUMS_ASSET} --repo {REPO_SLUG} --clobber")
@@ -657,7 +774,7 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
             print("    stable: unknown (no fetch)")
         else:
             frm = f" (a fast-forward from {stable[1][:12]})" if stable[1] else " (stable is made)"
-            print(f"    git push origin \"{stable_push}\"{frm}")
+            print(f"    git push origin {stable_push}    ({tag}){frm}")
         return 0
 
     # 5. Upload and edit. -----------------------------------------------------
@@ -671,10 +788,12 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
     _verify_published(t, tag, sums)
     say("every file on GitHub matches SHA256SUMS")
 
-    # 7. LAST: stable. --------------------------------------------------------
+    # 7. LAST: stable, to the SHA checked above. --------------------------------
     if not moves_stable:
         say(f"stable stays where it is: {STABLE_STAYS}")
     else:
+        if _remote_ref(t, f"refs/tags/{tag}") != tag_commit:
+            die(f"the tag {tag} on GitHub no longer names {tag_commit[:12]}: stable stays where it is")
         stable = _stable_plan(t, tag_commit)
         if stable[0] == "refused":
             die(f"stable on GitHub moved to {stable[1]}, which the tag doesn't come after: refusing")
@@ -687,24 +806,6 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
                 die("stable on GitHub is not the tag's commit after the push")
     say(f"done: {tag} has the Setup, SHA256SUMS and its notes" + ("; stable is at it" if moves_stable else "") + ".")
     return 0
-
-
-def _build_setup(repo: Path) -> Path:
-    """DomovoiSetup.exe, from the installer's own build script."""
-    if os.name != "nt":
-        die("the Windows Setup builds on Windows only (windows/build.ps1): run finish-release.ps1 there, "
-            "or pass --setup with a DomovoiSetup.exe built from this commit")
-    shell = shutil.which("powershell.exe") or shutil.which("powershell")
-    if not shell:
-        die("no Windows PowerShell to run windows/build.ps1")
-    print("finish-release: building the Windows Setup (windows/build.ps1)...", flush=True)
-    p = subprocess.run([shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(repo / "windows" / "build.ps1")], cwd=repo)
-    if p.returncode != 0:
-        die("windows/build.ps1 failed")
-    exe = repo / "windows" / "build" / SETUP_ASSET
-    if not exe.is_file():
-        die(f"windows/build.ps1 left no {exe}")
-    return exe
 
 
 def main(argv: list[str] | None = None) -> int:
