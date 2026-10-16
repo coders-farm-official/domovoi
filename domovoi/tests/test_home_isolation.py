@@ -106,10 +106,16 @@ def test_an_exported_path_into_the_real_home_is_dropped(tmp_path):
         "VOICE_MODELS_DIR": str(fake_real / ".domovoi" / "piper_voices"),
         "KEEP_ME": str(fake_real / "Music"),
     })
+    # And the cleanup removes the home even with a log file still open in it
+    # (a plugin's plugin_<slug>.log handler; Windows won't delete an open file).
     code = (
-        "import os; from domovoi.tests import home_isolation as h; home = h.isolate(); "
+        "import os, logging; from domovoi.tests import home_isolation as h; home = h.isolate(); "
         "print(os.environ.get('VOICE_MODELS_DIR')); print(os.environ.get('KEEP_ME')); "
-        "print(os.environ['HOME'] == str(home)); h.cleanup(); print(home.exists())"
+        "print(os.environ['HOME'] == str(home)); "
+        "(home / '.domovoi' / 'logs').mkdir(); "
+        "logging.getLogger('plugin.x').addHandler(logging.FileHandler(home / '.domovoi' / 'logs' / 'plugin_x.log')); "
+        "logging.getLogger('plugin.x').warning('hi'); "
+        "h.cleanup(); print(home.exists())"
     )
     out = subprocess.run([sys.executable, "-c", code], cwd=REPO, env=env,
                          capture_output=True, text=True, timeout=60)

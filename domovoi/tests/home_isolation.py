@@ -136,11 +136,24 @@ def relocate(value: object) -> str | None:
 
 
 def cleanup() -> None:
-    """Remove this process's temp home (best effort: Windows keeps a file
-    another handle still has open, faulthandler's log for one)."""
+    """Remove this process's temp home. Logging file handlers still open
+    on it (``plugin_<slug>.log``, the core's own) are closed first: Windows
+    won't delete an open file. Best effort past that (faulthandler's file)."""
     home = _state["home"]
-    if home is not None and _norm(home) != _norm(real_home()):
-        shutil.rmtree(home, ignore_errors=True)
+    if home is None or _norm(home) == _norm(real_home()):
+        return
+    import logging
+
+    root = _norm(home)
+    loggers = [logging.getLogger()] + [
+        lg for lg in logging.Logger.manager.loggerDict.values() if isinstance(lg, logging.Logger)
+    ]
+    for logger in loggers:
+        for handler in list(logger.handlers):
+            if _inside(getattr(handler, "baseFilename", "") or "", root):
+                logger.removeHandler(handler)
+                handler.close()
+    shutil.rmtree(home, ignore_errors=True)
 
 
 # ─── the guard ──────────────────────────────────────────────────────────────
