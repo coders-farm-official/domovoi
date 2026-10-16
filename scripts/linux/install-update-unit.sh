@@ -836,15 +836,23 @@ check_signing() {
     fi
     line ok "upstream pinned: origin is $url"
   fi
+  # One branch, or several separated by spaces or commas (provision.sh pins
+  # the two release channels, "stable main"), the way apply-update.sh reads it.
   want=$(defaults_get DOMOVOI_UPSTREAM_BRANCH)
   if [ -n "$want" ]; then
+    local -a branches=()
+    local b match=""
+    read -r -a branches <<<"${want//,/ }"
     up=$(as_user git -C "$REPO" rev-parse --symbolic-full-name '@{u}' 2>/dev/null) || up=""
-    if [ "$up" != "refs/remotes/origin/$want" ]; then
-      stop "$DEFAULTS_FILE pins the branch to origin/$want, but HEAD tracks ${up:-no upstream branch}" \
-        "The update unit would refuse every run. Fix the tracking branch as $SVC_USER (git -C $REPO branch --set-upstream-to origin/$want)," \
+    for b in ${branches[@]+"${branches[@]}"}; do
+      if [ "$up" = "refs/remotes/origin/$b" ]; then match=$b; fi
+    done
+    if [ -z "$match" ]; then
+      stop "$DEFAULTS_FILE pins the branch to $(printf 'origin/%s or ' ${branches[@]+"${branches[@]}"} | sed 's/ or $//'), but HEAD tracks ${up:-no upstream branch}" \
+        "The update unit would refuse every run. Fix the tracking branch as $SVC_USER (git -C $REPO branch --set-upstream-to origin/${branches[0]:-main})," \
         "or the pin, then run this again."
     fi
-    line ok "upstream pinned: HEAD tracks origin/$want"
+    line ok "upstream pinned: HEAD tracks origin/$match"
   fi
 }
 

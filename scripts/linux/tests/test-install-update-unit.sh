@@ -1268,6 +1268,33 @@ case_upstream_pin_that_matches_is_reported() {
   end_case
 }
 
+# The pin provision.sh writes, both release channels: either one is fine,
+# and a checkout on any other branch hears that the unit would refuse it.
+case_upstream_pin_of_both_channels() {
+  new_case upstream_pin_of_both_channels
+  local bare=$CASE/upstream.git
+  git init -q --bare -b main "$bare"
+  g remote add origin "$bare"
+  g push -q origin main main:stable 2>/dev/null
+  g fetch -q origin
+  g checkout -q -B stable
+  g branch -q --set-upstream-to=origin/stable stable
+  mkdir -p "$ROOT/etc/default"
+  printf 'DOMOVOI_UPSTREAM_BRANCH="stable main"\n' >"$ROOT/etc/default/domovoi-update"
+  run_install
+  check "stable: exit 0" eq "$RC" 0
+  check "stable: reported" said "upstream pinned: HEAD tracks origin/stable"
+  g push -q origin main:release 2>/dev/null
+  g fetch -q origin
+  g checkout -q -B release
+  g branch -q --set-upstream-to=origin/release release
+  run_install
+  check "release: exit 1" eq "$RC" 1
+  check "release: says why" said "pins the branch to origin/stable or origin/main, but HEAD tracks refs/remotes/origin/release"
+  check "release: the fix names the first" said "git -C $REPO branch --set-upstream-to origin/stable"
+  end_case
+}
+
 CASES=(
   case_fresh_install
   case_idempotent_rerun
@@ -1330,6 +1357,7 @@ CASES=(
   case_upstream_pin_mismatch_stops
   case_upstream_branch_pin_mismatch_stops
   case_upstream_pin_that_matches_is_reported
+  case_upstream_pin_of_both_channels
 )
 
 # --case / --list / ONLY=<regex> (case-filter.sh) pick what runs; the suite
