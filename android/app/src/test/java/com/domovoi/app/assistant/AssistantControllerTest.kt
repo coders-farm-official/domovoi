@@ -346,6 +346,10 @@ class AssistantControllerTest {
         assertEquals("It's 3:42 PM.", a.text)
         assertNull(a.error)
         assertNotNull(a.firstTextMs)
+        assertTrue(a.fromClock)
+        assertNull(a.backend)
+        assertNull(a.tokensPerS)
+        assertEquals("the phone's clock", c.draftReport(c.ui().conversation, 1)!!.modelLine())
         assertTrue("no model was loaded for it", engines.isEmpty())
         assertEquals(EngineState.Unloaded, c.ui().engine)
         until("saved") { conversations.load(c.ui().conversation.id)?.messages?.lastOrNull()?.text == "It's 3:42 PM." }
@@ -371,6 +375,7 @@ class AssistantControllerTest {
         c.send("What time is it in Tokyo?")
         until("replied") { !c.ui().replying && c.ui().conversation.messages.size == 2 }
         val engine = engines.single()
+        assertFalse("a model's reply", c.ui().conversation.messages.last().fromClock)
         assertEquals(Persona.SYSTEM_PROMPT, engine.systems.last())
         assertEquals(
             "The phone's clock says it is Thursday, October 15, 2026, 3:42 PM, Pacific Daylight Time " +

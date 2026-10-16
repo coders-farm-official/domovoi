@@ -414,7 +414,8 @@ internal fun bubbleState(fromUser: Boolean, writing: Boolean): String = when {
  *  custom actions list them: report only on a finished reply with words. */
 internal fun bubbleActions(canReport: Boolean): List<String> = listOfNotNull(ACTION_COPY, ACTION_REPORT.takeIf { canReport })
 
-/** "0.45 s to first words · 30.2 tokens/s · cpu": how a reply went. */
+/** "0.45 s to first words · 30.2 tokens/s · cpu": how a reply went; a clock
+ *  answer names the phone's clock instead, with no model numbers. */
 internal fun replyDetails(m: StoredMessage): String? {
     if (m.fromUser) return null
     val parts = listOfNotNull(
@@ -424,8 +425,9 @@ internal fun replyDetails(m: StoredMessage): String? {
         },
         m.sttMs?.let { "heard in $it ms" },
         m.firstTextMs?.let { String.format(Locale.US, "%.2f s to first words", it / 1000.0) },
-        m.tokensPerS?.let { String.format(Locale.US, "%.1f tokens/s", it) },
-        m.backend,
+        // The clock's answer: no model wrote it, so no model numbers.
+        m.tokensPerS?.takeUnless { m.fromClock }?.let { String.format(Locale.US, "%.1f tokens/s", it) },
+        if (m.fromClock) ReplyReport.CLOCK else m.backend,
         m.stopMs?.let { "silenced $it ms after stop" },
     )
     return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")

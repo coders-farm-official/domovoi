@@ -63,6 +63,34 @@ class ReplyReportTest {
         assertEquals("Yes, entirely.", r.title)
     }
 
+    /** A reply from the phone's clock names the clock as its source, not
+     *  the model (none wrote it). */
+    @Test fun aClockAnswersReportNamesThePhonesClock() {
+        val clockTalk = StoredConversation(messages = listOf(
+            StoredMessage(Speaker.USER, "what time is it", at = 1_000, spoken = true),
+            StoredMessage(Speaker.DOMOVOI, "It's 3:42 PM.", at = 1_760_550_000_000, fromClock = true),
+        ))
+        val r = ReplyReport.draft(clockTalk, 1, model, "1.2.3", now = 1_760_550_060_000)!!
+        assertTrue(r.fromClock)
+        assertEquals("source", r.sourceLabel)
+        assertEquals("the phone's clock", r.model)
+        assertEquals("", r.modelId)
+        assertNull(r.backend)
+        assertEquals("the phone's clock", r.modelLine())
+        val text = r.asText()
+        assertTrue(text, text.lines().contains("Source: the phone's clock"))
+        assertFalse(text, text.contains("Model:") || text.contains(model.name) || text.contains(model.id))
+
+        // A model's reply still names the model.
+        val modelReply = ReplyReport.draft(talk, 3, model, "", 0)!!
+        assertFalse(modelReply.fromClock)
+        assertEquals("model", modelReply.sourceLabel)
+        // ...and the clock state survives a save (the JSON's fields are unchanged).
+        val store = ReplyReportStore(File(root, "clock-reports"))
+        store.save(r)
+        assertTrue(store.list().single().fromClock)
+    }
+
     @Test fun onlyAFinishedReplyWithWordsCanBeReported() {
         assertNull("a question", ReplyReport.draft(talk, 2, model, "", 0))
         assertNull("a failed reply with no words", ReplyReport.draft(talk, 4, model, "", 0))

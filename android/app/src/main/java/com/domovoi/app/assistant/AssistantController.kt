@@ -760,7 +760,8 @@ class AssistantController(
             ClockQuestions.answer(kind, style.at(clock()), style)
         }.onFailure { Log.w(TAG, "the phone's clock could not be read", it) }.getOrNull() ?: return null
         onDelta(text)
-        return finishReply(asked, StoredMessage(Speaker.DOMOVOI, text, clock(), firstTextMs = (nanos() - sent) / 1_000_000))
+        val reply = StoredMessage(Speaker.DOMOVOI, text, clock(), firstTextMs = (nanos() - sent) / 1_000_000, fromClock = true)
+        return finishReply(asked, reply)
     }
 
     /** The phone's clock for the model, read now (Persona.clockLine); null
