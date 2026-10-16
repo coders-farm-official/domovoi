@@ -826,9 +826,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # startup (or while the server was down) waits for its rooms to
     # reconnect, and its grace window counts from now.
     app.state.timer_delivery.set_accepting()
+    # Startup is done: the loop watchdog (installed by main(), never by a
+    # test) starts watching this loop, and systemd hears READY=1
+    # (domovoi/loop_watchdog.py).
+    from domovoi import loop_watchdog
+
+    loop_watchdog.attach_running_loop()
     try:
         yield
     finally:
+        # A stop is not a stall: lifecycle's exit watchdog bounds it.
+        loop_watchdog.detach()
         # By now uvicorn has closed every satellite socket (1012) and waited
         # out, or cancelled, what was in flight (shutdown_grace_sec). This
         # teardown is bounded as a whole (shutdown_teardown_sec) and step by
@@ -973,6 +981,20 @@ async def phone_voice_turn(
 # code from before the address binding. It takes the new code on its next
 # upgrade; the line is how an operator sees the transition is not over.
 _UNBOUND_CHALLENGE_SEEN = False
+
+
+@app.get("/v1/alive")
+async def alive() -> dict[str, Any]:
+    """Liveness, and nothing else: answered by the event loop itself, with
+    no database, no lock and no credential behind it. A core that answers
+    here is running, however slow or sick ``/v1/health`` says it is (a
+    database that is down answers 503 there). The dashboard's "Restart the
+    core" ends a core only when this has stayed silent for longer than the
+    core's own loop watchdog waits (web/backend/core_restart.py). ``pid``
+    is this process's, for that check."""
+    import os
+
+    return {"alive": True, "pid": os.getpid()}
 
 
 @app.get("/v1/health")
@@ -2286,11 +2308,17 @@ async def admin_version() -> dict[str, Any]:
     """
     from domovoi.plugins_runtime.loader import LOADER
 
+    from domovoi import loop_watchdog
+
     state = await git_version.version_state()
     pending = LOADER.pending_restarts()
     state["code_restart_required"] = state["restart_required"]
     state["plugins_pending_restart"] = pending
     state["restart_required"] = state["restart_required"] or bool(pending)
+    # The last time the loop watchdog ended a frozen core on this box
+    # ({at, reason, pid, log}), or None: the Version card says when and
+    # why, and where the stacks are (domovoi/loop_watchdog.py).
+    state["last_watchdog_restart"] = await asyncio.to_thread(loop_watchdog.last_stall)
     return state
 
 
@@ -4991,8 +5019,11 @@ async def capabilities() -> dict[str, Any]:
 async def list_plugins() -> dict[str, Any]:
     """Plugin registry rows (open read; design §12). ``pending_restart`` is
     ``{slug, from_version, to_version, since, where}`` for an upgrade whose
-    new code loads at the next restart, else null."""
+    new code loads at the next restart, else null. ``worker_notes`` is what
+    the plugin's running workers say about themselves (``[{worker, note}]``,
+    e.g. the radio fingerprinter's pause), empty when they say nothing."""
     from domovoi.plugins_runtime.loader import LOADER
+    from domovoi.plugins_runtime.workers import WORKERS
 
     async with session_scope() as s:
         rows = (
@@ -5017,6 +5048,7 @@ async def list_plugins() -> dict[str, Any]:
                 "installed_at": r.installed_at.isoformat() if r.installed_at else None,
                 "updated_at": r.updated_at.isoformat() if r.updated_at else None,
                 "pending_restart": LOADER.pending_restart.get(r.slug),
+                "worker_notes": WORKERS.notes(r.slug),
             }
             for r in rows
         ]
@@ -6104,6 +6136,13 @@ def main() -> None:
         return
 
     import uvicorn
+
+    # A frozen core restarts itself instead of waiting for a power cycle
+    # (incident 2026-10-14): the loop watchdog's thread starts now and
+    # watches the loop from the end of startup (domovoi/loop_watchdog.py).
+    from domovoi import loop_watchdog
+
+    loop_watchdog.install(settings)
 
     # From a SIGTERM on, the process gets shutdown_deadline_sec to be gone,
     # whatever hangs (domovoi/lifecycle.py) — below the unit's

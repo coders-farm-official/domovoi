@@ -75,6 +75,10 @@ class RadioSettings(BaseSettings):
     fingerprinter_interval_sec: float = 60.0
     # Minimum aligned-hash count for a local fingerprint match.
     fingerprinter_match_threshold: int = 10
+    # Wall-clock limit for decoding and hashing one library track. The
+    # work runs in a child process (clients/fingerprint.py); past this it
+    # is killed, and the track is marked so it is not tried again.
+    fingerprinter_timeout_sec: float = 300.0
 
 
 RADIO_FIELDSPECS: list[FieldSpec] = [

@@ -635,3 +635,80 @@ def test_the_mounted_version_is_read_from_the_code_on_disk(tmp_path) -> None:
     assert plugin_host._on_disk_version(tmp_path / "missing") is None
     (tmp_path / "domovoi-plugin.toml").write_text("[plugin\n", encoding="utf-8")
     assert plugin_host._on_disk_version(tmp_path) is None
+
+
+# ─── worker notes from the core (review 2026-10-15) ──────────────────────
+
+
+@pytest.mark.asyncio
+async def test_the_plugin_list_carries_the_cores_worker_notes(monkeypatch) -> None:
+    """The radio fingerprinter's pause is "shown": the web's plugin list
+    merges each plugin's worker notes from the core's GET /v1/plugins (a
+    real HTTP server here). A core that doesn't answer, or answers
+    rubbish, costs nothing but the notes."""
+    import asyncio
+    import json
+    import time
+
+    from web.backend.api import plugins as plugins_api
+
+    body = json.dumps({"plugins": [
+        {"slug": "radio", "worker_notes": [
+            {"worker": "track_fingerprinter", "note": "paused for 1 h: 3 tracks in a row failed"},
+            {"worker": "quiet", "note": None}, "junk"]},
+        {"slug": "sleep", "worker_notes": []},
+        {"no": "slug"},
+    ]}).encode()
+
+    async def handle(reader, writer):
+        await reader.readline()
+        while (await reader.readline()) not in (b"\r\n", b"\n", b""):
+            pass
+        writer.write(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n"
+                     + f"content-length: {len(body)}\r\nconnection: close\r\n\r\n".encode() + body)
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        monkeypatch.setenv("DOMOVOI_URL", f"http://127.0.0.1:{port}")
+        assert await plugins_api._worker_notes() == {"radio": [
+            {"worker": "track_fingerprinter", "note": "paused for 1 h: 3 tracks in a row failed"}]}
+    finally:
+        server.close()
+
+    # A frozen core: accepts, never answers. Bounded, and no notes.
+    async def frozen(reader, writer):
+        await asyncio.sleep(30)
+
+    server = await asyncio.start_server(frozen, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        monkeypatch.setenv("DOMOVOI_URL", f"http://127.0.0.1:{port}")
+        t0 = time.monotonic()
+        assert await plugins_api._worker_notes() == {}
+        assert time.monotonic() - t0 < plugins_api._NOTES_TIMEOUT_SEC + 1.0
+    finally:
+        server.close()
+    monkeypatch.setenv("DOMOVOI_URL", "http://127.0.0.1:9")    # nothing listens
+    assert await plugins_api._worker_notes() == {}
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_installed_list_shows_each_plugins_worker_notes(fake_plugin, monkeypatch) -> None:
+    """GET /api/plugins puts each plugin's notes on its own row, and an
+    empty list on every other (the Plugins page renders them)."""
+    from web.backend.api import plugins as plugins_api
+
+    async def notes():
+        return {_SLUG: [{"worker": "poller", "note": "paused for 1 h"}]}
+
+    monkeypatch.setattr(plugins_api, "_worker_notes", notes)
+    async with _web() as client:
+        r = await client.get("/api/plugins")
+    assert r.status_code == 200
+    rows = {p["slug"]: p for p in r.json()["plugins"]}
+    assert rows[_SLUG]["worker_notes"] == [{"worker": "poller", "note": "paused for 1 h"}]
+    assert all(p["worker_notes"] == [] for slug, p in rows.items() if slug != _SLUG)

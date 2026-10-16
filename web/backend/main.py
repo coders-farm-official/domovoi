@@ -466,12 +466,13 @@ async def health(challenge: str | None = None) -> HealthResponse:
     # Domovoi ping: best-effort against /v1/health on the
     # configured domovoi URL. Doesn't fail the response.
     core_ok = False
+    core_alive: bool | None = None
     stt: str | None = None
     identity: dict[str, str] | None = None
+    import httpx
+    domovoi_url = os.environ.get("DOMOVOI_URL", "http://localhost:6370")
     try:
-        import httpx
         from urllib.parse import quote
-        domovoi_url = os.environ.get("DOMOVOI_URL", "http://localhost:6370")
         url = f"{domovoi_url}/v1/health"
         if challenge:
             url += f"?challenge={quote(challenge, safe='')}"
@@ -490,6 +491,18 @@ async def health(challenge: str | None = None) -> HealthResponse:
                     identity = core_identity_block(doc.get("identity"))
     except Exception:
         pass
+    # Not healthy: is its loop running at all? Any answer on /v1/alive says
+    # it is (incident 2026-10-14: running but sick, or frozen, are two
+    # different pages for the household).
+    if core_ok:
+        core_alive = True
+    else:
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                await client.get(f"{domovoi_url}/v1/alive")
+            core_alive = True
+        except Exception:
+            core_alive = False
 
     return HealthResponse(
         status="ok" if db_ok and core_ok else "degraded",
@@ -497,6 +510,7 @@ async def health(challenge: str | None = None) -> HealthResponse:
         domovoi_reachable=core_ok,
         stt=stt,
         identity=identity,
+        core_alive=core_alive,
     )
 
 

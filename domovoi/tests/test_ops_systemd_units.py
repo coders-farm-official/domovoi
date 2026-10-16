@@ -238,3 +238,51 @@ def test_docker_group_warning_sits_with_the_usermod_step() -> None:
     i = doc.index("sudo usermod -aG docker $USER")
     nearby = doc[i : i + 1500]
     assert re.search(r"`docker` group is root", nearby), "the Install step must say the group is root-equivalent"
+
+
+def _unit_section(name: str) -> dict[str, list[str]]:
+    text = (UNITS / f"{name}.service").read_text(encoding="utf-8")
+    out: dict[str, list[str]] = {}
+    section = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        if line.startswith("["):
+            section = line
+            continue
+        if section == "[Unit]":
+            key, _, value = line.partition("=")
+            out.setdefault(key.strip(), []).append(value.strip())
+    return out
+
+
+def test_the_core_unit_restarts_a_frozen_core() -> None:
+    """Incident 2026-10-14: the core says READY=1 when started and feeds
+    systemd's watchdog only while healthy (domovoi/loop_watchdog.py), and
+    every way it can end on purpose (its own watchdog's exit 70, the
+    dashboard's kill, systemd's watchdog) is one Restart= starts it again
+    after."""
+    svc = _service("domovoi-core")
+    assert _one(svc, "Type") == "notify"
+    assert _one(svc, "NotifyAccess") == "main"
+    assert _one(svc, "Restart") == "on-failure"
+    assert _one(svc, "RestartSec") == "5"
+    # Longer than the core's own watchdog (30 s) by a margin, so the core's
+    # report (with every stack) normally comes first.
+    assert _one(svc, "WatchdogSec") == "90"
+    # The core's own startup limit is LOOP_WATCHDOG_STARTUP_SEC (900 s).
+    assert _one(svc, "TimeoutStartSec") == "15min"
+    assert "RestartPreventExitStatus" not in svc
+    assert "SuccessExitStatus" not in svc
+
+
+def test_the_dashboard_does_not_wait_for_the_core() -> None:
+    """A Type=notify core is "activating" until its startup is done; the
+    dashboard must be up meanwhile, and while the core is stuck."""
+    unit = _unit_section("domovoi-web")
+    after = {u for v in unit.get("After", []) for u in v.split()}
+    assert "domovoi-core.service" not in after
+    assert "domovoi-db.service" in after
+    wants = {u for v in unit.get("Wants", []) for u in v.split()}
+    assert {"domovoi-db.service", "domovoi-core.service"} <= wants

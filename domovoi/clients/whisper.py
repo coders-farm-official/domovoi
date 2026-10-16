@@ -45,7 +45,6 @@ that says so.
 
 from __future__ import annotations
 
-import asyncio
 import importlib.machinery
 import importlib.util
 import io
@@ -63,7 +62,7 @@ from typing import Any, Callable, Protocol
 
 import numpy as np
 
-from domovoi import egress
+from domovoi import egress, executors
 from domovoi.config import settings
 
 log = logging.getLogger(__name__)
@@ -700,21 +699,21 @@ class FasterWhisperClient:
 
     async def transcribe(self, pcm_bytes: bytes) -> str:
         """Transcribe raw 16 kHz mono int16 PCM bytes."""
-        text, _window = await asyncio.to_thread(self._transcribe_pcm_sync, pcm_bytes)
+        text, _window = await executors.run("speech", self._transcribe_pcm_sync, pcm_bytes)
         return text
 
     async def transcribe_with_window(self, pcm_bytes: bytes) -> tuple[str, int]:
         """:meth:`transcribe`, plus the window (seconds) the text came from."""
-        return await asyncio.to_thread(self._transcribe_pcm_sync, pcm_bytes)
+        return await executors.run("speech", self._transcribe_pcm_sync, pcm_bytes)
 
     async def transcribe_full_window(self, pcm_bytes: bytes) -> tuple[str, int]:
         """The 30 s path, even for a capture the short window would take."""
-        text = await asyncio.to_thread(self._transcribe_full_sync, pcm_bytes)
+        text = await executors.run("speech", self._transcribe_full_sync, pcm_bytes)
         return text, FULL_WINDOW_SEC
 
     async def transcribe_wav_bytes(self, wav_bytes: bytes) -> str:
         """Transcribe a complete WAV file's bytes."""
-        return await asyncio.to_thread(self._transcribe_wav_sync, wav_bytes)
+        return await executors.run("speech", self._transcribe_wav_sync, wav_bytes)
 
     def _transcribe_pcm_sync(self, pcm_bytes: bytes) -> tuple[str, int]:
         """The short window when it applies and its result is usable,

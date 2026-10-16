@@ -165,6 +165,14 @@ _WEB_BACKEND_CORE_IMPORTS = (
     # inside handlers (embedded cover art, every room's now-playing read).
     "domovoi.media_tags",
     "domovoi.clients.mpd_protocol",
+    # The Version card's "restart the core" when the core doesn't answer
+    # (web/backend/core_restart.py): the restart grant probe, and the update
+    # unit's state it reads through git_version, for the sudo route.
+    "domovoi.self_restart",
+    "domovoi.git_version",
+    # ...and, once it has ended a frozen core, the note the Version card
+    # shows (core-watchdog-last.json), written the core's own way.
+    "domovoi.loop_watchdog",
 )
 
 

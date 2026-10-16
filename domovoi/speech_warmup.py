@@ -27,6 +27,7 @@ import asyncio
 import logging
 import time
 
+from domovoi import executors
 from domovoi.config import settings
 
 log = logging.getLogger(__name__)
@@ -91,7 +92,10 @@ async def _load_piper(ref: str) -> bool:
 
     t0 = time.monotonic()
     try:
-        ok = await asyncio.to_thread(tts.preload_piper_voice_sync, ref)
+        # The files first, in the downloads pool; then the load, which then
+        # never downloads in a speech thread.
+        await tts.ensure_piper_voice(ref)
+        ok = await executors.run("tts", tts.preload_piper_voice_sync, ref)
     except Exception as e:  # noqa: BLE001
         log.warning(
             "speech warm-up: Piper voice %s didn't load (%s: %s); the first reply "

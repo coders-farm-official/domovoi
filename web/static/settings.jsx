@@ -651,6 +651,15 @@ const VoicesPanel = () => {
  *   POST  /api/config/version/check· git fetch + count → { behind, ahead, upstream, upstream_sha, error }
  *   POST  /api/config/version/pull · git pull --ff-only → { pulled, new_sha, error }
  *   POST  /api/config/version/restart · bounce core+web, or start the update unit → { ok, mode, units, error }
+ *   GET   /api/config/core/restart · when the core doesn't answer: what "Restart the core" would do
+ *   POST  /api/config/core/restart · the web ends a core that doesn't answer; systemd starts it again
+ *
+ * When the core doesn't answer at all (the version read comes back 502:
+ * the web could not reach it), every action above is the core's own and
+ * can't run, so the card says so and offers CoreRestart (components.jsx)
+ * instead: incident 2026-10-14, a frozen core the old card could only show
+ * as "—". `last_watchdog_restart` is the last time the core was ended for
+ * freezing (its loop watchdog, its backstops, or that button), and why.
  *   GET   /api/config/editable     · the field set + current values
  *   PATCH /api/config/editable     · { changes } → { applied, rejected, restart_required }
  */
@@ -857,7 +866,10 @@ const VersionSection = () => {
   // Checking and pulling talk to the git remote: greyed under "No"
   // (Settings → Internet). Restarting stays — it never leaves the box.
   const internetOff = internetOffIn(cfg);
-  const { data: core, refresh: refreshCore } = useApiObject('/api/config/version');
+  const { data: core, error: coreError, refresh: refreshCore } = useApiObject('/api/config/version');
+  // The web answered for the core: it could not reach it (bridge_response's
+  // 502), or the core itself said it can't serve (503/504).
+  const coreDown = !core && !!coreError && [502, 503, 504].includes(coreError.status);
   const [fire, node] = useToast();
   const [checking, setChecking] = React.useState(false);
   const [pulling, setPulling] = React.useState(false);
@@ -1018,6 +1030,15 @@ const VersionSection = () => {
             </div>
           </React.Fragment>
         )}
+        {core && core.last_watchdog_restart && core.last_watchdog_restart.at && (
+          <React.Fragment>
+            <div className="label">last freeze</div>
+            <div className="version-last-freeze" style={{ fontSize: 12, color: 'var(--fg-muted)' }}
+                 title={core.last_watchdog_restart.log ? `every thread's stack: ${core.last_watchdog_restart.log}` : undefined}>
+              {new Date(core.last_watchdog_restart.at).toLocaleString()} · restarted · {core.last_watchdog_restart.reason}
+            </div>
+          </React.Fragment>
+        )}
         {lastUpdate && (
           <React.Fragment>
             <div className="label">last update</div>
@@ -1037,6 +1058,14 @@ const VersionSection = () => {
           </React.Fragment>
         )}
       </div>
+      {coreDown && (
+        <div className="version-core-down" style={{ padding: '0 16px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ fontSize: 12, color: 'var(--err)' }}>
+            The Domovoi core isn’t answering, so the satellites and the app can’t reach it.
+          </div>
+          <CoreRestart onBack={() => { setStatus(null); return refreshCore(); }}/>
+        </div>
+      )}
       {lastUpdate && lastUpdate.error && lastUpdate.status !== 'ok' && lastUpdate.status !== 'running' && (
         <div className="mono" style={{ padding: '0 16px 12px', fontSize: 11, color: 'var(--fg-muted)',
                                        overflowWrap: 'anywhere' }}>

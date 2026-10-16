@@ -102,6 +102,9 @@ of its own. The interesting ones:
 | `RADIO_SDR_STREAM_BASE` | `http://127.0.0.1` | host MPD dials for FM audio (see hardware notes) |
 | `RADIO_SDR_BIND_HOST` | empty | address the FM listener binds; empty = the stream base's host, never `0.0.0.0` |
 | `RADIO_FINGERPRINTER_ENABLED` | `true` | fingerprint library tracks for offline matching |
+| `RADIO_FINGERPRINTER_TIMEOUT_SEC` | `300` | the most one track's decode and hashing may take; it runs in a child process (never on the core's event loop), which is killed past this; the track is tried again later and marked, not tried again, after 3 such timeouts |
+
+A track whose file the decoder refuses (or that gives no hashes) is marked at once and skipped from then on; delete its row in `plugin_radio.track_fingerprints` to retry it. Any other failure (the file isn't there to read, as when the media disk isn't mounted; the child stopped by a `systemctl stop`; a crash; the audio libraries missing; a timeout) says nothing for certain about the file: the track is tried again after 10 minutes, then twice as long each time (at most a day). Three failures in a row pause the fingerprinter for an hour (then twice as long each time, at most a day); the pause and its reason are in the core's log and on the dashboard's Plugins page, under the radio plugin.
 
 ## Without the internet
 

@@ -239,13 +239,16 @@ def test_the_old_wiring_never_shuts_down() -> None:
 def test_main_hands_uvicorn_a_graceful_timeout_and_arms_the_watchdog(monkeypatch) -> None:
     import uvicorn
 
-    from domovoi import lifecycle, main as core_main
+    from domovoi import lifecycle, loop_watchdog, main as core_main
 
     captured: dict = {}
     armed: list[float] = []
+    asked: list = []
+    order: list[str] = []
 
     def fake_run(_app, **kwargs):
         captured.update(kwargs)
+        order.append("uvicorn")
 
     real_watchdog = lifecycle.exit_watchdog
 
@@ -253,12 +256,25 @@ def test_main_hands_uvicorn_a_graceful_timeout_and_arms_the_watchdog(monkeypatch
         armed.append(deadline_sec)
         return real_watchdog(deadline_sec, exit_fn=lambda code: None, **kw)
 
+    # The loop watchdog is asked for, never armed here: the real install()
+    # writes under ~/.domovoi and leaves its thread in this pytest worker.
+    def fake_install(core_settings):
+        asked.append(core_settings)
+        order.append("loop watchdog")
+        return None
+
     monkeypatch.setattr(uvicorn, "run", fake_run)
     monkeypatch.setattr(core_main.lifecycle, "exit_watchdog", fake_watchdog)
+    monkeypatch.setattr(loop_watchdog, "install", fake_install)
     monkeypatch.setattr("sys.argv", ["domovoi"])
     core_main.main()
     assert captured["timeout_graceful_shutdown"] == settings.shutdown_grace_sec
     assert armed == [settings.shutdown_deadline_sec]
+    # Armed with the core's own settings (its LOOP_WATCHDOG_* values), once,
+    # before uvicorn starts the app.
+    assert len(asked) == 1 and asked[0] is settings
+    assert order == ["loop watchdog", "uvicorn"]
+    assert loop_watchdog._ACTIVE is None and not loop_watchdog._INSTALLED
 
 
 def test_the_bounds_nest_inside_systemds_timeout() -> None:

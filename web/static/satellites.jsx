@@ -81,9 +81,20 @@ const remainingFromExpiresAt = (iso) => {
   return Math.max(0, Math.round(ms / 1000));
 };
 
+/* When a room was last heard from: its newest health sample, paired hello
+ * or MPD row time (the server's last_seen_at), else the MPD row's own time
+ * from a server before 2026-10-15. last_connected_at alone is NOT that:
+ * it changes only when the room's MPD row is (re)allocated, which is how
+ * every card of a frozen core read "offline · 19d ago" (incident 2026-10-14). */
+const satLastSeen = (s) => s.last_seen_at || s.last_connected_at || null;
+
 /* ---- Satellite card --------------------------------------- */
-const SatCard = ({ s, onOpen, tick }) => {
-  const online = s.status === 'online';
+/* `coreDown`: the server's core isn't answering (/api/health), so nothing
+ * here is live: no room can connect, and "offline" would say the
+ * satellite is the problem. The card says "can't connect" and when the
+ * room was last heard from instead. */
+const SatCard = ({ s, onOpen, tick, coreDown = false }) => {
+  const online = s.status === 'online' && !coreDown;
   const np = s.now_playing;
   const playing = np?.state === 'play' && np.song;
   const songDur = np?.song?.duration_sec ?? 0;
@@ -132,9 +143,11 @@ const SatCard = ({ s, onOpen, tick }) => {
             {s.settings_ignored.length === 1 ? 'a setting ignored' : `${s.settings_ignored.length} settings ignored`}
           </Pill>
         )}
-        <Pill tone={online ? 'live' : 'idle'} live={online}>
-          {online ? 'online' : s.status === 'waiting' ? 'waiting' : 'offline'}
-        </Pill>
+        <span title={coreDown ? 'the server’s core isn’t answering, so no satellite can connect' : undefined}>
+          <Pill tone={online ? 'live' : coreDown ? 'warn' : 'idle'} live={online}>
+            {online ? 'online' : coreDown ? 'can’t connect' : s.status === 'waiting' ? 'waiting' : 'offline'}
+          </Pill>
+        </span>
       </div>
 
       <div style={{ padding: '0 16px 12px', minHeight: 56 }}>
@@ -174,8 +187,8 @@ const SatCard = ({ s, onOpen, tick }) => {
           )}
         </div>
         <span style={{ flex: 1 }}/>
-        <span className="mono" style={{ fontSize: 11, color: online ? 'var(--ok)' : 'var(--fg-faint)' }}>
-          {online ? 'active now' : relTime(s.last_connected_at)}
+        <span className="mono sat-card-seen" style={{ fontSize: 11, color: online ? 'var(--ok)' : 'var(--fg-faint)' }}>
+          {online ? 'active now' : satLastSeen(s) ? `last heard ${relTime(satLastSeen(s))}` : 'never heard'}
         </span>
       </div>
     </button>
@@ -1031,10 +1044,10 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
     <>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', borderBottom: '1px solid var(--border-soft)' }}>
         <div style={{ padding: '14px 16px', borderRight: '1px solid var(--border-soft)' }}>
-          <div className="label">last connected</div>
-          <div style={{ fontSize: 16, fontWeight: 600, marginTop: 2 }}>{s.status === 'online' ? 'active now' : relTime(s.last_connected_at)}</div>
+          <div className="label">last heard from</div>
+          <div style={{ fontSize: 16, fontWeight: 600, marginTop: 2 }}>{s.status === 'online' ? 'active now' : satLastSeen(s) ? relTime(satLastSeen(s)) : 'never'}</div>
           <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>
-            {s.last_connected_at ? s.last_connected_at.replace('T',' ').slice(0,16) + ' UTC' : '—'}
+            {satLastSeen(s) ? new Date(satLastSeen(s)).toISOString().replace('T',' ').slice(0,16) + ' UTC' : '—'}
           </div>
         </div>
         <div style={{ padding: '14px 16px' }}>
@@ -2698,6 +2711,9 @@ const SpareDeviceCard = ({ fire }) => {
  * as its first line. Without it, the same view as a page of its own, which
  * the shell no longer routes to (#satellites opens the Settings tab). Every
  * read, action and auth tier is the same either way. */
+// How often the page asks whether the core answers (the web pings it).
+const SAT_HEALTH_POLL_MS = 10000;
+
 const SatellitesPage = ({ embedded = false } = {}) => {
   const [openRoom, setOpenRoom] = React.useState(null);
   const [tick, setTick] = React.useState(0);
@@ -2706,6 +2722,27 @@ const SatellitesPage = ({ embedded = false } = {}) => {
   const { items: sats, loading, refresh } = useApiList('/api/satellites', {
     eventTypes: ['satellites.presence.changed', 'satellites.wifi.changed', 'satellites.dropins.changed', 'satellites.display.changed', 'satellites.pending.changed', 'music.now_playing.changed'],
   });
+  // Whether the server's core answers (the web's /api/health pings it):
+  // while it doesn't, no satellite can connect, and the page says that
+  // rather than showing every room "offline" (incident 2026-10-14).
+  const { data: health, refresh: refreshHealth } = useApiObject('/api/health', { quiet: true });
+  React.useEffect(() => {
+    const t = setInterval(refreshHealth, SAT_HEALTH_POLL_MS);
+    return () => clearInterval(t);
+  }, [refreshHealth]);
+  const coreDown = !!health && health.domovoi_reachable === false;
+  // Why the core can't serve: its database (the web's own ping fails too),
+  // or a core that runs but can't answer (its loop answers /v1/alive), or a
+  // core that is stopped or frozen. Only the last one is the core's to fix
+  // by restarting.
+  const downWhy = !coreDown ? null
+    : health.db_reachable === false ? 'db'
+      : health.core_alive === true ? 'sick' : 'frozen';
+  const wasDown = React.useRef(false);
+  React.useEffect(() => {
+    if (wasDown.current && !coreDown) refresh();   // back: the live state again
+    wasDown.current = coreDown;
+  }, [coreDown, refresh]);
   const { items: approvals, refresh: refreshApprovals } = useApiList('/api/satellites/approvals');
   const [approvalBusy, setApprovalBusy] = React.useState('');
   // {room_id, tone, text} — the refusal that belongs beside THAT room's
@@ -2780,13 +2817,40 @@ const SatellitesPage = ({ embedded = false } = {}) => {
   const unlabeled = sats.filter(s => !s.room_label);
   const grid = (list) => (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
-      {list.map(s => <SatCard key={s.room_id} s={s} onOpen={(s) => setOpenRoom(s.room_id)} tick={tick}/>)}
+      {list.map(s => <SatCard key={s.room_id} s={s} onOpen={(s) => setOpenRoom(s.room_id)} tick={tick} coreDown={coreDown}/>)}
     </div>
   );
 
-  const summary = `${onlineCount} online · ${offlineCount} offline${waitingCount ? ` · ${waitingCount} waiting` : ''} · ${sats.length} known`;
+  const summary = coreDown
+    ? `the core isn’t answering · ${sats.length} known`
+    : `${onlineCount} online · ${offlineCount} offline${waitingCount ? ` · ${waitingCount} waiting` : ''} · ${sats.length} known`;
   const body = (
     <>
+      {coreDown && (
+        <Card>
+          <div className="sat-core-down" style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <StatusDot tone="err"/>
+              <span style={{ fontSize: 14, fontWeight: 600 }}>
+                {downWhy === 'db'
+                  ? 'The database isn’t answering, so satellites can’t connect.'
+                  : downWhy === 'sick'
+                    ? 'The server’s core is running but can’t answer, so satellites can’t connect.'
+                    : 'The server’s core isn’t answering, so satellites can’t connect.'}
+              </span>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+              {downWhy === 'db'
+                ? 'The core needs it for every room. Restarting the core won’t help; the database has to come back first. '
+                : downWhy === 'sick'
+                  ? 'It is most likely waiting on its database. Restarting it won’t help while that lasts. '
+                  : ''}
+              The rooms below are as they were last heard from. They reconnect by themselves once the core is back.
+            </div>
+            {downWhy === 'frozen' && <CoreRestart onBack={() => { refreshHealth(); refresh(); }}/>}
+          </div>
+        </Card>
+      )}
       {approvals.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div className="label">waiting for approval</div>

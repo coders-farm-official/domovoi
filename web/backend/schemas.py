@@ -498,7 +498,17 @@ class Satellite(BaseModel):
     # "waiting" = adopted (satellites row exists) but never connected — no
     # mpd_rooms row yet, so mpd_ports/now_playing are null.
     status: Literal["online", "offline", "waiting"]
+    # When the MPD row was last (re)allocated: set when the room was first
+    # provisioned, and again only when a core process met the room without
+    # its ports cached, which warm_known_rooms() at every boot prevents. So
+    # it is NOT when the satellite was last seen (an offline card read
+    # "19d ago" on 2026-10-14 for rooms heard minutes before the core
+    # froze). Kept for compatibility; show ``last_seen_at``.
     last_connected_at: datetime | None = None
+    # When this room was last heard from: its newest minute-by-minute health
+    # sample (V022), its last accepted paired hello (satellite_pairings), or
+    # the MPD row's time, whichever is latest.
+    last_seen_at: datetime | None = None
     wifi: WifiStatus | None = None
     now_playing: NowPlaying | None = None
     active_session_id: str | None = None
@@ -945,6 +955,13 @@ class HealthResponse(BaseModel):
     # answer or predates identity. The Android app pins the key and checks
     # the signature after every network change (A6-03).
     identity: dict[str, str] | None = None
+    # Whether the core's event loop runs, from its /v1/alive (answered by
+    # the loop alone, no database): true when /v1/health said 200, else
+    # whether /v1/alive gave any answer. `domovoi_reachable` false with
+    # this true is a core that runs but can't serve (its database, most
+    # likely), which restarting it won't fix; false is a core that is
+    # stopped or frozen (incident 2026-10-14).
+    core_alive: bool | None = None
 
 
 class ConfigResponse(BaseModel):

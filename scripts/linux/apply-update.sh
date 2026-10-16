@@ -131,6 +131,27 @@
 #   check health and plugins again, and record the new SHA as bad_sha so the
 #   version panel stops offering it.
 #
+# On either path, after the checks above: the core unit must start the core
+# again when it ends on purpose (reconcile_core_restart). The core exits
+# with status 70 when its loop watchdog finds it frozen, and the dashboard
+# ends a core that stopped answering (incident 2026-10-14); only
+# Restart=on-failure or Restart=always brings either back. A unit with no
+# restart policy at all (Restart=no, systemd's default: a hand-made unit;
+# the shipped one has on-failure) gets the drop-in
+# domovoi-core.service.d/50-domovoi-restart.conf that sets on-failure (and
+# RestartSec=5 unless the unit already sets its own), and systemctl
+# daemon-reload. A policy the household chose (on-abnormal, say) is left
+# as it is, with a warn step saying what it misses. Never fatal.
+#
+# Then the journal (reconcile_journal): kept on disk, so what the core
+# logs about why it stopped survives a power cycle (on 2026-10-14 a box
+# whose journal lived in RAM lost the record of a frozen core). The
+# checkout's scripts/linux/units/journald-domovoi.conf becomes
+# /etc/systemd/journald.conf.d/50-domovoi.conf (Storage=persistent and
+# nothing else: the household's own size limits stay) and systemd-journald
+# restarts to read it, once; provision.sh installs the same file.
+# DOMOVOI_MANAGE_JOURNAL=0 leaves the journal alone. Never fatal.
+#
 # Every run ends by writing last-result.json into DOMOVOI_UPDATE_DIR, which
 # the core serves as `last_update` from GET /v1/admin/version.
 #
@@ -206,6 +227,16 @@ esac
 CORE_UNIT=domovoi-core.service
 WEB_UNIT=domovoi-web.service
 DB_UNIT=domovoi-db.service
+# Where reconcile_core_restart writes its drop-in (the harness points it at
+# a scratch directory).
+CORE_DROPIN_DIR=${DOMOVOI_CORE_DROPIN_DIR:-/etc/systemd/system/$CORE_UNIT.d}
+CORE_RESTART_DROPIN=$CORE_DROPIN_DIR/50-domovoi-restart.conf
+# The journal on disk (reconcile_journal); the harness points the drop-in
+# directory at a scratch one.
+MANAGE_JOURNAL=${DOMOVOI_MANAGE_JOURNAL:-1}
+JOURNALD_DROPIN_DIR=${DOMOVOI_JOURNALD_DROPIN_DIR:-/etc/systemd/journald.conf.d}
+JOURNALD_DROPIN=$JOURNALD_DROPIN_DIR/50-domovoi.conf
+JOURNALD_SRC=$SCRIPT_DIR/units/journald-domovoi.conf
 
 # The search helper (docs/INTERNET.md): the compose service and the
 # container it runs as. DOMOVOI_MANAGE_SEARXNG=0 (or false/no/off) in
@@ -563,7 +594,7 @@ on_exit() {
     # Something this script did not expect. Don't leave the house without
     # its services: start whatever this run stopped, then say what happened.
     if [ "$SERVICES_STOPPED" = 1 ]; then
-      systemctl start "$CORE_UNIT" "$WEB_UNIT" || true
+      systemctl start "$CORE_UNIT" "$WEB_UNIT" --no-block || true
     fi
     write_result failed "${LAST_ERROR:-update script exited unexpectedly (exit $rc)}" || true
   fi
@@ -967,7 +998,12 @@ stop_services() {
   return 0
 }
 
-start_services() { systemctl start "$CORE_UNIT" "$WEB_UNIT"; }
+# --no-block: queue the starts and let wait_healthy bound the wait. The
+# shipped core is Type=notify, so a blocking start would wait for its
+# READY=1 for up to its TimeoutStartSec (15 min) instead of the health
+# check's DOMOVOI_UPDATE_HEALTH_TIMEOUT. (After the unit names, where
+# systemctl takes options too.)
+start_services() { systemctl start "$CORE_UNIT" "$WEB_UNIT" --no-block; }
 
 # domovoi-db is a oneshot: compose up -d postgres, then compose run flyway.
 restart_db() { systemctl restart "$DB_UNIT"; }
@@ -1931,6 +1967,98 @@ reconcile_wake_trainer() {
   return 0
 }
 
+# The drop-in reconcile_core_restart writes; "keep-sec" leaves RestartSec=
+# out (the unit sets its own).
+core_restart_dropin() {
+  cat <<'EOF'
+# Written by scripts/linux/apply-update.sh (domovoi-update.service). The
+# core exits on purpose when it finds itself frozen (status 70, its loop
+# watchdog: domovoi/loop_watchdog.py), and the dashboard ends a core that
+# stopped answering (web/backend/core_restart.py). Either way systemd has
+# to start it again, and this unit had no restart policy at all
+# (docs/LINUX_HOST.md, The loop watchdog). To decide Restart= yourself,
+# set it in a drop-in that sorts after this one, or delete this file and
+# set it in the unit; a policy of your own is never replaced.
+[Service]
+Restart=on-failure
+EOF
+  [ "${1-}" = keep-sec ] || printf 'RestartSec=5\n'
+}
+
+# See the header: Restart=on-failure for a core unit with no restart policy
+# (Restart=no), and only for that. Records a step only when it wrote the
+# drop-in (ok), or when the core would still stay down after its watchdog's
+# exit (warn: a policy of the household's own that doesn't cover it, a
+# drop-in of theirs overriding ours, or the write failed).
+reconcile_core_restart() {
+  local t0 current sec want
+  command -v systemctl >/dev/null 2>&1 || return 0
+  current=$(systemctl show -p Restart --value "$CORE_UNIT" 2>/dev/null || true)
+  case $current in
+    always|on-failure) return 0 ;;
+    "") log "systemd can't say $CORE_UNIT's Restart=: left as it is"; return 0 ;;
+  esac
+  t0=$(now_ms)
+  log "step core-restart: $CORE_UNIT has Restart=$current"
+  if [ "$current" != no ]; then
+    add_step core-restart warn "$t0" "$CORE_UNIT has Restart=$current, a policy of its own, left as it is: it does not start the core again after its loop watchdog ends a frozen core (status 70); Restart=on-failure would"
+    return 0
+  fi
+  if [ -f "$CORE_RESTART_DROPIN" ]; then
+    add_step core-restart warn "$t0" "$CORE_UNIT has Restart=no although $CORE_RESTART_DROPIN sets on-failure (a drop-in after it, or the unit itself, overrides it), so a core that ends itself when frozen stays down"
+    return 0
+  fi
+  # systemd's default RestartSec is 100ms: anything else is the unit's own.
+  sec=$(systemctl show -p RestartUSec --value "$CORE_UNIT" 2>/dev/null || true)
+  if [ -n "$sec" ] && [ "$sec" != 100ms ]; then
+    want=$(core_restart_dropin keep-sec)$'\n'
+  else
+    want=$(core_restart_dropin)$'\n'
+  fi
+  if mkdir -p "$CORE_DROPIN_DIR" && write_atomic "$CORE_RESTART_DROPIN" "$want" \
+      && systemctl daemon-reload; then
+    add_step core-restart ok "$t0" "$CORE_UNIT had no restart policy (Restart=no); $CORE_RESTART_DROPIN sets on-failure, so a core that ends itself when frozen starts again"
+  else
+    add_step core-restart warn "$t0" "$CORE_UNIT has Restart=no and $CORE_RESTART_DROPIN could not be written, so a core that ends itself when frozen stays down"
+    log "step core-restart failed; not fatal, the run goes on"
+  fi
+  return 0
+}
+
+# See the header. A step only when it installed the drop-in (ok) or could
+# not (warn); one already in place is nothing to do, whatever journald
+# made of it.
+reconcile_journal() {
+  local t0 want
+  case "$(printf '%s' "$MANAGE_JOURNAL" | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|off) log "the journal left alone (DOMOVOI_MANAGE_JOURNAL=$MANAGE_JOURNAL)"; return 0 ;;
+  esac
+  if [ ! -f "$JOURNALD_SRC" ]; then
+    log "no $JOURNALD_SRC: the journal left as it is"
+    return 0
+  fi
+  want=$(cat "$JOURNALD_SRC"; printf x)
+  want=${want%x}
+  if [ -f "$JOURNALD_DROPIN" ] && [ "$(cat "$JOURNALD_DROPIN"; printf x)" = "${want}x" ]; then
+    return 0
+  fi
+  t0=$(now_ms)
+  log "step journal: keeping the journal on disk ($JOURNALD_DROPIN)"
+  if ! { mkdir -p "$JOURNALD_DROPIN_DIR" && write_atomic "$JOURNALD_DROPIN" "$want"; }; then
+    add_step journal warn "$t0" "$JOURNALD_DROPIN could not be written, so the journal may still be lost at a power cycle"
+    log "step journal failed; not fatal, the run goes on"
+    return 0
+  fi
+  if command -v systemctl >/dev/null 2>&1 && systemctl restart systemd-journald.service; then
+    journalctl --flush >/dev/null 2>&1 || true
+    add_step journal ok "$t0" "the journal is kept on disk now ($JOURNALD_DROPIN), so what the core logs survives a power cycle"
+  else
+    add_step journal warn "$t0" "$JOURNALD_DROPIN is in place but systemd-journald did not restart: the journal moves to disk at the next boot"
+    log "step journal: systemd-journald did not restart; not fatal, the run goes on"
+  fi
+  return 0
+}
+
 migrations_grew() {
   [[ $MIGRATIONS_BEFORE =~ ^[0-9]+$ ]] && [[ $MIGRATIONS_AFTER =~ ^[0-9]+$ ]] \
     && [ "$MIGRATIONS_AFTER" -gt "$MIGRATIONS_BEFORE" ]
@@ -2205,6 +2333,8 @@ main() {
   # signature ("Signed updates" above).
   if ! check_upstream; then exit 1; fi
   if ! check_signature; then exit 1; fi
+  reconcile_core_restart
+  reconcile_journal
 
   if [ "$PREV_SHA" = "$HEAD_SHA" ]; then
     plain_restart

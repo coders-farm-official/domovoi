@@ -623,6 +623,11 @@ const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgr
               server web module: {p.web_load_error}
             </div>
           )}
+          {(p.worker_notes || []).map((n, i) => (
+            <div key={`wn${i}`} className="mono plugin-worker-note" style={{ fontSize: 11, color: 'var(--warn)', marginTop: 2 }}>
+              {n.worker || 'worker'}: {n.note}
+            </div>
+          ))}
           {(p.page_errors || []).map((msg, i) => (
             <div key={`pg${i}`} className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 2 }}>
               web page: {msg}

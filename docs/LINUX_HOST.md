@@ -693,7 +693,10 @@ journalctl -u domovoi-core -f
 
 `domovoi-web` uses `Wants=` rather than `Requires=` on the core
 deliberately — if the core is wedged, you still want the dashboard up to
-tell you so.
+tell you so. For the same reason it is ordered after `domovoi-db` only,
+not after the core: the core is `Type=notify` and counts as starting
+until it says it is ready ([The loop watchdog](#the-loop-watchdog)), and
+the dashboard must not wait on that.
 
 **Then test the power cut.** Pull the plug, bring it back, and confirm the
 whole house returns — Docker, Postgres, both services, every satellite —
@@ -749,7 +752,10 @@ What is deliberately left out, and why:
   the Restart button: the panel then reports no sudoers grant. The web
   never runs sudo (its Restart button asks the core), so it keeps
   `NoNewPrivileges` and every one of those the hardware allows (all but the
-  device, clock and W+X ones below).
+  device, clock and W+X ones below). Its **Restart the core**, for a core
+  that doesn't answer, needs no privilege either: it signals the core's
+  main process, which runs as the same user, and the core unit's
+  `Restart=` starts it again ([The loop watchdog](#the-loop-watchdog)).
 - **`PrivateDevices`, `ProtectClock`, `DevicePolicy` on core and web.**
   They hide device nodes: a GPU, an SDR stick for the radio, the block
   devices the dashboard reads a satellite card's label from.
@@ -793,6 +799,139 @@ drop-in stops its sudo.
 `domovoi-update.service` is not sandboxed: it runs as root to stop and
 start the other units, back up the database, rebuild the room image and
 roll everything back ([Updates from the dashboard](#updates-from-the-dashboard)).
+
+### The loop watchdog
+
+On 2026-10-14 the core froze: port 6370 still took connections, nothing
+answered, every satellite went offline, and the dashboard's Restart could
+not help, because it asks the core to restart itself. It stayed that way
+until a power cycle, which also wiped the journal (that box kept it in RAM
+only). Two causes were found and fixed (the radio plugin decoding audio on
+the core's event loop, and database connects queuing behind a full thread
+pool); these pieces are for the next one.
+
+**The core watches itself.** A thread outside the event loop
+(`domovoi/loop_watchdog.py`) checks a heartbeat the loop beats every
+2 s, and every 15 s sends a real `SELECT 1` through the normal database
+path. If the loop has not run for `LOOP_WATCHDOG_STALL_SEC` (30), or
+`LOOP_WATCHDOG_PROBE_FAILURES` (3) probes in a row got no answer within
+`LOOP_WATCHDOG_PROBE_TIMEOUT_SEC` (10), it writes the reason and every
+thread's stack to the journal and to `~/.domovoi/logs/core-watchdog.log`
+(1 MB, one older copy, flushed to disk before it goes on), and exits with
+status **70**. A database that *refuses* (down, restarting) is logged, not
+counted: restarting the core can't fix that. A startup still unfinished
+after `LOOP_WATCHDOG_STARTUP_SEC` (900) counts too. For a freeze so deep
+the thread can't run either (C code holding the interpreter), Python's
+faulthandler dumps every stack and exits (status 1) 30 s after the stall
+time; what it writes goes to `~/.domovoi/logs/core-faulthandler.log`, and
+the next start moves it into `core-watchdog.log` and repeats it in the
+journal. Settings → Version shows the last such restart (**last freeze**,
+when and why). `LOOP_WATCHDOG_ENABLED=false` turns the checks off (the
+core then never ends itself; under the shipped unit it still says it is
+ready and keeps systemd's watchdog fed).
+
+**systemd restarts it.** Every one of those exits needs the unit to start
+the core again. The shipped `domovoi-core.service` has what it takes:
+
+```ini
+Type=notify          # READY=1 when startup is done
+NotifyAccess=main
+Restart=on-failure   # after the watchdog's 70, faulthandler's 1, a kill
+RestartSec=5
+TimeoutStartSec=15min
+WatchdogSec=90       # fed only while the loop beats and the database answers
+```
+
+`WatchdogSec` is the last backstop: the core feeds it (`WATCHDOG=1`) only
+while healthy, so if even its watchdog thread stops (the whole process
+stuck), systemd sends SIGABRT (faulthandler prints the stacks) and then
+SIGKILL, and `Restart=` starts it again. The dashboard is ordered after
+`domovoi-db`, not after the core, so it stays up while the core starts or
+is stuck.
+
+**A unit you wrote yourself** (from an older copy of this page) with no
+restart policy at all (`Restart=no`, systemd's default) leaves the core
+down after the watchdog ends it. You don't have to fix that: every run of
+the [update unit](#updates-from-the-dashboard) checks `systemctl show -p
+Restart domovoi-core` and, only when it is `no`, writes
+`/etc/systemd/system/domovoi-core.service.d/50-domovoi-restart.conf`
+(`Restart=on-failure`, plus `RestartSec=5` unless the unit sets a
+`RestartSec=` of its own) and reloads systemd; the Version card's last
+update says so. A policy of your own (`on-abnormal`, `on-watchdog`,
+`on-success`) is never replaced: the run leaves it and its last update
+carries a warning that it won't start a core that exited with 70. Neither
+is `always` or `on-failure` touched. `Type=notify` and `WatchdogSec=` are
+added only by installing the shipped unit (above, or
+`scripts/linux/provision.sh`), never into a unit you wrote: a different
+`ExecStart` could leave systemd waiting for a READY that never comes.
+To decide `Restart=` yourself, put it in the unit or in a drop-in that
+sorts after `50-domovoi-restart.conf`.
+
+**The dashboard's Restart the core.** When the core doesn't answer, an
+admin gets **Restart the core** on Settings → Version, on the Satellites
+page and on Home's "isn't answering" row. It ends only a core that is
+truly stuck, never one that is busy, slow or missing its database:
+
+- **Liveness, not health.** The web asks `GET /v1/alive`, which the
+  core's event loop answers by itself, with no database. Any answer at all,
+  a `503` included, means the core runs: nothing is ended, and the button
+  isn't offered. A core whose database is down says so (the Satellites
+  banner reads *the database isn't answering*): restarting it can't help.
+- **Silent for longer than the core's own watchdog waits.** A press ends
+  the core only after `/v1/alive` has given no answer, asked every second
+  (3 s each), for `LOOP_WATCHDOG_STALL_SEC` + 15 s (45 s by default; never
+  under 45): a loop busy for a few seconds answers again within that, and
+  a core truly frozen has usually ended itself first. The page reads the
+  status every 5 s while the core is silent, and that silence counts, so a
+  press after a minute of watching acts at once; otherwise the button says
+  *making sure it's stuck* while it waits. Only silence somebody watched
+  counts: more than 12 s between two silent reads (the page was closed;
+  the core may have answered meanwhile) starts the count again.
+- **Not while it starts.** A core systemd reports as starting, one that
+  restarted meanwhile (a new main PID) and, under a unit changed to
+  `Type=simple`, one that hasn't said it is ready
+  (`~/.domovoi/run/core-ready.json`) and started less than
+  `LOOP_WATCHDOG_STARTUP_SEC` (900 s) ago are left alone. The note counts
+  only when it names that PID and was written after that process started
+  (the core removes it at each start), so an earlier boot's note can't
+  vouch for a core that is starting now.
+- **Every guard again, right before the kill.** The unit restarts after a
+  kill, the main PID is still that process, it is `python -m domovoi.main`
+  and this account's: read fresh after the wait, before SIGUSR1 and again
+  before SIGKILL. One press at a time; a second (another admin) is told one
+  is under way.
+
+The web checks the admin session itself (the shared `admin_sessions`
+table; the core can't), then signals the core's main process: SIGUSR1
+(every stack into the faulthandler log), then SIGKILL, and systemd starts
+it again. It needs no sudoers line: core and web run as the same user.
+Where it can't work (a unit systemd wouldn't restart, a core under another
+account, no systemd), the dashboard shows why and the command to run by
+hand. When the process can't be signalled but the web may use the core's
+[restart grant](#2b-restart-from-the-dashboard-needs-one-sudoers-line)
+(a web unit you wrote without `NoNewPrivileges`), it runs that instead.
+
+**The journal is kept on disk.** Without that, the record of a freeze is
+lost at the power cycle that ends it. `provision.sh` and every update run
+install
+[`scripts/linux/units/journald-domovoi.conf`](../scripts/linux/units/journald-domovoi.conf)
+as `/etc/systemd/journald.conf.d/50-domovoi.conf`, which sets
+`Storage=persistent` and nothing else, and restart `systemd-journald`
+once. Its size stays journald's to decide (by default at most 10% of the
+file system, capped at 4 GB) or yours: a `SystemMaxUse=` in
+`/etc/systemd/journald.conf` or a drop-in of your own still applies. To
+keep the journal your own way, set `DOMOVOI_MANAGE_JOURNAL=0` in
+`/etc/default/domovoi-update` and delete the file, or put your own
+`Storage=` in a drop-in after it.
+
+**By hand, over SSH** (nothing else answering):
+
+```bash
+sudo systemctl restart domovoi-core                 # what the button does, the slow way
+journalctl -u domovoi-core -b -1 --no-pager | tail -200   # the boot before, if the box was power-cycled
+cat ~domovoi/.domovoi/logs/core-watchdog.log        # every stall report, newest last
+sudo kill -USR1 "$(systemctl show -p MainPID --value domovoi-core)"   # every stack into ~/.domovoi/logs/core-faulthandler.log; it carries on
+```
 
 ### Internet or not
 
@@ -1305,6 +1444,8 @@ layout on this page, so you only need the file to change one:
 # Its rebuild in a transient unit: auto (when systemd runs the box), 1, or 0 (in the foreground, bounded below).
 # DOMOVOI_UPDATE_TRAINER_DETACH=auto
 # DOMOVOI_UPDATE_TRAINER_TIMEOUT=1800
+# 0: leave the journal where it is (The loop watchdog). Default: kept on disk (journald's own size limits).
+# DOMOVOI_MANAGE_JOURNAL=1
 ```
 
 **The sudoers grant.** The button needs one more single-command rule,

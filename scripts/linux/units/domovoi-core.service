@@ -5,14 +5,30 @@ Requires=domovoi-db.service
 Wants=ollama.service
 
 [Service]
-Type=simple
+# The core says READY=1 when its startup is done (models loaded, plugins
+# up), and while it is healthy its loop watchdog sends WATCHDOG=1
+# (domovoi/loop_watchdog.py; docs/LINUX_HOST.md, "The loop watchdog").
+Type=notify
+NotifyAccess=main
 User=domovoi
 WorkingDirectory=/opt/domovoi
 Environment=PYTHONUNBUFFERED=1
 Environment=HOME=/home/domovoi
 ExecStart=/opt/domovoi/.venv/bin/python -m domovoi.main
+# Restarts it after a crash, after the loop watchdog's own exit (status
+# 70: the core noticed it was frozen), after the dashboard ended a core
+# that stopped answering (web/backend/core_restart.py) and after systemd's
+# watchdog below did.
 Restart=on-failure
 RestartSec=5
+# A first boot (models, plugin migrations) can take minutes on a slow box.
+# The core's own limit is LOOP_WATCHDOG_STARTUP_SEC, 900 s.
+TimeoutStartSec=15min
+# No WATCHDOG=1 for this long: the core is stuck so badly that even its
+# watchdog thread can't run (its own checks act after 30 s). systemd sends
+# SIGABRT (faulthandler prints every thread's stack to the journal), then
+# SIGKILL after TimeoutStopSec, and Restart= starts it again.
+WatchdogSec=90
 TimeoutStopSec=30
 KillMode=control-group
 # Sandboxing (docs/LINUX_HOST.md, "Sandboxing the units"). Writable: the

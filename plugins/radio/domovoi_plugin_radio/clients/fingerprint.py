@@ -22,11 +22,23 @@ zone). Drift between the two silently kills match rates — keep them
 coupled.
 
 Heavy imports (numpy, scipy) are deferred to function bodies; absence is
-handled by returning empty/None so the sampler degrades to
-online-identify-only without an exception. Audio is decoded to 16 kHz mono
-by the system ``ffmpeg`` (a required tool of this plugin), run as its own
-program in a worker thread; until 2026-10-15 it was ``librosa.load``, whose
-import brings soxr and soundfile (LGPL libraries) and numba.
+handled by returning None so the sampler degrades to online-identify-only
+without an exception (the fingerprinter is told, and tries again later).
+Audio is decoded to 16 kHz mono by the system ``ffmpeg`` (a required tool
+of this plugin), run as its own program by the fingerprint child (below);
+until 2026-10-15 it was ``librosa.load``, whose import brings soxr and
+soundfile (LGPL libraries) and numba.
+
+**The decode and the hashing never run in the core process.** Both are
+synchronous, CPU-bound and, for a library track, take seconds to tens of
+seconds; until 2026-10-14 they ran on the core's event loop, so every
+satellite, the dashboard and the health check stood still meanwhile
+(about 1.9 s per 20 s test track), and a decode that never returned
+froze the core for good. Each file now goes to a child process (this
+module, run with ``-m``) at a lower CPU priority, under a hard time
+limit: past it the child and anything it started are killed and
+:class:`FingerprintTimeout` is raised. At most :data:`MAX_CHILDREN` run
+at once. The matcher's database work stays in the core (it awaits).
 
 DB access notes: ``track_fingerprints`` is schema-qualified as
 ``plugin_radio.*`` so these helpers work on ANY session regardless of
@@ -39,12 +51,18 @@ read can't violate the "plugins never DDL/write core tables" policy.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import os
 import shutil
+import signal
+import struct
 import subprocess
+import sys
+import weakref
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, AsyncIterator, Iterable
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -133,31 +151,42 @@ class FingerprintIdentity:
 
 # ─── Public coroutines ──────────────────────────────────────────────────
 
+# Time limits for one child: a library track (the fingerprinter passes the
+# plugin's fingerprinter_timeout_sec) and a radio sample (about 15 s of
+# WAV, a second or two of work).
+FINGERPRINT_TIMEOUT_SEC = 300.0
+SAMPLE_TIMEOUT_SEC = 60.0
+# Children decoding at once, across the fingerprinter and the sampler.
+MAX_CHILDREN = 2
 
-async def fingerprint_file(file_path: str | Path) -> list[FingerprintRow]:
-    """Compute landmark hashes for one audio file. Empty list on any
-    failure (missing numpy/scipy/ffmpeg, unreadable file, audio too short)."""
-    try:
-        samples = await asyncio.to_thread(_load_audio_to_mono_16k, Path(file_path))
-    except _DepMissingError as e:
-        log.debug("fingerprint deps missing for %s: %s", file_path, e)
-        return []
-    except Exception as e:
-        log.debug("fingerprint load failed for %s: %s", file_path, e)
-        return []
 
-    if samples is None or len(samples) < _SAMPLE_RATE:
-        # Need at least 1 second of audio for meaningful hashes.
-        return []
+class FingerprintTimeout(Exception):
+    """Decoding and hashing one file ran past its time limit; the child
+    doing it (and anything it started) was killed. The fingerprinter tries
+    the file again later, and gives up on it after a few of these
+    (workers/track_fingerprinter.py)."""
 
-    try:
-        return _hash_samples(samples)
-    except _DepMissingError as e:
-        log.debug("fingerprint deps missing during hash: %s", e)
-        return []
-    except Exception as e:
-        log.debug("fingerprint hash failed for %s: %s", file_path, e)
-        return []
+
+class FingerprintFailed(Exception):
+    """This attempt failed for a reason other than the file's content: the
+    file isn't there to read (missing, a media disk not mounted, no
+    permission), the child could not start, was stopped (a ``systemctl
+    stop`` sends SIGTERM to it too) or crashed, the audio libraries are
+    missing, or its answer was garbled. Try the file again later; it says
+    nothing about the file."""
+
+
+async def fingerprint_file(
+    file_path: str | Path, *, timeout_sec: float = FINGERPRINT_TIMEOUT_SEC
+) -> list[FingerprintRow]:
+    """Compute landmark hashes for one audio file, in a child process.
+    Empty list when the file is there and gives none: the decoder refused
+    it, or it is too short or silent, verdicts about the file. Raises
+    :class:`FingerprintTimeout` when the work ran past ``timeout_sec`` and
+    was killed, and :class:`FingerprintFailed` when the attempt failed for
+    any other reason, a file that isn't there to read included (try again
+    later)."""
+    return await _hash_file_in_child(Path(file_path), timeout_sec)
 
 
 async def match_sample(
@@ -165,29 +194,17 @@ async def match_sample(
     wav_path: str | Path,
     *,
     min_confidence: int = 10,
+    timeout_sec: float = SAMPLE_TIMEOUT_SEC,
 ) -> LocalMatch | None:
     """Query ``track_fingerprints`` for hashes overlapping the sample at
     ``wav_path``. Returns the best-scoring track above
     ``min_confidence`` (callers pass
-    ``config.fingerprinter_match_threshold``), else ``None``."""
+    ``config.fingerprinter_match_threshold``), else ``None`` (also when
+    hashing the sample ran past ``timeout_sec``)."""
     try:
-        samples = await asyncio.to_thread(_load_audio_to_mono_16k, Path(wav_path))
-    except _DepMissingError as e:
-        log.debug("match_sample deps missing: %s", e)
-        return None
-    except Exception as e:
-        log.debug("match_sample load failed for %s: %s", wav_path, e)
-        return None
-
-    if samples is None or len(samples) < _SAMPLE_RATE:
-        return None
-
-    try:
-        rows = _hash_samples(samples)
-    except _DepMissingError:
-        return None
-    except Exception as e:
-        log.debug("match_sample hash failed for %s: %s", wav_path, e)
+        rows = await _hash_file_in_child(Path(wav_path), timeout_sec)
+    except (FingerprintTimeout, FingerprintFailed) as e:
+        log.warning("radio sample not matched locally: %s", e)
         return None
 
     if not rows:
@@ -254,6 +271,270 @@ async def match_sample(
     )
 
 
+# ─── Internal: the child process ────────────────────────────────────────
+#
+# The child is this module run with ``-m`` (_child_main). It writes
+# _MAGIC, the row count (uint32) and then each row as 8 hash bytes plus
+# the offset (int32), little-endian, to stdout; anything it has to say
+# goes to stderr. Exit status 0: the rows (possibly none); otherwise one
+# of the _EXIT_* reasons. Only _EXIT_LOAD (the decoder refused a file that
+# is there) is a verdict, an empty result; every other one is
+# FingerprintFailed in the parent.
+
+_CHILD_MODULE = "domovoi_plugin_radio.clients.fingerprint"
+_MAGIC = b"DOMOVOI-FP1\n"
+_ROW = struct.Struct("<8si")
+_COUNT = struct.Struct("<I")
+_EXIT_USAGE = 2
+_EXIT_DEPS = 3
+_EXIT_LOAD = 4
+_EXIT_HASH = 5
+# The file isn't there to read: missing, a media disk not mounted, no
+# permission, an I/O error. Says nothing about its content.
+_EXIT_NOT_THERE = 6
+# The tail of a child's stderr the parent puts in its log line.
+_STDERR_MAX = 600
+# How long a killed child gets to be reaped before it is left to the OS.
+_REAP_SEC = 5.0
+# After the child has exited, how long its pipes may stay open (something
+# it started still holding them) before that group is killed too.
+_PIPE_GRACE_SEC = 2.0
+# The child runs below normal priority, so the core's own work (speech
+# above all) comes first: a nice value on POSIX, a priority class on
+# Windows.
+_CHILD_NICE = 10
+_BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+
+# One semaphore per event loop (tests open a new loop each time, and an
+# asyncio.Semaphore stays bound to the loop it first waited on).
+_SLOTS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+@contextlib.asynccontextmanager
+async def _child_slot() -> AsyncIterator[None]:
+    loop = asyncio.get_running_loop()
+    sem = _SLOTS.get(loop)
+    if sem is None:
+        sem = _SLOTS[loop] = asyncio.Semaphore(MAX_CHILDREN)
+    async with sem:
+        yield
+
+
+def _child_env() -> dict[str, str]:
+    """The core's environment, plus the plugin's own directory on the
+    import path (the plugin loader puts it on sys.path, which a child
+    does not inherit), and one thread per numeric library: a background
+    job, not a race. The core's systemd notify socket stays the core's."""
+    env = dict(os.environ)
+    plugin_root = str(Path(__file__).resolve().parents[2])
+    env["PYTHONPATH"] = os.pathsep.join(
+        p for p in (plugin_root, env.get("PYTHONPATH", "")) if p
+    )
+    for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+                "NUMBA_NUM_THREADS"):
+        env.setdefault(var, "1")
+    for var in ("NOTIFY_SOCKET", "WATCHDOG_USEC", "WATCHDOG_PID"):
+        env.pop(var, None)
+    return env
+
+
+def _child_command(path: Path) -> list[str]:
+    """The command line of the child that hashes ``path``."""
+    return [sys.executable, "-m", _CHILD_MODULE, str(path)]
+
+
+def _spawn_kwargs() -> dict[str, Any]:
+    if sys.platform == "win32":
+        return {"creationflags": _BELOW_NORMAL_PRIORITY_CLASS}
+    # A process group of its own, so a kill reaches whatever it started
+    # too (the decode is an ffmpeg of its own).
+    return {"start_new_session": True}
+
+
+async def _kill_tree(proc: "asyncio.subprocess.Process") -> None:
+    """Kill the child and everything it started; reap it if that's quick."""
+    if proc.returncode is not None:
+        return
+    if sys.platform == "win32":
+        try:
+            killer = await asyncio.create_subprocess_exec(
+                "taskkill", "/F", "/T", "/PID", str(proc.pid),
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(killer.wait(), _REAP_SEC)
+        except (OSError, asyncio.TimeoutError):
+            pass
+    else:
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    with contextlib.suppress(OSError):
+        proc.kill()
+    with contextlib.suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(proc.wait(), _REAP_SEC)
+
+
+def _kill_group(proc: "asyncio.subprocess.Process") -> None:
+    """What the child left behind once it has exited itself: its process
+    group (POSIX; the group outlives its leader while a member lives).
+    On Windows an orphan can't be found from a dead parent: nothing."""
+    if sys.platform == "win32":
+        return
+    with contextlib.suppress(OSError):
+        os.killpg(proc.pid, signal.SIGKILL)
+
+
+def _kill_now(proc: "asyncio.subprocess.Process") -> None:
+    """:func:`_kill_tree` without awaiting anything (a cancelled caller)."""
+    if proc.returncode is not None:
+        return
+    if sys.platform == "win32":
+        with contextlib.suppress(OSError):
+            subprocess.Popen(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+    else:
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    with contextlib.suppress(OSError):
+        proc.kill()
+
+
+def _parse_child_output(out: bytes) -> list[FingerprintRow] | None:
+    """The rows a child wrote, or None when the output isn't an answer."""
+    head = len(_MAGIC) + _COUNT.size
+    if len(out) < head or not out.startswith(_MAGIC):
+        return None
+    (count,) = _COUNT.unpack_from(out, len(_MAGIC))
+    if len(out) != head + count * _ROW.size:
+        return None
+    return [
+        FingerprintRow(hash_bytes=h, offset_ms=off)
+        for h, off in _ROW.iter_unpack(out[head:])
+    ]
+
+
+async def _hash_file_in_child(path: Path, timeout_sec: float) -> list[FingerprintRow]:
+    """Decode and hash ``path`` in a child process. The rows; [] for a
+    verdict about the file (the decoder refused it, nothing to hash);
+    :class:`FingerprintFailed` for a file that isn't there (review round 2,
+    case L7: a media disk not mounted marked a track a minute for good);
+    :class:`FingerprintTimeout` when the child ran past
+    ``timeout_sec`` (killed first); :class:`FingerprintFailed` for any
+    other failure. The time limit is the child's: once it has exited, what
+    it started may not hold its pipes open past :data:`_PIPE_GRACE_SEC`
+    (that group is killed). A caller cancelled while it waits takes the
+    child down with it."""
+    if not path.is_file():
+        raise FingerprintFailed(
+            f"{path} isn't there to read (missing, or its disk not mounted?)")
+    async with _child_slot():
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *_child_command(path),
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, env=_child_env(), **_spawn_kwargs(),
+            )
+        except OSError as e:
+            raise FingerprintFailed(f"the fingerprint child for {path} didn't start: {e}") from None
+        talk = asyncio.ensure_future(proc.communicate())
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_sec
+        try:
+            # Until the answer is in, or the child has exited (watched by
+            # its return code: Process.wait() also waits for every pipe to
+            # close, which something the child started can hold forever).
+            while not talk.done() and proc.returncode is None:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    await _kill_tree(proc)
+                    talk.cancel()
+                    raise FingerprintTimeout(
+                        f"decoding {path} took longer than {timeout_sec:.0f} s; stopped")
+                await asyncio.wait({talk}, timeout=min(0.2, remaining))
+        except FingerprintTimeout:
+            raise
+        except BaseException:
+            _kill_now(proc)
+            talk.cancel()
+            raise
+        try:
+            out, err = await asyncio.wait_for(asyncio.shield(talk), _PIPE_GRACE_SEC)
+        except asyncio.TimeoutError:
+            _kill_group(proc)
+            try:
+                out, err = await asyncio.wait_for(asyncio.shield(talk), _REAP_SEC)
+            except asyncio.TimeoutError:
+                talk.cancel()
+                raise FingerprintFailed(
+                    f"the fingerprint child for {path} exited, but something it started "
+                    "kept its output open") from None
+    detail = (err or b"")[-_STDERR_MAX:].decode("utf-8", "replace").strip()
+    code = proc.returncode
+    if code == _EXIT_LOAD:
+        # The decoder refused the file: a verdict, not worth another try.
+        log.debug("fingerprint child for %s: unreadable: %s", path, detail)
+        return []
+    if code != 0:
+        why = (f"stopped by signal {-code}" if code is not None and code < 0
+               else {_EXIT_DEPS: "the audio libraries are missing",
+                     _EXIT_NOT_THERE: "the file isn't there to read (missing, or its disk not mounted?)",
+                     _EXIT_HASH: "hashing crashed",
+                     _EXIT_USAGE: "it was started wrongly"}.get(code, f"exit {code}"))
+        raise FingerprintFailed(f"fingerprinting {path} failed ({why}): {detail[-200:]}")
+    rows = _parse_child_output(out or b"")
+    if rows is None:
+        raise FingerprintFailed(f"the fingerprint child for {path} wrote no usable answer: {detail[-200:]}")
+    return rows
+
+
+def _child_main(argv: list[str]) -> int:
+    """The child: decode one file, hash it, write the rows to stdout."""
+    if len(argv) != 2:
+        print("usage: python -m domovoi_plugin_radio.clients.fingerprint FILE", file=sys.stderr)
+        return _EXIT_USAGE
+    if sys.platform != "win32":
+        with contextlib.suppress(OSError):
+            os.nice(_CHILD_NICE)
+    path = Path(argv[1])
+    if not path.is_file():
+        print(f"not there: {path}", file=sys.stderr)
+        return _EXIT_NOT_THERE
+    try:
+        samples = _load_audio_to_mono_16k(path)
+    except _DepMissingError as e:
+        print(f"fingerprint deps missing: {e}", file=sys.stderr)
+        return _EXIT_DEPS
+    except Exception as e:  # noqa: BLE001 - any other decode failure is "unreadable"
+        print(f"load failed: {type(e).__name__}: {e}", file=sys.stderr)
+        # Reading the file failed (gone meanwhile, its disk went away, no
+        # permission, an I/O error), or the decoder refused what it read.
+        # Only the second is about the file.
+        if isinstance(e, OSError) or not path.is_file():
+            return _EXIT_NOT_THERE
+        return _EXIT_LOAD
+    rows: list[FingerprintRow] = []
+    # Need at least 1 second of audio for meaningful hashes.
+    if samples is not None and len(samples) >= _SAMPLE_RATE:
+        try:
+            rows = _hash_samples(samples)
+        except _DepMissingError as e:
+            print(f"fingerprint deps missing during hash: {e}", file=sys.stderr)
+            return _EXIT_DEPS
+        except Exception as e:  # noqa: BLE001
+            print(f"hash failed: {type(e).__name__}: {e}", file=sys.stderr)
+            return _EXIT_HASH
+    out = sys.stdout.buffer
+    out.write(_MAGIC + _COUNT.pack(len(rows)))
+    out.write(b"".join(_ROW.pack(r.hash_bytes, r.offset_ms) for r in rows))
+    out.flush()
+    return 0
+
+
 # ─── Internal: dep-gated implementations ────────────────────────────────
 
 
@@ -262,18 +543,27 @@ class _DepMissingError(Exception):
     unavailable', explicitly traceable to this subsystem."""
 
 
+class _DecodeRefused(Exception):
+    """ffmpeg read the file and could not decode it: a verdict about the
+    file (the child's _EXIT_LOAD), unlike a file that isn't there."""
+
+
 # Cap library tracks at ~5 min to bound CPU. Longer tracks still match —
-# radio samples come from the middle of songs anyway.
+# radio samples come from the middle of songs anyway. No time limit of the
+# decode's own: the parent's (FINGERPRINT_TIMEOUT_SEC, or the plugin's
+# fingerprinter_timeout_sec) kills the child and its ffmpeg.
 _MAX_DECODE_SEC = 300
-_DECODE_TIMEOUT_SEC = 120.0
 
 
 def _load_audio_to_mono_16k(file_path: Path) -> "Any":
     """Decode an audio file to a mono 16 kHz float32 array (the first
     :data:`_MAX_DECODE_SEC` seconds) with ffmpeg: channels averaged,
     resampled by ffmpeg's resampler, 16-bit samples scaled by 1/32768.
-    None for a file that isn't there or that ffmpeg can't decode. Blocking
-    — the callers run it in a worker thread."""
+    Raises FileNotFoundError for a file that isn't there, an OSError for
+    one that can't be read, and :class:`_DecodeRefused` for one ffmpeg
+    can't decode. Blocking: it runs in the fingerprint child
+    (:func:`_child_main`), never in the core, under the parent's time
+    limit (which kills the ffmpeg too)."""
     try:
         import numpy as np  # type: ignore[import]
     except ImportError as e:
@@ -282,22 +572,26 @@ def _load_audio_to_mono_16k(file_path: Path) -> "Any":
     if exe is None:
         raise _DepMissingError("ffmpeg is not on PATH")
 
-    if not file_path.exists():
-        return None
+    if not file_path.is_file():
+        raise FileNotFoundError(str(file_path))
+    # Read here first, so a file that can't be read (no permission, an I/O
+    # error) is an OSError, not ffmpeg's refusal: only a refusal of what
+    # was read is a verdict about the file (_child_main).
+    with file_path.open("rb") as fh:
+        fh.read(1)
     try:
         proc = subprocess.run(
             [exe, "-nostdin", "-hide_banner", "-loglevel", "error",
              "-t", str(_MAX_DECODE_SEC), "-i", str(file_path),
              "-vn", "-ac", "1", "-ar", str(_SAMPLE_RATE), "-f", "f32le", "pipe:1"],
-            capture_output=True, timeout=_DECODE_TIMEOUT_SEC,
+            capture_output=True,
         )
-    except (OSError, subprocess.TimeoutExpired) as e:
-        log.debug("ffmpeg decode failed for %s: %s", file_path, e)
-        return None
+    except OSError as e:
+        raise _DepMissingError(f"ffmpeg could not run: {e}") from e
     if proc.returncode != 0:
-        log.debug("ffmpeg could not decode %s: %s", file_path,
-                  (proc.stderr or b"").decode("utf-8", "replace").strip()[-200:])
-        return None
+        raise _DecodeRefused(
+            f"ffmpeg could not decode {file_path}: "
+            + (proc.stderr or b"").decode("utf-8", "replace").strip()[-200:])
     return np.frombuffer(proc.stdout, dtype=np.float32).copy()
 
 
@@ -374,3 +668,7 @@ def _hash_samples(samples: "Any") -> list[FingerprintRow]:
                 fan += 1
             j += 1
     return rows
+
+
+if __name__ == "__main__":
+    sys.exit(_child_main(sys.argv))

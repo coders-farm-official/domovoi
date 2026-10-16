@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import socket
+import sys
 
 # The home first: HOME/USERPROFILE at a temp folder before anything computes
 # a path from them (the repo-root conftest.py has already done this, and
@@ -334,6 +335,34 @@ def _not_shutting_down():
     lifecycle.reset()
     yield
     lifecycle.reset()
+
+
+def _armed_loop_watchdog() -> bool:
+    """Stand down a real loop watchdog a test left armed; whether it did."""
+    lw = sys.modules.get("domovoi.loop_watchdog")
+    if lw is None or (lw._ACTIVE is None and not lw._INSTALLED):
+        return False
+    if lw._ACTIVE is not None:
+        lw._ACTIVE.stop()
+    lw._ACTIVE, lw._INSTALLED = None, False
+    return True
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item, nextitem):
+    """No test may arm the real loop watchdog (domovoi/loop_watchdog.py
+    install()): it writes the ready note and the faulthandler file under
+    the real ~/.domovoi and leaves a thread watching the worker for every
+    later test. A test that calls main() stubs install(); one that tests
+    install() itself monkeypatches its home, _ACTIVE and _INSTALLED. Looked
+    at once every fixture is torn down (monkeypatch undone): what is still
+    armed is stood down, and the test errors."""
+    result = yield
+    if _armed_loop_watchdog():
+        raise AssertionError(
+            f"{item.nodeid} armed the real loop watchdog (loop_watchdog.install): stub "
+            "it, or monkeypatch its home, _ACTIVE and _INSTALLED")
+    return result
 
 
 @pytest_asyncio.fixture

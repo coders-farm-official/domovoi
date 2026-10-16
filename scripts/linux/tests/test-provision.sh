@@ -123,7 +123,8 @@ build_origin() {
   # The real manifest, with the Whisper pin swapped for the fake model's.
   sed "s/^whisper_model_bin_sha256=.*/whisper_model_bin_sha256=$(sha_of_text "$WHISPER_CONTENT")/" \
     "$REAL_REPO/scripts/linux/provision-manifest.conf" >"$o/scripts/linux/provision-manifest.conf"
-  cp "$REAL_REPO"/scripts/linux/units/*.service "$o/scripts/linux/units/"
+  cp "$REAL_REPO"/scripts/linux/units/*.service "$REAL_REPO/scripts/linux/units/journald-domovoi.conf" \
+    "$o/scripts/linux/units/"
   # The real helpers: provision.sh runs them from the checkout, under the
   # same harness root.
   cp "$REAL_REPO/scripts/linux/os-jobs.sh" "$o/scripts/linux/os-jobs.sh"
@@ -374,7 +375,9 @@ case $url in
     mv "$SHIM_STATE/om.new" "$SHIM_STATE/ollama-models"
     echo '{"status":"success"}' ;;
   http://127.0.0.1:6370/v1/health)
-    active domovoi-core.service && [ ! -f "$SHIM_STATE/core-unhealthy" ] || { echo "curl: (7)" >&2; exit 7; } ;;
+    # The core answers only with its database up (its health reads it).
+    active domovoi-core.service && active domovoi-db.service && [ ! -f "$SHIM_STATE/core-unhealthy" ] \
+      || { echo "curl: (7)" >&2; exit 7; } ;;
   http://127.0.0.1:6369/api/health)
     active domovoi-web.service || { echo "curl: (7)" >&2; exit 7; } ;;
   *) echo "curl shim: unexpected URL $url" >&2; exit 6 ;;
@@ -409,6 +412,9 @@ case $cmd in
   is-enabled)
     if [ -f "$SHIM_STATE/enabled/${units[0]}" ]; then echo enabled; exit 0; fi
     echo disabled; exit 1 ;;
+  is-failed)
+    if [ -f "$SHIM_STATE/failed/${units[0]}" ]; then [ "$quiet" = 1 ] || echo failed; exit 0; fi
+    [ "$quiet" = 1 ] || echo active; exit 1 ;;
   enable)
     for u in "${units[@]}"; do
       touch "$SHIM_STATE/enabled/$u"
@@ -425,6 +431,16 @@ case $cmd in
       if [ "$u" = docker.service ] && ! docker_starts; then
         echo "Job for docker.service failed because the control process exited with error code." >&2
         rm -f "$SHIM_STATE/active/$u"; touch "$SHIM_STATE/failed/$u"; exit 1
+      fi
+      # start-then-fail: a --no-block start returns at once, and the unit
+      # fails afterwards (domovoi-db's Flyway, say).
+      if grep -qx -- "$u" "$SHIM_STATE/start-then-fail" 2>/dev/null; then
+        touch "$SHIM_STATE/failed/$u"; continue
+      fi
+      # start-queued: a --no-block start whose job waits (the core's, for
+      # the database's): a failed mark from before stays until it runs.
+      if grep -qx -- "$u" "$SHIM_STATE/start-queued" 2>/dev/null; then
+        touch "$SHIM_STATE/active/$u"; continue
       fi
       touch "$SHIM_STATE/active/$u"; rm -f "$SHIM_STATE/failed/$u"
     done ;;
@@ -1733,6 +1749,99 @@ case_update_defaults_opt_into_the_lock() {
 # Review 2026-10-11, finding 4: DOMOVOI_MANAGE_OS_JOBS=0 in
 # /etc/default/domovoi-update leaves Ubuntu's jobs alone on a provision
 # run too, as it does in the update unit (WSL's wsl-pro and snapd included).
+# The journal kept on disk, so what the core logs about why it stopped
+# (its loop watchdog's report) survives a power cycle (incident
+# 2026-10-14): the units step installs the drop-in and restarts journald
+# once; a second run does nothing; an edited drop-in is put back.
+case_journal_kept_on_disk() {
+  new_case journal_kept_on_disk
+  local f=$ROOT/etc/systemd/journald.conf.d/50-domovoi.conf
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "the shipped drop-in" cmp -s "$f" "$REAL_REPO/scripts/linux/units/journald-domovoi.conf"
+  check "Storage=persistent" has_line "$f" "Storage=persistent"
+  # Nothing else: a household's own size limits stay (review 2026-10-15).
+  check "and no size limit of ours" bash -c '! grep -q "^SystemMaxUse" "$1"' _ "$f"
+  check "journald restarted to read it" called "systemctl restart systemd-journald.service"
+  check "the journal so far moved to disk" called "journalctl --flush"
+  check "said so" said "the journal is kept on disk"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "second run exit 0" eq "$RC" 0
+  check "second run: units skipped" eq "$(state_of units)" skip
+  check "second run: journald left alone" not_called "systemd-journald"
+  printf '[Journal]\nStorage=volatile\n' >"$f"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "an edited drop-in: units ran again" eq "$(state_of units)" done
+  check "and put it back" cmp -s "$f" "$REAL_REPO/scripts/linux/units/journald-domovoi.conf"
+  check "and restarted journald" called "systemctl restart systemd-journald.service"
+  end_case
+}
+
+# The core is Type=notify: a blocking start would wait for its READY=1
+# with no progress line and past --health-timeout (review 2026-10-15).
+case_starts_do_not_block_on_ready() {
+  new_case starts_do_not_block_on_ready
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "the start is --no-block" called "systemctl start domovoi-db.service domovoi-core.service domovoi-web.service --no-block"
+  check "and the wait reports" said "answered after"
+  end_case
+}
+
+case_a_unit_that_fails_after_a_no_block_start_stops_the_wait() {
+  new_case a_unit_that_fails_after_a_no_block_start_stops_the_wait
+  echo domovoi-core.service >"$STATE/start-then-fail"
+  local t0=$SECONDS
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 1" eq "$RC" 1
+  check "at once, not after --health-timeout" bash -c '[ "$1" -lt 60 ]' _ "$((SECONDS - t0))"
+  check "names the unit" said "domovoi-core.service failed"
+  check "with the diagnostics" said "systemctl status"
+  end_case
+}
+
+case_the_database_failing_after_a_no_block_start_stops_the_wait() {
+  new_case the_database_failing_after_a_no_block_start_stops_the_wait
+  echo domovoi-db.service >"$STATE/start-then-fail"
+  local t0=$SECONDS
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 1" eq "$RC" 1
+  check "at once, not after --health-timeout" bash -c '[ "$1" -lt 60 ]' _ "$((SECONDS - t0))"
+  check "names the database" said "the core (/v1/health) won't answer: domovoi-db.service failed"
+  end_case
+}
+
+# A core that failed before this run (the last provision's, say) keeps its
+# failed mark while its --no-block start waits for the database's: the
+# wait must not take that for this start failing. The mark is cleared
+# first, and only a unit that has one.
+case_a_failed_mark_from_before_is_not_this_starts() {
+  new_case a_failed_mark_from_before_is_not_this_starts
+  mkdir -p "$STATE/failed"
+  touch "$STATE/failed/domovoi-core.service"
+  echo domovoi-core.service >"$STATE/start-queued"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "the old mark cleared" called "systemctl reset-failed domovoi-core.service"
+  check "before the start" before "systemctl reset-failed domovoi-core.service" \
+    "systemctl start domovoi-db.service domovoi-core.service domovoi-web.service --no-block"
+  check "only that unit's" not_called "systemctl reset-failed domovoi-web.service"
+  check "not taken for a failure" not_said "domovoi-core.service failed"
+  end_case
+}
+
+case_journal_opt_out_is_honoured() {
+  new_case journal_opt_out_is_honoured
+  mkdir -p "$ROOT/etc/default"
+  printf 'DOMOVOI_MANAGE_JOURNAL=0\n' >"$ROOT/etc/default/domovoi-update"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "no drop-in" absent "$ROOT/etc/systemd/journald.conf.d/50-domovoi.conf"
+  check "journald left alone" not_called "systemd-journald"
+  check "says why" said "the journal left as it is (DOMOVOI_MANAGE_JOURNAL in /etc/default/domovoi-update)"
+  end_case
+}
+
 case_os_jobs_opt_out_is_honoured() {
   new_case os_jobs_opt_out_is_honoured
   mkdir -p "$ROOT/etc/default"
@@ -2703,6 +2812,12 @@ CASES=(
   case_bare_metal_sets_the_zone
   case_cpu_only_box_reports_no_gpu
   case_update_defaults_opt_into_the_lock
+  case_journal_kept_on_disk
+  case_starts_do_not_block_on_ready
+  case_a_unit_that_fails_after_a_no_block_start_stops_the_wait
+  case_the_database_failing_after_a_no_block_start_stops_the_wait
+  case_a_failed_mark_from_before_is_not_this_starts
+  case_journal_opt_out_is_honoured
   case_os_jobs_opt_out_is_honoured
   case_os_jobs_never_leaves_the_box_degraded
   case_vision_model_pull_is_optional

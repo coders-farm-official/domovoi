@@ -100,16 +100,21 @@ def test_a_long_track_is_cut_at_five_minutes(tmp_path, monkeypatch) -> None:
 
 
 async def test_unreadable_missing_and_no_ffmpeg(tmp_path, monkeypatch) -> None:
+    """In the child: ffmpeg refusing a file is a verdict (_DecodeRefused,
+    an empty result); a missing file or no ffmpeg is a failure to retry."""
     junk = tmp_path / "junk.mp3"
     junk.write_bytes(b"not audio at all" * 100)
-    assert fp._load_audio_to_mono_16k(junk) is None
-    assert fp._load_audio_to_mono_16k(tmp_path / "missing.mp3") is None
+    with pytest.raises(fp._DecodeRefused):
+        fp._load_audio_to_mono_16k(junk)
+    with pytest.raises(FileNotFoundError):
+        fp._load_audio_to_mono_16k(tmp_path / "missing.mp3")
+    assert fp._child_main(["fp", str(junk)]) == fp._EXIT_LOAD
     assert await fp.fingerprint_file(junk) == []
     wav = _write_wav(tmp_path / "song.wav", 2.0, [440.0])
     monkeypatch.setattr(fp.shutil, "which", lambda name: None)
     with pytest.raises(fp._DepMissingError):
         fp._load_audio_to_mono_16k(wav)
-    assert await fp.fingerprint_file(wav) == []          # degrades, never raises
+    assert fp._child_main(["fp", str(wav)]) == fp._EXIT_DEPS     # tried again later
 
 
 async def test_silence_produces_no_hashes(tmp_path) -> None:
@@ -127,8 +132,19 @@ async def test_too_short_audio_rejected(tmp_path) -> None:
     assert await fp.fingerprint_file(wav) == []
 
 
-async def test_unreadable_file_returns_empty(tmp_path) -> None:
-    assert await fp.fingerprint_file(tmp_path / "missing.wav") == []
+async def test_a_file_the_decoder_refuses_returns_empty(tmp_path) -> None:
+    """There, but not audio: a verdict about the file (marked, not retried)."""
+    junk = tmp_path / "not-audio.wav"
+    junk.write_bytes(b"this is not a wav file at all" * 10)
+    assert await fp.fingerprint_file(junk) == []
+
+
+async def test_a_file_that_is_not_there_is_a_failure_not_a_verdict(tmp_path) -> None:
+    """Review round 2, case L7: a media disk not mounted made every track's
+    file missing, and each was marked for good, a track a minute. Missing
+    is FingerprintFailed: tried again later, counted toward the pause."""
+    with pytest.raises(fp.FingerprintFailed, match="isn't there"):
+        await fp.fingerprint_file(tmp_path / "unmounted" / "missing.wav")
 
 
 @requires_db

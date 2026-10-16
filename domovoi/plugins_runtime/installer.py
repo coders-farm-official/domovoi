@@ -38,7 +38,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from domovoi import egress
+from domovoi import egress, executors
 from domovoi.auth import require_admin
 from domovoi.plugins_runtime import registry as reg
 from domovoi.plugins_runtime.contracts import ContractError
@@ -778,8 +778,8 @@ async def stage_zip(
         # parsers): a worker thread, so the core's event loop — the
         # satellites' sockets included — keeps running while a plugin is
         # previewed (A7-04).
-        manifest = await asyncio.to_thread(
-            _extract_and_validate, zf, prefix, stage_dir
+        manifest = await executors.run(
+            "plugins", _extract_and_validate, zf, prefix, stage_dir
         )
 
         # Step 6 — slug collision / orphan schema.
@@ -869,19 +869,19 @@ async def stage_zip(
             # Under the lifecycle lock: a dry run beside a real install
             # resolves against a half-written environment.
             async with lifecycle_lock():
-                transitive = (await asyncio.to_thread(pip_dry_run, lock))["resolved"]
+                transitive = (await executors.run("plugins", pip_dry_run, lock))["resolved"]
 
-        tree_hash = await asyncio.to_thread(hash_tree, stage_dir)   # step 8
+        tree_hash = await executors.run("plugins", hash_tree, stage_dir)   # step 8
 
-        marked = await asyncio.to_thread(
-            _collect_marked_endpoints, stage_dir, manifest
+        marked = await executors.run(
+            "plugins", _collect_marked_endpoints, stage_dir, manifest
         )
         migration_count = len(
-            await asyncio.to_thread(
-                discover_migrations, stage_dir / manifest.migrations_dir
+            await executors.run(
+                "plugins", discover_migrations, stage_dir / manifest.migrations_dir
             )
         )
-        satellite = await asyncio.to_thread(_satellite_preview, stage_dir, manifest)
+        satellite = await executors.run("plugins", _satellite_preview, stage_dir, manifest)
         preview = {
             "slug": manifest.slug,
             "name": manifest.name,
@@ -1110,8 +1110,8 @@ async def _confirm_install_locked(
 
     # Step 9a — TOCTOU close: re-hash the staged tree.
     meta_file = staged.root / ".domovoi-staging.json"
-    tree_now = await asyncio.to_thread(
-        hash_tree_excluding, staged.root, {meta_file.name}
+    tree_now = await executors.run(
+        "plugins", hash_tree_excluding, staged.root, {meta_file.name}
     )
     if tree_now != staged.tree_hash:
         _drop_staged(staged)
@@ -1137,7 +1137,7 @@ async def _confirm_install_locked(
         if manifest.python_requirements:
             lock = staged.root / (manifest.lockfile or "requirements.lock")
             # Blocking for up to half an hour: off the event loop.
-            pip_report = await asyncio.to_thread(pip_install, lock)
+            pip_report = await executors.run("plugins", pip_install, lock)
 
         # Step 10 — migrations, both DBs (the runner owns fresh-install
         # both-or-neither internally).
@@ -1305,8 +1305,8 @@ async def _rollback(
         except Exception:  # pragma: no cover
             log.exception("rollback: schema drop failed")
     if pip_report:
-        await asyncio.to_thread(
-            pip_uninstall,
+        await executors.run(
+            "plugins", pip_uninstall,
             [d["name"] for d in pip_report.get("newly_installed", [])],
         )
     _drop_staged(staged)
@@ -1419,7 +1419,7 @@ async def _uninstall_plugin_locked(slug: str, *, data: str) -> dict[str, Any]:
                 continue
             for req in ((other.manifest.get("requirements") or {}).get("python") or []):
                 others.add(req.split("==")[0].split("[")[0].lower())
-        await asyncio.to_thread(pip_uninstall, sorted(newly - others))
+        await executors.run("plugins", pip_uninstall, sorted(newly - others))
 
     # 4/5. Bundled → tombstone (never delete dir or row); else remove the
     #      row, and the files only when the installer put them there

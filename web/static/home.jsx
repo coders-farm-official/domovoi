@@ -357,8 +357,15 @@ const HomeAttentionRows = ({ viewer, health, rooms, plugins, pluginErrors, acq,
           text: "the database isn't answering · nothing new can be saved" });
   }
   if (coreDown) {
-    add({ key: 'core', tone: 'err', scope: 'open', href: '#satellites',
-          text: "the Domovoi server isn't answering · rooms show the last known state" });
+    // An admin gets the restart on the row itself (CoreRestart: it
+    // renders nothing for anyone else, or while the core's loop runs); the
+    // row still links to Satellites. A core that runs but can't serve (its
+    // /v1/alive answers) is told apart: restarting it won't help.
+    const sick = health.core_alive === true;
+    add({ key: 'core', tone: 'err', scope: 'open', href: '#satellites', coreDown: !sick,
+          text: sick
+            ? "the Domovoi server is running but can't answer · most likely its database"
+            : "the Domovoi server isn't answering · rooms show the last known state" });
   }
 
   if (!dbDown && !coreDown) {
@@ -660,6 +667,17 @@ const HomeAttention = ({ view, viewer, shared, checking, failed, refused, checke
                 <span className="home-att-acts">
                   <a href="#manual" className="home-link">how domovoi works</a>
                   <Button variant="primary" icon="key" onClick={() => { onClaim(); }}>claim it</Button>
+                </span>
+              </div>
+            );
+          }
+          if (r.coreDown && viewer.isAdmin && !shared) {
+            return (
+              <div key={r.key} className={`${cls} home-att-claim`} data-key={r.key}>
+                {body}
+                <span className="home-att-acts">
+                  <a href={r.href} className="home-link">satellites</a>
+                  <CoreRestart/>
                 </span>
               </div>
             );

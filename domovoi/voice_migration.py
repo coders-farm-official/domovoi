@@ -222,7 +222,7 @@ async def run_default_voice_move() -> str:
         result = await attempt()
         if result == "waiting" and egress.internet_allowed():
             try:
-                await asyncio.to_thread(tts._piper_voice_path, DEFAULT_PIPER_VOICE)
+                await tts.ensure_piper_voice(DEFAULT_PIPER_VOICE)
             except Exception as e:  # noqa: BLE001 - a failed fetch is tried again next boot
                 log.warning("voice: could not fetch Kristin (%s); Norman keeps speaking until she is on disk", e)
                 return result

@@ -103,6 +103,11 @@ if [ "${1-}" = show ]; then
   case "$*" in *ExecStart*) cat "$SHIM_STATE/show-execstart" 2>/dev/null ;; esac
   # How the unit's last stop went: show-<unit> holds Key=Value lines.
   case "$*" in *Result*) cat "$SHIM_STATE/show-${2-}" 2>/dev/null ;; esac
+  # The core unit's Restart= (reconcile_core_restart): show-restart, else
+  # on-failure, the shipped unit's.
+  case "$*" in *"-p Restart "*) cat "$SHIM_STATE/show-restart" 2>/dev/null || echo on-failure ;; esac
+  # Its RestartSec= (show-restartusec), else systemd's default.
+  case "$*" in *"-p RestartUSec "*) cat "$SHIM_STATE/show-restartusec" 2>/dev/null || echo 100ms ;; esac
   exit 0
 fi
 # stop-hangs lists units whose stop never finishes by itself: only a
@@ -702,6 +707,10 @@ new_case() {
   # plugin runtime migrates it too.
   echo 0 >"$STATE/db-domovoi_test"
   echo "plugin_radio 1" >"$STATE/ledgers-domovoi_test"
+  # The journal is already kept on disk (reconcile_journal has nothing to
+  # do); the journal_* cases take this away.
+  mkdir -p "$CASE/journald"
+  cp "$HERE/../units/journald-domovoi.conf" "$CASE/journald/50-domovoi.conf"
 
   g init -q -b main
   printf '[project]\nname = "domovoi"\nversion = "0"\n' >"$REPO/pyproject.toml"
@@ -727,7 +736,7 @@ new_case() {
 # the upstream pins.
 run_update() {
   local extra_bin=${1-}
-  local path=$CASE/bin:$PATH venv_env=(DOMOVOI_VENV="$CASE/venv") manage_env=() pin_env=() lock_env=() osjobs_env=() gpu_env=()
+  local path=$CASE/bin:$PATH venv_env=(DOMOVOI_VENV="$CASE/venv") manage_env=() pin_env=() lock_env=() osjobs_env=() gpu_env=() journal_env=()
   local run=(bash "$SCRIPT")
   if [ -n "$extra_bin" ]; then path=$extra_bin:$path; fi
   if [ "${NO_VENV_ENV:-0}" = 1 ]; then venv_env=(); fi
@@ -739,12 +748,14 @@ run_update() {
   if [ -n "${MANAGE_GPU_RUNTIME:-}" ]; then gpu_env+=(DOMOVOI_MANAGE_GPU_RUNTIME="$MANAGE_GPU_RUNTIME"); fi
   if [ -n "${MANAGE_WAKE_TRAINER:-}" ]; then gpu_env+=(DOMOVOI_MANAGE_WAKE_TRAINER="$MANAGE_WAKE_TRAINER"); fi
   if [ -n "${WAKE_TRAINER_IMAGE:-}" ]; then gpu_env+=(DOMOVOI_WAKE_TRAINER_IMAGE="$WAKE_TRAINER_IMAGE"); fi
+  if [ -n "${MANAGE_JOURNAL:-}" ]; then journal_env=(DOMOVOI_MANAGE_JOURNAL="$MANAGE_JOURNAL"); fi
   # Unset, EPOCHREALTIME is an ordinary (empty) variable in that shell.
   if [ "${NO_BASH_CLOCK:-0}" = 1 ]; then run=(bash -c 'unset EPOCHREALTIME; . "$0"' "$SCRIPT"); fi
   RC=0
   env -u DOMOVOI_VENV -u DOMOVOI_MANAGE_SEARXNG -u DOMOVOI_REVOKED_SIGNERS \
     -u DOMOVOI_UPSTREAM_URL -u DOMOVOI_UPSTREAM_BRANCH -u DOMOVOI_USE_LOCK -u DOMOVOI_MANAGE_OS_JOBS \
-    -u DOMOVOI_MANAGE_GPU_RUNTIME -u DOMOVOI_MANAGE_WAKE_TRAINER -u DOMOVOI_WAKE_TRAINER_IMAGE PATH="$path" \
+    -u DOMOVOI_MANAGE_GPU_RUNTIME -u DOMOVOI_MANAGE_WAKE_TRAINER -u DOMOVOI_WAKE_TRAINER_IMAGE \
+    -u DOMOVOI_MANAGE_JOURNAL PATH="$path" \
     DOMOVOI_REPO_DIR="$REPO" \
     DOMOVOI_PROVISION_ROOT="$OSROOT" DOMOVOI_PROVISION_TEST_HARNESS=1 \
     ${venv_env[@]+"${venv_env[@]}"} \
@@ -753,10 +764,13 @@ run_update() {
     ${lock_env[@]+"${lock_env[@]}"} \
     ${osjobs_env[@]+"${osjobs_env[@]}"} \
     ${gpu_env[@]+"${gpu_env[@]}"} \
+    ${journal_env[@]+"${journal_env[@]}"} \
     DOMOVOI_ALLOWED_SIGNERS="${SIGNERS:-$CASE/no-allowed-signers}" \
     DOMOVOI_UPDATE_DIR="$UPD" \
     DOMOVOI_USER=tester \
     DOMOVOI_CORE_STATE_DIR="$CORE_STATE" \
+    DOMOVOI_CORE_DROPIN_DIR="$CASE/dropins" \
+    DOMOVOI_JOURNALD_DROPIN_DIR="$CASE/journald" \
     DOMOVOI_UPDATE_HEALTH_TIMEOUT=1 \
     DOMOVOI_UPDATE_HEALTH_INTERVAL=0.2 \
     DOMOVOI_UPDATE_STOP_TIMEOUT="${STOP_TIMEOUT:-5}" \
@@ -1117,6 +1131,182 @@ case_mpd_conf_only() {
   check "status ok" eq "$(field status)" '"ok"'
   check "mpd.conf alone counts as an MPD change" eq "$(field mpd_changed)" true
   check "containers recreated for the new conf" called "docker rm -f domovoi-mpd-kitchen"
+  end_case
+}
+
+# Incident 2026-10-14: the core exits on purpose when it finds itself
+# frozen (status 70) and the dashboard ends one that stopped answering;
+# only Restart=on-failure or always starts it again. A hand-made unit
+# without one gets a drop-in that sets it (reconcile_core_restart).
+case_core_restart_drop_in_for_a_unit_that_would_stay_down() {
+  new_case core_restart_drop_in_for_a_unit_that_would_stay_down
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo no >"$STATE/show-restart"
+  run_update
+  local f=$CASE/dropins/50-domovoi-restart.conf
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the drop-in is there" test -f "$f"
+  check "a [Service] section" grep -qx '\[Service\]' "$f"
+  check "Restart=on-failure" grep -qx 'Restart=on-failure' "$f"
+  check "RestartSec=5" grep -qx 'RestartSec=5' "$f"
+  check "systemd reads it" called "systemctl daemon-reload"
+  check "before the services start" before "systemctl daemon-reload" "systemctl start domovoi-core.service"
+  check "an ok step says what changed" step_is core-restart ok
+  check "after the signature check, before the restart" eq "$(step_names)" "signature core-restart stop-services start-services health searxng"
+  end_case
+}
+
+case_core_restart_drop_in_on_a_full_update() {
+  new_case core_restart_drop_in_on_a_full_update
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  commit_all "B: app" >/dev/null
+  echo no >"$STATE/show-restart"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "mode update" eq "$(field mode)" '"update"'
+  check "Restart=on-failure written" grep -qx 'Restart=on-failure' "$CASE/dropins/50-domovoi-restart.conf"
+  check "before the backup" before "systemctl daemon-reload" "pg_dump"
+  check "an ok step" step_is core-restart ok
+  end_case
+}
+
+# Review 2026-10-15 (note 7): a restart policy the household chose is
+# theirs. Only a unit with none (Restart=no) gets ours; RestartSec= is
+# added only where the unit has systemd's default.
+case_core_restart_a_households_own_policy_is_kept() {
+  new_case core_restart_a_households_own_policy_is_kept
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  # on-abnormal restarts after a signal, not after the watchdog's exit 70.
+  echo on-abnormal >"$STATE/show-restart"
+  echo 1min >"$STATE/show-restartusec"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no drop-in over their policy" test ! -e "$CASE/dropins/50-domovoi-restart.conf"
+  check "no reload" not_called "systemctl daemon-reload"
+  check "a warn step" step_is core-restart warn
+  check "that says what it misses" grep -qF "does not start the core again after its loop watchdog" "$RESULT"
+  end_case
+}
+
+case_core_restart_keeps_a_households_restart_sec() {
+  new_case core_restart_keeps_a_households_restart_sec
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo no >"$STATE/show-restart"
+  echo 1min >"$STATE/show-restartusec"
+  run_update
+  local f=$CASE/dropins/50-domovoi-restart.conf
+  check "status ok" eq "$(field status)" '"ok"'
+  check "Restart=on-failure" grep -qx 'Restart=on-failure' "$f"
+  check "their RestartSec= is not overridden" bash -c '! grep -q "^RestartSec=" "$1"' _ "$f"
+  check "an ok step" step_is core-restart ok
+  end_case
+}
+
+case_core_restart_left_alone_when_the_unit_restarts() {
+  local r
+  for r in on-failure always; do
+    new_case "core_restart_left_alone_when_the_unit_restarts_$r"
+    mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+    echo "$r" >"$STATE/show-restart"
+    run_update
+    check "status ok" eq "$(field status)" '"ok"'
+    check "no drop-in" test ! -e "$CASE/dropins/50-domovoi-restart.conf"
+    check "no reload" not_called "systemctl daemon-reload"
+    check "no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+    end_case
+  done
+}
+
+case_core_restart_overridden_drop_in_is_a_warn() {
+  new_case core_restart_overridden_drop_in_is_a_warn
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  # Ours is in place, yet systemd still says no: an admin's later drop-in
+  # (or the unit) decides. Left as it is, said on the Version card.
+  mkdir -p "$CASE/dropins"
+  printf '[Service]\nRestart=on-failure\nRestartSec=5\n' >"$CASE/dropins/50-domovoi-restart.conf"
+  echo no >"$STATE/show-restart"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a warn step" step_is core-restart warn
+  check "that names the override" grep -qF "overrides it" "$RESULT"
+  check "no rewrite, no reload" not_called "systemctl daemon-reload"
+  end_case
+}
+
+# The journal kept on disk, so the core's account of why it stopped
+# survives a power cycle (incident 2026-10-14).
+case_journal_made_persistent_once() {
+  new_case journal_made_persistent_once
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  rm -f "$CASE/journald/50-domovoi.conf"
+  run_update
+  local f=$CASE/journald/50-domovoi.conf
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the drop-in is the shipped file" cmp -s "$f" "$HERE/../units/journald-domovoi.conf"
+  check "Storage=persistent" grep -qx 'Storage=persistent' "$f"
+  # Review 2026-10-15 (owner-default call): nothing else, so a household's
+  # own size limits (journald.conf, its drop-ins) stay.
+  check "and nothing else set" eq "$(grep -v '^#' "$f" | grep -v '^$' | tr '\n' ' ')" "[Journal] Storage=persistent "
+  check "journald restarted to read it" called "systemctl restart systemd-journald.service"
+  check "an ok step" step_is journal ok
+  check "where it sits" eq "$(step_names)" "signature journal stop-services start-services health searxng"
+  # A second run has nothing to do.
+  : >"$STATE/calls.log"
+  run_update
+  check "second run ok" eq "$(field status)" '"ok"'
+  check "no second restart" not_called "systemctl restart systemd-journald.service"
+  check "no step the second time" eq "$(step_names)" "signature stop-services start-services health searxng"
+  end_case
+}
+
+case_journal_a_changed_drop_in_is_replaced() {
+  new_case journal_a_changed_drop_in_is_replaced
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[Journal]\nStorage=persistent\nSystemMaxUse=100M\n' >"$CASE/journald/50-domovoi.conf"
+  printf '[Journal]\nSystemMaxUse=200M\n' >"$CASE/journald/90-local.conf"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "ours is the shipped file again" cmp -s "$CASE/journald/50-domovoi.conf" "$HERE/../units/journald-domovoi.conf"
+  check "an admin's own drop-in is never touched" grep -qx 'SystemMaxUse=200M' "$CASE/journald/90-local.conf"
+  check "journald restarted" called "systemctl restart systemd-journald.service"
+  end_case
+}
+
+case_journal_restart_failure_is_a_warn() {
+  new_case journal_restart_failure_is_a_warn
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  rm -f "$CASE/journald/50-domovoi.conf"
+  echo "restart systemd-journald.service" >"$STATE/fail-systemctl"
+  run_update
+  check "the restart still ok" eq "$(field status)" '"ok"'
+  check "a warn step" step_is journal warn
+  check "that says when it takes effect" grep -qF "at the next boot" "$RESULT"
+  check "the drop-in is in place for that boot" test -f "$CASE/journald/50-domovoi.conf"
+  end_case
+}
+
+case_journal_opt_out() {
+  new_case journal_opt_out
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  rm -f "$CASE/journald/50-domovoi.conf"
+  MANAGE_JOURNAL=0 run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no drop-in" test ! -e "$CASE/journald/50-domovoi.conf"
+  check "journald untouched" not_called "systemd-journald"
+  check "no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  end_case
+}
+
+case_starts_do_not_wait_for_the_cores_ready() {
+  new_case starts_do_not_wait_for_the_cores_ready
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  # The core is Type=notify: a blocking start would wait for READY=1 up to
+  # its TimeoutStartSec, past the health check's own bound.
+  check "start does not block" called "systemctl start domovoi-core.service domovoi-web.service --no-block"
   end_case
 }
 
@@ -3506,6 +3696,17 @@ case_dotenv_is_read_the_way_the_core_reads_it() {
 
 CASES=(
   case_noop_restart
+  case_core_restart_drop_in_for_a_unit_that_would_stay_down
+  case_core_restart_drop_in_on_a_full_update
+  case_core_restart_a_households_own_policy_is_kept
+  case_core_restart_keeps_a_households_restart_sec
+  case_core_restart_left_alone_when_the_unit_restarts
+  case_core_restart_overridden_drop_in_is_a_warn
+  case_starts_do_not_wait_for_the_cores_ready
+  case_journal_made_persistent_once
+  case_journal_a_changed_drop_in_is_replaced
+  case_journal_restart_failure_is_a_warn
+  case_journal_opt_out
   case_noop_without_any_history
   case_noop_restart_migrates_a_database_behind_the_checkout
   case_noop_restart_brings_postgres_back
