@@ -4,9 +4,21 @@ Publish a release of the Domovoi Android app.
 
 .DESCRIPTION
 Builds the per-ABI release APKs (arm64-v8a, armeabi-v7a), signs them with
-YOUR release key, checks them the way a Domovoi server will, publishes a
-GitHub release on coders-farm-official/domovoi with gh, and writes
-android/release.json for you to commit.
+YOUR release key, checks them the way a Domovoi server will, writes
+android/release.json, commits it ("android: release <v> [skip ci]") and
+pushes it to the branch's upstream, then publishes the GitHub release
+v<versionName> on coders-farm-official/domovoi with gh, tagged at THAT
+commit: the tag holds the manifest naming its own APKs (they are built from
+the commit before it, which differs only by that file). Last it downloads
+each file back by the manifest's URL.
+
+If a run stops after the commit (a failed push, gh or download), run it
+again from the same checkout: it sees the release commit at HEAD and
+carries on from there, with the signed files it left; nothing is built or
+signed again.
+
+Then scripts\release\finish-release.ps1 adds the Windows Setup, one
+SHA256SUMS and the release notes, and moves the stable branch.
 
 Run by the owner on his own machine; nothing here runs in CI. The
 keystore's path and passwords are asked for here and never written to a
@@ -16,19 +28,20 @@ removed right after. The bash twin is release.sh beside it;
 android/README.md, "Publishing a release", walks through a run.
 
 Needs: a JDK (JAVA_HOME or java on PATH), the Android SDK with build-tools
-35.0.0, Python 3.11+ (the server's own check), git, and gh signed in to an
-account that may publish releases on the repository.
+35.0.0, Python 3.11+ (the server's own check), git with push access, and gh
+signed in to an account that may publish releases on the repository.
 
 .PARAMETER NoPublish
-Build, sign and check; stop before GitHub (nothing is published and
-android/release.json is not touched).
+Build, sign and check; stop before GitHub (nothing is committed, pushed
+or published, and android/release.json is not touched).
 
 .PARAMETER SkipBuild
 Sign what the last build left (after a failed signing).
 
 .PARAMETER Prerelease
-Mark the GitHub release a pre-release. Off by default: a version with a
-suffix (1.0.0-rc1) is published as a full release unless this is given.
+Mark the GitHub release a pre-release. A version with a suffix (1.0.0-rc2)
+is always one; this makes a plain version (1.0.1) one too. A plain version
+is otherwise marked Latest.
 
 .PARAMETER Keystore
 The keystore file (asked for when not given).
@@ -141,12 +154,153 @@ $dirty = Invoke-Tool 'git' @('status', '--porcelain')
 if ($null -eq $dirty) { Die 'git status failed (is this a checkout?)' }
 if (@($dirty | Where-Object { $_ }).Count -gt 0) { Die 'the checkout has uncommitted changes: commit or stash them first, so the release is one commit' }
 $commit = (Invoke-Tool 'git' @('rev-parse', 'HEAD'))[0].Trim()
+
+# A release commit at HEAD: android/release.json, committed on top of the
+# commit its APKs were built from (and nothing else changed), by an earlier
+# run that stopped before it finished. Then this run carries on from there.
+$resume = $null
+$builtFrom = $null
+try {
+    $headRelease = (Get-Content -Raw -Encoding UTF8 'android\release.json' | ConvertFrom-Json).release
+    if ($headRelease -and $headRelease.PSObject.Properties['commit']) { $builtFrom = [string]$headRelease.commit }
+} catch { $headRelease = $null }
+if ($builtFrom -match '^[0-9a-f]{40}$' -and $builtFrom -ne $commit -and
+        (Test-Tool 'git' @('merge-base', '--is-ancestor', $builtFrom, $commit)) -eq 0) {
+    $changed = Invoke-Tool 'git' @('diff', '--name-only', $builtFrom, $commit)
+    if ($null -ne $changed -and (@($changed | Where-Object { $_ }) -join ',') -eq 'android/release.json') { $resume = $headRelease }
+}
+
+# The branch the release commit goes on: HEAD must be its tip on GitHub
+# (the release is committed on top of it, and the tag points there).
+$branch = $null; $upstream = $null
 if (-not $NoPublish) {
     if ($null -eq (Invoke-Tool 'git' @('fetch', '--quiet', 'origin'))) { Die 'git fetch origin failed' }
-    $remote = Invoke-Tool 'git' @('branch', '-r', '--contains', $commit)
-    if (-not $remote -or @($remote | Where-Object { $_.Trim() }).Count -eq 0) {
-        Die "commit $($commit.Substring(0, 12)) is not on GitHub yet: push it first (the release's tag points at it)"
+    $onBranch = Invoke-Tool 'git' @('symbolic-ref', '--quiet', '--short', 'HEAD')
+    if ($null -eq $onBranch) { Die 'HEAD is not on a branch: switch to the branch the release goes on (git switch main)' }
+    $branch = $onBranch[0].Trim()
+    $tracks = Invoke-Tool 'git' @('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}')
+    if ($null -eq $tracks -or $tracks[0].Trim() -ne "origin/$branch") { Die "$branch does not track origin/$branch (git branch --set-upstream-to=origin/$branch)" }
+    $upstream = (Invoke-Tool 'git' @('rev-parse', "origin/$branch"))[0].Trim()
+    $atTip = if ($resume) { @($resume.commit, $commit) } else { @($commit) }
+    if ($atTip -notcontains $upstream) {
+        if ((Test-Tool 'git' @('merge-base', '--is-ancestor', $commit, $upstream)) -eq 0) {
+            Die "origin/$branch has commits this checkout lacks: git pull --ff-only, then run again"
+        }
+        if ($resume) {
+            Die "origin/$branch moved on after this release's commit was made here: drop it (git reset --keep HEAD~1), git pull --ff-only, and run again (the APKs are built and signed again)"
+        }
+        Die "commit $($commit.Substring(0, 12)) is not on GitHub yet: push it first (the release is committed on top of it, and its tag points there)"
     }
+}
+
+$signed = 'android\app\build\outputs\apk\release-signed'
+$sumsFile = Join-Path $signed 'SHA256SUMS'
+$isPrerelease = $false
+
+# Push the release commit (unless GitHub has it), publish the release at it
+# (unless it exists), check its tag is that commit, and download each file
+# back by the URL android/release.json names. The manifest at HEAD is the
+# release's from here on.
+function Publish-Release([string]$ReleaseCommit, [bool]$Exists) {
+    if ($script:upstream -ne $ReleaseCommit) {
+        Say "pushing the release commit $($ReleaseCommit.Substring(0, 12)) to origin/$branch..."
+        if ($null -eq (Invoke-Tool 'git' @('push', '--quiet', 'origin', "$($ReleaseCommit):refs/heads/$branch"))) {
+            $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }
+            Die 'the push failed: android/release.json is committed here but not on GitHub. Fix that and run this script again; it carries on from the release commit (nothing is signed again)'
+        }
+    }
+    $manifest = (Get-Content -Raw -Encoding UTF8 'android\release.json' | ConvertFrom-Json).release
+    if (-not $Exists) {
+        $rows = foreach ($entry in $manifest.apks) {
+            $who = if ($entry.abi -eq 'arm64-v8a') { 'most phones (64-bit)' } else { 'older or cheaper phones (32-bit)' }
+            "| $($entry.file) | $who | ``$($entry.sha256)`` |"
+        }
+        $notes = @(
+            "Domovoi $versionName. The Android app (versionCode $versionCode), built from $($manifest.commit); the release is tagged at $ReleaseCommit, which adds android/release.json naming these files. scripts/release/finish-release adds the Windows Setup, SHA256SUMS for every file and the release notes.",
+            '',
+            'Install the app from your own Domovoi server: on the dashboard, Settings -> Satellites -> add a spare device (for a room) or Settings -> Devices -> get the Domovoi app. The server checks these files against android/release.json before it hands them out.',
+            '',
+            '| file | for | SHA-256 |',
+            '|---|---|---|'
+        ) + $rows + @('', "Signing certificate SHA-256: ``$($manifest.cert_sha256)`` (check with ``apksigner verify --print-certs <file>``).")
+        $notesFile = Join-Path $signed 'NOTES.md'
+        $utf8 = New-Object Text.UTF8Encoding $false
+        [IO.File]::WriteAllText((Join-Path $repo $notesFile), ($notes -join "`n") + "`n", $utf8)
+        [IO.File]::WriteAllText((Join-Path $repo $sumsFile), (($manifest.apks | ForEach-Object { "$($_.sha256)  $($_.file)" }) -join "`n") + "`n", $utf8)
+
+        $kind = if ($isPrerelease) { 'a pre-release' } else { 'the Latest release' }
+        Say "publishing $tag on $RepoSlug at $($ReleaseCommit.Substring(0, 12)), $kind..."
+        $assets = @($manifest.apks | ForEach-Object { Join-Path $signed $_.file }) + @($sumsFile)
+        $ghArgs = @('release', 'create', $tag) + $assets + @('--repo', $RepoSlug, '--target', $ReleaseCommit,
+            '--title', "Domovoi v$versionName", '--notes-file', $notesFile)
+        $ghArgs += if ($isPrerelease) { '--prerelease' } else { '--latest' }
+        $created = Invoke-Tool 'gh' $ghArgs
+        if ($null -eq $created) {
+            $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }
+            Die 'gh release create failed: run this script again; it carries on from the release commit'
+        }
+        $created | ForEach-Object { Write-Host "  $_" }
+    } else {
+        Say "$tag is already on $RepoSlug, so checking it"
+    }
+
+    # The tag (GitHub makes it at --target) must be the release commit.
+    if ($null -eq (Invoke-Tool 'git' @('fetch', '--quiet', 'origin', "refs/tags/$($tag):refs/tags/$tag"))) {
+        $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }
+        Die "can't fetch the tag $tag from GitHub"
+    }
+    $tagged = (Invoke-Tool 'git' @('rev-parse', "$tag^{commit}"))[0].Trim()
+    if ($tagged -ne $ReleaseCommit) { Die "the tag $tag is $tagged, not the release commit $ReleaseCommit" }
+
+    Say 'checking the published files by their manifest URLs...'
+    $checkDir = Join-Path ([IO.Path]::GetTempPath()) ('domovoi-release-' + [guid]::NewGuid().ToString('N'))
+    $null = New-Item -ItemType Directory -Path $checkDir
+    try {
+        foreach ($entry in $manifest.apks) {
+            $dest = Join-Path $checkDir $entry.file
+            if ((Test-Tool 'curl.exe' @('-fsSL', '--retry', '3', '-o', $dest, $entry.url)) -ne 0) { Die "can't download $($entry.url) (run this script again to check once more)" }
+            if ((Get-Sha256 $dest) -ne $entry.sha256) { Die "$($entry.url) is not the file that was signed" }
+        }
+    } finally { Remove-Item -Recurse -Force $checkDir -ErrorAction SilentlyContinue }
+
+    Say "done: $tag is published at $($ReleaseCommit.Substring(0, 12)), with the android/release.json naming its APKs."
+    Write-Host 'Next: move the Windows Setup''s pins to that commit (windows\installer\pins.iss), commit and push them, then:'
+    Write-Host '    git pull --ff-only'
+    Write-Host "    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\finish-release.ps1 -Tag $tag"
+}
+
+# --- carry on from a release commit --------------------------------------
+if ($resume) {
+    $versionName = [string]$resume.version_name; $versionCode = [long]$resume.version_code
+    $tag = "v$versionName"
+    $isPrerelease = $Prerelease -or $versionName.Contains('-')
+    Say "Domovoi $versionName (versionCode $versionCode): HEAD $($commit.Substring(0, 12)) is its release commit (android/release.json on top of $($resume.commit.Substring(0, 12)), which the APKs were built from), so this run carries on from there; nothing is built or signed again"
+    # The first run's checks against the release before it, on what is committed.
+    $prevCode = 0; $prevCert = $null
+    $prevText = Invoke-Tool 'git' @('show', "$($resume.commit):android/release.json")
+    if ($null -ne $prevText) {
+        try {
+            $prev = (($prevText -join "`n") | ConvertFrom-Json).release
+            if ($prev) { $prevCode = [long]$prev.version_code; $prevCert = [string]$prev.cert_sha256 }
+        } catch { }
+    }
+    if ($versionCode -le $prevCode) { Die "android/release.json at HEAD names versionCode $versionCode, not above the last release's ($prevCode)" }
+    if ($prevCert -and $prevCert -ne [string]$resume.cert_sha256) { Die "android/release.json at HEAD names another key ($($resume.cert_sha256)) than the last release's ($prevCert)" }
+    $exists = (-not $NoPublish) -and ((Test-Tool 'gh' @('release', 'view', $tag, '--repo', $RepoSlug)) -eq 0)
+    if (-not $exists) {
+        $checked = Invoke-Tool $python @('-m', 'domovoi.android_app', 'check', 'android\release.json', $signed)
+        if ($null -eq $checked) {
+            $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }
+            Die "the signed APKs android\release.json pins are not in $signed (or have changed), so they can't be published from here: drop the release commit (git reset --keep HEAD~1), raise versionCode, and release again"
+        }
+        $checked | ForEach-Object { Write-Host "  $_" }
+    }
+    if ($NoPublish) {
+        Say "not published (-NoPublish). A real run pushes the release commit if GitHub lacks it, publishes $tag at it unless it exists, and checks the files."
+        exit 0
+    }
+    Publish-Release -ReleaseCommit $commit -Exists $exists
+    exit 0
 }
 
 # --- build ---------------------------------------------------------------
@@ -181,6 +335,8 @@ foreach ($abi in $Abis) {
 # The project-wide tag, v<versionName> (v1.0.0-rc1): domovoi.android_app's
 # tag_for, which the manifest's URLs are checked against.
 $tag = "v$versionName"
+# A version with a suffix (1.0.0-rc2) is a pre-release, never Latest.
+$isPrerelease = $Prerelease -or $versionName.Contains('-')
 Say "Domovoi $versionName (versionCode $versionCode), commit $($commit.Substring(0, 12))"
 
 # versionCode is YYMMDDNN (android\app\build.gradle.kts): the build's date
@@ -200,6 +356,9 @@ if ($versionCode -le $prevCode) {
 }
 if (-not $NoPublish) {
     if ((Test-Tool 'gh' @('release', 'view', $tag, '--repo', $RepoSlug)) -eq 0) { Die "a release $tag already exists on $RepoSlug" }
+    $remoteTag = Invoke-Tool 'git' @('ls-remote', '--tags', 'origin', "refs/tags/$tag")
+    if ($null -eq $remoteTag) { Die 'git ls-remote origin failed' }
+    if (@($remoteTag | Where-Object { $_.Trim() }).Count -gt 0) { Die "the tag $tag already exists on GitHub (a published tag never moves: raise the version)" }
 }
 
 # --- sign ----------------------------------------------------------------
@@ -227,7 +386,6 @@ function ConvertFrom-Secure([System.Security.SecureString]$secure) {
     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 }
 
-$signed = 'android\app\build\outputs\apk\release-signed'
 if (Test-Path $signed) { Remove-Item -Recurse -Force $signed }
 $null = New-Item -ItemType Directory -Path $signed
 try {
@@ -286,50 +444,19 @@ if ($null -eq $checked) { $script:LastToolOutput | ForEach-Object { Write-Host "
 $checked | ForEach-Object { Write-Host "  $_" }
 
 if ($NoPublish) {
+    $kind = if ($isPrerelease) { 'a pre-release' } else { 'the Latest release' }
     Say "not published (-NoPublish). Signed APKs, SHA256SUMS and the manifest it would commit: $signed\"
+    Say "A real run commits that manifest (android: release $versionName [skip ci]), pushes it, and publishes $tag at that commit as $kind."
     exit 0
 }
 
-# --- publish -------------------------------------------------------------
-$rows = foreach ($abi in $Abis) {
-    $name = "domovoi-$versionName-$abi.apk"
-    $who = if ($abi -eq 'arm64-v8a') { 'most phones (64-bit)' } else { 'older or cheaper phones (32-bit)' }
-    "| $name | $who | ``$(Get-Sha256 (Join-Path $signed $name))`` |"
-}
-$notes = @(
-    "Domovoi for Android $versionName (versionCode $versionCode), built from $commit.",
-    '',
-    'Install it from your own Domovoi server: on the dashboard, Settings -> Satellites -> add a spare device (for a room) or Settings -> Devices -> get the Domovoi app. The server checks these files against android/release.json before it hands them out.',
-    '',
-    '| file | for | SHA-256 |',
-    '|---|---|---|'
-) + $rows + @('', "Signing certificate SHA-256: ``$cert`` (check with ``apksigner verify --print-certs <file>``).")
-$notesFile = Join-Path $signed 'NOTES.md'
-[IO.File]::WriteAllText((Join-Path $repo $notesFile), ($notes -join "`n") + "`n", (New-Object Text.UTF8Encoding $false))
-
-Say "publishing $tag on $RepoSlug..."
-$assets = @($Abis | ForEach-Object { Join-Path $signed "domovoi-$versionName-$_.apk" }) + @(Join-Path $signed 'SHA256SUMS')
-$ghArgs = @('release', 'create', $tag) + $assets + @('--repo', $RepoSlug, '--target', $commit,
-    '--title', "Domovoi v$versionName", '--notes-file', $notesFile)
-if ($Prerelease) { $ghArgs += '--prerelease' }
-$created = Invoke-Tool 'gh' $ghArgs
-if ($null -eq $created) { $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }; Die 'gh release create failed' }
-$created | ForEach-Object { Write-Host "  $_" }
-
-Say 'checking the published files by their manifest URLs...'
-$manifest = Get-Content -Raw -Encoding UTF8 $staged | ConvertFrom-Json
-$checkDir = Join-Path ([IO.Path]::GetTempPath()) ('domovoi-release-' + [guid]::NewGuid().ToString('N'))
-$null = New-Item -ItemType Directory -Path $checkDir
-try {
-    foreach ($entry in $manifest.release.apks) {
-        $dest = Join-Path $checkDir $entry.file
-        if ((Test-Tool 'curl.exe' @('-fsSL', '--retry', '3', '-o', $dest, $entry.url)) -ne 0) { Die "can't download $($entry.url)" }
-        if ((Get-Sha256 $dest) -ne $entry.sha256) { Die "$($entry.url) is not the file that was signed" }
-    }
-} finally { Remove-Item -Recurse -Force $checkDir -ErrorAction SilentlyContinue }
-
+# --- publish: commit the manifest, push it, tag that commit ---------------
 Copy-Item -LiteralPath $staged -Destination 'android\release.json' -Force
-Say "done. Now commit the manifest so servers start handing out $versionName`:"
-Write-Host '    git add android/release.json'
-Write-Host "    git commit -m `"android: release $versionName [skip ci]`""
-Write-Host '    git push'
+if ($null -eq (Invoke-Tool 'git' @('add', '--', 'android/release.json'))) { Die 'git add android/release.json failed' }
+if ($null -eq (Invoke-Tool 'git' @('commit', '--quiet', '-m', "android: release $versionName [skip ci]", '--', 'android/release.json'))) {
+    $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }
+    Die 'git commit failed (android/release.json is written, not committed: git checkout -- android/release.json undoes it)'
+}
+$releaseCommit = (Invoke-Tool 'git' @('rev-parse', 'HEAD'))[0].Trim()
+Say "committed android/release.json as $($releaseCommit.Substring(0, 12)) (android: release $versionName [skip ci]): the tag goes there"
+Publish-Release -ReleaseCommit $releaseCommit -Exists $false

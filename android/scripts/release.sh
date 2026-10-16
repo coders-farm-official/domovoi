@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 # Publish a release of the Domovoi Android app: build the per-ABI release
 # APKs, sign them with YOUR release key, check them the way a Domovoi
-# server will, publish a GitHub release on coders-farm-official/domovoi
-# with gh, and write android/release.json for you to commit.
+# server will, write android/release.json, commit it ("android: release
+# <v> [skip ci]") and push it to the branch's upstream, then publish the
+# GitHub release v<versionName> on coders-farm-official/domovoi with gh,
+# tagged at THAT commit (so the tag holds the manifest naming its own
+# APKs), and download each file back by the manifest's URL. A run that
+# stops after the commit (a failed push, gh or download) carries on from
+# the release commit when run again; nothing is built or signed again.
+# Then scripts/release/finish-release.sh adds the Windows Setup, one
+# SHA256SUMS and the notes, and moves the stable branch.
 #
 # Run by the owner on his own machine; nothing here runs in CI. The
 # keystore's path and passwords are asked for here (never written to a
@@ -11,15 +18,16 @@
 # script for PowerShell is release.ps1 beside it; android/README.md,
 # "Publishing a release", says when to run which.
 #
-#   bash android/scripts/release.sh                  # build, sign, check, publish, write release.json
-#   bash android/scripts/release.sh --no-publish     # build, sign, check; stop before GitHub
+#   bash android/scripts/release.sh                  # build, sign, check, commit + push the manifest, publish
+#   bash android/scripts/release.sh --no-publish     # build, sign, check; stop before git and GitHub
 #   bash android/scripts/release.sh --skip-build     # sign what the last build left (after a failed signing)
-#   bash android/scripts/release.sh --prerelease     # mark the GitHub release a pre-release (off by default)
+#   bash android/scripts/release.sh --prerelease     # a plain version (1.0.1) as a pre-release too (1.0.0-rc2 always is)
 #   bash android/scripts/release.sh --keystore ~/domovoi-release.jks --alias domovoi
 #
 # Needs: a JDK (JAVA_HOME or java on PATH), the Android SDK with
-# build-tools 35.0.0, Python 3.11+ (the server's own check), git, and gh
-# signed in to an account that may publish releases on the repository.
+# build-tools 35.0.0, Python 3.11+ (the server's own check), git with push
+# access, and gh signed in to an account that may publish releases on the
+# repository.
 set -euo pipefail
 
 REPO_SLUG="coders-farm-official/domovoi"
@@ -39,7 +47,7 @@ while [ $# -gt 0 ]; do
     --prerelease) prerelease=1 ;;
     --keystore) keystore="${2:?--keystore needs a path}"; shift ;;
     --alias) alias_name="${2:?--alias needs a name}"; shift ;;
-    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
     *) echo "unknown option: $1 (see --help)" >&2; exit 64 ;;
   esac
   shift
@@ -95,9 +103,139 @@ sha256() { "$python" -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[
 # ─── the source ──────────────────────────────────────────────────────────
 [ -z "$(git status --porcelain)" ] || die "the checkout has uncommitted changes: commit or stash them first, so the release is one commit"
 commit="$(git rev-parse HEAD)"
+
+# Fields of a manifest's release (a file, or - for stdin), "-" for none.
+read_release='import json, sys
+try:
+    text = sys.stdin.read() if sys.argv[1] == "-" else open(sys.argv[1], encoding="utf-8").read()
+    rel = json.loads(text).get("release") or {}
+except (OSError, ValueError):
+    rel = {}
+print(" ".join(str(rel.get(k) or "-") for k in sys.argv[2:]))'
+release_fields() { "$python" -c "$read_release" "$@" | tr -d '\r'; }
+
+# A release commit at HEAD: android/release.json, committed on top of the
+# commit its APKs were built from (and nothing else changed), by an earlier
+# run that stopped before it finished. Then this run carries on from there.
+resume=0
+read -r built_from head_version head_code head_cert <<<"$(release_fields android/release.json commit version_name version_code cert_sha256)"
+if printf '%s\n' "$built_from" | grep -Eq '^[0-9a-f]{40}$' && [ "$built_from" != "$commit" ] \
+    && git merge-base --is-ancestor "$built_from" "$commit" 2>/dev/null \
+    && [ "$(git diff --name-only "$built_from" "$commit")" = "android/release.json" ]; then
+  resume=1
+fi
+
+# The branch the release commit goes on: HEAD must be its tip on GitHub
+# (the release is committed on top of it, and the tag points there).
+branch=""; upstream=""
 if [ "$publish" = 1 ]; then
   git fetch --quiet origin || die "git fetch origin failed"
-  [ -n "$(git branch -r --contains "$commit")" ] || die "commit ${commit:0:12} is not on GitHub yet: push it first (the release's tag points at it)"
+  branch="$(git symbolic-ref --quiet --short HEAD)" || die "HEAD is not on a branch: switch to the branch the release goes on (git switch main)"
+  [ "$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)" = "origin/$branch" ] \
+    || die "$branch does not track origin/$branch (git branch --set-upstream-to=origin/$branch)"
+  upstream="$(git rev-parse "origin/$branch")"
+  if [ "$upstream" != "$commit" ] && { [ "$resume" = 0 ] || [ "$upstream" != "$built_from" ]; }; then
+    if git merge-base --is-ancestor "$commit" "$upstream"; then
+      die "origin/$branch has commits this checkout lacks: git pull --ff-only, then run again"
+    fi
+    [ "$resume" = 0 ] || die "origin/$branch moved on after this release's commit was made here: drop it (git reset --keep HEAD~1), git pull --ff-only, and run again (the APKs are built and signed again)"
+    die "commit ${commit:0:12} is not on GitHub yet: push it first (the release is committed on top of it, and its tag points there)"
+  fi
+fi
+
+signed="android/app/build/outputs/apk/release-signed"
+is_prerelease=0
+
+# Push the release commit (unless GitHub has it), publish the release at it
+# (unless it exists), check its tag is that commit, and download each file
+# back by the URL android/release.json names. The manifest at HEAD is the
+# release's from here on.
+publish_release() {  # publish_release RELEASE_COMMIT EXISTS(0|1)
+  local release_commit="$1" exists="$2" work m_commit m_cert notes flag kind tagged
+  if [ "$upstream" != "$release_commit" ]; then
+    say "pushing the release commit ${release_commit:0:12} to origin/$branch…"
+    git push --quiet origin "$release_commit:refs/heads/$branch" \
+      || die "the push failed: android/release.json is committed here but not on GitHub. Fix that and run this script again; it carries on from the release commit (nothing is signed again)"
+  fi
+  work="$(mktemp -d)"
+  # (tr: a Windows Python ends its lines with CR LF.)
+  "$python" -c 'import json
+for e in json.load(open("android/release.json", encoding="utf-8"))["release"]["apks"]:
+    print(e["abi"], e["file"], e["sha256"], e["url"])' | tr -d '\r' > "$work/apks"
+  if [ "$exists" = 0 ]; then
+    read -r m_commit m_cert <<<"$(release_fields android/release.json commit cert_sha256)"
+    notes="$signed/NOTES.md"
+    {
+      echo "Domovoi $version_name. The Android app (versionCode $version_code), built from $m_commit; the release is tagged at $release_commit, which adds android/release.json naming these files. scripts/release/finish-release adds the Windows Setup, SHA256SUMS for every file and the release notes."
+      echo
+      echo "Install the app from your own Domovoi server: on the dashboard, Settings → Satellites → add a spare device (for a room) or Settings → Devices → get the Domovoi app. The server checks these files against android/release.json before it hands them out."
+      echo
+      echo "| file | for | SHA-256 |"
+      echo "|---|---|---|"
+      while read -r abi file sha url; do
+        case "$abi" in arm64-v8a) who="most phones (64-bit)" ;; *) who="older or cheaper phones (32-bit)" ;; esac
+        echo "| $file | $who | \`$sha\` |"
+      done < "$work/apks"
+      echo
+      echo "Signing certificate SHA-256: \`$m_cert\` (check with \`apksigner verify --print-certs <file>\`)."
+    } > "$notes"
+    assets=()
+    : > "$signed/SHA256SUMS"
+    while read -r abi file sha url; do
+      printf '%s  %s\n' "$sha" "$file" >> "$signed/SHA256SUMS"
+      assets+=("$signed/$file")
+    done < "$work/apks"
+    flag=--latest; kind="the Latest release"
+    if [ "$is_prerelease" = 1 ]; then flag=--prerelease; kind="a pre-release"; fi
+    say "publishing $tag on $REPO_SLUG at ${release_commit:0:12}, $kind…"
+    gh release create "$tag" "${assets[@]}" "$signed/SHA256SUMS" --repo "$REPO_SLUG" --target "$release_commit" \
+      --title "Domovoi v$version_name" --notes-file "$notes" "$flag" \
+      || die "gh release create failed: run this script again; it carries on from the release commit"
+  else
+    say "$tag is already on $REPO_SLUG, so checking it"
+  fi
+
+  # The tag (GitHub makes it at --target) must be the release commit.
+  git fetch --quiet origin "refs/tags/$tag:refs/tags/$tag" || die "can't fetch the tag $tag from GitHub"
+  tagged="$(git rev-parse "$tag^{commit}")"
+  [ "$tagged" = "$release_commit" ] || die "the tag $tag is $tagged, not the release commit $release_commit"
+
+  say "checking the published files by their manifest URLs…"
+  while read -r abi file sha url; do
+    curl -fsSL --retry 3 -o "$work/$file" "$url" || die "can't download $url (run this script again to check once more)"
+    [ "$(sha256 "$work/$file")" = "$sha" ] || die "$url is not the file that was signed"
+  done < "$work/apks"
+  rm -rf "$work"
+
+  say "done: $tag is published at ${release_commit:0:12}, with the android/release.json naming its APKs."
+  echo "Next: move the Windows Setup's pins to that commit (windows/installer/pins.iss), commit and push them, then:"
+  echo "    git pull --ff-only"
+  echo "    bash scripts/release/finish-release.sh --tag $tag      # or finish-release.ps1 -Tag $tag on Windows"
+}
+
+# ─── carry on from a release commit ──────────────────────────────────────
+if [ "$resume" = 1 ]; then
+  version_name="$head_version"; version_code="$head_code"
+  tag="v$version_name"
+  is_prerelease="$prerelease"; case "$version_name" in *-*) is_prerelease=1 ;; esac
+  say "Domovoi $version_name (versionCode $version_code): HEAD ${commit:0:12} is its release commit (android/release.json on top of ${built_from:0:12}, which the APKs were built from), so this run carries on from there; nothing is built or signed again"
+  # The first run's checks against the release before it, on what is committed.
+  read -r prev_code prev_cert <<<"$(git show "$built_from:android/release.json" 2>/dev/null | release_fields - version_code cert_sha256 || true)"
+  [ "${prev_code:--}" != "-" ] || prev_code=0
+  [ "$version_code" -gt "$prev_code" ] || die "android/release.json at HEAD names versionCode $version_code, not above the last release's ($prev_code)"
+  [ "${prev_cert:--}" = "-" ] || [ "$prev_cert" = "$head_cert" ] || die "android/release.json at HEAD names another key ($head_cert) than the last release's ($prev_cert)"
+  exists=0
+  if [ "$publish" = 1 ] && gh release view "$tag" --repo "$REPO_SLUG" >/dev/null 2>&1; then exists=1; fi
+  if [ "$exists" = 0 ]; then
+    "$python" -m domovoi.android_app check android/release.json "$signed" \
+      || die "the signed APKs android/release.json pins are not in $signed (or have changed), so they can't be published from here: drop the release commit (git reset --keep HEAD~1), raise versionCode, and release again"
+  fi
+  if [ "$publish" = 0 ]; then
+    say "not published (--no-publish). A real run pushes the release commit if GitHub lacks it, publishes $tag at it unless it exists, and checks the files."
+    exit 0
+  fi
+  publish_release "$commit" "$exists"
+  exit 0
 fi
 
 # ─── build ───────────────────────────────────────────────────────────────
@@ -127,6 +265,8 @@ done
 # The project-wide tag, v<versionName> (v1.0.0-rc1): domovoi.android_app's
 # tag_for, which the manifest's URLs are checked against.
 tag="v$version_name"
+# A version with a suffix (1.0.0-rc2) is a pre-release, never Latest.
+is_prerelease="$prerelease"; case "$version_name" in *-*) is_prerelease=1 ;; esac
 say "Domovoi $version_name (versionCode $version_code), commit ${commit:0:12}"
 
 # versionCode is YYMMDDNN (android/app/build.gradle.kts): the build's date
@@ -147,8 +287,10 @@ PY
 prev="${prev//$'\r'/}"
 prev_code="${prev%% *}"; prev_cert="${prev##* }"
 [ "$version_code" -gt "$prev_code" ] || die "versionCode $version_code is not above the last release's ($prev_code): raise versionCode (YYMMDDNN: the build's date and that day's number) and versionName in android/app/build.gradle.kts, commit, and run again"
-if [ "$publish" = 1 ] && gh release view "$tag" --repo "$REPO_SLUG" >/dev/null 2>&1; then
-  die "a release $tag already exists on $REPO_SLUG"
+if [ "$publish" = 1 ]; then
+  ! gh release view "$tag" --repo "$REPO_SLUG" >/dev/null 2>&1 || die "a release $tag already exists on $REPO_SLUG"
+  remote_tag="$(git ls-remote --tags origin "refs/tags/$tag")" || die "git ls-remote origin failed"
+  [ -z "$remote_tag" ] || die "the tag $tag already exists on GitHub (a published tag never moves: raise the version)"
 fi
 
 # ─── sign ────────────────────────────────────────────────────────────────
@@ -183,7 +325,6 @@ DOMOVOI_RELEASE_KEY_PASS="$(read_secret 'Key password (Enter if the same): ')"
 export DOMOVOI_RELEASE_KS_PASS DOMOVOI_RELEASE_KEY_PASS
 trap 'unset DOMOVOI_RELEASE_KS_PASS DOMOVOI_RELEASE_KEY_PASS' EXIT
 
-signed="android/app/build/outputs/apk/release-signed"
 rm -rf "$signed"; mkdir -p "$signed"
 for abi in "${ABIS[@]}"; do
   name="domovoi-$version_name-$abi.apk"
@@ -231,50 +372,17 @@ staged="$signed/release.json"
 "$python" -m domovoi.android_app check "$staged" "$signed" || die "the server's own check refuses these APKs"
 
 if [ "$publish" = 0 ]; then
+  kind="the Latest release"; [ "$is_prerelease" = 1 ] && kind="a pre-release"
   say "not published (--no-publish). Signed APKs, SHA256SUMS and the manifest it would commit: $signed/"
+  say "A real run commits that manifest (android: release $version_name [skip ci]), pushes it, and publishes $tag at that commit as $kind."
   exit 0
 fi
 
-# ─── publish ─────────────────────────────────────────────────────────────
-notes="$signed/NOTES.md"
-{
-  echo "Domovoi for Android $version_name (versionCode $version_code), built from $commit."
-  echo
-  echo "Install it from your own Domovoi server: on the dashboard, Settings → Satellites → add a spare device (for a room) or Settings → Devices → get the Domovoi app. The server checks these files against android/release.json before it hands them out."
-  echo
-  echo "| file | for | SHA-256 |"
-  echo "|---|---|---|"
-  for abi in "${ABIS[@]}"; do
-    name="domovoi-$version_name-$abi.apk"
-    case "$abi" in arm64-v8a) who="most phones (64-bit)" ;; *) who="older or cheaper phones (32-bit)" ;; esac
-    echo "| $name | $who | \`$(sha256 "$signed/$name")\` |"
-  done
-  echo
-  echo "Signing certificate SHA-256: \`$cert\` (check with \`apksigner verify --print-certs <file>\`)."
-} > "$notes"
-say "publishing $tag on $REPO_SLUG…"
-assets=()
-for abi in "${ABIS[@]}"; do assets+=("$signed/domovoi-$version_name-$abi.apk"); done
-pre=(); [ "$prerelease" = 1 ] && pre=(--prerelease)
-gh release create "$tag" "${assets[@]}" "$signed/SHA256SUMS" --repo "$REPO_SLUG" --target "$commit" \
-  --title "Domovoi v$version_name" --notes-file "$notes" ${pre[@]+"${pre[@]}"} || die "gh release create failed"
-
-say "checking the published files by their manifest URLs…"
-check_dir="$(mktemp -d)"
-# (tr: a Windows Python ends its lines with CR LF.)
-"$python" - "$staged" <<'PY' | tr -d '\r' > "$check_dir/urls"
-import json, sys
-for e in json.load(open(sys.argv[1], encoding="utf-8"))["release"]["apks"]:
-    print(e["url"], e["file"], e["sha256"])
-PY
-while read -r url name want; do
-  curl -fsSL --retry 3 -o "$check_dir/$name" "$url" || die "can't download $url"
-  [ "$(sha256 "$check_dir/$name")" = "$want" ] || die "$url is not the file that was signed"
-done < "$check_dir/urls"
-rm -rf "$check_dir"
-
+# ─── publish: commit the manifest, push it, tag that commit ──────────────
 cp "$staged" android/release.json
-say "done. Now commit the manifest so servers start handing out $version_name:"
-echo "    git add android/release.json"
-echo "    git commit -m \"android: release $version_name [skip ci]\""
-echo "    git push"
+git add -- android/release.json || die "git add android/release.json failed"
+git commit --quiet -m "android: release $version_name [skip ci]" -- android/release.json \
+  || die "git commit failed (android/release.json is written, not committed: git checkout -- android/release.json undoes it)"
+release_commit="$(git rev-parse HEAD)"
+say "committed android/release.json as ${release_commit:0:12} (android: release $version_name [skip ci]): the tag goes there"
+publish_release "$release_commit" 0
