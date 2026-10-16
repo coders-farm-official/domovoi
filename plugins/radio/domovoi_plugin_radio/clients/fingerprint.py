@@ -157,26 +157,30 @@ MAX_CHILDREN = 2
 
 class FingerprintTimeout(Exception):
     """Decoding and hashing one file ran past its time limit; the child
-    doing it (and anything it started) was killed. A verdict about the
-    file: the fingerprinter does not try it again."""
+    doing it (and anything it started) was killed. The fingerprinter tries
+    the file again later, and gives up on it after a few of these
+    (workers/track_fingerprinter.py)."""
 
 
 class FingerprintFailed(Exception):
-    """This attempt failed for a reason other than the file itself: the
-    child could not start, was stopped (a ``systemctl stop`` sends SIGTERM
-    to it too) or crashed, the audio libraries are missing, or its answer
-    was garbled. Try the file again later; it says nothing about the file."""
+    """This attempt failed for a reason other than the file's content: the
+    file isn't there to read (missing, a media disk not mounted, no
+    permission), the child could not start, was stopped (a ``systemctl
+    stop`` sends SIGTERM to it too) or crashed, the audio libraries are
+    missing, or its answer was garbled. Try the file again later; it says
+    nothing about the file."""
 
 
 async def fingerprint_file(
     file_path: str | Path, *, timeout_sec: float = FINGERPRINT_TIMEOUT_SEC
 ) -> list[FingerprintRow]:
     """Compute landmark hashes for one audio file, in a child process.
-    Empty list when the file gives none: missing, unreadable (the decoder
-    refused it), too short or silent, all verdicts about the file. Raises
+    Empty list when the file is there and gives none: the decoder refused
+    it, or it is too short or silent, verdicts about the file. Raises
     :class:`FingerprintTimeout` when the work ran past ``timeout_sec`` and
     was killed, and :class:`FingerprintFailed` when the attempt failed for
-    any other reason (try again later)."""
+    any other reason, a file that isn't there to read included (try again
+    later)."""
     return await _hash_file_in_child(Path(file_path), timeout_sec)
 
 
@@ -268,8 +272,9 @@ async def match_sample(
 # _MAGIC, the row count (uint32) and then each row as 8 hash bytes plus
 # the offset (int32), little-endian, to stdout; anything it has to say
 # goes to stderr. Exit status 0: the rows (possibly none); otherwise one
-# of the _EXIT_* reasons, which the parent treats like the in-process
-# failures it replaced: an empty result.
+# of the _EXIT_* reasons. Only _EXIT_LOAD (the decoder refused a file that
+# is there) is a verdict, an empty result; every other one is
+# FingerprintFailed in the parent.
 
 _CHILD_MODULE = "domovoi_plugin_radio.clients.fingerprint"
 _MAGIC = b"DOMOVOI-FP1\n"
@@ -279,6 +284,9 @@ _EXIT_USAGE = 2
 _EXIT_DEPS = 3
 _EXIT_LOAD = 4
 _EXIT_HASH = 5
+# The file isn't there to read: missing, a media disk not mounted, no
+# permission, an I/O error. Says nothing about its content.
+_EXIT_NOT_THERE = 6
 # The tail of a child's stderr the parent puts in its log line.
 _STDERR_MAX = 600
 # How long a killed child gets to be reaped before it is left to the OS.
@@ -407,15 +415,18 @@ def _parse_child_output(out: bytes) -> list[FingerprintRow] | None:
 
 async def _hash_file_in_child(path: Path, timeout_sec: float) -> list[FingerprintRow]:
     """Decode and hash ``path`` in a child process. The rows; [] for a
-    verdict about the file (missing, the decoder refused it, nothing to
-    hash); :class:`FingerprintTimeout` when the child ran past
+    verdict about the file (the decoder refused it, nothing to hash);
+    :class:`FingerprintFailed` for a file that isn't there (review round 2,
+    case L7: a media disk not mounted marked a track a minute for good);
+    :class:`FingerprintTimeout` when the child ran past
     ``timeout_sec`` (killed first); :class:`FingerprintFailed` for any
     other failure. The time limit is the child's: once it has exited, what
     it started may not hold its pipes open past :data:`_PIPE_GRACE_SEC`
     (that group is killed). A caller cancelled while it waits takes the
     child down with it."""
-    if not path.exists():
-        return []
+    if not path.is_file():
+        raise FingerprintFailed(
+            f"{path} isn't there to read (missing, or its disk not mounted?)")
     async with _child_slot():
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -466,6 +477,7 @@ async def _hash_file_in_child(path: Path, timeout_sec: float) -> list[Fingerprin
     if code != 0:
         why = (f"stopped by signal {-code}" if code is not None and code < 0
                else {_EXIT_DEPS: "the audio libraries are missing",
+                     _EXIT_NOT_THERE: "the file isn't there to read (missing, or its disk not mounted?)",
                      _EXIT_HASH: "hashing crashed",
                      _EXIT_USAGE: "it was started wrongly"}.get(code, f"exit {code}"))
         raise FingerprintFailed(f"fingerprinting {path} failed ({why}): {detail[-200:]}")
@@ -484,13 +496,21 @@ def _child_main(argv: list[str]) -> int:
         with contextlib.suppress(OSError):
             os.nice(_CHILD_NICE)
     path = Path(argv[1])
+    if not path.is_file():
+        print(f"not there: {path}", file=sys.stderr)
+        return _EXIT_NOT_THERE
     try:
         samples = _load_audio_to_mono_16k(path)
     except _DepMissingError as e:
         print(f"fingerprint deps missing: {e}", file=sys.stderr)
         return _EXIT_DEPS
-    except Exception as e:  # noqa: BLE001 - any decode failure is "unreadable"
+    except Exception as e:  # noqa: BLE001 - any other decode failure is "unreadable"
         print(f"load failed: {type(e).__name__}: {e}", file=sys.stderr)
+        # Reading the file failed (gone meanwhile, its disk went away, no
+        # permission, an I/O error), or the decoder refused what it read.
+        # Only the second is about the file.
+        if isinstance(e, OSError) or not path.is_file():
+            return _EXIT_NOT_THERE
         return _EXIT_LOAD
     rows: list[FingerprintRow] = []
     # Need at least 1 second of audio for meaningful hashes.
@@ -519,16 +539,17 @@ class _DepMissingError(Exception):
 
 
 def _load_audio_to_mono_16k(file_path: Path) -> "Any":
-    """Decode an audio file to a mono 16 kHz float32 array; None for
-    unreadable files."""
+    """Decode an audio file to a mono 16 kHz float32 array. Raises
+    FileNotFoundError for a file that isn't there, and whatever the
+    decoder raises for one it refuses."""
     try:
         import librosa  # type: ignore[import]
         import numpy as np  # type: ignore[import]
     except ImportError as e:
         raise _DepMissingError(str(e)) from e
 
-    if not file_path.exists():
-        return None
+    if not file_path.is_file():
+        raise FileNotFoundError(str(file_path))
     samples, _ = librosa.load(
         str(file_path),
         sr=_SAMPLE_RATE,

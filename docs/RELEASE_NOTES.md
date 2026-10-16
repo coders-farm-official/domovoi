@@ -18,8 +18,9 @@ journal in RAM). What changed:
   good). It now runs in a child process, below normal priority, killed
   after `RADIO_FINGERPRINTER_TIMEOUT_SEC` (300 s; a sample 60 s), two at
   a time. Only a file the decoder refuses is skipped for good at once;
-  any other failure (a `systemctl stop` mid-track, a crash, the audio
-  libraries missing, a timeout) is tried again later (10 min, doubling to
+  any other failure (a file that isn't there, as with the media disk not
+  mounted, a `systemctl stop` mid-track, a crash, the audio libraries
+  missing, a timeout) is tried again later (10 min, doubling to
   a day; a track that times out 3 times is then skipped), and 3 failures
   in a row pause the fingerprinter (an hour, doubling to a day), said in
   the log and on the Plugins page under the radio plugin (`worker_notes`,

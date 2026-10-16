@@ -207,6 +207,55 @@ async def test_only_a_verdict_about_the_file_is_an_empty_result(tmp_path, monkey
     assert await fp.match_sample(None, audio) is None  # type: ignore[arg-type]
 
 
+async def test_a_file_that_is_not_there_never_reaches_a_verdict(tmp_path, monkeypatch) -> None:
+    """Review round 2, case L7. Missing before the child starts: a failure,
+    and no child at all. Missing (or unreadable from disk) by the time the
+    child reads it: its own exit, a failure in the parent, never the
+    decoder's "unreadable" verdict."""
+    async def no_child(*a, **k):
+        raise AssertionError("a child was started for a file that isn't there")
+
+    monkeypatch.setattr(fp.asyncio, "create_subprocess_exec", no_child)
+    with pytest.raises(fp.FingerprintFailed, match="isn't there"):
+        await fp.fingerprint_file(tmp_path / "missing.flac")
+    monkeypatch.undo()
+    audio = tmp_path / "track.flac"
+    audio.write_bytes(b"x")
+    _stand_in(monkeypatch, f"import sys; sys.exit({fp._EXIT_NOT_THERE})")
+    with pytest.raises(fp.FingerprintFailed, match="isn't there"):
+        await fp.fingerprint_file(audio)
+
+
+def test_the_child_tells_a_file_not_there_from_one_it_cant_decode(tmp_path, monkeypatch) -> None:
+    present = tmp_path / "song.flac"
+    present.write_bytes(b"x")
+
+    def no_libraries(path):
+        raise fp._DepMissingError("No module named 'librosa'")
+
+    # Not there: said so before the decoder is even loaded, so the reason
+    # is the file, even on a box whose audio libraries are missing too.
+    monkeypatch.setattr(fp, "_load_audio_to_mono_16k", no_libraries)
+    assert fp._child_main(["fp", str(present)]) == fp._EXIT_DEPS
+    assert fp._child_main(["fp", str(tmp_path / "gone.flac")]) == fp._EXIT_NOT_THERE
+    for err, want in ((FileNotFoundError("gone meanwhile"), fp._EXIT_NOT_THERE),
+                      (PermissionError("no permission"), fp._EXIT_NOT_THERE),
+                      (OSError(5, "Input/output error"), fp._EXIT_NOT_THERE),
+                      (ValueError("not an audio stream"), fp._EXIT_LOAD),
+                      (RuntimeError("Error opening: Format not recognised"), fp._EXIT_LOAD)):
+        def load(path, _e=err):
+            raise _e
+        monkeypatch.setattr(fp, "_load_audio_to_mono_16k", load)
+        assert fp._child_main(["fp", str(present)]) == want, repr(err)
+
+    # The decoder failing because the file vanished under it is not a verdict.
+    def vanishing(path):
+        path.unlink()
+        raise RuntimeError("Error opening: System error")
+    monkeypatch.setattr(fp, "_load_audio_to_mono_16k", vanishing)
+    assert fp._child_main(["fp", str(present)]) == fp._EXIT_NOT_THERE
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
 async def test_a_child_stopped_by_a_signal_is_a_failure_not_a_verdict(tmp_path, monkeypatch) -> None:
     """``systemctl stop`` SIGTERMs the core's whole cgroup, the child too."""

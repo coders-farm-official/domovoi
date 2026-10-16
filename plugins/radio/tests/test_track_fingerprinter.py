@@ -181,6 +181,27 @@ async def test_failures_in_a_row_pause_the_worker(radio_sdk, db_session, monkeyp
     assert worker.status_note is None and _note_of(worker) is None
 
 
+async def test_an_unmounted_media_disk_pauses_the_worker_and_marks_nothing(
+    radio_sdk, db_session, tmp_path
+) -> None:
+    """Review round 2, case L7, with the real fingerprint_file: the media
+    disk isn't mounted, so every track's file is missing. Nothing is
+    marked; after FAILURES_BEFORE_PAUSE tracks the worker pauses, saying
+    why; when the disk is back the same tracks are fingerprinted."""
+    disk = tmp_path / "music-disk"
+    ids = [await _insert_track(db_session, str(disk / f"song{i}.flac")) for i in range(5)]
+    clock = {"t": 1000.0}
+    worker = TrackFingerprinter(radio_sdk, clock=lambda: clock["t"])
+    for _ in range(tf_mod.FAILURES_BEFORE_PAUSE):
+        assert await worker.tick() == 0
+    assert await _fingerprint_rows(db_session) == []
+    assert worker.status_note and "paused for 1 h" in worker.status_note
+    assert "isn't there" in worker.status_note
+    assert await worker.tick() == 0                           # paused
+    assert set(worker._retry) == set(ids[: tf_mod.FAILURES_BEFORE_PAUSE])
+    assert await _fingerprint_rows(db_session) == []           # still nothing marked
+
+
 async def test_resumes_where_it_left_off(radio_sdk, db_session, monkeypatch) -> None:
     a = await _insert_track(db_session, "C:/music/a.mp3")
     b = await _insert_track(db_session, "C:/music/b.mp3")

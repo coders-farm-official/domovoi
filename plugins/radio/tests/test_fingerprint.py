@@ -84,8 +84,19 @@ async def test_too_short_audio_rejected(tmp_path) -> None:
     assert await fp.fingerprint_file(wav) == []
 
 
-async def test_unreadable_file_returns_empty(tmp_path) -> None:
-    assert await fp.fingerprint_file(tmp_path / "missing.wav") == []
+async def test_a_file_the_decoder_refuses_returns_empty(tmp_path) -> None:
+    """There, but not audio: a verdict about the file (marked, not retried)."""
+    junk = tmp_path / "not-audio.wav"
+    junk.write_bytes(b"this is not a wav file at all" * 10)
+    assert await fp.fingerprint_file(junk) == []
+
+
+async def test_a_file_that_is_not_there_is_a_failure_not_a_verdict(tmp_path) -> None:
+    """Review round 2, case L7: a media disk not mounted made every track's
+    file missing, and each was marked for good, a track a minute. Missing
+    is FingerprintFailed: tried again later, counted toward the pause."""
+    with pytest.raises(fp.FingerprintFailed, match="isn't there"):
+        await fp.fingerprint_file(tmp_path / "unmounted" / "missing.wav")
 
 
 @requires_db

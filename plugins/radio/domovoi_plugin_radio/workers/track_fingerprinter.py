@@ -14,11 +14,12 @@ Each tick:
 CPU-bound (~10-30 s per song), so the decode and the hashing run in a
 child process under ``fingerprinter_timeout_sec`` (clients/fingerprint.py),
 never on the core's event loop. Only a clean verdict about the FILE is
-final at once: it gave no hashes (the decoder refused it, too short,
-silent: a sentinel row with offset_ms 0); it isn't tried again (delete its
-row to retry). Any other failure (the child was stopped, as every
-``systemctl stop`` does, or crashed, couldn't start, the audio libraries
-are missing, or it ran past the time limit, which a busy box can cause
+final at once: the file is there and gave no hashes (the decoder refused
+it, too short, silent: a sentinel row with offset_ms 0); it isn't tried
+again (delete its row to retry). Any other failure (the file isn't there
+to read, as with a media disk not mounted; the child was stopped, as every
+``systemctl stop`` does, or crashed, couldn't start; the audio libraries
+are missing; or it ran past the time limit, which a busy box can cause
 too) is tried again later, after 10 minutes and then twice as long each
 time (at most a day). A track that runs past the time limit
 :data:`TIMEOUTS_BEFORE_MARK` times is marked then (offset_ms -1), so a
@@ -143,8 +144,8 @@ class TrackFingerprinter(Worker):
             return 0
         self._worked(track_id)
         if not rows:
-            # Nothing produced — unreadable file, too short, or the
-            # audio deps are missing. Insert one sentinel row (empty
+            # Nothing produced from a file that is there: the decoder
+            # refused it, or it is too short. Insert one sentinel row (empty
             # BYTEA — a real hash is always 8 bytes) so the NOT EXISTS
             # gate skips this track next tick instead of retrying
             # forever. The matcher's `= ANY(...)` can never include
