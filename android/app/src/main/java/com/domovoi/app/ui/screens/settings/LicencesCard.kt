@@ -27,9 +27,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.domovoi.app.LocalToast
 import com.domovoi.app.assistant.AssistantSupport
 import com.domovoi.app.assistant.ModelCatalog
 import com.domovoi.app.ui.components.SectionLabel
+import com.domovoi.app.ui.components.openWebLink
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -101,6 +103,35 @@ internal val OPEN_SOURCE_PARTS: List<OpenSourcePart> = listOf(
 
 private const val LITERT_LM = "LiteRT-LM 0.18.0"
 
+/**
+ * docs/LICENSES.md as GitHub shows it on main: every model, voice and
+ * dataset a Domovoi server, this app and the wake-word trainer download,
+ * with its licence and what it means for a household and for a
+ * redistributor. The phone's own downloads are listed above as well; the
+ * page adds the server's (the wake word hey_jarvis, CC BY-NC-SA 4.0, and
+ * llama3.2:3b, the Llama 3.2 Community License).
+ */
+internal const val MODEL_LICENCES_URL: String = "https://github.com/coders-farm-official/domovoi/blob/main/docs/LICENSES.md"
+
+/** The line and the button that open [MODEL_LICENCES_URL]. */
+@Composable
+internal fun ModelLicencesLink() {
+    val context = LocalContext.current
+    val toast = LocalToast.current
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            "The models, voices and wake words a Domovoi server downloads have licences of their own: two of its " +
+                "defaults are not permissive (the wake word hey_jarvis is non-commercial, CC BY-NC-SA 4.0; the " +
+                "answer model llama3.2:3b is under the Llama 3.2 Community License).",
+            style = MaterialTheme.typography.bodySmall,
+            color = Domovoi.colors.fgMuted,
+        )
+        TextButton(onClick = { if (!openWebLink(context, MODEL_LICENCES_URL)) toast("no browser found to open the page") }) {
+            Text("licences of what Domovoi downloads", color = Domovoi.colors.brand)
+        }
+    }
+}
+
 /** The card's list for this install. Without the on-device assistant (a
  *  32-bit phone or APK, [AssistantSupport]) its downloads are left out, as
  *  nothing downloads them; LiteRT-LM stays, as its Java part is in every
@@ -140,6 +171,7 @@ internal fun LicencesCard() {
                     part.notices.forEach { path -> NoticeToggle(path, open) { open = it } }
                 }
             }
+            ModelLicencesLink()
             SectionLabel("every library in this build")
             Text(OpenSourceLicences.summary(libraries), style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
             if (libraries.isNotEmpty()) {

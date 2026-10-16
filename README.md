@@ -602,6 +602,7 @@ Want to write one? Start at the
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | When the house spirit sulks — fixes for common problems |
 | [Home Assistant](docs/HOME_ASSISTANT.md) | No integration; running both side by side and spoken announcements from Home Assistant |
 | [Security & privacy](docs/SECURITY_PRIVACY.md) | Threat model, what leaves your network (and what never does) |
+| [Licences of what Domovoi downloads](docs/LICENSES.md) | Every model, voice and dataset a server, the app or the trainer downloads, its licence, and what that means for a household and for a redistributor |
 | [Container guard](docs/CONTAINER_GUARD.md) | Which Docker containers Domovoi watches, the alerts when one fails, and the freeze when one looks tampered with |
 | [Satellite hardware](docs/SATELLITE_HARDWARE.md) | Parts list and step-by-step Pi satellite build |
 | [Pi provisioning checklist](satellite/PROVISIONING.md) | Every command and gotcha for building a Pi satellite by hand |
@@ -653,5 +654,10 @@ The Android app's on-phone assistant runs Gemma 4 E2B (Apache-2.0) on
 LiteRT-LM (Apache-2.0), and listens with Moonshine and Silero VAD (both
 MIT) through sherpa-onnx (Apache-2.0). Room mode wakes with openWakeWord's
 models on ONNX Runtime (MIT).
+
+The question-answering model a server installs, `llama3.2:3b`, is under the
+Llama 3.2 Community License. Every model, voice and dataset Domovoi
+downloads, with its licence and what that means for a household and for
+anyone passing it on: [docs/LICENSES.md](docs/LICENSES.md).
 
 *May your stove stay warm and your wake word never misfire.* 🐈

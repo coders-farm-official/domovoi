@@ -2586,6 +2586,10 @@ const ServerFingerprint = () => {
   );
 };
 
+// docs/LICENSES.md as GitHub shows it: every model, voice and dataset a
+// server downloads, with its licence (domovoi/tests/test_licences_doc.py).
+const LICENCES_DOC_URL = 'https://github.com/coders-farm-official/domovoi/blob/main/docs/LICENSES.md';
+
 const AboutPanel = () => (
   <Card title="About Domovoi"
         sub="The local-first home voice assistant that runs entirely on your own hardware.">
@@ -2605,6 +2609,14 @@ const AboutPanel = () => (
         voices, the music library, timers and intercom all work with no internet. Only a few features
         (web search, media-provider plugins) need the network, and they degrade gracefully instead of
         breaking.
+      </div>
+      <div>
+        Domovoi's code is MIT. The models, voices and wake words this server downloads have their
+        own licences; two defaults are not permissive: the wake word <code>hey_jarvis</code> (CC
+        BY-NC-SA 4.0, non-commercial) and the answer model <code>llama3.2:3b</code> (the Llama 3.2
+        Community License). Fine at home; the list says what each means for anyone passing them
+        on: <a href={LICENCES_DOC_URL} target="_blank" rel="noopener noreferrer"
+               style={{ color: 'var(--brand)' }}>licences of what Domovoi downloads</a>.
       </div>
       <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
         Build / version identifiers live under Configuration → Version.
