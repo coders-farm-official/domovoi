@@ -331,17 +331,32 @@ def test_a_started_core_leaves_its_ready_note(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(loop_watchdog, "_INSTALLED", True)
     asyncio.run(started())
     assert loop_watchdog.read_ready()["pid"] == os.getpid()
+    # This process started a while ago (its real /proc age on Linux; a
+    # stand-in elsewhere): the note it just wrote is its own.
+    if core_restart.process_uptime_sec(os.getpid()) is None:
+        monkeypatch.setattr(core_restart, "process_uptime_sec", lambda pid: 30.0)
     assert core_restart._said_ready(os.getpid())
     assert not core_restart._said_ready(os.getpid() + 1)     # another process's note
 
 
-def test_install_honours_the_switch(monkeypatch) -> None:
+def test_install_honours_the_switch(tmp_path, monkeypatch) -> None:
     class S:
         loop_watchdog_enabled = False
 
+    # An earlier boot's note, naming the PID this process happens to have
+    # (review round 2, I3): a core starting is not ready, whatever it says.
+    note = tmp_path / "run" / "core-ready.json"
+    note.parent.mkdir()
+    note.write_text(json.dumps({"pid": os.getpid(), "at": 1_700_000_000}), encoding="utf-8")
+    monkeypatch.setattr(loop_watchdog, "logs_dir", lambda: tmp_path / "logs")
+    monkeypatch.setattr(loop_watchdog, "ready_path", lambda: note)
     monkeypatch.setattr(loop_watchdog, "_ACTIVE", None)
+    monkeypatch.setattr(loop_watchdog, "_INSTALLED", False)
+    monkeypatch.setattr(loop_watchdog, "_FAULT_FILE", None)
     monkeypatch.delenv("NOTIFY_SOCKET", raising=False)
     assert loop_watchdog.install(S()) is None
+    assert not note.exists()
+    assert loop_watchdog.read_ready() is None
     # Without one installed (every test that starts the app), the lifespan
     # hooks do nothing.
     loop_watchdog.detach()

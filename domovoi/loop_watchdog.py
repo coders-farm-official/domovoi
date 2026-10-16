@@ -144,6 +144,15 @@ def _note_ready(path: Path | None = None) -> None:
         pass
 
 
+def _clear_ready(path: Path | None = None) -> None:
+    """A core starting: whatever note is there is an earlier process's
+    (an earlier boot's, whose PID this one may have), not this one's."""
+    try:
+        (path or ready_path()).unlink()
+    except OSError:  # none there, or not ours to remove: nothing to clear
+        pass
+
+
 def _fsync_dir(path: Path) -> None:
     if sys.platform == "win32":
         return
@@ -714,6 +723,9 @@ def install(settings: Any) -> LoopWatchdog | None:
     if _ACTIVE is not None:
         return _ACTIVE
     _INSTALLED = True
+    # Not ready yet: an old note (an earlier boot's core may have had this
+    # PID) must not say this one finished starting (review round 2, I3).
+    _clear_ready()
     # The dumps, whether or not the watchdog itself is on: the dashboard
     # sends SIGUSR1 before it ends a core that doesn't answer, which with no
     # handler would end it with nothing written.

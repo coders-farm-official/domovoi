@@ -81,6 +81,10 @@ PROBE_EVERY_SEC = 1.0
 # Beyond the core's own stall threshold: its watchdog's exit, systemd's
 # RestartSec and the start of the next process all fit in it.
 SILENCE_MARGIN_SEC = 15.0
+# The longest gap between two silent probes that still counts as one
+# silence: a press probes every second, the page's status read every 5 s
+# (components.jsx CORE_STATUS_POLL_MS), each probe taking at most 3 s.
+SILENCE_GAP_SEC = 12.0
 # Between the stack dump (SIGUSR1) and the kill.
 DUMP_GRACE_SEC = 1.0
 # How long the kill gets to show (the process gone, or systemd on a new one).
@@ -91,9 +95,12 @@ _WINDOWS = sys.platform == "win32"
 # One restart at a time: the main PID this process last ended, and when.
 _LAST_KILL: tuple[int, float] | None = None
 _LAST_KILL_HOLD_SEC = 60.0
-# Main PID -> time.monotonic() of the first probe that got no answer from
-# it, since the last one that did. Cleared whenever any answer comes.
-_SILENT_SINCE: dict[int, float] = {}
+# Main PID -> (since, last): time.monotonic() of the first probe of an
+# unbroken run that got no answer from it, and of the latest. Cleared
+# whenever any answer comes; a run is broken by a gap longer than
+# SILENCE_GAP_SEC between silent probes, since nobody looked in between
+# and the core may have answered meanwhile (review round 2, case N).
+_SILENT_SINCE: dict[int, tuple[float, float]] = {}
 # One press at a time: a second press (another admin, another tab) while
 # one is waiting out the silence or ending the core is told so, rather
 # than signalling the same process again or ending the new one.
@@ -168,15 +175,20 @@ async def probe_core(timeout: float = PROBE_TIMEOUT_SEC, *, with_health: bool = 
 
 
 def _note_probe(pid: int, alive: bool) -> float:
-    """Record a probe against ``pid``; how long it has been silent (0 when
-    it answered)."""
+    """Record a probe against ``pid``; how long it has been silent without
+    a break (0 when it answered). Only silence somebody watched counts: a
+    gap of more than SILENCE_GAP_SEC since the last silent probe (the page
+    was closed, nobody asked) starts the count again."""
     now = time.monotonic()
     if alive:
         _SILENT_SINCE.clear()
         return 0.0
     for other in [p for p in _SILENT_SINCE if p != pid]:
         del _SILENT_SINCE[other]
-    since = _SILENT_SINCE.setdefault(pid, now)
+    since, last = _SILENT_SINCE.get(pid, (now, now))
+    if now - last > SILENCE_GAP_SEC:
+        since = now
+    _SILENT_SINCE[pid] = (since, now)
     return now - since
 
 
@@ -277,10 +289,25 @@ def process_uptime_sec(pid: int) -> float | None:
         return None
 
 
+# Clock granularity between the note's time and the process's start.
+_READY_SLACK_SEC = 2.0
+
+
 def _said_ready(pid: int) -> bool:
-    """The core process ``pid`` finished starting (its ready note)."""
+    """The core process ``pid`` finished starting: its ready note names
+    ``pid`` and was written after that process started. A note from before
+    (an earlier boot whose core had the same PID, review round 2 case I3)
+    doesn't count, nor one whose age can't be told (no ``/proc``): a core
+    that may still be starting is left to start. The core also removes the
+    note at each start (loop_watchdog.install)."""
     note = loop_watchdog.read_ready()
-    return bool(note and note.get("pid") == pid)
+    if not note or note.get("pid") != pid:
+        return False
+    uptime = process_uptime_sec(pid)
+    at = note.get("at")
+    if uptime is None or not isinstance(at, (int, float)):
+        return False
+    return at >= time.time() - uptime - _READY_SLACK_SEC
 
 
 def manual_command() -> str | None:

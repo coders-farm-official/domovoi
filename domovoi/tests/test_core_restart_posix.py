@@ -107,3 +107,54 @@ def test_end_core_refuses_a_pid_that_is_no_longer_the_cores(monkeypatch) -> None
     finally:
         child.kill()
         child.wait()
+
+
+def test_end_core_checks_again_between_the_dump_and_the_kill(tmp_path, monkeypatch) -> None:
+    """Review round 2 note 4: the PID is checked again after SIGUSR1's
+    grace, before SIGKILL. Here systemd moves on during the grace (a new
+    main PID), while the old process is still there: it is not killed."""
+    marker = tmp_path / "usr1"
+    child = _child("domovoi.main", code=(
+        "import signal, time\n"
+        f"signal.signal(signal.SIGUSR1, lambda *a: open(r'{marker}', 'w').write('dumped'))\n"
+        "print('ready', flush=True)\n"
+        "while True: time.sleep(1)\n"
+    ))
+    try:
+        assert child.stdout.readline().strip() == "ready"
+        monkeypatch.setattr(core_restart, "_LAST_KILL", None)
+        # The main PID systemd reports: this child until it has dumped its
+        # stacks, then another process.
+        monkeypatch.setattr(core_restart, "core_unit", lambda: core_restart.CoreUnit(
+            "loaded", "active", "running", 999999 if marker.exists() else child.pid,
+            "on-failure", "notify", None))
+        notes: list[str] = []
+        monkeypatch.setattr(core_restart.loop_watchdog, "note_last_stall",
+                            lambda reason, **kw: notes.append(reason))
+        assert core_restart.end_core(child.pid) is False
+        assert marker.read_text() == "dumped"           # the dump went out
+        assert child.poll() is None                     # the kill did not
+        assert notes == []
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_a_ready_note_older_than_the_process_is_not_its(tmp_path, monkeypatch) -> None:
+    """Review round 2, case I3, with the real /proc: a note naming this PID
+    from before the process started (an earlier boot's) doesn't say it
+    finished starting; one written since does."""
+    import json
+
+    note = tmp_path / "core-ready.json"
+    monkeypatch.setattr(core_restart.loop_watchdog, "ready_path", lambda: note)
+    child = _child("domovoi.main")
+    try:
+        time.sleep(1.5)
+        note.write_text(json.dumps({"pid": child.pid, "at": time.time() - 3600}), encoding="utf-8")
+        assert core_restart._said_ready(child.pid) is False
+        note.write_text(json.dumps({"pid": child.pid, "at": time.time()}), encoding="utf-8")
+        assert core_restart._said_ready(child.pid) is True
+    finally:
+        child.kill()
+        child.wait()

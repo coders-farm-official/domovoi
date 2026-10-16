@@ -868,12 +868,17 @@ truly stuck, never one that is busy, slow or missing its database:
   a core truly frozen has usually ended itself first. The page reads the
   status every 5 s while the core is silent, and that silence counts, so a
   press after a minute of watching acts at once; otherwise the button says
-  *making sure it's stuck* while it waits.
+  *making sure it's stuck* while it waits. Only silence somebody watched
+  counts: more than 12 s between two silent reads (the page was closed;
+  the core may have answered meanwhile) starts the count again.
 - **Not while it starts.** A core systemd reports as starting, one that
   restarted meanwhile (a new main PID) and, under a unit changed to
   `Type=simple`, one that hasn't said it is ready
   (`~/.domovoi/run/core-ready.json`) and started less than
-  `LOOP_WATCHDOG_STARTUP_SEC` (900 s) ago are left alone.
+  `LOOP_WATCHDOG_STARTUP_SEC` (900 s) ago are left alone. The note counts
+  only when it names that PID and was written after that process started
+  (the core removes it at each start), so an earlier boot's note can't
+  vouch for a core that is starting now.
 - **Every guard again, right before the kill.** The unit restarts after a
   kill, the main PID is still that process, it is `python -m domovoi.main`
   and this account's: read fresh after the wait, before SIGUSR1 and again

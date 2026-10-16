@@ -137,6 +137,38 @@ def test_a_type_simple_core_still_starting_is_left_alone(systemd) -> None:
     assert core_restart.plan()["how"] == "signal"
 
 
+def test_a_ready_note_counts_only_for_the_process_that_wrote_it(tmp_path, monkeypatch) -> None:
+    """Review round 2, case I3: a note from an earlier boot named the PID
+    a Type=simple core starting now happened to have, and the core was
+    ended mid-start. A note counts only when it names the PID and was
+    written after that process started; one whose age can't be told
+    (no /proc) doesn't count either."""
+    import json as _json
+
+    note = tmp_path / "core-ready.json"
+    monkeypatch.setattr(core_restart.loop_watchdog, "ready_path", lambda: note)
+    monkeypatch.setattr(core_restart, "process_uptime_sec", lambda pid: 126.0)
+    now = time.time()
+
+    def write(pid: int, at: float) -> None:
+        note.write_text(_json.dumps({"pid": pid, "at": at}), encoding="utf-8")
+
+    write(4242, now - 3600)                      # an earlier boot's core, the same PID
+    assert core_restart._said_ready(4242) is False
+    write(4242, now - 100)                       # written 26 s into this process's life
+    assert core_restart._said_ready(4242) is True
+    write(4242, now - 127)                       # within the slack of its start
+    assert core_restart._said_ready(4242) is True
+    write(5151, now - 100)                       # another process's
+    assert core_restart._said_ready(4242) is False
+    write(4242, now - 100)
+    monkeypatch.setattr(core_restart, "process_uptime_sec", lambda pid: None)
+    assert core_restart._said_ready(4242) is False   # no way to tell its age
+    note.write_text('{"pid": 4242}', encoding="utf-8")
+    monkeypatch.setattr(core_restart, "process_uptime_sec", lambda pid: 126.0)
+    assert core_restart._said_ready(4242) is False   # no time on it
+
+
 def test_another_account_or_no_process_falls_back_to_the_grant(systemd) -> None:
     systemd["may_signal"] = False
     p = core_restart.plan()
@@ -240,11 +272,31 @@ async def test_a_silence_already_watched_counts(systemd, monkeypatch) -> None:
     watched silent long enough acts at once."""
     monkeypatch.setattr(core_restart, "silence_needed_sec", lambda: 30.0)
     await core_restart.status()
-    core_restart._SILENT_SINCE[4242] -= 31.0
+    _silent_for(4242, 31.0, last_probe_ago=4.0)     # watched by the page's 5 s polls
     t0 = time.monotonic()
     res = await core_restart.restart_unanswering_core()
     assert res["ok"] is True and systemd["ended"] == [4242]
     assert time.monotonic() - t0 < 1.0
+
+
+def _silent_for(pid: int, sec: float, *, last_probe_ago: float) -> None:
+    now = time.monotonic()
+    core_restart._SILENT_SINCE[pid] = (now - sec, now - last_probe_ago)
+
+
+async def test_an_old_silence_nobody_watched_does_not_count(systemd, monkeypatch) -> None:
+    """Review round 2, case N: the core was busy while the page read the
+    status, then answered with nobody looking (the page had closed), then
+    was busy again when an admin pressed. The old silence counted, and a
+    12 s busy loop was ended after 12.6 s. A gap of more than
+    SILENCE_GAP_SEC since the last silent probe starts the count afresh,
+    so the press waits again, and the core answering ends that wait."""
+    monkeypatch.setattr(core_restart, "silence_needed_sec", lambda: 0.5)
+    _silent_for(4242, 73.0, last_probe_ago=core_restart.SILENCE_GAP_SEC + 48.0)
+    systemd["probes"] = [Probe(alive=False)] * 4 + [Probe(alive=True)]
+    res = await core_restart.restart_unanswering_core()
+    assert res["ok"] is False and res["answering"] is True and "busy, not frozen" in res["error"]
+    assert systemd["ended"] == []
 
 
 def test_silence_is_counted_per_process(monkeypatch) -> None:
@@ -254,13 +306,33 @@ def test_silence_is_counted_per_process(monkeypatch) -> None:
     any answer clears them all."""
     monkeypatch.setattr(core_restart, "_SILENT_SINCE", {})
     core_restart._note_probe(4242, False)
-    core_restart._SILENT_SINCE[4242] -= 100.0               # silent for 100 s
+    _silent_for(4242, 100.0, last_probe_ago=2.0)            # silent for 100 s, watched
     assert core_restart._note_probe(4242, False) >= 100.0
     assert core_restart._note_probe(5151, False) < 1.0      # systemd's next core
     assert core_restart._note_probe(4242, False) < 1.0      # the PID again, later: afresh
-    core_restart._SILENT_SINCE[4242] -= 50.0
+    _silent_for(4242, 50.0, last_probe_ago=2.0)
     assert core_restart._note_probe(0, True) == 0.0
     assert core_restart._SILENT_SINCE == {}
+
+
+def test_a_gap_between_silent_probes_breaks_the_silence(monkeypatch) -> None:
+    """Only silence somebody watched counts (review round 2, case N): the
+    last silent probe within SILENCE_GAP_SEC continues the run, an older
+    one starts it again; at the edge, both sides."""
+    gap = core_restart.SILENCE_GAP_SEC
+    monkeypatch.setattr(core_restart, "_SILENT_SINCE", {})
+    _silent_for(4242, 40.0, last_probe_ago=gap - 1.0)
+    assert core_restart._note_probe(4242, False) >= 40.0
+    _silent_for(4242, 40.0, last_probe_ago=gap + 1.0)
+    assert core_restart._note_probe(4242, False) < 1.0
+    # And the run carries on from there, probe by probe.
+    _silent_for(4242, 5.0, last_probe_ago=1.0)
+    assert 5.0 <= core_restart._note_probe(4242, False) < 6.0
+    # A press never breaks its own run: one turn of its wait (a pause, a
+    # probe, systemd's MainPID) fits in the gap even when each takes its
+    # longest.
+    assert (core_restart.PROBE_EVERY_SEC + core_restart.PROBE_TIMEOUT_SEC
+            + core_restart._SYSTEMCTL_TIMEOUT_SEC) < gap
 
 
 async def test_a_new_process_meanwhile_stops_the_press(systemd, monkeypatch) -> None:
