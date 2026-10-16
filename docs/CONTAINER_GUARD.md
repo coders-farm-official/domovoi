@@ -274,8 +274,9 @@ finding is one per container **and** image or setting.
 
 * **Acknowledge** (a failure, admin): the banner hides it until something
   new happens. It still resolves by itself.
-* **Clear** (tampering, admin, after review, with an optional note): the
-  incident closes, and when no tamper incident is open the freeze lifts.
+* **Clear** (tampering, admin, after review, with an optional note; it
+  waits for first-run setup, `501` before an admin password exists, since
+  lifting the freeze is a security decision): the incident closes, and when no tamper incident is open the freeze lifts.
   Both are recorded. The cleared finding stays **accepted** — it doesn't
   reopen while it persists, however long the box was off in between —
   until the guard itself looks and sees it gone; if it comes back after

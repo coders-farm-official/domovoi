@@ -16,7 +16,9 @@ the core's Postgres), tiered the dashboard's usual way
 
 The actions are the core's (it is the only writer): acknowledge a
 failure, clear a tamper incident after review, run a check now. Each is
-``require_admin_mutation`` at both hops.
+``require_admin_mutation`` at both hops, except the clear: it lifts the
+freeze, so it is ``require_admin_security`` at both (no pre-setup grace,
+delta review N5).
 """
 
 from __future__ import annotations
@@ -28,7 +30,12 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
 from domovoi import admin_auth
-from domovoi.admin_auth import require_admin_mutation, require_admin_read, require_device_read
+from domovoi.admin_auth import (
+    require_admin_mutation,
+    require_admin_read,
+    require_admin_security,
+    require_device_read,
+)
 from domovoi.container_guard import store, views
 
 from web.backend.db import session_scope
@@ -121,7 +128,7 @@ async def containers_acknowledge(incident_id: int, request: Request):
     )
 
 
-@router.post("/incidents/{incident_id}/clear", dependencies=[Depends(require_admin_mutation)])
+@router.post("/incidents/{incident_id}/clear", dependencies=[Depends(require_admin_security)])
 async def containers_clear(incident_id: int, request: Request, body: ClearBody | None = None):
     """Clear a tamper incident after review (admin), with an optional note.
     The freeze lifts when no tamper incident is open."""

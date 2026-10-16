@@ -88,7 +88,6 @@ GUEST_TIER = [
 ]
 
 ADMIN_TIER = [
-    ("POST", "/v1/admin/version/pull"),
     ("POST", "/v1/admin/satellite/restart"),
     ("POST", "/v1/admin/satellite/display"),
     ("POST", "/v1/admin/satellite/{room_id}/config"),
@@ -108,6 +107,15 @@ ADMIN_TIER = [
 # the security tier's gate, 501 until an admin exists.
 LIVE_MIC_TIER = [
     ("POST", "/v1/admin/dropin/start"),
+]
+
+# Delta review N5 (2026-10-16): pulling new code (it moves an unclaimed
+# install off the commit it was pinned to) and clearing a tamper incident
+# (it lifts the container guard's freeze) are security decisions, so they
+# wear the security tier: an admin Bearer, and 501 before setup.
+SECURITY_TIER = [
+    ("POST", "/v1/admin/version/pull"),
+    ("POST", "/v1/admin/containers/incidents/{incident_id}/clear"),
 ]
 
 # ADD-1 — an admin READ: the dashboard cookie may render it, nothing less.
@@ -183,6 +191,16 @@ def test_an_http_drop_in_is_on_the_security_tier(method, path) -> None:
 
 
 @pytest.mark.parametrize(
+    ("method", "path"), SECURITY_TIER, ids=[f"{m} {p}" for m, p in SECURITY_TIER]
+)
+def test_pulling_code_and_lifting_the_freeze_are_on_the_security_tier(method, path) -> None:
+    gates = _gates_for(method, path)
+    assert admin_auth.require_admin_security in gates
+    assert admin_auth.require_admin_mutation not in gates
+    assert admin_auth.require_device not in gates
+
+
+@pytest.mark.parametrize(
     ("method", "path"), ADMIN_READ_TIER, ids=[f"{m} {p}" for m, p in ADMIN_READ_TIER]
 )
 def test_satellite_logs_are_an_admin_read(method, path) -> None:
@@ -212,7 +230,10 @@ def _client() -> AsyncClient:
 
 
 def _sample_path(path: str) -> str:
-    return path.replace("{room_id}", "kitchen").replace("{action}", "pause")
+    return (
+        path.replace("{room_id}", "kitchen").replace("{action}", "pause")
+        .replace("{incident_id}", "1")
+    )
 
 
 # A body each route accepts, so a refusal is the gate's and not pydantic's.
@@ -241,7 +262,7 @@ BODIES: dict[str, dict[str, Any]] = {
     "/v1/admin/music/queue/{room_id}/move": {"song_id": 1, "to_position": 0},
 }
 
-GATED_POSTS = DEVICE_TIER + ADMIN_TIER + LIVE_MIC_TIER
+GATED_POSTS = DEVICE_TIER + ADMIN_TIER + LIVE_MIC_TIER + SECURITY_TIER
 # Without a credential these answer as the guest rule says (403 for a room
 # that isn't playing — test_guest_queue.py), so they sit out the 401 test
 # and join the credentialed ones.
@@ -316,8 +337,8 @@ async def test_device_tier_route_accepts_the_household_token(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("method", "path"), ADMIN_TIER + LIVE_MIC_TIER,
-    ids=[f"{m} {p}" for m, p in ADMIN_TIER + LIVE_MIC_TIER],
+    ("method", "path"), ADMIN_TIER + LIVE_MIC_TIER + SECURITY_TIER,
+    ids=[f"{m} {p}" for m, p in ADMIN_TIER + LIVE_MIC_TIER + SECURITY_TIER],
 )
 async def test_admin_tier_route_refuses_the_household_token(
     method, path, monkeypatch
@@ -362,6 +383,24 @@ async def test_an_http_drop_in_is_closed_before_setup(method, path, monkeypatch)
     install_fake_db(monkeypatch, admin=False, device_token=DEVICE_TOKEN)
     async with _client() as c:
         for headers in ({}, {HEADER: DEVICE_TOKEN}):
+            r = await c.post(
+                _sample_path(path), json=BODIES.get(path, {}), headers=headers
+            )
+            assert r.status_code == 501, r.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path"), SECURITY_TIER, ids=[f"{m} {p}" for m, p in SECURITY_TIER]
+)
+async def test_pulling_code_and_lifting_the_freeze_are_closed_before_setup(
+    method, path, monkeypatch
+) -> None:
+    """Delta review N5: no pre-setup grace for either — 501 whatever is
+    presented until an admin password exists."""
+    install_fake_db(monkeypatch, admin=False, device_token=DEVICE_TOKEN)
+    async with _client() as c:
+        for headers in ({}, {HEADER: DEVICE_TOKEN}, bearer(ADMIN_TOKEN)):
             r = await c.post(
                 _sample_path(path), json=BODIES.get(path, {}), headers=headers
             )

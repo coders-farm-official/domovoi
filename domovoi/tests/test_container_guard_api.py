@@ -383,15 +383,18 @@ def test_the_gates_on_the_route_tables() -> None:
                 return found
         raise AssertionError(f"{method} {path} not routed")
 
-    for path in ("/v1/admin/containers/check", "/v1/admin/containers/incidents/{incident_id}/acknowledge",
-                 "/v1/admin/containers/incidents/{incident_id}/clear"):
+    for path in ("/v1/admin/containers/check", "/v1/admin/containers/incidents/{incident_id}/acknowledge"):
         assert admin_auth.require_admin_mutation in gates(core_app, "POST", path)
+    # Clearing lifts the freeze: the security tier, no pre-setup grace (N5).
+    assert admin_auth.require_admin_security in gates(
+        core_app, "POST", "/v1/admin/containers/incidents/{incident_id}/clear")
+    assert admin_auth.require_admin_security in gates(
+        web_app, "POST", "/api/containers/incidents/{incident_id}/clear")
     assert admin_auth.require_admin_read in gates(core_app, "GET", "/v1/admin/containers")
     assert admin_auth.require_device_read in gates(web_app, "GET", "/api/containers/incidents")
     assert admin_auth.require_admin_read in gates(web_app, "GET", "/api/containers/status")
     assert gates(web_app, "GET", "/api/containers/summary") == []
-    for path in ("/api/containers/check", "/api/containers/incidents/{incident_id}/acknowledge",
-                 "/api/containers/incidents/{incident_id}/clear"):
+    for path in ("/api/containers/check", "/api/containers/incidents/{incident_id}/acknowledge"):
         assert admin_auth.require_admin_mutation in gates(web_app, "POST", path)
 
 

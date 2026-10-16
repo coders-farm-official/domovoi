@@ -141,7 +141,6 @@ ADMIN_TIER = [
     ("POST", "/api/satellites/{room_id}/restart"),
     ("POST", "/api/satellites/{room_id}/display"),
     ("PATCH", "/api/satellites/{room_id}/config"),
-    ("POST", "/api/config/version/pull"),
     # the verbs that destroy something, or hand back a whole library in
     # one response. Widening SAVE to the household did not widen these.
     ("POST", "/api/documents/delete"),
@@ -220,6 +219,25 @@ def test_the_code_adjacent_mutations_are_on_the_admin_tier(method, path) -> None
     )
 
 
+# Delta review N5 (2026-10-16): the security tier at both hops, no
+# pre-setup grace — pulling new code, and clearing a tamper incident (it
+# lifts the container guard's freeze).
+SECURITY_TIER = [
+    ("POST", "/api/config/version/pull"),
+    ("POST", "/api/containers/incidents/{incident_id}/clear"),
+]
+
+
+@pytest.mark.parametrize(
+    ("method", "path"), SECURITY_TIER, ids=[f"{m} {p}" for m, p in SECURITY_TIER]
+)
+def test_pulling_code_and_lifting_the_freeze_are_on_the_security_tier(method, path) -> None:
+    calls = _gates(method, path)
+    assert admin_auth.require_admin_security in calls
+    assert admin_auth.require_admin_mutation not in calls
+    assert admin_auth.require_device not in calls
+
+
 @pytest.mark.parametrize(
     ("method", "path"), KIOSK_OPEN, ids=[f"{m} {p}" for m, p in KIOSK_OPEN]
 )
@@ -288,8 +306,6 @@ ADMIN_FAMILIES = {
                           {"action": "off"}, "satellites", "post_admin"),
     "satellite-config": ("PATCH", "/api/satellites/kitchen/config",
                          {"changes": {"volume": 3}}, "satellites", "post_admin"),
-    "version-pull": ("POST", "/api/config/version/pull", None,
-                     "config", "post_admin"),
     "people-rename": ("PATCH", "/api/people/1", {"name": "Sam"},
                       "people", "session_scope"),
 }
@@ -454,6 +470,57 @@ async def test_a_fresh_install_keeps_its_grace(
     install_fake_db(monkeypatch, admin=False)
     method, path, body = _spec(family)
     async with _client() as c:
+        with pytest.raises(Reached):
+            await _send(c, method, path, body)
+
+
+SECURITY_FAMILIES = {
+    "version-pull": ("POST", "/api/config/version/pull", None, "config", "post_admin"),
+    "incident-clear": ("POST", "/api/containers/incidents/1/clear", {"note": "ours"},
+                       "containers", "post_admin"),
+}
+
+
+@pytest.fixture
+def mark_security_hops(monkeypatch):
+    from web.backend import api as web_api
+
+    seen: list[str] = []
+
+    async def marked_hop(*a, **kw):
+        seen.append("hop")
+        raise Reached("reached the core hop")
+
+    for _m, _p, _b, module_name, attr in SECURITY_FAMILIES.values():
+        monkeypatch.setattr(getattr(web_api, module_name), attr, marked_hop)
+    return seen
+
+
+@pytest.mark.parametrize("family", sorted(SECURITY_FAMILIES))
+@pytest.mark.asyncio
+async def test_pulling_code_and_lifting_the_freeze_wait_for_setup(
+    family, monkeypatch, mark_security_hops
+) -> None:
+    """N5: before setup, 501 and no hop to the core; after it, only an
+    admin Bearer gets through (not the household token, not the cookie)."""
+    method, path, body = SECURITY_FAMILIES[family][:3]
+    install_fake_db(monkeypatch, admin=False, device_token=DEVICE_TOKEN)
+    async with _client() as c:
+        assert (await _send(c, method, path, body)).status_code == 501
+    async with _client({HEADER: DEVICE_TOKEN}) as c:
+        assert (await _send(c, method, path, body)).status_code == 501
+    assert mark_security_hops == []
+    install_fake_db(
+        monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=DEVICE_TOKEN
+    )
+    async with _client() as c:
+        assert (await _send(c, method, path, body)).status_code == 401
+    async with _client({HEADER: DEVICE_TOKEN}) as c:
+        assert (await _send(c, method, path, body)).status_code == 401
+    async with _client(cookies={COOKIE: ADMIN_TOKEN}) as c:
+        assert (await _send(c, method, path, body)).status_code == 403
+    assert mark_security_hops == []
+    async with _client(bearer(ADMIN_TOKEN)) as c:
         with pytest.raises(Reached):
             await _send(c, method, path, body)
 
