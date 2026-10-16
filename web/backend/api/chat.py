@@ -78,13 +78,13 @@ import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
-import anyio
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Path as PathParam, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from domovoi import executors, image_safety
 from domovoi.admin_auth import require_device, require_device_read
 from domovoi.clients import ollama as ollama_client
 from domovoi.config import settings as core_settings
@@ -496,9 +496,17 @@ def _vision_bytes(src: Path) -> bytes:
     EXIF orientation applied, which Ollama ignores) and at most
     ``_VISION_MAX_EDGE`` px on its long edge, from the copy beside the
     upload, made on first use. A picture that is already both is sent as
-    it was uploaded, with no copy. One Pillow can't read is sent as it is,
-    as before. Sync — run it in a worker thread. Raises ``OSError`` only
-    when the upload itself can't be read."""
+    it was uploaded, with no copy. Sync — run it in the ``pictures`` pool.
+
+    Only a JPEG, PNG, GIF, WebP or BMP is decoded, and only up to
+    ``image_safety.MAX_IMAGE_PIXELS`` (2026-10-16 delta review S7: every
+    Pillow format was tried, so an EPS named ``cat.png`` reached
+    Ghostscript, and a 164 KB PNG of 169 megapixels decoded to 350 MB). A
+    bigger one raises :class:`~domovoi.image_safety.PictureRefused` and is
+    not sent at all (the model would only decode it instead); one of
+    another kind, or one Pillow can't read, is sent as it is, as before,
+    never decoded here. Raises ``OSError`` when the upload itself can't be
+    read."""
     copy = _vision_copy_path(src)
     if copy.is_file():
         try:
@@ -508,19 +516,22 @@ def _vision_bytes(src: Path) -> bytes:
     try:
         from PIL import Image, ImageOps
 
-        with Image.open(src) as im:
+        with image_safety.open_image(src, image_safety.PICTURE_FORMATS) as im:
             upright = im.getexif().get(_EXIF_ORIENTATION, 1) in (1, None)
             if upright and max(im.size) <= _VISION_MAX_EDGE:
                 return src.read_bytes()
-            out = ImageOps.exif_transpose(im)
-        jpeg = copy.suffix == ".jpg"
-        if jpeg and out.mode not in ("RGB", "L"):
-            out = out.convert("RGB")
-        elif out.mode not in ("RGB", "RGBA", "L", "LA"):
-            # Palette and other modes: resampled as RGB(A), not nearest-pixel.
-            alpha = "transparency" in out.info or out.mode in ("PA", "RGBa", "La")
-            out = out.convert("RGBA" if alpha else "RGB")
-        out.thumbnail((_VISION_MAX_EDGE, _VISION_MAX_EDGE), Image.Resampling.LANCZOS)
+            jpeg = copy.suffix == ".jpg"
+            out = im
+            if jpeg and out.mode not in ("RGB", "L"):
+                out = out.convert("RGB")
+            elif out.mode not in ("RGB", "RGBA", "L", "LA"):
+                # Palette and other modes: resampled as RGB(A), not nearest-pixel.
+                alpha = "transparency" in out.info or out.mode in ("PA", "RGBa", "La")
+                out = out.convert("RGBA" if alpha else "RGB")
+            # Shrunk before it is turned: a JPEG then decodes at a fraction of
+            # its size, and turning moves 1280 px, not the whole photo.
+            out.thumbnail((_VISION_MAX_EDGE, _VISION_MAX_EDGE), Image.Resampling.LANCZOS)
+            out = ImageOps.exif_transpose(out)
         buf = io.BytesIO()
         # No EXIF in the copy: it is upright now, and the rest is not the
         # model's business.
@@ -529,6 +540,12 @@ def _vision_bytes(src: Path) -> bytes:
         else:
             out.save(buf, "PNG")
         data = buf.getvalue()
+    except image_safety.PictureRefused as e:
+        if e.too_large:
+            raise
+        log.warning("chat: picture %s is not a kind the chat decodes (%s); sending it as it is",
+                    src.name, e)
+        return src.read_bytes()
     except Exception as e:  # noqa: BLE001 — any decode failure: send it as it is
         log.warning("chat: picture %s not shrunk for the model (%s: %s); sending it as it is",
                     src.name, type(e).__name__, e)
@@ -576,8 +593,11 @@ async def _history_for_model(thread_id: int, with_images: bool = True) -> list[d
             p = _upload_path(img.get("token", ""))
             if p is not None:
                 try:
-                    data = await anyio.to_thread.run_sync(_vision_bytes, p)
+                    data = await executors.run("pictures", _vision_bytes, p)
                 except OSError:
+                    continue
+                except image_safety.PictureRefused as e:
+                    log.warning("chat: picture %s left out for the model: %s", p.name, e)
                     continue
                 b64s.append(base64.b64encode(data).decode())
         if b64s:
@@ -830,16 +850,38 @@ async def send_voice(
 
 
 # ─── Uploads ────────────────────────────────────────────────────────────────
+def _check_picture(data: bytes) -> None:
+    """Raise PictureRefused unless ``data`` is a picture of an allowed kind
+    and size (from its header). Blocking: the ``pictures`` pool."""
+    with image_safety.open_image(io.BytesIO(data), image_safety.PICTURE_FORMATS):
+        pass
+
+
 @router.post("/uploads", dependencies=DEVICE)
 async def upload(file: UploadFile = File(...)) -> dict[str, Any]:
     """Stage one image for a chat message. Returns the server-generated
-    token the send call references; files are capped and extension-checked."""
+    token the send call references; files are capped, extension-checked,
+    and must really be a JPEG, PNG, GIF, WebP or BMP of at most
+    ``image_safety.MAX_IMAGE_PIXELS`` (read from the header, off the loop;
+    nothing is decoded and no other kind is tried: delta review S7)."""
     ext = Path(file.filename or "").suffix.lower()
     if ext not in _UPLOAD_EXTS:
         raise HTTPException(status_code=415, detail=f"unsupported image type {ext or '(none)'}")
     data = await file.read()
     if len(data) > _MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="image too large (20 MB cap)")
+    try:
+        await executors.run("pictures", _check_picture, data)
+    except image_safety.PictureRefused as e:
+        if e.too_large:
+            raise HTTPException(
+                status_code=413,
+                detail=f"That picture is too large for the chat: {e}.",
+            ) from None
+        raise HTTPException(
+            status_code=415,
+            detail="That file isn't a picture the chat can read. Send a JPEG, PNG, GIF, WebP or BMP.",
+        ) from None
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     token = uuid.uuid4().hex
     (UPLOADS_DIR / f"{token}{ext}").write_bytes(data)

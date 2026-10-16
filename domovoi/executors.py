@@ -12,8 +12,8 @@ connects (a ``localhost`` lookup each) could no longer get a thread
 
 So the heavy users get pools of their own, each with a fixed number of
 threads: speech recognition and voice analysis, speech synthesis,
-plugin installs, and reading audio files' tags (in the dashboard's
-process too, which uses the same pools). When one of them is saturated,
+plugin installs, reading audio files' tags and decoding pictures (in the
+dashboard's process too, which uses the same pools). When one of them is saturated,
 only its own work waits; the default pool, and the database behind it,
 are left alone.
 
@@ -60,6 +60,15 @@ POOL_SIZES: dict[str, int] = {
     # can make the process hold (each read keeps to the reader's budget),
     # and a slow file can't hold the event loop (delta review B2, S2).
     "tags": 2,
+    # Decoding pictures with Pillow (domovoi.image_safety): a chat
+    # picture's checks and the copy the vision model gets, the picture
+    # libraries' thumbnails. Each decode is at most 40 megapixels; three at
+    # a time bounds the memory they take together (delta review S7).
+    "pictures": 3,
+    # Saving the sheet editor's grid into an existing .xlsx / .csv, which
+    # reads the whole file (up to ~280 MB for the largest it takes): one at
+    # a time (delta review S6).
+    "sheets": 1,
 }
 
 _pools: dict[str, ThreadPoolExecutor] = {}

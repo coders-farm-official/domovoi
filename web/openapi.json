@@ -1835,7 +1835,7 @@
           "music"
         ],
         "summary": "Track Cover",
-        "description": "A library track's cover art, read from the file on request: the\npicture built into it (ID3 APIC \u2014 the front cover when it marks one \u2014\nMP4 ``covr``, FLAC pictures, Vorbis/Opus ``METADATA_BLOCK_PICTURE`` or\n``COVERART``, WMA ``WM/Picture``), else the first image in the track's\nown folder named cover / folder / front / album (.jpg / .jpeg / .png /\n.webp, any case). Served as-is with its real content type, a strong\n``ETag`` (the audio file's path, mtime and size, plus the folder\nimage's) and ``Cache-Control`` so clients keep it; ``304`` when\n``If-None-Match`` still matches; ``404`` when there is none (or only\npictures over 8 MiB).\n\nOpen, like the library listing it decorates: an ``<img>`` tag and the\nphone's lock screen can't send a credential. The id resolves the path\nfrom the database, containment-checked inside MUSIC_DIR (400 outside\nit, as for ``/audio``); nothing is stored.",
+        "description": "A library track's cover art, read from the file on request: the\npicture built into it (ID3 APIC \u2014 the front cover when it marks one \u2014\nMP4 ``covr``, FLAC pictures, Vorbis/Opus ``METADATA_BLOCK_PICTURE`` or\n``COVERART``, WMA ``WM/Picture``), else the first image in the track's\nown folder named cover / folder / front / album (.jpg / .jpeg / .png /\n.webp, any case). Served as-is with its real content type, a strong\n``ETag`` (the audio file's path, mtime and size, plus the folder\nimage's) and ``Cache-Control`` so clients keep it; ``304`` when\n``If-None-Match`` still matches; ``404`` when there is none (or only\npictures over 8 MiB).\n\nOpen, like the library listing it decorates: an ``<img>`` tag and the\nphone's lock screen can't send a credential. The id resolves the path\nfrom the database, containment-checked inside MUSIC_DIR (400 outside\nit, as for ``/audio``); nothing is stored on disk. Tags are read in the\ntwo-thread ``tags`` pool, once per file version (:func:`_embedded_cover`).",
         "operationId": "track_cover_api_music_library__track_id__cover_get",
         "parameters": [
           {
@@ -9171,7 +9171,7 @@
           "documents"
         ],
         "summary": "Write Sheet",
-        "description": "Write the editor grid back: .csv gets values (formula strings kept\nverbatim as text), .xlsx gets formulas as formulas and numbers as\nnumbers (openpyxl). An existing file is updated in place, cell by\nchanged cell, so what the editor cannot show (formatting, other\nsheets, anything past its window) survives; an .xlsx holding charts,\npictures or pivot tables is refused with 409 rather than stripped.\nA non-sheet target is refused with 415 up front, so a save the server\nwill not do leaves nothing behind.",
+        "description": "Write the editor grid back: .csv gets values (formula strings kept\nverbatim as text), .xlsx gets formulas as formulas and numbers as\nnumbers (openpyxl). An existing file is updated in place, cell by\nchanged cell, so what the editor cannot show (formatting, other\nsheets, anything past its window) survives; an .xlsx holding charts,\npictures or pivot tables is refused with 409 rather than stripped.\nA non-sheet target is refused with 415 up front, so a save the server\nwill not do leaves nothing behind. An existing sheet too large to save\ninto is refused with 413 before it is read (delta review S6); the save\nruns in the one-thread ``sheets`` pool, never on the event loop.",
         "operationId": "write_sheet_api_documents_sheet__rel_path__put",
         "parameters": [
           {
@@ -12262,7 +12262,7 @@
           "chat"
         ],
         "summary": "Upload",
-        "description": "Stage one image for a chat message. Returns the server-generated\ntoken the send call references; files are capped and extension-checked.",
+        "description": "Stage one image for a chat message. Returns the server-generated\ntoken the send call references; files are capped, extension-checked,\nand must really be a JPEG, PNG, GIF, WebP or BMP of at most\n``image_safety.MAX_IMAGE_PIXELS`` (read from the header, off the loop;\nnothing is decoded and no other kind is tried: delta review S7).",
         "operationId": "upload_api_chat_uploads_post",
         "requestBody": {
           "content": {

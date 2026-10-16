@@ -105,6 +105,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from domovoi import executors
 from domovoi.admin_auth import require_admin_mutation, require_device, require_device_read
 from domovoi.config import settings as core_settings
 from web.backend.api.csrf_guard import require_requested_with
@@ -954,6 +955,46 @@ def _assert_xlsx_fits(target: Path) -> None:
         )
 
 
+# What an existing sheet may be for the editor to save into it. A save
+# keeps everything the editor can't show, so it reads the WHOLE file
+# first: openpyxl holds an .xlsx at about 16 times its inflated size and
+# csv.reader a .csv at about 12 times its size on disk (2026-10-16 delta
+# review S6: 643 MB for a 2.4 MB workbook, 1.6 GB for a 101 MB CSV, on the
+# web's event loop). Past these a save is refused with 413 before anything
+# is read, as the text editor refuses files past 2 MB; under them a save
+# takes at most ~280 MB and ~5 s, in the one-thread "sheets" pool, so
+# saves never run on the event loop and never two at once.
+_SHEET_SAVE_MAX_INFLATED_BYTES = 16 * 1024 * 1024
+_SHEET_SAVE_MAX_CSV_BYTES = 8 * 1024 * 1024
+
+
+def _assert_sheet_save_fits(target: Path) -> None:
+    """413 when the sheet already at ``target`` is too large to save into
+    (above). A new file, or one whose zip directory can't be read (the
+    caller refuses that in its own words), passes."""
+    try:
+        if not target.is_file():
+            return
+        if target.suffix.lower() == ".csv":
+            size = target.stat().st_size
+            limit = _SHEET_SAVE_MAX_CSV_BYTES
+            what = f"is {size / (1024 * 1024):.0f} MB"
+        else:
+            with zipfile.ZipFile(target) as z:
+                size = sum(info.file_size for info in z.infolist())
+            limit = _SHEET_SAVE_MAX_INFLATED_BYTES
+            what = f"unpacks to {size / (1024 * 1024):.0f} MB"
+    except (zipfile.BadZipFile, OSError):
+        return
+    if size > limit:
+        raise HTTPException(
+            status_code=413,
+            detail=f"{target.name} is too large to save from the sheet editor: it {what}, and the "
+            f"editor saves sheets up to {limit // (1024 * 1024)} MB. Nothing was changed. "
+            "Edit it in a spreadsheet app.",
+        )
+
+
 def _xlsx_unkept_parts(target: Path) -> bool:
     try:
         with zipfile.ZipFile(target) as z:
@@ -991,6 +1032,7 @@ def _write_csv_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> None
     a UTF-8 byte-order mark the file started with is kept."""
     original: list[list[str]] = []
     bom = False
+    _assert_sheet_save_fits(target)
     if target.is_file():
         raw = target.read_bytes()
         bom = raw.startswith(codecs.BOM_UTF8)
@@ -1028,6 +1070,7 @@ def _write_xlsx_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> Non
     wb = None
     if target.is_file() and target.stat().st_size > 0:
         _assert_xlsx_fits(target)
+        _assert_sheet_save_fits(target)
         if _xlsx_unkept_parts(target):
             raise HTTPException(
                 status_code=409,
@@ -1111,7 +1154,9 @@ async def write_sheet(
     sheets, anything past its window) survives; an .xlsx holding charts,
     pictures or pivot tables is refused with 409 rather than stripped.
     A non-sheet target is refused with 415 up front, so a save the server
-    will not do leaves nothing behind."""
+    will not do leaves nothing behind. An existing sheet too large to save
+    into is refused with 413 before it is read (delta review S6); the save
+    runs in the one-thread ``sheets`` pool, never on the event loop."""
     await _assert_files_policy(request, req.device_id)
     target = _safe_target(rel_path)
     _assert_saveable_name(target)
@@ -1120,7 +1165,7 @@ async def write_sheet(
         raise HTTPException(status_code=413, detail=f"more than {_SHEET_MAX_COLS} columns")
     with _usable_path(rel_path):
         _ensure_parent_dir(target)
-        _write_sheet_grid(target, req.rows)
+        await executors.run("sheets", _write_sheet_grid, target, req.rows)
         st = target.stat()
     _listing_changed()
     ext = target.suffix.lower()

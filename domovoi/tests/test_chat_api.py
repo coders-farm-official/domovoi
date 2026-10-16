@@ -22,6 +22,18 @@ from domovoi.clients import ollama as ollama_mod
 from domovoi.tests.conftest import requires_db
 from web.backend.main import app
 
+
+def _tiny_png() -> bytes:
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), (200, 30, 30)).save(buf, "PNG")
+    return buf.getvalue()
+
+
+# A real picture: since the delta review (S7) an upload must be one.
+TINY_PNG = _tiny_png()
+
 # Nothing a user reads may carry these (the owner's 2026-10-11 report: a
 # raw httpx error naming http://localhost:11434/api/chat and a help URL).
 _LEAKS = ("localhost", "127.0.0.1", "11434", "http", "mozilla", "api/chat", "Client error")
@@ -70,7 +82,7 @@ def tags(monkeypatch):
 
 
 def _upload(c, name="cat.png") -> str:
-    up = c.post("/api/chat/uploads", files={"file": (name, io.BytesIO(b"\x89PNGfake"), "image/png")})
+    up = c.post("/api/chat/uploads", files={"file": (name, io.BytesIO(TINY_PNG), "image/png")})
     assert up.status_code == 200
     return up.json()["token"]
 
@@ -425,7 +437,7 @@ def test_upload_and_vision_model_switch(uploads_dir, stub_stream, tags):
     tags.models = [chat_api.core_settings.ollama_vision_model]
     with _client() as c:
         up = c.post("/api/chat/uploads",
-                    files={"file": ("cat.png", io.BytesIO(b"\x89PNGfake"), "image/png")})
+                    files={"file": ("cat.png", io.BytesIO(TINY_PNG), "image/png")})
         assert up.status_code == 200
         token = up.json()["token"]
         assert (uploads_dir / f"{token}.png").is_file()
