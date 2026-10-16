@@ -849,7 +849,7 @@ git_root() {
   # copy: root's own repository, not the service user's. Never through a
   # replacement object or a graft (rc2 review C3), which could stand
   # another commit in for the one HEAD_SHA names.
-  GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git "${cfg[@]}" -C "$GIT_ROOT_DIR" "$@"
+  GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git -c advice.graftFileDeprecated=false "${cfg[@]}" -C "$GIT_ROOT_DIR" "$@"
 }
 
 # Why ALLOWED_SIGNERS cannot be trusted, printed; nothing when it can. A

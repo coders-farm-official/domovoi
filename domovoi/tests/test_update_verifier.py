@@ -80,7 +80,10 @@ def test_root_git_reads_no_replacements_and_no_grafts():
     apply = APPLY.read_text(encoding="utf-8")
     m = re.search(r"^git_root\(\) \{\n(.*?)\n\}$", apply, re.M | re.S)
     assert m, "git_root() not found"
-    assert 'GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git "${cfg[@]}" -C "$GIT_ROOT_DIR"' in m.group(1)
+    assert 'GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git -c advice.graftFileDeprecated=false "${cfg[@]}" -C "$GIT_ROOT_DIR"' in m.group(1)
+    # And for every git the scripts run, the service user's included (wf/rc2-channels).
+    for script in (VERIFIER, APPLY, PROVISION, LINUX / "install-update-unit.sh"):
+        assert "\nexport GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null\n" in script.read_text(encoding="utf-8"), script.name
 
 
 def test_the_checkout_is_read_by_the_service_user():

@@ -3142,7 +3142,7 @@ case_signed_head_verifies_as_root_before_anything_runs() {
   check "the result says verified" eq "$(sig_field status)" '"verified"'
   check "and who" eq "$(sig_field signer)" '"owner@example.invalid"'
   check "and that it is enforced" eq "$(sig_field enforced)" true
-  check "root verified HEAD itself" called "git -c safe.directory=$REPO -c gpg.ssh.allowedSignersFile=$CASE/keys/allowed_signers"
+  check "root verified HEAD itself" called "git -c advice.graftFileDeprecated=false -c safe.directory=$REPO -c gpg.ssh.allowedSignersFile=$CASE/keys/allowed_signers"
   check "with the programs pinned" called "-c gpg.ssh.program=ssh-keygen -c gpg.program=gpg"
   check "and verify-commit on the exact HEAD" called "verify-commit $sha_b"
   check "not through runuser" not_called "runuser -u tester -- git -c safe.directory"
@@ -4072,7 +4072,7 @@ case_verifier_refuses_an_unsigned_head_when_enforced() {
   check "says how to fix it" grep -qF 'signed updates are enforced by' "$RESULT"
   check "from the applied commit" eq "$(field from_sha)" "\"$SHA_S\""
   check "to the unsigned one" eq "$(field to_sha)" "\"$sha_u\""
-  check "verified in the mirror" called "-C $UPD/mirror.git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c gpg.ssh.allowedSignersFile=$CASE/keys/allowed_signers"
+  check "verified in the mirror" called "-C $UPD/mirror.git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c advice.graftFileDeprecated=false -c gpg.ssh.allowedSignersFile=$CASE/keys/allowed_signers"
   check "apply-update.sh never ran" not apply_ran
   check "nothing of the commit ran" not planted_ran ran-apply-update
   check "nor its os-jobs.sh" not planted_ran ran-os-jobs
