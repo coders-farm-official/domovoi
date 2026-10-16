@@ -2438,6 +2438,56 @@ const SpareWindows = ({ res, fire }) => {
   );
 };
 
+/* The Linux laptop's own Python (2026-10-15). A Debian or Ubuntu new enough
+ * (Python 3.11+) uses its own; older ones (Ubuntu 22.04, Mint 21, Debian 11)
+ * and Fedora, openSUSE and Arch get a pinned CPython, from this server's
+ * cache when an admin has fetched it (here), else straight from GitHub —
+ * the same pinned file either way, checked by its SHA-256 on the laptop. */
+const SpareLinuxPython = ({ res, fire }) => {
+  const [rt, setRt] = React.useState(res.linux_runtime || null);
+  const [fetching, setFetching] = React.useState(false);
+  React.useEffect(() => { setRt(res.linux_runtime || null); }, [res]);
+  React.useEffect(() => {
+    if (!rt || !rt.fetch || !rt.fetch.running) return undefined;
+    const t = setInterval(async () => {
+      try { setRt(await apiGet('/api/satellites/linux-runtime')); } catch (e) { /* keep the last */ }
+    }, 3000);
+    return () => clearInterval(t);
+  }, [rt && rt.fetch && rt.fetch.running]);
+  if (!rt) return null;
+  const getIt = async () => {
+    setFetching(true);
+    try {
+      setRt(await apiPost('/api/satellites/linux-runtime/fetch', {}));
+    } catch (e) {
+      fire(apiErrorText(e, 0));
+    } finally {
+      setFetching(false);
+    }
+  };
+  const running = !!(rt.fetch && rt.fetch.running);
+  const versions = (rt.pythons || []).map((p) => p.version).filter((v, i, all) => all.indexOf(v) === i).join(' / ');
+  return (
+    <div className="spare-linux-python" style={{ fontSize: 11.5, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
+      Older Linux (Ubuntu 22.04, Mint 21, Debian 11) and Fedora, openSUSE or Arch get the
+      satellite's own Python ({versions}).{' '}
+      {rt.ready
+        ? <>This server holds it ({spareMb(rt.bytes_total)}): the laptop gets it from here.</>
+        : <>This server doesn't hold it yet ({spareMb(rt.bytes_total)}{rt.bytes_cached ? `, ${spareMb(rt.bytes_cached)} so far` : ''}).
+            Get it now, or the laptop downloads the same pinned file from GitHub itself.{' '}
+            {rt.fetch && rt.fetch.ok === false && rt.fetch.message
+              ? <span style={{ color: 'var(--err)' }}>Last try: {rt.fetch.message}</span> : null}</>}
+      {!rt.ready && (
+        <div style={{ marginTop: 6 }}>
+          <Button icon="download" disabled={running || fetching} onClick={getIt}>
+            {running ? 'getting the Linux Python…' : 'get the Linux Python'}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const SpareDeviceCard = ({ fire }) => {
   const admin = useAdminSignedIn();
   const [open, setOpen] = React.useState(false);
@@ -2528,7 +2578,7 @@ const SpareDeviceCard = ({ fire }) => {
               {res.conflict && <div role="alert" style={{ fontSize: 12, color: 'var(--warn)' }}>{res.conflict}</div>}
               <div className="spare-device-body" style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
                 <div style={{ flex: '1 1 320px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div className="label">linux laptop or mini pc (debian or ubuntu)</div>
+                  <div className="label">linux laptop or mini pc</div>
                   <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
                     On the device, signed in as the account it will run as, open a terminal and
                     paste this. It installs the satellite and shows the approval code.
@@ -2547,6 +2597,7 @@ const SpareDeviceCard = ({ fire }) => {
                     (Settings → About shows it) before it writes anything. Make a new command after
                     updating Domovoi.
                   </div>
+                  <SpareLinuxPython res={res} fire={fire}/>
                 </div>
                 <div style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <div className="label">phone or tablet</div>

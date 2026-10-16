@@ -31,6 +31,12 @@ SHA = "ab" * 32
 WIN_RUNTIME = {"ready": False, "python": "3.14.8", "files": 28, "missing": ["python-3.14.8-embed-amd64.zip"],
                "bytes_total": 95968382, "bytes_cached": 0,
                "fetch": {"running": False, "started_at": None, "finished_at": None, "ok": None, "message": None}}
+LINUX_RUNTIME = {"ready": False, "files": 2, "bytes_total": 65627774, "bytes_cached": 0,
+                 "pythons": [{"machine": "x86_64", "version": "3.14.8", "size": 36299807},
+                             {"machine": "aarch64", "version": "3.13.16", "size": 29327967}],
+                 "missing": ["cpython-3.14.8+20261009-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+                             "cpython-3.13.16+20261009-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz"],
+                 "fetch": {"running": False, "started_at": None, "finished_at": None, "ok": None, "message": None}}
 
 
 class Req:
@@ -46,6 +52,7 @@ def core(monkeypatch):
         "/v1/health": (200, {"status": "ok", "identity": {"fingerprint": FP, "algorithm": "ed25519"}}),
         "/v1/satellite-code/bundle.sha256": (200, {"sha256": SHA, "size": 812345, "files": 70}),
         "/v1/admin/satellite-windows": (200, WIN_RUNTIME),
+        "/v1/admin/satellite-linux": (200, LINUX_RUNTIME),
     }
 
     async def get_admin(path, headers=None, **kw):
@@ -73,6 +80,14 @@ async def test_the_route_answers_with_a_payload_the_device_parses(core):
     assert got["command"] == web_sats.install_command(parsed.core, SHA, got["payload"])
     assert got["command_windows"] == web_sats.install_command_windows(parsed.core, SHA, got["payload"])
     assert got["windows_runtime"] == WIN_RUNTIME
+    assert got["linux_runtime"] == LINUX_RUNTIME
+
+
+async def test_a_core_that_does_not_say_gives_no_linux_runtime(core):
+    """An older core (no /v1/admin/satellite-linux): the card just says nothing."""
+    core["/v1/admin/satellite-linux"] = (404, {"detail": "Not Found"})
+    got = await web_sats.spare_device_enrolment(SpareDeviceEnrolRequest(room="Den"), Req())
+    assert got["linux_runtime"] is None and got["command"]
 
 
 async def test_a_taken_room_is_said_before_the_device_is_refused(core):
@@ -250,6 +265,39 @@ async def test_the_windows_files_status_and_fetch_go_to_the_core_as_an_admin(mon
     assert any(d.dependency is require_admin_mutation for d in fetch.dependencies) and "POST" in fetch.methods
 
 
+async def test_the_linux_python_status_and_fetch_go_to_the_core_as_an_admin(monkeypatch):
+    seen = []
+
+    async def get_admin(path, headers=None, **kw):
+        seen.append(("GET", path))
+        return 200, LINUX_RUNTIME
+
+    async def post_admin(path, body=None, headers=None, **kw):
+        seen.append(("POST", path))
+        return 200, {"started": True, **LINUX_RUNTIME}
+
+    monkeypatch.setattr(web_sats, "get_admin", get_admin)
+    monkeypatch.setattr(web_sats, "post_admin", post_admin)
+    assert (await web_sats.linux_runtime_status(Req())) == LINUX_RUNTIME
+    assert (await web_sats.linux_runtime_fetch(Req()))["started"] is True
+    assert seen == [("GET", "/v1/admin/satellite-linux"), ("POST", "/v1/admin/satellite-linux/fetch")]
+    from domovoi.admin_auth import require_admin_mutation, require_admin_read
+
+    routes = {r.path: r for r in web_sats.router.routes}
+    assert any(d.dependency is require_admin_read for d in routes["/api/satellites/linux-runtime"].dependencies)
+    fetch = routes["/api/satellites/linux-runtime/fetch"]
+    assert any(d.dependency is require_admin_mutation for d in fetch.dependencies) and "POST" in fetch.methods
+
+
+async def test_a_refused_fetch_passes_the_core_s_answer_on(monkeypatch):
+    async def post_admin(path, body=None, headers=None, **kw):
+        return 503, {"detail": "the Linux Python lock is unreadable"}
+
+    monkeypatch.setattr(web_sats, "post_admin", post_admin)
+    resp = await web_sats.linux_runtime_fetch(Req())
+    assert resp.status_code == 503
+
+
 # ─── the vendored QR library ──────────────────────────────────────────────
 
 def test_the_qr_library_is_the_pinned_mit_release():
@@ -296,7 +344,12 @@ const rects = svg ? h.findAll((e) => e.type === 'rect' && h.ancestors(e).include
 const win = h.find((e) => String((e.props && e.props.className) || '').includes('spare-windows'));
 const winText = win ? w.__deep(win) : '';
 if (win) { await h.click(isBtn('get the Windows files')); await w.__settle(h, 10); }
-return { card: true, text: w.__deep(card), calls: h.calls, rects, winText };
+const lpy = h.find((e) => String((e.props && e.props.className) || '').includes('spare-linux-python'));
+const linuxText = lpy ? w.__deep(lpy) : '';
+if (lpy) { await h.click(isBtn('get the Linux Python')); await w.__settle(h, 10); }
+const lpyAfter = h.find((e) => String((e.props && e.props.className) || '').includes('spare-linux-python'));
+return { card: true, text: w.__deep(card), calls: h.calls, rects, winText, linuxText,
+         linuxAfter: lpyAfter ? w.__deep(lpyAfter) : '' };
 """
 
 
@@ -323,6 +376,7 @@ def card(tmp_path_factory) -> dict:
         "bundle_size": 812345, "command": web_sats.install_command("http://192.168.0.117:6370", SHA, payload),
         "command_windows": web_sats.install_command_windows("http://192.168.0.117:6370", SHA, payload),
         "windows_runtime": WIN_RUNTIME,
+        "linux_runtime": LINUX_RUNTIME,
         "conflict": None,
     }
     qr_js = (REPO / "web" / "static" / "vendor" / "qrcode" / "qrcode.js").read_text(encoding="utf-8")
@@ -334,6 +388,9 @@ def card(tmp_path_factory) -> dict:
                                                           fetch=dict(WIN_RUNTIME["fetch"], running=True)),
         "GET /api/satellites/windows-runtime": dict(WIN_RUNTIME, ready=True, missing=[],
                                                    bytes_cached=95968382),
+        "POST /api/satellites/linux-runtime/fetch": dict(LINUX_RUNTIME, started=True,
+                                                        fetch=dict(LINUX_RUNTIME["fetch"], running=True)),
+        "GET /api/satellites/linux-runtime": dict(LINUX_RUNTIME, ready=True, missing=[], bytes_cached=65627774),
     }
     admin = {"files": FILES, "component": "SatellitesPanel", "api": api, "script": _SCRIPT,
              "setup": _SETUP + qr_js + "\nwindow.qrcode = qrcode;\n"}
@@ -364,3 +421,13 @@ def test_the_card_gives_windows_its_command_the_unsigned_warning_and_the_files_b
     assert "not as administrator" in text or "Run as administrator" in text
     assert "get the Windows files" in text and "96 MB" in text
     assert any("windows-runtime/fetch" in json.dumps(c) for c in r["calls"]), "the button asks the server"
+
+
+def test_the_card_says_older_linux_gets_its_own_python_and_offers_to_fetch_it(card):
+    r = card["admin"]
+    text = r["linuxText"]
+    assert "Ubuntu 22.04" in text and "Debian 11" in text and "Fedora" in text
+    assert "3.14.8 / 3.13.16" in text and "66 MB" in text
+    assert "get the Linux Python" in text and "from GitHub itself" in text
+    assert any("linux-runtime/fetch" in json.dumps(c) for c in r["calls"]), "the button asks the server"
+    assert "debian or ubuntu" not in r["text"]

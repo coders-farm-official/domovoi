@@ -4561,6 +4561,46 @@
         }
       }
     },
+    "/api/satellites/linux-runtime": {
+      "get": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Linux Runtime Status",
+        "description": "Whether the core holds the Linux satellite's own Python (``ready``,\n``pythons``, ``missing``, ``bytes_total``, ``bytes_cached``, ``fetch``).",
+        "operationId": "linux_runtime_status_api_satellites_linux_runtime_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/linux-runtime/fetch": {
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Linux Runtime Fetch",
+        "description": "Start fetching the Linux satellite's own Python onto the core.",
+        "operationId": "linux_runtime_fetch_api_satellites_linux_runtime_fetch_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/satellites/approvals/{room_id}/approve": {
       "post": {
         "tags": [
