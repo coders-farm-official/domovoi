@@ -432,7 +432,7 @@
           "plugins"
         ],
         "summary": "List Installed",
-        "description": "Installed plugins for the admin page: registry row + the fields\nthe list renders (permissions, capabilities, pages). Open read \u2014\n\u00a712 keeps the registry list open; errors show for everyone.",
+        "description": "Installed plugins for the admin page: registry row + the fields\nthe list renders (permissions, capabilities, pages), and what the\nplugin's running workers say about themselves (``worker_notes``, from\nthe core). Open read \u2014 \u00a712 keeps the registry list open; errors show\nfor everyone.",
         "operationId": "list_installed_api_plugins_get",
         "responses": {
           "200": {
@@ -6701,6 +6701,46 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config/version/channel": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Switch Version Channel",
+        "description": "Settings \u2192 Version's channel: follow ``stable`` (releases only) or\n``main`` (every change) from now on. HEAD never moves; the check and\nthe pull then compare with, and move to, that branch. Proxy of the\ncore's ``POST /v1/admin/version/channel`` \u2192\n``{ok, changed, channel, error}``.",
+        "operationId": "switch_version_channel_api_config_version_channel_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VersionChannelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
               }
             }
           }
@@ -20183,6 +20223,20 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "VersionChannelRequest": {
+        "properties": {
+          "channel": {
+            "type": "string",
+            "maxLength": 40,
+            "title": "Channel"
+          }
+        },
+        "type": "object",
+        "required": [
+          "channel"
+        ],
+        "title": "VersionChannelRequest"
       },
       "Voice": {
         "properties": {

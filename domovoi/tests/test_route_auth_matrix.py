@@ -232,6 +232,9 @@ def test_allowlist_entries_are_still_open() -> None:
 SECURITY_TIER_ROUTES = [
     ("core", "POST", "/v1/admin/config"),
     ("core", "POST", "/v1/admin/version/restart"),
+    # The update channel (stable / main): what every later pull, and so
+    # the update unit's root run, follows.
+    ("core", "POST", "/v1/admin/version/channel"),
     ("core", "POST", "/v1/admin/satellite/upgrade"),
     ("core", "POST", "/v1/admin/satellites/{room_id}/pairing/preseed"),
     ("core", "DELETE", "/v1/admin/satellites/{room_id}/pairing"),
@@ -251,6 +254,7 @@ SECURITY_TIER_ROUTES = [
     ("web", "POST", "/api/satellites/approvals/{room_id}/reject"),
     ("web", "PATCH", "/api/config/editable"),
     ("web", "POST", "/api/config/version/restart"),
+    ("web", "POST", "/api/config/version/channel"),
     ("web", "POST", "/api/satellites/{room_id}/upgrade"),
     ("web", "POST", "/api/satellites/{room_id}/pairing/reset"),
     ("web", "POST", "/api/satellites/pending/{pending_id}/adopt"),

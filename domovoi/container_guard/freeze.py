@@ -15,7 +15,9 @@ Frozen (docs/CONTAINER_GUARD.md, "The freeze"):
 * handing out the Android app — core ``/v1/android-app/files/*`` (the
   APKs phones download from the join page) and the admin's fetch and
   upload that fill that cache;
-* the update pull and apply — core ``/v1/admin/version/pull``, and
+* the update pull and apply — core ``/v1/admin/version/pull``, the
+  channel switch beside it (``/v1/admin/version/channel``: what every later
+  pull follows), and
   ``/v1/admin/version/restart`` whenever it would load code that isn't
   running yet (pulled code or a staged plugin upgrade; on an update-unit
   host that is the unit's trigger). A plain restart with nothing new to

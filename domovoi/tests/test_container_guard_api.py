@@ -196,6 +196,34 @@ async def test_a_restart_that_would_apply_is_frozen_a_plain_one_is_not(guard_db,
         assert r.status_code == 200 and r.json()["ok"] is True
 
 
+async def test_the_channel_switch_is_frozen_like_the_pull(guard_db, monkeypatch) -> None:
+    """Switching stable / main decides what every later pull follows: it
+    pauses with the pull. (git_version.switch_channel is faked: the real
+    one would fetch and re-point the checkout these tests run from.)"""
+    from domovoi import git_version
+
+    calls: list[str] = []
+
+    async def switch(channel: str) -> dict:
+        calls.append(channel)
+        return {"ok": True, "changed": True, "channel": channel, "error": None}
+
+    monkeypatch.setattr(git_version, "switch_channel", switch)
+    token = await _admin()
+    iid = await _open(tamper_finding())
+    async with core_client() as c:
+        r = await c.post("/v1/admin/version/channel", json={"channel": "stable"}, headers=bearer(token))
+        assert r.status_code == 423, r.text
+        assert r.json()["detail"]["error"]["details"]["operation"] == "update_pull"
+        assert calls == []
+        async with session_scope() as s:
+            await store.clear(s, iid, "admin via test", "reviewed")
+        freeze.forget()
+        r = await c.post("/v1/admin/version/channel", json={"channel": "stable"}, headers=bearer(token))
+        assert r.status_code == 200 and r.json()["channel"] == "stable", r.text
+    assert calls == ["stable"]
+
+
 async def test_restart_would_apply_reads_pulled_code_and_staged_plugins(monkeypatch) -> None:
     from domovoi import git_version
     from domovoi import main as core_main

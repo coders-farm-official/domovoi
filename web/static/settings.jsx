@@ -615,8 +615,15 @@ const VoicesPanel = () => {
  * values (DB URL, ports, STT device) can stop the server booting.
  *
  * Above the editor sits a Version section: the web build, the server's
+ * release label ("1.0.0", or "1.0.0 + 14 (abc1234)" past that release) and
  * git SHA (with a "-dirty" suffix when its working tree has uncommitted
- * changes), and an update check. The panel offers exactly ONE update action
+ * changes), the update channel, and an update check. The channel
+ * (docs/LINUX_HOST.md, Release channels) is the branch the check and the
+ * pull follow: stable (releases only) or main (every change). An admin can
+ * switch it here; that never moves the code, it changes what "update
+ * available" means: a newer release on stable, commits behind on main. A
+ * channel root's update unit doesn't allow (DOMOVOI_UPSTREAM_BRANCH) isn't
+ * offered. The panel offers exactly ONE update action
  * at a time, in the order an operator needs them: "Restart to apply
  * changes" when code is on disk but not loaded, else "Pull the latest" when
  * behind, else "Check for updates". The restart is replaced by the manual
@@ -648,8 +655,10 @@ const VoicesPanel = () => {
  * Data:
  *   GET   /api/config              · web build (web_version)
  *   GET   /api/config/version      · domovoi git SHA → { sha, restart_mode, last_update, bad_sha, … }
- *   POST  /api/config/version/check· git fetch + count → { behind, ahead, upstream, upstream_sha, error }
+ *   POST  /api/config/version/check· git fetch + count → { behind, ahead, upstream, upstream_sha, error,
+ *                                    channel, upstream_version, latest_release }
  *   POST  /api/config/version/pull · git pull --ff-only → { pulled, new_sha, error }
+ *   POST  /api/config/version/channel · follow stable or main; HEAD never moves → { ok, changed, channel, error }
  *   POST  /api/config/version/restart · bounce core+web, or start the update unit → { ok, mode, units, error }
  *   GET   /api/config/core/restart · when the core doesn't answer: what "Restart the core" would do
  *   POST  /api/config/core/restart · the web ends a core that doesn't answer; systemd starts it again
@@ -850,6 +859,25 @@ const lastUpdateWarnings = (lastUpdate) => {
   return out;
 };
 
+// The update channels (git_version.CHANNELS): what each one follows.
+const CHANNEL_TEXT = {
+  stable: 'releases only',
+  main: 'every change, as it lands',
+};
+
+// What an update check found, in the channel's own terms: on stable "a
+// newer release" (or that this server runs code newer than the latest
+// one), on main how many commits behind. null when there is no answer.
+const versionCheckWords = (res) => {
+  if (!res || !res.upstream) return null;
+  if (res.channel === 'stable') {
+    if (res.behind > 0) return `Domovoi ${res.upstream_version || 'a newer release'} is available`;
+    if (res.ahead > 0) return 'newer than the latest release';
+    return 'the latest release';
+  }
+  return res.behind > 0 ? `${res.behind} commit${res.behind === 1 ? '' : 's'} behind` : 'up to date';
+};
+
 const LastUpdateWarnings = ({ lastUpdate }) => {
   const lines = lastUpdateWarnings(lastUpdate);
   if (!lines.length) return null;
@@ -904,16 +932,49 @@ const VersionSection = () => {
       if (res && res.error) {
         fire(`update check failed: ${res.error}`);
       } else if (!res || !res.upstream) {
-        fire('no upstream configured — can’t check');
-      } else if (res.behind > 0) {
-        fire(`${res.behind} commit${res.behind === 1 ? '' : 's'} behind`);
+        fire(res && res.channel === 'stable' && !res.latest_release
+          ? 'no release has been published on the stable channel yet'
+          : 'no upstream configured — can’t check');
       } else {
-        fire('up to date');
+        fire(versionCheckWords(res));
       }
     } catch (e) {
       reportMutationFailure(fire, 'update check', e);
     } finally {
       setChecking(false);
+    }
+  };
+
+  // Follow the other channel. Nothing moves now: the server makes the
+  // local branch at the code it runs and tracks origin/<channel>; the
+  // check that follows says what is new there.
+  const [switching, setSwitching] = React.useState(false);
+  const switchChannel = async (to) => {
+    if (!to || !core || to === core.channel) return;
+    if (!window.confirm(to === 'stable'
+      ? 'Follow the stable channel: Domovoi releases only?\n\nNothing changes now. ' +
+        'The update check then offers each new release. If this server already ' +
+        'runs newer code than the latest release, updates resume with the next ' +
+        'release that includes it.'
+      : 'Follow the main channel: every change, as it lands?\n\nNothing changes ' +
+        'now. The update check then offers each new change on main, which is ' +
+        'tested less than a release.'
+    )) return;
+    setSwitching(true);
+    try {
+      const res = await apiPost('/api/config/version/channel', { channel: to });
+      if (res && res.ok) {
+        fire(`now following ${to}`);
+        setStatus(null);
+        await refreshCore();
+        await check();
+      } else {
+        fire(`channel not changed: ${(res && res.error) || 'unknown'}`);
+      }
+    } catch (e) {
+      reportMutationFailure(fire, 'channel switch', e);
+    } finally {
+      setSwitching(false);
     }
   };
 
@@ -959,6 +1020,16 @@ const VersionSection = () => {
   // which is exactly when someone looks at this panel.
   const coreSha = core && core.sha;
   const checkoutSha = core && core.checkout_sha;
+  // Its release label ("1.0.0", "1.0.0 + 14 (abc1234)"); the SHA beside it
+  // only when the label doesn't already name it.
+  const coreLabel = core && typeof core.version === 'string' ? core.version : null;
+  const labelHasSha = (label, sha) => !!(label && sha && label.includes(String(sha).replace(/-dirty$/, '').slice(0, 7)));
+  // The update channel: what the check and the pull follow, and the ones an
+  // admin may switch to (root's DOMOVOI_UPSTREAM_BRANCH can narrow them).
+  const channel = core && typeof core.channel === 'string' ? core.channel : null;
+  const channelPin = core && Array.isArray(core.channel_pin) ? core.channel_pin : null;
+  const channelChoices = (core && Array.isArray(core.channels) ? core.channels : [])
+    .filter((c) => !channelPin || channelPin.includes(c));
   // Pulled code and staged plugin upgrades both wait on the same restart;
   // the panel says which (see pendingRestart in components.jsx).
   const pending = pendingRestart(core);
@@ -986,6 +1057,12 @@ const VersionSection = () => {
   // restart itself, the command to run instead.
   const plainRestart = admin && !!core && mode !== 'restart' && mode !== 'busy';
   const plainRunning = restarting === 'plain';
+  // The switch is an admin's, and only where there is somewhere to go.
+  const canSwitch = admin && !!core && mode !== 'busy' && channelChoices.some((c) => c !== channel);
+  // On stable, past the latest release (switched from main): nothing to
+  // pull until a release includes this code.
+  const aheadOfRelease = !!(status && status.upstream && status.channel === 'stable'
+                            && status.behind === 0 && status.ahead > 0);
   // Signed updates (docs/LINUX_HOST.md): whether the checked-out commit
   // carries a signature by a key in the server's root-owned allowed-signers
   // file. One badge: signed (verified); else what it is, and whether that
@@ -1004,14 +1081,17 @@ const VersionSection = () => {
 
   return (
     <Card title="Version"
-          sub="Build identifiers for the web dashboard and the Domovoi server, plus a git update check.">
+          sub="The Domovoi release this server runs, which updates it follows, and the update check.">
       <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '140px 1fr',
                     rowGap: 8, fontSize: 13, alignItems: 'center' }}>
         <div className="label">web build</div>
         <div className="mono" style={{ color: webVer ? 'var(--fg)' : 'var(--fg-faint)' }}>{webVer || '—'}</div>
         <div className="label">domovoi</div>
         <div className="mono" style={{ color: coreSha ? 'var(--fg)' : 'var(--fg-faint)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span style={{ userSelect: 'all' }}>{coreSha || '—'}</span>
+          {coreLabel && <span className="version-label" style={{ userSelect: 'all' }}>{coreLabel}</span>}
+          {(!coreLabel || !labelHasSha(coreLabel, coreSha)) && (
+            <span style={{ userSelect: 'all', color: coreLabel ? 'var(--fg-muted)' : undefined }}>{coreSha || '—'}</span>
+          )}
           {coreSha && coreSha.endsWith('-dirty') &&
             <Pill tone="warn">uncommitted changes</Pill>}
           {sigBadge && <span className="version-signature" title={sigBadge.title}><Pill tone={sigBadge.tone}>{sigBadge.label}</Pill></span>}
@@ -1025,8 +1105,44 @@ const VersionSection = () => {
           <React.Fragment>
             <div className="label">checked out</div>
             <div className="mono" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ userSelect: 'all' }}>{checkoutSha}</span>
+              {core.checkout_version && <span>{core.checkout_version}</span>}
+              {!labelHasSha(core.checkout_version, checkoutSha) && <span style={{ userSelect: 'all' }}>{checkoutSha}</span>}
               <Pill tone="warn">restart to load</Pill>
+            </div>
+          </React.Fragment>
+        )}
+        {core && (channel || canSwitch) && (
+          <React.Fragment>
+            <div className="label">updates</div>
+            <div className="version-channel" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12 }}>
+              {canSwitch ? (
+                <select value={channel || ''} onChange={(e) => switchChannel(e.target.value)}
+                        disabled={switching || internetOff || !!restarting || pulling}
+                        aria-label="update channel"
+                        title={internetOff ? NEEDS_INTERNET_TEXT : 'which updates this server follows; switching moves no code'}
+                        style={{ font: 'inherit', fontSize: 12, height: 28, padding: '0 8px',
+                                 borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+                                 background: 'var(--card)', color: 'var(--fg)', maxWidth: 280 }}>
+                  {!channelChoices.includes(channel) && (
+                    <option value={channel || ''} disabled>{channel ? `${channel} (not a channel)` : 'no branch followed'}</option>
+                  )}
+                  {channelChoices.map((c) => (
+                    <option key={c} value={c}>{CHANNEL_TEXT[c] ? `${c}: ${CHANNEL_TEXT[c]}` : c}</option>
+                  ))}
+                </select>
+              ) : (
+                <span>
+                  <span className="mono">{channel}</span>
+                  {CHANNEL_TEXT[channel] && <span style={{ color: 'var(--fg-muted)' }}>{`: ${CHANNEL_TEXT[channel]}`}</span>}
+                </span>
+              )}
+              {switching && <span style={{ color: 'var(--fg-muted)' }}>switching…</span>}
+              {admin && !canSwitch && channelPin && (
+                <span style={{ color: 'var(--fg-muted)' }}
+                      title="DOMOVOI_UPSTREAM_BRANCH in /etc/default/domovoi-update, which only an administrator on the server can change">
+                  set on the server
+                </span>
+              )}
             </div>
           </React.Fragment>
         )}
@@ -1113,10 +1229,13 @@ const VersionSection = () => {
         )}
         {internetOff && mode !== 'restart' && mode !== 'busy' && <NeedsInternetNote compact/>}
         {mode !== 'restart' && mode !== 'busy' && behind != null && (
-          <span style={{ fontSize: 12, color: behind > 0 ? 'var(--warn)' : 'var(--ok)' }}>
-            {behind > 0
-              ? `${behind} commit${behind === 1 ? '' : 's'} behind`
-              : 'up to date'}
+          <span className="version-check-result" style={{ fontSize: 12, color: behind > 0 ? 'var(--warn)' : 'var(--ok)' }}>
+            {versionCheckWords(status)}
+          </span>
+        )}
+        {mode !== 'restart' && mode !== 'busy' && behind != null && status.channel !== 'stable' && status.latest_release && (
+          <span className="version-latest-release" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+            latest release: {status.latest_release}
           </span>
         )}
         {plainRestart && restartCapable && (
@@ -1145,6 +1264,13 @@ const VersionSection = () => {
       {mode === 'pull' && (
         <div className="mono" style={{ padding: '0 16px 14px', fontSize: 11, color: 'var(--fg-faint)' }}>
           Pull updates the host files only — this panel will then offer the restart that loads them.
+        </div>
+      )}
+      {aheadOfRelease && mode === 'check' && (
+        <div className="version-ahead-of-release" style={{ padding: '0 16px 14px', fontSize: 12, color: 'var(--fg-muted)' }}>
+          This server runs newer code than the latest release
+          ({coreLabel || shortCommit(coreSha)}); updates resume with the next
+          release that includes it.
         </div>
       )}
       {mode === 'held' && (

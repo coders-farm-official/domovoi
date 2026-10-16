@@ -68,6 +68,7 @@ KNOWN_FROZEN = {
     ("core", "/v1/admin/satellite/upgrade"),
     ("core", "/v1/satellite-code/manifest"),
     ("core", "/v1/admin/version/pull"),
+    ("core", "/v1/admin/version/channel"),
     ("core", "/v1/admin/version/restart"),
     ("web", "/api/satellites/media/prepare"),
 }
