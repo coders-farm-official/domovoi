@@ -539,13 +539,18 @@ async def test_identify_without_an_offer_answers_the_sentence_alone(faked, monke
     assert resp.text == "It might be Lantern Song by The Example Band, or Copper Morning by Glass Harbor."
 
 
-def test_a_lyric_question_is_logged_by_its_word_count() -> None:
+def test_a_lyric_question_is_logged_by_its_word_count(caplog) -> None:
     res = Resolution("ask", (_cand(LANTERN, 0.83),), heard=PHRASE, reason="lyrics")
     assert music_choice._heard_for_log(res, {"lyrics": PHRASE}) == "<lyrics: 7 words>"
     assert music_choice._heard_for_log(res, {"any": PHRASE}) == "<lyrics: 7 words>"   # the last resort
     name = Resolution("ask", (Candidate(ref=COPPER, score=0.8, via="fuzzy", speak="Copper Morning"),),
                       heard="copper mourning")
+    # A name is what somebody said too: its words only at DEBUG (S5).
+    caplog.set_level(logging.INFO)
+    assert music_choice._heard_for_log(name, {"any": "copper mourning"}) == "<2 words>"
+    caplog.set_level(logging.DEBUG)
     assert music_choice._heard_for_log(name, {"any": "copper mourning"}) == "'copper mourning'"
+    assert music_choice._heard_for_log(res, {"lyrics": PHRASE}) == "<lyrics: 7 words>"   # never a lyric
 
 
 # ─── Through the real router, on Postgres ─────────────────────────────────

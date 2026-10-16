@@ -80,6 +80,7 @@ from typing import Any, Callable, Iterable
 
 from domovoi import egress
 from domovoi.config import settings
+from domovoi.log_privacy import said
 
 log = logging.getLogger(__name__)
 
@@ -1057,8 +1058,8 @@ def _settle(capture: LaneCapture, transcript: str, timings: Any) -> None:
             "fastlane would commit %s at +%dms (%s ms before utterance_end, "
             "hold %d ms) in room=%s; lane heard %r; whisper later said %r; "
             "agree=%s%s",
-            cmd.path, ms, lead, cmd.hold_ms, capture.room_id, decision.lane_text,
-            transcript, agree,
+            cmd.path, ms, lead, cmd.hold_ms, capture.room_id, said(decision.lane_text),
+            said(transcript), agree,
             f"; {after_ms} ms of speech came after it" if after_ms else "",
         )
     elif preempted and whisper is not None and whisper.hold_ms is not None:
@@ -1071,7 +1072,7 @@ def _settle(capture: LaneCapture, transcript: str, timings: Any) -> None:
         log.info(
             "fastlane had not decided %s in room=%s when the core ended the "
             "capture early; the lane heard %r", whisper.path, capture.room_id,
-            capture.lane_text,
+            said(capture.lane_text),
         )
     else:
         missed = whisper is not None and whisper.hold_ms is not None
@@ -1079,8 +1080,8 @@ def _settle(capture: LaneCapture, transcript: str, timings: Any) -> None:
         if missed:
             log.info(
                 "fastlane missed %s in room=%s: whisper said %r, the lane heard "
-                "%r%s", whisper.path, capture.room_id, transcript,
-                capture.lane_text, f" (stopped: {gave_up})" if gave_up else "",
+                "%r%s", whisper.path, capture.room_id, said(transcript),
+                said(capture.lane_text), f" (stopped: {gave_up})" if gave_up else "",
             )
     if timings is not None and hasattr(timings, "note"):
         timings.note(**record)

@@ -4,6 +4,39 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-16 — Privacy fixes: the journal, "forget me", two routes before setup
+
+Server update (core and dashboard, a database migration, V029) and a new
+Android APK. From the delta security review.
+
+* **The server's journal no longer holds the household token or what was
+  said.** Every log line either process writes has the value of a
+  credential-named parameter blanked (`device_token=***`, a WebSocket's
+  `?token=`, a Bearer), and transcripts, searches and replies appear only
+  as a word count (`<5 words>`) at the default level. To see the words
+  while chasing a misrecognition, run with `LOG_LEVEL=DEBUG`. A journal
+  from before this update can hold both until journald rotates it out
+  (it is kept on disk, with no time limit): rotate the household token in
+  Settings → Devices and run `sudo journalctl --vacuum-time=7d` if that
+  matters to you. "Forget me" never reaches the journal (SECURITY_PRIVACY,
+  Data at rest).
+* **"Forget me" deletes a person only in their own voice.** "My name is
+  X" + "yes" still adds the speaker's voice to X, now marked as a claim
+  (V029). "Forget me" from a voice that doesn't match X's own samples
+  removes only what that voice claimed and keeps X's profile and
+  memories, and says so; an admin still deletes a person on the People
+  page, which now marks claimed samples (where and by whom, for an admin).
+  Samples saved before this update count as the person's own.
+* **Pulling new code and clearing a container-guard tamper incident wait
+  for setup** (`501` until an admin password exists, then an admin
+  Bearer), at the core and the dashboard.
+* `GET /api/people/{id}/profiles` (open) no longer shows a phone sample's
+  room (`phone-<device id>`) or the claim details to a caller who isn't an
+  admin.
+* **Android:** a release build writes no transcript or spoken sentence to
+  logcat (a word count instead), and on a shared screen the "this phone"
+  view leaves Files and the assistant off, as the workspace does.
+
 ## 2026-10-16 — Crafted audio files, chat pictures and big sheets can't overwhelm the server
 
 Server update (core and dashboard; no migration). Fixes from the delta

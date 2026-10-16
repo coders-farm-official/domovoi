@@ -31,6 +31,7 @@ import json
 import logging
 
 from domovoi.clients.ollama import get_ollama_client
+from domovoi.log_privacy import said
 
 log = logging.getLogger(__name__)
 
@@ -104,7 +105,7 @@ async def classify_third_party_match(
     try:
         parsed = json.loads(raw)
     except Exception as e:
-        log.warning("third-party classifier parse failed: %s — text=%r", e, raw[:200])
+        log.warning("third-party classifier parse failed: %s — text=%r", e, said(raw[:200]))
         return 0.5
 
     try:

@@ -84,6 +84,7 @@ from domovoi.confirmations import request_confirmation
 from domovoi.handlers.shared import library_match
 from domovoi.handlers.shared.library_match import Candidate, EntityRef, Resolution
 from domovoi.models import Context, Response
+from domovoi.log_privacy import said
 
 log = logging.getLogger(__name__)
 
@@ -462,7 +463,7 @@ def _heard_for_log(res: Resolution, query: Mapping[str, Any]) -> str:
     logs a lyric (lyrics-build contract [Q51])."""
     if _is_lyric_request(res, query):
         return f"<lyrics: {len(str(res.heard or '').split())} words>"
-    return repr(res.heard)
+    return repr(said(res.heard))
 
 
 class MusicChoiceMixin:
@@ -635,7 +636,7 @@ class MusicChoiceMixin:
         if not refs:
             return None
         reply = parse_choice_reply(transcript, len(refs))
-        log.info("music: did-you-mean reply %r → %s", transcript, reply)
+        log.info("music: did-you-mean reply %r → %s", said(transcript), reply)
         heard = str(data.get("heard") or "")
         if reply.action == "pass":
             return None

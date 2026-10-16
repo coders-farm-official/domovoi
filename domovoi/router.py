@@ -41,6 +41,7 @@ from domovoi.uncertainty import (
     categorize_question,
     looks_like_question,
 )
+from domovoi.log_privacy import said
 
 log = logging.getLogger(__name__)
 
@@ -794,7 +795,7 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
         # of the music-names list but is a question about the world): the
         # turn goes on to the tool model and the Q&A model as if no fast
         # path had matched.
-        log.info("fast path %s declined %r; routing on", handler.name, transcript)
+        log.info("fast path %s declined %r; routing on", handler.name, said(transcript))
 
     # 2. LLM tool-call fallback (the stub client returns None) — except for
     # a plain question about the world or a request for a joke or a story,
@@ -815,7 +816,7 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             # offers_tool gate) — that is the QA fallthrough, not a route.
             log.info(
                 "tool model called withheld tool %r for %r — ignoring",
-                handler.name, intent.transcript,
+                handler.name, said(intent.transcript),
             )
             handler = None
         if handler is not None:
@@ -854,7 +855,7 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
                 return response
             # The tool declined the call (it was not about what the tool
             # does after all): the Q&A model answers it below.
-            log.info("tool %s declined %r; answering as Q&A", handler.name, intent.transcript)
+            log.info("tool %s declined %r; answering as Q&A", handler.name, said(intent.transcript))
 
     # 3. General Q&A (Ollama is local, so always available). Pass recent
     # turns from session context so multi-turn QA actually feels stateful —
@@ -1100,13 +1101,13 @@ async def _finish_qa(
             log.warning(
                 "qa: the LLM is unreachable for %r; speaking the outage line "
                 "instead of silence",
-                intent.transcript,
+                said(intent.transcript),
             )
         else:
             log.warning(
                 "qa: the LLM gave no usable answer for %r; speaking the "
                 "no-answer line",
-                intent.transcript,
+                said(intent.transcript),
             )
         path = "error" if unreachable else "qa"
         response = Response(

@@ -61,6 +61,8 @@ from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence, get_args
 
 from sqlalchemy import text
 
+from domovoi.log_privacy import said
+
 if TYPE_CHECKING:  # pragma: no cover
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -490,12 +492,12 @@ async def resolve_request(
             ask_threshold=float(settings.music_match_ask_threshold),
         )
     except Exception as e:  # noqa: BLE001 — today's search still runs
-        log.warning("spoken-name resolver failed for %r: %s", heard, e)
+        log.warning("spoken-name resolver failed for %r: %s", said(heard), e)
         return Resolution.none("error", heard=heard)
     best = res.best
     log.info(
         "spoken-name match %r → %s%s (%s, %.0f ms)",
-        heard, res.decision,
+        said(heard), res.decision,
         f" {best.ref.type} {best.ref.label!r} {best.score:.3f}" if best else "",
         res.reason, (time.perf_counter() - t0) * 1000.0,
     )
@@ -626,7 +628,7 @@ async def match_reply(
             ask=float(settings.music_match_ask_threshold),
         )
     except Exception as e:  # noqa: BLE001
-        log.warning("spoken-name resolver: match_reply failed for %r: %s", text, e)
+        log.warning("spoken-name resolver: match_reply failed for %r: %s", said(text), e)
         return None
 
 

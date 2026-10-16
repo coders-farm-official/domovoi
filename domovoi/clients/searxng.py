@@ -36,6 +36,7 @@ from typing import Any, Literal, NamedTuple, Protocol
 
 from domovoi import egress
 from domovoi.config import settings
+from domovoi.log_privacy import said
 
 log = logging.getLogger(__name__)
 
@@ -168,7 +169,7 @@ class RealSearxNGClient:
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             # Nothing listening (the container isn't running) or the
             # address doesn't answer: the search never ran.
-            log.warning("SearxNG unreachable at %s for %r: %s", self._base_url, query, e)
+            log.warning("SearxNG unreachable at %s for %r: %s", self._base_url, said(query), e)
             return SearchOutcome([], "unreachable")
         except Exception as e:
             # The status code or the error's kind only: an HTTP error's text
@@ -205,7 +206,7 @@ class RealSearxNGClient:
         if unresponsive:
             log.info(
                 "SearxNG returned nothing for %r: its engines didn't answer (%s)",
-                query, str(unresponsive)[:300],
+                said(query), str(unresponsive)[:300],
             )
             return SearchOutcome([], "engines_failed")
         return SearchOutcome([], "no_results")

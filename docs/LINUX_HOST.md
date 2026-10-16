@@ -922,7 +922,9 @@ file system, capped at 4 GB) or yours: a `SystemMaxUse=` in
 `/etc/systemd/journald.conf` or a drop-in of your own still applies. To
 keep the journal your own way, set `DOMOVOI_MANAGE_JOURNAL=0` in
 `/etc/default/domovoi-update` and delete the file, or put your own
-`Storage=` in a drop-in after it.
+`Storage=` in a drop-in after it. What the journal holds, for how long,
+and what "forget me" doesn't reach:
+[SECURITY_PRIVACY.md, Data at rest](SECURITY_PRIVACY.md#data-at-rest).
 
 **By hand, over SSH** (nothing else answering):
 

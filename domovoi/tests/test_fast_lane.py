@@ -549,7 +549,12 @@ def test_agreement_is_recorded_and_logged(lane, caplog) -> None:
     assert isinstance(doc["fastlane_cpu_ms"], int)
     line = next(r.getMessage() for r in caplog.records if "fastlane would commit" in r.getMessage())
     assert "music._pause_from_match at +" in line
-    assert "whisper later said 'Pause the music.'" in line and "agree=True" in line
+    # What was said reaches the journal only at DEBUG (S5, log_privacy.said).
+    assert "whisper later said <3 words>" in line and "agree=True" in line
+    assert "pause the music" not in line.lower()
+    caplog.set_level(logging.DEBUG)
+    line = next(r.getMessage() for r in caplog.records if "fastlane would commit" in r.getMessage())
+    assert "whisper later said 'Pause the music.'" in line
 
 
 def test_disagreement_and_the_speech_that_came_after(lane) -> None:

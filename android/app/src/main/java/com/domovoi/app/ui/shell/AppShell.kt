@@ -526,9 +526,19 @@ private fun TopChrome(content: @Composable () -> Unit) {
 @Composable
 private fun OfflineShell(choice: ServerChoice) {
     // Music, videos, files, and the on-device assistant where this install
-    // has it (localTabs); the index of the one showing.
-    val tabs = remember { localTabs() }
+    // has it (localTabs); the index of the one showing. A shared screen
+    // (the kitchen tablet, as the saved server last answered) leaves Files
+    // and the assistant off here too, as the workspace does (N7).
+    val app = LocalApp.current
+    val savedServer by app.prefs.serverUrl.collectAsState()
+    val savedToken by app.prefs.deviceToken.collectAsState()
+    val sharedAnswers by app.prefs.sharedScreens.collectAsState()
+    val shared = savedServer.isNotBlank() && isSharedScreen(
+        ServerCredentials.sharedAnswerFor(sharedAnswers, savedServer), !savedToken.isNullOrBlank(),
+    )
+    val tabs = remember(shared) { localTabs(shared = shared) }
     var tab by rememberSaveable { mutableStateOf(0) }
+    LaunchedEffect(tabs) { if (tab >= tabs.size) tab = 0 }
     // This phone's own settings (voice, problem reports, the app's version
     // and developer options): the top bar's gear opens them, with no server
     // needed.

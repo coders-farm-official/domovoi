@@ -89,6 +89,7 @@ from domovoi.config import settings
 from domovoi.db.session import session_scope
 from domovoi.models import PHONE_ROOM_PREFIX, Context, Intent, Response
 from domovoi.voice_identifier import speaker_is_confident
+from domovoi.log_privacy import said
 
 log = logging.getLogger(__name__)
 
@@ -765,8 +766,8 @@ async def _answer(
     )
     log.info(
         "phone voice: %s thread=%s heard %r%s -> %s/%s (speaker %s %s) in %d ms",
-        room, thread_id, transcript,
-        f" (routed as {request!r})" if request != transcript else "",
+        room, thread_id, said(transcript),
+        f" (routed as {said(request)!r})" if request != transcript else "",
         getattr(response, "matched_handler", None), getattr(response, "matched_path", None),
         person_id, "-" if score is None else f"{score:.3f}", stats["wall_ms"],
     )

@@ -46,6 +46,7 @@ from domovoi.handlers.shared.playlist_pick import (
     read_resume_position,
 )
 from domovoi.models import Context, Intent, Response
+from domovoi.log_privacy import said
 
 log = logging.getLogger(__name__)
 
@@ -650,7 +651,7 @@ class PlaylistHandler(Handler):
             )
             return result.outcome == "enqueued"
         except Exception as e:
-            log.warning("fetch-missing enqueue failed for %r: %s", query, e)
+            log.warning("fetch-missing enqueue failed for %r: %s", said(query), e)
             return False
 
     async def _add_current_to_named(

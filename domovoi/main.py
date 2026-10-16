@@ -114,6 +114,13 @@ logging.basicConfig(
     format="%(asctime)s.%(msecs)03d %(levelname)s %(name)s: %(message)s",
     datefmt="%H:%M:%S",
 )
+# S5 (delta review 2026-10-16): no log line the core writes may carry a
+# credential — uvicorn prints a WebSocket's ``?token=`` with its path, and
+# stdout is the journal, kept on disk. Every record has credential values
+# blanked as it is made (domovoi/log_privacy.py).
+from domovoi import log_privacy  # noqa: E402
+
+log_privacy.install()
 log = logging.getLogger(__name__)
 
 
@@ -2396,9 +2403,11 @@ async def admin_version_check() -> dict[str, Any]:
 
 @app.post(
     "/v1/admin/version/pull",
-    # Admin tier: this changes the code on disk that the core and
-    # /v1/satellite-code serve from. Bearer-only; pre-setup grace.
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier: this changes the code on disk that the core and
+    # /v1/satellite-code serve from, and moves an unclaimed install off the
+    # commit it was pinned to (delta review N5, 2026-10-16). Bearer-only,
+    # and 501 until an admin password exists: no pre-setup grace.
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_version_pull() -> dict[str, Any]:
     """`git pull --ff-only` — a deliberate, separate action (never invoked by
@@ -2539,7 +2548,10 @@ async def admin_container_incident_acknowledge(incident_id: int, request: Reques
 
 @app.post(
     "/v1/admin/containers/incidents/{incident_id}/clear",
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier (delta review N5, 2026-10-16): clearing the last open
+    # tamper incident lifts the freeze, a security decision, so no
+    # pre-setup grace (501 until an admin password exists).
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_container_incident_clear(
     incident_id: int, request: Request, body: _ClearIncidentBody | None = None,

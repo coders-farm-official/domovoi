@@ -99,14 +99,37 @@ const PERSON_VOICE_SAMPLE_SETS = [
     hint: 'said into the app’s chat mic — what the phone recognizes this voice by first; satellites never use them' },
 ];
 
+/*
+ * A claimed sample (V029): added because somebody said this person's name
+ * and "yes", or learned by a room from a voice recognized only through such
+ * a sample. Matching uses it; "forget me" from a voice that doesn't match
+ * the person's own removes only these. Where and by whom reach an admin
+ * only (the server leaves them out for everyone else, with a phone
+ * sample's room, which names the phone).
+ */
+const personVoiceSampleClaim = (s) => {
+  if (!s.claimed) return null;
+  if (s.claim_of) return `learned through the name claim #${s.claim_of}`;
+  const where = s.claim_room ? ` in ${s.claim_room}` : '';
+  const who = s.claimed_by_name ? ` by a voice recognized as ${s.claimed_by_name}` : '';
+  return `added by saying the name${where}${who}`;
+};
+
 const PersonVoiceSampleRow = ({ sample, onDelete }) => (
   <div style={{ padding: '8px 16px', borderTop: '1px solid var(--border-soft)',
                 display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, alignItems: 'center' }}>
     <div style={{ minWidth: 0 }}>
-      <div style={{ fontSize: 13, overflowWrap: 'anywhere' }}>{sample.room_id || 'no room'}</div>
+      <div style={{ fontSize: 13, overflowWrap: 'anywhere' }}>
+        {sample.room_id || (sample.source === 'phone' ? 'a phone' : 'no room')}
+      </div>
       <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>
         #{sample.id} · added {sample.enrolled_at ? new Date(sample.enrolled_at).toLocaleString() : '—'} ({relTime(sample.enrolled_at)})
       </div>
+      {sample.claimed && (
+        <div className="mono" style={{ fontSize: 11, color: 'var(--warn, var(--fg-muted))', marginTop: 2 }}>
+          {personVoiceSampleClaim(sample)}
+        </div>
+      )}
     </div>
     <Button icon="trash-2" onClick={() => onDelete(sample)}
             style={{ background: 'var(--err-soft)', color: 'var(--err)', borderColor: 'transparent' }}>

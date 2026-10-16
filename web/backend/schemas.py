@@ -327,6 +327,23 @@ class VoiceProfile(BaseModel):
     # match only satellite samples; a phone turn matches phone samples
     # first.
     source: str = "satellite"
+    # Whether the sample is not the person's own voice (V029, delta review
+    # S1): added because somebody said their name and "yes", or learned
+    # by a room from a voice recognized only through such a sample.
+    # "Forget me" from a voice that doesn't match the person's own removes
+    # only these. ``claimed_at`` is when the claim was made (the claim's
+    # own time for a learned one).
+    claimed: bool = False
+    claimed_at: datetime | None = None
+    # Admin callers only (Bearer, the dashboard cookie, or before setup);
+    # None for everyone else. ``claim_room``: where the yes was said (a
+    # room, or a phone's own id). ``claimed_by_*``: who that voice was
+    # recognized as then (None: an unknown voice). ``claim_of``: the
+    # claim a learned sample stands on.
+    claim_room: str | None = None
+    claimed_by_person_id: int | None = None
+    claimed_by_name: str | None = None
+    claim_of: int | None = None
 
 
 # ─── Profile personalization ─────────────────────────────────────

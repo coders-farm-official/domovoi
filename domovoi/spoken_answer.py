@@ -47,6 +47,7 @@ from domovoi.clients.ollama import (
     _is_timeout,
     _last_complete_sentences,
 )
+from domovoi.log_privacy import said
 
 log = logging.getLogger(__name__)
 
@@ -144,12 +145,12 @@ class SpokenAnswer:
                         # Part of the answer was already said: keep it, stop.
                         log.warning(
                             "spoken answer: stream failed after %d sentence(s) for %r: %s",
-                            len(self.spoken), self._transcript, e,
+                            len(self.spoken), said(self._transcript), e,
                         )
                         return
                     log.warning(
                         "spoken answer: ollama call failed (attempt %d) for %r: %s",
-                        attempt, self._transcript, e,
+                        attempt, said(self._transcript), e,
                     )
                     if attempt == 2 or _is_timeout(e):
                         # A timeout already waited the full read limit.
@@ -168,7 +169,7 @@ class SpokenAnswer:
                         else:
                             log.warning(
                                 "spoken answer: dropped a cut tail for %r: %r",
-                                self._transcript, tail,
+                                said(self._transcript), said(tail),
                             )
                     return
 
@@ -179,7 +180,7 @@ class SpokenAnswer:
                     return
                 log.warning(
                     "spoken answer: %s answer for %r (attempt %d): %r",
-                    problem, self._transcript, attempt, text,
+                    problem, said(self._transcript), attempt, said(text),
                 )
                 if attempt == 2 and problem == "cut":
                     for sentence in _sentences(_last_complete_sentences(text)):

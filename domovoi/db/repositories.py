@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
@@ -1011,6 +1012,35 @@ class MemoriesRepository:
         return [(int(r[0]), r[1]) for r in row.all()]
 
 
+@dataclass(frozen=True)
+class VoiceSample:
+    """One ``voice_profiles`` row as "forget me" and room learning read it
+    (:meth:`VoiceProfilesRepository.person_samples`).
+
+    ``claimed``: added by a name claim. ``claim_of``: learned from a voice
+    recognized only through the claim with that id. Either way not the
+    person's own voice (:attr:`own`)."""
+
+    id: int
+    embedding: bytes
+    source: str
+    room_id: str | None
+    claimed: bool
+    claim_of: int | None
+
+    @property
+    def own(self) -> bool:
+        return not self.claimed and self.claim_of is None
+
+    @property
+    def claim_root(self) -> int | None:
+        """The claim this sample stands on: itself, or the one it was
+        learned through; None for the person's own voice."""
+        if self.claimed:
+            return self.id
+        return self.claim_of
+
+
 class VoiceProfilesRepository:
     """All speaker embeddings live here. A person can have several rows
     (enrollment, plus at most one learned sample per room). The
@@ -1021,6 +1051,13 @@ class VoiceProfilesRepository:
     a room's satellite, and ``phone`` rows, said into the app's chat mic.
     :meth:`all_for_model` is the satellites' matching set and holds no
     phone row; a phone turn reads both (:meth:`phone_matching_rows`).
+
+    Claimed samples (V029, delta review S1): a row added because somebody
+    said a known person's name and "yes" carries ``claimed_at`` /
+    ``claim_room`` / ``claimed_by_person_id``; a row a satellite learned
+    from a voice recognized only through such a row carries ``claim_of``
+    (that claim's id, and goes with it). Everything else is the person's
+    own voice. :meth:`person_samples` reads them for "forget me".
     """
 
     EMBEDDING_MODEL_TAG = "resemblyzer-v1"
@@ -1039,14 +1076,25 @@ class VoiceProfilesRepository:
         room_id: str | None,
         sample_seconds: float | None,
         source: str = SATELLITE,
+        claimed: bool = False,
+        claim_room: str | None = None,
+        claimed_by: int | None = None,
+        claim_of: int | None = None,
     ) -> int:
+        """One sample. ``claimed``: it is being added because the speaker
+        said this person's name and "yes" (V029), in ``claim_room``, by a
+        voice recognized as ``claimed_by`` (None: an unknown voice).
+        ``claim_of``: a learned sample that rests on that claim."""
         row = await self.s.execute(
             text(
                 """
                 INSERT INTO voice_profiles
-                    (person_id, embedding, model, room_id, sample_seconds, source)
+                    (person_id, embedding, model, room_id, sample_seconds, source,
+                     claimed_at, claim_room, claimed_by_person_id, claim_of)
                 VALUES
-                    (:person_id, :embedding, :model, :room_id, :sample_seconds, :source)
+                    (:person_id, :embedding, :model, :room_id, :sample_seconds, :source,
+                     CASE WHEN :claimed THEN NOW() END, :claim_room,
+                     (SELECT id FROM people WHERE id = :claimed_by), :claim_of)
                 RETURNING id
                 """
             ),
@@ -1057,6 +1105,10 @@ class VoiceProfilesRepository:
                 "room_id": room_id,
                 "sample_seconds": sample_seconds,
                 "source": source,
+                "claimed": bool(claimed),
+                "claim_room": claim_room if claimed else None,
+                "claimed_by": claimed_by if claimed else None,
+                "claim_of": claim_of,
             },
         )
         return int(row.scalar_one())
@@ -1069,14 +1121,19 @@ class VoiceProfilesRepository:
         model: str,
         room_id: str | None,
         cap: int,
+        claimed: bool = False,
+        claimed_by: int | None = None,
     ) -> tuple[int, int]:
         """Add one of ``person_id``'s phone samples, keeping at most
-        ``cap`` of them: the oldest go first. Returns (the new row's id,
-        how many old phone samples were dropped). Their satellite samples
-        are never touched."""
+        ``cap`` of them: the new one, then the person's own (unclaimed)
+        samples, then claimed ones, newest first in each, so another
+        phone's claims can't push the person's own phone voice out (V029).
+        Returns (the new row's id, how many old phone samples were
+        dropped). Their satellite samples are never touched."""
         new_id = await self.add(
             person_id=person_id, embedding=embedding, model=model,
             room_id=room_id, sample_seconds=None, source=self.PHONE,
+            claimed=claimed, claim_room=room_id, claimed_by=claimed_by,
         )
         dropped = await self.s.execute(
             text(
@@ -1086,14 +1143,50 @@ class VoiceProfilesRepository:
                    AND id NOT IN (
                        SELECT id FROM voice_profiles
                         WHERE person_id = :pid AND source = 'phone'
-                        ORDER BY enrolled_at DESC, id DESC
+                        ORDER BY (id = :new_id) DESC,
+                                 (claimed_at IS NULL AND claim_of IS NULL) DESC,
+                                 enrolled_at DESC, id DESC
                         LIMIT :keep
                    )
                 """
             ),
-            {"pid": person_id, "keep": max(1, int(cap))},
+            {"pid": person_id, "keep": max(1, int(cap)), "new_id": new_id},
         )
         return new_id, int(dropped.rowcount or 0)
+
+    async def person_samples(self, person_id: int, model: str) -> list["VoiceSample"]:
+        """Every sample of ``person_id`` at ``model``, both sets, with its
+        claim marks (V029), oldest first."""
+        result = await self.s.execute(
+            text(
+                """
+                SELECT id, embedding, source, room_id, claimed_at, claim_of
+                  FROM voice_profiles
+                 WHERE person_id = :pid AND model = :model
+                 ORDER BY id
+                """
+            ),
+            {"pid": person_id, "model": model},
+        )
+        return [
+            VoiceSample(
+                id=int(r[0]), embedding=bytes(r[1]), source=str(r[2]), room_id=r[3],
+                claimed=r[4] is not None, claim_of=None if r[5] is None else int(r[5]),
+            )
+            for r in result.all()
+        ]
+
+    async def delete_samples(self, person_id: int, ids: list[int]) -> int:
+        """Delete these samples of ``person_id`` (and, by V029's cascade,
+        anything learned from them). Returns how many rows the statement
+        named directly."""
+        if not ids:
+            return 0
+        result = await self.s.execute(
+            text("DELETE FROM voice_profiles WHERE person_id = :pid AND id = ANY(:ids)"),
+            {"pid": person_id, "ids": [int(i) for i in ids]},
+        )
+        return int(result.rowcount or 0)
 
     async def all_for_model(
         self, model: str

@@ -13,7 +13,10 @@ Context). This handler covers the *user-facing* parts:
   * Forget: "forget me" / "don't save my voice" → cascade-delete
     rows from ``people`` (and ``voice_profiles`` via FK), letting
     ``intents_log.person_id`` lapse to NULL via the ``ON DELETE
-    SET NULL``.
+    SET NULL`` — when the voice matches the person's OWN samples. A
+    voice that was recognized only through samples a name claim added
+    removes just those samples (V029, owner decision 2026-10-16, delta
+    review S1): see :meth:`VoiceProfileHandler._forget`.
 
 The confirmation flow uses the multi-turn ``pending_confirmation``
 mechanism in ``router.py``: the introduction stashes the candidate
@@ -64,6 +67,15 @@ without asking first:
   * the People page's rename (``PATCH /api/people/{id}``) refuses a name
     someone else has, under the same lock.
 
+A claim is not proof (delta review S1, owner decision 2026-10-16). Every
+sample added to someone who already exists because the speaker said their
+name and "yes" is marked as claimed (V029: when, where, and who the voice
+was recognized as then); matching uses it like any other. "Forget me"
+deletes the person only for a voice that matches the person's own samples
+(:func:`voice_identifier.is_own_voice`) or for an admin on the People
+page; any other voice loses only the samples it claimed, and is told
+plainly what was forgotten and what was kept.
+
 Fully local (`requires_network="no"`); embedding + match are CPU-only,
 DB writes go to the same Postgres the rest of the system uses.
 """
@@ -89,7 +101,9 @@ from domovoi.db.repositories import (
 )
 from domovoi.confirmations import request_confirmation
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.log_privacy import said
 from domovoi.models import Context, Intent, Response, is_phone_room
+from domovoi.voice_identifier import claims_by_this_voice, is_own_voice
 
 log = logging.getLogger(__name__)
 
@@ -281,13 +295,29 @@ def _decode_b64_embedding(s: str) -> np.ndarray | None:
         return None
 
 
-def _confirmation_payload(name: str, embedding: np.ndarray, kind: str) -> dict:
+#: The key a parked enrolment question keeps who the voice was recognized
+#: as when it said the name (V029's ``claimed_by_person_id``).
+_CLAIMED_BY_KEY = "claimed_by"
+
+
+def _confirmation_payload(
+    name: str, embedding: np.ndarray, kind: str, claimed_by: int | None = None,
+) -> dict:
     return {
         "kind": kind,
         "name": name,
         "embedding_b64": _b64_embedding(embedding),
         "created_at": datetime.now(tz=timezone.utc).isoformat(),
+        _CLAIMED_BY_KEY: claimed_by,
     }
+
+
+def _claimed_by(data: dict) -> int | None:
+    try:
+        value = data.get(_CLAIMED_BY_KEY)
+        return None if value is None else int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 # ─── Third-party expectation lifecycle ────────────────────────────────────
@@ -485,7 +515,7 @@ async def maybe_inject_third_party_ask(
         )
         log.info(
             "third-party classifier: cluster %d conf=%.2f text=%r",
-            idx, conf, candidate_text[:80],
+            idx, conf, said(candidate_text[:80]),
         )
         if conf > best_conf:
             best_conf = conf
@@ -657,7 +687,7 @@ class VoiceProfileHandler(Handler):
                 )
             return await self._enroll(
                 name, embedding, ctx, session, phone=_asked_on_the_phone(data),
-                room_id=data.get(_ORIGIN_ROOM_KEY),
+                room_id=data.get(_ORIGIN_ROOM_KEY), claimed_by=_claimed_by(data),
             )
         if kind == "core.third_party_intro_confirm":
             return await self._handle_third_party_confirm(
@@ -732,9 +762,11 @@ class VoiceProfileHandler(Handler):
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
+        # The introducer vouches for the name: if someone already has it,
+        # the cluster is added as THEIR claim (V029), by the introducer.
         response = await self._enroll(
             name, embedding, ctx, session, phone=_asked_on_the_phone(data),
-            room_id=data.get(_ORIGIN_ROOM_KEY),
+            room_id=data.get(_ORIGIN_ROOM_KEY), claimed_by=ctx.person_id,
         )
         try:
             await clear_third_party_expectation(session, ctx.session_id)
@@ -908,7 +940,9 @@ class VoiceProfileHandler(Handler):
                 kind="core.self_intro",
                 handler=self.name,
                 data={
-                    **_confirmation_payload(name, embedding, "core.self_intro"),
+                    **_confirmation_payload(
+                        name, embedding, "core.self_intro", claimed_by=ctx.person_id,
+                    ),
                     **_origin(ctx),
                 },
             )
@@ -947,7 +981,9 @@ class VoiceProfileHandler(Handler):
         about anything else drops the question."""
         person_id, name = known
         payload = {
-            **_confirmation_payload(name, embedding, "core.phone_voice_add"),
+            **_confirmation_payload(
+                name, embedding, "core.phone_voice_add", claimed_by=ctx.person_id,
+            ),
             **_origin(ctx),
             "person_id": int(person_id),
             "expires_at": time.time() + VOICE_ADD_TTL_SEC,
@@ -992,7 +1028,9 @@ class VoiceProfileHandler(Handler):
         :data:`VOICE_ADD_TTL_SEC` (a choice kind)."""
         person_id, name = known
         payload = {
-            **_confirmation_payload(name, embedding, "core.room_voice_add"),
+            **_confirmation_payload(
+                name, embedding, "core.room_voice_add", claimed_by=ctx.person_id,
+            ),
             **_origin(ctx),
             "person_id": int(person_id),
             "expires_at": time.time() + VOICE_ADD_TTL_SEC,
@@ -1050,7 +1088,9 @@ class VoiceProfileHandler(Handler):
         room_id = data.get(_ORIGIN_ROOM_KEY) or ctx.room_id
         if not affirmative:
             return await self._enroll_namesake(name, embedding, room_id, ctx, session)
-        return await self._add_room_sample(person_id, name, embedding, room_id, ctx, session)
+        return await self._add_room_sample(
+            person_id, name, embedding, room_id, ctx, session, claimed_by=_claimed_by(data),
+        )
 
     async def _enroll_namesake(
         self,
@@ -1112,10 +1152,14 @@ class VoiceProfileHandler(Handler):
         room_id: str | None,
         ctx: Context,
         session: AsyncSession,
+        *,
+        claimed_by: int | None = None,
     ) -> Response:
         """One clip into ``person_id``'s SATELLITE samples, tagged with
         ``room_id``: the opt-out list first, then the person re-read (they
-        may have been forgotten since the question)."""
+        may have been forgotten since the question). Marked as claimed
+        (V029): the speaker said the name, nothing showed it is their
+        voice; ``claimed_by`` is who that voice was recognized as."""
         if await self._is_denylisted(embedding, session):
             return Response(
                 text="I wasn't able to save that voice profile.",
@@ -1140,6 +1184,9 @@ class VoiceProfileHandler(Handler):
                 model=VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
                 room_id=room_id,
                 sample_seconds=None,
+                claimed=True,
+                claim_room=room_id,
+                claimed_by=claimed_by,
             )
         except Exception as e:
             log.warning("room voice add failed for person_id=%s: %s", person_id, e)
@@ -1225,7 +1272,9 @@ class VoiceProfileHandler(Handler):
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
-        return await self._add_phone_sample(person_id, name, embedding, ctx, session)
+        return await self._add_phone_sample(
+            person_id, name, embedding, ctx, session, claimed_by=_claimed_by(data),
+        )
 
     async def _add_phone_sample(
         self,
@@ -1234,10 +1283,13 @@ class VoiceProfileHandler(Handler):
         embedding: np.ndarray,
         ctx: Context,
         session: AsyncSession,
+        *,
+        claimed_by: int | None = None,
     ) -> Response:
         """One clip into ``person_id``'s PHONE samples: the opt-out list
         first, the person re-read (they may have been forgotten since the
-        question), then at most ``voice_profile_phone_sample_cap``."""
+        question), then at most ``voice_profile_phone_sample_cap``. Marked
+        as claimed (V029), like :meth:`_add_room_sample`."""
         if await self._is_denylisted(embedding, session):
             return Response(
                 text="I wasn't able to save that voice profile.",
@@ -1263,6 +1315,8 @@ class VoiceProfileHandler(Handler):
                 model=VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
                 room_id=ctx.room_id,
                 cap=settings.voice_profile_phone_sample_cap,
+                claimed=True,
+                claimed_by=claimed_by,
             )
         except Exception as e:
             log.warning("phone voice add failed for person_id=%s: %s", person_id, e)
@@ -1333,6 +1387,7 @@ class VoiceProfileHandler(Handler):
         *,
         phone: bool = False,
         room_id: str | None = None,
+        claimed_by: int | None = None,
     ) -> Response:
         """Save ``embedding`` as ``name``'s voice. ``phone``: the question
         was asked on a chat mic (its parked origin, never the answering
@@ -1375,9 +1430,14 @@ class VoiceProfileHandler(Handler):
                 text=_more_than_one(name), session_id=ctx.session_id, matched_handler=self.name,
             )
         if known:
+            # Someone has the name by now: the clip joins them as a claim.
             if phone:
-                return await self._add_phone_sample(known[0][0], name, embedding, ctx, session)
-            return await self._add_room_sample(known[0][0], name, embedding, room_id, ctx, session)
+                return await self._add_phone_sample(
+                    known[0][0], name, embedding, ctx, session, claimed_by=claimed_by,
+                )
+            return await self._add_room_sample(
+                known[0][0], name, embedding, room_id, ctx, session, claimed_by=claimed_by,
+            )
         try:
             voice_profiles = VoiceProfilesRepository(session)
             person_id = await people.create(name=name)
@@ -1492,10 +1552,17 @@ class VoiceProfileHandler(Handler):
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
+        removed = 0
         try:
             row = await PeopleRepository(session).get(ctx.person_id)
             name = row[1] if row else "you"
-            await PeopleRepository(session).delete(ctx.person_id)
+            scope, claim_ids = await self._forget_scope(ctx, session)
+            if scope == "claims":
+                removed = await VoiceProfilesRepository(session).delete_samples(
+                    ctx.person_id, claim_ids,
+                )
+            elif scope == "person":
+                await PeopleRepository(session).delete(ctx.person_id)
         except Exception as e:
             log.warning("forget-me delete failed: %s", e)
             return Response(
@@ -1503,6 +1570,8 @@ class VoiceProfileHandler(Handler):
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
+        if scope != "person":
+            return self._forget_claims_answer(ctx, scope, name, removed)
         log.info("forgot person id=%d name=%s", ctx.person_id, name)
         # The `people` row is gone, but we're still inside the router's
         # session_scope — `_persist_turn` has yet to write this turn's
@@ -1520,10 +1589,80 @@ class VoiceProfileHandler(Handler):
         ctx.person_id = None
         ctx.presence_tier = "high"
         return Response(
-            text=f"Okay, I've forgotten you, {name}.",
+            text=(
+                f"Okay, I've forgotten you, {name}: your voice, your profile "
+                "and everything I remembered about you."
+            ),
             session_id=ctx.session_id,
             matched_handler=self.name,
         )
+
+    async def _forget_scope(self, ctx: Context, session: AsyncSession) -> tuple[str, list[int]]:
+        """What "forget me" may delete for this voice (delta review S1,
+        owner decision 2026-10-16):
+
+        * ``("person", [])`` — the person: their profile, every voice
+          sample, memories, favorites. When none of their samples came from
+          a name claim (every household before V029: nothing changes), or
+          when this voice matches their OWN samples
+          (:func:`voice_identifier.is_own_voice`).
+        * ``("claims", ids)`` — only the claims this voice made
+          (:func:`voice_identifier.claims_by_this_voice`), and what rooms
+          learned through them.
+        * ``("unverified", [])`` — nothing: the voice is not the person's own
+          and claimed nothing of theirs that it matches.
+        * ``("unheard", [])`` — nothing: the person has claimed samples and
+          this turn has no voice to hold against them.
+        """
+        repo = VoiceProfilesRepository(session)
+        samples = await repo.person_samples(ctx.person_id, repo.EMBEDDING_MODEL_TAG)
+        if all(s.own for s in samples):
+            return "person", []
+        if ctx.embedding_bytes is None or len(ctx.embedding_bytes) != EMBEDDING_DIM * 4:
+            return "unheard", []
+        voice = np.frombuffer(ctx.embedding_bytes, dtype=np.float32)
+        if is_own_voice(voice, samples, phone=phone_chat_mic(ctx)):
+            return "person", []
+        mine = claims_by_this_voice(voice, samples)
+        if mine:
+            return "claims", mine
+        return "unverified", []
+
+    def _forget_claims_answer(
+        self, ctx: Context, scope: str, name: str, removed: int,
+    ) -> Response:
+        """The plain answer when "forget me" does not delete the person."""
+        if scope == "claims":
+            log.info(
+                "forget me: removed %d claimed voice sample(s) from person_id=%d "
+                "(the voice is not theirs); the person stays",
+                removed, ctx.person_id,
+            )
+            # This voice is nobody now, for the rest of the turn too.
+            ctx.person_id = None
+            ctx.presence_tier = "high"
+            text = (
+                f"I've forgotten the voice you added to {name}. I kept {name}'s "
+                f"profile and memories: your voice doesn't match the one I learned "
+                f"for {name}, so only an admin can delete those, on the People page."
+            )
+        elif scope == "unheard":
+            text = (
+                "I couldn't hear your voice well enough to check it's you, so I "
+                "haven't forgotten anything. Try again, or an admin can remove a "
+                "person on the People page."
+            )
+        else:
+            log.info(
+                "forget me: the voice matches neither person_id=%d's own samples "
+                "nor a claim it made; nothing removed", ctx.person_id,
+            )
+            text = (
+                f"Your voice doesn't match the one I learned for {name}, so I "
+                "haven't forgotten anything. An admin can remove a person on the "
+                "People page."
+            )
+        return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
 
     async def _denylist(self, ctx: Context, session: AsyncSession) -> Response:
         """Add the current speaker's embedding to the persistent

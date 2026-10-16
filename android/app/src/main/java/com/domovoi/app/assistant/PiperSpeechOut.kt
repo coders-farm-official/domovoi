@@ -4,6 +4,7 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.util.Log
+import com.domovoi.app.diagnostics.SpokenLog
 import com.domovoi.app.phonemizer.PhonemeIds
 import com.domovoi.app.phonemizer.Phonemizer
 import kotlinx.coroutines.CancellationException
@@ -196,7 +197,7 @@ class PiperSpeechOut(
         val started = clock()
         val phonemes = phonemizer.phonemize(sentence, dialect)
         lastPhonemes = phonemes
-        log("phonemes: ${phonemes.joinToString(" | ")}")
+        log("phonemes: ${SpokenLog.said(phonemes.joinToString(" | "))}")
         var first: Long? = null
         var frames = 0L
         try {

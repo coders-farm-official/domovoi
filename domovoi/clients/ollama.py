@@ -27,6 +27,7 @@ from functools import lru_cache
 from typing import Any, AsyncIterator, Protocol
 
 from domovoi.config import normalize_think_setting, settings
+from domovoi.log_privacy import said
 
 log = logging.getLogger(__name__)
 
@@ -1509,7 +1510,7 @@ class RealOllamaClient:
                 break
             log.warning(
                 "qa_with_uncertainty: %s answer for %r (attempt %d): %r",
-                problem, transcript, attempt, raw,
+                problem, said(transcript), attempt, said(raw),
             )
         if problem == "cut":
             text = _last_complete_sentences(text)

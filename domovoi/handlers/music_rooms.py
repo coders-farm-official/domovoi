@@ -73,6 +73,7 @@ from domovoi.handlers.room_commands import (
 from domovoi.handlers.shared import rooms as rooms_mod
 from domovoi.handlers.shared.rooms import Place, Room
 from domovoi.models import Context, Response
+from domovoi.log_privacy import said
 
 log = logging.getLogger(__name__)
 
@@ -317,7 +318,7 @@ class MusicRoomsMixin(RoomCommandsMixin):
                 kind, cand = reading
                 if kind == "ask" and ask is not None and ctx.session_id is not None and ctx.answerable:
                     return await self._ask_room_or_title(ask, cand, transcript, ctx, session)
-                log.info("music: %r is the name %r, not a room", transcript, cand.ref.label)
+                log.info("music: %r is the name %r, not a room", said(transcript), cand.ref.label)
                 return await self._as_without_place(transcript, ctx, session)
         if ask is None:
             assert unknown is not None
@@ -517,7 +518,7 @@ class MusicRoomsMixin(RoomCommandsMixin):
         except Exception as e:  # noqa: BLE001 — the name alone is today's answer
             log.warning("music: couldn't park the song-or-room question: %s", e)
             return await self._as_without_place(transcript, ctx, session)
-        log.info("music: asked %r for %r", prompt, transcript)
+        log.info("music: asked %r for %r", prompt, said(transcript))
         return Response(
             text=prompt,
             session_id=ctx.session_id,

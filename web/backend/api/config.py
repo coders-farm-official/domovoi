@@ -318,14 +318,15 @@ async def core_restart_now():
 
 @router.post(
     "/config/version/pull",
-    # Admin tier at both hops: this changes the code on disk, and the
-    # core's /v1/admin/version/pull is admin-gated.
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier at both hops (delta review N5, 2026-10-16): this changes
+    # the code on disk, so it waits for the admin password like the core's
+    # /v1/admin/version/pull (501 before setup).
+    dependencies=[Depends(require_admin_security)],
 )
 async def pull_version(request: Request):
     """`git pull --ff-only` on the Domovoi server — a deliberate, separate
-    action never triggered by the check. Admin tier, like the core route it
-    proxies to. A dirty or diverged tree returns pulled=False; the Domovoi
+    action never triggered by the check. Security tier, like the core route
+    it proxies to. A dirty or diverged tree returns pulled=False; the Domovoi
     server process is not restarted."""
     return bridge_response(
         *await post_admin(
