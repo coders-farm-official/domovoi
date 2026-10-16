@@ -124,10 +124,12 @@ model wrote it and when, the app's version, and an optional note.
 
 - **Save on this phone** keeps it in the app only.
 - **Email draft to Coders Farm** opens your email app with the report
-  addressed to codersfarm@gmail.com. Nothing is sent until you press send
-  in your email app. If you send it, we receive what the report shows plus
-  what any email carries (your email address), and use it only to look into
-  the reply and improve Domovoi. Ask us at the same address to delete it.
+  addressed to info@codersfarm.org (codersfarm@gmail.com in the first
+  release, build 26101501). Nothing is sent until you press send in your
+  email app. If you send it, we receive what the report shows plus what any
+  email carries (your email address), and use it only to look into the
+  reply and improve Domovoi. Ask us at the address you sent it to, or at
+  info@codersfarm.org, to delete it.
 - **Share as text** hands it to any app you choose.
 
 ## Children
