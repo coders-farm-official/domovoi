@@ -21,6 +21,7 @@ Driven through domovoi/tests/jsx_interact_harness.js. No DB; needs node.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -37,6 +38,9 @@ HOME_FILES = ["web/static/components.jsx", "web/static/satellite_media.jsx",
 
 NOW = datetime.now(timezone.utc)
 HEARD = (NOW - timedelta(minutes=12)).isoformat()
+# The scenarios are built at import; the cards render later (a minute
+# later under a busy -n 4 run), so 12m or 13m.
+_HEARD_12M = re.compile(r"last heard 1[23]m ago")
 ALLOCATED = (NOW - timedelta(days=19)).isoformat()
 
 _SETUP = r"""
@@ -200,7 +204,7 @@ def test_satellites_say_the_core_is_down_not_that_they_are(driven) -> None:
     assert len(r["cards"]) == 4
     for card in r["cards"]:
         assert "can’t connect" in card and "offline" not in card
-        assert "last heard 12m ago" in card
+        assert _HEARD_12M.search(card), card
         assert "19d" not in card       # the MPD row's allocation time, never a last-seen
     # Nobody without the admin sign-in is offered a restart, or asks for its status.
     assert "Restart the core" not in r["buttons"]
@@ -228,7 +232,7 @@ def test_with_the_core_up_an_offline_room_reads_when_it_was_heard(driven) -> Non
     r = driven["sat_up_offline"]
     assert r["banner"] is None
     for card in r["cards"]:
-        assert "offline" in card and "last heard 12m ago" in card and "19d" not in card
+        assert "offline" in card and _HEARD_12M.search(card) and "19d" not in card
     assert "0 online · 4 offline" in r["text"]
 
 
