@@ -28,9 +28,11 @@ from domovoi.media_tags._model import Tags
 from domovoi.media_tags._util import (
     MAX_BLOCK,
     MAX_ITEMS,
+    Budget,
     BudgetExceeded,
     TagError,
     budget,
+    charging,
     one_read,
     syncsafe,
     u32be,
@@ -48,6 +50,14 @@ INFLATE_TAG_MAX = 16 * 1024 * 1024
 #: read's item budget and cost the frames after it.
 MAX_FRAME_VALUES = 1024
 MAX_SYNCED_ENTRIES = 8192
+#: An ID3 tag's chapters (CHAP and the frames inside them) have their own
+#: allowance, not the read's item budget: a podcast with thousands of
+#: chapters had used that up and the tag's cover, after the chapters, went
+#: unread (delta re-check). Past MAX_CHAPTERS, or past MAX_CHAPTER_ITEMS
+#: things made inside them, further chapters are dropped and the rest of
+#: the tag still reads.
+MAX_CHAPTERS = 8192
+MAX_CHAPTER_ITEMS = 65_536
 
 # ─── frames ──────────────────────────────────────────────────────────────
 
@@ -459,12 +469,28 @@ def _frame_bits(data: bytes, major: int, start: int = 0, end: int | None = None)
 
 
 class _TagState:
-    """What one tag has left to inflate (shared with its chapters' frames)."""
+    """What one tag has left to inflate (shared with its chapters' frames),
+    and of its chapters' own allowance."""
 
-    __slots__ = ("inflate_left",)
+    __slots__ = ("inflate_left", "chapters_left", "chapter_items_left")
 
     def __init__(self) -> None:
         self.inflate_left = INFLATE_TAG_MAX
+        self.chapters_left = MAX_CHAPTERS
+        self.chapter_items_left = MAX_CHAPTER_ITEMS
+
+
+def _parse_chapter(fid: str, body: bytes, major: int, bpi: int, state: _TagState) -> Frame | None:
+    """A top-level CHAP, everything made inside it counted against the
+    tag's chapter allowance (the bytes it takes still against the read's)."""
+    read = budget()
+    allowance = Budget(nbytes=read.bytes_left, items=state.chapter_items_left, steps=read.steps_left)
+    try:
+        with charging(allowance):
+            return _parse_frame(fid, body, major, bpi, 0, state)
+    finally:
+        state.chapter_items_left = allowance.items_left
+        read.spend(read.bytes_left - allowance.bytes_left)
 
 
 def _interpreted(fid: str) -> bool:
@@ -501,17 +527,26 @@ def _inflate(fid: str, data: bytes, state: _TagState) -> bytes | None:
 def _walk_frames(data: bytes, major: int, tag_unsync: bool, bpi: int, start: int = 0,
                  end: int | None = None, *, depth: int = 0, state: _TagState | None = None):
     """The frames in ``data[start:end]``, each counted against the read's
-    item budget: :class:`BudgetExceeded` ends the walk, and the caller keeps
-    the frames that came before."""
+    item budget (a top-level chapter against the tag's chapter allowance):
+    :class:`BudgetExceeded` ends the walk, and the caller keeps the frames
+    that came before."""
     state = state or _TagState()
     allowance = budget()
     for item in _headers(data, major, bpi, start, end):
         if item is None:
             return
-        allowance.item()
         fid, flags, at, size = item
-        if depth and fid == "CHAP":
+        chapter = fid == "CHAP" and major != 2
+        if chapter and depth:
+            allowance.item()
             continue               # a chapter in a chapter: not read (_parse_frame)
+        if chapter:
+            if state.chapters_left <= 0 or state.chapter_items_left <= 0:
+                continue           # past the chapters' allowance: dropped, the rest still reads
+            state.chapters_left -= 1
+            state.chapter_items_left -= 1
+        else:
+            allowance.item()
         if major == 2:
             fid = _V22_IDS.get(fid, fid)
             body = data[at:at + size]
@@ -545,7 +580,10 @@ def _walk_frames(data: bytes, major: int, tag_unsync: bool, bpi: int, start: int
                 body = _inflate(fid, body, state)
                 if body is None:
                     continue
-        frame = _parse_frame(fid, body, major, bpi, depth, state)
+        if chapter:
+            frame = _parse_chapter(fid, body, major, bpi, state)
+        else:
+            frame = _parse_frame(fid, body, major, bpi, depth, state)
         if frame is not None:
             yield frame
 

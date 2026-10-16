@@ -373,3 +373,35 @@ def test_one_read_keeps_to_one_budget(tmp_path, monkeypatch) -> None:
         assert media_tags.read(small).tags.first("TIT2") == "Small"
     # A parser called on its own gets a budget of its own.
     assert media_tags.parse_vorbis_comment(mw.vorbis_comment([("A", "b")])).first("a") == "b"
+
+
+# ─── chapters have an allowance of their own (delta re-check) ────────────
+
+
+def _chapters_then_cover(n: int) -> bytes:
+    chaps = [mw.CHAP(element_id=f"c{i}", start_time=i * 1000, end_time=i * 1000 + 999,
+                     sub_frames=[mw.TIT2(f"Chapter {i}")]) for i in range(n)]
+    cover = mw.APIC(encoding=3, mime="image/jpeg", type=3, desc="", data=b"\xff\xd8\xff" + b"j" * 100)
+    return mw.id3_tag(chaps + [mw.text_frame("TALB", "After The Chapters"), cover], version=3)
+
+
+def test_a_tag_of_thousands_of_chapters_still_reads_its_cover(tmp_path) -> None:
+    """Six thousand chapters (three items each) had used up the read's item
+    budget, and the cover after them went unread."""
+    tags = media_tags.read_id3(_write(tmp_path, "pod.mp3", _chapters_then_cover(6000) + MPEG_FRAME))
+    assert len(tags.getall("CHAP")) == 6000
+    assert tags.getall("CHAP")[-1].sub_frames[0].text == ["Chapter 5999"]
+    assert tags.first("TALB") == "After The Chapters"
+    assert len(tags.getall("APIC")) == 1
+
+
+def test_chapters_past_their_allowance_are_dropped_and_the_rest_reads(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(_id3, "MAX_CHAPTERS", 100)
+    tags = media_tags.read_id3(_write(tmp_path, "pod.mp3", _chapters_then_cover(150) + MPEG_FRAME))
+    assert [c.element_id for c in tags.getall("CHAP")] == [f"c{i}" for i in range(100)]
+    assert tags.first("TALB") == "After The Chapters" and len(tags.getall("APIC")) == 1
+    monkeypatch.setattr(_id3, "MAX_CHAPTERS", 8192)
+    monkeypatch.setattr(_id3, "MAX_CHAPTER_ITEMS", 90)            # 3 items a chapter: 30 fit
+    tags = media_tags.read_id3(_write(tmp_path, "pod2.mp3", _chapters_then_cover(50) + MPEG_FRAME))
+    assert 25 <= len(tags.getall("CHAP")) <= 30
+    assert tags.first("TALB") == "After The Chapters" and len(tags.getall("APIC")) == 1

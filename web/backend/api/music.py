@@ -1566,26 +1566,38 @@ def _read_and_memo_cover(path: Path, key: tuple) -> tuple[bytes, str] | None:
 
 async def _embedded_cover(path: Path, etag: str) -> tuple[bytes, str] | None:
     """:func:`_read_embedded_cover`, kept per file version, read once for
-    every request that wants it at the same time, in the ``tags`` pool."""
+    every request that wants it at the same time, in the ``tags`` pool.
+
+    The completion callback is registered after ``_cover_lock`` is
+    released: a read that is already done runs it at once, in this thread,
+    and it takes the lock (the delta re-check's deadlock of the event loop
+    on a read that raised at once). Each waiter awaits through
+    ``asyncio.shield``, so one request that goes away can't cancel the read
+    the others share."""
     from domovoi import executors
 
     key = (str(path), etag, COVER_MAX_BYTES)
     hit, value = _cover_memo_get(key)
     if hit:
         return value
+    started = False
     with _cover_lock:
         fut = _cover_inflight.get(key)
         if fut is None:
             fut = executors.pool("tags").submit(_read_and_memo_cover, path, key)
             _cover_inflight[key] = fut
+            started = True
+    if started:
+        def _done(f: concurrent.futures.Future, k: tuple = key) -> None:
+            with _cover_lock:
+                if _cover_inflight.get(k) is f:
+                    del _cover_inflight[k]
 
-            def _done(f: concurrent.futures.Future, k: tuple = key) -> None:
-                with _cover_lock:
-                    if _cover_inflight.get(k) is f:
-                        del _cover_inflight[k]
-
-            fut.add_done_callback(_done)
-    return await asyncio.wrap_future(fut)
+        fut.add_done_callback(_done)
+    shared = asyncio.wrap_future(fut)
+    # A waiter that left doesn't read the outcome: it is retrieved here.
+    shared.add_done_callback(lambda f: f.cancelled() or f.exception())
+    return await asyncio.shield(shared)
 
 
 def _folder_image(audio: Path, music_root: Path) -> tuple[Path, os.stat_result, str] | None:

@@ -583,6 +583,57 @@ def test_different_files_are_read_two_at_a_time(library, monkeypatch, fresh_memo
     assert running["most"] <= 2
 
 
+def test_a_read_that_fails_at_once_never_deadlocks(monkeypatch, fresh_memo, tmp_path):
+    """The delta re-check's deadlock: a read the pool finished before the
+    completion callback was registered ran that callback at once, under
+    the lock it takes, on the event loop. Three hundred reads that raise at
+    once, each with a fresh key, all come back."""
+    def boom(path):
+        raise ValueError("at once")
+
+    monkeypatch.setattr(music_api, "_read_embedded_cover", boom)
+
+    async def go():
+        for i in range(300):
+            with pytest.raises(ValueError):
+                await music_api._embedded_cover(tmp_path / "t.mp3", f'"r{i}"')
+
+    t = threading.Thread(target=lambda: asyncio.run(go()), daemon=True)
+    t.start()
+    t.join(30)
+    assert not t.is_alive(), "the event loop deadlocked"
+    assert music_api._cover_inflight == {}
+
+
+def test_a_waiter_that_goes_away_does_not_cancel_the_shared_read(monkeypatch, fresh_memo, tmp_path):
+    """Both tags threads busy, two requests share one queued read, one of
+    them is cancelled: the other still gets the picture."""
+    from domovoi import executors
+
+    mp3 = tagged_mp3(tmp_path / "a" / "t.mp3", [(3, "image/jpeg", JPEG)])
+    pool = executors.pool("tags")
+    gate = threading.Event()
+    blockers = [pool.submit(gate.wait, 10) for _ in range(executors.POOL_SIZES["tags"])]
+
+    async def go():
+        a = asyncio.create_task(music_api._embedded_cover(mp3, '"v5"'))
+        b = asyncio.create_task(music_api._embedded_cover(mp3, '"v5"'))
+        await asyncio.sleep(0.05)
+        a.cancel()
+        await asyncio.sleep(0.05)
+        gate.set()
+        return await asyncio.gather(a, b, return_exceptions=True)
+
+    try:
+        got_a, got_b = asyncio.run(go())
+    finally:
+        gate.set()
+        for x in blockers:
+            x.result()
+    assert isinstance(got_a, asyncio.CancelledError)
+    assert got_b == (JPEG, "image/jpeg")
+
+
 def test_the_memory_of_covers_is_bounded(monkeypatch, fresh_memo):
     monkeypatch.setattr(music_api, "_COVER_MEMO_MAX_BYTES", 1000)
     for i in range(3):

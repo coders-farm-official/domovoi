@@ -100,6 +100,18 @@ def budget() -> Budget:
     return _current.get() or Budget()
 
 
+@contextmanager
+def charging(allowance: Budget) -> Iterator[Budget]:
+    """Everything inside counts against ``allowance`` instead of the
+    read's budget (a part of a file with an allowance of its own: an ID3
+    tag's chapters)."""
+    token = _current.set(allowance)
+    try:
+        yield allowance
+    finally:
+        _current.reset(token)
+
+
 F = TypeVar("F", bound=Callable)
 
 
