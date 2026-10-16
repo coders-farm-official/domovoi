@@ -156,6 +156,28 @@ const ChatDetails = (() => {
     return { text, code, models: MODEL_CODES.includes(code) };
   };
 
+  /* ── a picture the chat can't take (2026-10-16) ─────────────────────
+   * What the paperclip says when POST /api/chat/uploads refuses a file:
+   * its body is {detail, code, format?} (web/backend/api/chat.py,
+   * UPLOAD_REFUSAL_CODES). A browser can't convert a phone's HEIC photo
+   * the way the Android app does, so that one says what to do; every
+   * other coded refusal is the server's own sentence. An older server's
+   * bare 415/413 still reads plainly; anything else is null (the caller
+   * says "upload failed"). Worded as the app's ChatPhotoPlan.kt. */
+  const UPLOAD_CODES = ['unsupported_format', 'too_many_pixels', 'file_too_large'];
+  const uploadRefusalText = (status, body) => {
+    const b = body && typeof body === 'object' ? body : {};
+    const detail = typeof b.detail === 'string' ? b.detail.trim() : '';
+    if (b.code === 'unsupported_format' && (b.format === 'HEIC' || b.format === 'HEIF')) {
+      return `This photo is in ${b.format} format, which the chat can't read. `
+        + 'Send it from the Domovoi app (it converts photos), or save it as a JPEG and try again.';
+    }
+    if (UPLOAD_CODES.includes(b.code) && detail) return detail;
+    if (status === 415) return "That file isn't a picture the chat can read. Send a JPEG, PNG, GIF, WebP or BMP.";
+    if (status === 413) return 'That picture is too large for the chat.';
+    return null;
+  };
+
   /* Who Domovoi heard on a message said into the app's chat mic (V025),
    * worded as the app's SpeakerMarker.kt: the name at full strength for a
    * clear match, "maybe <name>" drawn softer for a weak one, "voice not
@@ -175,7 +197,8 @@ const ChatDetails = (() => {
     return { label: who, name: who, soft: false, description: `spoken by ${who}` };
   };
 
-  return { stamp, rows, lengthLine, ACCEPTS, visionMissingText, visionMissing, errorView, speakerMark };
+  return { stamp, rows, lengthLine, ACCEPTS, visionMissingText, visionMissing, errorView, speakerMark,
+           uploadRefusalText };
 })();
 
 window.ChatDetails = ChatDetails;

@@ -12262,7 +12262,7 @@
           "chat"
         ],
         "summary": "Upload",
-        "description": "Stage one image for a chat message. Returns the server-generated\ntoken the send call references; files are capped, extension-checked,\nand must really be a JPEG, PNG, GIF, WebP or BMP of at most\n``image_safety.MAX_IMAGE_PIXELS`` (read from the header, off the loop;\nnothing is decoded and no other kind is tried: delta review S7).",
+        "description": "Stage one image for a chat message. Returns the server-generated\ntoken the send call references; files are capped, extension-checked,\nand must really be a JPEG, PNG, GIF, WebP or BMP of at most\n``image_safety.MAX_IMAGE_PIXELS`` (read from the header, off the loop;\nnothing is decoded and no other kind is tried: delta review S7).\n\nA refusal is ``{detail, code, ...}`` (:func:`_upload_refused`):\n``415 unsupported_format`` with ``format`` (``\"HEIC\"``, ``\"AVIF\"``, \u2026\nfrom the bytes, or null), ``413 too_many_pixels`` with\n``max_megapixels``, ``413 file_too_large`` with ``max_mb``.",
         "operationId": "upload_api_chat_uploads_post",
         "requestBody": {
           "content": {
@@ -12286,6 +12286,12 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "Too large: {\"detail\": \"...\", \"code\": \"too_many_pixels\", \"max_megapixels\": 40} or {\"detail\": \"...\", \"code\": \"file_too_large\", \"max_mb\": 20}"
+          },
+          "415": {
+            "description": "Not a picture the chat reads: {\"detail\": \"...\", \"code\": \"unsupported_format\", \"format\": \"HEIC\" | \"HEIF\" | \"AVIF\" | \"JPEG XL\" | \"TIFF\" | null}"
           },
           "422": {
             "description": "Validation Error",
