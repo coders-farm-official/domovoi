@@ -48,10 +48,14 @@ connected by name, deliberately: an ``OUTBOUND_ALLOW_HOSTS`` endpoint
 (matched as written — the operator named it, and the check does not
 resolve it) and whatever a tool that opens its own connection (the radio
 sampler's ffmpeg) is handed; :func:`resolve_final_target` gives such a
-caller the vetted address of the final hop. A client that pools
-connections across several names at one address would reuse a TLS
-connection verified for the first name — the fetchers here build a
-client per fetch, so none does.
+caller the vetted address of the final hop. The fetchers build a client
+per fetch, so two fetches never share a connection; but the redirect hops
+of one :func:`open_stream` call share the caller's client, and httpcore
+keys its pool by the literal address. Within one call, two https hops
+whose names share an address reuse the first hop's TLS connection, so the
+second name's certificate is not checked; each hop's address is still
+vetted (REV-21, docs/SECURITY_PRIVACY.md; the fix is a fresh client per
+hop when the name changes).
 
 Resolution happens in :func:`resolve_host`, a module-level function so
 tests patch it instead of touching DNS. A name that does not resolve is
@@ -575,10 +579,12 @@ async def arequire_safe_outbound_url(
 # (egress's InternetTurnedOffConnectError) does not.
 #
 # Known residuals, deliberate: an allowlisted endpoint is connected by
-# name (the operator named it; the check does not resolve it); a client
-# that pools connections across names at one address would reuse a TLS
-# connection verified for the first name (every fetcher here builds a
-# client per fetch); a client routed through an HTTP proxy hands the
+# name (the operator named it; the check does not resolve it); within one
+# call, two https hops whose names share an address reuse the first hop's
+# TLS connection, so the second name's certificate is not checked; each
+# hop's address is still vetted (REV-21: the hops share the caller's
+# client, whose pool is keyed by the literal address; every fetcher builds
+# a client per fetch, so separate fetches never share one); a client routed through an HTTP proxy hands the
 # proxy the literal address (the proxy connects, not us — and httpcore's
 # CONNECT tunnel does not read ``sni_hostname``, so https through a proxy
 # would verify the certificate against the literal and fail; none of the

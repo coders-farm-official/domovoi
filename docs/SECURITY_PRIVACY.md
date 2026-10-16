@@ -703,8 +703,11 @@ not yet fixed): `POST /api/files/upload` and `POST /api/music/library/upload`
 up to 8 GiB each, every member a music zip extracts up to 1 GiB, a
 documents upload up to 512 MiB and a chat image up to 64 MiB before its
 20 MB check — so one paired device can make that process allocate that
-much in a single request. The Piper voice upload already streams to disk
-under a running budget; doing the same for these is the fix.
+much in a single request. Saving a spreadsheet in place
+(`PUT /api/documents/sheet/{path}`) is the same class: the whole workbook
+is loaded and rewritten in memory, several times its size on disk (S6).
+The Piper voice upload already streams to disk under a running budget;
+doing the same for these is the fix (WEB-19, a documented limit for 1.0).
 `MAX_REQUEST_BYTES` moves the default.
 
 Two smaller bounds go with it. `Intent.transcript` and `room_id` are
@@ -724,7 +727,9 @@ process's calls into the core. It protects the box's memory, not its
 availability. A per-source ceiling has to sit below the ASGI layer, which
 never sees a connection that sends nothing, and has not been built; a
 per-source connection limit in the host's firewall on ports 6370 and 6369
-is the way to get one today. Relatedly, a second connect for a room now **closes** the socket
+is the way to get one today. On the Windows install the Hyper-V firewall
+rules can't limit connections per source, so there is no workaround there
+(CORE-15, a documented limit for 1.0). Relatedly, a second connect for a room now **closes** the socket
 it replaced (1001) instead of leaving it open and unread.
 
 ### Daily tier (LAN-trust)
@@ -1033,7 +1038,12 @@ sampler, the model pull):
   in the radio sampler) is outside this guarantee.
 - Redirects are followed **one hop at a time** (five at most), each target
   re-checked — and its connection pinned the same way — before it is
-  opened: a public URL cannot bounce the server into your LAN.
+  opened: a public URL cannot bounce the server into your LAN. One gap in
+  the certificate check, not the address check (REV-21, a documented limit
+  for 1.0): within one fetch, two https hops whose names share an address
+  reuse the first hop's TLS connection, so the second name's certificate
+  is not checked; each hop's address is still vetted. A fresh connection
+  per hop when the name changes is the fix.
 - Every fetcher caps how many bytes it will read, so a "feed" that is really
   a firehose stops instead of filling the disk.
 
@@ -1137,18 +1147,22 @@ each at an exact version with its SHA-256s, for CPython 3.14 on x86_64
 ([LINUX_HOST.md, Install](LINUX_HOST.md#install)). pip refuses a download
 that doesn't match its hash, and the packages that publish only source are
 built against hash-checked build tools rather than ones fetched unchecked
-for the build. Once a box opts in (`DOMOVOI_USE_LOCK=1`,
-[LINUX_HOST.md, The hash-pinned lock](LINUX_HOST.md#the-hash-pinned-lock)),
-the update unit's re-sync installs from the same lock, so a tampered
-package fails the update and it rolls back. What is not hash-checked,
-said plainly:
+for the build. `scripts/linux/provision.sh` — the one-command install on a
+fresh Linux box, and the Windows installer's distro — installs from the
+lock and opts the box in to locked updates (`DOMOVOI_USE_LOCK=1` in
+`/etc/default/domovoi-update`); a server built by hand opts in itself
+([LINUX_HOST.md, The hash-pinned lock](LINUX_HOST.md#the-hash-pinned-lock)).
+Once opted in, the update unit's re-sync installs from the same lock, so a
+tampered package fails the update and it rolls back. What is not
+hash-checked, said plainly (OPS-9, a documented limit for 1.0):
 
-- **An update before you opt in.** Without `DOMOVOI_USE_LOCK=1` the
-  update unit's re-sync resolves from the index, unchecked, as it did
-  before the lock existed; its step says the lock is there. It is opt-in
-  so the first locked re-sync can be seeded from what the box runs.
+- **An update on a box that hasn't opted in.** A server built by hand
+  without `DOMOVOI_USE_LOCK=1` (or one whose administrator set it to 0)
+  re-syncs from the index, unchecked, as it did before the lock existed;
+  its step says the lock is there.
 - **Another Python or platform.** With no lock for the venv's Python (an
-  older Ubuntu, a `uv`-installed 3.13, Windows), pip's resolver installs
+  older Ubuntu, a `uv`-installed 3.13, a core run natively on Windows
+  rather than in the installer's distro), pip's resolver installs
   whatever the index serves within the floors. On a box that opted in,
   the update unit records that re-sync as a `warn` step and Settings →
   Version shows **lock not applied: <reason>**, so the opt-in never turns
@@ -1158,9 +1172,14 @@ said plainly:
 - **The `dev` lock** (`requirements.lock`, core + `dev`, Python 3.12) is
   the suite's set, not a server's.
 - **A plugin's own lock** is hash-checked by the plugin installer
-  ([PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md)); the satellite card's
-  Python wheels are not yet, the `openwakeword` package among them. The
-  XVF3800 tool is pinned by commit and SHA-256. The wake-word base models
+  ([PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md)). A spare Linux or
+  Windows computer enrolled as a room installs its Python packages from
+  hash-pinned locks (`satellite/scripts/install-pc.sh`,
+  `satellite/win_install.py`); a Raspberry Pi card does not yet (SAT-11, a
+  documented limit until the cards are re-flashed): the server downloads
+  the card's wheels, the `openwakeword` package among them, without
+  `--require-hashes`, the card's first boot installs them without it, and
+  its stage 2 retries online. The XVF3800 tool is pinned by commit and SHA-256. The wake-word base models
   are pinned by SHA-256 and size on the server, which fetches every one
   and refuses to prepare an offline card unless the cache holds all of
   them verified; stage 2 on the satellite checks them again against the
@@ -1557,7 +1576,10 @@ the other:
   and from which address, a household member opened it, and can make the
   viewer's browser send a blind GET to another host on your network.
   Previewing a note somebody else wrote is visiting a page they chose the
-  images for; limiting preview images to the server's own URLs is the fix.
+  images for; limiting preview images to the server's own URLs is the fix
+  (a documented limit for 1.0). Chat replies render no images at all
+  (`web/static/chat_markdown.js`), so an answer from the language model
+  can't do this.
   Without the sanitiser loaded there is no preview at all.
   `domovoi/tests/test_markdown_preview_sanitised.py` renders the real
   pipeline and asserts on what the preview would put in the page.
@@ -1574,6 +1596,7 @@ All of it on hardware you own. Locations, verified against the code:
 | **Docker volume `domovoi_oww_cache` on the server** (only once wake-word training is on) | The trainer's downloaded training data (about 18 GB) and, per wake word, `runs/<slug>/`: the synthetic clips generated for it and the features computed from them and from its recorded clips. The copies of the recorded clips a run makes there (`positive_train/real_*.wav`) are removed at the end of every run: finished, failed, stopped from the dashboard, timed out, or stopped by a core shutdown (the container runs under `--init`, so its entrypoint gets the stop signal and removes them before it exits; the wrapper stops it with `docker stop` and a 10 s grace before `docker rm -f`). A run killed outright (SIGKILL, out of memory, the box losing power) can't clean up after itself, so the wrapper's stop path, every run's start, and the trainer worker's first pass after the core starts each scrub any `real_*.wav` left in the volume. The originals stay in `~/.domovoi/wake_clips/`. Deleting a wake word in the dashboard removes its folder in the volume too (a training of it is stopped first), and the worker's first pass after a start removes the folder of any word that no longer exists (a delete made while the core was down). **Settings → Wake Words → Turn off and free the space** removes the whole volume, the trainer image and Docker's build cache for it, after showing their size; trained models and recordings stay. By hand: `docker volume rm domovoi_oww_cache` (the next training downloads the data again). The trainer image itself (12.4 GB) holds no household data. |
 | **Postgres: rolled-back databases** (Linux update unit only) | When a rollback restores the pre-update dump, the database it replaced is renamed `domovoi_failed_<UTC time>` (and `domovoi_test_failed_<UTC time>`) and kept for inspection: a full copy of everything the row above lists. Only the newest one of each is kept (`DOMOVOI_UPDATE_KEEP_FAILED_DBS`, default 1); older ones are dropped at the next restore. Same credential as the live database. |
 | **`/var/lib/domovoi-update/` on the server** (Linux update unit only) | `backups/pre-<sha>-<UTC time>.dump` and `.test.dump`: a `pg_dump` of `domovoi` and `domovoi_test` taken before every full update, so **everything the database holds** — transcripts, voice embeddings, the admin password hash, session token hashes and the household device token, in plain text inside the dump. Directory 0700 and files 0600, root only; the newest 5 of each are kept (`DOMOVOI_UPDATE_KEEP_BACKUPS`). Also `last-result.json` (the last run's steps, with the tail of each failed command's output; mode 0640, readable by root and the service user's group, which is how the core reads it), `pip-freeze-pre.txt` (package versions) and the applied / bad commit SHAs. |
+| **The systemd journal on the server** (Linux; the Windows install keeps one inside its WSL distro) | What the core and the dashboard print to stdout: start-ups and shut-downs, warnings and errors, the loop watchdog's stall reports, one line per HTTP request but the routine polls (method, path, status, the caller's address), which room a turn came from and which handler answered it, and voice identification's scores (person ids and numbers). **Since 2026-10-16 no line holds a credential or what was said** at the default level: both processes blank the value of every credential-named parameter in every log line, whatever logger wrote it (`?device_token=` in the URLs the dashboard builds, a WebSocket's `?token=`, a Bearer: `device_token=***`, `domovoi/log_privacy.py`), and a transcript, a search, an announcement or a reply appears only as a word count (`<5 words>`); with `LOG_LEVEL=DEBUG` the words are written too, for as long as it is set. Kept **on disk** (`Storage=persistent`, installed by `provision.sh` and every update so a freeze's record survives a power cycle, [LINUX_HOST.md](LINUX_HOST.md#the-loop-watchdog)) within journald's own limits: by default at most 10% of the file system, capped at 4 GB, with **no time limit** — the oldest entries go only when the cap is reached, which on a quiet box can be months. Readable by root and members of `adm` / `systemd-journal`. **"Forget me", deleting a person or a chat conversation, and "never save my voice" do not reach it**: lines already written stay until journald rotates them out. To remove them sooner, as root: `journalctl --vacuum-time=7d` (or set `MaxRetentionSec=` in a drop-in of your own). A journal from before 2026-10-16 can hold the household token (the dashboard's access log printed `?device_token=` URLs) and transcripts (the core logged some at INFO) until it rotates: rotate the household token (Settings → Devices) and vacuum the journal if that matters to you. Setup's **Copy logs** on Windows copies the last 200 journal lines of a failed start into `provision.log`, with `device_token=` blanked there too (`Redact.KeyValue`). |
 | **Media directories on the server** | Your music (`~/Music` by default) and documents (`~/Documents` by default), plus flat podcast and audiobook directories under the config dir (`~/.domovoi/podcasts` and `~/.domovoi/audiobooks` by default; all paths configurable). |
 | **`domovoi/.env` in the repo checkout** | Settings changed from the dashboard's Settings page, persisted as plain text — **including secrets** (e.g. `ACOUSTID_API_KEY`). Protect it like `~/.domovoi/plugins/`. No value written there may hold a newline or another control character (the configuration page refuses it, and the writer refuses it for every key): the core reads a quoted newline as part of the value, but a line-based reader would see a second setting, which a value could smuggle past the core. The update unit (root) reads it through the checkout's own reader, as the core does. |
 | **Postgres: guests** (V023 `guests_seen`, `guest_bans`, `room_queue_items.guest_*`, 2026-10-10) | `guests_seen`: one row per (self-asserted browser id, source address) that a GUEST (no household credential) changed the music from — the id, the address, the user agent, the room, the last action, first and last seen. Written by the core each time it lets a guest act; at most 10 rows per address (newest kept), and a row not seen for 30 days is deleted by the core's hourly `guests_seen_pruner` worker. `guest_bans`: the admin's bans (an id and/or an address, an optional note), kept until lifted. `room_queue_items.guest_device_id` / `guest_source`: which guest queued an entry, gone with the entry's provenance row. All three are read only by an admin (`GET /api/music/guests`, `/api/music/guest-bans`, the admin's queue read); a guest never sees them. No transcript, no recording. |
