@@ -62,7 +62,7 @@ def bash(script: str, *args: str, env: dict | None = None) -> subprocess.Complet
 # ─── every script: LF, and it parses ──────────────────────────────────────
 
 SCRIPTS = sorted(p for p in STICK.rglob("*") if p.is_file() and (
-    p.suffix == ".sh" or p.name == "domovoi-status"))
+    p.suffix in (".sh", ".script") or p.name == "domovoi-status"))
 
 
 def test_every_stick_file_is_lf_only():
@@ -82,7 +82,7 @@ def test_every_script_parses(script):
 
 def test_the_installer_scripts_are_posix_sh_with_no_bashisms():
     """busybox ash runs them inside Debian's installer."""
-    for name in ("erase-confirm.sh", "late.sh", "lib.sh"):
+    for name in ("early.sh", "erase-confirm.sh", "late.sh", "lib.sh", "udhcpc-default.script"):
         text = (STICK / "installer" / name).read_text(encoding="utf-8")
         for bashism in ("[[", "local ", "function ", "${!", "<<<", "$((++", "declare "):
             assert bashism not in text, f"{name}: {bashism}"
@@ -352,3 +352,40 @@ def test_the_core_keeps_only_the_boot_shape_it_knows():
     assert s["boot"] == {"firmware": "uefi", "secure_boot": True, "ca_2023": False}
     s = satellite_health.validate_sample({"seq": 1, "rss_kb": 1, "boot": {"firmware": "efi"}})
     assert s["boot"] is None
+
+
+@requires_bash
+def test_the_8_gb_floor_holds_even_against_a_solid_state_disk(tmp_path):
+    trees = ('disk sda pci0000:00/0000:00:17.0/ata1/host0 8 1 0 0 HDD8 ATA ""\n'
+             'disk sdc pci0000:00/0000:00:17.0/ata3/host2 7 0 0 0 SSD7 ATA ""\n')
+    assert run_lib(tmp_path / "t", trees, "ds_pick '' sda sdc") == "sda"
+    assert run_lib(tmp_path / "u", trees.splitlines()[1] + "\n", "ds_pick '' sdc") == ""
+
+
+@requires_bash
+def test_the_stick_is_never_picked_even_on_an_internal_port(tmp_path):
+    """A stick that looks internal (an SD-to-SATA adapter, a USB stick a
+    firmware presents as SATA): known as the stick by /cdrom alone."""
+    tree = 'disk sde pci0000:00/0000:00:17.0/ata5/host4 640 0 0 0 Big ATA ""\n' + HDD
+    assert run_lib(tmp_path / "t", tree, "ds_pick sde sda sde") == "sda"
+
+
+@requires_bash
+def test_a_thunderbolt_or_usb4_disk_is_never_picked(tmp_path):
+    """No "usb" in its path: the PCI port it sits behind says removable."""
+    tb = "pci0000:00/0000:00:07.0/0000:20:00.0/0000:21:01.0/0000:22:00.0/nvme/nvme1"
+    tree = (HDD + f'disk nvme1n1 {tb} 2000 0 0 0 TBEnclosure "" ""\n'
+            'echo removable >"$R/devices/pci0000:00/0000:00:07.0/0000:20:00.0/removable"\n'
+            'echo fixed >"$R/devices/pci0000:00/0000:00:17.0/removable"\n')
+    assert run_lib(tmp_path / "t", tree, "ds_pick '' sda nvme1n1") == "sda"
+    assert run_lib(tmp_path / "u", tree, "ds_external nvme1n1 && echo ext; ds_external sda || echo own") == "ext\nown"
+
+
+@requires_bash
+def test_disks_joined_by_lvm_or_raid_are_named(tmp_path):
+    setup = HDD + HDD.replace("sda", "sdd").replace("ata1", "ata2") + SSD
+    stub = ('blkid() { for a; do d=$a; done; case ${d##*/} in sda2|sdd) echo LVM2_member ;; '
+            'nvme0n1p1) echo ext4 ;; esac; }\n')
+    assert run_lib(tmp_path / "t", setup, stub + "ds_joined sda sdd nvme0n1").split() == ["sda", "sdd"]
+    assert run_lib(tmp_path / "u", setup, stub + "ds_internal sdb sda sdb sdd nvme0n1").split() == [
+        "sda", "sdd", "nvme0n1"]

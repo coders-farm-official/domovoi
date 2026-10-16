@@ -23,6 +23,10 @@ $USB_STICK_KIT_DIR/logs/matrix-<time>.json.
                       disk unchanged.
   wifi                a stick made with --wifi on a restricted network:
                       Wi-Fi drivers load (cfg80211 rc 0), the Wi-Fi page.
+  bootfile            a rogue DHCP server names its own preseed as the boot
+                      file: never fetched, the ERASE page still asked.
+  poweroff-returns    a stick whose power-off returns (--mutant-stick), on a
+                      refused computer: it never goes on to install.
 
   python matrix.py --stick kitchen.img [--wifi-stick kids-wifi.img] [--cases a,b] [--parallel 2]
 """
@@ -117,6 +121,72 @@ def refuse(case: str, stick: str, *extra: str, expect: str, mode: str = "uefi") 
             "markers": markers(s)}
 
 
+EVIL_CFG = """# The room stick kit's rogue DHCP case: what a DHCP server's boot-file name points at.
+d-i partman/early_command string echo "DOMOVOI-STICK: EVIL-EARLY ran instead of the ERASE page" >/dev/ttyS0
+d-i partman-auto/disk string /dev/sda
+d-i preseed/late_command string echo "DOMOVOI-STICK: EVIL-LATE" >/dev/ttyS0
+"""
+
+
+def bootfile(stick: str) -> dict:
+    """A rogue DHCP server: its boot-file name is a URL to its own preseed
+    (QEMU's user network hands it out). The stick must never fetch it, and
+    the ERASE page must still be the one asked; three wrong answers, off."""
+    import http.server
+    import socketserver
+    import threading
+
+    www = BASE / "logs" / "evil-www"
+    www.mkdir(parents=True, exist_ok=True)
+    (www / "evil.cfg").write_text(EVIL_CFG, encoding="utf-8")
+    hits: list[str] = []
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **k):
+            super().__init__(*a, directory=str(www), **k)
+
+        def log_message(self, fmt, *args):
+            hits.append(fmt % args)
+
+    srv = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    name = "m-bootfile"
+    new_disk(name)
+    try:
+        s = drive("run", name, "--mode", "uefi", "--stick", stick, "--cpu", CPU, "--tag", "bootfile",
+                  "--bootfile", f"http://10.0.2.2:{port}/evil.cfg",
+                  "--type-on", "ERASE-PROMPT=NOPE", "--type-on", "NOT-ERASE 1=NOPE", "--type-on", "NOT-ERASE 2=NOPE",
+                  "--type-on", "REFUSAL=", "--until", "STOPPED", "--until", "EVIL", "--timeout", "900",
+                  "--shot-every", "20")
+    finally:
+        srv.shutdown()
+    serial = Path(s.get("serial", "")).read_text(errors="replace") if s.get("serial") else ""
+    network_preseed = "network-preseed" in serial and ("retrieving network-preseed" in serial
+                                                     or "Menu item 'network-preseed'" in serial)
+    ok = (has(s, "ERASE-PROMPT") and has(s, "STOPPED domovoi-stick/stopped") and not has(s, "EVIL")
+          and not hits and not network_preseed and not written(name))
+    return {"case": "bootfile", "ok": ok, "evil_fetched": hits, "network_preseed_ran": network_preseed,
+            "disk_written": written(name), "seconds": s.get("seconds"), "markers": markers(s)}
+
+
+def poweroff_returns(mutant_stick: str) -> dict:
+    """A stick whose power-off returns (firmware that ignores it), on a
+    refused computer (an old CPU): the installer must never go on to install
+    Debian. Watched for 6 minutes after the refusal."""
+    name = "m-poweroff-returns"
+    new_disk(name)
+    s = drive("run", name, "--mode", "uefi", "--stick", mutant_stick, "--tag", "poweroff-returns",
+              "--type-on", "REFUSAL=", "--until", "Menu item 'base-installer'", "--until", "debootstrap: ",
+              "--timeout", "480", "--shot-every", "30")
+    serial = Path(s.get("serial", "")).read_text(errors="replace") if s.get("serial") else ""
+    went_on = any(w in serial for w in ("Menu item 'base-installer'", "debootstrap: "))
+    ok = (has(s, "POWEROFF-MUTANT") and has(s, "POWEROFF-RETURNED") and s["result"] == "timeout"
+          and not went_on and not written(name))
+    return {"case": "poweroff-returns", "ok": ok, "went_on": went_on, "disk_written": written(name),
+            "result": s.get("result"), "markers": markers(s)}
+
+
 def again(stick: str) -> dict:
     name = "m-uefi"
     if not (BASE / "vm" / f"{name}.qcow2").exists():
@@ -135,8 +205,9 @@ def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--stick", required=True, help="a debug stick under $USB_STICK_KIT_DIR/out/")
     p.add_argument("--wifi-stick", help="a debug stick made with --wifi")
+    p.add_argument("--mutant-stick", help="a debug stick made with --mutant poweroff-returns")
     p.add_argument("--cases", default="install-bios,install-uefi,install-uefi-sb,install-uefi-sb2023,"
-                                       "refuse-erase,refuse-network,refuse-cpu,wifi,again")
+                                       "refuse-erase,refuse-network,refuse-cpu,wifi,bootfile,poweroff-returns,again")
     p.add_argument("--parallel", type=int, default=2)
     a = p.parse_args(argv)
     stick = str(BASE / "out" / a.stick)
@@ -153,6 +224,8 @@ def main(argv: list[str]) -> int:
                                          expect="domovoi-stick/no-network"),
         "refuse-cpu": lambda: refuse("refuse-cpu", stick, expect="domovoi-stick/cpu-too-old"),
         "wifi": lambda: refuse("wifi", wifi, "--cpu", CPU, "--net-restrict", expect="domovoi-stick/no-network-wifi"),
+        "bootfile": lambda: bootfile(stick),
+        "poweroff-returns": lambda: poweroff_returns(str(BASE / "out" / a.mutant_stick)),
     }
     wanted = [c for c in a.cases.split(",") if c]
     results = []

@@ -1749,7 +1749,9 @@ reconcile_os_jobs() {
 # a run with nothing missing adds nothing to the result.
 reconcile_added_packages() {
   local p t0 out rc=0 policy
-  local -a missing=() apt=(apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=300 -q)
+  # A short wait for apt's lock (unattended-upgrades may hold it): the
+  # Restart must not hang on it; the next update or Restart tries again.
+  local -a missing=() apt=(apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=20 -q)
   case "$(printf '%s' "$MANAGE_PACKAGES" | tr '[:upper:]' '[:lower:]')" in
     0|false|no|off) log "added system packages left to the administrator (DOMOVOI_MANAGE_PACKAGES=$MANAGE_PACKAGES)"; return 0 ;;
   esac
@@ -1776,7 +1778,7 @@ reconcile_added_packages() {
   if [ -n "$out" ]; then printf '%s\n' "$out" | tail -n 20 | sed 's/^/    /'; fi
   if [ "$rc" -ne 0 ]; then
     # The core shows this detail on the Version card: our words, not apt's.
-    add_step added-packages warn "$t0" "not installed: ${missing[*]} (apt-get failed, exit $rc; journalctl -u domovoi-update says why). USB sticks for old computers need xorriso"
+    add_step added-packages warn "$t0" "not installed: ${missing[*]} (apt-get failed, exit $rc, or another program was using apt; journalctl -u domovoi-update says why). The next update or Restart tries again. USB sticks for old computers need xorriso"
     log "step added-packages failed (exit $rc); not fatal, the run goes on"
   else
     add_step added-packages ok "$t0" "installed ${missing[*]}"

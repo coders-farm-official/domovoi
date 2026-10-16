@@ -49,33 +49,65 @@ ds_gb() {
 	echo $((_sectors / 2 / 1000 / 1000))
 }
 
-# ds_pick STICK DISK...: the disk the room goes on, or nothing. Never the
-# stick itself, never a removable or USB disk (another stick, a backup
-# drive), never a read-only one or one under $DS_MIN_GB; of the rest, a
-# solid-state disk before a spinning one, then the largest. Says why each
-# one was left out through ds_log.
+# ds_external NAME: true when the disk hangs off a port meant for things
+# that are plugged in and out: anywhere under USB, or behind a PCI port the
+# kernel marks external-facing (Thunderbolt, USB4: an NVMe enclosure there
+# has no "usb" in its path). Each ancestor's own "removable" attribute says
+# so ("removable"; the block device's own file, 0 or 1, is read apart).
+ds_external() {
+	_real=$(readlink -f "$DS_ROOT/sys/block/$1" 2>/dev/null)
+	case $_real in */usb[0-9]*) return 0 ;; esac
+	_p=${_real%/*}
+	while [ -n "$_p" ] && [ "$_p" != "${_p%/*}" ]; do
+		[ "$(cat "$_p/removable" 2>/dev/null)" = removable ] && return 0
+		_p=${_p%/*}
+	done
+	return 1
+}
+
+# ds_internal_ok STICK NAME: true when NAME is one of this computer's own
+# disks the room could go on (any size): not the stick, not removable, not
+# external (ds_external), not a memory card, not read-only. Says why not
+# through ds_log.
+ds_internal_ok() {
+	_sys=$DS_ROOT/sys/block/$2
+	[ -d "$_sys" ] || return 1
+	if [ -n "$1" ] && [ "$2" = "$1" ]; then ds_log "skip $2: the stick"; return 1; fi
+	if [ "$(cat "$_sys/removable" 2>/dev/null)" = 1 ]; then ds_log "skip $2: removable"; return 1; fi
+	if ds_external "$2"; then ds_log "skip $2: on USB or an external port"; return 1; fi
+	# A memory card left in the laptop's reader is solid-state and would
+	# win in ds_pick; built-in eMMC (cheap laptops' only disk) says MMC.
+	case $2 in
+		mmcblk*)
+			if [ "$(cat "$_sys/device/type" 2>/dev/null)" != MMC ]; then
+				ds_log "skip $2: a memory card"; return 1
+			fi ;;
+	esac
+	if [ "$(cat "$_sys/ro" 2>/dev/null)" = 1 ]; then ds_log "skip $2: read-only"; return 1; fi
+	return 0
+}
+
+# ds_internal STICK DISK...: the names of this computer's own disks.
+ds_internal() {
+	_st=$1
+	shift
+	for _dev in "$@"; do
+		ds_internal_ok "$_st" "${_dev##*/}" && echo "${_dev##*/}"
+	done
+	return 0
+}
+
+# ds_pick STICK DISK...: the disk the room goes on, or nothing. Of this
+# computer's own disks (ds_internal_ok) of at least $DS_MIN_GB, a
+# solid-state disk before a spinning one, then the largest.
 ds_pick() {
 	_stick=$1
 	shift
 	_best="" _best_score=-1
 	for _dev in "$@"; do
 		_name=${_dev##*/}
+		ds_internal_ok "$_stick" "$_name" || continue
 		_sys=$DS_ROOT/sys/block/$_name
-		[ -d "$_sys" ] || continue
-		if [ -n "$_stick" ] && [ "$_name" = "$_stick" ]; then ds_log "skip $_name: the stick"; continue; fi
-		if [ "$(cat "$_sys/removable" 2>/dev/null)" = 1 ]; then ds_log "skip $_name: removable"; continue; fi
-		case $(readlink -f "$_sys" 2>/dev/null) in
-			*/usb[0-9]*) ds_log "skip $_name: on USB"; continue ;;
-		esac
-		# A memory card left in the laptop's reader is solid-state and would
-		# win below; built-in eMMC (cheap laptops' only disk) says MMC.
-		case $_name in
-			mmcblk*)
-				if [ "$(cat "$_sys/device/type" 2>/dev/null)" != MMC ]; then
-					ds_log "skip $_name: a memory card"; continue
-				fi ;;
-		esac
-		if [ "$(cat "$_sys/ro" 2>/dev/null)" = 1 ]; then ds_log "skip $_name: read-only"; continue; fi
 		_gb=$(ds_gb "$_name")
 		if [ "$_gb" -lt "$DS_MIN_GB" ]; then ds_log "skip $_name: $_gb GB is too small"; continue; fi
 		_ssd=0
@@ -85,6 +117,24 @@ ds_pick() {
 		if [ "$_score" -gt "$_best_score" ]; then _best=$_name _best_score=$_score; fi
 	done
 	echo "$_best"
+}
+
+# ds_joined DISK...: of these disks, the ones that hold a piece of storage
+# joined across disks (an LVM physical volume, a RAID member), on the disk
+# itself or one of its partitions, as blkid reads it. Erasing one of those
+# would break, or be spread into, the others: the stick refuses (erase-
+# confirm.sh) when the chosen disk is one and another disk is too.
+ds_joined() {
+	for _d in "$@"; do
+		for _n in "$_d" $(cd "$DS_ROOT/sys/block/$_d" 2>/dev/null && ls -d "$_d"* 2>/dev/null); do
+			case $(blkid -o value -s TYPE "/dev/$_n" 2>/dev/null) in
+				LVM2_member|*_raid_member)
+					echo "$_d"
+					break ;;
+			esac
+		done
+	done
+	return 0
 }
 
 # ds_cpu_missing: the first x86-64-v2 feature this processor lacks, or

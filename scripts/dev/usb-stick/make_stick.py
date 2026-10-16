@@ -64,6 +64,19 @@ def offline(a) -> int:
     from domovoi.usb_stick import image
     from satellite import enrolment
 
+    if a.mutant == "poweroff-returns":
+        # A power-off that returns (firmware that ignores ACPI S5): the rest
+        # of stop() runs as written. The matrix's poweroff-returns case.
+        orig = image._text
+
+        def patched(rel: str) -> bytes:
+            data = orig(rel)
+            if rel == "installer/erase-confirm.sh":
+                assert b"\tpoweroff -f\n" in data
+                data = data.replace(b"\tpoweroff -f\n", b"\tmark POWEROFF-MUTANT; : poweroff -f\n")
+            return data
+
+        image._text = patched
     out = kit_dir() / "out" / a.out
     out.parent.mkdir(parents=True, exist_ok=True)
     fp = a.fp or "SHA256:" + base64.b64encode(hashlib.sha256(b"no such server").digest()).decode().rstrip("=")
@@ -156,6 +169,8 @@ def main(argv: list[str]) -> int:
     p.add_argument("--timezone", default="America/Chicago")
     p.add_argument("--wifi", action="store_true", help="offline: a stick with Wi-Fi on")
     p.add_argument("--no-debug", dest="debug", action="store_false", help="offline: no serial markers")
+    p.add_argument("--mutant", choices=["poweroff-returns"], default=None,
+                   help="offline: a stick whose power-off returns (a test of the ERASE gate failing closed)")
     p.add_argument("--epoch", type=int, default=None)
     p.add_argument("--ft-dir", default=None, help="ft: the functional-testing folder (runs/current.json)")
     a = p.parse_args(argv)

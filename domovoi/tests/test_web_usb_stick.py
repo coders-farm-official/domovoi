@@ -254,10 +254,16 @@ return { text: w.__deep(h.tree()) };
 """
 
 
+NOT_INSTALLED = {"state": "not_installed", "detail": "no domovoi-provisioning.service on this device; on a "
+                 "satellite Pi, sudo ~/satellite-venv/bin/python -m satellite.net_settings applies it once"}
+
+
 @pytest.fixture(scope="module")
 def health(tmp_path_factory) -> dict:
-    def scenario(boot):
+    def scenario(boot, net_step=None):
         sample = {"seq": 1, "rss_kb": 120000, "boot": boot} if boot is not None else {"seq": 1, "rss_kb": 120000}
+        if net_step:
+            sample.update(net_step=net_step, hostname="domovoi-kitchen")
         api = {"GET /api/satellites/kitchen/health": {"latest": {"received_at": "2026-10-16T10:00:00Z",
                                                                  "sample": sample}, "history": None}}
         return {"files": FILES, "component": "SatHealthCard", "props": {"room": "kitchen", "online": True},
@@ -269,7 +275,9 @@ def health(tmp_path_factory) -> dict:
         "fine": scenario({"firmware": "uefi", "secure_boot": True, "ca_2023": True, "loader_held": True,
                           "stick": True}),
         "bios": scenario({"firmware": "bios", "stick": True}),
-        "pi": scenario(None),
+        "nosb": scenario({"firmware": "uefi", "stick": True}),
+        "pi": scenario(None, NOT_INSTALLED),
+        "stick-net": scenario({"firmware": "bios", "stick": True}, NOT_INSTALLED),
     }, tmp_path_factory.mktemp("usb-stick-health"))
 
 
@@ -278,6 +286,7 @@ def test_a_room_whose_firmware_lacks_the_2023_certificate_is_warned_about(health
     assert "firmware needs the 2023 certificate" in text
     assert "UEFI · Secure Boot on · no 2023 certificate · boot loader frozen" in text
     assert "doesn't have Microsoft's 2023 Secure Boot certificate" in text and "BIOS/UEFI update" in text
+    assert "Once Debian ships a boot loader signed with the 2023 certificate only" in text, "said as what will happen"
 
 
 def test_no_warning_when_the_firmware_has_it_or_there_is_no_secure_boot(health):
@@ -286,3 +295,16 @@ def test_no_warning_when_the_firmware_has_it_or_there_is_no_secure_boot(health):
     assert "firmware has the 2023 certificate" in health["fine"]["text"]
     assert "BIOS" in health["bios"]["text"]
     assert "boot loader frozen" not in health["pi"]["text"], "a Pi shows nothing of this"
+
+
+def test_firmware_without_secure_boot_is_explained_not_unknown(health):
+    text = health["nosb"]["text"]
+    assert "no Secure Boot setting" in text and "Secure Boot unknown" not in text
+    assert "doesn't say whether Secure Boot is on" in text
+    assert "firmware needs the 2023 certificate" not in text
+
+
+def test_a_stick_room_shows_no_pi_network_step_but_a_pi_still_does(health):
+    stick = health["stick-net"]["text"]
+    assert "not installed" not in stick and "sudo" not in stick and "domovoi-kitchen" in stick
+    assert "not installed" in health["pi"]["text"] and "sudo" in health["pi"]["text"]

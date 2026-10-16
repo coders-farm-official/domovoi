@@ -822,14 +822,16 @@ The installer works by itself for about a minute, then shows one page:
 > GB (/dev/sda) … Type ERASE to make this computer the Kitchen room.
 
 It names the disk it will use: never the stick itself, never another USB
-drive or a memory card; a solid-state disk before a spinning one, then the
-largest. It also says whether your Domovoi server answered (a server that
-is off just now is fine: the room keeps trying after it is set up).
-Anything but ERASE, three times, or **Go Back**: "Nothing was changed", and
-the computer turns off.
+or Thunderbolt drive or a memory card; a solid-state disk before a spinning
+one, then the largest. To be sure, unplug any other external disk first
+(an eSATA one can't be told from an internal one). It also says whether your
+Domovoi server answered (a server that is off just now is fine: the room
+keeps trying after it is set up). Anything but ERASE, three times, or **Go
+Back**: "Nothing was changed", and the computer turns off.
 
 Before that page, the stick stops on a plain page, with nothing changed,
-when the computer has no usable disk, its processor is too old, it is a T2
+when the computer has no usable disk, its disks are joined together (LVM or
+RAID: the page names them), its processor is too old, it is a T2
 Mac, or it is not on the internet. If the computer is **already a room**
 (the stick was left in and it started from it again), the page says so:
 turn it off, take the stick out, and it stays that room.
@@ -886,8 +888,9 @@ signed by Microsoft with both its **2011** and its **2023** certificates.
 - **The dashboard warns** on the room's health card ("firmware needs the
   2023 certificate") when Secure Boot is on and the firmware lacks
   Microsoft's 2023 certificate (the room checks at every start). It keeps
-  starting as it is, but a newer stick, whose shim will be signed with the
-  2023 certificate only, won't start on it with Secure Boot on. **To update
+  starting as it is; once Debian ships a boot loader signed with the 2023
+  certificate only, a stick made after that will stop starting on it while
+  Secure Boot is on. **To update
   the firmware by hand:** install the maker's latest BIOS/UEFI update for
   that model from their support site (many have a bootable USB updater; if
   the computer still has Windows, run it from there, and let Windows Update
@@ -941,6 +944,8 @@ Retire room**).
 | "Plug in a network cable" | No internet: a cable from the router (or a USB network adapter), then start again. |
 | "This computer's processor is too old" | Older than about 2009: it can't be a room. |
 | "There is no disk to put the room on" | No internal disk of 8 GB or more. |
+| "This computer's disks are joined together" | Its disks are one LVM volume or a RAID: the stick erases only one disk. Take the others out (or erase them first). |
+| "Something on this network tried to set up this computer" | A device on the network handed the installer setup answers (a "DHCP boot file"). Start again with a cable straight to your router. |
 | The screen stays black after the menu | Restart and pick **The same, in text mode**. |
 | "Not ready yet: … Can't reach your Domovoi server" | Is the server on, and the computer on the same network? It keeps trying every minute. |
 | "did not prove it is the Domovoi server this stick was made by" | Something else answers at that address now (the server moved, or another machine). Make a new stick. |

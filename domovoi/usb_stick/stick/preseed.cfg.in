@@ -17,6 +17,11 @@
 #### (priority high; "critical" would skip them and install with no
 #### network).
 
+### Only these answers: early.sh switches off Debian's network preseeding
+### (a DHCP server's boot-file name read as a preseed URL), before the
+### installer loads anything from the stick.
+d-i preseed/early_command string sh /domovoi-stick/early.sh
+
 ### Language, keyboard (the household's server could pass its own)
 d-i debian-installer/locale string @LOCALE@
 d-i debian-installer/language string en
@@ -67,19 +72,13 @@ d-i time/zone string @TIMEZONE@
 d-i clock-setup/ntp boolean true
 
 ### The disk: partman/early_command picks it and asks for ERASE before
-### partman touches anything; after that, nothing more is asked.
+### partman touches anything. The partitioner's own confirmations (wipe the
+### disk, remove old LVM/RAID, write the new table) are answered by
+### erase-confirm.sh after ERASE is typed, never here: if that script ends
+### any other way, Debian's partitioner asks the person itself.
 d-i partman/early_command string sh /domovoi-stick/erase-confirm.sh
 d-i partman-auto/method string regular
 d-i partman-auto/choose_recipe select atomic
-d-i partman-auto/purge_lvm_from_device boolean true
-d-i partman-lvm/device_remove_lvm boolean true
-d-i partman-md/device_remove_md boolean true
-d-i partman-lvm/confirm boolean true
-d-i partman-lvm/confirm_nooverwrite boolean true
-d-i partman-partitioning/confirm_write_new_label boolean true
-d-i partman/choose_partition select finish
-d-i partman/confirm boolean true
-d-i partman/confirm_nooverwrite boolean true
 d-i partman-efi/non_efi_system boolean true
 d-i partman/mount_style select uuid
 

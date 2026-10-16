@@ -1,0 +1,9 @@
+#!/bin/sh
+# Domovoi room stick: udhcpc's script inside the installer (early.sh puts
+# it in place and keeps Debian's own as default.script.debian). The DHCP
+# server's boot-file name is dropped before Debian's script records the
+# lease, so nothing can read it as a preseed URL; everything else is
+# Debian's script, unchanged.
+boot_file=
+export boot_file
+exec /etc/udhcpc/default.script.debian "$@"

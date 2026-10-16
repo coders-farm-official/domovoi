@@ -378,7 +378,7 @@ const SatNetStep = ({ step, hostname }) => {
   const m = (step && SAT_NET_STEP[step.state]) || null;
   return (
     <div className="sat-net-step" style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginTop: 10, fontSize: 12 }}>
-      <div className="label">boot network step</div>
+      <div className="label">{m ? 'boot network step' : 'network'}</div>
       {m && <Pill tone={m.tone}>{m.word}</Pill>}
       {hostname && <span className="mono" style={{ fontSize: 11.5 }}>host name {hostname}</span>}
       {m && step.detail && <span style={{ color: 'var(--fg-muted)', flexBasis: '100%', overflowWrap: 'anywhere' }}>{step.detail}</span>}
@@ -401,7 +401,7 @@ const SatBootSecurity = ({ boot }) => {
   const uefi = boot.firmware === 'uefi';
   const words = [
     uefi ? 'UEFI' : 'BIOS',
-    uefi ? (boot.secure_boot === true ? 'Secure Boot on' : boot.secure_boot === false ? 'Secure Boot off' : 'Secure Boot unknown') : null,
+    uefi ? (boot.secure_boot === true ? 'Secure Boot on' : boot.secure_boot === false ? 'Secure Boot off' : 'no Secure Boot setting') : null,
     uefi && boot.ca_2023 != null ? (boot.ca_2023 ? 'firmware has the 2023 certificate' : 'no 2023 certificate') : null,
     uefi && boot.loader_held ? 'boot loader frozen' : null,
   ].filter(Boolean).join(' · ');
@@ -411,14 +411,20 @@ const SatBootSecurity = ({ boot }) => {
         <div className="label">boot</div>
         <span className="mono" style={{ fontSize: 11.5 }}>{words}</span>
       </div>
+      {uefi && boot.secure_boot == null && (
+        <div className="sat-boot-nosb" style={{ color: 'var(--fg-muted)', lineHeight: 1.5, marginTop: 4 }}>
+          This computer's firmware doesn't say whether Secure Boot is on (older firmware often has no
+          Secure Boot at all). Nothing to do: the room starts the same either way.
+        </div>
+      )}
       {satNeeds2023(boot) && (
         <div role="note" className="sat-boot-2023" style={{ color: 'var(--warn)', lineHeight: 1.5, marginTop: 4 }}>
           This computer's firmware doesn't have Microsoft's 2023 Secure Boot certificate. It keeps
-          starting as it is: its boot loader is frozen at the one the USB stick installed. Debian's newer
-          boot loaders are signed with the 2023 certificate only, though, so a newer stick won't start on
-          it with Secure Boot on. To fix it by hand: install the maker's latest BIOS/UEFI update for this
-          model from their support site (many have a bootable USB updater), or turn Secure Boot off in its
-          firmware settings.
+          starting as it is: its boot loader is frozen at the one the USB stick installed. Once Debian
+          ships a boot loader signed with the 2023 certificate only, a stick made after that will stop
+          starting on it while Secure Boot is on. To fix it by hand: install the maker's latest BIOS/UEFI
+          update for this model from their support site (many have a bootable USB updater), or turn
+          Secure Boot off in its firmware settings.
         </div>
       )}
     </div>
@@ -521,7 +527,13 @@ const SatHealthCard = ({ room, online }) => {
           })()}
         </div>
       )}
-      {s && (s.net_step || s.hostname) && <SatNetStep step={s.net_step} hostname={s.hostname}/>}
+      {/* A room made from a USB stick has no Pi's boot-time network step:
+          its "not installed" (and the Pi's command to run it) would only
+          mislead. Its host name still shows. */}
+      {s && (s.net_step || s.hostname) && (
+        <SatNetStep step={s.boot && s.boot.stick && s.net_step && s.net_step.state === 'not_installed' ? null : s.net_step}
+                    hostname={s.hostname}/>
+      )}
       {s && s.boot && <SatBootSecurity boot={s.boot}/>}
       {s && (
         <div className="mono" style={{ fontSize: 10.5, color: 'var(--fg-faint)', marginTop: 8 }}>

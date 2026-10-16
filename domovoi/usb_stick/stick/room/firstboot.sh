@@ -14,15 +14,19 @@
 # dedicated room, not someone's laptop. Until the server can be reached
 # (no network yet, the server is off), this says why on the screen and
 # tries again every minute.
+#
+# FB_* variables are the tests' (domovoi/tests/test_usb_stick_installer.py);
+# on the room they are unset.
 set -u
-PATH=/usr/sbin:/usr/bin:/sbin:/bin
+PATH=${FB_PATH:-/usr/sbin:/usr/bin:/sbin:/bin}
 export PATH
 umask 022
 
 LIB=${FB_LIB:-/usr/local/lib/domovoi-stick}
 STATE=${FB_STATE:-/var/lib/domovoi-stick}
 LOG=${FB_LOG:-/var/log/domovoi-stick-firstboot.log}
-PY=/usr/bin/python3
+PY=${FB_PY:-/usr/bin/python3}
+SYNCED=${FB_SYNCED:-/run/systemd/timesync/synchronized}
 
 field() { $PY -I -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))[sys.argv[2]])' "$LIB/stick.json" "$1"; }
 ROOM=$(field room)
@@ -90,7 +94,7 @@ fi
 # install has not got, and never said "yes" in the first QEMU run.)
 synced=0
 for _ in $(seq 1 30); do
-	if [ -e /run/systemd/timesync/synchronized ]; then synced=1; break; fi
+	if [ -e "$SYNCED" ]; then synced=1; break; fi
 	sleep 2
 done
 echo "$(stamp) clock synchronised: $synced" >>"$LOG"

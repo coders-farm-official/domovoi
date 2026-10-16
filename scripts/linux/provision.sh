@@ -1082,7 +1082,7 @@ do_preflight() {
 # OS package run as a separate program, never bundled. Ubuntu 26.04's
 # build (1:1.5.6-1.1ubuntu4 when this was written) is the one tested; an
 # install from before it gets the same package from apply-update.sh
-# (scripts/linux/added-packages.txt).
+# (ADDED_PACKAGES, reconcile_added_packages).
 APT_PACKAGES=(python3 python3-venv python3-dev build-essential pkg-config libasound2-dev
   git ffmpeg mpg123 libchromaprint-tools xorriso
   zstd ca-certificates curl gnupg tzdata sudo)

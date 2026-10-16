@@ -3048,9 +3048,9 @@ case_added_packages_installed_on_a_restart() {
   check "a step of its own, after the search helper" eq "$(step_names)" "signature stop-services start-services health searxng added-packages"
   check "an ok step" step_is added-packages ok
   check "it says what it installed" grep -qF '"detail": "installed xorriso"' "$RESULT"
-  check "no recommends" called "apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=300 -q install -y --no-install-recommends xorriso"
+  check "no recommends, a short wait for apt's lock" called "apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=20 -q install -y --no-install-recommends xorriso"
   check "installed after health" before "curl http://127.0.0.1:6369/api/health" "install -y --no-install-recommends xorriso"
-  check "with the lists apt had: no update" not_called "$APT_UPDATE"
+  check "with the lists apt had: no update" not_called "DPkg::Lock::Timeout=20 -q update"
   check "not held" not_called "apt-mark"
   check "installed" grep -qx "xorriso=1" "$STATE/dpkg"
   : >"$STATE/calls.log"
@@ -3101,8 +3101,8 @@ case_added_packages_failure_is_a_warning_and_opt_out_is_honoured() {
   check "exit 0" eq "$RC" 0
   check "status ok" eq "$(field status)" '"ok"'
   check "a warn step" step_is added-packages warn
-  check "its detail is ours" grep -qF '"detail": "not installed: xorriso (apt-get failed, exit 100; journalctl -u domovoi-update says why). USB sticks for old computers need xorriso"' "$RESULT"
-  check "tried again with fresh lists" called "$APT_UPDATE"
+  check "its detail is ours" grep -qF '"detail": "not installed: xorriso (apt-get failed, exit 100, or another program was using apt; journalctl -u domovoi-update says why). The next update or Restart tries again. USB sticks for old computers need xorriso"' "$RESULT"
+  check "tried again with fresh lists" called "apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=20 -q update"
   check "no error on the run" eq "$(field error)" null
   check "no rollback" not_called "reset --keep"
   check "not installed" eq "$(grep -c '^xorriso=' "$STATE/dpkg")" 0

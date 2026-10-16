@@ -188,7 +188,8 @@ def qemu_args(a, qmp_port: int, serial: Path) -> list[str]:
         "-drive", f"file={VM / (a.name + '.qcow2')},if=none,id=hd0,format=qcow2,cache=unsafe",
         "-device", "ide-hd,drive=hd0,bus=ide.0,bootindex=2",
         "-device", "qemu-xhci,id=xhci",
-        "-netdev", "user,id=n0" + (",restrict=on" if a.net_restrict else ""),
+        "-netdev", "user,id=n0" + (",restrict=on" if a.net_restrict else "")
+        + (f",bootfile={a.bootfile}" if a.bootfile else ""),
         "-device", f"e1000e,netdev=n0,mac={a.mac}",
         "-audiodev", "none,id=a0",
         "-device", "intel-hda", "-device", "hda-micro,audiodev=a0",
@@ -394,6 +395,8 @@ def main(argv: list[str]) -> int:
     r.add_argument("--linger", type=float, default=5.0)
     r.add_argument("--summary", help="also write the run's summary (events, markers) here")
     r.add_argument("--no-reboot", action="store_true")
+    r.add_argument("--bootfile", default=None,
+                   help="the DHCP server's boot-file name (QEMU's user network): a rogue DHCP server's preseed URL")
     r.add_argument("--net-restrict", action="store_true",
                    help="no internet: QEMU's user network with restrict=on (DHCP still answers)")
     s = sub.add_parser("stop")

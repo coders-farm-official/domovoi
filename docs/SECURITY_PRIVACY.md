@@ -2370,18 +2370,46 @@ could rewrite the dashboard page (see above). And anyone who can change the
 stick itself (physical access) can change what it installs, as with a Pi's
 SD card.
 
+**Only the stick's answers.** Debian's installer would take a preseed URL
+from a DHCP server's boot-file name (`network-preseed`) and load it over
+the stick's own answers: a rogue DHCP server on the network could then
+replace the ERASE page, erase the disk without asking and run its own
+commands as root in the new system (security review of wf/usb-stick, shown
+in QEMU). The stick's first command in the installer (`installer/early.sh`)
+records `network-preseed` as installed, so it is never unpacked or run, and
+wraps udhcpc's script so the boot-file name is dropped before the lease is
+written; the ERASE step refuses ("Something on this network tried to set up
+this computer") if a preseed URL is set anyway or `network-preseed` was
+installed. The answers come only from the stick (`/preseed.cfg` in its own
+initrd) and its boot menu's kernel command line; changing those needs the
+stick or the keyboard in hand. A QEMU case with a DHCP boot file pointing
+at an "evil" preseed checks that the file is never fetched and the ERASE
+page still shows.
+
 **It erases a disk: the guards.** Nothing is written before the person
 types ERASE on the computer (any case; three wrong answers, Go Back or
 turning it off: "Nothing was changed"), on a page that names the disk by
-make, size and device. The disk is chosen by `installer/lib.sh`: never the
-disk the stick is on, never a USB, removable, read-only or memory-card disk,
-never one under 8 GB; a solid-state disk before a spinning one, then the
-largest. Before that page the stick stops, with nothing written, for no
-usable disk, a processor older than x86-64-v2, a T2 Mac, or no internet.
-The "this computer is already a room" check mounts the chosen disk's ext4
-partitions read-only without replaying their journals (`ro,noload`).
-Tested in QEMU each time the pin moves (`scripts/dev/usb-stick/matrix.py`),
-including that a refused run never writes to the disk.
+make, size and device. It fails closed: a refusal powers the computer off
+and, if the firmware ignores that, waits there for ever rather than return
+to the partitioner, and the partitioner's own confirmations (wipe the disk,
+remove old LVM or RAID, write the new table) are given only after ERASE,
+never in the answers file, so if the ERASE step ends any other way Debian's
+partitioner asks the person itself. The disk is chosen by
+`installer/lib.sh`: never the disk the stick is on, never a USB, Thunderbolt
+or USB4 disk (anything behind a port the kernel marks removable or external),
+never a removable, read-only or memory-card disk, never one under 8 GB; a
+solid-state disk before a spinning one, then the largest. An eSATA disk can't
+be told from an internal one (the kernel doesn't say), so the guide says to
+unplug external disks first. Before that page the stick stops, with nothing
+written, for no usable disk, a processor older than x86-64-v2, a T2 Mac, no
+internet, or disks joined by LVM or RAID with another disk (it would erase
+or break more than the one disk it names; the page names every one). The
+"this computer is already a room" check mounts the chosen disk's ext4
+partitions read-only without replaying their journals (`ro,noload`). The
+scripts are tested whole against stand-ins for debconf and the installer's
+tools (`domovoi/tests/test_usb_stick_scripts.py`) and in QEMU each time the
+pin moves (`scripts/dev/usb-stick/matrix.py`), including that a refused run
+never writes to the disk and a power-off that returns never goes on.
 
 **Root on the room.** Root's password is locked and there is no user
 account, so nobody logs in at the keyboard. Root runs: the first-boot
@@ -2399,9 +2427,9 @@ Two programs the stick adds run as `domovoi-sat` too: the room's screen and
 `aplay` when the satellite calls it (root's file, the satellite's rights).
 
 **Secure Boot: a frozen boot loader.** Debian's shim on the stick is signed
-by Microsoft with its 2011 and its 2023 certificates; new shims are signed
-with the 2023 one only, which firmware that never got the 2023 certificate
-won't start. So on UEFI the room **holds** the shim and GRUB packages it
+by Microsoft with its 2011 and its 2023 certificates; Microsoft now signs
+new shims with the 2023 one only, so once Debian ships one, firmware that
+never got the 2023 certificate won't start it. So on UEFI the room **holds** the shim and GRUB packages it
 installed (`apt-mark hold`, and an `unattended-upgrades` blacklist,
 `/etc/apt/apt.conf.d/52domovoi-stick`) and never installs fwupd: nothing
 changes the firmware's certificates or its revocation list from the room.

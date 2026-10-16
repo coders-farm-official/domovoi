@@ -8,14 +8,19 @@
 # security updates with a night-time restart, and on UEFI a frozen boot
 # loader. Nothing here needs the network; the satellite itself is installed
 # at first boot, by systemd.
+#
+# DS_* variables are the tests' (domovoi/tests/test_usb_stick_installer.py,
+# with stand-ins for in-target, chroot and install); in the installer they
+# are unset and every path is the installer's own.
 set -e
-LOG=/var/log/domovoi-stick.log
+STICK_DIR=${DS_STICK_DIR:-/domovoi-stick}
+LOG=${DS_LOG:-/var/log/domovoi-stick.log}
 log() { echo "domovoi-stick late: $*" >>"$LOG"; }
-mark() { [ -e /domovoi-stick/debug ] && echo "DOMOVOI-STICK: $*" >/dev/ttyS0 2>/dev/null; return 0; }
+mark() { [ -e "$STICK_DIR/debug" ] && { echo "DOMOVOI-STICK: $*" >/dev/ttyS0; } 2>/dev/null || true; return 0; }
 mark "LATE-START"
 
-SRC=/cdrom/domovoi
-T=/target
+SRC=${DS_SRC:-/cdrom/domovoi}
+T=${DS_TARGET:-/target}
 LIB=$T/usr/local/lib/domovoi-stick
 
 mkdir -p "$LIB/sounds" "$T/var/lib/domovoi-stick"
@@ -25,7 +30,7 @@ for f in firstboot.sh console.py boot-check.sh; do
 done
 # The room's name as plain text: the stick's ERASE page reads it to say
 # "this computer is already the room ..." if the stick is started again.
-cp /domovoi-stick/room-name "$LIB/room-name"
+cp "$STICK_DIR/room-name" "$LIB/room-name"
 for w in "$SRC"/sounds/*.wav; do
 	[ -f "$w" ] && cp "$w" "$LIB/sounds/"
 done
@@ -63,7 +68,7 @@ install -o root -g root -m 0644 "$SRC/room/52domovoi-stick" "$T/etc/apt/apt.conf
 # disk (apt-mark hold, and the unattended-upgrades blacklist above), and
 # fwupd is not installed: nothing changes the firmware's certificates from
 # here. Kernels keep updating (Debian signs them; this shim checks them).
-if [ -d /sys/firmware/efi ]; then
+if [ -d "${DS_ROOT:-}/sys/firmware/efi" ]; then
 	held=""
 	for p in shim-signed shim-signed-common shim-unsigned shim-helpers-amd64-signed \
 	         grub-efi-amd64-signed grub-efi-amd64-bin grub-efi-amd64 grub-common grub2-common; do
@@ -102,7 +107,7 @@ fi
 in-target passwd -l root >>"$LOG" 2>&1 || true
 
 # Test builds only: the journal on the serial port for the QEMU runs.
-if [ -e /domovoi-stick/debug ] && [ -f "$SRC/test-only/domovoi-stick-debug.service" ]; then
+if [ -e "$STICK_DIR/debug" ] && [ -f "$SRC/test-only/domovoi-stick-debug.service" ]; then
 	cp "$SRC/test-only/debug-room.sh" "$LIB/debug-room.sh"
 	cp "$SRC/test-only/domovoi-stick-debug.service" "$T/etc/systemd/system/"
 	in-target systemctl enable domovoi-stick-debug.service >>"$LOG" 2>&1 || true

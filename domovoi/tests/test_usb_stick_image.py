@@ -137,9 +137,11 @@ def test_the_answers_are_filled_and_ask_for_nothing_but_erase():
     assert "d-i preseed/late_command string sh /domovoi-stick/late.sh" in text
     assert "d-i passwd/make-user boolean false" in text
     assert "systemd-timesyncd" in text and "fwupd" not in text.split("pkgsel/include", 1)[1].split("\n")[0]
-    assert "early_command string sh /domovoi-stick/debug-serial.sh" not in text
-    debug = image.preseed(image.Options(debug=True), "h").decode()
-    assert debug.endswith("d-i preseed/early_command string sh /domovoi-stick/debug-serial.sh\n")
+    # The one early command: early.sh (network preseeding off; a test
+    # build's serial copier is started from there, not from the answers).
+    assert text.count("preseed/early_command") == 1
+    assert "d-i preseed/early_command string sh /domovoi-stick/early.sh\n" in text
+    assert image.preseed(image.Options(debug=True), "h") == image.preseed(image.Options(), "h")
 
 
 @pytest.mark.parametrize("name, shown", [
@@ -165,7 +167,8 @@ def test_the_initrd_holds_the_answers_and_our_two_hooks_owned_by_root():
     assert set(files) == {
         "preseed.cfg", "domovoi-stick", "domovoi-stick/room-name", "domovoi-stick/core-url",
         "domovoi-stick/wifi", "domovoi-stick/erase-confirm.sh", "domovoi-stick/late.sh",
-        "domovoi-stick/lib.sh", "domovoi-stick/templates",
+        "domovoi-stick/lib.sh", "domovoi-stick/templates", "domovoi-stick/early.sh",
+        "domovoi-stick/udhcpc-default.script",
         "etc", "etc/modprobe.d", "etc/modprobe.d/domovoi-stick-no-wifi.conf",
     }
     assert list(files) == sorted(files), "parents before children"

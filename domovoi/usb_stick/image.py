@@ -75,7 +75,8 @@ MAX_BUNDLE_BYTES = 32 * 1024 * 1024
 
 #: Executable files among the stick's own (everything else is 0644).
 _EXECUTABLE = frozenset({
-    "installer/erase-confirm.sh", "installer/late.sh",
+    "installer/erase-confirm.sh", "installer/late.sh", "installer/early.sh",
+    "installer/udhcpc-default.script",
     "room/firstboot.sh", "room/boot-check.sh", "room/domovoi-status",
     "test-only/debug-serial.sh", "test-only/debug-room.sh",
 })
@@ -86,7 +87,7 @@ ROOM_UNITS = (
     "domovoi-stick-firstboot.service",
     "domovoi-stick-console.service",
 )
-INSTALLER_FILES = ("erase-confirm.sh", "late.sh", "lib.sh", "templates")
+INSTALLER_FILES = ("early.sh", "erase-confirm.sh", "late.sh", "lib.sh", "templates", "udhcpc-default.script")
 
 
 class PinError(ValueError):
@@ -255,14 +256,12 @@ def _fill(template: bytes, values: dict[str, str]) -> bytes:
 
 
 def preseed(options: Options, hostname: str) -> bytes:
-    """The installer's answers (``/preseed.cfg`` in our initrd)."""
-    out = _fill(_text("preseed.cfg.in"), {
+    """The installer's answers (``/preseed.cfg`` in our initrd). A test
+    build's serial copier is started by early.sh when it is on the stick."""
+    return _fill(_text("preseed.cfg.in"), {
         "LOCALE": options.locale, "COUNTRY": options.country, "KEYMAP": options.keymap,
         "HOSTNAME": hostname, "TIMEZONE": options.timezone,
     })
-    if options.debug:
-        out += b"d-i preseed/early_command string sh /domovoi-stick/debug-serial.sh\n"
-    return out
 
 
 def menus(room: str) -> tuple[bytes, bytes]:
