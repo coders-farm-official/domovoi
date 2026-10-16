@@ -21,6 +21,14 @@ WMA (ASF), WAV, AIFF, raw AAC (ADTS) and the APEv2-tagged formats.
 :func:`read` raises :class:`TagError` for a file of a known kind whose
 structure is broken, and OSError when the file can't be read; every caller
 catches both.
+
+Every read keeps to a budget (``_util``: ``READ_BUDGET`` bytes taken into
+memory, ``MAX_ITEMS`` things made, ``MAX_STEPS`` structures stepped over),
+whatever the file says about itself: a file that asks for more is broken
+(:class:`BudgetExceeded`, a TagError), or, where the rest can be left
+unread (an ID3 tag's further frames, FLAC pictures past their share), is
+cut short. Reads are blocking; the server runs them in worker threads
+(``domovoi.executors``, the ``tags`` pool), never on its event loop.
 """
 
 from __future__ import annotations
@@ -64,7 +72,7 @@ from domovoi.media_tags._mp4 import read_mp4
 from domovoi.media_tags._mpeg import find_first_frame, stream_length
 from domovoi.media_tags._ogg import read_ogg
 from domovoi.media_tags._riff import read_aiff, read_wav
-from domovoi.media_tags._util import TagError, file_size
+from domovoi.media_tags._util import BudgetExceeded, TagError, file_size, one_read
 
 _MPEG_EXTS = (".mp3", ".mp2", ".mpg", ".mpeg")
 _AAC_EXTS = (".aac", ".aacp", ".adts", ".adif")
@@ -80,6 +88,7 @@ def read(path: str | os.PathLike[str]) -> MediaFile | None:
         return read_fileobj(f, os.fspath(path))
 
 
+@one_read
 def read_fileobj(f: BinaryIO, name: str = "") -> MediaFile | None:
     size = file_size(f)
     f.seek(0)
@@ -145,6 +154,7 @@ def _flac(f: BinaryIO, start: int) -> MediaFile:
     return MediaFile("flac", duration, tags or None, pictures)
 
 
+@one_read
 def read_id3(path: str | os.PathLike[str]) -> ID3Tags | None:
     """Only the ID3v2 tag at the start of the file, whatever follows it."""
     with open(path, "rb") as f:
@@ -157,6 +167,7 @@ __all__ = [
     "APEValue",
     "ASFTags",
     "ASFValue",
+    "BudgetExceeded",
     "ChapterFrame",
     "CommentFrame",
     "Frame",

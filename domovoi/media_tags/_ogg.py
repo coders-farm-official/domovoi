@@ -1,6 +1,13 @@
 """Ogg (RFC 3533) carrying Vorbis, Opus (RFC 7845), FLAC or Speex: the
 comment header of the first audio stream and the stream's length from
-its last granule position."""
+its last granule position.
+
+Both are linear in what they read and bounded in what they keep (2026-10-16
+delta review B2/S2): a header packet is assembled from a list of its
+segments, joined once, and may be at most ``MAX_BLOCK`` (it had been grown
+255 bytes at a time, so a 10 MB comment header took 36 s); the last granule
+is looked for backwards through the file in fixed chunks (the tail read had
+widened until it held the whole file)."""
 
 from __future__ import annotations
 
@@ -9,22 +16,27 @@ from typing import BinaryIO
 
 from domovoi.media_tags._flac import parse_vorbis_comment, streaminfo_length
 from domovoi.media_tags._model import VorbisTags
-from domovoi.media_tags._util import TagError
+from domovoi.media_tags._util import MAX_BLOCK, TagError, budget
 
 _MAX_HEADER_PAGES = 4096
+#: How much of the file the backwards search for the last page reads at a
+#: time.
 _TAIL = 256 * 1024
+_PAGE_HEAD = 27
 
 
 def _pages(f: BinaryIO, start: int = 0):
     """``(serial, granule, flags, segments, data)`` for each page from
     ``start``, until the file ends or stops being Ogg."""
     f.seek(start)
+    allowance = budget()
     while True:
-        head = f.read(27)
-        if len(head) < 27:
+        head = f.read(_PAGE_HEAD)
+        if len(head) < _PAGE_HEAD:
             return
         if head[:4] != b"OggS" or head[4] != 0:
             raise TagError("lost Ogg page sync")
+        allowance.step()
         flags = head[5]
         granule, serial = struct.unpack_from("<qI", head, 6)
         lacing = f.read(head[26])
@@ -37,9 +49,14 @@ def _pages(f: BinaryIO, start: int = 0):
 
 
 def _packets(f: BinaryIO, serial: int, wanted: int) -> list[bytes]:
-    """The first ``wanted`` packets of logical stream ``serial``."""
+    """The first ``wanted`` packets of logical stream ``serial``. Each is
+    gathered as a list of its segments and joined once, so the work is
+    linear in its size; one over ``MAX_BLOCK``, or over what is left of
+    the read's budget, is a broken file."""
+    allowance = budget()
     packets: list[bytes] = []
-    partial = b""
+    parts: list[bytes] = []
+    size = 0
     for n, (s, _granule, _flags, lacing, data) in enumerate(_pages(f)):
         if n > _MAX_HEADER_PAGES:
             break
@@ -47,36 +64,42 @@ def _packets(f: BinaryIO, serial: int, wanted: int) -> list[bytes]:
             continue
         pos = 0
         for seg in lacing:
-            partial += data[pos:pos + seg]
+            if seg:
+                if size + seg > MAX_BLOCK:
+                    raise TagError("Ogg header packet too large")
+                allowance.spend(seg)
+                parts.append(data[pos:pos + seg])
+                size += seg
             pos += seg
             if seg < 255:
-                packets.append(partial)
-                partial = b""
+                packets.append(b"".join(parts))
+                parts, size = [], 0
                 if len(packets) >= wanted:
                     return packets
     return packets
 
 
 def _last_granule(f: BinaryIO, serial: int, size: int) -> int | None:
-    """The granule position of the last page of ``serial`` that has one."""
-    span = _TAIL
-    while True:
-        begin = max(0, size - span)
+    """The granule position of the last page of ``serial`` that has one:
+    the file read backwards ``_TAIL`` bytes at a time (each chunk with the
+    bytes a page header that starts in it runs into), so nothing more than
+    one chunk is ever held, however far back that page is."""
+    limit = size                # page starts at or past this were looked at
+    while limit > 0:
+        begin = max(0, limit - _TAIL)
         f.seek(begin)
-        chunk = f.read(size - begin)
-        best = None
-        i = chunk.rfind(b"OggS")
+        chunk = f.read(min(size, limit + _PAGE_HEAD - 1) - begin)
+        # A capture pattern that starts before ``limit`` (it ends by limit + 3).
+        i = chunk.rfind(b"OggS", 0, limit - begin + 3)
         while i >= 0:
-            head = chunk[i:i + 27]
-            if len(head) == 27 and head[4] == 0:
+            head = chunk[i:i + _PAGE_HEAD]
+            if len(head) == _PAGE_HEAD and head[4] == 0:
                 granule, s = struct.unpack_from("<qI", head, 6)
                 if s == serial and granule != -1:
-                    best = granule
-                    break
+                    return granule
             i = chunk.rfind(b"OggS", 0, i)
-        if best is not None or begin == 0:
-            return best
-        span *= 4
+        limit = begin
+    return None
 
 
 def read_ogg(f: BinaryIO, size: int) -> tuple[str, float | None, VorbisTags | None]:

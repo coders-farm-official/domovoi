@@ -8,15 +8,17 @@ import struct
 from typing import BinaryIO
 
 from domovoi.media_tags._id3 import ID3Tags, parse_id3v2
-from domovoi.media_tags._util import MAX_BLOCK, TagError
+from domovoi.media_tags._util import MAX_BLOCK, TagError, budget, read_upto
 
 _ID3_CHUNKS = (b"id3 ", b"ID3 ")
 
 
 def _chunks(f: BinaryIO, start: int, end: int, big_endian: bool):
     fmt = ">I" if big_endian else "<I"
+    allowance = budget()
     pos = start
     while pos + 8 <= end:
+        allowance.step()
         f.seek(pos)
         head = f.read(8)
         if len(head) < 8:
@@ -31,7 +33,7 @@ def _id3_chunk(f: BinaryIO, at: int, size: int) -> ID3Tags | None:
     if size > MAX_BLOCK:
         raise TagError("ID3 chunk too large")
     f.seek(at)
-    return parse_id3v2(f.read(size))
+    return parse_id3v2(read_upto(f, size))
 
 
 def read_wav(f: BinaryIO, size: int) -> tuple[float | None, ID3Tags | None]:

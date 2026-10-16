@@ -8,7 +8,7 @@ import uuid
 from typing import BinaryIO
 
 from domovoi.media_tags._model import ASFTags, ASFValue
-from domovoi.media_tags._util import MAX_BLOCK, TagError, read_exact
+from domovoi.media_tags._util import MAX_BLOCK, TagError, budget, read_exact
 
 
 def _guid(text: str) -> bytes:
@@ -24,6 +24,8 @@ METADATA = _guid("C5F8CBEA-5BAF-4877-8467-AA8C44FA4CCA")
 METADATA_LIBRARY = _guid("44231C94-9498-49D1-A141-1D134E457054")
 
 _CONTENT_NAMES = ("Title", "Author", "Copyright", "Description", "Rating")
+# The integer types' widths: DWORD, QWORD, WORD.
+_INT_WIDTHS = {3: 4, 4: 8, 5: 2}
 
 
 def _text(raw: bytes) -> str:
@@ -36,13 +38,17 @@ def _value(dtype: int, raw: bytes, *, in_metadata: bool) -> ASFValue:
     if dtype == 2:
         n = 2 if in_metadata else 4
         return ASFValue(2, bool(int.from_bytes(raw[:n], "little")))
-    if dtype in (3, 4, 5):
-        return ASFValue(dtype, int.from_bytes(raw, "little"))
+    if dtype in _INT_WIDTHS:
+        # A DWORD is four bytes, whatever length the attribute claims: a
+        # 2000-byte "DWORD" had made a 4800-digit number that no str() takes.
+        return ASFValue(dtype, int.from_bytes(raw[:_INT_WIDTHS[dtype]], "little"))
     return ASFValue(dtype, bytes(raw))
 
 
 def _objects(data: bytes, pos: int):
+    allowance = budget()
     while pos + 24 <= len(data):
+        allowance.step()
         guid = data[pos:pos + 16]
         size = struct.unpack_from("<Q", data, pos + 16)[0]
         if size < 24 or pos + size > len(data):
@@ -54,7 +60,9 @@ def _objects(data: bytes, pos: int):
 def _metadata_records(body: bytes, items: list[tuple[str, ASFValue]]) -> None:
     count = struct.unpack_from("<H", body, 0)[0]
     pos = 2
+    allowance = budget()
     for _ in range(count):
+        allowance.item()
         _lang, _stream, nlen, dtype, dlen = struct.unpack_from("<HHHHI", body, pos)
         pos += 12
         name = _text(body[pos:pos + nlen])
@@ -93,6 +101,7 @@ def read_asf(f: BinaryIO) -> tuple[float | None, ASFTags | None]:
                 count = struct.unpack_from("<H", body, 0)[0]
                 pos = 2
                 for _ in range(count):
+                    budget().item()
                     nlen = struct.unpack_from("<H", body, pos)[0]
                     name = _text(body[pos + 2:pos + 2 + nlen])
                     pos += 2 + nlen

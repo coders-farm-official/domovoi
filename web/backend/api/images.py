@@ -29,10 +29,10 @@ import hashlib
 import logging
 from pathlib import Path
 
-import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 
+from domovoi import executors, image_safety
 from domovoi.admin_auth import require_device_read
 from domovoi.config import settings as core_settings
 from web.backend.api.documents import _IMAGE_EXTS
@@ -109,17 +109,23 @@ async def raw(
 
 # ─── Thumbnails ─────────────────────────────────────────────────────────────
 def _make_thumb(src: Path, dest: Path, max_edge: int) -> bool:
-    """Pillow resize → WebP. Sync (worker thread). False when Pillow is
-    missing or the file can't be decoded (caller writes the sentinel)."""
+    """Pillow resize → WebP. Sync (the ``pictures`` pool). False when Pillow
+    is missing or the file can't be decoded (caller writes the sentinel).
+    Only the library picture formats are tried (never EPS, PostScript or
+    another format that runs a program), and nothing over
+    ``image_safety.MAX_IMAGE_PIXELS`` is decoded (2026-10-16 delta review
+    S7)."""
     try:
-        from PIL import Image, ImageOps
+        from PIL import ImageOps
     except ImportError:
         log.warning("images: Pillow not installed — thumbnails disabled")
         return False
     try:
-        with Image.open(src) as im:
-            im = ImageOps.exif_transpose(im)
+        with image_safety.open_image(src, image_safety.LIBRARY_FORMATS) as im:
+            # Shrunk before it is turned (the box is square, so the result
+            # is the same): a JPEG then decodes at a fraction of its size.
             im.thumbnail((max_edge, max_edge))
+            im = ImageOps.exif_transpose(im)
             if im.mode not in ("RGB", "RGBA"):
                 im = im.convert("RGB")
             im.save(dest, "WEBP", quality=82)
@@ -158,7 +164,7 @@ async def thumb(
     if sentinel.is_file():
         return Response(status_code=204, headers=headers)
 
-    ok = await anyio.to_thread.run_sync(_make_thumb, target, webp, THUMB_SIZES[size])
+    ok = await executors.run("pictures", _make_thumb, target, webp, THUMB_SIZES[size])
     if ok:
         return FileResponse(webp, media_type="image/webp", headers=headers)
     sentinel.touch()

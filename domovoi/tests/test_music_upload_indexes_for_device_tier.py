@@ -65,13 +65,21 @@ ADMIN_SWEEP = "/v1/admin/library/reindex"
 
 
 class _Result:
-    def __init__(self, rowcount: int) -> None:
+    def __init__(self, rowcount: int, rows: list[tuple] | None = None) -> None:
         self.rowcount = rowcount
+        self._rows = rows or []
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+    def __iter__(self):
+        return iter(self._rows)
 
 
 class _RecordingSession:
     """Just enough AsyncSession for the indexer: records the INSERTs and
-    the NOTIFY, and reports one row affected per insert."""
+    the NOTIFY, and reports one row affected per insert (and no row for the
+    "already indexed?" check the indexer makes before reading tags)."""
 
     def __init__(self) -> None:
         self.inserts: list[dict[str, Any]] = []
@@ -287,7 +295,12 @@ async def test_index_paths_is_idempotent_for_a_file_already_known(
     class _Known(_RecordingSession):
         async def execute(self, stmt, params=None):
             await super().execute(stmt, params)
-            return _Result(0)  # the row was already there
+            return _Result(0, [(1,)])  # the row was already there
+
+    def _no_tag_read(path):
+        raise AssertionError("tags read for a path already indexed")
+
+    monkeypatch.setattr(indexer, "_resolve_metadata_for", _no_tag_read)
 
     session = _Known()
 

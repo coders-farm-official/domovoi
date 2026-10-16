@@ -4,6 +4,30 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-16 — Crafted audio files, chat pictures and big sheets can't overwhelm the server
+
+Server update (core and dashboard; no migration). Fixes from the delta
+security review:
+
+* **The tag reader keeps to a budget.** A small crafted audio file (a
+  podcast episode, an upload, anything in the music folder) could make
+  the core or the dashboard take gigabytes, or stall the core at every
+  boot until its loop watchdog restarted it, again and again. Each read
+  now holds at most 64 MB of a file, compressed tags inflate to at most 16 MB, and
+  tags are read off the event loop, two files at a time. The answers for
+  real files are unchanged.
+* **A boot no longer re-reads the library.** The startup sweep skips every
+  file already in the library before reading its tags, so it costs a
+  directory walk and one query, however big the library is.
+* **Chat pictures must be pictures.** An upload has to really be a JPEG,
+  PNG, GIF, WebP or BMP (anything else is refused, whatever its name, with
+  a message saying so) of at most 40 megapixels. A HEIC photo the phone
+  app sends as `.jpg` is refused now; the model could never read one.
+* **Very large sheets are refused on save.** Saving from
+  the sheet editor into an .xlsx that unpacks to more than 16 MB, or a
+  .csv over 8 MB, answers "too large to save from the sheet editor" and
+  changes nothing; edit those in a spreadsheet app.
+
 ## 2026-10-16 — Android app: reply reports go to info@codersfarm.org
 
 Android app only (versionCode 26101601, still 1.0.0-rc1); nothing changes

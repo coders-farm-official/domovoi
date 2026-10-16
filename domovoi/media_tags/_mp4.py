@@ -11,12 +11,15 @@ import struct
 from typing import Any, BinaryIO, Iterator
 
 from domovoi.media_tags._model import MP4Tags
-from domovoi.media_tags._util import MAX_BLOCK, TagError, read_exact
+from domovoi.media_tags._util import MAX_BLOCK, TagError, budget, read_exact
 
 def _boxes(f: BinaryIO, start: int, end: int) -> Iterator[tuple[bytes, int, int]]:
-    """``(type, payload start, payload end)`` of each box in [start, end)."""
+    """``(type, payload start, payload end)`` of each box in [start, end);
+    each one is a step of the read's budget."""
+    allowance = budget()
     pos = start
     while pos + 8 <= end:
+        allowance.step()
         f.seek(pos)
         head = f.read(8)
         if len(head) < 8:
@@ -69,11 +72,13 @@ _TEXT_TYPES = (1, 2)
 def _item_values(name: str, body: bytes) -> list[Any]:
     """The ``data`` boxes of one ilst item, decoded."""
     values: list[Any] = []
+    allowance = budget()
     pos = 0
     while pos + 8 <= len(body):
         size, kind = struct.unpack_from(">I4s", body, pos)
         if size < 8 or pos + size > len(body):
             break
+        allowance.item()
         if kind == b"data" and size >= 16:
             dtype = int.from_bytes(body[pos + 9:pos + 12], "big")
             raw = body[pos + 16:pos + size]
@@ -112,11 +117,13 @@ _TEXTUAL = {"aART", "cprt", "desc", "ldes", "purd", "soal", "soar", "sonm", "soa
 
 def _parse_ilst(body: bytes) -> MP4Tags:
     items: list[tuple[str, Any]] = []
+    allowance = budget()
     pos = 0
     while pos + 8 <= len(body):
         size, kind = struct.unpack_from(">I4s", body, pos)
         if size < 8 or pos + size > len(body):
             break
+        allowance.item()
         inner = body[pos + 8:pos + size]
         name = kind.decode("latin-1")
         if kind == b"----":
@@ -127,6 +134,7 @@ def _parse_ilst(body: bytes) -> MP4Tags:
                 s, k = struct.unpack_from(">I4s", inner, p)
                 if s < 8 or p + s > len(inner):
                     break
+                allowance.item()
                 if k == b"mean":
                     mean = inner[p + 12:p + s].decode("utf-8", "replace")
                 elif k == b"name":

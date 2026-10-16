@@ -184,6 +184,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     contract. Start order: poll loop first (so emit_for_channel is
     operational), then listen task; reverse on shutdown.
     """
+    # Pillow's picture-size limit, set explicitly for this whole process,
+    # plugins included (domovoi/image_safety.py; delta review S7, OPS-16).
+    from domovoi import image_safety
+
+    image_safety.configure_pillow()
+
     # Household device token (device tier): the web boots the same hook as
     # the core so a web-only throwaway has a token row and
     # ~/.domovoi/device-token.txt (0600) too. Whichever process boots first

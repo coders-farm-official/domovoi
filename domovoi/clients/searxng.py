@@ -171,7 +171,13 @@ class RealSearxNGClient:
             log.warning("SearxNG unreachable at %s for %r: %s", self._base_url, query, e)
             return SearchOutcome([], "unreachable")
         except Exception as e:
-            log.warning("SearxNG query failed for %r: %s", query, e)
+            # The status code or the error's kind only: an HTTP error's text
+            # carries the request URL, the user's question in it (delta
+            # re-check, after S5).
+            if isinstance(e, httpx.HTTPStatusError):
+                log.warning("SearxNG query failed: HTTP %s", e.response.status_code)
+            else:
+                log.warning("SearxNG query failed: %s", type(e).__name__)
             return SearchOutcome([], "error")
 
         raw_results = payload.get("results", []) if isinstance(payload, dict) else []

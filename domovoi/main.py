@@ -309,6 +309,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     lifecycle.reset()
     install_signal_handlers()
     _register_core_reapply_hooks()
+    # Pillow's picture-size limit, set explicitly for this whole process,
+    # plugins included (domovoi/image_safety.py; delta review S7, OPS-16).
+    from domovoi import image_safety
+
+    image_safety.configure_pillow()
 
     # Pin the version label to the code this process actually imported,
     # before anything can pull underneath us. See git_version.capture_boot_state.

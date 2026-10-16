@@ -7,7 +7,7 @@ import struct
 from typing import BinaryIO
 
 from domovoi.media_tags._model import APETags, APEValue
-from domovoi.media_tags._util import MAX_BLOCK, TagError
+from domovoi.media_tags._util import MAX_BLOCK, TagError, budget, read_upto
 
 
 def _footer_at(f: BinaryIO, end: int) -> tuple[int, int, int, int] | None:
@@ -37,7 +37,7 @@ def read_ape(f: BinaryIO, size: int) -> APETags | None:
         if tag_size < 32 or tag_size > min(end, MAX_BLOCK):
             raise TagError("implausible APE tag size")
         f.seek(end - tag_size)
-        return parse_items(f.read(tag_size - 32), count)
+        return parse_items(read_upto(f, tag_size - 32), count)
     return None
 
 
@@ -50,15 +50,17 @@ def read_ape_at_start(f: BinaryIO) -> APETags | None:
     _version, tag_size, count, _flags = struct.unpack_from("<IIII", head, 8)
     if tag_size < 32 or tag_size > MAX_BLOCK:
         raise TagError("implausible APE tag size")
-    return parse_items(f.read(tag_size - 32), count)
+    return parse_items(read_upto(f, tag_size - 32), count)
 
 
 def parse_items(data: bytes, count: int) -> APETags:
     items: list[tuple[str, APEValue]] = []
+    allowance = budget()
     pos = 0
     for _ in range(count):
         if pos + 8 > len(data):
             break
+        allowance.item()
         vlen, flags = struct.unpack_from("<II", data, pos)
         pos += 8
         end = data.find(b"\x00", pos)
