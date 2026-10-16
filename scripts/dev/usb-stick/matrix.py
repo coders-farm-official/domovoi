@@ -90,7 +90,8 @@ def install(firmware: str, stick: str) -> dict:
     boot = drive("run", name, "--mode", firmware, "--cpu", CPU, "--tag", "boot",
                  "--until", "FIRSTBOOT-RC", "--until", "FIRSTBOOT-DONE", "--timeout", "900", "--shot-every", "20")
     boot_json = next((m.split("BOOT-JSON ", 1)[1] for m in markers(boot) if m.startswith("BOOT-JSON ")), None)
-    held = next((m.split("HELD", 1)[1].strip() for m in markers(boot) if m.startswith("HELD")), None)
+    held = next((m.split("HELD", 1)[1].strip() for m in markers(boot)
+                 if "HELD" in m and "BOOT-JSON" not in m and "BOOTLOADER" not in m), None)
     ok_boot = boot["result"] == "until" and boot_json is not None
     facts = json.loads(boot_json) if boot_json else {}
     if firmware.startswith("uefi"):
@@ -109,7 +110,9 @@ def refuse(case: str, stick: str, *extra: str, expect: str, mode: str = "uefi") 
     # when its marker shows.
     s = drive("run", name, "--mode", mode, "--stick", stick, "--tag", case, "--until", "STOPPED",
               "--type-on", "REFUSAL=", "--timeout", "900", "--shot-every", "20", *extra)
-    ok = s["result"] == "until" and has(s, f"STOPPED {expect}") and not written(name)
+    # The refusal powers the PC off: QEMU exits, or the STOPPED marker is
+    # seen first.
+    ok = s["result"] in ("until", "exited") and has(s, f"STOPPED {expect}") and not written(name)
     return {"case": case, "ok": ok, "seconds": s.get("seconds"), "disk_written": written(name),
             "markers": markers(s)}
 
@@ -123,7 +126,7 @@ def again(stick: str) -> dict:
               "--type-on", "ERASE-PROMPT=NOPE", "--type-on", "NOT-ERASE 1=NOPE", "--type-on", "NOT-ERASE 2=NOPE",
               "--type-on", "REFUSAL=", "--until", "STOPPED", "--timeout", "900", "--shot-every", "20")
     after = disk_digest(name)
-    ok = s["result"] == "until" and has(s, "ALREADY-A-ROOM") and has(s, "STOPPED domovoi-stick/stopped")
+    ok = s["result"] in ("until", "exited") and has(s, "ALREADY-A-ROOM") and has(s, "STOPPED domovoi-stick/stopped")
     return {"case": "again", "ok": ok and before == after, "disk_unchanged": before == after,
             "seconds": s.get("seconds"), "markers": markers(s)}
 

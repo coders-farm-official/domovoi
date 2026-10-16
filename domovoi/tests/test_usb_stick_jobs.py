@@ -427,3 +427,16 @@ def test_the_debug_seam_and_the_wifi_setting_reach_the_options(monkeypatch):
     o = main._usb_stick_options()
     assert o.debug is False and o.wifi is False
     o.check()
+
+
+def test_a_cached_image_with_the_wrong_bytes_is_never_used(home, monkeypatch):
+    """The card's check is the size (cheap); the build holds the image to
+    its SHA-256 and, under never, can't fetch a good one: it fails, said."""
+    p = jobs.iso_path(PIN)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"X" * len(ISO))
+    monkeypatch.setattr(egress, "internet_turned_off", lambda: True)
+    assert jobs.iso_present(PIN) and jobs.refusal(PIN) is None
+    with pytest.raises(RuntimeError, match="turned off"):
+        jobs.build(PIN, code("Den"), BUNDLE, image.Options())
+    assert jobs.list_builds() == []

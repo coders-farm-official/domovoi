@@ -84,7 +84,9 @@ class QMP:
         deadline = time.time() + 30
         while True:
             try:
-                self.sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+                # 60 s: with several VMs starting at once on a busy box
+                # QEMU's greeting took longer than 10 s (run2, 2026-10-16).
+                self.sock = socket.create_connection(("127.0.0.1", port), timeout=60)
                 break
             except OSError:
                 if time.time() > deadline:
@@ -256,7 +258,10 @@ def cmd_run(a) -> int:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.wait(timeout=10)
+            try:
+                proc.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                say(f"QEMU {proc.pid} did not stop; stop it with: qemu_drive.py stop {a.name}")
         print((LOGS / f"{run_id}.qemu.log").read_text(errors="replace"))
         return 1
     event("started", pid=proc.pid)
@@ -268,6 +273,15 @@ def cmd_run(a) -> int:
     seen = 0
     while True:
         if proc.poll() is not None:
+            # The last lines before a power-off (a refusal's STOPPED) land
+            # after the previous read: read them before saying it ended.
+            try:
+                tail = serial.read_text(errors="replace")[seen:] if serial.exists() else ""
+            except OSError:
+                tail = ""
+            for line in tail.splitlines():
+                if "DOMOVOI-STICK:" in line:
+                    event("marker", line=line.strip()[-400:])
             result = "exited"
             event("qemu exited", code=proc.returncode)
             break
@@ -295,7 +309,7 @@ def cmd_run(a) -> int:
             seen = len(text)
             for line in new.splitlines():
                 if "DOMOVOI-STICK:" in line:
-                    event("marker", line=line.strip()[-160:])
+                    event("marker", line=line.strip()[-400:])
         for marker, keys in type_on:
             if marker not in done_markers and marker in text:
                 done_markers.add(marker)

@@ -2716,17 +2716,17 @@ const SpareUsbStick = ({ res, body, fire }) => {
             {' '}SHA-256 <span className="mono" style={{ wordBreak: 'break-all' }}>{mine.sha256.slice(0, 16)}…</span>
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            <a className="btn btn-primary" href={imagerLink}><Icon name="external-link" size={14}/>Open in Raspberry Pi Imager</a>
-            <a className="btn btn-secondary" href={mine.manifest_url} download><Icon name="file-down" size={14}/>the Imager file</a>
-            <a className="btn btn-secondary" href={mine.image_url} download><Icon name="download" size={14}/>download the image</a>
+            <a className="btn btn-primary" href={imagerLink} style={{ textDecoration: 'none' }}><Icon name="external-link" size={14}/>Open in Raspberry Pi Imager</a>
+            <a className="btn btn-secondary" href={mine.manifest_url} download style={{ textDecoration: 'none' }}><Icon name="file-down" size={14}/>the Imager file</a>
+            <a className="btn btn-secondary" href={mine.image_url} download style={{ textDecoration: 'none' }}><Icon name="download" size={14}/>download the image</a>
             <Button icon="trash-2" variant="ghost" onClick={() => remove(mine.id)}>remove it from this server</Button>
           </div>
           <div style={{ fontSize: 11.5, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
             Raspberry Pi Imager 2.0.3 or newer opens with this stick listed (“A computer”, then “Domovoi room
             stick”) and checks every byte while it writes; nothing is sent to Raspberry Pi for a list like this
-            one. Don’t have it? <a href="https://www.raspberrypi.com/software/" target="_blank" rel="noopener noreferrer">Get Raspberry Pi Imager</a>,
+            one. Don’t have it? <a href="https://www.raspberrypi.com/software/" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--fg-muted)' }}>Get Raspberry Pi Imager</a>,
             then double-click the Imager file. Or write the image with{' '}
-            <a href="https://bztsrc.gitlab.io/usbimager/" target="_blank" rel="noopener noreferrer">USBImager</a>.
+            <a href="https://bztsrc.gitlab.io/usbimager/" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--fg-muted)' }}>USBImager</a>.
           </div>
           <ol className="spare-stick-steps" style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
             <SpareStickStep n="1" icon="usb">Write it to a USB stick: in Raspberry Pi Imager choose “A computer”, “Domovoi room stick”, then your stick.</SpareStickStep>

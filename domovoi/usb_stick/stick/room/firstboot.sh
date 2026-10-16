@@ -86,9 +86,11 @@ if [ "$now" -lt "$MADE" ]; then
 	echo "$(stamp) the clock said $(date -d "@$now" '+%Y-%m-%d'); set to the stick's date" >>"$LOG"
 	date -s "@$MADE" >/dev/null 2>&1 || true
 fi
+# (timesyncd's own flag file: timedatectl needs D-Bus, which a minimal
+# install has not got, and never said "yes" in the first QEMU run.)
 synced=0
 for _ in $(seq 1 30); do
-	if [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = yes ]; then synced=1; break; fi
+	if [ -e /run/systemd/timesync/synchronized ]; then synced=1; break; fi
 	sleep 2
 done
 echo "$(stamp) clock synchronised: $synced" >>"$LOG"

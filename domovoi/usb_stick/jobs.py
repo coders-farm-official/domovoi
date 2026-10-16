@@ -124,6 +124,17 @@ def free_bytes(path: Path) -> int:
         return 0
 
 
+def iso_present(pin: dict[str, Any]) -> bool:
+    """Whether Debian's image looks cached: a plain file of the pinned size.
+    Cheap, for the card and the refusals; the build holds it to the
+    SHA-256 (:func:`image.iso_matches`) before it is used."""
+    path = iso_path(pin)
+    try:
+        return path.is_file() and not path.is_symlink() and path.stat().st_size == pin["size"]
+    except OSError:
+        return False
+
+
 def need_bytes(pin: dict[str, Any], cached: bool) -> int:
     """What one more stick takes on this server's disk: its image (Debian's
     size plus ours) and, the first time, Debian's image itself."""
@@ -147,7 +158,7 @@ def refusal(pin: dict[str, Any]) -> dict[str, str] | None:
             "This server can't make USB sticks yet: it needs the xorriso package (a Linux system "
             "package). The next Domovoi update or restart from the dashboard adds it; on a server "
             "you set up yourself: sudo apt install xorriso.")}
-    cached = image.iso_matches(iso_path(pin), pin)
+    cached = iso_present(pin)
     if not cached and egress.internet_turned_off():
         return {"reason": "internet_off", "message": (
             f"Internet access is off for this server (Settings → Internet), so it can't download "
@@ -314,7 +325,7 @@ def status(pin: dict[str, Any]) -> dict[str, Any]:
     be prepared now (and why not), the job, and the finished sticks."""
     from domovoi import egress
 
-    cached = image.iso_matches(iso_path(pin), pin)
+    cached = iso_present(pin)
     return {
         "debian": {"version": pin["version"], "name": pin["name"], "size": pin["size"],
                    "cached": cached, "shim_signatures": pin.get("shim_signatures") or []},
