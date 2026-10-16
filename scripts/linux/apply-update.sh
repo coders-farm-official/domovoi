@@ -156,10 +156,26 @@
 # the core serves as `last_update` from GET /v1/admin/version.
 #
 # Privilege: this runs as root, but everything that reads or writes the
-# checkout or the venv (git, pip) runs as the service user through runuser.
-# Root never executes git hooks or build steps from a tree the service user
-# can edit. Root's own state lives in DOMOVOI_UPDATE_DIR, a root-owned dir the
-# service user can read but not write.
+# checkout or the venv (git, pip, docker build) runs as the service user
+# through runuser. Root never executes git hooks or build steps from a tree
+# the service user can edit. Root's own state lives in DOMOVOI_UPDATE_DIR, a
+# root-owned dir the service user can read but not write.
+#
+# And root never runs this script, or anything it runs or installs, from the
+# checkout (delta security review 2026-10-16, S4): domovoi-update.service's
+# ExecStartPre, scripts/linux/update-verifier.sh installed root-owned as
+# /usr/local/lib/domovoi-update/verify-update.sh, fetches HEAD into a bare
+# mirror only root can write (every object checked), verifies its
+# signature there while signed updates are enforced, and writes the commit's
+# scripts/linux into /run/domovoi-update/<sha>; its ExecStart runs this
+# script from that copy, with DOMOVOI_VERIFIED_SHA, DOMOVOI_VERIFIED_DIR and
+# DOMOVOI_VERIFIED_MIRROR set. So os-jobs.sh, gpu-runtime.sh, the journald
+# drop-in and install-update-unit.sh below are the commit's own files, and
+# the signature and branch checks run in the mirror. Started any other way
+# as root (a unit from before the verifier, or by hand), this script hands
+# over to the verifier first (relaunch_verified), and that run moves the
+# unit to the verifier (reconcile_update_unit). A HEAD that moved after the
+# verifier's copy was made refuses the run.
 #
 # Settings come from the environment; domovoi-update.service loads
 # /etc/default/domovoi-update. Every one has a default that matches
@@ -170,6 +186,27 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 REPO_DIR=${DOMOVOI_REPO_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd)}
+
+# The verified copy this run comes from (see "Privilege" above): set by the
+# verifier's run step, which the unit runs; never by hand. Unset, a run as
+# root hands over to the verifier (relaunch_verified).
+VERIFIED_SHA=${DOMOVOI_VERIFIED_SHA:-}
+VERIFIED_DIR=${DOMOVOI_VERIFIED_DIR:-}
+VERIFIED_MIRROR=${DOMOVOI_VERIFIED_MIRROR:-}
+# Where root's own git looks at commits (signature_state, check_upstream):
+# the verifier's mirror, whose objects root fetched and checked itself.
+# Only without one (a run that is not root's) the checkout.
+GIT_ROOT_DIR=${VERIFIED_MIRROR:-$REPO_DIR}
+# DOMOVOI_PROVISION_ROOT with DOMOVOI_PROVISION_TEST_HARNESS=1 (the test
+# harness only, as for os-jobs.sh): the system paths below go under it.
+TEST_ROOT=""
+if [ "${DOMOVOI_PROVISION_TEST_HARNESS:-}" = 1 ] && [[ ${DOMOVOI_PROVISION_ROOT:-} == /?* ]]; then
+  TEST_ROOT=${DOMOVOI_PROVISION_ROOT%/}
+fi
+# The root-owned verifier domovoi-update.service runs (install-update-unit.sh
+# puts it there; reconcile_update_unit keeps it the verified copy's).
+VERIFIER_INSTALLED=$TEST_ROOT/usr/local/lib/domovoi-update/verify-update.sh
+UPDATE_UNIT_FILE=$TEST_ROOT/etc/systemd/system/domovoi-update.service
 # Without DOMOVOI_VENV, resolve_venv may move this to the core unit's venv.
 VENV_DIR=${DOMOVOI_VENV:-$REPO_DIR/.venv}
 # `-` rather than `:-`: an explicitly empty value is honoured (no extras; no
@@ -623,7 +660,9 @@ dotenv_get() {
     return 0
   fi
   log "domovoi/.env: $1 read line by line: this checkout's python -m domovoi.config_env_writer --get could not read it" >&2
-  v=$(sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$f" | tail -n 1 | tr -d '\r')
+  # As the service user, like the rest of the checkout: a link planted at
+  # domovoi/.env must not have root read the file it points at.
+  v=$(as_user sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$f" | tail -n 1 | tr -d '\r')
   v=${v%\"}; v=${v#\"}; v=${v%\'}; v=${v#\'}
   printf '%s' "$v"
 }
@@ -788,20 +827,24 @@ images_changed() {
 # the same way (git refuses another user's checkout without it). Only a
 # file root owns and only root can write counts as the signers file.
 #
-# What this cannot do: a tree already moved to an unverified commit by a
-# pull that skipped the core (a by-hand `git pull` as the service user)
-# has already replaced this script. The core's own check before the
-# fast-forward is the gate for the dashboard path; this one catches the
-# rest (a signers file installed after the pull, a tool's unsigned merge)
-# and keeps the two halves from disagreeing.
+# Run as the verified copy (the unit's ExecStartPre made it), the gate
+# before anything of a commit runs as root is the verifier's: a tree moved
+# to an unverified commit by a pull that skipped the core (a by-hand `git
+# pull` as the service user) is refused there, before this script runs, and
+# this check (in the verifier's mirror) only repeats its verdict for the
+# result. Run any other way, this script hands over to the verifier first.
 
 # git as root, for the signature verdict alone. Nothing here writes.
 git_root() {
-  local -a cfg=(-c "safe.directory=$REPO_DIR" -c "gpg.ssh.allowedSignersFile=$ALLOWED_SIGNERS"
+  local -a cfg=(-c "safe.directory=$GIT_ROOT_DIR" -c "gpg.ssh.allowedSignersFile=$ALLOWED_SIGNERS"
                 -c gpg.ssh.program=ssh-keygen -c gpg.program=gpg
                 -c gpg.openpgp.program=gpg -c gpg.x509.program=gpgsm)
   if [ -n "$REVOKED_SIGNERS" ]; then cfg+=(-c "gpg.ssh.revocationFile=$REVOKED_SIGNERS"); fi
-  git "${cfg[@]}" -C "$REPO_DIR" "$@"
+  # In the verifier's mirror (GIT_ROOT_DIR) when this run is the verified
+  # copy: root's own repository, not the service user's. Never through a
+  # replacement object or a graft (rc2 review C3), which could stand
+  # another commit in for the one HEAD_SHA names.
+  GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git "${cfg[@]}" -C "$GIT_ROOT_DIR" "$@"
 }
 
 # Why ALLOWED_SIGNERS cannot be trusted, printed; nothing when it can. A
@@ -1664,7 +1707,10 @@ rebuild_mpd() {
     # recreate the rooms so they mount the new conf.
     echo "internet access is turned off: keeping the $MPD_TAG image (Dockerfile.mpd unchanged)"
   else
-    docker build -t "$MPD_TAG" -f "$REPO_DIR/domovoi/Dockerfile.mpd" "$REPO_DIR/domovoi" || return 1
+    # As the service user (in the docker group, as the core that builds it
+    # too): root's docker CLI would read the Dockerfile through whatever
+    # link the checkout holds there.
+    as_user docker build -t "$MPD_TAG" -f "$REPO_DIR/domovoi/Dockerfile.mpd" "$REPO_DIR/domovoi" || return 1
   fi
   names=$(docker ps -a --format '{{.Names}}') || return 1
   for n in $names; do
@@ -2120,6 +2166,114 @@ migrations_grew() {
     && [ "$MIGRATIONS_AFTER" -gt "$MIGRATIONS_BEFORE" ]
 }
 
+# The tracked files git status skips, one "<tag> <path>" line each: git
+# ls-files -v tags a skip-worktree file S and an assume-unchanged one with
+# a lower-case letter. Nothing when there are none; status 1 when git
+# can't say.
+hidden_from_status() {
+  local out
+  out=$(git_as ls-files -v) || return 1
+  printf '%s\n' "$out" | grep -E '^([a-z]|S) ' || true
+}
+
+# ─── The verified copy (scripts/linux/update-verifier.sh) ────────────────
+
+# Started as root without the verifier (domovoi-update.service from before
+# it, whose ExecStart ran the checkout's copy of this script, or a run by
+# hand): hand over to it, so this run too goes on from the verified copy of
+# HEAD, and nothing below runs from the checkout. The installed verifier
+# when there is one; else, once, the one beside this script, which is
+# exactly as trusted as this script itself (it is the one already running).
+relaunch_verified() {
+  local v=$VERIFIER_INSTALLED
+  if [ ! -f "$v" ] || [ -L "$v" ]; then v=$SCRIPT_DIR/update-verifier.sh; fi
+  if [ ! -f "$v" ]; then
+    log "no update verifier ($VERIFIER_INSTALLED, or $SCRIPT_DIR/update-verifier.sh): nothing can be run as root"
+    return 1
+  fi
+  log "started without the update verifier: handing over to $v, which runs the verified copy of HEAD"
+  exec env DOMOVOI_REPO_DIR="$REPO_DIR" bash "$v" relaunch
+}
+
+# The unit as install-update-unit.sh wrote it before the verifier, for this
+# checkout: the one shape that is moved to the new one without asking.
+legacy_unit_text() {
+  printf '%s\n' '[Unit]' \
+    'Description=Domovoi update (back up, sync, migrate, restart, roll back on failure)' \
+    'After=docker.service network-online.target' \
+    'Wants=network-online.target' \
+    '' \
+    '[Service]' \
+    'Type=oneshot' \
+    'EnvironmentFile=-/etc/default/domovoi-update' \
+    "ExecStart=/bin/bash $REPO_DIR/scripts/linux/apply-update.sh" \
+    'TimeoutStartSec=30min'
+}
+
+# Can no one but root write directory $1 and the one above it? (The
+# verifier's own file goes there; the rest of the path is the system's.)
+root_dir() {
+  local p st uids="0"
+  if [ -n "$TEST_ROOT" ]; then uids="0 $EUID"; fi
+  for p in "$1" "$(dirname "$1")"; do
+    [ -d "$p" ] && [ ! -L "$p" ] || return 1
+    st=$(stat -c '%u %a' -- "$p" 2>/dev/null) || return 1
+    [[ $st =~ ^([0-9]+)\ ([0-7]{3,4})$ ]] || return 1
+    [[ " $uids " == *" ${BASH_REMATCH[1]} "* ]] || return 1
+    (( 8#${BASH_REMATCH[2]} & 8#022 )) && return 1
+  done
+  return 0
+}
+
+# Keep domovoi-update.service on the verifier: its file the verified copy's
+# (scripts/linux/update-verifier.sh), and a unit from before the verifier
+# (exactly legacy_unit_text) replaced by the one install-update-unit.sh
+# writes now, then daemon-reload; the next run starts with ExecStartPre.
+# Only from a verified copy, as root, under the unit (no unit file: a run
+# by hand, nothing to keep). A unit someone changed by hand is left as it
+# is, with a warn step saying how to move it. Never fatal.
+reconcile_update_unit() {
+  local t0 src=$SCRIPT_DIR/update-verifier.sh dir have want tmp did=() why=""
+  [ "$RUN_AS_ROOT" = 1 ] && [ -n "$VERIFIED_DIR" ] || return 0
+  [ -f "$UPDATE_UNIT_FILE" ] && [ ! -L "$UPDATE_UNIT_FILE" ] && [ -s "$UPDATE_UNIT_FILE" ] || return 0
+  [ -f "$src" ] || return 0
+  t0=$(now_ms)
+  dir=$(dirname "$VERIFIER_INSTALLED")
+  if ! cmp -s "$src" "$VERIFIER_INSTALLED"; then
+    if [ ! -d "$dir" ]; then mkdir -p "$dir" && chmod 0755 "$dir" || true; fi
+    if ! root_dir "$dir"; then
+      why="$dir is not a directory only root can write, so the verifier was not put there"
+    elif tmp=$(mktemp "$dir/.verify-update.sh.XXXXXX") && cp "$src" "$tmp" && chmod 0755 "$tmp" \
+        && mv -f "$tmp" "$VERIFIER_INSTALLED"; then
+      did+=("the verifier $VERIFIER_INSTALLED is this commit's")
+    else
+      rm -f "${tmp:-}"
+      why="$VERIFIER_INSTALLED could not be written"
+    fi
+  fi
+  have=$(cat "$UPDATE_UNIT_FILE" 2>/dev/null) || have=""
+  if [[ $have != *"verify-update.sh prepare"* ]]; then
+    want=$(bash "$SCRIPT_DIR/install-update-unit.sh" --print-unit --repo "$REPO_DIR" 2>/dev/null) || want=""
+    if [ -z "$why" ] && [ -n "$want" ] && [ "$have" = "$(legacy_unit_text)" ] && [ -f "$VERIFIER_INSTALLED" ]; then
+      if write_atomic "$UPDATE_UNIT_FILE" "$want"$'\n' && systemctl daemon-reload; then
+        did+=("domovoi-update.service runs it before every update (ExecStartPre), and root runs only the verified copy of each commit")
+      else
+        why="${why:+$why; }$UPDATE_UNIT_FILE could not be replaced"
+      fi
+    else
+      why="${why:+$why; }$UPDATE_UNIT_FILE is not the unit install-update-unit.sh wrote, so it was left as it is: until it runs the verifier (sudo bash $VERIFIED_DIR/scripts/linux/install-update-unit.sh, which keeps the old one beside it), root runs this script from the checkout first, at every update"
+    fi
+  fi
+  if [ -n "$why" ]; then
+    add_step update-unit warn "$t0" "$(trunc "$why" 600)"
+    log "step update-unit: $why"
+  elif [ "${#did[@]}" -gt 0 ]; then
+    add_step update-unit ok "$t0" "$(IFS=';'; printf '%s' "${did[*]}" | sed 's/;/; /g')"
+    log "step update-unit: $(IFS=';'; printf '%s' "${did[*]}")"
+  fi
+  return 0
+}
+
 # ─── The two paths ───────────────────────────────────────────────────────
 
 plain_restart() {
@@ -2182,6 +2336,21 @@ full_update() {
   if [ -n "$dirty" ]; then
     add_step preflight refused "$t0" "$(printf '%s\n' "$dirty" | head -n 10)"
     finish refused "tracked files have uncommitted changes, so a rollback could not restore this tree; commit or stash them, then restart again: $(printf '%s\n' "$dirty" | head -n 5 | tr '\n' ' ')"
+    return
+  fi
+  # git status doesn't look at a file flagged skip-worktree or
+  # assume-unchanged (git update-index), so an edit there is invisible to
+  # the check above (delta security review 2026-10-16, S4). Root runs none
+  # of it any more (the verified copy), but a rollback could not restore it
+  # either.
+  if ! dirty=$(hidden_from_status); then
+    add_step preflight failed "$t0" "git ls-files -v failed"
+    finish failed "git ls-files -v failed in $REPO_DIR"
+    return
+  fi
+  if [ -n "$dirty" ]; then
+    add_step preflight refused "$t0" "$(printf '%s\n' "$dirty" | head -n 10)"
+    finish refused "tracked files are hidden from git status (skip-worktree or assume-unchanged), so local changes to them can't be seen and a rollback could not restore this tree; as $SERVICE_USER, clear the flags (git update-index --no-skip-worktree --no-assume-unchanged FILE), commit or stash any changes, then restart again: $(printf '%s\n' "$dirty" | head -n 5 | tr '\n' ' ')"
     return
   fi
   if deps_changed; then DEPS_CHANGED=1; fi
@@ -2352,6 +2521,20 @@ main() {
   umask 022
   STARTED_AT=$(now_iso)
   START_MS=$(now_ms)
+  # As root, only ever the verified copy: anything else hands over to the
+  # verifier here, before this script has touched a thing.
+  if [ -z "$VERIFIED_SHA" ] && [ "$(id -u)" = 0 ]; then
+    if ! relaunch_verified; then
+      install -d -m 0755 "$UPDATE_DIR"
+      RESULT_READY=1
+      finish failed "the update verifier is missing, so nothing was run as root (reinstall the update unit: sudo bash scripts/linux/install-update-unit.sh)"
+      exit 1
+    fi
+  fi
+  if [ -n "$VERIFIED_DIR" ] && [ "$(cd "$VERIFIED_DIR/scripts/linux" 2>/dev/null && pwd -P)" != "$(cd "$SCRIPT_DIR" && pwd -P)" ]; then
+    log "DOMOVOI_VERIFIED_DIR is $VERIFIED_DIR, but this script runs from $SCRIPT_DIR: not the verified copy; nothing was done"
+    exit 1
+  fi
   install -d -m 0755 "$UPDATE_DIR"
   RESULT_READY=1
   trap on_exit EXIT
@@ -2385,10 +2568,20 @@ main() {
   resolve_prev
   BAD_SHA=$(read_sha_file "$BAD_FILE" || true)
 
+  # The commit the verifier copied is the one this run applies: a HEAD that
+  # moved since (a pull in between) would put new code under the old copy's
+  # checks. Restarting again verifies the new HEAD.
+  if [ -n "$VERIFIED_SHA" ] && [ "$HEAD_SHA" != "$VERIFIED_SHA" ]; then
+    add_step verify refused "$(now_ms)" "HEAD is ${HEAD_SHA:0:12}, the verified copy is of ${VERIFIED_SHA:0:12}"
+    finish refused "the checkout moved to ${HEAD_SHA:0:12} after the update verifier copied ${VERIFIED_SHA:0:12}, so nothing was changed; restart again to apply what is checked out now"
+    exit 1
+  fi
+
   # Before either path, touching nothing: the pinned upstream, then HEAD's
   # signature ("Signed updates" above).
   if ! check_upstream; then exit 1; fi
   if ! check_signature; then exit 1; fi
+  reconcile_update_unit
   reconcile_core_restart
   reconcile_journal
 

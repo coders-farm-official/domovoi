@@ -37,8 +37,11 @@ allowed-signers file BEFORE fast-forwarding, and refuses the pull while that
 file exists and the tip does not verify. Without the file it warns, loudly,
 and goes on, so an install that has not set signing up keeps updating.
 :func:`version_state` reports the checkout's state as ``signature``. The
-update unit re-verifies HEAD as root (apply-update.sh): this process runs as
-the service user, and root does not take its word for it.
+update unit re-verifies HEAD as root: its root-owned verifier
+(scripts/linux/update-verifier.sh) fetches HEAD into a mirror only root can
+write, verifies it there and runs the update from that commit's own copy of
+scripts/linux, never from this checkout. This process runs as the service
+user, and root does not take its word for it, nor run its files.
 """
 
 from __future__ import annotations
@@ -627,7 +630,10 @@ async def switch_channel(channel: str) -> dict:
 # unit runs the pulled checkout's own script as root. The bound is a
 # signature. Every commit the owner makes is SSH-signed, the allowed keys
 # live in a root-owned file on the box, and nothing from an unverified
-# checkout runs as root while that file exists.
+# commit runs as root while that file exists. Root runs only the verified
+# copy of a commit (scripts/linux/update-verifier.sh), so an edit this
+# process, or anything else running as the service user, makes to the
+# working tree never reaches root either.
 #
 # Enforcement is the file's presence: no file, no enforcement, and a loud
 # warning instead, so the live install keeps working until the owner sets
@@ -919,6 +925,7 @@ _WARN_DETAIL_STEPS = frozenset(
         "wake-trainer",
         "core-restart",
         "journal",
+        "update-unit",
     }
 )
 _WARN_DETAIL_MAX_CHARS = 300
