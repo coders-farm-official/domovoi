@@ -2798,19 +2798,24 @@ devices, so:
   code that names any server but the one the page came from. Its button is
   an Android
   `intent:` link to the app's `domovoi-room:` handler restricted to package
-  `com.domovoi.app`; the app then checks the code in full and makes the
-  server prove its key, exactly as when the code is scanned in the app
-  (the link only fills the form).
+  `com.domovoi.app`; the app then checks the code it was handed in full
+  and makes the server that code names prove the key that code names (the
+  link only fills the form). That is only as good as the code the page
+  handed over: see below.
 
 **What this does not cover, plainly.** The join page trusts the LAN like
 any plain-HTTP page: it and the APK travel unencrypted, like the
-dashboard, and the page cannot prove which server sent it. The pin does
-not depend on it: the room code's fingerprint is checked by the app
-itself, which makes the server prove its key before it writes anything,
-so a code scanned in the app's own scanner (Domovoi Room → scan) keeps
-the pin intact whatever any page says. Someone who can answer for the
-server's address on your network (a spoofed router, ARP or DNS) could show
-a phone a different page with a different APK; Android accepts any validly
+dashboard, and the page cannot prove which server sent it. **Someone
+who can answer for the server's address on your network can swap the
+room code the page hands to the app**, its core address and fingerprint
+included: the app then pins *their* server, which proves *their* key, and
+the "this server" check on the page proves nothing to them. For an intact
+pin, scan the dashboard's code with the app's own scanner (Domovoi Room
+→ scan): that code comes straight from the dashboard's screen, and the
+app makes the server prove the key in it before it writes anything.
+The same attacker
+(a spoofed router, ARP or DNS) could also show a phone a different page
+with a different APK; Android accepts any validly
 signed app the first time it is installed, and the phone has no way to
 know our key. After that first install, Android refuses an update signed
 by another key, so a phone that has the real app keeps it. Someone who can
