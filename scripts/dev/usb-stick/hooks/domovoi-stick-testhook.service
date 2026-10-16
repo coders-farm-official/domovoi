@@ -1,0 +1,18 @@
+# TEST ONLY (room stick kit): run /usr/local/lib/domovoi-stick-test/hook.sh
+# once per boot, as root, its output on ttyS0. Put on a test PC's disk by
+# disk-tool.sh between QEMU runs; never part of a stick.
+[Unit]
+Description=Domovoi room stick (test): hook
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/usr/local/lib/domovoi-stick-test/hook.sh
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /usr/local/lib/domovoi-stick-test/hook.sh
+StandardOutput=file:/dev/ttyS0
+StandardError=file:/dev/ttyS0
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target

@@ -2254,6 +2254,19 @@ case_unhealthy_start_logs_all_three_units() {
 # Item 2: --stop-before start runs everything before the start step and
 # stops (exit 0, result "stopped"), so the Windows installer can check the
 # PC's ports; the next run without it starts Domovoi.
+# The apt step brings xorriso too (2026-10-16): the program the core runs
+# to make old computers' room sticks, an Ubuntu package like ffmpeg.
+case_apt_step_installs_the_stick_tool() {
+  new_case apt_step_installs_the_stick_tool
+  run_prov "${wsl_args[@]}" --skip-models --stop-before user
+  check "exit 0" eq "$RC" 0
+  check "the apt step ran" marker apt
+  check "xorriso asked for with the rest" grep -qE '^apt-get .* install -y .*\bmpg123\b.*\bxorriso\b' "$STATE/calls.log"
+  check "installed" grep -qx "xorriso=1" "$STATE/dpkg"
+  check "not held" not_called "apt-mark"
+  end_case
+}
+
 case_stop_before_start() {
   new_case stop_before_start
   run_prov "${wsl_args[@]}" --skip-models --stop-before start
@@ -3157,6 +3170,7 @@ CASES=(
   case_setup_code_kept_out_of_the_journal_it_prints
   case_failed_start_logs_status_and_journal
   case_unhealthy_start_logs_all_three_units
+  case_apt_step_installs_the_stick_tool
   case_stop_before_start
   case_stop_before_takes_a_step_inside_the_run
   case_every_exit_has_one_final_line

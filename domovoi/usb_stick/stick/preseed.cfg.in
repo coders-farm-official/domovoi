@@ -1,0 +1,116 @@
+#### Domovoi room stick (domovoi/usb_stick/): the answers for Debian's own
+#### installer. domovoi/usb_stick/image.py fills in the @...@ values and puts
+#### this file at /preseed.cfg in a small extra initrd (/domovoi/preseed.gz)
+#### that the stick's boot menu loads after Debian's own initrd; Debian's
+#### files on the stick are left as they are.
+####
+#### Priority stays "high" (the installer's default), not "critical": every
+#### question below is answered, so a wired machine sees no question at all
+#### except ours (the ERASE confirmation). Wi-Fi is off on the stick for now
+#### (owner decision 2026-10-15: a cable first, Wi-Fi once a real laptop has
+#### passed the test): the extra initrd then also carries
+#### /etc/modprobe.d/domovoi-stick-no-wifi.conf, so no Wi-Fi driver loads in
+#### the installer, a cable-less PC gets no Wi-Fi questions, and our page
+#### says "plug in a network cable" before anything is erased. A stick made
+#### with Wi-Fi on (USB_STICK_WIFI=true on the server) leaves that file out,
+#### and the installer's own "which network / password" questions appear
+#### (priority high; "critical" would skip them and install with no
+#### network).
+
+### Only these answers: early.sh switches off Debian's network preseeding
+### (a DHCP server's boot-file name read as a preseed URL), before the
+### installer loads anything from the stick.
+d-i preseed/early_command string sh /domovoi-stick/early.sh
+
+### Language, keyboard (the household's server could pass its own)
+d-i debian-installer/locale string @LOCALE@
+d-i debian-installer/language string en
+d-i debian-installer/country string @COUNTRY@
+d-i localechooser/supported-locales multiselect @LOCALE@
+d-i keyboard-configuration/xkb-keymap select @KEYMAP@
+d-i console-setup/ask_detect boolean false
+
+### Network: cable if there is one; Wi-Fi questions only when there isn't
+d-i netcfg/enable boolean true
+d-i netcfg/choose_interface select auto
+d-i netcfg/link_wait_timeout string 10
+d-i netcfg/dhcp_timeout string 30
+d-i netcfg/get_hostname string @HOSTNAME@
+d-i netcfg/get_domain string
+d-i netcfg/hostname string @HOSTNAME@
+d-i netcfg/wireless_wep string
+d-i hw-detect/load_firmware boolean true
+# A network that gives an address but no name server: don't ask for name
+# server addresses (not a household question; the spike's no-internet QEMU
+# run sat on "Name server addresses:"); erase-confirm.sh then stops with a
+# plain "not on the internet" page before anything is erased.
+# NOT netcfg/dhcp_options: preseeding "Do not configure the network at this
+# time" there makes apt-setup treat the network as off even after DHCP
+# worked (apt-setup generators/50mirror reads it), and the install stopped
+# on "Continue without a network mirror?". So when DHCP fails outright the
+# person sees Debian's own "Network autoconfiguration failed" choices.
+d-i netcfg/get_nameservers string
+
+### Where Debian comes from
+d-i mirror/country string manual
+d-i mirror/http/hostname string deb.debian.org
+d-i mirror/http/directory string /debian
+d-i mirror/http/proxy string
+
+### Accounts: none that can log in, and nobody has a password to forget or
+### leak. The installer insists on either a root password or a user (a
+### preseeded "!" counts as "not answered" and it asks, user-setup-ask), so
+### root gets a hash no password can produce ("*" is outside crypt's
+### alphabet), no user is made, and late.sh then locks root outright.
+d-i passwd/root-login boolean true
+d-i passwd/root-password-crypted password $6$domovoi.locked$**************************************************************************************
+d-i passwd/make-user boolean false
+
+### Clock: the household server's time zone
+d-i clock-setup/utc boolean true
+d-i time/zone string @TIMEZONE@
+d-i clock-setup/ntp boolean true
+
+### The disk: partman/early_command picks it and asks for ERASE before
+### partman touches anything. The partitioner's own confirmations (wipe the
+### disk, remove old LVM/RAID, write the new table) are answered by
+### erase-confirm.sh after ERASE is typed, never here: if that script ends
+### any other way, Debian's partitioner asks the person itself.
+d-i partman/early_command string sh /domovoi-stick/erase-confirm.sh
+d-i partman-auto/method string regular
+d-i partman-auto/choose_recipe select atomic
+d-i partman-efi/non_efi_system boolean true
+d-i partman/mount_style select uuid
+
+### The system: minimal, firmware the hardware needs, security updates
+d-i base-installer/install-recommends boolean false
+d-i base-installer/kernel/image string linux-image-amd64
+d-i apt-setup/non-free-firmware boolean true
+d-i apt-setup/non-free boolean false
+d-i apt-setup/contrib boolean false
+d-i apt-setup/cdrom/set-first boolean false
+d-i apt-setup/cdrom/set-next boolean false
+d-i apt-setup/cdrom/set-failed boolean false
+d-i apt-setup/disable-cdrom-entries boolean true
+d-i apt-setup/services-select multiselect security, updates
+tasksel tasksel/first multiselect
+# systemd-timesyncd: with recommends off nothing keeps the clock (the spike's
+# first installs had no time client at all); an old PC's flat CMOS battery
+# would otherwise break TLS to Debian and PyPI.
+d-i pkgsel/include string python3 python3-venv python3-pip libportaudio2 mpg123 alsa-utils ca-certificates console-setup kbd unattended-upgrades systemd-timesyncd
+d-i pkgsel/upgrade select full-upgrade
+d-i pkgsel/update-policy select unattended-upgrades
+popularity-contest popularity-contest/participate boolean false
+
+### Boot loader on the chosen disk (erase-confirm.sh sets bootdev); the
+### extra copy at EFI's removable path is for firmware that forgets or
+### ignores its boot entries (common on old laptops).
+d-i grub-installer/only_debian boolean true
+d-i grub-installer/with_other_os boolean false
+d-i grub-installer/force-efi-extra-removable boolean true
+d-i grub-installer/update-nvram boolean true
+
+### Our files, then restart into the room
+d-i preseed/late_command string sh /domovoi-stick/late.sh
+d-i finish-install/reboot_in_progress note
+d-i cdrom-detect/eject boolean false

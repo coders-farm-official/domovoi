@@ -1734,6 +1734,177 @@ async def admin_satellite_linux_fetch() -> dict[str, Any]:
     return {"started": started, **(await asyncio.to_thread(satellite_linux.status, lock))}
 
 
+# ─── Old computers: the room stick (2026-10-16) ───────────────────────────
+# Settings → Satellites → add a spare device → Old computer (USB stick). An
+# admin's "Prepare the stick" downloads Debian's netinst the first time
+# (pinned in domovoi/usb_stick/debian-image.json) and re-packs it with the
+# room's code, the satellite bundle and our installer answers
+# (domovoi/usb_stick/). The finished image, its Raspberry Pi Imager list and
+# manifest are served without a login at /v1/usb-stick/<id>/… (a random id
+# per stick): Imager and a browser download can't send one, and nothing on a
+# stick is a secret (Debian's public image, the public satellite code, the
+# server's address and public fingerprint; the computer still waits for its
+# approval code).
+
+
+def _usb_stick_pin() -> dict[str, Any]:
+    from domovoi.usb_stick import image as stick_image
+
+    try:
+        return stick_image.load_pin()
+    except stick_image.PinError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+
+
+def _usb_stick_options():
+    """What the installer is told beyond the room: this server's time zone,
+    Wi-Fi on or off (USB_STICK_WIFI), the QEMU kit's markers (test seam)."""
+    import os
+
+    from domovoi.host_time import local_timezone_name
+    from domovoi.usb_stick import image as stick_image
+
+    tz = local_timezone_name() or "Etc/UTC"
+    options = stick_image.Options(timezone=tz, wifi=bool(settings.usb_stick_wifi),
+                                  debug=os.environ.get("DOMOVOI_USB_STICK_DEBUG") == "1")
+    try:
+        options.check()
+    except stick_image.StickError:
+        options = stick_image.Options(wifi=options.wifi, debug=options.debug)
+    return options
+
+
+async def _usb_stick_clips() -> dict[str, bytes]:
+    """The spoken-code clips ("Your setup code is", the digits) in the
+    household's voice, rendered as for a Pi card; none when they can't be
+    (the stick then shows the code without saying it)."""
+    from domovoi import canned_sounds
+    from domovoi.usb_stick import image as stick_image
+
+    try:
+        await asyncio.wait_for(canned_sounds.render_setup_clips(), timeout=90)
+    except Exception as e:  # noqa: BLE001 — a quiet stick, not a failed one
+        log.warning("USB stick: setup clips not rendered: %s", e)
+    out: dict[str, bytes] = {}
+    for name in stick_image.CLIP_NAMES:
+        try:
+            out[name] = (canned_sounds._SETUP_DIR / name).read_bytes()
+        except OSError:
+            pass
+    return out
+
+
+@app.get("/v1/admin/usb-stick", dependencies=[Depends(require_admin_read)])
+async def admin_usb_stick() -> dict[str, Any]:
+    """Debian's image (cached or not), whether a stick can be prepared now
+    (``refusal``: busy, no xorriso, internet never without the image, short
+    of disk), the job and the finished sticks."""
+    from domovoi.usb_stick import jobs as stick_jobs
+
+    return await asyncio.to_thread(stick_jobs.status, _usb_stick_pin())
+
+
+class _UsbStickBuildBody(BaseModel):
+    payload: str = Field(..., min_length=1, max_length=1024)
+
+
+@app.post("/v1/admin/usb-stick/build", dependencies=[Depends(require_admin_mutation)])
+async def admin_usb_stick_build(body: _UsbStickBuildBody) -> dict[str, Any]:
+    """Start preparing a stick for the room code in ``payload`` (the
+    dashboard's spare-device code). The code must carry this server's own
+    fingerprint: a stick only ever enrols a room with the server that made
+    it. 409 with ``{reason, message}`` when it can't start (the card says
+    why); 422 for a code it can't carry. Answers at once; poll the status."""
+    await container_freeze.require_unfrozen("satellite_media")
+    from domovoi import satellite_bundle
+    from domovoi.usb_stick import image as stick_image
+    from domovoi.usb_stick import jobs as stick_jobs
+
+    pin = _usb_stick_pin()
+    try:
+        enrol = stick_image.parse_room(body.payload)
+    except stick_image.StickError as e:
+        raise HTTPException(status_code=422, detail={"reason": e.reason, "message": str(e)}) from None
+    own = server_identity.load_or_create().fingerprint
+    if enrol.fp != own:
+        raise HTTPException(status_code=422, detail={
+            "reason": "not_this_server",
+            "message": "that room code is for another Domovoi server; make it on this one"})
+    why = await asyncio.to_thread(stick_jobs.refusal, pin)
+    if why is not None:
+        raise HTTPException(status_code=409, detail=why)
+    clips = await _usb_stick_clips()
+
+    def bundle() -> bytes:
+        return satellite_bundle.current(SATELLITE_CODE_DIR, _is_allowed_satellite_code).data
+
+    started, why = await asyncio.to_thread(
+        stick_jobs.start, pin, body.payload, bundle, _usb_stick_options(), clips)
+    if not started:
+        raise HTTPException(status_code=409, detail=why)
+    return {"started": True, **(await asyncio.to_thread(stick_jobs.status, pin))}
+
+
+@app.delete("/v1/admin/usb-stick/builds/{build_id}", dependencies=[Depends(require_admin_mutation)])
+async def admin_usb_stick_delete(build_id: str) -> dict[str, Any]:
+    """Remove a finished stick's image from this server (about 800 MB)."""
+    from domovoi.usb_stick import jobs as stick_jobs
+
+    if not await asyncio.to_thread(stick_jobs.delete_build, build_id):
+        raise HTTPException(status_code=404, detail="no such stick")
+    return await asyncio.to_thread(stick_jobs.status, _usb_stick_pin())
+
+
+def _usb_stick_build_or_404(build_id: str) -> dict[str, Any]:
+    from domovoi.usb_stick import jobs as stick_jobs
+
+    doc = stick_jobs.build_info(build_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return doc
+
+
+@app.get("/v1/usb-stick/{build_id}/domovoi-room-stick.img")
+async def usb_stick_image(build_id: str) -> FileResponse:
+    """One stick's image, for the browser's download and Raspberry Pi
+    Imager. Public by its random id (see above). 423 while the container
+    guard's freeze is on."""
+    await container_freeze.require_unfrozen("satellite_media", public=True)
+    from domovoi.usb_stick import image as stick_image
+    from domovoi.usb_stick import jobs as stick_jobs
+
+    path = await asyncio.to_thread(stick_jobs.image_file, build_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(path, media_type="application/octet-stream", filename=stick_image.IMAGE_NAME,
+                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
+
+
+@app.get("/v1/usb-stick/{build_id}/os-list.json")
+async def usb_stick_os_list(build_id: str) -> dict[str, Any]:
+    """Raspberry Pi Imager's list for one stick (its custom repository):
+    one device, one image, its size and SHA-256."""
+    await container_freeze.require_unfrozen("satellite_media", public=True)
+    from domovoi.usb_stick import jobs as stick_jobs
+
+    return stick_jobs.os_list(await asyncio.to_thread(_usb_stick_build_or_404, build_id))
+
+
+@app.get("/v1/usb-stick/{build_id}/domovoi-room-stick.rpi-imager-manifest")
+async def usb_stick_manifest(build_id: str) -> FastAPIResponse:
+    """The same list as a file Raspberry Pi Imager opens on a double-click."""
+    await container_freeze.require_unfrozen("satellite_media", public=True)
+    from domovoi.usb_stick import jobs as stick_jobs
+
+    doc = stick_jobs.os_list(await asyncio.to_thread(_usb_stick_build_or_404, build_id))
+    return FastAPIResponse(
+        content=json.dumps(doc, indent=2).encode("utf-8"),
+        media_type="application/vnd.raspberrypi.imager-manifest+json",
+        headers={"Content-Disposition": f'attachment; filename="{stick_jobs.MANIFEST}"',
+                 "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"},
+    )
+
+
 # ─── Satellite plugin-payload channel ──────────────────────────────────────
 # A fourth file channel, parallel to /v1/sounds, /v1/satellite-code, and
 # /v1/wake-models — but for ENABLED plugins' [satellite] payloads (files a

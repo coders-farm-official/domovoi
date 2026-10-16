@@ -1,0 +1,50 @@
+#!/bin/bash
+# Domovoi room stick: the approval code through the speaker
+# (domovoi/usb_stick/; installed as /usr/local/sbin/domovoi-status).
+#
+#   domovoi-status say-code <digits>
+#
+# The satellite runs this, as its own account (domovoi-sat) and with that
+# account's rights only, when it is waiting to be approved (satellite/
+# client.py, _setup_status), exactly as it runs a Pi card's indicator
+# script. It is not a root helper: no sudo, no setuid. It plays the stick's
+# clips ("Your setup code is", then each digit) with aplay on the default
+# sound card, if there is one that works; otherwise it says nothing. The
+# code is said at most once every two minutes (the satellite asks again at
+# every reconnect while it waits). Every other state is ignored: the room's
+# screen shows them (console.py).
+set -u
+PATH=/usr/bin:/bin
+
+[ "${1:-}" = say-code ] || exit 0
+CODE=${2:-}
+case $CODE in ''|*[!0-9]*) exit 0 ;; esac
+[ "${#CODE}" -le 12 ] || exit 0
+
+# DS_CLIPS / DS_APLAY: the tests' (domovoi/tests/test_usb_stick_installer.py);
+# this runs as the satellite's account, so they change nothing it could not.
+CLIPS=${DS_CLIPS:-/usr/local/lib/domovoi-stick/sounds}
+APLAY=${DS_APLAY:-aplay}
+[ -f "$CLIPS/your_code_is.wav" ] || exit 0
+command -v "$APLAY" >/dev/null 2>&1 || exit 0
+
+# The satellite's own state dir (its home is the only place it may write).
+MEMO=${HOME:-/var/lib/domovoi-sat}/.domovoi/stick-code-said
+now=$(date +%s)
+if [ -f "$MEMO" ]; then
+	read -r last_code last_at <"$MEMO" 2>/dev/null || true
+	case ${last_at:-} in ''|*[!0-9]*) last_at=0 ;; esac
+	if [ "${last_code:-}" = "$CODE" ] && [ $((now - last_at)) -lt 120 ]; then
+		exit 0
+	fi
+fi
+printf '%s %s\n' "$CODE" "$now" >"$MEMO" 2>/dev/null || true
+
+play() { [ -f "$1" ] && timeout 10 "$APLAY" -q "$1" >/dev/null 2>&1; }
+play "$CLIPS/your_code_is.wav" || exit 0
+i=0
+while [ "$i" -lt "${#CODE}" ]; do
+	play "$CLIPS/digit_${CODE:$i:1}.wav" || exit 0
+	i=$((i + 1))
+done
+exit 0

@@ -1,0 +1,24 @@
+# Domovoi room stick: the BIOS boot menu (domovoi/usb_stick/).
+# Replaces Debian's /isolinux/isolinux.cfg on the stick. Two initrds:
+# Debian's own, then ours (the answers file), comma-separated.
+path
+default vesamenu.c32
+prompt 0
+timeout 100
+menu title Domovoi room stick: @ROOM@
+include stdmenu.cfg
+
+label room
+	menu label ^Make this computer the room "@ROOM@" (asks first)
+	menu default
+	kernel /install.amd/vmlinuz
+	append vga=788 initrd=/install.amd/gtk/initrd.gz,/domovoi/preseed.gz priority=high @KERNEL_EXTRA@--- quiet
+
+label roomtext
+	menu label The same, in ^text mode
+	kernel /install.amd/vmlinuz
+	append vga=788 initrd=/install.amd/initrd.gz,/domovoi/preseed.gz priority=high @KERNEL_EXTRA@--- quiet
+
+label local
+	menu label ^Leave this computer as it is (start from its own disk)
+	localboot -1

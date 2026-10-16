@@ -4736,6 +4736,105 @@
         }
       }
     },
+    "/api/satellites/usb-stick": {
+      "get": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Usb Stick Status",
+        "description": "``debian`` (cached or not), ``refusal`` (why a stick can't be\nprepared now, or null), ``job`` (stage, progress, the last result,\nwhich stays until the next try) and ``builds``.",
+        "operationId": "usb_stick_status_api_satellites_usb_stick_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Usb Stick Prepare",
+        "description": "Prepare a room stick for ``room``: the same enrolment payload the\nspare-device card shows, handed to the core, which builds the image in\nthe background. Answers at once (``started`` and the status) or 409\n``{reason, message}`` when it can't start (internet \"never\" without\nDebian's image, short of disk, no xorriso, one already being made);\n``conflict`` says when the room is taken, as for the other devices.",
+        "operationId": "usb_stick_prepare_api_satellites_usb_stick_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpareDeviceEnrolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/usb-stick/{build_id}": {
+      "delete": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Usb Stick Delete",
+        "description": "Remove a finished stick's image from the server (about 800 MB).",
+        "operationId": "usb_stick_delete_api_satellites_usb_stick__build_id__delete",
+        "parameters": [
+          {
+            "name": "build_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Build Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/satellites/approvals/{room_id}/approve": {
       "post": {
         "tags": [

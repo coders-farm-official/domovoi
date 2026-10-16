@@ -10,3 +10,6 @@ domovoi/tests/fixtures/media_tags/** -text
 # The speaker-encoder fixtures: 16 kHz excerpts and the embeddings recorded for them.
 domovoi/tests/fixtures/speaker_encoder/** -text
 android/licences/** -text
+# The room stick's own files run inside Debian's installer and on the
+# installed room: a CR breaks every shell script there (domovoi/usb_stick/).
+domovoi/usb_stick/stick/** text eol=lf

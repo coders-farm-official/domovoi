@@ -957,6 +957,16 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "network interfaces and autodetection picks the wrong one.",
         "str", section="advanced", tier="hot",
     ),
+    FieldSpec(
+        "usb_stick_wifi", "USB sticks may use Wi-Fi (not tested yet)", "Security",
+        "Old computers (Settings → Satellites → add a spare device → USB "
+        "stick): let a stick made from now on set the computer up over "
+        "Wi-Fi, with Debian's own network and password questions. OFF (the "
+        "default) = the stick needs a network cable and says so before "
+        "anything is erased. Not yet tested on real laptops. Applies to the "
+        "next stick you prepare.",
+        "bool", section="advanced", tier="hot",
+    ),
 ]
 
 

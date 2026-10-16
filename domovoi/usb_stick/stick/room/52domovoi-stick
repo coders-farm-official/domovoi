@@ -1,0 +1,23 @@
+// Domovoi room stick (domovoi/usb_stick/): what this room does by itself.
+//
+// Debian's security updates, every day, by unattended-upgrades; when one
+// needs a restart (a new kernel), at 03:30, when the house is asleep.
+// Satellite updates come from the household's Domovoi server, not here.
+//
+// The boot loader is frozen: its packages are held (apt-mark hold, see
+// /var/lib/domovoi-stick/held-packages) and also kept out of
+// unattended-upgrades below, so no update can swap in a shim that this
+// computer's firmware does not trust (Microsoft signs new shims with its
+// 2023 certificate only). docs/SPARE_DEVICE_SATELLITES.md, "Old computer".
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "03:30";
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Package-Blacklist {
+    "^shim-";
+    "^grub-";
+    "^grub2-";
+    "^fwupd";
+};

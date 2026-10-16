@@ -49,8 +49,8 @@ installed from the dashboard as a zip upload or a GitHub URL.
 
 > **Status: tested, and built in public.** Domovoi works today if you're
 > comfortable running your own server, and the easier ways in (an assistant
-> that runs on your phone, a Windows installer, rooms on spare laptops and
-> phones) are previews: see [Status and roadmap](#status-and-roadmap).
+> that runs on your phone, a Windows installer, rooms on spare laptops,
+> phones and old PCs) are previews: see [Status and roadmap](#status-and-roadmap).
 > Ask questions in
 > [Discussions](https://github.com/coders-farm-official/domovoi/discussions).
 
@@ -146,6 +146,11 @@ they have been tried on fewer devices than the rest, aren't yet held to
   ([older Linux](docs/SPARE_DEVICE_SATELLITES.md#older-linux-and-fedora-opensuse-arch)),
   and a processor from before about 2009 is turned away before anything
   is downloaded.
+- **A USB stick that turns an old PC into a room.** The dashboard prepares
+  the stick, and an old 64-bit PC, laptop or Intel Mac installs Debian and
+  the satellite from it after you type ERASE on it; a network cable for the
+  setup. Tested in virtual machines; real laptops are next
+  ([old computers](docs/SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick)).
 
 **Coming next** (being finished now)
 
@@ -156,9 +161,6 @@ they have been tried on fewer devices than the rest, aren't yet held to
 
 **Later**
 
-- **A USB stick that turns an old PC into a room:** the server writes the
-  stick, and the PC installs Debian and the satellite from it. A prototype
-  works; it isn't built into Domovoi yet.
 - **The Android app on Google Play,** once Coders Farm's developer account
   is cleared.
 - **The Windows installer out of preview,** so one download turns the household

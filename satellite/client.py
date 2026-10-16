@@ -188,6 +188,42 @@ def _hostname() -> str | None:
         return None
 
 
+#: What a room-stick computer's firmware said about Secure Boot this boot
+#: (written by root's domovoi-stick-boot-check.service, the stick's
+#: boot-check.sh; tmpfs). Absent on every other satellite.
+STICK_BOOT_FILE = Path("/run/domovoi-stick/boot.json")
+_STICK_BOOT_FLAGS = ("secure_boot", "ca_2023", "ca_2011", "loader_held", "stick")
+
+
+def _stick_boot_facts(path: Path | None = None) -> dict[str, Any] | None:
+    """The Secure Boot facts of a computer set up from a Domovoi room stick,
+    for the health sample (the dashboard warns when Secure Boot is on and
+    the firmware lacks Microsoft's 2023 certificate): ``firmware`` ("uefi"
+    or "bios") and booleans only. None anywhere else, or when the file is
+    not one the stick wrote."""
+    if sys.platform == "win32":
+        return None
+    try:
+        raw = (path or STICK_BOOT_FILE).read_bytes()
+    except OSError:
+        return None
+    if len(raw) > 4096:
+        return None
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(doc, dict):
+        return None
+    out: dict[str, Any] = {}
+    if doc.get("firmware") in ("uefi", "bios"):
+        out["firmware"] = doc["firmware"]
+    for key in _STICK_BOOT_FLAGS:
+        if isinstance(doc.get(key), bool):
+            out[key] = doc[key]
+    return out or None
+
+
 def _reboot_helper_installed(cfg: Any) -> bool:
     """Whether the root reboot helper is there to ask. Never on a Windows
     satellite: the POSIX path would be a file at the root of the system
@@ -3708,6 +3744,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # be showing for this unit.
             "net_step": self._net_step,
             "hostname": _hostname(),
+            # A room-stick computer's Secure Boot state; absent elsewhere.
+            **({"boot": boot} if (boot := _stick_boot_facts()) else {}),
             "log_ring": {k: v for k, v in LOG_RING.stats().items() if k != "max_bytes"},
             "log_spool": {k: v for k, v in LOG_SPOOL.stats().items() if k != "max_bytes"},
         }

@@ -939,6 +939,8 @@ _WARN_DETAIL_STEPS = frozenset(
         # "HEAD ... is on none of the pinned branches ...; it is the commit
         # this box last applied, so this restart goes on" (rc2 review C2).
         "upstream",
+        # "not installed: xorriso (...)": old computers' room sticks.
+        "added-packages",
     }
 )
 _WARN_DETAIL_MAX_CHARS = 300

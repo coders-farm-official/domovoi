@@ -1776,6 +1776,7 @@ outbound traffic, each with its own off switch:
 | **Wake-word base models** — one-time openWakeWord model download (GitHub release assets) | Refreshing the satellite media cache on the server; on the Pi only for a card prepared with offline off | One-time. Every file is checked against pinned SHA-256 digests on the server and again on the Pi; a mismatch is deleted, never loaded. Under `never` the server refuses the refresh. |
 | **Wake-word training** — the trainer image's build (Docker Hub's base image, two GitHub repositories, PyPI packages, GitHub release assets, Ubuntu's package archive) and its training data (Hugging Face `davidscripka/openwakeword_features` and `MIT_environmental_impulse_responses`, openWakeWord's background-clip zips on Backblaze B2): about 22 GB, once | Only after an admin turns training on in Settings → Wake Words: the build and the data download then, a rebuild by the Linux update unit when `scripts/wake_word/docker` changes, and a training that finds its data missing. All of it from inside containers, outside the core's outbound-URL check ([details](#wake-word-training-the-gpu-runtime-the-trainer-image-and-what-it-downloads)) | Don't turn it on. Under `never` the card refuses, every training is refused before it starts, and the update unit doesn't rebuild; answering `never` stops a setup job's build or download and the update unit's rebuild that are already running. |
 | **NVIDIA Container Toolkit** — NVIDIA's apt repository (`nvidia.github.io`) | Only on a Linux server (or the Windows install's distro) where an NVIDIA GPU is visible: at install, and at an update or Restart while it is missing; `apt upgrade` afterwards, like any package | `DOMOVOI_MANAGE_GPU_RUNTIME=0` in `/etc/default/domovoi-update`. Under `never` the update unit downloads nothing (the install itself still does, as for every package it installs). |
+| **Debian's installer image** — the amd64 netinst (793 MB) from `cdimage.debian.org`, kept only if its size and SHA-256 are the pinned ones, for old computers' room sticks; and `xorriso` from Ubuntu's archive on a server installed before it (the update unit) | Only when an admin presses **Prepare the stick** and the image isn't on the server yet (it is kept for the next stick). The old computer itself then downloads Debian's packages and the satellite's libraries while it sets up, as a Linux laptop does | Don't prepare a stick. Under `never` it is refused unless the image is already here, and the update unit installs nothing. |
 | **Admin downloads** — Ollama model installs (the Ollama registry), plugin installs (GitHub, PyPI), **Refresh caches** for satellite media (PyPI, Docker Hub, Debian's mirrors, GitHub), and the spare-device card's **get the Windows files** (python.org, PyPI) and **get the Linux Python** (python-build-standalone's GitHub releases), each file held to its pinned SHA-256 | Only when an admin starts one | Don't start them. Under `never` they are refused. |
 | **Plugins** — a plugin's own requests | Whatever the plugin does; its install screen says | Requests made through the SDK's HTTP client (`sdk.http`, or the web host's `http()`) and streams played through `sdk.playback` are refused under `never`; a plugin that opens its own connections (raw HTTP, its own downloads, `docker pull`) is outside the switch. Settings → Internet lists every enabled plugin whose manifest asks for the network. |
 | **Satellite plugin payloads** — a plugin's `[satellite]` system packages, installed by the satellite's root helper | When an enabled plugin declares `apt_packages` (none of the bundled ones do) | Under `never` the payload manifest marks each plugin `offline` and the helper installs from the satellite's local package caches only (`apt-get --no-download`); a satellite whose helper predates that leaves the apt work for later. |
@@ -2471,6 +2472,139 @@ is a filled red microphone while audio is leaving for the server, and Mute
 closes the capture stream itself (Windows' icon goes out too). The
 approval code is shown in the tray, its toast and the installer's window,
 never logged.
+
+### Old computers: the room stick
+
+Since 2026-10-16 an old PC, laptop or Intel Mac can become a room from a
+USB stick the server makes ([SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick)).
+The stick is **Debian's own netinst image, unmodified**, with about 1 MB of
+Domovoi's files added; booted, it erases the computer's disk (after one
+typed word) and installs Debian and the satellite. What that means for
+trust:
+
+**What a stick holds, and who may have it.** Debian's public image; the
+public satellite bundle the core serves to any satellite; the installer's
+answers and Domovoi's own scripts (`domovoi/usb_stick/stick/`); the room
+code (`stick.json`: the server's address, its **public** fingerprint, the
+room's name) and the household's time zone; on most sticks, the spoken
+digits. **Nothing on it is a secret**: no password, no token, no Wi-Fi key
+(with Wi-Fi off there is none to type; with `USB_STICK_WIFI` on, the
+password is typed at the computer and never on the stick). Someone who
+copies a stick can make a computer *ask* to be that room; it still waits
+for the six-digit code an admin types, as any device does (strict
+pairing). That is why the image, its Raspberry Pi Imager list and manifest
+are served **without a login** (`GET /v1/usb-stick/<id>/…` on the core:
+Imager and a browser download can't send one), each under a random
+32-character id that only the admin's card shows, so the list of rooms is
+not on the network. Making one is an admin's (`POST
+/api/satellites/usb-stick`, admin write tier), and the core takes only a
+room code carrying **its own** fingerprint.
+
+**The chain a room trusts.** Debian's image: downloaded by the server from
+`cdimage.debian.org` only (through the outbound gate), kept only if its
+size and SHA-256 are the ones pinned in `domovoi/usb_stick/debian-image.json`
+(read from Debian's `SHA256SUMS`, whose signature by the Debian CD signing
+key was checked when the pin was set). The installer then takes the rest of
+Debian from `deb.debian.org` (apt checks every package against Debian's
+signed archive). At first boot the room checks the satellite bundle against
+the SHA-256 in `stick.json`, and `install-pc.sh` makes the server prove the
+pinned fingerprint before it writes anything (the same chain as the Linux
+one-liner above: PyPI supplies the hash-pinned wheels, the server can't
+choose them). **What this does not cover:** the stick is only as
+trustworthy as the place it was written from. The image and its list come
+over the LAN in plain HTTP; Imager checks the image against the SHA-256 in
+the list, but a host that can rewrite one can rewrite both, exactly as it
+could rewrite the dashboard page (see above). And anyone who can change the
+stick itself (physical access) can change what it installs, as with a Pi's
+SD card.
+
+**Only the stick's answers.** Debian's installer would take a preseed URL
+from a DHCP server's boot-file name (`network-preseed`) and load it over
+the stick's own answers: a rogue DHCP server on the network could then
+replace the ERASE page, erase the disk without asking and run its own
+commands as root in the new system (security review of wf/usb-stick, shown
+in QEMU). The stick's first command in the installer (`installer/early.sh`)
+records `network-preseed` as installed, so it is never unpacked or run, and
+wraps udhcpc's script so the boot-file name is dropped before the lease is
+written; the ERASE step refuses ("Something on this network tried to set up
+this computer") if a preseed URL is set anyway or `network-preseed` was
+installed. The answers come only from the stick (`/preseed.cfg` in its own
+initrd) and its boot menu's kernel command line; changing those needs the
+stick or the keyboard in hand. A QEMU case with a DHCP boot file pointing
+at an "evil" preseed checks that the file is never fetched and the ERASE
+page still shows.
+
+**It erases a disk: the guards.** Nothing is written before the person
+types ERASE on the computer (any case; three wrong answers, Go Back or
+turning it off: "Nothing was changed"), on a page that names the disk by
+make, size and device. It fails closed: a refusal powers the computer off
+and, if the firmware ignores that, waits there for ever rather than return
+to the partitioner, and the partitioner's own confirmations (wipe the disk,
+remove old LVM or RAID, write the new table) are given only after ERASE,
+never in the answers file, so if the ERASE step ends any other way Debian's
+partitioner asks the person itself. The disk is chosen by
+`installer/lib.sh`: never the disk the stick is on, never a USB, Thunderbolt
+or USB4 disk (anything behind a port the kernel marks removable or external),
+never a removable, read-only or memory-card disk, never one under 8 GB; a
+solid-state disk before a spinning one, then the largest. An eSATA disk can't
+be told from an internal one (the kernel doesn't say), and neither can a
+Thunderbolt drive on computers from before about 2019 whose firmware doesn't
+mark the port external (a known limit: it could be the disk chosen), so the
+guide says to unplug external disks first and the ERASE page names the disk
+by make, size and device. Before that page the stick stops, with nothing
+written, for no usable disk, a processor older than x86-64-v2, a T2 Mac, no
+internet, or a chosen disk holding an LVM physical volume or a RAID member
+while any other disk, USB ones included, holds one too (it would erase or
+break more than the one disk it names; the page names every one). blkid
+doesn't say which volume group or array a member belongs to, so two
+unrelated ones are refused as well, with no way past that page (a known
+limit; the guide says how to wipe the other disk first). The
+"this computer is already a room" check mounts the chosen disk's ext4
+partitions read-only without replaying their journals (`ro,noload`). The
+scripts are tested whole against stand-ins for debconf and the installer's
+tools (`domovoi/tests/test_usb_stick_scripts.py`) and in QEMU each time the
+pin moves (`scripts/dev/usb-stick/matrix.py`), including that a refused run
+never writes to the disk and a power-off that returns never goes on.
+
+**Root on the room.** Root's password is locked and there is no user
+account, so nobody logs in at the keyboard. Root runs: the first-boot
+install (once: the bundle's SHA-256, then `install-pc.sh --mode headless`
+with the stick's room code, the same install as a Linux mini PC), a
+per-boot read of the firmware's Secure Boot variables (it writes only
+`/run/domovoi-stick/boot.json`), and Debian's `unattended-upgrades` (with a
+03:30 restart when a kernel needs it). The satellite runs as
+`domovoi-sat`, with no login, no sudo and no root helper, exactly as on a
+headless Linux install ([above](#what-a-spare-computer-holds-and-what-the-server-may-do-to-it));
+the server can update its code (signed, **automatic** permissions: the
+computer is a room, not someone's laptop) and restart it, and nothing more.
+Two programs the stick adds run as `domovoi-sat` too: the room's screen and
+`/usr/local/sbin/domovoi-status`, which plays the code's clips with
+`aplay` when the satellite calls it (root's file, the satellite's rights).
+
+**Secure Boot: a frozen boot loader.** Debian's shim on the stick is signed
+by Microsoft with its 2011 and its 2023 certificates; Microsoft now signs
+new shims with the 2023 one only, so once Debian ships one, firmware that
+never got the 2023 certificate won't start it. So on UEFI the room **holds** the shim and GRUB packages it
+installed (`apt-mark hold`, and an `unattended-upgrades` blacklist,
+`/etc/apt/apt.conf.d/52domovoi-stick`) and never installs fwupd: nothing
+changes the firmware's certificates or its revocation list from the room.
+The trade, accepted by the owner (2026-10-15): the boot loader gets no
+security updates on that computer; kernels still do (Debian signs them, the
+held shim checks them). The room reports each boot whether Secure Boot is on
+and whether the firmware has the 2023 certificate, and the dashboard warns
+on its health card when it doesn't, with how to update the firmware by
+hand. The image itself boots on firmware with either certificate; a
+"Secured-core" PC with Microsoft's third-party certificate switched off
+refuses it until that setting is changed.
+
+**On the server.** The image is made by `xorriso` (GPL-3.0-or-later, an OS
+package run as a separate program as the core's own user, never bundled)
+from a folder the core writes; the core keeps Debian's image and at most
+three stick images (about 800 MB each) under
+`~/.domovoi/satellite_media/`. Two environment variables are test seams for
+the QEMU kit and are never set on a household's server:
+`DOMOVOI_USB_STICK_REPACK` (run the repack step elsewhere, for a core with no
+xorriso) and `DOMOVOI_USB_STICK_DEBUG=1` (the kit's serial-port markers).
 
 ## Satellite pairing (WS auth)
 

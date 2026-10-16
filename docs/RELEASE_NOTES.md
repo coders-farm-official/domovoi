@@ -4,6 +4,40 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-16 — Old computers become rooms from a USB stick
+
+* **Settings → Satellites → add a spare device → old computer (usb
+  stick).** Name the room, press **Prepare the stick**: the server
+  downloads Debian 13.7's installer image from Debian the first time
+  (793 MB, used only if its SHA-256 is the pinned one, kept for the next
+  stick) and makes the room's stick image in a minute or two. Write it with
+  **Open in Raspberry Pi Imager** (2.0.3 or newer) or USBImager, start the
+  old computer from it, type ERASE, approve its code. An old 64-bit PC,
+  laptop or 2012-2017 Intel Mac with a processor from about 2009 on
+  (x86-64-v2); a network cable while it sets up (Wi-Fi on the stick is off
+  until it has been tried on real laptops). The guide:
+  [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick).
+* **The server needs `xorriso`** (an Ubuntu package, run as a program).
+  New installs get it; on a Linux server with the update unit, the next
+  update or **Restart** installs it (an `added-packages` step;
+  `DOMOVOI_MANAGE_PACKAGES=0` in `/etc/default/domovoi-update` leaves it to
+  you). Otherwise: `sudo apt install xorriso`. Until then the card says so.
+* **Disk:** Debian's image (793 MB) plus about 800 MB per stick, at most
+  three, under `~/.domovoi/satellite_media/`; **remove it from this
+  server** on the card frees one. Under internet **No** a stick is refused
+  unless Debian's image is already there.
+* **New open routes on the core:** `GET /v1/usb-stick/<id>/domovoi-room-stick.img`,
+  `…/os-list.json` and `…/domovoi-room-stick.rpi-imager-manifest`, each
+  under a random id only the admin card shows (nothing on a stick is
+  secret: [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#old-computers-the-room-stick)).
+* **Secure Boot:** a room made from a stick keeps the boot loader it
+  installed (its shim and GRUB are held, no fwupd), and its health card
+  says **firmware needs the 2023 certificate** when Secure Boot is on and
+  the firmware lacks Microsoft's 2023 CA, with how to update the firmware
+  by hand. Health samples carry a new `boot` object on those rooms only.
+* **USB_STICK_WIFI** (off; Settings → advanced): a stick made with it on
+  asks Debian's own Wi-Fi questions. Not yet tested on hardware.
+
 ## 2026-10-16 — 1.0.0-rc2: previews say so, and the licences of what Domovoi downloads
 
 Version 1.0.0rc2 (the app 1.0.0-rc2, versionCode 26101602). Nothing to do

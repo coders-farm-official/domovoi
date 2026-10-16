@@ -1,0 +1,29 @@
+# Domovoi room stick: the room's screen (domovoi/usb_stick/). The room
+# name, the approval code in large digits while it waits, and why it can't
+# connect when it can't. Runs as the satellite's own account (it reads the
+# engine's control socket, which only that account and root may open),
+# after the first-boot install made that account.
+[Unit]
+Description=Domovoi room stick: the room's code on the screen
+After=domovoi-stick-firstboot.service domovoi-satellite.service systemd-user-sessions.service
+ConditionPathExists=/var/lib/domovoi-stick/installed
+Conflicts=getty@tty1.service
+
+[Service]
+User=domovoi-sat
+ExecStart=/usr/bin/python3 -I /usr/local/lib/domovoi-stick/console.py
+StandardInput=tty
+StandardOutput=tty
+StandardError=journal
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

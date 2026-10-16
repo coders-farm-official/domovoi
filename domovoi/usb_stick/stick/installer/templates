@@ -1,0 +1,114 @@
+Template: domovoi-stick/erase
+Type: string
+Description: Type ERASE to make this computer the ${ROOM} room:
+ This will ERASE EVERYTHING on this computer's disk:
+ .
+     ${DISK}
+ .
+ Windows (or whatever system it has now), files, photos and programs on it
+ will be gone for good, and it becomes the Domovoi room "${ROOM}".
+ .
+ ${SERVER}
+ .
+ Nothing has been changed yet. To stop, turn the computer off now and take
+ the stick out.
+ .
+ To go ahead, type ERASE in capital letters and press Continue.
+
+Template: domovoi-stick/erase-room
+Type: string
+Description: Type ERASE to set this computer up again as the ${ROOM} room:
+ This computer is already the Domovoi room "${OLDROOM}". If it started
+ from the stick by mistake, turn it off, take the stick out and turn it
+ back on: it stays that room.
+ .
+ To set it up again as "${ROOM}", everything on its disk is erased:
+ .
+     ${DISK}
+ .
+ ${SERVER}
+ .
+ Nothing has been changed yet. To go ahead, type ERASE in capital letters
+ and press Continue.
+
+Template: domovoi-stick/erase-again
+Type: string
+Description: Type ERASE (capital letters) to go ahead:
+ That was not ERASE, so nothing has been changed.
+ .
+ This will erase everything on ${DISK} and make this computer the
+ Domovoi room "${ROOM}". Type ERASE to go ahead, or turn the computer off
+ now to stop.
+
+Template: domovoi-stick/stopped
+Type: error
+Description: Nothing was changed
+ This computer was left exactly as it was. It turns off when you press
+ Continue; take the stick out before you turn it back on.
+
+Template: domovoi-stick/no-disk
+Type: error
+Description: There is no disk to put the room on
+ This computer has no internal disk of 8 GB or more that the stick can use
+ (the stick itself, memory cards and other USB drives are never used).
+ Nothing was changed. It turns off when you press Continue.
+
+Template: domovoi-stick/t2-mac
+Type: error
+Description: This Mac can't be a Domovoi room
+ Macs from 2018 to 2020 have Apple's T2 chip. Its keyboard, speakers and
+ microphone don't work with the system the stick installs, so the room
+ would have no sound. Nothing was changed. It turns off when you press
+ Continue; take the stick out and it starts macOS as before.
+
+Template: domovoi-stick/no-network
+Type: error
+Description: Plug in a network cable
+ This computer is not on the internet. The stick sets the room up over a
+ network cable, and needs the internet for it (the room's programs come
+ from Debian and from your Domovoi server).
+ .
+ Plug a cable from your router into this computer (or into a USB network
+ adapter plugged into it) and start again with the stick. Wi-Fi comes
+ later. Nothing was changed. It turns off when you press Continue.
+
+Template: domovoi-stick/no-network-wifi
+Type: error
+Description: This computer is not on the internet
+ The stick needs the internet to set up the room, and this computer could
+ not reach it. Its Wi-Fi may not work with the stick (common on older Macs
+ and some laptops with Broadcom Wi-Fi).
+ .
+ Plug in a network cable (or a USB network adapter) and start again.
+ Nothing was changed. It turns off when you press Continue.
+
+Template: domovoi-stick/cpu-too-old
+Type: error
+Description: This computer's processor is too old for a Domovoi room
+ The wake-word software needs a processor from about 2009 or later (Intel
+ Core i3/i5/i7 or newer, AMD from about 2011). This one is older, so the
+ room could never start. Nothing was changed. It turns off when you press
+ Continue.
+
+Template: domovoi-stick/joined
+Type: error
+Description: This computer's disks are joined together
+ The disk the room would go on holds part of an LVM volume or a RAID, and
+ so does another disk here, so erasing it could break or reach into the
+ others:
+ .
+ ${DISKS}
+ .
+ The stick erases only one disk, so it stops here. Nothing was changed. To
+ use this computer, unplug or take out the other disks (or wipe them
+ first: the guide's "When it doesn't work" says how), then start again. It
+ turns off when you press Continue.
+
+Template: domovoi-stick/tampered
+Type: error
+Description: Something on this network tried to set up this computer
+ The installer was handed setup answers that did not come from the stick
+ (from the network). To be safe the stick stops here. Nothing was changed.
+ .
+ Start again on another network (a cable straight to your router), and
+ tell whoever runs this network. It turns off when you press Continue.

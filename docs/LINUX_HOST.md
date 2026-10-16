@@ -348,10 +348,13 @@ Follow them instead if you prefer, or to see what a step changed.
 Prerequisites:
 
 ```bash
-sudo apt update && sudo apt install -y python3 python3-venv python3-dev build-essential pkg-config libasound2-dev git ffmpeg mpg123 libchromaprint-tools
+sudo apt update && sudo apt install -y python3 python3-venv python3-dev build-essential pkg-config libasound2-dev git ffmpeg mpg123 libchromaprint-tools xorriso
 ```
 
-`libchromaprint-tools` provides `fpcalc` for library enrichment, and
+`xorriso` is what the core runs to make an old computer's room stick
+(Settings → Satellites → add a spare device → old computer; a GPL program
+run on its own, never bundled with Domovoi). `libchromaprint-tools`
+provides `fpcalc` for library enrichment, and
 `python3-dev` + `build-essential` are what let the sdist-only pins
 (`metaphone`) compile. (No
 `espeak-ng`: see [the system-voice fallback](#1-the-system-voice-fallback-is-optional-on-linux).)

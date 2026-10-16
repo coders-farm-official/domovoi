@@ -1,8 +1,10 @@
 # Satellites on spare devices
 
 A room doesn't need a Raspberry Pi. A spare **Linux laptop or mini PC** can
-be one, a **Windows laptop or PC** too, and an old **phone or tablet**
-through the Android app's room mode. Each speaks the same protocol to the
+be one, a **Windows laptop or PC** too, an old **phone or tablet**
+through the Android app's room mode, and an **old computer** you are done
+with (a PC, a laptop, an Intel Mac) from a **USB stick** your server makes
+([below](#old-computers-usb-stick)). Each speaks the same protocol to the
 Domovoi server as a Pi, joins through the same approval code, and becomes a
 room like any other: wake word, answers, music, intercom, timers.
 
@@ -35,7 +37,8 @@ doesn't wear out its battery.
    device**. Type the room's name ("Kid's Room") and press **make the
    code**. The page shows the room id it will connect as
    (`kids_room`), a **one-line install command** for Linux, another for
-   Windows, and a **QR code** for a phone. All three carry the same short *enrolment code*:
+   Windows, a **QR code** for a phone, and **Prepare the stick** for an
+   old computer. All three carry the same short *enrolment code*:
    `domovoi-room:1?core=…&fp=…&room=…` — your server's address, its
    fingerprint, and the room's name. **Nothing in it is a password.** The
    QR code wraps it in a link to your server's own join page
@@ -789,3 +792,276 @@ same question as on every Pi; see the wake-word notes).
 | The wake word never fires | **Settings → Privacy & security → Microphone**: "Let desktop apps access your microphone" on; the right microphone chosen in **Settings → System → Sound**. |
 | It goes quiet while someone else uses the PC | It runs in its own account's session; while another account is signed in at the screen, Windows may give it no microphone (not yet checked on hardware). |
 | Anything else | `%LOCALAPPDATA%\Domovoi\Satellite\logs\satellite.log` (the tray's **Show logs folder**), and the live log in the dashboard's room drawer. |
+
+## Old computers (USB stick)
+
+An old **64-bit PC, laptop or mini PC**, or an **Intel Mac from 2012 to
+2017**, can become a room that does nothing else: your Domovoi server makes
+a USB stick for the room, the computer starts from it, you type one word,
+and about half an hour later it is a room. No terminal, no password, no
+account to make. The stick puts a fresh system on the computer
+([Debian](https://www.debian.org/) 13, with no desktop) and the satellite
+on top of it, the same headless install a Linux mini PC gets.
+
+**The stick erases that computer's disk.** Everything on it (Windows, files,
+photos) is gone for good. It asks first, on the computer itself, naming the
+disk, and nothing is touched until you type ERASE.
+
+### What it needs
+
+| | |
+|---|---|
+| **Processor** | About **2009 or newer**: Intel Core i3/i5/i7 or later, AMD from about 2011 (x86-64-v2). The wake-word software can't run on older ones (Core 2, the first Atoms, AMD K8/K10); the stick says so and stops before erasing anything. |
+| **Network** | A **network cable** from your router to the computer while it sets up (or a USB network adapter). Wi-Fi on the stick comes later, once it has been tried on real laptops; without a cable the stick says "plug in a network cable" before anything is erased. |
+| **Internet** | The computer downloads part of Debian (~155 MB) and the satellite's libraries while it sets up. |
+| **The stick** | 2 GB or more (everything on it is replaced; the image is about 793 MB). |
+| **The computer's disk** | 8 GB or more. An installed room uses about 1.6 GB. |
+| **Your server** | Linux, or the Windows install (its Linux side). It downloads Debian's installer image from Debian the first time (793 MB, kept for the next stick) and keeps each stick's image (about 800 MB, removable on the card); it needs `xorriso`, which the installer and the next update add. |
+
+**Not suitable:** 32-bit-only PCs; tablets and netbooks with 32-bit UEFI
+(Bay Trail, Cherry Trail); Macs with Apple's T2 chip (2018-2020: the stick
+recognises them and stops); and, until a firmware setting is changed, the
+"Secured-core" PCs that refuse it (see Secure Boot below).
+
+**What it costs to run.** A room runs day and night. An old desktop tower
+draws about 30-80 W, $50-130 a year at US prices: more than a new Pi
+satellite costs. An old laptop (6-15 W, $10-25 a year) or a mini PC is the
+better room.
+
+### 1. Prepare the stick
+
+**Settings → Satellites → add a spare device**, name the room, **make the
+code**, then under **old computer (usb stick)** press **Prepare the
+stick**. The first time, the server downloads Debian's netinst image from
+Debian (it uses it only if its size and SHA-256 are the ones Domovoi pins);
+then it makes this room's image in a minute or two. The card shows the
+progress; if something goes wrong it says what, and keeps saying it until
+you try again.
+
+The card refuses, with the reason, when the server's internet access is set
+to **never** and Debian's image isn't on it yet, when its disk is short, or
+when it has no `xorriso` yet.
+
+### 2. Write it to a USB stick
+
+- **Raspberry Pi Imager** (first choice; 2.0.3 or newer,
+  [raspberrypi.com/software](https://www.raspberrypi.com/software/)): press
+  **Open in Raspberry Pi Imager**. Imager opens with your server's list:
+  choose **A computer**, then **Domovoi room stick**, then your stick. It
+  checks every byte against the SHA-256 while it writes. If the button
+  opens nothing, download **the Imager file** and double-click it. Imager
+  sends usage statistics only for Raspberry Pi's own list, never for a list
+  like this one.
+- **USBImager** ([bztsrc.gitlab.io/usbimager](https://bztsrc.gitlab.io/usbimager/),
+  MIT): **download the image**, open it in USBImager, pick the stick,
+  **Write**.
+- balenaEtcher and Rufus work too (Rufus: "DD image" mode).
+
+The image's name is generic (`domovoi-room-stick.img`); the room is inside.
+
+### 3. Start the old computer from it
+
+Plug the stick in, switch the computer on, and keep tapping its boot-menu
+key; pick the USB stick. Common keys (a model can differ):
+
+| Maker | Key |
+|---|---|
+| Dell | F12 |
+| HP | Esc, then F9 |
+| Lenovo | F12 (some: the small Novo button) |
+| Acer | F12 (turn on "F12 Boot Menu" in the firmware first) |
+| ASUS | Esc (desktops: F8) |
+| Toshiba / Dynabook | F12 |
+| MSI | F11 |
+| Samsung | Esc or F10 |
+| Sony VAIO | Assist button, or F11 |
+| Fujitsu | F12 |
+| Gigabyte / ASRock | F12 / F11 |
+| Intel NUC | F10 |
+| Intel Mac (2012-2017) | hold Option (Alt) from the start chime |
+
+If no key works, the firmware settings (often F2 or Del at power-on) can
+put USB first; "Fast Boot" may need turning off.
+
+The stick's menu says **Make this computer the Domovoi room "Kitchen" (asks
+before erasing)** and starts it after 10 seconds; **Leave this computer as
+it is** starts the computer as before. If the screen stays black, restart
+and pick **The same, in text mode**.
+
+### 4. Type ERASE
+
+The installer works by itself for about a minute, then shows one page:
+
+> This will ERASE EVERYTHING on this computer's disk: Samsung SSD 860, 256
+> GB (/dev/sda) … Type ERASE to make this computer the Kitchen room.
+
+It names the disk it will use: never the stick itself, never another USB
+or Thunderbolt drive or a memory card; a solid-state disk before a spinning
+one, then the largest. To be sure, unplug any other external disk first
+(an eSATA one can't be told from an internal one, nor a Thunderbolt one on
+some computers from before about 2019: see Known limits), and read the
+disk's name on the page before you type. It also says whether your
+Domovoi server answered (a server that is off just now is fine: the room
+keeps trying after it is set up). Anything but ERASE, three times, or **Go
+Back**: "Nothing was changed", and the computer turns off.
+
+Before that page, the stick stops on a plain page, with nothing changed,
+when the computer has no usable disk, its disks are joined together (LVM or
+RAID: the page names them), its processor is too old, it is a T2
+Mac, or it is not on the internet. If the computer is **already a room**
+(the stick was left in and it started from it again), the page says so:
+turn it off, take the stick out, and it stays that room.
+
+If it says **"Network autoconfiguration failed"** (Debian's own page, when
+no network answered at all): plug in the cable and choose **Retry network
+autoconfiguration**.
+
+Then it installs (5 to 20 minutes, depending on the line) and restarts by
+itself. **Take the stick out once it restarts.**
+
+### 5. Approve it
+
+At its first start the computer installs the satellite (a few more minutes;
+its screen says what it is doing, and why if it can't reach your server),
+then shows the room's **six-digit code in large digits**, and says it
+through its speaker if one works. Type it in **Settings → Satellites**,
+under **waiting for approval**. The screen says "This computer is now the
+room …" and turns off a minute later.
+
+### What it does by itself
+
+- **Satellite updates** come from your server, signed by its key, as on a
+  Pi: the stick installs with **automatic** permissions (this computer is a
+  room, not someone's laptop).
+- **Debian's security updates** install every day by themselves
+  (unattended-upgrades), and the computer restarts at **03:30** when one
+  needs it (a new kernel).
+- **The clock**: a time client keeps it right; a flat CMOS battery that
+  starts it in 2009 is set forward to the day the stick was made, so the
+  downloads work.
+- Lid, sleep and screen: the installer's power settings (lid ignored, never
+  sleep); the screen turns off a minute after approval.
+
+### Secure Boot
+
+The stick starts with Secure Boot on: its boot loader (Debian's shim) is
+signed by Microsoft with both its **2011** and its **2023** certificates.
+
+- **A PC that refuses the stick** ("Access Denied", "Secure Boot
+  violation", or straight back to its boot menu) has Microsoft's
+  third-party certificate switched off ("Secured-core" PCs, some Lenovo and
+  Surface models since 2022). Turn on **Allow Microsoft 3rd Party UEFI CA**
+  (Lenovo's name; other makers word it differently) in its firmware
+  settings, or turn Secure Boot off.
+- **The boot loader is frozen.** Microsoft's 2011 certificate expired in
+  June 2026 and new shims are signed with the 2023 one only; firmware that
+  never got the 2023 certificate (no maker update, and Windows, which would
+  have brought it, is gone) would not start a room that an update moved to
+  such a shim, with nobody at a keyboard. So the room keeps the shim and
+  GRUB the stick installed: their packages are held (`apt-mark hold`) and
+  kept out of the automatic updates, and nothing on the room changes the
+  firmware's certificates (no fwupd). Kernels still update.
+- **The dashboard warns** on the room's health card ("firmware needs the
+  2023 certificate") when Secure Boot is on and the firmware lacks
+  Microsoft's 2023 certificate (the room checks at every start). It keeps
+  starting as it is; once Debian ships a boot loader signed with the 2023
+  certificate only, a stick made after that will stop starting on it while
+  Secure Boot is on. **To update
+  the firmware by hand:** install the maker's latest BIOS/UEFI update for
+  that model from their support site (many have a bootable USB updater; if
+  the computer still has Windows, run it from there, and let Windows Update
+  finish first, which may bring the certificate too), or turn Secure Boot
+  off in the firmware settings.
+
+### What runs as root on it
+
+The same as on a headless Linux mini PC, plus three things the stick adds,
+none of which the server can reach or start:
+
+| | What | When |
+|---|---|---|
+| `domovoi-stick-firstboot.service` | checks the bundle's SHA-256, waits for the network, sets a stale clock forward, runs `install-pc.sh --mode headless` with the stick's room code | once, at the first start (until it succeeds) |
+| `domovoi-stick-boot-check.service` | reads the firmware's Secure Boot state and certificates from `/sys/firmware/efi`, writes `/run/domovoi-stick/boot.json` | every start |
+| unattended-upgrades | Debian's security updates, the 03:30 restart | daily |
+
+The satellite runs as `domovoi-sat`, which has no login and no sudo, as on
+any headless install. The room's screen (`console.py`) runs as
+`domovoi-sat` too, and so does `/usr/local/sbin/domovoi-status`, which says
+the code through the speaker: the satellite starts it with its own rights
+(the same mechanism a Pi card's indicator uses; no sudo entry, no setuid).
+Root's password is locked and there is no user account: nobody can log in
+at the keyboard (the other consoles, Ctrl+Alt+F2, show a login prompt that
+no password opens).
+
+### Wi-Fi
+
+Off for now (owner decision, 2026-10-15): the stick keeps every Wi-Fi
+driver from loading while it installs, so a computer without a cable gets
+the "plug in a network cable" page. **USB_STICK_WIFI** (Settings →
+advanced, "USB sticks may use Wi-Fi") makes the next stick ask Debian's own
+Wi-Fi questions instead (network, password); that path has not been tried
+on a real laptop yet, and a room set up that way has no way to change its
+Wi-Fi later. Older Macs and laptops with Broadcom Wi-Fi need a cable either
+way.
+
+### Reusing the computer, or retiring the room
+
+The room is the whole computer. To use it for something else, install
+another system over it (or start it from a new stick for another room).
+Retire the room in the dashboard too (**Settings → Satellites → the room →
+Retire room**).
+
+### When it doesn't work
+
+| What you see | Why, and what to do |
+|---|---|
+| The computer starts as before | It didn't start from the stick: the boot-menu key (above), or USB first in its firmware settings. |
+| "Access Denied", "Secure Boot violation" | Secure Boot with Microsoft's third-party certificate off: see Secure Boot. |
+| "Plug in a network cable" | No internet: a cable from the router (or a USB network adapter), then start again. |
+| "This computer's processor is too old" | Older than about 2009: it can't be a room. |
+| "There is no disk to put the room on" | No internal disk of 8 GB or more. |
+| "This computer's disks are joined together" | Its disk holds part of an LVM volume or a RAID, and so does another disk (a USB one counts). The stick erases only one disk. Unplug or take out the others, or wipe the ones you don't need first (see Known limits), then start again. |
+| "Something on this network tried to set up this computer" | A device on the network handed the installer setup answers (a "DHCP boot file"). Start again with a cable straight to your router. |
+| The screen stays black after the menu | Restart and pick **The same, in text mode**. |
+| "Not ready yet: … Can't reach your Domovoi server" | Is the server on, and the computer on the same network? It keeps trying every minute. |
+| "did not prove it is the Domovoi server this stick was made by" | Something else answers at that address now (the server moved, or another machine). Make a new stick. |
+| "The satellite files on this computer are damaged" | Make a new stick and start again. |
+| The ERASE page again after the install | The stick is still in and the computer starts from USB first: take it out. |
+| Anything else | The room's log in the dashboard's room drawer; on the computer, `/var/log/domovoi-stick-firstboot.log`. |
+
+### Known limits
+
+- **Thunderbolt on older computers.** The stick never picks a disk behind
+  a port the computer marks as external. Thunderbolt computers from before
+  about 2019 often don't mark their ports, so a Thunderbolt drive plugged
+  into one looks like an internal disk and could be the one chosen (a
+  solid-state one even comes first). The ERASE page always names the disk
+  by make, size and device: if it isn't the computer's own disk, type
+  anything else, unplug the drive and start again.
+- **Two unrelated LVM or RAID disks.** The stick can see that a disk holds
+  part of an LVM volume or a RAID, but not which one. If the chosen disk
+  holds one and any other disk does too, it refuses, even when the two have
+  nothing to do with each other, and there is no way past that page. Unplug
+  the other disk if you can. If it's built in and you don't need what's on
+  it, wipe it first from any Linux live stick (Debian's or Ubuntu's): `lsblk
+  -f` lists the disks; for that disk (`/dev/sdX` here), `sudo wipefs -a` on
+  each of its partitions (`/dev/sdX1`, `/dev/sdX2`, …) and then on
+  `/dev/sdX` itself. That erases what's on it. A RAID made in the
+  computer's own firmware (Intel RST and the like) is deleted in that
+  firmware's RAID setup instead. Then start from the stick again.
+
+### For developers
+
+`domovoi/usb_stick/`: `image.py` makes our files (pure, reproducible:
+`SOURCE_DATE_EPOCH`, sorted, root-owned), `repack.py` runs xorriso,
+`jobs.py` is the core's download, job and cache; the stick's own files are
+in `stick/` (`installer/` runs inside Debian's installer, `room/` on the
+installed room). The pinned image is `debian-image.json` (its `about` says
+how to move it). The QEMU kit is `scripts/dev/usb-stick/` (Windows host,
+WHPX): `make_stick.py` (offline, or from a throwaway stack's own route),
+`matrix.py` (BIOS, UEFI, Secure Boot with Microsoft's 2011 and 2023 keys,
+the refusals, the "already a room" page, the Wi-Fi switch),
+`qemu_drive.py`, and the OVMF and disk tools. Two test seams on the core,
+never for a household: `DOMOVOI_USB_STICK_REPACK` (run repack.py
+elsewhere, for a core with no xorriso) and `DOMOVOI_USB_STICK_DEBUG=1` (the
+kit's serial markers).
