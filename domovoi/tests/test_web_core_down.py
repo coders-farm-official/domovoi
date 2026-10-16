@@ -124,6 +124,11 @@ def _sat(setup: str, health: dict, status: dict | None, rows=ROOMS, script=_SAT_
 
 DOWN = {"status": "degraded", "db_reachable": True, "domovoi_reachable": False}
 UP = {"status": "ok", "db_reachable": True, "domovoi_reachable": True}
+# Review 2026-10-15: the database down (the web's own ping fails too), and a
+# core whose loop answers /v1/alive but can't serve. Neither is the core's
+# to fix by restarting, so neither gets the button.
+DB_DOWN = {"status": "degraded", "db_reachable": False, "domovoi_reachable": False, "core_alive": True}
+SICK = {"status": "degraded", "db_reachable": True, "domovoi_reachable": False, "core_alive": True}
 
 
 def _version(setup: str, version, status: dict | None) -> dict:
@@ -155,6 +160,8 @@ SCENARIOS = {
     "sat_down_admin_starting": _sat(_SETUP, DOWN, {**CAN, "capable": False, "starting": True,
                                                    "why": "the core is starting; give it a minute"}),
     "sat_up_offline": _sat(_SETUP, UP, {"answering": True}),
+    "sat_db_down_admin": _sat(_SETUP, DB_DOWN, CAN),
+    "sat_sick_admin": _sat(_SETUP, SICK, CAN),
     "sat_down_press": _sat(_ADMIN_PRESS, DOWN, CAN, script=_PRESS_SCRIPT),
     "version_down_admin": _version(_SETUP, {"__error": {"status": 502, "message": "domovoi unreachable"}}, CAN),
     "version_down_household": _version(_HOUSEHOLD, {"__error": {"status": 502, "message": "domovoi unreachable"}}, CAN),
@@ -245,3 +252,18 @@ def test_home_s_row_carries_the_restart_for_an_admin(driven) -> None:
     assert "Restart the core" in driven["home_admin"]["buttons"]
     assert "Restart the core" not in driven["home_household"]["buttons"]
     assert "isn't answering" in driven["home_household"]["text"]
+
+
+def test_a_database_that_is_down_is_named_and_offers_no_restart(driven) -> None:
+    r = driven["sat_db_down_admin"]
+    assert r["banner"] and "The database isn’t answering, so satellites can’t connect" in r["banner"]
+    assert "Restarting the core won’t help" in r["banner"]
+    assert "core isn’t answering" not in r["banner"]
+    assert "Restart the core" not in r["buttons"]
+
+
+def test_a_core_that_runs_but_cannot_answer_offers_no_restart(driven) -> None:
+    r = driven["sat_sick_admin"]
+    assert r["banner"] and "running but can’t answer" in r["banner"]
+    assert "database" in r["banner"]
+    assert "Restart the core" not in r["buttons"]

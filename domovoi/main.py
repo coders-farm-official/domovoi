@@ -956,6 +956,20 @@ async def phone_voice_turn(
 _UNBOUND_CHALLENGE_SEEN = False
 
 
+@app.get("/v1/alive")
+async def alive() -> dict[str, Any]:
+    """Liveness, and nothing else: answered by the event loop itself, with
+    no database, no lock and no credential behind it. A core that answers
+    here is running, however slow or sick ``/v1/health`` says it is (a
+    database that is down answers 503 there). The dashboard's "Restart the
+    core" ends a core only when this has stayed silent for longer than the
+    core's own loop watchdog waits (web/backend/core_restart.py). ``pid``
+    is this process's, for that check."""
+    import os
+
+    return {"alive": True, "pid": os.getpid()}
+
+
 @app.get("/v1/health")
 async def health(
     challenge: str | None = None, addr: str | None = None

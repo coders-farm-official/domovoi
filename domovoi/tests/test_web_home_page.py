@@ -787,6 +787,11 @@ _RULE_CASES = {
     "core_down": {"health": {"status": "degraded", "db_reachable": True, "domovoi_reachable": False,
                              "stt": "unavailable"},
                   "rooms": [room("a", "offline")], "approvals": [{"room_id": "x"}]},
+    # Review 2026-10-15: a core that runs (its /v1/alive answers) but can't
+    # serve is not offered the restart, which wouldn't help.
+    "core_sick": {"health": {"status": "degraded", "db_reachable": True, "domovoi_reachable": False,
+                             "core_alive": True, "stt": "unavailable"},
+                  "rooms": [room("a", "offline")]},
     "unclaimed_first": {"viewer": {**_V, "unclaimed": True}, "hardware": {"disk": {"percent": 91}},
                         "rooms": [room("a", "offline")], "health": {**HEALTH_OK, "stt": "unavailable"}},
 }
@@ -798,7 +803,7 @@ SCENARIOS["rules"] = scenario(
     "const cases = " + json.dumps(_RULE_CASES) + ";"
     "const out = {};"
     "for (const [k, c] of Object.entries(cases)) out[k] = w.__rows({ ...base, ...c })"
-    ".map((r) => ({ key: r.key, tone: r.tone, scope: r.scope, text: r.text }));"
+    ".map((r) => ({ key: r.key, tone: r.tone, scope: r.scope, text: r.text, coreDown: !!r.coreDown }));"
     "return out;",
 )
 
@@ -1574,6 +1579,12 @@ def test_a_staged_plugin_upgrade_asks_for_the_restart_by_name(driven) -> None:
 def test_a_down_core_or_database_suppresses_what_depends_on_it(driven) -> None:
     assert _rules(driven, "db_down") == [("db", "err")]
     assert _rules(driven, "core_down") == [("core", "err")]
+    (frozen,) = driven["rules"]["core_down"]
+    assert frozen["coreDown"] and "isn't answering" in frozen["text"]
+    (sick,) = driven["rules"]["core_sick"]
+    assert (sick["key"], sick["tone"]) == ("core", "err")
+    assert not sick["coreDown"]                      # no restart on the row
+    assert "running but can't answer" in sick["text"] and "database" in sick["text"]
 
 
 def test_the_claim_row_leads_and_errors_rank_first(driven) -> None:

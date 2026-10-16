@@ -15168,6 +15168,17 @@
               }
             ],
             "title": "Identity"
+          },
+          "core_alive": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Core Alive"
           }
         },
         "type": "object",

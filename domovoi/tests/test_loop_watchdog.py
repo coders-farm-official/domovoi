@@ -187,6 +187,38 @@ def test_database_probes_without_an_answer_are_a_stall(tmp_path) -> None:
     assert out.count("database probe got no answer") == 3
 
 
+def test_a_database_error_resets_the_no_answer_count(tmp_path) -> None:
+    """Review note 9: no answer, no answer, then an error (the database
+    answered, with a no), then no answer twice: never three in a row, so
+    no stall; a third no-answer after that is."""
+    script = ["hang", "hang", "error", "hang", "hang"]
+    seen: list[str] = []
+
+    async def probe() -> None:
+        step = script.pop(0) if script else "hang"
+        seen.append(step)
+        if step == "error":
+            raise ConnectionRefusedError("refused")
+        await asyncio.sleep(30)
+
+    with Harness(tmp_path, probe=probe) as h:
+        assert wait_until(lambda: len(seen) >= 5, 10)
+        fired_early = h.exited.is_set()
+        assert h.exited.wait(10)            # the next no-answer makes three
+        out = h.output()
+    assert not fired_early, f"fired after {seen}: an error must reset the count"
+    assert "3 database probes in a row got no answer" in out
+
+
+def wait_until(pred, secs: float) -> bool:
+    end = time.monotonic() + secs
+    while time.monotonic() < end:
+        if pred():
+            return True
+        time.sleep(0.02)
+    return pred()
+
+
 def test_a_database_that_refuses_is_not_a_stall(tmp_path) -> None:
     async def refused() -> None:
         raise ConnectionRefusedError("nothing listens on 6432")
@@ -258,6 +290,51 @@ def test_a_startup_that_never_finishes_is_a_stall(tmp_path) -> None:
     assert off.check() is None
 
 
+def test_systemd_is_fed_while_starting_but_not_once_stopping(tmp_path) -> None:
+    """A unit changed to Type=simple keeps WatchdogSec= and is watched
+    from the fork (the review's I2, unmocked in the systemd container):
+    a slow first boot must not be killed for want of keep-alives. Once
+    a stop has begun (detached), nothing feeds it."""
+    clock = {"t": 0.0}
+    n = FakeNotifier(watchdog_usec=1_000_000)
+    wd = LoopWatchdog(Limits(startup_sec=900.0), notifier=n, exit_fn=lambda c: None,
+                      backstop=lambda s: None, clock=lambda: clock["t"],
+                      out_fd=os.open(os.devnull, os.O_WRONLY))
+    lifecycle.reset()
+    for t in (1.0, 2.0, 3.0):
+        clock["t"] = t
+        assert wd.check() is None
+    assert n.sent.count("WATCHDOG=1") >= 2
+    wd._attached_once = True            # attached, then detached for a stop
+    before = len(n.sent)
+    clock["t"] = 10.0
+    assert wd.check() is None
+    assert len(n.sent) == before
+
+
+def test_a_started_core_leaves_its_ready_note(tmp_path, monkeypatch) -> None:
+    """Under a unit that isn't Type=notify, the dashboard tells a core
+    still starting from one that started and then froze by this note
+    (review I2); only an installed core (domovoi.main) leaves it."""
+    from web.backend import core_restart
+
+    note = tmp_path / "run" / "core-ready.json"
+    monkeypatch.setattr(loop_watchdog, "ready_path", lambda: note)
+    monkeypatch.setattr(loop_watchdog, "_ACTIVE", None)
+    monkeypatch.setattr(loop_watchdog, "_INSTALLED", False)
+
+    async def started() -> None:
+        loop_watchdog.attach_running_loop()
+
+    asyncio.run(started())
+    assert not note.exists()            # a test app or a tool: no note
+    monkeypatch.setattr(loop_watchdog, "_INSTALLED", True)
+    asyncio.run(started())
+    assert loop_watchdog.read_ready()["pid"] == os.getpid()
+    assert core_restart._said_ready(os.getpid())
+    assert not core_restart._said_ready(os.getpid() + 1)     # another process's note
+
+
 def test_install_honours_the_switch(monkeypatch) -> None:
     class S:
         loop_watchdog_enabled = False
@@ -275,7 +352,10 @@ def test_switched_off_under_systemd_it_still_says_ready_and_feeds(tmp_path, monk
     core must still say READY=1 (or systemd kills it after
     TimeoutStartSec) and feed WatchdogSec=, but never find a stall."""
     release = threading.Event()
-    with Harness(tmp_path, limits=Limits(detect=False, check_sec=0.05, heartbeat_sec=0.1),
+    # A stall time far shorter than the freeze: switched on, this fires.
+    with Harness(tmp_path, limits=Limits(detect=False, stall_sec=0.3, probe_interval_sec=0.2,
+                                         probe_timeout_sec=0.2, check_sec=0.05,
+                                         heartbeat_sec=0.1),
                  watchdog_usec=200_000) as h:
         h.loop.call_soon_threadsafe(blocking_worker, release)
         time.sleep(2.0)
@@ -512,3 +592,43 @@ def test_an_installed_watchdog_keeps_faulthandlers_dump_on_disk(tmp_path, monkey
     assert kind and "frozen past the backstop" in kind
     assert "gil_holder" in (logs / "core-watchdog.log").read_text(encoding="utf-8")
     assert "frozen past the backstop" in loop_watchdog.last_stall()["reason"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+def test_an_installed_core_survives_sigusr1_and_writes_its_stacks(tmp_path) -> None:
+    """Review note 9: the dashboard sends SIGUSR1 before it ends a core;
+    with no handler that signal ends the process with nothing written.
+    install() registers faulthandler on it, the watchdog on or off."""
+    import signal
+
+    for enabled in ("true", "false"):
+        home = tmp_path / f"home-{enabled}"
+        home.mkdir()
+        repo = str(Path(__file__).resolve().parents[2])
+        code = textwrap.dedent(f"""
+            import sys, time
+            sys.path.insert(0, {repo!r})
+            from domovoi import loop_watchdog
+            class S:
+                loop_watchdog_enabled = {enabled == "true"}
+                loop_watchdog_stall_sec = 30.0
+                loop_watchdog_probe_interval_sec = 600.0
+                loop_watchdog_probe_timeout_sec = 10.0
+                loop_watchdog_probe_failures = 3
+                loop_watchdog_startup_sec = 0.0
+            loop_watchdog.install(S())
+            print("ready", flush=True)
+            time.sleep(60)
+        """)
+        env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+        child = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True, env=env)
+        try:
+            assert child.stdout.readline().strip() == "ready"
+            os.kill(child.pid, signal.SIGUSR1)
+            time.sleep(1.0)
+            assert child.poll() is None, f"SIGUSR1 ended the core (watchdog {enabled})"
+            dump = (home / ".domovoi" / "logs" / "core-faulthandler.log").read_text(encoding="utf-8")
+            assert "most recent call first" in dump
+        finally:
+            child.kill()
+            child.wait()

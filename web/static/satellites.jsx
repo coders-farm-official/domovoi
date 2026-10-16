@@ -2302,6 +2302,13 @@ const SatellitesPage = ({ embedded = false } = {}) => {
     return () => clearInterval(t);
   }, [refreshHealth]);
   const coreDown = !!health && health.domovoi_reachable === false;
+  // Why the core can't serve: its database (the web's own ping fails too),
+  // or a core that runs but can't answer (its loop answers /v1/alive), or a
+  // core that is stopped or frozen. Only the last one is the core's to fix
+  // by restarting.
+  const downWhy = !coreDown ? null
+    : health.db_reachable === false ? 'db'
+      : health.core_alive === true ? 'sick' : 'frozen';
   const wasDown = React.useRef(false);
   React.useEffect(() => {
     if (wasDown.current && !coreDown) refresh();   // back: the live state again
@@ -2395,12 +2402,23 @@ const SatellitesPage = ({ embedded = false } = {}) => {
           <div className="sat-core-down" style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <StatusDot tone="err"/>
-              <span style={{ fontSize: 14, fontWeight: 600 }}>The server’s core isn’t answering, so satellites can’t connect.</span>
+              <span style={{ fontSize: 14, fontWeight: 600 }}>
+                {downWhy === 'db'
+                  ? 'The database isn’t answering, so satellites can’t connect.'
+                  : downWhy === 'sick'
+                    ? 'The server’s core is running but can’t answer, so satellites can’t connect.'
+                    : 'The server’s core isn’t answering, so satellites can’t connect.'}
+              </span>
             </div>
             <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+              {downWhy === 'db'
+                ? 'The core needs it for every room. Restarting the core won’t help; the database has to come back first. '
+                : downWhy === 'sick'
+                  ? 'It is most likely waiting on its database. Restarting it won’t help while that lasts. '
+                  : ''}
               The rooms below are as they were last heard from. They reconnect by themselves once the core is back.
             </div>
-            <CoreRestart onBack={() => { refreshHealth(); refresh(); }}/>
+            {downWhy === 'frozen' && <CoreRestart onBack={() => { refreshHealth(); refresh(); }}/>}
           </div>
         </Card>
       )}

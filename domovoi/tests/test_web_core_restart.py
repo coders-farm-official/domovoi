@@ -1,20 +1,23 @@
-"""Restart a core that doesn't answer, from the dashboard (incident
-2026-10-14): web/backend/core_restart.py and its two routes.
+"""Restart a core that is frozen, from the dashboard (incident 2026-10-14):
+web/backend/core_restart.py and its two routes.
 
 The dashboard's Restart used to go THROUGH the core, so a frozen core
-could not be restarted from it. Now the web process ends a core that
-doesn't answer and systemd starts it again, under the security tier, which
-the web checks itself against the shared admin_sessions table (the core
-that would normally check it is the one not answering).
+could not be restarted from it. Now the web process ends a core whose
+event loop has given no answer at all for longer than the core's own
+watchdog waits, and systemd starts it again; under the security tier,
+which the web checks itself against the shared admin_sessions table.
 
-The process side (a real kill, a real systemd restarting the unit) runs in
-functional-testing/core-resilience/systemd (a container with systemd as
-PID 1); here the decisions are pinned with systemd's answers scripted."""
+Review 2026-10-15: the first build ended cores that were NOT frozen (a
+503 from a database that was down, a 12 s busy loop, a 5 s health answer,
+a Type=simple core still starting). Those are pinned here, against real
+HTTP servers where it matters, and in functional-testing/core-resilience/
+systemd under a real systemd (cases A, B2, C, I2); the POSIX process parts
+run unmocked in test_core_restart_posix.py."""
 
 from __future__ import annotations
 
+import asyncio
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -22,7 +25,7 @@ import time
 import pytest
 
 from web.backend import core_restart
-from web.backend.core_restart import CoreUnit
+from web.backend.core_restart import CoreUnit, Probe
 
 from domovoi.tests.auth_testkit import (  # noqa: F401  (the _db fixture)
     COOKIE,
@@ -44,15 +47,23 @@ def unit(**kw) -> CoreUnit:
 
 @pytest.fixture
 def systemd(monkeypatch):
-    """Script what systemd and the kernel say; record what would be done."""
+    """Script what systemd, the kernel and the core say; record what would
+    be done. The core is silent and has been for long enough, unless a
+    test says otherwise."""
     state = {"unit": unit(), "may_signal": True, "is_core": True, "sudo": (False, "no grant"),
+             "uptime": 3600.0, "ready": True, "probes": [], "probe": Probe(alive=False),
              "ended": [], "restarted": 0}
     monkeypatch.setattr(core_restart, "core_unit", lambda: state["unit"])
     monkeypatch.setattr(core_restart, "_may_signal", lambda pid: state["may_signal"])
     monkeypatch.setattr(core_restart, "_looks_like_the_core", lambda pid: state["is_core"])
+    monkeypatch.setattr(core_restart, "process_uptime_sec", lambda pid: state["uptime"])
+    monkeypatch.setattr(core_restart, "_said_ready", lambda pid: state["ready"])
     monkeypatch.setattr(core_restart, "_systemctl", lambda: "/usr/bin/systemctl")
     monkeypatch.setattr(core_restart.self_restart, "capable", lambda mode=None: state["sudo"])
     monkeypatch.setattr(core_restart, "_LAST_KILL", None)
+    monkeypatch.setattr(core_restart, "_SILENT_SINCE", {})
+    monkeypatch.setattr(core_restart, "silence_needed_sec", lambda: 0.0)
+    monkeypatch.setattr(core_restart, "PROBE_EVERY_SEC", 0.01)
 
     def end_core(pid: int) -> bool:
         state["ended"].append(pid)
@@ -63,12 +74,14 @@ def systemd(monkeypatch):
         return {"ok": True, "mode": "update", "units": ["domovoi-update.service"],
                 "delay_sec": 1.0, "error": None, "in_progress": False}
 
-    async def not_answering(timeout: float = 3.0) -> bool:
-        return False
+    async def probe(timeout: float = 3.0, *, with_health: bool = True) -> Probe:
+        if state["probes"]:
+            return state["probes"].pop(0)
+        return state["probe"]
 
     monkeypatch.setattr(core_restart, "end_core", end_core)
     monkeypatch.setattr(core_restart.self_restart, "restart", restart)
-    monkeypatch.setattr(core_restart, "core_answers", not_answering)
+    monkeypatch.setattr(core_restart, "probe_core", probe)
     return state
 
 
@@ -78,7 +91,7 @@ def systemd(monkeypatch):
 def test_a_frozen_core_under_systemd_is_ended_and_left_to_systemd(systemd) -> None:
     p = core_restart.plan()
     assert p == {"capable": True, "how": "signal", "why": None, "starting": False,
-                 "manual_command": "sudo systemctl restart domovoi-core"}
+                 "manual_command": "sudo systemctl restart domovoi-core", "pid": 4242}
 
 
 @pytest.mark.parametrize("restart", ["always", "on-failure", "on-abnormal", "on-abort"])
@@ -102,26 +115,25 @@ def test_a_starting_core_is_left_to_start(systemd) -> None:
     assert p["starting"] and not p["capable"]
     systemd["unit"] = unit(active_state="activating", sub_state="auto-restart", main_pid=0)
     assert core_restart.plan()["starting"]
-    # Type=simple says active at once: a young process may still be loading.
-    systemd["unit"] = unit(service_type="simple", started_monotonic_sec=time.monotonic() - 30)
+
+
+def test_a_type_simple_core_still_starting_is_left_alone(systemd) -> None:
+    """Review case I2: a Type=simple core 126 s into a slow first boot was
+    killed (the grace was 120 s). The grace is now the core's own startup
+    limit, by the process's uptime, unless it said it is ready."""
+    systemd["unit"] = unit(service_type="simple")
+    systemd["ready"] = False
+    systemd["uptime"] = 126.0
     p = core_restart.plan()
-    assert p["starting"] and "started 30 s ago" in p["why"]
+    assert p["starting"] and not p["capable"] and "started 126 s ago" in p["why"]
+    systemd["uptime"] = core_restart.startup_limit_sec() + 1
+    assert core_restart.plan()["how"] == "signal"       # past the core's own limit
+    systemd["uptime"] = 126.0
+    systemd["ready"] = True
+    assert core_restart.plan()["how"] == "signal"       # it finished starting, then froze
     # Type=notify is active only once it said READY: no grace needed.
-    systemd["unit"] = unit(service_type="notify", started_monotonic_sec=time.monotonic() - 30)
-    assert core_restart.plan()["how"] == "signal"
-
-
-def test_one_restart_at_a_time(systemd) -> None:
-    import asyncio
-
-    res = asyncio.run(core_restart.restart_unanswering_core())
-    assert res["ok"] and systemd["ended"] == [4242]
-    # The real end_core records what it ended; the plan then holds off.
-    core_restart._LAST_KILL = (4242, time.monotonic())
-    p = core_restart.plan()
-    assert p["starting"] and p["why"] == "a restart is already under way"
-    # A new process (systemd started it again) can be restarted again.
-    systemd["unit"] = unit(main_pid=5151)
+    systemd["unit"] = unit(service_type="notify")
+    systemd["ready"] = False
     assert core_restart.plan()["how"] == "signal"
 
 
@@ -164,24 +176,131 @@ def test_reading_systemd(monkeypatch) -> None:
     u = core_restart.core_unit()
     assert u == CoreUnit("loaded", "active", "running", 812, "on-failure", "notify", 123.456789)
     assert calls[0][:3] == ["/usr/bin/systemctl", "show", "domovoi-core.service"]
-    # No sudo anywhere: a plain read over the bus.
     assert "sudo" not in " ".join(calls[0])
     monkeypatch.setattr(core_restart.subprocess, "run",
                         lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "LoadState=not-found\n", ""))
     assert core_restart.core_unit() is None
 
 
+def test_the_silence_needed_is_longer_than_the_cores_own_watchdog(monkeypatch) -> None:
+    from domovoi.config import settings
+
+    monkeypatch.setattr(settings, "loop_watchdog_stall_sec", 30.0)
+    assert core_restart.silence_needed_sec() == 45.0
+    monkeypatch.setattr(settings, "loop_watchdog_stall_sec", 90.0)
+    assert core_restart.silence_needed_sec() == 105.0
+    monkeypatch.setattr(settings, "loop_watchdog_stall_sec", 5.0)   # never under 30 s
+    assert core_restart.silence_needed_sec() == 45.0
+
+
 # ─── the restart itself ──────────────────────────────────────────────────
 
 
-async def test_an_answering_core_is_never_restarted_from_here(systemd, monkeypatch) -> None:
-    async def answering(timeout: float = 3.0) -> bool:
-        return True
-
-    monkeypatch.setattr(core_restart, "core_answers", answering)
+async def test_a_core_whose_loop_answers_is_never_ended(systemd) -> None:
+    """Review cases A and C: a core that answers at all (a 503 from a
+    database that is down, a slow health answer, a 404 from an older core)
+    is running. Nothing is ended; the answer says what is wrong."""
+    systemd["probe"] = Probe(alive=True, health=503, db_down=True)
+    res = await core_restart.restart_unanswering_core()
+    assert res["ok"] is False and res["answering"] is True and res["db_down"] is True
+    assert "database isn't answering" in res["error"]
+    systemd["probe"] = Probe(alive=True, health=None)
     res = await core_restart.restart_unanswering_core()
     assert res["ok"] is False and res["answering"] is True
+    systemd["probe"] = Probe(alive=True, health=200)
+    res = await core_restart.restart_unanswering_core()
+    assert "use Restart Domovoi" in res["error"]
     assert systemd["ended"] == [] and systemd["restarted"] == 0
+
+
+async def test_a_press_waits_out_the_silence_and_stops_when_the_core_answers(systemd, monkeypatch) -> None:
+    """Review case B2: a 12 s busy loop (the core's own watchdog counts it
+    healthy) was killed at once. A press now waits for the silence the
+    core's watchdog would need, and the core answering ends the wait."""
+    monkeypatch.setattr(core_restart, "silence_needed_sec", lambda: 0.5)
+    systemd["probes"] = [Probe(alive=False), Probe(alive=False), Probe(alive=False), Probe(alive=True)]
+    t0 = time.monotonic()
+    res = await core_restart.restart_unanswering_core()
+    assert res["ok"] is False and res["answering"] is True and "busy, not frozen" in res["error"]
+    assert systemd["ended"] == []
+    assert time.monotonic() - t0 < 2.0
+
+
+async def test_a_core_silent_for_the_whole_wait_is_ended(systemd, monkeypatch) -> None:
+    monkeypatch.setattr(core_restart, "silence_needed_sec", lambda: 0.3)
+    t0 = time.monotonic()
+    res = await core_restart.restart_unanswering_core()
+    assert res["ok"] is True and res["how"] == "signal"
+    assert systemd["ended"] == [4242]
+    assert time.monotonic() - t0 >= 0.3
+
+
+async def test_a_silence_already_watched_counts(systemd, monkeypatch) -> None:
+    """The page polls the status read: a press after the core has been
+    watched silent long enough acts at once."""
+    monkeypatch.setattr(core_restart, "silence_needed_sec", lambda: 30.0)
+    await core_restart.status()
+    core_restart._SILENT_SINCE[4242] -= 31.0
+    t0 = time.monotonic()
+    res = await core_restart.restart_unanswering_core()
+    assert res["ok"] is True and systemd["ended"] == [4242]
+    assert time.monotonic() - t0 < 1.0
+
+
+async def test_a_new_process_meanwhile_stops_the_press(systemd, monkeypatch) -> None:
+    """systemd started another core while the press waited (its own
+    watchdog did its job): nothing is ended."""
+    monkeypatch.setattr(core_restart, "silence_needed_sec", lambda: 0.3)
+    calls = {"n": 0}
+
+    def changing():
+        calls["n"] += 1
+        return unit() if calls["n"] < 3 else unit(main_pid=5151)
+
+    monkeypatch.setattr(core_restart, "core_unit", changing)
+    res = await core_restart.restart_unanswering_core()
+    assert res["ok"] is False and res["starting"] is True and "restarting by itself" in res["error"]
+    assert systemd["ended"] == []
+
+
+async def test_every_guard_runs_again_before_the_kill(systemd, monkeypatch) -> None:
+    """Review note 8: the policy, the account and the PID are read again,
+    fresh, right before the kill."""
+    monkeypatch.setattr(core_restart, "silence_needed_sec", lambda: 0.1)
+    calls = {"n": 0}
+
+    def drifting():
+        calls["n"] += 1
+        return unit() if calls["n"] == 1 else unit(restart="no")
+
+    monkeypatch.setattr(core_restart, "core_unit", drifting)
+    res = await core_restart.restart_unanswering_core()
+    assert res["ok"] is False and "Restart=no" in res["error"]
+    assert systemd["ended"] == []
+
+
+async def test_one_restart_at_a_time(systemd) -> None:
+    res = await core_restart.restart_unanswering_core()
+    assert res["ok"] and systemd["ended"] == [4242]
+    core_restart._LAST_KILL = (4242, time.monotonic())
+    p = core_restart.plan()
+    assert p["starting"] and p["why"] == "a restart is already under way"
+    systemd["unit"] = unit(main_pid=5151)
+    assert core_restart.plan()["how"] == "signal"
+
+
+async def test_two_presses_at_once_end_the_core_once(systemd, monkeypatch) -> None:
+    """Review case D (unmocked in the systemd container too): two admins
+    press during the same silence. Both used to wait it out and both
+    signalled; now the second is told a restart is under way."""
+    monkeypatch.setattr(core_restart, "silence_needed_sec", lambda: 0.3)
+    a, b = await asyncio.gather(core_restart.restart_unanswering_core(),
+                                core_restart.restart_unanswering_core())
+    assert sorted([a["ok"], b["ok"]]) == [False, True]
+    told = b if a["ok"] else a
+    assert "already under way" in told["error"]
+    assert systemd["ended"] == [4242]
+    assert core_restart._PRESS_UNDER_WAY is False       # and the next press may run
 
 
 async def test_the_sudo_route_is_the_cores_own_restart(systemd) -> None:
@@ -192,38 +311,110 @@ async def test_the_sudo_route_is_the_cores_own_restart(systemd) -> None:
     assert systemd["ended"] == []
 
 
-async def test_status_says_what_the_button_would_do(systemd, monkeypatch) -> None:
+async def test_status_says_what_the_button_would_do(systemd) -> None:
     st = await core_restart.status()
-    assert st["answering"] is False and st["how"] == "signal"
-
-    async def answering(timeout: float = 3.0) -> bool:
-        return True
-
-    monkeypatch.setattr(core_restart, "core_answers", answering)
-    assert (await core_restart.status())["answering"] is True
+    assert st["answering"] is False and st["how"] == "signal" and "pid" not in st
+    assert st["silence_needed_sec"] == 0.0
+    systemd["probe"] = Probe(alive=True, health=503, db_down=True)
+    st = await core_restart.status()
+    assert st["answering"] is True and st["db_down"] is True and st["capable"] is False
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals and /proc")
-def test_end_core_dumps_then_kills(tmp_path, monkeypatch) -> None:
-    """A real process: SIGUSR1 first (the core's faulthandler prints its
-    stacks), then SIGKILL, and end_core sees it gone."""
-    marker = tmp_path / "usr1"
-    child = subprocess.Popen([sys.executable, "-c", (
-        "import signal, time\n"
-        f"signal.signal(signal.SIGUSR1, lambda *a: open(r'{marker}', 'w').write('dumped'))\n"
-        "print('ready', flush=True)\n"
-        "while True: time.sleep(1)\n"
-    )], stdout=subprocess.PIPE, text=True)
-    assert child.stdout.readline().strip() == "ready"
-    monkeypatch.setattr(core_restart, "_LAST_KILL", None)
-    notes: list[tuple[str, int]] = []
-    monkeypatch.setattr(core_restart.loop_watchdog, "note_last_stall",
-                        lambda reason, *, pid, **kw: notes.append((reason, pid)))
-    assert core_restart.end_core(child.pid)
-    assert child.wait(5) == -signal.SIGKILL
-    assert marker.read_text() == "dumped"
-    # The Version card says the dashboard did it, and why.
-    assert notes == [("the dashboard restarted the core: it did not answer /v1/health", child.pid)]
+# ─── probe_core against real HTTP servers (no mocks) ─────────────────────
+
+
+async def _serve(handler) -> tuple[asyncio.AbstractServer, int]:
+    server = await asyncio.start_server(handler, "127.0.0.1", 0)
+    return server, server.sockets[0].getsockname()[1]
+
+
+def _responder(routes: dict[str, tuple[int, bytes, float]]):
+    async def handle(reader, writer):
+        line = await reader.readline()
+        path = line.split()[1].decode() if len(line.split()) > 1 else "/"
+        while (await reader.readline()) not in (b"\r\n", b"\n", b""):
+            pass
+        status, body, delay = routes.get(path, (404, b'{"detail":"Not Found"}', 0.0))
+        if delay:
+            await asyncio.sleep(delay)
+        writer.write(f"HTTP/1.1 {status} X\r\ncontent-length: {len(body)}\r\nconnection: close\r\n\r\n"
+                     .encode() + body)
+        try:
+            await writer.drain()
+        except ConnectionError:
+            pass
+        writer.close()
+    return handle
+
+
+async def test_probe_any_answer_from_the_loop_is_alive(monkeypatch) -> None:
+    """The kill rule, unmocked: ANY HTTP answer on /v1/alive is a running
+    loop (the 503 of a database that is down, a slow health check, a 404
+    from a core older than /v1/alive). A mutant that wants a 200 from
+    /v1/health (the first build's rule) fails here."""
+    cases = {
+        "db down": ({"/v1/alive": (200, b'{"alive":true}', 0.0),
+                     "/v1/health": (503, b'{"detail":"db unreachable: refused"}', 0.0)},
+                    Probe(alive=True, health=503, db_down=True)),
+        "slow health": ({"/v1/alive": (200, b"{}", 0.0), "/v1/health": (200, b"{}", 5.0)},
+                        Probe(alive=True, health=None)),
+        "older core": ({"/v1/health": (200, b"{}", 0.0)}, Probe(alive=True, health=200)),
+        "healthy": ({"/v1/alive": (200, b"{}", 0.0), "/v1/health": (200, b"{}", 0.0)},
+                    Probe(alive=True, health=200)),
+    }
+    for name, (routes, want) in cases.items():
+        server, port = await _serve(_responder(routes))
+        monkeypatch.setenv("DOMOVOI_URL", f"http://127.0.0.1:{port}")
+        try:
+            got = await core_restart.probe_core(timeout=2.0)
+        finally:
+            server.close()
+            await server.wait_closed()
+        assert got == want, name
+
+
+async def test_probe_a_frozen_or_absent_core_is_silent(monkeypatch) -> None:
+    async def never(reader, writer):
+        await asyncio.sleep(30)
+
+    server, port = await _serve(never)          # accepts, never answers: frozen
+    monkeypatch.setenv("DOMOVOI_URL", f"http://127.0.0.1:{port}")
+    try:
+        t0 = time.monotonic()
+        assert await core_restart.probe_core(timeout=1.0) == Probe(alive=False)
+        assert time.monotonic() - t0 < 3
+    finally:
+        server.close()
+    server2, port2 = await _serve(never)
+    server2.close()
+    await server2.wait_closed()
+    monkeypatch.setenv("DOMOVOI_URL", f"http://127.0.0.1:{port2}")   # nothing listens
+    assert await core_restart.probe_core(timeout=1.0) == Probe(alive=False)
+
+
+async def test_a_press_against_a_real_core_that_answers_503_ends_nothing(monkeypatch) -> None:
+    """Review case A end to end on this side: a real server answering 503
+    "db unreachable" and plan() pretending everything else would allow a
+    kill. Nothing is ended."""
+    ended: list[int] = []
+    monkeypatch.setattr(core_restart, "end_core", lambda pid: ended.append(pid) or True)
+    monkeypatch.setattr(core_restart, "plan", lambda: {"capable": True, "how": "signal", "why": None,
+                                                       "starting": False, "manual_command": None,
+                                                       "pid": 4242})
+    server, port = await _serve(_responder({
+        "/v1/alive": (200, b"{}", 0.0),
+        "/v1/health": (503, b'{"detail":"db unreachable: connection refused"}', 0.0)}))
+    monkeypatch.setenv("DOMOVOI_URL", f"http://127.0.0.1:{port}")
+    try:
+        res = await core_restart.restart_unanswering_core()
+    finally:
+        server.close()
+    assert res["ok"] is False and res["db_down"] is True and ended == []
+
+
+def test_may_signal_never_on_windows(monkeypatch) -> None:
+    monkeypatch.setattr(core_restart, "_WINDOWS", True)
+    assert core_restart._may_signal(os.getpid()) is False
 
 
 # ─── the routes and their gate ───────────────────────────────────────────
@@ -232,11 +423,10 @@ def test_end_core_dumps_then_kills(tmp_path, monkeypatch) -> None:
 @requires_db
 async def test_the_restart_is_the_security_tier_checked_by_the_web(_db, systemd) -> None:
     async with web_client() as c:
-        # Before an admin exists: refused outright (501), never the grace.
         r = await c.post("/api/config/core/restart")
         assert r.status_code == 501
         token = await claim_admin(c)
-        c.cookies.clear()   # the setup answer signed this client in by cookie
+        c.cookies.clear()
         r = await c.post("/api/config/core/restart")
         assert r.status_code == 401
         r = await c.post("/api/config/core/restart", headers={
@@ -263,10 +453,29 @@ async def test_the_status_read_is_the_device_tier(_db, systemd) -> None:
         assert r.json()["answering"] is False and r.json()["capable"] is True
 
 
+@requires_db
+async def test_web_health_tells_a_running_core_from_a_frozen_one(_db, monkeypatch) -> None:
+    """/api/health's core_alive: a core whose /v1/health fails but whose
+    loop answers is not the frozen one (the Satellites banner says so)."""
+    server, port = await _serve(_responder({
+        "/v1/alive": (200, b"{}", 0.0),
+        "/v1/health": (503, b'{"detail":"db unreachable: refused"}', 0.0)}))
+    monkeypatch.setenv("DOMOVOI_URL", f"http://127.0.0.1:{port}")
+    try:
+        async with web_client() as c:
+            h = (await c.get("/api/health")).json()
+    finally:
+        server.close()
+    assert h["domovoi_reachable"] is False and h["core_alive"] is True
+    monkeypatch.setenv("DOMOVOI_URL", "http://127.0.0.1:9")
+    async with web_client() as c:
+        h = (await c.get("/api/health")).json()
+    assert h["domovoi_reachable"] is False and h["core_alive"] is False
+
+
 def test_the_web_never_imports_more_of_the_core_than_it_preloads() -> None:
     from web.backend import plugin_host
 
     assert {"domovoi.self_restart", "domovoi.git_version", "domovoi.loop_watchdog"} <= set(
         plugin_host._WEB_BACKEND_CORE_IMPORTS)
     assert "domovoi.self_restart" in sys.modules
-    assert os.path.basename(core_restart.__file__) == "core_restart.py"

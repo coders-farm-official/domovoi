@@ -117,6 +117,33 @@ def faulthandler_path() -> Path:
     return logs_dir() / "core-faulthandler.log"
 
 
+def ready_path() -> Path:
+    """Where a started core says so: ``{"pid", "at"}``, written when its
+    startup is done (the dashboard reads it to tell a core still starting
+    from one that started and then froze, under a unit that isn't
+    ``Type=notify``)."""
+    return Path.home() / ".domovoi" / "run" / "core-ready.json"
+
+
+def read_ready(path: Path | None = None) -> dict[str, Any] | None:
+    try:
+        data = json.loads((path or ready_path()).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) and isinstance(data.get("pid"), int) else None
+
+
+def _note_ready(path: Path | None = None) -> None:
+    path = path or ready_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps({"pid": os.getpid(), "at": time.time()}), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def _fsync_dir(path: Path) -> None:
     if sys.platform == "win32":
         return
@@ -458,16 +485,25 @@ class LoopWatchdog:
         if self._fired or lifecycle.shutting_down():
             return None
         now = self._clock()
+        # Still starting: systemd watches a Type=notify core only from
+        # READY=1, but a unit changed to Type=simple is watched from the
+        # fork, so it is fed while starting too (a startup that never ends
+        # is this thread's to catch, below; a held interpreter starves the
+        # feed and systemd's watchdog then catches it).
+        starting = self._loop is None and not self._attached_once
         if not self.limits.detect:
-            if self._loop is not None:
+            if self._loop is not None or starting:
                 self._keepalive(now)
             return None
         loop = self._loop
         if loop is None:
-            if (not self._attached_once and self.limits.startup_sec > 0
+            if not starting:
+                return None
+            if (self.limits.startup_sec > 0
                     and now - self._installed_at >= self.limits.startup_sec):
                 return (f"startup has not finished after {now - self._installed_at:.0f} s "
                         f"(loop_watchdog_startup_sec={self.limits.startup_sec:.0f})")
+            self._keepalive(now)
             return None
         age = now - (self._beat_at if self._beat_at is not None else now)
         if age >= self.limits.stall_sec:
@@ -654,6 +690,9 @@ class LoopWatchdog:
 # ─── the process-wide watchdog ──────────────────────────────────────────
 
 _ACTIVE: LoopWatchdog | None = None
+# install() ran (the real server, not a test), whether or not the checks
+# are on: attach_running_loop() then says the core is ready.
+_INSTALLED = False
 
 
 def _open_fault_file() -> Any:
@@ -671,9 +710,10 @@ def install(settings: Any) -> LoopWatchdog | None:
     faulthandler dump into the retained log first, then points faulthandler
     at its file and turns it on (POSIX): a crash, a SIGABRT from systemd's
     watchdog and a SIGUSR1 each leave every stack there."""
-    global _ACTIVE, _FAULT_FILE
+    global _ACTIVE, _FAULT_FILE, _INSTALLED
     if _ACTIVE is not None:
         return _ACTIVE
+    _INSTALLED = True
     # The dumps, whether or not the watchdog itself is on: the dashboard
     # sends SIGUSR1 before it ends a core that doesn't answer, which with no
     # handler would end it with nothing written.
@@ -703,7 +743,10 @@ def install(settings: Any) -> LoopWatchdog | None:
 
 
 def attach_running_loop() -> None:
-    """The lifespan's startup is done: watch this loop, tell systemd."""
+    """The lifespan's startup is done: watch this loop, tell systemd, and
+    leave the ready note (:func:`ready_path`)."""
+    if _INSTALLED:
+        _note_ready()
     if _ACTIVE is not None:
         _ACTIVE.attach(asyncio.get_running_loop())
 

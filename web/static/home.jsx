@@ -358,9 +358,14 @@ const HomeAttentionRows = ({ viewer, health, rooms, plugins, pluginErrors, acq,
   }
   if (coreDown) {
     // An admin gets the restart on the row itself (CoreRestart: it
-    // renders nothing for anyone else); the row still links to Satellites.
-    add({ key: 'core', tone: 'err', scope: 'open', href: '#satellites', coreDown: true,
-          text: "the Domovoi server isn't answering · rooms show the last known state" });
+    // renders nothing for anyone else, or while the core's loop runs); the
+    // row still links to Satellites. A core that runs but can't serve (its
+    // /v1/alive answers) is told apart: restarting it won't help.
+    const sick = health.core_alive === true;
+    add({ key: 'core', tone: 'err', scope: 'open', href: '#satellites', coreDown: !sick,
+          text: sick
+            ? "the Domovoi server is running but can't answer · most likely its database"
+            : "the Domovoi server isn't answering · rooms show the last known state" });
   }
 
   if (!dbDown && !coreDown) {

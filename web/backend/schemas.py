@@ -927,6 +927,13 @@ class HealthResponse(BaseModel):
     # answer or predates identity. The Android app pins the key and checks
     # the signature after every network change (A6-03).
     identity: dict[str, str] | None = None
+    # Whether the core's event loop runs, from its /v1/alive (answered by
+    # the loop alone, no database): true when /v1/health said 200, else
+    # whether /v1/alive gave any answer. `domovoi_reachable` false with
+    # this true is a core that runs but can't serve (its database, most
+    # likely), which restarting it won't fix; false is a core that is
+    # stopped or frozen (incident 2026-10-14).
+    core_alive: bool | None = None
 
 
 class ConfigResponse(BaseModel):
