@@ -190,6 +190,10 @@ for e in json.load(open("android/release.json", encoding="utf-8"))["release"]["a
     remote_tag="${remote_tag%%[[:space:]]*}"
     [ -z "$remote_tag" ] || [ "$remote_tag" = "$release_commit" ] \
       || die "the tag $tag already exists on GitHub at another commit ($remote_tag): a published tag never moves"
+    # A tag of that name only here would stop the tag being fetched after publishing.
+    local_tag="$(git rev-parse --quiet --verify "refs/tags/$tag^{commit}" || true)"
+    [ -z "$local_tag" ] || [ "$local_tag" = "$release_commit" ] \
+      || die "this checkout has a tag $tag at ${local_tag:0:12} that GitHub doesn't: delete it (git tag -d $tag) and run again"
     flag=--latest; kind="the Latest release"
     if [ "$is_prerelease" = 1 ]; then flag=--prerelease; kind="a pre-release"; fi
     say "publishing $tag on $REPO_SLUG at ${release_commit:0:12}, $kind…"
@@ -201,7 +205,8 @@ for e in json.load(open("android/release.json", encoding="utf-8"))["release"]["a
   fi
 
   # The tag (GitHub makes it at --target) must be the release commit.
-  git fetch --quiet origin "refs/tags/$tag:refs/tags/$tag" || die "can't fetch the tag $tag from GitHub"
+  git fetch --quiet origin "refs/tags/$tag:refs/tags/$tag" \
+    || die "can't fetch the tag $tag from GitHub (a different tag $tag here? git tag -d $tag, then run again to check)"
   tagged="$(git rev-parse "$tag^{commit}")"
   [ "$tagged" = "$release_commit" ] || die "the tag $tag is $tagged, not the release commit $release_commit"
 
@@ -296,6 +301,8 @@ if [ "$publish" = 1 ]; then
   ! gh release view "$tag" --repo "$REPO_SLUG" >/dev/null 2>&1 || die "a release $tag already exists on $REPO_SLUG"
   remote_tag="$(git ls-remote --tags origin "refs/tags/$tag")" || die "git ls-remote origin failed"
   [ -z "$remote_tag" ] || die "the tag $tag already exists on GitHub (a published tag never moves: raise the version)"
+  ! git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null \
+    || die "this checkout has a tag $tag that GitHub doesn't: delete it (git tag -d $tag) and run again"
 fi
 
 # ─── sign ────────────────────────────────────────────────────────────────

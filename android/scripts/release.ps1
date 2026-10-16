@@ -235,6 +235,11 @@ function Publish-Release([string]$ReleaseCommit, [bool]$Exists) {
         if ($remoteTag.Count -gt 0 -and -not $remoteTag[0].StartsWith($ReleaseCommit)) {
             Die "the tag $tag already exists on GitHub at another commit ($($remoteTag[0].Split()[0])): a published tag never moves"
         }
+        # A tag of that name only here would stop the tag being fetched after publishing.
+        $localTag = Invoke-Tool 'git' @('rev-parse', '--quiet', '--verify', "refs/tags/$tag^{commit}")
+        if ($null -ne $localTag -and $localTag[0].Trim() -ne $ReleaseCommit) {
+            Die "this checkout has a tag $tag at $($localTag[0].Trim().Substring(0, 12)) that GitHub doesn't: delete it (git tag -d $tag) and run again"
+        }
         $kind = if ($isPrerelease) { 'a pre-release' } else { 'the Latest release' }
         Say "publishing $tag on $RepoSlug at $($ReleaseCommit.Substring(0, 12)), $kind..."
         $assets = @($manifest.apks | ForEach-Object { Join-Path $signed $_.file }) + @($sumsFile)
@@ -254,7 +259,7 @@ function Publish-Release([string]$ReleaseCommit, [bool]$Exists) {
     # The tag (GitHub makes it at --target) must be the release commit.
     if ($null -eq (Invoke-Tool 'git' @('fetch', '--quiet', 'origin', "refs/tags/$($tag):refs/tags/$tag"))) {
         $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }
-        Die "can't fetch the tag $tag from GitHub"
+        Die "can't fetch the tag $tag from GitHub (a different tag $tag here? git tag -d $tag, then run again to check)"
     }
     $tagged = (Invoke-Tool 'git' @('rev-parse', "$tag^{commit}"))[0].Trim()
     if ($tagged -ne $ReleaseCommit) { Die "the tag $tag is $tagged, not the release commit $ReleaseCommit" }
@@ -366,6 +371,9 @@ if (-not $NoPublish) {
     $remoteTag = Invoke-Tool 'git' @('ls-remote', '--tags', 'origin', "refs/tags/$tag")
     if ($null -eq $remoteTag) { Die 'git ls-remote origin failed' }
     if (@($remoteTag | Where-Object { $_.Trim() }).Count -gt 0) { Die "the tag $tag already exists on GitHub (a published tag never moves: raise the version)" }
+    if ($null -ne (Invoke-Tool 'git' @('rev-parse', '--quiet', '--verify', "refs/tags/$tag"))) {
+        Die "this checkout has a tag $tag that GitHub doesn't: delete it (git tag -d $tag) and run again"
+    }
 }
 
 # --- sign ----------------------------------------------------------------
