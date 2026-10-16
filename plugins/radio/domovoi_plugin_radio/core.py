@@ -17,8 +17,8 @@ here, against the injected :class:`~domovoi.sdk.PluginSDK`:
   fire-and-forget (design §4.9).
 
 Import-time discipline (design §4.1): nothing here imports numpy/scipy/
-librosa/shazamio — the heavy audio deps load lazily inside worker and
-client bodies.
+shazamio — the heavy audio deps load lazily inside worker and client
+bodies.
 """
 
 from __future__ import annotations

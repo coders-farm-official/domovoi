@@ -1501,9 +1501,10 @@ story. Here is the developer's tour, file by file.
   describe an environment nobody installs. (It used to ship one; it had
   drifted below the core's lock, carried dependency advisories and no
   longer resolved, so it was removed rather than kept as a false record.)
-  Its heavy dependencies (`numpy`, `scipy`, `librosa`, `shazamio`) are
-  imported lazily and degrade when absent; they come from the core's
-  `fingerprint` and `shazam` extras. **A plugin you distribute as a zip is
+  Its heavy dependencies (`numpy`, `scipy`, `shazamio`) are imported
+  lazily and degrade when absent; they come from the core's `fingerprint`
+  and `shazam` extras. Audio is decoded by the `ffmpeg` program (no
+  librosa since 2026-10-15). **A plugin you distribute as a zip is
   different** — it must pin and lock everything it imports, as
   [`[requirements]`](#requirements) describes.
 * **One handler** at band **280** — the anchored-media neighborhood, between
@@ -1567,7 +1568,7 @@ story. Here is the developer's tour, file by file.
    observation broadcast other plugins can subscribe to and act on.
 8. **`ctx.on_disable`**: stops the SDR pipeline cleanly.
 
-Import discipline: nothing in `core.py` imports numpy/scipy/librosa/shazamio
+Import discipline: nothing in `core.py` imports numpy/scipy/shazamio
 — the heavy audio deps load lazily inside worker and client bodies, keeping
 the import budget honest.
 

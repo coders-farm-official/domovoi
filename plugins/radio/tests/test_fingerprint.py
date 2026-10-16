@@ -2,14 +2,16 @@
 one module so the algorithm parameters can't drift — that coupling is
 the thing under test here, end to end against the DB).
 
-Skips cleanly when the audio stack (numpy/scipy/librosa) isn't
-installed — the runtime degrades the same way.
+Skips cleanly when numpy/scipy (the core's ``fingerprint`` extra) or the
+ffmpeg program aren't installed — the runtime degrades the same way.
 """
 
 from __future__ import annotations
 
 import math
+import shutil
 import struct
+import subprocess
 import wave
 from pathlib import Path
 
@@ -20,7 +22,8 @@ from domovoi.tests.conftest import requires_db
 
 np = pytest.importorskip("numpy")
 pytest.importorskip("scipy")
-pytest.importorskip("librosa")
+if shutil.which("ffmpeg") is None:
+    pytest.skip("ffmpeg (which decodes the audio) is not on PATH", allow_module_level=True)
 
 from domovoi_plugin_radio.clients import fingerprint as fp  # noqa: E402
 
@@ -67,6 +70,46 @@ async def test_fingerprint_is_deterministic(tmp_path) -> None:
     assert [(r.hash_bytes, r.offset_ms) for r in a] == [
         (r.hash_bytes, r.offset_ms) for r in b
     ]
+
+
+def test_a_16k_mono_wav_decodes_to_its_own_samples(tmp_path) -> None:
+    """No resampling and no mixing: ffmpeg gives the 16-bit samples scaled
+    by 1/32768, exactly as the old librosa decode did."""
+    wav = _write_wav(tmp_path / "song.wav", 1.5, [440.0, 1200.0])
+    with wave.open(str(wav)) as w:
+        raw = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
+    got = fp._load_audio_to_mono_16k(wav)
+    assert got.dtype == np.float32 and len(got) == len(raw)
+    assert np.array_equal(got, raw.astype(np.float32) / 32768.0)
+
+
+def test_other_rates_and_stereo_come_out_16k_mono(tmp_path) -> None:
+    src = tmp_path / "stereo44.flac"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=500:duration=2:sample_rate=44100",
+                    "-ac", "2", str(src)], check=True)
+    got = fp._load_audio_to_mono_16k(src)
+    assert abs(len(got) - 2 * _SR) <= 32
+    peak_hz = np.argmax(np.abs(np.fft.rfft(got[:_SR])))      # one second: 1 Hz bins
+    assert abs(peak_hz - 500) <= 2
+
+
+def test_a_long_track_is_cut_at_five_minutes(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(fp, "_MAX_DECODE_SEC", 1)
+    wav = _write_wav(tmp_path / "song.wav", 3.0, [440.0])
+    assert len(fp._load_audio_to_mono_16k(wav)) == _SR
+
+
+async def test_unreadable_missing_and_no_ffmpeg(tmp_path, monkeypatch) -> None:
+    junk = tmp_path / "junk.mp3"
+    junk.write_bytes(b"not audio at all" * 100)
+    assert fp._load_audio_to_mono_16k(junk) is None
+    assert fp._load_audio_to_mono_16k(tmp_path / "missing.mp3") is None
+    assert await fp.fingerprint_file(junk) == []
+    wav = _write_wav(tmp_path / "song.wav", 2.0, [440.0])
+    monkeypatch.setattr(fp.shutil, "which", lambda name: None)
+    with pytest.raises(fp._DepMissingError):
+        fp._load_audio_to_mono_16k(wav)
+    assert await fp.fingerprint_file(wav) == []          # degrades, never raises
 
 
 async def test_silence_produces_no_hashes(tmp_path) -> None:
