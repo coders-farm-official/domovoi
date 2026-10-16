@@ -142,9 +142,12 @@ uninstalls it once before the first release build goes on.
 **Every release:**
 
 1. Raise `versionCode` (and `versionName`) in `app/build.gradle.kts`,
-   commit, and push. The script refuses a `versionCode` that is not above
-   the last release's, and a commit that is not on GitHub (the release's
-   tag points at it).
+   commit, and push. `versionCode` is `YYMMDDNN`: the build's date and
+   that day's number (`26101501` is the first build of 2026-10-15), one
+   sequence for the GitHub releases and Google Play. The script refuses a
+   `versionCode` of another shape, one that is not above the last
+   release's, and a commit that is not on GitHub (the release's tag points
+   at it).
 2. Run the script from a clean checkout (it says what it does as it goes):
 
    ```powershell
@@ -182,7 +185,10 @@ Python 3.11+, git and `gh auth login` with permission to publish releases.
 App Bundle and signs it with the same key (jarsigner; its prompts and
 checks are the release scripts'), and `android/play/PUBLISH-CHECKLIST.md`
 walks through the Play Console, Play App Signing with this key (PEPK)
-included. `versionCode` is `YYMMDDNN`, one sequence for GitHub and Play.
+included. It reads the same `versionCode` (`YYMMDDNN`, the same shape
+check) and refuses one below the last GitHub release's in
+`android/release.json`: the bundle of a build already released on GitHub
+keeps that release's `versionCode`.
 
 Keep the key and its password safe and backed up: every later release has
 to be signed with the same key, or phones refuse the upgrade.

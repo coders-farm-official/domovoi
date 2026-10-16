@@ -124,6 +124,12 @@ done
 tag="android-v$version_name"
 say "Domovoi $version_name (versionCode $version_code), commit ${commit:0:12}"
 
+# versionCode is YYMMDDNN (android/app/build.gradle.kts): the build's date
+# and that day's number, one sequence for these APKs and the Play bundle
+# (play-bundle.sh checks the same shape).
+printf '%s\n' "$version_code" | grep -Eq '^[0-9]{2}(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])(0[1-9]|[1-9][0-9])$' \
+  || die "versionCode $version_code is not YYMMDDNN (the build's date and that day's number, e.g. 26101501): set it in android/app/build.gradle.kts, commit, and run again"
+
 prev="$("$python" - <<'PY'
 import json
 try:
@@ -135,7 +141,7 @@ PY
 )"
 prev="${prev//$'\r'/}"
 prev_code="${prev%% *}"; prev_cert="${prev##* }"
-[ "$version_code" -gt "$prev_code" ] || die "versionCode $version_code is not above the last release's ($prev_code): raise versionCode (and versionName) in android/app/build.gradle.kts, commit, and run again"
+[ "$version_code" -gt "$prev_code" ] || die "versionCode $version_code is not above the last release's ($prev_code): raise versionCode (YYMMDDNN: the build's date and that day's number) and versionName in android/app/build.gradle.kts, commit, and run again"
 if [ "$publish" = 1 ] && gh release view "$tag" --repo "$REPO_SLUG" >/dev/null 2>&1; then
   die "a release $tag already exists on $REPO_SLUG"
 fi

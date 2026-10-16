@@ -95,6 +95,12 @@ app_id="$(sed -n 's/^[[:space:]]*applicationId[[:space:]]*=[[:space:]]*"\([^"]*\
 [ "$app_id" = "$PACKAGE" ] || die "the applicationId is not $PACKAGE"
 say "Domovoi $version_name (versionCode $version_code), commit ${commit:0:12}"
 
+# versionCode is YYMMDDNN: the build's date and that day's number, one
+# sequence for the GitHub APKs and this bundle (release.sh checks the same
+# shape).
+printf '%s\n' "$version_code" | grep -Eq '^[0-9]{2}(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])(0[1-9]|[1-9][0-9])$' \
+  || die "versionCode $version_code is not YYMMDDNN (the build's date and that day's number, e.g. 26101501): set it in $gradle_file"
+
 # The last GitHub release (android/release.json, when this checkout has one).
 prev_code=0; prev_cert="-"
 if [ -f android/release.json ]; then
@@ -113,7 +119,7 @@ PY
   prev_code="${prev%% *}"; prev_cert="${prev##* }"
 fi
 if [ "$prev_code" -gt 0 ] && [ "$version_code" -lt "$prev_code" ]; then
-  die "versionCode $version_code is below the last GitHub release's ($prev_code): one sequence for both, raise it"
+  die "versionCode $version_code is below the last GitHub release's ($prev_code): one sequence for both (YYMMDDNN), raise it"
 fi
 
 # ─── build ───────────────────────────────────────────────────────────────

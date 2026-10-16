@@ -166,7 +166,7 @@ foreach ($abi in $Abis) {
     if ($null -eq $badging) { Die "aapt2 can't read $apk" }
     $pkgLine = $badging | Where-Object { $_ -like 'package: *' } | Select-Object -First 1
     if ($pkgLine -notmatch "name='([^']*)'.* versionCode='([0-9]+)' versionName='([^']*)'") { Die "aapt2 shows no version for $apk" }
-    $pkg = $Matches[1]; $vc = [int]$Matches[2]; $vn = $Matches[3]
+    $pkg = $Matches[1]; $vc = [long]$Matches[2]; $vn = $Matches[3]
     $native = ($badging | Where-Object { $_ -like 'native-code: *' } | Select-Object -First 1)
     if ($pkg -ne $Package) { Die "$apk is $pkg, not $Package" }
     if ($native -ne "native-code: '$abi'") { Die "$apk carries $native, not '$abi' only" }
@@ -176,13 +176,20 @@ foreach ($abi in $Abis) {
 $tag = "android-v$versionName"
 Say "Domovoi $versionName (versionCode $versionCode), commit $($commit.Substring(0, 12))"
 
+# versionCode is YYMMDDNN (android\app\build.gradle.kts): the build's date
+# and that day's number, one sequence for these APKs and the Play bundle
+# (play-bundle.ps1 checks the same shape).
+if ("$versionCode" -notmatch '^[0-9]{2}(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])(0[1-9]|[1-9][0-9])$') {
+    Die "versionCode $versionCode is not YYMMDDNN (the build's date and that day's number, e.g. 26101501): set it in android\app\build.gradle.kts, commit, and run again"
+}
+
 $prevCode = 0; $prevCert = $null
 try {
     $prev = (Get-Content -Raw -Encoding UTF8 'android\release.json' | ConvertFrom-Json).release
-    if ($prev) { $prevCode = [int]$prev.version_code; $prevCert = [string]$prev.cert_sha256 }
+    if ($prev) { $prevCode = [long]$prev.version_code; $prevCert = [string]$prev.cert_sha256 }
 } catch { }
 if ($versionCode -le $prevCode) {
-    Die "versionCode $versionCode is not above the last release's ($prevCode): raise versionCode (and versionName) in android\app\build.gradle.kts, commit, and run again"
+    Die "versionCode $versionCode is not above the last release's ($prevCode): raise versionCode (YYMMDDNN: the build's date and that day's number) and versionName in android\app\build.gradle.kts, commit, and run again"
 }
 if (-not $NoPublish) {
     if ((Test-Tool 'gh' @('release', 'view', $tag, '--repo', $RepoSlug)) -eq 0) { Die "a release $tag already exists on $RepoSlug" }
