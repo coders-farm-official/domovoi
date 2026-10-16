@@ -2243,8 +2243,13 @@ do_models() {
 hf_repo_dir() { echo "$ROOT$SVC_HOME/.cache/huggingface/hub/models--${M[whisper_repo]//\//--}"; }
 whisper_bin() { echo "$(hf_repo_dir)/snapshots/${M[whisper_revision]}/model.bin"; }
 
+# faster-whisper through Domovoi's import: the venv has no PyAV (installed
+# --no-deps, requirements-no-deps.in), and faster_whisper's package imports
+# it at load time; domovoi.clients.whisper stands in for it.
 PY_WHISPER='#provision:whisper-download
 import sys
+from domovoi.clients.whisper import import_faster_whisper
+import_faster_whisper()
 from faster_whisper.utils import download_model
 print(download_model(sys.argv[1], revision=sys.argv[2]))'
 

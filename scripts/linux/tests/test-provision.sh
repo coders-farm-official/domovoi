@@ -1008,6 +1008,26 @@ case_import_check_names_no_dropped_package() {
   end_case
 }
 
+# faster-whisper's package imports PyAV (av) at load time, and a fresh venv
+# has none since 2026-10-15 (installed --no-deps): the Whisper download
+# must import it through domovoi.clients.whisper.import_faster_whisper,
+# which stands in for av, before anything from faster_whisper. The shim
+# below answers the snippet by its tag and never runs it, so this reads
+# the snippet itself; a real install at 4d6b414 stopped at the whisper step
+# with "No module named 'av'".
+case_whisper_download_imports_without_pyav() {
+  new_case whisper_download_imports_without_pyav
+  local py first_fw helper
+  py=$(sed -n "/^PY_WHISPER='#provision:whisper-download/,/'\$/p" "$SCRIPT")
+  check "found the snippet" grep -qF 'download_model(' <<<"$py"
+  helper=$(grep -n '^import_faster_whisper()$' <<<"$py" | head -n 1 | cut -d: -f1)
+  first_fw=$(grep -nE '^(from|import) faster_whisper' <<<"$py" | head -n 1 | cut -d: -f1)
+  check "it calls import_faster_whisper()" test -n "$helper"
+  check "before its first faster_whisper import" test "${helper:-99}" -lt "${first_fw:-0}"
+  check "no PyAV import of its own" eq "$(grep -cE '^(from|import) av' <<<"$py")" 0
+  end_case
+}
+
 case_harness_vars_need_each_other() {
   new_case harness_vars_need_each_other
   RC=0
@@ -2630,6 +2650,7 @@ case_gpu_runtime_helper_interface() {
 CASES=(
   case_help_and_usage_errors
   case_import_check_names_no_dropped_package
+  case_whisper_download_imports_without_pyav
   case_lock_without_the_no_deps_lock_stops
   case_harness_vars_need_each_other
   case_not_root_refuses

@@ -6,8 +6,8 @@ versionName is the same version in SemVer spelling (``1.0.0-rc1``), and the
 GitHub release is tagged ``v<versionName>`` (domovoi.android_app.tag_for).
 Until they all read one source (design-notes V1-RELEASE-PLAN 1.1), this
 test fails the moment one is bumped without the others. Pure file reads:
-no DB, no network, never skips. The Windows Setup's own version is not
-checked here: it follows separately (its re-pin comes with the freeze fixes).
+no DB, no network, never skips. The Windows Setup says the same SemVer
+version (``AppVersion``), and its file versions are the numeric X.Y.Z.0.
 """
 
 from __future__ import annotations
@@ -71,3 +71,19 @@ def test_the_release_tag_is_v_and_the_version_name() -> None:
         text = (REPO / script).read_text(encoding="utf-8")
         assert re.search(r'^\$?tag ?= ?"v\$(versionName|version_name)"\s*$', text, flags=re.MULTILINE), script
         assert "android-v" not in text, script
+
+
+def test_the_windows_setup_says_the_same_version() -> None:
+    """DomovoiSetup.exe and its two programs: the SemVer spelling where text
+    is shown (the wizard, Installed apps), X.Y.Z.0 where Windows wants four
+    numbers (a pre-release has no place there)."""
+    semver = _semver(_pyproject_version())
+    numeric = re.match(r"\d+\.\d+\.\d+", semver).group(0) + ".0"
+    iss = "windows/installer/DomovoiSetup.iss"
+    assert _one(iss, r'^#define AppVersion "([^"]+)"$') == semver
+    assert _one(iss, r"^VersionInfoVersion=(\S+)$") == numeric
+    assert _one(iss, r"^VersionInfoProductTextVersion=(\S+)$") == "{#AppVersion}"
+    asm = "windows/common/AssemblyInfo.cs"
+    assert _one(asm, r'^\[assembly: AssemblyInformationalVersion\("([^"]+)"\)\]$') == semver
+    assert _one(asm, r'^\[assembly: AssemblyVersion\("([^"]+)"\)\]$') == numeric
+    assert _one(asm, r'^\[assembly: AssemblyFileVersion\("([^"]+)"\)\]$') == numeric

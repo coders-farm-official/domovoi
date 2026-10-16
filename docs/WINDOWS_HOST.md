@@ -97,11 +97,13 @@ that:
    there.
 5. **Downloads** Ubuntu 26.04.1's official WSL image, and `provision.sh`
    from the pinned commit (GitHub's raw file at `DomovoiCommit`, today
-   `2f19bbd`), each checked against a pinned SHA-256
+   `4d6b414`, the v1.0.0-rc1 release), each checked against a pinned SHA-256
    (`windows/installer/pins.iss`). A build whose `provision.sh` is ahead of
    the pinned commit (`ProvisionBundled` in `pins.iss`) carries the script
    inside `DomovoiSetup.exe` instead; it is checked against its pin the
-   same way, and it still installs the pinned commit's code.
+   same way, and it still installs the pinned commit's code. The
+   v1.0.0-rc1 build does: `4d6b414`'s script stops at its Whisper download
+   on a new install, so Setup carries it with that fixed.
 6. **Turns on Virtual Machine Platform** and installs WSL 2.7.14 only if
    they are missing. If Windows needs a restart, Setup asks, and starts
    again by itself after you sign in.
@@ -278,13 +280,11 @@ PC needs for it:
   `nvidia` runtime in Docker's configuration, and a Docker restart
   (Postgres and the rooms' players stop for a moment and come back by
   themselves). It never installs a Linux NVIDIA driver: the driver is
-  Windows'. Setup installs Domovoi at the commit the installer is pinned
-  to, and until the installer is re-pinned to a commit that has this
-  helper, a **new install** doesn't get the toolkit during Setup: like an
-  **existing install**, it gets it at its first update from the dashboard
-  (**Pull the latest**, then **Restart to apply changes**). Once the
-  installer is re-pinned past it, Setup installs it (`provision.sh`'s
-  `gpu-runtime` step). After that every **Restart Domovoi** checks it is
+  Windows'. A **new install** gets it during Setup (`provision.sh`'s
+  `gpu-runtime` step, since the installer pinned to `4d6b414`); an
+  **existing install** from an earlier Setup gets it at its first update
+  from the dashboard (**Pull the latest**, then **Restart to apply
+  changes**). After that every **Restart Domovoi** checks it is
   still in place. A try that failed is not repeated at every Restart: the
   next one is a day later, or at the next Restart after you press **Turn
   on wake-word training** or **Check the GPU and trainer again**. With the
@@ -317,7 +317,8 @@ and **Push to** a room when it is ready. "Hello Domo", "Hey Domovoi" and
 "Domovoi" are three wake words, three models; a satellite listens for one
 at a time.
 
-On a PC with an NVIDIA card, update first: until the toolkit is there the
+On a PC with an NVIDIA card and an install from an earlier Setup, update
+first: until the toolkit is there the
 card says Docker can't use the card yet, and offers only the processor.
 With the toolkit in place after the update, **Check the GPU and trainer
 again** (or **Try again**) finds the GPU. Once training is set up for the
@@ -404,6 +405,9 @@ you share them.
 - Whether everything starts before anyone signs in after a reboot, and
   whether the GPU is used then, is still being proven.
 - Code signing (on hold): see [Unsigned](#unsigned).
+- A release channel. Setup installs the pinned commit (`DomovoiCommit`),
+  and the dashboard's updates then follow `main` from there, as on a Linux
+  box installed with `provision.sh`'s defaults.
 - Keep-data uninstall and reinstall onto kept data.
 - The optional details page after the internet question (town, state,
   AcoustID key); set them in the dashboard.

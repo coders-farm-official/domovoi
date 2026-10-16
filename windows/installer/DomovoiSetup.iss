@@ -29,7 +29,7 @@
 #else
   #define DashboardRoute "settings"
 #endif
-#define AppVersion "0.1.0-test"
+#define AppVersion "1.0.0-rc1"
 #define Helper "DomovoiSetupHelper.exe"
 ; Which build this is, for the dashboard link on the last page: a URL no
 ; earlier build opened, so an old cache-first service worker of the
@@ -61,7 +61,8 @@ RestartIfNeededByRun=no
 UsePreviousAppDir=no
 Uninstallable=yes
 UninstallDisplayName=Domovoi
-VersionInfoVersion=0.1.0.0
+VersionInfoVersion=1.0.0.0
+VersionInfoProductTextVersion={#AppVersion}
 VersionInfoCompany=Coders Farm
 VersionInfoDescription=Domovoi Setup (test build)
 VersionInfoProductName=Domovoi
