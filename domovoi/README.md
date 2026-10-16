@@ -93,22 +93,22 @@ voice-profile deps via the extra and Resemblyzer with `--no-deps`:
 
 ```bash
 pip install -e ".[real-clients,voice-profile]"
-pip install --no-deps resemblyzer
+pip install --no-deps -r requirements-no-deps.in
 ```
 
-`librosa` and `torch` are Resemblyzer's other deps and ship cp312
-Windows wheels, so they install cleanly through the extra.
-
-**On Linux this workaround is unnecessary** — `webrtcvad` compiles from
-source given `python3-dev` and `build-essential`, so a plain
-`pip install resemblyzer` works. See
-[docs/LINUX_HOST.md](../docs/LINUX_HOST.md).
+Since 2026-10-15 that is how every host installs it, Linux included, and
+for more than webrtcvad: Domovoi uses only Resemblyzer's pretrained
+weights and runs the network itself (`domovoi/clients/speaker_encoder.py`,
+on `torch` from the extra), so librosa (which brings soxr and soundfile,
+LGPL libraries) isn't installed either. The same file installs
+`faster-whisper` without PyAV. A Linux server installs both from the
+hash-pinned lock instead ([docs/LINUX_HOST.md](../docs/LINUX_HOST.md)).
 
 Verify it's all there:
 
 ```bash
-python -c "from resemblyzer import VoiceEncoder; VoiceEncoder()"
-# Should print: "Loaded the voice encoder model on cpu in <N> seconds."
+python -c "from domovoi.clients.speaker_encoder import SpeakerEncoder; SpeakerEncoder()"
+# Prints nothing when the weights and torch are there.
 ```
 
 ### Voice-profile command vocabulary

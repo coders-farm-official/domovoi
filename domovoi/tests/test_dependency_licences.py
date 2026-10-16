@@ -25,6 +25,12 @@ REPLACED = {
     "mutagen": ("mutagen", "GPL-2.0-or-later", "domovoi/media_tags, Domovoi's own tag reader (2026-10-15)"),
     "mpd": ("python-mpd2", "LGPL-3.0-or-later", "domovoi/clients/mpd_protocol.py (2026-10-15)"),
     "lameenc": ("lameenc", "LGPL-3.0, carrying LAME", "the system ffmpeg, run as a program (canned_sounds, 2026-10-15)"),
+    "librosa": ("librosa", "ISC, but brings soxr and soundfile",
+                "numpy mel spectrogram (speaker_encoder), ffmpeg decode (radio fingerprinter), 2026-10-15"),
+    "soxr": ("soxr", "LGPL-2.1-or-later, carrying libsoxr", "nothing: it came with librosa"),
+    "soundfile": ("soundfile", "BSD, carrying libsndfile (LGPL-2.1)", "nothing: it came with librosa"),
+    "av": ("av", "BSD, carrying FFmpeg's LGPL libraries",
+           "audio arrays handed to faster-whisper, installed --no-deps (2026-10-15)"),
 }
 
 #: The code a Domovoi install runs: core, dashboard, satellite, bundled plugins.
@@ -72,7 +78,8 @@ def test_pyproject_requires_none_of_them() -> None:
     assert names & {d for d, _, _ in REPLACED.values()} == set()
 
 
-@pytest.mark.parametrize("lock", ["requirements.lock", "requirements-linux-py314.lock"])
+@pytest.mark.parametrize("lock", ["requirements.lock", "requirements-linux-py314.lock",
+                                  "requirements-linux-py314-no-deps.lock"])
 def test_the_locks_pin_none_of_them(lock: str) -> None:
     pins = {m.group(1).lower() for m in re.finditer(r"^([A-Za-z0-9_.-]+)==", (REPO / lock).read_text(encoding="utf-8"), re.M)}
     assert pins, lock

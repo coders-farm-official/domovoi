@@ -146,8 +146,8 @@ cd domovoi
 # docs/LINUX_HOST.md#install. Add `dev` to the extras only to run the tests.
 pip install -e ".[real-clients,voice-profile]"
 pip install -e ".[cuda]"            # NVIDIA hosts only — CUDA runtime wheels
-pip install --no-deps resemblyzer   # Windows quirk — see domovoi/README.md
-                                    # (on Linux: plain `pip install resemblyzer`)
+pip install --no-deps -r requirements-no-deps.in   # faster-whisper, resemblyzer, without
+                                    # their declared deps (PyAV, librosa: the file says why)
 
 # One-shot bootstrap: starts Postgres, runs migrations (and the search
 # helper, when the internet question is answered Yes or Sometimes), then

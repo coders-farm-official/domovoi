@@ -152,7 +152,7 @@ pip install -e ".[cuda]"
 ```
 
 ```powershell
-pip install --no-deps resemblyzer
+pip install --no-deps -r requirements-no-deps.in
 ```
 
 That last line is a Windows quirk, not a typo — `resemblyzer` (speaker

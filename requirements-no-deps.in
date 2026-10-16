@@ -1,0 +1,24 @@
+# requirements-no-deps.in: packages Domovoi installs WITHOUT the
+# dependencies they declare, because what they declare isn't what Domovoi
+# runs, and some of it carries LGPL libraries (docs/CONTRIBUTING.md,
+# "Dependencies and licences"). Install after the extras:
+#
+#    pip install -e ".[real-clients,voice-profile]"
+#    pip install --no-deps -r requirements-no-deps.in
+#
+# A Linux server installs the hash-pinned requirements-linux-py314-no-deps.lock
+# instead (scripts/linux/compile-linux-lock.sh writes it from this file).
+
+# Speech recognition. faster-whisper declares PyAV (av), which bundles
+# FFmpeg's LGPL libraries, to decode audio files; Domovoi hands it audio
+# arrays and never a file (domovoi/clients/whisper.py), so PyAV is not
+# installed. Its other dependencies (ctranslate2, huggingface-hub,
+# tokenizers, onnxruntime, tqdm) are in pyproject's real-clients extra.
+faster-whisper>=1.0,<2
+
+# Voice ID: only Resemblyzer's pretrained encoder weights
+# (resemblyzer/pretrained.pt); domovoi/clients/speaker_encoder.py runs the
+# network. It declares librosa (which brings soxr and soundfile, LGPL
+# libraries, and numba), webrtcvad and scipy, none of which voice ID uses.
+# torch and numpy come from the voice-profile and real-clients extras.
+resemblyzer>=0.1.4

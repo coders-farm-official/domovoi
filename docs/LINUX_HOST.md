@@ -25,7 +25,7 @@ the ledger flips:
 | **CUDA DLL preloading** | `domovoi/bootstrap.py` preloads cuBLAS/cuDNN by hand because the Windows loader ignores `add_dll_directory()` for dependent DLLs. The plugin loader asserts it ran. | The whole module is `if sys.platform != "win32": return ()`. Dead code. It's the single biggest piece of Windows-specific engineering in the repo, and you skip it. |
 | **Wake-word training** | openWakeWord's training pipeline (piper-sample-generator) is Linux-only, so it runs in a Linux container under Docker Desktop. | On the server itself, in a container on its own Docker Engine, switched on from the dashboard (Settings → Wake Words); an NVIDIA GPU gets its container runtime from the install and the update unit. See [Wake-word training](#wake-word-training). |
 | **External binaries** (`ffmpeg`, `fpcalc`/Chromaprint, `mpg123`) | Download, unzip, put on PATH by hand. | `apt install`. |
-| **`resemblyzer` install** | Needs `pip install --no-deps resemblyzer` because its `webrtcvad` pin has no Windows wheels and would need MSVC to build. | `webrtcvad` builds from source with `gcc` + `python3-dev`, so try the plain install first. |
+| **`faster-whisper` and `resemblyzer` install** | `pip install --no-deps -r requirements-no-deps.in`: without the dependencies they declare (PyAV, librosa, webrtcvad), which Domovoi doesn't use. | The same, from the hash-pinned `requirements-linux-py314-no-deps.lock`. |
 | **Docker** | Docker Desktop — a whole application, its own RAM overhead, its own licensing question. | Native Docker Engine. The core drives containers through the `docker` CLI (`mpd_provisioner.py`), so nothing else changes. |
 | **Autostart** | Scheduled task at boot, or a service wrapper. Fiddly. | systemd. Units below. |
 | **Ollama on an AMD/Intel iGPU** | ROCm support on Windows is thin. | Better supported, if you ever want to experiment. Still optional — see [CPU_HOST.md](CPU_HOST.md#what-about-the-integrated-gpu). |
@@ -173,9 +173,10 @@ error that has nothing to do with Domovoi.
 
 So the rule is: **before committing to a release, check that this repo's
 compiled dependencies publish wheels for the Python it ships.** The
-long poles are `numba` (pulled in by `librosa`), `torch`, and
-`ctranslate2` (under `faster-whisper`) — `numba` is reliably the last to
-land, so it's the one to watch.
+long poles are `torch` and `ctranslate2` (the engine under
+`faster-whisper`); `numba`, the slowest of all to land, left with
+`librosa` on 2026-10-15, and the check below still lists it for older
+checkouts.
 
 ```bash
 python3 -c "import json,urllib.request as u,re; [print(p, sorted({m.group(1) for f in json.load(u.urlopen(f'https://pypi.org/pypi/{p}/json'))['urls'] for m in [re.search(r'-(cp3\d+)-',f['filename'])] if m and 'manylinux' in f['filename'] and 'x86_64' in f['filename']})) for p in ('numba','torch','ctranslate2','shazamio-core')]"
@@ -198,8 +199,8 @@ about because **neither shows up if you only check the packages named in
 `pyproject.toml`** — they are transitive:
 
 - **`webrtcvad`** (via `resemblyzer`) — sdist-only on *every* Python
-  version, so not a 3.14 issue. See the `resemblyzer` note under
-  [Install](#install).
+  version. Since 2026-10-15 it isn't installed: `resemblyzer` goes in
+  without its dependencies (`requirements-no-deps.in`).
 - **`shazamio-core`** (via `shazamio`, the library-enricher fallback) — a
   Rust/pyo3 extension binding ALSA. `shazamio` itself is pure Python, which
   makes this easy to miss. When its prebuilt wheel is absent for your
@@ -341,7 +342,8 @@ sudo apt update && sudo apt install -y python3 python3-venv python3-dev build-es
 ```
 
 `libchromaprint-tools` provides `fpcalc` for library enrichment, and
-`python3-dev` + `build-essential` are what let `webrtcvad` compile. (No
+`python3-dev` + `build-essential` are what let the sdist-only pins
+(`metaphone`) compile. (No
 `espeak-ng`: see [the system-voice fallback](#1-the-system-voice-fallback-is-optional-on-linux).)
 
 `pkg-config` and `libasound2-dev` are there for **`shazamio-core`** — a
@@ -433,17 +435,21 @@ python3 -m venv .venv && source .venv/bin/activate
 
 **Install from the hash-pinned lock.** `requirements-linux-py314.lock` at
 the repo root is the whole production set (the core, the dashboard, the
-`real-clients` and `voice-profile` extras, `resemblyzer`, and CPU-only
-`torch` from PyTorch's CPU index), every package at an exact version with
-its SHA-256s, so a substituted or tampered download fails the install
-instead of running. It was compiled for CPython 3.14 on x86_64, which is
-what Ubuntu 26.04's `python3` is (`python3 --version`). Three installs, in
-this order:
+`real-clients` and `voice-profile` extras, and CPU-only `torch` from
+PyTorch's CPU index), every package at an exact version with its
+SHA-256s, so a substituted or tampered download fails the install instead
+of running. Beside it, `requirements-linux-py314-no-deps.lock` pins and
+hashes `faster-whisper` and `resemblyzer`, which go in without the
+dependencies they declare (`requirements-no-deps.in` says why: PyAV and
+librosa carry LGPL libraries Domovoi doesn't use). They were compiled for
+CPython 3.14 on x86_64, which is what Ubuntu 26.04's `python3` is
+(`python3 --version`). Four installs, in this order:
 
 ```bash
 awk '/^(packaging|setuptools|wheel)==/ {p = 1} p {print} p && !/\\$/ {p = 0}' requirements-linux-py314.lock >/tmp/build-tools.txt
 pip install --require-hashes -r /tmp/build-tools.txt
 pip install --require-hashes --no-build-isolation -r requirements-linux-py314.lock
+pip install --require-hashes --no-deps -r requirements-linux-py314-no-deps.lock
 pip install --no-deps --no-build-isolation -e .
 ```
 
@@ -457,13 +463,14 @@ hashes from a constraints file. `provision.sh` and the update unit's
 locked re-sync both install the build tools the `awk` way.) If pip
 stops with *Hashes are required* for another package, a build tool
 gained a dependency in the lock: add its name to the `awk` pattern.
-The second installs everything else; `metaphone` and `webrtcvad` publish
-no wheels and are built here, with those checked tools rather than a
-fresh, unchecked `setuptools` that pip would otherwise download for each
-build (that is what `--no-build-isolation` is for, and why the
-`python3-dev` and `build-essential` prerequisites are there). The third
-installs Domovoi itself and nothing else. No `dev` extra: a server doesn't
-run the test suite.
+The second installs everything else; `metaphone` publishes no wheels and
+is built here, with those checked tools rather than a fresh, unchecked
+`setuptools` that pip would otherwise download for each build (that is
+what `--no-build-isolation` is for, and why the `python3-dev` and
+`build-essential` prerequisites are there). The third installs
+`faster-whisper` and `resemblyzer` alone, hash-checked; everything they
+use is already in from the second. The fourth installs Domovoi itself and
+nothing else. No `dev` extra: a server doesn't run the test suite.
 
 PyPI's default Linux `torch` build bundles its own CUDA runtime — cuBLAS,
 cuDNN, NCCL, cuFFT, cuSOLVER, Triton and friends, about **2.7 GB** of it.
@@ -471,13 +478,16 @@ The lock pins the `+cpu` build from PyTorch's CPU index (it names that
 index itself), so none of that arrives. That is entirely separate from the
 `cuda` extra below, which only covers the wheels `ctranslate2` wants.
 
-Check the voice encoder loads:
+Check speech recognition and the voice encoder load:
 
 ```bash
-python -c "from resemblyzer import VoiceEncoder; VoiceEncoder()"
+python -c "from domovoi.clients.whisper import import_faster_whisper; import_faster_whisper()"
+python -c "from domovoi.clients.speaker_encoder import SpeakerEncoder; SpeakerEncoder()"
 ```
 
-That should print `Loaded the voice encoder model on cpu in <N> seconds`.
+Both print nothing when they work. (Not `from resemblyzer import
+VoiceEncoder`: that package imports librosa, which isn't installed;
+Domovoi runs Resemblyzer's network itself, `domovoi/clients/speaker_encoder.py`.)
 
 **No lock for your Python?** On anything but CPython 3.14 (the
 [`uv venv --python 3.13`](#if-the-wheels-arent-there-yet) route, an arm64
@@ -488,7 +498,7 @@ floors in `pyproject.toml`:
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -e ".[real-clients,voice-profile]"
-pip install resemblyzer      # if webrtcvad fails to build: pip install --no-deps resemblyzer
+pip install --no-deps -r requirements-no-deps.in    # faster-whisper, resemblyzer
 ```
 
 The [update unit](#updates-from-the-dashboard) re-syncs this way too
@@ -1332,11 +1342,11 @@ resolves from the index exactly as it did before the lock existed, and
 its step says the lock is there. The reason is the first locked re-sync:
 it moves every package to the lock's version, and the lock in the
 repository is seeded from the test suite's set, not from what your box
-runs (torch, librosa, faster-whisper and the rest of the speech stack are
-the newest that resolved).
+runs (torch, faster-whisper and the rest of the speech stack are the
+newest that resolved).
 
 **A box `provision.sh` installed is opted in already.** It was installed
-from the lock (the three installs under [By hand](#by-hand)), so its venv
+from the lock (the installs under [By hand](#by-hand)), so its venv
 holds the lock's versions and there is nothing to re-seed: the script
 writes `DOMOVOI_USE_LOCK=1` into `/etc/default/domovoi-update` (a file
 that already sets `DOMOVOI_USE_LOCK`, to anything, is left as it is, with

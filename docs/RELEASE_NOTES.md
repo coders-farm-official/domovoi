@@ -7,7 +7,7 @@ a way that would otherwise get reported as a bug.
 ## 2026-10-15 — Licence clean-up: Domovoi's own tag reader and music-player client
 
 Server update; no migration. Domovoi takes permissively licensed
-dependencies only, and three it still had are gone:
+dependencies only, and the last copyleft ones a server installed are gone:
 
 * **mutagen (GPL)**, which read the tags inside audio files, is replaced
   by Domovoi's own reader (`domovoi/media_tags`). The library and
@@ -35,11 +35,25 @@ dependencies only, and three it still had are gone:
   server and the Windows install already have. On a server without
   `ffmpeg` on its PATH no clip is re-rendered, and the satellites keep the
   clips they have.
-* The three packages stay in an existing install's Python environment,
-  unused, until removed by hand; a fresh install doesn't get them.
-* Still open, waiting on a decision: `soxr` and the libsndfile inside
-  `soundfile` (both LGPL), which voice profiles pull in through librosa
-  ([CONTRIBUTING.md](CONTRIBUTING.md#dependencies-and-licences)).
+* **librosa** (with **soxr** and **soundfile**, which carry the LGPL
+  libraries libsoxr and libsndfile) and **PyAV** (FFmpeg's LGPL libraries)
+  are no longer installed either. Voice ID runs Resemblyzer's encoder
+  itself (`domovoi/clients/speaker_encoder.py`) and gives the same voice
+  embeddings, so every enrolled voice keeps matching; Whisper is handed the
+  audio directly instead of through a temporary file, and transcribes the
+  same words; the radio plugin's fingerprinter decodes with `ffmpeg`, and
+  finds the same songs. `faster-whisper` and `resemblyzer` are now
+  installed without the dependencies they declare
+  (`requirements-no-deps.in`); a Linux server gets them from a second
+  hash-pinned lock, `requirements-linux-py314-no-deps.lock`, which the
+  update installs with the first.
+* **Installing by hand** (a Windows PC, or a Linux box without the lock):
+  after `pip install -e ".[real-clients,voice-profile]"`, run
+  `pip install --no-deps -r requirements-no-deps.in` (it replaces
+  `pip install --no-deps resemblyzer`).
+* The packages left behind stay in an existing install's Python
+  environment, unused, until removed by hand; a fresh install doesn't get
+  them.
 
 ## 2026-10-14 — A reload no longer signs the admin out
 

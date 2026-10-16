@@ -46,7 +46,7 @@ from `domovoi/` (where the compose file lives):
 
 ```powershell
 pip install -e ".[dev,real-clients,voice-profile]"
-pip install --no-deps resemblyzer         # Windows quirk — see below
+pip install --no-deps -r requirements-no-deps.in   # faster-whisper, resemblyzer (see below)
 cd domovoi
 docker compose up -d postgres
 docker compose run --rm flyway            # prod-DB migrations
@@ -301,6 +301,8 @@ Replaced so far:
 | mutagen | GPL-2.0-or-later | `domovoi/media_tags`, Domovoi's own tag reader (2026-10-15) |
 | python-mpd2 | LGPL-3.0-or-later | `domovoi/clients/mpd_protocol.py` (2026-10-15) |
 | lameenc | LGPL-3.0, bundles LAME | the system `ffmpeg`, run as a program (2026-10-15) |
+| librosa → soxr, soundfile | LGPL-2.1 libsoxr, libsndfile inside | numpy mel spectrogram in `domovoi/clients/speaker_encoder.py`; `ffmpeg` decode in the radio fingerprinter (2026-10-15) |
+| av (PyAV, via faster-whisper) | FFmpeg's LGPL libraries inside | audio arrays handed to faster-whisper, installed `--no-deps` (2026-10-15) |
 | piper-tts, piper-phonemize | GPL-3.0 (espeak-ng inside) | `domovoi/phonemizer` on ONNX Runtime (2026-10) |
 | edge-tts | LGPL-3.0 | dropped with the online voices (2026-10-12) |
 | Unidecode / num2words | GPL / LGPL | anyascii / `spoken_names.int_to_words` |
@@ -308,10 +310,13 @@ Replaced so far:
 `domovoi/tests/test_dependency_licences.py` fails if a replaced package
 comes back as an import in shipped code, a requirement or a lock pin.
 
-Still open, each waiting on a decision: `soxr` (LGPL-2.1, bundles
-libsoxr) and `soundfile` (bundles libsndfile, LGPL-2.1), both through
-librosa, which voice profiles (resemblyzer) pull in; PyAV (`av`, bundles
-FFmpeg's LGPL libraries) through faster-whisper. The wake-word trainer
+Installed without their declared dependencies (`requirements-no-deps.in`,
+since 2026-10-15): faster-whisper, which declares PyAV (`av`, FFmpeg's
+LGPL libraries inside) though Domovoi hands it arrays and never a file,
+and resemblyzer, which declares librosa (with soxr and soundfile:
+libsoxr and libsndfile, LGPL) though Domovoi computes the one mel
+spectrogram it needs with numpy (`domovoi/clients/speaker_encoder.py`).
+So none of PyAV, librosa, soxr or soundfile is installed. The wake-word trainer
 image (`scripts/wake_word/docker`) is a separate tool built on the server
 when training is turned on, not part of an install; its upstream training
 code uses mutagen and espeak-ng.

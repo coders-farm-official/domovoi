@@ -82,8 +82,8 @@ lives). Docker commands run from `domovoi/` (where the compose file lives).
 # Manual equivalent
 pip install -e ".[dev,real-clients,voice-profile]"
 pip install -e ".[cuda]"                  # only on an NVIDIA host
-pip install --no-deps resemblyzer         # Windows quirk — see domovoi/README.md
-                                          # (on Linux, plain `pip install resemblyzer` works)
+pip install --no-deps -r requirements-no-deps.in   # faster-whisper, resemblyzer: without
+                                          # their declared deps (PyAV, librosa; the file says why)
 cd domovoi
 docker compose up -d postgres
 docker compose run --rm flyway            # prod migrations

@@ -90,7 +90,15 @@ domovoi = "domovoi.plugins_runtime.cli:main"
 # Real Whisper/TTS clients. Skipped when USE_STUBS=true (tests, CI).
 # Install with: pip install -e ".[real-clients]"  (or ".[dev,real-clients]").
 real-clients = [
-    "faster-whisper>=1.0",
+    # Speech recognition: faster-whisper itself is installed without its
+    # declared dependencies (requirements-no-deps.in: it declares PyAV,
+    # which bundles FFmpeg's LGPL libraries, and Domovoi never has it
+    # decode a file). These are the dependencies it does use, with its own
+    # bounds (faster-whisper 1.x); onnxruntime is below.
+    "ctranslate2>=4.0,<5",
+    "huggingface-hub>=0.21",
+    "tokenizers>=0.13,<1",
+    "tqdm",
     # No edge-tts (LGPL-3.0) or miniaudio (its MP3 decoding) since
     # 2026-10-12: the Microsoft Edge online voices were dropped, and the
     # update unit uninstalls edge-tts from existing venvs
@@ -170,19 +178,17 @@ cuda = [
 # (docs/CPU_HOST.md, "The fast lane"), or the PyPI wheel knowing what it
 # carries. The model (a 103 MB download, 137 MB unpacked) arrives on first
 # enable, from a pinned URL checked against a pinned SHA-256.
-# VoiceProfileHandler runtime deps. Split into a separate extra because
-# Resemblyzer's `webrtcvad>=2.0.10` pin has no Windows binary wheels and
-# pip would try to build it from source (needs MSVC). We don't use the
-# part of Resemblyzer that calls webrtcvad — `embed_utterance(wav_array)`
-# skips preprocessing entirely — so the workaround is:
+# VoiceProfileHandler runtime deps: torch, which runs Resemblyzer's speaker
+# encoder (domovoi/clients/speaker_encoder.py). Resemblyzer itself is
+# installed without its dependencies, for its weights alone:
 #
 #   pip install -e ".[real-clients,voice-profile]"
-#   pip install --no-deps resemblyzer
+#   pip install --no-deps -r requirements-no-deps.in
 #
-# librosa + torch are Resemblyzer's other deps; both ship Windows wheels
-# for cp312, so they install through the extra without trouble.
+# Not librosa (since 2026-10-15): it brought soxr and soundfile (LGPL
+# libraries) and numba for one mel spectrogram, which speaker_encoder.py
+# computes with numpy; nor webrtcvad, whose sdist needs a compiler.
 voice-profile = [
-    "librosa>=0.10",
     "torch>=2.0",
 ]
 # Local-library fingerprinting. The fingerprint client uses a
@@ -191,14 +197,12 @@ voice-profile = [
 # target window. Outputs land in our own ``library_track_fingerprints``
 # table (binary BYTEA + a HASH index), so we don't need a
 # separate fingerprint DB or a third-party dejavu/audfprint backend.
-# `librosa` for the WAV/MP3 reader (already pulled in by voice-profile
-# but listed here too so users who only want fingerprinting can opt in
-# without taking the full voice-profile stack). `numpy` and `scipy`
-# come along because everything else in the algorithm needs them.
+# The audio is decoded by the system ffmpeg (no librosa since 2026-10-15:
+# it brought soxr and soundfile, LGPL libraries); `numpy` and `scipy` run
+# the algorithm.
 fingerprint = [
     "numpy>=1.26",
     "scipy>=1.11",
-    "librosa>=0.10",
 ]
 # Conversational chat mode (#8). The Letta SDK client used by
 # domovoi/clients/letta.py to drive the self-hosted Letta agent.
