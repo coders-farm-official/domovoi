@@ -400,6 +400,22 @@ def test_a_pull_on_stable_past_the_release_never_goes_back(repos):
     assert pulled["pulled"] is True and head.startswith(pulled["new_sha"])
 
 
+def test_the_channel_asked_for_is_remembered_and_the_switch_updates_it(repos):
+    """provision.sh records stable when origin had none yet (it then follows
+    main); the state says so beside the latest release, and a switch makes
+    what the household chose the one remembered."""
+    _, server, _ = repos
+    _git(server, "config", "domovoi.intendedChannel", "stable")
+    state = _run(git_version.version_state())
+    assert (state["channel"], state["channel_intended"], state["latest_release"]) == ("main", "stable", "1.0.0")
+    assert _run(git_version.switch_channel("stable"))["ok"] is True
+    assert _git(server, "config", "domovoi.intendedChannel") == "stable"
+    assert _run(git_version.switch_channel("main"))["ok"] is True
+    assert _git(server, "config", "domovoi.intendedChannel") == "main"
+    _git(server, "config", "domovoi.intendedChannel", "nonsense")
+    assert _run(git_version.version_state())["channel_intended"] is None
+
+
 def test_refused_while_an_update_runs(repos, monkeypatch):
     monkeypatch.setattr(self_restart, "underway", lambda *a, **k: True)
     res = _run(git_version.switch_channel("stable"))

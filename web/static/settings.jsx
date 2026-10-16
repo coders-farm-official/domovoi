@@ -1067,6 +1067,11 @@ const VersionSection = () => {
   // pull until a release includes this code.
   const aheadOfRelease = !!(status && status.upstream && status.channel === 'stable'
                             && status.behind === 0 && status.ahead > 0);
+  // Set up to follow stable before the first release (provision.sh then
+  // follows main, and remembers what was asked for): once a release is out,
+  // say so. Nothing switches by itself; the switch is above.
+  const releaseOut = (core && core.latest_release) || (status && status.latest_release) || null;
+  const stableWaiting = !!(core && core.channel_intended === 'stable' && channel && channel !== 'stable' && releaseOut);
   // Signed updates (docs/LINUX_HOST.md): whether the checked-out commit
   // carries a signature by a key in the server's root-owned allowed-signers
   // file. One badge: signed (verified); else what it is, and whether that
@@ -1274,6 +1279,15 @@ const VersionSection = () => {
       {mode === 'pull' && (
         <div className="mono" style={{ padding: '0 16px 14px', fontSize: 11, color: 'var(--fg-faint)' }}>
           Pull updates the host files only — this panel will then offer the restart that loads them.
+        </div>
+      )}
+      {stableWaiting && (
+        <div className="version-stable-waiting" style={{ padding: '0 16px 14px', fontSize: 12, color: 'var(--fg-muted)' }}>
+          This server was set up to follow stable, Domovoi’s releases only,
+          before the first release was out, so it follows main for now.
+          Domovoi {releaseOut} is out:{' '}
+          {canSwitch ? 'switch to stable above to follow releases from now on.'
+                     : 'an admin can switch it to stable here.'}
         </div>
       )}
       {aheadOfRelease && mode === 'check' && (

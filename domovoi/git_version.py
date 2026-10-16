@@ -235,6 +235,13 @@ async def version_state() -> dict:
         # `channel_pin` the branches root's update unit allows
         # (DOMOVOI_UPSTREAM_BRANCH), None when it allows any.
         "channel": track["channel"],
+        # The channel the box was set up to follow when that wasn't possible
+        # yet (stable before the first release), or the last one switched
+        # to; the card points at the switch once it differs from `channel`
+        # and the release is out. `latest_release` is origin/stable's label
+        # as last fetched (no fetch here), None before the first release.
+        "channel_intended": track["intended"],
+        "latest_release": await asyncio.to_thread(latest_release),
         "channels": list(CHANNELS),
         "channel_pin": channel_pin(),
         # "unreadable" when the update unit's settings file is there but this
@@ -393,10 +400,15 @@ def tracking() -> dict:
     """Blocking. What the checkout follows, from its config alone (no
     fetch, and the remote-tracking ref need not exist yet): ``branch`` (the
     local branch, None when HEAD is detached), ``remote`` and ``merge`` (its
-    upstream), and ``channel``, the upstream's branch name when the remote
-    is origin. Never raises."""
-    out: dict = {"branch": None, "remote": None, "merge": None, "channel": None}
+    upstream), ``channel``, the upstream's branch name when the remote is
+    origin, and ``intended``, the channel the box was set up for when that
+    was not possible yet (``git config domovoi.intendedChannel``:
+    provision.sh writes "stable" when origin had no stable branch, the
+    switch writes the channel it moves to). Never raises."""
+    out: dict = {"branch": None, "remote": None, "merge": None, "channel": None, "intended": None}
     try:
+        intended = _config("domovoi.intendedChannel")
+        out["intended"] = intended if intended in CHANNELS else None
         head = _run("symbolic-ref", "--short", "-q", "HEAD")
         branch = head.stdout.strip() if head.returncode == 0 else ""
         if not branch or not _BRANCH_RE.match(branch):
@@ -508,6 +520,7 @@ def _switch_channel(channel: str, pin: list[str] | None = None) -> dict:
         return _channel_answer(False, "git could not read this server's HEAD")
     track = tracking()
     if track["branch"] == channel and track["channel"] == channel:
+        _run("config", "domovoi.intendedChannel", channel)
         return _channel_answer(True, None, channel)
     # A pull only ever fast-forwards: the channel has to hold this code, or
     # be behind it on the same line (then updates wait for its next release).
@@ -546,6 +559,9 @@ def _switch_channel(channel: str, pin: list[str] | None = None) -> dict:
         return _channel_answer(False, (tracked.stderr or "git branch failed").strip()[:_ERROR_MAX_CHARS])
     if _full_sha("HEAD") != head:  # never: -B at HEAD keeps the commit
         return _channel_answer(False, "HEAD moved during the switch; check the checkout by hand")
+    # What the household chose now, so the card's "switch to stable" note
+    # (an install from before the first release) doesn't come back.
+    _run("config", "domovoi.intendedChannel", channel)
     log.info("update channel: now following origin/%s at %s (HEAD %s unchanged)", channel, target[:12], head[:12])
     return _channel_answer(True, None, channel, changed=True)
 

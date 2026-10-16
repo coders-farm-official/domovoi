@@ -1443,17 +1443,22 @@ check_tag_record() {
 # given with --track-branch stable, the Windows installer's, follows main),
 # with a warning; the household can switch to stable from Settings >
 # Version once there is one. A --ref stable given on the command line has
-# no such fallback.
+# no such fallback. The switch is the household's (Settings > Version);
+# nothing moves the box to stable by itself. The checkout keeps what was
+# asked for (git config domovoi.intendedChannel stable), and the Version
+# card says so once the first release is out.
 checkout_ref() {
-  local d=$1 sha ref=$REF track=$TRACK_BRANCH kind name head
+  local d=$1 sha ref=$REF track=$TRACK_BRANCH kind name head intended=""
   if ! gd "$d" rev-parse -q --verify "refs/remotes/origin/stable" >/dev/null; then
     if [ "$ref" = stable ] && [ "$REF_GIVEN" = 0 ]; then
       ref=main
       [ "$TRACK_GIVEN" = 1 ] || track=main
+      intended=stable
       warn "$REPO_URL has no stable branch yet (no release has been published): installing main, and this box follows main; switch to stable in Settings > Version after the first release"
     fi
     if [ "$track" = stable ] && [ "$ref" != stable ]; then
       track=main
+      intended=stable
       warn "$REPO_URL has no stable branch yet (no release has been published): this box follows main; switch to stable in Settings > Version after the first release"
     fi
   fi
@@ -1493,6 +1498,9 @@ checkout_ref() {
   esac
   head=$(gd "$d" rev-parse -q --verify HEAD) || die "can't read HEAD after checking $ref out"
   [ "$head" = "$sha" ] || die "HEAD is $head after checking $ref out, not $sha; nothing was installed"
+  if [ -n "$intended" ]; then
+    gd "$d" config domovoi.intendedChannel "$intended" || warn "can't record the channel asked for (git config domovoi.intendedChannel $intended)"
+  fi
   if [ "$DRY_RUN" = 0 ]; then
     mkdir -p "$STATE_DIR"
     printf '%s %s %s\n' "$kind" "$name" "$sha" >"$REF_RECORD.tmp" && mv -f "$REF_RECORD.tmp" "$REF_RECORD" \

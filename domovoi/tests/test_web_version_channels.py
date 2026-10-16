@@ -117,6 +117,10 @@ SCENARIOS = {
     "household": _scenario(_version(), _check(), NOTHING, setup=_HOUSEHOLD),
     "pinned_to_main": _scenario(_version(channel="main", channel_pin=["main"]), _check(channel="main")),
     "pinned_to_both": _scenario(_version(channel="main", channel_pin=["stable", "main"]), _check(channel="main")),
+    "stable_waiting": _scenario(_version(channel="main", channel_intended="stable", latest_release="1.0.0")),
+    "stable_not_yet": _scenario(_version(channel="main", channel_intended="stable", latest_release=None)),
+    "stable_waiting_household": _scenario(_version(channel="main", channel_intended="stable", latest_release="1.0.0"),
+                                          setup=_HOUSEHOLD),
     "pin_unknown": _scenario(_version(channel="main", channel_pin_problem="unreadable"), _check(channel="main")),
     "dev_branch": _scenario(_version(channel="wf/x", version="1.0.0 + 2 (4d6b414)")),
     "older_core": _scenario({"sha": "4d6b414", "running_sha": "4d6b414", "checkout_sha": "4d6b414",
@@ -215,6 +219,21 @@ def test_a_channel_root_does_not_allow_is_not_offered(driven) -> None:
     assert b["channel"].endswith("set on the server")
     both = driven["pinned_to_both"]["before"]
     assert both["select"]["options"] == ["stable: releases only", "main: every change, as it lands"]
+
+
+def test_an_install_from_before_the_first_release_is_told_when_it_is_out(driven) -> None:
+    """provision.sh follows main when origin has no stable yet, and
+    remembers stable was asked for; the card says so once a release is
+    out. It never switches by itself."""
+    def note(name):
+        e = driven[name]["before"]["text"]
+        return "set up to follow stable" in e, e
+    shown, text = note("stable_waiting")
+    assert shown and "Domovoi 1.0.0 is out: switch to stable above" in text
+    assert driven["stable_waiting"]["calls"] == []
+    assert note("stable_not_yet")[0] is False
+    shown, text = note("stable_waiting_household")
+    assert shown and "an admin can switch it to stable here" in text
 
 
 def test_a_settings_file_the_server_cannot_read_offers_no_switch(driven) -> None:

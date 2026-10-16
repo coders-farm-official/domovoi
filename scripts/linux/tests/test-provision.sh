@@ -2789,6 +2789,7 @@ case_new_install_follows_stable() {
   check "HEAD is the release" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$FIXTURE_A"
   check "on stable, tracking origin/stable" tracks stable
   check "no fallback" not_said "no stable branch yet"
+  check "nothing to remember" eq "$(git -C "$CHECKOUT" config domovoi.intendedChannel || echo unset)" unset
   check "the channel pin written" has_line "$ROOT/etc/default/domovoi-update" "$PIN_LINE"
   check "beside the lock line" has_line "$ROOT/etc/default/domovoi-update" "DOMOVOI_USE_LOCK=1"
   check "before the update unit's installer ran" grep -qxF "$PIN_LINE" "$STATE/update-defaults-seen"
@@ -2806,6 +2807,7 @@ case_before_the_first_release_installs_follow_main() {
   check "on main, tracking origin/main" tracks main
   check "says why" said "has no stable branch yet (no release has been published): installing main"
   check "and how to move later" said "switch to stable in Settings > Version after the first release"
+  check "the checkout keeps what was asked for" eq "$(git -C "$CHECKOUT" config domovoi.intendedChannel)" stable
   check "the channel pin written (main is one)" has_line "$ROOT/etc/default/domovoi-update" "$PIN_LINE"
   end_case
 }
@@ -2864,6 +2866,7 @@ case_the_installer_before_the_first_release_follows_main() {
   check "HEAD is the pinned commit" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$FIXTURE_A"
   check "on main" tracks main
   check "says why" said "has no stable branch yet (no release has been published): this box follows main"
+  check "the checkout keeps what was asked for" eq "$(git -C "$CHECKOUT" config domovoi.intendedChannel)" stable
   end_case
 }
 
