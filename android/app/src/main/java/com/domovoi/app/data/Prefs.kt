@@ -46,7 +46,7 @@ data class KnownServer(val url: String, val name: String? = null)
 class Prefs(
     private val context: Context,
     private val vault: TokenVault = TokenVault(PrefsVaultStore(context), KeystoreSealer()) { Log.w(TAG, it) },
-) : IdentityGate.PinStore {
+) : IdentityGate.PinStore, DeveloperOptions.Store {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val kServer = stringPreferencesKey("server_url")
@@ -71,6 +71,7 @@ class Prefs(
     private val kPhoneBar = stringPreferencesKey("phone_bar")
     private val kVoiceChoice = stringPreferencesKey("voice_choice")
     private val kVoiceInfo = stringPreferencesKey("voice_server_info")
+    private val kDeveloperOptions = booleanPreferencesKey("developer_options")
 
     private val _serverUrl = MutableStateFlow("")
     val serverUrl: StateFlow<String> = _serverUrl
@@ -159,6 +160,11 @@ class Prefs(
      *  like" list), by normalised address, for when the phone is offline. */
     private var voiceInfo: Map<String, String> = emptyMap()
 
+    /** Developer options as last set on this phone (data/DeveloperOptions.kt);
+     *  null = never set, so the build decides. */
+    @Volatile
+    private var developerOptions: Boolean? = null
+
     /** Stable per-install client id, e.g. "android-4f21" (web: "browser-xxxx"). */
     var deviceId: String = ""
         private set
@@ -213,6 +219,7 @@ class Prefs(
             _phoneBar.value = p[kPhoneBar]
             _voiceChoice.value = p[kVoiceChoice] ?: "server"
             voiceInfo = decodeVoiceInfo(p[kVoiceInfo])
+            developerOptions = p[kDeveloperOptions]
             deviceId = p[kDeviceId] ?: ("android-" + Random.nextInt(0x10000).toString(16).padStart(4, '0')).also { id ->
                 scope.launch { context.dataStore.edit { it[kDeviceId] = id } }
             }
@@ -494,6 +501,15 @@ class Prefs(
         if (next == _lyricsRoomNudge.value) return
         _lyricsRoomNudge.value = next
         scope.launch { context.dataStore.edit { it[kLyricsRoomNudge] = LyricsNudge.encode(next) } }
+    }
+
+    // ── Developer options (DeveloperOptions.Store) ─────────────────────
+
+    override fun loadDeveloperOptions(): Boolean? = developerOptions
+
+    override fun saveDeveloperOptions(on: Boolean) {
+        developerOptions = on
+        scope.launch { context.dataStore.edit { it[kDeveloperOptions] = on } }
     }
 
     private companion object {

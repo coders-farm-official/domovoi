@@ -420,11 +420,11 @@ the voice silenced and the model stopped, what was written kept.
   screen. The microphone permission is asked on the first tap.
 - **Audio focus**: the phone's own music pauses while the mic listens and
   ducks under the reply.
-- The long-press on a spoken turn's reply shows the voice numbers: end of
-  speech to the first spoken word (the plan's target is 3 s or less; the
-  detector's half-second silence wait is shown beside it), and how long
-  speech to text took. The model settings show the last stop's tap to
-  silence.
+- With developer options on (below), the long-press on a spoken turn's
+  reply shows the voice numbers: end of speech to the first spoken word
+  (the plan's target is 3 s or less; the detector's half-second silence
+  wait is shown beside it), and how long speech to text took. The model
+  settings show the last stop's tap to silence.
 - **Debug builds only** (`app/src/debug`): a test can queue WAV files in the
   app's private `files/debug-mic-feed/` (reachable only with `run-as`) and
   the next voice turn hears the first of them instead of the microphone, at
@@ -433,15 +433,32 @@ the voice silenced and the model stopped, what was written kept.
 **Conversations** stay on the phone: one JSON file per conversation in
 `filesDir/assistant/` (app-private, outside backups and device-to-device
 transfer), never sent to a server. The history lists them; each can be
-deleted, and **clear all conversations** deletes every one. A reply's
-long-press shows how it went (time to first words, tokens a second, CPU or
-GPU).
+deleted, and **clear all conversations** deletes every one. With developer
+options on, a reply's long-press also shows how it went (time to first
+words, tokens a second, CPU or GPU).
 
-**The benchmark** (Settings → About) stays as a measuring tool: load
-time, time to first words, decode speed, voice turns, memory, network use
-and the 10-minute heat loop, with results to copy. It shares the model
-files with the assistant, and each frees the other's copy of the model
-before loading its own.
+**The benchmark** (Settings → About → developer options) stays as a
+measuring tool: load time, time to first words, decode speed, voice turns,
+memory, network use and the 10-minute heat loop, with results to copy. It
+shares the model files with the assistant, and each frees the other's copy
+of the model before loading its own.
+
+**Developer options** (`data/DeveloperOptions.kt`,
+`ui/screens/settings/DeveloperOptionsSection.kt`, since 2026-10-16) keep
+the measuring tools out of a household's way: the benchmark, a reply's
+timings in its long-press menu and the last stop's timing in the model
+settings show only while they are on. Tap **app version** (Settings →
+About, or the no-server settings' **About this app**) seven times, as on
+Android's own build number: from the third tap a toast counts down ("You
+are now 3 steps away from developer options"), the seventh says
+"Developer options on", and a **Developer options** section appears at the
+end of the page with the benchmark and a **use developer options** switch
+that turns them off again. The choice is kept on the phone (the
+`developer_options` key in the `domovoi` DataStore); a phone that never
+chose starts with them on in a debug build (the version line says "debug
+build") and off in a release build. An install without the assistant (a
+32-bit phone or APK) has nothing to put under them, so there the version
+line is plain text and they never come on.
 
 **Report this reply** (Google Play's AI-generated content policy: a
 person can report an answer to the developer). Long-press a finished
@@ -496,7 +513,7 @@ About lists them with their notices; nothing GPL):
 | sherpa-onnx 1.13.8, built without text to speech (speech recognition, voice detection); compiled in: Eigen (MPL-2.0, unmodified), nlohmann/json (MIT), kaldi-decoder, kaldi-native-fbank, kaldifst, OpenFst, simple-sentencepiece (Apache-2.0), KISS FFT (BSD-3-Clause) | Apache-2.0 | in every APK; the assistant's listening and the benchmark |
 | ONNX Runtime 1.28.0 | MIT | in every APK |
 | Moonshine tiny, English (speech to text) | MIT | downloaded by the assistant |
-| Moonshine base, English (speech to text, larger) | MIT | downloaded by the benchmark |
+| Moonshine base, English (speech to text, larger) | MIT | downloaded by the benchmark (developer options) |
 | Silero VAD v4 (voice detection) | MIT | downloaded by the assistant |
 | Piper voices Norman, Kristin, Linda | public domain | downloaded from Settings → Voice; speak the assistant's replies |
 
@@ -517,7 +534,8 @@ licence at its source and adding (or confirming) its rule.
 
 The app's Settings screen keeps just the tabs that belong to the phone —
 **Connection** (server, theme, this device's name, "listening as") and
-**About**. The dashboard's server-administration tabs (Greetings, Voices,
+**About** (with the app's version, and the developer options it turns on:
+"On-device assistant", above). The dashboard's server-administration tabs (Greetings, Voices,
 Wake Words, Models, Configuration) are *not* mirrored: they need the
 dashboard's admin session, which this app does not have, so they could
 never apply a change correctly. In their place a **Server settings** tab

@@ -68,7 +68,7 @@ version from 8.0.
 | Timer and reminder alerts | works; exact alarms with no permission | works | works | works; exact alarms need "Alarms & reminders" (on by default; inexact if revoked) | works | works |
 | Notifications | on, no prompt | on, no prompt | on, no prompt | on, no prompt | asked at first start | as the Android version |
 | Problem reports | degraded: crashes and freezes; no "not responding" closes, and the card says so | degraded: as 8 | works: crashes, freezes, "not responding" closes | works | works | works |
-| On-device assistant benchmark (Settings → About) | works; its results lack the thermal status and name the board, not the chip | works; thermal status from 10 | works | works; chip name from 12 | works | **hidden** |
+| On-device assistant benchmark (Settings → About → developer options: tap the app version seven times) | works; its results lack the thermal status and name the board, not the chip | works; thermal status from 10 | works | works; chip name from 12 | works | **hidden** |
 | Room mode (this device as a room) | works; the mic service starts from the room screen | works | works; mic only "while using the app": the service starts from the room screen, and after a restart needs one tap | works; the mic privacy toggle shows as **mic blocked**; the notification's Stop asks for the unlock | works; notifications asked for in the explainer; Android 14+ declares the microphone service type | works (ONNX Runtime only) |
 | Documents "download all" (zip) | degraded: lands in the app's own folder (Android/data/…/Download) | degraded on 9: as 8; works on 10 (public Downloads) | works | works | works | as the Android version |
 
@@ -91,10 +91,10 @@ Notes:
   engine library is in this install and this process can load it
   (`assistant/AssistantSupport.kt`). Where it isn't, the Assistant tab and
   screen are on no launcher (local mode keeps Music, Videos and Files; Home's
-  grid, the drawer, the rail and the phone-bar choices leave it out), the
-  benchmark card is not shown, the local Settings screen doesn't mention the
-  assistant, and the licences list leaves out the models only the assistant
-  downloads.
+  grid, the drawer, the rail and the phone-bar choices leave it out), there
+  are no developer options (the app version line is plain text, and the
+  benchmark card they hold is not shown), and the licences list leaves out
+  the models only the assistant downloads.
 
 - **Room mode** runs openWakeWord and the Silero voice detector on ONNX
   Runtime, the runtime the phone's voice already ships for all four ABIs,

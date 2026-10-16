@@ -94,7 +94,7 @@ internal val OPEN_SOURCE_PARTS: List<OpenSourcePart> = listOf(
     OpenSourcePart(
         m.name, m.license, m.licenseUrl.removePrefix("https://"),
         if (m in ModelCatalog.chat) "Downloaded by the on-device assistant (the assistant tab)."
-        else "Downloaded by the on-device assistant's benchmark.",
+        else "Downloaded by the on-device assistant.",
         assistantOnly = true,
     )
 }

@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
 import com.domovoi.app.alerts.CONTAINERS_ROUTE
 import com.domovoi.app.alerts.EXTRA_ROUTE
+import com.domovoi.app.data.LocalDeveloperOptionsOn
 import com.domovoi.app.diagnostics.Diagnostics
 import com.domovoi.app.roommode.RoomModeActivity
 import com.domovoi.app.roommode.RoomStore
@@ -53,7 +54,8 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) routeFrom(intent)
         setContent {
             val themeMode by container.prefs.themeMode.collectAsState()
-            CompositionLocalProvider(LocalApp provides container) {
+            val developerOptions by container.developerOptions.on.collectAsState()
+            CompositionLocalProvider(LocalApp provides container, LocalDeveloperOptionsOn provides developerOptions) {
                 DomovoiTheme(mode = themeMode) {
                     AppShell()
                 }
