@@ -356,6 +356,9 @@ case $cmd in
   is-enabled)
     if [ -f "$SHIM_STATE/enabled/${units[0]}" ]; then echo enabled; exit 0; fi
     echo disabled; exit 1 ;;
+  is-failed)
+    if [ -f "$SHIM_STATE/failed/${units[0]}" ]; then [ "$quiet" = 1 ] || echo failed; exit 0; fi
+    [ "$quiet" = 1 ] || echo active; exit 1 ;;
   enable) for u in "${units[@]}"; do touch "$SHIM_STATE/enabled/$u"; [ "$now" = 0 ] || touch "$SHIM_STATE/active/$u"; done ;;
   disable) for u in "${units[@]}"; do rm -f "$SHIM_STATE/enabled/$u"; [ "$now" = 0 ] || rm -f "$SHIM_STATE/active/$u"; done ;;
   start|restart)
@@ -363,6 +366,16 @@ case $cmd in
     for u in "${units[@]}"; do
       if [ -f "$SHIM_STATE/start-fail" ] && { [ ! -s "$SHIM_STATE/start-fail" ] || grep -qx -- "$u" "$SHIM_STATE/start-fail"; }; then
         echo "Job for $u failed because the control process exited with error code." >&2; touch "$SHIM_STATE/failed/$u"; exit 1
+      fi
+      # start-then-fail: a --no-block start returns at once, and the unit
+      # fails afterwards (domovoi-db's Flyway, say).
+      if grep -qx -- "$u" "$SHIM_STATE/start-then-fail" 2>/dev/null; then
+        touch "$SHIM_STATE/failed/$u"; continue
+      fi
+      # start-queued: a --no-block start whose job waits (the core's, for
+      # the database's): a failed mark from before stays until it runs.
+      if grep -qx -- "$u" "$SHIM_STATE/start-queued" 2>/dev/null; then
+        touch "$SHIM_STATE/active/$u"; continue
       fi
       touch "$SHIM_STATE/active/$u"; rm -f "$SHIM_STATE/failed/$u"
     done ;;
@@ -1572,7 +1585,8 @@ case_journal_kept_on_disk() {
   check "exit 0" eq "$RC" 0
   check "the shipped drop-in" cmp -s "$f" "$REAL_REPO/scripts/linux/units/journald-domovoi.conf"
   check "Storage=persistent" has_line "$f" "Storage=persistent"
-  check "a size cap" has_line "$f" "SystemMaxUse=1G"
+  # Nothing else: a household's own size limits stay (review 2026-10-15).
+  check "and no size limit of ours" bash -c '! grep -q "^SystemMaxUse" "$1"' _ "$f"
   check "journald restarted to read it" called "systemctl restart systemd-journald.service"
   check "the journal so far moved to disk" called "journalctl --flush"
   check "said so" said "the journal is kept on disk"
@@ -1585,6 +1599,48 @@ case_journal_kept_on_disk() {
   check "an edited drop-in: units ran again" eq "$(state_of units)" done
   check "and put it back" cmp -s "$f" "$REAL_REPO/scripts/linux/units/journald-domovoi.conf"
   check "and restarted journald" called "systemctl restart systemd-journald.service"
+  end_case
+}
+
+# The core is Type=notify: a blocking start would wait for its READY=1
+# with no progress line and past --health-timeout (review 2026-10-15).
+case_starts_do_not_block_on_ready() {
+  new_case starts_do_not_block_on_ready
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "the start is --no-block" called "systemctl start domovoi-db.service domovoi-core.service domovoi-web.service --no-block"
+  check "and the wait reports" said "answered after"
+  end_case
+}
+
+case_a_unit_that_fails_after_a_no_block_start_stops_the_wait() {
+  new_case a_unit_that_fails_after_a_no_block_start_stops_the_wait
+  echo domovoi-core.service >"$STATE/start-then-fail"
+  local t0=$SECONDS
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 1" eq "$RC" 1
+  check "at once, not after --health-timeout" bash -c '[ "$1" -lt 60 ]' _ "$((SECONDS - t0))"
+  check "names the unit" said "domovoi-core.service failed"
+  check "with the diagnostics" said "systemctl status"
+  end_case
+}
+
+# A core that failed before this run (the last provision's, say) keeps its
+# failed mark while its --no-block start waits for the database's: the
+# wait must not take that for this start failing. The mark is cleared
+# first, and only a unit that has one.
+case_a_failed_mark_from_before_is_not_this_starts() {
+  new_case a_failed_mark_from_before_is_not_this_starts
+  mkdir -p "$STATE/failed"
+  touch "$STATE/failed/domovoi-core.service"
+  echo domovoi-core.service >"$STATE/start-queued"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "the old mark cleared" called "systemctl reset-failed domovoi-core.service"
+  check "before the start" before "systemctl reset-failed domovoi-core.service" \
+    "systemctl start domovoi-db.service domovoi-core.service domovoi-web.service --no-block"
+  check "only that unit's" not_called "systemctl reset-failed domovoi-web.service"
+  check "not taken for a failure" not_said "domovoi-core.service failed"
   end_case
 }
 
@@ -2227,6 +2283,9 @@ CASES=(
   case_cpu_only_box_reports_no_gpu
   case_update_defaults_opt_into_the_lock
   case_journal_kept_on_disk
+  case_starts_do_not_block_on_ready
+  case_a_unit_that_fails_after_a_no_block_start_stops_the_wait
+  case_a_failed_mark_from_before_is_not_this_starts
   case_journal_opt_out_is_honoured
   case_os_jobs_opt_out_is_honoured
   case_os_jobs_never_leaves_the_box_degraded

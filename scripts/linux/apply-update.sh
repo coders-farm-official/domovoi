@@ -98,19 +98,22 @@
 # again when it ends on purpose (reconcile_core_restart). The core exits
 # with status 70 when its loop watchdog finds it frozen, and the dashboard
 # ends a core that stopped answering (incident 2026-10-14); only
-# Restart=on-failure or Restart=always brings either back. A unit without
-# one (a hand-made unit; the shipped one has on-failure) gets the drop-in
-# domovoi-core.service.d/50-domovoi-restart.conf that sets it, and
-# systemctl daemon-reload. Never fatal.
+# Restart=on-failure or Restart=always brings either back. A unit with no
+# restart policy at all (Restart=no, systemd's default: a hand-made unit;
+# the shipped one has on-failure) gets the drop-in
+# domovoi-core.service.d/50-domovoi-restart.conf that sets on-failure (and
+# RestartSec=5 unless the unit already sets its own), and systemctl
+# daemon-reload. A policy the household chose (on-abnormal, say) is left
+# as it is, with a warn step saying what it misses. Never fatal.
 #
 # Then the journal (reconcile_journal): kept on disk, so what the core
 # logs about why it stopped survives a power cycle (on 2026-10-14 a box
 # whose journal lived in RAM lost the record of a frozen core). The
 # checkout's scripts/linux/units/journald-domovoi.conf becomes
-# /etc/systemd/journald.conf.d/50-domovoi.conf (Storage=persistent, at
-# most 1 GB) and systemd-journald restarts to read it, once; provision.sh
-# installs the same file. DOMOVOI_MANAGE_JOURNAL=0 leaves the journal
-# alone. Never fatal.
+# /etc/systemd/journald.conf.d/50-domovoi.conf (Storage=persistent and
+# nothing else: the household's own size limits stay) and systemd-journald
+# restarts to read it, once; provision.sh installs the same file.
+# DOMOVOI_MANAGE_JOURNAL=0 leaves the journal alone. Never fatal.
 #
 # Every run ends by writing last-result.json into DOMOVOI_UPDATE_DIR, which
 # the core serves as `last_update` from GET /v1/admin/version.
@@ -1671,28 +1674,31 @@ reconcile_os_jobs() {
   return 0
 }
 
-# The drop-in reconcile_core_restart writes.
+# The drop-in reconcile_core_restart writes; "keep-sec" leaves RestartSec=
+# out (the unit sets its own).
 core_restart_dropin() {
   cat <<'EOF'
 # Written by scripts/linux/apply-update.sh (domovoi-update.service). The
 # core exits on purpose when it finds itself frozen (status 70, its loop
 # watchdog: domovoi/loop_watchdog.py), and the dashboard ends a core that
 # stopped answering (web/backend/core_restart.py). Either way systemd has
-# to start it again, which this unit did not do (docs/LINUX_HOST.md, The
-# loop watchdog). To decide Restart= yourself, set it in a drop-in that
-# sorts after this one, or delete this file and set it in the unit.
+# to start it again, and this unit had no restart policy at all
+# (docs/LINUX_HOST.md, The loop watchdog). To decide Restart= yourself,
+# set it in a drop-in that sorts after this one, or delete this file and
+# set it in the unit; a policy of your own is never replaced.
 [Service]
 Restart=on-failure
-RestartSec=5
 EOF
+  [ "${1-}" = keep-sec ] || printf 'RestartSec=5\n'
 }
 
-# See the header: Restart=on-failure for a core unit that has neither it
-# nor always. Records a step only when it wrote the drop-in (ok) or found
-# the unit still not restarting the core (warn: its own drop-in overrides
-# this one, or the write failed).
+# See the header: Restart=on-failure for a core unit with no restart policy
+# (Restart=no), and only for that. Records a step only when it wrote the
+# drop-in (ok), or when the core would still stay down after its watchdog's
+# exit (warn: a policy of the household's own that doesn't cover it, a
+# drop-in of theirs overriding ours, or the write failed).
 reconcile_core_restart() {
-  local t0 current want
+  local t0 current sec want
   command -v systemctl >/dev/null 2>&1 || return 0
   current=$(systemctl show -p Restart --value "$CORE_UNIT" 2>/dev/null || true)
   case $current in
@@ -1701,16 +1707,26 @@ reconcile_core_restart() {
   esac
   t0=$(now_ms)
   log "step core-restart: $CORE_UNIT has Restart=$current"
-  want=$(core_restart_dropin)$'\n'
-  if [ -f "$CORE_RESTART_DROPIN" ] && [ "$(cat "$CORE_RESTART_DROPIN"; printf x)" = "${want}x" ]; then
-    add_step core-restart warn "$t0" "$CORE_UNIT has Restart=$current although $CORE_RESTART_DROPIN sets on-failure (a drop-in after it, or the unit itself, overrides it), so a core that ends itself when frozen stays down"
+  if [ "$current" != no ]; then
+    add_step core-restart warn "$t0" "$CORE_UNIT has Restart=$current, a policy of its own, left as it is: it does not start the core again after its loop watchdog ends a frozen core (status 70); Restart=on-failure would"
     return 0
+  fi
+  if [ -f "$CORE_RESTART_DROPIN" ]; then
+    add_step core-restart warn "$t0" "$CORE_UNIT has Restart=no although $CORE_RESTART_DROPIN sets on-failure (a drop-in after it, or the unit itself, overrides it), so a core that ends itself when frozen stays down"
+    return 0
+  fi
+  # systemd's default RestartSec is 100ms: anything else is the unit's own.
+  sec=$(systemctl show -p RestartUSec --value "$CORE_UNIT" 2>/dev/null || true)
+  if [ -n "$sec" ] && [ "$sec" != 100ms ]; then
+    want=$(core_restart_dropin keep-sec)$'\n'
+  else
+    want=$(core_restart_dropin)$'\n'
   fi
   if mkdir -p "$CORE_DROPIN_DIR" && write_atomic "$CORE_RESTART_DROPIN" "$want" \
       && systemctl daemon-reload; then
-    add_step core-restart ok "$t0" "$CORE_UNIT had Restart=$current; $CORE_RESTART_DROPIN sets on-failure, so a core that ends itself when frozen starts again"
+    add_step core-restart ok "$t0" "$CORE_UNIT had no restart policy (Restart=no); $CORE_RESTART_DROPIN sets on-failure, so a core that ends itself when frozen starts again"
   else
-    add_step core-restart warn "$t0" "$CORE_UNIT has Restart=$current and $CORE_RESTART_DROPIN could not be written, so a core that ends itself when frozen stays down"
+    add_step core-restart warn "$t0" "$CORE_UNIT has Restart=no and $CORE_RESTART_DROPIN could not be written, so a core that ends itself when frozen stays down"
     log "step core-restart failed; not fatal, the run goes on"
   fi
   return 0
@@ -1742,7 +1758,7 @@ reconcile_journal() {
   fi
   if command -v systemctl >/dev/null 2>&1 && systemctl restart systemd-journald.service; then
     journalctl --flush >/dev/null 2>&1 || true
-    add_step journal ok "$t0" "the journal is kept on disk now (at most 1 GB, $JOURNALD_DROPIN), so what the core logs survives a power cycle"
+    add_step journal ok "$t0" "the journal is kept on disk now ($JOURNALD_DROPIN), so what the core logs survives a power cycle"
   else
     add_step journal warn "$t0" "$JOURNALD_DROPIN is in place but systemd-journald did not restart: the journal moves to disk at the next boot"
     log "step journal: systemd-journald did not restart; not fatal, the run goes on"

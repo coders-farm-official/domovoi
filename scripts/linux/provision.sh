@@ -2478,7 +2478,7 @@ install_journald_dropin() {
   src=$(journald_dropin_src)
   [ -f "$src" ] || die "the checkout has no scripts/linux/units/journald-domovoi.conf"
   if write_if_changed "$JOURNALD_DROPIN" 0644 <"$src"; then
-    log "installed /etc/systemd/journald.conf.d/50-domovoi.conf: the journal is kept on disk (at most 1 GB)"
+    log "installed /etc/systemd/journald.conf.d/50-domovoi.conf: the journal is kept on disk"
     if systemd_running; then
       systemctl restart systemd-journald.service \
         || warn "systemd-journald did not restart; the journal moves to disk at the next boot"
@@ -2538,7 +2538,9 @@ do_timezone() {
       done
       if [ "${#restart[@]}" -gt 0 ]; then
         log "restarting ${restart[*]}: they took the zone at their start"
-        systemctl restart "${restart[@]}"
+        # --no-block: the core is Type=notify; the start step waits for it,
+        # with progress lines and --health-timeout.
+        systemctl restart "${restart[@]}" --no-block
       fi
     fi
     zone_files_agree || die "/etc/timezone ($(etc_timezone)) still disagrees with /etc/localtime ($z)"
@@ -2592,6 +2594,13 @@ wait_http() {
       start_diagnostics
       die "$label did not answer within ${timeout}s ($url; journalctl -u $unit)"
     fi
+    # The starts are --no-block: a unit (or the database it needs) that has
+    # already failed won't answer, however long this waits.
+    if systemctl is-failed --quiet domovoi-db.service 2>/dev/null \
+        || systemctl is-failed --quiet "$unit" 2>/dev/null; then
+      start_diagnostics
+      die "$label won't answer: $(systemctl is-failed --quiet domovoi-db.service 2>/dev/null && echo domovoi-db.service || echo "$unit") failed (journalctl -u $unit)"
+    fi
     if [ $((now - last)) -ge 30 ]; then
       last=$now
       emit_frac $(( from + (now - t0) * (to - from) / timeout )) "Waiting for $label ($((now - t0))s)"
@@ -2629,12 +2638,22 @@ do_start() {
     systemctl is-active --quiet domovoi-core.service && restart+=(domovoi-core.service)
     systemctl is-active --quiet domovoi-web.service && restart+=(domovoi-web.service)
   fi
+  # --no-block, both: the core is Type=notify, so a blocking start would
+  # wait for its READY=1 (up to its TimeoutStartSec) with no progress line
+  # and past --health-timeout. wait_http below waits instead, reporting,
+  # and stops at a unit that failed; so a failed mark from before this run
+  # is cleared first (a queued start leaves it until the job runs, which
+  # for the core waits for the database's).
+  local u
+  for u in "${SHIPPED_UNITS[@]}"; do
+    if systemctl is-failed --quiet "$u" 2>/dev/null; then systemctl reset-failed "$u" || true; fi
+  done
   if [ "${#restart[@]}" -gt 0 ]; then
     log "restarting ${restart[*]}: what they read changed"
-    systemctl restart "${restart[@]}"
+    systemctl restart "${restart[@]}" --no-block
   fi
   # The documented start, which is a no-op for what already runs.
-  if ! systemctl start "${SHIPPED_UNITS[@]}"; then
+  if ! systemctl start "${SHIPPED_UNITS[@]}" --no-block; then
     start_diagnostics
     die "systemctl start ${SHIPPED_UNITS[*]} failed (its status and the units' last 200 journal lines are in the output above; journalctl -u domovoi-db -u domovoi-core -u domovoi-web)"
   fi

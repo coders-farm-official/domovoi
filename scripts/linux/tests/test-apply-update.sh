@@ -92,6 +92,8 @@ if [ "${1-}" = show ]; then
   # The core unit's Restart= (reconcile_core_restart): show-restart, else
   # on-failure, the shipped unit's.
   case "$*" in *"-p Restart "*) cat "$SHIM_STATE/show-restart" 2>/dev/null || echo on-failure ;; esac
+  # Its RestartSec= (show-restartusec), else systemd's default.
+  case "$*" in *"-p RestartUSec "*) cat "$SHIM_STATE/show-restartusec" 2>/dev/null || echo 100ms ;; esac
   exit 0
 fi
 # stop-hangs lists units whose stop never finishes by itself: only a
@@ -901,13 +903,44 @@ case_core_restart_drop_in_on_a_full_update() {
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
   printf 'print("b")\n' >"$REPO/domovoi/app.py"
   commit_all "B: app" >/dev/null
-  # on-abnormal restarts after a signal but not after the watchdog's exit 70.
-  echo on-abnormal >"$STATE/show-restart"
+  echo no >"$STATE/show-restart"
   run_update
   check "status ok" eq "$(field status)" '"ok"'
   check "mode update" eq "$(field mode)" '"update"'
   check "Restart=on-failure written" grep -qx 'Restart=on-failure' "$CASE/dropins/50-domovoi-restart.conf"
   check "before the backup" before "systemctl daemon-reload" "pg_dump"
+  check "an ok step" step_is core-restart ok
+  end_case
+}
+
+# Review 2026-10-15 (note 7): a restart policy the household chose is
+# theirs. Only a unit with none (Restart=no) gets ours; RestartSec= is
+# added only where the unit has systemd's default.
+case_core_restart_a_households_own_policy_is_kept() {
+  new_case core_restart_a_households_own_policy_is_kept
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  # on-abnormal restarts after a signal, not after the watchdog's exit 70.
+  echo on-abnormal >"$STATE/show-restart"
+  echo 1min >"$STATE/show-restartusec"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no drop-in over their policy" test ! -e "$CASE/dropins/50-domovoi-restart.conf"
+  check "no reload" not_called "systemctl daemon-reload"
+  check "a warn step" step_is core-restart warn
+  check "that says what it misses" grep -qF "does not start the core again after its loop watchdog" "$RESULT"
+  end_case
+}
+
+case_core_restart_keeps_a_households_restart_sec() {
+  new_case core_restart_keeps_a_households_restart_sec
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo no >"$STATE/show-restart"
+  echo 1min >"$STATE/show-restartusec"
+  run_update
+  local f=$CASE/dropins/50-domovoi-restart.conf
+  check "status ok" eq "$(field status)" '"ok"'
+  check "Restart=on-failure" grep -qx 'Restart=on-failure' "$f"
+  check "their RestartSec= is not overridden" bash -c '! grep -q "^RestartSec=" "$1"' _ "$f"
   check "an ok step" step_is core-restart ok
   end_case
 }
@@ -933,7 +966,7 @@ case_core_restart_overridden_drop_in_is_a_warn() {
   # Ours is in place, yet systemd still says no: an admin's later drop-in
   # (or the unit) decides. Left as it is, said on the Version card.
   mkdir -p "$CASE/dropins"
-  sed -n '/^core_restart_dropin() {$/,/^}$/p' "$SCRIPT" | sed '1,2d;$d' | sed '$d' >"$CASE/dropins/50-domovoi-restart.conf"
+  printf '[Service]\nRestart=on-failure\nRestartSec=5\n' >"$CASE/dropins/50-domovoi-restart.conf"
   echo no >"$STATE/show-restart"
   run_update
   check "status ok" eq "$(field status)" '"ok"'
@@ -954,7 +987,9 @@ case_journal_made_persistent_once() {
   check "status ok" eq "$(field status)" '"ok"'
   check "the drop-in is the shipped file" cmp -s "$f" "$HERE/../units/journald-domovoi.conf"
   check "Storage=persistent" grep -qx 'Storage=persistent' "$f"
-  check "with a size cap" grep -qx 'SystemMaxUse=1G' "$f"
+  # Review 2026-10-15 (owner-default call): nothing else, so a household's
+  # own size limits (journald.conf, its drop-ins) stay.
+  check "and nothing else set" eq "$(grep -v '^#' "$f" | grep -v '^$' | tr '\n' ' ')" "[Journal] Storage=persistent "
   check "journald restarted to read it" called "systemctl restart systemd-journald.service"
   check "an ok step" step_is journal ok
   check "where it sits" eq "$(step_names)" "signature journal stop-services start-services health searxng"
@@ -2864,6 +2899,8 @@ CASES=(
   case_noop_restart
   case_core_restart_drop_in_for_a_unit_that_would_stay_down
   case_core_restart_drop_in_on_a_full_update
+  case_core_restart_a_households_own_policy_is_kept
+  case_core_restart_keeps_a_households_restart_sec
   case_core_restart_left_alone_when_the_unit_restarts
   case_core_restart_overridden_drop_in_is_a_warn
   case_starts_do_not_wait_for_the_cores_ready
