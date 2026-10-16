@@ -95,6 +95,16 @@ We build Domovoi in public. Here's where it stands.
   Its journal never holds the household token, and what people say shows
   up there only as a word count unless you turn on debug logging
   ([data at rest](docs/SECURITY_PRIVACY.md#data-at-rest)).
+- **Updates from the dashboard,** on a release channel. Settings →
+  Configuration → Version names the release the server runs (`1.0.0-rc1 +
+  14 (abc1234)` between releases) and pulls and applies updates, rolling
+  back by itself when the new code doesn't come up healthy. Root only
+  ever runs a verified copy of the commit, never the files in the checkout
+  ([the update verifier](docs/LINUX_HOST.md#the-update-verifier)). New
+  installs follow `stable`, releases only (until the first release is
+  out, `main`); servers installed before stay on `main`, every change as
+  it lands; an admin switches in the same card
+  ([release channels](docs/LINUX_HOST.md#release-channels)).
 - **Raspberry Pi satellites** put a voice in every room, with wake word,
   barge-in, and intercom and drop-in between rooms. The dashboard prepares
   a Pi's SD card, and you finish its setup from your phone over the Pi's
@@ -103,7 +113,12 @@ We build Domovoi in public. Here's where it stands.
   name are never guessed between: a satellite asks "Is that you?" instead.
 - **No GPL or LGPL libraries in the server's Python code:** tag reading
   and the music player's client are Domovoi's own, and audio is encoded by
-  the system's `ffmpeg`, run as a program.
+  the system's `ffmpeg`, run as a program. Every model, voice and dataset
+  a server, the app or the wake-word trainer downloads is listed with its
+  licence in [docs/LICENSES.md](docs/LICENSES.md); two defaults aren't
+  permissive, the `hey_jarvis` wake word (non-commercial) and the answer
+  model `llama3.2:3b` (the Llama 3.2 Community License). Settings → About
+  links to it, on the dashboard and in the app.
 - **The web dashboard** manages all of it, from plugins to training your own
   wake word on the server (about 20 minutes on an NVIDIA GPU, longer on the
   CPU). After you sign in as admin, reloading the page keeps you signed in
@@ -117,6 +132,12 @@ We build Domovoi in public. Here's where it stands.
   app to this server** once on the dashboard, and a phone installs it from
   your server's own page by scanning a QR code
   ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode)).
+  From 1.0.0-rc2 on, the app says when your server holds a newer release
+  than the phone has, and opens the server's page for the update (never
+  for a Google Play install, which updates itself). Phone photos in HEIC
+  (or AVIF) send fine in chat: the app turns them into a JPEG on the phone
+  first (HEIC from Android 9, AVIF from Android 12), and that copy leaves
+  the photo's location and camera details on the phone.
 
 **Previews**
 
@@ -149,15 +170,21 @@ they have been tried on fewer devices than the rest, aren't yet held to
 - **A USB stick that turns an old PC into a room.** The dashboard prepares
   the stick, and an old 64-bit PC, laptop or Intel Mac installs Debian and
   the satellite from it after you type ERASE on it; a network cable for the
-  setup. Tested in virtual machines; real laptops are next
+  setup. Tested in virtual machines; real computers are next
   ([old computers](docs/SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick)).
 
 **Coming next** (being finished now)
 
-1. **Domovoi v1.0.0,** after the
+1. **Domovoi v1.0.0-rc2,** a dress rehearsal of the v1.0.0 release itself:
+   the server, the app (1.0.0-rc2) and a Windows Setup that installs that
+   commit, one `SHA256SUMS` for every file, all published the way v1.0.0
+   will be ([Releasing](docs/CONTRIBUTING.md#releasing)).
+2. **Domovoi v1.0.0,** after
    [v1.0.0-rc1](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc1)
-   pre-release: once the freeze fixes above have run for a few days and
-   the spare-device hardware checks are done.
+   and rc2: once the freeze fixes above have run for a week with no freeze
+   and no satellite dropping out, and the hardware checks on real phones
+   and spare computers are done. `stable` then points at it, and new
+   installs follow it.
 
 **Later**
 
@@ -168,6 +195,10 @@ they have been tried on fewer devices than the rest, aren't yet held to
 - **"Hey Domovoi" as a default wake word.** A model trained at home can't be
   shipped to everyone: its training data isn't licensed for that. A shipped
   default needs training data with permissive licences throughout.
+- **Signed releases (1.1).** Release commits and tags signed, and servers on
+  `stable` checking the signature before they update; the update verifier
+  already does the checking wherever an `allowed_signers` file is in place
+  ([signed updates](docs/LINUX_HOST.md#signed-updates)).
 
 **How it's built.** Domovoi is written with AI coding agents and held to the
 same bar Coders Farm teaches: automated tests, review, and a written
@@ -619,7 +650,7 @@ Want to write one? Start at the
 | [Satellite hardware](docs/SATELLITE_HARDWARE.md) | Parts list and step-by-step Pi satellite build |
 | [Pi provisioning checklist](satellite/PROVISIONING.md) | Every command and gotcha for building a Pi satellite by hand |
 | [Video satellites](satellite/VIDEO_SATELLITE.md) | A satellite with a screen: the now-playing kiosk build on a Radxa Zero 3W |
-| [Satellites on spare devices](docs/SPARE_DEVICE_SATELLITES.md) | A Linux or Windows laptop or PC, or an old phone or tablet in room mode, as a room: the command or QR code, the approval, what each can and can't do |
+| [Satellites on spare devices](docs/SPARE_DEVICE_SATELLITES.md) | A Linux or Windows laptop or PC, an old phone or tablet in room mode, or an old computer from a USB stick, as a room (previews): the command, QR code or stick, the approval, what each can and can't do |
 | [Wake-word training](scripts/wake_word/README.md) | Training your own wake word from the dashboard: what it needs, what a training does to the server, the licence of what it makes |
 | [Hardware validation](docs/HARDWARE_VALIDATION.md) | The checks on real devices that satellite onboarding and video satellites still need |
 | [Android compatibility](docs/ANDROID_COMPATIBILITY.md) | Which phones and Android versions the app runs on, which APK to install, what each version gets |
