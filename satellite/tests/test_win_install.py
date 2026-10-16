@@ -867,7 +867,7 @@ def test_an_old_processor_is_refused_before_anything_is_downloaded(tmp_path, ser
     then fail at the first import. -TestCpuMissing (tests only) makes this
     PC's processor lack one feature as IsProcessorFeaturePresent reports it."""
     bundle = _bundle_copy(tmp_path, served)
-    payload = enrolment.build("http://192.168.0.117:6370", FP, "Den")
+    payload = enrolment.build("http://192.168.1.20:6370", FP, "Den")
     r = _ps(["-File", str(bundle / "satellite" / "scripts" / "install-windows.ps1"), payload,
              "-InstallRoot", str(tmp_path / "S"), "-TestCorePcSignals", _signals(tmp_path, NOTHING),
              "-TestCpuMissing", missing], timeout=90)

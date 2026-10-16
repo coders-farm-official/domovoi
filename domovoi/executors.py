@@ -8,7 +8,7 @@ When long jobs fill it, everything else queued behind them waits: on
 voice download holding the speech engine's lock while every speech
 request piled up behind it, one pool thread each, until the database
 connects (a ``localhost`` lookup each) could no longer get a thread
-(functional-testing incident-1014, ``starve.py``).
+(reproduced in the maintainers' functional test harness, kept outside this repo).
 
 So the heavy users get pools of their own, each with a fixed number of
 threads: speech recognition and voice analysis, speech synthesis, and

@@ -5,7 +5,7 @@ connections, nothing answered, every satellite dropped, and the
 dashboard's Restart could not help because it asks the core to restart
 itself. It stayed that way until a power cycle a day and a half later,
 which also erased the box's RAM-only journal, and with it the record. Two ways to get there were found
-(functional-testing incident-1014): synchronous work on the event loop
+(in the maintainers' functional test harness, kept outside this repo): synchronous work on the event loop
 that never returns, and a full thread pool that every database connect
 waits on forever. Both are fixed where they were found; this module is
 for the next one nobody has found yet.

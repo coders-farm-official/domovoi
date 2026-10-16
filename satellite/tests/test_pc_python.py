@@ -6,8 +6,8 @@ on root's own copy), the glibc floor, and which Python a computer gets.
 Each function runs on its own in bash (Git Bash on Windows, bash on Linux)
 with the script's own text, so a test fails if the script's check changes.
 The real install, as root in a container, is test_install_pc_sandbox.py;
-the end-to-end on Ubuntu 22.04, Debian 11, Mint 21 and Debian 12 is
-functional-testing/wf-sat-pc-python/.
+the end-to-end on Ubuntu 22.04, Debian 11, Mint 21 and Debian 12 is run
+by the maintainers' functional test harness, kept outside this repo.
 """
 
 from __future__ import annotations
@@ -159,19 +159,19 @@ def test_payload_core_agrees_with_the_shared_fixture():
 
 
 CORES = [
-    "http://192.168.0.117:6370", "HTTP://Core.LOCAL:06370/", "https://domovoi.local", "http://10.1.2.3",
+    "http://192.168.1.20:6370", "HTTP://Core.LOCAL:06370/", "https://domovoi.local", "http://10.1.2.3",
     "http://172.16.0.1:1", "http://172.31.255.255:65535", "http://172.32.0.1", "http://192.169.0.1",
-    "http://192.168.0.01", "http://300.1.1.1.local", "http://1.2.3", "http://127.0.0.1:6370",
+    "http://192.168.1.01", "http://300.1.1.1.local", "http://1.2.3", "http://127.0.0.1:6370",
     "http://100.64.0.1", "http://8.8.8.8", "http://core.home.arpa", "http://core.lan:0", "http://core.lan:65536",
     "http://core.internal:", "http://.local", "http://-x.local", "http://x-.local", "http://a..b.local",
     "http://[fd00::17]:6370", "http://[FD00::17]", "http://[fe80::1]", "http://[febf::1]", "http://[fec0::1]",
-    "http://[fc00::]", "http://[::ffff:192.168.0.1]", "http://[fd00::192.168.0.1]", "http://[fd00:::1]",
+    "http://[fc00::]", "http://[::ffff:192.168.1.1]", "http://[fd00::192.168.1.1]", "http://[fd00:::1]",
     "http://[fd00::1::2]", "http://[fd00:1:2:3:4:5:6:7]", "http://[fd00:1:2:3:4:5:6:7:8]",
     "http://[fd00:1:2:3:4:5:6::7]", "http://[fd00::1%eth0]", "http://[fd00::1", "http://[fd00::12345]",
     "http://[:fd00::1]", "http://[fd00::1:]", "http://[1:2:3:4:5:6:7::]", "http://[::]", "http://[fd00::1]x",
-    "http://192.168.0.117:6370/x", "http://a@192.168.0.117", "http://192.168.0.117?x", "http://192.168.0.117#x",
-    "http://192.168.0.117//", "file:///etc/passwd", "ftp://192.168.0.117", "http:/192.168.0.117",
-    "http://192.168.0.117 ", " http://192.168.0.117", "http://192.168.0.117\n", "http://Kü.local",
+    "http://192.168.1.20:6370/x", "http://a@192.168.1.20", "http://192.168.1.20?x", "http://192.168.1.20#x",
+    "http://192.168.1.20//", "file:///etc/passwd", "ftp://192.168.1.20", "http:/192.168.1.20",
+    "http://192.168.1.20 ", " http://192.168.1.20", "http://192.168.1.20\n", "http://Kü.local",
     "http://x.local:6370:1", "http://x.local:+80", "1http://x.local", "http://x_y.local",
     "http://" + "a" * 240 + ".local", "http://" + "a" * 250 + ".local",
 ]
@@ -194,9 +194,9 @@ def test_core_normal_is_normalize_core():
 
 def test_payload_core_ignores_a_raw_value_with_odd_characters():
     assert _payload_cores(["domovoi-room:1?core=http://x;id&fp=a&room=R",
-                           "domovoi-room:1?core=http%3A%2F%2F192.168.0.9%00&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=R",
-                           "domovoi-room:1?core=http%3A%2F%2F192.168.0.9&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYcz%00KK6r6YgmCylej3GSSoOA&room=R",
-                           "domovoi-room:1?core=http%3A%2F%2F192.168.0.9%0A&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=R",
+                           "domovoi-room:1?core=http%3A%2F%2F192.168.1.9%00&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=R",
+                           "domovoi-room:1?core=http%3A%2F%2F192.168.1.9&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYcz%00KK6r6YgmCylej3GSSoOA&room=R",
+                           "domovoi-room:1?core=http%3A%2F%2F192.168.1.9%0A&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=R",
                            ]) == ["", "", "", ""]
 
 

@@ -1,5 +1,5 @@
 """Incident 2026-10-14, mechanism 2: a full default thread pool must not
-stop the database (functional-testing incident-1014, ``starve.py``).
+stop the database (reproduced in the maintainers' functional test harness, kept outside this repo).
 
 Every session opens a new connection (NullPool), and a ``localhost`` host
 makes each connect resolve the name in the event loop's default pool,

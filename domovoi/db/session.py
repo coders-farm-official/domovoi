@@ -22,8 +22,8 @@ def connect_url(url: str) -> str:
     every ``asyncio.to_thread`` call queues in: once that pool is full of
     long jobs, every database connect waits behind them, and with it every
     request that touches the database (``/v1/health`` included). That is
-    one way the core froze on 2026-10-14 (functional-testing
-    incident-1014, ``starve.py``: with the pool full, a ``localhost``
+    one way the core froze on 2026-10-14 (reproduced in the
+    the maintainers' functional test harness, kept outside this repo: with the pool full, a ``localhost``
     connect was still waiting after 8 s while ``127.0.0.1`` connected in
     0.02 s). An IP needs no lookup, so the connect never touches the pool.
     It is also the address Docker publishes the compose Postgres on, and

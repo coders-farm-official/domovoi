@@ -10,8 +10,9 @@ which the web checks itself against the shared admin_sessions table.
 Review 2026-10-15: the first build ended cores that were NOT frozen (a
 503 from a database that was down, a 12 s busy loop, a 5 s health answer,
 a Type=simple core still starting). Those are pinned here, against real
-HTTP servers where it matters, and in functional-testing/core-resilience/
-systemd under a real systemd (cases A, B2, C, I2); the POSIX process parts
+HTTP servers where it matters, and in the maintainers' functional test
+harness (kept outside this repo) under a real systemd (cases A, B2, C,
+I2); the POSIX process parts
 run unmocked in test_core_restart_posix.py."""
 
 from __future__ import annotations

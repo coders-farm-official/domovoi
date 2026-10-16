@@ -1,9 +1,10 @@
 """The process side of the dashboard's "Restart the core", unmocked (review
 2026-10-15, note 9): which PID may be signalled, whether it is the core,
 how long it has run, and the dump-then-kill. POSIX only (it reads /proc
-and sends signals); on this repo's Windows dev box these skip, and
-functional-testing/core-resilience/linux-pytest runs them in a Linux
-container (plus the systemd container for the whole button)."""
+and sends signals); on a Windows dev box these skip, and the
+maintainers' functional test harness (kept outside this repo) runs
+them in a Linux container (plus a systemd container for the whole
+button)."""
 
 from __future__ import annotations
 

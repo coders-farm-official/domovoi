@@ -8,8 +8,8 @@ computer's own Python takes its place again; the uninstall removes it.
 Root only, inside a container (``/.dockerenv`` or
 ``DOMOVOI_INSTALLER_SANDBOX=1``), like test_install_pc_sandbox.py, and only
 with the real pinned build at hand: ``DOMOVOI_TEST_PBS_DIR`` names a folder
-holding the file the tree's lock pins for this machine (the runner,
-functional-testing/wf-sat-pc-python/run-linux-tests.sh, copies it in). No
+holding the file the tree's lock pins for this machine (the runner, in
+the maintainers' functional test harness, kept outside this repo, copies it in). No
 network: GitHub is unreachable here, so a server that serves anything else
 leaves no source.
 """
