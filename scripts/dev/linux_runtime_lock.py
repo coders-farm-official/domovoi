@@ -42,6 +42,7 @@ import argparse
 import hashlib
 import io
 import json
+import posixpath
 import re
 import shutil
 import subprocess
@@ -82,7 +83,10 @@ HEADER = """\
 # libedit in place of GNU readline (BSD-3-Clause), Tcl/Tk (TCL), libX11,
 # libxcb and libXau (MIT/X11). No GNU readline and no GDBM are in it. The
 # one copyleft part, the dbm module's Berkeley DB (Sleepycat), is deleted
-# by the installer (lib-dynload/_dbm.*.so) and never loaded.
+# by the installer from both its copies (lib-dynload/_dbm.*.so) and never
+# loaded. The archive itself is upstream's, unmodified (its SHA-256 is the
+# pin): each household's own server fetches it from GitHub and hands it
+# only to that household's computers; Domovoi never ships or hosts it.
 #
 # python <machine> <version> <file> <size> <sha256> <url>
 """
@@ -113,14 +117,32 @@ def url_for(release: str, name: str) -> str:
     return BASE + release + "/" + urllib.parse.quote(name)
 
 
+def _inside(name: str) -> bool:
+    return not name.startswith("/") and ".." not in name.split("/") and name.split("/")[0] == "python"
+
+
 def check_layout(path: Path, version: str) -> None:
+    """The archive is a plain tree under python/: regular files, folders and
+    links that stay inside it, no setuid, setgid or sticky bit (root unpacks
+    it), and the layout the installer expects (security review of
+    wf/sat-pc-python)."""
     minor = ".".join(version.split(".")[:2])
     want = {"python/bin/python3", f"python/lib/python{minor}/lib-dynload"}
     with tarfile.open(path, "r:gz") as t:
         names = set()
         for m in t:
-            if m.name.startswith("/") or ".." in Path(m.name).parts or not m.name.startswith("python/"):
+            if not _inside(m.name):
                 raise SystemExit(f"{path.name}: unexpected member {m.name!r}")
+            if not (m.isreg() or m.isdir() or m.issym() or m.islnk()):
+                raise SystemExit(f"{path.name}: {m.name!r} is not a file, folder or link")
+            if m.mode & 0o7000:
+                raise SystemExit(f"{path.name}: {m.name!r} has a setuid, setgid or sticky bit")
+            if m.issym():
+                target = posixpath.normpath(posixpath.join(posixpath.dirname(m.name), m.linkname))
+                if m.linkname.startswith("/") or not _inside(target):
+                    raise SystemExit(f"{path.name}: {m.name!r} links out of the tree ({m.linkname!r})")
+            if m.islnk() and not _inside(posixpath.normpath(m.linkname)):
+                raise SystemExit(f"{path.name}: {m.name!r} is a hard link out of the tree ({m.linkname!r})")
             # Every member and the folders above it (the archive need not list folders).
             parts = m.name.rstrip("/").split("/")
             names.update("/".join(parts[:i]) for i in range(1, len(parts) + 1))
@@ -142,12 +164,16 @@ def _zstd_bytes(path: Path) -> bytes:
         return subprocess.run([tool, "-dc", str(path)], check=True, capture_output=True).stdout
 
 
-def licences(release: str, machine: str, version: str, cache: Path) -> list[str]:
-    """Every built module's licences from the full build's PYTHON.json;
-    raises SystemExit for one outside PERMISSIVE that is not REMOVED."""
+def licences(release: str, machine: str, version: str, cache: Path, sums: dict[str, str]) -> list[str]:
+    """Every built module's licences from the full build's PYTHON.json (the
+    archive held to the release's SHA256SUMS first); raises SystemExit for
+    one outside PERMISSIVE that is not REMOVED."""
     name = file_name(release, machine, version, "pgo+lto-full", "tar.zst")
     path = cache / name
     download(url_for(release, name), path)
+    digest = sha256_file(path)
+    if sums.get(name) != digest:
+        raise SystemExit(f"{name}: the release's SHA256SUMS says {sums.get(name)}, the download is {digest}")
     with tarfile.open(fileobj=io.BytesIO(_zstd_bytes(path))) as t:
         doc = json.load(t.extractfile("python/PYTHON.json"))
     lines, bad = [], []
@@ -192,7 +218,7 @@ def build(release: str, pythons: list[tuple[str, str]], cache: Path, *, check_li
             raise SystemExit(f"{name}: the release's SHA256SUMS says {sums.get(name)}, the download is {digest}")
         check_layout(path, version)
         if check_licences:
-            for line in licences(release, machine, version, cache):
+            for line in licences(release, machine, version, cache, sums):
                 print(f"  {machine} {line}")
         rows.append(f"python {machine} {version} {name} {path.stat().st_size} {digest} {url_for(release, name)}")
     return HEADER.format(variant=VARIANT, release=release) + "\n".join(rows) + "\n"

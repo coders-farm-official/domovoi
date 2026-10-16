@@ -2030,17 +2030,32 @@ x86-64, 3.13.16 on 64-bit ARM), pinned by size and SHA-256 in
 GitHub supplies it (or your server's cache of the same file, which an
 admin fetches through the outbound gate) but cannot choose it: the
 installer reads at most one byte past the pinned size and unpacks nothing
-that isn't the pinned file. It unpacks it first in a temporary folder of
-the installing account, to check the server's identity before anything is
-written, then **root copies the file into its own folder and checks that
-copy again** (the temporary one is the account's to change) before
-unpacking it, owned by root and writable by no one else, into
+that isn't the pinned file. It asks your server for it only at an address
+the identity check would itself accept (the payload read as that check
+reads it: a home-network address, the right shape) and follows no
+redirect from it; from GitHub it follows redirects to `https` only, with
+curl or wget alike. It unpacks it first in a folder of the installing
+account that no other account can change, all the way up (its home,
+root's for root; else a new 0700 folder in `/tmp`), to check the server's
+identity before anything is written, then **root copies the file into its
+own folder and checks that copy again** (the first one is the account's to
+change) before unpacking it, owned by root, readable by all and writable
+by no one else whatever the umask, into
 `/usr/local/lib/domovoi-satellite/python`; the satellite's venv is made
-from it as from `/usr/bin/python3`. Root itself runs only
-`/usr/bin/python3` or that root-owned copy, always with `-I`, and refuses
-any other (the record and the purge helper below). Its `dbm` module's
-Berkeley DB (a copyleft licence) is deleted at install; nothing in it is
-GNU readline or GDBM. **It is not updated by the computer's own package
+from it as from `/usr/bin/python3`. **Both copies get an empty
+`lib/python3XY.zip` before they first run**, and each run checks its
+standard library is its own: CPython looks for that file in every folder
+above its `bin/`, so without it a library planted higher up (`/tmp/lib/…`
+by any local account) would have been imported first, `-I` or not
+(security review of wf/sat-pc-python). Every Python the installer runs,
+the first copy included, runs with `-I`; root runs only `/usr/bin/python3`
+or its own copy (root's folders all the way down, no link, nobody else may
+write), and refuses any other (the record and the purge helper below).
+Its `dbm` module's Berkeley DB (a copyleft licence) is deleted from both
+copies; nothing in it is GNU readline or GDBM. The archive itself is
+upstream's, unmodified (its SHA-256 is the pin): your server fetches it
+from GitHub and hands it only to your own computers; Domovoi never ships
+or hosts it. **It is not updated by the computer's own package
 manager**: a newer pin arrives with a Domovoi update and reaches a laptop
 when its install command is run again, as on Windows.
 

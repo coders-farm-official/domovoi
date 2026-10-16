@@ -407,11 +407,19 @@ else:
 #
 # For a computer whose python3 won't do (step 0). The lock line for this
 # machine, from the bundle the dashboard's command checked; the file it
-# names, from the Domovoi server's cache or from GitHub, held to its size
-# and SHA-256 before anything unpacks it; unpacked first in a temporary
-# folder of the installing account (for step 1, before anything is
-# written), then by root into root's own folder from root's own copy,
-# which root checks again (the temporary folder is the account's).
+# names, from the Domovoi server's cache (only an address step 1 itself
+# would accept) or from GitHub, held to its size and SHA-256 before anything
+# unpacks it; unpacked first in a folder of the installing account that no
+# other account can change, all the way up (for step 1, before anything is
+# written), then by root into root's own folder from root's own copy, which
+# root checks again (the first folder is the account's).
+#
+# Both copies get an empty python3XY.zip in their own lib/ before they first
+# run: CPython looks for that file in every folder above its bin/ to find
+# its standard library, so without one inside the tree, a lib/python3XY.zip
+# and lib/python3.XY/ planted higher up (in /tmp, say) would be imported
+# instead, sitecustomize and all, -I or not (security review of
+# wf/sat-pc-python).
 
 PIN_VERSION="" PIN_FILE="" PIN_SIZE="" PIN_SHA="" PIN_URL="" PYSTAGE=""
 MACHINE=$(/usr/bin/uname -m)
@@ -433,29 +441,157 @@ read_pin() {  # the lock's line for $MACHINE -> PIN_*; 1 when there is none
   return 1
 }
 
-payload_core() {  # the payload's core= address, if it is a plain http(s)://host[:port]
-  # Only where to look for the cached file first: whatever it serves is held
-  # to the pin like GitHub's, and the server proves who it is in step 1.
-  local pairs pair v="" d bs='\x'
-  IFS='&' read -r -a pairs <<<"${PAYLOAD#*\?}"
-  for pair in "${pairs[@]}"; do
-    case $pair in core=*) v=${pair#core=} ;; esac
-  done
-  [ "${#v}" -le 256 ] && [[ $v =~ ^[A-Za-z0-9%._~:/-]+$ ]] || return 0
-  d=$(printf '%b' "${v//%/$bs}")
-  if [[ $d =~ ^https?://[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$ ]] || [[ $d =~ ^https?://\[[0-9A-Fa-f:.]{2,45}\](:[0-9]{1,5})?$ ]]; then
-    printf '%s' "$d"
-  fi
+# The payload, read as step 1 (satellite/enrolment.py parse) reads it, so
+# that step 0 asks no address for the file that step 1 would refuse: the
+# grammar, the strict %-escapes, the keys, the fingerprint's shape, and the
+# core address exactly (normalize_core and is_home_network_host). Only the
+# room name's finer rules (letters, UTF-8, control characters) are left to
+# step 1; they name no address. A test holds this to the shared fixture
+# (docs/uml/spare-device-enrol-fixture.json) and to normalize_core.
+
+ipv4_ok() {  # ipv4_ok TEXT -> 0 for a dotted quad Python's ipaddress takes (no leading zeros)
+  local o
+  [[ $1 =~ ^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$ ]] || return 1
+  for o in "${BASH_REMATCH[@]:1}"; do [ "$o" -le 255 ] || return 1; done
 }
 
-fetch_to() {  # fetch_to URL FILE: at most $PIN_SIZE + 1 bytes of what URL serves
+ipv6_first() {  # ipv6_first TEXT -> prints its first 16 bits (decimal) if Python's IPv6Address takes it
+  local s=$1 parts n i skip=-1 hi lo p first
+  [[ $s =~ ^[0-9a-f:.]+$ ]] || return 1
+  IFS=: read -r -a parts <<<"$s:"          # the extra ':' keeps a trailing empty part
+  n=${#parts[@]}
+  [ "$n" -ge 3 ] || return 1
+  if [[ ${parts[n-1]} == *.* ]]; then
+    ipv4_ok "${parts[n-1]}" || return 1
+    parts[n-1]=0; parts[n]=0; n=$((n + 1))
+  fi
+  [ "$n" -le 9 ] || return 1
+  for ((i = 1; i < n - 1; i++)); do
+    if [ -z "${parts[i]}" ]; then [ "$skip" -lt 0 ] || return 1; skip=$i; fi
+  done
+  if [ "$skip" -ge 0 ]; then
+    hi=$skip lo=$((n - skip - 1))
+    if [ -z "${parts[0]}" ]; then hi=$((hi - 1)); [ "$hi" = 0 ] || return 1; fi
+    if [ -z "${parts[n-1]}" ]; then lo=$((lo - 1)); [ "$lo" = 0 ] || return 1; fi
+    [ $((8 - hi - lo)) -ge 1 ] || return 1
+  else
+    [ "$n" = 8 ] && [ -n "${parts[0]}" ] && [ -n "${parts[n-1]}" ] || return 1
+  fi
+  for ((i = 0; i < n; i++)); do
+    p=${parts[i]}
+    [ "$i" = "$skip" ] && continue
+    [ -z "$p" ] && { [ "$i" = 0 ] || [ "$i" = $((n - 1)) ]; } && continue
+    [[ $p =~ ^[0-9a-f]{1,4}$ ]] || return 1
+  done
+  first=${parts[0]:-0}
+  printf '%d' "$((16#$first))"
+}
+
+home_host() {  # home_host HOST -> 0 when is_home_network_host would take it (lower-case, no brackets)
+  local h=$1 a b x
+  if [[ $h == *:* ]]; then
+    x=$(ipv6_first "$h") || return 1
+    { [ "$x" -ge $((16#fc00)) ] && [ "$x" -le $((16#fdff)) ]; } || { [ "$x" -ge $((16#fe80)) ] && [ "$x" -le $((16#febf)) ]; }
+    return
+  fi
+  if ipv4_ok "$h"; then
+    a=${h%%.*}; b=${h#*.}; b=${b%%.*}
+    [ "$a" = 10 ] || { [ "$a" = 172 ] && [ "$b" -ge 16 ] && [ "$b" -le 31 ]; } || { [ "$a" = 192 ] && [ "$b" = 168 ]; }
+    return
+  fi
+  local s
+  for s in .local .home.arpa .lan .internal; do
+    [[ $h == *"$s" ]] && [ "${#h}" -gt "${#s}" ] && return 0
+  done
+  return 1
+}
+
+core_normal() {  # core_normal VALUE -> prints the core address as normalize_core makes it, or nothing
+  local LC_ALL=C v=$1 scheme rest netloc path host after shown port=""
+  [ "${#v}" -ge 1 ] && [ "${#v}" -le 256 ] && [[ $v =~ ^[!-~]+$ ]] || return 0
+  case $v in *'?'*|*'#'*|*'@'*) return 0 ;; esac
+  [[ $v =~ ^([A-Za-z][A-Za-z0-9+.-]*)://(.*)$ ]] || return 0
+  scheme=${BASH_REMATCH[1],,} rest=${BASH_REMATCH[2]}
+  case $scheme in http|https) ;; *) return 0 ;; esac
+  netloc=${rest%%/*} path=${rest#"$netloc"}
+  [ -z "$path" ] || [ "$path" = / ] || return 0
+  if [[ $netloc == \[* ]]; then
+    [[ $netloc == *\]* ]] || return 0
+    host=${netloc#\[}; after=${host#*\]}; host=${host%%\]*}; host=${host,,}
+    case $host in *%*|*\[*) return 0 ;; esac
+    ipv6_first "$host" >/dev/null || return 0
+    shown="[$host]"
+  else
+    host=${netloc%%:*}; after=${netloc#"$host"}; host=${host,,}
+    [[ $host =~ ^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$ ]] || return 0
+    shown=$host
+  fi
+  if [ -n "$after" ]; then
+    [[ $after =~ ^:[0-9]+$ ]] || return 0
+    port=${after#:}
+    while [ "${port#0}" != "$port" ]; do port=${port#0}; done
+    [ -n "$port" ] && [ "${#port}" -le 5 ] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || return 0
+    port=":$port"
+  fi
+  home_host "$host" || return 0
+  printf '%s' "$scheme://$shown$port"
+}
+
+payload_core() {  # the payload's core address if step 1 would take the payload's address and shape, else nothing
+  local LC_ALL=C t=$PAYLOAD ws=$' \t\r\n' rest query q pair key value seen=" " core="" fp="" room="" bs='\x'
+  local raw_re="^([A-Za-z0-9._~!\$'()*+,;:@/?-]|%[0-9A-Fa-f]{2})*\$"
+  while [ -n "$t" ] && [[ $ws == *"${t:0:1}"* ]]; do t=${t:1}; done
+  while [ -n "$t" ] && [[ $ws == *"${t: -1}"* ]]; do t=${t:0:${#t}-1}; done
+  [ "${#t}" -le 1024 ] && [[ $t == *:* ]] || return 0
+  rest=${t%%:*}
+  [ "${rest,,}" = domovoi-room ] || return 0
+  rest=${t#*:}
+  [[ $rest == '1?'* ]] || return 0
+  query=${rest#1\?}
+  case $query in *'#'*) return 0 ;; esac
+  q=$query
+  while :; do
+    pair=${q%%&*}
+    [[ $pair == *=* ]] || return 0
+    key=${pair%%=*} value=${pair#*=}
+    [[ $key =~ ^[a-z][a-z0-9_]{0,31}$ ]] && [[ $value =~ $raw_re ]] || return 0
+    case $seen in *" $key "*) return 0 ;; esac
+    seen="$seen$key "
+    # A NUL can't live in a shell variable, so it is refused here (step 1
+    # refuses one in the address and the fingerprint; stricter elsewhere,
+    # never laxer); the "." keeps a decoded trailing newline.
+    case $value in *%00*) [ "$key" = room ] || return 0 ;; esac
+    value=$(printf '%b.' "${value//%/$bs}"); value=${value%.}
+    case $key in core) core=$value ;; fp) fp=$value ;; room) room=$value ;; esac
+    [ "$pair" != "$q" ] || break
+    q=${q#*&}
+  done
+  [ -n "$core" ] && [ -n "$room" ] && [[ $fp =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]] || return 0
+  core_normal "$core"
+}
+
+fetch_to() {  # fetch_to URL FILE HOPS: at most $PIN_SIZE + 1 bytes of what URL serves
+  # HOPS redirects at most, each to https only: 0 for the Domovoi server,
+  # which never redirects; GitHub sends its release files to another https
+  # host. curl and wget hold to the same rule (wget follows one hop at a
+  # time here, so it can refuse plain http and a bad Location).
+  local LC_ALL=C url=$1 hops=$3 status loc
   /usr/bin/rm -f "$2"
   if [ -x /usr/bin/curl ]; then
-    /usr/bin/curl -fsSL --proto '=http,https' --proto-redir '=https' --max-redirs 5 --connect-timeout 15 \
-      --max-time 1800 "$1" 2>/dev/null | /usr/bin/head -c "$((PIN_SIZE + 1))" >"$2" || true
+    /usr/bin/curl -fsSL --proto '=http,https' --proto-redir '=https' --max-redirs "$hops" --connect-timeout 15 \
+      --max-time 1800 "$url" 2>/dev/null | /usr/bin/head -c "$((PIN_SIZE + 1))" >"$2" || true
   elif [ -x /usr/bin/wget ]; then
-    /usr/bin/wget -q --max-redirect=5 --timeout=30 -O - "$1" 2>/dev/null \
-      | /usr/bin/head -c "$((PIN_SIZE + 1))" >"$2" || true
+    while :; do
+      /usr/bin/wget -q -S --max-redirect=0 --timeout=30 -O - "$url" 2>"$2.headers" \
+        | /usr/bin/head -c "$((PIN_SIZE + 1))" >"$2" || true
+      read -r status loc <<<"$(/usr/bin/awk '$1 ~ /^HTTP\// {s = $2; l = ""} tolower($1) == "location:" {l = $2}
+                                            END {print s, l}' "$2.headers" | /usr/bin/tr -d '\r')"
+      case $status in 3??) ;; *) break ;; esac
+      /usr/bin/rm -f "$2"
+      [ "$hops" -gt 0 ] && [[ $loc =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[!-~]*)?$ ]] || break
+      hops=$((hops - 1)) url=$loc
+    done
+    /usr/bin/rm -f "$2.headers"
   fi
 }
 
@@ -464,6 +600,22 @@ pinned_ok() {  # pinned_ok FILE -> 0 when it is exactly the pinned file (size, t
     && [ "$($SUDO_CHECK /usr/bin/sha256sum "$1" | /usr/bin/cut -d' ' -f1)" = "$PIN_SHA" ]
 }
 SUDO_CHECK=""
+
+CPUINFO=/proc/cpuinfo
+
+cpu_ok() {  # 0 when this processor runs the satellite's numpy: x86-64-v2, or any 64-bit ARM
+  # x86-64-v2 is SSSE3, SSE4.2, POPCNT and CMPXCHG16B (Intel from 2008-2009,
+  # AMD from 2011; a Core 2 lacks SSE4.2 and POPCNT). numpy 2.4+ needs it on
+  # every x86-64 list in satellite/locks/. When the kernel says nothing about
+  # the flags, nothing is refused.
+  local flags f
+  [ "$MACHINE" = x86_64 ] || return 0
+  flags=$(/usr/bin/awk -F: '$1 ~ /^flags[ \t]*$/ {print " " $2 " "; exit}' "$CPUINFO" 2>/dev/null) || return 0
+  [ -n "$flags" ] || return 0
+  for f in ssse3 sse4_2 popcnt cx16; do
+    case $flags in *" $f "*) ;; *) return 1 ;; esac
+  done
+}
 
 glibc_ok() {  # 0 when this is glibc 2.28 or newer
   local g major minor
@@ -474,26 +626,72 @@ glibc_ok() {  # 0 when this is glibc 2.28 or newer
   [ "$major" -gt 2 ] || { [ "$major" = 2 ] && [ "$minor" -ge "$MIN_GLIBC_MINOR" ]; }
 }
 
-stage_pinned_python() {  # step 0: the pinned file, checked, unpacked in a temporary folder -> PY
-  local f core
+private_dir() {  # private_dir DIR -> 0 when only root and this account can change DIR and every folder above it
+  local d me
+  me=$(/usr/bin/id -u)
+  d=$(cd -P -- "$1" 2>/dev/null && pwd -P) || return 1
+  while :; do
+    case $(/usr/bin/stat -c '%u %a' "$d" 2>/dev/null) in
+      "0 "*[0145][0145]|"$me "*[0145][0145]) ;;
+      *) return 1 ;;
+    esac
+    [ "$d" = / ] && return 0
+    d=$(/usr/bin/dirname "$d")
+  done
+}
+
+landmark_zip() {  # landmark_zip -> an empty zip (its end record alone) on stdout
+  printf 'PK\005\006'
+  /usr/bin/head -c 18 /dev/zero
+}
+
+stage_pinned_python() {  # step 0: the pinned file, checked, unpacked in a private folder -> PY
+  local f core home zip
   [ -x /usr/bin/curl ] || [ -x /usr/bin/wget ] || die "curl or wget is needed to download the satellite's Python" 2
-  PYSTAGE=$(/usr/bin/mktemp -d)
+  # The account's own home (root's for root), from the account database,
+  # when no other account can change it or anything above it; else a new
+  # folder under /tmp (0700), where the landmark below is what keeps the
+  # search inside the tree.
+  home=$(/usr/bin/getent passwd "$(/usr/bin/id -un)" | /usr/bin/cut -d: -f6)
+  if [ -n "$home" ] && private_dir "$home"; then
+    PYSTAGE=$(/usr/bin/mktemp -d "$home/.domovoi-python.XXXXXXXX")
+  else
+    PYSTAGE=$(/usr/bin/mktemp -d)
+  fi
   f=$PYSTAGE/$PIN_FILE
   say "This computer gets the satellite's own Python $PIN_VERSION ($((PIN_SIZE / 1000000)) MB, pinned by its SHA-256)..."
   core=$(payload_core)
-  if [ -n "$core" ]; then fetch_to "$core/v1/satellite-linux/files/$PIN_FILE" "$f"; fi
+  if [ -n "$core" ]; then fetch_to "$core/v1/satellite-linux/files/$PIN_FILE" "$f" 0; fi
   if pinned_ok "$f"; then
     say "  from the Domovoi server"
   else
-    fetch_to "$PIN_URL" "$f"
+    fetch_to "$PIN_URL" "$f" 5
     pinned_ok "$f" || die "neither the Domovoi server nor GitHub gave the pinned Python $PIN_VERSION, so nothing was installed. In the dashboard: Settings -> Satellites -> Add a spare device -> get the Linux Python (or connect this computer to the internet), then run the command again" 1
     say "  from GitHub (python-build-standalone)"
   fi
   /usr/bin/mkdir "$PYSTAGE/x"
   /usr/bin/tar -xzf "$f" -C "$PYSTAGE/x" --no-same-owner
+  /usr/bin/find "$PYSTAGE/x/python/lib" -path '*/lib-dynload/_dbm.*.so' -type f -delete
+  zip=$PYSTAGE/x/python/lib/$(landmark_name)
+  landmark_zip >"$zip"
   PY=$PYSTAGE/x/python/bin/python3
   [ "$($PY -I -c 'import platform; print(platform.python_version())' 2>/dev/null)" = "$PIN_VERSION" ] \
     || die "the satellite's Python $PIN_VERSION does not run on this computer, so nothing was installed" 1
+  python_stays_home "$PYSTAGE/x/python" || die "the satellite's Python $PIN_VERSION reads its library from outside its own folder, so nothing was installed" 1
+}
+
+landmark_name() {  # python3XY.zip for the pinned version
+  local mm=${PIN_VERSION%.*}
+  printf 'python%s.zip' "${mm//./}"
+}
+
+python_stays_home() {  # python_stays_home PREFIX -> 0 when $PY's prefix and library are inside PREFIX
+  # (the landmark's proof: a library planted higher up would show here).
+  local got prefix os_file real
+  real=$(cd -P -- "$1" 2>/dev/null && pwd -P) || return 1
+  got=$($PY -I -c 'import sys, os; print(sys.prefix); print(os.__file__)' 2>/dev/null) || return 1
+  prefix=$(printf '%s\n' "$got" | /usr/bin/sed -n 1p) os_file=$(printf '%s\n' "$got" | /usr/bin/sed -n 2p)
+  { [ "$prefix" = "$1" ] && [[ $os_file == "$1/lib/"* ]]; } || { [ "$prefix" = "$real" ] && [[ $os_file == "$real/lib/"* ]]; }
 }
 
 install_root_s_python() {  # step 3: root's own copy of the staged Python -> PY=$PINNED_PY
@@ -511,14 +709,17 @@ install_root_s_python() {  # step 3: root's own copy of the staged Python -> PY=
   $SUDO /usr/bin/tar -xzf "$PY_PART" -C "$PY_NEW" --no-same-owner
   # The dbm module's Berkeley DB is copyleft (Sleepycat): never installed.
   $SUDO /usr/bin/find "$PY_NEW/python/lib" -path '*/lib-dynload/_dbm.*.so' -type f -delete
-  $SUDO /usr/bin/chmod -R go-w "$PY_NEW"
+  landmark_zip | $SUDO /usr/bin/tee "$PY_NEW/python/lib/$(landmark_name)" >/dev/null
+  # Readable by everyone, writable by root alone, whatever root's umask
+  # made of the folders tar created (the archive lists none); no setuid.
+  $SUDO /usr/bin/chmod -R u=rwX,go=rX "$PY_NEW"
   if [ -e "$PYTHON_HOME" ] || [ -L "$PYTHON_HOME" ]; then $SUDO /usr/bin/mv "$PYTHON_HOME" "$PY_OLD"; fi
   $SUDO /usr/bin/mv "$PY_NEW/python" "$PYTHON_HOME"
   $SUDO /usr/bin/rm -rf "$PY_NEW" "$PY_OLD"
   $SUDO /usr/bin/rm -f "$PY_PART"
   PY=$PINNED_PY
   python_is_root_s "$PY" && [ "$($PY -I -c 'import platform; print(platform.python_version())')" = "$PIN_VERSION" ] \
-    || die "root's copy of the satellite's Python is not usable" 1
+    && python_stays_home "$PYTHON_HOME" || die "root's copy of the satellite's Python is not usable" 1
   say "  the satellite's Python $PIN_VERSION is in $PYTHON_HOME (root's)"
 }
 
@@ -720,6 +921,9 @@ case $MACHINE in
   x86_64|aarch64) ;;
   *) die "this computer is $MACHINE: the satellite runs on x86-64 and 64-bit ARM (aarch64), so nothing was installed" 2 ;;
 esac
+# Before anything is downloaded: the satellite's numpy (2.4 and later) runs
+# only on an x86-64-v2 processor, and would otherwise fail at its first use.
+cpu_ok || die "this computer's processor is too old for Domovoi (needs roughly 2009 or newer), so nothing was installed" 2
 
 # The computer's own python3 on Debian and Ubuntu when it is new enough and
 # has a pinned package list; the satellite's own otherwise.
@@ -761,9 +965,9 @@ fi
 say "Checking the Domovoi server named in the code..."
 ERRFILE=$(mktemp)
 set +e
-# -P: nothing from the current directory is importable; the bundle is
-# named explicitly.
-ENROL_JSON=$(/usr/bin/env PYTHONPATH="$SRC" $PY -P -s -m satellite.enrolment verify "$PAYLOAD" 2>"$ERRFILE")
+# -I (as every Python this script runs): no environment, no user site, nothing
+# from the current directory; the bundle is put on the path explicitly.
+ENROL_JSON=$($PY -I -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("satellite.enrolment", run_name="__main__", alter_sys=True)' "$SRC" verify "$PAYLOAD" 2>"$ERRFILE")
 rc=$?
 set -e
 msg=$(/usr/bin/cat "$ERRFILE" 2>/dev/null || true)

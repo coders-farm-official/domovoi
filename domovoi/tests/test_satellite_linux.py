@@ -281,3 +281,56 @@ def test_the_lock_is_the_generator_s_text():
     assert set(tool["REMOVED"]) == {"_dbm"} and not set(tool["PERMISSIVE"]) & {"GPL-3.0", "GPL-2.0", "Sleepycat", "LGPL-2.1"}
     script = (REPO / "satellite" / "scripts" / "install-pc.sh").read_text(encoding="utf-8")
     assert "-path '*/lib-dynload/_dbm.*.so' -type f -delete" in script
+
+
+def _tar(tmp_path, members) -> Path:
+    import io
+    import tarfile
+
+    path = tmp_path / "a.tar.gz"
+    with tarfile.open(path, "w:gz") as t:
+        for info, data in members:
+            t.addfile(info, io.BytesIO(data) if data is not None else None)
+    return path
+
+
+def _member(name, *, kind=None, mode=0o644, data=b"", link=""):
+    import tarfile
+
+    info = tarfile.TarInfo(name)
+    info.mode = mode
+    if kind is not None:
+        info.type = kind
+        info.linkname = link
+        return info, None
+    info.size = len(data)
+    return info, data
+
+
+@pytest.mark.parametrize("bad", [
+    "setuid", "sticky", "device", "fifo", "abs-link", "up-link", "hard-out", "outside", "dotdot",
+])
+def test_the_lock_tool_refuses_an_archive_root_should_not_unpack(tmp_path, bad):
+    """scripts/dev/linux_runtime_lock.py check_layout: a plain tree under
+    python/ only (review of wf/sat-pc-python)."""
+    import runpy
+    import tarfile
+
+    tool = runpy.run_path(str(REPO / "scripts" / "dev" / "linux_runtime_lock.py"), run_name="lock_tool")
+    good = [_member("python/bin/python3", mode=0o755, data=b"x"), _member("python/lib/python3.14/lib-dynload/a.so"),
+            _member("python/bin/python", kind=tarfile.SYMTYPE, link="python3"),
+            _member("python/lib/libpython3.so", kind=tarfile.SYMTYPE, link="../lib/python3.14/lib-dynload/a.so")]
+    tool["check_layout"](_tar(tmp_path, good), "3.14.8")          # a good one passes
+    extra = {
+        "setuid": _member("python/bin/su", mode=0o4755, data=b"x"),
+        "sticky": _member("python/lib", kind=tarfile.DIRTYPE, mode=0o1777),
+        "device": _member("python/dev0", kind=tarfile.CHRTYPE),
+        "fifo": _member("python/fifo", kind=tarfile.FIFOTYPE),
+        "abs-link": _member("python/bin/sh", kind=tarfile.SYMTYPE, link="/bin/sh"),
+        "up-link": _member("python/bin/etc", kind=tarfile.SYMTYPE, link="../../../etc"),
+        "hard-out": _member("python/bin/shadow", kind=tarfile.LNKTYPE, link="etc/shadow"),
+        "outside": _member("etc/cron.d/x"),
+        "dotdot": _member("python/../etc/x"),
+    }[bad]
+    with pytest.raises(SystemExit):
+        tool["check_layout"](_tar(tmp_path, [*good, extra]), "3.14.8")

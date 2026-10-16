@@ -13,6 +13,7 @@ functional-testing/wf-sat-pc-python/.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -71,7 +72,8 @@ def _posix(p: Path) -> str:
 def run(script: str, *, env: dict | None = None) -> subprocess.CompletedProcess:
     prelude = ('die() { echo "die: $*" >&2; exit "${2:-1}"; }\nsay() { printf \'%s\\n\' "$*"; }\n'
                + "PIN_VERSION='' PIN_FILE='' PIN_SIZE='' PIN_SHA='' PIN_URL=''\n")
-    return subprocess.run([BASH, "-c", prelude + script], capture_output=True, text=True,
+    # On stdin: a long script outgrows Windows' command line.
+    return subprocess.run([BASH, "-s"], input=prelude + script, capture_output=True, text=True,
                           env={**os.environ, **(env or {}), "MSYS_NO_PATHCONV": "1"}, timeout=120)
 
 
@@ -122,30 +124,94 @@ def test_read_pin_takes_a_good_line(tmp_path):
     assert got.stdout.split() == ["PIN", "3.14.8", GOOD_FILE, "100", GOOD_SHA, GOOD_URL], got.stderr
 
 
-# ─── payload_core: where to look for the cached file first ────────────────
+# ─── payload_core: the address step 0 may ask, exactly step 1's ─────────────
 
-@pytest.mark.parametrize("core,want", [
-    ("http://192.168.0.117:6370", "http://192.168.0.117:6370"),
-    ("http://core.home.arpa:6370", "http://core.home.arpa:6370"),
-    ("https://domovoi.local", "https://domovoi.local"),
-    ("http://[fd00::17]:6370", "http://[fd00::17]:6370"),
-    ("http://192.168.0.117:6370/x", ""),             # a path
-    ("http://a@192.168.0.117:6370", ""),             # userinfo
-    ("file:///etc/passwd", ""),
-    ("http://192.168.0.117:6370\nhttp://evil", ""),
-    ("http://$(id)", ""),
-    ("ftp://192.168.0.117", ""),
-])
-def test_payload_core_is_a_plain_address_or_nothing(core, want):
-    payload = "domovoi-room:1?core=" + urllib.parse.quote(core, safe="") + "&fp=SHA256%3Ax&room=R"
-    got = run(_function("payload_core") + f"\nPAYLOAD={_sh_quote(payload)}\nprintf '[%s]' \"$(payload_core)\"")
-    assert got.stdout == f"[{want}]", (got.stdout, got.stderr)
+FIXTURE = ROOT / "docs" / "uml" / "spare-device-enrol-fixture.json"
+# What step 0 leaves to step 1: a room name's letters, control characters
+# and UTF-8 (they name no address). Every other refusal is step 0's too.
+ROOM_ONLY = {"bad_room"}
+ROOM_UTF8 = "room=K%C3%28che"
+
+
+def _payload_cores(payloads: list[str]) -> list[str]:
+    """payload_core for each payload, in one bash run."""
+    lines = [_function(f) for f in ("ipv4_ok", "ipv6_first", "home_host", "core_normal", "payload_core")]
+    for p in payloads:
+        lines.append(f"PAYLOAD={_sh_quote(p)}; printf '[%s]\\n' \"$(payload_core)\"")
+    got = run("\n".join(lines))
+    out = re.findall(r"^\[(.*)\]$", got.stdout, re.M)
+    assert len(out) == len(payloads), (got.stdout, got.stderr)
+    return out
+
+
+def test_payload_core_agrees_with_the_shared_fixture():
+    """Every payload step 1 takes gives its own core address; every one it
+    refuses gives none, but for the room-name rules left to step 1."""
+    doc = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    valid, invalid = doc["valid"], doc["invalid"]
+    got = _payload_cores([c["payload"] for c in valid] + [c["payload"] for c in invalid])
+    for case, core in zip(valid, got[:len(valid)]):
+        assert core == case["expect"]["core"], (case["name"], core)
+    for case, core in zip(invalid, got[len(valid):]):
+        if case["reason"] in ROOM_ONLY or ROOM_UTF8 in case["payload"]:
+            continue
+        assert core == "", (case["reason"], case["payload"][:120], core)
+
+
+CORES = [
+    "http://192.168.0.117:6370", "HTTP://Core.LOCAL:06370/", "https://domovoi.local", "http://10.1.2.3",
+    "http://172.16.0.1:1", "http://172.31.255.255:65535", "http://172.32.0.1", "http://192.169.0.1",
+    "http://192.168.0.01", "http://300.1.1.1.local", "http://1.2.3", "http://127.0.0.1:6370",
+    "http://100.64.0.1", "http://8.8.8.8", "http://core.home.arpa", "http://core.lan:0", "http://core.lan:65536",
+    "http://core.internal:", "http://.local", "http://-x.local", "http://x-.local", "http://a..b.local",
+    "http://[fd00::17]:6370", "http://[FD00::17]", "http://[fe80::1]", "http://[febf::1]", "http://[fec0::1]",
+    "http://[fc00::]", "http://[::ffff:192.168.0.1]", "http://[fd00::192.168.0.1]", "http://[fd00:::1]",
+    "http://[fd00::1::2]", "http://[fd00:1:2:3:4:5:6:7]", "http://[fd00:1:2:3:4:5:6:7:8]",
+    "http://[fd00:1:2:3:4:5:6::7]", "http://[fd00::1%eth0]", "http://[fd00::1", "http://[fd00::12345]",
+    "http://[:fd00::1]", "http://[fd00::1:]", "http://[1:2:3:4:5:6:7::]", "http://[::]", "http://[fd00::1]x",
+    "http://192.168.0.117:6370/x", "http://a@192.168.0.117", "http://192.168.0.117?x", "http://192.168.0.117#x",
+    "http://192.168.0.117//", "file:///etc/passwd", "ftp://192.168.0.117", "http:/192.168.0.117",
+    "http://192.168.0.117 ", " http://192.168.0.117", "http://192.168.0.117\n", "http://Kü.local",
+    "http://x.local:6370:1", "http://x.local:+80", "1http://x.local", "http://x_y.local",
+    "http://" + "a" * 240 + ".local", "http://" + "a" * 250 + ".local",
+]
+
+
+def test_core_normal_is_normalize_core():
+    """The address rule itself, held to satellite/enrolment.py's own."""
+    from satellite import enrolment
+
+    payloads, want = [], []
+    for core in CORES:
+        payloads.append("domovoi-room:1?core=" + urllib.parse.quote(core, safe="")
+                        + "&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Den")
+        try:
+            want.append(enrolment.parse(payloads[-1]).core)
+        except enrolment.EnrolmentError:
+            want.append("")
+    assert dict(zip(CORES, _payload_cores(payloads))) == dict(zip(CORES, want))
 
 
 def test_payload_core_ignores_a_raw_value_with_odd_characters():
-    got = run(_function("payload_core") + "\nPAYLOAD='domovoi-room:1?core=http://x;id&fp=a&room=R'\n"
-              "printf '[%s]' \"$(payload_core)\"")
-    assert got.stdout == "[]"
+    assert _payload_cores(["domovoi-room:1?core=http://x;id&fp=a&room=R",
+                           "domovoi-room:1?core=http%3A%2F%2F192.168.0.9%00&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=R",
+                           "domovoi-room:1?core=http%3A%2F%2F192.168.0.9&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYcz%00KK6r6YgmCylej3GSSoOA&room=R",
+                           "domovoi-room:1?core=http%3A%2F%2F192.168.0.9%0A&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=R",
+                           ]) == ["", "", "", ""]
+
+
+def test_step_0_asks_the_server_only_at_that_address_and_runs_python_isolated():
+    stage = _function("stage_pinned_python")
+    assert 'core=$(payload_core)' in stage
+    assert 'fetch_to "$core/v1/satellite-linux/files/$PIN_FILE" "$f" 0' in stage   # no redirects from it
+    assert 'fetch_to "$PIN_URL" "$f" 5' in stage
+    text = _text()
+    # Every Python the script runs, the staged one included, runs with -I.
+    runs = [ln for ln in text.splitlines() if re.search(r"(\$PY|/usr/bin/python3) -", ln)]
+    assert len(runs) >= 12, runs
+    for line in runs:
+        assert re.search(r"(\$PY|/usr/bin/python3) -I ", line), line
+    assert "-P -s" not in text and "PYTHONPATH=" not in text
 
 
 def _sh_quote(s: str) -> str:
@@ -195,7 +261,76 @@ def test_pinned_ok_refuses_a_link(tmp_path):
 def test_fetch_to_reads_at_most_one_byte_past_the_pin():
     body = _function("fetch_to")
     assert body.count('/usr/bin/head -c "$((PIN_SIZE + 1))"') == 2
-    assert "--proto '=http,https' --proto-redir '=https'" in body and "--max-redirs 5" in body
+    assert "--proto '=http,https' --proto-redir '=https' --max-redirs \"$hops\"" in body
+    assert "--max-redirect=0" in body and "[ \"$hops\" -gt 0 ] && [[ $loc =~ ^https://" in body
+
+
+class _Server:
+    """http://127.0.0.1:PORT: /file (the pinned bytes), /endless (never
+    ends), /to-http and /to-https (redirects); what was asked, in order."""
+
+    def __init__(self, body: bytes) -> None:
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        seen = self.seen = []
+
+        class H(BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                seen.append(self.path)
+                if self.path.startswith("/to-"):
+                    target = ("https://127.0.0.1:9/file" if self.path == "/to-https"
+                              else f"http://127.0.0.1:{self.server.server_address[1]}/file")
+                    self.send_response(302)
+                    self.send_header("Location", target)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.end_headers()
+                try:
+                    if self.path == "/endless":
+                        while True:
+                            self.wfile.write(b"x" * 65536)
+                    self.wfile.write(body)
+                except OSError:
+                    pass
+
+            def log_message(self, *a):
+                pass
+
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def close(self) -> None:
+        self.httpd.shutdown()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the script names /usr/bin/curl and /usr/bin/wget")
+@pytest.mark.parametrize("tool", ["curl", "wget"])
+def test_fetch_to_caps_the_bytes_and_follows_no_redirect_it_should_not(tmp_path, tool):
+    if not Path(f"/usr/bin/{tool}").exists():
+        pytest.skip(f"no {tool} here")
+    body = _function("fetch_to")
+    if tool == "wget":
+        body = body.replace("if [ -x /usr/bin/curl ]; then", "if false; then")
+    srv = _Server(BODY)
+    try:
+        def fetch(path: str, hops: int) -> bytes:
+            out = tmp_path / "out"
+            got = run(body + f"\nPIN_SIZE={len(BODY)}\nfetch_to {srv.url}{path} {out} {hops}; echo done")
+            assert "done" in got.stdout, got.stderr
+            return out.read_bytes() if out.exists() else b""
+
+        assert fetch("/file", 0) == BODY
+        assert len(fetch("/endless", 0)) == len(BODY) + 1          # cut one byte past the pin
+        srv.seen.clear()
+        assert fetch("/to-http", 5) == b"" and srv.seen == ["/to-http"]    # never to plain http
+        srv.seen.clear()
+        assert fetch("/to-https", 0) == b"" and srv.seen == ["/to-https"]  # the server: no redirect at all
+        assert not list(tmp_path.glob("*.headers"))
+    finally:
+        srv.close()
 
 
 # ─── root's own copy is checked again, by root ────────────────────────────
@@ -208,8 +343,78 @@ def test_root_checks_its_own_copy_before_unpacking_it():
     assert copy < body.index("SUDO_CHECK=$SUDO") < check < unpack
     assert '$PYSTAGE' not in body[check:]          # nothing after the check reads the account's copy
     assert "-path '*/lib-dynload/_dbm.*.so' -type f -delete" in body
-    assert '$SUDO /usr/bin/chmod -R go-w "$PY_NEW"' in body
-    assert body.index("python_is_root_s \"$PY\"") > body.index("PY=$PINNED_PY")
+    # Readable, root's alone, whatever the umask made of tar's folders.
+    assert '$SUDO /usr/bin/chmod -R u=rwX,go=rX "$PY_NEW"' in body and "go-w" not in body
+    # The landmark goes in before the first run, and the run proves it held.
+    landmark = body.index('landmark_zip | $SUDO /usr/bin/tee "$PY_NEW/python/lib/$(landmark_name)"')
+    switch = body.index("\n  PY=$PINNED_PY\n")
+    assert unpack < landmark < switch < body.index('python_stays_home "$PYTHON_HOME"')
+    assert body.index("python_is_root_s \"$PY\"") > switch
+
+
+def test_the_staged_copy_gets_the_landmark_and_loses_dbm_before_it_runs():
+    body = _function("stage_pinned_python")
+    unpack = body.index('/usr/bin/tar -xzf "$f" -C "$PYSTAGE/x" --no-same-owner')
+    dbm = body.index("-path '*/lib-dynload/_dbm.*.so' -type f -delete")
+    landmark = body.index('landmark_zip >"$zip"')
+    first_run = body.index("$PY -I -c")
+    assert unpack < dbm < landmark < first_run < body.index('python_stays_home "$PYSTAGE/x/python"')
+    assert 'zip=$PYSTAGE/x/python/lib/$(landmark_name)' in body
+    # A private folder when the account has one, all the way up.
+    assert 'private_dir "$home"' in body and '/usr/bin/mktemp -d "$home/.domovoi-python.XXXXXXXX"' in body
+
+
+def test_the_landmark_is_an_empty_zip_named_for_the_pin(tmp_path):
+    import zipfile
+
+    out = tmp_path / "landmark.zip"
+    got = run("\n".join([_function("landmark_zip"), _function("landmark_name"),
+                         "PIN_VERSION=3.14.8; landmark_name; echo", "PIN_VERSION=3.13.16; landmark_name; echo",
+                         f"landmark_zip > {_sh_quote(_posix(out))}"]))
+    assert got.stdout.split() == ["python314.zip", "python313.zip"], got.stderr
+    assert zipfile.is_zipfile(out) and zipfile.ZipFile(out).namelist() == [] and out.stat().st_size == 22
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX owners and modes")
+def test_private_dir_takes_only_folders_no_other_account_can_change(tmp_path):
+    mine = tmp_path / "mine"
+    mine.mkdir(mode=0o700)
+    script = "\n".join([_function("private_dir"), f"private_dir {mine}; echo tmp=$?", "private_dir /; echo root=$?",
+                        f"private_dir {tmp_path}/missing; echo missing=$?"])
+    got = run(script).stdout
+    # pytest's tmp_path is under /tmp (1777: anyone may write there).
+    assert "tmp=1" in got and "root=0" in got and "missing=1" in got, got
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="runs the staged files")
+def test_a_staged_python_that_does_not_run_as_pinned_stops_the_install(tmp_path):
+    """The staged copy's own check (review mutant R8): a file that is the
+    pin but whose python3 is not that version installs nothing."""
+    import io
+    import tarfile
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as t:
+        for name, data, mode in (("python/bin/python3", b"#!/bin/sh\necho 3.0.0\n", 0o755),
+                                 ("python/lib/python3.14/os.py", b"", 0o644)):
+            info = tarfile.TarInfo(name)
+            info.size, info.mode = len(data), mode
+            t.addfile(info, io.BytesIO(data))
+    fake = tmp_path / "fake.tar.gz"
+    fake.write_bytes(buf.getvalue())
+    script = "\n".join([
+        *(_function(f) for f in ("pinned_ok", "private_dir", "landmark_zip", "landmark_name", "python_stays_home",
+                                 "ipv4_ok", "ipv6_first", "home_host", "core_normal", "payload_core",
+                                 "stage_pinned_python")),
+        f'fetch_to() {{ /usr/bin/cp {fake} "$2"; }}',
+        'SUDO_CHECK="" PAYLOAD=""',
+        f"PIN_VERSION=3.14.8 PIN_FILE=fake.tar.gz PIN_SIZE={len(buf.getvalue())} "
+        f"PIN_SHA={hashlib.sha256(buf.getvalue()).hexdigest()} PIN_URL=https://example.invalid/fake.tar.gz",
+        "trap '[ -z \"$PYSTAGE\" ] || /usr/bin/rm -rf \"$PYSTAGE\"' EXIT",
+        "stage_pinned_python; echo survived"])
+    got = run(script)
+    assert got.returncode == 1 and "does not run on this computer" in got.stderr, (got.stdout, got.stderr)
+    assert "survived" not in got.stdout
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="runs install -o root")
@@ -279,6 +484,19 @@ def test_python_is_root_s_refuses_one_the_account_could_change(tmp_path):
     if owned_by_root:
         (lib / "python").chmod(0o775)               # group-writable: no longer root's alone
         assert "pinned=1" in run(script).stdout
+        (lib / "python").chmod(0o755)
+        assert "pinned=0" in run(script).stdout
+        # A link anywhere on the way, even to a folder root owns and nobody
+        # else may write (review mutant R1): refused.
+        for linked in (lib / "python" / "bin", lib / "python", lib):
+            real = linked.with_name(linked.name + ".real")
+            linked.rename(real)
+            linked.symlink_to(real)
+            try:
+                assert "pinned=1" in run(script).stdout, linked
+            finally:
+                linked.unlink()
+                real.rename(linked)
 
 
 # ─── which Python a computer gets ─────────────────────────────────────────
@@ -329,3 +547,43 @@ def test_every_full_path_the_script_runs_is_checked_or_optional():
                 "/usr/bin/curl", "/usr/bin/wget", "/usr/bin/getconf", "/usr/sbin/nologin"}
     used = set(re.findall(r"/usr/s?bin/[a-z0-9_-]+", text))
     assert used - checked - optional == set(), sorted(used - checked - optional)
+
+
+# ─── the processor: x86-64-v2 for numpy 2.4+ (2026-10-15) ───────────────────
+
+# /proc/cpuinfo as a kernel writes it (trimmed to the line that matters).
+MODERN = ("processor\t: 0\nvendor_id\t: GenuineIntel\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr "
+          "pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx lm constant_tsc pni ssse3 cx16 sse4_1 "
+          "sse4_2 popcnt aes xsave avx\nbogomips\t: 5000\n\n")
+CORE2 = ("processor\t: 0\nmodel name\t: Intel(R) Core(TM)2 Duo CPU     E8400  @ 3.00GHz\nflags\t\t: fpu vme de pse "
+         "tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe "
+         "syscall nx lm constant_tsc pni dtes64 monitor ds_cpl vmx est tm2 ssse3 cx16 xtpr pdcm sse4_1 xsave\n\n")
+ATHLON64 = "processor\t: 0\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov sse sse2 lm 3dnow\n"
+
+
+@pytest.mark.parametrize("machine,cpuinfo,ok", [
+    ("x86_64", MODERN, True),
+    ("x86_64", CORE2, False),                      # SSSE3 and CX16, but no SSE4.2 or POPCNT
+    ("x86_64", ATHLON64, False),
+    ("x86_64", MODERN.replace(" cx16", ""), False),
+    ("x86_64", MODERN.replace(" sse4_2", " sse4_2x"), False),   # whole words only
+    ("x86_64", "processor\t: 0\n", True),          # the kernel says nothing: nothing is refused
+    ("x86_64", None, True),                        # no /proc/cpuinfo at all
+    ("aarch64", ATHLON64, True),                   # 64-bit ARM: no x86 flags to need
+])
+def test_cpu_ok_wants_x86_64_v2(tmp_path, machine, cpuinfo, ok):
+    info = tmp_path / "cpuinfo"
+    if cpuinfo is not None:
+        info.write_bytes(cpuinfo.encode("ascii"))
+    got = run(_function("cpu_ok") + f"\nMACHINE={machine} CPUINFO={_sh_quote(_posix(info))}\ncpu_ok; echo rc=$?")
+    assert got.stdout.strip() == ("rc=0" if ok else "rc=1"), (got.stdout, got.stderr)
+
+
+def test_the_processor_is_checked_before_anything_is_downloaded():
+    text = _text()
+    assert "\nCPUINFO=/proc/cpuinfo\n" in text
+    check = text.index("cpu_ok || die \"this computer's processor is too old for Domovoi (needs roughly 2009 or newer)")
+    assert check < text.index("[ \"$USE_PY\" = system ] || stage_pinned_python") < text.index("# ─── 1. the payload")
+    assert check < text.index('need_sudo\n$SUDO /usr/bin/install -d -o root -g root -m 0755 "$ROOT_LIB"')
+    for flag in ("ssse3", "sse4_2", "popcnt", "cx16"):
+        assert flag in _function("cpu_ok")

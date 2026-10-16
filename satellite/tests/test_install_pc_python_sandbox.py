@@ -96,7 +96,11 @@ def _clean() -> None:
 
 
 def _stray_stages() -> list[str]:
-    return [str(p) for p in Path("/tmp").glob("tmp.*") if (p / "x").exists() or any(p.glob("cpython-*"))]
+    """Staging folders left behind: in /tmp, or in an account's home."""
+    found = [p for p in Path("/tmp").glob("tmp.*") if (p / "x").exists() or any(p.glob("cpython-*"))]
+    for home in (Path("/root"), *Path("/home").glob("*")):
+        found += list(home.glob(".domovoi-python.*"))
+    return [str(p) for p in found]
 
 
 class Core:
@@ -273,3 +277,118 @@ def test_root_will_not_run_a_python_the_account_could_have_changed(tree, core):
     assert u.returncode == 0, (u.stdout, u.stderr)
     assert not marker.exists(), "root ran a Python from a folder others can write"
     assert not ROOT_LIB.exists()
+
+
+# ─── review fix round: a library planted above the tree, the umask, cwd ───
+
+MALLORY = "mallory"
+PLANT = Path("/tmp/lib")
+MARKER_GLOB = "pwned-*"
+
+
+def _sh_as(user: str, cmd: str, *, cwd: str = "/", check: bool = False, timeout: int = 600):
+    return subprocess.run(["runuser", "-u", user, "--", "bash", "-c", cmd], capture_output=True, text=True,
+                          env={**os.environ, **ENV, "HOME": pwd.getpwnam(user).pw_dir}, cwd=cwd,
+                          timeout=timeout, stdin=subprocess.DEVNULL)
+
+
+def _markers() -> list[str]:
+    return sorted(str(p) for p in Path("/tmp").glob(MARKER_GLOB))
+
+
+@pytest.fixture
+def plant():
+    """Another local account plants lib/python3XY.zip and the pinned
+    version's standard library, with a sitecustomize, in /tmp: what the
+    review's tmp-zip-attack.sh did."""
+    for name in (MALLORY, "kid"):
+        try:
+            pwd.getpwnam(name)
+        except KeyError:
+            subprocess.run(["useradd", "-m", "-s", "/bin/bash", name], check=True)
+    minor = ".".join(PIN["version"].split(".")[:2])
+    tag = minor.replace(".", "")
+    stage = f"/tmp/mallory-py-{os.getpid()}"
+    r = _sh_as(MALLORY, f"""set -e
+        mkdir -p {stage} && tar -xzf {PBS_DIR / PIN['file']} -C {stage}
+        mkdir -p {PLANT} && cp -r {stage}/python/lib/python{minor} {PLANT}/
+        printf 'PK\\005\\006' > {PLANT}/python{tag}.zip; head -c 18 /dev/zero >> {PLANT}/python{tag}.zip
+        printf 'import os\\nopen("/tmp/pwned-%%d" %% os.getuid(), "a").write("ran\\\\n")\\n' > {PLANT}/python{minor}/sitecustomize.py
+        chmod -R a+rX {PLANT}; rm -rf {stage}""")
+    assert r.returncode == 0, r.stderr
+    for m in _markers():
+        Path(m).unlink()
+    yield
+    shutil.rmtree(PLANT, ignore_errors=True)
+    for m in _markers():
+        Path(m).unlink()
+    for name in (MALLORY, "kid"):
+        subprocess.run(["userdel", "-r", name], capture_output=True)
+
+
+def test_a_library_planted_in_tmp_never_runs_as_root(tree, core, plant):
+    r = _install(tree, core)
+    out = r.stdout + r.stderr
+    assert _markers() == [], ("the planted sitecustomize ran", _markers(), out[-1500:])
+    assert f"proved it is {FP}" in r.stdout and "Setting up Python" in r.stdout, out[-2000:]
+    got = subprocess.run([str(PYTHON_HOME / "bin" / "python3"), "-I", "-c", "import sys, os; print(sys.prefix, os.__file__)"],
+                         capture_output=True, text=True, cwd="/tmp")
+    assert got.stdout.split()[0] == str(PYTHON_HOME) and got.stdout.split()[1].startswith(f"{PYTHON_HOME}/lib/")
+    landmark = PYTHON_HOME / "lib" / f"python{PIN['version'].split('.')[0]}{PIN['version'].split('.')[1]}.zip"
+    assert landmark.stat().st_size == 22 and landmark.stat().st_uid == 0
+
+
+def test_a_library_planted_in_tmp_never_runs_for_an_account_whose_home_others_can_write(tree, core, plant):
+    """kid's home is group-writable, so the staging falls back to /tmp,
+    right under the plant: the landmark alone keeps the search inside."""
+    os.chmod("/home/kid", 0o777)
+    sh(f"chmod -R a+rX {tree}")
+    r = _sh_as("kid", f"cd ~ && bash {tree}/satellite/scripts/install-pc.sh {FLAGS.replace('--mode headless', '--mode desktop')} "
+                      f"--python pinned '{core.payload}'")
+    out = r.stdout + r.stderr
+    assert "satellite's own Python" in r.stdout and f"proved it is {FP}" in r.stdout, out[-2000:]
+    assert _markers() == [], ("the planted sitecustomize ran", _markers(), out[-1500:])
+    assert not list(Path("/tmp").glob("tmp.*/x")), "the staged copy is gone"
+
+
+def test_a_planted_library_with_no_stdlib_does_not_break_the_install(tree, core, plant):
+    shutil.rmtree(PLANT / f"python{'.'.join(PIN['version'].split('.')[:2])}")
+    r = _install(tree, core)
+    assert f"proved it is {FP}" in r.stdout and "Setting up Python" in r.stdout, (r.stdout + r.stderr)[-2000:]
+
+
+def test_root_runs_nothing_from_the_folder_it_was_started_in(tree, core, plant):
+    """Every Python the script runs, root's included, runs with -I: a
+    json.py or platform.py in the current folder (one another account can
+    write to) is never imported (review mutant R4)."""
+    evil = Path("/tmp/evilcwd")
+    evil.mkdir(mode=0o777, exist_ok=True)
+    os.chmod(evil, 0o777)
+    for mod in ("json", "platform", "runpy"):
+        (evil / f"{mod}.py").write_text(
+            'import os\nopen("/tmp/pwned-cwd-%d" % os.getuid(), "a").write("' + mod + '\\n")\n'
+            'raise ImportError("planted")\n', encoding="utf-8")
+    try:
+        r = sh(f"cd {evil} && bash {tree}/satellite/scripts/install-pc.sh {FLAGS} --python pinned '{core.payload}'",
+               check=False)
+        assert f"proved it is {FP}" in r.stdout and "Setting up Python" in r.stdout, (r.stdout + r.stderr)[-2000:]
+        assert _markers() == [], [Path(m).read_text() for m in _markers()]
+        assert json.loads(RECORD.read_text(encoding="utf-8"))["python"] == "pinned"
+    finally:
+        shutil.rmtree(evil, ignore_errors=True)
+
+
+@pytest.mark.parametrize("mask", ["077", "027"])
+def test_a_strict_umask_still_gives_a_python_the_satellite_can_run(tree, core, mask):
+    r = sh(f"umask {mask} && bash {tree}/satellite/scripts/install-pc.sh {FLAGS} --python pinned '{core.payload}'",
+           check=False)
+    assert "Setting up Python" in r.stdout, (r.stdout + r.stderr)[-2000:]
+    minor = ".".join(PIN["version"].split(".")[:2])
+    for d in (PYTHON_HOME, PYTHON_HOME / "bin", PYTHON_HOME / "lib", PYTHON_HOME / "lib" / f"python{minor}",
+              PYTHON_HOME / "lib" / f"python{minor}" / "lib-dynload"):
+        assert stat.S_IMODE(d.stat().st_mode) == 0o755, (d, oct(d.stat().st_mode))
+    assert _modes_under(PYTHON_HOME) == []
+    got = subprocess.run(["runuser", "-u", SAT, "--", str(PYTHON_HOME / "bin" / "python3"), "-I", "-c",
+                          "import ssl, json; print('runs')"], capture_output=True, text=True, cwd="/")
+    assert got.stdout.strip() == "runs", got.stderr
+    assert (SAT_HOME / "app" / "venv" / "bin" / "python").exists()
