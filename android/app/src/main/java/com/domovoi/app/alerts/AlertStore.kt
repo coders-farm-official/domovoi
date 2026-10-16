@@ -32,6 +32,8 @@ import kotlinx.serialization.json.Json
 //   mirror          the local alarm mirror: which timers have an alarm set,
 //                   and the words to show when one rings (TimerAlarmMirror)
 //   hint_dismissed  Home's "Timer alerts are off on this phone" said "not now"
+//   exact_hint_dismissed  Home's "Timers may ring late on this phone" (no
+//                   exact-alarm grant, ExactAlarms.kt) said "not now"
 //
 // The rules over those values are pure functions below, for the JVM tests.
 // ---------------------------------------------------------------------------
@@ -156,6 +158,7 @@ class AlertStore(private val ds: DataStore<Preferences>) {
     private val kSeenAt = stringPreferencesKey("fires_seen_at")
     private val kMirror = stringPreferencesKey("mirror")
     private val kHint = booleanPreferencesKey("hint_dismissed")
+    private val kExactHint = booleanPreferencesKey("exact_hint_dismissed")
 
     /** Serialises every "has this been posted?" question: both paths ask it,
      *  from different threads, about the same timer at the same moment. */
@@ -223,5 +226,11 @@ class AlertStore(private val ds: DataStore<Preferences>) {
 
     suspend fun dismissHint() {
         ds.edit { it[kHint] = true }
+    }
+
+    val exactHintDismissed: Flow<Boolean> = ds.data.map { it[kExactHint] == true }
+
+    suspend fun dismissExactHint() {
+        ds.edit { it[kExactHint] = true }
     }
 }

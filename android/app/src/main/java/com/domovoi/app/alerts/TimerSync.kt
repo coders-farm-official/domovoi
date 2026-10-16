@@ -52,9 +52,9 @@ import kotlinx.coroutines.withTimeoutOrNull
 //    own database and its own start-up initializer. Its one advantage —
 //    rescheduling itself after a reboot — the app already has for the
 //    timer alarms (TimerBootReceiver, which now restarts this chain too).
-//  * The app already holds exact alarms for the timers themselves
-//    (USE_EXACT_ALARM from 33, SCHEDULE_EXACT_ALARM on 31-32, none needed
-//    below), and the sync exists so those timers ring.
+//  * The app already arms exact alarms for the timers themselves (from 31
+//    with the person's SCHEDULE_EXACT_ALARM grant, ExactAlarms.kt; none
+//    needed below), and the sync exists so those timers ring.
 //
 // Doze rations allow-while-idle alarms per app, and a tick must never hold
 // back a timer's own alarm, so how the tick is armed depends on the API
@@ -68,7 +68,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 //    ~9 minutes while dozing (or in Battery Saver). Exact every 15 minutes
 //    (no permission needed below 31), kept out of the 9 minutes either side
 //    of every mirrored timer alarm ([clearOfAlarms]).
-//  * API 31-32 with "Alarms & reminders" revoked: no exact alarms at all,
+//  * API 31+ without "Alarms & reminders" (never given: Android 14+ leaves
+//    it off for a new install; or taken back): no exact alarms at all,
 //    and an inexact allow-while-idle tick would get no network in Doze
 //    while taking the (then inexact) timer alarms' slot. So the tick is a
 //    plain inexact alarm (10 minutes, delivered up to 75% later): it runs
@@ -128,8 +129,8 @@ enum class ChainMode {
     /** API 31+ with exact alarms allowed: exact, allowed while idle. */
     EXACT,
 
-    /** API 31+ without exact alarms (31-32 with the grant revoked):
-     *  inexact, not while idle. */
+    /** API 31+ without the exact-alarm grant (ExactAlarms): inexact, not
+     *  while idle. */
     PLAIN,
 }
 

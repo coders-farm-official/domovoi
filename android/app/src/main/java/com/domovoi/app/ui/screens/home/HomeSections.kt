@@ -64,6 +64,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.domovoi.app.alerts.TimerAlertHint
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.Pill
@@ -345,6 +346,27 @@ internal fun HomeAttention(
 
 internal fun timersShown(view: TimerView): Boolean = view.active.isNotEmpty() || view.done.isNotEmpty()
 
+/** The timers card's one line about this phone's alerts: what is wrong,
+ *  the way to fix it, and "not now". */
+@Composable
+private fun AlertHintRow(text: String, fix: String, onFix: () -> Unit, onNotNow: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        StatusDot(Tone.Warn)
+        Text(
+            text,
+            style = MaterialTheme.typography.bodySmall,
+            color = Domovoi.colors.fgMuted,
+            modifier = Modifier.weight(1f),
+        )
+        HomeLink(fix, onClick = onFix)
+        HomeLink("not now", onClick = onNotNow)
+    }
+}
+
 @Composable
 internal fun HomeTimers(
     view: TimerView,
@@ -354,9 +376,11 @@ internal fun HomeTimers(
     onlineRooms: Set<String>,
     cancelling: Set<Long>,
     onCancel: (HomeTimer) -> Unit,
-    alertsOff: Boolean = false,
+    alertHint: TimerAlertHint = TimerAlertHint.NONE,
     onTurnOnAlerts: () -> Unit = {},
     onNotNow: () -> Unit = {},
+    onAllowExact: () -> Unit = {},
+    onExactNotNow: () -> Unit = {},
 ) {
     if (!timersShown(view)) return
     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -368,25 +392,19 @@ internal fun HomeTimers(
     }
     HomeCard("timers", action = more) {
         var first = true
-        if (alertsOff) {
-            // Notifications are off for this app: nothing will ring here
-            // when one of these goes off, and it's worth saying once.
-            Row(
-                Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                StatusDot(Tone.Warn)
-                Text(
-                    "Timer alerts are off on this phone",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Domovoi.colors.fgMuted,
-                    modifier = Modifier.weight(1f),
-                )
-                HomeLink("turn on", onClick = onTurnOnAlerts)
-                HomeLink("not now", onClick = onNotNow)
+        // Notifications off for this app: nothing will ring here when one of
+        // these goes off. Or no exact-alarm grant (alerts/ExactAlarms.kt):
+        // it rings, perhaps minutes late. Either is worth saying once.
+        when (alertHint) {
+            TimerAlertHint.NOTIFICATIONS_OFF -> {
+                AlertHintRow("Timer alerts are off on this phone", "turn on", onTurnOnAlerts, onNotNow)
+                first = false
             }
-            first = false
+            TimerAlertHint.MAY_RING_LATE -> {
+                AlertHintRow("Timers may ring a few minutes late on this phone", "allow alarms", onAllowExact, onExactNotNow)
+                first = false
+            }
+            TimerAlertHint.NONE -> Unit
         }
         view.active.forEachIndexed { i, t ->
             if (compact && i >= HOME_PHONE_TIMERS && !expanded) return@forEachIndexed

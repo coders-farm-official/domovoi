@@ -37,13 +37,14 @@ class AlertsManifestTest {
     private fun permission(name: String): Element? =
         elements("uses-permission").firstOrNull { it.attr("name") == "android.permission.$name" }
 
+    /** SCHEDULE_EXACT_ALARM (the person's grant) on every level from 31;
+     *  never USE_EXACT_ALARM, which Google Play keeps for alarm-clock, timer
+     *  and calendar apps (ExactAlarmsTest has the rest). */
     @Test fun exactAlarmPermissionsMatchTheirApiLevels() {
         val schedule = permission("SCHEDULE_EXACT_ALARM")
         assertNotNull("SCHEDULE_EXACT_ALARM", schedule)
-        assertEquals("32", schedule!!.attr("maxSdkVersion"))
-        val use = permission("USE_EXACT_ALARM")
-        assertNotNull("USE_EXACT_ALARM", use)
-        assertEquals(null, use!!.attr("maxSdkVersion"))
+        assertEquals(null, schedule!!.attr("maxSdkVersion"))
+        assertEquals(null, permission("USE_EXACT_ALARM"))
     }
 
     @Test fun bootAndNotificationPermissionsAreAskedFor() {
@@ -85,14 +86,18 @@ class AlertsManifestTest {
         assertEquals(listOf(workManager), dataSync.map { it.attr("name") })
     }
 
-    @Test fun theBootReceiverIsNotExportedAndHearsBootAndUpdate() {
+    @Test fun theBootReceiverIsNotExportedAndHearsBootUpdateAndTheExactAlarmGrant() {
         val r = elements("receiver").single { it.attr("name") == ".alerts.TimerBootReceiver" }
         assertEquals("false", r.attr("exported"))
         val actions = r.getElementsByTagName("action").let { n ->
             (0 until n.length).map { (n.item(it) as Element).attr("name") }
         }
         assertEquals(
-            setOf("android.intent.action.BOOT_COMPLETED", "android.intent.action.MY_PACKAGE_REPLACED"),
+            setOf(
+                "android.intent.action.BOOT_COMPLETED",
+                "android.intent.action.MY_PACKAGE_REPLACED",
+                "android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED",
+            ),
             actions.toSet(),
         )
     }
