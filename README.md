@@ -91,7 +91,12 @@ We build Domovoi in public. Here's where it stands.
 - **Raspberry Pi satellites** put a voice in every room, with wake word,
   barge-in, and intercom and drop-in between rooms. The dashboard prepares
   a Pi's SD card, and you finish its setup from your phone over the Pi's
-  own setup Wi-Fi.
+  own setup Wi-Fi. Any room can start music, a podcast or an audiobook in
+  another ("play some jazz in the garage"), and two people with the same
+  name are never guessed between: a satellite asks "Is that you?" instead.
+- **No GPL or LGPL libraries in the server's Python code:** tag reading
+  and the music player's client are Domovoi's own, and audio is encoded by
+  the system's `ffmpeg`, run as a program.
 - **The web dashboard** manages all of it, from plugins to training your own
   wake word on the server (about 20 minutes on an NVIDIA GPU, longer on the
   CPU). After you sign in as admin, reloading the page keeps you signed in
@@ -99,9 +104,12 @@ We build Domovoi in public. Here's where it stands.
 - **The Android app** brings the dashboard, a music player, chat and drop-in
   to your phone, on Android 8.0 or later, 32-bit phones included
   ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)). With no server it
-  still plays your phone's own music, videos and files. Until its first
-  signed release (below) you build the app yourself
-  ([android/README.md](android/README.md#building)).
+  still plays your phone's own music, videos and files. It is a signed
+  release, [v1.0.0-rc1](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc1)
+  on GitHub, and your server can hand it to phones: press **Download the
+  app to this server** once on the dashboard, and a phone installs it from
+  your server's own page by scanning a QR code
+  ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode)).
 
 **In early builds**
 
@@ -110,9 +118,12 @@ We build Domovoi in public. Here's where it stands.
   for text chat and push-to-talk voice, in airplane mode too once its
   2.45 GB of models are downloaded. It needs a 64-bit phone with 8 GB of
   memory or more ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)).
+  A bad reply can be reported (an email draft you send yourself), and its
+  controls, like room mode's, are labelled for screen readers.
 - **A Windows installer, as a test build.** `DomovoiSetup.exe` puts the Linux
-  server inside WSL2 on a Windows 11 PC. It isn't code-signed, and there is
-  no download yet: you build it from the repository
+  server inside WSL2 on a Windows 11 PC. It is an unsigned test build;
+  download it from the
+  [v1.0.0-rc1 release](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc1)
   ([Windows installer](docs/WINDOWS_HOST.md)).
 - **Satellites on spare devices.** A Linux or Windows laptop or PC, or an old
   phone or tablet through the Android app's room mode, can be a room instead
@@ -121,19 +132,7 @@ We build Domovoi in public. Here's where it stands.
 
 **Coming next** (being finished now)
 
-1. **The app from your own server.** The Android app's first signed release,
-   which your Domovoi server checks and hands out on your home network: a
-   phone scans one QR code, installs the app and can become a room.
-2. **The phone assistant, polished,** and the app updated for Android 16:
-   reporting a bad reply, a licences screen, screen-reader labels.
-3. **Music in another room by voice:** "play some jazz in the garage",
-   and podcasts and audiobooks the same way.
-4. **Two people with the same name:** a satellite asks who's speaking
-   instead of guessing.
-5. **No GPL or LGPL libraries in the server's Python code:** tag reading,
-   the MPD client and an audio encoder move to permissively licensed
-   replacements.
-6. **Fixes for a rare server freeze:** the core restarts itself when it
+1. **Fixes for a rare server freeze:** the core restarts itself when it
    stalls, and the dashboard can restart a core that has stopped answering.
 
 **Later**
@@ -269,8 +268,9 @@ Three ways in:
   server, its services and the models in one unattended run:
   [Or let the script do it](docs/LINUX_HOST.md#or-let-the-script-do-it).
 - **Windows 11, the installer (test build).** `DomovoiSetup.exe` runs that
-  same script inside a private WSL2 distro. It is unsigned and not offered
-  as a download yet; you build it with `windows\build.ps1`
+  same script inside a private WSL2 distro. It is unsigned; download it from
+  the [v1.0.0-rc1 release](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc1),
+  or build it with `windows\build.ps1`
   ([Windows installer](docs/WINDOWS_HOST.md)).
 - **By hand, on Windows or Linux:** the commands below.
 
@@ -367,8 +367,11 @@ Satellites** on the dashboard (as admin) to make it a room. Three routes:
   ([Linux](docs/SPARE_DEVICE_SATELLITES.md#linux-laptops-and-mini-pcs) ·
   [Windows](docs/SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)).
 - **An old phone or tablet** (Android 8.0 or later). The same **add a spare
-  device** card shows a QR code: install the Domovoi Android app on the
-  phone, open its **Domovoi Room** icon and scan the code. The phone gets
+  device** card shows a QR code: scan it with the phone's camera, and your
+  server's page installs the Domovoi Android app (press **Download the app
+  to this server** on the card once first) and opens it as that room. A
+  phone that already has the app can scan the code from its **Domovoi
+  Room** icon instead. The phone gets
   its wake-word models from the server, so press **prepare satellite media
   → Refresh caches** once first
   ([room mode](docs/SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode)).
@@ -594,7 +597,8 @@ Want to write one? Start at the
 | [Wake-word training](scripts/wake_word/README.md) | Training your own wake word from the dashboard: what it needs, what a training does to the server, the licence of what it makes |
 | [Hardware validation](docs/HARDWARE_VALIDATION.md) | The checks on real devices that satellite onboarding and video satellites still need |
 | [Android compatibility](docs/ANDROID_COMPATIBILITY.md) | Which phones and Android versions the app runs on, which APK to install, what each version gets |
-| [The Android app](android/README.md) | Building the app, and how it works: offline mode, the on-phone assistant, room mode, what the phone holds |
+| [The Android app](android/README.md) | Building and releasing the app, and how it works: offline mode, the on-phone assistant, room mode, what the phone holds |
+| [Android app privacy policy](docs/PRIVACY_POLICY.md) | What the app keeps on the phone, what it sends and to whom (nothing reaches Coders Farm unless you email it) |
 | [Running without an NVIDIA GPU](docs/CPU_HOST.md) | CPU-host settings, model sizing, what gets slower and what doesn't |
 | [Running the server on Linux](docs/LINUX_HOST.md) | Linux install (one script or by hand), what differs from the Windows-first docs, systemd units, updates from the dashboard |
 | [The Windows installer (test build)](docs/WINDOWS_HOST.md) | `DomovoiSetup.exe`: the Linux server in a private WSL2 distro, every change it makes on the PC and how uninstall undoes it |
