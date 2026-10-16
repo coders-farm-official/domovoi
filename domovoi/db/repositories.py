@@ -2600,20 +2600,29 @@ class SatelliteHealthRepository:
     async def prune(self, room_id: str | None, keep_hours: int = 24) -> int:
         """Drop samples older than ``keep_hours``: one room's, or every
         room's when ``room_id`` is None (the stream handler's call, so a
-        room that stopped connecting is pruned too)."""
+        room that stopped connecting is pruned too). Each room's newest
+        sample stays, however old: it is when the room was last heard from
+        (the Satellites page's "last heard", review 2026-10-15), and the
+        Health card says how old it is."""
+        keep_newest = (
+            "AND h.id <> (SELECT n.id FROM satellite_health n WHERE n.room_id = h.room_id "
+            "ORDER BY n.received_at DESC, n.id DESC LIMIT 1)"
+        )
         if room_id is None:
             result = await self.s.execute(
                 text(
-                    "DELETE FROM satellite_health "
-                    "WHERE received_at < now() - make_interval(hours => CAST(:h AS int))"
+                    "DELETE FROM satellite_health h "
+                    "WHERE h.received_at < now() - make_interval(hours => CAST(:h AS int)) "
+                    + keep_newest
                 ),
                 {"h": int(keep_hours)},
             )
             return int(result.rowcount or 0)
         result = await self.s.execute(
             text(
-                "DELETE FROM satellite_health WHERE room_id = :r "
-                "AND received_at < now() - make_interval(hours => CAST(:h AS int))"
+                "DELETE FROM satellite_health h WHERE h.room_id = :r "
+                "AND h.received_at < now() - make_interval(hours => CAST(:h AS int)) "
+                + keep_newest
             ),
             {"r": room_id, "h": int(keep_hours)},
         )

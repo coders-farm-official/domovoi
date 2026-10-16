@@ -72,3 +72,38 @@ def test_latest_ignores_what_is_unknown() -> None:
     b = a + timedelta(minutes=5)
     assert sat_api._latest(None, a, b, None) == b
     assert sat_api._latest(None, None) is None
+
+
+@requires_db
+async def test_last_heard_survives_the_24_hour_prune() -> None:
+    """Review 2026-10-15 (note 10): the health prune keeps 24 h, which took
+    "last heard" with it for a room silent longer than that. Each room's
+    newest sample now stays, so last_seen_at stays honest."""
+    from domovoi.db.repositories import SatelliteHealthRepository
+
+    now = datetime.now(timezone.utc)
+    rooms = ("lastseen_health", "lastseen_pairing")
+    await _clean()
+    try:
+        async with session_scope() as s:
+            for hours in (100, 80, 50):
+                await s.execute(text(
+                    "INSERT INTO satellite_health (room_id, sample, received_at) "
+                    "VALUES (:r, CAST('{}' AS jsonb), :t)"),
+                    {"r": rooms[0], "t": now - timedelta(hours=hours)})
+            await s.execute(text(
+                "INSERT INTO satellite_health (room_id, sample, received_at) "
+                "VALUES (:r, CAST('{}' AS jsonb), :t)"), {"r": rooms[1], "t": now - timedelta(hours=1)})
+            await s.execute(text(
+                "INSERT INTO satellite_health (room_id, sample, received_at) "
+                "VALUES (:r, CAST('{}' AS jsonb), :t)"), {"r": rooms[1], "t": now - timedelta(hours=30)})
+        async with session_scope() as s:
+            removed = await SatelliteHealthRepository(s).prune(None, 24)
+        assert removed == 3          # two of the silent room's, one of the other's
+        heard = await sat_api._last_heard_or_empty()
+        assert abs((heard[rooms[0]] - (now - timedelta(hours=50))).total_seconds()) < 1
+        assert abs((heard[rooms[1]] - (now - timedelta(hours=1))).total_seconds()) < 1
+        async with session_scope() as s:
+            assert await SatelliteHealthRepository(s).prune(rooms[0], 24) == 0
+    finally:
+        await _clean()
