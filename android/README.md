@@ -173,10 +173,11 @@ uninstalls it once before the first release build goes on.
    `coders-farm-official/domovoi` with `gh`, **tagged at that commit**: the
    tag holds the manifest naming its own APKs, so a server installed at
    the tag hands them out. The release carries the two APKs and an
-   APK-only `SHA256SUMS`, with the certificate's SHA-256 in the notes. A
-   version with a suffix (`1.0.0-rc2`) is always a pre-release; a plain
-   one is marked Latest (`-Prerelease` / `--prerelease` makes it a
-   pre-release too). Last it checks the tag is that commit and downloads
+   APK-only `SHA256SUMS`, with the certificate's SHA-256 in the notes.
+   Every release is a full one, marked Latest, release candidates
+   (`1.0.0-rc2`) included: the suffix says what it is (owner decision
+   2026-10-15). `-Prerelease` / `--prerelease` makes one a pre-release.
+   Last it checks the tag is that commit and downloads
    each file back by the URL the manifest names.
 
    If the run stops after the commit (the push, `gh` or a download

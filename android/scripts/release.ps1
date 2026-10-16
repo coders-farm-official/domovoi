@@ -39,9 +39,9 @@ or published, and android/release.json is not touched).
 Sign what the last build left (after a failed signing).
 
 .PARAMETER Prerelease
-Mark the GitHub release a pre-release. A version with a suffix (1.0.0-rc2)
-is always one; this makes a plain version (1.0.1) one too. A plain version
-is otherwise marked Latest.
+Mark the GitHub release a pre-release. Off by default: every release is a
+full one, marked Latest, release candidates (1.0.0-rc2) included (owner
+decision 2026-10-15: the suffix says what it is).
 
 .PARAMETER Keystore
 The keystore file (asked for when not given).
@@ -285,7 +285,7 @@ function Publish-Release([string]$ReleaseCommit, [bool]$Exists) {
 if ($resume) {
     $versionName = [string]$resume.version_name; $versionCode = [long]$resume.version_code
     $tag = "v$versionName"
-    $isPrerelease = $Prerelease -or $versionName.Contains('-')
+    $isPrerelease = [bool]$Prerelease
     Say "Domovoi $versionName (versionCode $versionCode): HEAD $($commit.Substring(0, 12)) is its release commit (android/release.json on top of $($resume.commit.Substring(0, 12)), which the APKs were built from), so this run carries on from there; nothing is built or signed again"
     # The first run's checks against the release before it, on what is committed.
     $prevCode = 0; $prevCert = $null
@@ -347,8 +347,9 @@ foreach ($abi in $Abis) {
 # The project-wide tag, v<versionName> (v1.0.0-rc1): domovoi.android_app's
 # tag_for, which the manifest's URLs are checked against.
 $tag = "v$versionName"
-# A version with a suffix (1.0.0-rc2) is a pre-release, never Latest.
-$isPrerelease = $Prerelease -or $versionName.Contains('-')
+# A full release, marked Latest, unless -Prerelease (a release candidate too:
+# the suffix says what it is, owner decision 2026-10-15).
+$isPrerelease = [bool]$Prerelease
 Say "Domovoi $versionName (versionCode $versionCode), commit $($commit.Substring(0, 12))"
 
 # versionCode is YYMMDDNN (android\app\build.gradle.kts): the build's date

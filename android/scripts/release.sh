@@ -21,7 +21,7 @@
 #   bash android/scripts/release.sh                  # build, sign, check, commit + push the manifest, publish
 #   bash android/scripts/release.sh --no-publish     # build, sign, check; stop before git and GitHub
 #   bash android/scripts/release.sh --skip-build     # sign what the last build left (after a failed signing)
-#   bash android/scripts/release.sh --prerelease     # a plain version (1.0.1) as a pre-release too (1.0.0-rc2 always is)
+#   bash android/scripts/release.sh --prerelease     # a pre-release (off: every release is a full one, rc's included)
 #   bash android/scripts/release.sh --keystore ~/domovoi-release.jks --alias domovoi
 #
 # Needs: a JDK (JAVA_HOME or java on PATH), the Android SDK with
@@ -227,7 +227,7 @@ for e in json.load(open("android/release.json", encoding="utf-8"))["release"]["a
 if [ "$resume" = 1 ]; then
   version_name="$head_version"; version_code="$head_code"
   tag="v$version_name"
-  is_prerelease="$prerelease"; case "$version_name" in *-*) is_prerelease=1 ;; esac
+  is_prerelease="$prerelease"
   say "Domovoi $version_name (versionCode $version_code): HEAD ${commit:0:12} is its release commit (android/release.json on top of ${built_from:0:12}, which the APKs were built from), so this run carries on from there; nothing is built or signed again"
   # The first run's checks against the release before it, on what is committed.
   read -r prev_code prev_cert <<<"$(git show "$built_from:android/release.json" 2>/dev/null | release_fields - version_code cert_sha256 || true)"
@@ -275,8 +275,9 @@ done
 # The project-wide tag, v<versionName> (v1.0.0-rc1): domovoi.android_app's
 # tag_for, which the manifest's URLs are checked against.
 tag="v$version_name"
-# A version with a suffix (1.0.0-rc2) is a pre-release, never Latest.
-is_prerelease="$prerelease"; case "$version_name" in *-*) is_prerelease=1 ;; esac
+# A full release, marked Latest, unless --prerelease (a release candidate too:
+# the suffix says what it is, owner decision 2026-10-15).
+is_prerelease="$prerelease"
 say "Domovoi $version_name (versionCode $version_code), commit ${commit:0:12}"
 
 # versionCode is YYMMDDNN (android/app/build.gradle.kts): the build's date

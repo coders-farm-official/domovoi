@@ -450,8 +450,10 @@ its own `YYMMDDNN` counter, which only goes up.
 Keep to fewer than ten release candidates (`rc10` sorts before `rc2`).
 
 Two branches: `main` carries every change; **`stable`** points at the
-latest release and only ever fast-forwards to one. Pre-releases (`rcN`)
-are tags on `main` and never move `stable`. A published tag never moves
+latest release and only ever fast-forwards to one. Release candidates
+(`rcN`) are full GitHub releases (the suffix says what they are; owner
+decision 2026-10-15), tagged on `main`, and never move `stable`; only a
+version without a suffix does. A published tag never moves
 and is never deleted, and `stable` is never rewound or force-pushed: a bad
 release gets a warning in its notes and a patch release.
 
@@ -464,8 +466,9 @@ starts no workflow. Every pushed commit carries `[skip ci]`. In order:
 2. **`android/scripts/release.ps1`** (or `.sh`) from a clean, pushed
    checkout of `main`: builds and signs the APKs with the release key,
    commits `android/release.json` and pushes it, and publishes
-   `v<versionName>` tagged at that commit (a pre-release for a version with
-   a suffix, Latest for a plain one). `-NoPublish` is its dry run.
+   `v<versionName>` tagged at that commit, as a full release marked Latest
+   (release candidates too; `-Prerelease` makes it a pre-release).
+   `-NoPublish` is its dry run.
    [android/README.md, "Publishing a release"](../android/README.md#publishing-a-release-the-app-every-domovoi-server-hands-out)
    has the details.
 3. **The Setup's pins**: a commit on top of the tag that moves
@@ -481,14 +484,15 @@ starts no workflow. Every pushed commit carries `[skip ci]`. In order:
    ```
 
    It checks the tag, its manifest, the pins and the published APKs first,
-   and for a release without a suffix that `stable` can fast-forward;
+   and, for a version without a suffix, that `stable` can fast-forward;
    nothing on GitHub changes until all of that passes. Then it builds
    `DomovoiSetup.exe` with `windows\build.ps1`, writes one `SHA256SUMS` (LF)
    for every file, sets the notes (`docs/release/v<version>.md`, or a
    summary of the `docs/RELEASE_NOTES.md` entries since the previous tag
    with links into the full file at the tag), uploads the Setup and
    `SHA256SUMS`, checks every file on GitHub against `SHA256SUMS`, and
-   **last**, for a release without a suffix, runs
+   **last**, for a version without a suffix that GitHub doesn't mark a
+   pre-release, runs
    `git push origin "v<version>^{commit}:refs/heads/stable"` (never
    forced). Run again, it replaces the two files and leaves `stable` where
    it is. `finish-release.sh` is the same for bash; it needs `--setup FILE`

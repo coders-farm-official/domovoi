@@ -17,10 +17,11 @@ commit and pushed. From a clean checkout at the pins commit
 4. writes the notes: docs/release/v<version>.md at the tag, or a summary of
    docs/RELEASE_NOTES.md since the previous tag with links into the full
    file (GitHub caps a release body at 125,000 characters);
-5. uploads the Setup and SHA256SUMS (--clobber), sets the title, the notes
-   and pre-release or Latest;
+5. uploads the Setup and SHA256SUMS (--clobber), sets the title and the
+   notes, and keeps a pre-release one (only when GitHub marks it so; every
+   other release, release candidates included, is a full one, Latest);
 6. checks every file on GitHub against SHA256SUMS;
-7. LAST, a release without a suffix only: git push origin
+7. LAST, a release without a suffix (and not a pre-release) only: git push origin
    "v<version>^{commit}:refs/heads/stable", never forced (a stable the tag
    doesn't come after is refused).
 

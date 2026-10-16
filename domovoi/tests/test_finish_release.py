@@ -157,7 +157,7 @@ class World:
     """A checkout at the pins commit after the release commit, its bare origin, and a fake release."""
 
     def __init__(self, tmp_path: Path, monkeypatch, version: str = "1.0.0-rc2", stable: str | None = None,
-                 hand_notes: str | None = None):
+                 hand_notes: str | None = None, github_prerelease: bool = False):
         self.tmp = tmp_path
         self.version = version
         self.tag = f"v{version}"
@@ -217,7 +217,7 @@ class World:
         self.state_file = tmp_path / "gh-state.json"
         self.state = {"origin": str(self.origin), "calls": [], "files": {},
                       "releases": {self.tag: {"tagName": self.tag, "name": f"Domovoi {self.tag}", "isDraft": False,
-                                              "isPrerelease": "-" in version, "url": "https://example.invalid/r",
+                                              "isPrerelease": github_prerelease, "url": "https://example.invalid/r",
                                               "assets": assets}}}
         self.save()
         fake = tmp_path / "fake_gh.py"
@@ -266,7 +266,7 @@ def test_a_dry_run_stages_everything_and_changes_nothing_on_github(tmp_path, mon
     assert (w.stage / "DomovoiSetup.exe").read_bytes() == w.setup.read_bytes()
     notes = (w.stage / "NOTES.md").read_text(encoding="utf-8")
     assert w.tag_commit in notes and w.head in notes and CERT in notes and setup_sha in notes
-    assert "pre-release" in notes
+    assert "is a candidate for 1.0.0" in notes and "Servers that follow `stable` don't get it." in notes
     assert "## What's new since v1.0.0-rc1" in notes
     base = f"https://github.com/coders-farm-official/domovoi/blob/{w.tag}/docs/RELEASE_NOTES.md"
     assert f"({base}#2026-10-16--android-app-reply-reports-go-to-infocodersfarmorg)" in notes
@@ -278,14 +278,18 @@ def test_a_dry_run_stages_everything_and_changes_nothing_on_github(tmp_path, mon
 
 
 @requires_git
-def test_a_prerelease_gets_its_setup_sums_and_notes_but_never_moves_stable(tmp_path, monkeypatch):
+def test_a_release_candidate_is_a_full_release_but_never_moves_stable(tmp_path, monkeypatch):
+    """Every release is a full one, release candidates included (owner
+    decision 2026-10-15: the suffix says what it is); stable still moves
+    only for a version without a suffix."""
     w = World(tmp_path, monkeypatch)
     assert w.run() == 0
     (upload,) = w.calls("upload")
     assert "--clobber" in upload
     assert [Path(a).name for a in upload[3:5]] == ["DomovoiSetup.exe", "SHA256SUMS"]
     (edit,) = w.calls("edit")
-    assert "--prerelease" in edit and "--latest" not in edit
+    assert "--latest" in edit and "--prerelease" not in edit
+    assert w.load()["releases"][w.tag]["isPrerelease"] is False
     assert edit[edit.index("--title") + 1] == "Domovoi v1.0.0-rc2"
     rel = w.load()["releases"][w.tag]
     assert sorted(a["name"] for a in rel["assets"]) == sorted([*w.apk_bytes, "DomovoiSetup.exe", "SHA256SUMS"])
@@ -293,7 +297,20 @@ def test_a_prerelease_gets_its_setup_sums_and_notes_but_never_moves_stable(tmp_p
     assert w.state["files"]["SHA256SUMS"] == hashlib.sha256(sums).hexdigest()
     assert rel["body"] == (w.stage / "NOTES.md").read_text(encoding="utf-8")
     assert w.stable() == ""
-    assert any("pre-release never moves it" in s for s in w.said)
+    assert any(fr.STABLE_STAYS in s for s in w.said)
+
+
+@requires_git
+def test_a_release_github_marks_a_pre_release_stays_one_and_leaves_stable(tmp_path, monkeypatch):
+    """release.ps1 -Prerelease: finish-release keeps it so, and a plain
+    version marked a pre-release doesn't move stable either."""
+    w = World(tmp_path, monkeypatch, version="1.0.0", stable="v1.0.0-rc1", github_prerelease=True)
+    assert w.run() == 0
+    (edit,) = w.calls("edit")
+    assert "--prerelease" in edit and "--latest" not in edit
+    assert w.load()["releases"][w.tag]["isPrerelease"] is True
+    assert "is a pre-release" in w.state["releases"][w.tag]["body"]
+    assert w.stable() == w.rc1
 
 
 # ─── stable: last, forward only ──────────────────────────────────────────
@@ -588,11 +605,14 @@ def test_release_commits_the_manifest_then_tags_that_commit(script):
     assert create < fn_end < commit, "publishing is one function, called after the commit"
     if script.endswith(".ps1"):
         assert "'--target', $ReleaseCommit" in text
-        assert "$isPrerelease = $Prerelease -or $versionName.Contains('-')" in text
+        # A full release unless -Prerelease, whatever the version's suffix.
+        assert text.count("$isPrerelease = [bool]$Prerelease") == 2
+        assert "Contains('-')" not in text
         assert "-ne $ReleaseCommit) { Die" in text
     else:
         assert '--target "$release_commit"' in text
-        assert 'case "$version_name" in *-*) is_prerelease=1' in text
+        assert text.count('is_prerelease="$prerelease"\n') == 2
+        assert "*-*) is_prerelease=1" not in text
         assert '[ "$tagged" = "$release_commit" ]' in text
     assert "--latest" in text and "--prerelease" in text
     # A run that stopped after the commit carries on (nothing signed again).

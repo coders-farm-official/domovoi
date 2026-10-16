@@ -26,16 +26,18 @@ every check has passed):
    the manifest) and the Setup.
 4. The release notes: ``docs/release/v<version>.md`` at the tag if there is
    one, otherwise a summary of the ``docs/RELEASE_NOTES.md`` entries added
-   since the previous tag (a pre-release counts from the tag before it; a
-   release from the release before it), with links into the full file at
+   since the previous tag (a release candidate counts from the tag before
+   it; a release from the release before it), with links into the full file at
    the tag. Then the files, their SHA-256, the commit the tag is, the
    commit Setup was built from, the app's signing certificate. Kept under
    20 KB, and never over GitHub's 125,000-character cap.
 5. Upload the Setup and ``SHA256SUMS`` (``--clobber``, so a second run
-   replaces them), set the title, the notes, and pre-release (a version
-   with a suffix, or one GitHub already marks so) or Latest.
+   replaces them), set the title and the notes, and keep a pre-release one
+   (only one GitHub already marks so: every release is a full one by default,
+   release candidates included, owner decision 2026-10-15) or mark it Latest.
 6. Check every asset on GitHub against ``SHA256SUMS``.
-7. LAST, only for a release without a suffix: fast-forward ``stable`` to
+7. LAST, only for a release without a suffix that is not a pre-release:
+   fast-forward ``stable`` to
    the tag's commit, ``git push origin "v<version>^{commit}:refs/heads/stable"``,
    never forced: a ``stable`` that is not an ancestor of the tag is refused.
 
@@ -77,6 +79,7 @@ BODY_BUDGET = 20_000
 PARAGRAPH_MAX = 400
 TAG_RE = re.compile(r"^v(\d+\.\d+\.\d+)(-[0-9A-Za-z.]+)?$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+STABLE_STAYS = "only a release without a suffix, not marked a pre-release, moves it"
 
 
 class Refused(Exception):
@@ -230,7 +233,7 @@ def summary(new: list[Entry], *, tag: str, since: str | None, budget: int) -> st
 class Release:
     tag: str
     version: str
-    prerelease: bool
+    prerelease: bool         # GitHub marks it a pre-release
     tag_commit: str
     setup_commit: str
     cert: str
@@ -238,6 +241,7 @@ class Release:
     setup_sha256: str
     previous_tag: str | None = None
     notes: str = ""          # the summary part, from docs/release or RELEASE_NOTES.md
+    candidate_of: str | None = None   # X.Y.Z, when the version has a suffix
 
 
 def _who(abi: str) -> str:
@@ -246,8 +250,11 @@ def _who(abi: str) -> str:
 
 def body(rel: Release) -> str:
     """The whole release body: the summary, how to install, the files."""
-    if rel.prerelease:
-        lead = (f"**Domovoi {rel.version}** is a pre-release: for testing before the release it leads to. "
+    if rel.candidate_of:
+        lead = (f"**Domovoi {rel.version}** is a candidate for {rel.candidate_of}, for testing before it. "
+                "Servers that follow `stable` don't get it.")
+    elif rel.prerelease:
+        lead = (f"**Domovoi {rel.version}** is a pre-release. "
                 "Servers that follow `stable` don't get it.")
     else:
         lead = f"**Domovoi {rel.version}**."
@@ -375,8 +382,8 @@ def _version_name(text: str) -> str:
 
 def _previous_tag(t: Tools, tag_commit: str, prerelease: bool) -> str | None:
     """The tag the notes count from: the nearest earlier tag for a
-    pre-release; for a release, the nearest earlier one without a suffix
-    (stable's last), else any."""
+    release candidate or a pre-release; for a release, the nearest earlier
+    one without a suffix (stable's last), else any."""
     patterns = [["--exclude", "v*-*"], []] if not prerelease else [[]]
     if not t.git_ok("rev-parse", "--verify", "--quiet", f"{tag_commit}^"):
         return None
@@ -576,10 +583,14 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
         if release.get("isDraft"):
             die(f"the GitHub release {tag} is a draft: publish it first")
         _check_published_apks(release, apks)
-    prerelease = by_name or bool(release and release.get("isPrerelease"))
+    # Every release is a full one unless GitHub already marks it a pre-release
+    # (release.ps1 -Prerelease); only a version without a suffix that is not
+    # one moves stable.
+    prerelease = bool(release and release.get("isPrerelease"))
+    moves_stable = not by_name and not prerelease
 
     stable = ("skip", None)
-    if not prerelease:
+    if moves_stable:
         stable = _stable_plan(t, tag_commit) if fetched else ("unknown", None)
         if stable[0] == "refused":
             die(f"stable on GitHub is {stable[1]}, which the tag's commit doesn't come after: refusing "
@@ -605,10 +616,11 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
     # 3 and 4. SHA256SUMS and the notes. --------------------------------------
     if args.since and not t.git_ok("rev-parse", "--verify", "--quiet", f"refs/tags/{args.since}"):
         die(f"no tag {args.since} (--since)")
-    since = args.since or _previous_tag(t, tag_commit, prerelease)
+    since = args.since or _previous_tag(t, tag_commit, not moves_stable)
     hand = t.git_bytes("show", f"{tag_commit}:docs/release/{tag}.md")
     info = Release(tag=tag, version=version, prerelease=prerelease, tag_commit=tag_commit, setup_commit=head,
-                   cert=cert, apks=apks, setup_sha256=sha256_file(staged_setup), previous_tag=since)
+                   cert=cert, apks=apks, setup_sha256=sha256_file(staged_setup), previous_tag=since,
+                   candidate_of=m.group(1) if by_name else None)
     if hand is not None:
         info.notes = hand.decode("utf-8")
         say(f"the notes: docs/release/{tag}.md at the tag")
@@ -637,8 +649,8 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
         print(f"    gh release edit {tag} --repo {REPO_SLUG} --title \"Domovoi v{version}\" --notes-file NOTES.md "
               + ("--prerelease" if prerelease else "--latest") + f"    ({kind})")
         print("    (checks every file on GitHub against SHA256SUMS)")
-        if prerelease:
-            print("    stable stays where it is: a pre-release never moves it")
+        if not moves_stable:
+            print(f"    stable stays where it is: {STABLE_STAYS}")
         elif stable[0] == "already":
             print(f"    stable is already at {tag}")
         elif stable[0] == "unknown":
@@ -660,8 +672,8 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
     say("every file on GitHub matches SHA256SUMS")
 
     # 7. LAST: stable. --------------------------------------------------------
-    if prerelease:
-        say("stable stays where it is: a pre-release never moves it")
+    if not moves_stable:
+        say(f"stable stays where it is: {STABLE_STAYS}")
     else:
         stable = _stable_plan(t, tag_commit)
         if stable[0] == "refused":
@@ -673,7 +685,7 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
             t.git("push", "origin", stable_push)
             if _remote_ref(t, "refs/heads/stable") != tag_commit:
                 die("stable on GitHub is not the tag's commit after the push")
-    say(f"done: {tag} has the Setup, SHA256SUMS and its notes" + ("" if prerelease else "; stable is at it") + ".")
+    say(f"done: {tag} has the Setup, SHA256SUMS and its notes" + ("; stable is at it" if moves_stable else "") + ".")
     return 0
 
 
