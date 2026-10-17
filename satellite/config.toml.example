@@ -597,9 +597,10 @@ fd_limit = 512
 
 # Self-check 5: minutes without a socket to the core before the link is
 # looked at. If NetworkManager says the device is not connected, or the
-# gateway is silent, the usual recovery runs (nmcli device connect wlan0,
-# or wpa_cli reassociate on a hand-built unit), at most once per 5 minutes
-# counting the Wi-Fi watcher's own recoveries. "Silent" means no answer to
+# gateway is silent, the usual recovery runs (the house profile by name,
+# `nmcli connection up id domovoi-home`, or wpa_cli reassociate on a
+# hand-built unit), at most once per 5 minutes counting the Wi-Fi watcher's
+# own recoveries. "Silent" means no answer to
 # TCP on 53, 80 or 443 (a refusal counts as an answer) nor to a ping, or no
 # default route at all while NetworkManager does not say connected.
 no_server_escalate_min = 5
@@ -611,6 +612,21 @@ no_server_escalate_min = 5
 # core's own host answers (even with a refusal): a core that is down is
 # the core's problem, not this Pi's.
 reboot_after_min = 15
+
+# The link-down ladder: when the LINK is down (NetworkManager not connected
+# and no default route), not just the core, there is nothing to wait for.
+# The first recovery comes after this many minutes without a server; a
+# failed one is retried after link_down_retry_min, and the retry turns the
+# radio off and on first where /usr/local/sbin/domovoi-wifi-reset exists
+# (cards prepared from 2026-10-17 on). After two failed recoveries the
+# reboot comes at link_down_reboot_min instead of reboot_after_min. Every
+# self-check reboot in the last 6 hours doubles the next one's wait, up to
+# reboot_backoff_cap_min, so a link that keeps dropping cannot reboot the
+# unit in a loop (and at most one reboot an hour, whatever these say).
+link_down_escalate_min = 2
+link_down_retry_min = 2.5
+link_down_reboot_min = 10
+reboot_backoff_cap_min = 60
 
 # Self-check 1: seconds with no mic frames, while the capture stream
 # should be live (voice started and not deliberately stopped by an

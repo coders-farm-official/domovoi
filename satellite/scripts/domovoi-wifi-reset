@@ -1,0 +1,71 @@
+#!/bin/sh
+# Domovoi satellite: turn the Wi-Fi radio off and on, then bring the house
+# network back BY NAME. Installed to /usr/local/sbin/domovoi-wifi-reset
+# (root:root 0755) by the media-prep bootstrap, invoked by the client's
+# no-server self-check through exactly this sudoers line:
+#
+#   <user> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-wifi-reset ""
+#
+# The "" admits it with no arguments only, and it refuses any anyway: what
+# it does with root is fixed here, in this root-owned file.
+#
+# Why (2026-10-17): a Pi Zero 2 W at -77 dBm lost the house network and
+# `nmcli connection up id domovoi-home` timed out on every try; only a
+# reboot brought it back, sixteen minutes later. A brcmfmac radio that has
+# stopped associating is what an off/on clears. The client asks for this
+# only when that `connection up` timed out or failed AND the radio is not
+# associated (never on a working link), at most as often as the self-check
+# recovers the link at all.
+#
+# Never onto the setup hotspot: turning the radio back on lets
+# NetworkManager autoconnect, so with the `domovoi-setup` access-point
+# profile still saved this does nothing (exit 3) - the boot-time network
+# step deletes that profile (satellite/net_settings.py). And only the
+# profile named `domovoi-home` is brought up (exit 4 when there is none).
+
+set -u
+
+if [ "$#" -ne 0 ]; then
+  echo "domovoi-wifi-reset takes no arguments" >&2
+  exit 2
+fi
+
+NMCLI=/usr/bin/nmcli
+HOME_PROFILE=domovoi-home
+AP_PROFILE=domovoi-setup
+
+say() {
+  logger -t domovoi-wifi-reset "$*" 2>/dev/null || true
+  echo "$*"
+}
+
+profiles="$("$NMCLI" -t -f NAME connection show 2>/dev/null)" || {
+  say "NetworkManager would not list its profiles; nothing done"
+  exit 5
+}
+if printf '%s\n' "$profiles" | grep -qx "$AP_PROFILE"; then
+  say "the setup hotspot profile ($AP_PROFILE) is still saved; not cycling the radio (a reboot removes it)"
+  exit 3
+fi
+if ! printf '%s\n' "$profiles" | grep -qx "$HOME_PROFILE"; then
+  say "no $HOME_PROFILE profile on this unit; nothing done"
+  exit 4
+fi
+
+say "turning the Wi-Fi radio off and on, then bringing back $HOME_PROFILE"
+"$NMCLI" radio wifi off || true
+sleep 3
+"$NMCLI" radio wifi on || { say "could not turn the Wi-Fi radio back on"; exit 6; }
+
+# The radio comes back "unavailable" for a moment, then scans.
+i=0
+while [ "$i" -lt 15 ]; do
+  state="$("$NMCLI" -t -f DEVICE,STATE device status 2>/dev/null | awk -F: '$1 == "wlan0" { print $2; exit }')"
+  if [ -n "$state" ] && [ "$state" != "unavailable" ]; then
+    break
+  fi
+  sleep 1
+  i=$((i + 1))
+done
+
+exec "$NMCLI" --wait 45 connection up id "$HOME_PROFILE"

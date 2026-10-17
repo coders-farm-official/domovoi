@@ -29,6 +29,12 @@
 # hour). Argv-less: the "" allows it with no arguments only, and the
 # helper refuses any anyway - see satellite/scripts/domovoi-reboot.
 @USER@ ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-reboot ""
+# Turns the Wi-Fi radio off and on, then brings back the house profile by
+# name, and nothing else: the self-check's next rung when `nmcli connection
+# up id domovoi-home` timed out on a link that is down (2026-10-17).
+# Argv-less like the reboot helper; it refuses to run while the setup
+# hotspot's profile is saved - see satellite/scripts/domovoi-wifi-reset.
+@USER@ ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-wifi-reset ""
 # The XVF3800's LED ring is driven over USB, which needs root. The client
 # tries a plain call first and falls back to `sudo -n` (PROVISIONING §E).
 @USER@ ALL=(root) NOPASSWD: /opt/xvf3800/xvf_host

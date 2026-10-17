@@ -48,7 +48,8 @@ def test_the_bundle_is_the_code_channel_s_files_under_satellite():
     assert files == {f"satellite/{rel}" for rel in channel}
     assert "satellite/scripts/install-pc.sh" in files
     assert "satellite/client.py" in files and "satellite/enrolment.py" in files
-    for helper in ("domovoi-apply-payload", "domovoi-sync-time", "domovoi-reboot"):
+    for helper in ("domovoi-apply-payload", "domovoi-sync-time", "domovoi-reboot",
+                   "domovoi-wifi-reset"):
         assert f"satellite/scripts/{helper}" not in files, "a Pi's root helpers never travel"
     assert not any("__pycache__" in n or n.endswith((".pyc", ".bak")) or "/.env" in n for n in files)
     for m in members.values():

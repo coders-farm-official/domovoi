@@ -418,6 +418,12 @@ if ! skip units; then
   if [ -f "$PAYDIR/system/domovoi-reboot" ]; then
     install -m 0755 "$PAYDIR/system/domovoi-reboot" /usr/local/sbin/domovoi-reboot
   fi
+  # The radio-reset helper (satellite/scripts/domovoi-wifi-reset): the
+  # self-check's next rung when bringing the house network back by name
+  # timed out on a link that is down. Guarded the same way.
+  if [ -f "$PAYDIR/system/domovoi-wifi-reset" ]; then
+    install -m 0755 "$PAYDIR/system/domovoi-wifi-reset" /usr/local/sbin/domovoi-wifi-reset
+  fi
   # The verifier that helper checks the server's signature with. Root's
   # copy, not the satellite user's: the helper runs as root on that
   # user's request and must import nothing that user can edit.

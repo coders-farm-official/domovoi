@@ -2870,7 +2870,11 @@ connection up id domovoi-home` (the house network's profile, by name, since
 2026-10-12; cards prepared before then have `nmcli device connect wlan0`
 instead, which the client runs only where it cannot raise the setup
 hotspot), `systemctl --no-block restart` of its own two units,
-`domovoi-apply-payload`, `domovoi-sync-time` and `xvf_host`. Every one of
+`domovoi-apply-payload`, `domovoi-sync-time`, `domovoi-reboot` (argv-less:
+`systemctl reboot`, for the no-server self-check), `domovoi-wifi-reset`
+(argv-less, cards prepared since 2026-10-17: the Wi-Fi radio off and on,
+then the `domovoi-home` profile by name; it refuses while the setup
+hotspot's profile is saved) and `xvf_host`. Every one of
 those targets is a root-owned path the account cannot edit, and every
 script root runs on the device (stage 1, stage 2 as
 `/usr/local/sbin/domovoi-stage2`, the two helpers, `domovoi-status`) lives

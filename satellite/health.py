@@ -951,6 +951,28 @@ class CheckInput:
     reboot_after: float = 15 * 60.0
     recovery_cooldown: float = 5 * 60.0
     reboot_helper: bool = False
+    # The link-down ladder (2026-10-17, the office unit at -77 dBm: the link
+    # fell off the network entirely, `nmcli connection up` timed out every
+    # time, and the unit sat red for 16 minutes before the reboot that
+    # fixed it). When the LINK is down — NetworkManager not connected and no
+    # default route, or the radio hosting the setup hotspot — waiting five
+    # minutes before the first try buys nothing: there is no core to wait
+    # for. So the first recovery comes after `link_down_escalate_after`,
+    # a failed one is retried after `link_down_retry`, and after
+    # `link_down_reboot_failures` failed recoveries the reboot comes at
+    # `link_down_reboot_after` instead of `reboot_after`. Every reboot
+    # threshold doubles for each self-check reboot in the last
+    # REBOOT_BACKOFF_WINDOW_S (`recent_reboots`), up to `reboot_backoff_cap`,
+    # so a link that keeps dropping cannot reboot the unit in a loop (the
+    # restart budget's one reboot an hour still holds on top).
+    link_down_escalate_after: float = 2 * 60.0
+    link_down_retry: float = 150.0
+    link_down_reboot_after: float = 10 * 60.0
+    link_down_reboot_failures: int = 2
+    # Failed link recoveries since the server was last reachable.
+    recovery_failures: int = 0
+    recent_reboots: int = 0
+    reboot_backoff_cap: float = 60 * 60.0
     mic_silence_limit: float = 30.0
     heartbeat_limit: float = 60.0
 
@@ -984,6 +1006,43 @@ def gateway_silent(ci: CheckInput) -> bool:
     if ci.gateway_ok is False:
         return True
     return ci.default_route is False and ci.nm_connected is not True
+
+
+def link_down(ci: CheckInput) -> bool:
+    """The link itself is gone, not just the far end: NetworkManager says the
+    device is not connected AND there is no default route (or the radio is
+    hosting the setup hotspot). A gateway that answers overrides both. An
+    unknown fact (None) is never "down": only what the unit could see."""
+    if ci.gateway_ok is True:
+        return False
+    if ci.ap_mode:
+        return True
+    return ci.nm_connected is False and ci.default_route is False
+
+
+#: How far back a self-check reboot counts toward the reboot backoff.
+REBOOT_BACKOFF_WINDOW_S = 6 * 3600.0
+
+
+def reboot_threshold(ci: CheckInput) -> tuple[float, str]:
+    """Seconds without a server before a reboot, and why that many: the
+    link-down threshold once the link is down and recovery has failed
+    ``link_down_reboot_failures`` times, else ``reboot_after``; doubled for
+    each recent self-check reboot, capped at ``reboot_backoff_cap`` (never
+    below the unbacked threshold)."""
+    base = ci.reboot_after
+    why = ""
+    if link_down(ci) and ci.recovery_failures >= ci.link_down_reboot_failures:
+        if ci.link_down_reboot_after < base:
+            base = ci.link_down_reboot_after
+            why = f" after {ci.recovery_failures} failed link recoveries"
+    n = max(0, int(ci.recent_reboots))
+    if n:
+        backed = min(base * (2 ** min(n, 10)), max(base, ci.reboot_backoff_cap))
+        if backed > base:
+            why += f" (held to {backed / 60:.0f} min: {n} self-check reboot(s) in the last {REBOOT_BACKOFF_WINDOW_S / 3600:.0f} h)"
+            base = backed
+    return base, why
 
 
 def decide(ci: CheckInput) -> list[Decision]:
@@ -1049,36 +1108,49 @@ def decide(ci: CheckInput) -> list[Decision]:
     # while the core's own host answers (a refusal from it proves the path):
     # a core that is down is the core's problem, not this Pi's. The same
     # rule the Wi-Fi watcher uses (:func:`link_suspect`).
+    # A link that is down outright (no association, no route) is looked at
+    # sooner than a link that is up with a silent gateway: see CheckInput's
+    # link-down ladder. Both still need the same guard.
+    down = link_down(ci)
+    escalate = min(ci.escalate_after, ci.link_down_escalate_after) if down else ci.escalate_after
     if (
-        ci.no_server_for is not None and ci.no_server_for >= ci.escalate_after
+        ci.no_server_for is not None and ci.no_server_for >= escalate
         and (ci.ap_mode or link_suspect(ci.core_host_ok, ci.gateway_ok))
     ):
         silent = gateway_silent(ci)
         if ci.nm_connected is False or silent:
+            cooldown = ci.recovery_cooldown
+            if down and ci.recovery_failures > 0:
+                cooldown = min(cooldown, ci.link_down_retry)
             due = (
                 ci.last_wifi_recovery is None
-                or ci.now - ci.last_wifi_recovery >= ci.recovery_cooldown
+                or ci.now - ci.last_wifi_recovery >= cooldown
             )
             if due:
                 what = (
                     "the radio is hosting the setup hotspot instead of being on "
                     "the house network" if ci.ap_mode else "the link is down"
                 )
+                tries = (
+                    f"; {ci.recovery_failures} recovery attempt(s) failed so far"
+                    if ci.recovery_failures else ""
+                )
                 out.append(Decision(
                     "wifi_recover",
                     f"no server for {ci.no_server_for / 60:.0f} min and {what} "
                     f"(nm_connected={ci.nm_connected}, gateway_ok={ci.gateway_ok}, "
-                    f"default_route={ci.default_route})",
+                    f"default_route={ci.default_route}){tries}",
                     check="no_server_link", basis="sample",
                 ))
-        if ci.no_server_for >= ci.reboot_after and silent:
+        reboot_at, why = reboot_threshold(ci)
+        if ci.no_server_for >= reboot_at and silent:
             reason = (
                 f"no server for {ci.no_server_for / 60:.0f} min and the gateway does "
-                "not answer; the network stack needs a reboot"
+                f"not answer{why}; the network stack needs a reboot"
             )
             paced = (
                 ci.last_reboot_note is None
-                or ci.now - ci.last_reboot_note >= ci.reboot_after
+                or ci.now - ci.last_reboot_note >= reboot_at
             )
             if paced:
                 out.append(Decision(
@@ -1194,12 +1266,26 @@ class RestartBudget:
                 return False
         return True
 
+    def count(self, action: str, within_s: float) -> int:
+        """How many ``action`` entries the last ``within_s`` seconds hold —
+        the reboot backoff looks further back than the budget's window."""
+        now = self.clock()
+        return sum(
+            1 for e in self._entries
+            if e["action"] == action and now - within_s < e["ts"] <= now + self.window_s
+        )
+
     def record(self, action: str, reason: str) -> bool:
         """Count one restart, on disk before it happens. False when the
-        file could not be written (the count still holds in this process)."""
-        self._entries = self.recent() + [
-            {"ts": self.clock(), "action": action, "reason": reason[:300]}
-        ]
+        file could not be written (the count still holds in this process).
+        Entries are kept for :data:`REBOOT_BACKOFF_WINDOW_S` (or the
+        budget's window, if longer), so the reboot backoff survives the
+        reboot it counts."""
+        now = self.clock()
+        keep = max(self.window_s, REBOOT_BACKOFF_WINDOW_S)
+        self._entries = [
+            e for e in self._entries if now - keep < e["ts"] <= now + self.window_s
+        ][-49:] + [{"ts": now, "action": action, "reason": reason[:300]}]
         return write_json_atomic(self.path, {"restarts": self._entries})
 
     def note_suppressed(self, action: str, reason: str) -> None:

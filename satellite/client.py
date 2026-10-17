@@ -167,6 +167,19 @@ LAST_HEALTH_PATH = CONFIG_DIR / "last-health.json"
 # installed by stage 1 on cards prepared from 2026-10-09 on, or by hand per
 # PROVISIONING.md §8.3). Its absence is checked, never assumed.
 REBOOT_HELPER = Path("/usr/local/sbin/domovoi-reboot")
+# The root helper that turns the Wi-Fi radio off and on and brings the house
+# network back (satellite/scripts/domovoi-wifi-reset; cards prepared from
+# 2026-10-17 on, or by hand per PROVISIONING.md §8.3). Checked, never assumed.
+WIFI_RESET_HELPER = Path("/usr/local/sbin/domovoi-wifi-reset")
+# How long `nmcli connection up id domovoi-home` may take. nmcli waits up to
+# 90 s for the activation by itself; a join at the edge of range (an
+# association, the key exchange and DHCP, each retried) can need well over
+# the 30 s this used to allow, and a kill here cancels nothing in
+# NetworkManager — it only stops waiting for the answer.
+NMCLI_UP_TIMEOUT_SEC = 45.0
+# The radio reset: off, 3 s, on, up to 15 s for the radio to come back, then
+# `nmcli --wait 45 connection up` (satellite/scripts/domovoi-wifi-reset).
+WIFI_RESET_TIMEOUT_SEC = 90.0
 # The self-restart budget (satellite/health.py RestartBudget): when this
 # unit last exited or rebooted itself for a self-check, kept across lives.
 SELF_RESTARTS_PATH = CONFIG_DIR / "self-restarts.json"
@@ -229,6 +242,12 @@ def _reboot_helper_installed(cfg: Any) -> bool:
     satellite: the POSIX path would be a file at the root of the system
     drive, which any account can create."""
     return not engine_platform.is_windows_pc(cfg) and REBOOT_HELPER.exists()
+
+
+def _wifi_reset_helper_installed(cfg: Any) -> bool:
+    """Whether the root radio-reset helper is there to ask (never on a
+    Windows satellite, for the reason `_reboot_helper_installed` gives)."""
+    return not engine_platform.is_windows_pc(cfg) and WIFI_RESET_HELPER.exists()
 
 
 def _hard_exit(code: int) -> None:
@@ -631,6 +650,11 @@ class Config:
     health_fd_limit: int = 512
     health_no_server_escalate_min: float = 5.0
     health_reboot_after_min: float = 15.0
+    # The link-down ladder (satellite/health.py CheckInput).
+    health_link_down_escalate_min: float = 2.0
+    health_link_down_retry_min: float = 2.5
+    health_link_down_reboot_min: float = 10.0
+    health_reboot_backoff_cap_min: float = 60.0
     health_write_interval_sec: float = 600.0
     health_log_push_interval_sec: float = 30.0
     health_mic_silence_sec: float = 30.0
@@ -961,6 +985,10 @@ class Config:
             health_fd_limit=int(healthc.get("fd_limit", 512)),
             health_no_server_escalate_min=float(healthc.get("no_server_escalate_min", 5.0)),
             health_reboot_after_min=float(healthc.get("reboot_after_min", 15.0)),
+            health_link_down_escalate_min=max(1.0, float(healthc.get("link_down_escalate_min", 2.0))),
+            health_link_down_retry_min=max(1.0, float(healthc.get("link_down_retry_min", 2.5))),
+            health_link_down_reboot_min=max(5.0, float(healthc.get("link_down_reboot_min", 10.0))),
+            health_reboot_backoff_cap_min=max(15.0, float(healthc.get("reboot_backoff_cap_min", 60.0))),
             health_write_interval_sec=float(healthc.get("write_interval_sec", 600.0)),
             health_log_push_interval_sec=max(5.0, float(healthc.get("log_push_interval_sec", 30.0))),
             health_mic_silence_sec=float(healthc.get("mic_silence_sec", 30.0)),
@@ -3382,8 +3410,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
             try:
                 r = subprocess.run(
                     ["sudo", "-n", *step.argv],
-                    capture_output=True, text=True, timeout=30.0,
+                    capture_output=True, text=True, timeout=NMCLI_UP_TIMEOUT_SEC,
                 )
+            except subprocess.TimeoutExpired as e:
+                log.warning("wifi recovery (%s): %s", step.label, e)
+                return self._wifi_reset_radio(f"`nmcli {step.label}` timed out", associated, ap_active)
             except (OSError, subprocess.SubprocessError) as e:
                 log.warning("wifi recovery (%s): %s", step.label, e)
                 return False
@@ -3403,7 +3434,60 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 " (check the sudoers entry: `sudo -n " + " ".join(step.argv)
                 + "` must run without prompting)" if _sudo_refused(err) else "",
             )
+            if _sudo_refused(err):
+                return False
+            return self._wifi_reset_radio(
+                f"`nmcli {step.label}` failed (rc={r.returncode})", associated, ap_active,
+            )
+        return False
+
+    _wifi_reset_missing_said: bool = False
+
+    def _wifi_reset_radio(self, why: str, associated: bool, ap_active: bool) -> bool:
+        """The next rung when bringing the house network back by name timed
+        out or failed: the radio off and on, then the house profile again,
+        through the argv-less root helper (satellite/scripts/domovoi-wifi-reset,
+        cards prepared from 2026-10-17 on). A brcmfmac radio that has stopped
+        associating at the edge of range is what this clears; the office unit
+        at -77 dBm timed out `nmcli connection up` again and again and only a
+        reboot brought it back (2026-10-17).
+
+        Only for a link that is genuinely down: never while the radio is
+        associated (that would drop a working link) and never while it hosts
+        the setup hotspot (the helper refuses anyway while that profile is
+        saved). False, and said once, on a unit without the helper."""
+        if associated or ap_active:
             return False
+        if not _wifi_reset_helper_installed(self.cfg):
+            if not self._wifi_reset_missing_said:
+                self._wifi_reset_missing_said = True
+                log.warning(
+                    "wifi recovery: %s, and this unit has no %s to turn the radio "
+                    "off and on (cards prepared before 2026-10-17; PROVISIONING.md "
+                    "§8.3) - the next recovery tries again, then a reboot",
+                    why, WIFI_RESET_HELPER,
+                )
+            return False
+        log.warning("wifi recovery: %s; turning the radio off and on, then the house "
+                    "network again (%s)", why, WIFI_RESET_HELPER)
+        try:
+            r = subprocess.run(
+                ["sudo", "-n", str(WIFI_RESET_HELPER)],
+                capture_output=True, text=True, timeout=WIFI_RESET_TIMEOUT_SEC,
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            log.warning("wifi recovery (radio reset): %s", e)
+            return False
+        if r.returncode == 0:
+            log.info("wifi recovery: radio reset + house network: OK")
+            return True
+        out = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
+        log.warning(
+            "wifi recovery: radio reset failed: rc=%d %s%s", r.returncode,
+            out[-1][:200] if out else "",
+            " (check the sudoers entry for " + str(WIFI_RESET_HELPER) + ")"
+            if _sudo_refused(r.stderr or "") else "",
+        )
         return False
 
     def _reassociate_wifi(self) -> bool:
@@ -3545,6 +3629,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
     _health_mic_silent_since: float | None = None
     _health_mic_reopened_at: float | None = None
     _health_last_wifi_recovery: float | None = None
+    # Failed self-check link recoveries since the server was last reachable.
+    _health_recovery_failures: int = 0
     _health_last_reboot_note: float | None = None
     _health_last_push: float = 0.0
     _health_samples: int = 0
@@ -3929,6 +4015,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
 
         rss_kb = s.get("rss_kb")
         since = self._no_server_since()
+        if since is None:
+            # The server is back: the next outage starts its ladder over.
+            self._health_recovery_failures = 0
         last_recovery = max(
             (t for t in (self._health_last_wifi_recovery, self._last_reassociate_at) if t is not None),
             default=None,
@@ -3962,6 +4051,15 @@ class Satellite(pc_engine.SpareDeviceEngine):
             escalate_after=float(self._hcfg("no_server_escalate_min", 5.0)) * 60.0,
             reboot_after=float(self._hcfg("reboot_after_min", 15.0)) * 60.0,
             reboot_helper=_reboot_helper_installed(self.cfg),
+            link_down_escalate_after=float(self._hcfg("link_down_escalate_min", 2.0)) * 60.0,
+            link_down_retry=float(self._hcfg("link_down_retry_min", 2.5)) * 60.0,
+            link_down_reboot_after=float(self._hcfg("link_down_reboot_min", 10.0)) * 60.0,
+            recovery_failures=self._health_recovery_failures if since is not None else 0,
+            recent_reboots=(
+                self._health_budget.count("reboot", health.REBOOT_BACKOFF_WINDOW_S)
+                if self._health_budget is not None else 0
+            ),
+            reboot_backoff_cap=float(self._hcfg("reboot_backoff_cap_min", 60.0)) * 60.0,
             mic_silence_limit=float(self._hcfg("mic_silence_sec", 30.0)),
             heartbeat_limit=float(self._hcfg("heartbeat_stale_sec", 60.0)),
         )
@@ -3998,7 +4096,15 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 self._health_last_wifi_recovery = now
                 self._health_write()
                 ok = self._reassociate_wifi()
-                log.error("self-check: link recovery %s", "requested" if ok else "FAILED")
+                # Counted for the link-down ladder (satellite/health.py
+                # CheckInput): two failures in one outage bring the reboot
+                # forward. A recovery that worked starts the count over.
+                self._health_recovery_failures = 0 if ok else self._health_recovery_failures + 1
+                log.error(
+                    "self-check: link recovery %s",
+                    "requested" if ok else
+                    f"FAILED ({self._health_recovery_failures} in this outage)",
+                )
             elif d.action == "reboot":
                 self._health_last_reboot_note = now
                 self._health_reboot(d.reason)
