@@ -4,6 +4,31 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — A new satellite says its setup code clearly again
+
+Server update (core; no migration).
+
+* **The setup code a new satellite speaks was garbled in the Kristin
+  voice.** Each digit is its own clip, and each was rendered from the bare
+  word ("seven", with no full stop). Kristin, the default voice since
+  2026-10-12, says a short phrase with no ending punctuation as a held
+  first sound or a stretched word: "sss" for seven, "nnn" for nine,
+  "ffff" for four, "three" heard as "B". Norman, the earlier default,
+  never showed it, which is why cards made before the switch were fine.
+  The digits are now written as sentences ("Seven."), and the voice
+  engine adds a full stop to any short phrase that has no ending
+  punctuation, whatever it is (a greeting typed without one, say).
+* **Cards prepared from rc2 with Kristin carry the garbled clips.** The
+  clips are written onto the card when it is prepared, so an existing
+  card keeps them. That only matters while a satellite is waiting for
+  approval: the code is also on the setup page the phone showed, and in
+  `~/.domovoi/approval_code` on the satellite (over SSH, where it is
+  enabled). Prepare the card again after this update
+  (or make a new USB stick) to get clear clips; the server renders them
+  again on its own the next time a card or stick is prepared. Satellites
+  already approved need nothing.
+
+
 ## 2026-10-17 — Windows: Domovoi's tray icon, and satellite cards from Windows
 
 A new program on Windows installs (`DomovoiTray.exe`), the Windows Setup,

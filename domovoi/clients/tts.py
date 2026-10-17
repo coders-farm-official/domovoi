@@ -585,6 +585,31 @@ def phoneme_count(phonemes: str) -> int:
     return sum(1 for c in phonemes if c.isalpha() and c not in "ˈˌː")
 
 
+# A short sentence with no punctuation at its end is out of what the voices
+# were trained on, and Kristin (the default since 2026-10-12) says one as a
+# held first sound or a stretched word: a lone "seven" lasts 1.7 to 2.9 s
+# against 0.7 s for "seven.", "three" is heard as "B", "nine" as a hum
+# (measured 2026-10-17 over the setup digit clips, Whisper and by length;
+# owner's satellite spoke its approval code that way). Such a sentence is
+# said with a full stop at its end. Longer ones are left alone: a reply
+# chunk cut mid-sentence keeps its rising, unfinished sound.
+SENTENCE_END_MARKS = ".!?,;:"
+_CLOSING_MARKS = "\"')]}"
+
+
+def end_short_sentence(phonemes: str) -> str:
+    """``phonemes`` with a full stop added when it is a short sentence
+    (fewer than LEAD_IN_MAX_PHONEMES phonemes) that has none of
+    SENTENCE_END_MARKS at its end (closing quotes and brackets aside)."""
+    body = phonemes.rstrip()
+    if not body or phoneme_count(body) >= LEAD_IN_MAX_PHONEMES:
+        return phonemes
+    words = body.rstrip(_CLOSING_MARKS)
+    if not words or words[-1] in SENTENCE_END_MARKS:
+        return phonemes
+    return body + "."
+
+
 def cut_after_lead_in(audio, sample_rate: int, lead_in_seconds: float):
     """The part of ``audio`` (the lead-in sentence, then a short sentence,
     from one model call) after the pause that ends the lead-in, faded in;
@@ -741,8 +766,10 @@ class PiperVoice:
         """One sentence's phoneme string -> float32 samples in [-1, 1]
         (none when nothing in it is a sound the voice knows). A short
         sentence in a voice that runs away is said after the lead-in and
-        cut off from it."""
+        cut off from it. A short sentence with no end mark gets a full
+        stop (:func:`end_short_sentence`)."""
         np = self.np
+        phonemes = end_short_sentence(phonemes)
         ids = self.sentence_ids(phonemes)
         if ids is None:
             return np.zeros(0, dtype=np.float32)
