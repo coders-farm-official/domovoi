@@ -168,7 +168,7 @@ def test_writing_to_a_drive_is_refused_inside_wsl_with_the_way_out(host):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(media_api.media_prepare(body, None))  # type: ignore[arg-type]
     assert exc.value.status_code == 422
-    assert "WSL" in exc.value.detail and "zip" in exc.value.detail
+    assert "WSL" in exc.value.detail and "card helper" in exc.value.detail and "tray icon" in exc.value.detail
 
 
 def test_media_status_tells_the_card_what_this_host_can_do(host, monkeypatch):

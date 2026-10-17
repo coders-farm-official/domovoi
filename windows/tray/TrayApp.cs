@@ -311,7 +311,7 @@ namespace Domovoi.Windows.Tray
 
         void Hide()
         {
-            if (MessageBox.Show("Hide the Domovoi icon?\n\nDomovoi keeps running, and so does \"Keep this PC awake\". The icon comes back the next time you sign in, or when you open Domovoi from the Start menu.",
+            if (MessageBox.Show("Hide the Domovoi icon?\n\nDomovoi keeps running, and so does \"Keep this PC awake\". The icon comes back the next time you sign in, or when you start it again (Domovoi in the Start menu, or DomovoiTray.exe).",
                     "Hide this icon", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK)
                 return;
             icon.Visible = false;
