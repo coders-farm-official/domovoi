@@ -133,8 +133,9 @@ fun StationsScreen() {
         .windowSizeClass.windowWidthSizeClass == WindowWidthSizeClass.COMPACT
 
     // POSTing the search-hit shape — server idempotent on external_id.
-    val onFavorite: suspend (Station) -> Unit = { hit ->
-        app.api.post(
+    // Answers the saved row, so the search row keeps its id for the next tap.
+    val onFavorite: suspend (Station) -> Station? = { hit ->
+        val saved = app.api.post(
             "/api/plugins/radio/stations",
             buildJsonObject {
                 put("name", hit.name)
@@ -148,6 +149,7 @@ fun StationsScreen() {
         )
         toast("favorited ${hit.name}")
         favState.refresh()
+        runCatching { saved.decode<Station>() }.getOrNull()
     }
 
     fun forget(st: Station) {
