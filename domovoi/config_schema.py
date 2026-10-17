@@ -69,7 +69,12 @@ import re
 from dataclasses import dataclass, field
 from typing import Literal
 
-from domovoi.config import HOME_PROBLEMS_VISIBILITY_CHOICES, QA_THINK_CHOICES
+from domovoi.config import (
+    HOME_PROBLEMS_VISIBILITY_CHOICES,
+    QA_THINK_CHOICES,
+    VOICE_HISTORY_KEEP_CHOICES,
+    VOICE_HISTORY_KEEP_LABELS,
+)
 
 Tier = Literal["hot", "reapply", "restart"]
 Section = Literal["common", "advanced"]
@@ -415,6 +420,22 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "about you (a preference, a name). Higher = fewer but surer memories; "
         "lower = it remembers more, including shakier guesses.",
         "float", min=0.3, max=0.95,
+    ),
+
+    # ─── Privacy ───────────────────────────────────────────────────────
+    # Also on People → Voice history, beside "Delete all voice history"
+    # (domovoi/voice_history.py). 'reapply': a save prunes at once.
+    FieldSpec(
+        "voice_history_keep", "Keep voice history", "Privacy",
+        "How long Domovoi keeps what people say to it and what it answered: "
+        "the Conversations and Sessions tabs, the routing log behind them, "
+        "each room's short-term conversation, and the satellites' logs kept "
+        "on this server. Anything older is deleted once a day, and right "
+        "away when you save. Forever keeps it all. Memories, voice samples, "
+        "notes, timers, the music played and chat threads are not affected.",
+        "choice", tier="reapply",
+        choices=list(VOICE_HISTORY_KEEP_CHOICES),
+        choice_labels=dict(VOICE_HISTORY_KEEP_LABELS),
     ),
 
     # ─── Library ───────────────────────────────────────────────────────

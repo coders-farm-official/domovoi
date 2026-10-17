@@ -8,6 +8,8 @@
  *   * GET /api/people/{id}/profiles            — their voice samples, satellite
  *                                                and phone sets (Profile tab).
  *   * GET /api/denylist                        — opted-out voice count.
+ *   * GET /api/voice-history                   — "Keep voice history", what is
+ *                                                kept, the latest cleanup/delete.
  *   * /ws/state · `people.last_seen.changed`   — push refresh of the roster.
  *
  * Sessions and conversations are fetched per-person on selection; we
@@ -23,6 +25,9 @@ const isLive = (iso) => {
   if (!iso) return false;
   return (new Date() - new Date(iso)) / 1000 < 300;
 };
+
+// How many of a person's turns the page reads (the Conversations tab).
+const PERSON_TURNS_FETCHED = 200;
 
 /* ---- Confirm modal (cascade delete) ----------------------- */
 const ConfirmForget = ({ person, sessionCount, turnCount, open, onClose, onConfirm }) => {
@@ -55,11 +60,14 @@ const ConfirmForget = ({ person, sessionCount, turnCount, open, onClose, onConfi
         </div>
         <div style={{ padding: 16, fontSize: 13, color: 'var(--fg)' }}>
           <p style={{ margin: 0, marginBottom: 10 }}>This is a cascade delete. Domovoi will lose:</p>
-          <ul style={{ margin: 0, marginBottom: 12, paddingLeft: 18, color: 'var(--fg-muted)', fontSize: 12, lineHeight: 1.8 }}>
+          <ul style={{ margin: 0, marginBottom: 8, paddingLeft: 18, color: 'var(--fg-muted)', fontSize: 12, lineHeight: 1.8 }}>
             <li><span className="mono" style={{ color: 'var(--fg)' }}>{person.voice_profile_count}</span> voice profile{person.voice_profile_count === 1 ? '' : 's'}</li>
-            <li><span className="mono" style={{ color: 'var(--fg)' }}>{sessionCount}</span> session{sessionCount === 1 ? '' : 's'}</li>
-            <li><span className="mono" style={{ color: 'var(--fg)' }}>{turnCount}</span> conversation turn{turnCount === 1 ? '' : 's'}</li>
+            <li>what they said: <span className="mono" style={{ color: 'var(--fg)' }}>{turnCount}{turnCount >= PERSON_TURNS_FETCHED ? '+' : ''}</span> conversation turn{turnCount === 1 ? '' : 's'}{sessionCount > 0 && <> in <span className="mono" style={{ color: 'var(--fg)' }}>{sessionCount}</span> session{sessionCount === 1 ? '' : 's'}</>}, with Domovoi's answers</li>
+            <li>their memories, favorites and preferences</li>
           </ul>
+          <p style={{ margin: 0, marginBottom: 12, fontSize: 12, color: 'var(--fg-muted)' }}>
+            Turns where someone else said their name stay: Domovoi goes by who was speaking.
+          </p>
           <p style={{ margin: 0, marginBottom: 8, fontSize: 12, color: 'var(--fg-muted)' }}>
             Type <span className="mono" style={{ color: 'var(--fg)' }}>{person.name}</span> to confirm.
           </p>
@@ -683,10 +691,185 @@ const DenylistView = ({ count, onBack }) => (
   </Card>
 );
 
+/* ---- Voice history sub-view (owner, 2026-10-17) ----------- */
+/*
+ * How long Domovoi keeps what people say to it, and deleting all of it
+ * (domovoi/voice_history.py):
+ *   GET   /api/voice-history             — the setting, what is kept and
+ *                                          since when, the latest cleanup and
+ *                                          delete (counts and dates only)
+ *   PATCH /api/config/editable           — { changes: { voice_history_keep } }
+ *                                          (admin; also Settings → Configuration
+ *                                          → Privacy)
+ *   POST  /api/voice-history/delete-all  — admin; runs as a job on the server,
+ *                                          its progress is read back here
+ */
+const VOICE_HISTORY_GOES = [
+  'what everyone said to Domovoi, and what it answered, in every room and on every phone: the Conversations and Sessions tabs',
+  'the routing log behind them',
+  'each room’s short-term conversation (what “say that again” and a follow-up question use)',
+  'the satellites’ logs kept on the server, which quote what they heard',
+];
+const VOICE_HISTORY_STAYS =
+  'People, voice samples, memories, notes, timers, the music played, chat threads and command recordings stay.';
+
+const voiceHistoryDays = (keep) => (keep === 'forever' ? null : Number(keep));
+
+const VoiceHistoryJobLine = ({ job }) => {
+  if (!job) return null;
+  const d = job.deleted || {};
+  const turns = d.conversation_log || 0;
+  if (job.state === 'queued' || job.state === 'running')
+    return <span>Deleting all voice history… {turns} turn{turns === 1 ? '' : 's'} so far.</span>;
+  if (job.state === 'failed')
+    return <span style={{ color: 'var(--err)' }}>The delete stopped ({job.error}). The server tries again within the hour.</span>;
+  return (
+    <span>
+      Deleted everything said before {new Date(job.cutoff).toLocaleString()} ({turns} turn{turns === 1 ? '' : 's'}), {relTime(job.finished_at)}.
+    </span>
+  );
+};
+
+const VoiceHistoryView = ({ vh, onBack, fire }) => {
+  const { data, error, refresh } = vh;
+  const [pendingKeep, setPendingKeep] = React.useState(null);   // a shorter keep, awaiting confirm
+  const [askDelete, setAskDelete] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const job = data && data.delete_all;
+  const running = !!job && (job.state === 'queued' || job.state === 'running');
+  React.useEffect(() => {
+    if (!running) return undefined;
+    const t = setInterval(refresh, 1500);
+    return () => clearInterval(t);
+  }, [running, refresh]);
+
+  const refused = error && (error.status === 401 || error.status === 403);
+  const keep = data ? data.keep : null;
+  const choices = (data && data.choices) || [];
+  const labelOf = (v) => (choices.find(c => c.value === v) || {}).label || v;
+
+  const saveKeep = async (value) => {
+    setBusy(true);
+    try {
+      const res = await apiPatch('/api/config/editable', { changes: { voice_history_keep: value } });
+      const why = res && res.rejected && res.rejected.voice_history_keep;
+      if (why) fire(`not saved: ${why}`);
+      else fire(value === 'forever' ? 'voice history is kept forever now'
+                                    : `voice history is kept for ${labelOf(value)} now`);
+      // The server deletes what is now too old right after the save; read
+      // the counts again once it has.
+      refresh();
+      setTimeout(refresh, 2000);
+    } catch (e) {
+      reportMutationFailure(fire, 'save', e);
+    } finally {
+      setBusy(false);
+      setPendingKeep(null);
+    }
+  };
+  const onKeepChange = (value) => {
+    if (value === keep) return;
+    const now = voiceHistoryDays(keep), next = voiceHistoryDays(value);
+    // Shorter deletes at once: ask first. Longer, or forever, deletes nothing.
+    if (next !== null && (now === null || next < now)) setPendingKeep(value);
+    else saveKeep(value);
+  };
+  const deleteAll = async () => {
+    setBusy(true);
+    try {
+      await apiPost('/api/voice-history/delete-all', {});
+      fire('deleting all voice history');
+      refresh();
+    } catch (e) {
+      reportMutationFailure(fire, 'delete', e);
+    } finally {
+      setBusy(false);
+      setAskDelete(false);
+    }
+  };
+
+  const cleanup = data && data.last_cleanup;
+  const cleaned = cleanup && cleanup.deleted ? (cleanup.deleted.conversation_log || 0) : 0;
+
+  return (
+    <Card>
+      <div style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--border-soft)' }}>
+        <Button icon="chevron-left" onClick={onBack}>back</Button>
+        <div style={{ fontSize: 14, fontWeight: 600, marginLeft: 4 }}>Voice history</div>
+        {data && <Pill tone="idle" style={{ marginLeft: 'auto' }}>{data.keep === 'forever' ? 'kept forever' : `kept ${data.keep_label}`}</Pill>}
+      </div>
+      {refused && !data ? <PairedOnlyEmpty what="how long the house keeps what was said"/> : (
+        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16, fontSize: 13, lineHeight: 1.55 }}>
+          <div style={{ color: 'var(--fg-muted)', maxWidth: 560 }}>
+            Domovoi keeps what people say to it, and what it answered, so the Conversations and Sessions
+            tabs can show them. Anything older than you choose here is deleted every day.
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <label htmlFor="voice-history-keep" style={{ fontWeight: 500 }}>Keep voice history</label>
+            <select id="voice-history-keep" value={keep || ''} disabled={!data || busy}
+                    onChange={e => onKeepChange(e.target.value)}
+                    style={{ ..._cfgInput, minWidth: 150 }}>
+              {!keep && <option value="" disabled>…</option>}
+              {choices.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+            </select>
+            <span style={{ fontSize: 12, color: 'var(--fg-faint)' }}>an admin changes this</span>
+          </div>
+
+          <div className="mono" style={{ fontSize: 12, color: 'var(--fg-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span>
+              {!data ? 'reading…'
+                : data.turns === 0 ? 'nothing kept yet'
+                : `${data.turns} turn${data.turns === 1 ? '' : 's'} kept · the oldest from ${new Date(data.oldest_at).toLocaleDateString()}`}
+            </span>
+            {data && data.keep === 'forever' && <span>Forever: nothing is deleted on its own.</span>}
+            {data && data.keep !== 'forever' && cleanup && cleanup.finished_at && (
+              cleanup.state === 'failed'
+                ? <span style={{ color: 'var(--err)' }}>the last cleanup, {relTime(cleanup.finished_at)}, stopped ({cleanup.error}); the server tries again within the hour</span>
+                : <span>last cleanup {relTime(cleanup.finished_at)}: {cleaned} turn{cleaned === 1 ? '' : 's'} deleted</span>
+            )}
+            {job && <VoiceHistoryJobLine job={job}/>}
+          </div>
+
+          <div style={{ paddingTop: 14, borderTop: '1px solid var(--border-soft)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <Button icon="trash-2" disabled={!data || busy || running} onClick={() => setAskDelete(true)}
+                    style={{ background: 'var(--err-soft)', color: 'var(--err)', borderColor: 'transparent' }}>
+              Delete all voice history
+            </Button>
+            <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+              Forgetting one person (their Profile tab) deletes only what they said.
+            </span>
+          </div>
+        </div>
+      )}
+
+      {pendingKeep && (
+        <DeleteConfirmDialog title={`Keep voice history for ${labelOf(pendingKeep)}?`} busy={busy}
+                             confirmLabel={`Keep ${labelOf(pendingKeep)}`}
+                             onCancel={() => setPendingKeep(null)} onConfirm={() => saveKeep(pendingKeep)}>
+          <div>Everything said more than {labelOf(pendingKeep)} ago is deleted now, and every day from then on. This can’t be undone.</div>
+        </DeleteConfirmDialog>
+      )}
+      {askDelete && (
+        <DeleteConfirmDialog title="Delete all voice history?" busy={busy}
+                             confirmLabel="Delete all voice history"
+                             onCancel={() => setAskDelete(false)} onConfirm={deleteAll}>
+          <div>This deletes, for everyone:</div>
+          <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.6 }}>
+            {VOICE_HISTORY_GOES.map(t => <li key={t}>{t}</li>)}
+          </ul>
+          <div>{VOICE_HISTORY_STAYS}</div>
+          <div>This can’t be undone. Backups the server made before an update keep their copy until they’re replaced.</div>
+        </DeleteConfirmDialog>
+      )}
+    </Card>
+  );
+};
+
 /* ---- Page ------------------------------------------------- */
 const PeoplePage = () => {
   const [selectedId, setSelectedId] = React.useState(null);
-  const [view, setView] = React.useState('roster'); // roster | denylist
+  const [view, setView] = React.useState('roster'); // roster | denylist | history
   const [tab, setTab] = React.useState('profile');
   const [search, setSearch] = React.useState('');
   const [confirmFor, setConfirmFor] = React.useState(null);
@@ -696,6 +879,9 @@ const PeoplePage = () => {
     useApiList('/api/people', { eventTypes: ['people.last_seen.changed'] });
   const { items: denylist } = useApiList('/api/denylist');
   const denylistCount = denylist.length;
+  // "Keep voice history", for the rail's line and the Voice history view.
+  // Quiet: an unpaired browser isn't asked to pair just for the rail.
+  const voiceHistory = useApiObject('/api/voice-history', { quiet: true, refetchOnAuth: true });
 
   // Per-person fetches; refetch when the selection changes OR when
   // a memory/favorite mutation bumps the tick.
@@ -734,7 +920,7 @@ const PeoplePage = () => {
     (async () => {
       const [ss, cc, mm, ff, pp, vs] = await Promise.all([
         read(`/api/people/${selectedId}/sessions?limit=50`, []),
-        read(`/api/people/${selectedId}/conversations?limit=200`, []),
+        read(`/api/people/${selectedId}/conversations?limit=${PERSON_TURNS_FETCHED}`, []),
         read(`/api/people/${selectedId}/memories`, []),
         read(`/api/people/${selectedId}/favorites`, []),
         read(`/api/people/${selectedId}/preferences`, {}),
@@ -869,11 +1055,31 @@ const PeoplePage = () => {
             </div>
             <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{denylistCount}</span>
           </button>
+
+          <button onClick={() => { setView('history'); setSelectedId(null); }}
+                  style={{ font: 'inherit', cursor: 'pointer', textAlign: 'left',
+                           padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 10,
+                           background: view === 'history' ? 'var(--brand-soft)' : 'var(--card)',
+                           border: '1px solid var(--border)',
+                           borderRadius: 'var(--r-md)',
+                           color: view === 'history' ? 'var(--brand-press)' : 'var(--fg)' }}>
+            <Icon name="history" size={14}/>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 500 }}>Voice history</div>
+              <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+                {voiceHistory.data
+                  ? (voiceHistory.data.keep === 'forever' ? 'kept forever' : `kept ${voiceHistory.data.keep_label}`)
+                  : 'how long what was said is kept'}
+              </div>
+            </div>
+          </button>
         </div>
 
         {/* Right pane */}
         {view === 'denylist' ? (
           <DenylistView count={denylistCount} onBack={() => setView('roster')}/>
+        ) : view === 'history' ? (
+          <VoiceHistoryView vh={voiceHistory} fire={fire} onBack={() => setView('roster')}/>
         ) : !selected ? (
           <Card>
             <div style={{ padding: '64px 24px', textAlign: 'center' }}>

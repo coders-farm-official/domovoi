@@ -70,7 +70,75 @@ HOME_PROBLEMS_VISIBILITY_UNKNOWN = "summary"
 ADMIN_RELOAD_WINDOW_DEFAULT_MIN = 60
 ADMIN_RELOAD_WINDOW_MAX_MIN = 1440
 
+# `voice_history_keep` (owner, 2026-10-17): how long what people say to
+# Domovoi is kept. The values are days, or "forever"; second = default.
+# The dashboard shows them with VOICE_HISTORY_KEEP_LABELS. See the field
+# and domovoi/voice_history.py.
+VOICE_HISTORY_KEEP_CHOICES = ("30", "90", "365", "forever")
+VOICE_HISTORY_KEEP_DEFAULT = "90"
+VOICE_HISTORY_KEEP_LABELS = {
+    "30": "30 days", "90": "90 days", "365": "1 year", "forever": "Forever",
+}
+# Spellings that can only mean "keep it". "never", "none" and "off" are
+# not here: they could as well mean "keep none", so they are unreadable
+# (which, like any unreadable value, deletes nothing).
+_VOICE_HISTORY_KEEP_FOREVER = frozenset({
+    "forever", "always", "keep", "unlimited", "infinite", "0",
+})
+# The unreadable values already logged (normalize runs on every read).
+_VOICE_HISTORY_KEEP_WARNED: set[str] = set()
+
 _log = logging.getLogger(__name__)
+
+
+def normalize_voice_history_keep(value: object) -> str:
+    """One of :data:`VOICE_HISTORY_KEEP_CHOICES` for a raw setting value.
+
+    Never fatal (a typo in .env must not take the voice service down), and
+    never SHORTER than asked, because this setting deletes: a whole number
+    of days rounds UP to the next choice (45 keeps 90 days; 0 or less, or
+    more than a year, keeps everything), "1 year" / "1y" / "year" read as
+    365, "90d" as 90, and the words that can only mean "keep it" as
+    forever. Blank is the default. Anything else ("6 months", "2y", a typo
+    of forever, "never") is unreadable, and an unreadable value deletes
+    nothing: it reads as forever, and the log says so once (review
+    2026-10-17, N-V5)."""
+    text = str(value if value is not None else "").strip().lower()
+    if not text:
+        return VOICE_HISTORY_KEEP_DEFAULT
+    if text in VOICE_HISTORY_KEEP_CHOICES:
+        return text
+    if text in _VOICE_HISTORY_KEEP_FOREVER:
+        return "forever"
+    compact = text.replace(" ", "").replace("_", "")
+    if compact.replace("-", "") in ("1y", "1year", "year", "oneyear", "12months"):
+        return "365"
+    for suffix in ("days", "day", "d"):
+        if compact.endswith(suffix) and compact[: -len(suffix)].isdigit():
+            compact = compact[: -len(suffix)]
+            break
+    if compact.lstrip("-").isdigit():
+        days = int(compact)
+        if days <= 0 or days > 365:
+            meant = "forever"
+        else:
+            meant = next(c for c in ("30", "90", "365") if days <= int(c))
+        if meant != compact and text not in _VOICE_HISTORY_KEEP_WARNED:
+            _VOICE_HISTORY_KEEP_WARNED.add(text)
+            _log.warning("VOICE_HISTORY_KEEP=%r read as %r (the choices: %s)",
+                         value, meant, ", ".join(VOICE_HISTORY_KEEP_CHOICES))
+        return meant
+    if text not in _VOICE_HISTORY_KEEP_WARNED:
+        _VOICE_HISTORY_KEEP_WARNED.add(text)
+        _log.warning("VOICE_HISTORY_KEEP=%r is not one of %s; keeping everything (forever) "
+                     "until it is", value, ", ".join(VOICE_HISTORY_KEEP_CHOICES))
+    return "forever"
+
+
+def voice_history_keep_days(value: object) -> int | None:
+    """The number of days ``value`` keeps, or None for forever."""
+    keep = normalize_voice_history_keep(value)
+    return None if keep == "forever" else int(keep)
 
 
 def normalize_think_setting(value: object) -> str:
@@ -1160,6 +1228,26 @@ class Settings(BaseSettings):
     # doesn't grow unbounded; <= 0 disables pruning (keep forever).
     media_plays_retention_days: int = 90
     media_plays_pruner_interval_sec: float = 21600.0  # 6h
+
+    # ─── Voice history (owner, 2026-10-17; domovoi/voice_history.py) ────
+    # How long what people say to Domovoi, and what it answered, is kept:
+    # "30", "90" (the default), "365" days, or "forever". Once a day the
+    # core deletes everything older from intents_log and conversation_log,
+    # the rooms' short-term conversations (sessions idle that long; older
+    # exchanges in a room still talking) and the satellites' logs kept on
+    # this server. "Keep voice history" on People → Voice history and in
+    # Settings → Configuration (Privacy); a save prunes at once.
+    # Never fatal and never shorter than asked: see the validator.
+    voice_history_keep: str = VOICE_HISTORY_KEEP_DEFAULT
+    # How often the pruner looks (workers/voice_history_pruner.py): it
+    # finishes an open "Delete all voice history" (one a restart cut short)
+    # and runs the retention when the last run is a day old.
+    voice_history_pruner_interval_sec: float = 3600.0
+
+    @field_validator("voice_history_keep", mode="before")
+    @classmethod
+    def _voice_history_keep_known(cls, value: object) -> str:
+        return normalize_voice_history_keep(value)
 
     # ─── Library enricher ──────────────────────────────────────────────
     # Walks library_tracks for files with no enriched_at and tries to

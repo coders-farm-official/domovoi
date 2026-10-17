@@ -309,7 +309,8 @@ class ConversationLogRepository:
     and gets truncated as turns roll off). This table is the
     full-fidelity history — useful for debugging multi-turn issues,
     auditing what the bot said in any room over the last week, or
-    feeding a future training dataset.
+    feeding a future training dataset — for as long as "Keep voice
+    history" keeps it (domovoi/voice_history.py; 90 days by default).
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -536,7 +537,9 @@ class PeopleRepository:
 
     async def delete(self, person_id: int) -> int:
         """Cascades through voice_profiles via FK; intents_log.person_id
-        becomes NULL via the FK's ON DELETE SET NULL."""
+        becomes NULL via the FK's ON DELETE SET NULL. Forgetting a person
+        deletes their turns FIRST (voice_history.delete_person_history):
+        after this, they can no longer be found."""
         result = await self.s.execute(
             text("DELETE FROM people WHERE id = :id"),
             {"id": person_id},

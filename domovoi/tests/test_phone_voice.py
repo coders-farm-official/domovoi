@@ -1127,16 +1127,20 @@ async def test_forget_me_from_a_phone_still_writes_both_rows(
     whisper.texts = ["forget me"]
     tid = await _thread()
     async with _client() as c:
+        asked = await _turn(c, tid)
+        assert asked.status_code == 200, asked.text
+        assert "Say yes to delete everything you've said." in asked.json()["reply"]
+        whisper.texts = ["yes"]
         r = await _turn(c, tid)
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["reply"] == (
-        "Okay, I've forgotten you, Ana: your voice, your profile and everything I "
-        "remembered about you."
+        "Okay, I've forgotten you, Ana: your voice, your profile, everything I "
+        "remembered about you and what you've said to me."
     )
     assert body["speaker"] is None
-    user, assistant = await _rows(tid)
-    assert (user["content"], user["speaker_person_id"], user["speaker_confidence"]) == ("forget me", None, None)
+    *_, user, assistant = await _rows(tid)
+    assert (user["content"], user["speaker_person_id"], user["speaker_confidence"]) == ("yes", None, None)
     assert assistant["content"] == body["reply"]
     async with SessionLocal() as s:
         assert (await s.execute(text("SELECT count(*) FROM people WHERE id = :p"), {"p": ana})).scalar_one() == 0

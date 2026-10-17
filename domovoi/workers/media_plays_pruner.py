@@ -1,10 +1,11 @@
 """Retention pruner for the ``media_plays`` table.
 
 The Satellites "Recently played" tab records one row per play-start
-across every room and source. Left unbounded the table grows forever
-(like ``conversation_log`` / ``intents_log``, which we accept), but the
-user asked for a retention policy here — so this worker periodically
-deletes rows older than ``settings.media_plays_retention_days``.
+across every room and source. Left unbounded the table grows forever,
+and the user asked for a retention policy here — so this worker
+periodically deletes rows older than ``settings.media_plays_retention_days``.
+(``conversation_log`` / ``intents_log`` have theirs too since 2026-10-17:
+"Keep voice history", workers/voice_history_pruner.py.)
 
 Pure DB work (no MPD / network), so unlike the music-source sweeper it
 runs even under ``USE_STUBS`` — though in tests the table is truncated

@@ -206,10 +206,13 @@ async def test_forget_me_in_the_persons_own_voice_still_forgets_them(
         await _say(c, tid, whisper, "My name is Kamron.", STRANGER)
         await _say(c, tid, whisper, "Yes.", STRANGER)
         assert sum(r["claimed_at"] is not None for r in await _rows(kamron)) == 1
-        gone = await _say(c, tid, whisper, "Forget me.", KAMRON_PHONE)
+        asked = await _say(c, tid, whisper, "Forget me.", KAMRON_PHONE)
+        assert asked["reply"] == "Kamron, I'll forget your voice, your profile, what I remember about you and everything you've said to me. Say yes to delete everything you've said."
+        assert await _people_named("Kamron") == 1   # nothing before the yes
+        gone = await _say(c, tid, whisper, "Yes.", KAMRON_PHONE)
     assert gone["reply"] == (
-        "Okay, I've forgotten you, Kamron: your voice, your profile and everything "
-        "I remembered about you."
+        "Okay, I've forgotten you, Kamron: your voice, your profile, everything "
+        "I remembered about you and what you've said to me."
     )
     assert await _people_named("Kamron") == 0
     assert await _memories("kamron private note") == 0
@@ -221,7 +224,9 @@ async def test_without_any_claim_forget_me_is_what_it_was(db_session, open_gate,
     ana = await _person("Ana", phone=KAMRON_PHONE)
     tid = await _thread()
     async with _client() as c:
-        gone = await _say(c, tid, whisper, "Forget me.", KAMRON_PHONE)
+        asked = await _say(c, tid, whisper, "Forget me.", KAMRON_PHONE)
+        assert asked["reply"].startswith("Ana, I'll forget your voice")
+        gone = await _say(c, tid, whisper, "Yes.", KAMRON_PHONE)
     assert gone["reply"].startswith("Okay, I've forgotten you, Ana")
     assert await _people_named("Ana") == 0
     assert ana

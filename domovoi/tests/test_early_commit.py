@@ -668,10 +668,11 @@ def test_the_phone_voice_question_is_a_choice_too() -> None:
     """"Add this phone's voice to …?" (core.phone_voice_add) is a choice:
     a whole yes ends the capture early, a bare no runs to the timeout."""
     pending = _pending("voice_profile", choice=True)
-    assert pending["kind"] == "core.phone_voice_add"
-    ec = early_commit_for("yes", pending=pending)
-    assert ec is not None and ec.tier == TIER_B and ec.plan.path == "confirmation"
-    assert early_commit_for("no", pending=pending) is None
+    for kind in ("core.phone_voice_add", "core.forget_me"):   # "forget me"'s question too
+        pending["kind"] = kind
+        ec = early_commit_for("yes", pending=pending)
+        assert ec is not None and ec.tier == TIER_B and ec.plan.path == "confirmation", kind
+        assert early_commit_for("no", pending=pending) is None, kind
 
 
 def test_a_legacy_unnamespaced_kind_still_plans_as_its_confirmation() -> None:

@@ -545,7 +545,9 @@ def _has_tool_gate(handler: Handler) -> bool:
 # the latency work measured the list: moved to the end with the gated
 # tools, qwen3:8b answered "Can you check online?" from Q&A instead of
 # calling double_check (2026-09-30, the live tool list).
-_GATES_KEEP_BAND_PLACE = frozenset({"reminder", "timer"})
+# voice_profile's gate (2026-10-17) withholds it only on talk about
+# forgetting something other than the speaker, so it keeps its place too.
+_GATES_KEEP_BAND_PLACE = frozenset({"reminder", "timer", "voice_profile"})
 
 
 def _tool_order(handler: Handler) -> int:

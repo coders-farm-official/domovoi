@@ -511,6 +511,32 @@ def room_file_stem(room_id: str) -> str:
     return f"{safe.replace('.', '_') or '_'}-{digest}"
 
 
+def _drop_lines_before(path: Path, cut: bytes) -> int:
+    """Keep ``path`` from its first line stamped at or after ``cut`` (the
+    ``%Y-%m-%dT%H:%M:%SZ`` prefix :meth:`RetainedLog.append` writes, which
+    sorts as text); remove the file when no line is. Rewritten through a
+    temporary file and a rename, so a reader never sees half of it. The
+    caller holds the log's lock. Returns the lines removed."""
+    data = path.read_bytes()
+    lines = data.splitlines(keepends=True)
+    keep_from = len(lines)
+    for i, line in enumerate(lines):
+        stamp = line[:20]
+        if len(stamp) == 20 and stamp[4:5] == b"-" and stamp[19:20] == b"Z" and stamp >= cut:
+            keep_from = i
+            break
+    if keep_from == 0:
+        return 0
+    if keep_from >= len(lines):
+        path.unlink()
+        return len(lines)
+    tmp = path.with_name(path.name + ".trim")
+    with open(tmp, "wb") as f:
+        f.write(b"".join(lines[keep_from:]))
+    os.replace(tmp, path)
+    return keep_from
+
+
 class RetainedLog:
     """Per-room log files on disk, 1 MB each plus one rotation."""
 
@@ -565,6 +591,30 @@ class RetainedLog:
             except OSError:
                 return ""
         return data.decode("utf-8", errors="replace")
+
+    def drop_before(self, cutoff: datetime) -> int:
+        """Remove every line stamped before ``cutoff`` from each room's file
+        and its rotation: the lines quote what the satellite heard and said,
+        so "Keep voice history" bounds them too (domovoi/voice_history.py).
+        A file is in time order, so everything from its first line stamped
+        at or after the cutoff stays; a file left with nothing is removed.
+        Returns the number of lines removed."""
+        cut = cutoff.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ").encode("ascii")
+        removed = 0
+        with self._lock:
+            try:
+                paths = sorted(
+                    p for p in self.dir.iterdir()
+                    if p.is_file() and (p.name.endswith(".log") or p.name.endswith(".log.1"))
+                )
+            except OSError:
+                return 0
+            for path in paths:
+                try:
+                    removed += _drop_lines_before(path, cut)
+                except OSError as e:
+                    log.warning("satellite log %s: could not trim it: %s", path.name, e)
+        return removed
 
     def info(self, room_id: str) -> dict[str, Any]:
         path = self.path(room_id)

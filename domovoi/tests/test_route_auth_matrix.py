@@ -441,6 +441,12 @@ HOUSEHOLD_STATE_READS: dict[tuple[str, str], str] = {
         "a room's latest health sample, 24 h summary and outage reports"
     ),
     ("web", "/api/satellites/{room_id}/health"): "proxy of the core read above (credential forwarded)",
+    # Voice history (2026-10-17): no words, but how many turns are kept and
+    # since when is a measure of how much the house talks.
+    ("web", "/api/voice-history"): (
+        "how long voice history is kept, how many turns and since when, the "
+        "cleanup and delete-all jobs' counts — never what was said"
+    ),
 }
 
 
