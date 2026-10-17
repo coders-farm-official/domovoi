@@ -29,7 +29,18 @@ Dashboard update (the web process; no migration, no app update).
   message being answered always goes whole. Before, a thread with many
   pictures could overrun the window and Ollama cut it off wherever it fell.
 * **Typed text chat answers as Domovoi too**, with the same message
-  (without the pictures part). Nothing else about text turns changed.
+  (without the pictures part).
+* **Chat replies have a length limit.** One test reply from the 2B vision
+  model fell into a loop ("I am here. I am at work. ...") and ran until its
+  8192-token window was full. Every chat reply, typed or with pictures, now
+  stops at `ollama_chat_num_predict` tokens (new setting, Settings →
+  Models, *Chat reply length limit*; default 2048, about 1,500 words; 0 =
+  no limit; the dashboard picks it up when it restarts). A reply that
+  reaches it ends with "…" and a short note saying it was stopped, not an
+  error; its details say `done_reason: length`. Ollama's repeat penalty was
+  tried as well and left off: at 1.1 it made the 2B model say it was
+  Domovoi less often (20 of 25 replies against 24), because it penalises
+  repeating the name.
 
 ## 2026-10-16 — Phone photos in chat: HEIC converted, refusals in words
 

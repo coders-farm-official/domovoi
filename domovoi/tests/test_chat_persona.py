@@ -51,6 +51,7 @@ class _FakeOllama:
         self.chats: list[dict[str, Any]] = []
         self.model_system: str | None = None
         self.reply = "Hi, I'm Domovoi."
+        self.done_reason = "stop"
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -68,7 +69,8 @@ class _FakeOllama:
             self.chats.append(json.loads(request.content))
             lines = [
                 json.dumps({"message": {"content": self.reply}, "done": False}),
-                json.dumps({"message": {"content": ""}, "done": True, "eval_count": 5}),
+                json.dumps({"message": {"content": ""}, "done": True, "eval_count": 5,
+                            "done_reason": self.done_reason}),
             ]
             return httpx.Response(200, content="\n".join(lines).encode())
         return httpx.Response(404, json={"error": "not here"})
@@ -278,7 +280,7 @@ def test_a_long_picture_thread_is_cut_to_the_vision_window(uploads_dir, monkeypa
     room."""
     fake = _FakeOllama()
     pic = chat_api._PICTURE_TOKENS
-    window = 3 * pic + chat_api._REPLY_RESERVE_TOKENS + 400
+    window = 3 * pic + chat_api._reply_room() + 400
     monkeypatch.setattr(chat_api.core_settings, "ollama_vision_num_ctx", window)
     with _client() as c:
         fake.install(monkeypatch)
@@ -295,5 +297,107 @@ def test_a_long_picture_thread_is_cut_to_the_vision_window(uploads_dir, monkeypa
             "picture 0", "picture 1", "picture 2", "hey domo!"]
         estimate = chat_api._text_tokens(system["content"]) + sum(
             chat_api._text_tokens(m["content"]) + pic * len(m.get("images", [])) for m in history)
-        assert estimate <= window - chat_api._REPLY_RESERVE_TOKENS
+        assert estimate <= window - chat_api._reply_room()
         assert fake.chats[-1]["options"]["num_ctx"] == window
+
+
+# ─── the reply's length cap (ollama_chat_num_predict) ───────────────────────
+# One live reply on 2026-10-17 (qwen3-vl 2B) fell into "I am here. I am at
+# work." until the 8192-token window was full. Every chat call now asks for
+# at most ollama_chat_num_predict tokens, and a reply stopped by it ends
+# with "…" and a note.
+
+
+def test_the_cap_is_a_setting_with_a_default(monkeypatch):
+    from domovoi.config import Settings
+    from domovoi.config_schema import FIELD_BY_NAME, coerce_and_validate
+
+    assert Settings.model_fields["ollama_chat_num_predict"].default == 2048
+    spec = FIELD_BY_NAME["ollama_chat_num_predict"]
+    assert spec.type == "int" and spec.group == "Models"
+    assert coerce_and_validate(spec, 0) == 0
+    with pytest.raises(ValueError):
+        coerce_and_validate(spec, -1)
+    # A blank env value means "no cap", like the context-window settings.
+    monkeypatch.setenv("OLLAMA_CHAT_NUM_PREDICT", "")
+    assert Settings().ollama_chat_num_predict == 0
+    monkeypatch.setenv("OLLAMA_CHAT_NUM_PREDICT", "1024")
+    assert Settings().ollama_chat_num_predict == 1024
+
+
+async def test_chat_stream_sends_num_predict_only_when_set(monkeypatch):
+    fake = _FakeOllama()
+    fake.install(monkeypatch)
+    msgs = [{"role": "user", "content": "hi"}]
+    [d async for d in ollama.chat_stream(msgs, model="m", num_ctx=8192, num_predict=2048)]
+    assert fake.chats[-1]["options"] == {"num_ctx": 8192, "num_predict": 2048}
+    for unset in (None, 0):
+        [d async for d in ollama.chat_stream(msgs, model="m", num_ctx=8192, num_predict=unset)]
+        assert fake.chats[-1]["options"] == {"num_ctx": 8192}
+
+
+@requires_db
+@pytest.mark.parametrize("pictures", [False, True])
+def test_every_chat_call_is_capped(uploads_dir, monkeypatch, pictures):
+    fake = _FakeOllama()
+    with _client() as c:
+        fake.install(monkeypatch)
+        t = c.post("/api/chat/threads", json={}).json()
+        _send(c, t["id"], "hello", [_upload(c, _png())] if pictures else [])
+        assert fake.chats[-1]["options"]["num_predict"] == 2048
+        monkeypatch.setattr(chat_api.core_settings, "ollama_chat_num_predict", 0)
+        _send(c, t["id"], "again", [_upload(c, _png())] if pictures else [])
+        assert "num_predict" not in fake.chats[-1].get("options", {})
+
+
+@requires_db
+@pytest.mark.parametrize("pictures", [False, True])
+def test_a_reply_stopped_by_the_cap_ends_cleanly(uploads_dir, monkeypatch, pictures):
+    """The stream and the kept row both end with "…" and the note; no error
+    event, and the stats say it stopped at the length limit."""
+    fake = _FakeOllama()
+    fake.reply = "I am here. I am at work. I am here. I am at work."
+    fake.done_reason = "length"
+    with _client() as c:
+        fake.install(monkeypatch)
+        t = c.post("/api/chat/threads", json={}).json()
+        r = _send(c, t["id"], "hey domo!", [_upload(c, _png())] if pictures else [])
+        events = [(e, d) for e, d in _sse(r.text)]
+        deltas = "".join(d["text"] for e, d in events if e == "delta")
+        assert deltas == fake.reply + "…" + chat_api.CUT_OFF_NOTE
+        done = next(d for e, d in events if e == "done")
+        assert done["content"] == deltas and done["error"] is None
+        assert done["stats"]["done_reason"] == "length"
+        assert "error_code" not in done["stats"]
+        row = c.get(f"/api/chat/threads/{t['id']}/messages").json()["messages"][-1]
+        assert row["content"].endswith("length limit.*")
+        # The next turn hands the model its earlier reply, note and all,
+        # as the thread shows it.
+        fake.done_reason = "stop"
+        _send(c, t["id"], "are you ok?")
+        assert fake.chats[-1]["messages"][-2]["content"] == deltas
+
+
+@requires_db
+def test_a_reply_that_finishes_gets_no_note(uploads_dir, monkeypatch):
+    fake = _FakeOllama()
+    with _client() as c:
+        fake.install(monkeypatch)
+        t = c.post("/api/chat/threads", json={}).json()
+        r = _send(c, t["id"], "hey domo!")
+        done = next(d for e, d in _sse(r.text) if e == "done")
+        assert done["content"] == fake.reply
+
+
+def _sse(body: str) -> list[tuple[str, Any]]:
+    out = []
+    for frame in body.split("\n\n"):
+        ev, data = "message", ""
+        for line in frame.split("\n"):
+            if line.startswith("event: "):
+                ev = line[7:].strip()
+            elif line.startswith("data: "):
+                data += line[6:]
+        if data:
+            out.append((ev, json.loads(data)))
+    return out

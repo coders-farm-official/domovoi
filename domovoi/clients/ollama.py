@@ -238,6 +238,7 @@ async def chat_stream(
     *,
     think: bool | None = None,
     num_ctx: int | None = None,
+    num_predict: int | None = None,
 ) -> AsyncIterator[str]:
     """Stream one multi-turn chat completion via ``POST /api/chat``, yielding
     assistant-content deltas as they arrive.
@@ -264,7 +265,10 @@ async def chat_stream(
     streamed, so the reader would wait in silence (15-90 s on a CPU, or no
     answer at all within the reply's length). A server that refuses the
     flag (a 400 that names it) is asked once more without it. ``num_ctx``
-    is this call's context window; unset or 0 uses ``ollama_num_ctx``."""
+    is this call's context window; unset or 0 uses ``ollama_num_ctx``.
+    ``num_predict`` caps the reply's length in tokens (unset or 0: no cap);
+    a reply stopped by it ends with ``done_reason`` ``"length"`` in
+    ``stats``."""
     import httpx
 
     url = f"{_ollama_base(base_url)}/api/chat"
@@ -273,6 +277,9 @@ async def chat_stream(
     # the same one as the voice pipeline's QA calls; unset (0) sends
     # nothing, as before.
     options = _num_ctx_options(num_ctx) or _num_ctx_options(settings.ollama_num_ctx)
+    cap = _positive_int(num_predict)
+    if cap is not None:
+        options = {**options, "num_predict": cap}
     if options:
         body["options"] = options
     if think is not None:

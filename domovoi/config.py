@@ -281,7 +281,19 @@ class Settings(BaseSettings):
     # model, or Ollama reloads it whenever the window changes).
     ollama_vision_num_ctx: int = 8192
 
-    @field_validator("ollama_num_ctx", "ollama_tool_num_ctx", "ollama_vision_num_ctx", mode="before")
+    # The longest reply the text chat asks for (Ollama's num_predict), for
+    # typed messages and pictures alike. Without a cap a model that falls
+    # into a loop writes until the context window is full: qwen3-vl 2B did,
+    # once, on 2026-10-17 ("I am here. I am at work." to 8192 tokens). 2048
+    # tokens is ~1,500 words, room for any real answer; a reply that reaches
+    # it ends with "..." and a note saying it was stopped. A call with
+    # pictures keeps this much of its window free for the reply. 0 = no cap.
+    ollama_chat_num_predict: int = 2048
+
+    @field_validator(
+        "ollama_num_ctx", "ollama_tool_num_ctx", "ollama_vision_num_ctx", "ollama_chat_num_predict",
+        mode="before",
+    )
     @classmethod
     def _blank_num_ctx_is_unset(cls, value: object) -> object:
         """A blank ``OLLAMA_NUM_CTX=`` means "don't send it", the same as 0

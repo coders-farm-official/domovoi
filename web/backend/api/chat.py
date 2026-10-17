@@ -126,8 +126,12 @@ _VISION_MAX_EDGE = 1280
 # square per token, 40 x 30 for a 1280 x 960 photo.
 _PICTURE_TOKENS = 1200
 # Room kept in the vision window for the reply when the thread's history is
-# cut to fit (_fit_history).
+# cut to fit (_fit_history), when the reply has no cap
+# (ollama_chat_num_predict 0); with one, the cap is the room kept.
 _REPLY_RESERVE_TOKENS = 1024
+# What a reply stopped by ollama_chat_num_predict ends with: the text it
+# had, "…", and this, so it reads as stopped rather than broken off.
+CUT_OFF_NOTE = "\n\n*Stopped here: this reply reached the chat's length limit.*"
 _EXIF_ORIENTATION = 0x0112
 
 _TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -664,6 +668,20 @@ async def _history_for_model(
     return out
 
 
+def _reply_cap() -> int | None:
+    """``ollama_chat_num_predict`` as a cap, or None for none."""
+    try:
+        cap = int(core_settings.ollama_chat_num_predict or 0)
+    except (TypeError, ValueError):
+        return None
+    return cap if cap > 0 else None
+
+
+def _reply_room() -> int:
+    """How much of the vision window is kept for the reply."""
+    return _reply_cap() or _REPLY_RESERVE_TOKENS
+
+
 async def _thread_profile(person_id: int | None) -> str | None:
     """The profile blob (memories, favorites, preferences) of the person a
     thread belongs to (``chat_threads.person_id``), for the system message,
@@ -765,7 +783,7 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         window = (core_settings.ollama_vision_num_ctx or core_settings.ollama_num_ctx) if with_images else 0
         if window:
             longest = ollama_client.chat_system_prompt(profile, pictures=True, model_system=model_system)
-            budget = max(0, window - _text_tokens(longest) - _REPLY_RESERVE_TOKENS)
+            budget = max(0, window - _text_tokens(longest) - _reply_room())
         history = await _history_for_model(thread_id, with_images=with_images, budget=budget)
     # A call that carries pictures: no reasoning before the answer (only
     # the answer is streamed, so the reader would wait in silence), and the
@@ -803,12 +821,19 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         else:
             try:
                 async for delta in ollama_client.chat_stream(
-                    [system, *history], model=model, stats=ollama_stats, **stream_knobs,
+                    [system, *history], model=model, stats=ollama_stats,
+                    num_predict=_reply_cap(), **stream_knobs,
                 ):
                     if first_token_ms is None:
                         first_token_ms = (time.monotonic() - started) * 1000
                     chunks.append(delta)
                     yield f"event: delta\ndata: {json.dumps({'text': delta})}\n\n"
+                if chunks and ollama_stats.get("done_reason") == "length":
+                    # The cap stopped it (a loop, or an answer that long):
+                    # end it visibly, the same in the stream and the row.
+                    tail = "…" + CUT_OFF_NOTE
+                    chunks.append(tail)
+                    yield f"event: delta\ndata: {json.dumps({'text': tail})}\n\n"
             except Exception as e:  # noqa: BLE001 — surfaced as an SSE error event
                 code, error = _failure(e, model, model_role)
                 # The detail is for whoever reads the log; the user gets
