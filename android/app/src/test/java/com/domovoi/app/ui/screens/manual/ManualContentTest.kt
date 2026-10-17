@@ -141,7 +141,9 @@ class ManualContentTest {
         val by = phrasesByHandler(doc)
         assertTrue("set a timer for 10 minutes" in by["timer"].orEmpty())
         assertTrue(by.values.flatten().none { "…" in it })
-        assertTrue("remind me at 6 pm to take the bins out" !in by["reminder"].orEmpty())   // pending
+        // Pending until wf/v1-voice-fixes; batch 14 merged it and dropped the mark.
+        assertTrue("remind me at 6 pm to take the bins out" in by["reminder"].orEmpty())
+        assertTrue("what can you do" in by["help"].orEmpty())
     }
 
     @Test fun theRepositoryKeepsACopyPerServer() = runBlocking {
