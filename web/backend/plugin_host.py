@@ -59,6 +59,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from sqlalchemy import text
 
+from domovoi.plugins_runtime.accent import manifest_accent
 from domovoi.plugins_runtime.manifest import nav_icon_problem
 from web.backend.db import session_scope
 from web.backend.static_cache import STATIC_CACHE_CONTROL
@@ -753,6 +754,12 @@ class PluginHost:
                     "slug": slug,
                     "version": r["version"],
                     "name": r["name"],
+                    # The plugin page frame (components.jsx PluginPageFrame):
+                    # who made it, and the colour its page takes in each
+                    # theme (plugins_runtime.accent: validated, contrast-
+                    # checked; the neutral plugin slate without one).
+                    "publisher": r.get("publisher"),
+                    "accent": manifest_accent(m).as_dict(),
                     "status": r["status"],
                     "scripts": [
                         _asset_url(sc) for sc in (web.get("scripts") or [])

@@ -375,6 +375,8 @@
       // Route map: core routes + manifest-declared plugin pages.
       let Page = null;
       let pageSlug = null;   // set only when the resolved page belongs to a plugin
+      let pagePlugin = null; // ... and then its manifest entry and page (the frame)
+      let pageDecl = null;
       const coreGetter = window.DomovoiCore.pages[page];
       if (coreGetter) Page = coreGetter();
       if (!Page) {
@@ -382,7 +384,7 @@
           for (const pg of p.pages || []) {
             if (pg.route === page) {
               const P = pluginPage(p.slug, pg.page);
-              if (P) { Page = P; pageSlug = p.slug; }
+              if (P) { Page = P; pageSlug = p.slug; pagePlugin = p; pageDecl = pg; }
             }
           }
         }
@@ -413,7 +415,19 @@
               {/* A household token this server refused, or its "wait"
                   after wrong ones: said once, here (components.jsx). */}
               <DeviceTokenNotice/>
-              <PluginErrorBoundary slug={pageSlug} routeKey={route}><Page counts={counts} badges={badges}/></PluginErrorBoundary>
+              {/* A plugin's page sits in the plugin frame (components.jsx
+                  PluginPageFrame): its name, publisher and a link to its
+                  Plugins row above it, and its own accent in place of
+                  Domovoi's amber inside it. Core pages never get one. The
+                  frame stays when the page throws, so the error reads as
+                  the plugin's. */}
+              {pagePlugin ? (
+                <PluginPageFrame key={pageSlug} plugin={pagePlugin} page={pageDecl}>
+                  <PluginErrorBoundary slug={pageSlug} routeKey={route}><Page counts={counts} badges={badges}/></PluginErrorBoundary>
+                </PluginPageFrame>
+              ) : (
+                <PluginErrorBoundary slug={pageSlug} routeKey={route}><Page counts={counts} badges={badges}/></PluginErrorBoundary>
+              )}
             </main>
             <AuthModalHost/>
             {/* A timer or reminder went off somewhere in the house: a card

@@ -267,9 +267,13 @@ def test_nav_items_carry_the_dark_icon(rendered) -> None:
 
 
 def test_every_launcher_hands_the_dark_icon_on() -> None:
-    # Sidebar, Home's grid and the phone bar editor all draw PluginNavIcon.
+    # Sidebar, Home's grid and the phone bar editor all draw PluginNavIcon
+    # from a nav item; the plugin page frame draws it from the page itself.
     for f in ("components.jsx", "home.jsx", "settings.jsx"):
         src = (REPO_ROOT / "web" / "static" / f).read_text(encoding="utf-8")
-        uses = src.count("<PluginNavIcon ")
+        uses = src.count("<PluginNavIcon src={it.iconSrc}")
         assert uses >= 1, f
         assert src.count("srcDark={it.iconSrcDark}") == uses, f
+    src = (REPO_ROOT / COMPONENTS).read_text(encoding="utf-8")
+    assert src.count("<PluginNavIcon ") == src.count("<PluginNavIcon src={it.iconSrc}") + 1
+    assert "<PluginNavIcon src={pg.nav_icon || null} srcDark={pg.nav_icon_dark || null}" in src

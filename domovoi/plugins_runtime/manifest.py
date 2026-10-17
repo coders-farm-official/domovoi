@@ -279,6 +279,10 @@ class PluginManifest:
     description: str
     domovoi_api: str
     homepage: str | None = None
+    # Optional page colour (2026-10-17): the raw values, judged by
+    # plugins_runtime.accent (a bad one is a load warning, never an error).
+    accent: Any = None
+    accent_dark: Any = None
     # [entry_points]
     entry_core: str = ""
     entry_web: str | None = None
@@ -732,6 +736,8 @@ def parse_manifest(toml_text: str) -> PluginManifest:
         description=description,
         domovoi_api=domovoi_api,
         homepage=homepage,
+        accent=plugin.get("accent"),
+        accent_dark=plugin.get("accent_dark"),
         entry_core=entry_core,
         entry_web=entry_web,
         provides=provides,

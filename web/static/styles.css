@@ -243,6 +243,56 @@
 .ctr-watch-label { flex: 1; min-width: 140px; color: var(--fg-muted); }
 .ctr-watch-meta { font-size: 11px; color: var(--fg-muted); }
 
+/* The plugin page frame (components.jsx PluginPageFrame): one band across
+   the top of every plugin page, under the shell's own notices, so a plugin
+   reads as a plugin. It spans .main's padding like the guard banner (the
+   shell's chrome, not the page's), and tops the pane when nothing is above
+   it. Inside .plugin-frame the brand tokens are the plugin's accent (set
+   inline per theme), so the band's wash, icon and badge are its colour. */
+.plugin-frame-band {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  margin: 0 -24px 20px;
+  padding: 4px 24px;
+  font-size: 13px;
+  color: var(--fg);
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(var(--brand-soft), var(--brand-soft)), var(--surface);
+}
+.main > .plugin-frame:first-child > .plugin-frame-band { margin-top: -24px; }
+.plugin-frame-icon { display: inline-flex; flex: none; color: var(--brand-ink); }
+.plugin-frame-who { display: flex; align-items: baseline; gap: 6px; min-width: 0; overflow: hidden; }
+.plugin-frame-name { font-weight: 600; white-space: nowrap; }
+.plugin-frame-publisher {
+  font-size: 12px; color: var(--fg-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.plugin-frame-badge {
+  flex: none;
+  font-size: 11px; font-weight: 500; line-height: 18px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--brand-ink);
+}
+.plugin-frame-manage {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 32px; padding: 0 8px;
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  color: var(--fg-muted);
+  text-decoration: none;
+}
+.plugin-frame-manage:hover { color: var(--fg); background: var(--brand-soft); }
+.plugin-frame-version { font-size: 11px; }
+/* The Plugins page row the frame's "manage" link opened (#plugins/<slug>). */
+.plugin-row.focused > :first-child { background: var(--brand-soft); }
+
 /* Browser music player — brand-tinted range inputs (volume, EQ, seek). */
 .main input[type="range"] { accent-color: var(--brand); }
 .eq-slider { accent-color: var(--brand); cursor: pointer; }
@@ -450,6 +500,12 @@ table.tbl .actions { text-align: right; }
   /* The container guard's banner follows .main's 16px padding. */
   .guard-banner { top: -16px; margin: -16px -16px 16px; padding: 10px 16px; }
   .guard-banner-actions { flex-direction: column; align-items: flex-end; gap: 4px; }
+  /* The plugin frame's band follows .main's 16px padding, and keeps to
+     one 44px row: the version gives way, then the publisher ellipsizes. */
+  .plugin-frame-band { margin: 0 -16px 16px; padding: 0 8px 0 16px; min-height: 44px; }
+  .main > .plugin-frame:first-child > .plugin-frame-band { margin-top: -16px; }
+  .plugin-frame-version { display: none; }
+  .plugin-frame-manage { min-height: 44px; }
   /* The token notice's buttons go under its words. */
   .device-token-notice { flex-wrap: wrap; }
   .device-token-notice-actions { flex: 1 1 100%; }

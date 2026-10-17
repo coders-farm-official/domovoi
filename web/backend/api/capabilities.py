@@ -25,6 +25,7 @@ import httpx
 from fastapi import APIRouter
 
 from domovoi.host_kind import host_kind
+from domovoi.plugins_runtime.accent import manifest_accent
 
 from web.backend.plugin_host import HOST
 
@@ -107,6 +108,12 @@ async def capabilities() -> dict[str, Any]:
             {
                 "slug": slug,
                 "version": r["version"],
+                # The app's plugin screen frame (Stations, Images): the
+                # plugin's name, publisher and page colour per theme, as
+                # the dashboard's frame shows them (plugins_runtime.accent).
+                "name": r.get("name"),
+                "publisher": r.get("publisher"),
+                "accent": manifest_accent(m).as_dict(),
                 "android_capabilities": (m.get("android") or {}).get(
                     "capabilities"
                 ) or [],

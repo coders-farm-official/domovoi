@@ -477,6 +477,16 @@ def check_web_routes(
                 )
 
 
+def check_accent(manifest: PluginManifest, report: ContractReport) -> None:
+    """``[plugin].accent`` / ``accent_dark`` (2026-10-17): a warning, never
+    an error. A value that isn't a colour (or is core's amber) gets the
+    default plugin accent; one that fails the contrast rules is moved until
+    it passes. The warnings say which, and the colour the page gets."""
+    from domovoi.plugins_runtime.accent import resolve_accent
+
+    report.warnings.extend(resolve_accent(manifest.accent, manifest.accent_dark).warnings)
+
+
 def check_route_tiers(
     routers: list[Any], report: ContractReport, package_dir: Path | None = None
 ) -> None:
@@ -589,6 +599,7 @@ def run_contract_checks(
         capability_names, report,
     )
     check_web_routes(slug, manifest, list(foreign_web_routes or []), report)
+    check_accent(manifest, report)
     check_containers(
         slug, manifest, list(container_ids or []),
         list(foreign_container_names or []), report,

@@ -586,14 +586,24 @@ const PluginUpgradeControls = ({ p, onUpgradeZip, onUpgradeUrl, internetOff = fa
 };
 
 /* ---- One installed-plugin row --------------------------------- */
-const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgradeUrl, internetOff = false }) => {
-  const [open, setOpen] = React.useState(false);
+const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgradeUrl, internetOff = false,
+                     focused = false }) => {
+  // `focused`: the address named this plugin (#plugins/<slug>, the plugin
+  // frame's "manage" link): its row opens and scrolls into view.
+  const [open, setOpen] = React.useState(focused);
+  const rowRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!focused) return;
+    setOpen(true);
+    if (rowRef.current && rowRef.current.scrollIntoView) rowRef.current.scrollIntoView({ block: 'start' });
+  }, [focused]);
   const pill = STATUS_PILL[p.status] || { tone: 'idle', label: p.status };
   const perms = p.permissions || {};
   const activePerms = Object.keys(PERMISSION_LABELS).filter((k) => perms[k]);
   const browserErrors = useBrowserPluginErrors(p.slug);
   return (
-    <div style={{ borderBottom: '1px solid var(--border-soft)' }}>
+    <div ref={rowRef} id={`plugin-${p.slug}`} className={focused ? 'plugin-row focused' : 'plugin-row'}
+         style={{ borderBottom: '1px solid var(--border-soft)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', cursor: 'pointer' }}
            onClick={() => setOpen(!open)}>
         <Icon name={open ? 'chevron-down' : 'chevron-right'} size={14}/>
@@ -732,6 +742,16 @@ const PluginsPage = () => {
   const internetCfg = useApiObject('/api/config', { quiet: true });
   const internetOff = !!(internetCfg.data && internetCfg.data.internet_access === 'never');
   const [uninstalling, setUninstalling] = React.useState(null);
+  // #plugins/<slug>: the plugin a page's frame sent us here for.
+  const [focusSlug, setFocusSlug] = React.useState(() => routeParts(currentRoute())[1] || null);
+  React.useEffect(() => {
+    const follow = () => {
+      const parts = routeParts(currentRoute());
+      if (parts[0] === 'plugins') setFocusSlug(parts[1] || null);
+    };
+    window.addEventListener('hashchange', follow);
+    return () => window.removeEventListener('hashchange', follow);
+  }, []);
 
   // The core answers 200 with {enabled: false, status: 'load_error',
   // error} when the plugin's contract checks refuse the load (a page
@@ -798,6 +818,7 @@ const PluginsPage = () => {
           <div>
             {plugins.map((p) => (
               <PluginRow key={p.slug} p={p} restartPending={waitingSlugs.has(p.slug)}
+                         focused={p.slug === focusSlug}
                          onEnable={onEnable} onDisable={onDisable}
                          onUninstall={setUninstalling}
                          onUpgradeZip={(slug) => flow.pickZip(slug)}

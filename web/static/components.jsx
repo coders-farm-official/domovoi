@@ -1821,6 +1821,67 @@ const PluginNavIcon = ({ src, srcDark = null, size = 16 }) => {
                style={{ width: size, height: size, '--plugin-ico': `url(${JSON.stringify(url)})` }}/>;
 };
 
+/* ---- The plugin page frame (2026-10-17) ----------------------
+ * Every plugin page is shown inside this frame, so it reads as a plugin
+ * and not as part of Domovoi: a band naming the plugin (its icon, name,
+ * publisher and a "plugin" badge) with a link to its row on the Plugins
+ * page (version, update, disable), and, inside the frame, the brand
+ * tokens re-scoped to the plugin's accent. The server sends the accent
+ * already checked for contrast in both themes (plugins_runtime/accent.py;
+ * the neutral plugin slate when the plugin declares none), so a plugin's
+ * primary buttons, links and washes take its colour while the shell
+ * around the frame keeps Domovoi's amber. */
+const PLUGIN_ACCENT_VARS = {
+  brand: ['--brand'], brand_hover: ['--brand-hover'], brand_press: ['--brand-press'],
+  brand_fg: ['--brand-fg', '--fg-on-brand'], brand_soft: ['--brand-soft'],
+  brand_halo: ['--brand-halo'], brand_ring: ['--brand-ring'], brand_ink: ['--brand-ink'],
+};
+const PLUGIN_ACCENT_HEX = /^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i;
+
+/* The CSS variables a plugin page's frame sets for the theme showing:
+ * only the brand family, only well-formed hex (anything else is left to
+ * the page's surroundings). */
+const pluginAccentStyle = (accent, dark) => {
+  const set = accent && (dark ? accent.dark : accent.light);
+  const out = {};
+  if (!set || typeof set !== 'object') return out;
+  Object.entries(PLUGIN_ACCENT_VARS).forEach(([key, names]) => {
+    const v = set[key];
+    if (typeof v === 'string' && PLUGIN_ACCENT_HEX.test(v)) names.forEach((n) => { out[n] = v; });
+  });
+  return out;
+};
+
+const PluginPageFrame = ({ plugin, page = null, children }) => {
+  const dark = useDarkTheme();
+  const p = plugin || {};
+  const pg = page || {};
+  const name = p.name || p.slug || 'plugin';
+  return (
+    <div className="plugin-frame" data-plugin={p.slug || ''}
+         data-accent={(p.accent && p.accent.source) || 'none'}
+         style={pluginAccentStyle(p.accent, dark)}>
+      <div className="plugin-frame-band" role="region" aria-label={`${name} plugin`}>
+        <span className="plugin-frame-icon">
+          <PluginNavIcon src={pg.nav_icon || null} srcDark={pg.nav_icon_dark || null} size={18}/>
+        </span>
+        <span className="plugin-frame-who">
+          <span className="plugin-frame-name">{name}</span>
+          {p.publisher && <span className="plugin-frame-publisher">by {p.publisher}</span>}
+        </span>
+        <span className="plugin-frame-badge">plugin</span>
+        <a className="plugin-frame-manage" href={`#plugins/${p.slug || ''}`}
+           title={`${name} on the Plugins page: version, update, disable`}>
+          {p.version && <span className="mono plugin-frame-version">v{p.version}</span>}
+          <span>manage</span>
+          <Icon name="chevron-right" size={14}/>
+        </a>
+      </div>
+      {children}
+    </div>
+  );
+};
+
 /* One nav row's classes. `primary` keeps the row in the phone strip (it is
  * on this device's phone bar); `brand-link` hides it in the desktop
  * sidebar, where the brand row is that link; `more-active` lights the home
@@ -3446,6 +3507,7 @@ Object.assign(window, {
   Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, PreviewTag, PREVIEW_MEANS, RoomChip, Avatar,
   Card, Empty, Button, IconButton, Sidebar, Topbar, PageHeader, Stat, useToast, Tabs,
   CORE_NAV_ITEMS, buildNavItems, navItemsFor, PluginNavIcon, useDarkTheme, usePluginBadges,
+  PluginPageFrame, pluginAccentStyle,
   SHARED_SCREEN_HIDDEN, useSharedScreen,
   PHONE_BAR_DEFAULT, PHONE_BAR_MAX, PHONE_BAR_MIN, PhoneBarStore, usePhoneBar, phoneBarRoutes, phoneBarEdit,
   SETTINGS_TAB_ROUTES, settingsTabRoute, resolveRoute, routeParts, routePage, currentRoute,

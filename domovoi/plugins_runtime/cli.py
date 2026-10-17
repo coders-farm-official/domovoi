@@ -42,6 +42,11 @@ publisher = "you"
 license = "MIT"
 description = "Describe what {title} does — shown on the install preview."
 domovoi_api = ">=1.0,<2.0"
+# Your dashboard page's colour (optional): its buttons, links and the frame
+# the dashboard draws around it. Hex; without it the page gets the neutral
+# plugin slate. Checked for contrast at load (docs/PLUGIN_DEVELOPMENT.md).
+# accent = "#2f7d6d"
+# accent_dark = "#5fb8a4"     # optional: the dark theme's own colour
 
 [entry_points]
 core = "domovoi_plugin_{slug}.core"
@@ -212,10 +217,20 @@ def _tree_mtime(path: Path) -> float:
     return latest
 
 
+def _print_accent_warnings(manifest: PluginManifest) -> None:
+    """The load-time accent warnings, at pack/dev time, so an author sees
+    them before a user's server logs them (never a failure)."""
+    from domovoi.plugins_runtime.accent import resolve_accent
+
+    for w in resolve_accent(manifest.accent, manifest.accent_dark).warnings:
+        print(f"warning: {w}")
+
+
 def _cmd_dev(args: argparse.Namespace) -> int:
     path = Path(args.path).resolve()
     try:
         manifest = _validate_dir(path)
+        _print_accent_warnings(manifest)
         asyncio.run(_dev_register(path, manifest))
     except ManifestError as e:
         print(f"validation failed: {e}", file=sys.stderr)
@@ -258,6 +273,7 @@ def _cmd_pack(args: argparse.Namespace) -> int:
     except ManifestError as e:
         print(f"validation failed: {e}", file=sys.stderr)
         return 1
+    _print_accent_warnings(manifest)
     out = Path(
         args.output or f"{manifest.slug}-{manifest.version}.zip"
     ).resolve()
