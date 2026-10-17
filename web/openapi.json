@@ -3133,7 +3133,7 @@
           "people"
         ],
         "summary": "Delete Person",
-        "description": "Same SQL as the voice \"forget me\" path (which runs it only for a\nvoice that matches the person's own samples; this is the admin's way).\n\nCascades to ``voice_profiles`` via FK; ``intents_log.person_id``\nand ``conversation_log.person_id`` lapse to NULL via\n``ON DELETE SET NULL``. Historical audit trail\nstays \u2014 anonymized rather than deleted.",
+        "description": "The same delete as the voice \"forget me\" path (which runs it only\nfor a voice that matches the person's own samples; this is the\nadmin's way), in one transaction:\n\n* what they said (owner, 2026-10-17): every ``conversation_log`` and\n  ``intents_log`` row voice identification attributed to them as the\n  speaker, and the short-term conversation of the sessions those turns\n  were in (``voice_history.delete_person_history``). A turn in which\n  someone else said their name is the other speaker's and stays;\n* then the person: their voice samples, memories, favorites and\n  preferences go with the row (FK cascades). What other tables keep\n  of them (a chat-mic message's speaker mark, an alias they taught)\n  lapses to NULL.",
         "operationId": "delete_person_api_people__person_id__delete",
         "parameters": [
           {
@@ -3943,6 +3943,50 @@
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/voice-history": {
+      "get": {
+        "tags": [
+          "voice-history"
+        ],
+        "summary": "Get Voice History",
+        "description": "``{keep, keep_label, keep_days, choices, turns, oldest_at,\ndelete_all, last_cleanup}``: \"Keep voice history\" (``30`` / ``90`` /\n``365`` / ``forever``; ``keep_days`` null for forever), the\nconversation turns kept and the oldest one's time, and the latest\n\"Delete all voice history\" and daily cleanup as jobs (``state``:\nqueued / running / failed / done, ``cutoff``, ``deleted`` counts per\nstore). No text. A paired device or the admin.",
+        "operationId": "get_voice_history_api_voice_history_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Voice History Api Voice History Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/voice-history/delete-all": {
+      "post": {
+        "tags": [
+          "voice-history"
+        ],
+        "summary": "Delete All Voice History",
+        "description": "Delete all voice history: every turn said until now, everywhere,\nwith Domovoi's answers, the routing log, the rooms' short-term\nconversations and the satellites' logs kept on the server. Admin.\nForwarded to the core (``POST /v1/admin/voice-history/delete-all``),\nwhich answers at once with ``{job}`` and runs it in the background;\npressing again while one runs answers that one. 502 when the core is\nunreachable.",
+        "operationId": "delete_all_voice_history_api_voice_history_delete_all_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           }

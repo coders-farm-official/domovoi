@@ -27,6 +27,7 @@ from domovoi.admin_auth import (
     require_device_read,
 )
 from domovoi.config import settings as core_settings
+from domovoi import voice_history
 from domovoi.db.repositories import PeopleRepository
 from web.backend.db import session_scope
 from web.backend.schemas import (
@@ -356,20 +357,28 @@ async def list_profiles(person_id: int, request: Request) -> list[VoiceProfile]:
     dependencies=[Depends(require_admin_mutation)],
 )
 async def delete_person(person_id: int) -> None:
-    """Same SQL as the voice "forget me" path (which runs it only for a
-    voice that matches the person's own samples; this is the admin's way).
+    """The same delete as the voice "forget me" path (which runs it only
+    for a voice that matches the person's own samples; this is the
+    admin's way), in one transaction:
 
-    Cascades to ``voice_profiles`` via FK; ``intents_log.person_id``
-    and ``conversation_log.person_id`` lapse to NULL via
-    ``ON DELETE SET NULL``. Historical audit trail
-    stays — anonymized rather than deleted.
+    * what they said (owner, 2026-10-17): every ``conversation_log`` and
+      ``intents_log`` row voice identification attributed to them as the
+      speaker, and the short-term conversation of the sessions those turns
+      were in (``voice_history.delete_person_history``). A turn in which
+      someone else said their name is the other speaker's and stays;
+    * then the person: their voice samples, memories, favorites and
+      preferences go with the row (FK cascades). What other tables keep
+      of them (a chat-mic message's speaker mark, an alias they taught)
+      lapses to NULL.
     """
     async with session_scope() as s:
+        await voice_history.delete_person_history(s, person_id)
         result = await s.execute(
             text("DELETE FROM people WHERE id = :id"), {"id": person_id}
         )
-    if (result.rowcount or 0) == 0:
-        raise HTTPException(status_code=404, detail=f"person {person_id} not found")
+        if (result.rowcount or 0) == 0:
+            # Nothing was theirs either (the FK); raising rolls it back.
+            raise HTTPException(status_code=404, detail=f"person {person_id} not found")
 
 
 @router.delete(

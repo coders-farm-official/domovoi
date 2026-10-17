@@ -64,6 +64,7 @@ from web.backend.api import satellites as satellites_api
 from web.backend.api import stats as stats_api
 from web.backend.api import videos as videos_api
 from web.backend.api import voice as voice_api
+from web.backend.api import voice_history as voice_history_api
 from web.backend.api import voices as voices_api
 from web.backend.api import wake_words as wake_words_api
 from web.backend.static_cache import (
@@ -379,6 +380,8 @@ app.include_router(music_queue_api.guest_bans_router)
 app.include_router(devices_api.router)
 app.include_router(people_api.router)
 app.include_router(denylist_api.router)
+# People → Voice history: "Keep voice history" and "Delete all voice history".
+app.include_router(voice_history_api.router)
 # Media-prep BEFORE satellites: its /api/satellites/media/* paths must
 # never be captured by the satellites router's /{room_id} parameters.
 app.include_router(satellite_media_api.router)

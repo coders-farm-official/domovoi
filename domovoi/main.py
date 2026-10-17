@@ -279,6 +279,11 @@ def _register_core_reapply_hooks() -> None:
     reapply.on_reapply(
         "internet_access", mpd_internet.schedule_purge, key="mpd_internet"
     )
+    # Saving "Keep voice history" deletes what is now older than it at once
+    # instead of at the next daily run (domovoi/voice_history.py).
+    from domovoi import voice_history
+
+    reapply.on_reapply("voice_history_keep", voice_history.schedule_retention_now)
 
 
 # At shutdown, how long a worker owner's (a plugin's, the core's) running
@@ -633,6 +638,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # The retained per-room log files satellites push their lines into
     # (1 MB each plus one rotation), and the per-room push budget.
     app.state.satellite_retained_log = satellite_health.default_retained_log()
+    # "Keep voice history" trims those files too, through this instance (its
+    # lock is what keeps a trim and a push from interleaving).
+    from domovoi import voice_history
+
+    voice_history.use_retained_log(app.state.satellite_retained_log)
     app.state.log_push_limiter = satellite_health.LogPushLimiter()
     # Per-room code version (the synced_sha the Pi reports in its hello frame
     # after a satellite-code sync) so the dashboard can show which satellites
@@ -671,8 +681,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   timer_watcher → playback_state_sweeper → media_plays_pruner →
     #   memory_extractor → lyrics_index → news_fetcher → wake_word_trainer →
     #   podcast_feed_poller → audiobook_indexer → command_capture_pruner →
-    #   guests_seen_pruner → container_guard → library_alias_fetch →
-    #   lyrics_scan → lyrics_fetch.
+    #   guests_seen_pruner → voice_history_pruner → container_guard →
+    #   library_alias_fetch → lyrics_scan → lyrics_fetch.
     #
     # Per-worker rationale lives on each class (workers/*.py); the radio
     # feature (stations, passive detection, SDR/FM, FCC import) is a
@@ -714,6 +724,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.workers.guests_seen_pruner import GuestsSeenPruner
 
     WORKERS.add_worker(GuestsSeenPruner(), owner="core")
+    # Keep voice history (owner, 2026-10-17): once a day, what people said
+    # longer ago than the setting goes; also finishes an open "Delete all
+    # voice history" (domovoi/workers/voice_history_pruner.py).
+    from domovoi.workers.voice_history_pruner import VoiceHistoryPruner
+
+    WORKERS.add_worker(VoiceHistoryPruner(), owner="core")
     # The container guard's checks (domovoi/container_guard/): failures and
     # signs of tampering in the containers Domovoi expects.
     from domovoi.workers.container_guard import ContainerGuardWorker
@@ -2198,6 +2214,9 @@ async def admin_snapshot() -> dict[str, Any]:
         # reason: the web decides every resume, and its own settings copy
         # goes stale the moment Settings saves this.
         "admin_reload_window_min": int(settings.admin_reload_window_min),
+        # "Keep voice history" (30 / 90 / 365 / forever), for People →
+        # Voice history on the web: its own copy goes stale on a save.
+        "voice_history_keep": settings.voice_history_keep,
         # The opt-in MusicBrainz alias fetch's live state (off / offline /
         # running / done ...), for the dashboard's "Also-called names" card.
         "music_alias_fetch": alias_fetch_status(),
@@ -4021,8 +4040,9 @@ async def admin_delete_satellite(
     actually reasoning about when they decide to remove one.
 
     History is kept in both modes. ``intents_log`` and ``conversation_log``
-    are append-only records of things that really happened, and a room name
-    being reused later does not make them untrue. The room's opt-in command
+    are records of things that really happened, and a room name being
+    reused later does not make them untrue; "Keep voice history" ages them
+    out like any room's (domovoi/voice_history.py). The room's opt-in command
     recordings (V016) are not history and are deleted in both modes.
     """
     from domovoi.db.repositories import (
@@ -5746,6 +5766,43 @@ async def admin_update_config(body: _AdminConfigUpdateBody) -> dict[str, Any]:
         # Settings that follow the internet answer again (follow_internet).
         "followed": followed,
     }
+
+
+# ─── Voice history (People → Voice history) ───────────────────────────────
+
+
+@app.post(
+    "/v1/admin/voice-history/delete-all",
+    # Admin, like deleting a person on the People page: an admin Bearer,
+    # never the dashboard cookie, with the pre-setup grace. The web hop
+    # (POST /api/voice-history/delete-all) wears the same gate.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_voice_history_delete_all() -> dict[str, Any]:
+    """Delete all voice history (domovoi/voice_history.py): everything said
+    to Domovoi until now and what it answered — every conversation_log and
+    intents_log row, every room's short-term conversation, and the
+    satellites' logs kept on this server. Written as a job first (V030
+    ``voice_history_jobs``), then run in the background in batches, the way
+    the daily cleanup runs; the answer is the job, at once. Pressing again
+    while one is open answers that one. A restart in the middle finishes it
+    at the next boot. One ``[ui]`` intents_log row records that it was
+    asked for (no speech in it)."""
+    from domovoi import voice_history
+    from domovoi.db.repositories import IntentLogRepository
+
+    job = await voice_history.request_delete_all()
+    voice_history.schedule_pending_jobs()
+    async with session_scope() as s:
+        await IntentLogRepository(s).log(
+            room_id="",
+            transcript="[ui] delete all voice history",
+            matched_handler="voice_history",
+            matched_path=None,
+            online=True,
+            latency_ms=0,
+        )
+    return {"job": job}
 
 
 # ─── Settings → Internet ──────────────────────────────────────────────────

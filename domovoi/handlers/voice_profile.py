@@ -10,10 +10,11 @@ Context). This handler covers the *user-facing* parts:
     same flow but the introducer attests.
   * Queries: "who am I", "do you know me", "do you know who I am" →
     answer from current ``ctx.person_id``.
-  * Forget: "forget me" / "don't save my voice" → cascade-delete
-    rows from ``people`` (and ``voice_profiles`` via FK), letting
-    ``intents_log.person_id`` lapse to NULL via the ``ON DELETE
-    SET NULL`` — when the voice matches the person's OWN samples. A
+  * Forget: "forget me" / "don't save my voice" → delete the person's
+    own spoken turns (``conversation_log`` / ``intents_log`` rows
+    attributed to them, :func:`voice_history.delete_person_history`), then
+    cascade-delete rows from ``people`` (and ``voice_profiles`` via FK) —
+    when the voice matches the person's OWN samples. A
     voice that was recognized only through samples a name claim added
     removes just those samples (V029, owner decision 2026-10-16, delta
     review S1): see :meth:`VoiceProfileHandler._forget`.
@@ -102,6 +103,7 @@ from domovoi.db.repositories import (
 from domovoi.confirmations import request_confirmation
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.log_privacy import said
+from domovoi import voice_history
 from domovoi.models import Context, Intent, Response, is_phone_room
 from domovoi.voice_identifier import claims_by_this_voice, is_own_voice
 
@@ -1562,6 +1564,11 @@ class VoiceProfileHandler(Handler):
                     ctx.person_id, claim_ids,
                 )
             elif scope == "person":
+                # What they said goes too (owner, 2026-10-17): their own
+                # spoken turns, found by who voice identification heard
+                # speaking, BEFORE the person row (whose delete sets the
+                # turns' person_id to NULL). domovoi/voice_history.py.
+                await voice_history.delete_person_history(session, ctx.person_id)
                 await PeopleRepository(session).delete(ctx.person_id)
         except Exception as e:
             log.warning("forget-me delete failed: %s", e)
@@ -1590,8 +1597,8 @@ class VoiceProfileHandler(Handler):
         ctx.presence_tier = "high"
         return Response(
             text=(
-                f"Okay, I've forgotten you, {name}: your voice, your profile "
-                "and everything I remembered about you."
+                f"Okay, I've forgotten you, {name}: your voice, your profile, "
+                "everything I remembered about you and what you've said to me."
             ),
             session_id=ctx.session_id,
             matched_handler=self.name,

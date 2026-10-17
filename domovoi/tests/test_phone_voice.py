@@ -1131,8 +1131,8 @@ async def test_forget_me_from_a_phone_still_writes_both_rows(
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["reply"] == (
-        "Okay, I've forgotten you, Ana: your voice, your profile and everything I "
-        "remembered about you."
+        "Okay, I've forgotten you, Ana: your voice, your profile, everything I "
+        "remembered about you and what you've said to me."
     )
     assert body["speaker"] is None
     user, assistant = await _rows(tid)

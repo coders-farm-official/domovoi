@@ -327,6 +327,13 @@ def stub_people_repo(monkeypatch):
         return "person", []
 
     monkeypatch.setattr(VoiceProfileHandler, "_forget_scope", _whole_person)
+
+    # What they said goes first (voice history, 2026-10-17); its SQL has
+    # its own DB-backed tests (test_voice_history.py).
+    async def _history(session, person_id):
+        return {"conversation_log": 0, "intents_log": 0, "sessions_cleared": 0}
+
+    monkeypatch.setattr("domovoi.voice_history.delete_person_history", _history)
     return _StubPeopleRepo
 
 

@@ -208,8 +208,8 @@ async def test_forget_me_in_the_persons_own_voice_still_forgets_them(
         assert sum(r["claimed_at"] is not None for r in await _rows(kamron)) == 1
         gone = await _say(c, tid, whisper, "Forget me.", KAMRON_PHONE)
     assert gone["reply"] == (
-        "Okay, I've forgotten you, Kamron: your voice, your profile and everything "
-        "I remembered about you."
+        "Okay, I've forgotten you, Kamron: your voice, your profile, everything "
+        "I remembered about you and what you've said to me."
     )
     assert await _people_named("Kamron") == 0
     assert await _memories("kamron private note") == 0
