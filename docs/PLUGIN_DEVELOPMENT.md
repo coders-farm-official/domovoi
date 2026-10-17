@@ -370,7 +370,7 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 | `publisher` | Shown on the install preview. Bundled radio declares `"Coders Farm"`. |
 | `license` | SPDX-style string. |
 | `description` | One or two sentences — shown on the install preview. |
-| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.5.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
+| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.6.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
 | `homepage` | Optional URL. |
 
 ### `[entry_points]`
@@ -753,15 +753,17 @@ from domovoi.sdk import (
 
 `PluginSDK` instances are **injected** — your `register(ctx)` receives a
 `PluginContext` whose `ctx.sdk` is your facade. You never construct one.
-`domovoi.sdk.API_VERSION` (currently `"1.5.0"` — 1.3 added
+`domovoi.sdk.API_VERSION` (currently `"1.6.0"` — 1.3 added
 `device_endpoint`; 1.4 added `egress`, the internet-access gate, and
 `connectivity.policy` / `.reason` / `.internet_allowed`, and made
 `sdk.http` refuse non-local requests when the answer is `never`; 1.5 added
 the `[[containers]]` table and `ctx.add_container` /
-`ContainerExpectation`, §4.18) is the semver your `domovoi_api` range is
-checked against. Ask for `">=1.4"` if you use the 1.4 names; for 1.5's,
-either ask for `">=1.5"` or call `ctx.add_container` only
-`if hasattr(ctx, "add_container")` so an older core still loads you.
+`ContainerExpectation`, §4.18; 1.6 added `sdk.playback.dispatch`, §4.5) is
+the semver your `domovoi_api` range is checked against. Ask for `">=1.4"`
+if you use the 1.4 names; for 1.5's, either ask for `">=1.5"` or call
+`ctx.add_container` only `if hasattr(ctx, "add_container")` so an older
+core still loads you; likewise `getattr(sdk.playback, "dispatch", None)`
+for 1.6's.
 
 ### 4.1 `register(ctx)` — the PluginContext
 
@@ -955,6 +957,30 @@ failure. A LAN stream (an SDR tuner, a NAS) still plays. Also: `stop(room_id)`, 
 `mpd_stream_url_for(room_id)`, and `update_library_all_rooms()` (each
 per-room MPD has its own database and Docker Desktop drops host inotify —
 after writing files you must tell every daemon to rescan).
+
+**Playing or stopping outside a voice turn** — your page's "play in the
+bedroom" route, a worker whose timer runs out — has no turn to carry the
+Response to the room, so nothing would tell the room's satellite: MPD sits
+paused and the room stays silent. Hand the Response to
+`await sdk.playback.dispatch(resp, room_id)` (SDK 1.6): it sends the
+room's satellite its `music_start` (with no satellite connected it resumes
+MPD, so a later connect joins a live stream) or `music_stop`, the way the
+dashboard's own room controls do, and does nothing for a refused play.
+Never dispatch a Response your handler returns from a voice turn: the
+streaming layer already delivers that one.
+
+```python
+@router.post("/play")
+@device_endpoint
+async def play(body: PlayBody):
+    resp = await sdk.playback.play_url(body.room_id, url, title=t, source="mine")
+    if resp.music_action != "start":
+        raise HTTPException(status_code=502, detail=resp.text)
+    dispatch = getattr(sdk.playback, "dispatch", None)   # None on a core before SDK 1.6
+    if dispatch is not None:
+        await dispatch(resp, body.room_id)
+    return {"ok": True}
+```
 
 ### 4.6 Library — `sdk.library`
 

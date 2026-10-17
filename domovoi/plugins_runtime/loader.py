@@ -235,6 +235,13 @@ class PluginLoader:
         for lp in self.loaded.values():
             mount_plugin_routers(app, lp.slug, lp.context.routers)
 
+    @property
+    def app(self) -> Any | None:
+        """The core's FastAPI app once ``bind_app`` ran (None before, and
+        in a process that never binds one). ``sdk.playback.dispatch``
+        reads the live satellite sessions from its state."""
+        return self._app
+
     # ── load / unload ────────────────────────────────────────────────────────
 
     async def load_plugin(
