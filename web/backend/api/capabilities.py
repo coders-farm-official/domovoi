@@ -59,6 +59,7 @@ CORE_HANDLER_DISPLAY: list[dict[str, str]] = [
     {"name": "news",          "label": "News",           "tone": "info"},
     {"name": "spoken_audio",  "label": "Podcasts & Books", "tone": "media"},
     {"name": "playlist",      "label": "Playlists",      "tone": "media"},
+    {"name": "music_alias",   "label": "Music names",    "tone": "media"},
     {"name": "music",         "label": "Music",          "tone": "media"},
     {"name": "library",       "label": "Library",        "tone": "media"},
 ]
