@@ -1011,7 +1011,7 @@ const ModelsPanel = () => {
       <Card title="Voices & wake words"
             sub="Managed in full on the Settings page — surfaced here so everything model-shaped is in one place.">
         <FoldedSummary icon="volume-2" title="TTS voices"
-          sub="Edge (cloud) + Piper (local) voice registry — each satellite speaks in one." tab="voices"/>
+          sub="Domovoi's voices, all on this server (Piper) — each satellite speaks in one." tab="voices"/>
         <FoldedSummary icon="mic" title="Wake words"
           sub="Custom openWakeWord models — record clips on a satellite, train, push." tab="wakewords"/>
       </Card>

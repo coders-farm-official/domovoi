@@ -147,9 +147,9 @@ SCENARIOS: dict[str, dict] = {
           // A link to another tab while Settings is on screen.
           w.go('#settings/internet'); await w.__settle(h);
           const link = on('Internet');
-          // #settings alone: the default tab.
+          // #settings alone: the default tab, About (the manual's way in).
           w.go('#settings'); await w.__settle(h);
-          const bare = { greetings: on('Greetings'), hash: w.location.hash };
+          const bare = { about: on('About'), hash: w.location.hash };
           // An address for another page leaves the tab alone (Settings is on its way out).
           w.go('#settings/about'); await w.__settle(h);
           w.go('#music/queue'); await w.__settle(h);
@@ -163,8 +163,8 @@ SCENARIOS: dict[str, dict] = {
         "script": r"""
           const w = h.global('window');
           h.render(); await w.__settle(h);
-          const greetings = h.findAll({ type: 'button' }).find((e) => w.__deep(e) === 'Greetings');
-          return { on: String(greetings.props.style.borderBottom).includes('var(--brand)'),
+          const about = h.findAll({ type: 'button' }).find((e) => w.__deep(e) === 'About');
+          return { on: String(about.props.style.borderBottom).includes('var(--brand)'),
                    hash: w.location.hash, replaced: w.__replaced };
         """,
     },
@@ -414,7 +414,7 @@ def test_clicking_tabs_writes_the_address_and_back_and_links_move_the_tab(driven
     # Back puts the previous address back; the tab follows.
     assert o["back"] == {"on": True, "wake": False}
     assert o["link"] is True
-    assert o["bare"] == {"greetings": True, "hash": "#settings"}
+    assert o["bare"] == {"about": True, "hash": "#settings"}
     assert o["leaving"] is True
     # Nothing was rewritten in place along the way.
     assert o["replaced"] == []

@@ -1,9 +1,14 @@
 # Running Domovoi without an NVIDIA GPU
 
-The default configuration assumes a machine with an NVIDIA GPU: Whisper
-runs on CUDA at `float16`, and Ollama keeps a 14B tool-routing model in
-VRAM. Plenty of good server hardware isn't shaped like that — AMD mini
-PCs, Intel NUCs, older desktops, anything with an integrated GPU.
+A server set up by the installers (the Linux script and the Windows
+installer) already runs this way: Whisper `small.en` on the CPU at `int8`,
+Qwen3 8B for routing (Qwen3 4B under 24 GB of memory), Llama 3.2 3B for
+answers and Qwen3-VL 2B for pictures, with Ollama using a GPU by itself
+when there is one. This page is for a server set up by hand, whose default
+configuration assumes a machine with an NVIDIA GPU: Whisper runs on CUDA
+at `float16`, and Ollama keeps a 14B tool-routing model in VRAM. Plenty of
+good server hardware isn't shaped like that — AMD mini PCs, Intel NUCs,
+older desktops, anything with an integrated GPU.
 
 Domovoi runs on those. It just needs different settings, and you should
 know in advance which parts get slower and which don't change at all.
@@ -17,7 +22,7 @@ Related: [FAQ — Can it run without a GPU?](FAQ.md#can-it-run-without-a-gpu) ·
 
 ## The short version
 
-| Setting | Default (NVIDIA) | CPU host |
+| Setting | Default by hand (NVIDIA) | CPU host |
 |---|---|---|
 | `whisper_device` | `cuda` | **`cpu`** |
 | `whisper_compute_type` | `auto` (runs `float16`) | `auto` (runs **`int8`**) — or `int8` explicitly |

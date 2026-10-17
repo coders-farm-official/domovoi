@@ -402,7 +402,7 @@ you share them.
   app can't reach Domovoi, the dashboard says the server isn't
   answering): the core inside the distro has frozen. It notices by itself
   and restarts within a minute or so; if it hasn't, an admin gets
-  **Restart the core** on Settings > Version, the Satellites page and Home
+  **Restart the core** on Settings → Configuration → Version, the Satellites page and Home
   ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#everything-offline-dashboard-up)).
   The distro runs the same units and the same loop watchdog as a Linux
   server ([LINUX_HOST.md, The loop watchdog](LINUX_HOST.md#the-loop-watchdog)):
@@ -411,7 +411,7 @@ you share them.
   survives a restart of the PC. A distro installed before 2026-10-15 gets
   the journal setting, and `Restart=on-failure` if its core unit had no
   restart policy at all, from the
-  next update run (Settings > Version, **Restart Domovoi**); the
+  next update run (Settings → Configuration → Version, **Restart Domovoi**); the
   `Type=notify` unit itself comes with the next run of Setup. By hand, from
   an administrator PowerShell, `Restart-Service DomovoiHost` stops
   Domovoi's Linux system and starts it again, core included (the distro
