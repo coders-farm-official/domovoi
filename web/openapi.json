@@ -13531,8 +13531,7 @@
           "key": {
             "anyOf": [
               {
-                "type": "string",
-                "maxLength": 256
+                "type": "string"
               },
               {
                 "type": "null"

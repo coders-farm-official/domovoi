@@ -89,8 +89,10 @@ from __future__ import annotations
 import asyncio
 import enum
 import importlib.util
+import json
 import logging
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -301,13 +303,79 @@ ACOUSTID_API_PLAIN = "http://api.acoustid.org/v2/"
 ACOUSTID_API = "https://api.acoustid.org/v2/"
 
 
+# Every AcoustID request — the sweep's and "test the key" — is bounded:
+# no more than this many seconds for the whole answer (pyacoustid's own
+# timeout is per socket read, and the sweep passed none at all, so one
+# hung lookup held pyacoustid's rate-limit lock and "test the key" with
+# it), no more than this many bytes of it once un-gzipped, and no
+# redirect followed (a 307 would post the key again, somewhere else).
+ACOUSTID_TIMEOUT_SEC = 15.0
+ACOUSTID_MAX_ANSWER_BYTES = 1024 * 1024
+
+
+def _bounded_api_request(url: str, params: dict, timeout: float | None = None) -> Any:
+    """pyacoustid's ``_api_request`` with the bounds above: a POST of the
+    form ``params`` to ``url``, the JSON answer parsed. Every failure is
+    ``acoustid.WebServiceError``, as pyacoustid's own is; an HTTP error
+    status still hands back AcoustID's JSON (its error code is in it)."""
+    import acoustid
+    import requests
+
+    limit = float(timeout or ACOUSTID_TIMEOUT_SEC)
+    deadline = time.monotonic() + limit
+    if isinstance(params.get("meta"), list):
+        params = {**params, "meta": " ".join(params["meta"])}
+    body = bytearray()
+    try:
+        with requests.Session() as session:
+            response = session.post(
+                url, data=params, timeout=limit, allow_redirects=False, stream=True,
+                headers={"Accept-Encoding": "gzip",
+                         "Content-Type": "application/x-www-form-urlencoded"},
+            )
+            with response:
+                if response.is_redirect or 300 <= response.status_code < 400:
+                    raise acoustid.WebServiceError(
+                        f"AcoustID answered with a redirect ({response.status_code}); not followed"
+                    )
+                # read1: whatever has arrived (un-gzipped), so the deadline
+                # is checked as the answer trickles in, not once 64 KiB of
+                # it has finally come.
+                while True:
+                    chunk = response.raw.read1(65536, decode_content=True)
+                    if not chunk:
+                        break
+                    body += chunk
+                    if len(body) > ACOUSTID_MAX_ANSWER_BYTES:
+                        raise acoustid.WebServiceError("AcoustID's answer was too large")
+                    if time.monotonic() > deadline:
+                        raise acoustid.WebServiceError(f"AcoustID took over {limit:g} s to answer")
+    except requests.exceptions.RequestException as exc:
+        raise acoustid.WebServiceError(f"HTTP request failed: {exc}")
+    try:
+        return json.loads(bytes(body))
+    except ValueError:
+        raise acoustid.WebServiceError("response is not valid JSON")
+
+
 def _acoustid() -> Any:
     """pyacoustid (ImportError when it isn't installed), talking to
-    AcoustID over HTTPS. A base URL somebody set on purpose is kept."""
+    AcoustID over HTTPS through :func:`_bounded_api_request` (behind
+    pyacoustid's own rate limiter). A base URL somebody set on purpose is
+    kept."""
     import acoustid
 
     if getattr(acoustid, "API_BASE_URL", None) == ACOUSTID_API_PLAIN:
         acoustid.set_base_url(ACOUSTID_API)
+    current = getattr(acoustid, "_api_request", None)
+    if current is not None and not getattr(current, "_domovoi_bounded", False):
+        limited = getattr(acoustid, "_rate_limit", None)
+        bounded = limited(_bounded_api_request) if limited is not None else _bounded_api_request
+        try:
+            bounded._domovoi_bounded = True  # type: ignore[attr-defined]
+        except AttributeError:
+            pass
+        acoustid._api_request = bounded
     return acoustid
 
 
@@ -333,7 +401,9 @@ async def _enrich_via_acoustid(file_path: Path) -> Lookup:
     # (_match_results): parsed, a refused key read as a line failure.
     try:
         results = await asyncio.to_thread(
-            lambda: _match_results(acoustid, acoustid.match(api_key, str(file_path), parse=False)),
+            lambda: _match_results(acoustid, acoustid.match(
+                api_key, str(file_path), parse=False, timeout=ACOUSTID_TIMEOUT_SEC,
+            )),
         )
     except acoustid.NoBackendError:
         log.warning(
@@ -403,7 +473,7 @@ KEY_CHECK_FINGERPRINT = (
     "DAjIgSZGMSAAUMBySgggBgkjkACoIwSQAGwoihASQEjIEBHECAqEQshyighxACIlgBgYoTYU"
     "IoQAIQUEyADiBBAEIKA4R8QBQ6AAAgA0mEIISsUcMoQBAQFnTgFDgQBIAUupIMQQAQU"
 )
-KEY_CHECK_TIMEOUT_SEC = 15.0
+KEY_CHECK_TIMEOUT_SEC = ACOUSTID_TIMEOUT_SEC
 
 # One test at a time: a button pressed again while one is out waits for it.
 _key_check_lock = asyncio.Lock()

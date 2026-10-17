@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -141,9 +141,14 @@ async def patch_editable_config(body: ConfigUpdateRequest, request: Request):
     return bridge_response(status, answer)
 
 
+# The longest typed key the test forwards. Checked in the handler, not as a
+# pydantic max_length: that 422 quotes the value back (its "input").
+ACOUSTID_TEST_KEY_MAX = 256
+
+
 class AcoustidTestRequest(BaseModel):
     # A key typed but not saved yet; absent or empty tests the saved one.
-    key: str | None = Field(default=None, max_length=256)
+    key: str | None = None
 
 
 @router.post(
@@ -159,6 +164,11 @@ async def acoustid_key_test(body: AcoustidTestRequest, request: Request):
     ``{result: works|refused|unreachable|unavailable, detail,
     fingerprints}``; 409 when the internet answer is No (nothing sent),
     422 with no key to test. The key is never echoed or logged."""
+    if body.key and len(body.key) > ACOUSTID_TEST_KEY_MAX:
+        raise HTTPException(
+            status_code=422,
+            detail=f"that is longer than an AcoustID key ({ACOUSTID_TEST_KEY_MAX} characters at most)",
+        )
     payload: dict = {}
     if body.key:
         payload["key"] = body.key

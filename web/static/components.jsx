@@ -1898,7 +1898,7 @@ const ConfigField = ({ f, value, onChange, internetOff = false }) => {
           <Button variant="ghost" onClick={() => onChange(undefined)}>keep it</Button>
         </span>
       : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <input type="text" value={value || ''} autoComplete="off" spellCheck={false}
+          <input type="password" value={value || ''} autoComplete="new-password" spellCheck={false}
                  aria-label={f.label} className="config-secret-input"
                  placeholder={f.is_set ? 'paste a new key to replace it' : 'paste the key'}
                  onChange={e => onChange(e.target.value === '' ? undefined : e.target.value)}

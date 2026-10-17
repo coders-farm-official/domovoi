@@ -117,6 +117,7 @@ _READ = r"""
   const result = () => { const r = h.find((e) => w.__cls(e).includes('config-acoustid-result')); return r ? { tone: r.props['data-tone'], text: w.__deep(r) } : null; };
   const save = () => h.findAll({ type: 'button' }).find((e) => w.__deep(e) === 'Save');
   const state = () => ({ pill: pill(), test: testBtn() ? w.__deep(testBtn()) : null, input: input() ? input().props.placeholder : null,
+                         inputType: input() ? [input().props.type, input().props.autoComplete] : null,
                          result: result(), words: words(), links: links(),
                          saveDisabled: save() ? !!save().props.disabled : null });
 """
@@ -321,6 +322,9 @@ def test_an_empty_field_says_not_set_and_offers_no_test(driven) -> None:
     first = driven["unset_type_test_save"]["first"]
     assert first["pill"] == "not set"
     assert first["input"] == "paste the key"
+    # Not shown on screen while it is typed (review N-A3), and not offered
+    # to the browser's saved passwords as this site's sign-in.
+    assert first["inputType"] == ["password", "new-password"]
     assert first["test"] is None                    # nothing to test yet
     assert [WHICH_KEY, "acoustid.org/new-application"] in first["links"]
     assert "application" in first["words"] and "not the user API key" in first["words"]

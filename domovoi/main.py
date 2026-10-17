@@ -5770,9 +5770,14 @@ async def admin_update_config(body: _AdminConfigUpdateBody) -> dict[str, Any]:
     }
 
 
+# The longest typed key "test the key" takes. Checked in the handler, not
+# as a pydantic max_length: that 422 quotes the value back (its "input").
+ACOUSTID_TEST_KEY_MAX = 256
+
+
 class _AcoustidTestBody(BaseModel):
     # A key typed but not saved yet; absent or empty tests the saved one.
-    key: str | None = Field(default=None, max_length=256)
+    key: str | None = None
 
 
 @app.post(
@@ -5802,6 +5807,11 @@ async def admin_acoustid_test(body: _AcoustidTestBody | None = None) -> dict[str
     if egress.internet_turned_off():
         raise egress.http_exception("the AcoustID key test")
     typed = (body.key if body is not None else None) or ""
+    if len(typed) > ACOUSTID_TEST_KEY_MAX:
+        raise HTTPException(
+            status_code=422,
+            detail=f"that is longer than an AcoustID key ({ACOUSTID_TEST_KEY_MAX} characters at most)",
+        )
     if typed.strip():
         try:
             key = str(coerce_and_validate(FIELD_BY_NAME["acoustid_api_key"], typed))

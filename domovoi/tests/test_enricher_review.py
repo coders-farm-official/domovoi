@@ -43,7 +43,7 @@ def refused_key(monkeypatch):
     monkeypatch.setattr(le, "_key_hint_logged", False)
     asked: list[str] = []
 
-    def refused(_key, path, parse=True):
+    def refused(_key, path, parse=True, timeout=None):
         # What pyacoustid 1.3.1 really does: the HTTP 400 comes back as
         # data (parse=False, how the enricher asks); parsed, it would be a
         # WebServiceError("status: error") with the code gone.

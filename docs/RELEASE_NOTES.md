@@ -43,8 +43,12 @@ Server update (core and dashboard; no migration).
   couldn't place stayed undecided, tried again each sweep. The enricher
   now reads AcoustID's answer itself: a refused key is like no key for
   the rest of the sweep, as documented.
-* **AcoustID over HTTPS.** pyacoustid's own address is plain HTTP; the key
-  and the fingerprints now go to `https://api.acoustid.org`.
+* **AcoustID over HTTPS, and its answers bounded.** pyacoustid's own
+  address is plain HTTP; the key and the fingerprints now go to
+  `https://api.acoustid.org`. Every AcoustID request (the sweep's and the
+  test's) now ends after 15 s, reads at most 1 MiB of answer and follows
+  no redirect. The sweep's lookups had no timeout at all, so one hung
+  lookup could hold up every later one, the test included.
 
 ## 2026-10-16 — Phone photos in chat: HEIC converted, refusals in words
 
