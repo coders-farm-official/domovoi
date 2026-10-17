@@ -4,6 +4,39 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — Plugin pages look like plugins
+
+Dashboard update (web; no migration). The web serves the new manifest
+fields after its own restart; the bundled radio plugin's accent arrives
+with the core's restart (it refreshes the bundled row on boot). Android:
+the app's Stations and Images screens get the same frame from the next
+APK.
+
+* **Every plugin page has a frame.** A band across the top names the
+  plugin (its icon, name and publisher, and a "plugin" badge) with a
+  **manage** link to its row on the Plugins page, where its version,
+  update and disable controls are. `#plugins/<slug>` now opens that row.
+  The band is one row (40px, 44px on a phone), so the page's own content
+  starts just under it. Core pages are unchanged.
+* **Plugins have their own colour.** Inside a plugin page, primary
+  buttons, links, selection washes and focus rings take the plugin's
+  accent, not Domovoi's amber; the sidebar, topbar and core pages stay
+  amber. A plugin that declares none gets a neutral slate, so its page
+  still reads as a plugin's. **This changes how every installed plugin's
+  page looks** (their amber buttons turn slate, or the plugin's colour)
+  with nothing to do; it is not a bug.
+* **For plugin authors:** optional `accent = "#rrggbb"` (and
+  `accent_dark`) in `[plugin]`. The dashboard checks it in both themes
+  (text 4.5:1, buttons 3:1) and adjusts a colour that falls short, with a
+  warning in the load log; a value that isn't a colour, or Domovoi's own
+  amber, is refused with a warning and the slate is used. It never stops a
+  plugin loading. `domovoi plugin pack` / `dev` print the same warnings,
+  and `domovoi plugin new` offers both keys. The bundled radio plugin is
+  teal (`#2f7d6d`). See `docs/PLUGIN_DEVELOPMENT.md`, "The frame and your
+  accent".
+* `/api/plugins/manifest` and `/api/capabilities` carry each plugin's
+  `publisher` and `accent` tokens (`docs/API_REFERENCE.md`).
+
 ## 2026-10-17 — The dark theme is readable again, plugin icons included
 
 Dashboard update (web; no migration, no restart of the core needed — the
