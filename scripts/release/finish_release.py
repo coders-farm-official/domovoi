@@ -32,9 +32,14 @@ every check has passed):
    ``provision.sh`` and nothing bundled; anything else is refused. The
    worktree is removed afterwards; its ``pins.iss`` is kept beside the
    Setup. ``--setup FILE`` takes one built that way elsewhere (on Linux,
-   say), and the notes say it was.
+   say), and the notes say it was. The same build makes
+   ``DomovoiTray.exe`` (``windows/build/bin``), the tray icon Setup
+   installs, attached on its own too for Windows installs from before the
+   tray (it runs from anywhere and registers itself); with ``--setup``, from
+   ``--tray FILE`` or ``bin/DomovoiTray.exe`` beside the Setup. A tag whose
+   build makes none (before the tray) is released without it.
 3. One ``SHA256SUMS`` (LF line endings) for every asset: the APKs (from
-   the manifest) and the Setup.
+   the manifest), the Setup and the tray.
 4. The release notes: ``docs/release/v<version>.md`` at the tag if there is
    one, otherwise a summary of the ``docs/RELEASE_NOTES.md`` entries added
    since the previous tag (a release candidate counts from the tag before
@@ -42,7 +47,7 @@ every check has passed):
    file at the tag. Then the files, their SHA-256, the commit the tag is,
    how the Setup was built, the app's signing certificate. Kept under
    20 KB, and never over GitHub's 125,000-character cap.
-5. Upload the Setup and ``SHA256SUMS`` (``--clobber``, so a second run
+5. Upload the Setup, the tray and ``SHA256SUMS`` (``--clobber``, so a second run
    replaces them), set the title and the notes, and keep a pre-release one
    (only one GitHub already marks so: every release is a full one by
    default, release candidates included, owner decision 2026-10-15) or
@@ -87,6 +92,8 @@ REPO = Path(__file__).resolve().parents[2]
 REPO_SLUG = "coders-farm-official/domovoi"
 REPO_URL = "https://github.com/" + REPO_SLUG
 SETUP_ASSET = "DomovoiSetup.exe"
+#: The tray icon (windows/tray), built beside the Setup in windows/build/bin.
+TRAY_ASSET = "DomovoiTray.exe"
 SUMS_ASSET = "SHA256SUMS"
 #: GitHub refuses a release body over this many characters.
 BODY_LIMIT = 125_000
@@ -263,6 +270,7 @@ class Release:
     previous_tag: str | None = None
     notes: str = ""          # the summary part, from docs/release or RELEASE_NOTES.md
     candidate_of: str | None = None   # X.Y.Z, when the version has a suffix
+    tray_sha256: str | None = None    # DomovoiTray.exe, when the tag's build makes one
 
 
 def _who(abi: str) -> str:
@@ -283,6 +291,8 @@ def body(rel: Release) -> str:
     for e in rel.apks:
         files.append(f"| {e['file']} | {_who(e['abi'])} | `{e['sha256']}` |")
     files.append(f"| {SETUP_ASSET} | the Windows installer (preview, not code-signed) | `{rel.setup_sha256}` |")
+    if rel.tray_sha256:
+        files.append(f"| {TRAY_ASSET} | the Windows tray icon, for an install from before it (Setup installs it) | `{rel.tray_sha256}` |")
     if rel.setup_built:
         how = (f"It was built from the tag's own files by `windows/build.ps1 -Pin {rel.tag}`, which sets its pins "
                "(`windows/installer/pins.iss`) to that commit; nothing else differs from the tag.")
@@ -308,6 +318,10 @@ def body(rel: Release) -> str:
         "once an admin presses \"Download the app to this server\" there.",
         f"- **Windows (preview):** `{SETUP_ASSET}` puts the server on a Windows 11 PC.",
     ]
+    if rel.tray_sha256:
+        install.append(f"- **A Windows install from before the tray icon:** run `{TRAY_ASSET}` once, from any folder: "
+                       "Domovoi's icon appears beside the clock and starts at every sign-in from then on "
+                       f"([docs/WINDOWS_HOST.md]({REPO_URL}/blob/{rel.tag}/docs/WINDOWS_HOST.md#the-tray-icon)).")
     parts = [lead, "", rel.notes.strip(), "", *install, "", *files, *facts]
     return "\n".join(parts).rstrip("\n") + "\n"
 
@@ -316,6 +330,8 @@ def sums_text(rel: Release) -> str:
     """``SHA256SUMS``: ``<sha256>  <file>`` per asset, LF line endings."""
     lines = [f"{e['sha256']}  {e['file']}" for e in rel.apks]
     lines.append(f"{rel.setup_sha256}  {SETUP_ASSET}")
+    if rel.tray_sha256:
+        lines.append(f"{rel.tray_sha256}  {TRAY_ASSET}")
     return "\n".join(lines) + "\n"
 
 
@@ -511,7 +527,7 @@ def _digest(asset: dict[str, Any]) -> str | None:
 
 def _check_published_apks(release: dict[str, Any], apks: list[dict[str, Any]]) -> None:
     assets = {a["name"]: a for a in release.get("assets") or []}
-    allowed = {e["file"] for e in apks} | {SETUP_ASSET, SUMS_ASSET}
+    allowed = {e["file"] for e in apks} | {SETUP_ASSET, TRAY_ASSET, SUMS_ASSET}
     unknown = sorted(set(assets) - allowed)
     if unknown:
         die(f"the release has files finish-release doesn't know: {', '.join(unknown)} "
@@ -603,6 +619,7 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
     ap.add_argument("--tag", help="the release, v<version> (default: v + the Android versionName)")
     ap.add_argument("--no-publish", action="store_true", help="check, build and write everything; change nothing on GitHub")
     ap.add_argument("--setup", help="a DomovoiSetup.exe built by windows/build.ps1 -Pin <tag> from the tag, instead of building it")
+    ap.add_argument("--tray", help="with --setup: the DomovoiTray.exe of that build (default: bin/DomovoiTray.exe beside the Setup)")
     ap.add_argument("--since", help="the tag the notes' summary counts from (default: the previous one)")
     args = ap.parse_args(argv)
 
@@ -708,12 +725,21 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
         shutil.rmtree(stage)
     stage.mkdir(parents=True)
     staged_setup = stage / SETUP_ASSET
+    staged_tray = stage / TRAY_ASSET
+    if args.tray and not args.setup:
+        die("--tray goes with --setup")
     if args.setup:
         setup = Path(args.setup).resolve()
         if not setup.is_file():
             die(f"no Setup at {args.setup}")
         say(f"using {setup} (--setup: built by windows/build.ps1 -Pin {tag} from the tag, it is taken to be)")
         shutil.copyfile(setup, staged_setup)
+        tray = Path(args.tray).resolve() if args.tray else setup.parent / "bin" / TRAY_ASSET
+        if args.tray and not tray.is_file():
+            die(f"no tray at {args.tray}")
+        if tray.is_file():
+            say(f"using {tray} (the tray of that build)")
+            shutil.copyfile(tray, staged_tray)
     else:
         src = repo / "windows" / "build" / "release" / f"{tag}-source"
         if src.exists():
@@ -726,6 +752,10 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
             _check_pinned_worktree(t, src, tag_commit, tag_provision)
             shutil.copyfile(exe, staged_setup)
             shutil.copyfile(src / PINS, stage / "pins.iss")
+            # The tray the same build made (a tag from before it has none).
+            built_tray = exe.parent / "bin" / TRAY_ASSET
+            if built_tray.is_file():
+                shutil.copyfile(built_tray, staged_tray)
         finally:
             if not t.git_ok("worktree", "remove", "--force", str(src)):
                 say(f"warning: couldn't remove the build worktree {src}: git worktree remove --force it later")
@@ -737,6 +767,7 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
     hand = t.git_bytes("show", f"{tag_commit}:docs/release/{tag}.md")
     info = Release(tag=tag, version=version, prerelease=prerelease, tag_commit=tag_commit, cert=cert, apks=apks,
                    setup_sha256=sha256_file(staged_setup), setup_built=not args.setup, previous_tag=since,
+                   tray_sha256=sha256_file(staged_tray) if staged_tray.is_file() else None,
                    candidate_of=m.group(1) if by_name else None)
     if hand is not None:
         info.notes = hand.decode("utf-8")
@@ -757,12 +788,16 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
     notes_file = stage / "NOTES.md"
     notes_file.write_bytes(text.encode("utf-8"))
     kind = "a pre-release" if prerelease else "the Latest release"
-    say(f"staged in {stage}: {SETUP_ASSET} ({staged_setup.stat().st_size} bytes), {SUMS_ASSET}, NOTES.md ({len(text)} characters)")
+    tray_note = f"{TRAY_ASSET} ({staged_tray.stat().st_size} bytes), " if info.tray_sha256 else ""
+    say(f"staged in {stage}: {SETUP_ASSET} ({staged_setup.stat().st_size} bytes), {tray_note}{SUMS_ASSET}, NOTES.md ({len(text)} characters)")
+    if not info.tray_sha256:
+        say(f"no {TRAY_ASSET}: this tag's build makes none (it predates the tray icon)")
+    uploads = [staged_setup, *([staged_tray] if info.tray_sha256 else []), stage / SUMS_ASSET]
 
     stable_push = f"{tag_commit}:refs/heads/stable"
     if not publish:
         say("not published (--no-publish). A real run then:")
-        print(f"    gh release upload {tag} {SETUP_ASSET} {SUMS_ASSET} --repo {REPO_SLUG} --clobber")
+        print(f"    gh release upload {tag} {' '.join(u.name for u in uploads)} --repo {REPO_SLUG} --clobber")
         print(f"    gh release edit {tag} --repo {REPO_SLUG} --title \"Domovoi v{version}\" --notes-file NOTES.md "
               + ("--prerelease" if prerelease else "--latest") + f"    ({kind})")
         print("    (checks every file on GitHub against SHA256SUMS)")
@@ -778,8 +813,8 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
         return 0
 
     # 5. Upload and edit. -----------------------------------------------------
-    say(f"uploading {SETUP_ASSET} and {SUMS_ASSET} to {tag}...")
-    t.gh("release", "upload", tag, str(staged_setup), str(stage / SUMS_ASSET), "--repo", REPO_SLUG, "--clobber")
+    say(f"uploading {', '.join(u.name for u in uploads)} to {tag}...")
+    t.gh("release", "upload", tag, *(str(u) for u in uploads), "--repo", REPO_SLUG, "--clobber")
     say(f"setting the title and notes, as {kind}...")
     t.gh("release", "edit", tag, "--repo", REPO_SLUG, "--title", f"Domovoi v{version}", "--notes-file", str(notes_file),
          "--prerelease" if prerelease else "--latest")

@@ -13,14 +13,33 @@
  *
  * Inside WSL (a Windows install) the server sees no removable drives, so
  * /status answers drive_targets: false: the card drops the USB transport
- * and the drive targets, stops polling for cards, and says why — the zip
- * plus the Wi-Fi portal is the whole route there. */
+ * and the drive targets, stops polling for cards, and leads with the
+ * Windows tray icon's card helper (windows/tray, "Prepare a satellite
+ * card"), which writes the zip onto the card and asks for the setup
+ * network password shown here; the zip's README keeps the steps by hand.
+ * The tray links here as #settings/satellites/media, which opens this
+ * card. */
 
 const smInput = {
   font: 'inherit', fontSize: 13, height: 32, padding: '0 8px',
   borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
   background: 'var(--card)', color: 'var(--fg)', boxShadow: 'var(--inner-highlight)',
 };
+
+/* The mic boards in household words; the value sent stays the id. */
+const SM_MIC_LABELS = {
+  respeaker_2mic_hat_v2: 'ReSpeaker 2-Mics HAT v2',
+  respeaker_2mic_hat_v1: 'ReSpeaker 2-Mics HAT v1',
+  xvf3800_usb: 'ReSpeaker XVF3800 (USB, 4 mics)',
+  none: 'no microphone yet',
+};
+const smMicLabel = (id) => SM_MIC_LABELS[id] || id;
+
+/* A HAT needs its device-tree overlay on the Pi. Stage 1 copies a prebuilt
+ * one from the payload's dtbo cache when the cache has one, and otherwise
+ * only warns (firstrun.sh, step 6): nothing builds it for you. */
+const smNeedsOverlay = (id) => /^respeaker_2mic_hat/.test(id || '');
+const SM_OVERLAY_DOC_URL = 'https://github.com/coders-farm-official/domovoi/blob/main/satellite/PROVISIONING.md#4-respeaker-driver--device-tree-overlay';
 
 const smBytes = (n) => {
   if (n == null) return '—';
@@ -69,7 +88,7 @@ const smCacheRows = (cache, dockerAvailable) => {
  * They live in the web process's memory and nowhere else, so a restart
  * loses them.
  */
-const CredentialsModal = ({ creds, zip, onClose }) => {
+const CredentialsModal = ({ creds, zip, cardHelper, onClose }) => {
   const ap = creds.ap;
   const con = creds.console;
   const row = (label, value) => (
@@ -104,7 +123,16 @@ const CredentialsModal = ({ creds, zip, onClose }) => {
 
         <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 16,
                       paddingTop: 14, borderTop: '1px solid var(--border-soft)' }}>
-          {zip ? (
+          {zip && cardHelper ? (
+            <>
+              Keep this open, or write these down: this is the only place they
+              are shown.{ap && (
+                <> Domovoi's tray icon → <b>Prepare a satellite card</b> asks
+                  for the wi-fi password when it writes the card.</>
+              )} The downloaded zip deliberately contains no passwords, and they
+              are held in memory here until the dashboard restarts.
+            </>
+          ) : zip ? (
             <>
               Write these down now — this is the only place they are shown. The
               downloaded zip deliberately contains no passwords, and they are held
@@ -132,7 +160,7 @@ const CredentialsModal = ({ creds, zip, onClose }) => {
   );
 };
 
-const MediaJobRow = ({ j, onShowCredentials }) => {
+const MediaJobRow = ({ j, onShowCredentials, cardHelper }) => {
   const live = j.status === 'running' || j.status === 'pending';
   return (
     <div style={{ padding: '10px 0', borderTop: '1px solid var(--border-soft)' }}>
@@ -147,7 +175,7 @@ const MediaJobRow = ({ j, onShowCredentials }) => {
         {j.status === 'done' && j.has_artifact && (
           <a className="mono" style={{ fontSize: 12, color: 'var(--brand)' }}
              href={`${API_BASE}/api/satellites/media/jobs/${j.id}/download`}>
-            download zip
+            {cardHelper ? 'download for the card helper' : 'download zip'}
           </a>
         )}
         <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{relTime(j.requested_at)}</span>
@@ -162,6 +190,11 @@ const MediaJobRow = ({ j, onShowCredentials }) => {
       )}
       {j.status === 'failed' && j.error && (
         <div className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 4 }}>{j.error}</div>
+      )}
+      {j.status === 'done' && j.target_kind === 'zip' && cardHelper && (
+        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
+          then Domovoi's tray icon → Prepare a satellite card
+        </div>
       )}
       {j.status === 'done' && j.target_kind === 'drive' && (
         <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
@@ -202,6 +235,16 @@ const PrepareMediaCard = ({ fire }) => {
   const [busy, setBusy] = React.useState(false);
   const [open, setOpen] = React.useState(false);
   const [creds, setCreds] = React.useState(null);
+  // The Windows tray icon's card helper links to #settings/satellites/media:
+  // open this card and bring it into view.
+  const cardRef = React.useRef(null);
+  const linkedRef = React.useRef(false);
+  React.useEffect(() => {
+    const parts = routeParts(currentRoute());
+    if (parts[0] !== 'settings' || parts[1] !== 'satellites' || parts[2] !== 'media') return;
+    linkedRef.current = true;
+    setOpen(true);
+  }, []);
   // Refreshing the caches downloads (PyPI, Docker Hub, Debian, GitHub):
   // greyed while the box is set to stay off the internet. Prepare uses
   // what is already cached and stays available.
@@ -244,6 +287,18 @@ const PrepareMediaCard = ({ fire }) => {
   React.useEffect(() => {
     if (!drivesVisible) { setTransport('portal'); setTarget('zip'); }
   }, [drivesVisible]);
+
+  // Scrolled to once the page above it has its height (the satellites and
+  // this card's status loaded), so it lands in view.
+  React.useEffect(() => {
+    if (!linkedRef.current || !status) return;
+    linkedRef.current = false;
+    const t = setTimeout(() => {
+      try { if (cardRef.current) cardRef.current.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
+      catch (e) { /* an old browser: the card is open anyway */ }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [status]);
 
   const boards = status?.boards || [];
   const plugins = status?.plugins || [];
@@ -290,7 +345,8 @@ const PrepareMediaCard = ({ fire }) => {
   };
 
   return (
-    <div style={{ background: 'var(--card)', border: '1px solid var(--border)',
+    <div ref={cardRef}
+         style={{ background: 'var(--card)', border: '1px solid var(--border)',
                   borderRadius: 'var(--r-md)', boxShadow: 'var(--inner-highlight)' }}>
       <button onClick={() => setOpen(o => !o)}
               style={{ font: 'inherit', width: '100%', textAlign: 'left', cursor: 'pointer',
@@ -299,9 +355,11 @@ const PrepareMediaCard = ({ fire }) => {
         <Icon name="disc-3" size={16}/>
         <span style={{ fontSize: 14, fontWeight: 600, flex: 1 }}>prepare satellite media</span>
         <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
-          {transport === 'portal'
-            ? 'flash stock OS · prepare here · boot · set up from a phone'
-            : 'flash stock OS · prepare here · boot · plug in to adopt'}
+          {!drivesVisible
+            ? 'flash stock OS · build here · tray icon writes the card · boot · set up from a phone'
+            : transport === 'portal'
+              ? 'flash stock OS · prepare here · boot · set up from a phone'
+              : 'flash stock OS · prepare here · boot · plug in to adopt'}
         </span>
         <Icon name={open ? 'chevron-up' : 'chevron-down'} size={14}/>
       </button>
@@ -317,7 +375,7 @@ const PrepareMediaCard = ({ fire }) => {
               ))}
             </select>
             <select value={mic} onChange={e => setMic(e.target.value)} style={smInput}>
-              {(status?.mic_profiles || []).map(m => <option key={m} value={m}>{m}</option>)}
+              {(status?.mic_profiles || []).map(m => <option key={m} value={m}>{smMicLabel(m)}</option>)}
             </select>
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12,
                             color: 'var(--fg-muted)' }}>
@@ -330,6 +388,12 @@ const PrepareMediaCard = ({ fire }) => {
                        catch (err) { /* private window — session only */ }
                      }}/>
             </label>
+            {!drivesVisible && (
+              <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}
+                    title="this server can't see SD cards, so the card is set up from a phone over its own Wi-Fi">
+                wi-fi setup portal
+              </span>
+            )}
             {drivesVisible && (
               <select value={transport} onChange={e => setTransport(e.target.value)} style={smInput}>
                 <option value="portal">wi-fi setup portal</option>
@@ -337,7 +401,7 @@ const PrepareMediaCard = ({ fire }) => {
               </select>
             )}
             <select value={target} onChange={e => setTarget(e.target.value)} style={smInput}>
-              <option value="zip">download overlay zip</option>
+              <option value="zip">{drivesVisible ? 'download overlay zip' : 'download for the card helper'}</option>
               {bootTargets.map(t => (
                 <option key={t.token} value={t.token}>
                   write to {t.token}: {t.label ? `(${t.label})` : ''} · {smBytes(t.free_bytes)} free
@@ -350,19 +414,27 @@ const PrepareMediaCard = ({ fire }) => {
             {internetOff && <NeedsInternetNote compact/>}
           </div>
 
+          {smNeedsOverlay(mic) && !cache.dtbo?.ok && (
+            <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 6 }}>
+              {smMicLabel(mic)} needs a one-time overlay step on the Pi:{' '}
+              <a href={SM_OVERLAY_DOC_URL} target="_blank" rel="noopener noreferrer"
+                 style={{ color: 'var(--brand)' }}>PROVISIONING §4</a>
+            </div>
+          )}
+
           {!drivesVisible && (
             <div style={{ marginTop: 10, padding: '8px 10px', display: 'flex', gap: 8,
                           alignItems: 'flex-start', borderRadius: 'var(--r-sm)',
                           background: 'var(--sunken)' }}>
               <Icon name="info" size={13}/>
               <span style={{ fontSize: 11, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
-                Domovoi is running inside WSL on Windows, which can't see USB
-                drives or SD cards, so USB adoption and writing straight to a
-                card aren't available here. Download the zip, unzip it onto the
-                card's boot partition, and add{' '}
-                <span className="mono">domovoi/ap.json</span> with the key from
-                "show setup details" (the zip's README has the line) — then set
-                the satellite up from a phone over its own Wi-Fi.
+                Domovoi is running inside WSL on Windows, which can't see SD
+                cards. Build the card files here, then use Domovoi's tray icon
+                (beside the clock) → <b>Prepare a satellite card</b>: it writes
+                them onto the card and asks for the setup network password
+                shown when the build finishes ("show setup details"). Then set
+                the satellite up from a phone over its own Wi-Fi. By hand
+                instead: the zip's README.txt has the steps.
               </span>
             </div>
           )}
@@ -401,14 +473,16 @@ const PrepareMediaCard = ({ fire }) => {
           {jobs.length > 0 && (
             <div style={{ marginTop: 10 }}>
               {jobs.slice(0, 5).map(j => (
-                <MediaJobRow key={j.id} j={j} onShowCredentials={showCredentials}/>
+                <MediaJobRow key={j.id} j={j} onShowCredentials={showCredentials}
+                             cardHelper={!drivesVisible}/>
               ))}
             </div>
           )}
         </div>
       )}
       {creds && (
-        <CredentialsModal creds={creds} zip={!!creds.zip} onClose={() => setCreds(null)}/>
+        <CredentialsModal creds={creds} zip={!!creds.zip} cardHelper={!drivesVisible}
+                          onClose={() => setCreds(null)}/>
       )}
     </div>
   );

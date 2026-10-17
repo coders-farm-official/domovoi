@@ -25,6 +25,7 @@ from typing import Any, Awaitable, Callable
 
 from domovoi import git_version, host_time, server_identity
 from domovoi.config import settings
+from domovoi.host_kind import is_wsl
 from domovoi.satellite_media import cache, fetchers, overlay, payload
 from domovoi.satellite_media.boards import BOARDS, MIC_PROFILES
 
@@ -40,6 +41,121 @@ Progress = Callable[[str, int, str], Awaitable[None]]  # (phase, pct, text)
 
 async def _noop_progress(phase: str, pct: int, text: str) -> None:
     return None
+
+
+def zip_readme(ap: dict | None, *, windows_host: bool) -> str:
+    """README.txt of an overlay zip.
+
+    ``windows_host``: this server runs inside WSL on Windows (the Windows
+    installer's), which can't see SD cards, so the zip is the only way to
+    build a card there and the tray icon's card helper puts it on the card
+    (windows/tray, CardWriter.cs). That README leads with the helper and
+    keeps the steps by hand below it, worded for a household: the two
+    files are added to, never replaced (a replaced cmdline.txt doesn't
+    boot), and ap.json is saved as "All files" so Notepad doesn't make it
+    ap.json.txt. Other hosts keep the short README they always had."""
+    if windows_host:
+        return _windows_readme(ap)
+    readme = [
+        "Domovoi satellite overlay",
+        "1. Flash stock OS for your board with any imaging tool.",
+        "2. Copy the domovoi/ folder to the card's boot partition, and",
+        "   apply the config.txt/cmdline.txt additions from this zip's",
+        "   copies (each addition is marked with a domovoi comment).",
+    ]
+    if ap is not None:
+        # A portal card never goes near the server's USB port.
+        readme += [
+            "3. Create domovoi/ap.json (below), then boot the device. It",
+            "   raises its own Wi-Fi setup network: set it up from a phone,",
+            "   then approve it in the dashboard's Settings -> Satellites.",
+        ]
+    else:
+        readme += [
+            "3. Boot the device, then plug it into the Domovoi server's USB",
+            "   port and adopt it from the dashboard's Settings -> Satellites.",
+        ]
+    readme += [
+        "",
+        "This zip deliberately contains no passwords. The dashboard shows",
+        f"the console login for {SAT_USER} once, when the build finishes —",
+        "write it down then. The card itself only carries the hash.",
+    ]
+    if ap is not None:
+        readme += [
+            "",
+            "This is a Wi-Fi setup (portal) card. Stage 1 reads its setup",
+            "network's key from domovoi/ap.json, which is not in this zip.",
+            "Create it on the boot partition with the password the",
+            "dashboard showed you:",
+            "",
+            '  {"ssid": "' + str(ap["ssid"]) + '", "psk": "<the password>"}',
+            "",
+            "Without that file the unit falls back to USB adoption.",
+        ]
+    return "\n".join(readme) + "\n"
+
+
+def _windows_readme(ap: dict | None) -> str:
+    portal = ap is not None
+    readme = [
+        "On Windows, use Domovoi's tray icon → Prepare a satellite card.",
+        "",
+        "It puts these files on the card for you, checks them, and asks for",
+        "the setup network password the dashboard showed when it built them.",
+        "The icon is beside the clock (the amber cat; it may be under the ^",
+        "arrow).",
+        "",
+        "",
+        "Doing it by hand instead",
+        "------------------------",
+        "",
+        "1. Flash the card with Raspberry Pi OS Lite (64-bit), using",
+        "   Raspberry Pi Imager. When Imager offers to apply OS customisation",
+        "   settings, choose No.",
+        "2. Put the card back in this PC. Its boot partition opens as a drive",
+        "   called \"bootfs\".",
+        "3. Copy this zip's domovoi folder and userconf.txt onto that drive.",
+        "4. config.txt: open the card's own config.txt in Notepad, go to the",
+        "   very end, and paste all the lines of this zip's config.txt there,",
+        "   below everything else. Save it.",
+        "5. cmdline.txt: open the card's own cmdline.txt in Notepad. It is",
+        "   one long line. Click on it and press End (the end of that line,",
+        "   not below it), type a space, and paste the line from this zip's",
+        "   cmdline.txt there, so everything stays on that one line. Save",
+        "   it. Never replace the card's cmdline.txt with this zip's: a Pi",
+        "   doesn't start without the card's own line.",
+    ]
+    if portal:
+        readme += [
+            "6. ap.json: in Notepad, start a new file and type exactly this one",
+            "   line, with the setup network password the dashboard showed you",
+            "   in place of <the password>:",
+            "",
+            '     {"ssid": "' + str(ap["ssid"]) + '", "psk": "<the password>"}',
+            "",
+            "   Save it in the card's domovoi folder (domovoi/ap.json) with the",
+            "   name ap.json, and under \"Save as type\" choose \"All files\", so",
+            "   Notepad doesn't call it ap.json.txt.",
+            "7. Eject the card, put it in the Pi and switch it on. It raises its",
+            "   own Wi-Fi setup network: set it up from a phone, then approve it",
+            "   in the dashboard's Settings -> Satellites.",
+            "",
+            "Without ap.json the satellite never raises its setup network.",
+        ]
+    else:
+        readme += [
+            "6. Eject the card, put it in the Pi and switch it on,",
+            "   then plug it into the Domovoi server's USB port and adopt it",
+            "   from the dashboard's Settings -> Satellites.",
+        ]
+    readme += [
+        "",
+        "This zip deliberately contains no passwords. The dashboard shows",
+        f"the console login for {SAT_USER} once, when the build finishes —",
+        "write it down then. The card itself only carries its hash.",
+    ]
+    return "\n".join(readme) + "\n"
 
 
 async def build(
@@ -249,47 +365,8 @@ async def build(
             include_credential_files=False,
             server_identity=identity,
         )
-        readme = [
-            "Domovoi satellite overlay",
-            "1. Flash stock OS for your board with any imaging tool.",
-            "2. Copy the domovoi/ folder to the card's boot partition, and",
-            "   apply the config.txt/cmdline.txt additions from this zip's",
-            "   copies (each addition is marked with a domovoi comment).",
-        ]
-        if ap is not None:
-            # A portal card never goes near the server's USB port - and
-            # on a Windows (WSL) install, where the zip is the only way to
-            # build a card, it can't.
-            readme += [
-                "3. Create domovoi/ap.json (below), then boot the device. It",
-                "   raises its own Wi-Fi setup network: set it up from a phone,",
-                "   then approve it in the dashboard's Settings -> Satellites.",
-            ]
-        else:
-            readme += [
-                "3. Boot the device, then plug it into the Domovoi server's USB",
-                "   port and adopt it from the dashboard's Settings -> Satellites.",
-            ]
-        readme += [
-            "",
-            "This zip deliberately contains no passwords. The dashboard shows",
-            f"the console login for {SAT_USER} once, when the build finishes —",
-            "write it down then. The card itself only carries the hash.",
-        ]
-        if ap is not None:
-            readme += [
-                "",
-                "This is a Wi-Fi setup (portal) card. Stage 1 reads its setup",
-                "network's key from domovoi/ap.json, which is not in this zip.",
-                "Create it on the boot partition with the password the",
-                "dashboard showed you:",
-                "",
-                '  {"ssid": "' + str(ap["ssid"]) + '", "psk": "<the password>"}',
-                "",
-                "Without that file the unit falls back to USB adoption.",
-            ]
         (staging / "README.txt").write_text(
-            "\n".join(readme) + "\n", encoding="utf-8",
+            zip_readme(ap, windows_host=is_wsl()), encoding="utf-8",
         )
         artifact = workspace / "domovoi-satellite-overlay.zip"
         with zipfile.ZipFile(artifact, "w", zipfile.ZIP_DEFLATED) as zf:

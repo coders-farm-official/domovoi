@@ -57,7 +57,8 @@ def _pins() -> dict[str, str]:
 def test_sources_exist():
     names = {p.name for p in SOURCES}
     for n in ("DomovoiSetup.iss", "pins.iss", "build.ps1", "Tests.cs", "Host.cs", "Uninstall.cs", "UninstallPlan.cs", "WslList.cs", "Processes.cs",
-              "PortScan.cs", "ServiceWait.cs", "ProfileTask.cs", "Logs.cs", "make_art.py"):
+              "PortScan.cs", "ServiceWait.cs", "ProfileTask.cs", "Logs.cs", "make_art.py",
+              "TrayApp.cs", "CardWriter.cs", "BootText.cs", "CardZip.cs", "TrayTests.cs", "tray.manifest.xml"):
         assert n in names, n
 
 
@@ -501,6 +502,7 @@ def test_the_doc_names_every_machine_change():
         "Copy logs", "Documents\\Domovoi logs", "DomovoiRemoveProfile", "wsl --shutdown", "as `domovoi-svc`",
         "?installed=", "--stop-before", "#settings/configuration/setup", "DashboardTabRoutes",
         "first-run admin setup", "set up admin", "set password",
+        "DomovoiTray.exe", "The tray icon", "Prepare a satellite card", "Keep this PC awake",
     ):
         assert needle in doc, needle
 
@@ -570,6 +572,35 @@ def test_copy_logs_never_opens_a_folder_elevated():
     assert "if not IsUninstaller and IsPlainDir(Folder) then" in body
     assert "ShellExecAsOriginalUser('open', AddBackslash(Folder)," in body
     assert "((A and $400) = 0)" in s  # IsPlainDir: no reparse point
+
+
+def test_setup_installs_starts_and_removes_the_tray():
+    """The tray icon (owner, 2026-10-17: Setup is the main way it arrives):
+    installed with the program, started at every account's sign-in by one
+    machine-wide Run value the uninstaller removes, started for the person
+    running Setup once the install worked (as them, not elevated), and
+    stopped, every account's, before Setup replaces it or the uninstaller
+    removes Domovoi."""
+    s = SCRIPT.read_text(encoding="ascii")
+    assert r'Source: "..\build\bin\DomovoiTray.exe"; DestDir: "{app}"; Flags: ignoreversion' in s
+    run = [line for line in s.splitlines() if 'ValueName: "DomovoiTray"' in line]
+    assert len(run) == 1 and run[0].startswith(r'Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"')
+    assert r'""{app}\DomovoiTray.exe"" --autostart' in run[0] and "Flags: uninsdeletevalue" in run[0]
+    stop = s[s.index("procedure StopTrays;"):]
+    stop = stop[: stop.index("\nend;")]
+    assert r"ExpandConstant('{sys}\taskkill.exe'), '/F /IM DomovoiTray.exe'" in stop
+    start = s[s.index("procedure StartTray;"):]
+    start = start[: start.index("\nend;")]
+    assert r"ExecAsOriginalUser(ExpandConstant('{app}\DomovoiTray.exe')" in start
+    assert "InstallOk := MachineSetup;\n    if InstallOk then\n      StartTray;" in s
+    prep = s[s.index("function PrepareToInstall"):]
+    prep = prep[: prep.index("\nend;")]
+    assert prep.index("'host-stop'") < prep.index("StopTrays;")
+    un = s[s.index("procedure CurUninstallStepChanged"):]
+    assert un.index("StopTrays;") < un.index("ExecAndLogOutput(HelperExe, 'uninstall'")
+    assert r"RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Domovoi\Tray')" in un
+    assert r'Name: "{autoprograms}\Domovoi"; Filename: "{app}\DomovoiTray.exe"; Parameters: "--open"' in s
+    assert "DomovoiTray.exe" in BUILD.read_text(encoding="ascii")
 
 
 @requires_windows_build

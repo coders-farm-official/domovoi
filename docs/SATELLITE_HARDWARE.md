@@ -110,10 +110,14 @@ Choose the route when you prepare the card: **Settings → Satellites →
 prepare satellite media → wi-fi setup portal** (the default) or **usb
 adoption**.
 
-On a Windows install, where Domovoi runs inside WSL, the portal and the zip
-download are the only choices. WSL can't see USB drives or SD cards, so USB
-adoption and writing straight to a card aren't offered there and the card
-says why. Unzip the overlay onto the card yourself (below).
+On a Windows install, where Domovoi runs inside WSL, the portal is the
+only route and the card's files come as a download. WSL can't see USB
+drives or SD cards, so USB adoption and writing straight to a card aren't
+offered there. Domovoi's tray icon writes the card instead: **Prepare a
+satellite card** in its menu ([WINDOWS_HOST.md, Prepare a satellite
+card](WINDOWS_HOST.md#prepare-a-satellite-card)) takes the download, puts
+it on the card exactly as the server would, and asks for the setup network
+password. The zip's `README.txt` keeps the steps by hand (below).
 
 ## The golden path — prepare media from the dashboard
 
@@ -138,10 +142,14 @@ nowhere else, so a dashboard restart loses them.
 - Downloaded as a **zip**: it deliberately contains neither, because that
   file sits on the server and is fetched over HTTP. The card still gets
   `userconf.txt` (the console password's *hash*), so first boot is
-  unattended. For a portal card, create `domovoi/ap.json` on the boot
-  partition yourself with the key the dashboard showed — the zip's
-  README has the exact line. Without it the unit falls back to USB
-  adoption.
+  unattended. On a Windows install the tray icon's card helper writes
+  `domovoi/ap.json` from the password you type. By hand, for a portal
+  card, create `domovoi/ap.json` on the boot partition yourself with the
+  key the dashboard showed — the zip's README has the exact line (in
+  Notepad, save it as "All files" so it isn't `ap.json.txt`), and add to
+  `config.txt` and `cmdline.txt` rather than replacing them: a replaced
+  `cmdline.txt` doesn't boot. Without `ap.json` the unit falls back to
+  USB adoption.
 
 ## Step 1 — Flash the SD card
 

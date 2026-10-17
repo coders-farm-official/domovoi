@@ -398,6 +398,43 @@ def test_a_second_run_replaces_the_files_and_leaves_stable(tmp_path, monkeypatch
 # ─── the Setup, built from the tag's own files ───────────────────────────
 
 @requires_git
+@requires_git
+def test_the_tray_the_build_makes_is_attached_and_summed(tmp_path, monkeypatch):
+    """DomovoiTray.exe (windows/build/bin, built with the Setup) goes on the
+    release too, for Windows installs from before the tray: in SHA256SUMS,
+    uploaded between the Setup and the sums, named in the notes."""
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+
+    def build_with_tray(src: Path, tag: str, repo: Path) -> Path:
+        exe = w.pin_build(src, tag, repo)
+        _write(src, "windows/build/bin/DomovoiTray.exe", b"MZ tray " + tag.encode())
+        return exe
+
+    assert w.run_built(builder=build_with_tray) == 0
+    tray_sha = hashlib.sha256(b"MZ tray " + w.tag.encode()).hexdigest()
+    sums = (w.stage / "SHA256SUMS").read_text(encoding="ascii").splitlines()
+    assert sums[-2].endswith("  DomovoiSetup.exe") and sums[-1] == f"{tray_sha}  DomovoiTray.exe"
+    (upload,) = w.calls("upload")
+    assert [Path(a).name for a in upload[3:6]] == ["DomovoiSetup.exe", "DomovoiTray.exe", "SHA256SUMS"]
+    assert w.load()["files"]["DomovoiTray.exe"] == tray_sha
+    notes = w.state["releases"][w.tag]["body"]
+    assert f"| DomovoiTray.exe |" in notes and tray_sha in notes and "from before the tray icon" in notes
+
+
+@requires_git
+def test_a_setup_handed_in_brings_its_tray_from_beside_it_or_none(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch)
+    assert w.run("--no-publish") == 0
+    assert not (w.stage / "DomovoiTray.exe").exists()
+    assert any("predates the tray icon" in s for s in w.said)
+    (w.setup.parent / "bin").mkdir()
+    (w.setup.parent / "bin" / "DomovoiTray.exe").write_bytes(b"MZ tray")
+    assert w.run("--no-publish") == 0
+    assert (w.stage / "SHA256SUMS").read_text(encoding="ascii").splitlines()[-1] == hashlib.sha256(b"MZ tray").hexdigest() + "  DomovoiTray.exe"
+    with pytest.raises(fr.Refused, match="no tray at"):
+        w.run("--no-publish", "--tray", str(tmp_path / "missing.exe"))
+
+
 def test_the_setup_is_built_from_the_tag_alone_and_pinned_to_it(tmp_path, monkeypatch):
     """Review R3: commits after the tag never reach the Setup. It is built in
     a clean worktree of the tag's commit, where build.ps1 -Pin moves the pins

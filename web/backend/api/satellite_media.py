@@ -85,7 +85,8 @@ def default_setup_transport() -> str:
 # a 422, who is holding a card and needs the way forward.
 _NO_DRIVES_DETAIL = (
     "this server runs inside WSL on Windows and can't see SD cards — "
-    "choose the zip download and unzip it onto the card instead"
+    "choose the download for the card helper, then use Domovoi's tray icon "
+    "→ Prepare a satellite card"
 )
 
 

@@ -4,8 +4,11 @@
 [LINUX_HOST.md](LINUX_HOST.md) on a Windows 11 PC: the same systemd units,
 Postgres, Docker Engine, Ollama and git checkout, inside a private WSL2
 distro that belongs to a hidden Windows account. Windows supplies only the
-installer, one service that keeps the distro running, and firewall rules.
-After setup the dashboard at `http://localhost:6369` is the only interface.
+installer, one service that keeps the distro running, firewall rules, and
+Domovoi's icon in the notification area. After setup the dashboard at
+`http://localhost:6369` is the interface; the icon opens it, says whether
+Domovoi is running, and prepares satellite cards
+([The tray icon](#the-tray-icon)).
 
 **This is a preview.** It ships with Domovoi 1.0 but isn't yet held to its promise. It is not code-signed (see [Unsigned](#unsigned)),
 it installs a pinned commit and then follows a release channel (see
@@ -23,7 +26,8 @@ asks) · [Security & privacy](SECURITY_PRIVACY.md)
 **A Windows laptop as a room** (a satellite, not the server) is a different
 thing: [Satellites on spare devices → Windows](SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs).
 Its installer refuses to run on the PC where this server is installed;
-using the server PC as a room is planned for the server's own tray.
+using the server PC as a room is planned for the server's tray icon (it
+doesn't do that yet).
 
 ---
 
@@ -168,7 +172,9 @@ that:
    page also says where the AI models run, from what Setup found: the
    chat and voice-command models on the NVIDIA cards it lists (or on the
    processor when there is none), speech recognition always on the
-   processor.
+   processor. Domovoi's icon appears beside the clock for the account that
+   ran Setup, and starts at every account's sign-in from then on
+   ([The tray icon](#the-tray-icon)).
 
 ## Every change on the PC, and how uninstall undoes it
 
@@ -184,10 +190,13 @@ that:
 | Hyper-V firewall rules for WSL's VM creator (`{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}`), inbound TCP from your subnet only: `Domovoi-Dashboard-6369`, `Domovoi-Core-6370`, `Domovoi-MPD-8050-8099`, `Domovoi-Jellyfin-8096`, `Domovoi-RomM-7676`, `Domovoi-Kiwix-9467`. They apply to **every WSL VM on the PC**, your own WSL distros and Docker Desktop's included: anything of yours that listens on those ports in a mirrored-mode distro becomes reachable from your home network too. None if the PC has no private (RFC 1918) address. | Every `Domovoi-` rule for WSL's VM creator is removed (and listing them again must work, or the uninstaller says so). |
 | `C:\ProgramData\Domovoi` (`distro`, `wsl`, `backups`, `logs`, `state`, `host`): SYSTEM and Administrators only, with `domovoi-svc` allowed where it needs it. Household accounts can't open it. Setup only uses this folder if it made it. | Made administrators-only again, then deleted, only if Setup made it (files still in use are deleted at the next restart). |
 | The media folder and its `Music`, `Pictures`, `Videos`, `Documents`, `Audiobooks`: made if missing; `domovoi-svc` may read and write them (an inherited rule); a root folder Setup makes also lets every user of the PC (Users) read and write. An existing folder keeps all its own rules. | Setup's rule for `domovoi-svc` comes off. A folder Setup made is removed **only if it is empty**. No file in a media folder is ever deleted. |
-| `C:\Program Files\Domovoi` (`DomovoiHost.exe`, `DomovoiSetupHelper.exe`, `domovoi.ico`, the uninstaller) and its Apps entry. | Deleted, after everything above is gone. |
+| `C:\Program Files\Domovoi` (`DomovoiHost.exe`, `DomovoiSetupHelper.exe`, `DomovoiTray.exe`, `domovoi.ico`, the uninstaller) and its Apps entry. | Deleted, after everything above is gone. |
+| The tray icon's start at every account's sign-in: value `DomovoiTray` under `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run` (`"C:\Program Files\Domovoi\DomovoiTray.exe" --autostart`), and **Domovoi** in the Start menu (opens the dashboard, and brings a hidden icon back). Setup starts the icon for the account that ran it once the install has worked. | Every account's running icon is ended first (before the uninstall's other steps, and before Setup replaces the file on a repair); then the value and the Start menu entry are removed. |
+| Written by the icon itself, per account (not by Setup): `HKCU\Software\Domovoi\Tray` (`KeepAwake`, `StartWithWindows`) and its log, `%LOCALAPPDATA%\Domovoi\tray.log`. | The uninstalling account's settings are removed; other accounts' two values and the logs stay (they hold nothing of Domovoi's data). |
 | Only when missing (not on a PC that already runs WSL 2.7.14 or later): the Windows feature **Virtual Machine Platform**, and **WSL 2.7.14**. Only when they need a restart: a copy of Setup in `C:\Program Files\Domovoi\resume` and a `DomovoiSetupResume` value under `HKLM\...\CurrentVersion\RunOnce` that runs it (Windows deletes the value when it runs). | Virtual Machine Platform and WSL are left in place: they are shared with anything else that uses WSL. The copy and a leftover `DomovoiSetupResume` value are deleted. |
 
-Not changed: power and sleep settings, Windows Update, `AutoUpgradeViaMsix`,
+Not changed: power and sleep settings (the icon's **Keep this PC awake**
+only asks Windows not to sleep while it runs), Windows Update, `AutoUpgradeViaMsix`,
 Smart App Control, your accounts and files. Setup never touches the
 household's own WSL distros or Docker Desktop, and never runs
 `wsl --shutdown` as you or any other account. The uninstaller has
@@ -258,6 +267,108 @@ must be paired again after a reinstall. Keep-data uninstall comes later.
 
 To see what uninstall would do without doing it, from an administrator
 prompt: `"C:\Program Files\Domovoi\DomovoiSetupHelper.exe" uninstall --dry-run`.
+
+## The tray icon
+
+`DomovoiTray.exe`: Domovoi's cat beside the clock (it may be under the
+**^** arrow; drag it out to keep it in sight). It runs as whoever is signed
+in, never as an administrator, and starts at every account's sign-in. The
+dot on the cat says how Domovoi is: green running, amber starting or
+updating, grey stopped, red a problem; hovering says it in words, and
+Windows shows a notification when Domovoi stops or comes back (not while it
+restarts for an update). It reads only what needs no password: the
+`DomovoiHost` service's state, the dashboard's `/api/health` and the
+core's `/v1/alive`; nothing new is opened on the server for it.
+
+Right-click it for the menu; double-click opens Domovoi.
+
+| Item | What it does |
+|---|---|
+| **Open Domovoi** | `http://localhost:6369`. |
+| **Open on this network** | The dashboard at this PC's address on your home network (the address of the adapter that leads to the router; with several, one entry each). |
+| **Copy address** | That address, to paste into a message. |
+| **Show a code for your phone** | That address as a QR code: point the phone's camera at it. |
+| **User manual** | The dashboard's manual (`#manual`). |
+| **Prepare a satellite card...** | The card helper, below. |
+| **Keep this PC awake** | On by default: Windows doesn't put the PC to sleep while the icon runs (the screen may still turn off). The line under it says, from the power plan (never changed), whether Windows would still sleep it when nobody is signed in. |
+| **Start with Windows** | This account's sign-in start, on by default. |
+| **Save logs for support...** | Domovoi's logs are administrators-only: Windows asks for permission, then Setup's helper copies them to `Documents\Domovoi logs`, blanked as **Copy logs** does, with the icon's own log beside them. Without Setup's helper on the PC only the icon's log is copied, and it says so. |
+| **Restart Domovoi...** | Asks first, then Windows asks for an administrator, then `Restart-Service DomovoiHost`: for when the dashboard itself can't be reached. |
+| **Hide this icon** | Hides it until the next sign-in; Domovoi keeps running, and so does **Keep this PC awake**. **Domovoi** in the Start menu brings it back. |
+
+### Prepare a satellite card
+
+Domovoi's Linux system can't see SD cards here, so the dashboard builds the
+card's files as a zip and the icon's card helper puts them on the card:
+
+1. Flash a microSD card with **Raspberry Pi OS Lite (64-bit)** in
+   Raspberry Pi Imager. When Imager offers to apply OS customisation
+   settings, choose **No**.
+2. In the dashboard, **Settings > Satellites > prepare satellite media**:
+   pick the board and the microphone, **Prepare**, then **download for the
+   card helper**. Keep the setup network password it shows on screen.
+3. **Prepare a satellite card...** in the icon's menu. It picks the newest
+   `domovoi-satellite-overlay*.zip` in Downloads (or **Browse**), checks it
+   (its shape, the payload against its SHA-256, and that it was built by
+   the Domovoi on this PC: the server identity it carries against the one
+   the dashboard reports), lists only removable
+   drives that look like a freshly flashed Raspberry Pi card (never a hard
+   disk or the Windows drive), asks for the setup network password, writes
+   the card, reads everything back to check it, and offers **Eject**.
+4. Put the card in the Pi and switch it on. Join its setup Wi-Fi from your
+   phone, then approve it in **Settings > Satellites**.
+
+It writes exactly what a server that can see the card writes
+(`domovoi/satellite_media/overlay.py`, checked byte for byte by the tests):
+the zip's `domovoi` folder and `userconf.txt`, `domovoi/ap.json` with the
+password, Domovoi's block at the end of `config.txt` and its words at the
+end of `cmdline.txt`'s one line, each added once (a card prepared before
+keeps its bytes). `config.txt` and `cmdline.txt` are written last, so a
+card pulled out halfway doesn't start Domovoi's setup without its files.
+Nothing is formatted or deleted. A card that already runs another
+first-boot script (Imager's customisation adds one) is refused: Domovoi's
+setup would never start on it.
+
+By hand instead, the zip's `README.txt` has the steps.
+
+### On an install from before the icon
+
+An install made by a Setup without the icon (1.0.0-rc1, rc2) gets it in
+one of three ways:
+
+- **Run `DomovoiTray.exe` on its own** (keeps everything): download it
+  from the release page (its line is in `SHA256SUMS`) and run it. It
+  starts for your account at once, copies itself to
+  `%LOCALAPPDATA%\Programs\Domovoi` (a folder only your account can
+  change, so nobody else on the PC can swap the program your sign-in
+  starts) and starts from there at each sign-in (value `DomovoiTray`
+  under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`; **Start
+  with Windows** turns it off). Each account that wants the icon runs it
+  once. Once a Setup with the icon is installed, its copy takes over and
+  the per-account start and copy are removed.
+- **Run the newer Setup over the install** (a repair): Setup stops
+  Domovoi, replaces its programs (the icon included), and runs the newer
+  `provision.sh` over the existing distro. The database, settings and
+  Domovoi's code stay as they are (an existing checkout is never moved;
+  the dashboard's updates move it). This is the same repair run as "Setup
+  stopped partway" below, with a newer `provision.sh` than the one that
+  installed the distro.
+- **Uninstall, then install the newer Setup**: this build has no
+  keep-data uninstall, so it deletes the database, history, voice
+  profiles and the server's identity, and satellites must be paired
+  again.
+
+### For developers
+
+`DomovoiTray.exe --web-url URL --core-url URL --service NAME` (and
+`--profile`, `--downloads`, `--fake-card DIR`, `--grace SECONDS`,
+`--snapshot DIR`; `windows/tray/Options.cs` lists them) points the icon at
+a throwaway Domovoi. Any of them makes it a developer run: its own
+settings key (`HKCU\Software\Domovoi\TrayDev\<profile>`), its own
+single-instance name, no sign-in registration, and no real drive listed by
+the card helper (only `--fake-card` folders). Never point one at a
+household's install, and never use **Restart Domovoi** with a real
+service name in a test.
 
 ## Give the PC a fixed address (DHCP reservation)
 
@@ -389,6 +500,11 @@ you share them.
   another port, then **Retry**. Docker Desktop can keep running. It can
   come during the install too, right before Domovoi starts: then Setup
   carries on by itself once the port is free.
+- **The dashboard doesn't open:** the tray icon's dot and tooltip say
+  what Domovoi is doing (starting, stopped, or which part isn't
+  answering). **Restart Domovoi...** in its menu restarts it, and **Save
+  logs for support...** copies the logs, both with an administrator's
+  permission.
 - **The browser shows an old dashboard, or claiming the admin account
   fails** ("X-Requested-With header required"): an earlier Domovoi's
   service worker is answering from its cache. Use **Open Domovoi** on
@@ -420,11 +536,14 @@ you share them.
 ## Not in this build
 
 - The always-on supervisor (health checks and recovery, firewall sync when
-  the network changes, the port watch, the media watcher, backups) and the
-  tray icon. Until then nothing re-checks the subnet in the firewall rules
-  if the PC moves to another network.
-- Power settings: Setup doesn't ask to keep the PC awake. A sleeping PC
-  takes Domovoi offline.
+  the network changes, the port watch, the media watcher, backups). Until
+  then nothing re-checks the subnet in the firewall rules if the PC moves
+  to another network.
+- Power settings: Setup doesn't change them. The tray icon's **Keep this
+  PC awake** keeps the PC up while someone is signed in; with nobody signed
+  in Windows sleeps it as its power plan says (the icon's menu says when),
+  and a sleeping PC takes Domovoi offline.
+- The server PC as a room (a satellite on the same PC).
 - Whether everything starts before anyone signs in after a reboot, and
   whether the GPU is used then, is still being proven.
 - Code signing (on hold): see [Unsigned](#unsigned).
@@ -475,7 +594,7 @@ that has it, a fresh install's first update does the same.
 From a Windows PowerShell 5.1 prompt in the repository:
 
 ```powershell
-.\windows\build.ps1                  # exes, unit tests, then DomovoiSetup.exe
+.\windows\build.ps1                  # exes (DomovoiTray.exe too), unit tests, then DomovoiSetup.exe
 .\windows\build.ps1 -SkipInstaller   # exes and unit tests only
 .\windows\build.ps1 -Pin v1.0.0      # move the pins to a release tag's commit, then build
 .\windows\build.ps1 -Pin <sha> -Channel main -PinOnly   # a test pin, nothing built
@@ -502,8 +621,9 @@ the installer needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)
 | `windows/installer/art/` | Domovoi's icon (16-256 px) and the wizard's pictures at every size Inno Setup uses, made from `docs/assets/domovoi-icon.png` by `make_art.py` (Pillow 12.3.0 from `requirements.txt` in a private venv; `--check` compares them pixel for pixel). Don't edit them by hand: change the source or the script and run it again. |
 | `windows/helper/` | `DomovoiSetupHelper.exe`: every change to the PC, one verb per call, run elevated from `C:\Program Files\Domovoi`. |
 | `windows/host/` | `DomovoiHost.exe`: the service that runs as `domovoi-svc`. |
+| `windows/tray/` | `DomovoiTray.exe`: the notification-area icon and its card helper (WinForms, the same compiler). |
 | `windows/common/` | Logic both share: progress-line parsing, `wsl --list` answers, port owners, `.wslconfig` and firewall rules, media-folder rules, the uninstall plan and its runner. |
-| `windows/tests/` | The unit tests, compiled with `common/`, `helper/` and `host/`. They run Firewall's cleanup script against stand-in cmdlets and the helper's folder code on throwaway junctions under `%TEMP%`; nothing else on the PC is touched. |
+| `windows/tests/` | The unit tests, compiled with `common/`, `helper/`, `host/` and `tray/`. They run Firewall's cleanup script against stand-in cmdlets, the helper's folder code on throwaway junctions under `%TEMP%`, and the card helper on folders that mimic a flashed card, against `card-goldens.json` (the server's own `config.txt`/`cmdline.txt` edits, made and kept current by `domovoi/tests/test_windows_card_parity.py`); nothing else on the PC is touched. |
 
 `build.ps1 -Sign` is the place code signing goes back in; while signing is
 on hold it refuses, and every build is unsigned.

@@ -3178,7 +3178,7 @@ const SatellitesPage = ({ embedded = false } = {}) => {
       ) : sats.length === 0 ? (
         <Card><Empty glyph="sleeping" title="no satellites provisioned yet"
                      sub={onWsl
-                       ? "prepare a card below and set the satellite up from a phone — USB adoption isn't available while Domovoi runs inside WSL on Windows"
+                       ? "build the card's files below, write them with the tray icon's card helper, then set the satellite up from a phone — no USB adoption while Domovoi runs inside WSL on Windows"
                        : "plug a satellite into this machine's USB port to adopt it — or provision one manually"}/></Card>
       ) : labels.length === 0 ? (
         grid(sats)
