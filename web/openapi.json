@@ -18939,6 +18939,28 @@
               }
             ],
             "title": "Settings Ignored"
+          },
+          "wake_word": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wake Word"
+          },
+          "wake_phrase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wake Phrase"
           }
         },
         "type": "object",

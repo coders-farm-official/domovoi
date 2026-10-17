@@ -604,6 +604,13 @@ class Satellite(BaseModel):
     # its profile's default at load (2026-10-13), e.g. "music device setting
     # ignored: not a plain ALSA name". Null when none, or offline.
     settings_ignored: list[str] | None = None
+    # The wake word this room answers to: the openWakeWord slug it named in
+    # its last hello ("hey_jarvis", or a trained word's slug), kept by the
+    # Domovoi server after a disconnect; null until it has connected since
+    # the server started. ``wake_phrase``: a trained word's phrase from the
+    # registry (null for the built-in words). The user manual says these.
+    wake_word: str | None = None
+    wake_phrase: str | None = None
 
 
 # ─── Notes / Timers ───────────────────────────────────────────────────────
