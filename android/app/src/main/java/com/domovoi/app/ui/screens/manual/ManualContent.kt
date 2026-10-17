@@ -1,238 +1,370 @@
 package com.domovoi.app.ui.screens.manual
 
-/**
- * Static copy for the manual screen. Deliberately trimmed to CORE
- * features only: plugin-provided features (radio stations, media
- * providers, …) are documented live in the web dashboard's manual,
- * which renders from the server's capability manifest — a static list
- * here would go stale the moment a plugin is installed or removed.
+import com.domovoi.app.net.DomovoiJson
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+
+/*
+ * The user manual's content: the server's web/static/manual-content.json
+ * (made by scripts/manual/build_manual.py from scripts/manual/manual.md).
+ * The dashboard's #manual page renders the same file; the app fetches it
+ * from the server it is connected to (ManualRepository), so the manual
+ * here always matches that server's version. This file is the pure part:
+ * the model, the inline markup, the wake word the rooms answer to, which
+ * docs a "More detail" link opens, the checklist's ticks, and search.
+ * Unit-tested on the JVM (ManualContentTest), against the repo's own file.
  */
 
-internal data class ManualNode(
-    val glyph: String,
-    val name: String,
-    val role: String,
-    val tech: String,
-    val live: Boolean = false,
-    val idle: Boolean = false,
+internal const val MANUAL_PATH = "/manual-content.json"
+internal const val MANUAL_SCHEMA_PREFIX = "domovoi-manual/"
+
+@Serializable
+internal data class ManualDoc(
+    val schema: String = "",
+    @SerialName("doc_base") val docBase: String = "",
+    val labels: JsonObject = JsonObject(emptyMap()),
+    @SerialName("wake_word") val wakeWord: ManualWakeWord = ManualWakeWord(),
+    val routes: Map<String, ManualRoute> = emptyMap(),
+    /** handler → the server feature it needs on (GET /api/capabilities
+     *  features) to be listed in "Everything it can do". */
+    @SerialName("handler_needs_feature") val handlerNeedsFeature: Map<String, String> = emptyMap(),
+    val centre: ManualCentre = ManualCentre(),
+    val start: ManualStart = ManualStart(),
+    val topics: List<ManualTopic> = emptyList(),
+    val pieces: List<ManualPiece> = emptyList(),
+) {
+    /** A chrome string from `labels` ("search_placeholder"), or a nested
+     *  one ("admin", "text"); [fallback] when the file has none. */
+    fun label(key: String, sub: String? = null, fallback: String = ""): String {
+        val v = labels[key] ?: return fallback
+        return runCatching {
+            if (sub == null) v.jsonPrimitive.contentOrNull else v.jsonObject[sub]?.jsonPrimitive?.contentOrNull
+        }.getOrNull() ?: fallback
+    }
+
+    fun piece(id: String?): ManualPiece? = pieces.firstOrNull { it.id == id }
+    fun topic(id: String?): ManualTopic? = topics.firstOrNull { it.id == id }
+
+    /** The topics around the centre (the centre's own opens from it). */
+    val ringTopics: List<ManualTopic> get() = topics.filter { it.id != centre.opens }
+
+    companion object {
+        fun parse(text: String): ManualDoc? = runCatching {
+            DomovoiJson.decodeFromString(serializer(), text)
+        }.getOrNull()?.takeIf { it.schema.startsWith(MANUAL_SCHEMA_PREFIX) && it.topics.isNotEmpty() }
+    }
+}
+
+@Serializable
+internal data class ManualWakeWord(
+    val default: String = "hey_jarvis",
+    val names: Map<String, String> = mapOf("hey_jarvis" to "Hey Jarvis"),
+    val quoted: String = "“{phrase}”",
+    val note: String = "Some rooms answer to another word: {list}.",
+    @SerialName("note_item") val noteItem: String = "“{phrase}” in {rooms}",
+    @SerialName("note_join") val noteJoin: String = "; ",
 )
 
-internal val MANUAL_NODES = listOf(
-    ManualNode("◈", "satellites", "the ears & mouth in each room", "pi zero 2 w · mic · aux", idle = true),
-    ManualNode("▦", "web", "this dashboard", "fastapi :6369 · react"),
-    ManualNode("▚", "core", "the brain — routes every request", "fastapi :6370 · handlers · plugin runtime", live = true),
-    ManualNode("◟", "whisper", "turns your speech into text", "faster-whisper · cuda"),
-    ManualNode("◍", "ollama", "understands & answers", "llama3.2 · qwen2.5"),
-    ManualNode("◠", "tts", "gives Domovoi its voice", "piper on onnx runtime → system"),
-    ManualNode("▤", "postgres", "remembers everything", "postgres 16 · migrations"),
-    ManualNode("♪", "mpd", "plays music, per room", "one container / room"),
-    ManualNode("⚙", "workers", "background jobs", "timers · library upkeep · plugin workers"),
+@Serializable
+internal data class ManualRoute(val dashboard: String? = null, val app: ManualAppRoute = ManualAppRoute())
+
+/** [screen]: a Route name; [tab]: a Settings tab key; [dashboard]: the app
+ *  opens the dashboard at the route instead. */
+@Serializable
+internal data class ManualAppRoute(val screen: String? = null, val tab: String? = null, val dashboard: Boolean = false)
+
+@Serializable
+internal data class ManualCentre(
+    val id: String = "domovoi",
+    val title: String = "Domovoi",
+    val subtitle: String = "",
+    val opens: String = "",
 )
 
-internal data class FeatureRow(val name: String, val desc: String, val net: String? = null)
-
-internal val MANUAL_FEATURES = listOf(
-    FeatureRow("music", "library playback, playlists & favorites — kitchen and garage play independently", "offline"),
-    FeatureRow("timers · reminders", "countdowns and spoken reminders", "offline"),
-    FeatureRow("intercom · drop-in", "talk room-to-room across the satellites", "offline"),
-    FeatureRow("voice notes", "leave yourself a spoken note", "offline"),
-    FeatureRow("memory", "tell Domovoi a fact and it keeps it"),
-    FeatureRow("chat mode", "open, continued conversation without re-waking"),
-    FeatureRow("double-check", "fact-check the last answer against the web", "needs net"),
-    FeatureRow("voice profiles", "knows who's speaking, with presence-aware urgency", "offline"),
-    FeatureRow("everyday", "clock, calculator, wi-fi info, homelab status", "offline"),
-    FeatureRow("plugins", "installed plugins add more — radio stations, media providers, … — managed and documented in the web dashboard"),
+@Serializable
+internal data class ManualStart(
+    val title: String = "Start here",
+    val blocks: List<ManualBlock> = emptyList(),
+    val checklist: List<ManualCheck> = emptyList(),
 )
 
-internal data class TechRow(val name: String, val desc: String)
-
-internal val MANUAL_TECH = listOf(
-    TechRow("satellites", "Pi Zero 2 W · openWakeWord · ReSpeaker 2-Mics HAT or XVF3800 USB array · WebSocket audio streaming · aux-out playback"),
-    TechRow("core", "FastAPI · Python 3.11+ · native on Windows for CUDA · intent router → handlers → TTS · background workers · in-process plugin runtime"),
-    TechRow("whisper", "faster-whisper large-v3 on CUDA (float16), via CTranslate2"),
-    TechRow("ollama", "llama3.2:3b answers questions · qwen2.5:14b routes tool calls (stronger schema adherence)"),
-    TechRow("tts", "Domovoi's own text-to-phoneme converter → a Piper voice on ONNX Runtime (Kristin, Norman or Linda, public domain) → the system voice as the floor · every voice local · voices configurable per satellite · this phone can speak with the same voice"),
-    TechRow("postgres", "PostgreSQL 16 (the only Dockerized piece) · migration-only schema · LISTEN/NOTIFY live state bus"),
-    TechRow("mpd", "Music Player Daemon — one lazily-spawned container per room"),
-    TechRow("workers", "timer watcher, library index/enrich, memory extractor, and more — plugins register their own alongside"),
-    TechRow("web", "separate FastAPI on :6369 · React (Babel-in-browser) · reads the same Postgres, calls the Domovoi core for live state"),
+@Serializable
+internal data class ManualCheck(
+    val id: String = "",
+    @SerialName("done_when") val doneWhen: String = "",
+    val platforms: List<String> = emptyList(),
+    val text: String = "",
+    @SerialName("app_text") val appText: String? = null,
+    @SerialName("app_done_when") val appDoneWhen: String? = null,
 )
 
-internal data class TroubleRow(val symptom: String, val fix: String)
-
-internal val MANUAL_TROUBLE = listOf(
-    TroubleRow("choppy audio", "check the Pi's wi-fi rate first: iw dev wlan0 link — if rx is stuck at 1 Mbit/s, run wpa_cli reassociate before touching anything else."),
-    TroubleRow("no sound at all", "only one process can hold a Pi's audio card at a time (no software mixer on Pi OS Lite). Make sure nothing else is playing."),
-    TroubleRow("mpg123 crashes", "on a fresh Pi it defaults to JACK and segfaults — force ALSA with -o alsa."),
-    TroubleRow("\"port not listening\"", "the music stream binds lazily — that message usually just means nothing is playing yet."),
-    TroubleRow("one Pi worse than others", "a hotter-running satellite drops mic frames — suspect its SD card / dependencies, not the code."),
-    TroubleRow("quiet / one-sided music", "the XVF3800's audio-out is mono — use a mono→stereo adapter for a stereo speaker pair."),
-    TroubleRow("\"managed by your organization\"", "that Windows firewall popup is usually stale block rules, not a real policy."),
-    TroubleRow("server can't reach a Pi", "use a LAN hostname, never localhost — on the Pi that resolves back to itself."),
+@Serializable
+internal data class ManualTopic(
+    val id: String = "",
+    val title: String = "",
+    val subtitle: String = "",
+    val keywords: List<String> = emptyList(),
+    val pieces: List<String> = emptyList(),
+    val centre: Boolean = false,
+    val intro: String? = null,
 )
 
-internal data class FaqRow(val q: String, val a: String)
-
-internal val MANUAL_FAQ = listOf(
-    FaqRow(
-        "What's a domovoi?",
-        "A household guardian spirit from Slavic folklore — it often takes the form of a cat, which is why a cat lives in the UI. Domovoi is the assistant you talk to; the wake name is configurable.",
-    ),
-    FaqRow(
-        "Does it work without internet?",
-        "Yes — it's local-first. Speech-to-text, understanding, local voices, the music library, timers, intercom and more all run offline. Only web search and some plugin features need the network, and they degrade gracefully instead of breaking.",
-    ),
-    FaqRow(
-        "Is my data private?",
-        "Everything runs on your own hardware. There's no cloud account and nothing leaves the house unless a network feature asks for it.",
-    ),
-    FaqRow(
-        "Can I change the wake word?",
-        "Yes. Record a handful of clips on a satellite and train a custom model on the web dashboard — Settings → Wake Words. (Training is Linux-only, so it runs off-box.)",
-    ),
-    FaqRow(
-        "Can I add my own voice?",
-        "Pick one of the three public-domain voices, upload a Piper .onnx trained on English phonemes (American \"en-us\", what most voices people train use, or British \"en\") — on the web dashboard, Settings → Voices.",
-    ),
-    FaqRow(
-        "It says a name wrong. Can I fix it?",
-        "Yes: on the web dashboard, Settings → Voices → Say it like. Type the word and how it sounds, the stressed part in capitals (Siobhan = shiv-AWN), and press play to hear it first. This phone uses the same list.",
-    ),
-    FaqRow(
-        "Can this phone sound like Domovoi?",
-        "Yes: Settings → Voice here — \"Same as the server\" (the default) or one of the three voices. The one in use downloads once (about 64 MB) and then speaks offline; until it has, the phone's own text-to-speech voice speaks.",
-    ),
-    FaqRow(
-        "Why two different LLMs?",
-        "A small fast model handles open questions; a stronger model routes tool calls, where strict schema adherence matters more than speed.",
-    ),
-    FaqRow(
-        "How do rooms play different music?",
-        "Each room gets its own music daemon, so the kitchen and the garage can play completely independent tracks at the same time. Any room can start or control another’s by naming it: “play some music in the garage”.",
-    ),
-    FaqRow(
-        "How do I add features?",
-        "Install plugins from the web dashboard (Settings → Plugins). A plugin can add voice commands, background workers, dashboard pages and app screens — the Stations screen here, for example, appears when the radio plugin is installed.",
-    ),
+@Serializable
+internal data class ManualPiece(
+    val id: String = "",
+    val topic: String = "",
+    val title: String = "",
+    val subtitle: String = "",
+    val keywords: List<String> = emptyList(),
+    val preview: Boolean = false,
+    val plugin: String? = null,
+    val live: String? = null,
+    @SerialName("alias_of") val aliasOf: String? = null,
+    val blocks: List<ManualBlock> = emptyList(),
+    val more: ManualMore? = null,
 )
 
-internal data class HowtoRow(val title: String, val act: List<String>, val diag: List<String>)
+@Serializable
+internal data class ManualMore(val text: String = "More detail", val target: String = "")
 
-internal val MANUAL_HOWTO = listOf(
-    HowtoRow(
-        "satellites",
-        listOf(
-            "Add one: flash the Pi and drop in its config — it shows up here once it connects.",
-            "Change its voice or wake word on the web dashboard (Settings → Voices / Wake Words), then push to the room.",
-            "Set playback volume per room from the Music page.",
-        ),
-        listOf(
-            "No response? Check the wake loop is running and the mic board matches its trained model.",
-            "Choppy audio? Check wi-fi rx rate (iw dev wlan0 link); reassociate if stuck at 1 Mbit/s.",
-            "No sound? Make sure nothing else is holding the Pi's single audio card.",
-        ),
-    ),
-    HowtoRow(
-        "the web dashboard",
-        listOf(
-            "Switch pages from the nav — each surface manages one area.",
-            "Server settings (greetings, voices, wake words, models, configuration) are managed here — this app's Settings → Server settings opens it.",
-            "Change server settings under the gear → Configuration.",
-            "Install and manage plugins under Settings → Plugins.",
-            "Check versions / pull updates under Configuration → Version.",
-        ),
-        listOf(
-            "Stale data? Hard-refresh (Ctrl+Shift+R).",
-            "Actions failing? The dashboard must reach the Domovoi core on :6370 — confirm it is running.",
-        ),
-    ),
-    HowtoRow(
-        "the core service",
-        listOf(
-            "Restart it on the server to apply restart-tier config changes.",
-            "Check health at /v1/health and connectivity at /v1/connectivity.",
-            "Update on the web dashboard under Configuration → Version: check, pull, then restart to apply.",
-        ),
-        listOf(
-            "Nothing responds? Confirm the process is up and Postgres is reachable.",
-            "Bad routing? Make sure both Ollama models are installed and loaded.",
-        ),
-    ),
-    HowtoRow(
-        "whisper (speech-to-text)",
-        listOf(
-            "Switch the speech-to-text model or pre-download a size from the web dashboard's Models page.",
-            "Prefer large-v3 for accuracy; a smaller size if VRAM is tight.",
-        ),
-        listOf(
-            "Slow or garbled? Confirm it is on CUDA (float16), not the CPU.",
-            "First use slow? The model may be cold-downloading — pre-stage it on the dashboard's Models page.",
-        ),
-    ),
-    HowtoRow(
-        "ollama (the language model)",
-        listOf(
-            "Switch the Q&A or tool-routing model, or pull a new one, from the web dashboard's Models page.",
-            "Two models by design: a fast one answers, a stronger one routes tools.",
-        ),
-        listOf(
-            "LLM commands failing? Check the Ollama server is reachable and the model is installed.",
-            "See what's loaded in VRAM right now on the dashboard's hardware panel.",
-        ),
-    ),
-    HowtoRow(
-        "text-to-speech",
-        listOf(
-            "Pick Domovoi's voice (Kristin, the default, Norman or Linda) on the web dashboard under Settings → Voices.",
-            "A word said wrong? Add it under \"Say it like\" there: Siobhan = shiv-AWN.",
-            "Or upload a local Piper .onnx trained on English phonemes (American \"en-us\" or British \"en\").",
-            "This phone's voice: Settings → Voice here.",
-        ),
-        listOf(
-            "No voice? Play a sample — a missing or broken Piper voice falls back to the system voice.",
-            "Wrong voice? Confirm the intended one is set as default.",
-        ),
-    ),
-    HowtoRow(
-        "postgres (state)",
-        listOf(
-            "Mostly hands-off — schema changes are migrations applied on deploy; plugins keep their own schemas.",
-        ),
-        listOf(
-            "State missing or errors? Confirm the Postgres container is up and reachable.",
-            "Check the latest migration has been applied to both prod and test DBs.",
-        ),
-    ),
-    HowtoRow(
-        "music playback",
-        listOf(
-            "Play, queue and favorite music from the Music page — each room is independent.",
-            "By voice, from any room, name the room: “play jazz in the garage”, “stop the music in the office”, “what’s playing in the kitchen”, “turn it up in the den”, “resume my audiobook in the office”.",
-            "To stop, pause or skip in another room, saying the room first is safest: “in the garage, stop the music”.",
-        ),
-        listOf(
-            "\"port not listening\" usually just means nothing is playing (it binds lazily).",
-            "No music in a room? Check that room's MPD container is running.",
-        ),
-    ),
-    HowtoRow(
-        "background workers",
-        listOf(
-            "Enable/disable background workers (library upkeep, memory, plugin workers…) on the web dashboard under Configuration.",
-        ),
-        listOf(
-            "A feature isn't updating? Check its worker's enabled flag — and that the core service was restarted after the change.",
-        ),
-    ),
-    HowtoRow(
-        "plugins",
-        listOf(
-            "Install, enable/disable and remove plugins from the web dashboard (Settings → Plugins).",
-            "Plugin screens in this app (like Stations) appear automatically once the matching plugin is installed.",
-        ),
-        listOf(
-            "A screen is missing here? Check the plugin is installed AND enabled on the server, then pull to refresh.",
-            "Plugin misbehaving? Its logs and worker status show in the web dashboard's observability panel.",
-        ),
-    ),
+/** One block of a page; which fields are set depends on [type] (the
+ *  file's notes.blocks). */
+@Serializable
+internal data class ManualBlock(
+    val type: String = "",
+    val text: String = "",
+    val only: String? = null,
+    val ordered: Boolean = false,
+    val items: List<ManualItem> = emptyList(),
+    val role: String? = null,
+    val admin: Boolean = false,
+    val note: String? = null,
+    val phrases: List<ManualPhrase> = emptyList(),
+    val header: List<String> = emptyList(),
+    val rows: List<List<String>> = emptyList(),
+    val slot: String? = null,
 )
+
+@Serializable
+internal data class ManualItem(val text: String = "", val only: String? = null)
+
+@Serializable
+internal data class ManualPhrase(
+    val text: String = "",
+    val handler: String? = null,
+    val path: String? = null,
+    val note: String? = null,
+    val then: Boolean = false,
+    val plugin: String? = null,
+    val pending: String? = null,
+)
+
+/** Shown in the app: everything but the dashboard-only lines. */
+internal fun shownInApp(only: String?): Boolean = only == null || only == "app"
+
+// ─── inline markup ───────────────────────────────────────────────────────
+
+internal sealed interface Span {
+    data class Plain(val text: String) : Span
+    data class Bold(val text: String) : Span
+    data class Italic(val text: String) : Span
+    data class Code(val text: String) : Span
+    /** kind: route | node | doc. */
+    data class Link(val text: String, val kind: String, val target: String) : Span
+    /** admin | preview | plugin. */
+    data class Tag(val name: String) : Span
+    data object Wake : Span
+}
+
+private val TOKEN = Regex(
+    """\*\*[^*]+\*\*|\*[^*\s][^*]*\*|`[^`]+`|\[[^\]]+\]\((?:route|node|doc):[^)]+\)|\{(?:admin|preview|plugin|wake)\}""",
+)
+private val LINK = Regex("""^\[([^\]]+)\]\((route|node|doc):([^)]+)\)$""")
+
+/** The file's inline markup (notes.inline) as spans. */
+internal fun parseInline(text: String): List<Span> {
+    val out = mutableListOf<Span>()
+    var at = 0
+    for (m in TOKEN.findAll(text)) {
+        if (m.range.first > at) out += Span.Plain(text.substring(at, m.range.first))
+        val t = m.value
+        out += when {
+            t.startsWith("**") -> Span.Bold(t.substring(2, t.length - 2))
+            t.startsWith("`") -> Span.Code(t.substring(1, t.length - 1))
+            t == "{wake}" -> Span.Wake
+            t.startsWith("{") -> Span.Tag(t.substring(1, t.length - 1))
+            t.startsWith("[") -> LINK.find(t)!!.destructured.let { (label, kind, target) -> Span.Link(label, kind, target) }
+            else -> Span.Italic(t.substring(1, t.length - 1))
+        }
+        at = m.range.last + 1
+    }
+    if (at < text.length) out += Span.Plain(text.substring(at))
+    return out
+}
+
+// ─── the wake word ───────────────────────────────────────────────────────
+
+/** A room as the manual needs it (GET /api/satellites). */
+@Serializable
+internal data class ManualRoom(
+    @SerialName("room_id") val roomId: String = "",
+    @SerialName("room_label") val roomLabel: String? = null,
+    val status: String = "",
+    @SerialName("wake_word") val wakeWord: String? = null,
+    @SerialName("wake_phrase") val wakePhrase: String? = null,
+    @SerialName("last_seen_at") val lastSeenAt: String? = null,
+    @SerialName("now_playing") val nowPlaying: ManualNowPlaying? = null,
+) {
+    val name: String get() = roomLabel?.takeIf { it.isNotBlank() } ?: roomId
+}
+
+@Serializable
+internal data class ManualNowPlaying(val title: String? = null, val file: String? = null)
+
+internal fun titleWords(s: String?): String =
+    (s ?: "").replace(Regex("[_-]+"), " ").trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        .joinToString(" ") { w -> w.replaceFirstChar { it.uppercaseChar() } }
+
+/** The words a room answers to, as people say them. */
+internal fun wakePhraseOf(ww: ManualWakeWord, room: ManualRoom): String? {
+    val slug = room.wakeWord ?: return null
+    return room.wakePhrase?.takeIf { it.isNotBlank() }?.let(::titleWords) ?: ww.names[slug] ?: titleWords(slug)
+}
+
+internal data class WakeInfo(val lead: String, val others: List<Pair<String, List<String>>>)
+
+/** The word to name: the out-of-the-box word while any room answers to it
+ *  (or nothing is known), else the one most rooms use; [WakeInfo.others]:
+ *  the other words, with their rooms (the dashboard's umWake). */
+internal fun wakeInfo(ww: ManualWakeWord, rooms: List<ManualRoom>?): WakeInfo {
+    val known = rooms.orEmpty().filter { it.wakeWord != null }
+    val groups = LinkedHashMap<String, MutableList<String>>()
+    known.forEach { r -> groups.getOrPut(wakePhraseOf(ww, r)!!) { mutableListOf() } += r.name }
+    val fallback = ww.names[ww.default] ?: titleWords(ww.default)
+    val order = compareByDescending<Map.Entry<String, MutableList<String>>> { it.value.size }.thenBy { it.key }
+    val lead = if (known.isNotEmpty() && known.none { it.wakeWord == ww.default }) {
+        groups.entries.sortedWith(order).first().key
+    } else fallback
+    val others = groups.entries.filter { it.key != lead }.sortedWith(order).map { it.key to it.value.toList() }
+    return WakeInfo(lead, others)
+}
+
+internal fun fill(template: String, vars: Map<String, String>): String =
+    Regex("""\{(\w+)\}""").replace(template) { m -> vars[m.groupValues[1]] ?: m.value }
+
+internal fun wakeNote(ww: ManualWakeWord, info: WakeInfo): String? {
+    if (info.others.isEmpty()) return null
+    val list = info.others.joinToString(ww.noteJoin) { (phrase, rooms) ->
+        fill(ww.noteItem, mapOf("phrase" to phrase, "rooms" to rooms.joinToString(", ")))
+    }
+    return fill(ww.note, mapOf("list" to list))
+}
+
+// ─── links ───────────────────────────────────────────────────────────────
+
+private val RELEASE = Regex("""^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$""")
+
+/** The docs of the version the server runs: its tag when the version label
+ *  is a release exactly ("1.0.0", "1.0.0-rc2"), else main. */
+internal fun docRef(versionLabel: String?): String =
+    if (versionLabel != null && RELEASE.matches(versionLabel)) "v$versionLabel" else "main"
+
+internal fun docUrl(doc: ManualDoc, versionLabel: String?, target: String): String =
+    doc.docBase.replace("{ref}", docRef(versionLabel)) + target.removePrefix("doc:")
+
+/** The dashboard at [hash] ("#settings/voices") on the connected server. */
+internal fun dashboardUrl(serverUrl: String?, hash: String): String? {
+    val base = serverUrl?.trim()?.trimEnd('/').orEmpty()
+    if (base.isEmpty()) return null
+    return "$base/${if (hash.startsWith("#")) hash else "#$hash"}"
+}
+
+// ─── the checklist ───────────────────────────────────────────────────────
+
+/** What the app read for the checklist; null = couldn't tell. */
+internal data class ManualSignals(
+    val rooms: List<ManualRoom>? = null,
+    val roomHeard: Boolean? = null,
+    val people: Int? = null,
+    val tracks: Long? = null,
+)
+
+/** The lines the app shows, with their text (the app's own for the phone
+ *  line) and whether each is done (null: can't tell from here). */
+internal fun appChecklist(doc: ManualDoc, s: ManualSignals): List<Pair<String, Boolean?>> =
+    doc.start.checklist.mapNotNull { c ->
+        when {
+            "app" in c.platforms -> c.text to done(c.doneWhen, s)
+            c.appText != null -> c.appText to (if (c.appDoneWhen == "this_phone_paired") true else null)
+            else -> null
+        }
+    }
+
+private fun done(key: String, s: ManualSignals): Boolean? = when (key) {
+    "rooms" -> s.rooms?.isNotEmpty()
+    "room_heard" -> s.roomHeard
+    "people" -> s.people?.let { it > 0 }
+    "music" -> s.tracks?.let { it > 0 }
+    else -> null
+}
+
+// ─── search ──────────────────────────────────────────────────────────────
+
+/** Pieces matching every word of [query] (title, subtitle, search words,
+ *  topic), best first: the dashboard's umSearch. */
+internal fun searchManual(doc: ManualDoc, visible: Set<String>, query: String, max: Int = 8): List<ManualPiece> {
+    val words = query.lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    if (words.isEmpty()) return emptyList()
+    return doc.pieces.asSequence()
+        .filter { it.id in visible && it.aliasOf == null }
+        .mapNotNull { p ->
+            val title = p.title.lowercase()
+            val hay = (listOf(title, p.subtitle.lowercase()) + p.keywords.map { it.lowercase() } +
+                (doc.topic(p.topic)?.title?.lowercase() ?: "")).joinToString(" · ")
+            if (!words.all { it in hay }) return@mapNotNull null
+            val score = words.sumOf { w ->
+                when {
+                    title.startsWith(w) -> 4
+                    w in title -> 3
+                    p.keywords.any { it.lowercase().startsWith(w) } -> 2
+                    else -> 1
+                }.toInt()
+            }
+            p to score
+        }
+        .sortedWith(compareByDescending<Pair<ManualPiece, Int>> { it.second }.thenBy { it.first.title })
+        .take(max).map { it.first }.toList()
+}
+
+/** The manual's own phrases per handler (never a pending one, never one
+ *  written with "…"): what "Everything it can do" lists where the server
+ *  gives a feature none. */
+internal fun phrasesByHandler(doc: ManualDoc): Map<String, List<String>> {
+    val out = LinkedHashMap<String, MutableList<String>>()
+    (listOf(doc.start.blocks) + doc.pieces.map { it.blocks }).flatten().filter { it.type == "say" }.forEach { b ->
+        b.phrases.forEach { p ->
+            val h = p.handler ?: return@forEach
+            if (p.pending != null || p.then || "…" in p.text) return@forEach
+            val list = out.getOrPut(h) { mutableListOf() }
+            if (p.text !in list) list += p.text
+        }
+    }
+    return out
+}
+
+/** The phrase Home's first-run hint offers: Start here's first. */
+internal fun startPhrase(doc: ManualDoc?): String? =
+    doc?.start?.blocks?.firstOrNull { it.type == "say" && it.phrases.isNotEmpty() }
+        ?.phrases?.firstOrNull { it.pending == null && !it.then }?.text
+
+/** A label read from a JSON element, for the few nested labels. */
+internal fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
+
+/** The features "Everything it can do" lists: those the server has on. */
+internal fun listedHandlers(doc: ManualDoc, names: List<String>, features: Map<String, Boolean>): List<String> =
+    names.filter { n -> doc.handlerNeedsFeature[n]?.let { features[it] == true } ?: true }

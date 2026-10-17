@@ -110,7 +110,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Wake word** — the phrase that opens the mic (default `hey_jarvis`). Detection runs on the satellite via *openWakeWord*; custom words ("Hey Domovoi") are recorded, trained, and pushed to rooms from the dashboard's Wake Words tab, with trained models synced into the Pi's `~/.domovoi/wake_models/` cache.
 
-**Whisper** — the local speech-to-text model (`faster-whisper`, default `large-v3` on CUDA). All transcription happens on the server; no audio goes to any cloud STT.
+**Whisper** — the local speech-to-text model (`faster-whisper`): `small.en` on the CPU on a server set up by the installers, `large-v3` on CUDA by default on one set up by hand. All transcription happens on the server; no audio goes to any cloud STT.
 
 **Worker** — a background loop in the core (or a plugin): the timer watcher, news fetcher, library enricher, playback-state sweeper, wake-word trainer, and friends. Plugins declare theirs in the manifest as `poll`, `longrun`, or `startup` workers.
 

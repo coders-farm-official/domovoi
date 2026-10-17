@@ -1215,7 +1215,7 @@ const FilesPage = () => {
             ? <Empty title="nothing matches" sub={`filter = “${needle}”`}
                      action={<Button icon="x" onClick={() => setFilter('')}>clear filter</Button>}/>
             : <Empty title="empty folder"
-                     sub={canUpload ? 'upload files with New, or go back up' : 'nothing here'}/>
+                     sub={canUpload ? 'upload files with Upload, or go back up' : 'nothing here'}/>
         ) : (
           entries.map((entry) => {
             if (!entry.is_dir && isDocuments && view.doc_editing) {

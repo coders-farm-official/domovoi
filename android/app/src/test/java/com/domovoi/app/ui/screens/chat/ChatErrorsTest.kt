@@ -69,7 +69,8 @@ class ChatErrorsTest {
 
     @Test fun theAcceptedFilesAreSpelledOut() {
         assertEquals(
-            "Chat takes text and pictures: PNG, JPEG, GIF, WebP or BMP, up to 4 a message. No other files.",
+            "Chat takes text and pictures, up to 4 a message: PNG, JPEG, GIF, WebP or BMP, and phone " +
+                "photos in HEIC or AVIF, which this phone turns into a JPEG first. No other files.",
             CHAT_ACCEPTS,
         )
     }

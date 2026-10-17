@@ -69,7 +69,7 @@ Setting up a whole server one way or the other? [Will your Domovoi have internet
 **The server** — one machine that stays on:
 
 - **Linux or Windows** — both supported; see [Linux or Windows for the server?](#linux-or-windows-for-the-server). Either way Docker runs Postgres and the per-room music daemons (Docker Engine on Linux, Docker Desktop on Windows).
-- An NVIDIA GPU is recommended but **not required**: the default STT is Whisper `large-v3` on CUDA, and the local Ollama models (a 3B conversational model and a 14B tool-routing model by default) want VRAM too. On a CPU-only or non-NVIDIA box, four settings get you a system that's instant for everyday commands and slower only for open-ended questions — see [CPU_HOST.md](CPU_HOST.md).
+- An NVIDIA GPU is **not required**. The installers (the Linux script and the Windows installer) set the server up for its processor: Whisper `small.en` on the CPU, Qwen3 8B for routing (Qwen3 4B on a server with less than 24 GB of memory), Llama 3.2 3B for answers and Qwen3-VL 2B for pictures; Ollama uses a GPU by itself when there is one. A server set up by hand starts from defaults that want an NVIDIA GPU (Whisper `large-v3` on CUDA, a 14B tool-routing model); on a CPU-only or non-NVIDIA box, four settings get you a system that's instant for everyday commands and slower only for open-ended questions — see [CPU_HOST.md](CPU_HOST.md).
 - **~20 GB of free disk** for the software and all default models (the two Ollama models alone are ~11 GB), **plus** room for your own media library on top. The full breakdown and ways to shrink it are in the README's [Disk footprint](../README.md#disk-footprint) section.
 
 **Satellites** — one small box per room you want to talk to:
@@ -83,7 +83,7 @@ Full parts list and step-by-step setup: [Satellite Hardware](SATELLITE_HARDWARE.
 
 ## Can it run without a GPU?
 
-Yes, with tradeoffs. Whisper's device is a setting (`WHISPER_DEVICE`, choices `cuda` or `cpu` — dashboard settings gear, advanced section). On CPU you'll want a smaller Whisper model than the default `large-v3` (e.g. `small` or `medium`), and Ollama will run its models on CPU too, so responses get noticeably slower. The system works; it just stops feeling instant. If you're GPU-less, also prefer the fast-path voice commands (timers, music, announcements) — those never touch the LLM at all.
+Yes, with tradeoffs. A server set up by the installers already runs this way: Whisper `small.en` on the processor, and the Qwen3 router sized to its memory. By hand, Whisper's device is a setting (`WHISPER_DEVICE`, choices `cuda` or `cpu` — dashboard settings gear, advanced section). On CPU you'll want a smaller Whisper model than the by-hand default `large-v3` (e.g. `small.en` or `medium`), and Ollama will run its models on CPU too, so responses get noticeably slower. The system works; it just stops feeling instant. If you're GPU-less, also prefer the fast-path voice commands (timers, music, announcements) — those never touch the LLM at all.
 
 ## Does it work offline?
 
@@ -104,13 +104,24 @@ Yes. After setup (which downloads the software and models), answer **No, keep ev
 
 ## How do I add rooms?
 
-A room *is* a satellite. To add one:
+A room *is* a satellite, and every room is added from the dashboard, as
+admin, in **Settings → Satellites**:
 
-1. Provision a new Pi (flash, HAT/array setup, install the satellite client — see `satellite/PROVISIONING.md`).
-2. In its `~/.domovoi/config.toml`, set a stable `room_id` (e.g. `kitchen`) and point `domovoi_url` at your server: `ws://your-server.local:6370`.
-3. Start it. That's it — on first connection, the server automatically provisions that room's own music daemon (an MPD container with its own queue and volume) and the room appears in the dashboard's Settings → Satellites.
+1. **A Raspberry Pi:** put Raspberry Pi OS Lite (64-bit) on a microSD card,
+   put the card in the server's card reader, and use **prepare satellite
+   media → wi-fi setup portal → Prepare** (on the Windows install, which
+   can't see SD cards, **download overlay zip** and unzip it onto the
+   card). The Pi starts its own setup Wi-Fi (`Domovoi-Setup-<id>`): join it
+   from a phone, pick your home Wi-Fi and name the room.
+   **A spare laptop or PC, or an old phone** (preview): **add a spare
+   device** — see [Can an old laptop or phone be a room?](#can-an-old-laptop-or-phone-be-a-room).
+2. The device says or shows a six-digit code: type it under **waiting for
+   approval** and press **approve**.
+3. That's it — on first connection, the server provisions that room's own
+   music daemon (an MPD container with its own queue and volume) and the
+   room appears in Settings → Satellites.
 
-Room names matter: intercom ("announce in the kitchen…") and drop-in ("drop in on the kitchen") address rooms by that `room_id`.
+Room names matter: intercom ("announce in the kitchen…") and drop-in ("drop in on the kitchen") address rooms by the name you gave. The by-hand route (installing the satellite client and pointing it at `ws://<server>:6370` yourself) is in the [Satellite hardware guide](SATELLITE_HARDWARE.md) and `satellite/PROVISIONING.md`.
 
 ## Can an old laptop or phone be a room?
 

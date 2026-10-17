@@ -66,7 +66,7 @@ fun ScreenRouter(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts 
         Route.Stations -> StationsScreen()
         Route.Files -> SourceSwitchPage(DevicePage.Files, server = { FilesScreen() }, device = { YourDeviceFiles() })
         Route.Settings -> SettingsScreen(navigate)
-        Route.Manual -> ManualScreen()
+        Route.Manual -> ManualScreen(navigate)
         Route.Containers -> ContainersScreen()
         Route.Assistant -> AssistantScreen()
     }

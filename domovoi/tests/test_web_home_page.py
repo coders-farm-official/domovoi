@@ -599,14 +599,15 @@ SCENARIOS["cancel_already_fired"] = scenario(
 _EMPTY = house(**{"GET /api/satellites": [], "GET /api/timers": {"server_now": iso(NOW), "timers": []},
                   "GET /api/calendar/events": []})
 SCENARIOS["first_run"] = scenario(
-    {**_EMPTY, "GET /api/capabilities/manual": {"handlers": [
-        {"name": "calculator", "example_phrases": ["what is 2 plus 2"]},
-        {"name": "timer", "example_phrases": []},
-        {"name": "clock", "example_phrases": ["what time is it"]}]}},
+    {**_EMPTY, "GET /manual-content.json": {"schema": "domovoi-manual/2", "start": {"blocks": [
+        {"type": "p", "text": "Domovoi is your home's own voice assistant."},
+        {"type": "say", "phrases": [
+            {"text": "what time is it", "handler": "clock", "path": "fast"},
+            {"text": "set a timer for 10 minutes", "handler": "timer", "path": "fast"}]}]}}},
     SNAP, ls=PAIRED_LS,
 )
 SCENARIOS["first_run_manual_down"] = scenario(
-    {**_EMPTY, "GET /api/capabilities/manual": {"__status": 502, "__body": {"detail": "x"}}},
+    {**_EMPTY, "GET /manual-content.json": {"__status": 404, "__body": {"detail": "Not Found"}}},
     SNAP, ls=PAIRED_LS,
 )
 SCENARIOS["today_next"] = scenario(
@@ -1331,7 +1332,8 @@ def test_cancelling_a_timer_that_already_fired_says_so(driven) -> None:
 def test_an_empty_house_gets_the_first_run_hint(driven) -> None:
     snap = driven["first_run"]
     assert "try saying" in snap["text"]
-    assert "“what time is it”" in snap["text"]     # the timer has none; clock's is next
+    assert "“what time is it”" in snap["text"]     # Start here's first phrase
+    assert "start here" in snap["text"] and "#manual" in snap["links"]
     assert "no rooms yet" in snap["text"]
     assert "add a satellite" in snap["text"] and "#satellites" in snap["links"]
     assert "nothing on today" in snap["quiet"]
@@ -1340,8 +1342,8 @@ def test_an_empty_house_gets_the_first_run_hint(driven) -> None:
 
 
 def test_the_manual_is_read_only_for_an_empty_house(driven) -> None:
-    assert "/api/capabilities/manual" in _fetched(driven["first_run"])
-    assert "/api/capabilities/manual" not in _fetched(driven["paired"]["after"])
+    assert "/manual-content.json" in _fetched(driven["first_run"])
+    assert "/manual-content.json" not in _fetched(driven["paired"]["after"])
     assert "try saying" not in driven["paired"]["after"]["text"]
 
 

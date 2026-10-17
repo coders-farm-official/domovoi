@@ -698,6 +698,17 @@ MUSIC_HOLD_MAX_SEC = 600.0
 # replies), a barge-in, or anything else.
 EARLY_COMMIT_TRIGGERS = frozenset({"wake_word", "followup"})
 
+_WAKE_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+
+def _clean_wake_slug(raw: object) -> str | None:
+    """A hello's ``wake_word``: an openWakeWord model stem ("hey_jarvis", a
+    trained word's slug), or None for anything else (absent, not a string,
+    not slug-shaped)."""
+    if isinstance(raw, str) and _WAKE_SLUG_RE.match(raw.strip()):
+        return raw.strip()
+    return None
+
 # Speculative decodes per utterance, at most. Each is a full Whisper pass
 # (faster-whisper pads every call to a 30 s window, so a partial costs what
 # a whole one does), and a capture that keeps pausing and resuming — a TV,
@@ -2974,6 +2985,17 @@ class StreamSession:
             self.ws.app.state.satellite_synced_sha[self.room_id] = ctrl.get(
                 "synced_sha"
             )
+            # The wake word this room answers to (its effective slug: a word
+            # pushed from the dashboard, else its configured one), for the
+            # user manual's "say ..." (GET /api/satellites wake_word). Kept
+            # after a disconnect, unlike the live caches around it: it is
+            # the room's last known word, and an offline room still has one.
+            wake = _clean_wake_slug(ctrl.get("wake_word"))
+            if wake is not None:
+                words = getattr(self.ws.app.state, "satellite_wake_word", None)
+                if words is None:
+                    words = self.ws.app.state.satellite_wake_word = {}
+                words[self.room_id] = wake
             # An upgrade the core asked this room for is over: the code
             # version it came back on says how it went
             # (domovoi/satellite_upgrades.py).

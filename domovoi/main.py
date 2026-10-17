@@ -649,6 +649,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # are behind the core's current SHA. None means the Pi has never
     # synced. Cleared on disconnect.
     app.state.satellite_synced_sha = {}
+    # Per-room wake word (the slug each satellite named in its hello), for
+    # the user manual's "say ...". Kept across a disconnect: a room's last
+    # known word (streaming.py).
+    app.state.satellite_wake_word = {}
     # The satellite upgrades this core asked for and how each ended
     # (domovoi/satellite_upgrades.py): room → record, from the request until
     # the satellite says hello again, then kept a while. NOT cleared on
@@ -2173,6 +2177,9 @@ async def admin_snapshot() -> dict[str, Any]:
         # frame) so the dashboard can flag satellites behind the core.
         # None for a room means it has never synced its code.
         "satellite_synced_sha": dict(app.state.satellite_synced_sha),
+        # Per-room wake word (the slug each satellite named in its hello,
+        # last known), so the manual names the words the rooms answer to.
+        "satellite_wake_word": dict(getattr(app.state, "satellite_wake_word", None) or {}),
         # Per-room satellite upgrades under way or just finished
         # (domovoi/satellite_upgrades.py: running | done | rolled_back |
         # no_news), so every dashboard and the app lock a room's Upgrade

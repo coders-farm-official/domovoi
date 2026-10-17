@@ -4166,7 +4166,8 @@ const SETTINGS_TABS = [
   { id: 'internet', label: 'Internet' },      // the INTERNET_ACCESS answer (its one home)
   { id: 'config', slug: 'configuration', label: 'Configuration' },   // last tab, by request
 ];
-const SETTINGS_DEFAULT_TAB = 'greetings';
+// A bare #settings opens About: what Domovoi is, and the way to the manual.
+const SETTINGS_DEFAULT_TAB = 'about';
 
 const SETTINGS_SUB = {
   about: 'What Domovoi is — and a link to the user manual.',

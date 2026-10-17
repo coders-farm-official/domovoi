@@ -50,6 +50,8 @@ import com.domovoi.app.ui.shell.Route
 import com.domovoi.app.ui.shell.SidebarCounts
 import com.domovoi.app.update.AppUpdateCard
 import com.domovoi.app.update.rememberAppUpdateNotice
+import com.domovoi.app.ui.screens.manual.ManualRepository
+import com.domovoi.app.ui.screens.manual.startPhrase
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -280,7 +282,7 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
     val firstRun = sats.data?.isEmpty() == true && timers.data != null && tv.active.isEmpty() &&
         cal.data?.isEmpty() == true
     val manual = rememberApi(firstRun) { a ->
-        if (firstRun) ManualAnswer(runCatching { HomeApi.manual(a.api) }.getOrNull()) else null
+        if (firstRun) ManualAnswer((a.manual.load() as? ManualRepository.Result.Ready)?.doc?.let(::startPhrase)) else null
     }
     // A newer app on this server (update/AppUpdate.kt): one quiet card, or none.
     val appUpdate = rememberAppUpdateNotice()
@@ -456,7 +458,7 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
             item(key = "header") { header() }
             val hint = manual.data
             if (firstRun && hint != null) {
-                item(key = "firstrun") { HomeFirstRun(hintPhrase(hint.manual)) { navigate(Route.Manual) } }
+                item(key = "firstrun") { HomeFirstRun(hintPhrase(hint.phrase)) { navigate(Route.Manual) } }
             }
             if (appUpdate != null) item(key = "app-update") { AppUpdateCard(appUpdate) }
             if (twoCol) {
@@ -506,7 +508,7 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
 }
 
 /** The manual read on a first run: [manual] is null when it failed. */
-private class ManualAnswer(val manual: HomeManual?)
+private class ManualAnswer(val phrase: String?)
 
 /** Hand a URL to whatever browser the system has; false when nothing can. */
 private fun openInBrowser(context: Context, url: String): Boolean =

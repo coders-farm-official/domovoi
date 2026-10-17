@@ -42,7 +42,6 @@ internal object HomeApi {
     suspend fun calendar(api: ApiClient, dayStartMs: Long, zone: ZoneId): List<HomeEvent> =
         api.get(calendarPath(dayStartMs, zone)).decode()
 
-    suspend fun manual(api: ApiClient): HomeManual = api.get("/api/capabilities/manual").decode()
 
     /** pause / resume / stop one room — the Music page's transport. */
     suspend fun roomAction(api: ApiClient, room: String, verb: String) {

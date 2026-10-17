@@ -52,9 +52,11 @@ internal data class ChatModelsInfo(
     val vision_installed: Boolean? = null,
 )
 
-/** What the paperclip takes (the server's upload allowlist). */
+/** What the paperclip takes: the server's upload allowlist, plus the phone
+ *  photos this app turns into a JPEG first (ChatPhotoPlan.kt). */
 internal const val CHAT_ACCEPTS =
-    "Chat takes text and pictures: PNG, JPEG, GIF, WebP or BMP, up to 4 a message. No other files."
+    "Chat takes text and pictures, up to 4 a message: PNG, JPEG, GIF, WebP or BMP, and phone " +
+        "photos in HEIC or AVIF, which this phone turns into a JPEG first. No other files."
 
 internal fun visionMissingText(model: String?): String {
     val name = model?.trim().orEmpty()

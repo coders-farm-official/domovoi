@@ -132,8 +132,10 @@ async def list_satellites() -> list[Satellite]:
     captures = await command_captures.opted_in_rooms_or_empty()
     own_only = await _own_only_rooms_or_empty()
     heard = await _last_heard_or_empty()
+    wake_phrases = await _wake_phrases_or_empty()
     return [
-        await _satellite_for(r, snapshot, pairings, meta, captures, own_only=own_only, heard=heard)
+        await _satellite_for(r, snapshot, pairings, meta, captures, own_only=own_only, heard=heard,
+                             wake_phrases=wake_phrases)
         for r in rooms
     ]
 
@@ -777,7 +779,7 @@ async def get_satellite(room_id: str) -> Satellite:
     own_only = await _own_only_rooms_or_empty()
     heard = await _last_heard_or_empty(room_id)
     return await _satellite_for(match, snapshot, pairings, meta, captures, own_only=own_only,
-                                heard=heard)
+                                heard=heard, wake_phrases=await _wake_phrases_or_empty())
 
 
 # ─── Sessions / conversations / notes / timers (per room) ─────────────────
@@ -1656,6 +1658,19 @@ async def _last_heard_or_empty(room_id: str | None = None) -> dict[str, Any]:
         return {}
 
 
+async def _wake_phrases_or_empty() -> dict[str, str]:
+    """slug → phrase of the trained wake words (the ``wake_words``
+    registry), for each room's ``wake_phrase``. {} on any failure: the
+    roster must not fail over a phrase."""
+    try:
+        async with session_scope() as s:
+            rows = await s.execute(text("SELECT slug, phrase FROM wake_words"))
+            return {r[0]: r[1] for r in rows.all() if r[0] and r[1]}
+    except Exception as e:  # noqa: BLE001
+        log.debug("wake word phrases unavailable: %s", e)
+        return {}
+
+
 def _latest(*times: Any) -> Any:
     """The latest of the datetimes given (None ignored), or None."""
     known = [t for t in times if t is not None]
@@ -1683,6 +1698,7 @@ async def _satellite_for(
     *,
     own_only: dict[str, Any] | None = None,
     heard: dict[str, Any] | None = None,
+    wake_phrases: dict[str, str] | None = None,
 ) -> Satellite:
     room_id = room["room_id"]
     active_rooms = set(snapshot.get("active_rooms") or [])
@@ -1722,6 +1738,11 @@ async def _satellite_for(
     # frame and cached per-room in the Domovoi server snapshot. None until the
     # Pi has run an upgrade (or while it's offline).
     version = (snapshot.get("satellite_synced_sha") or {}).get(room_id)
+    # The wake word the room named in its last hello (its slug; the core
+    # keeps it after a disconnect), and a trained word's phrase from the
+    # registry: what the user manual tells people to say.
+    raw_wake = (snapshot.get("satellite_wake_word") or {}).get(room_id)
+    wake_word = raw_wake[:64] if isinstance(raw_wake, str) and raw_wake else None
     in_call_with: str | None = None
     for call in snapshot.get("active_dropins") or []:
         if call.get("initiator") == room_id:
@@ -1819,6 +1840,8 @@ async def _satellite_for(
         supports=[str(x) for x in supports] if supports is not None else None,
         upgrade=upgrade,
         settings_ignored=ignored,
+        wake_word=wake_word,
+        wake_phrase=(wake_phrases or {}).get(wake_word) if wake_word else None,
     )
 
 
