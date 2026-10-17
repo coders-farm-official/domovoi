@@ -994,18 +994,33 @@ def build_plugin_libraries(
     return libs
 
 
+# Mounts already reported as unreadable, so a drive that stays that way is
+# logged once rather than on every Files request (each rebuilds the list).
+_UNREADABLE_SEEN: set[str] = set()
+
+
 def build_removable_libraries() -> list[MediaLibrary]:
+    """One library per present, readable removable drive. A drive that
+    can't be read is left out, never raised (F-055): on Windows a card
+    reader holding an unformatted card is still listed as a removable
+    drive, and resolving its root raises ``OSError`` [WinError 1005] "The
+    volume does not contain a recognized file system". Raised here, that
+    error answered every Files route 500 until the card was taken out."""
     libs: list[MediaLibrary] = []
     for rm in detect_removable():
         mount = rm.get("mount")
         if not mount:
             continue
-        root = Path(mount).expanduser().resolve(strict=False)
         try:
+            root = Path(mount).expanduser().resolve(strict=False)
             if not root.exists() or not root.is_dir():
                 continue
-        except OSError:
+        except (OSError, RuntimeError, ValueError) as e:
+            if mount not in _UNREADABLE_SEEN:
+                _UNREADABLE_SEEN.add(mount)
+                log.info("removable drive %s can't be read, left out of Files: %s", mount, e)
             continue
+        _UNREADABLE_SEEN.discard(mount)
         cdrom = bool(rm.get("read_only"))
         libs.append(
             MediaLibrary(
