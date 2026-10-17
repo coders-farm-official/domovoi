@@ -134,7 +134,7 @@ def test_the_builder_keeps_the_partial_fetch_message():
 
 def _online_debs() -> str:
     body = overlay.render_stage2("domovoi")
-    start = body.index('if [ ! -f "$STEPS/online-debs" ]; then')
+    start = body.index('if [ ! -f "$STEPS/online-debs" ] && [ -f /var/lib/domovoi/internet-off ]; then')
     end = body.index("# 3. The client's Python dependencies.")
     return "\n".join(ln for ln in body[start:end].splitlines() if not ln.lstrip().startswith("#"))
 
@@ -191,3 +191,87 @@ def test_a_card_prepared_with_the_internet_off_carries_root_s_flag():
 def test_the_builder_passes_the_server_s_answer():
     src = (REPO / "domovoi" / "satellite_media" / "builder.py").read_text(encoding="utf-8")
     assert "internet_off=egress.internet_turned_off()," in src
+
+
+# ─── stage 2's package step, run (internet-off flag) ──────────────────────
+#
+# Integration 1017d: stage 2 still ran `apt-get update` (and the online
+# repair) on a card carrying root's internet-off flag. The rendered block
+# runs here under bash (Git Bash on Windows, never System32's WSL launcher)
+# with apt-get replaced by a function that only logs: no network, no root.
+
+
+def _find_bash() -> str | None:
+    import os
+    import shutil
+    import sys
+
+    if sys.platform != "win32":
+        return shutil.which("bash")
+    candidates = []
+    git = shutil.which("git")
+    if git:
+        for up in (Path(git).parent.parent, Path(git).parent.parent.parent):
+            candidates.append(up / "bin" / "bash.exe")
+    candidates.append(Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "bin" / "bash.exe")
+    for c in candidates:
+        if c.is_file() and "system32" not in str(c).lower():
+            return str(c)
+    return None
+
+
+_BASH = _find_bash()
+
+# Shell functions shadow the real commands (a PATH entry would need a POSIX
+# path, which a Windows temp folder is not under Git Bash).
+_FAKES = (
+    'apt-get() { echo "apt-get $*" >>"$FAKE_LOG"; return 0; }\n'
+    "sleep() { :; }\n"
+)
+
+
+def _run_package_step(tmp_path: Path, *, flag: bool) -> tuple[str, list[str], bool]:
+    import subprocess
+
+    body = overlay.render_stage2("domovoi")
+    block = body[body.index("# 2. System packages."):body.index("# 3. The client's Python dependencies.")]
+    flag_path = tmp_path / "internet-off"
+    if flag:
+        flag_path.write_text("off\n")
+    assert block.count("/var/lib/domovoi/internet-off") == 2  # the comment and the test
+    block = block.replace("/var/lib/domovoi/internet-off", flag_path.as_posix())
+    steps = tmp_path / "steps"
+    steps.mkdir()
+    log = tmp_path / "apt.log"
+    script = tmp_path / "step2.sh"
+    script.write_bytes((
+        "set -u\n"
+        + _FAKES
+        + f'STEPS="{steps.as_posix()}"\n'
+        f'export FAKE_LOG="{log.as_posix()}"\n'
+        'APT_PACKAGES="mpg123 alsa-utils"\n'
+        + block
+    ).encode())
+    out = subprocess.run([_BASH, script.as_posix()], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    calls = log.read_text().splitlines() if log.exists() else []
+    return out.stdout, calls, (steps / "online-debs").exists()
+
+
+@pytest.mark.skipif(_BASH is None, reason="no usable bash (Git Bash on Windows)")
+def test_stage_2_stays_offline_on_a_card_with_the_internet_off_flag(tmp_path):
+    stdout, calls, marked = _run_package_step(tmp_path, flag=True)
+    assert calls == [], f"stage 2 ran apt with internet access turned off: {calls}"
+    assert "internet access is turned off on this card" in stdout
+    assert "the boot step installs what is missing" in stdout
+    # Not marked done: nothing was installed here.
+    assert not marked
+
+
+@pytest.mark.skipif(_BASH is None, reason="no usable bash (Git Bash on Windows)")
+def test_stage_2_still_goes_online_without_the_flag(tmp_path):
+    stdout, calls, marked = _run_package_step(tmp_path, flag=False)
+    assert calls and calls[0].startswith("apt-get update"), calls
+    assert any("-f install -y --no-remove" in c for c in calls)
+    assert any(c.endswith("install -y --no-install-recommends --no-remove mpg123") for c in calls)
+    assert "system packages present" in stdout and marked

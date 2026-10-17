@@ -43,8 +43,9 @@ reset helper. No core or dashboard change is needed, and no migration.
     --configure -a` finishes any interrupted install; 20 minutes at most)
     and records it in `/var/lib/domovoi/base-packages.json`. A card
     prepared with the server's internet access turned off never goes
-    online for this: it uses its own package cache only, and the Health
-    card does not ask for a reboot that could not help;
+    online for this: it uses its own package cache only (setup's stage 2
+    fetches no package lists there either), and the Health card does not
+    ask for a reboot that could not help;
   * the Health card says **reboot needed: system packages missing
     (mpg123)** until it is there;
   * setup's own repair never runs without fresh package lists and never

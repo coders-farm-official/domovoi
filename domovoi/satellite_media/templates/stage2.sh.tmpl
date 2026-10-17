@@ -126,7 +126,14 @@ fi
 #    apt stop instead, and whatever is still missing is installed at a
 #    later boot by the boot step (satellite/base_packages.py), because this
 #    stage is marked done once the satellite runs.
-if [ ! -f "$STEPS/online-debs" ]; then
+#
+#    A card prepared while the server's internet access was turned off
+#    carries root's flag /var/lib/domovoi/internet-off (stage 1). Then this
+#    step does not go online at all - no `apt-get update`, no install: the
+#    boot step repairs from the card's own package caches.
+if [ ! -f "$STEPS/online-debs" ] && [ -f /var/lib/domovoi/internet-off ]; then
+  echo "internet access is turned off on this card: no online package lists or installs - the boot step installs what is missing from the card's own package cache"
+elif [ ! -f "$STEPS/online-debs" ]; then
   UPDATE_OK=0
   for TRY in 1 2 3; do
     if apt-get update -qq -o DPkg::Lock::Timeout=120; then UPDATE_OK=1; break; fi
