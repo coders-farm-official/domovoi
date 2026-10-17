@@ -4,6 +4,26 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — Android app: "play in room" from a track's drawer plays again
+
+A new APK; nothing changes on the server.
+
+* **Music → a track → "play in &lt;room&gt;" works again.** In 1.0.0-rc2 the
+  drawer closed on the tap and the request was cancelled with it, so the
+  room never played and the app said "play failed: The coroutine scope
+  left the composition". The playlist drawer's play and shuffle had the
+  same fault. These requests, and the other Music actions started from a
+  drawer, sheet, dialog, menu, list row or tab (cast to a room or back to
+  the phone, a tapped queue row while casting, add to playlist, room-queue
+  edits, delete, upload, rescan), now keep going after the screen part
+  that started them closes, and still end in a toast. Leaving the page
+  midway no longer reports a failure that didn't happen. Podcasts'
+  subscribe and unsubscribe, and playing a station, work the same way.
+* **Library rows no longer read "manual manual".** A track the library
+  found on disk shows "manual" once (how it was added). A source pill
+  appears only when a plugin added the track, and the track drawer shows
+  "—" for no source.
+
 ## 2026-10-16 — Phone photos in chat: HEIC converted, refusals in words
 
 Dashboard update (the web process; no migration) and a new Android APK.

@@ -30,7 +30,6 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,6 +47,7 @@ import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.fmtDur
+import com.domovoi.app.ui.components.runAction
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
@@ -104,7 +104,10 @@ internal class RoomQueueModel(
 internal fun rememberRoomQueue(rooms: List<String>, playingRoom: String?): RoomQueueModel {
     val app = LocalApp.current
     val toast = LocalToast.current
-    val scope = rememberCoroutineScope()
+    // The app's scope: this model leaves composition with its tab, and an
+    // edit already sent must still finish and say how it went
+    // (ServerAction.kt says why).
+    val scope = app.scope
 
     // Default to a room that's actually playing — that's the queue you opened
     // this tab to look at.
@@ -130,19 +133,22 @@ internal fun rememberRoomQueue(rooms: List<String>, playingRoom: String?): RoomQ
         if (sel.busy) return
         scope.launch {
             sel.busy = true
-            runCatching {
-                post(
-                    "remove",
-                    buildJsonObject {
-                        put("song_ids", buildJsonArray { add(JsonPrimitive(item.songId)) })
-                        put("device_id", deviceId)
-                    },
-                )
-            }.onSuccess {
-                toast("removed \"${item.title ?: "track"}\"")
-                queueState.refresh()
-            }.onFailure { toast("remove failed: ${it.message}") }
-            sel.busy = false
+            try {
+                runAction {
+                    post(
+                        "remove",
+                        buildJsonObject {
+                            put("song_ids", buildJsonArray { add(JsonPrimitive(item.songId)) })
+                            put("device_id", deviceId)
+                        },
+                    )
+                }.onSuccess {
+                    toast("removed \"${item.title ?: "track"}\"")
+                    queueState.refresh()
+                }.onFailure { toast("remove failed: ${it.message}") }
+            } finally {
+                sel.busy = false
+            }
         }
     }
 
@@ -150,31 +156,37 @@ internal fun rememberRoomQueue(rooms: List<String>, playingRoom: String?): RoomQ
         if (sel.busy) return
         scope.launch {
             sel.busy = true
-            runCatching {
-                post(
-                    "move",
-                    buildJsonObject {
-                        put("song_id", item.songId)
-                        put("to_position", toPosition)
-                        put("device_id", deviceId)
-                    },
-                )
-            }.onSuccess { queueState.refresh() }
-                .onFailure { toast("move failed: ${it.message}") }
-            sel.busy = false
+            try {
+                runAction {
+                    post(
+                        "move",
+                        buildJsonObject {
+                            put("song_id", item.songId)
+                            put("to_position", toPosition)
+                            put("device_id", deviceId)
+                        },
+                    )
+                }.onSuccess { queueState.refresh() }
+                    .onFailure { toast("move failed: ${it.message}") }
+            } finally {
+                sel.busy = false
+            }
         }
     }
 
     fun clear() {
         scope.launch {
             sel.busy = true
-            runCatching { post("clear", buildJsonObject { put("device_id", deviceId) }) }
-                .onSuccess {
-                    toast("cleared ${sel.room}'s queue")
-                    queueState.refresh()
-                }
-                .onFailure { toast("clear failed: ${it.message}") }
-            sel.busy = false
+            try {
+                runAction { post("clear", buildJsonObject { put("device_id", deviceId) }) }
+                    .onSuccess {
+                        toast("cleared ${sel.room}'s queue")
+                        queueState.refresh()
+                    }
+                    .onFailure { toast("clear failed: ${it.message}") }
+            } finally {
+                sel.busy = false
+            }
         }
     }
 

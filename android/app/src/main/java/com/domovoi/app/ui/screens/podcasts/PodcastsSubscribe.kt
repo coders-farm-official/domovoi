@@ -40,6 +40,8 @@ import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.decode
 import com.domovoi.app.net.failureText
+import com.domovoi.app.ui.components.rememberStillComposed
+import com.domovoi.app.ui.components.runAction
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
@@ -52,7 +54,11 @@ import java.net.URLEncoder
 internal fun SubscribeDialog(onClose: () -> Unit, onDone: () -> Unit) {
     val app = LocalApp.current
     val toast = LocalToast.current
+    // Search results only matter in this dialog: its own scope, closed with
+    // it. A subscribe is the household's: the app's scope, so closing the
+    // dialog mid-request doesn't cancel it (ui/components/ServerAction.kt).
     val scope = rememberCoroutineScope()
+    val open = rememberStillComposed()
 
     var tab by remember { mutableStateOf("search") }
     var q by remember { mutableStateOf("") }
@@ -64,13 +70,16 @@ internal fun SubscribeDialog(onClose: () -> Unit, onDone: () -> Unit) {
         if (q.isBlank() || busy) return
         busy = true
         scope.launch {
-            runCatching {
-                app.api.get("/api/podcasts/discover?q=${URLEncoder.encode(q.trim(), "UTF-8")}")
-                    .decode<List<DiscoverRow>>()
+            try {
+                runAction {
+                    app.api.get("/api/podcasts/discover?q=${URLEncoder.encode(q.trim(), "UTF-8")}")
+                        .decode<List<DiscoverRow>>()
+                }
+                    .onSuccess { results = it }
+                    .onFailure { toast(failureText("Discovery", it)) }
+            } finally {
+                busy = false
             }
-                .onSuccess { results = it }
-                .onFailure { toast(failureText("Discovery", it)) }
-            busy = false
         }
     }
 
@@ -78,19 +87,23 @@ internal fun SubscribeDialog(onClose: () -> Unit, onDone: () -> Unit) {
         val feed = url?.trim().orEmpty()
         if (feed.isEmpty() || busy) return
         busy = true
-        scope.launch {
-            runCatching {
-                app.api.post(
-                    "/api/podcasts/subscriptions",
-                    buildJsonObject { put("feed_url", feed) },
-                )
-            }
-                .onSuccess {
-                    toast("Subscribed")
-                    onDone()
+        app.scope.launch {
+            try {
+                runAction {
+                    app.api.post(
+                        "/api/podcasts/subscriptions",
+                        buildJsonObject { put("feed_url", feed) },
+                    )
                 }
-                .onFailure { toast(failureText("Subscribe", it)) }
-            busy = false
+                    .onSuccess {
+                        toast("Subscribed")
+                        onDone()
+                        if (open()) onClose()
+                    }
+                    .onFailure { toast(failureText("Subscribe", it)) }
+            } finally {
+                busy = false
+            }
         }
     }
 
