@@ -414,6 +414,90 @@ def voice_qa_system_prompt(profile_prefix: str | None = None) -> str:
     return prompt
 
 
+# System prompt for the typed chat (web/backend/api/chat.py: the dashboard's
+# and the app's chat threads, answered over :func:`chat_stream`). Until
+# 2026-10-17 those calls sent no system message at all, so the models
+# answered as themselves: the owner sent the vision model a picture of
+# Domovoi's own promo image with "hey domo!" and qwen3-vl 2B replied "I see
+# you're excited to meet Domovoi ... I'm not a voice assistant". Written
+# chat, not speech: the reply is rendered as Markdown, so none of the voice
+# prompt's "no markdown, short sentences" here.
+CHAT_SYSTEM_PROMPT = (
+    "You are {bot}, this household's own assistant. You run on the "
+    "household's own server and talk with the people who live here: by "
+    "voice around the house, and by text in the {bot} app and dashboard, "
+    "where this chat is. When someone greets you or says your name{nick}, "
+    "they are talking to you: greet them back and answer as {bot}, in the "
+    "first person. You are {bot}, not the person writing to you, and never "
+    "talk about {bot} as if it were someone else."
+)
+
+# Added for a call that carries pictures (the vision model). The model has
+# no instructions of its own about pictures (qwen3-vl's Modelfile has no
+# SYSTEM; a model that has one keeps it, see :func:`chat_system_prompt`),
+# so this keeps it doing what it was picked for — reading the picture —
+# now that the system message also says who it is.
+CHAT_PICTURES_PROMPT = (
+    "Messages can include pictures. Look at each one closely and answer "
+    "about what it actually shows: describe it when you are asked to or "
+    "when the message asks nothing else, read out any text in it, and say "
+    "plainly when something is unclear.{self_picture}"
+)
+
+
+def chat_system_prompt(
+    profile_prefix: str | None = None,
+    *,
+    pictures: bool = False,
+    model_system: str | None = None,
+) -> str:
+    """The typed chat's system message: who it is (:data:`CHAT_SYSTEM_PROMPT`),
+    how to read pictures when the call carries any, the model's own
+    Modelfile ``SYSTEM`` (``model_system``: a system message replaces it in
+    Ollama, so it is carried over rather than lost), then the person's
+    profile blob — last, as in :func:`voice_qa_system_prompt`, so the
+    fixed part stays cached across people."""
+    bot = settings.bot_name
+    domovoi = bot.strip().lower() == "domovoi"
+    prompt = CHAT_SYSTEM_PROMPT.format(bot=bot, nick=" (or calls you Domo)" if domovoi else "")
+    if pictures:
+        prompt += "\n\n" + CHAT_PICTURES_PROMPT.format(
+            self_picture=(
+                f" A picture that shows the name {bot}"
+                + (" or its cat logo" if domovoi else "")
+                + " is a picture of you: say so."
+            ),
+        )
+    if model_system and model_system.strip():
+        prompt += "\n\n" + model_system.strip()
+    if profile_prefix and profile_prefix.strip():
+        prompt += "\n\n" + profile_prefix.strip()
+    return prompt
+
+
+async def model_system_or_none(
+    model: str, base_url: str | None = None, timeout: float = 5.0,
+) -> str | None:
+    """The model's own ``SYSTEM`` instructions (its Modelfile, via
+    ``POST /api/show``), or None when it has none or Ollama couldn't be
+    asked. A chat that sends its own system message carries these over:
+    Ollama uses the message in place of the Modelfile's."""
+    import httpx
+
+    if not (model or "").strip():
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            resp = await c.post(f"{_ollama_base(base_url)}/api/show", json={"model": model})
+            resp.raise_for_status()
+            payload = resp.json()
+    except Exception as e:  # noqa: BLE001 — the chat goes ahead without it
+        log.warning("ollama /api/show failed for %s: %s", model, e)
+        return None
+    system = payload.get("system") if isinstance(payload, dict) else None
+    return system if isinstance(system, str) and system.strip() else None
+
+
 # System prompt for the tool-routing call (``RealOllamaClient.route``).
 #
 # The router runs at temperature 0 with every handler's schema on offer,

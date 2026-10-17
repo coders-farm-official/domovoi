@@ -77,7 +77,12 @@ def tags(monkeypatch):
         _Tags.asked += 1
         return None if _Tags.models is None else [{"name": n} for n in _Tags.models]
 
+    async def _no_model_system(*a, **kw):
+        return None
+
     monkeypatch.setattr(chat_api.ollama_client, "tags_or_none", _tags_or_none)
+    # A picture turn also asks Ollama for the model's own SYSTEM (/api/show).
+    monkeypatch.setattr(chat_api.ollama_client, "model_system_or_none", _no_model_system)
     return _Tags
 
 
@@ -394,7 +399,9 @@ def test_a_text_turn_leaves_the_threads_pictures_out(uploads_dir, stub_stream, t
         c.post(f"/api/chat/threads/{t['id']}/messages", json={"content": "tell me more"})
         text_turn = stub_stream[-1]
         assert text_turn["model"] == chat_api.core_settings.ollama_model
-        assert [m["content"] for m in text_turn["messages"]] == [
+        # The system message first (test_chat_persona.py), then the thread.
+        assert text_turn["messages"][0]["role"] == "system"
+        assert [m["content"] for m in text_turn["messages"][1:]] == [
             "what is this?", "Hello there", "tell me more"]
         assert all("images" not in m for m in text_turn["messages"])
         # Another picture: the vision model sees both.
