@@ -11,7 +11,7 @@
   station and FM stay allowed.
 * The clients send nothing under never; the voice handler never hands MPD
   an internet stream.
-* The manifest is 1.3.0 and needs SDK ``>=1.4``.
+* The manifest is 1.3.x and needs SDK ``>=1.4``.
 
 These tests live outside ``domovoi/tests``, so they do not get the core
 suite's autouse policy pin: every policy-dependent test sets it with
@@ -320,11 +320,12 @@ def test_web_routes_refuse_under_never(web_client, monkeypatch) -> None:
 # ─── manifest ────────────────────────────────────────────────────────────
 
 
-def test_manifest_is_1_3_0_and_needs_sdk_1_4() -> None:
+def test_manifest_is_1_3_x_and_needs_sdk_1_4() -> None:
     import tomllib
 
     manifest = tomllib.loads((PLUGIN_DIR / "domovoi-plugin.toml").read_text(encoding="utf-8"))
-    assert manifest["plugin"]["version"] == "1.3.0"
+    major, minor, _patch = (int(p) for p in manifest["plugin"]["version"].split("."))
+    assert (major, minor) == (1, 3)
     assert manifest["plugin"]["domovoi_api"] == ">=1.4,<2.0"
 
 

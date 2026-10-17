@@ -83,7 +83,7 @@ private fun enc(s: String): String = URLEncoder.encode(s, "UTF-8")
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun StationSearchCard(
-    onFavorite: suspend (Station) -> Unit,
+    onFavorite: suspend (Station) -> Station?,
     onPlay: (Station) -> Unit,
 ) {
     val app = LocalApp.current
@@ -436,7 +436,7 @@ private fun FavoriteMatchRow(s: Station, onPlay: (Station) -> Unit) {
 private fun SearchResultRow(
     hit: Station,
     scopeSel: String,
-    onFavorite: suspend (Station) -> Unit,
+    onFavorite: suspend (Station) -> Station?,
     onPlay: (Station) -> Unit,
 ) {
     val app = LocalApp.current
@@ -445,6 +445,11 @@ private fun SearchResultRow(
     // Local favorited flag so the toggle feels snappy — the WS push refreshes
     // the canonical favorites list, but this row should react immediately.
     var favorited by remember(hit.id, hit.external_id) { mutableStateOf(hit.favorited) }
+    // The saved row's id: local-FM rows and hits already in the table come
+    // with it; a new online hit has 0 until its first star saves it, and
+    // the id that save answers is kept so the next tap unfavorites it
+    // (plugin board F-P013: the second tap used to do nothing).
+    var rowId by remember(hit.id, hit.external_id) { mutableStateOf(hit.id) }
     var busy by remember(hit.id, hit.external_id) { mutableStateOf(false) }
 
     fun toggle() {
@@ -452,11 +457,12 @@ private fun SearchResultRow(
         scope.launch {
             busy = true
             runCatching {
-                if (hit.id != 0L) {
+                val tap = searchStarTap(rowId, favorited)
+                if (tap is StarTap.Patch) {
                     // Existing DB row (local-FM rows always have a real id).
-                    val newFav = !favorited
+                    val newFav = tap.favorited
                     app.api.patch(
-                        "/api/plugins/radio/stations/${hit.id}",
+                        "/api/plugins/radio/stations/${tap.id}",
                         buildJsonObject { put("favorited", newFav) },
                     )
                     favorited = newFav
@@ -467,16 +473,17 @@ private fun SearchResultRow(
                     // failing lookup doesn't bounce the favorite itself.
                     if (newFav && hit.source == "fm" && hit.stream_url.isNullOrBlank()) {
                         runCatching {
-                            app.api.post("/api/plugins/radio/stations/${hit.id}/resolve-simulcast")
+                            app.api.post("/api/plugins/radio/stations/${tap.id}/resolve-simulcast")
                                 .decode<SimulcastResult>()
                         }.onSuccess { res ->
                             if (res.resolved) toast("simulcast found for ${hit.name}")
                             else res.message?.let { toast("no simulcast: $it") }
                         }.onFailure { toast("simulcast lookup failed: ${it.message}") }
                     }
-                } else if (!favorited) {
-                    // Online hit not yet persisted — POST the search-hit shape.
-                    onFavorite(hit)
+                } else {
+                    // Online hit not yet persisted — POST the search-hit
+                    // shape, which saves AND favorites it; keep its id.
+                    rowId = onFavorite(hit)?.id ?: 0L
                     favorited = true
                 }
             }.onFailure { toast("favorite failed: ${it.message}") }
@@ -578,3 +585,14 @@ private fun SearchTagChip(t: String) {
         Text(t, style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgMuted)
     }
 }
+
+/** What a tap on a search row's star does (plugin board F-P013). */
+internal sealed interface StarTap {
+    /** A saved row: flip its favorite to [favorited]. */
+    data class Patch(val id: Long, val favorited: Boolean) : StarTap
+    /** A new online hit (id 0): save it, which favorites it. */
+    data object Post : StarTap
+}
+
+internal fun searchStarTap(rowId: Long, favorited: Boolean): StarTap =
+    if (rowId != 0L) StarTap.Patch(rowId, !favorited) else StarTap.Post

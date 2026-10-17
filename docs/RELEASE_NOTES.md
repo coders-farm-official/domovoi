@@ -4,6 +4,20 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — Stations: the star on a search result works both ways
+
+Dashboard update (the bundled Stations plugin, 1.3.1; no migration) and a
+new Android APK.
+
+* **A second tap on a search result's star un-favorites it.** Starring a
+  station found in the online directory saved it, but the row then forgot
+  which saved station it was: a second tap sent nothing and showed nothing
+  while the star stayed lit, so the favorite could only be removed from
+  Recent or Favorites. The row now keeps the saved station's id, so the
+  star toggles on the Stations page and in the app, and starring again
+  never saves a second copy.
+
+
 ## 2026-10-17 — Plugin pages can play in a room; the trust screen needs an answer
 
 Core and dashboard update (both processes; no migration). Plugins need an

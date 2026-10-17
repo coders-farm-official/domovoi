@@ -427,21 +427,38 @@ const FavoriteMatchRow = ({ s, onPlay, internetOff }) => (
   </button>
 );
 
+/* What a tap on a search row's star does (plugin board F-P013): a row
+ * with a saved id flips its favorite with a PATCH (`favorited` is the
+ * new value); a row with none (a new online hit) is saved with a POST,
+ * which favorites it, and the id the POST answers is kept for the next
+ * tap. */
+const searchStarTap = (rowId, favorited) => ({ post: !rowId, favorited: !favorited });
+
 const SearchResultRow = ({ hit, scope, onFavorite, onPlay, fire, internetOff = false }) => {
   // Local favorited state so the star feels snappy; the realtime push
   // refreshes the canonical list.
   const [favorited, setFavorited] = React.useState(hit.favorited);
+  // The saved row's id. Local-FM rows and online hits already in the
+  // table come with it (/search stamps them); a new online hit carries
+  // id 0 until its first star POSTs it, and that answer's id is kept here
+  // so the next tap unfavorites it (plugin board F-P013: the second tap
+  // used to do nothing).
+  const [rowId, setRowId] = React.useState(hit.id || 0);
   const [busy, setBusy] = React.useState(false);
 
   const toggle = async () => {
     if (busy) return;
     setBusy(true);
     try {
-      // Local-FM rows always have a real DB id (they came from
-      // /stations); online-search hits carry id=0 until POSTed.
-      if (hit.id && hit.id !== 0) {
-        const newFav = !favorited;
-        await apiPatch(`${RADIO_API}/stations/${hit.id}`, { favorited: newFav });
+      const plan = searchStarTap(rowId, favorited);
+      if (plan.post) {
+        // Saving it favorites it (POST is idempotent on external_id).
+        const saved = await onFavorite(hit);
+        setRowId(saved && saved.id ? saved.id : 0);
+        setFavorited(true);
+      } else {
+        const newFav = plan.favorited;
+        await apiPatch(`${RADIO_API}/stations/${rowId}`, { favorited: newFav });
         setFavorited(newFav);
         fire(newFav ? `favorited ${hit.name}` : `unfavorited ${hit.name}`);
         // FM rows from the FCC import have no stream_url; right after
@@ -453,7 +470,7 @@ const SearchResultRow = ({ hit, scope, onFavorite, onPlay, fire, internetOff = f
         if (newFav && hit.source === 'fm' && !hit.stream_url && !internetOff) {
           try {
             const res = await apiPost(
-              `${RADIO_API}/stations/${hit.id}/resolve-simulcast`, {},
+              `${RADIO_API}/stations/${rowId}/resolve-simulcast`, {},
             );
             if (res?.resolved) {
               fire(`simulcast found for ${hit.name}`);
@@ -464,9 +481,6 @@ const SearchResultRow = ({ hit, scope, onFavorite, onPlay, fire, internetOff = f
             reportFailure(fire, 'simulcast lookup', e);
           }
         }
-      } else if (!favorited) {
-        await onFavorite(hit);
-        setFavorited(true);
       }
     } catch (e) {
       reportFailure(fire, 'favorite', e);
@@ -1133,7 +1147,8 @@ const StationsPage = () => {
 
   const onFavorite = async (hit) => {
     // POST the search-hit shape — the server is idempotent on external_id.
-    await apiPost(`${RADIO_API}/stations`, {
+    // Answers the saved row: the search row keeps its id for the next tap.
+    const saved = await apiPost(`${RADIO_API}/stations`, {
       name: hit.name,
       source: hit.source || 'online',
       stream_url: hit.stream_url,
@@ -1144,6 +1159,7 @@ const StationsPage = () => {
     });
     fire(`favorited ${hit.name}`);
     refresh();
+    return saved;
   };
 
   const onDelete = async (s) => {
