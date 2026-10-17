@@ -4,6 +4,33 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — Chat answers as Domovoi, pictures included
+
+Dashboard update (the web process; no migration, no app update).
+
+* **The chat knows it is Domovoi.** Typed messages and pictures in the
+  app's and the dashboard's chat went to the model with no instructions at
+  all, so it answered as itself: sent Domovoi's own promo picture with
+  "hey domo!", the vision model replied that it was "not a voice
+  assistant"; asked "who are you?" it named its maker. Every chat reply
+  now starts from one system message: it is Domovoi (the `bot_name`
+  setting), this household's assistant, in the household's own app.
+  Measured on qwen3-vl 2B with a picture and "hey domo! who are you?":
+  0 of 6 replies said Domovoi before, 8 of 8 after.
+* **Pictures are still read.** A message with a picture adds how to read
+  it (say what it shows, read any text, and a picture of the Domovoi name
+  or cat logo is a picture of itself); a vision model with its own
+  instructions (a Modelfile `SYSTEM`) keeps them. Asked "what's in this
+  picture?" of a grocery list, all five items were read, as before.
+* **Long picture threads fit the vision context window.** The thread's
+  earlier messages still go along, now cut to `ollama_vision_num_ctx`
+  (8192 by default) less the instructions and room for the reply: older
+  messages lose their pictures first, then drop out, oldest first; the
+  message being answered always goes whole. Before, a thread with many
+  pictures could overrun the window and Ollama cut it off wherever it fell.
+* **Typed text chat answers as Domovoi too**, with the same message
+  (without the pictures part). Nothing else about text turns changed.
+
 ## 2026-10-16 — Phone photos in chat: HEIC converted, refusals in words
 
 Dashboard update (the web process; no migration) and a new Android APK.
