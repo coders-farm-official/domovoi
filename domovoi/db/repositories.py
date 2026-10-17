@@ -2639,6 +2639,30 @@ class SatellitesRepository:
             {"r": room_id, "b": board},
         )
 
+    async def room_voice(self, room_id: str) -> str | None:
+        """The voice the server keeps for this room (V031), or None (the
+        server's own voice). Only a device that keeps no voice of its own
+        is read for it: see domovoi/room_voice.py."""
+        row = (
+            await self.s.execute(
+                text("SELECT voice FROM satellites WHERE room_id = :r"), {"r": room_id}
+            )
+        ).first()
+        return row[0] if row is not None and row[0] else None
+
+    async def set_room_voice(self, room_id: str, voice: str | None) -> None:
+        """Keep (or clear, with None) the voice the server renders this
+        room's speech in (V031). Upserts, like :meth:`set_room_label`."""
+        await self.s.execute(
+            text(
+                "INSERT INTO satellites (room_id, voice, adopted_via) "
+                "VALUES (:r, :v, 'hello') "
+                "ON CONFLICT (room_id) DO UPDATE SET "
+                "voice = EXCLUDED.voice, updated_at = now()"
+            ),
+            {"r": room_id, "v": voice},
+        )
+
     async def set_room_label(self, room_id: str, room_label: str | None) -> None:
         """Set (or clear, with None) a satellite's display room label.
         Upserts so pre-V003 satellites (mpd_rooms row only) can be labeled."""

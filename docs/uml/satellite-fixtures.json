@@ -72,7 +72,7 @@
       "hello_key": null
     },
     "voice": {
-      "unlocks": "pi_action set_voice",
+      "unlocks": "pi_action set_voice; without it the server keeps the room's voice (ready.room_voice)",
       "assumed_without_supports": true,
       "hello_key": null
     },
@@ -996,7 +996,8 @@
           "music_failed",
           "health",
           "log_push"
-        ]
+        ],
+        "room_voice": null
       },
       "expect": {
         "declared": true,

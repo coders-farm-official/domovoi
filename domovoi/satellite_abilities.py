@@ -62,7 +62,7 @@ ABILITIES: dict[str, str] = {
     "wake_clips": "`start_wake_recording` / `stop_wake_recording` (recording wake-word clips)",
     "wake_models": "`set_wake_word` and `wake_models_changed` (pushed wake-word models)",
     "sounds": "`sounds_changed` (greeting and offline clips) and the sounds.* settings",
-    "voice": "`pi_action: set_voice` (\"switch to voice X\" kept on the device)",
+    "voice": "`pi_action: set_voice` (\"switch to voice X\" kept on the device); without it the server keeps the room's voice (domovoi/room_voice.py)",
     "time_sync": "the device sets its clock and zone from GET /v1/time after `ready` (nothing is pushed)",
     "chat_mode": "`chat_start` / `chat_end` (conversational chat mode; needs full_duplex too)",
     "announce_after_session_end": "out-of-turn announcements: timers, reminders, intercom, broadcasts",

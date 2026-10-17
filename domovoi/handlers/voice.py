@@ -17,7 +17,9 @@ satellite speaks in one of them (reported via ``voice_status``; see
    ``voice_override=<name>`` (so the confirmation is spoken in the NEW
    voice immediately) plus ``pi_action="set_voice"`` + ``pi_action_arg``
    so the satellite persists the selection, re-reports it, and re-syncs
-   that voice's clips.
+   that voice's clips. A room whose device keeps no voice of its own (a
+   phone in room mode) has the choice kept on the server instead
+   (``domovoi/room_voice.py``): same reply, no ``pi_action``.
 
 5. **not downloaded yet** — the three voices Domovoi offers
    (``SHIPPED_VOICES``) are all in Settings → Voices, but a server that
@@ -55,8 +57,8 @@ from domovoi.handlers.base import (
     HandlerDisplay,
     satellite_setting_refusal,
 )
+from domovoi import room_voice
 from domovoi.models import Context, Intent, Response
-from domovoi.satellite_abilities import room_allows
 
 log = logging.getLogger(__name__)
 
@@ -351,10 +353,6 @@ class VoiceHandler(Handler):
             # (pi_action set_voice); a phone has none to switch. Listing,
             # "what voice" and a sample still work from a phone.
             return satellite_setting_refusal(self.name, ctx)
-        if not room_allows(ctx.app, ctx.room_id, "voice"):
-            # Its hello declared what it can do (`supports`) without
-            # "voice": it can't keep a voice choice, so don't claim one.
-            return self._r("This room's device can't change its voice.", ctx)
         voice, shipped = await self._resolve(name, session)
         if voice is None and shipped is not None:
             voice = await self._register_if_on_disk(shipped, session)
@@ -365,6 +363,17 @@ class VoiceHandler(Handler):
         stuck = self._stuck_off_disk(voice, ctx)
         if stuck is not None:
             return await self._not_downloaded(stuck, "switch", ctx, session)
+        if room_voice.kept_by_server(ctx.app, ctx.room_id):
+            # Its hello declared what it can do (`supports`) without
+            # "voice" (a phone in room mode): it keeps no voice choice, so
+            # the server keeps this room's and renders its speech in it
+            # (domovoi/room_voice.py). Nothing for the device to do.
+            await room_voice.choose(session, ctx.app, ctx.room_id, voice["name"])
+            return self._r(
+                f"Okay, I'm {voice['name']} now.",
+                ctx,
+                voice_override=voice["name"],
+            )
         # Confirmation is spoken in the NEW voice (voice_override) so the
         # user hears the change immediately; pi_action persists it Pi-side
         # and re-reports it for subsequent turns.

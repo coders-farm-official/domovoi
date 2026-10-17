@@ -1199,7 +1199,10 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
           </>
         )}
         <div className="label">voice</div>
-        <div className="mono" style={{ color: s.voice ? 'var(--fg)' : 'var(--fg-faint)' }}>{s.voice || 'registry default'}</div>
+        {/* Changed by voice in the room ("switch to Kristin's voice"): a Pi
+            keeps the choice, a phone in room mode has the server keep it. */}
+        <div className="mono" title="say “switch to <name>’s voice” in the room to change it"
+             style={{ color: s.voice ? 'var(--fg)' : 'var(--fg-faint)' }}>{s.voice || 'registry default'}</div>
         <div className="label">version</div>
         <div className="mono" style={{ color: s.version ? 'var(--fg)' : 'var(--fg-faint)' }}>{s.version || '—'}</div>
         <div className="label">pairing</div>

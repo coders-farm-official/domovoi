@@ -130,6 +130,10 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     @Volatile private var http: OkHttpClient? = null
     @Volatile private var features: Set<String> = emptySet()
     @Volatile private var ready = false
+    /** The voice the server renders this room in (`ready.room_voice`; null:
+     *  the server's own): whose greeting clips the room mirrors. Not the
+     *  phone's own voice (Settings → Voice), which room mode never uses. */
+    @Volatile private var roomVoice: String? = null
     @Volatile private var readyAt = 0L
     @Volatile private var downSince = SystemClock.elapsedRealtime()
     private val reconnects = AtomicInteger(0)
@@ -364,7 +368,10 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
                 music.stop()
                 update { it.copy(musicPlaying = false) }
             }
-            is RoomProtocol.ServerFrame.SoundsChanged -> background { syncSounds() }
+            is RoomProtocol.ServerFrame.SoundsChanged -> {
+                if (f.saysVoice) roomVoice = f.roomVoice
+                background { syncSounds() }
+            }
             is RoomProtocol.ServerFrame.SetWakeWord -> background { switchWakeWord(f.slug, f.threshold) }
             is RoomProtocol.ServerFrame.WakeModelsChanged -> background { refreshModels() }
             is RoomProtocol.ServerFrame.DropinStart -> onDropinStart(f)
@@ -377,6 +384,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     private fun onReady(f: RoomProtocol.ServerFrame.Ready) {
         store.setApprovedOnce()
         features = f.features
+        roomVoice = f.roomVoice
         ready = true
         readyAt = SystemClock.elapsedRealtime()
         reconnects.incrementAndGet()
@@ -611,7 +619,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     private fun syncSounds() {
         val client = http ?: return
         val enrol = store.enrolment ?: return
-        runCatching { sounds.sync(client, enrol.coreUrl, enrol.fingerprint) }
+        runCatching { sounds.sync(client, enrol.coreUrl, enrol.fingerprint, roomVoice) }
             .onSuccess { if (it > 0) Log.i(TAG, "sound sync: $it clip(s) updated") }
             .onFailure { Log.w(TAG, "sound sync failed (keeping the cached clips): ${it.message}") }
     }

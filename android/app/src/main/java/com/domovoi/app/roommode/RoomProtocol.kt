@@ -125,7 +125,16 @@ object RoomProtocol {
     // ── what the core sends ─────────────────────────────────────────────
 
     sealed class ServerFrame {
-        data class Ready(val features: Set<String>, val roomId: String?, val botName: String?) : ServerFrame()
+        /** [roomVoice]: the voice the server keeps for this room and renders
+         *  its speech in (`room_voice`, null: the server's own voice). This
+         *  device keeps no voice choice ("voice" is not in [supports]), so
+         *  the server does; the room mirrors that voice's greeting clips. */
+        data class Ready(
+            val features: Set<String>,
+            val roomId: String?,
+            val botName: String?,
+            val roomVoice: String? = null,
+        ) : ServerFrame()
         data class Error(val reason: String?, val message: String?, val code: String?) : ServerFrame()
         data object Pong : ServerFrame()
         data class Transcript(val text: String) : ServerFrame()
@@ -135,7 +144,10 @@ object RoomProtocol {
         data class MusicStart(val streamUrl: String?) : ServerFrame()
         data object MusicStop : ServerFrame()
         data class EndCapture(val utt: Int?) : ServerFrame()
-        data object SoundsChanged : ServerFrame()
+        /** [saysVoice]: the frame carried `room_voice` (a core from
+         *  2026-10-17 on, also sent when the room's voice changes); without
+         *  it the room keeps the voice it had. */
+        data class SoundsChanged(val roomVoice: String? = null, val saysVoice: Boolean = false) : ServerFrame()
         data class SetWakeWord(val slug: String?, val threshold: Double?) : ServerFrame()
         data object WakeModelsChanged : ServerFrame()
         data class DropinStart(val peerRoom: String?, val peerLabel: String?, val sampleRate: Int, val fullDuplex: Boolean) : ServerFrame()
@@ -157,6 +169,7 @@ object RoomProtocol {
                 features = (o["features"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toSet() ?: emptySet(),
                 roomId = s("room_id"),
                 botName = s("bot_name"),
+                roomVoice = s("room_voice")?.takeIf { it.isNotBlank() },
             )
             "error" -> ServerFrame.Error(s("reason"), s("message"), s("code"))
             "pong" -> ServerFrame.Pong
@@ -167,7 +180,7 @@ object RoomProtocol {
             "music_start" -> ServerFrame.MusicStart(s("stream_url"))
             "music_stop" -> ServerFrame.MusicStop
             "end_capture" -> ServerFrame.EndCapture(i("utt"))
-            "sounds_changed" -> ServerFrame.SoundsChanged
+            "sounds_changed" -> ServerFrame.SoundsChanged(s("room_voice")?.takeIf { it.isNotBlank() }, "room_voice" in o)
             "set_wake_word" -> ServerFrame.SetWakeWord(s("slug"), (o["threshold"] as? JsonPrimitive)?.doubleOrNull)
             "wake_models_changed" -> ServerFrame.WakeModelsChanged
             "dropin_start" -> ServerFrame.DropinStart(

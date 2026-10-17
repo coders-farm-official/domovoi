@@ -32,7 +32,6 @@ from domovoi import satellite_abilities as sa
 from domovoi import satellite_health as sh
 from domovoi import streaming
 from domovoi.handlers.chat_mode import ChatModeHandler
-from domovoi.handlers.voice import VoiceHandler
 from domovoi.handlers.wifi import WifiHandler
 from domovoi.models import Context
 from domovoi.satellite_config_schema import EDITABLE_FIELDS
@@ -114,6 +113,9 @@ def inventory(monkeypatch):
 
         async def upsert_board(self, room, board):
             writes.append(("board", room, board))
+
+        async def room_voice(self, room):
+            return None  # the server keeps no voice for the room (a read)
 
     @asynccontextmanager
     async def scope():
@@ -458,13 +460,12 @@ async def test_chat_mode_is_declined_for_a_full_duplex_device_without_chat_mode(
     assert resp.text != "Chat mode isn't available on this room's device."
 
 
-async def test_wifi_and_voice_are_refused_for_a_device_that_keeps_its_own(paired, inventory):
+async def test_wifi_is_refused_for_a_device_that_keeps_its_own(paired, inventory):
+    # A voice switch in a room whose device keeps no voice is no longer
+    # refused: the server keeps the room's voice (test_room_voice.py).
     pc, _ = await _hello("linux_pc")
     resp = WifiHandler()._reassociate_response(_ctx_for(pc))
     assert resp.pi_action is None and "its own Wi-Fi" in resp.text
-    phone, _ = await _hello("android_room")
-    resp = await VoiceHandler()._switch_response("aria", _ctx_for(phone), _NoDB())  # type: ignore[arg-type]
-    assert resp.pi_action is None and "can't change its voice" in resp.text
     pi, _ = await _hello("pi_2mic_hat")
     assert WifiHandler()._reassociate_response(_ctx_for(pi)).pi_action == "reassociate_wifi"
 
