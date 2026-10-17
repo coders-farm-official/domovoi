@@ -4,6 +4,25 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — Dashboard: signing in loads what the page was refused
+
+Dashboard update (the web process; no migration).
+
+* **A page opened before the sign-in fills in once you sign in.** Settings
+  → Satellites could stay at "0 known" until a reload when the browser
+  still held an old household token (from a reinstall, or a test server on
+  the same address): the server made the address wait (429, "…or sign in
+  as an admin"), and the dashboard never asked again after the sign-in.
+  It also allowed only ONE retry per refusal, so a retry the old token
+  spent left the page empty after the sign-in that followed. Every
+  dashboard read now asks again once per new credential (a sign-in, a
+  pairing, the end of a wait) after a 401, 403 or that 429; a notice or
+  modal opening still asks nothing, so a refusal cannot loop. This covers
+  every page built on the shared list/object/paged reads (Satellites,
+  Music, Videos, Pictures, Podcasts, Audiobooks, Files, Settings tabs,
+  People, Chat, Home) and the reads pages make by hand (the Files
+  libraries, a chat thread, a person's tabs, a room's logs).
+
 ## 2026-10-17 — Dashboard: the track drawer reads "manual" once
 
 Dashboard update (the web process; no migration).

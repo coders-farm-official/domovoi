@@ -913,7 +913,8 @@ const PeoplePage = () => {
     let cancelled = false;
     let refusal = null;
     const read = (path, empty) => apiGet(path).catch((e) => {
-      if (e && (e.status === 401 || e.status === 403) && !refusal) refusal = e;
+      if (e && (e.status === 401 || e.status === 403 || (e.status === 429 && e.deviceTokenWait))
+          && !refusal) refusal = e;
       return empty;
     });
     setPerPersonLoading(true);

@@ -989,11 +989,10 @@ const stateBus = new StateBus();
 // sidesteps that without forcing components.jsx (which is the
 // canonical first-declared place for these names) to change.
 
-// The post-login / post-pairing retry useApiList and useApiObject carry
-// (below), for a page that fetches by hand instead — a person's tabs on
-// the People page, a chat thread's messages. Both read the household's
-// speech, which answers to a paired device, so on a browser that is not
-// paired yet the first fetch is refused and the pair modal opens.
+// The post-login / post-pairing retry. useApiList, useApiObject and
+// usePagedList (below) run it on their own refusals; a page that fetches
+// by hand calls it itself — a person's tabs on the People page, a chat
+// thread's messages, the Files page's libraries.
 // Pass the error that refused the fetch (null once one succeeds) and the
 // function that repeats it: `retry` runs when a CREDENTIAL arrives after
 // the refusal (a login, or the household token through the pair modal) —
@@ -1001,12 +1000,22 @@ const stateBus = new StateBus();
 // opening or closing): the retried read that is refused again re-opens
 // the modal, and retrying on THAT notify is the modal loop. A second
 // token typed into the modal after a mistyped one is a new credential,
-// so it gets its own retry.
+// so it gets its own retry — and so does the admin sign-in that follows
+// a retry the old token spent (the hooks used to allow ONE retry per
+// refusal, so a page whose retry went out under a stale household token
+// stayed empty after the sign-in, until a reload: batch 15, Settings →
+// Satellites at "0 known").
 const useRetryAfterCredential = (refusal, retry) => {
   // The credentialVersion the last retry ran on.
   const retriedAtRef = React.useRef(null);
   React.useEffect(() => {
-    if (!refusal || (refusal.status !== 401 && refusal.status !== 403)) return;
+    // Refused for want of a credential: a 401/403, or the 429 the server
+    // answers while it makes this address wait for wrong household tokens
+    // (an old install's token left in this browser). That 429's own words
+    // say "sign in as an admin", so the sign-in must reload the read too.
+    const refused = !!refusal && (refusal.status === 401 || refusal.status === 403
+      || (refusal.status === 429 && !!refusal.deviceTokenWait));
+    if (!refused) return;
     if (typeof Auth === 'undefined') return;
     try {
       const seen = Auth.credentialVersion;
@@ -1100,8 +1109,6 @@ const useApiList = (path, { eventTypes = [], pickItems = (x) => x, quiet = false
   const [items, setItems] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState(null);
-  // Guards the post-login retry below to one attempt per error.
-  const retriedRef = React.useRef(false);
 
   // `quietRead`: THIS read opens no prompt even when the hook's do (the
   // re-read after a credential change).
@@ -1123,7 +1130,6 @@ const useApiList = (path, { eventTypes = [], pickItems = (x) => x, quiet = false
     } else {
       setItems(pickItems(data) || []);
       setError(null);
-      retriedRef.current = false;
     }
     setLoading(false);
   }, [path, quiet, refetchOnAuth]);
@@ -1139,32 +1145,15 @@ const useApiList = (path, { eventTypes = [], pickItems = (x) => x, quiet = false
   // unauthenticated), which pops the login modal via _maybeRequestLogin —
   // but nothing re-ran the request once the user authenticated, leaving
   // the panel stuck on a stale error against a now-valid session. Re-fetch
-  // when a 401/403 is followed by a successful login or pairing.
-  //
-  // AT MOST ONE retry per error, reset on any success. A 401 that persists
-  // while logged in is a real failure (e.g. a web→core hop that forgets to
-  // forward credentials), and retrying it on every Auth notify produces an
+  // once per credential that arrives after the refusal
+  // (useRetryAfterCredential): a 401 that persists while logged in is a
+  // real failure (e.g. a web→core hop that forgets to forward
+  // credentials), and retrying it on every Auth notify would be an
   // infinite login-modal loop rather than surfacing the bug.
   //
   // Not for a refetchOnAuth read: it re-reads on EVERY credential change
   // already, so this would read twice.
-  React.useEffect(() => {
-    if (refetchOnAuth) return;
-    if (!error || (error.status !== 401 && error.status !== 403)) return;
-    if (typeof Auth === 'undefined') return;
-    try {
-      // Retry when a CREDENTIAL changed since the refusal — a login, or
-      // the household token arriving through the pair modal — never on
-      // the notify that merely opened a modal.
-      const seen = Auth.credentialVersion;
-      return Auth.subscribe(() => {
-        if (Auth.credentialVersion === seen || retriedRef.current) return;
-        if (!Auth.isLoggedIn() && !(Auth.isPaired && Auth.isPaired())) return;
-        retriedRef.current = true;
-        refresh();
-      });
-    } catch { /* auth.js absent — nothing to recover from */ }
-  }, [error, refresh, refetchOnAuth]);
+  useRetryAfterCredential(refetchOnAuth ? null : error, refresh);
 
   React.useEffect(() => {
     if (!eventTypes || eventTypes.length === 0) return;
@@ -1185,8 +1174,6 @@ const useApiObject = (path, { eventTypes = [], quiet = false, refetchOnAuth = fa
   const [data, setData] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState(null);
-  // Guards the post-login retry below to one attempt per error.
-  const retriedRef = React.useRef(false);
 
   // `quietRead`: THIS read opens no prompt even when the hook's do (the
   // re-read after a credential change).
@@ -1216,7 +1203,6 @@ const useApiObject = (path, { eventTypes = [], quiet = false, refetchOnAuth = fa
     } else {
       setData(got);
       setError(null);
-      retriedRef.current = false;
     }
     setLoading(false);
   }, [path, quiet, refetchOnAuth]);
@@ -1232,32 +1218,15 @@ const useApiObject = (path, { eventTypes = [], quiet = false, refetchOnAuth = fa
   // unauthenticated), which pops the login modal via _maybeRequestLogin —
   // but nothing re-ran the request once the user authenticated, leaving
   // the panel stuck on a stale error against a now-valid session. Re-fetch
-  // when a 401/403 is followed by a successful login or pairing.
-  //
-  // AT MOST ONE retry per error, reset on any success. A 401 that persists
-  // while logged in is a real failure (e.g. a web→core hop that forgets to
-  // forward credentials), and retrying it on every Auth notify produces an
+  // once per credential that arrives after the refusal
+  // (useRetryAfterCredential): a 401 that persists while logged in is a
+  // real failure (e.g. a web→core hop that forgets to forward
+  // credentials), and retrying it on every Auth notify would be an
   // infinite login-modal loop rather than surfacing the bug.
   //
   // Not for a refetchOnAuth read: it re-reads on EVERY credential change
   // already, so this would read twice.
-  React.useEffect(() => {
-    if (refetchOnAuth) return;
-    if (!error || (error.status !== 401 && error.status !== 403)) return;
-    if (typeof Auth === 'undefined') return;
-    try {
-      // Retry when a CREDENTIAL changed since the refusal — a login, or
-      // the household token arriving through the pair modal — never on
-      // the notify that merely opened a modal.
-      const seen = Auth.credentialVersion;
-      return Auth.subscribe(() => {
-        if (Auth.credentialVersion === seen || retriedRef.current) return;
-        if (!Auth.isLoggedIn() && !(Auth.isPaired && Auth.isPaired())) return;
-        retriedRef.current = true;
-        refresh();
-      });
-    } catch { /* auth.js absent — nothing to recover from */ }
-  }, [error, refresh, refetchOnAuth]);
+  useRetryAfterCredential(refetchOnAuth ? null : error, refresh);
 
   React.useEffect(() => {
     if (!eventTypes || eventTypes.length === 0) return;
@@ -1415,17 +1384,7 @@ const usePagedList = (basePath, { pageSize = PAGED_DEFAULT_SIZE, pick = (d) => d
   }, [reload, eventTypes.join(',')]);
 
   // A read refused for want of a credential retries once one arrives.
-  React.useEffect(() => {
-    const e = st.error;
-    if (!e || (e.status !== 401 && e.status !== 403) || typeof Auth === 'undefined') return undefined;
-    try {
-      const seen = Auth.credentialVersion;
-      return Auth.subscribe(() => {
-        if (Auth.credentialVersion === seen) return;
-        retry();
-      });
-    } catch { return undefined; }
-  }, [st.error, retry]);
+  useRetryAfterCredential(st.error, retry);
 
   const updateItem = React.useCallback((id, patch) => setSt((p) => ({
     ...p,

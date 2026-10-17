@@ -342,7 +342,7 @@ SCENARIOS["list_opt_in"] = scenario(
     cookie="old-session",
 )
 # An ORDINARY read (not opted in) that a fresh Bearer cannot fix: one retry
-# per error, however many notifies and sign-ins follow.
+# per CREDENTIAL, however many notifies (modals opening and closing) follow.
 SCENARIOS["retry_guard"] = scenario(
     r"""
     const n = () => w.__gets('/api/broken').length;
@@ -585,15 +585,19 @@ def test_a_list_answer_sent_under_the_old_credential_is_thrown_away(driven) -> N
     assert o["sent"] == ["none", "bearer", "bearer", "none"]
 
 
-def test_an_ordinary_read_still_retries_at_most_once_per_error(driven) -> None:
+def test_an_ordinary_read_retries_once_per_credential(driven) -> None:
     """The retry guard the opt-in must not disturb: a read that a fresh
-    Bearer does not fix is retried ONCE, re-opens the prompt once, and
-    nothing after that — no modal loop."""
+    Bearer does not fix is retried ONCE for it, re-opens the prompt once,
+    and no notify after that reads again — no modal loop. A second sign-in
+    is a new credential and gets its own single retry (2026-10-17: the
+    guard used to allow one retry per refusal, so the admin sign-in after
+    a retry an old household token had spent left Settings → Satellites
+    empty until a reload; test_web_satellites_reload_after_signin)."""
     o = driven["retry_guard"]
     assert o["first"] == {"reads": 1, "modal": True}
     assert o["signedIn"] == {"reads": 2, "modal": True}
     assert o["modalOnly"] == {"reads": 2}
-    assert o["signedInAgain"] == {"reads": 2, "view": "error 401"}
+    assert o["signedInAgain"] == {"reads": 3, "view": "error 401"}
 
 
 def test_an_opted_in_read_that_stays_refused_does_not_loop(driven) -> None:

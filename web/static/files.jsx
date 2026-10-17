@@ -813,7 +813,8 @@ const FilesPage = () => {
         : (libs.length ? libs[0].id : null));
       setLibsRefusal(null);
     } catch (e) {
-      setLibsRefusal(e && (e.status === 401 || e.status === 403) ? e : null);
+      setLibsRefusal(e && (e.status === 401 || e.status === 403
+        || (e.status === 429 && e.deviceTokenWait)) ? e : null);
       // A refusal that opened the sign-in or pair prompt: the prompt says it.
       if (!(e && e.loginPrompted)) fire(`Couldn't load libraries: ${String(e.message || e).slice(0, 80)}`);
     } finally { setLibLoading(false); }
