@@ -252,13 +252,22 @@ async def test_forget_me_when_known(db_session) -> None:
     await db_session.commit()
 
     handler = VoiceProfileHandler()
+    sid = await SessionRepository(db_session).get_or_create(None, "kitchen")
+    await db_session.commit()
     ctx = Context(
-        session_id=None,
+        session_id=sid,
         room_id="kitchen",
         online=True,
         person_id=sarah_id,
     )
-    response = await handler._forget(ctx, db_session)
+    # Asked first (review 2026-10-17): nothing goes before the yes.
+    asked = await handler._forget(ctx, db_session)
+    await db_session.commit()
+    assert asked.text.endswith("Say yes to delete everything you've said.")
+    assert (await db_session.execute(text("SELECT count(*) FROM people"))).scalar_one() == 1
+    pending = (await SessionRepository(db_session).get_context(sid))["pending_confirmation"]
+    assert pending["kind"] == "core.forget_me"
+    response = await handler.handle_choice_reply(pending["kind"], pending, "yes", ctx, db_session)
     await db_session.commit()
 
     assert "forgotten" in response.text.lower()
@@ -350,7 +359,7 @@ async def test_forget_me_clears_identity_from_context(stub_people_repo) -> None:
         presence_tier="low",
     )
 
-    response = await handler._forget(ctx, object())
+    response = await handler._forget_person(2, "Guy", ctx, object())
 
     assert "forgotten" in response.text.lower()
     assert "guy" in response.text.lower()
@@ -375,7 +384,7 @@ async def test_forget_me_keeps_identity_when_delete_fails(stub_people_repo) -> N
         presence_tier="low",
     )
 
-    response = await handler._forget(ctx, object())
+    response = await handler._forget_person(2, "Guy", ctx, object())
 
     assert "still there" in response.text.lower()
     assert ctx.person_id == 2

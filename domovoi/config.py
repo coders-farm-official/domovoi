@@ -80,10 +80,13 @@ VOICE_HISTORY_KEEP_LABELS = {
     "30": "30 days", "90": "90 days", "365": "1 year", "forever": "Forever",
 }
 # Spellings that can only mean "keep it". "never", "none" and "off" are
-# not here: they could as well mean "keep none", so they read as the default.
+# not here: they could as well mean "keep none", so they are unreadable
+# (which, like any unreadable value, deletes nothing).
 _VOICE_HISTORY_KEEP_FOREVER = frozenset({
     "forever", "always", "keep", "unlimited", "infinite", "0",
 })
+# The unreadable values already logged (normalize runs on every read).
+_VOICE_HISTORY_KEEP_WARNED: set[str] = set()
 
 _log = logging.getLogger(__name__)
 
@@ -96,8 +99,10 @@ def normalize_voice_history_keep(value: object) -> str:
     of days rounds UP to the next choice (45 keeps 90 days; 0 or less, or
     more than a year, keeps everything), "1 year" / "1y" / "year" read as
     365, "90d" as 90, and the words that can only mean "keep it" as
-    forever. Blank is the default. Anything else is the default too, and
-    the log says so."""
+    forever. Blank is the default. Anything else ("6 months", "2y", a typo
+    of forever, "never") is unreadable, and an unreadable value deletes
+    nothing: it reads as forever, and the log says so once (review
+    2026-10-17, N-V5)."""
     text = str(value if value is not None else "").strip().lower()
     if not text:
         return VOICE_HISTORY_KEEP_DEFAULT
@@ -118,13 +123,16 @@ def normalize_voice_history_keep(value: object) -> str:
             meant = "forever"
         else:
             meant = next(c for c in ("30", "90", "365") if days <= int(c))
-        if meant != compact:
+        if meant != compact and text not in _VOICE_HISTORY_KEEP_WARNED:
+            _VOICE_HISTORY_KEEP_WARNED.add(text)
             _log.warning("VOICE_HISTORY_KEEP=%r read as %r (the choices: %s)",
                          value, meant, ", ".join(VOICE_HISTORY_KEEP_CHOICES))
         return meant
-    _log.warning("VOICE_HISTORY_KEEP=%r is not one of %s; using %r",
-                 value, ", ".join(VOICE_HISTORY_KEEP_CHOICES), VOICE_HISTORY_KEEP_DEFAULT)
-    return VOICE_HISTORY_KEEP_DEFAULT
+    if text not in _VOICE_HISTORY_KEEP_WARNED:
+        _VOICE_HISTORY_KEEP_WARNED.add(text)
+        _log.warning("VOICE_HISTORY_KEEP=%r is not one of %s; keeping everything (forever) "
+                     "until it is", value, ", ".join(VOICE_HISTORY_KEEP_CHOICES))
+    return "forever"
 
 
 def voice_history_keep_days(value: object) -> int | None:

@@ -41,7 +41,8 @@ from domovoi.tests.conftest import requires_db
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORPUS_PATH = REPO_ROOT / "scripts" / "routing_corpus.json"
 CORPUS = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))["cases"]
-GATED = {"calculator", "double_check", "news", "library", "reminder", "timer", "music_alias"}
+GATED = {"calculator", "double_check", "news", "library", "reminder", "timer", "music_alias",
+         "voice_profile"}
 
 
 def _normalize(utterance: str) -> str:
@@ -289,7 +290,10 @@ def test_reminder_and_timer_withhold_only_where_the_router_never_looks(utterance
     a routed turn's list — which is why those two keep their band place
     among the ungated tools, where qwen3:8b routed the measured corpus
     (moved to the end, it answered "Can you check online?" from Q&A)."""
-    assert _GATES_KEEP_BAND_PLACE == {"reminder", "timer"}
+    # voice_profile keeps its place too (2026-10-17): it is withheld only on
+    # talk about forgetting something other than the speaker
+    # (test_voice_history.py pins that gate).
+    assert _GATES_KEEP_BAND_PLACE == {"reminder", "timer", "voice_profile"}
     assert answers_without_tools(_normalize(utterance))
     ordinary = _offered("play some jazz in the kitchen")
     band = {h.name: h.priority_band for h in HANDLERS}

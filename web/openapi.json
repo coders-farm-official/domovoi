@@ -3979,7 +3979,7 @@
           "voice-history"
         ],
         "summary": "Delete All Voice History",
-        "description": "Delete all voice history: every turn said until now, everywhere,\nwith Domovoi's answers, the routing log, the rooms' short-term\nconversations and the satellites' logs kept on the server. Admin.\nForwarded to the core (``POST /v1/admin/voice-history/delete-all``),\nwhich answers at once with ``{job}`` and runs it in the background;\npressing again while one runs answers that one. 502 when the core is\nunreachable.",
+        "description": "Delete all voice history: every turn said until now, everywhere,\nwith Domovoi's answers, the routing log, the rooms' short-term\nconversations and the satellites' logs kept on the server. Admin,\nsecurity tier: 501 before setup.\nForwarded to the core (``POST /v1/admin/voice-history/delete-all``),\nwhich answers at once with ``{job}`` and runs it in the background;\npressing again while one runs answers that one. 502 when the core is\nunreachable.",
         "operationId": "delete_all_voice_history_api_voice_history_delete_all_post",
         "responses": {
           "200": {

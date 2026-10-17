@@ -229,6 +229,24 @@ _FORGET_RE = re.compile(
     r")$"
 )
 
+# The LLM router is offered this handler's tool (whose actions include
+# "forget") on a turn that mentions forgetting only when the turn asks to
+# forget the SPEAKER — "forget about it", "forget that", "forget the
+# timer" never reach it (review 2026-10-17, N-V4). Every "forget me" turn
+# is asked about before anything is deleted anyway.
+_FORGET_TALK_RE = re.compile(r"\bforget\b")
+_FORGET_ME_TALK_RE = re.compile(
+    r"\bforget (?:me|my voice|my profile|(?:all |everything )?about me|who i am)\b"
+)
+
+#: How long "forget me"'s question waits for its yes.
+FORGET_CONFIRM_TTL_SEC = VOICE_ADD_TTL_SEC
+#: What a "forget me" from the person's own voice asks before deleting.
+_FORGET_ASK = (
+    "{name}, I'll forget your voice, your profile, what I remember about you "
+    "and everything you've said to me. Say yes to delete everything you've said."
+)
+
 # Persistent opt-out. Distinct from `_FORGET_RE` —
 # forget DELETES existing data, denylist ADDS the current voice to a
 # persistent suppression list so future utterances from this voice
@@ -571,15 +589,26 @@ class VoiceProfileHandler(Handler):
     display = HandlerDisplay(label="Voice Profile", tone="info")
     confirmation_kinds = (
         "core.self_intro", "core.third_party_intro_confirm", "core.phone_voice_add",
-        "core.room_voice_add",
+        "core.room_voice_add", "core.forget_me",
     )
     # "Add this phone's voice to X?" and a satellite's "I already know
     # someone called X. Is that you?" are answered by the very next turn or
     # not at all (handle_choice_reply): choices, so the router hands them
     # every next turn, and drops them when that turn is about something
     # else.
-    choice_kinds = ("core.phone_voice_add", "core.room_voice_add")
+    # "forget me"'s "Say yes to delete everything you've said" is one too:
+    # the very next turn answers it, or nothing does.
+    choice_kinds = ("core.phone_voice_add", "core.room_voice_add", "core.forget_me")
     requires_network = "no"
+
+    def offers_tool(self, transcript: str) -> bool:
+        """Withheld from a turn that talks about forgetting something other
+        than the speaker ("forget about it", "forget that"): a misroute
+        there could only reach the tool's "forget". Everything else keeps
+        the tool (introductions and "who am I" phrasings the fast paths
+        miss)."""
+        t = transcript or ""
+        return not (_FORGET_TALK_RE.search(t) and not _FORGET_ME_TALK_RE.search(t))
 
     tool_schema = {
         "name": "voice_profile",
@@ -1222,6 +1251,8 @@ class VoiceProfileHandler(Handler):
 
         if kind not in self.choice_kinds:
             return None
+        if kind == "core.forget_me":
+            return await self._handle_forget_reply(data, transcript, ctx, session)
         affirmative = _parse_yes_no(transcript)
         if affirmative is None:
             affirmative = _parse_yes_no(strip_leading_filler(transcript))
@@ -1563,13 +1594,6 @@ class VoiceProfileHandler(Handler):
                 removed = await VoiceProfilesRepository(session).delete_samples(
                     ctx.person_id, claim_ids,
                 )
-            elif scope == "person":
-                # What they said goes too (owner, 2026-10-17): their own
-                # spoken turns, found by who voice identification heard
-                # speaking, BEFORE the person row (whose delete sets the
-                # turns' person_id to NULL). domovoi/voice_history.py.
-                await voice_history.delete_person_history(session, ctx.person_id)
-                await PeopleRepository(session).delete(ctx.person_id)
         except Exception as e:
             log.warning("forget-me delete failed: %s", e)
             return Response(
@@ -1579,7 +1603,120 @@ class VoiceProfileHandler(Handler):
             )
         if scope != "person":
             return self._forget_claims_answer(ctx, scope, name, removed)
-        log.info("forgot person id=%d name=%s", ctx.person_id, name)
+        return await self._ask_forget(ctx.person_id, name, ctx, session)
+
+    async def _ask_forget(
+        self, person_id: int, name: str, ctx: Context, session: AsyncSession,
+    ) -> Response:
+        """The person's own voice said "forget me" (or the tool router sent
+        a turn here): nothing is deleted yet (review 2026-10-17, N-V4). The
+        question is parked as a choice — the very next turn in the same
+        room or on the same phone, within :data:`FORGET_CONFIRM_TTL_SEC`,
+        says yes, or nothing happens."""
+        data = {
+            **_origin(ctx),
+            "person_id": int(person_id),
+            "name": name,
+            "expires_at": time.time() + FORGET_CONFIRM_TTL_SEC,
+        }
+        try:
+            await request_confirmation(
+                session, ctx.session_id, kind="core.forget_me", handler=self.name, data=data,
+            )
+        except Exception as e:
+            log.warning("couldn't park the forget-me question: %s", e)
+            return Response(
+                text="Something went wrong — I haven't forgotten anything.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        return Response(
+            text=_FORGET_ASK.format(name=name),
+            session_id=ctx.session_id,
+            matched_handler=self.name,
+            expect_followup=True,
+        )
+
+    async def _handle_forget_reply(
+        self, data: dict, transcript: str, ctx: Context, session: AsyncSession,
+    ) -> Response | None:
+        """The turn after "Say yes to delete everything you've said". Yes,
+        in time, from where it was asked, and not in somebody else's
+        recognized voice: the person goes (:meth:`_forget_person`). No: kept.
+        Anything else is not an answer: the question is dropped and the
+        turn routed as usual (None)."""
+        from domovoi.router import _parse_yes_no, strip_leading_filler
+
+        affirmative = _parse_yes_no(transcript)
+        if affirmative is None:
+            affirmative = _parse_yes_no(strip_leading_filler(transcript))
+        if affirmative is None:
+            return None
+        name = str(data.get("name") or "you")
+        if not affirmative:
+            return Response(
+                text=f"Okay, I've kept everything, {name}.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        try:
+            expired = time.time() > float(data.get("expires_at"))
+        except (TypeError, ValueError):
+            expired = True
+        if expired:
+            return Response(
+                text="That was a while ago, so I haven't forgotten anything. Say forget me again if you'd like me to.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        same_place = (
+            data.get(_ORIGIN_ROOM_KEY) == ctx.room_id
+            and _asked_on_the_phone(data) == phone_chat_mic(ctx)
+        )
+        if not same_place:
+            return Response(text=_ELSEWHERE_TEXT, session_id=ctx.session_id, matched_handler=self.name)
+        try:
+            person_id = int(data.get("person_id"))
+        except (TypeError, ValueError):
+            return Response(
+                text="Something went wrong — I haven't forgotten anything.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        if ctx.person_id is not None and ctx.person_id != person_id:
+            # A "yes" in somebody else's recognized voice forgets nobody.
+            return Response(
+                text=f"That doesn't sound like {name}, so I haven't forgotten anything.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        return await self._forget_person(person_id, name, ctx, session)
+
+    async def _forget_person(
+        self, person_id: int, name: str, ctx: Context, session: AsyncSession,
+    ) -> Response:
+        """Delete the person and what they said, after their yes."""
+        try:
+            if await PeopleRepository(session).get(person_id) is None:
+                return Response(
+                    text=f"I've already forgotten {name}.",
+                    session_id=ctx.session_id,
+                    matched_handler=self.name,
+                )
+            # What they said goes too (owner, 2026-10-17): their own spoken
+            # turns, found by who voice identification heard speaking,
+            # BEFORE the person row (whose delete sets the turns'
+            # person_id to NULL). domovoi/voice_history.py.
+            await voice_history.delete_person_history(session, person_id)
+            await PeopleRepository(session).delete(person_id)
+        except Exception as e:
+            log.warning("forget-me delete failed: %s", e)
+            return Response(
+                text="Something went wrong — your profile is still there.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        log.info("forgot person id=%d name=%s", person_id, name)
         # The `people` row is gone, but we're still inside the router's
         # session_scope — `_persist_turn` has yet to write this turn's
         # intents_log / conversation_log rows, and it stamps them from

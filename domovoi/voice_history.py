@@ -86,6 +86,10 @@ RETENTION_EVERY = timedelta(days=1)
 JOB_ROWS_KEPT = 30
 # How often a running delete-all writes its progress to its job row.
 PROGRESS_EVERY_SEC = 1.0
+# How far behind the newest turn's time the clock may be before a retention
+# run is skipped (_clock_moved): a turn stamped by a database a moment
+# ahead of this process is not a clock that moved.
+CLOCK_SLACK = timedelta(minutes=5)
 
 # The counts a run reports, per store. Never any text.
 STORES = (
@@ -377,16 +381,25 @@ def _job(row: Any) -> dict[str, Any]:
 
 
 async def request_delete_all() -> dict[str, Any]:
-    """Write a "delete all" job, everything said until now, unless one is
-    still open (then that one is the answer: pressing twice deletes once).
-    Run it with :func:`run_pending_jobs`."""
+    """Ask for everything said until now to be deleted. Run it with
+    :func:`run_pending_jobs`. Pressing again:
+
+    * while a job waits (never started, or failed and waiting for its
+      retry) moves that job's cutoff up to now and answers it, so what was
+      said between the two presses goes too (review 2026-10-17, N-V2);
+    * while one is running answers a follow-up job with its own cutoff,
+      which runs after it (one follow-up at most: a further press moves it).
+    """
     async with session_scope() as s:
         await s.execute(text("LOCK TABLE voice_history_jobs IN SHARE ROW EXCLUSIVE MODE"))
         row = (
             await s.execute(
                 text(
-                    f"SELECT {_JOB_COLS} FROM voice_history_jobs "
-                    "WHERE kind = 'delete_all' AND finished_at IS NULL ORDER BY id LIMIT 1"
+                    "UPDATE voice_history_jobs SET cutoff = GREATEST(cutoff, NOW()) "
+                    "WHERE id = (SELECT id FROM voice_history_jobs "
+                    "WHERE kind = 'delete_all' AND finished_at IS NULL "
+                    "AND (started_at IS NULL OR error IS NOT NULL) ORDER BY id DESC LIMIT 1) "
+                    f"RETURNING {_JOB_COLS}"
                 )
             )
         ).first()
@@ -496,6 +509,40 @@ async def run_pending_jobs(**prune_kw: Any) -> list[dict[str, Any]]:
     return ran
 
 
+async def _clock_moved(cutoff: datetime, now: datetime) -> str | None:
+    """Why a retention run must not trust this clock, or None (review
+    2026-10-17, N-V3). Turns are stamped by the same clock that sets the
+    cutoff, so:
+
+    * now earlier than the newest turn: the clock went back (or was ahead
+      when that turn was written);
+    * the cutoff later than the newest turn: the run would delete every
+      turn there is, the newest included — a clock that jumped ahead by
+      more than the setting looks exactly like this.
+
+    The second also holds back a house that has said nothing for longer
+    than the setting: its last turns stay until someone speaks again."""
+    async with session_scope() as s:
+        newest = (
+            await s.execute(
+                text(
+                    "SELECT GREATEST((SELECT MAX(at) FROM conversation_log), "
+                    "(SELECT MAX(at) FROM intents_log))"
+                )
+            )
+        ).scalar()
+    if newest is None:
+        return None
+    if now < newest - CLOCK_SLACK:
+        return f"the clock ({now.isoformat()}) is behind the newest turn ({newest.isoformat()})"
+    if cutoff > newest:
+        return (
+            f"the cutoff ({cutoff.isoformat()}) is after the newest turn "
+            f"({newest.isoformat()}): every turn would go"
+        )
+    return None
+
+
 async def _last_retention_at() -> datetime | None:
     async with session_scope() as s:
         return (
@@ -521,7 +568,12 @@ async def run_retention(*, force: bool = False, **prune_kw: Any) -> dict[str, An
             last = await _last_retention_at()
             if last is not None and datetime.now(timezone.utc) - last < RETENTION_EVERY:
                 return None
-        cutoff = cutoff_for(days)
+        now = datetime.now(timezone.utc)
+        cutoff = cutoff_for(days, now)
+        why = await _clock_moved(cutoff, now)
+        if why is not None:
+            log.warning("voice history: not deleting anything this time: %s", why)
+            return None
         async with session_scope() as s:
             row = (
                 await s.execute(

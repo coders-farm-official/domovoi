@@ -8,8 +8,8 @@
   so a paired phone can see how long the house keeps its voice. Read from
   the database this process shares; the setting's live value from the
   core's snapshot (this process's own copy goes stale on a save).
-* ``POST /api/voice-history/delete-all`` — admin (Bearer, the pre-setup
-  grace kept), like People → forget person. Forwarded to the core, which
+* ``POST /api/voice-history/delete-all`` — admin, security tier (Bearer
+  only, 501 until first-run setup; review 2026-10-17). Forwarded to the core, which
   writes the job and runs it in the background (domovoi/voice_history.py);
   the answer is the job.
 
@@ -24,7 +24,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 
 from domovoi import voice_history
-from domovoi.admin_auth import require_admin_mutation, require_device_read
+from domovoi.admin_auth import require_admin_security, require_device_read
 from domovoi.config import VOICE_HISTORY_KEEP_CHOICES
 from domovoi.config import settings as core_settings
 from web.backend.db import session_scope
@@ -60,11 +60,12 @@ async def get_voice_history() -> dict[str, Any]:
         return await voice_history.status(s, live_keep())
 
 
-@router.post("/delete-all", dependencies=[Depends(require_admin_mutation)])
+@router.post("/delete-all", dependencies=[Depends(require_admin_security)])
 async def delete_all_voice_history(request: Request):
     """Delete all voice history: every turn said until now, everywhere,
     with Domovoi's answers, the routing log, the rooms' short-term
-    conversations and the satellites' logs kept on the server. Admin.
+    conversations and the satellites' logs kept on the server. Admin,
+    security tier: 501 before setup.
     Forwarded to the core (``POST /v1/admin/voice-history/delete-all``),
     which answers at once with ``{job}`` and runs it in the background;
     pressing again while one runs answers that one. 502 when the core is

@@ -5773,10 +5773,11 @@ async def admin_update_config(body: _AdminConfigUpdateBody) -> dict[str, Any]:
 
 @app.post(
     "/v1/admin/voice-history/delete-all",
-    # Admin, like deleting a person on the People page: an admin Bearer,
-    # never the dashboard cookie, with the pre-setup grace. The web hop
-    # (POST /api/voice-history/delete-all) wears the same gate.
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier (review 2026-10-17, N-V1, like N5's version pull): an
+    # admin Bearer, never the dashboard cookie, and 501 until setup — on an
+    # unclaimed box nobody on the LAN can wipe the house's history. The web
+    # hop (POST /api/voice-history/delete-all) wears the same gate.
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_voice_history_delete_all() -> dict[str, Any]:
     """Delete all voice history (domovoi/voice_history.py): everything said

@@ -40,6 +40,7 @@ from domovoi.config_schema import FIELD_BY_NAME, coerce_and_validate
 from domovoi.db.session import engine
 from domovoi.satellite_health import RetainedLog
 from domovoi.tests.conftest import requires_db
+from domovoi.tests.test_phone_voice_profile import open_gate, whisper  # noqa: F401  (fixtures)
 
 DAY = timedelta(days=1)
 
@@ -60,13 +61,27 @@ def _now() -> datetime:
         ("1 year", "365"), ("1y", "365"), ("year", "365"), ("90d", "90"), ("30 days", "30"),
         # A whole number of days rounds UP: never shorter than asked.
         ("7", "30"), ("45", "90"), ("91", "365"), ("366", "forever"), (60, "90"),
-        # Words that could mean "keep none" are not read as forever OR as
-        # zero: they are the default, and the log says so.
-        ("never", "90"), ("none", "90"), ("off", "90"), ("banana", "90"),
+        # Unreadable: deletes nothing (review 2026-10-17, N-V5) — words
+        # that could mean "keep none", months and years, typos.
+        ("never", "forever"), ("none", "forever"), ("off", "forever"), ("banana", "forever"),
+        ("6 months", "forever"), ("2y", "forever"), ("18months", "forever"), ("forevr", "forever"),
     ],
 )
 def test_the_setting_reads_a_hand_written_value_never_shorter(raw, read_as) -> None:
     assert normalize_voice_history_keep(raw) == read_as
+
+
+def test_an_unreadable_value_is_logged_once(caplog) -> None:
+    import logging
+
+    from domovoi import config
+
+    config._VOICE_HISTORY_KEEP_WARNED.discard("3 fortnights")
+    with caplog.at_level(logging.WARNING, logger="domovoi.config"):
+        for _ in range(3):
+            assert normalize_voice_history_keep("3 fortnights") == "forever"
+    said = [r.getMessage() for r in caplog.records if "3 fortnights" in r.getMessage()]
+    assert len(said) == 1 and "keeping everything (forever)" in said[0]
 
 
 def test_keep_days() -> None:
@@ -460,6 +475,7 @@ async def test_a_failed_retention_run_is_retried_at_the_next_tick(vh, monkeypatc
     clean, _ = vh
     await clean()
     await _turn(_now() - 200 * DAY, "old")
+    await _turn(_now() - DAY, "yesterday")
 
     async def broken(*a, **kw):
         raise RuntimeError("boom")
@@ -511,26 +527,37 @@ async def test_forget_me_deletes_only_the_speakers_own_turns(vh, db_session, mon
         return "person", []  # whose voice it is has its own tests (test_voice_claims.py)
 
     monkeypatch.setattr(VoiceProfileHandler, "_forget_scope", own_voice)
-    ctx = Context(room_id="kitchen", online=True, person_id=scene["sarah"], presence_tier="low",
-                  session_id=UUID(scene["a"]))
-    response = await route(Intent(transcript="forget me", room_id="kitchen"), ctx, db_session)
+    def ctx():
+        return Context(room_id="kitchen", online=True, person_id=scene["sarah"], presence_tier="low",
+                       session_id=UUID(scene["a"]))
+
+    asked = await route(Intent(transcript="forget me", room_id="kitchen"), ctx(), db_session)
+    await db_session.commit()
+    # Asked first (review 2026-10-17): nothing is gone yet.
+    assert asked.text == (
+        "Sarah, I'll forget your voice, your profile, what I remember about you and "
+        "everything you've said to me. Say yes to delete everything you've said."
+    )
+    assert len(await _said()) == 5
+    response = await route(Intent(transcript="yes", room_id="kitchen"), ctx(), db_session)
     await db_session.commit()
 
     assert "what you've said to me" in response.text
-    # Hers are gone; the turns that only NAME her stay; the request itself
-    # is written like every turn (both rows), with nobody's name on it.
-    assert await _said() == ["bob: remind Sarah to buy milk", "forget me", "someone: is Sarah home"]
+    # Hers are gone (the "forget me" turn too: she said it); the turns that
+    # only NAME her stay; the yes is written like every turn (both rows),
+    # with nobody's name on it.
+    assert await _said() == ["bob: remind Sarah to buy milk", "someone: is Sarah home", "yes"]
     async with engine.begin() as conn:
         rows = (await conn.execute(text(
-            "SELECT person_id FROM conversation_log WHERE user_text = 'forget me' "
-            "UNION ALL SELECT person_id FROM intents_log WHERE transcript = 'forget me'"))).all()
+            "SELECT person_id FROM conversation_log WHERE user_text = 'yes' "
+            "UNION ALL SELECT person_id FROM intents_log WHERE transcript = 'yes'"))).all()
     assert [r[0] for r in rows] == [None, None]
     assert await _scalar("SELECT COUNT(*) FROM people WHERE id = :p", p=scene["sarah"]) == 0
     assert await _scalar("SELECT COUNT(*) FROM memories") == 0
     # The room she spoke in starts its short-term conversation afresh (the
-    # forget-me exchange is the only one); Bob's room keeps his.
+    # yes exchange is the only one); Bob's room keeps his.
     ctx_a = await _context(scene["a"])
-    assert [e["text"] for e in ctx_a["recent_turns"]] == ["forget me", response.text]
+    assert [e["text"] for e in ctx_a["recent_turns"]] == ["yes", response.text]
     assert ctx_a["last_played_track"] == {"t": 1}
     assert [e["text"] for e in (await _context(scene["b"]))["recent_turns"]] == ["bob's words"]
 
@@ -691,6 +718,11 @@ async def test_delete_all_needs_an_admin(hop, monkeypatch) -> None:
         assert (await c.post(path, headers={HEADER: "household"})).status_code in (401, 403)
     async with client(cookies={COOKIE: "admin-token"}) as c:
         assert (await c.post(path)).status_code == 403
+    # Before setup nobody on the LAN can wipe the house's history (review
+    # 2026-10-17, N-V1; the version pull's N5 rule).
+    install_fake_db(monkeypatch, admin=False)
+    async with client() as c:
+        assert (await c.post(path)).status_code == 501
 
 
 @pytest.mark.asyncio
@@ -875,3 +907,259 @@ async def test_the_batches_stay_short_on_a_large_table(vh, capsys) -> None:
     assert max(batch_times) < 2.0
     assert max(gaps) < 0.25
     assert total < 120
+
+
+# ─── Review 2026-10-17 (design-notes/REVIEW-ACOUSTID-VOICEHISTORY-1017.md §2) ─
+
+
+@pytest.mark.parametrize(
+    ("said", "offered"),
+    [
+        ("forget about it", False), ("forget that", False), ("forget it", False),
+        ("just forget the timer", False), ("forget what i said about the dentist", False),
+        ("forget me", True), ("please forget my voice", True), ("forget everything about me", True),
+        ("forget about me", True), ("i'm sarah", True), ("what's my name", True), ("", True),
+    ],
+)
+def test_the_forget_tool_is_offered_only_on_forget_me_talk(said, offered) -> None:
+    """N-V4: a turn about forgetting something else never sees the tool
+    whose "forget" deletes the speaker."""
+    from domovoi.handlers.voice_profile import VoiceProfileHandler
+    from domovoi.router import offered_tool_schemas
+
+    assert VoiceProfileHandler().offers_tool(said) is offered
+    names = [t["name"] for t in offered_tool_schemas(said)]
+    assert ("voice_profile" in names) is offered
+
+
+def test_the_gate_keeps_the_tool_list_order_on_ordinary_turns(monkeypatch) -> None:
+    """The tool list is the cached prompt prefix: an ordinary turn sees it
+    exactly as it was before the gate."""
+    from domovoi.handlers.base import Handler
+    from domovoi.handlers.voice_profile import VoiceProfileHandler
+    from domovoi.router import offered_tool_schemas
+
+    said = "turn the lights a bit warmer"
+    gated = [t["name"] for t in offered_tool_schemas(said)]
+    monkeypatch.setattr(VoiceProfileHandler, "offers_tool", Handler.offers_tool)
+    assert gated == [t["name"] for t in offered_tool_schemas(said)]
+
+
+async def _ask_then(db_session, scene, answer, *, answer_person="same", room="kitchen"):
+    from uuid import UUID
+
+    from domovoi.handlers.voice_profile import VoiceProfileHandler
+    from domovoi.models import Context, Intent
+    from domovoi.router import route
+
+    async def own_voice(self, ctx, session):
+        return "person", []
+
+    import domovoi.handlers.voice_profile as vp
+
+    VoiceProfileHandler._forget_scope, real = own_voice, VoiceProfileHandler._forget_scope
+    try:
+        asked = await route(Intent(transcript="forget me", room_id="kitchen"),
+                            Context(room_id="kitchen", online=True, person_id=scene["sarah"],
+                                    session_id=UUID(scene["a"])), db_session)
+        await db_session.commit()
+        who = scene["sarah"] if answer_person == "same" else answer_person
+        reply = await route(Intent(transcript=answer, room_id=room),
+                            Context(room_id=room, online=True, person_id=who,
+                                    session_id=UUID(scene["a"])), db_session)
+        await db_session.commit()
+    finally:
+        VoiceProfileHandler._forget_scope = real
+    assert vp  # imported for the patch's module
+    return asked, reply
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_forget_me_answered_no_keeps_everything(vh, db_session) -> None:
+    clean, _ = vh
+    await clean()
+    scene = await _forget_scene()
+    _, reply = await _ask_then(db_session, scene, "no")
+    assert reply.text == "Okay, I've kept everything, Sarah."
+    assert await _scalar("SELECT COUNT(*) FROM people WHERE id = :p", p=scene["sarah"]) == 1
+    assert await _scalar(
+        "SELECT COUNT(*) FROM conversation_log WHERE person_id = :p AND user_text LIKE 'sarah:%'",
+        p=scene["sarah"]) == 2
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_yes_in_somebody_elses_voice_forgets_nobody(vh, db_session) -> None:
+    clean, _ = vh
+    await clean()
+    scene = await _forget_scene()
+    _, reply = await _ask_then(db_session, scene, "yes", answer_person=scene["bob"])
+    assert reply.text == "That doesn't sound like Sarah, so I haven't forgotten anything."
+    assert await _scalar("SELECT COUNT(*) FROM people WHERE id = :p", p=scene["sarah"]) == 1
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_anything_but_yes_or_no_drops_the_question(vh, db_session) -> None:
+    clean, _ = vh
+    await clean()
+    scene = await _forget_scene()
+    _, reply = await _ask_then(db_session, scene, "what time is it")
+    assert reply.matched_handler != "voice_profile"
+    # The question is gone: a later "yes" deletes nothing.
+    from uuid import UUID
+
+    from domovoi.models import Context, Intent
+    from domovoi.router import route
+
+    await route(Intent(transcript="yes", room_id="kitchen"),
+                Context(room_id="kitchen", online=True, person_id=scene["sarah"],
+                        session_id=UUID(scene["a"])), db_session)
+    await db_session.commit()
+    assert await _scalar("SELECT COUNT(*) FROM people WHERE id = :p", p=scene["sarah"]) == 1
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_late_yes_forgets_nothing(vh, db_session, monkeypatch) -> None:
+    import domovoi.handlers.voice_profile as vp
+
+    clean, _ = vh
+    await clean()
+    scene = await _forget_scene()
+    monkeypatch.setattr(vp, "FORGET_CONFIRM_TTL_SEC", -1.0)
+    _, reply = await _ask_then(db_session, scene, "yes")
+    assert reply.text.startswith("That was a while ago, so I haven't forgotten anything.")
+    assert await _scalar("SELECT COUNT(*) FROM people WHERE id = :p", p=scene["sarah"]) == 1
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_stranger_who_claimed_a_name_forgets_none_of_their_turns(
+    vh, db_session, open_gate, whisper,
+) -> None:
+    """T-V1, the 2026-10-17 privacy review's test 1, through the real
+    phone route: a stranger's phone says "My name is Kamron.", "Yes.", "Who
+    am I?" (recognized as Kamron through the claimed sample), "Forget me."
+    Only the claimed sample goes; Kamron and every turn of his stay."""
+    from domovoi.tests.test_phone_voice import _client, _thread
+    from domovoi.tests.test_phone_voice_profile import (
+        KAMRON_ROOM, STRANGER, _people_named, _person, _samples, _say,
+    )
+
+    clean, _ = vh
+    await clean()
+    kamron = await _person("Kamron", satellite=KAMRON_ROOM)
+    now = _now()
+    await _turn(now - 3 * DAY, "kamron: what's on my calendar", person=kamron)
+    await _turn(now - 2 * DAY, "kamron: remind me about the dentist", person=kamron)
+    await _turn(now - DAY, "someone: is Kamron home")
+    samples_before = len(await _samples(kamron))
+    tid = await _thread()
+    async with _client() as c:
+        await _say(c, tid, whisper, "My name is Kamron.", STRANGER)
+        await _say(c, tid, whisper, "Yes.", STRANGER)
+        who = await _say(c, tid, whisper, "Who am I?", STRANGER)
+        assert who["reply"].startswith("You're Kamron")
+        gone = await _say(c, tid, whisper, "Forget me.", STRANGER)
+    assert gone["reply"].startswith("I've forgotten the voice you added to Kamron.")
+    assert await _people_named("Kamron") == 1
+    assert len(await _samples(kamron)) == samples_before
+    async with engine.begin() as conn:
+        texts = [r[0] for r in (await conn.execute(text("SELECT user_text FROM conversation_log"))).all()]
+    for mine in ("kamron: what's on my calendar", "kamron: remind me about the dentist", "someone: is Kamron home"):
+        assert mine in texts
+    assert await _scalar(
+        "SELECT COUNT(*) FROM intents_log WHERE transcript LIKE 'kamron:%' AND person_id = :p", p=kamron) == 2
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_second_press_after_a_failure_moves_the_cutoff(vh, monkeypatch) -> None:
+    """N-V2: press, the job fails, someone speaks, the admin presses again:
+    the same job, its cutoff moved up, and what was said in between goes."""
+    clean, _ = vh
+    await clean()
+    await _turn(_now() - DAY, "said before the first press")
+    first = await voice_history.request_delete_all()
+    real = voice_history.prune_before
+
+    async def broken(*a, **kw):
+        raise RuntimeError("database went away")
+
+    monkeypatch.setattr(voice_history, "prune_before", broken)
+    assert [j["state"] for j in await voice_history.run_pending_jobs()] == ["failed"]
+    await _turn(_now(), "said between the two presses")
+    second = await voice_history.request_delete_all()
+    assert second["id"] == first["id"] and second["cutoff"] > first["cutoff"]
+    monkeypatch.setattr(voice_history, "prune_before", real)
+    assert [j["state"] for j in await voice_history.run_pending_jobs()] == ["done"]
+    assert await _said() == []
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_press_while_one_runs_gets_a_follow_up(vh) -> None:
+    clean, _ = vh
+    await clean()
+    first = await voice_history.request_delete_all()
+    await _exec("UPDATE voice_history_jobs SET started_at = NOW() WHERE id = :i", i=first["id"])
+    second = await voice_history.request_delete_all()
+    third = await voice_history.request_delete_all()
+    assert second["id"] != first["id"] and third["id"] == second["id"]
+    assert third["cutoff"] >= second["cutoff"]
+    assert [j["state"] for j in await voice_history.run_pending_jobs()] == ["done", "done"]
+
+
+def _clock(monkeypatch, shift: timedelta) -> None:
+    class Shifted(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) + shift
+
+    monkeypatch.setattr(voice_history, "datetime", Shifted)
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_clock_far_ahead_deletes_nothing(vh, monkeypatch, caplog) -> None:
+    """N-V3: a clock 400 days ahead would put the cutoff past every turn."""
+    clean, _ = vh
+    await clean()
+    await _turn(_now() - timedelta(hours=1), "an hour ago")
+    await _turn(_now() - 10 * DAY, "ten days ago")
+    _clock(monkeypatch, timedelta(days=400))
+    assert await voice_history.run_retention(force=True) is None
+    assert await _said() == ["an hour ago", "ten days ago"]
+    assert any("every turn would go" in r.getMessage() for r in caplog.records)
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_clock_behind_the_newest_turn_deletes_nothing(vh, monkeypatch) -> None:
+    clean, _ = vh
+    await clean()
+    await _turn(_now() - 200 * DAY, "old")
+    await _turn(_now() - DAY, "yesterday")
+    _clock(monkeypatch, -timedelta(days=3))
+    assert await voice_history.run_retention(force=True) is None
+    assert await _said() == ["old", "yesterday"]
+    _clock(monkeypatch, timedelta(0))
+    assert (await voice_history.run_retention(force=True))["deleted"]["conversation_log"] == 1
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_session_exchange_at_the_cutoff_stays(vh) -> None:
+    """The session trim's boundary is the logs' one: strictly older goes."""
+    clean, _ = vh
+    await clean()
+    cutoff = _now() - 5 * DAY
+    sid = await _session(started=cutoff - DAY, last=_now(), context={"recent_turns": [
+        _entry("user", "before", cutoff - timedelta(microseconds=1)),
+        _entry("user", "at", cutoff),
+        _entry("user", "after", cutoff + timedelta(microseconds=1)),
+    ]})
+    await voice_history.prune_before(cutoff)
+    assert [e["text"] for e in (await _context(sid))["recent_turns"]] == ["at", "after"]
