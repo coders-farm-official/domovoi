@@ -99,6 +99,11 @@ SPARE_BOARDS: dict[str, str] = {
     "android_room": "Android room",
 }
 
+#: Boards whose device keeps no voice choice (its `supports` leaves out
+#: "voice"): the server keeps the room's (domovoi/room_voice.py). Read
+#: only while the room is offline; a live hello's `supports` decides.
+BOARDS_WITHOUT_VOICE: frozenset[str] = frozenset({"android_room"})
+
 #: The `config` setting sections a narrower ability owns. A section not
 #: listed here needs only `config`.
 CONFIG_SECTION_ABILITY: dict[str, str] = {

@@ -15,6 +15,7 @@ DB-free except the last section (the real SQL, `requires_db`).
 
 from __future__ import annotations
 
+import asyncio
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -45,7 +46,7 @@ def _state() -> SimpleNamespace:
         active_sessions={}, active_dropins={},
         satellite_full_duplex={}, satellite_synced_sha={}, satellite_sat_type={},
         satellite_mic_enabled={}, wifi_status={}, satellite_volume={}, satellite_voice={},
-        satellite_config={}, satellite_display={},
+        satellite_config={}, satellite_display={}, resumable_music={},
     )
 
 
@@ -54,6 +55,7 @@ class FakeWS:
         self.app = SimpleNamespace(state=state or _state())
         self._in = list(frames or [])
         self.sent: list[dict[str, Any]] = []
+        self.audio = 0
         self.closed: int | None = None
 
     async def accept(self) -> None:
@@ -66,6 +68,9 @@ class FakeWS:
 
     async def send_text(self, text: str) -> None:
         self.sent.append(json.loads(text))
+
+    async def send_bytes(self, data: bytes) -> None:
+        self.audio += len(data)
 
     async def close(self, code: int = 1000) -> None:
         self.closed = code
@@ -152,7 +157,10 @@ def _ctx(session: StreamSession) -> Context:
 @pytest.fixture
 def registry(monkeypatch):
     """The voices registry: Amy (default), Ryan."""
-    rows = {"amy": {"name": "Amy"}, "ryan": {"name": "Ryan"}}
+    rows = {
+        "amy": {"name": "Amy", "engine": "piper", "model_ref": "test-amy"},
+        "ryan": {"name": "Ryan", "engine": "piper", "model_ref": "test-ryan"},
+    }
 
     class Voices:
         def __init__(self, _s):
@@ -280,8 +288,8 @@ async def test_switching_a_pis_voice_still_goes_to_the_pi(paired, kept, registry
 
 async def test_an_unknown_voice_changes_nothing_in_a_phone_room(paired, kept, registry):
     phone, ws = await _hello(PHONE)
-    resp = await VoiceHandler()._switch_response("zelda", _ctx(phone), object())  # type: ignore[arg-type]
-    assert resp.text.startswith("I don't have a voice called zelda.")
+    resp = await VoiceHandler()._switch_response("xyzzy", _ctx(phone), object())  # type: ignore[arg-type]
+    assert resp.text.startswith("I don't have a voice called xyzzy.")
     assert kept.voices == {} and ws.sent == [] and ws.app.state.satellite_voice == {}
 
 
@@ -289,6 +297,190 @@ def test_a_room_with_no_live_device_is_not_kept_by_the_server():
     app = SimpleNamespace(state=SimpleNamespace(active_sessions={}))
     assert room_voice.kept_by_server(app, "kitchen") is False
     assert room_voice.kept_by_server(None, "kitchen") is False
+
+
+# ─── the dashboard's picker (room_voice.apply) ─────────────────────────────
+
+
+@pytest.fixture
+def picker(monkeypatch, kept):
+    """apply()'s database as dicts: the registry (Kristin default, Norman;
+    Linda shipped and not downloaded), the inventory (`kept.voices`, plus
+    boards), and which rooms the house knows."""
+    from domovoi.clients import tts
+    from domovoi.db import session as db_session
+
+    registry = {
+        "kristin": {"name": "Kristin", "engine": "piper", "model_ref": "en_US-kristin-medium", "is_default": True},
+        "norman": {"name": "Norman", "engine": "piper", "model_ref": "en_US-norman-medium", "is_default": False},
+    }
+    boards: dict[str, str] = {}
+    known: set[str] = set()
+
+    class Voices:
+        def __init__(self, _s):
+            pass
+
+        async def get_by_name(self, name):
+            return registry.get(name.lower())
+
+        async def get_default(self):
+            return registry["kristin"]
+
+        async def create(self, **kw):
+            registry[kw["name"].lower()] = {**kw, "is_default": False}
+
+    class Inventory(streaming.SatellitesRepository):  # the `kept` fake
+        async def get(self, room):
+            return {"room_id": room, "board": boards[room]} if room in boards else None
+
+        async def room_is_known(self, room):
+            return room in known or room in boards
+
+    @asynccontextmanager
+    async def scope():
+        yield None
+
+    monkeypatch.setattr(db_session, "session_scope", scope)
+    monkeypatch.setattr(repositories, "VoicesRepository", Voices)
+    monkeypatch.setattr(repositories, "SatellitesRepository", Inventory)
+    on_disk = {"en_US-kristin-medium", "en_US-norman-medium"}
+    monkeypatch.setattr(tts, "piper_voice_on_disk", lambda ref: ref in on_disk)
+    monkeypatch.setattr(tts, "piper_voice_problem", lambda ref: None)
+    spoken: list[tuple[str, Any]] = []
+
+    class Speech:
+        async def synthesize(self, text_, engine=None, voice=None):
+            spoken.append((text_, voice))
+            import io
+            import wave
+
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(16000)
+                w.writeframes(bytes([1, 0]) * 1600)
+            return buf.getvalue()
+
+    monkeypatch.setattr(streaming, "get_tts_client", lambda: Speech())
+    return SimpleNamespace(spoken=spoken, registry=registry, boards=boards, known=known, voices=kept.voices)
+
+
+def _frames(ws: FakeWS) -> list[dict[str, Any]]:
+    return [f for f in ws.sent if isinstance(f, dict)]
+
+
+async def test_the_picker_sends_a_pi_the_change_the_voice_command_makes(paired, picker):
+    pi, ws = await _hello(PI)
+    out = await room_voice.apply(ws.app, PI["room_id"], "norman")
+    assert out == {"room_id": PI["room_id"], "voice": "Norman", "kept_on": "device", "said": True}
+    start = next(f for f in ws.sent if f.get("type") == "response_start")
+    end = next(f for f in ws.sent if f.get("type") == "response_end")
+    assert start["text"] == "Okay, I'm Norman now."
+    assert picker.spoken == [("Okay, I'm Norman now.", "en_US-norman-medium")], "said in the new voice"
+    assert (end["pi_action"], end["pi_action_arg"], end["interrupted"]) == ("set_voice", "Norman", False)
+    assert picker.voices == {}, "nothing kept on the server: the Pi stores it and reports it back"
+    assert PI["room_id"] not in ws.app.state.satellite_voice
+    await pi._on_control({"type": "voice_status", "voice": "Norman"})
+    assert ws.app.state.satellite_voice[PI["room_id"]] == "Norman"
+
+
+async def test_a_busy_or_offline_pi_or_the_servers_voice_is_refused_and_nothing_changes(paired, picker):
+    pi, ws = await _hello(PI)
+    pending = asyncio.get_running_loop().create_future()
+    pi._response_task = pending  # mid-reply
+    with pytest.raises(room_voice.VoiceChangeRefused) as busy:
+        await room_voice.apply(ws.app, PI["room_id"], "Norman")
+    pending.cancel()
+    assert busy.value.status == 409 and "busy" in busy.value.detail and ws.sent == []
+    with pytest.raises(room_voice.VoiceChangeRefused) as none:
+        await room_voice.apply(ws.app, PI["room_id"], None)
+    assert none.value.status == 400
+    picker.boards["den"] = "raspberry_pi_zero_2_w"
+    with pytest.raises(room_voice.VoiceChangeRefused) as offline:
+        await room_voice.apply(ws.app, "den", "Norman")
+    assert offline.value.status == 409 and "offline" in offline.value.detail
+    with pytest.raises(room_voice.VoiceChangeRefused) as unknown_room:
+        await room_voice.apply(ws.app, "attic", "Norman")
+    assert unknown_room.value.status == 404
+    assert picker.voices == {}
+
+
+async def test_the_picker_keeps_a_phone_rooms_voice_on_the_server(paired, picker):
+    phone, ws = await _hello(PHONE)
+    out = await room_voice.apply(ws.app, PHONE["room_id"], "Norman")
+    assert out == {"room_id": PHONE["room_id"], "voice": "Norman", "kept_on": "server", "said": True}
+    assert picker.voices[PHONE["room_id"]] == "Norman"
+    assert ws.app.state.satellite_voice[PHONE["room_id"]] == "Norman"
+    assert {"type": "sounds_changed", "room_voice": "Norman"} in ws.sent
+    end = next(f for f in ws.sent if f.get("type") == "response_end")
+    assert "pi_action" not in end, "nothing for the phone to do"
+    assert picker.spoken[-1] == ("Okay, I'm Norman now.", "en_US-norman-medium")
+    # Back to the server's own voice.
+    ws.sent.clear()
+    out = await room_voice.apply(ws.app, PHONE["room_id"], None)
+    assert out["voice"] is None and picker.voices[PHONE["room_id"]] is None
+    assert PHONE["room_id"] not in ws.app.state.satellite_voice
+    assert {"type": "sounds_changed", "room_voice": None} in ws.sent
+
+
+async def test_an_offline_phone_room_takes_the_voice_on_its_next_connect(paired, picker):
+    app = SimpleNamespace(state=_state())
+    picker.boards[PHONE["room_id"]] = "android_room"
+    out = await room_voice.apply(app, PHONE["room_id"], "Norman")
+    assert out == {"room_id": PHONE["room_id"], "voice": "Norman", "kept_on": "server", "said": False}
+    assert picker.voices[PHONE["room_id"]] == "Norman"
+    _, ws, seen = await _run(PHONE)
+    assert ws.sent[0]["room_voice"] == "Norman" and seen["voice"] == "Norman"
+
+
+async def test_a_voice_that_isnt_downloaded_or_doesnt_exist_is_refused(paired, picker):
+    _, ws = await _hello(PHONE)
+    with pytest.raises(room_voice.VoiceChangeRefused) as linda:
+        await room_voice.apply(ws.app, PHONE["room_id"], "Linda")
+    assert linda.value.status == 409 and "isn't downloaded" in linda.value.detail
+    with pytest.raises(room_voice.VoiceChangeRefused) as nobody:
+        await room_voice.apply(ws.app, PHONE["room_id"], "Zelda")
+    assert nobody.value.status == 404
+    assert picker.voices == {} and ws.sent == []
+
+
+async def test_a_shipped_voice_on_disk_but_not_registered_is_registered_and_used(paired, picker, monkeypatch):
+    from domovoi.clients import tts
+
+    monkeypatch.setattr(tts, "piper_voice_on_disk", lambda ref: True)
+    _, ws = await _hello(PHONE)
+    out = await room_voice.apply(ws.app, PHONE["room_id"], "linda")
+    assert out["voice"] == "Linda" and "linda" in picker.registry
+
+
+@pytest.mark.parametrize("device", sorted(DEVICES))
+async def test_the_dashboard_row_says_who_keeps_the_voice(device, monkeypatch):
+    """`voice_on_server`: the drawer's picker works offline and offers the
+    server's own voice for a phone room only; an offline phone room shows
+    the voice the server keeps for it, an offline Pi none."""
+    from domovoi import satellite_abilities as sa
+    from web.backend.api import satellites as web_sats
+
+    async def no_np(*a, **kw):
+        return None
+
+    monkeypatch.setattr(web_sats, "_now_playing_for", no_np)
+    d = DEVICES[device]
+    room = d["hello"]["room_id"]
+    ab = sa.from_hello(d["hello"])
+    board = sa.clean_board(d["hello"].get("board")) or "raspberry_pi_zero_2_w"
+    snapshot = {"active_rooms": [room], "satellite_board": {room: board}, "satellite_voice": {room: "Norman"}}
+    if ab.declared:
+        snapshot["satellite_supports"] = {room: ab.declared_list()}
+    row = {"room_id": room, "control_port": 6650, "http_port": 8050, "last_connected_at": None}
+    meta = {room: {"board": board, "voice": "Kristin"}}
+    phone = device == "android_room"
+    online = await web_sats._satellite_for(row, snapshot, {}, meta, {})
+    assert (online.voice_on_server, online.voice) == (phone, "Norman")
+    offline = await web_sats._satellite_for(row, {"active_rooms": []}, {}, meta, {})
+    assert (offline.voice_on_server, offline.voice) == (phone, "Kristin" if phone else None)
 
 
 # ─── the real SQL (V031) ──────────────────────────────────────────────────

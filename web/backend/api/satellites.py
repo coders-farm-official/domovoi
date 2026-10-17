@@ -53,6 +53,7 @@ from domovoi.admin_auth import (
 )
 from domovoi import command_captures
 from domovoi.db.repositories import notify_timers_changed
+from domovoi.satellite_abilities import BOARDS_WITHOUT_VOICE
 
 from satellite import provisioning_protocol as proto
 
@@ -79,6 +80,7 @@ from web.backend.schemas import (
     PendingSatellite,
     RecentlyPlayed,
     RoomLabelRequest,
+    RoomVoiceRequest,
     Satellite,
     SatelliteApproveRequest,
     SatelliteDisplay,
@@ -1536,6 +1538,25 @@ async def patch_satellite_config(
 
 
 @router.post(
+    "/{room_id}/voice",
+    # Admin tier at both hops, as the room's other settings (/config).
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def set_room_voice(room_id: str, body: RoomVoiceRequest, request: Request):
+    """The room drawer's voice picker. Proxies to the core, which does what
+    "switch to <name>'s voice" said in the room does: a Pi is sent the
+    change (it confirms aloud in the new voice and reports it back); a
+    phone in room mode has it kept on the server. Returns {room_id, voice,
+    kept_on: "device"|"server", said}."""
+    status, payload = await post_admin(
+        f"/v1/admin/satellite/{room_id}/voice",
+        {"voice": body.voice},
+        headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
+@router.post(
     "/{room_id}/pairing/reset",
     # §7.3 gated list: resetting a satellite's pairing is a SECURITY op (it
     # lets the next connection re-pair as this room), so it's security-tier:
@@ -1619,7 +1640,7 @@ async def _list_satellite_meta() -> dict[str, dict[str, Any]]:
             rows = await s.execute(
                 text(
                     "SELECT room_id, sat_type, room_label, hardware, board, "
-                    "mac, adopted_at FROM satellites"
+                    "mac, adopted_at, voice FROM satellites"
                 )
             )
         return {
@@ -1630,6 +1651,7 @@ async def _list_satellite_meta() -> dict[str, dict[str, Any]]:
                 "board": r[4],
                 "mac": r[5],
                 "adopted_at": r[6],
+                "voice": r[7],
             }
             for r in rows.all()
         }
@@ -1778,6 +1800,17 @@ async def _satellite_for(
     supports = (snapshot.get("satellite_supports") or {}).get(room_id) if online else None
     if supports is not None and not isinstance(supports, list):
         supports = None
+    # Who keeps the room's voice (domovoi/room_voice.py): a device whose
+    # live hello left "voice" out of `supports` (a phone in room mode), or,
+    # offline, a board that never keeps one. Then the server's choice is
+    # the room's voice, offline too.
+    voice_on_server = (
+        isinstance(supports, list) and "voice" not in supports
+        if online
+        else board in BOARDS_WITHOUT_VOICE
+    )
+    if voice_on_server and not online:
+        voice = meta_row.get("voice")
     # An upgrade the Domovoi server asked this room for (running, or how it
     # just ended): what locks the Upgrade button, a page reload included.
     upgrade_dict = (snapshot.get("satellite_upgrades") or {}).get(room_id)
@@ -1822,6 +1855,7 @@ async def _satellite_for(
         full_duplex=full_duplex,
         in_call_with=in_call_with,
         voice=voice,
+        voice_on_server=voice_on_server,
         volume=volume,
         pairing=pairing,
         sat_type=sat_type,

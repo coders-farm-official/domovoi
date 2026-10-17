@@ -2968,6 +2968,13 @@ class StreamSession:
             return name
         return row["name"] if row else None
 
+    def _pi_action_fields(self, pi_action: str | None, pi_action_arg: str | None) -> dict[str, Any]:
+        """The `pi_action` fields of a `response_end`, as declared."""
+        action, arg = self._declared_pi_action(pi_action, pi_action_arg)
+        if action is None:
+            return {}
+        return {"pi_action": action, **({"pi_action_arg": arg} if arg is not None else {})}
+
     def _declared_pi_action(
         self, pi_action: str | None, pi_action_arg: str | None
     ) -> tuple[str | None, str | None]:
@@ -5641,7 +5648,15 @@ class StreamSession:
                 f"room {self.room_id} {reason}, announce deferred", reason=reason,
             )
 
-    async def announce(self, text: str, *, defer_to_capture: bool = False) -> None:
+    async def announce(
+        self,
+        text: str,
+        *,
+        defer_to_capture: bool = False,
+        voice: str | None = None,
+        pi_action: str | None = None,
+        pi_action_arg: str | None = None,
+    ) -> None:
         """Inject a TTS-synthesized announcement into this Pi's stream.
 
         Reuses the normal response wire format (response_start →
@@ -5676,6 +5691,13 @@ class StreamSession:
         and an announcement's ``response_end`` then releases the
         satellite's wait for the real reply. Intercom, the admin announce
         and ``sdk.speech`` keep today's behaviour.
+
+        ``voice`` speaks it in that voice instead of the room's (a reply's
+        ``voice_override``), and ``pi_action`` / ``pi_action_arg`` ride on
+        its ``response_end`` as on a reply's (only one the device declared:
+        ``_declared_pi_action``): what the dashboard's voice picker sends a
+        Pi, the same change "switch to Norman's voice" makes
+        (domovoi/room_voice.py).
 
         A first sentence that synthesizes to no audio at all (every TTS
         engine down: the client returns an empty WAV) raises
@@ -5719,11 +5741,18 @@ class StreamSession:
         # still to come (`_restart_music_after_announce`).
         self._announce_callers += 1
         try:
-            await self._announce(text, defer_to_capture)
+            await self._announce(text, defer_to_capture, voice, pi_action, pi_action_arg)
         finally:
             self._announce_callers -= 1
 
-    async def _announce(self, text: str, defer_to_capture: bool) -> None:
+    async def _announce(
+        self,
+        text: str,
+        defer_to_capture: bool,
+        voice: str | None = None,
+        pi_action: str | None = None,
+        pi_action_arg: str | None = None,
+    ) -> None:
         """`announce`'s body, run while it is counted in
         `_announce_callers`; see there."""
         async with self._announce_lock:
@@ -5743,7 +5772,7 @@ class StreamSession:
             sentences = _split_sentences(text) or [text]
             # Announce in this room's own voice, like its normal responses.
             a_engine, a_voice = await resolve_voice(
-                self.ws.app.state.satellite_voice.get(self.room_id)
+                voice or self.ws.app.state.satellite_voice.get(self.room_id)
             )
             try:
                 first_pcm, sr = _wav_to_pcm(
@@ -5789,7 +5818,10 @@ class StreamSession:
                 )
 
             task = asyncio.create_task(
-                self._send_announcement(text, sentences, first_pcm, sr, a_engine, a_voice),
+                self._send_announcement(
+                    text, sentences, first_pcm, sr, a_engine, a_voice,
+                    end_extra=self._pi_action_fields(pi_action, pi_action_arg),
+                ),
                 name=f"announce-{self.room_id}",
             )
             self._announce_task = task
@@ -5847,6 +5879,7 @@ class StreamSession:
         sr: int,
         a_engine: Any,
         a_voice: Any,
+        end_extra: dict[str, Any] | None = None,
     ) -> None:
         """announce()'s frames: response_start, the audio, response_end.
         Raw `self.ws.send_*` (not `_safe_send_text`) so any
@@ -5904,6 +5937,7 @@ class StreamSession:
             "type": "response_end",
             "interrupted": False,
             "expect_followup": False,
+            **(end_extra or {}),
         }))
 
     def _restart_music_after_announce(self, url: str) -> None:

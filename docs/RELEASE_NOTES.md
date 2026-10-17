@@ -26,6 +26,16 @@ Android APK (optional: the voice works without it).
   greetings stay in the server's voice while the replies change. A
   `voice_status` from such a device is ignored: the server's choice
   stands.
+* **The room drawer picks the voice** (Settings → Satellites, a room's
+  Overview: the voice row is now a picker, admin). A Pi is sent the same
+  change the voice command makes: it says "Okay, I'm Norman now." in the
+  new voice and stores and reports it (online only; a busy room refuses
+  and changes nothing). A phone room's choice is kept on the server,
+  offline too, and can go back to the server's own voice. A voice that
+  isn't downloaded yet is listed, marked, and can't be picked.
+  `POST /api/satellites/{room}/voice` (core
+  `/v1/admin/satellite/{room}/voice`); the room rows gain
+  `voice_on_server`.
 * **Not the phone's own voice.** The app's Settings → Voice (the chat
   mic's replies and the on-phone assistant) is a separate setting on the
   phone; its card now says that room mode plays the room's voice instead.

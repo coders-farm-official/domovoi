@@ -542,6 +542,11 @@ class Satellite(BaseModel):
     # registry default. The room's config.toml/sidecar drives this, so it
     # surfaces here (the Settings tab can't show a sidecar-overridden voice).
     voice: str | None = None
+    # True when the server keeps this room's voice (a phone in room mode:
+    # its hello's `supports` leaves out "voice"; offline, its board): the
+    # drawer's picker then works offline too and offers the server's own
+    # voice. False: the satellite keeps its own (a Pi), changed while online.
+    voice_on_server: bool = False
     # Master output volume (0-100) the satellite reports via volume_status, or
     # None when it hasn't reported one yet (or its board has no output mixer
     # control). Drives the overview tab's volume slider.
@@ -1007,6 +1012,13 @@ class ConfigResponse(BaseModel):
     # "always", "sometimes" or "never". Open like the rest of this
     # response: the Home page and every "needs internet" greying read it.
     internet_access: Literal["", "always", "sometimes", "never"] = ""
+
+
+class RoomVoiceRequest(BaseModel):
+    """The room drawer's voice picker (POST /api/satellites/{room}/voice)."""
+    # A registered voice's name; null: the server's own voice (a phone in
+    # room mode only: a Pi keeps a named voice of its own).
+    voice: str | None = Field(default=None, min_length=1, max_length=80)
 
 
 class ConfigUpdateRequest(BaseModel):

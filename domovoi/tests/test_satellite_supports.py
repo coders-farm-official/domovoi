@@ -342,7 +342,7 @@ async def _trigger(session: StreamSession, ws: FakeWS, frame: str) -> Any:
         elif frame == "chat_start":
             await session.send_chat_start()
         elif frame == "announcement":
-            async def fake_announce(text, defer):
+            async def fake_announce(text, defer, *_extra):
                 await ws.send_text(json.dumps({"type": "announcement"}))
 
             session._announce = fake_announce  # type: ignore[method-assign]
