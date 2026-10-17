@@ -214,15 +214,12 @@ const PrepareMediaCard = ({ fire }) => {
   // The Windows tray icon's card helper links to #settings/satellites/media:
   // open this card and bring it into view.
   const cardRef = React.useRef(null);
+  const linkedRef = React.useRef(false);
   React.useEffect(() => {
     const parts = routeParts(currentRoute());
     if (parts[0] !== 'settings' || parts[1] !== 'satellites' || parts[2] !== 'media') return;
+    linkedRef.current = true;
     setOpen(true);
-    const t = setTimeout(() => {
-      try { if (cardRef.current) cardRef.current.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
-      catch (e) { /* an old browser: the card is open anyway */ }
-    }, 300);
-    return () => clearTimeout(t);
   }, []);
   // Refreshing the caches downloads (PyPI, Docker Hub, Debian, GitHub):
   // greyed while the box is set to stay off the internet. Prepare uses
@@ -266,6 +263,18 @@ const PrepareMediaCard = ({ fire }) => {
   React.useEffect(() => {
     if (!drivesVisible) { setTransport('portal'); setTarget('zip'); }
   }, [drivesVisible]);
+
+  // Scrolled to once the page above it has its height (the satellites and
+  // this card's status loaded), so it lands in view.
+  React.useEffect(() => {
+    if (!linkedRef.current || !status) return;
+    linkedRef.current = false;
+    const t = setTimeout(() => {
+      try { if (cardRef.current) cardRef.current.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
+      catch (e) { /* an old browser: the card is open anyway */ }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [status]);
 
   const boards = status?.boards || [];
   const plugins = status?.plugins || [];
