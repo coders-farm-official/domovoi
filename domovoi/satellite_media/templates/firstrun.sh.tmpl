@@ -35,11 +35,25 @@ SAT_TYPE="@SAT_TYPE@"
 SETUP_TRANSPORT="@SETUP_TRANSPORT@"
 WIFI_COUNTRY="@WIFI_COUNTRY@"
 KEYBOARD_LAYOUT="@KEYBOARD_LAYOUT@"
+# "never" when the server's internet access was turned off as this card was
+# prepared, else empty.
+INTERNET_ACCESS="@INTERNET_ACCESS@"
 LOG=/var/log/domovoi-firstrun.log
 
 mkdir -p "$STEPS"
 exec >>"$LOG" 2>&1
 echo "== domovoi stage-1 $(date -Is) =="
+
+# Root's record of that answer, for the boot step's package repair
+# (satellite/base_packages.py): with it, nothing there goes online. Every
+# run, so a card re-prepared with the answer changed follows it.
+if [ "$INTERNET_ACCESS" = "never" ]; then
+  echo "internet access was turned off on the server when this card was prepared" \
+    >/var/lib/domovoi/internet-off
+  chmod 0644 /var/lib/domovoi/internet-off
+else
+  rm -f /var/lib/domovoi/internet-off
+fi
 
 info() {
   # Update device-info.json (status/step/error) on the boot partition.
@@ -417,6 +431,12 @@ if ! skip units; then
   # gateway. Guarded like sync-time: a payload from before it lacks it.
   if [ -f "$PAYDIR/system/domovoi-reboot" ]; then
     install -m 0755 "$PAYDIR/system/domovoi-reboot" /usr/local/sbin/domovoi-reboot
+  fi
+  # The radio-reset helper (satellite/scripts/domovoi-wifi-reset): the
+  # self-check's next rung when bringing the house network back by name
+  # timed out on a link that is down. Guarded the same way.
+  if [ -f "$PAYDIR/system/domovoi-wifi-reset" ]; then
+    install -m 0755 "$PAYDIR/system/domovoi-wifi-reset" /usr/local/sbin/domovoi-wifi-reset
   fi
   # The verifier that helper checks the server's signature with. Root's
   # copy, not the satellite user's: the helper runs as root on that

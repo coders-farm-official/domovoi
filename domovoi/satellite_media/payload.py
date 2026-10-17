@@ -208,6 +208,13 @@ async def assemble(
         sat_dir / "scripts" / "domovoi-reboot",
         system / "domovoi-reboot",
     )
+    # The radio-reset helper: the self-check's next rung when `nmcli
+    # connection up id domovoi-home` timed out on a link that is down.
+    # Root-installed and argv-less like the reboot helper.
+    shutil.copy2(
+        sat_dir / "scripts" / "domovoi-wifi-reset",
+        system / "domovoi-wifi-reset",
+    )
     # The verifier that helper uses to make the server prove who it is.
     # Shipped separately from the copy under satellite/ because first boot
     # installs THIS one root-owned: the helper runs as root on the

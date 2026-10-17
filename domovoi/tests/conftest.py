@@ -45,7 +45,8 @@ def _resolve_test_database_url() -> str:
       2. Auto-derive from ``DATABASE_URL`` by replacing the dbname with
          ``<dbname>_test``. So if prod is at
          ``...:6432/domovoi``, tests hit ``...:6432/domovoi_test``.
-      3. Fall back to a hard-coded local default.
+      3. Neither: the old local default, which ``db_guard`` refuses
+         before anything connects (it is the live install's port).
 
     The test DB must exist + be migrated; see the README's "Test
     database setup" section.
@@ -66,11 +67,22 @@ def _resolve_test_database_url() -> str:
     return "postgresql+asyncpg://domovoi:domovoi@localhost:6432/domovoi_test"
 
 
+# Never a database by accident (domovoi/tests/db_guard.py): no variable set,
+# or port 6432 (where an installed Domovoi keeps its live Postgres) without
+# the explicit DOMOVOI_TEST_DB_ON_6432=1, stops the run here, before
+# anything connects.
+from domovoi.tests import db_guard as _db_guard  # noqa: E402  (stdlib only)
+
+_candidate_db = _resolve_test_database_url()
+_refused = _db_guard.refusal(os.environ, _candidate_db)
+if _refused:
+    raise RuntimeError(_refused)
+
 # Override DATABASE_URL with the test variant BEFORE importing settings.
 # Pydantic-settings reads env vars first, then .env, then defaults — so
 # pinning os.environ here wins over whatever .env says. This is the
 # single line that protects the core's prod DB from pytest.
-os.environ["DATABASE_URL"] = _resolve_test_database_url()
+os.environ["DATABASE_URL"] = _candidate_db
 
 # Safety belt: refuse to run if the resolved DB doesn't look like a test
 # DB. Catches the contamination class of bug where TEST_DATABASE_URL

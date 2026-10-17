@@ -36,6 +36,9 @@ EXPECTED_HELPERS = {
     # Argv-less reboot, for the client's no-server self-check (2026-10-09):
     # sudo's "" admits it with no arguments only.
     '/usr/local/sbin/domovoi-reboot ""',
+    # Argv-less radio off/on + the house profile by name (2026-10-17), the
+    # self-check's rung after `nmcli connection up` timed out.
+    '/usr/local/sbin/domovoi-wifi-reset ""',
     "/opt/xvf3800/xvf_host",
 }
 
@@ -254,6 +257,38 @@ def test_the_reboot_helper_takes_no_arguments_and_only_reboots():
     assert 'domovoi ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-reboot ""\n' in sudoers
     prov = (REPO / "satellite" / "PROVISIONING.md").read_text(encoding="utf-8")
     assert '<username> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-reboot ""' in prov
+
+
+def test_the_wifi_reset_helper_takes_no_arguments_and_only_cycles_the_radio():
+    """Read, never run (2026-10-17): arguments are refused before anything
+    else; it refuses while the setup hotspot's profile is saved (turning the
+    radio on lets NetworkManager autoconnect); what it runs as root is the
+    radio off/on and the house profile BY NAME, nothing taken from outside."""
+    script = (REPO / "satellite" / "scripts" / "domovoi-wifi-reset").read_text(encoding="utf-8")
+    assert script.startswith("#!/bin/sh\n") and "\r" not in script
+    code = _code_lines(script)
+    guard = next(i for i, ln in enumerate(code) if '"$#" -ne 0' in ln)
+    ap = next(i for i, ln in enumerate(code) if 'grep -qx "$AP_PROFILE"' in ln)
+    off = next(i for i, ln in enumerate(code) if "radio wifi off" in ln)
+    assert guard < ap < off, "no arguments, and no hotspot profile, before the radio is touched"
+    assert code[-1].strip() == 'exec "$NMCLI" --wait 45 connection up id "$HOME_PROFILE"'
+    assert "HOME_PROFILE=domovoi-home" in code and "AP_PROFILE=domovoi-setup" in code
+    assert "NMCLI=/usr/bin/nmcli" in code
+    shell = "\n".join(ln for ln in code if "awk " not in ln)   # awk's own $1/$2 are fields
+    assert "$1" not in shell and "$@" not in shell
+    # "$*" only inside say(), the log line: never an argument passed on.
+    assert script.count('"$*"') == 2 and 'logger -t domovoi-wifi-reset "$*"' in script
+    # Every command it runs as root: nmcli (radio, list, up), and the shell's
+    # own sleep/awk/grep/logger. No `device connect`, no profile edits.
+    assert "device connect" not in script and "connection modify" not in script
+    assert "connection delete" not in script
+    sudoers = overlay.render_template("sudoers.tmpl", {"USER": "domovoi"})
+    assert 'domovoi ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-wifi-reset ""\n' in sudoers
+    prov = (REPO / "satellite" / "PROVISIONING.md").read_text(encoding="utf-8")
+    assert '<username> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-wifi-reset ""' in prov
+    src = (REPO / "satellite" / "client.py").read_text(encoding="utf-8")
+    assert '["sudo", "-n", str(WIFI_RESET_HELPER)]' in src
+    assert 'WIFI_RESET_HELPER = Path("/usr/local/sbin/domovoi-wifi-reset")' in src
 
 
 def test_the_client_calls_the_reboot_helper_argv_less():

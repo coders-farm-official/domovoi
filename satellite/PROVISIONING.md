@@ -595,6 +595,12 @@ Two units died while idle for days (October 2026) and only a power cycle brought
 
 **The reboot helper.** After `[health] reboot_after_min` (15) minutes with no server AND a gateway that does not answer (no TCP answer on 53, 80 or 443 and no ping, or no default route at all), the client runs `sudo -n /usr/local/sbin/domovoi-reboot`, which does exactly `systemctl reboot` and refuses any argument. It never reboots while the gateway answers, nor while the core's own machine answers — a core that is down is the core's problem.
 
+**The link-down ladder (2026-10-17).** When the link itself is down — NetworkManager not connected and no default route — the first recovery (`nmcli connection up id domovoi-home`, allowed up to 45 s) comes after `[health] link_down_escalate_min` (2) minutes instead of 5, a failed one is retried after `link_down_retry_min` (2.5), and after two failed recoveries the reboot comes at `link_down_reboot_min` (10) minutes instead of 15. Each self-check reboot in the last six hours doubles the next reboot's wait, up to `reboot_backoff_cap_min` (60), on top of the one-reboot-an-hour budget, so a link that keeps dropping cannot reboot the unit in a loop. None of it runs while the gateway or the core's own machine answers.
+
+**The Wi-Fi reset helper.** When that `connection up` times out or fails on a link that is down, the client runs `sudo -n /usr/local/sbin/domovoi-wifi-reset`: the Wi-Fi radio off, three seconds, on, then the house profile `domovoi-home` again by name. It refuses any argument, and it does nothing while the setup hotspot's profile (`domovoi-setup`) is still saved, because turning the radio on lets NetworkManager connect to whatever it likes. Cards prepared from 2026-10-17 on have it; a unit without it skips that rung (one log line says so) and goes on to the reboot.
+
+**Missing base packages (2026-10-17).** The boot step that applies the network settings (`domovoi-provisioning.service`, root, every boot) also checks the base apt set of §3 once setup has finished. If one is missing — a card whose setup ran with the Wi-Fi down could lose mpg123 — it waits up to 5 minutes for a route, finishes any interrupted dpkg run (`dpkg --configure -a`), then runs `apt-get install --no-install-recommends --no-remove` for exactly those packages (20 minutes for the whole run) and records the result in `/var/lib/domovoi/base-packages.json`. On a card prepared while the server's internet access was turned off it does not go online: it installs from the card's own deb cache (`dpkg -i`) or apt's (`--no-download`) only. Until then the Health card says *reboot needed: system packages missing (…)*. It needs nothing installed beyond the satellite code push; reboot once with the network up. On a hand-built unit, `sudo ~/satellite-venv/bin/python -m satellite.base_packages` does one run by hand.
+
 **The hardware watchdog.** The Pi's SoC has a watchdog timer; once systemd is told to pet it, a kernel or firmware wedge that stops PID 1 reboots the unit on its own instead of leaving it dead until someone pulls the plug. It is two files: a line in the boot partition's `config.txt` and a systemd drop-in.
 
 How to add them depends on how the unit was built.
@@ -608,13 +614,16 @@ ROOT=/media/$USER/rootfs
 # The service account's name, from the sudoers file media prep wrote:
 sudo awk '/NOPASSWD/ {print $1; exit}' "$ROOT/etc/sudoers.d/domovoi-satellite"
 
-# 1. The reboot helper (from a checkout of this repository, run from the
-#    folder that holds it), root-owned, and its argv-less sudoers line.
+# 1. The reboot and Wi-Fi reset helpers (from a checkout of this repository, run from the
+#    folder that holds them), root-owned, and their argv-less sudoers lines.
 #    Check the file with visudo before the card goes back: a sudoers file
 #    with a mistake in it disables EVERY sudo line on the unit, including
 #    the Wi-Fi recovery and the self-restart.
 sudo install -o root -g root -m 0755 domovoi/satellite/scripts/domovoi-reboot "$ROOT/usr/local/sbin/domovoi-reboot"
-echo '<username> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-reboot ""' | sudo tee "$ROOT/etc/sudoers.d/satellite-reboot" >/dev/null
+sudo install -o root -g root -m 0755 domovoi/satellite/scripts/domovoi-wifi-reset "$ROOT/usr/local/sbin/domovoi-wifi-reset"
+printf '%s\n' '<username> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-reboot ""' \
+  '<username> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-wifi-reset ""' \
+  | sudo tee "$ROOT/etc/sudoers.d/satellite-reboot" >/dev/null
 sudo chmod 0440 "$ROOT/etc/sudoers.d/satellite-reboot"
 sudo visudo -cf "$ROOT/etc/sudoers.d/satellite-reboot"
 
@@ -629,13 +638,15 @@ printf '[Manager]\nRuntimeWatchdogSec=15\n' | sudo tee "$ROOT/etc/systemd/system
 
 ```bash
 sudo install -m 0755 ~/domovoi/satellite/scripts/domovoi-reboot /usr/local/sbin/domovoi-reboot
+sudo install -m 0755 ~/domovoi/satellite/scripts/domovoi-wifi-reset /usr/local/sbin/domovoi-wifi-reset
 sudo visudo -f /etc/sudoers.d/satellite-reboot
 ```
 
-Paste this single line (same `<username>` as §6.7; the posture note there applies). The `""` allows the helper with no arguments only:
+Paste these two lines (same `<username>` as §6.7; the posture note there applies). The `""` allows each helper with no arguments only:
 
 ```
 <username> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-reboot ""
+<username> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-wifi-reset ""
 ```
 
 Then the watchdog (`/boot/config.txt` on images older than Bookworm):

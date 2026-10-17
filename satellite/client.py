@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import itertools
 import json
 import logging
 import queue
@@ -46,6 +47,7 @@ from websockets.exceptions import ConnectionClosed
 
 from satellite import (
     _volume,
+    base_packages,
     chime,
     code_sync,
     config_writer,
@@ -167,6 +169,19 @@ LAST_HEALTH_PATH = CONFIG_DIR / "last-health.json"
 # installed by stage 1 on cards prepared from 2026-10-09 on, or by hand per
 # PROVISIONING.md §8.3). Its absence is checked, never assumed.
 REBOOT_HELPER = Path("/usr/local/sbin/domovoi-reboot")
+# The root helper that turns the Wi-Fi radio off and on and brings the house
+# network back (satellite/scripts/domovoi-wifi-reset; cards prepared from
+# 2026-10-17 on, or by hand per PROVISIONING.md §8.3). Checked, never assumed.
+WIFI_RESET_HELPER = Path("/usr/local/sbin/domovoi-wifi-reset")
+# How long `nmcli connection up id domovoi-home` may take. nmcli waits up to
+# 90 s for the activation by itself; a join at the edge of range (an
+# association, the key exchange and DHCP, each retried) can need well over
+# the 30 s this used to allow, and a kill here cancels nothing in
+# NetworkManager — it only stops waiting for the answer.
+NMCLI_UP_TIMEOUT_SEC = 45.0
+# The radio reset: off, 3 s, on, up to 15 s for the radio to come back, then
+# `nmcli --wait 45 connection up` (satellite/scripts/domovoi-wifi-reset).
+WIFI_RESET_TIMEOUT_SEC = 90.0
 # The self-restart budget (satellite/health.py RestartBudget): when this
 # unit last exited or rebooted itself for a self-check, kept across lives.
 SELF_RESTARTS_PATH = CONFIG_DIR / "self-restarts.json"
@@ -229,6 +244,20 @@ def _reboot_helper_installed(cfg: Any) -> bool:
     satellite: the POSIX path would be a file at the root of the system
     drive, which any account can create."""
     return not engine_platform.is_windows_pc(cfg) and REBOOT_HELPER.exists()
+
+
+def _player_present(program: str) -> bool:
+    """Whether a player program can be started: on PATH, or a path that is
+    there. A missing one is the base package a card did not get (mpg123 on
+    the office unit, 2026-10-17), told apart before the wake word waits on
+    it rather than after."""
+    return bool(program) and shutil.which(program) is not None
+
+
+def _wifi_reset_helper_installed(cfg: Any) -> bool:
+    """Whether the root radio-reset helper is there to ask (never on a
+    Windows satellite, for the reason `_reboot_helper_installed` gives)."""
+    return not engine_platform.is_windows_pc(cfg) and WIFI_RESET_HELPER.exists()
 
 
 def _hard_exit(code: int) -> None:
@@ -631,6 +660,11 @@ class Config:
     health_fd_limit: int = 512
     health_no_server_escalate_min: float = 5.0
     health_reboot_after_min: float = 15.0
+    # The link-down ladder (satellite/health.py CheckInput).
+    health_link_down_escalate_min: float = 2.0
+    health_link_down_retry_min: float = 2.5
+    health_link_down_reboot_min: float = 10.0
+    health_reboot_backoff_cap_min: float = 60.0
     health_write_interval_sec: float = 600.0
     health_log_push_interval_sec: float = 30.0
     health_mic_silence_sec: float = 30.0
@@ -961,6 +995,10 @@ class Config:
             health_fd_limit=int(healthc.get("fd_limit", 512)),
             health_no_server_escalate_min=float(healthc.get("no_server_escalate_min", 5.0)),
             health_reboot_after_min=float(healthc.get("reboot_after_min", 15.0)),
+            health_link_down_escalate_min=max(1.0, float(healthc.get("link_down_escalate_min", 2.0))),
+            health_link_down_retry_min=max(1.0, float(healthc.get("link_down_retry_min", 2.5))),
+            health_link_down_reboot_min=max(5.0, float(healthc.get("link_down_reboot_min", 10.0))),
+            health_reboot_backoff_cap_min=max(15.0, float(healthc.get("reboot_backoff_cap_min", 60.0))),
             health_write_interval_sec=float(healthc.get("write_interval_sec", 600.0)),
             health_log_push_interval_sec=max(5.0, float(healthc.get("log_push_interval_sec", 30.0))),
             health_mic_silence_sec=float(healthc.get("mic_silence_sec", 30.0)),
@@ -1014,6 +1052,55 @@ def _prime_wake_reset(oww: Any) -> bool:
     ):
         return False
     oww._domovoi_noise_features = features.copy()
+    return True
+
+
+def _lighten_wake_streaming(oww: Any) -> bool:
+    """Make openWakeWord's per-chunk melspectrogram read only the samples it
+    uses. Call once, straight after the model is built.
+
+    openWakeWord 0.6.0 keeps the last 10 s of audio in a deque of Python
+    ints (160,000 of them) and, on EVERY 80 ms chunk, copies the whole
+    deque into a list to slice the last 1,760 samples off it
+    (`AudioFeatures._streaming_melspectrogram`: `list(self.raw_data_buffer)
+    [-n_samples-160*3:]`). That copy touches every one of those objects
+    twice (a reference taken, then dropped), 12.5 times a second, on a
+    board with a 512 KB cache: measured at 25-45 % of the whole predict()
+    on an x86 PC (0.65-1.1 ms of 1.6-3 ms), and the Zero 2 W's cores are
+    far worse at it. The office satellite idled at 73-93 % of a core
+    (2026-10-17). This takes the same samples from the right-hand end of
+    the deque instead — identical values, identical scores (pinned by a
+    test against the library's own method) — and nothing else changes.
+
+    False, and the library's own method stays, for a model that is not
+    shaped as expected (a later openWakeWord, a stand-in)."""
+    pre = getattr(oww, "preprocessor", None)
+    own = getattr(pre, "__dict__", None)
+    buf = getattr(pre, "raw_data_buffer", None)
+    if (
+        not isinstance(own, dict)
+        or not isinstance(buf, deque)
+        or not callable(getattr(pre, "_get_melspectrogram", None))
+        or not isinstance(getattr(pre, "melspectrogram_buffer", None), np.ndarray)
+        or not isinstance(getattr(pre, "melspectrogram_max_len", None), int)
+        or not callable(getattr(type(pre), "_streaming_melspectrogram", None))
+    ):
+        return False
+
+    def _streaming_melspectrogram(n_samples: int) -> None:
+        raw = pre.raw_data_buffer
+        if len(raw) < 400:
+            raise ValueError("The number of input frames must be at least 400 samples @ 16khz (25 ms)!")
+        want = min(len(raw), n_samples + 160 * 3)
+        tail = list(itertools.islice(reversed(raw), want))
+        tail.reverse()
+        pre.melspectrogram_buffer = np.vstack(
+            (pre.melspectrogram_buffer, pre._get_melspectrogram(tail))
+        )
+        if pre.melspectrogram_buffer.shape[0] > pre.melspectrogram_max_len:
+            pre.melspectrogram_buffer = pre.melspectrogram_buffer[-pre.melspectrogram_max_len:, :]
+
+    own["_streaming_melspectrogram"] = _streaming_melspectrogram
     return True
 
 
@@ -2597,6 +2684,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
     # 2026-09-28: "Back so soon?" routed as a command). Listening after the
     # acknowledgement removes the cause instead of filtering the symptom.
 
+    _ack_player_missing_said: bool = False
+
     def _acknowledge_wake(self, music_was_playing: bool, woke_at: float) -> None:
         """Acknowledge the wake word the way `cfg.wake_ack_mode` says, and
         return once the capture may start. Blocking: a greeting or chime
@@ -2623,6 +2712,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
             return
         device = self.cfg.music_alsa_device
         clip: Path | None = None
+        argv: list[str] = []
         if mode == "greeting":
             clip = self._pick_greeting()
             if clip is None:
@@ -2632,7 +2722,24 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 device, str(clip), self.cfg.tts_playback_gain
             )
             cap, what = _ACK_GREETING_CAP_SEC, clip.name
-        else:
+            if not _player_present(argv[0]):
+                # The greetings are MP3s and mpg123 is not on this unit (a
+                # base package a card's setup failed to install; the boot
+                # step puts it back, satellite/base_packages.py). The chime
+                # is a WAV that aplay plays - the same player the setup
+                # clips use - so the wake word is still acknowledged out
+                # loud, as a chime rather than a greeting, and the log says
+                # why once.
+                if not self._ack_player_missing_said:
+                    self._ack_player_missing_said = True
+                    log.warning(
+                        "wake ack: %s is not installed, so the spoken greetings "
+                        "cannot play; acknowledging with the chime (aplay) until "
+                        "it is - a reboot runs the boot step that installs it",
+                        argv[0],
+                    )
+                clip = None
+        if clip is None and mode != "none":
             try:
                 # The gain goes into the samples: aplay has no --scale, and
                 # this is the same factor mpg123 applies to the greetings.
@@ -3382,8 +3489,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
             try:
                 r = subprocess.run(
                     ["sudo", "-n", *step.argv],
-                    capture_output=True, text=True, timeout=30.0,
+                    capture_output=True, text=True, timeout=NMCLI_UP_TIMEOUT_SEC,
                 )
+            except subprocess.TimeoutExpired as e:
+                log.warning("wifi recovery (%s): %s", step.label, e)
+                return self._wifi_reset_radio(f"`nmcli {step.label}` timed out", associated, ap_active)
             except (OSError, subprocess.SubprocessError) as e:
                 log.warning("wifi recovery (%s): %s", step.label, e)
                 return False
@@ -3403,7 +3513,66 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 " (check the sudoers entry: `sudo -n " + " ".join(step.argv)
                 + "` must run without prompting)" if _sudo_refused(err) else "",
             )
+            if _sudo_refused(err):
+                return False
+            return self._wifi_reset_radio(
+                f"`nmcli {step.label}` failed (rc={r.returncode})", associated, ap_active,
+            )
+        return False
+
+    _wifi_reset_missing_said: bool = False
+
+    def _wifi_reset_radio(self, why: str, associated: bool, ap_active: bool) -> bool:
+        """The next rung when bringing the house network back by name timed
+        out or failed: the radio off and on, then the house profile again,
+        through the argv-less root helper (satellite/scripts/domovoi-wifi-reset,
+        cards prepared from 2026-10-17 on). A brcmfmac radio that has stopped
+        associating at the edge of range is what this clears; the office unit
+        at -77 dBm timed out `nmcli connection up` again and again and only a
+        reboot brought it back (2026-10-17).
+
+        Only for a link that is genuinely down: never while the radio is
+        associated (that would drop a working link) and never while it hosts
+        the setup hotspot (the helper refuses anyway while that profile is
+        saved). False, and said once, on a unit without the helper."""
+        if associated or ap_active:
             return False
+        # `iw` may not have been asked (the watcher off, or no iw): then
+        # NetworkManager's own word decides. Connected means not down.
+        if health.nm_connected(health.read_nm_state()) is True:
+            log.info("wifi recovery: %s, but NetworkManager says connected; not "
+                     "turning the radio off", why)
+            return False
+        if not _wifi_reset_helper_installed(self.cfg):
+            if not self._wifi_reset_missing_said:
+                self._wifi_reset_missing_said = True
+                log.warning(
+                    "wifi recovery: %s, and this unit has no %s to turn the radio "
+                    "off and on (cards prepared before 2026-10-17; PROVISIONING.md "
+                    "§8.3) - the next recovery tries again, then a reboot",
+                    why, WIFI_RESET_HELPER,
+                )
+            return False
+        log.warning("wifi recovery: %s; turning the radio off and on, then the house "
+                    "network again (%s)", why, WIFI_RESET_HELPER)
+        try:
+            r = subprocess.run(
+                ["sudo", "-n", str(WIFI_RESET_HELPER)],
+                capture_output=True, text=True, timeout=WIFI_RESET_TIMEOUT_SEC,
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            log.warning("wifi recovery (radio reset): %s", e)
+            return False
+        if r.returncode == 0:
+            log.info("wifi recovery: radio reset + house network: OK")
+            return True
+        out = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
+        log.warning(
+            "wifi recovery: radio reset failed: rc=%d %s%s", r.returncode,
+            out[-1][:200] if out else "",
+            " (check the sudoers entry for " + str(WIFI_RESET_HELPER) + ")"
+            if _sudo_refused(r.stderr or "") else "",
+        )
         return False
 
     def _reassociate_wifi(self) -> bool:
@@ -3545,6 +3714,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
     _health_mic_silent_since: float | None = None
     _health_mic_reopened_at: float | None = None
     _health_last_wifi_recovery: float | None = None
+    # Failed self-check link recoveries since the server was last reachable.
+    _health_recovery_failures: int = 0
     _health_last_reboot_note: float | None = None
     _health_last_push: float = 0.0
     _health_samples: int = 0
@@ -3649,6 +3820,69 @@ class Satellite(pc_engine.SpareDeviceEngine):
         elif not self._net_reboot_needed:
             self._net_reboot_said = False
 
+    # ── The base system packages root repairs at boot ─────────────────
+    # satellite/base_packages.py: mpg123 never reached the office unit
+    # (2026-10-17). Root's boot step installs a missing one online; this
+    # process can only look (dpkg-query, read-only), say so once in the log
+    # (and so in the core's retained log), and put "reboot needed" on the
+    # dashboard while anything is missing — only on a unit where a reboot
+    # runs that step.
+
+    _base_missing: list[str] | None = None
+    _base_checked_at: float | None = None
+    _base_reboot_needed: str | None = None
+    _base_said: tuple[str, ...] | None = None
+    _base_report_logged: str | None = None
+    #: How often the packages are looked up again (seconds).
+    BASE_PACKAGES_RECHECK_SEC = 600.0
+
+    def _check_base_packages(self, now: float) -> None:
+        if (
+            sys.platform != "linux"
+            or engine_platform.is_windows_pc(getattr(self, "cfg", None))
+            or net_settings.boot_step_unit_state() != "enabled"
+        ):
+            self._base_missing, self._base_reboot_needed = None, None
+            return
+        if (
+            self._base_checked_at is not None
+            and now - self._base_checked_at < self.BASE_PACKAGES_RECHECK_SEC
+        ):
+            return
+        self._base_checked_at = now
+        report = base_packages.read_report()
+        if report is not None:
+            run_id = f"{report.get('boot_id')}:{report.get('ts')}"
+            if run_id != self._base_report_logged:
+                self._base_report_logged = run_id
+                state = report.get("state")
+                if state == "repaired":
+                    log.info("base packages (installed as root at boot): %s",
+                             ", ".join(map(str, report.get("installed") or [])))
+                elif state in ("failed", "no_network"):
+                    log.warning(
+                        "base packages (root's boot step): %s - still missing %s%s",
+                        state, ", ".join(map(str, report.get("still_missing") or [])),
+                        f" ({report.get('detail')})" if report.get("detail") else "",
+                    )
+        gone = base_packages.missing()
+        offline = base_packages.internet_off()
+        self._base_missing = gone
+        self._base_reboot_needed = base_packages.reboot_note(
+            gone, report, net_settings._boot_id(), offline=offline,
+        )
+        if gone and tuple(gone) != self._base_said:
+            self._base_said = tuple(gone)
+            log.warning(
+                "system packages missing: %s (%s)", ", ".join(gone),
+                "internet access is turned off on this card, so they come only "
+                "from its own package caches; prepare the card again with the "
+                "internet on, or install them by hand" if offline
+                else self._base_reboot_needed,
+            )
+        elif not gone:
+            self._base_said = None
+
     def _read_net_report(self, mtime: float | None) -> None:
         """Read root's record and put a run nobody has logged yet into this
         process's log (once per run, across restarts)."""
@@ -3737,7 +3971,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # Upgraded but not rebooted: the network settings root applies at
             # boot are not in place yet (satellite/net_settings.py). The
             # dashboard shows it; absent (None) when nothing is pending.
-            "reboot_needed": self._net_reboot_needed,
+            # Also while a base system package is missing: the boot step
+            # installs it (satellite/base_packages.py).
+            "reboot_needed": self._net_reboot_needed or self._base_reboot_needed,
             # What root's boot-time network step did this boot (applied /
             # unchanged / skipped / failed / not run / not installed /
             # running, with the reason), and the name the router should
@@ -3929,6 +4165,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
 
         rss_kb = s.get("rss_kb")
         since = self._no_server_since()
+        if since is None:
+            # The server is back: the next outage starts its ladder over.
+            self._health_recovery_failures = 0
         last_recovery = max(
             (t for t in (self._health_last_wifi_recovery, self._last_reassociate_at) if t is not None),
             default=None,
@@ -3962,6 +4201,15 @@ class Satellite(pc_engine.SpareDeviceEngine):
             escalate_after=float(self._hcfg("no_server_escalate_min", 5.0)) * 60.0,
             reboot_after=float(self._hcfg("reboot_after_min", 15.0)) * 60.0,
             reboot_helper=_reboot_helper_installed(self.cfg),
+            link_down_escalate_after=float(self._hcfg("link_down_escalate_min", 2.0)) * 60.0,
+            link_down_retry=float(self._hcfg("link_down_retry_min", 2.5)) * 60.0,
+            link_down_reboot_after=float(self._hcfg("link_down_reboot_min", 10.0)) * 60.0,
+            recovery_failures=self._health_recovery_failures if since is not None else 0,
+            recent_reboots=(
+                self._health_budget.count("reboot", health.REBOOT_BACKOFF_WINDOW_S)
+                if self._health_budget is not None else 0
+            ),
+            reboot_backoff_cap=float(self._hcfg("reboot_backoff_cap_min", 60.0)) * 60.0,
             mic_silence_limit=float(self._hcfg("mic_silence_sec", 30.0)),
             heartbeat_limit=float(self._hcfg("heartbeat_stale_sec", 60.0)),
         )
@@ -3998,7 +4246,15 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 self._health_last_wifi_recovery = now
                 self._health_write()
                 ok = self._reassociate_wifi()
-                log.error("self-check: link recovery %s", "requested" if ok else "FAILED")
+                # Counted for the link-down ladder (satellite/health.py
+                # CheckInput): two failures in one outage bring the reboot
+                # forward. A recovery that worked starts the count over.
+                self._health_recovery_failures = 0 if ok else self._health_recovery_failures + 1
+                log.error(
+                    "self-check: link recovery %s",
+                    "requested" if ok else
+                    f"FAILED ({self._health_recovery_failures} in this outage)",
+                )
             elif d.action == "reboot":
                 self._health_last_reboot_note = now
                 self._health_reboot(d.reason)
@@ -4151,6 +4407,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
             self._check_net_settings()
         except Exception as e:  # noqa: BLE001
             log.debug("network settings record: %s", e)
+        try:
+            self._check_base_packages(now)
+        except Exception as e:  # noqa: BLE001
+            log.debug("base packages: %s", e)
         self._push_live_logs(now)
         interval = float(self._hcfg("sample_interval_sec", 60.0))
         if self._health_last_sample_at is None or now - self._health_last_sample_at >= interval - 1.0:
@@ -5060,6 +5320,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # Every reset from here on reuses the noise features this load just
         # computed (see _WAKE_RESET_NOISE_SAMPLES) — one of them runs
         # between the wake acknowledgement and the capture.
+        if not _lighten_wake_streaming(oww):
+            log.warning(
+                "wake model: this openWakeWord is not shaped as expected, so it "
+                "keeps copying its whole 10 s audio buffer on every 80 ms chunk "
+                "(a quarter or more of its CPU on a Pi Zero 2 W)"
+            )
         if not _prime_wake_reset(oww):
             log.warning(
                 "wake model: this openWakeWord is not shaped as expected, so "

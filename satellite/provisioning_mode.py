@@ -1666,6 +1666,22 @@ def apply_network_settings(room_id: str | None, when: str) -> dict[str, Any] | N
         return None
 
 
+def apply_base_packages() -> dict[str, Any] | None:
+    """satellite/base_packages.py, as root on the satellite itself; a no-op
+    anywhere else, like :func:`apply_network_settings`. Never raises."""
+    geteuid = getattr(os, "geteuid", None)
+    if sys.platform != "linux" or geteuid is None or geteuid() != 0:
+        log.info("base packages: not root on a satellite; skipped")
+        return None
+    try:
+        from satellite import base_packages
+
+        return base_packages.repair()
+    except Exception as e:  # noqa: BLE001 — never take the boot down
+        log.warning("base packages could not be checked: %s", e)
+        return None
+
+
 def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -1682,6 +1698,10 @@ def main() -> int:
         from satellite import net_settings
 
         apply_network_settings(net_settings.read_room_id(CONFIG_PATH), "boot")
+        # Then the base system packages (satellite/base_packages.py): a card
+        # whose setup lost one (mpg123 on the office unit, 2026-10-17) gets it
+        # back at the next boot, online. Nothing runs when none is missing.
+        apply_base_packages()
     return run()
 
 

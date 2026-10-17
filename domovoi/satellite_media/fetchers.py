@@ -299,6 +299,35 @@ def fetch_debs(
 MISSING_MARKER = "DOMOVOI_MISSING:"
 
 
+def base_debs_missing(os_release: str, root: Path | None = None) -> list[str]:
+    """The base packages (:data:`BASE_APT_PACKAGES`) the deb cache for
+    ``os_release`` holds no ``.deb`` of, under any of their names
+    (:data:`DEB_ALTERNATES`). The cache counted as "ready" with ANY deb in
+    it, so a cache missing mpg123 was never fetched again and nobody was
+    told (2026-10-17)."""
+    folder = root if root is not None else cache.CACHE_ROOT / "debs" / os_release
+    try:
+        present = {f.name.split("_", 1)[0] for f in folder.glob("*.deb")}
+    except OSError:
+        present = set()
+    return [pkg for pkg in BASE_APT_PACKAGES
+            if not any(n in present for n in DEB_ALTERNATES.get(pkg, (pkg,)))]
+
+
+def base_debs_warning(missing: list[str]) -> str:
+    """The build's warning for base packages the card will not carry: loud,
+    and saying what that costs and what fixes it."""
+    return (
+        f"BASE PACKAGES NOT ON THIS CARD: the offline package cache has no "
+        f"{', '.join(missing)}. The satellite installs them online during "
+        f"setup (stage 2), and again at every boot until they are there "
+        f"(satellite/base_packages.py) - but until it has the network, "
+        f"whatever needs them does not work (mpg123: the spoken wake "
+        f"greeting and music). Check that Docker works on the server and "
+        f"refresh the satellite package cache before preparing more cards."
+    )
+
+
 def build_deb_script(pkgs: list[str]) -> str:
     """Shell for the arm64 download container.
 

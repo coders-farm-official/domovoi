@@ -186,8 +186,13 @@ def _sat(
     missing: bool = False,
     calls: int = 1,
     status: int = 0,
+    installed: frozenset[str] | None = None,
 ):
     monkeypatch.setattr(client, "webrtcvad", types.SimpleNamespace(Vad=FakeVad))
+    # Which players this unit has: both (a Pi with its base packages) unless
+    # the test says otherwise - never this machine's PATH.
+    have = frozenset({"mpg123", "aplay"}) if installed is None else installed
+    monkeypatch.setattr(client, "_player_present", lambda program: program in have)
     loop = asyncio.new_event_loop()
     sat = make_sat(loop=loop)
     sat.send_q = asyncio.Queue()
@@ -334,6 +339,55 @@ def test_a_missing_player_listens_at_once(monkeypatch, caplog):
     assert controls[-1]["greeting_played"] is False
     assert "ack_before_capture" not in controls[-1]
     assert "could not run mpg123" in caplog.text
+
+
+def test_without_mpg123_the_greeting_becomes_the_chime_through_aplay(monkeypatch, caplog):
+    """The office unit, 2026-10-17: mpg123 never got installed, so every
+    wake was "could not run mpg123 ... listening without the
+    acknowledgement". The greetings are MP3s; the chime is a WAV, played
+    by aplay like the setup clips, so the wake word is still acknowledged
+    out loud — and the turn reports no greeting, because none was said."""
+    sat, loop = _sat(monkeypatch, "greeting", _feed(), installed=frozenset({"aplay"}))
+    with caplog.at_level(logging.WARNING, logger="satellite"):
+        audio, controls = _wake_then_capture(sat, loop)
+    (player,) = sat.players
+    assert player.argv == ["aplay", "-q", "-D", DEVICE,
+                           str(client.SOUNDS_CACHE_DIR / client.CHIME_FILE)]
+    assert audio == ["user"] * 10 + ["silence"] * SILENCE_LIMIT
+    end = controls[-1]
+    assert end["greeting_played"] is False and "greeting_clip" not in end
+    assert end["ack_before_capture"] is True
+    assert "mpg123 is not installed" in caplog.text
+
+
+def test_the_missing_player_is_said_once_not_every_wake(monkeypatch, caplog):
+    sat, loop = _sat(monkeypatch, "greeting", _feed() + _feed(), installed=frozenset({"aplay"}))
+    with caplog.at_level(logging.WARNING, logger="satellite"):
+        _wake_then_capture(sat, loop)
+        loop2 = asyncio.new_event_loop()
+        sat.loop = loop2
+        try:
+            sat._acknowledge_wake(False, time.monotonic())
+        finally:
+            loop2.close()
+    assert caplog.text.count("mpg123 is not installed") == 1
+    assert [p.argv[0] for p in sat.players] == ["aplay", "aplay"]
+
+
+def test_with_neither_player_it_listens_at_once(monkeypatch, caplog):
+    sat, loop = _sat(monkeypatch, "greeting", _feed(), installed=frozenset(), missing=True)
+    with caplog.at_level(logging.WARNING, logger="satellite"):
+        audio, controls = _wake_then_capture(sat, loop)
+    assert audio[0] == "tail"
+    assert controls[-1]["greeting_played"] is False
+    assert "could not run aplay" in caplog.text
+
+
+def test_the_player_check_is_the_path_lookup(monkeypatch):
+    monkeypatch.setattr(client.shutil, "which", lambda name: "/usr/bin/aplay" if name == "aplay" else None)
+    assert client._player_present("aplay") is True
+    assert client._player_present("mpg123") is False
+    assert client._player_present("") is False
 
 
 # ─── music was playing ────────────────────────────────────────────────────

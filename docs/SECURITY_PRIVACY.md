@@ -2870,7 +2870,11 @@ connection up id domovoi-home` (the house network's profile, by name, since
 2026-10-12; cards prepared before then have `nmcli device connect wlan0`
 instead, which the client runs only where it cannot raise the setup
 hotspot), `systemctl --no-block restart` of its own two units,
-`domovoi-apply-payload`, `domovoi-sync-time` and `xvf_host`. Every one of
+`domovoi-apply-payload`, `domovoi-sync-time`, `domovoi-reboot` (argv-less:
+`systemctl reboot`, for the no-server self-check), `domovoi-wifi-reset`
+(argv-less, cards prepared since 2026-10-17: the Wi-Fi radio off and on,
+then the `domovoi-home` profile by name; it refuses while the setup
+hotspot's profile is saved) and `xvf_host`. Every one of
 those targets is a root-owned path the account cannot edit, and every
 script root runs on the device (stage 1, stage 2 as
 `/usr/local/sbin/domovoi-stage2`, the two helpers, `domovoi-status`) lives
@@ -2944,7 +2948,27 @@ it is given `--install-early-unit`, so such a unit still runs nothing at
 boot as root that it did not run before. Second, after a rename it made
 itself, the boot step asks DHCP once more under the new name
 (`nmcli device modify wlan0 ipv4.dhcp-hostname …`). That changes only the
-active connection, and nothing is saved. The console
+active connection, and nothing is saved. Since 2026-10-17 the same
+boot step also puts back a missing **base system package**
+(`satellite/base_packages.py`; the office satellite never got mpg123,
+because stage 2's offline `apt-get -f install` removed the copy stage 1
+had left unconfigured). Once stage 2 has finished, it asks `dpkg-query`
+which of the base packages are missing, and only when some are does it run
+`apt-get update` and `apt-get install --no-install-recommends --no-remove`
+for exactly those names, which are constants in that file: nothing is read
+from the account's files or the server, and apt may add dependencies but
+never remove a package. It records what it found and did in
+`/var/lib/domovoi/base-packages.json`. Before installing it runs
+`dpkg --configure -a`, which finishes an interrupted install and removes
+nothing, and the whole run has one 20-minute deadline. On a card prepared
+while the server's internet access was turned off (stage 1 leaves the
+root-owned flag `/var/lib/domovoi/internet-off`) it never goes online: no
+package lists are fetched, a package the card's own deb cache holds is
+installed from it with `dpkg -i`, and any other with `apt-get install
+--no-download`, as `domovoi-apply-payload` does. The names
+being constants does not make them root-owned: like the network settings,
+this runs from the satellite account's code tree. It is the same accepted
+path again, widened by one more action. The console
 login media prep prints on the label is this same account: it gives an
 operator a shell and the logs, not root. Root on a shipped unit means the
 card in another machine, or a re-flash — and these guarantees hold only

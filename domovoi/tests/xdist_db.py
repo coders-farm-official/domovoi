@@ -274,7 +274,19 @@ def main(argv: list[str] | None = None) -> int:
     what.add_argument("--list", action="store_true", help="print the lane's worker copies")
     what.add_argument("--drop", action="store_true", help="drop every worker copy of the lane")
     args = ap.parse_args(argv)
-    url = make_url(args.url or _lane_url_from_env())
+    raw = args.url or _lane_url_from_env()
+    # The same refusal as the conftest's (db_guard.py): no database by
+    # accident, and none on an installed Domovoi's port without the opt-in.
+    from domovoi.tests import db_guard
+
+    env = dict(os.environ)
+    if args.url:
+        env.setdefault("TEST_DATABASE_URL", args.url)
+    refused = db_guard.refusal(env, raw)
+    if refused:
+        print(f"refusing: {refused}", file=sys.stderr)
+        return 2
+    url = make_url(raw)
     lane = url.database or ""
     if not lane.endswith("_test"):
         print(f"refusing: {lane!r} is not a test database", file=sys.stderr)
