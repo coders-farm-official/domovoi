@@ -172,7 +172,6 @@ CHECKLIST: list[dict] = [
 # plugin (a plugin's handler), pending (behaviour another branch builds:
 # the test expects it NOT to route yet, and fails once it does, so the
 # mark comes off). Checked through POST /v1/intent on v1.0.0-rc2.
-PENDING_VOICE_FIXES = "v1-voice-fixes"
 PHRASES: dict[str, tuple] = {
     "set a timer for 10 minutes": ("timer", "fast", {}),
     "what's the weather tomorrow": (None, "qa", {}),
@@ -183,10 +182,10 @@ PHRASES: dict[str, tuple] = {
     "cancel the timer": ("timer", "fast", {}),
     "remind me to call Mom in 20 minutes": ("reminder", "fast", {}),
     "remind me in 2 hours to take the bins out": ("reminder", "fast", {}),
-    "remind me at 6 pm to take the bins out": ("reminder", "fast", {"pending": PENDING_VOICE_FIXES}),
-    "wake me up at 7": ("reminder", "fast", {"pending": PENDING_VOICE_FIXES}),
-    "set an alarm for 6:30": ("reminder", "fast", {"pending": PENDING_VOICE_FIXES}),
-    "cancel the 7 am alarm": ("reminder", "fast", {"pending": PENDING_VOICE_FIXES}),
+    "remind me at 6 pm to take the bins out": ("reminder", "fast", {}),
+    "wake me up at 7": ("reminder", "fast", {}),
+    "set an alarm for 6:30": ("reminder", "fast", {}),
+    "cancel the 7 am alarm": ("reminder", "fast", {}),
     "what reminders do I have": ("reminder", "fast", {}),
     "what time is it": ("clock", "fast", {}),
     "what day is it": ("clock", "fast", {}),
@@ -219,8 +218,8 @@ PHRASES: dict[str, tuple] = {
     "my favorite band is Weezer": ("memory", "fast", {}),
     "what do you remember about me": ("memory", "fast", {}),
     "forget that I parked on level 3": ("memory", "fast", {}),
-    "what can you do": ("help", "fast", {"pending": PENDING_VOICE_FIXES}),
-    "what can I say": ("help", "fast", {"pending": PENDING_VOICE_FIXES}),
+    "what can you do": ("help", "fast", {}),
+    "what can I say": ("help", "fast", {}),
     "say that again": ("repeat", "fast", {}),
     "never mind": ("dismiss", "fast", {}),
     "what voices are there": ("voice", "fast", {}),
@@ -239,9 +238,9 @@ PHRASES: dict[str, tuple] = {
     "any news about the city council": ("news", "fast", {}),
     "stream the jazz station": ("radio", "fast", {"plugin": "radio"}),
     "stop the radio": ("radio", "fast", {"plugin": "radio"}),
-    "what's on my calendar today": ("calendar", "fast", {"pending": PENDING_VOICE_FIXES}),
-    "what's next on my calendar": ("calendar", "fast", {"pending": PENDING_VOICE_FIXES}),
-    "do I have anything on Friday": ("calendar", "fast", {"pending": PENDING_VOICE_FIXES}),
+    "what's on my calendar today": ("calendar", "fast", {}),
+    "what's next on my calendar": ("calendar", "fast", {}),
+    "do I have anything on Friday": ("calendar", "fast", {}),
     "my name is Sarah": ("voice_profile", "fast", {}),
     "who am I": ("voice_profile", "fast", {}),
     "forget me": ("voice_profile", "fast", {}),

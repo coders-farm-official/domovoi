@@ -865,26 +865,22 @@
       {
        "text": "remind me at 6 pm to take the bins out",
        "handler": "reminder",
-       "path": "fast",
-       "pending": "v1-voice-fixes"
+       "path": "fast"
       },
       {
        "text": "wake me up at 7",
        "handler": "reminder",
-       "path": "fast",
-       "pending": "v1-voice-fixes"
+       "path": "fast"
       },
       {
        "text": "set an alarm for 6:30",
        "handler": "reminder",
-       "path": "fast",
-       "pending": "v1-voice-fixes"
+       "path": "fast"
       },
       {
        "text": "cancel the 7 am alarm",
        "handler": "reminder",
-       "path": "fast",
-       "pending": "v1-voice-fixes"
+       "path": "fast"
       },
       {
        "text": "what reminders do I have",
@@ -1337,14 +1333,12 @@
       {
        "text": "what can you do",
        "handler": "help",
-       "path": "fast",
-       "pending": "v1-voice-fixes"
+       "path": "fast"
       },
       {
        "text": "what can I say",
        "handler": "help",
-       "path": "fast",
-       "pending": "v1-voice-fixes"
+       "path": "fast"
       }
      ]
     }
@@ -2648,20 +2642,17 @@
       {
        "text": "what's on my calendar today",
        "handler": "calendar",
-       "path": "fast",
-       "pending": "v1-voice-fixes"
+       "path": "fast"
       },
       {
        "text": "what's next on my calendar",
        "handler": "calendar",
-       "path": "fast",
-       "pending": "v1-voice-fixes"
+       "path": "fast"
       },
       {
        "text": "do I have anything on Friday",
        "handler": "calendar",
-       "path": "fast",
-       "pending": "v1-voice-fixes"
+       "path": "fast"
       }
      ]
     }
