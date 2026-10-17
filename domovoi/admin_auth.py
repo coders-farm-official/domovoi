@@ -1813,13 +1813,24 @@ def device_token_retry_after(conn: Any) -> float:
 
 
 def device_token_throttled_error(conn: Any) -> HTTPException:
-    """The 429 a throttled device-tier caller gets, with ``Retry-After``."""
+    """The 429 a throttled device-tier caller gets, with ``Retry-After``.
+
+    The detail names the usual cause for the person reading it (2026-10-17:
+    a phone was locked out by a browser tab on that same phone still
+    holding a reinstalled server's household token; the 429 named neither).
+    It says nothing an attacker did not know: that this address sent wrong
+    tokens is what the 429 already means, and the advice is the same for
+    every caller. Same status, same tiers, same ``Retry-After``; it still
+    names the header and keeps "retry in Ns", which the dashboard reads
+    when a cross-origin page cannot see ``Retry-After``."""
     wait = device_token_retry_after(conn)
     return HTTPException(
         status_code=429,
         detail=(
-            f"too many wrong {DEVICE_TOKEN_HEADER} values — retry in "
-            f"{wait:.0f}s, or sign in as an admin"
+            f"too many wrong {DEVICE_TOKEN_HEADER} values from this address — "
+            f"retry in {wait:.0f}s. A device or browser tab at this address may "
+            "still be sending an old household token (after a reinstall or a "
+            "token change): pair it again or close it, or sign in as an admin"
         ),
         headers={"Retry-After": str(max(1, int(wait + 0.999)))},
     )

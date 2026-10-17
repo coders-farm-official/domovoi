@@ -697,6 +697,28 @@ async def test_wrong_tokens_start_costing_time_at_the_gate(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_the_429_names_the_usual_cause_for_a_person(monkeypatch) -> None:
+    """2026-10-17: a phone was locked out by a browser tab on the same phone
+    still holding a reinstalled server's token, and the 429 named neither.
+    It now says what usually causes it, and nothing else: no token, no
+    hint about how close a guess was. The app and the dashboard still
+    recognise it by the header's name, and a cross-origin dashboard reads
+    the wait from "retry in Ns" (it cannot see Retry-After)."""
+    install_fake_db(monkeypatch, admin=True, sessions={"admin-token"}, device_token="dev-token")
+    async with mini_client() as c:
+        for i in range(admin_auth.DEVICE_TOKEN_FREE_ATTEMPTS + 1):
+            await c.post("/device", headers={HEADER: f"stale-{i}"})
+        r = await c.post("/device", headers={HEADER: "stale-last"})
+    assert r.status_code == 429
+    detail = r.json()["detail"]
+    assert HEADER in detail
+    assert re.search(r"retry in \d+s", detail)
+    assert "browser tab" in detail and "old household token" in detail
+    assert "pair it again or close it" in detail and "sign in as an admin" in detail
+    assert "dev-token" not in detail and "stale" not in detail
+
+
+@pytest.mark.asyncio
 async def test_the_right_token_clears_the_counter_at_the_gate(monkeypatch) -> None:
     install_fake_db(monkeypatch, admin=True, sessions={"admin-token"}, device_token="dev-token")
     async with mini_client() as c:

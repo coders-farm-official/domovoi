@@ -245,6 +245,12 @@ class TokenHealthTest {
 
     @Test fun onlyTheDeviceTiersThrottleCounts() {
         assertTrue(TokenHealth.isDeviceTokenThrottle("""{"detail":"too many wrong X-Device-Token values — retry in 53s, or sign in as an admin"}"""))
+        // The wording since 2026-10-17, which names the usual cause.
+        assertTrue(
+            TokenHealth.isDeviceTokenThrottle(
+                """{"detail":"too many wrong X-Device-Token values from this address — retry in 53s. A device or browser tab at this address may still be sending an old household token (after a reinstall or a token change): pair it again or close it, or sign in as an admin"}""",
+            ),
+        )
         assertFalse(TokenHealth.isDeviceTokenThrottle("""{"detail":"too many failed attempts — retry in 30s"}"""))
         assertFalse(TokenHealth.isDeviceTokenThrottle(null))
     }

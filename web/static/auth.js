@@ -129,15 +129,70 @@ const Auth = (() => {
   // One stored token per server: the household token of the box that
   // served the page (same-origin, '') and, separately, of each selected
   // server — they are different households with different tokens.
-  const deviceTokenKey = () => (base() ? `${DEVICE_TOKEN_KEY}@${base()}` : DEVICE_TOKEN_KEY);
+  const perServer = (key) => (base() ? `${key}@${base()}` : key);
+  const deviceTokenKey = () => perServer(DEVICE_TOKEN_KEY);
   const readDeviceToken = () => {
     try { return localStorage.getItem(deviceTokenKey()) || null; } catch { return null; }
   };
+
+  // ── A household token the server no longer takes (2026-10-17) ────
+  //
+  // The server answers a wrong household token 401, and an address that
+  // keeps sending wrong ones 429 (five free, then a doubling wait to five
+  // minutes, per address: DEVICE_TOKEN_BACKOFF in domovoi/admin_auth.py).
+  // A tab left open on a server that was reinstalled, or whose household
+  // token was changed, used to send its old token on every poll and every
+  // socket reconnect, for as long as it stayed open, and kept that wait
+  // running for EVERY device at its address: the owner's phone app was
+  // locked out by a forgotten browser tab on the same phone.
+  //
+  // So two facts are kept, per server, beside the token:
+  //   * REFUSED: the token the server answered "wrong" to (the value itself,
+  //     so a new token, typed here or stored by another tab, is not
+  //     refused). It is not sent again: not as the header, not on the state
+  //     socket, not in a media URL. Requests go out without it, which the
+  //     server does not count. The shell says "this Domovoi doesn't
+  //     recognise this browser any more" (DeviceTokenNotice).
+  //   * WAIT: until when the server asked this address to wait (429
+  //     Retry-After). Until then the token is not sent either.
+  // A token is only ever marked refused from a refusal of a request that
+  // CARRIED it (data.js); "no token" is the pair modal's business, as before.
+  const DEVICE_TOKEN_REFUSED_KEY = 'domovoi-device-token-refused';
+  const DEVICE_TOKEN_WAIT_KEY = 'domovoi-device-token-wait';
+  const readRefused = () => {
+    try { return localStorage.getItem(perServer(DEVICE_TOKEN_REFUSED_KEY)) || null; } catch { return null; }
+  };
+  const writeRefused = (value) => {
+    try {
+      if (value) localStorage.setItem(perServer(DEVICE_TOKEN_REFUSED_KEY), value);
+      else localStorage.removeItem(perServer(DEVICE_TOKEN_REFUSED_KEY));
+    } catch {}
+  };
+  const readWaitUntil = () => {
+    try { return Number(localStorage.getItem(perServer(DEVICE_TOKEN_WAIT_KEY))) || 0; } catch { return 0; }
+  };
+  const writeWaitUntil = (ms) => {
+    try {
+      if (ms) localStorage.setItem(perServer(DEVICE_TOKEN_WAIT_KEY), String(Math.round(ms)));
+      else localStorage.removeItem(perServer(DEVICE_TOKEN_WAIT_KEY));
+    } catch {}
+  };
+  const waitLeftMs = () => Math.max(0, readWaitUntil() - Date.now());
+  // The token that may go out now: the stored one, unless the server
+  // refused it or asked this address to wait.
+  const usableDeviceToken = () => {
+    const stored = readDeviceToken();
+    if (!stored || readRefused() === stored || waitLeftMs() > 0) return null;
+    return stored;
+  };
+
+  // Any new value (or none) is not the token the server refused.
   const writeDeviceToken = (value) => {
     try {
       if (value) localStorage.setItem(deviceTokenKey(), value);
       else localStorage.removeItem(deviceTokenKey());
     } catch {}
+    writeRefused(null);
   };
 
   // The dashboard only talks to a server the user has explicitly trusted
@@ -272,7 +327,10 @@ const Auth = (() => {
       credentialVersion += 1;
       // The sign-in paired this browser; a browser whose storage was
       // cleared since gets the household token the same way (autoPair).
-      if (!readDeviceToken()) { try { await autoPair(); } catch { /* best effort */ } }
+      // So is one whose stored token the server has refused since.
+      if (!readDeviceToken() || readRefused() === readDeviceToken()) {
+        try { await autoPair(); } catch { /* best effort */ }
+      }
       notify();
       return true;
     })();
@@ -387,8 +445,63 @@ const Auth = (() => {
 
     // ── Device token ────────────────────────────────────────────────
     normalizeDeviceToken,
-    deviceToken: () => readDeviceToken(),
-    isPaired: () => !!readDeviceToken(),
+    // The token that goes out now (header, socket, media URLs): null when
+    // none is stored, when the server refused it, or while it asked this
+    // address to wait.
+    deviceToken: () => usableDeviceToken(),
+    isPaired: () => !!usableDeviceToken(),
+    // What is stored, refused or not (the Household token card's "this
+    // browser holds it").
+    storedDeviceToken: () => readDeviceToken(),
+
+    // The server answered a device-tier 401/403 to a request that carried
+    // `sent` (data.js): if that is still the stored token, it is not sent
+    // again. Not a credential change (credentialVersion stays): nothing
+    // new can be tried with it.
+    noteDeviceRefusal(sent) {
+      if (!sent || readDeviceToken() !== sent || readRefused() === sent) return;
+      writeRefused(sent);
+      notify();
+    },
+    // The server answered 429 for wrong household tokens from this
+    // address: wait `seconds` before the token goes out again. When the
+    // wait is over the token counts as usable again (credentialVersion),
+    // so the reads it refused are asked once more.
+    noteDeviceWait(seconds) {
+      const s = Math.min(Math.max(Number(seconds) || 60, 1), 15 * 60);
+      const until = Date.now() + s * 1000;
+      if (until <= readWaitUntil()) return;
+      writeWaitUntil(until);
+      notify();
+      try {
+        const t = setTimeout(() => {
+          if (waitLeftMs() > 0) return;
+          credentialVersion += 1;
+          notify();
+        }, s * 1000 + 50);
+        // (Node's timers keep a test harness alive; a browser's are numbers.)
+        if (t && typeof t.unref === 'function') t.unref();
+      } catch { /* no timers (a test harness): the next read still finds it over */ }
+    },
+    // What stands between this browser and the server, for the notice:
+    // null, or {kind: 'refused' | 'waiting', waitMs}. Nothing while no
+    // token is stored: that is the pair modal's business.
+    deviceTrouble() {
+      const stored = readDeviceToken();
+      if (!stored) return null;
+      const waitMs = waitLeftMs();
+      if (readRefused() === stored) return { kind: 'refused', waitMs };
+      if (waitMs > 0) return { kind: 'waiting', waitMs };
+      return null;
+    },
+    // "try it again": the refusal may have been a blip (the server's
+    // database not answering refuses every token). One more try.
+    retryRefusedDeviceToken() {
+      if (!readRefused()) return;
+      writeRefused(null);
+      credentialVersion += 1;
+      notify();
+    },
     // Store the household token for the current server (pasted in the
     // pair modal, fetched at login, or handed over by a rotation).
     pair(value) {
@@ -413,7 +526,7 @@ const Auth = (() => {
     headers() {
       const h = {};
       if (token) h.Authorization = `Bearer ${token}`;
-      const device = readDeviceToken();
+      const device = usableDeviceToken();
       if (device) h[DEVICE_TOKEN_HEADER] = device;
       return h;
     },
@@ -510,7 +623,7 @@ const Auth = (() => {
     // admin login's auto-pair), false when the modal is dismissed.
     ensurePaired(refusedDeviceToken) {
       const usable = () => {
-        const current = readDeviceToken();
+        const current = usableDeviceToken();
         return !!current && current !== refusedDeviceToken;
       };
       if (usable()) return Promise.resolve(true);

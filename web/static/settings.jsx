@@ -3499,7 +3499,12 @@ const HouseholdTokenCard = ({ fire }) => {
   const token = data && data.token;
   const header = (data && data.header) || 'X-Device-Token';
   const thisPaired = (() => {
-    try { return !!token && Auth.deviceToken && Auth.deviceToken() === token; } catch { return false; }
+    // What is STORED: a wait the server set (auth.js) holds the token back
+    // for a while without making it any less this browser's.
+    try {
+      const held = Auth.storedDeviceToken ? Auth.storedDeviceToken() : (Auth.deviceToken && Auth.deviceToken());
+      return !!token && held === token;
+    } catch { return false; }
   })();
 
   const copy = async () => {

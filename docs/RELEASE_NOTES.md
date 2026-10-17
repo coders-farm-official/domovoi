@@ -4,17 +4,24 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
-## 2026-10-17 — Android app: a server that no longer knows this phone
+## 2026-10-17 — A server that no longer knows this phone or browser
 
-A new APK; no server change.
+A new APK and a dashboard update (the web process; no migration). The core
+changes only the words of one refusal.
 
-* **What happened before.** A phone keeps one household token per server
-  address. When the Domovoi at that address was reinstalled, moved to a new
-  machine, or had its household token changed, the app kept sending the old
-  token on every poll. The server makes an address that sends wrong tokens
-  wait (5 free tries, then up to 5 minutes), so the phone kept itself locked
-  out: Home said "couldn't load rooms" and "offline", Videos showed
-  `429 Too Many Requests`.
+* **What happened before.** A phone or a browser keeps one household token
+  per server address. When the Domovoi at that address was reinstalled,
+  moved to a new machine, or had its household token changed, the old token
+  went out again on every poll. The server makes an address that sends wrong
+  tokens wait (5 free tries, then up to 5 minutes), and a device that keeps
+  sending one restarts the wait each time it ends. Every device at that
+  address is turned away while it runs, even one with the right token. The
+  case that found it: a dashboard tab left open in a phone's browser locked
+  out the app on that same phone. Home said "couldn't load rooms" and
+  "offline", Videos showed `429 Too Many Requests`.
+* **If it happens to you**, see TROUBLESHOOTING.md, "The app or dashboard
+  says too many wrong tokens". Close or re-pair whatever still holds the old
+  token, wait up to 5 minutes, then pair again.
 * **Now the app stops at the first refusal.** It no longer sends a token
   the server refused, including from background syncs and after a restart.
   Instead of the workspace it shows one card: **Domovoi doesn't recognise
@@ -31,11 +38,25 @@ A new APK; no server change.
   Domovoi — trust it again** pins the new identity, with the old and new
   fingerprints shown side by side. Pairing comes after that yes, and only
   if the server also refuses the old token.
+* **The dashboard does the same.** A browser stops sending a household token
+  the server refused: not as a header, not on the live socket, not in
+  picture or video links, and not after a reload. While the server's wait
+  runs it sends no token at all. One notice at the top of every page says
+  **This Domovoi doesn't recognise this browser any more** (or counts the
+  wait down), with **pair again** and **sign in as admin**, instead of every
+  panel failing on its own. A browser that was never paired still gets the
+  pair prompt, as before.
+* **The server's 429 says what usually causes it**: "A device or browser tab
+  at this address may still be sending an old household token … pair it
+  again or close it, or sign in as an admin". Same status, `Retry-After` and
+  tiers. It still names `X-Device-Token` and "retry in Ns", which clients
+  read.
 * **With an older app**, in the app: tap the server name at the top, then
   the **✕** on the highlighted server row, then **forget**. Wait 5 minutes,
   add the server again, trust it, and paste the household token. Or go to
   Settings → Connection → Household token, paste the new token and tap
-  **replace**; it starts working within 5 minutes.
+  **replace**; it starts working within 5 minutes. Either way, first close
+  any old dashboard tab on that address on the same phone.
 
 ## 2026-10-16 — Phone photos in chat: HEIC converted, refusals in words
 

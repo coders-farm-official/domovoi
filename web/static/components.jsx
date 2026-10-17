@@ -3241,6 +3241,64 @@ const ContainerGuardBanner = () => {
   );
 };
 
+/* ---- "this Domovoi doesn't recognise this browser any more" ------
+ * (2026-10-17.) A browser whose stored household token the server
+ * refused, or whose address the server told to wait after wrong tokens
+ * (auth.js deviceTrouble). The token has already stopped going out
+ * (data.js); this says so ONCE, at the top of every page, instead of
+ * each panel failing on its own, and offers the ways back: pair again
+ * (the pair modal, which also offers signing in), sign in as an admin
+ * (which fetches the current token itself), or, for a refusal that may
+ * have been a blip, try the old token once more. The server's 429 words
+ * ("or sign in as an admin") are the server's; these are this page's. */
+const tokenWaitClock = (ms) => {
+  const s = Math.ceil(Math.max(0, ms || 0) / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+
+const deviceTokenNoticeText = (trouble) => {
+  if (!trouble) return '';
+  const wait = trouble.waitMs > 0 ? tokenWaitClock(trouble.waitMs) : null;
+  if (trouble.kind === 'refused') {
+    return "This Domovoi doesn't recognise this browser any more: it no longer accepts the household "
+      + 'token this browser was paired with (Domovoi was reinstalled, or someone changed the token). '
+      + 'This browser has stopped sending it.'
+      + (wait ? ` After the wrong tokens Domovoi wants this address to wait ${wait}; a new token is tried when that is over.` : '');
+  }
+  return `This Domovoi asked this address to wait ${wait || '0:00'}: something here sent too many wrong `
+    + 'household tokens, often a tab or a device still holding an old one. This browser sends nothing '
+    + 'until then, and tries again by itself.';
+};
+
+const DeviceTokenNotice = () => {
+  const [, force] = React.useReducer((x) => x + 1, 0);
+  useEffect(() => (typeof Auth !== 'undefined' && Auth.subscribe ? Auth.subscribe(force) : undefined), []);
+  const trouble = (typeof Auth !== 'undefined' && Auth.deviceTrouble) ? Auth.deviceTrouble() : null;
+  const counting = !!trouble && trouble.waitMs > 0;
+  // The wait counts down on screen, and the notice goes when it ends.
+  useEffect(() => {
+    if (!counting) return undefined;
+    const t = setInterval(force, 1000);
+    return () => clearInterval(t);
+  }, [counting]);
+  if (!trouble) return null;
+  return (
+    <div className="device-token-notice" role="alert" data-kind={trouble.kind}>
+      <StatusDot tone="warn"/>
+      <span className="device-token-notice-text">{deviceTokenNoticeText(trouble)}</span>
+      <span className="device-token-notice-actions">
+        <Button type="button" variant="primary" icon="link" onClick={() => Auth.requestPairing()}>pair again</Button>
+        <Button type="button" icon="key" onClick={() => Auth.openModal()}>sign in as admin</Button>
+        {trouble.kind === 'refused' && !counting && (
+          <Button type="button" variant="ghost" onClick={() => Auth.retryRefusedDeviceToken()}>
+            try the old token again
+          </Button>
+        )}
+      </span>
+    </div>
+  );
+};
+
 /* expose to other Babel scripts */
 Object.assign(window, {
   Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, PreviewTag, PREVIEW_MEANS, RoomChip, Avatar,
@@ -3259,4 +3317,5 @@ Object.assign(window, {
   CoverArt, libraryCoverUrl, coverMisses,
   ContainerGuardStore, useContainerGuard, containerGuardBanner, ContainerGuardBanner,
   CONTAINER_GUARD_GUEST_TEXT,
+  DeviceTokenNotice, deviceTokenNoticeText, tokenWaitClock,
 });

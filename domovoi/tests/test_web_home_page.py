@@ -1636,10 +1636,16 @@ def test_signing_in_after_boot_registers_once(driven) -> None:
 def test_a_refused_background_register_never_prompts(driven) -> None:
     out = driven["boot_stale_token"]
     assert out["booted"] == {"posts": ["house-token"], "pair": False, "modal": False}
-    assert out["refreshed"] == {"posts": ["house-token", "house-token"], "pair": False, "modal": False}
+    # Since 2026-10-17 a household token the server refused is not sent again
+    # (auth.js): the next register is not even made, because this browser has
+    # nothing usable to register with. Before, it went out with the stale
+    # token on every refresh, focus and tick, which kept the server's
+    # per-address wrong-token wait running for every device at that address.
+    # The page's notice says it instead of a prompt.
+    assert out["refreshed"] == {"posts": ["house-token"], "pair": False, "modal": False}
     focus = driven["focus_stale_token"]
     assert focus["tooSoon"] == 1                 # boot's own, then a focus inside 15 s: nothing
-    assert focus["posts"] == ["house-token", "house-token"]
+    assert focus["posts"] == ["house-token"]     # ... and later ones: nothing either
     assert focus["pair"] is False and focus["modal"] is False
 
 

@@ -410,6 +410,9 @@
               {/* The container guard's banner, on every page while an
                   incident is open (components.jsx). */}
               <ContainerGuardBanner/>
+              {/* A household token this server refused, or its "wait"
+                  after wrong ones: said once, here (components.jsx). */}
+              <DeviceTokenNotice/>
               <PluginErrorBoundary slug={pageSlug} routeKey={route}><Page counts={counts} badges={badges}/></PluginErrorBoundary>
             </main>
             <AuthModalHost/>
