@@ -68,6 +68,7 @@ from web.backend.domovoi_client import (
     get_admin,
     get_cached_snapshot,
     post_admin,
+    set_cached_snapshot,
 )
 from web.backend.schemas import (
     AdoptRequest,
@@ -1553,7 +1554,25 @@ async def set_room_voice(room_id: str, body: RoomVoiceRequest, request: Request)
         {"voice": body.voice},
         headers=auth_forward_headers(request),
     )
+    if status == 200 and isinstance(payload, dict) and payload.get("kept_on") == "server":
+        _remember_room_voice(room_id, payload.get("voice"))
     return bridge_response(status, payload)
+
+
+def _remember_room_voice(room_id: str, voice: str | None) -> None:
+    """A voice the server now keeps for a room goes into the cached core
+    snapshot at once. The drawer re-reads GET /api/satellites right after
+    the pick, and an online room's voice comes from that snapshot, which the
+    poll loop refreshes only every few seconds: without this the picker
+    snapped back to the old voice until the page was reloaded. (A Pi's
+    voice is the one it reports back, so it waits for the next poll.)"""
+    snap = get_cached_snapshot()
+    if not isinstance(snap, dict):
+        return
+    voices = snap.get("satellite_voice")
+    voices = dict(voices) if isinstance(voices, dict) else {}
+    voices[room_id] = voice
+    set_cached_snapshot({**snap, "satellite_voice": voices})
 
 
 @router.post(
