@@ -114,3 +114,17 @@ since = "d79578e"
 test = "domovoi/tests/test_usb_stick_image.py::test_an_image_matches_only_at_the_pinned_size_and_digest"
 reason = "flaky under load: the rewrite lands in the same mtime tick with the same size and inode, so iso_matches' (path, size, mtime, inode, ctime) cache answers for the old bytes"
 since = "7409a1a"
+
+# Seen once (both parameters) in the full -n 4 run at integration/1017c
+# (5ef5047, 2026-10-17, the emulator booting and the contrast audit's Edge
+# beside it); passes alone 3 of 3 at that head, and nothing in batch 16
+# touches domovoi/usb_stick or the test.
+[[failure]]
+test = "domovoi/tests/test_usb_stick_scripts.py::test_erase_names_the_disk_and_only_then_answers_the_partitioner[ERASE]"
+reason = "flaky under load: Git Bash exits 2304 with no stdout or stderr (the shell never ran the script)"
+since = "0894dbb"
+
+[[failure]]
+test = "domovoi/tests/test_usb_stick_scripts.py::test_erase_names_the_disk_and_only_then_answers_the_partitioner[erase]"
+reason = "flaky under load: Git Bash exits 2304 with no stdout or stderr (the shell never ran the script)"
+since = "0894dbb"
