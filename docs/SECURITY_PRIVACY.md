@@ -2948,7 +2948,18 @@ it is given `--install-early-unit`, so such a unit still runs nothing at
 boot as root that it did not run before. Second, after a rename it made
 itself, the boot step asks DHCP once more under the new name
 (`nmcli device modify wlan0 ipv4.dhcp-hostname …`). That changes only the
-active connection, and nothing is saved. The console
+active connection, and nothing is saved. Since 2026-10-17 the same
+boot step also puts back a missing **base system package**
+(`satellite/base_packages.py`; the office satellite never got mpg123,
+because stage 2's offline `apt-get -f install` removed the copy stage 1
+had left unconfigured). Once stage 2 has finished, it asks `dpkg-query`
+which of the base packages are missing, and only when some are does it run
+`apt-get update` and `apt-get install --no-install-recommends --no-remove`
+for exactly those names, which are constants in that file: nothing is read
+from the account's files or the server, and apt may add dependencies but
+never remove a package. It records what it found and did in
+`/var/lib/domovoi/base-packages.json`. It is the same accepted path again,
+widened by one more action. The console
 login media prep prints on the label is this same account: it gives an
 operator a shell and the logs, not root. Root on a shipped unit means the
 card in another machine, or a re-flash — and these guarantees hold only

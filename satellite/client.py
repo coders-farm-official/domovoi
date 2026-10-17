@@ -47,6 +47,7 @@ from websockets.exceptions import ConnectionClosed
 
 from satellite import (
     _volume,
+    base_packages,
     chime,
     code_sync,
     config_writer,
@@ -3813,6 +3814,61 @@ class Satellite(pc_engine.SpareDeviceEngine):
         elif not self._net_reboot_needed:
             self._net_reboot_said = False
 
+    # ── The base system packages root repairs at boot ─────────────────
+    # satellite/base_packages.py: mpg123 never reached the office unit
+    # (2026-10-17). Root's boot step installs a missing one online; this
+    # process can only look (dpkg-query, read-only), say so once in the log
+    # (and so in the core's retained log), and put "reboot needed" on the
+    # dashboard while anything is missing — only on a unit where a reboot
+    # runs that step.
+
+    _base_missing: list[str] | None = None
+    _base_checked_at: float | None = None
+    _base_reboot_needed: str | None = None
+    _base_said: tuple[str, ...] | None = None
+    _base_report_logged: str | None = None
+    #: How often the packages are looked up again (seconds).
+    BASE_PACKAGES_RECHECK_SEC = 600.0
+
+    def _check_base_packages(self, now: float) -> None:
+        if (
+            sys.platform != "linux"
+            or engine_platform.is_windows_pc(getattr(self, "cfg", None))
+            or net_settings.boot_step_unit_state() != "enabled"
+        ):
+            self._base_missing, self._base_reboot_needed = None, None
+            return
+        if (
+            self._base_checked_at is not None
+            and now - self._base_checked_at < self.BASE_PACKAGES_RECHECK_SEC
+        ):
+            return
+        self._base_checked_at = now
+        report = base_packages.read_report()
+        if report is not None:
+            run_id = f"{report.get('boot_id')}:{report.get('ts')}"
+            if run_id != self._base_report_logged:
+                self._base_report_logged = run_id
+                state = report.get("state")
+                if state == "repaired":
+                    log.info("base packages (installed as root at boot): %s",
+                             ", ".join(map(str, report.get("installed") or [])))
+                elif state in ("failed", "no_network"):
+                    log.warning(
+                        "base packages (root's boot step): %s - still missing %s%s",
+                        state, ", ".join(map(str, report.get("still_missing") or [])),
+                        f" ({report.get('detail')})" if report.get("detail") else "",
+                    )
+        gone = base_packages.missing()
+        self._base_missing = gone
+        self._base_reboot_needed = base_packages.reboot_note(gone, report, net_settings._boot_id())
+        if gone and tuple(gone) != self._base_said:
+            self._base_said = tuple(gone)
+            log.warning("system packages missing: %s (%s)", ", ".join(gone),
+                        self._base_reboot_needed)
+        elif not gone:
+            self._base_said = None
+
     def _read_net_report(self, mtime: float | None) -> None:
         """Read root's record and put a run nobody has logged yet into this
         process's log (once per run, across restarts)."""
@@ -3901,7 +3957,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # Upgraded but not rebooted: the network settings root applies at
             # boot are not in place yet (satellite/net_settings.py). The
             # dashboard shows it; absent (None) when nothing is pending.
-            "reboot_needed": self._net_reboot_needed,
+            # Also while a base system package is missing: the boot step
+            # installs it (satellite/base_packages.py).
+            "reboot_needed": self._net_reboot_needed or self._base_reboot_needed,
             # What root's boot-time network step did this boot (applied /
             # unchanged / skipped / failed / not run / not installed /
             # running, with the reason), and the name the router should
@@ -4335,6 +4393,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
             self._check_net_settings()
         except Exception as e:  # noqa: BLE001
             log.debug("network settings record: %s", e)
+        try:
+            self._check_base_packages(now)
+        except Exception as e:  # noqa: BLE001
+            log.debug("base packages: %s", e)
         self._push_live_logs(now)
         interval = float(self._hcfg("sample_interval_sec", 60.0))
         if self._health_last_sample_at is None or now - self._health_last_sample_at >= interval - 1.0:

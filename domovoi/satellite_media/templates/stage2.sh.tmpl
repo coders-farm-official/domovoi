@@ -116,21 +116,43 @@ fi
 #    apt online is the thing that actually resolves a dependency graph.
 #    Stage 1 has warned "stage 2 retries via apt online" since it was
 #    written; this is the step that makes that true.
+#
+#    Never `apt-get -f install` without fresh package lists, and never with
+#    removals allowed. Debian's mpg123 needs nine libraries Pi OS Lite lacks,
+#    so stage 1 leaves it unpacked and unconfigured; with the Wi-Fi down
+#    when this ran, `apt-get update` failed, and apt's "repair" for a
+#    package whose dependencies it cannot fetch is to REMOVE it. The office
+#    satellite lost mpg123 exactly that way (2026-10-17). --no-remove makes
+#    apt stop instead, and whatever is still missing is installed at a
+#    later boot by the boot step (satellite/base_packages.py), because this
+#    stage is marked done once the satellite runs.
 if [ ! -f "$STEPS/online-debs" ]; then
-  apt-get update -qq || true
-  # Repair anything stage 1's dependency-free dpkg left half-configured.
-  apt-get -f install -y || true
-  APT_OK=1
-  for P in $APT_PACKAGES; do
-    # One name apt cannot resolve must not take the rest down with it —
-    # the lesson spidev taught us on the pip side.
-    apt-get install -y --no-install-recommends "$P" || APT_OK=0
+  UPDATE_OK=0
+  for TRY in 1 2 3; do
+    if apt-get update -qq -o DPkg::Lock::Timeout=120; then UPDATE_OK=1; break; fi
+    echo "WARN: apt-get update failed (try $TRY of 3)"
+    [ "$TRY" = 3 ] || sleep 15
   done
+  APT_OK=$UPDATE_OK
+  if [ "$UPDATE_OK" = 1 ]; then
+    # Repair what stage 1's dependency-free dpkg left half-configured.
+    apt-get -o DPkg::Lock::Timeout=120 -f install -y --no-remove || APT_OK=0
+    for P in $APT_PACKAGES; do
+      # One name apt cannot resolve must not take the rest down with it —
+      # the lesson spidev taught us on the pip side.
+      apt-get -o DPkg::Lock::Timeout=120 install -y --no-install-recommends --no-remove "$P" \
+        || APT_OK=0
+    done
+  fi
   if [ "$APT_OK" = 1 ]; then
     touch "$STEPS/online-debs"
     echo "system packages present"
   else
-    echo "WARN: some system packages did not install — retrying next boot"
+    if [ "$UPDATE_OK" = 1 ]; then
+      echo "WARN: some system packages did not install — the boot step installs what is missing at every boot until they are there"
+    else
+      echo "WARN: no package lists (no network?), so no system package was installed or repaired — the boot step installs what is missing at every boot until they are there"
+    fi
   fi
 fi
 

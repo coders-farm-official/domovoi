@@ -208,14 +208,24 @@ async def build(
             )
             if not ok:
                 warnings.append(msg)
-        if not st["debs"]["ok"]:
+        # A cache with SOME debs was "ready" before 2026-10-17, so one that
+        # lacked a base package (mpg123 on the office card) was never
+        # fetched again and the build said nothing. Refetch when any base
+        # package is missing, and say so loudly when it still is.
+        if not st["debs"]["ok"] or fetchers.base_debs_missing(board.os_release):
             await progress("fetch", 30, "fetching arm64 packages")
             extra: list[str] = []
             for entry in await payload.enabled_satellite_plugins():
                 extra += entry["decl"]["apt_packages"]
             ok, msg = fetchers.fetch_debs(board.os_release, tuple(extra))
-            if not ok:
+            # A partial fetch is ok=True with the missing names in the
+            # message, which used to be dropped here.
+            if not ok or "could not fetch" in msg:
                 warnings.append(msg)
+        gone = fetchers.base_debs_missing(board.os_release)
+        if gone:
+            log.warning("satellite media: %s", fetchers.base_debs_warning(gone))
+            warnings.append(fetchers.base_debs_warning(gone))
         oww_problem = ""
         if oww_verified < len(fetchers.OWW_MODEL_FILES):
             await progress("fetch", 40, "caching wake-word base models")

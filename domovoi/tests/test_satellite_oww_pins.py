@@ -247,6 +247,9 @@ def _offline_build(monkeypatch, tmp_path, *, missing: list[str], fetched: tuple[
     monkeypatch.setattr(fetchers, "verify_oww_models", lambda dest=None: (len(fetchers.OWW_MODEL_FILES) - len(missing), []))
     monkeypatch.setattr(fetchers, "fetch_oww_models", lambda: fetched)
     monkeypatch.setattr(fetchers, "missing_oww_models", lambda dest=None: list(missing))
+    # The deb bucket is checked for the base packages too (2026-10-17); an
+    # empty tmp cache would send the build to Docker for them.
+    monkeypatch.setattr(fetchers, "base_debs_missing", lambda *a, **k: [])
     assembled: list[bool] = []
 
     class Stop(Exception):
