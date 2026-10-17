@@ -4,6 +4,36 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — rc2 smoke fixes: new files play, honest name misses, hyphens
+
+Server update (core and dashboard; no migration).
+
+* **A newly added audiobook, song or podcast episode plays without
+  "rescan my library".** A room's player learns of new files by watching
+  its folders, and a Windows server's folders (through Docker Desktop) or
+  a network folder never tell it: a new book was found by voice, then
+  "the player couldn't load it". Now whatever adds files asks every
+  room's player to read their folders: the audiobook indexer (at start
+  and every 5 minutes), the music library sweep and upload, the
+  dashboard's audiobook reindex and a Files upload into the audiobooks
+  folder, and the podcast downloader. A book indexed **before** this
+  update that still won't play needs one "rescan my library".
+* **"When I say X, I mean Y" for something the library doesn't have**
+  answers "I don't have anything called Y in your library." instead of
+  passing the turn to the Q&A model, which made up an answer. A Y that is
+  a command, a question or something personal ("turn off the lights",
+  "my wife") still goes on as before. "What else is **the band** (or the
+  album, the song) Y called" answers the same way; a bare "what else is Y
+  called" for a name the library lacks is still answered as a general
+  question, since it can't be told from "what else is soccer called".
+* **A hyphen inside a word no longer splits "Artist - Title".** A
+  download titled "Lo-fi Piano Sample" was filed under the artist "Lo";
+  "Jay-Z - Empire State of Mind" under "Jay". The separator is now a dash
+  with a space beside it (`-`, `–` or `—`). The same rule names an
+  untagged file the indexer finds, so a new "Artist-Title.mp3" with no
+  spaces keeps its whole name as the title. Tracks already filed are not
+  changed: fix one with **edit tags** in its Music drawer.
+
 ## 2026-10-16 — Phone photos in chat: HEIC converted, refusals in words
 
 Dashboard update (the web process; no migration) and a new Android APK.
