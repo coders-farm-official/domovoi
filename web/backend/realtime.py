@@ -1013,12 +1013,24 @@ class ListenTask:
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
         self._refresh = asyncio.Event()
+        self._background: set[asyncio.Task] = set()
 
     def refresh_channels(self) -> None:
-        """Drop and re-establish the LISTEN set (design §5.3) — called
-        after a plugin registry resync changes the channel map. The
-        current listen session exits cleanly and the run loop reconnects
-        against the merged :func:`notify_channel_map`."""
+        """Bring the LISTEN set in line with the merged
+        :func:`notify_channel_map` (design §5.3) — called after every
+        plugin registry resync. The live session adds and removes
+        listeners on its OWN connection; it never reconnects for this.
+
+        It used to: the session closed its connection and the run loop
+        connected again. The core writes the registry several times in a
+        row for one action (an upgrade deletes the row, then inserts the
+        new one; an install inserts it ``ok``, then marks it
+        ``load_error``), and the resync of the first write asked for this
+        refresh, so the next ``plugins_changed`` arrived while nothing
+        listened. Postgres keeps no NOTIFY for a listener that isn't
+        there: the dashboard's plugin list kept the half-done state (an
+        upgraded plugin gone from the list, a refused one shown ``ok``;
+        F-054, rc2 smoke)."""
         self._refresh.set()
 
     async def start(self) -> None:
@@ -1070,41 +1082,93 @@ class ListenTask:
         dsn = self._asyncpg_dsn()
         conn = await asyncpg.connect(dsn)
         try:
-            channel_map = notify_channel_map()
-            for notify_channel, realtime_channel in channel_map.items():
-                await conn.add_listener(
-                    notify_channel,
-                    self._make_callback(realtime_channel),
-                )
-            # The plugin registry channel: any plugins row mutation
-            # re-syncs the web host (mount/unmount, manifest cache,
-            # realtime map) — design §3.2 step 15.
+            # Cleared BEFORE the listeners are read from the channel map, so
+            # a refresh asked for while they are being set up runs again.
+            self._refresh.clear()
+            # A connection the server drops (a Postgres restart, a killed
+            # backend) wakes the park below, so the run loop reconnects
+            # rather than waiting forever on a dead one.
+            lost = asyncio.Event()
+            conn.add_termination_listener(lambda _conn: lost.set())
+            # The registry channel first, and for the whole session: any
+            # plugins row mutation re-syncs the web host (mount/unmount,
+            # manifest cache, realtime map) — design §3.2 step 15.
             await conn.add_listener(
                 PLUGINS_CHANGED_CHANNEL, self._make_registry_callback()
             )
+            listening: dict[str, tuple[str, Callable]] = {}
+            await self._sync_listeners(conn, listening)
             log.info(
                 "listen task connected; channels=%s",
-                list(channel_map) + [PLUGINS_CHANGED_CHANNEL],
+                list(listening) + [PLUGINS_CHANGED_CHANNEL],
             )
-            # Park here until stop OR a channel-map refresh. asyncpg
+            # Whatever changed in the registry while this process was not
+            # listening (before the first connect, or while a dropped
+            # connection was down) was announced to nobody: read it now.
+            self._catch_up_registry()
+            # Park here until stop; a channel-map refresh reconciles the
+            # listeners on this same connection and parks again. asyncpg
             # pumps notifications via the event loop; the registered
             # callbacks fire without an explicit poll on this side.
-            self._refresh.clear()
-            stop_wait = asyncio.create_task(self._stop.wait())
-            refresh_wait = asyncio.create_task(self._refresh.wait())
-            try:
-                await asyncio.wait(
-                    {stop_wait, refresh_wait},
-                    return_when=asyncio.FIRST_COMPLETED,
+            while not self._stop.is_set():
+                waits = [
+                    asyncio.create_task(self._stop.wait()),
+                    asyncio.create_task(self._refresh.wait()),
+                    asyncio.create_task(lost.wait()),
+                ]
+                try:
+                    await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+                finally:
+                    for w in waits:
+                        w.cancel()
+                if self._stop.is_set():
+                    break
+                if lost.is_set() or conn.is_closed():
+                    raise ConnectionError("the LISTEN connection was closed by the server")
+                self._refresh.clear()
+                await self._sync_listeners(conn, listening)
+                log.info(
+                    "listen channels refreshed; channels=%s",
+                    list(listening) + [PLUGINS_CHANGED_CHANNEL],
                 )
-            finally:
-                stop_wait.cancel()
-                refresh_wait.cancel()
         finally:
             try:
                 await asyncio.wait_for(conn.close(), timeout=2.0)
             except Exception:
                 pass
+
+    async def _sync_listeners(
+        self, conn: Any, listening: dict[str, tuple[str, Callable]]
+    ) -> None:
+        """Make ``conn``'s listeners match :func:`notify_channel_map`:
+        drop the channels that left it (a disabled plugin's) or now map
+        elsewhere, add the new ones. ``listening`` is this session's
+        notify channel → (realtime channel, callback) record, updated in
+        place. The registry channel is not in the map and never touched."""
+        want = notify_channel_map()
+        for notify_channel, (realtime_channel, cb) in list(listening.items()):
+            if want.get(notify_channel) != realtime_channel:
+                await conn.remove_listener(notify_channel, cb)
+                del listening[notify_channel]
+        for notify_channel, realtime_channel in want.items():
+            if notify_channel not in listening:
+                cb = self._make_callback(realtime_channel)
+                await conn.add_listener(notify_channel, cb)
+                listening[notify_channel] = (realtime_channel, cb)
+
+    def _catch_up_registry(self) -> None:
+        """One registry resync, as if a ``plugins_changed`` had arrived.
+        A resync that finds nothing new tells no dashboard anything
+        (:meth:`web.backend.plugin_host.PluginHost.resync`)."""
+        handler = ON_PLUGINS_CHANGED
+        if handler is None:
+            return
+        task = asyncio.get_running_loop().create_task(
+            handler(), name="listen-plugins-catch-up"
+        )
+        # The loop holds tasks weakly: keep this one until it is done.
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
 
     def _make_callback(self, realtime_channel: str):
         """Build an asyncpg listener callback bound to the realtime

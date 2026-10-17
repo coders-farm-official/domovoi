@@ -51,7 +51,8 @@ def _core_url() -> str:
 
 async def _proxy_post(request: Request, core_path: str) -> JSONResponse:
     """Re-send the incoming request body (JSON or multipart zip upload)
-    to the core, auth + source headers forwarded, response verbatim."""
+    to the core, auth + source headers forwarded, response verbatim —
+    once this process has re-read the registry (:func:`_resync_registry`)."""
     headers = auth_forward_headers(request)
     content_type = request.headers.get("content-type")
     if content_type:
@@ -82,6 +83,7 @@ async def _proxy_post(request: Request, core_path: str) -> JSONResponse:
             detail="the Domovoi core service is not running — plugin "
                    "management needs it up",
         )
+    await _resync_registry(core_path)
     try:
         payload: Any = r.json()
     except Exception:
@@ -95,6 +97,20 @@ async def _proxy_post(request: Request, core_path: str) -> JSONResponse:
             core_path, r.status_code, payload,
         )
     return JSONResponse(status_code=r.status_code, content=payload)
+
+
+async def _resync_registry(core_path: str) -> None:
+    """Re-read the plugins registry before the core's answer goes back
+    (F-054). The Plugins page reads the list right after an action, and
+    the list is this process's copy of the registry: left to the
+    ``plugins_changed`` NOTIFY alone, it could still hold a state the
+    action had already moved past (an upgraded plugin missing, a refused
+    one ``ok``). Whatever the core answered, a refusal included: a refused
+    load is a registry write too. Never fails the action."""
+    try:
+        await HOST.resync()
+    except Exception as e:  # noqa: BLE001 - the NOTIFY path still runs
+        log.warning("plugin registry re-read after %s failed: %s", core_path, e)
 
 
 # NOTE: ``/api/plugins/manifest`` (the open frontend manifest) is served
