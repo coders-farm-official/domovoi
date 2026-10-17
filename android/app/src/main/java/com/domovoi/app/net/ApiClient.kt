@@ -95,11 +95,14 @@ class ApiClient(
      *  to; absent, [deviceTokenProvider] answers for every base (the
      *  tests' shape). */
     private val tokenForServer: ((String) -> String?)? = null,
+    /** What the server's answers said about the token: refused, or "wait"
+     *  ([TokenHealth]); null = nothing is learnt (the tests' default). */
+    val health: TokenHealth? = null,
 ) {
     /** Production wiring: the base URL and the household device token both
      *  follow the saved preferences for the active server. */
-    constructor(prefs: Prefs, gate: TokenGate? = null) :
-        this({ prefs.serverUrl.value }, { prefs.deviceToken.value }, gate, { prefs.tokenForServer(it) })
+    constructor(prefs: Prefs, gate: TokenGate? = null, health: TokenHealth? = null) :
+        this({ prefs.serverUrl.value }, { prefs.deviceToken.value }, gate, { prefs.tokenForServer(it) }, health)
 
     private val tokenFor: (String) -> String? = tokenForServer ?: { deviceTokenProvider() }
 
@@ -119,7 +122,7 @@ class ApiClient(
         .followSslRedirects(false)
         .addInterceptor(RedirectPolicy.interceptor)
         .addInterceptor(CleartextPolicy.interceptor)
-        .addInterceptor(DeviceAuthInterceptor(tokenFor, baseUrlProvider, gate))
+        .addInterceptor(DeviceAuthInterceptor(tokenFor, baseUrlProvider, gate, health))
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(120, TimeUnit.SECONDS)
@@ -174,6 +177,12 @@ class ApiClient(
         val base = TokenScope.baseOf(raw) ?: return@withContext null
         if (!TokenScope.sameServer(base, url)) return@withContext null
         val token = headerSafeToken(tokenFor(raw)) ?: return@withContext null
+        // The interceptor's rules, here too: a refused token is not handed
+        // out, and while the server asks the phone to wait, nothing is.
+        health?.let { h ->
+            if (h.isRejected(raw)) return@withContext null
+            h.waitMs(raw).takeIf { it > 0 }?.let { throw TokenThrottledException(it) }
+        }
         gate?.requireAdmitted(base)
         token
     }
@@ -194,7 +203,9 @@ class ApiClient(
      * that is not paired yet has its live socket refused (403), and that
      * server is plainly there — so only a transport failure means "out of
      * reach". A cleartext refusal is a setting to fix, not an outage, so it
-     * counts as an answer too and the workspace stays up to say so.
+     * counts as an answer too and the workspace stays up to say so. So does
+     * a server that asked this phone to wait ([TokenThrottledException]):
+     * it answered, and the shell shows the wait.
      */
     suspend fun answers(): Boolean = withContext(Dispatchers.IO) {
         val base = baseUrl
@@ -202,6 +213,8 @@ class ApiClient(
         try {
             probeHttp.newCall(Request.Builder().url("$base/api/health").build()).execute().use { true }
         } catch (e: UnknownServiceException) {
+            true
+        } catch (e: TokenThrottledException) {
             true
         } catch (e: IOException) {
             false

@@ -112,7 +112,7 @@ class ServerIdentityTest {
     @Test fun aDifferentKeyThanThePinnedOneIsAMismatchEvenWhenItProvesItself() {
         val pinned = ServerIdentity.Pin("c29tZWJvZHkgZWxzZXMga2V5IGhlcmUgLS0tLS0tLS0=", "SHA256:someoneelse")
         assertEquals(
-            ServerIdentity.Proof.Mismatch("SHA256:someoneelse", fingerprint),
+            ServerIdentity.Proof.Mismatch("SHA256:someoneelse", fingerprint, ServerIdentity.Pin(publicKey, fingerprint)),
             ServerIdentity.check(coreAnswer, challenge, pinned),
         )
     }

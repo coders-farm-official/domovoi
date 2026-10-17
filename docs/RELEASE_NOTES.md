@@ -4,6 +4,39 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — Android app: a server that no longer knows this phone
+
+A new APK; no server change.
+
+* **What happened before.** A phone keeps one household token per server
+  address. When the Domovoi at that address was reinstalled, moved to a new
+  machine, or had its household token changed, the app kept sending the old
+  token on every poll. The server makes an address that sends wrong tokens
+  wait (5 free tries, then up to 5 minutes), so the phone kept itself locked
+  out: Home said "couldn't load rooms" and "offline", Videos showed
+  `429 Too Many Requests`.
+* **Now the app stops at the first refusal.** It no longer sends a token
+  the server refused, including from background syncs and after a restart.
+  Instead of the workspace it shows one card: **Domovoi doesn't recognise
+  this phone any more**, with a field to paste the household token and
+  **pair again**. An admin finds the token on the dashboard under Settings
+  → Devices → Household token.
+* **It waits when the server says wait.** While the server's `429` wait
+  (`Retry-After`) runs, nothing carrying the token is sent. The card counts
+  the wait down and the phone tries again by itself when it ends, so a
+  token pasted during the wait still works afterwards.
+* **If the server's identity changed too** (a reinstall, or a new machine
+  at the same address), the phone shows its own media with "This looks like
+  a different Domovoi, or it was reinstalled" and asks first. Only **it's my
+  Domovoi — trust it again** pins the new identity, with the old and new
+  fingerprints shown side by side. Pairing comes after that yes, and only
+  if the server also refuses the old token.
+* **With an older app**, in the app: tap the server name at the top, then
+  the **✕** on the highlighted server row, then **forget**. Wait 5 minutes,
+  add the server again, trust it, and paste the household token. Or go to
+  Settings → Connection → Household token, paste the new token and tap
+  **replace**; it starts working within 5 minutes.
+
 ## 2026-10-16 — Phone photos in chat: HEIC converted, refusals in words
 
 Dashboard update (the web process; no migration) and a new Android APK.

@@ -92,6 +92,10 @@ class DeviceAuthInterceptor(
     /** The active server; the token goes to it and nowhere else. */
     private val baseUrlProvider: () -> String?,
     private val gate: TokenGate? = null,
+    /** What the server has said about the token ([TokenHealth]): a token
+     *  it refused is not sent again, and while it asks the phone to wait,
+     *  nothing that would carry the token is sent at all. */
+    private val health: TokenHealth? = null,
 ) : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
@@ -104,8 +108,23 @@ class DeviceAuthInterceptor(
         val wsUpgrade = request.tag(TokenScope.WsUpgrade::class.java) != null
         if (!TokenScope.admits(base, request.url, wsUpgrade)) return chain.proceed(bare)
         val token = headerSafeToken(raw?.let(tokenFor)) ?: return chain.proceed(bare)
+        val server: String = raw ?: return chain.proceed(bare)
+        if (health != null) {
+            // Refused once: never again, until a new token (or the person)
+            // says otherwise. Without it the request is an unpaired phone's,
+            // which the server's wrong-token count never sees.
+            if (health.isRejected(server)) return chain.proceed(bare)
+            val wait = health.waitMs(server)
+            if (wait > 0) throw TokenThrottledException(wait)
+        }
         gate?.requireAdmitted(base!!)
-        return chain.proceed(bare.newBuilder().header(DEVICE_TOKEN_HEADER, token).build())
+        val response = chain.proceed(bare.newBuilder().header(DEVICE_TOKEN_HEADER, token).build())
+        // Only the server's own answers (its scheme, host and port) speak for
+        // its token; the drop-in socket on the core's port keeps its own count.
+        if (health != null && TokenScope.sameServer(base!!, request.url)) {
+            health.observe(server, token, headerSafeToken(tokenFor(server)), response)
+        }
+        return response
     }
 }
 

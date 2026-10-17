@@ -29,14 +29,62 @@ internal fun shellMode(
     unreachable: Boolean,
     pairingRequired: Boolean,
     preferLocal: Boolean = false,
+    /** The server proved a different key than the one pinned (a reinstall,
+     *  a new machine, or someone else's server at this address): nothing is
+     *  sent to it, and the local shell's banner asks first (IdentityChanged.kt). */
+    identityChanged: Boolean = false,
+    /** The server refused this phone's token, or asked it to wait
+     *  ([tokenTrouble]): the workspace stays up to show the one card. */
+    tokenTrouble: Boolean = false,
 ): ShellMode =
     when {
         serverUrl.isBlank() -> ShellMode.Local
         preferLocal -> ShellMode.Local
-        pairingRequired -> ShellMode.Workspace
+        identityChanged -> ShellMode.Local
+        pairingRequired || tokenTrouble -> ShellMode.Workspace
         unreachable -> ShellMode.Local
         else -> ShellMode.Workspace
     }
+
+/**
+ * What stands between this phone and its server when the server answered
+ * but will not take this phone's household token (net/TokenHealth.kt):
+ * shown as ONE card in place of the workspace, never as "offline" and a
+ * page of errors.
+ */
+internal sealed interface TokenTrouble {
+    /** How long the server still makes the phone wait, in ms (0: no wait). */
+    val waitMs: Long
+
+    /** The server refused the token this phone holds: it is no longer sent,
+     *  and the card offers to pair again. */
+    data class NotRecognised(override val waitMs: Long = 0) : TokenTrouble
+
+    /** The server asked the phone to wait before it looks at a token from it
+     *  again (after wrong ones): nothing carrying the token is sent until then. */
+    data class Waiting(override val waitMs: Long) : TokenTrouble
+}
+
+/**
+ * The card to show for the active server, if any. A changed identity comes
+ * first and is not this card's business: the token is not sent to a server
+ * that proved a different key, and the person is asked about the key before
+ * anything about pairing ([shellMode], IdentityChanged.kt). A wait only
+ * matters while there is a token to wait with.
+ */
+internal fun tokenTrouble(
+    serverUrl: String,
+    paired: Boolean,
+    rejected: Boolean,
+    waitMs: Long,
+    identityChanged: Boolean = false,
+): TokenTrouble? = when {
+    serverUrl.isBlank() || !paired -> null
+    identityChanged -> null
+    rejected -> TokenTrouble.NotRecognised(waitMs.coerceAtLeast(0))
+    waitMs > 0 -> TokenTrouble.Waiting(waitMs)
+    else -> null
+}
 
 /**
  * Whether the connection dialog's server side can be picked right now, and
@@ -84,7 +132,7 @@ internal fun serverChoice(
 internal fun ServerChoice.reason(): String = when (this) {
     ServerChoice.NoServer -> "no server yet · pick one below"
     is ServerChoice.Unreachable -> "can't reach it right now"
-    is ServerChoice.NotOurs -> "didn't prove it's your Domovoi"
+    is ServerChoice.NotOurs -> "looks like a different Domovoi, or it was reinstalled"
     is ServerChoice.CoreDown -> "up, but its core isn't answering yet"
     is ServerChoice.Available -> if (needsPairing) "available · needs the household token" else "available"
 }

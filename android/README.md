@@ -334,6 +334,29 @@ one credential the app has. The rules, all unit-tested under
     proves now. That is the way to re-pair after a reinstalled or replaced
     server; it returns the app to the server list. Switching servers drops
     trust (only the trust) that is attached to no listed server.
+  - **Trusting again** (`ui/shell/IdentityChanged.kt`): when the server
+    proves a different key, the app goes to the phone's own media at once
+    and the banner says "This looks like a different Domovoi, or it was
+    reinstalled", with **it's my Domovoi — trust it again**. The yes,
+    given with the pinned and the proven fingerprints side by side, pins
+    the key the server proved over this phone's challenge and keeps the
+    token. If the server then refuses the token, the refused-token card
+    below offers to pair again. Nothing is re-trusted without that yes.
+- **A refused token** (`net/TokenHealth.kt`, `ui/shell/TokenTroubleScreen.kt`):
+  the server answers "no token" and "wrong token" with the same `401`,
+  but the app knows whether it sent one. A device-tier `401`/`403` to a
+  request that carried the token marks that token refused for that server
+  (kept in the DataStore as the address only, cleared by any new token or
+  by forgetting the server). From then on, requests go out without it, as an
+  unpaired phone's do, which the server's wrong-token count never sees.
+  Instead of the workspace the app shows one card, **Domovoi doesn't
+  recognise this phone any more**, with the pairing field (**pair again**),
+  **try the old token again** and **use this phone's media**. A device-tier
+  `429` (its detail names the header) sets a wait from `Retry-After`. Until
+  it ends nothing carrying the token is sent to that server: the request
+  fails in the app with `TokenThrottledException`, and the card counts the
+  wait down. A phone holding an old token therefore costs the server's
+  ledger one wrong attempt, not one per poll for as long as it runs.
 - **Redirects** (`net/RedirectPolicy.kt`): OkHttp's own follower is off;
   the app follows a `3xx` itself, through the same interceptors, so a
   hop to another host loses the token, a plain-http hop to a public host

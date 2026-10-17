@@ -127,7 +127,11 @@ priced: a source that presents wrong household tokens gets five free
 attempts (a browser or phone still holding a rotated token fires several
 requests in parallel, and none of those is a guess), and after that the same
 exponential backoff the admin login uses — 1 s doubling to a 5-minute cap,
-answered `429` with `Retry-After`. A correct token clears the counter; a
+answered `429` with `Retry-After`. The Android app takes the hint: a token
+the server refused is not sent again, and nothing carrying one is sent
+while a `Retry-After` runs, so a phone left holding a rotated token (or a
+reinstalled server's old one) cannot keep its own address locked out
+(`android/README.md`, "A refused token"). A correct token clears the counter; a
 request that also carries a live admin Bearer is never charged, so the
 device tier can never lock an admin out of the page that fixes it. The
 throttle is per source and has **no aggregate ceiling**, deliberately:
