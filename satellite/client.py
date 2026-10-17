@@ -3537,6 +3537,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
         saved). False, and said once, on a unit without the helper."""
         if associated or ap_active:
             return False
+        # `iw` may not have been asked (the watcher off, or no iw): then
+        # NetworkManager's own word decides. Connected means not down.
+        if health.nm_connected(health.read_nm_state()) is True:
+            log.info("wifi recovery: %s, but NetworkManager says connected; not "
+                     "turning the radio off", why)
+            return False
         if not _wifi_reset_helper_installed(self.cfg):
             if not self._wifi_reset_missing_said:
                 self._wifi_reset_missing_said = True

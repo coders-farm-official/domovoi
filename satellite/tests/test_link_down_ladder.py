@@ -258,7 +258,8 @@ class Runner:
         return subprocess.CompletedProcess(argv, rc, out, "")
 
 
-def _sat(monkeypatch, tmp_path, results, *, helper=True, link=None):
+def _sat(monkeypatch, tmp_path, results, *, helper=True, link=None, nm=None):
+    monkeypatch.setattr(client.health, "read_nm_state", lambda *a, **k: nm)
     sat = object.__new__(client.Satellite)
     sat.cfg = types.SimpleNamespace(wifi_enabled=link is not None)
     sat._last_wifi_link = None
@@ -312,6 +313,13 @@ def test_the_connection_up_waits_longer_than_it_did(monkeypatch, tmp_path):
 def test_no_radio_reset_while_the_radio_is_associated(monkeypatch, tmp_path):
     link = {"rx_mbits": 14.4, "ssid": "HomeNet", "signal_dbm": -77, "mode": "managed"}
     sat, runner = _sat(monkeypatch, tmp_path, [_timeout()], link=link)
+    assert sat._reconnect_wifi_nm() is False
+    assert len(runner.calls) == 1
+
+
+def test_no_radio_reset_while_networkmanager_says_connected(monkeypatch, tmp_path):
+    """No `iw` reading to go by (the watcher off): NetworkManager decides."""
+    sat, runner = _sat(monkeypatch, tmp_path, [_timeout()], nm={"code": 100, "state": "connected"})
     assert sat._reconnect_wifi_nm() is False
     assert len(runner.calls) == 1
 
