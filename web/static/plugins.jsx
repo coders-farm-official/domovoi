@@ -114,9 +114,12 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
       setBusy(false);
     }
   };
+  // No click-outside on this one (web board F-044): the §7.5 trust screen
+  // takes an explicit answer, "cancel" (or ✕) or "I trust this publisher".
+  // A stray click on the dimmed page used to drop the staged upload.
   return (
-    <div className="cal-modal-bg" onClick={() => !busy && onCancel()}>
-      <div className="cal-modal" onClick={(e) => e.stopPropagation()}
+    <div className="cal-modal-bg">
+      <div className="cal-modal"
            style={{ width: 560, maxWidth: '94vw', maxHeight: '86vh', overflow: 'auto' }}>
         <div className="cal-modal-head">
           <div className="ttl">{verb} “{p.name || 'plugin'}” {p.version || ''}</div>

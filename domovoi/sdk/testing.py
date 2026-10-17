@@ -48,6 +48,13 @@ class RecordingPlayback:
         self.calls.append({"action": "stop", "room_id": room_id})
         return Response(text="Stopped.", music_action="stop")
 
+    async def dispatch(self, response: Response, room_id: str) -> bool:
+        self.calls.append(
+            {"action": "dispatch", "room_id": room_id,
+             "music_action": response.music_action}
+        )
+        return response.music_action in ("start", "stop")
+
     def mpd_stream_url_for(self, room_id: str) -> str:
         return f"http://stub-mpd/{room_id}"
 

@@ -210,3 +210,24 @@ def test_the_trust_statement_says_the_pages_run_in_every_household_browser(rende
         assert "dashboard pages run as part of the dashboard" in statement, statement
         assert "every household browser" in statement, statement
         assert "signed-in admin session and the household token" in statement, statement
+
+
+# ─── F-044: only an explicit answer closes the trust screen ──────────────
+
+
+def test_a_click_on_the_dimmed_page_does_not_close_the_trust_screen(rendered) -> None:
+    """The §7.5 trust screen takes an answer: "cancel" (or the ✕) or "I
+    trust this publisher". Escape was already ignored; a click on the
+    backdrop used to cancel, dropping the staged upload (web board F-044)."""
+    elements = rendered["no_satellite"]
+    backdrops = [e for e in elements if e["props"].get("className") == "cal-modal-bg"]
+    assert len(backdrops) == 1, elements
+    assert backdrops[0]["on"] == [], "the backdrop must not handle clicks"
+    panel = next(e for e in elements if e["props"].get("className") == "cal-modal")
+    assert panel["on"] == [], "nothing to stop from bubbling once the backdrop ignores clicks"
+    # The two ways out are still there, and still wired.
+    buttons = {e["text"]: e["on"] for e in elements if e["type"] == "Button"}
+    assert "onClick" in buttons.get("cancel", []), buttons
+    assert any(t.startswith("I trust this publisher") and "onClick" in on for t, on in buttons.items()), buttons
+    close = [e for e in elements if e["type"] == "IconButton" and e["props"].get("name") == "x"]
+    assert close and "onClick" in close[0]["on"], close

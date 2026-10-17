@@ -4,6 +4,32 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — Plugin pages can play in a room; the trust screen needs an answer
+
+Core and dashboard update (both processes; no migration). Plugins need an
+upgrade to use the first part.
+
+* **A plugin that plays in a room from its own page is heard there.** A
+  play or stop that did not come from a voice turn (a plugin page's "play
+  in the bedroom", a timer running out in a plugin's worker) used to queue
+  the room's player paused and tell the room's satellite nothing: the page
+  said "playing" and the room stayed silent (the Sleep page, the media
+  provider's "stream to a room"). Plugin SDK 1.6.0 adds
+  `sdk.playback.dispatch(response, room_id)`, which sends the satellite
+  its `music_start` / `music_stop` the way the dashboard's own room
+  controls do. **What plugins need:** call it after `play_url` / `stop` in
+  any HTTP route or worker, guarded with
+  `getattr(sdk.playback, "dispatch", None)` so the plugin still loads on
+  an older core (where the room stays silent as before). Sleep 1.2.5 and
+  the media-provider plugin's 1.2.3 do. Never dispatch a Response a
+  handler returns from a voice turn: that one is already delivered.
+  (docs/PLUGIN_DEVELOPMENT.md §4.5.)
+* **The plugin trust screen closes only on an answer.** A click on the
+  dimmed page around it used to cancel the install and drop the staged
+  upload; now only "cancel", ✕ or "I trust this publisher" close it
+  (Escape already did nothing).
+
+
 ## 2026-10-17 — rc2 smoke fixes: new files play, honest name misses, hyphens
 
 Server update (core and dashboard; no migration).

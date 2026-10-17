@@ -16,6 +16,15 @@ invariant 9) so plugins never hand-assemble it:
   now-playing source, §4.7) and one ``media_plays`` history row is
   recorded (best-effort).
 
+A voice turn's Response rides home on the turn's own socket. Code that
+plays or stops OUTSIDE a voice turn — a plugin's HTTP route (a page's
+"play in the bedroom" button), a worker (a sleep timer running out) —
+has no such socket, so it hands the Response to :meth:`PlaybackAPI.dispatch`,
+which sends the room's satellite its ``music_start`` / ``music_stop`` the
+way the dashboard's own room controls do (``domovoi.room_music``). Without
+it the room's MPD sits paused and the room stays silent (plugin board
+F-P017).
+
 Under ``INTERNET_ACCESS=never`` a stream URL whose host is not on this
 network is refused BEFORE it reaches MPD: the room's MPD container fetches
 whatever it is given, and no in-process gate can see that traffic. The
@@ -146,6 +155,38 @@ class PlaybackAPI:
             log.warning("playback.stop: MPD stop failed for room=%s: %s", room_id, e)
         NOW_PLAYING.clear(room_id)
         return Response(text="Stopped.", music_action="stop")
+
+    async def dispatch(self, response: Response, room_id: str) -> bool:
+        """Send the room's satellite what ``response`` asks for, when the
+        play or stop did NOT come from a voice turn: a plugin's HTTP route
+        or a worker. ``music_action="start"`` → ``music_start`` (and, with
+        no satellite connected, MPD is resumed so a later connect joins a
+        live stream); ``"stop"`` → ``music_stop``. Anything else (a refused
+        play, an internet-off answer) sends nothing.
+
+        Never call it for a Response a handler returns from a voice turn:
+        the streaming layer already delivers that one, and the satellite
+        would get the frame twice.
+
+        Returns True when the Response was handed to the room's delivery
+        (whether or not a satellite is connected right now), False when
+        there was nothing to send or no core app is running (a unit test,
+        the web process)."""
+        if response.music_action not in ("start", "stop"):
+            return False
+        from domovoi.plugins_runtime.loader import LOADER
+
+        app = LOADER.app
+        if app is None:
+            log.warning(
+                "playback.dispatch: no core app is bound; room=%s gets no %s",
+                room_id, response.music_action,
+            )
+            return False
+        from domovoi.room_music import dispatch_music
+
+        await dispatch_music(app, response, room_id)
+        return True
 
     async def mpd_client_for(self, room_id: str) -> MPDClient:
         """Escape hatch (search_only, seek, ...) — same client the core

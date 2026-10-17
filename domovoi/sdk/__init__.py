@@ -27,7 +27,10 @@ from __future__ import annotations
 # 1.5.0: added containers: the manifest's [[containers]] table and
 #        ctx.add_container(id, resolve) -> ContainerExpectation, so the
 #        core's container guard watches the Docker containers a plugin runs.
-API_VERSION = "1.5.0"
+# 1.6.0: added playback.dispatch(response, room_id): a play or stop from a
+#        plugin's HTTP route or worker (no voice turn) reaches the room's
+#        satellite as music_start / music_stop.
+API_VERSION = "1.6.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,
