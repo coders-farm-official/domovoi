@@ -21,6 +21,10 @@ swapped, migrations applied, row written, and a marker in
 :attr:`PluginLoader.pending_restart` that ``/v1/plugins`` and
 ``/v1/admin/version`` report until the process restarts and imports the
 new code — the marker lives exactly as long as the stale import does.
+And for a fresh install of a slug this process imported before (an
+uninstall unloads a plugin but can't un-import it): it is staged the same
+way (``installer.confirm_install``), from the version
+:attr:`PluginLoader.imported_versions` remembers.
 """
 
 from __future__ import annotations
@@ -228,6 +232,9 @@ class PluginLoader:
         # new code waits for the next restart (see the module docstring).
         # In memory on purpose: a restart is what clears it.
         self.pending_restart: dict[str, dict[str, Any]] = {}
+        # slug → the version whose code this process imported (cached in
+        # sys.modules for good, through disable and uninstall alike).
+        self.imported_versions: dict[str, str] = {}
 
     def bind_app(self, app: Any) -> None:
         self._app = app
@@ -274,7 +281,8 @@ class PluginLoader:
         dir_str = str(install_dir)
         if dir_str not in sys.path:
             sys.path.insert(0, dir_str)
-        if not code_imported(slug):
+        first_import = not code_imported(slug)
+        if first_import:
             # A directory swapped in since the last import (an upgrade of a
             # plugin this process never imported) must not be looked up
             # through a stale finder listing.
@@ -285,12 +293,17 @@ class PluginLoader:
         try:
             module = importlib.import_module(manifest.entry_core)
         except Exception as e:
+            if first_import and code_imported(slug):
+                # A failed import still leaves part of the package cached.
+                self.imported_versions[slug] = manifest.version
             await self._record_status(
                 slug, "load_error", f"import failed: {e}",
                 update=update_registry_status,
             )
             raise
         import_seconds = time.monotonic() - t0
+        if first_import:
+            self.imported_versions[slug] = manifest.version
         cuda_initialized = _cuda_initialized() and not cuda_before
 
         register_fn = getattr(module, "register", None)

@@ -1867,6 +1867,11 @@ The runtime forces most of this, but know the shapes:
   pulled code — it bounces core and web). Until then the plugin is not
   loaded in the core. A plugin whose code the server never imported (its
   import failed at boot, say) is hot-loaded as before.
+* So is an install of a plugin the server ran earlier in the same process
+  (uninstalled, then installed again: an uninstall unloads a plugin but
+  can't un-import it). It answers `restart_required: true` and is listed as
+  pending, whatever its version number, until the restart loads the copy
+  just installed.
 * A disabled plugin stays disabled through an upgrade: its files, schema and
   row move to the new version, and nothing loads until someone enables it.
 * Dev-mode plugins refuse the upgrade endpoint — just restart.

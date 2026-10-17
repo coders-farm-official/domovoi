@@ -18,6 +18,11 @@ Server update (core and dashboard; no migration).
   the registry after each install, enable, disable, upgrade or uninstall
   before it answers, no longer misses a change while it re-subscribes to
   the database, and catches up after its database connection drops.
+* **A plugin installed again after an uninstall asks for the restart.** The
+  server can't drop code it has already run, so installing the same plugin
+  again in the same run kept the old code while saying "complete". Now it
+  says "installed — restart to finish it" and the Plugins page lists it
+  under the restart, at any version, like an upgrade of a running plugin.
 * **"Check for updates" never asks anything, and stops on time.** Every git
   the server runs has its questions turned off: no password or host-key
   prompt, no askpass window on a Windows desktop. A git that hangs is

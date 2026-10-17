@@ -357,6 +357,12 @@ class PluginHost:
         # slug → the version of the web module this process imported. A
         # row that moves past it needs a restart to reach this process.
         self.mounted_versions: dict[str, str] = {}
+        # Mounted slugs whose registry row went away (uninstalled) since,
+        # and those installed again after that: this process still runs the
+        # web module it imported first, whatever the new copy holds, so
+        # they wait for a restart at any version (stale_mounts).
+        self._gone: set[str] = set()
+        self.reinstalled: set[str] = set()
         self.load_errors: dict[str, str] = {}            # slug → error string
         self.snapshots: dict[str, Callable[[], Awaitable[Any]]] = {}
         self._manifest_cache: dict[str, Any] | None = None
@@ -554,7 +560,7 @@ class PluginHost:
             if not r or r["status"] == "uninstalled":
                 continue
             running = self.mounted_versions[slug]
-            if r["version"] != running:
+            if r["version"] != running or slug in self.reinstalled:
                 out.append(
                     {"slug": slug, "from_version": running,
                      "to_version": r["version"], "where": ["web"]}
@@ -608,6 +614,13 @@ class PluginHost:
             rows = await fetch_plugin_rows()
             self.rows = {r["slug"]: r for r in rows}
             self._manifest_cache = None
+            for slug in self.mounted_versions:
+                r = self.rows.get(slug)
+                if not r or r["status"] == "uninstalled":
+                    self._gone.add(slug)
+                elif slug in self._gone:
+                    self._gone.discard(slug)
+                    self.reinstalled.add(slug)
             seen = [
                 (r["slug"], r.get("version"), r.get("enabled"), r.get("status"),
                  r.get("last_error"), r.get("updated_at"))

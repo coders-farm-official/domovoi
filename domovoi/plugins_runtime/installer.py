@@ -1092,9 +1092,31 @@ async def confirm_install(
 
     One lifecycle step at a time (:func:`lifecycle_lock`); a second confirm
     of the same staged id while this one runs is ``confirm_in_progress``
-    (409)."""
+    (409).
+
+    A slug whose code this process has already imported (installed,
+    uninstalled, now installed again: an uninstall unloads a plugin but
+    can't un-import it) is staged for the restart like an upgrade of a
+    running plugin (:func:`confirm_upgrade`): everything but the hot load,
+    ``restart_required: true``, and a ``LOADER.pending_restart`` marker.
+    Loading it would register the CACHED old module and answer "loaded"
+    for code that never ran (rc2 smoke). Dropping the cached modules
+    instead is not safe: other modules, the router, the SDK and running
+    tasks hold references into them."""
     async with _confirming(staged_id):
-        return await _confirm_install_locked(staged_id, load=load, enabled=enabled)
+        staged = _STAGED.get(staged_id)
+        slug = staged.manifest.slug if staged is not None else None
+        cached = slug is not None and code_imported(slug)
+        result = await _confirm_install_locked(
+            staged_id, load=load and not cached, enabled=enabled
+        )
+        if cached and result.get("installed"):
+            LOADER.stage_restart(
+                slug,
+                from_version=LOADER.imported_versions.get(slug) or result["version"],
+                to_version=result["version"],
+            )
+        return result
 
 
 async def _confirm_install_locked(
