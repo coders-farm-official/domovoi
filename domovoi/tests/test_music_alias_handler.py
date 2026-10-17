@@ -269,10 +269,12 @@ async def test_a_fair_guess_at_the_target_is_asked_about(voice) -> None:
 @requires_db
 @pytest.mark.asyncio
 async def test_an_unknown_target_and_its_own_name(voice) -> None:
-    # A target the library has nothing like: not a music name — declined
-    # ("when I say goodnight I mean turn off the lights").
+    # A name for something the library has nothing like is answered plainly
+    # (F-V022: it used to go to the Q&A model, which made one up); a command
+    # is still declined (test_when_i_say_something_that_is_not_music_is_declined).
     r = await voice("when i say gramps i mean nobody here")
-    assert r.matched_handler != "music_alias" and r.matched_path == "qa"
+    assert (r.matched_handler, r.matched_path) == ("music_alias", "fast")
+    assert r.text == "I don't have anything called nobody here in your library."
     r = await voice("when i say hearth-ensemble i mean hearth ensemble")
     assert r.text == "That's already what Hearth Ensemble is called."
     assert (await voice.db.execute(text("SELECT count(*) FROM library_aliases"))).scalar_one() == 0
@@ -409,6 +411,70 @@ async def test_when_i_say_something_that_is_not_music_is_declined(voice) -> None
 
 @requires_db
 @pytest.mark.asyncio
+@pytest.mark.parametrize("utterance", [
+    "when i say goodnight i mean turn off the lights",       # a command
+    "when i say bedtime i mean set a timer for ten minutes",  # another handler's fast path
+    "when i say hush i mean stop",                            # ...music's own
+    "when i say the boss i mean my wife",                     # something personal
+    "when i say chill i mean something relaxing",             # a description
+    "when i say tea time i mean what time is it",             # a question
+])
+async def test_a_target_that_is_not_a_name_is_still_declined(voice, utterance) -> None:
+    """F-V022 answers a NAME the library lacks; everything else a "when I
+    say" turn can mean is left to the tool model and the Q&A model, as
+    before (a plugin's tool may run the command, the memory tool may keep
+    the fact)."""
+    r = await voice(utterance)
+    assert r.matched_handler != "music_alias"
+    assert "in your library" not in r.text
+    assert (await voice.db.execute(text("SELECT count(*) FROM library_aliases"))).scalar_one() == 0
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_band_the_library_lacks_is_answered_plainly(voice) -> None:
+    """F-V022 (rc2 smoke): "when I say gramps I mean <a band not in the
+    library>" went to the Q&A model, which answered "Gramps is a software
+    for … family trees". Now the handler says the library has nothing
+    called that, and writes nothing."""
+    r = await voice("When I say gramps, I mean the Kindling Choir.")
+    assert (r.matched_handler, r.matched_path) == ("music_alias", "fast")
+    assert r.text == "I don't have anything called the kindling choir in your library."
+    assert r.data == {"found": False}
+    r = await voice("when i say gramps i mean the band kindling choir")
+    assert r.text == "I don't have anything called kindling choir in your library."
+    assert (await voice.db.execute(text("SELECT count(*) FROM library_aliases"))).scalar_one() == 0
+    # A names question about something CALLED a band, album or song is
+    # about music too; a bare name is still a question about the world.
+    r = await voice("what else is the band kindling choir called")
+    assert (r.matched_handler, r.matched_path) == ("music_alias", "fast")
+    assert r.text == "I don't have anything called kindling choir in your library."
+    r = await voice("What other names does the song Nowhere Tune have?")
+    assert r.text == "I don't have anything called nowhere tune in your library."
+    r = await voice("what else is the album ember quire called")      # only a loose match
+    assert r.text == "I don't have anything called ember quire in your library."
+    r = await voice("what else is kindling choir called")
+    assert r.matched_handler != "music_alias" and r.matched_path == "qa"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_tool_call_answers_a_missing_name_plainly_too(voice) -> None:
+    h = HANDLER_BY_NAME["music_alias"]
+    sid = await SessionRepository(voice.db).get_or_create(None, "kitchen")
+    ctx = Context(room_id="kitchen", session_id=sid)
+    r = await h.execute_from_tool({"action": "add", "alias": "gramps", "target": "Kindling Choir"}, ctx, voice.db)
+    assert r.text == "I don't have anything called Kindling Choir in your library."
+    r = await h.execute_from_tool({"action": "list", "target": "the band Kindling Choir"}, ctx, voice.db)
+    assert r.text == "I don't have anything called Kindling Choir in your library."
+    # still declined: a command, and a bare name (a question about the world)
+    assert await h.execute_from_tool(
+        {"action": "add", "alias": "goodnight", "target": "turn off the lights"}, ctx, voice.db) is None
+    assert await h.execute_from_tool({"action": "list", "target": "napoleon"}, ctx, voice.db) is None
+
+
+@requires_db
+@pytest.mark.asyncio
 async def test_the_tool_call_declines_what_is_not_a_library_name(voice) -> None:
     h = HANDLER_BY_NAME["music_alias"]
     sid = await SessionRepository(voice.db).get_or_create(None, "kitchen")
@@ -536,3 +602,22 @@ async def test_a_name_that_sounds_like_its_target_is_not_read_back_as_the_target
     assert res.decision == "play" and res.best is not None and res.best.speak == "bramble"
     r = await voice_real("forget the name bramble")
     assert r.text == "OK — bramble doesn't mean BRMBL anymore."
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_smoke_repro_on_the_real_resolver(voice_real) -> None:
+    """F-V022 as the rc2 smoke heard it: names for an artist the library
+    doesn't have (the corpus phrase's "hearth ensemble", here a one-artist
+    library) are answered plainly, not by the Q&A model; the bare names
+    question stays a question about the world."""
+    r = await voice_real("when i say gramps i mean hearth ensemble")
+    assert (r.matched_handler, r.matched_path) == ("music_alias", "fast")
+    assert r.text == "I don't have anything called hearth ensemble in your library."
+    r = await voice_real("what else is the band hearth ensemble called")
+    assert r.text == "I don't have anything called hearth ensemble in your library."
+    # the band the library HAS, asked about the same way, is listed
+    assert (await voice_real("when i say bramble i mean brmbl")).text.startswith("Got it")
+    assert (await voice_real("what else is the band brmbl called")).text == "BRMBL is also called bramble."
+    r = await voice_real("what else is hearth ensemble called")
+    assert r.matched_handler != "music_alias" and r.matched_path == "qa"
