@@ -910,6 +910,19 @@ async def _snapshot_containers() -> dict[str, Any]:
     return await snapshot()
 
 
+async def _snapshot_files() -> dict[str, int]:
+    """How often each files library changed (``files.changed``): a write
+    through this process (Files upload / delete / move / import, a
+    Documents save) or a change on disk under a listing someone is viewing
+    (``listing_cache.sweep_in_use``, a few stats a tick). The Videos and
+    Files pages, web and app, re-read their list when it moves: these
+    libraries have no database index, so no NOTIFY says they changed."""
+    from web.backend.api import listing_cache
+
+    await asyncio.to_thread(listing_cache.sweep_in_use)
+    return listing_cache.changes()
+
+
 # The fires `timer_fires.changed` carries: the last hour, newest first.
 TIMER_FIRES_PUSH_WINDOW_SEC = 3600
 TIMER_FIRES_PUSH_MAX = 20
@@ -972,6 +985,11 @@ StatePollLoop._CHANNEL_HELPERS = {
     # The container guard's open and recent incidents, the banner and the
     # freeze state (web/backend/api/containers.py: the household view).
     "containers": _snapshot_containers,
+    # The filesystem libraries (Videos, Pictures, Documents, any Files
+    # library): their change counts (listing_cache), pushed as
+    # `files.changed` so a page on screen shows an upload, a delete or a
+    # file a plugin wrote without being left and opened again.
+    "files": _snapshot_files,
 }
 
 # The core realtime channels, frozen BEFORE any plugin mutates the helper

@@ -79,6 +79,9 @@ import com.domovoi.app.net.Page
 import com.domovoi.app.net.PageRequest
 import com.domovoi.app.net.SERVER_MAX_PAGE
 import com.domovoi.app.net.rememberApi
+import com.domovoi.app.ui.components.LibraryRefreshBox
+import com.domovoi.app.ui.components.LibraryRefreshButton
+import com.domovoi.app.ui.components.rememberLibraryRefresh
 import com.domovoi.app.ui.components.LoadMoreNearEnd
 import com.domovoi.app.ui.components.PagedFooter
 import com.domovoi.app.ui.components.rememberPager
@@ -213,6 +216,13 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
         }
     }
     val listing by pager.state.collectAsState()
+    // The header's rescan and the list's pull-to-refresh: the libraries, and
+    // the folder on screen re-walked past the server's cached listing.
+    val refresh = rememberLibraryRefresh {
+        libs.refresh()
+        pager.reload(fresh = true)
+        pager.idle()
+    }
     val data = meta?.takeIf { (it.libraryId == selectedId || !source.onPhone) && listing.loaded }
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
@@ -419,6 +429,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                 "Files",
                 source.subtitle,
                 actions = {
+                    LibraryRefreshButton(refresh, "rescan this library")
                     if (source.onPhone) {
                         if (canWrite) {
                             IconButton(onClick = { filePicker.launch("*/*") }, enabled = busy == null) {
@@ -517,7 +528,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
             }
 
             val errorTitle = if (source.onPhone) "couldn't open this folder" else "couldn't reach the server"
-            when {
+            LibraryRefreshBox(refresh, Modifier.fillMaxWidth().weight(1f)) { when {
                 libs.data == null && libs.loading -> LoadingState()
                 libs.data == null && libs.error != null ->
                     ErrorState(libs.error ?: "request failed", libs.refresh, title = errorTitle)
@@ -560,12 +571,12 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                     entries = listing.items,
                     model = { e -> source.imageModel(selectedId ?: "", e) },
                     onOpen = { e -> onEntryPrimary(e) },
-                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    modifier = Modifier.fillMaxSize(),
                     state = gridState,
                     footer = { PagedFooter(listing, "photos", onRetry = pager::retry, onLoadMore = pager::loadMore) },
                 )
                 data != null -> DomovoiCard(
-                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    modifier = Modifier.fillMaxSize(),
                     padding = 0,
                 ) {
                     LazyColumn(Modifier.fillMaxWidth(), state = listState) {
@@ -589,7 +600,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                     }
                 }
                 else -> LoadingState()
-            }
+            } }
         }
 
         textEditorRel?.let { rel ->

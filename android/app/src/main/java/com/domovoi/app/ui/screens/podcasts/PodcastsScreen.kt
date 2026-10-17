@@ -1,5 +1,7 @@
 package com.domovoi.app.ui.screens.podcasts
 
+import com.domovoi.app.ui.components.LibraryRefreshBox
+import com.domovoi.app.ui.components.rememberLibraryRefresh
 import com.domovoi.app.ui.components.rememberPager
 import com.domovoi.app.ui.components.PagedFooter
 import com.domovoi.app.ui.components.LoadMoreNearEnd
@@ -99,6 +101,12 @@ fun PodcastsScreen() {
     var showSubscribe by remember { mutableStateOf(false) }
     var resume by remember { mutableStateOf<ResumeRequest?>(null) }
     var polling by remember { mutableStateOf(false) }
+    // Pulling the list re-reads it; "poll now" is the feed fetch (the
+    // internet), which a pull must not start behind the person's back.
+    val refresh = rememberLibraryRefresh {
+        pager.reload()
+        pager.idle()
+    }
 
     fun poll() {
         if (polling) return
@@ -136,7 +144,7 @@ fun PodcastsScreen() {
             )
             Spacer(Modifier.height(12.dp))
 
-            when {
+            LibraryRefreshBox(refresh, Modifier.fillMaxWidth().weight(1f)) { when {
                 subs.items.isEmpty() && subs.loading -> LoadingState()
                 subs.items.isEmpty() && subs.error != null ->
                     ErrorState(subs.error ?: "request failed", pager::retry)
@@ -153,7 +161,7 @@ fun PodcastsScreen() {
                     columns = GridCells.Adaptive(220.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxSize(),
                 ) {
                     items(subs.items, key = { it.id }) { sub ->
                         SubscriptionCard(sub) { selected = sub }
@@ -162,7 +170,7 @@ fun PodcastsScreen() {
                         PagedFooter(subs, "shows", onRetry = pager::retry, onLoadMore = pager::loadMore)
                     }
                 }
-            }
+            } }
         }
 
         selected?.let { sub ->

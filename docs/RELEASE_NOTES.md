@@ -4,6 +4,34 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — Library pages show new files without being left
+
+Web update (no migration) and a new Android APK.
+
+* **An upload shows up on the page you are on.** Videos uploaded from the
+  phone did not appear on the Videos page (web or app) until it was left
+  and opened again, and nothing on the page could look again. Videos,
+  Pictures and Documents have no database index, so no server notice ever
+  said they changed. The web now counts each files library's changes — an
+  upload, delete, move or import through Files, a Documents save, and a
+  file another process wrote into a folder someone is viewing (checked on
+  the state poll's tick by folder modification time) — and pushes them on
+  the state socket as `files.changed`. Videos and Files (web and app)
+  re-read the list on screen when it moves.
+* **Every library page can look again.** Videos gains a Rescan button (web)
+  and a "rescan videos" button (app); the app's Files screen gains "rescan
+  this library". Both re-walk the folders on disk (`refresh=true`), the
+  same read tier as the list. Audiobooks keeps "reindex" (the server's
+  rescan, device tier), Podcasts "poll now" (the feed fetch), Music
+  "rescan library" (admin), and the web Files page "Rescan".
+* **Pull-to-refresh in the app** on Videos, Files, Podcasts and Audiobooks.
+  On Audiobooks the pull runs the reindex; on Podcasts it re-reads the
+  list and leaves the feed fetch to "poll now", which needs the internet.
+* **Indexing on upload, checked.** Music and audiobook uploads were already
+  indexed at once (the upload route starts the indexer); videos, pictures
+  and documents need no indexing, only the notice above. Podcasts come
+  from their feeds, not from files dropped in their folder.
+
 ## 2026-10-17 — Dashboard: signing in loads what the page was refused
 
 Dashboard update (the web process; no migration).

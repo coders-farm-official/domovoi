@@ -35,6 +35,14 @@ doesn't stat 5,000 folders per page):
   remove files, which their folder's mtime already says;
 * ``refresh=true`` on the request (the pages' Rescan / pull-to-refresh).
 
+**Telling the pages.** Every invalidation counts as a change of that
+library (:func:`changes`), and the state poll's tick looks for changes on
+disk under the listings people are viewing (:func:`sweep_in_use`). The
+``files`` realtime channel pushes the counts as ``files.changed``, and the
+Videos and Files pages (web and app) re-read when it moves: an upload from
+a phone, a delete, a picture a plugin saved, shows up without leaving the
+page.
+
 **Memory** (owner decision 2026-10-12: the walk has no count caps any
 more, so one library can be very large). The budget is in bytes,
 :data:`MAX_CACHE_BYTES`, estimated per row: measured 2026-10-12 at 50,000
@@ -236,6 +244,63 @@ def invalidate(library_id: Optional[str] = None) -> None:
             _global_generation += 1
         else:
             _generations[library_id] = _generations.get(library_id, 0) + 1
+
+
+def changes() -> dict[str, int]:
+    """How many times each library changed, as far as this process knows:
+    ``{library id: count}``, plus ``"*"`` for an invalidate-everything. The
+    state socket's ``files`` channel (``web/backend/realtime.py``) pushes it,
+    so a Videos or Files page on screen re-reads when the number moves:
+    after a write here (:func:`invalidate`) or a change on disk that
+    :func:`sweep_in_use` saw."""
+    with _lock:
+        out = dict(_generations)
+        if _global_generation:
+            out["*"] = _global_generation
+        return out
+
+
+def sweep_in_use() -> list[str]:
+    """The libraries whose listing someone is looking at (read in the last
+    :data:`IN_USE_SEC`) that changed on disk since it was walked: a folder
+    it read has a new mtime, or is gone — a file landed or left through any
+    process (the core, a plugin, a person at the server). Each one is
+    invalidated, which moves :func:`changes`; nothing else is read.
+
+    Called on the state poll's tick. A listing that read more than
+    :data:`VALIDATE_ALWAYS_DIRS` folders is checked at most every
+    :data:`VALIDATE_EVERY_SEC`, as a request would; its age alone
+    (:data:`MAX_AGE_SEC`) is not a change, so an idle page is not re-read
+    every few minutes for nothing."""
+    now = time.monotonic()
+    with _lock:
+        candidates = [
+            (key, snap) for key, snap in _snapshots.items()
+            if not snap.expired and now - snap.used_at < IN_USE_SEC and _library_of(key)
+        ]
+    changed: list[str] = []
+    for key, snap in candidates:
+        lib = _library_of(key)
+        if lib in changed:
+            continue
+        if len(snap.dirs) > VALIDATE_ALWAYS_DIRS and now - snap.validated_at < VALIDATE_EVERY_SEC:
+            continue
+        moved = False
+        for path, mtime_ns in list(snap.dirs.items()):
+            try:
+                if os.stat(path).st_mtime_ns != mtime_ns:
+                    moved = True
+                    break
+            except OSError:
+                moved = True
+                break
+        if moved:
+            changed.append(lib)
+        else:
+            snap.validated_at = now
+    for lib in changed:
+        invalidate(lib)
+    return changed
 
 
 def clear() -> None:

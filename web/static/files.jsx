@@ -840,7 +840,11 @@ const FilesPage = () => {
       + (needle ? `&q=${encodeURIComponent(needle)}` : '')
       + (sort !== 'name' ? `&sort=${encodeURIComponent(sort)}` : '')
     : null;
-  const list = usePagedList(browsePath, { pick: (x) => x && x.entries, key: (e) => e.rel });
+  // `files.changed` (the state socket) re-reads the folder on screen when a
+  // library changed elsewhere: a phone uploaded into it, another browser
+  // deleted, a plugin saved a picture (listing_cache tells).
+  const list = usePagedList(browsePath, { pick: (x) => x && x.entries, key: (e) => e.rel,
+                                          eventTypes: ['files.changed'] });
   const view = list.extra;
   const browseLoading = list.loading && list.items.length === 0;
 
