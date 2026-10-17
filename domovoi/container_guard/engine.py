@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from domovoi import git_run
 from domovoi.container_guard import holds, store
 from domovoi.container_guard.compose import ComposeService, parse_services, project_name, read_services
 from domovoi.container_guard.detect import DOCKER_KEY, Detection, RestartMemory, detect
@@ -60,7 +61,6 @@ MPD_BASELINE_KEY = "mpd_image_id"
 MAX_BACKOFF_SEC = 300.0
 # Resolved incidents past the retention are pruned about once a day.
 PRUNE_EVERY_SEC = 24 * 3600.0
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 @dataclass(frozen=True)
@@ -314,19 +314,14 @@ class ContainerGuard:
         git can't say (no git, not a clone, the file not committed)."""
         repo = self.compose_file().parent.parent
         try:
-            head = subprocess.run(
-                ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True,
-                encoding="utf-8", errors="replace", timeout=10, check=False, creationflags=_NO_WINDOW,
-            )
+            head = git_run.run(["git", "-C", str(repo), "rev-parse", "HEAD"], timeout=10)
             if head.returncode != 0 or not head.stdout.strip():
                 return None
             sha = head.stdout.strip()
             if self._git_cache is not None and self._git_cache[0] == sha:
                 return self._git_cache[1]
-            show = subprocess.run(
-                ["git", "-C", str(repo), "show", "HEAD:./domovoi/docker-compose.yml"],
-                capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=10, check=False, creationflags=_NO_WINDOW,
+            show = git_run.run(
+                ["git", "-C", str(repo), "show", "HEAD:./domovoi/docker-compose.yml"], timeout=10
             )
             if show.returncode != 0 or not show.stdout.strip():
                 return None

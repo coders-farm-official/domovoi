@@ -43,6 +43,14 @@ router = APIRouter(prefix="/api", tags=["config"])
 
 WEB_VERSION = "1.0.0rc2"
 
+# The core's git calls that reach the update server (the check, the pull,
+# a channel switch) each stop at their own timeout, and one route can run
+# a few of them in a row (fetch, tags, local reads, a merge): the web waits
+# longer than all of them, so a slow or refused fetch comes back as the
+# core's own words ("can't reach the update server ...") and never as
+# "domovoi unreachable" while the core is fine (F-051).
+_VERSION_GIT_TIMEOUT_SEC = 90.0
+
 
 def home_problems_visibility() -> str:
     """The live HOME_PROBLEMS_VISIBILITY.
@@ -254,7 +262,8 @@ async def check_version(request: Request):
     upstream=False rather than an error status. Read-only — never pulls."""
     return bridge_response(
         *await post_admin(
-            "/v1/admin/version/check", {}, headers=auth_forward_headers(request)
+            "/v1/admin/version/check", {}, headers=auth_forward_headers(request),
+            timeout=_VERSION_GIT_TIMEOUT_SEC,
         )
     )
 
@@ -331,7 +340,8 @@ async def pull_version(request: Request):
     server process is not restarted."""
     return bridge_response(
         *await post_admin(
-            "/v1/admin/version/pull", {}, headers=auth_forward_headers(request)
+            "/v1/admin/version/pull", {}, headers=auth_forward_headers(request),
+            timeout=_VERSION_GIT_TIMEOUT_SEC,
         )
     )
 
@@ -357,5 +367,6 @@ async def switch_version_channel(body: VersionChannelRequest, request: Request):
             "/v1/admin/version/channel",
             {"channel": body.channel},
             headers=auth_forward_headers(request),
+            timeout=_VERSION_GIT_TIMEOUT_SEC,
         )
     )

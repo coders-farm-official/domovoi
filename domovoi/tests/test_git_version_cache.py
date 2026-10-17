@@ -3,7 +3,7 @@ dashboard, so the SHA it embeds must not shell out to git on every call.
 
 Also pins the Windows console-window guard: every git launch passes
 CREATE_NO_WINDOW (0 on other platforms) so a console-less backend does not
-pop a conhost window per poll.
+pop a conhost window per poll. Every git goes through domovoi.git_run.
 """
 
 from __future__ import annotations
@@ -71,21 +71,30 @@ async def test_pull_invalidates_the_cache(monkeypatch, tmp_path):
         out = "b" * 40 + "\n" if "rev-parse" in cmd else "Already up to date.\n"
         return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
 
-    monkeypatch.setattr(git_version.subprocess, "run", fake_run)
+    monkeypatch.setattr(git_version.git_run, "run", fake_run)
     result = await git_version.pull()
     assert result["pulled"] is True
     assert await git_version.cached_current_sha() == "bbbbbbb"
 
 
 async def test_every_git_launch_hides_its_console_window(monkeypatch):
+    from domovoi import git_run
+
     seen = []
 
-    def fake_run(cmd, **kwargs):
-        seen.append(kwargs.get("creationflags"))
-        return subprocess.CompletedProcess(cmd, 0, stdout="abc1234\n", stderr="")
+    class FakePopen:
+        returncode = 0
 
-    monkeypatch.setattr(git_version.subprocess, "run", fake_run)
+        def __init__(self, cmd, **kwargs):
+            seen.append(kwargs)
+
+        def communicate(self, timeout=None):
+            return "abc1234" + chr(10), ""
+
+    monkeypatch.setattr(git_run.subprocess, "Popen", FakePopen)
     await git_version.current_sha()
     assert seen, "current_sha() must shell out"
-    expected = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    assert all(flag == expected for flag in seen), seen
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        assert all(kw.get("creationflags") == subprocess.CREATE_NO_WINDOW for kw in seen), seen
+    else:
+        assert all(kw.get("start_new_session") is True for kw in seen), seen

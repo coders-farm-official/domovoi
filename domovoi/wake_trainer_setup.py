@@ -59,7 +59,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from domovoi import egress
+from domovoi import egress, git_run
 from domovoi.config import settings
 
 log = logging.getLogger(__name__)
@@ -294,7 +294,9 @@ def source_tree_id() -> str:
     """The git tree id of scripts/wake_word/docker at HEAD (what
     apply-update.sh compares the image's label with), or "unknown"."""
     try:
-        r = _run(["git", "-C", str(repo_dir()), "rev-parse", "HEAD:scripts/wake_word/docker"], 30)
+        r = git_run.run(
+            ["git", "-C", str(repo_dir()), "rev-parse", "HEAD:scripts/wake_word/docker"], timeout=30
+        )
     except (OSError, subprocess.SubprocessError):
         return "unknown"
     out = (r.stdout or "").strip()

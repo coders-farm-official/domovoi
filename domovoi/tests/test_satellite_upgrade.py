@@ -288,7 +288,7 @@ async def test_current_sha_unknown_when_git_missing(
     def _boom(*args, **kwargs):
         raise FileNotFoundError("git not installed")
 
-    monkeypatch.setattr(git_version.subprocess, "run", _boom)
+    monkeypatch.setattr(git_version.git_run, "run", _boom)
     sha = await git_version.current_sha()
     assert sha == "unknown"
 
@@ -307,7 +307,7 @@ async def test_current_sha_appends_dirty_when_porcelain_nonempty(
             return _completed(cmd, 0, stdout=" M domovoi/main.py\n")
         return _completed(cmd, 0)
 
-    monkeypatch.setattr(git_version.subprocess, "run", _fake_run)
+    monkeypatch.setattr(git_version.git_run, "run", _fake_run)
     sha = await git_version.current_sha()
     assert sha == "deadbee-dirty"
 
@@ -324,7 +324,7 @@ async def test_current_sha_clean_tree_no_dirty_suffix(
             return _completed(cmd, 0, stdout="")
         return _completed(cmd, 0)
 
-    monkeypatch.setattr(git_version.subprocess, "run", _fake_run)
+    monkeypatch.setattr(git_version.git_run, "run", _fake_run)
     sha = await git_version.current_sha()
     assert sha == "cafef00"
 
@@ -339,7 +339,7 @@ async def test_pull_reports_failure_without_raising(
             cmd, 1, stderr="error: Your local changes would be overwritten\n"
         )
 
-    monkeypatch.setattr(git_version.subprocess, "run", _fake_run)
+    monkeypatch.setattr(git_version.git_run, "run", _fake_run)
     result = await git_version.pull()
     assert result["pulled"] is False
     assert result["new_sha"] is None
