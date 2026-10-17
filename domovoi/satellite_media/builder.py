@@ -23,7 +23,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from domovoi import git_version, host_time, server_identity
+from domovoi import egress, git_version, host_time, server_identity
 from domovoi.config import settings
 from domovoi.host_kind import is_wsl
 from domovoi.satellite_media import cache, fetchers, overlay, payload
@@ -282,6 +282,9 @@ async def build(
     firstrun = overlay.render_firstrun(
         SAT_USER, mic_profile, sat_type, setup_transport, wifi_country,
         tz=host_time.local_timezone_name(), prep_epoch=time.time(),
+        # Internet access turned off: the card's own package repair stays
+        # offline too (satellite/base_packages.py).
+        internet_off=egress.internet_turned_off(),
     )
     core_sha = await git_version.current_sha()
     # This card's server. Baked now, readable on the card, installed

@@ -35,11 +35,25 @@ SAT_TYPE="@SAT_TYPE@"
 SETUP_TRANSPORT="@SETUP_TRANSPORT@"
 WIFI_COUNTRY="@WIFI_COUNTRY@"
 KEYBOARD_LAYOUT="@KEYBOARD_LAYOUT@"
+# "never" when the server's internet access was turned off as this card was
+# prepared, else empty.
+INTERNET_ACCESS="@INTERNET_ACCESS@"
 LOG=/var/log/domovoi-firstrun.log
 
 mkdir -p "$STEPS"
 exec >>"$LOG" 2>&1
 echo "== domovoi stage-1 $(date -Is) =="
+
+# Root's record of that answer, for the boot step's package repair
+# (satellite/base_packages.py): with it, nothing there goes online. Every
+# run, so a card re-prepared with the answer changed follows it.
+if [ "$INTERNET_ACCESS" = "never" ]; then
+  echo "internet access was turned off on the server when this card was prepared" \
+    >/var/lib/domovoi/internet-off
+  chmod 0644 /var/lib/domovoi/internet-off
+else
+  rm -f /var/lib/domovoi/internet-off
+fi
 
 info() {
   # Update device-info.json (status/step/error) on the boot partition.

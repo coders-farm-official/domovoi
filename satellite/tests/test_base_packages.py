@@ -40,9 +40,13 @@ class FakeApt:
     """dpkg-query / apt-cache / apt-get / ip, as a dict of installed names."""
 
     def __init__(self, installed, *, candidates=None, route=True, install_ok=True,
-                 unpacked=()):
+                 unpacked=(), configure_fixes=False, tick=None):
         self.installed = set(installed)
         self.unpacked = set(unpacked)
+        self.configure_fixes = configure_fixes
+        # Each call costs this much of a fake clock: (clock list, seconds).
+        self.tick = tick
+        self.timeouts: list[tuple[str, float]] = []
         self.candidates = set(ALL) - {"libasound2", "libportaudio2t64"} if candidates is None else set(candidates)
         self.route = route
         self.install_ok = install_ok
@@ -51,8 +55,15 @@ class FakeApt:
     def __call__(self, argv, **kw):
         argv = list(argv)
         self.calls.append(argv)
+        self.timeouts.append((" ".join(argv[:2]), kw.get("timeout")))
+        if self.tick is not None and argv[0] in ("apt-get", "dpkg"):
+            self.tick[0][0] += self.tick[1]
         out, rc = "", 0
-        if argv[0] == "dpkg-query":
+        if argv[:2] == ["dpkg", "--force-confdef"]:
+            if self.configure_fixes:
+                self.installed |= self.unpacked
+                self.unpacked = set()
+        elif argv[0] == "dpkg-query":
             name = argv[-1]
             if name in self.installed:
                 out = "install ok installed"
@@ -67,11 +78,20 @@ class FakeApt:
             out = "default via 192.168.1.1 dev wlan0" if self.route else ""
         elif argv[0] == "apt-get" and "install" in argv:
             if self.install_ok:
-                self.installed.add(argv[-1])
-                self.unpacked.discard(argv[-1])
+                for target in argv[argv.index("--no-remove") + 1:]:
+                    name = Path(target).name.split("_", 1)[0] if target.endswith(".deb") else target
+                    self.installed.add(name)
+                    self.unpacked.discard(name)
             else:
                 rc, out = 100, "E: Unable to fetch some archives"
         return subprocess.CompletedProcess(argv, rc, out, "")
+
+
+@pytest.fixture(autouse=True)
+def card_paths(tmp_path, monkeypatch):
+    """Never this machine's /var/lib/domovoi or /opt: a card of its own."""
+    monkeypatch.setattr(base_packages, "INTERNET_OFF_FLAG", tmp_path / "internet-off")
+    monkeypatch.setattr(base_packages, "DEB_CACHE", tmp_path / "debs")
 
 
 @pytest.fixture
@@ -292,3 +312,110 @@ def test_the_health_sample_carries_the_package_note(tmp_path):
     assert sat._health_process_facts(100.0)["reboot_needed"].startswith("system packages missing")
     sat._net_reboot_needed = "network settings are applied at boot: reboot this satellite once"
     assert sat._health_process_facts(160.0)["reboot_needed"].startswith("network settings")
+
+
+
+# ─── review fixes (2026-10-17): offline, an interrupted dpkg, one deadline ─
+
+
+def _offline_card(tmp_path, *debs):
+    (tmp_path / "internet-off").write_text("off\n")
+    (tmp_path / "debs").mkdir(exist_ok=True)
+    for name in debs:
+        (tmp_path / "debs" / f"{name}_1.0-1_arm64.deb").write_bytes(b"!<arch>")
+
+
+def test_internet_off_nothing_goes_online(tmp_path, done):
+    _offline_card(tmp_path, "mpg123")
+    apt = FakeApt(_everything_but("mpg123"), unpacked={"mpg123"})
+    doc = base_packages.repair(run=apt, stage2_done=done, report_path=tmp_path / "r.json",
+                               sleep=lambda s: pytest.fail("waited for a route"))
+    assert doc["state"] == "repaired" and doc["internet_off"] is True
+    assert not any(c[:3] == ["ip", "route", "show"] for c in apt.calls)
+    assert not any(c[0] == "apt-get" and "update" in c for c in apt.calls)
+    (install,) = [c for c in apt.calls if c[0] == "apt-get" and "install" in c]
+    assert "--no-download" in install and "--no-remove" in install
+    assert install[-1] == str(tmp_path / "debs" / "mpg123_1.0-1_arm64.deb"), "the card's own deb"
+
+
+def test_internet_off_and_not_in_the_caches_is_offline_not_failed(tmp_path, done):
+    _offline_card(tmp_path)
+    apt = FakeApt(_everything_but("mpg123"), install_ok=False)
+    doc = base_packages.repair(run=apt, stage2_done=done, report_path=tmp_path / "r.json")
+    assert doc["state"] == "offline" and doc["still_missing"] == ["mpg123"]
+    (install,) = [c for c in apt.calls if c[0] == "apt-get" and "install" in c]
+    assert install[-1] == "mpg123" and "--no-download" in install
+    assert "internet access is turned off" in doc["detail"]
+
+
+def test_internet_off_does_not_ask_for_a_reboot_forever(monkeypatch, caplog):
+    sat = _client(monkeypatch, report={"boot_id": "b1", "ts": 3.0, "state": "offline",
+                                       "still_missing": ["mpg123"]})
+    monkeypatch.setattr(client.base_packages, "internet_off", lambda *a, **k: True)
+    with caplog.at_level(logging.WARNING, logger="satellite"):
+        sat._check_base_packages(0.0)
+    assert sat._base_reboot_needed is None
+    assert "internet access is turned off on this card" in caplog.text
+    assert base_packages.reboot_note(["mpg123"], None, "b1", offline=True) is None
+
+
+def test_an_interrupted_dpkg_is_finished_first_and_never_by_removing(tmp_path, done):
+    apt = FakeApt(_everything_but("mpg123"), unpacked={"mpg123"}, configure_fixes=True)
+    doc = base_packages.repair(run=apt, stage2_done=done, report_path=tmp_path / "r.json",
+                               sleep=lambda s: None)
+    configure = [c for c in apt.calls if c[0] == "dpkg"]
+    assert configure == [["dpkg", "--force-confdef", "--force-confold", "--configure", "-a"]]
+    first_install = next((i for i, c in enumerate(apt.calls) if c[0] == "apt-get" and "install" in c), None)
+    assert first_install is None, "configure finished it: nothing left to install"
+    assert doc["state"] == "repaired"
+
+
+def test_the_configure_runs_before_any_install(tmp_path, done):
+    apt = FakeApt(_everything_but("mpg123"))
+    base_packages.repair(run=apt, stage2_done=done, report_path=tmp_path / "r.json",
+                         sleep=lambda s: None)
+    kinds = [c[0] + (" install" if "install" in c else "") for c in apt.calls
+             if c[0] in ("dpkg", "apt-get")]
+    assert kinds.index("dpkg") < kinds.index("apt-get install")
+
+
+def test_one_deadline_for_the_whole_run(tmp_path, done):
+    clock = [0.0]
+    apt = FakeApt(set(), install_ok=False, tick=(clock, 400.0))
+    doc = base_packages.repair(run=apt, stage2_done=done, report_path=tmp_path / "r.json",
+                               sleep=lambda s: None, clock=lambda: clock[0], budget=1200.0)
+    installs = [c for c in apt.calls if c[0] == "apt-get" and "install" in c]
+    assert len(installs) < len(base_packages.BASE_PACKAGES), "stopped at the deadline"
+    assert any("out of time (20 min)" in e for e in doc["errors"])
+    assert clock[0] <= 1200.0 + 400.0
+    # Every step was given at most what was left of the 20 minutes.
+    assert all(t is None or t <= 1200.0 for _, t in apt.timeouts)
+
+
+def test_the_route_wait_counts_against_the_deadline(tmp_path, done):
+    t = [0.0]
+
+    def sleep(s):
+        t[0] += s
+
+    apt = FakeApt(_everything_but("mpg123"), route=False)
+    doc = base_packages.repair(run=apt, stage2_done=done, report_path=tmp_path / "r.json",
+                               sleep=sleep, clock=lambda: t[0], network_wait=3600.0, budget=120.0)
+    assert doc["state"] == "no_network" and t[0] <= 130.0
+
+
+def test_the_default_deadline_is_twenty_minutes():
+    assert base_packages.TOTAL_BUDGET_SEC == 20 * 60.0
+    assert inspect_default("budget") == base_packages.TOTAL_BUDGET_SEC
+
+
+def inspect_default(name):
+    import inspect
+
+    return inspect.signature(base_packages.repair).parameters[name].default
+
+
+def test_the_docstring_says_where_root_runs_this_from():
+    doc = base_packages.__doc__
+    assert "satellite account's" in doc and "code tree" in doc and "SECURITY_PRIVACY" in doc
+    assert "never read from the satellite account's files" not in doc

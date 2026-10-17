@@ -41,9 +41,31 @@ and may never take anything away. It records what it found and did in
 client reads, logs into the room's retained log, and turns into the
 dashboard's "reboot needed" while anything is still missing.
 
-What root runs here is fixed in this file: the package names are the
-constants below, never read from the satellite account's files or the
-server. Stdlib only, like everything provisioning mode imports.
+What it asks apt for are the package names below, constants in this
+file; no input from the server or from the satellite account's config or
+state files decides them. That is not a root-owned guarantee: like the
+network settings, this module runs as root from the satellite account's
+own venv and code tree, which that account can edit - the remaining
+root-runs-updatable-code item docs/SECURITY_PRIVACY.md documents. The
+owner accepted that path for the boot step; this widens what it does by
+this one action.
+
+Two limits keep a run from doing harm on its own:
+
+* **Internet access turned off.** A card prepared while the server's
+  ``INTERNET_ACCESS`` was ``never`` carries a root-owned flag
+  (:data:`INTERNET_OFF_FLAG`, written by stage 1). Then nothing goes online:
+  no ``apt-get update``, and the install is ``--no-download`` from the
+  card's own deb cache and apt's, as ``domovoi-apply-payload`` does for a
+  plugin's packages. What the caches cannot provide stays missing, recorded
+  as ``offline``, and the dashboard does not keep asking for a reboot that
+  cannot help.
+* **Bounded.** ``dpkg --configure -a`` (which never removes anything) runs
+  first, so a dpkg that a timeout or a reboot interrupted mid-install does
+  not block every later install; and the whole run, the wait for a route
+  included, has one deadline (:data:`TOTAL_BUDGET_SEC`).
+
+Stdlib only, like everything provisioning mode imports.
 """
 
 from __future__ import annotations
@@ -89,6 +111,11 @@ REPORT_PATH = STATE_DIR / "base-packages.json"
 #: Stage 2's done flag: until it exists, stage 2 owns the packages (two apt
 #: runs at once would fight over the dpkg lock).
 STAGE2_DONE = STATE_DIR / "bootstrap-done"
+#: Written by stage 1 on a card prepared while the server's internet access
+#: was turned off (root's, like the rest of STATE_DIR).
+INTERNET_OFF_FLAG = STATE_DIR / "internet-off"
+#: The card's deb cache, unpacked by stage 1 (root's).
+DEB_CACHE = Path("/opt/domovoi-payload/debs")
 
 #: How long the boot step waits for the network before giving up for this
 #: boot (it runs again at the next one), and how often it looks.
@@ -96,6 +123,10 @@ NETWORK_WAIT_SEC = 300.0
 NETWORK_POLL_SEC = 10.0
 UPDATE_TIMEOUT_SEC = 300.0
 INSTALL_TIMEOUT_SEC = 900.0
+CONFIGURE_TIMEOUT_SEC = 300.0
+#: One deadline for the whole run: the route wait, the configure, the
+#: update and every install together. Each step gets what is left.
+TOTAL_BUDGET_SEC = 20 * 60.0
 #: dpkg's lock may be held by stage 2 or unattended-upgrades: wait for it.
 _APT_OPTS = ("-o", "DPkg::Lock::Timeout=120", "-o", "Acquire::Retries=3")
 
@@ -166,6 +197,28 @@ def _boot_id() -> str | None:
         return None
 
 
+def internet_off(flag: Path | None = None) -> bool:
+    """Whether this card was prepared with the server's internet access
+    turned off (:data:`INTERNET_OFF_FLAG`)."""
+    try:
+        return (flag or INTERNET_OFF_FLAG).exists()
+    except OSError:
+        return False
+
+
+def cached_debs(base: str, cache_dir: Path | None = None) -> list[Path]:
+    """The card's own ``.deb`` files for a base package, under any of its
+    names (regular files only)."""
+    folder = cache_dir or DEB_CACHE
+    out: list[Path] = []
+    for n in dict(BASE_PACKAGES).get(base, (base,)):
+        try:
+            out += sorted(p for p in folder.glob(f"{n}_*.deb") if p.is_file() and not p.is_symlink())
+        except OSError:
+            continue
+    return out
+
+
 def write_report(doc: dict[str, Any], path: Path | None = None) -> bool:
     """Atomic, 0644, in root's own directory; never follows a link at the
     target (a planted one is replaced, not written through)."""
@@ -210,12 +263,16 @@ def repair(
     report_path: Path | None = None,
     network_wait: float = NETWORK_WAIT_SEC,
     wait_for_stage2: bool = True,
+    offline_flag: Path | None = None,
+    cache_dir: Path | None = None,
+    budget: float = TOTAL_BUDGET_SEC,
 ) -> dict[str, Any]:
     """Find the missing base packages and install them. Root only (the
     caller checks). Returns, and records, ``{state, missing, installed,
     still_missing, errors, ...}`` where state is ``ok`` (nothing missing),
-    ``repaired``, ``failed``, ``no_network`` or ``deferred`` (stage 2 has
-    not finished; it owns the packages until then)."""
+    ``repaired``, ``failed``, ``no_network``, ``offline`` (internet access
+    is off and the caches could not provide everything) or ``deferred``
+    (stage 2 has not finished; it owns the packages until then)."""
     doc: dict[str, Any] = {
         "version": BASE_PACKAGES_VERSION, "ts": time.time(), "boot_id": _boot_id(),
         "missing": [], "installed": [], "still_missing": [], "errors": [],
@@ -233,31 +290,71 @@ def repair(
         write_report(doc, report_path)
         log.info("base packages: all %d present", len(BASE_PACKAGES))
         return doc
-    log.warning("base packages missing: %s; installing them online", ", ".join(gone))
-    deadline = clock() + network_wait
-    while not default_route(run):
-        if clock() >= deadline:
-            doc["state"] = "no_network"
-            doc["still_missing"] = gone
-            doc["detail"] = (f"no network within {network_wait:.0f} s of boot; "
-                             "the next boot tries again")
-            write_report(doc, report_path)
-            log.warning("base packages: %s", doc["detail"])
-            return doc
-        sleep(NETWORK_POLL_SEC)
-    rc, out = _run(run, ["apt-get", *_APT_OPTS, "update", "-qq"], UPDATE_TIMEOUT_SEC)
-    if rc != 0:
-        doc["errors"].append(f"apt-get update: rc={rc}: {out[-200:]}")
+    offline = internet_off(offline_flag)
+    doc["internet_off"] = offline
+    end = clock() + budget
+
+    def left(cap: float) -> float:
+        return min(cap, end - clock())
+
+    if offline:
+        log.warning("base packages missing: %s; internet access is turned off on this "
+                    "card, so only its own package caches are used", ", ".join(gone))
+    else:
+        log.warning("base packages missing: %s; installing them online", ", ".join(gone))
+        wait_until = min(clock() + network_wait, end)
+        while not default_route(run):
+            if clock() >= wait_until:
+                doc["state"] = "no_network"
+                doc["still_missing"] = gone
+                doc["detail"] = (f"no network within {network_wait:.0f} s of boot; "
+                                 "the next boot tries again")
+                write_report(doc, report_path)
+                log.warning("base packages: %s", doc["detail"])
+                return doc
+            sleep(NETWORK_POLL_SEC)
+    # A dpkg run that was cut off (a timeout here, a self-check reboot mid-
+    # install) leaves "dpkg was interrupted", and every apt-get install
+    # after it refuses until this runs. It configures what is unpacked and
+    # never removes anything.
+    if left(CONFIGURE_TIMEOUT_SEC) > 0:
+        rc, out = _run(run, ["dpkg", "--force-confdef", "--force-confold", "--configure", "-a"],
+                       left(CONFIGURE_TIMEOUT_SEC))
+        if rc != 0:
+            doc["errors"].append(f"dpkg --configure -a: rc={rc}: {out[-200:]}")
+    if not offline and left(UPDATE_TIMEOUT_SEC) > 0:
+        rc, out = _run(run, ["apt-get", *_APT_OPTS, "update", "-qq"], left(UPDATE_TIMEOUT_SEC))
+        if rc != 0:
+            doc["errors"].append(f"apt-get update: rc={rc}: {out[-200:]}")
     for base in gone:
-        name = install_name(base, run)
-        rc, out = _run(run, ["apt-get", *_APT_OPTS, "install", "-y", "--no-install-recommends",
-                             "--no-remove", name], INSTALL_TIMEOUT_SEC)
-        if rc == 0:
-            doc["installed"].append(name)
+        if not missing_one(base, run):
+            continue          # the configure step finished it
+        if left(INSTALL_TIMEOUT_SEC) <= 0:
+            doc["errors"].append(f"out of time ({budget / 60:.0f} min) before {base}")
+            break
+        if offline:
+            debs = cached_debs(base, cache_dir)
+            targets = [str(p) for p in debs] or [install_name(base, run)]
+            argv = ["apt-get", *_APT_OPTS, "install", "-y", "--no-download",
+                    "--no-install-recommends", "--no-remove", *targets]
         else:
-            doc["errors"].append(f"{name}: rc={rc}: {out[-200:]}")
+            targets = [install_name(base, run)]
+            argv = ["apt-get", *_APT_OPTS, "install", "-y", "--no-install-recommends",
+                    "--no-remove", *targets]
+        rc, out = _run(run, argv, left(INSTALL_TIMEOUT_SEC))
+        if rc == 0:
+            doc["installed"].append(base if offline else targets[0])
+        else:
+            doc["errors"].append(f"{base}: rc={rc}: {out[-200:]}")
     doc["still_missing"] = missing(run)
-    doc["state"] = "failed" if doc["still_missing"] else "repaired"
+    if not doc["still_missing"]:
+        doc["state"] = "repaired"
+    elif offline:
+        doc["state"] = "offline"
+        doc["detail"] = ("internet access is turned off on this card, and its package caches "
+                         "do not hold everything these need")
+    else:
+        doc["state"] = "failed"
     write_report(doc, report_path)
     if doc["still_missing"]:
         log.warning("base packages: still missing after the install: %s (%s)",
@@ -267,15 +364,23 @@ def repair(
     return doc
 
 
+def missing_one(base: str, run: Runner) -> list[str]:
+    """``[base]`` while none of its names is installed, else ``[]``."""
+    names = dict(BASE_PACKAGES).get(base, (base,))
+    return [] if any(is_installed(n, run) for n in names) else [base]
+
+
 # ─── the client's reading of root's record ────────────────────────────────
 
 
 def reboot_note(present_missing: list[str], report: dict[str, Any] | None,
-                boot_id: str | None) -> str | None:
+                boot_id: str | None, *, offline: bool = False) -> str | None:
     """What the dashboard's "reboot needed" says while base packages are
     missing (None when none are). A reboot is what runs :func:`repair`; the
-    note says what the last run on this boot found, when there was one."""
-    if not present_missing:
+    note says what the last run on this boot found, when there was one.
+    None on a card with internet access turned off: a reboot cannot fetch
+    anything there, so asking for one would never stop."""
+    if not present_missing or offline:
         return None
     names = ", ".join(present_missing)
     last = ""

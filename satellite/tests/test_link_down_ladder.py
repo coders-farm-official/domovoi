@@ -360,3 +360,23 @@ def test_the_example_config_documents_the_new_keys():
     for key in ("link_down_escalate_min", "link_down_retry_min", "link_down_reboot_min",
                 "reboot_backoff_cap_min"):
         assert f"\n{key} = " in text, key
+
+
+def test_a_reboot_stamped_ahead_of_a_clock_that_is_behind_still_counts(tmp_path):
+    """A Pi has no clock of its own: after a reboot it can start from a
+    saved time behind the one the reboot was stamped with. The backoff must
+    not reset on exactly the reboots it spaces out."""
+    path = tmp_path / "self-restarts.json"
+    clock = [100_000.0]
+    health.RestartBudget(path, clock=lambda: clock[0]).record("reboot", "link down")
+    clock[0] -= 2 * 3600                  # the next boot's clock: two hours behind
+    b = health.RestartBudget(path, clock=lambda: clock[0])
+    assert b.count("reboot", health.REBOOT_BACKOFF_WINDOW_S) == 1
+    b.record("exit", "rss")               # a write in that life keeps it
+    b2 = health.RestartBudget(path, clock=lambda: clock[0])
+    assert b2.count("reboot", health.REBOOT_BACKOFF_WINDOW_S) == 1
+    # A stamp further ahead than the history is a clock that was wrong then.
+    path.write_text(json.dumps({"restarts": [
+        {"ts": clock[0] + 7 * 3600, "action": "reboot", "reason": "from 2031"}]}))
+    assert health.RestartBudget(path, clock=lambda: clock[0]).count(
+        "reboot", health.REBOOT_BACKOFF_WINDOW_S) == 0

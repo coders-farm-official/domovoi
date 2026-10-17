@@ -3866,12 +3866,20 @@ class Satellite(pc_engine.SpareDeviceEngine):
                         f" ({report.get('detail')})" if report.get("detail") else "",
                     )
         gone = base_packages.missing()
+        offline = base_packages.internet_off()
         self._base_missing = gone
-        self._base_reboot_needed = base_packages.reboot_note(gone, report, net_settings._boot_id())
+        self._base_reboot_needed = base_packages.reboot_note(
+            gone, report, net_settings._boot_id(), offline=offline,
+        )
         if gone and tuple(gone) != self._base_said:
             self._base_said = tuple(gone)
-            log.warning("system packages missing: %s (%s)", ", ".join(gone),
-                        self._base_reboot_needed)
+            log.warning(
+                "system packages missing: %s (%s)", ", ".join(gone),
+                "internet access is turned off on this card, so they come only "
+                "from its own package caches; prepare the card again with the "
+                "internet on, or install them by hand" if offline
+                else self._base_reboot_needed,
+            )
         elif not gone:
             self._base_said = None
 

@@ -169,3 +169,25 @@ def test_the_satellite_s_base_list_is_the_build_s():
     names = dict(base_packages.BASE_PACKAGES)
     for pkg, alternates in fetchers.DEB_ALTERNATES.items():
         assert set(alternates) <= set(names[pkg]), pkg
+
+
+# ─── internet access turned off at card prep ──────────────────────────────
+
+
+def test_a_card_prepared_with_the_internet_off_carries_root_s_flag():
+    on = overlay.render_firstrun("domovoi", "xvf3800_usb", "voice", "portal")
+    off = overlay.render_firstrun("domovoi", "xvf3800_usb", "voice", "portal", internet_off=True)
+    assert 'INTERNET_ACCESS=""' in on and 'INTERNET_ACCESS="never"' in off
+    block = off[off.index('if [ "$INTERNET_ACCESS" = "never" ]; then'):]
+    block = block[:block.index("\nfi\n")]
+    assert ">/var/lib/domovoi/internet-off" in block and "rm -f /var/lib/domovoi/internet-off" in block
+    # Written before any step can fail, right after the state directory exists.
+    assert off.index('mkdir -p "$STEPS"') < off.index("internet-off") < off.index("# 1.")
+    from satellite import base_packages
+
+    assert str(base_packages.INTERNET_OFF_FLAG).replace("\\", "/") == "/var/lib/domovoi/internet-off"
+
+
+def test_the_builder_passes_the_server_s_answer():
+    src = (REPO / "domovoi" / "satellite_media" / "builder.py").read_text(encoding="utf-8")
+    assert "internet_off=egress.internet_turned_off()," in src

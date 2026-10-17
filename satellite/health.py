@@ -1266,13 +1266,23 @@ class RestartBudget:
                 return False
         return True
 
+    def _history_s(self) -> float:
+        return max(self.window_s, REBOOT_BACKOFF_WINDOW_S)
+
     def count(self, action: str, within_s: float) -> int:
         """How many ``action`` entries the last ``within_s`` seconds hold —
-        the reboot backoff looks further back than the budget's window."""
+        the reboot backoff looks further back than the budget's window.
+
+        An entry stamped AFTER now still counts, up to the history's length
+        ahead: a Pi has no clock of its own, and the boot that follows a
+        reboot can start from a saved time that is behind the one the reboot
+        was stamped with. Dropping those would reset the backoff on exactly
+        the reboots it is there to space out. One further ahead than that is
+        a clock that was wrong when it was written, and is ignored."""
         now = self.clock()
         return sum(
             1 for e in self._entries
-            if e["action"] == action and now - within_s < e["ts"] <= now + self.window_s
+            if e["action"] == action and now - within_s < e["ts"] <= now + self._history_s()
         )
 
     def record(self, action: str, reason: str) -> bool:
@@ -1280,11 +1290,12 @@ class RestartBudget:
         file could not be written (the count still holds in this process).
         Entries are kept for :data:`REBOOT_BACKOFF_WINDOW_S` (or the
         budget's window, if longer), so the reboot backoff survives the
-        reboot it counts."""
+        reboot it counts — and so are ones stamped ahead of now by as much
+        (see :meth:`count`), at most 50 in all."""
         now = self.clock()
-        keep = max(self.window_s, REBOOT_BACKOFF_WINDOW_S)
+        keep = self._history_s()
         self._entries = [
-            e for e in self._entries if now - keep < e["ts"] <= now + self.window_s
+            e for e in self._entries if now - keep < e["ts"] <= now + keep
         ][-49:] + [{"ts": now, "action": action, "reason": reason[:300]}]
         return write_json_atomic(self.path, {"restarts": self._entries})
 

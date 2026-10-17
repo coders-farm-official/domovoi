@@ -39,8 +39,12 @@ reset helper. No core or dashboard change is needed, and no migration.
   unconfigured. The online repair then ran with the Wi-Fi down, apt
   **removed** mpg123, and setup marked itself done. Now:
   * at every boot, the boot step installs any missing base package online
-    (`apt-get install --no-remove`, fixed names only) and records it in
-    `/var/lib/domovoi/base-packages.json`;
+    (`apt-get install --no-remove`, fixed names only, after `dpkg
+    --configure -a` finishes any interrupted install; 20 minutes at most)
+    and records it in `/var/lib/domovoi/base-packages.json`. A card
+    prepared with the server's internet access turned off never goes
+    online for this: it uses its own package cache only, and the Health
+    card does not ask for a reboot that could not help;
   * the Health card says **reboot needed: system packages missing
     (mpg123)** until it is there;
   * setup's own repair never runs without fresh package lists and never

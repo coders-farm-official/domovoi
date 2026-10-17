@@ -2958,8 +2958,16 @@ which of the base packages are missing, and only when some are does it run
 for exactly those names, which are constants in that file: nothing is read
 from the account's files or the server, and apt may add dependencies but
 never remove a package. It records what it found and did in
-`/var/lib/domovoi/base-packages.json`. It is the same accepted path again,
-widened by one more action. The console
+`/var/lib/domovoi/base-packages.json`. Before installing it runs
+`dpkg --configure -a`, which finishes an interrupted install and removes
+nothing, and the whole run has one 20-minute deadline. On a card prepared
+while the server's internet access was turned off (stage 1 leaves the
+root-owned flag `/var/lib/domovoi/internet-off`) it never goes online: no
+package lists are fetched and the install is `--no-download`, from the
+card's deb cache and apt's, as `domovoi-apply-payload` does. The names
+being constants does not make them root-owned: like the network settings,
+this runs from the satellite account's code tree. It is the same accepted
+path again, widened by one more action. The console
 login media prep prints on the label is this same account: it gives an
 operator a shell and the logs, not root. Root on a shipped unit means the
 card in another machine, or a re-flash — and these guarantees hold only

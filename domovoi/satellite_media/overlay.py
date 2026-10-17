@@ -240,11 +240,14 @@ def render_firstrun(
     keyboard_layout: str = DEFAULT_KEYBOARD_LAYOUT,
     tz: str | None = None,
     prep_epoch: float | None = None,
+    internet_off: bool = False,
 ) -> str:
     """``tz`` is the server's IANA zone and ``prep_epoch`` the moment the
     card is prepared; stage 1 applies the first and uses the second as a
     floor under a clock that otherwise starts at the image's build date.
-    Either may be unknown, and renders empty - the script skips it."""
+    Either may be unknown, and renders empty - the script skips it.
+    ``internet_off``: the server's internet access is turned off; stage 1
+    leaves root's flag for that (satellite/base_packages.py)."""
     from domovoi.host_time import is_zone_name
 
     return render_template(
@@ -257,7 +260,8 @@ def render_firstrun(
             # Shell-safe by construction: a zone name is letters, digits and
             # / _ + - only, so it can sit inside the script's double quotes.
             "TZ": tz if is_zone_name(tz) else "",
-            "PREP_EPOCH": str(int(prep_epoch)) if prep_epoch and prep_epoch > 0 else ""},
+            "PREP_EPOCH": str(int(prep_epoch)) if prep_epoch and prep_epoch > 0 else "",
+            "INTERNET_ACCESS": "never" if internet_off else ""},
     )
 
 
