@@ -95,4 +95,17 @@ class RoomRulesTest {
             assertTrue(bad, !RoomSounds.safeRel(bad))
         }
     }
+
+    @Test
+    fun aRoomMirrorsItsOwnVoicesClips() {
+        // The server's own voice: no query, the record the room always kept.
+        assertEquals("", RoomSounds.voiceQuery(null))
+        assertEquals("", RoomSounds.voiceQuery(""))
+        assertEquals("satellite-sounds@", RoomSounds.soundsRecord(null))
+        // A voice the server keeps for the room: its list, its own serial
+        // record (the Pi's sounds_record), the name encoded.
+        assertEquals("?voice=Ryan", RoomSounds.voiceQuery("Ryan"))
+        assertEquals("?voice=Lessac%20Low%26x", RoomSounds.voiceQuery("Lessac Low&x"))
+        assertEquals("satellite-sounds@Ryan", RoomSounds.soundsRecord("Ryan"))
+    }
 }

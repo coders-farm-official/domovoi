@@ -11,28 +11,33 @@ import kotlin.random.Random
  * server renders (`/v1/sounds`, e.g. `greetings/greet_<hash>.mp3`,
  * `network_issues.mp3`) — mirrored into `files/room/sounds/` the way a Pi
  * mirrors them (satellite/sound_sync.py): only from a list our server
- * signed (`satellite-sounds`, kept per voice; the room uses the server's
- * default voice), every body checked against it, clips no longer listed
- * removed. On connect, and on `sounds_changed`.
+ * signed (`satellite-sounds`, kept per voice), every body checked against
+ * it, clips no longer listed removed. On connect, and on `sounds_changed`.
+ * The voice is the room's: the one the server keeps for it
+ * (`ready.room_voice`, "switch to Ryan" said in the room), or the server's
+ * own when it keeps none.
  */
 class RoomSounds(private val dir: File, private val store: RoomModels.ModelBook) {
     /** Mirror the list. Returns how many clips were downloaded; throws
      *  [IOException] / [RoomIdentity.IdentityException] on failure (the
      *  cache is kept as it was). Blocking. */
-    fun sync(http: OkHttpClient, coreUrl: String, fingerprint: String): Int {
-        val body = RoomModels.get(http, "$coreUrl/v1/sounds/manifest.sig").toString(Charsets.UTF_8)
+    fun sync(http: OkHttpClient, coreUrl: String, fingerprint: String, voice: String? = null): Int {
+        val query = voiceQuery(voice)
+        val body = RoomModels.get(http, "$coreUrl/v1/sounds/manifest.sig$query").toString(Charsets.UTF_8)
         val accepted = RoomIdentity.verifyManifestEnvelope(Json.parseToJsonElement(body), RoomIdentity.SOUNDS_CHANNEL, fingerprint)
-        // The default voice's record (`sounds_record(None)`); the channel's
-        // own record is its floor until that has been written.
-        val record = "${RoomIdentity.SOUNDS_CHANNEL}@"
-        RoomIdentity.checkFreshness(accepted, store.seen(record) ?: store.seen(RoomIdentity.SOUNDS_CHANNEL))
+        // One record per voice, as the server keeps one serial per voice (the
+        // Pi's `sounds_record(voice)`). The default voice's record has the
+        // channel's own record as its floor until it has been written.
+        val record = soundsRecord(voice)
+        val floor = if (voice.isNullOrEmpty()) store.seen(RoomIdentity.SOUNDS_CHANNEL) else null
+        RoomIdentity.checkFreshness(accepted, store.seen(record) ?: floor)
         dir.mkdirs()
         var downloaded = 0
         for ((rel, sha) in accepted.manifest) {
             if (!safeRel(rel)) continue
             val dest = File(dir, rel)
             if (dest.isFile && RoomModels.sha256(dest) == sha) continue
-            val bytes = RoomModels.get(http, "$coreUrl/v1/sounds/" + rel.split('/').joinToString("/") { encodeSegment(it) }, limit = MAX_CLIP_BYTES)
+            val bytes = RoomModels.get(http, "$coreUrl/v1/sounds/" + rel.split('/').joinToString("/") { encodeSegment(it) } + query, limit = MAX_CLIP_BYTES)
             if (RoomModels.sha256(bytes) != sha) continue
             dest.parentFile?.mkdirs()
             val tmp = File(dest.parentFile, ".${dest.name}.part")
@@ -74,6 +79,13 @@ class RoomSounds(private val dir: File, private val store: RoomModels.ModelBook)
             if (rel.isEmpty() || rel.startsWith("/") || '\\' in rel) return false
             return rel.split('/').all { it.isNotEmpty() && it != ".." && it != "." }
         }
+
+        /** Where the serial of [voice]'s list is kept (null: the server's own voice). */
+        fun soundsRecord(voice: String?): String = "${RoomIdentity.SOUNDS_CHANNEL}@${voice.orEmpty()}"
+
+        /** `?voice=<name>` for a room with a voice of its own, else nothing. */
+        fun voiceQuery(voice: String?): String =
+            if (voice.isNullOrEmpty()) "" else "?voice=" + encodeSegment(voice)
 
         private fun encodeSegment(s: String): String =
             java.net.URLEncoder.encode(s, "UTF-8").replace("+", "%20")

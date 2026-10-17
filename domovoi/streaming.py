@@ -179,6 +179,9 @@ Client → Server
                            and after a set_voice action. Server caches
                            per-room and synthesizes that room's responses +
                            greetings in it. None/unknown → registry default.
+                           Ignored from a device whose `supports` leaves out
+                           "voice": the server keeps that room's voice
+                           (domovoi/room_voice.py, see `room_voice` below).
   text  logs_chunk         {"type":"logs_chunk","request_id":str,"seq":int,
                             "data":str,"final":bool,"stats":{...}?}
                            - one slice of the log tail requested by `get_logs`,
@@ -256,6 +259,12 @@ Server → Client
                            satellite takes as the end of the turn. New fields
                            on existing messages need no listing — both sides
                            ignore fields they don't know.
+                           `room_voice` (NAME or null) only for a device whose
+                           `supports` leaves out "voice" (a phone in room
+                           mode): the voice the server keeps for the room and
+                           renders its speech in (null: the server's own), so
+                           the device mirrors that voice's clips
+                           (GET /v1/sounds/manifest.sig?voice=NAME).
   text  end_capture        {"type":"end_capture","utt":N}
                            — stop capturing now: the server has heard a whole
                            command (early commit, see below) and is answering.
@@ -275,7 +284,9 @@ Server → Client
                            at the new level. Scales both TTS and music.
   text  sounds_changed     {"type":"sounds_changed"} — the core
                            re-rendered the sound clips (a greeting was
-                           edited); the Pi re-syncs its sound cache.
+                           edited); the Pi re-syncs its sound cache. Carries
+                           `room_voice` as in `ready` for a device whose voice
+                           the server keeps; also sent when that changes.
   text  start_wake_recording {"type":"start_wake_recording","wake_word_id":N,
                            "slug":...,"clip_seconds":F,"target_count":N}
                            — Feature 5. Enter wake-word clip-recording mode:
@@ -1734,7 +1745,7 @@ class StreamSession:
             await existing._close_quietly(1001)
         else:
             log.info("ws %s connected", self.room_id)
-        await self._safe_send_text({
+        ready: dict[str, Any] = {
             "type": "ready",
             "protocol_version": PROTOCOL_VERSION,
             "room_id": self.room_id,
@@ -1746,7 +1757,14 @@ class StreamSession:
             # satellite resolves itself and then holds to the server
             # identity like any address (satellite/discovery.py).
             "server_names": advertised_server_names(),
-        })
+        }
+        if not self.abilities.allows("voice"):
+            # A device that keeps no voice of its own (a phone in room
+            # mode): the voice the server keeps for this room, restored now
+            # that this session is the room's, and said here so the device
+            # mirrors that voice's greeting clips (None: the server's own).
+            ready["room_voice"] = await self._restore_room_voice()
+        await self._safe_send_text(ready)
         self._connected_at = time.monotonic()
         # A timer or reminder that went off while this room was away (or
         # during a core restart) is announced now, if it is still within
@@ -2911,6 +2929,52 @@ class StreamSession:
                     self.room_id, e,
                 )
 
+    async def _restore_room_voice(self) -> str | None:
+        """For a device that keeps no voice of its own: the voice the server
+        keeps for this room (V031, domovoi/room_voice.py), put where every
+        synthesis of this room's speech reads it. None (the server's own
+        voice) when none is kept or it can't be read. Never raises."""
+        voice: str | None = None
+        try:
+            async with session_scope() as s:
+                voice = await SatellitesRepository(s).room_voice(self.room_id)
+        except Exception as e:  # noqa: BLE001 - speak in the server's voice
+            log.warning("room voice: could not read %s's voice: %s", self.room_id, e)
+        voice = await self._registered_voice(voice)
+        voices = self.ws.app.state.satellite_voice
+        if voice:
+            voices[self.room_id] = voice
+            from domovoi.speech_warmup import schedule_room_voice_warm_up
+
+            schedule_room_voice_warm_up(voice)
+        else:
+            voices.pop(self.room_id, None)
+        return voice
+
+    async def _registered_voice(self, name: str | None) -> str | None:
+        """``name`` while the voices registry still has it, else None: a
+        renamed or removed voice has no clips to mirror, and the room speaks
+        in the server's voice anyway (``resolve_voice``). The name as given
+        when the registry can't be read."""
+        if not name:
+            return None
+        from domovoi.db.repositories import VoicesRepository
+
+        try:
+            async with session_scope() as s:
+                row = await VoicesRepository(s).get_by_name(name)
+        except Exception as e:  # noqa: BLE001
+            log.debug("room voice: registry unreadable for %r: %s", name, e)
+            return name
+        return row["name"] if row else None
+
+    def _pi_action_fields(self, pi_action: str | None, pi_action_arg: str | None) -> dict[str, Any]:
+        """The `pi_action` fields of a `response_end`, as declared."""
+        action, arg = self._declared_pi_action(pi_action, pi_action_arg)
+        if action is None:
+            return {}
+        return {"pi_action": action, **({"pi_action_arg": arg} if arg is not None else {})}
+
     def _declared_pi_action(
         self, pi_action: str | None, pi_action_arg: str | None
     ) -> tuple[str | None, str | None]:
@@ -3244,6 +3308,11 @@ class StreamSession:
             # connect and after a set_voice action lands. Cached by room so
             # the synth path renders this room's responses + greetings in
             # that voice. A blank/missing name clears the cache (→ default).
+            if not self.abilities.allows("voice"):
+                # A device that keeps no voice of its own: the server keeps
+                # the room's choice (domovoi/room_voice.py), and it stands.
+                log.info("room %s keeps no voice: ignoring its voice_status", self.room_id)
+                return
             voice = ctrl.get("voice")
             if voice:
                 self.ws.app.state.satellite_voice[self.room_id] = str(voice)
@@ -5579,7 +5648,15 @@ class StreamSession:
                 f"room {self.room_id} {reason}, announce deferred", reason=reason,
             )
 
-    async def announce(self, text: str, *, defer_to_capture: bool = False) -> None:
+    async def announce(
+        self,
+        text: str,
+        *,
+        defer_to_capture: bool = False,
+        voice: str | None = None,
+        pi_action: str | None = None,
+        pi_action_arg: str | None = None,
+    ) -> None:
         """Inject a TTS-synthesized announcement into this Pi's stream.
 
         Reuses the normal response wire format (response_start →
@@ -5614,6 +5691,13 @@ class StreamSession:
         and an announcement's ``response_end`` then releases the
         satellite's wait for the real reply. Intercom, the admin announce
         and ``sdk.speech`` keep today's behaviour.
+
+        ``voice`` speaks it in that voice instead of the room's (a reply's
+        ``voice_override``), and ``pi_action`` / ``pi_action_arg`` ride on
+        its ``response_end`` as on a reply's (only one the device declared:
+        ``_declared_pi_action``): what the dashboard's voice picker sends a
+        Pi, the same change "switch to Norman's voice" makes
+        (domovoi/room_voice.py).
 
         A first sentence that synthesizes to no audio at all (every TTS
         engine down: the client returns an empty WAV) raises
@@ -5657,11 +5741,18 @@ class StreamSession:
         # still to come (`_restart_music_after_announce`).
         self._announce_callers += 1
         try:
-            await self._announce(text, defer_to_capture)
+            await self._announce(text, defer_to_capture, voice, pi_action, pi_action_arg)
         finally:
             self._announce_callers -= 1
 
-    async def _announce(self, text: str, defer_to_capture: bool) -> None:
+    async def _announce(
+        self,
+        text: str,
+        defer_to_capture: bool,
+        voice: str | None = None,
+        pi_action: str | None = None,
+        pi_action_arg: str | None = None,
+    ) -> None:
         """`announce`'s body, run while it is counted in
         `_announce_callers`; see there."""
         async with self._announce_lock:
@@ -5681,7 +5772,7 @@ class StreamSession:
             sentences = _split_sentences(text) or [text]
             # Announce in this room's own voice, like its normal responses.
             a_engine, a_voice = await resolve_voice(
-                self.ws.app.state.satellite_voice.get(self.room_id)
+                voice or self.ws.app.state.satellite_voice.get(self.room_id)
             )
             try:
                 first_pcm, sr = _wav_to_pcm(
@@ -5727,7 +5818,10 @@ class StreamSession:
                 )
 
             task = asyncio.create_task(
-                self._send_announcement(text, sentences, first_pcm, sr, a_engine, a_voice),
+                self._send_announcement(
+                    text, sentences, first_pcm, sr, a_engine, a_voice,
+                    end_extra=self._pi_action_fields(pi_action, pi_action_arg),
+                ),
                 name=f"announce-{self.room_id}",
             )
             self._announce_task = task
@@ -5785,6 +5879,7 @@ class StreamSession:
         sr: int,
         a_engine: Any,
         a_voice: Any,
+        end_extra: dict[str, Any] | None = None,
     ) -> None:
         """announce()'s frames: response_start, the audio, response_end.
         Raw `self.ws.send_*` (not `_safe_send_text`) so any
@@ -5842,6 +5937,7 @@ class StreamSession:
             "type": "response_end",
             "interrupted": False,
             "expect_followup": False,
+            **(end_extra or {}),
         }))
 
     def _restart_music_after_announce(self, url: str) -> None:
@@ -5982,7 +6078,14 @@ class StreamSession:
         `supports` without "sounds": it keeps no clip cache to re-sync."""
         if not self.abilities.allows("sounds"):
             return
-        await self._safe_send_text({"type": "sounds_changed"})
+        frame: dict[str, Any] = {"type": "sounds_changed"}
+        if not self.abilities.allows("voice"):
+            # Whose clips to mirror, for a device whose voice the server
+            # keeps (domovoi/room_voice.py; None: the server's own voice).
+            frame["room_voice"] = await self._registered_voice(
+                self.ws.app.state.satellite_voice.get(self.room_id)
+            )
+        await self._safe_send_text(frame)
 
     # ── Wake-word clip recording / model push (Feature 5) ─────────────────
 

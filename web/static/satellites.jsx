@@ -16,6 +16,7 @@
  *   * POST /api/satellites/{room}/restart                     — drawer · overview · Restart satellite
  *   * POST /api/satellites/{room}/upgrade                     — drawer · overview · Upgrade satellite (code sync + self-restart)
  *   * POST /api/satellites/{room}/pairing/reset               — drawer · overview · Reset pairing (admin-gated, V002 WS auth)
+ *   * POST /api/satellites/{room}/voice                       — drawer · overview · the room's voice (admin; a Pi confirms aloud)
  *   * GET  /api/config/version                                — domovoi git SHA → "needs upgrade" comparison
  *   * POST /api/satellites/{room}/dropin/start                — drawer · overview · Drop in (→ target_room)
  *   * POST /api/satellites/{room}/dropin/end                  — drawer · overview · Hang up
@@ -900,6 +901,89 @@ const satUpgradeOutcome = (room, v, { line = false } = {}) => {
   return '';
 };
 
+/* ---- The room's voice (drawer · overview) ------------------------ */
+/* What "switch to Norman's voice" said in the room does, from here
+ * (POST /api/satellites/{room}/voice, admin): a Pi is sent the change, says
+ * the confirmation in the new voice and reports it back (online only: it
+ * keeps the choice itself); a phone in room mode has the server keep it
+ * (`voice_on_server`), offline too, and may go back to the server's own
+ * voice. A voice that isn't downloaded is listed, marked as Settings →
+ * Voices marks it, and can't be picked: the room would speak in the
+ * fallback voice under its name. */
+const RoomVoicePicker = ({ s, fire, refresh }) => {
+  const admin = useAdminSignedIn();
+  // refetchOnAuth: a list read before the sign-in landed came back empty.
+  const { items: registry } = useApiList('/api/voices', { quiet: true, refetchOnAuth: true });
+  const { data: shipped } = useApiObject('/api/voice', { quiet: true, refetchOnAuth: true });
+  const { data: sampleInfo } = useApiObject('/api/voice/samples', { quiet: true, refetchOnAuth: true });
+  const [busy, setBusy] = React.useState(false);
+
+  const onServer = !!s.voice_on_server;
+  const online = s.status === 'online';
+  const changeable = onServer || (online && satCan(s, 'voice'));
+  const rows = Array.isArray(registry) ? registry : [];
+  const defaultName = (rows.find(v => v.is_default) || {}).name;
+  const options = rows.map(v => ({
+    name: v.name,
+    ready: v.sample === 'voice' && !v.problem,
+    why: v.problem ? 'can’t speak here' : 'not downloaded yet',
+  }));
+  // The voices Domovoi ships that the registry hasn't got yet.
+  for (const v of (shipped && Array.isArray(shipped.voices) ? shipped.voices : [])) {
+    if (rows.some(r => r.model_ref === v.id) || options.some(o => o.name === v.name)) continue;
+    options.push({ name: v.name, ready: sampleInfo?.samples?.[v.id] === 'voice', why: 'not downloaded yet' });
+  }
+  const current = s.voice || '';
+  if (current && !options.some(o => o.name === current)) options.push({ name: current, ready: false, why: 'not in the registry' });
+  const serverLabel = `the server’s voice${defaultName ? ` (${defaultName})` : ''}`;
+
+  const label = (
+    <span className="mono" style={{ color: s.voice ? 'var(--fg)' : 'var(--fg-faint)' }}>{s.voice || serverLabel}</span>
+  );
+  // No registry (not loaded, or unreadable): nothing to offer honestly.
+  if (!changeable || !admin || rows.length === 0) {
+    const why = !admin ? 'sign in as an admin to change it here, or say “switch to <name>’s voice” in the room'
+      : !changeable ? 'its satellite keeps its own voice: change it while the room is online'
+      : 'say “switch to <name>’s voice” in the room to change it';
+    return <div title={why}>{label}</div>;
+  }
+
+  const pick = async (value) => {
+    if (value === current) return;
+    setBusy(true);
+    try {
+      const res = await apiPost(`/api/satellites/${s.room_id}/voice`, { voice: value || null });
+      const spoken = res?.voice || serverLabel;
+      fire(res?.kept_on === 'device'
+        ? `${s.room_id} switches to ${spoken}: it says so in the new voice`
+        : `${s.room_id} now speaks as ${spoken}${online ? '' : ' (from its next connection)'}`);
+      if (refresh) refresh();
+    } catch (e) {
+      reportMutationFailure(fire, 'change the voice', e);
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+      <select aria-label={`${s.room_id}’s voice`} value={current} disabled={busy}
+              onChange={e => pick(e.target.value)}
+              title={onServer ? 'kept on the server for this room: it applies offline too'
+                              : 'the satellite keeps it: it says the change in the new voice'}
+              style={{ flex: 1, minWidth: 0, maxWidth: 260, font: 'inherit', fontSize: 12, height: 28, padding: '0 6px',
+                       borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+                       background: 'var(--card)', color: 'var(--fg)', boxShadow: 'var(--inner-highlight)' }}>
+        {(onServer || !current) && <option value="" disabled={!onServer}>{serverLabel}</option>}
+        {options.map(o => (
+          <option key={o.name} value={o.name} disabled={!o.ready && o.name !== current}>
+            {o.ready ? o.name : `${o.name} · ${o.why}`}
+          </option>
+        ))}
+      </select>
+      {busy && <Icon name="loader" size={14}/>}
+    </div>
+  );
+};
+
 const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   const waiting = s.status === 'waiting';
   const [msg, setMsg] = React.useState('');
@@ -1199,7 +1283,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
           </>
         )}
         <div className="label">voice</div>
-        <div className="mono" style={{ color: s.voice ? 'var(--fg)' : 'var(--fg-faint)' }}>{s.voice || 'registry default'}</div>
+        <RoomVoicePicker s={s} fire={fire} refresh={refresh}/>
         <div className="label">version</div>
         <div className="mono" style={{ color: s.version ? 'var(--fg)' : 'var(--fg-faint)' }}>{s.version || '—'}</div>
         <div className="label">pairing</div>

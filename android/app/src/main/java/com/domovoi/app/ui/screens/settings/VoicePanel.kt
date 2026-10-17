@@ -154,7 +154,8 @@ internal fun VoiceCard() {
     PanelCard(
         "Voice",
         "The voice this phone speaks with, the chat mic's replies included: the same voice as your Domovoi, " +
-            "downloaded to the phone once.",
+            "downloaded to the phone once. Room mode is different: it plays its room's voice, which the server " +
+            "renders (say \"switch to Kristin's voice\" in the room to change it).",
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             SettingsDropdown(

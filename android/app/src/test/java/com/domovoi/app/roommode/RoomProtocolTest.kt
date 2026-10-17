@@ -99,6 +99,23 @@ class RoomProtocolTest {
     }
 
     @Test
+    fun theRoomsVoiceIsTheServersToChoose() {
+        // The phone keeps no voice choice: "voice" is not declared, so the
+        // server keeps the room's and says it in `ready` / `sounds_changed`.
+        assertFalse("voice" in RoomProtocol.supports(echoCanceller = true))
+        val ready = RoomProtocol.parse(device["ready"]!!.toString()) as RoomProtocol.ServerFrame.Ready
+        assertEquals(null, ready.roomVoice)
+        val ryan = RoomProtocol.parse("""{"type":"ready","features":[],"room_voice":"Ryan"}""") as RoomProtocol.ServerFrame.Ready
+        assertEquals("Ryan", ryan.roomVoice)
+        assertEquals(null, (RoomProtocol.parse("""{"type":"ready","room_voice":"  "}""") as RoomProtocol.ServerFrame.Ready).roomVoice)
+        // sounds_changed: with the key it names the voice (null: the
+        // server's own); an older core's bare frame keeps the voice it had.
+        assertEquals(RoomProtocol.ServerFrame.SoundsChanged("Ryan", true), RoomProtocol.parse("""{"type":"sounds_changed","room_voice":"Ryan"}"""))
+        assertEquals(RoomProtocol.ServerFrame.SoundsChanged(null, true), RoomProtocol.parse("""{"type":"sounds_changed","room_voice":null}"""))
+        assertEquals(RoomProtocol.ServerFrame.SoundsChanged(null, false), RoomProtocol.parse("""{"type":"sounds_changed"}"""))
+    }
+
+    @Test
     fun onlyAnHttpUrlIsAStream() {
         assertTrue(RoomProtocol.isStreamUrl("http://192.168.1.30:8051/stream.mp3"))
         assertFalse(RoomProtocol.isStreamUrl("-w /sdcard/x"))

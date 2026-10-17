@@ -111,8 +111,11 @@ for an answer or fire a side effect.
   phrasings. The LLM tool-call and QA paths deliberately see the **raw**
   transcript.
 * **Per-room voice.** The TTS voice is resolved per turn: a handler's
-  `voice_override` wins, else the voice the room reports speaking in
-  (`voice_status` frame), else the registry default.
+  `voice_override` wins, else the room's voice — the one its satellite
+  reports speaking in (`voice_status` frame), or, for a device that keeps
+  no voice of its own (a phone in room mode), the one the server keeps for
+  the room (`satellites.voice`, `domovoi/room_voice.py`) — else the
+  registry default.
 * **Music coordination** rides the same turn. A `music_action="start"`
   response sends `music_start {stream_url}` and arms the `music_ready`
   handshake; music suppressed by wake capture auto-resumes after a non-music

@@ -3467,6 +3467,35 @@ async def admin_get_satellite_config(room_id: str) -> dict[str, Any]:
     return {"room_id": room_id, "reported": bool(reported), "fields": fields}
 
 
+class _AdminSatelliteVoiceBody(BaseModel):
+    # A registered voice's name; null: the server's own voice (only for a
+    # room whose device keeps no voice of its own).
+    voice: str | None = Field(default=None, min_length=1, max_length=80)
+
+
+@app.post(
+    "/v1/admin/satellite/{room_id}/voice",
+    # Admin tier, as the room's other settings (/config): it changes what
+    # a room sounds like for the whole household.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_set_satellite_voice(
+    room_id: str, body: _AdminSatelliteVoiceBody
+) -> dict[str, Any]:
+    """The room drawer's voice picker: what "switch to <name>'s voice"
+    said in the room does (domovoi/room_voice.py). A Pi is sent the
+    change and confirms it aloud in the new voice; a phone in room mode
+    has it kept on the server. {room_id, voice, kept_on, said}; 404 an
+    unknown voice or room, 409 a voice that isn't downloaded, a busy room
+    or an offline Pi, 400 "the server's voice" for a Pi."""
+    from domovoi import room_voice
+
+    try:
+        return await room_voice.apply(app, room_id, body.voice)
+    except room_voice.VoiceChangeRefused as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from e
+
+
 class _AdminSatelliteConfigBody(BaseModel):
     # CORE-7: a config push is a handful of keys, not a payload. The
     # bound is on the NUMBER of keys (pydantic's max_length for a dict);

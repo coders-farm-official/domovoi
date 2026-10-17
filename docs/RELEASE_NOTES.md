@@ -4,6 +4,44 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — A phone in room mode can change its voice
+
+Core update with a **migration (V031: `satellites.voice`)**, and a new
+Android APK (optional: the voice works without it).
+
+* **"Switch to Kristin's voice" works in a phone's room.** A Pi keeps its
+  own voice choice; a phone in room mode keeps none (its hello declares
+  `supports` without `voice`), so the server refused the switch there
+  ("This room's device can't change its voice"). The server now keeps that
+  room's choice itself, in `satellites.voice`, and renders the room's
+  replies, announcements and interim lines in it, across reconnects and
+  server restarts. A phone on today's app needs no update for that.
+  "What voice are you using" answers with it, and the dashboard's room
+  drawer shows it while the phone is connected. A Pi is unchanged: it
+  still keeps its own voice and reports it.
+* **The phone's wake greetings follow the room's voice** with the new APK:
+  the server says the room's voice in `ready` and `sounds_changed`
+  (`room_voice`, new optional fields sent only to a device without
+  `voice`), and the phone mirrors that voice's clips. On an older app the
+  greetings stay in the server's voice while the replies change. A
+  `voice_status` from such a device is ignored: the server's choice
+  stands.
+* **The room drawer picks the voice** (Settings → Satellites, a room's
+  Overview: the voice row is now a picker, admin). A Pi is sent the same
+  change the voice command makes: it says "Okay, I'm Norman now." in the
+  new voice and stores and reports it (online only; a busy room refuses
+  and changes nothing). A phone room's choice is kept on the server,
+  offline too, and can go back to the server's own voice. A voice that
+  isn't downloaded yet is listed, marked, and can't be picked.
+  `POST /api/satellites/{room}/voice` (core
+  `/v1/admin/satellite/{room}/voice`); the room rows gain
+  `voice_on_server`.
+* **Not the phone's own voice.** The app's Settings → Voice (the chat
+  mic's replies and the on-phone assistant) is a separate setting on the
+  phone; its card now says that room mode plays the room's voice instead.
+  "Switch voice" from the chat mic is still refused, as before.
+
+
 ## 2026-10-17 — Android app: "play in room" from a track's drawer plays again
 
 A new APK; nothing changes on the server.

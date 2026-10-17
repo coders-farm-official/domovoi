@@ -6116,6 +6116,57 @@
         }
       }
     },
+    "/api/satellites/{room_id}/voice": {
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Set Room Voice",
+        "description": "The room drawer's voice picker. Proxies to the core, which does what\n\"switch to <name>'s voice\" said in the room does: a Pi is sent the\nchange (it confirms aloud in the new voice and reports it back); a\nphone in room mode has it kept on the server. Returns {room_id, voice,\nkept_on: \"device\"|\"server\", said}.",
+        "operationId": "set_room_voice_api_satellites__room_id__voice_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoomVoiceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/satellites/{room_id}/pairing/reset": {
       "post": {
         "tags": [
@@ -18758,6 +18809,26 @@
         ],
         "title": "RoomState"
       },
+      "RoomVoiceRequest": {
+        "properties": {
+          "voice": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Voice"
+          }
+        },
+        "type": "object",
+        "title": "RoomVoiceRequest",
+        "description": "The room drawer's voice picker (POST /api/satellites/{room}/voice)."
+      },
       "SampleSources": {
         "properties": {
           "samples": {
@@ -18898,6 +18969,11 @@
               }
             ],
             "title": "Voice"
+          },
+          "voice_on_server": {
+            "type": "boolean",
+            "title": "Voice On Server",
+            "default": false
           },
           "volume": {
             "anyOf": [
