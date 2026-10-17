@@ -170,8 +170,10 @@ fun PodcastsScreen() {
                 EpisodeOverlay(
                     sub = sub,
                     onClose = { selected = null },
+                    // Can come after the overlay closed (the request runs in
+                    // the app's scope): close only this show's overlay.
                     onUnsubscribed = {
-                        selected = null
+                        if (selected?.id == sub.id) selected = null
                         pager.remove(sub.id)
                     },
                     onPlay = { ep -> playEpisode(app, scope, sub, ep) { resume = it } },
@@ -183,10 +185,7 @@ fun PodcastsScreen() {
     if (showSubscribe) {
         SubscribeDialog(
             onClose = { showSubscribe = false },
-            onDone = {
-                showSubscribe = false
-                pager.reload()
-            },
+            onDone = { pager.reload() },
         )
     }
 

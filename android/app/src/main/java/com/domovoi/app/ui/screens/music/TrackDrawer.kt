@@ -31,7 +31,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,9 +47,10 @@ import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.fmtDur
+import com.domovoi.app.ui.components.launchAction
+import com.domovoi.app.ui.components.rememberStillComposed
 import com.domovoi.app.ui.components.relTime
 import com.domovoi.app.ui.theme.Domovoi
-import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -70,7 +70,11 @@ internal fun TrackDrawer(
     val app = LocalApp.current
     val toast = LocalToast.current
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    // The app's scope, not this drawer's: "play in room" closes the drawer
+    // before the server answers, and a delete can be answered after a back
+    // gesture closed it (ServerAction.kt says why).
+    val scope = app.scope
+    val open = rememberStillComposed()
 
     // The picked chip, else the first room the server reported; null with
     // no room online (never a made-up "kitchen").
@@ -84,17 +88,20 @@ internal fun TrackDrawer(
     fun playInRoom() {
         val room = room ?: return
         toast("playing \"${track.title ?: "track"}\" in $room…")
-        // Close immediately so the tap feels responsive; failure still toasts.
+        // Close immediately so the tap feels responsive; the request runs in
+        // the app's scope, so closing doesn't cancel it, and failure still
+        // toasts.
         onClose()
-        scope.launch {
-            runCatching {
+        scope.launchAction(
+            action = {
                 app.api.post("/api/music/play-track", buildJsonObject {
                     put("room_id", room)
                     put("track_id", track.id)
                 })
-            }.onSuccess { refreshNP() }
-                .onFailure { toast("play failed: ${it.message}") }
-        }
+            },
+            onSuccess = { refreshNP() },
+            onFailure = { toast("play failed: ${it.message}") },
+        )
     }
 
     DrawerScaffold(onClose = onClose, widthDp = 420) {
@@ -140,8 +147,10 @@ internal fun TrackDrawer(
             // Metadata
             Column(Modifier.fillMaxWidth().padding(16.dp)) {
                 MetaRow("duration") { MonoText(fmtDur(track.durationSec)) }
+                // A provider plugin's slug, or nothing: a file the library
+                // found on disk already says "manual" under "added via".
                 MetaRow("source") {
-                    Pill(track.source ?: "manual", if (track.source != null) Tone.Brand else Tone.Idle)
+                    trackSource(track.source)?.let { Pill(it, Tone.Brand) } ?: MonoText("—")
                 }
                 MetaRow("source id") { MonoText(track.sourceId ?: "—") }
                 MetaRow("added") { MonoText(relTime(track.addedAt)) }
@@ -250,13 +259,15 @@ internal fun TrackDrawer(
             confirmLabel = "delete",
             destructive = true,
             onConfirm = {
-                scope.launch {
-                    runCatching {
+                scope.launchAction(
+                    action = {
                         app.api.delete(
                             "/api/music/library/${track.id}" +
                                 (if (alsoFile) "?also_file=true" else ""),
                         )
-                    }.onSuccess {
+                    },
+                    onFailure = { toast("delete failed: ${it.message}") },
+                    onSuccess = {
                         toast(
                             if (alsoFile) {
                                 "deleted \"${track.title ?: "track"}\" · file removed from disk"
@@ -264,11 +275,13 @@ internal fun TrackDrawer(
                                 "removed \"${track.title ?: "track"}\" from library (file kept; rescan will re-add)"
                             },
                         )
-                        onClose()
+                        // Only this drawer: a back gesture may have closed it
+                        // and opened another track's since.
+                        if (open()) onClose()
                         refreshLib()
                         refreshStats()
-                    }.onFailure { toast("delete failed: ${it.message}") }
-                }
+                    },
+                )
             },
             onDismiss = { confirmDelete = false },
         )

@@ -32,7 +32,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,8 +46,9 @@ import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.components.SectionLabel
+import com.domovoi.app.ui.components.launchAction
+import com.domovoi.app.ui.components.rememberStillComposed
 import com.domovoi.app.ui.theme.Domovoi
-import kotlinx.coroutines.launch
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -68,7 +68,12 @@ internal fun PlaylistDrawer(
 ) {
     val app = LocalApp.current
     val toast = LocalToast.current
-    val scope = rememberCoroutineScope()
+    // The app's scope, not this drawer's: "play" closes the drawer before
+    // the server answers, and a back gesture can close it mid-request
+    // (ServerAction.kt says why). [open] keeps a late answer off a drawer
+    // that has closed.
+    val scope = app.scope
+    val open = rememberStillComposed()
 
     val tracksState = rememberApi(
         playlist.id,
@@ -91,40 +96,46 @@ internal fun PlaylistDrawer(
     fun play(shuffle: Boolean) {
         val room = room ?: return
         toast((if (shuffle) "shuffling" else "playing") + " ${playlist.name} in $room…")
-        scope.launch {
-            runCatching {
+        scope.launchAction(
+            action = {
                 app.api.post("/api/music/play-playlist", buildJsonObject {
                     put("room_id", room)
                     put("playlist_id", playlist.id)
                     put("shuffle", shuffle)
                 })
-            }.onSuccess { refreshNP() }
-                .onFailure { toast((if (shuffle) "shuffle" else "play") + " failed: ${it.message}") }
-        }
+            },
+            onSuccess = { refreshNP() },
+            onFailure = { toast((if (shuffle) "shuffle" else "play") + " failed: ${it.message}") },
+        )
         onClose()
     }
 
     fun saveEdit() {
-        scope.launch {
-            runCatching {
+        scope.launchAction(
+            action = {
                 app.api.patch("/api/playlists/${playlist.id}", buildJsonObject {
                     put("name", editName.trim())
                     put("description", editDesc.trim())
                     put("cover_emoji", editEmoji.trim())
                 })
-            }.onSuccess {
+            },
+            onSuccess = {
                 toast("playlist updated")
-                editing = false
                 refreshPlaylists()
-                onEdited(
-                    playlist.copy(
-                        name = editName.trim(),
-                        description = editDesc.trim(),
-                        coverEmoji = editEmoji.trim(),
-                    ),
-                )
-            }.onFailure { toast("update failed: ${it.message}") }
-        }
+                // Closed meanwhile: don't reopen it with the new name.
+                if (open()) {
+                    editing = false
+                    onEdited(
+                        playlist.copy(
+                            name = editName.trim(),
+                            description = editDesc.trim(),
+                            coverEmoji = editEmoji.trim(),
+                        ),
+                    )
+                }
+            },
+            onFailure = { toast("update failed: ${it.message}") },
+        )
     }
 
     fun move(index: Int, dir: Int) {
@@ -134,30 +145,31 @@ internal fun PlaylistDrawer(
         val moved = next.removeAt(index)
         next.add(j, moved)
         localOrder = next
-        scope.launch {
-            runCatching {
+        scope.launchAction(
+            action = {
                 app.api.patch("/api/playlists/${playlist.id}/order", buildJsonObject {
                     putJsonArray("track_ids") { next.forEach { add(it.id) } }
                 })
-            }.onSuccess { refreshPlaylists() }
-                .onFailure {
-                    toast("reorder failed: ${it.message}")
-                    localOrder = null
-                }
-        }
+            },
+            onSuccess = { refreshPlaylists() },
+            onFailure = {
+                toast("reorder failed: ${it.message}")
+                localOrder = null
+            },
+        )
     }
 
     fun removeTrack(t: LibraryTrack) {
-        scope.launch {
-            runCatching {
-                app.api.delete("/api/playlists/${playlist.id}/tracks/${t.id}")
-            }.onSuccess {
+        scope.launchAction(
+            action = { app.api.delete("/api/playlists/${playlist.id}/tracks/${t.id}") },
+            onSuccess = {
                 toast("removed \"${t.title ?: "track"}\" from ${playlist.name}")
                 localOrder = null
                 tracksState.refresh()
                 refreshPlaylists()
-            }.onFailure { toast("remove failed: ${it.message}") }
-        }
+            },
+            onFailure = { toast("remove failed: ${it.message}") },
+        )
     }
 
     DrawerScaffold(onClose = onClose, widthDp = 460) {
@@ -391,15 +403,15 @@ internal fun PlaylistDrawer(
             confirmLabel = "delete",
             destructive = true,
             onConfirm = {
-                scope.launch {
-                    runCatching { app.api.delete("/api/playlists/${playlist.id}") }
-                        .onSuccess {
-                            toast("deleted ${playlist.name}")
-                            onClose()
-                            refreshPlaylists()
-                        }
-                        .onFailure { toast("delete failed: ${it.message}") }
-                }
+                scope.launchAction(
+                    action = { app.api.delete("/api/playlists/${playlist.id}") },
+                    onSuccess = {
+                        toast("deleted ${playlist.name}")
+                        if (open()) onClose()
+                        refreshPlaylists()
+                    },
+                    onFailure = { toast("delete failed: ${it.message}") },
+                )
             },
             onDismiss = { confirmDelete = false },
         )

@@ -1,12 +1,11 @@
 package com.domovoi.app.ui.screens.stations
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.rememberCoroutineScope
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.decode
 import com.domovoi.app.player.PlayItem
-import kotlinx.coroutines.launch
+import com.domovoi.app.ui.components.launchAction
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -53,13 +52,16 @@ internal fun unplayableReason(s: Station): String =
 internal fun rememberStationPlayer(onPlayed: () -> Unit = {}): (Station) -> Unit {
     val app = LocalApp.current
     val toast = LocalToast.current
-    val scope = rememberCoroutineScope()
+    // The app's scope: leaving Stations before the server answers must not
+    // cancel the play and toast it as "play failed"
+    // (ui/components/ServerAction.kt).
+    val scope = app.scope
     return { s: Station ->
         if (!stationPlayable(s)) {
             toast(unplayableReason(s))
         } else {
-            scope.launch {
-                runCatching {
+            scope.launchAction(
+                action = {
                     app.api.post(
                         "/api/plugins/radio/play",
                         buildJsonObject {
@@ -79,12 +81,14 @@ internal fun rememberStationPlayer(onPlayed: () -> Unit = {}): (Station) -> Unit
                             }
                         },
                     ).decode<Station>()
-                }.onSuccess { row ->
+                },
+                onSuccess = { row ->
                     app.player.playItems(listOf(PlayItem.fromStation(row.id, row.name)))
                     toast("playing ${row.name}")
                     onPlayed()
-                }.onFailure { toast("play failed: ${it.message}") }
-            }
+                },
+                onFailure = { toast("play failed: ${it.message}") },
+            )
         }
     }
 }

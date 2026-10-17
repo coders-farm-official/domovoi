@@ -333,7 +333,9 @@ private fun LibraryRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Pill(t.addedVia ?: "—", if (t.addedVia == "voice") Tone.Brand else Tone.Idle)
-                Pill(t.source ?: "manual", if (t.source != null) Tone.Brand else Tone.Idle)
+                // Only a provider plugin's slug: no source used to read
+                // "manual" too, next to added-via's "manual" ("manual manual").
+                trackSource(t.source)?.let { Pill(it, Tone.Brand) }
                 if (!t.album.isNullOrBlank()) {
                     Text(
                         t.album,

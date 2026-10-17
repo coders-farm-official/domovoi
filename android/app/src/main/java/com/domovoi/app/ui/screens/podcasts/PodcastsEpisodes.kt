@@ -41,7 +41,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,9 +59,9 @@ import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.ErrorState
 import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.components.fmtDur
+import com.domovoi.app.ui.components.launchAction
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.MonoFamily
-import kotlinx.coroutines.launch
 
 /**
  * Episode list for one subscription (web EpisodeDrawer). Full-screen on
@@ -78,7 +77,9 @@ internal fun EpisodeOverlay(
     val app = LocalApp.current
     val toast = LocalToast.current
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    // The app's scope, not this overlay's: a back gesture can close it
+    // while "unsubscribe" is on its way (ui/components/ServerAction.kt).
+    val scope = app.scope
     val compact = currentWindowAdaptiveInfo()
         .windowSizeClass.windowWidthSizeClass == WindowWidthSizeClass.COMPACT
     var confirmUnsub by remember { mutableStateOf(false) }
@@ -197,14 +198,14 @@ internal fun EpisodeOverlay(
             confirmLabel = "unsubscribe",
             destructive = true,
             onConfirm = {
-                scope.launch {
-                    runCatching { app.api.delete("/api/podcasts/subscriptions/${sub.id}") }
-                        .onSuccess {
-                            toast("Unsubscribed")
-                            onUnsubscribed()
-                        }
-                        .onFailure { toast("failed: ${it.message}") }
-                }
+                scope.launchAction(
+                    action = { app.api.delete("/api/podcasts/subscriptions/${sub.id}") },
+                    onSuccess = {
+                        toast("Unsubscribed")
+                        onUnsubscribed()
+                    },
+                    onFailure = { toast("failed: ${it.message}") },
+                )
             },
             onDismiss = { confirmUnsub = false },
         )

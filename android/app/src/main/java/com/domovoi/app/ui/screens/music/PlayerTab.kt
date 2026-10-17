@@ -45,7 +45,6 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,8 +68,8 @@ import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.fmtDur
+import com.domovoi.app.ui.components.launchAction
 import com.domovoi.app.ui.theme.Domovoi
-import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 /*
@@ -362,7 +361,9 @@ private fun SeekRow(current: PlayItem?, isRemote: Boolean) {
 private fun TransportRow(isRemote: Boolean, effPlaying: Boolean, rooms: List<String>) {
     val app = LocalApp.current
     val toast = LocalToast.current
-    val scope = rememberCoroutineScope()
+    // The app's scope: this row is a lazy item that scrolls away, and a cast
+    // already started must finish (ServerAction.kt says why).
+    val scope = app.scope
     Row(
         Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -404,14 +405,14 @@ private fun TransportRow(isRemote: Boolean, effPlaying: Boolean, rooms: List<Str
                     text = { Text("this device") },
                     onClick = {
                         castOpen = false
-                        scope.launch {
-                            // The toast is what happened: "playing" only when
-                            // the phone took over from a room that was
-                            // playing and was paused (CastOutcome.Here).
-                            runCatching { app.player.castTo(null) }
-                                .onSuccess { toast(it.note) }
-                                .onFailure { toast(castFailure(it, null)) }
-                        }
+                        // The toast is what happened: "playing" only when
+                        // the phone took over from a room that was
+                        // playing and was paused (CastOutcome.Here).
+                        scope.launchAction(
+                            action = { app.player.castTo(null) },
+                            onSuccess = { toast(it.note) },
+                            onFailure = { toast(castFailure(it, null)) },
+                        )
                     },
                 )
                 if (rooms.isEmpty()) {
@@ -442,11 +443,11 @@ private fun TransportRow(isRemote: Boolean, effPlaying: Boolean, rooms: List<Str
                         enabled = refusal == null,
                         onClick = {
                             castOpen = false
-                            scope.launch {
-                                runCatching { app.player.castTo(r) }
-                                    .onSuccess { toast(it.note) }
-                                    .onFailure { toast(castFailure(it, r)) }
-                            }
+                            scope.launchAction(
+                                action = { app.player.castTo(r) },
+                                onSuccess = { toast(it.note) },
+                                onFailure = { toast(castFailure(it, r)) },
+                            )
                         },
                     )
                 }
@@ -581,7 +582,9 @@ internal fun castFailure(e: Throwable, room: String?): String = CastPlanner.fail
 private fun PlayerQueueRow(i: Int, item: PlayItem, isCurrent: Boolean, last: Boolean, room: String?) {
     val app = LocalApp.current
     val toast = LocalToast.current
-    val scope = rememberCoroutineScope()
+    // The app's scope: a queue row scrolls away, or is redrawn under a new
+    // key once the room takes the queue (ServerAction.kt says why).
+    val scope = app.scope
     Row(
         Modifier
             .fillMaxWidth()
@@ -593,13 +596,13 @@ private fun PlayerQueueRow(i: Int, item: PlayItem, isCurrent: Boolean, last: Boo
                 // While casting, a tapped row starts the ROOM there; playing
                 // it on the phone would put two players on at once.
                 if (room != null) {
-                    scope.launch {
-                        runCatching { app.player.castFrom(i) }
-                            .onSuccess {
-                                toast(if (it is CastOutcome.ToRoom) "playing \"${item.title}\" in $room" else it.note)
-                            }
-                            .onFailure { toast(castFailure(it, room)) }
-                    }
+                    scope.launchAction(
+                        action = { app.player.castFrom(i) },
+                        onSuccess = {
+                            toast(if (it is CastOutcome.ToRoom) "playing \"${item.title}\" in $room" else it.note)
+                        },
+                        onFailure = { toast(castFailure(it, room)) },
+                    )
                 } else {
                     app.player.jumpTo(i)
                 }

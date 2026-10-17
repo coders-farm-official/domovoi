@@ -25,7 +25,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,8 +37,9 @@ import com.domovoi.app.net.decode
 import com.domovoi.app.net.rememberApi
 import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.components.SectionLabel
+import com.domovoi.app.ui.components.launchAction
+import com.domovoi.app.ui.components.rememberStillComposed
 import com.domovoi.app.ui.theme.Domovoi
-import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -57,7 +57,11 @@ internal fun AddToPlaylistSheet(
 ) {
     val app = LocalApp.current
     val toast = LocalToast.current
-    val scope = rememberCoroutineScope()
+    // The app's scope, not this sheet's: a back gesture can close the sheet
+    // before the server answers (ServerAction.kt says why). [open] keeps a
+    // late answer off a sheet that has closed.
+    val scope = app.scope
+    val open = rememberStillComposed()
 
     val memberships = rememberApi(
         track.id,
@@ -75,8 +79,8 @@ internal fun AddToPlaylistSheet(
 
     fun toggle(p: Playlist) {
         val inIt = p.id in memberIds
-        scope.launch {
-            runCatching {
+        scope.launchAction(
+            action = {
                 when {
                     p.isVirtual -> {
                         app.api.patch("/api/music/library/${track.id}", buildJsonObject {
@@ -95,35 +99,39 @@ internal fun AddToPlaylistSheet(
                         "added to ${p.name}"
                     }
                 }
-            }.onSuccess { msg ->
+            },
+            onSuccess = { msg ->
                 toast(msg)
                 onMutated()
-                onClose()
-            }.onFailure {
+                if (open()) onClose()
+            },
+            onFailure = {
                 toast("failed: ${it.message}")
                 memberships.refresh()
                 all.refresh()
-            }
-        }
+            },
+        )
     }
 
     fun create() {
         val name = creating.trim()
         if (name.isEmpty()) return
-        scope.launch {
-            runCatching {
+        scope.launchAction(
+            action = {
                 val created = app.api.post("/api/playlists", buildJsonObject { put("name", name) })
                 val pid = created.jsonObject["id"]?.jsonPrimitive?.longOrNull
                     ?: error("no playlist id returned")
                 app.api.post("/api/playlists/$pid/tracks", buildJsonObject {
                     put("track_id", track.id)
                 })
-            }.onSuccess {
+            },
+            onSuccess = {
                 toast("created $name · added \"${track.title ?: "track"}\"")
                 onMutated()
-                onClose()
-            }.onFailure { toast("create failed: ${it.message}") }
-        }
+                if (open()) onClose()
+            },
+            onFailure = { toast("create failed: ${it.message}") },
+        )
     }
 
     DrawerScaffold(onClose = onClose, widthDp = 380) {

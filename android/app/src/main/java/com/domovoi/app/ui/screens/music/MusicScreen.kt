@@ -28,7 +28,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -49,6 +48,8 @@ import com.domovoi.app.ui.components.LoadMoreNearEnd
 import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.components.PageHeader
 import com.domovoi.app.ui.components.PromptDialog
+import com.domovoi.app.ui.components.launchAction
+import com.domovoi.app.ui.components.runAction
 import com.domovoi.app.ui.components.rememberPager
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.Dispatchers
@@ -85,7 +86,12 @@ internal fun castRooms(nowPlaying: List<NowPlayingRoom>): List<String> =
 fun MusicScreen() {
     val app = LocalApp.current
     val toast = LocalToast.current
-    val scope = rememberCoroutineScope()
+    // Every server action here runs in the app's scope, not this screen's:
+    // the drawers, sheets, dialogs and tabs that start them close (or are
+    // left) before the server answers, and an answer still has to land as
+    // a toast. A composable's scope cancelled the request with it and
+    // toasted the cancellation as "play failed" (ServerAction.kt says why).
+    val scope = app.scope
     val context = LocalContext.current
     val ui = rememberSaveable(saver = MusicUi.Saver) { MusicUi() }
 
@@ -172,31 +178,33 @@ fun MusicScreen() {
 
     // ── Room transport ────────────────────────────────────────────────
     fun roomCtl(action: String, room: String, failLabel: String) {
-        scope.launch {
-            runCatching { app.api.post("/api/music/$action/$room") }
-                .onSuccess { nowPlaying.refresh() }
-                .onFailure { toast("$failLabel failed: ${it.message}") }
-        }
+        scope.launchAction(
+            action = { app.api.post("/api/music/$action/$room") },
+            onSuccess = { nowPlaying.refresh() },
+            onFailure = { toast("$failLabel failed: ${it.message}") },
+        )
     }
 
     val onPlayRandom: (String) -> Unit = { room ->
         toast("shuffle requested in $room…")
-        scope.launch {
-            runCatching {
+        scope.launchAction(
+            action = {
                 app.api.post("/api/music/play", buildJsonObject {
                     put("room_id", room)
                     put("query", "something random")
                 })
-            }.onSuccess { nowPlaying.refresh() }
-                .onFailure { toast("play failed: ${it.message}") }
-        }
+            },
+            onSuccess = { nowPlaying.refresh() },
+            onFailure = { toast("play failed: ${it.message}") },
+        )
     }
 
     val onFavoriteNp: (String) -> Unit = { room ->
-        scope.launch {
-            runCatching {
+        scope.launchAction(
+            action = {
                 app.api.post("/api/music/now-playing/$room/favorite").decode<NpFavoriteResponse>()
-            }.onSuccess { r ->
+            },
+            onSuccess = { r ->
                 val label = r.title ?: "track"
                 // Prefer server-supplied copy; the kind vocabulary is open
                 // (plugins report their own slugs), so fall back generically.
@@ -210,26 +218,29 @@ fun MusicScreen() {
                 toast(msg)
                 if (r.kind == "library" && !r.alreadyFavorited) libPager.reload()
                 nowPlaying.refresh()
-            }.onFailure { toast("favorite failed: ${it.message}") }
-        }
+            },
+            onFailure = { toast("favorite failed: ${it.message}") },
+        )
     }
 
     // ── Library actions ───────────────────────────────────────────────
     val onToggleFavorite: (LibraryTrack) -> Unit = { t ->
-        scope.launch {
-            runCatching {
+        scope.launchAction(
+            action = {
                 app.api.patch("/api/music/library/${t.id}", buildJsonObject {
                     put("favorited", !t.favorited)
                 })
-            }.onSuccess {
+            },
+            onSuccess = {
                 // The loaded row changes in place (no re-read of every page
                 // scrolled through); under "favorites only" an unfavorited
                 // track leaves the list.
                 if (t.favorited && ui.favoritedOnly) libPager.remove(t.id)
                 else libPager.update(t.id) { it.copy(favorited = !t.favorited) }
                 nowPlaying.refresh()
-            }.onFailure { toast("favorite failed: ${it.message}") }
-        }
+            },
+            onFailure = { toast("favorite failed: ${it.message}") },
+        )
     }
 
     val onBulkAdd: (Long, List<Long>) -> Unit = { pid, trackIds ->
@@ -237,12 +248,11 @@ fun MusicScreen() {
             var added = 0
             var dupes = 0
             for (tid in trackIds) {
-                try {
+                runAction {
                     app.api.post("/api/playlists/$pid/tracks", buildJsonObject {
                         put("track_id", tid)
                     })
-                    added++
-                } catch (e: Exception) {
+                }.onSuccess { added++ }.onFailure { e ->
                     val msg = e.message ?: ""
                     if (msg.contains("already", ignoreCase = true) || msg.contains("409")) dupes++
                     else toast("add failed: $msg")
@@ -259,18 +269,18 @@ fun MusicScreen() {
     }
 
     val onRescan: () -> Unit = {
-        scope.launch {
-            runCatching { app.api.post("/api/music/library/reindex") }
-                .onSuccess { toast("rescan started") }
-                .onFailure { toast("rescan failed: ${it.message}") }
-        }
+        scope.launchAction(
+            action = { app.api.post("/api/music/library/reindex") },
+            onSuccess = { toast("rescan started") },
+            onFailure = { toast("rescan failed: ${it.message}") },
+        )
     }
     val onEnrich: () -> Unit = {
-        scope.launch {
-            runCatching { app.api.post("/api/music/library/enrich") }
-                .onSuccess { toast(enrichReplyText(it)) }
-                .onFailure { toast("enrich failed: ${it.message}") }
-        }
+        scope.launchAction(
+            action = { app.api.post("/api/music/library/enrich") },
+            onSuccess = { toast(enrichReplyText(it)) },
+            onFailure = { toast("enrich failed: ${it.message}") },
+        )
     }
 
     // ── Upload ────────────────────────────────────────────────────────
@@ -280,35 +290,38 @@ fun MusicScreen() {
         if (uris.isNotEmpty()) {
             ui.uploading = true
             toast("uploading ${uris.size} item" + (if (uris.size == 1) "" else "s") + "…")
+            // The app's context: the upload can outlive this screen.
+            val appContext = context.applicationContext
             scope.launch {
                 try {
-                    val form = withContext(Dispatchers.IO) {
-                        val builder = MultipartBody.Builder().setType(MultipartBody.FORM)
-                        uris.forEach { uri ->
-                            val bytes = context.contentResolver.openInputStream(uri)
-                                ?.use { s -> s.readBytes() }
-                            if (bytes != null) {
-                                val mime = context.contentResolver.getType(uri)
-                                    ?: "application/octet-stream"
-                                builder.addFormDataPart(
-                                    "files",
-                                    displayName(context, uri),
-                                    bytes.toRequestBody(mime.toMediaTypeOrNull()),
-                                )
+                    runAction {
+                        val form = withContext(Dispatchers.IO) {
+                            val builder = MultipartBody.Builder().setType(MultipartBody.FORM)
+                            uris.forEach { uri ->
+                                val bytes = appContext.contentResolver.openInputStream(uri)
+                                    ?.use { s -> s.readBytes() }
+                                if (bytes != null) {
+                                    val mime = appContext.contentResolver.getType(uri)
+                                        ?: "application/octet-stream"
+                                    builder.addFormDataPart(
+                                        "files",
+                                        displayName(appContext, uri),
+                                        bytes.toRequestBody(mime.toMediaTypeOrNull()),
+                                    )
+                                }
                             }
+                            builder.build()
                         }
-                        builder.build()
-                    }
-                    val res = app.api.upload("/api/music/library/upload", form).jsonObject
-                    val saved = res["saved"]?.jsonPrimitive?.intOrNull ?: 0
-                    val skipped = (res["skipped"] as? JsonArray)?.size ?: 0
-                    val reindex = res["reindex_triggered"]?.jsonPrimitive?.booleanOrNull ?: false
-                    val parts = mutableListOf("uploaded $saved track" + (if (saved == 1) "" else "s"))
-                    if (skipped > 0) parts.add("$skipped skipped")
-                    parts.add(if (reindex) "indexing…" else "server offline — will index on next boot")
-                    toast(parts.joinToString(" · "))
-                } catch (e: Exception) {
-                    toast("upload failed: ${e.message}")
+                        val res = app.api.upload("/api/music/library/upload", form).jsonObject
+                        val saved = res["saved"]?.jsonPrimitive?.intOrNull ?: 0
+                        val skipped = (res["skipped"] as? JsonArray)?.size ?: 0
+                        val reindex = res["reindex_triggered"]?.jsonPrimitive?.booleanOrNull ?: false
+                        val parts = mutableListOf("uploaded $saved track" + (if (saved == 1) "" else "s"))
+                        if (skipped > 0) parts.add("$skipped skipped")
+                        parts.add(if (reindex) "indexing…" else "server offline — will index on next boot")
+                        parts.joinToString(" · ")
+                    }.onSuccess { toast(it) }
+                        .onFailure { toast("upload failed: ${it.message}") }
                 } finally {
                     ui.uploading = false
                 }
@@ -321,16 +334,17 @@ fun MusicScreen() {
         val room = rooms.firstOrNull()
             ?: return@play toast("no rooms online — connect a satellite to play ${p.name}")
         toast("playing ${p.name} in $room…")
-        scope.launch {
-            runCatching {
+        scope.launchAction(
+            action = {
                 app.api.post("/api/music/play-playlist", buildJsonObject {
                     put("room_id", room)
                     put("playlist_id", p.id)
                     put("shuffle", false)
                 })
-            }.onSuccess { nowPlaying.refresh() }
-                .onFailure { toast("play failed: ${it.message}") }
-        }
+            },
+            onSuccess = { nowPlaying.refresh() },
+            onFailure = { toast("play failed: ${it.message}") },
+        )
     }
 
     // ── Header derived counts ─────────────────────────────────────────
@@ -504,8 +518,8 @@ fun MusicScreen() {
             placeholder = "playlist name…",
             confirmLabel = "create",
             onConfirm = { name ->
-                scope.launch {
-                    runCatching {
+                scope.launchAction(
+                    action = {
                         val created = app.api.post("/api/playlists", buildJsonObject {
                             put("name", name)
                         })
@@ -516,18 +530,20 @@ fun MusicScreen() {
                             .map { it.id }
                         var added = 0
                         ids.forEach { tid ->
-                            runCatching {
+                            runAction {
                                 app.api.post("/api/playlists/$pid/tracks", buildJsonObject {
                                     put("track_id", tid)
                                 })
                             }.onSuccess { added++ }
                         }
                         added
-                    }.onSuccess { added ->
+                    },
+                    onSuccess = { added ->
                         toast("created $name · added $added track" + (if (added == 1) "" else "s"))
                         playlists.refresh()
-                    }.onFailure { toast("save failed: ${it.message}") }
-                }
+                    },
+                    onFailure = { toast("save failed: ${it.message}") },
+                )
             },
             onDismiss = { ui.saveQueueOpen = false },
         )

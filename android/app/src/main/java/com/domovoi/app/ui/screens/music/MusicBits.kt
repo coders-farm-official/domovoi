@@ -109,6 +109,14 @@ internal fun compactWidth(): Boolean =
 internal fun truncMid(s: String, max: Int = 50): String =
     if (s.length <= max) s else s.take(max / 2) + "…" + s.takeLast(max / 2)
 
+/**
+ * A library track's source pill: the provider plugin's slug that stamped it,
+ * or null for none. No source used to show as "manual", the same word as
+ * added-via's "manual" beside it, so every file the library found on disk
+ * read "manual manual".
+ */
+internal fun trackSource(source: String?): String? = source?.trim()?.takeIf { it.isNotEmpty() }
+
 /** Thin amber progress bar — the web's 4px track bar. */
 @Composable
 internal fun ProgressBar(fraction: Float, modifier: Modifier = Modifier) {
