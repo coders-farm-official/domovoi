@@ -187,6 +187,54 @@ class ApiClient(
         token
     }
 
+    /**
+     * Whether the active server accepts [candidate] as the household token,
+     * asked ONCE before it is saved (the pairing screen, Settings →
+     * Connection, the refused-token card): one device-tier read carrying the
+     * candidate and nothing else. A wrong paste costs one wrong token on the
+     * server's count, as it must; nothing here retries. The candidate goes
+     * only to the active server, after the identity gate admits it, and not
+     * at all while the server makes this address wait.
+     */
+    suspend fun checkDeviceToken(candidate: String): TokenCheck = withContext(Dispatchers.IO) {
+        if (HouseholdLock.roomModeActive) return@withContext TokenCheck.Unavailable
+        val raw = baseUrl
+        val base = TokenScope.baseOf(raw) ?: return@withContext TokenCheck.Unavailable
+        val token = headerSafeToken(candidate) ?: return@withContext TokenCheck.Refused
+        health?.waitMs(raw)?.takeIf { it > 0 }?.let { return@withContext TokenCheck.Throttled(it) }
+        try {
+            gate?.requireAdmitted(base)
+        } catch (e: IOException) {
+            return@withContext TokenCheck.Unavailable
+        }
+        val probe = http.newBuilder()
+            .apply { interceptors().removeAll { it is DeviceAuthInterceptor } }
+            .callTimeout(8, TimeUnit.SECONDS)
+            .build()
+        val url = base.newBuilder().encodedPath(TOKEN_CHECK_PATH).build()
+        val req = Request.Builder().url(url)
+            .header(DEVICE_TOKEN_HEADER, token)
+            .header("X-Requested-With", "DomovoiApp")
+            .build()
+        try {
+            probe.newCall(req).execute().use { resp ->
+                val body = runCatching { resp.peekBody(4096).string() }.getOrDefault("")
+                when {
+                    resp.isSuccessful || resp.code == 404 -> TokenCheck.Accepted
+                    isServerDeviceRefusal(resp.code, body) -> TokenCheck.Refused
+                    resp.code == 429 && TokenHealth.isDeviceTokenThrottle(body) -> {
+                        val wait = TokenHealth.retryAfterMs(resp.header("Retry-After"))
+                        health?.noteWait(raw, wait)
+                        TokenCheck.Throttled(wait)
+                    }
+                    else -> TokenCheck.Unavailable
+                }
+            }
+        } catch (e: IOException) {
+            TokenCheck.Unavailable
+        }
+    }
+
     fun absolute(path: String): String {
         if (path.startsWith("http://") || path.startsWith("https://")) return path
         return baseUrl + path
@@ -299,6 +347,19 @@ class ApiClient(
     private fun parse(text: String): JsonElement =
         if (text.isBlank()) JsonNull else DomovoiJson.parseToJsonElement(text)
 }
+
+/** What the server said to a household token checked before saving
+ *  ([ApiClient.checkDeviceToken]). */
+sealed class TokenCheck {
+    data object Accepted : TokenCheck()
+    data object Refused : TokenCheck()
+    data class Throttled(val waitMs: Long) : TokenCheck()
+    /** 503, no answer, or a server that did not prove itself: not a verdict. */
+    data object Unavailable : TokenCheck()
+}
+
+/** A device-tier read (the satellites list) any household token may make. */
+internal const val TOKEN_CHECK_PATH = "/api/satellites"
 
 /** Decode a JsonElement into a @Serializable model. */
 inline fun <reified T> JsonElement.decode(): T = DomovoiJson.decodeFromJsonElement(kotlinx.serialization.serializer(), this)

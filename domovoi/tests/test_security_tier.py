@@ -66,7 +66,10 @@ async def test_require_admin_security_fails_closed_when_the_check_raises(monkeyp
 
     monkeypatch.setattr(admin_auth, "has_admin_auth", boom)
     async with mini_client() as c:
-        assert (await c.post("/security", headers=bearer("admin-token"))).status_code == 401
+        # Still closed, as "try again" (503) rather than the 401 that reads as
+        # a bad credential (review S-T2, 2026-10-17).
+        r = await c.post("/security", headers=bearer("admin-token"))
+        assert r.status_code == 503 and int(r.headers["retry-after"]) >= 1
 
 
 # ═══ DB-BACKED ════════════════════════════════════════════════════════════

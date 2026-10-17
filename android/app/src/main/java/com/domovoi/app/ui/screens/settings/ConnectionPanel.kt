@@ -82,7 +82,6 @@ internal fun ConnectionPanel() {
     val pins by app.prefs.identityPins.collectAsState()
 
     var url by remember(serverUrl) { mutableStateOf(serverUrl) }
-    var tokenDraft by remember(serverUrl) { mutableStateOf("") }
     var saving by remember { mutableStateOf(false) }
     var confirmForgetActive by remember { mutableStateOf(false) }
     // The active server's latest identity verdict (net/IdentityGate.kt).
@@ -215,16 +214,10 @@ internal fun ConnectionPanel() {
                             color = Domovoi.colors.fgMuted,
                         )
                     }
-                    PairingField(
-                        token = tokenDraft,
-                        onTokenChange = { tokenDraft = it },
+                    // Checked with the server before it replaces anything.
+                    CheckedPairingField(
                         label = if (deviceToken != null) "replace" else "pair",
-                        onPair = {
-                            app.prefs.setDeviceToken(tokenDraft.trim())
-                            app.api.clearPairingRequired()
-                            tokenDraft = ""
-                            toast("this phone is paired")
-                        },
+                        onSaved = { toast("this phone is paired") },
                     )
                     if (deviceToken != null) {
                         Button(

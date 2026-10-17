@@ -48,7 +48,12 @@ COMPONENTS = "web/static/components.jsx"
 # The scripted fetch, with response headers (Retry-After) on top.
 _STUB_TAIL = "text: async () => text, json: async () => JSON.parse(text) };"
 assert _STUB_TAIL in HARNESS_JS, "the shared harness's fetch stub changed shape"
+_STUB_CALL = "calls.push({ url, method: (opts.method || 'GET').toUpperCase(), headers: opts.headers || {} });"
+assert _STUB_CALL in HARNESS_JS, "the shared harness's fetch stub changed shape"
 STORE_HARNESS = HARNESS_JS.replace(
+    _STUB_CALL,
+    _STUB_CALL + "\n    if (responses[i].throws) throw new TypeError('Failed to fetch');",
+).replace(
     _STUB_TAIL,
     "text: async () => text, json: async () => JSON.parse(text),\n"
     "             headers: { get: (k) => { const hs = responses[i].headers || {};\n"
@@ -69,6 +74,10 @@ LOGIN_THROTTLED = {"status": 429, "headers": {"Retry-After": "30"},
                    "body": {"detail": "too many failed attempts — retry in 30s"}}
 
 TOKEN = {"domovoi-device-token": "old-household"}
+DB_BLIP = {"status": 503, "headers": {"Retry-After": "5"},
+           "body": {"detail": "auth check unavailable — the server could not check credentials just now; try again shortly"}}
+PLUGIN_401 = {"status": 401, "body": {"detail": "this plugin wants a fresh X-Device-Token"}}
+NO_ANSWER = {"status": 0, "throws": True, "body": ""}
 HDR = "(c) => c.headers['X-Device-Token'] || null"
 
 STORE_SCENARIOS = {
@@ -125,10 +134,74 @@ STORE_SCENARIOS = {
         "script": rf"""
           await h.attempt(() => h.w.apiGet('/api/rooms'));
           const v = h.Auth.credentialVersion;
-          h.Auth.retryRefusedDeviceToken();
+          const probe = await h.Auth.retryRefusedDeviceToken();
           const out = await h.attempt(() => h.w.apiGet('/api/rooms'));
-          return {{ out, headers: h.calls.map({HDR}), bumped: h.Auth.credentialVersion > v,
-                   trouble: h.Auth.deviceTrouble() }};
+          return {{ probe, out, headers: h.calls.map({HDR}), urls: h.calls.map((c) => c.url),
+                   bumped: h.Auth.credentialVersion > v, trouble: h.Auth.deviceTrouble() }};
+        """,
+    },
+    "try_again_refused_again_is_one_request": {
+        "storage": TOKEN,
+        "responses": [DEVICE_401],
+        "script": r"""
+          await h.attempt(() => h.w.apiGet('/api/rooms'));
+          const v = h.Auth.credentialVersion;
+          const probe = await h.Auth.retryRefusedDeviceToken();
+          return { probe, calls: h.calls.length, bumped: h.Auth.credentialVersion > v,
+                   trouble: h.Auth.deviceTrouble() };
+        """,
+    },
+    "a_db_blip_is_not_a_refusal": {
+        "storage": TOKEN,
+        "responses": [DB_BLIP, OK],
+        "script": rf"""
+          const first = await h.attempt(() => h.w.apiGet('/api/rooms'));
+          const trouble = h.Auth.deviceTrouble();
+          await h.attempt(() => h.w.apiGet('/api/rooms'));
+          return {{ first, trouble, headers: h.calls.map({HDR}), pairModal: h.Auth.pairModalOpen }};
+        """,
+    },
+    "a_plugin_401_is_not_a_refusal": {
+        "storage": TOKEN,
+        "responses": [PLUGIN_401, OK],
+        "script": rf"""
+          await h.attempt(() => h.w.apiGet('/api/plugins/x/thing'));
+          const trouble = h.Auth.deviceTrouble();
+          await h.attempt(() => h.w.apiGet('/api/rooms'));
+          return {{ trouble, headers: h.calls.map({HDR}) }};
+        """,
+    },
+    "paste_accepted": {
+        "responses": [OK],
+        "script": r"""
+          const out = await h.Auth.checkAndPair('  current-household  ');
+          return { out, stored: h.Auth.storedDeviceToken(), calls: h.calls.map((c) => ({ url: c.url,
+                   device: c.headers['X-Device-Token'] || null })) };
+        """,
+    },
+    "paste_refused": {
+        "storage": {"domovoi-device-token": "kept-household"},
+        "responses": [DEVICE_401],
+        "script": r"""
+          const out = await h.Auth.checkAndPair('my-old-custom-token');
+          return { out, stored: h.Auth.storedDeviceToken(), calls: h.calls.length,
+                   trouble: h.Auth.deviceTrouble() };
+        """,
+    },
+    "paste_throttled": {
+        "responses": [THROTTLED],
+        "script": r"""
+          const out = await h.Auth.checkAndPair('current-household');
+          const again = await h.Auth.checkAndPair('current-household');
+          return { out, again, stored: h.Auth.storedDeviceToken(), calls: h.calls.length };
+        """,
+    },
+    "paste_unchecked": {
+        "responses": [DB_BLIP, NO_ANSWER],
+        "script": r"""
+          const blip = await h.Auth.checkAndPair('current-household');
+          const gone = await h.Auth.checkAndPair('current-household');
+          return { blip, gone, stored: h.Auth.storedDeviceToken(), calls: h.calls.length };
         """,
     },
     "an_admin_sign_in_fetches_the_current_token": {
@@ -252,9 +325,72 @@ def test_a_pressed_action_still_offers_pairing_and_the_replay_carries_the_new_to
 
 def test_trying_the_old_token_again_sends_it_once_more(store):
     o = store["try_the_old_token_again"]
-    assert o["headers"] == ["old-household", "old-household"]
+    assert o["probe"] == {"kind": "accepted"}
+    # One probe first (the satellites read), and only then the panels.
+    assert o["urls"][1].endswith("/api/satellites")
+    assert o["headers"] == ["old-household", "old-household", "old-household"]
     assert o["bumped"] is True                       # the refused reads are asked again
     assert o["out"]["resolved"] is True and o["trouble"] is None
+
+
+def test_trying_again_when_still_refused_is_one_request_not_a_burst(store):
+    # Review N-T1: it used to release every open panel at once.
+    o = store["try_again_refused_again_is_one_request"]
+    assert o["probe"] == {"kind": "refused"}
+    assert o["calls"] == 2
+    assert o["bumped"] is False
+    assert o["trouble"]["kind"] == "refused"
+
+
+# ── review fixes: a 503 and a plugin's 401 say nothing about the token ──
+
+
+def test_a_database_blip_is_not_a_refusal(store):
+    o = store["a_db_blip_is_not_a_refusal"]
+    assert o["first"]["status"] == 503
+    assert o["trouble"] is None
+    assert o["headers"] == ["old-household", "old-household"]
+    assert o["pairModal"] is False
+
+
+def test_a_plugins_own_401_is_not_a_refusal(store):
+    o = store["a_plugin_401_is_not_a_refusal"]
+    assert o["trouble"] is None
+    assert o["headers"] == ["old-household", "old-household"]
+
+
+# ── a pasted token is checked before it is stored ───────────────────────
+
+
+def test_a_pasted_token_the_server_takes_is_stored(store):
+    o = store["paste_accepted"]
+    assert o["out"] == {"kind": "accepted"}
+    assert o["stored"] == "current-household"
+    assert o["calls"] == [{"url": "/api/satellites", "device": "current-household"}]
+
+
+def test_a_wrong_paste_is_not_stored_and_is_asked_once(store):
+    o = store["paste_refused"]
+    assert o["out"] == {"kind": "refused"}
+    assert o["stored"] == "kept-household"           # nothing replaced
+    assert o["calls"] == 1                           # one wrong token, no retry
+    assert o["trouble"] is None                      # the stored token is not blamed
+
+
+def test_a_paste_during_the_wait_says_how_long_and_sends_nothing_more(store):
+    o = store["paste_throttled"]
+    assert o["out"]["kind"] == "waiting" and 40_000 <= o["out"]["waitMs"] <= 42_000
+    assert o["again"]["kind"] == "waiting"
+    assert o["calls"] == 1
+    assert o["stored"] is None
+
+
+def test_a_paste_the_server_could_not_check_is_not_stored(store):
+    o = store["paste_unchecked"]
+    assert o["blip"] == {"kind": "unavailable"}
+    assert o["gone"] == {"kind": "unavailable"}
+    assert o["stored"] is None
+    assert o["calls"] == 2
 
 
 def test_an_admin_sign_in_replaces_a_refused_token(store):
@@ -360,6 +496,47 @@ NOTICE_SCENARIOS = {
 }
 
 
+PAIR_SETUP = r"""
+window.__auth = { outcome: OUTCOME, asked: [], closed: 0 };
+Auth = {
+  status: { setup_complete: true, authenticated: false },
+  subscribe: () => () => {},
+  isLoggedIn: () => false,
+  headers: () => ({}),
+  modalOpen: false, pairModalOpen: true,
+  deviceToken: () => null,
+  checkAndPair: (v) => { window.__auth.asked.push(v); return Promise.resolve(window.__auth.outcome); },
+  pair: () => true,
+  signInInstead: () => {},
+  closePairModal: () => { window.__auth.closed += 1; },
+};
+"""
+
+PAIR_SCRIPT = r"""
+  h.render();
+  await h.type({ type: 'input' }, 'my-old-custom-token');
+  await h.click({ type: 'button', text: 'pair' });
+  await h.settle();
+  const a = h.global('window').__auth;
+  const pairButton = h.findAll({ type: 'button' }).filter((b) => /pair|checking/.test(b.text)).pop();
+  return { asked: a.asked, closed: a.closed, texts: h.text(),
+           disabled: !!(pairButton && pairButton.props.disabled) };
+"""
+
+
+def _pair(outcome: str) -> dict:
+    return {"files": [COMPONENTS], "component": "AuthModalHost",
+            "setup": PAIR_SETUP.replace("OUTCOME", outcome), "script": PAIR_SCRIPT}
+
+
+NOTICE_SCENARIOS.update({
+    "pair_accepted": _pair("{ kind: 'accepted' }"),
+    "pair_refused": _pair("{ kind: 'refused' }"),
+    "pair_waiting": _pair("{ kind: 'waiting', waitMs: 53000 }"),
+    "pair_unchecked": _pair("{ kind: 'unavailable' }"),
+})
+
+
 @pytest.fixture(scope="module")
 def notice() -> dict:
     node = shutil.which("node")
@@ -405,3 +582,29 @@ def test_no_notice_when_nothing_is_wrong(notice):
 def test_the_shell_shows_the_notice_on_every_page():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert "<DeviceTokenNotice/>" in html
+
+
+def test_the_pair_prompt_closes_only_when_the_server_took_the_token(notice):
+    ok = notice["pair_accepted"]
+    assert ok["asked"] == ["my-old-custom-token"]
+    assert ok["closed"] == 1
+
+
+def test_the_pair_prompt_says_a_wrong_token_does_not_match_and_stays(notice):
+    o = notice["pair_refused"]
+    assert o["closed"] == 0
+    assert any("that token doesn't match this server" in t for t in o["texts"])
+    assert any("Settings → Devices → Household token on this server's dashboard" in t for t in o["texts"])
+
+
+def test_the_pair_prompt_counts_a_wait_down_and_holds_the_button(notice):
+    o = notice["pair_waiting"]
+    assert o["closed"] == 0
+    assert any("too many tries — wait 0:53" in t for t in o["texts"])
+    assert o["disabled"] is True
+
+
+def test_the_pair_prompt_says_it_could_not_check(notice):
+    o = notice["pair_unchecked"]
+    assert o["closed"] == 0
+    assert any("couldn't check it with the server — try again" in t for t in o["texts"])

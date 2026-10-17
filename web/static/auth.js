@@ -186,6 +186,36 @@ const Auth = (() => {
     return stored;
   };
 
+  // The core's and the web's own device-tier refusals, word for word
+  // (domovoi/admin_auth.py): the only bodies that mean "this household token
+  // is not accepted". A plugin's own 401 that merely names the header must
+  // not make this browser drop its token (review N-T2, 2026-10-17).
+  const SERVER_DEVICE_REFUSALS = [
+    `${DEVICE_TOKEN_HEADER} or admin session required`,
+    `${DEVICE_TOKEN_HEADER} required — the dashboard cookie does not authorize device-tier actions`,
+  ];
+  const isServerDeviceRefusal = (status, text) => {
+    if (status !== 401 && status !== 403) return false;
+    try {
+      const j = JSON.parse(String(text || ''));
+      return typeof j.detail === 'string' && SERVER_DEVICE_REFUSALS.indexOf(j.detail) !== -1;
+    } catch { return false; }
+  };
+
+  // Seconds from a 429: Retry-After, which a cross-origin page cannot read,
+  // then the server's own "retry in Ns", then a minute.
+  const retryAfterSeconds = (r, text) => {
+    try {
+      const n = parseInt(r && r.headers && r.headers.get ? r.headers.get('Retry-After') : '', 10);
+      if (Number.isFinite(n) && n > 0) return n;
+    } catch { /* the words */ }
+    const m = /retry in (\d+)\s*s/i.exec(String(text || ''));
+    return m ? parseInt(m[1], 10) : 60;
+  };
+
+  // A device-tier read (the satellites list) any household token may make.
+  const TOKEN_CHECK_PATH = '/api/satellites';
+
   // Any new value (or none) is not the token the server refused.
   const writeDeviceToken = (value) => {
     try {
@@ -494,13 +524,60 @@ const Auth = (() => {
       if (waitMs > 0) return { kind: 'waiting', waitMs };
       return null;
     },
-    // "try it again": the refusal may have been a blip (the server's
-    // database not answering refuses every token). One more try.
-    retryRefusedDeviceToken() {
-      if (!readRefused()) return;
-      writeRefused(null);
-      credentialVersion += 1;
+    isServerDeviceRefusal,
+    retryAfterSeconds,
+
+    // Ask the server ONCE whether it takes `candidate` (2026-10-17: a pasted
+    // token used to be saved unchecked, and an old custom one left every
+    // page failing). One device-tier read carrying the candidate alone
+    // (credentials: 'omit', so no cookie vouches for it). Resolves
+    //   {kind: 'accepted'} | {kind: 'refused'} | {kind: 'waiting', waitMs}
+    //   | {kind: 'unavailable'} (a 503, no answer, an untrusted server).
+    // While the server makes this address wait nothing is sent. Never
+    // retried: a wrong paste costs one wrong token on the server's count.
+    async checkDeviceToken(candidate) {
+      const clean = storableDeviceToken(candidate);
+      if (!clean) return { kind: 'refused' };
+      const left = waitLeftMs();
+      if (left > 0) return { kind: 'waiting', waitMs: left };
+      if (!trusted()) return { kind: 'unavailable' };
+      let r = null;
+      let text = '';
+      try {
+        r = await fetch(`${base()}${TOKEN_CHECK_PATH}`, {
+          credentials: 'omit', cache: 'no-store',
+          headers: { [DEVICE_TOKEN_HEADER]: clean, 'X-Requested-With': 'XMLHttpRequest' },
+        });
+        text = await r.text().catch(() => '');
+      } catch { return { kind: 'unavailable' }; }
+      if (r.ok || r.status === 404) return { kind: 'accepted' };
+      if (isServerDeviceRefusal(r.status, text)) return { kind: 'refused' };
+      if (r.status === 429 && /x-device-token|device token|household token/i.test(text)) {
+        this.noteDeviceWait(retryAfterSeconds(r, text));
+        return { kind: 'waiting', waitMs: waitLeftMs() };
+      }
+      return { kind: 'unavailable' };
+    },
+    // The pair prompt's "pair": check, and store only what the server takes.
+    async checkAndPair(candidate) {
+      const out = await this.checkDeviceToken(candidate);
+      if (out.kind === 'accepted') this.pair(candidate);
+      return out;
+    },
+    // "try the old token again": the refusal may have been a blip. ONE probe
+    // with the refused token; only when the server takes it is it released
+    // to every panel (credentialVersion). Before, every open panel re-read at
+    // once with it, which could start the address's wait (review N-T1).
+    async retryRefusedDeviceToken() {
+      const refused = readRefused();
+      if (!refused) return { kind: 'accepted' };
+      const out = await this.checkDeviceToken(refused);
+      if (out.kind === 'accepted' && readRefused() === refused) {
+        writeRefused(null);
+        credentialVersion += 1;
+      }
       notify();
+      return out;
     },
     // Store the household token for the current server (pasted in the
     // pair modal, fetched at login, or handed over by a rotation).

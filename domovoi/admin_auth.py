@@ -1219,6 +1219,29 @@ def request_source(request: Request) -> str:
 CheckResult = Literal["ok", "pre-setup", "no-auth", "cookie-only", "invalid"]
 
 
+# How long a caller is told to wait when the credential check itself could
+# not run (the database did not answer).
+AUTH_UNAVAILABLE_RETRY_SEC = 5
+
+
+class AuthCheckUnavailable(HTTPException):
+    """The credential check could not run: the database did not answer
+    (a restart, "too many clients"). Answered ``503`` with ``Retry-After``
+    instead of the ``401`` it used to fall into: that ``401`` was byte for
+    byte the wrong-token answer, so a phone or a dashboard holding a GOOD
+    household token took a database blip for "this server no longer knows
+    you" and stopped sending it (review S-T2, 2026-10-17). Still fail-closed:
+    nothing is let through, and a WebSocket gate refuses the socket. Says
+    nothing about the credential."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=503,
+            detail="auth check unavailable — the server could not check credentials just now; try again shortly",
+            headers={"Retry-After": str(AUTH_UNAVAILABLE_RETRY_SEC)},
+        )
+
+
 async def check_admin_request(
     request: Request, session: AsyncSession | None = None
 ) -> CheckResult:
@@ -1255,9 +1278,11 @@ async def check_admin_request(
             return await _check(session)
         async with session_scope() as s:
             return await _check(s)
-    except Exception as e:  # pragma: no cover — DB down ⇒ fail closed
+    except AuthCheckUnavailable:
+        raise
+    except Exception as e:  # DB down ⇒ fail closed, as "try again", not "wrong"
         log.warning("admin check failed: %s", e)
-        return "invalid"
+        raise AuthCheckUnavailable() from e
 
 
 async def require_admin_mutation(request: Request) -> None:
@@ -1382,6 +1407,10 @@ async def _classify_device(
       that retries on a timer could never drain its own backoff.
     """
 
+    # A check the database could not answer is not a wrong token: whatever
+    # it reserved on the ledger is handed back (release), never counted.
+    pending: list[str] = []
+
     async def _check(s: AsyncSession) -> DeviceCheckResult:
         source = request_source(conn)
         throttled = False
@@ -1392,6 +1421,7 @@ async def _classify_device(
             else:
                 DEVICE_TOKEN_BACKOFF.reserve(source)
                 reserved = True
+                pending.append(source)
                 if await validate_device_token(s, presented):
                     DEVICE_TOKEN_BACKOFF.record_success(source)
                     return "ok"
@@ -1413,9 +1443,15 @@ async def _classify_device(
             return await _check(session)
         async with session_scope() as s:
             return await _check(s)
-    except Exception as e:  # pragma: no cover — DB down ⇒ fail closed
+    except AuthCheckUnavailable:
+        for source in pending:
+            DEVICE_TOKEN_BACKOFF.release(source)
+        raise
+    except Exception as e:  # DB down ⇒ fail closed, as "try again", not "wrong"
+        for source in pending:
+            DEVICE_TOKEN_BACKOFF.release(source)
         log.warning("device check failed: %s", e)
-        return "invalid"
+        raise AuthCheckUnavailable() from e
 
 
 async def check_device_request(
@@ -1484,7 +1520,10 @@ async def websocket_device_ok(ws: Any) -> bool:
     household token, an admin Bearer, or the pre-setup LAN grace. A
     throttled source is refused like any other bad credential — a socket
     has no status code to carry the 429 into."""
-    return await check_device_websocket(ws) in ("ok", "admin", "pre-setup")
+    try:
+        return await check_device_websocket(ws) in ("ok", "admin", "pre-setup")
+    except AuthCheckUnavailable:
+        return False   # a socket has no status to carry the 503 into
 
 
 async def check_live_mic_websocket(
@@ -1504,10 +1543,13 @@ async def check_live_mic_websocket(
 
     ``setup_required`` before setup, ``unauthorized`` for anything short of
     the device tier after it, ``ok`` otherwise."""
-    if await check_admin_request(ws) == "pre-setup":
-        return "setup_required"
-    if await check_device_websocket(ws) in ("ok", "admin"):
-        return "ok"
+    try:
+        if await check_admin_request(ws) == "pre-setup":
+            return "setup_required"
+        if await check_device_websocket(ws) in ("ok", "admin"):
+            return "ok"
+    except AuthCheckUnavailable:
+        pass   # fail closed; a socket has no status to carry the 503 into
     return "unauthorized"
 
 
@@ -1760,6 +1802,26 @@ class LoginBackoff:
         Reserving up front closes that window: the attempt is a failure
         until :meth:`record_success` says otherwise."""
         self._reserved[source] = self._count(source)
+
+    def release(self, source: str) -> None:
+        """Hand back an outstanding reservation WITHOUT a verdict: the check
+        could not run (the database did not answer), so the attempt was
+        neither a failure nor a success. Undoes what :meth:`reserve` counted;
+        the streak before it is left as it was."""
+        reserved = self._reserved.pop(source, None)
+        if reserved is None:
+            return
+        try:
+            self._global.remove(reserved)
+        except ValueError:
+            pass
+        entry = self._failures.get(source)
+        if entry is not None:
+            failures, last = entry
+            if failures <= 1:
+                self._failures.pop(source, None)
+            else:
+                self._failures[source] = (failures - 1, last)
 
     def record_success(self, source: str) -> None:
         # Clears the source's OWN streak. A reservation this attempt made

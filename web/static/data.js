@@ -524,7 +524,12 @@ const _retryAfterSeconds = (r, text) => {
 const _noteDeviceAnswer = (status, text, r, sentDevice) => {
   if (typeof Auth === 'undefined' || !sentDevice) return;
   try {
-    if (_isDeviceTokenRefusal(status, text) && Auth.noteDeviceRefusal) Auth.noteDeviceRefusal(sentDevice);
+    // Only the server's own refusal, word for word (auth.js): a plugin's 401
+    // naming the header, or a 503 while the server cannot check credentials,
+    // says nothing about the token.
+    const refusal = Auth.isServerDeviceRefusal ? Auth.isServerDeviceRefusal(status, text)
+      : _isDeviceTokenRefusal(status, text);
+    if (refusal && Auth.noteDeviceRefusal) Auth.noteDeviceRefusal(sentDevice);
     else if (_isDeviceTokenThrottle(status, text) && Auth.noteDeviceWait) {
       Auth.noteDeviceWait(_retryAfterSeconds(r, text));
     }

@@ -49,6 +49,8 @@ class TokenHealthTest {
         @Volatile var lastFailure = 0L
         /** Called when the request arrives, before the answer (a re-pair racing it). */
         @Volatile var onArrival: (String?) -> Unit = {}
+        /** The credential check cannot reach its database: 503, never a verdict. */
+        @Volatile var dbDown = false
         /** Every token the ledger actually LOOKED AT. */
         val evaluated = CopyOnWriteArrayList<String>()
         val requests = CopyOnWriteArrayList<RecordedRequest>()
@@ -70,6 +72,15 @@ class TokenHealthTest {
                     if (path.startsWith("/api/health")) return MockResponse().setBody("""{"status":"ok"}""")
                     if (path.startsWith("/api/admin")) {
                         return MockResponse().setResponseCode(401).setBody("""{"detail":"admin session required"}""")
+                    }
+                    if (path.startsWith("/api/plugins/")) {
+                        // A plugin's own refusal that happens to name the header.
+                        return MockResponse().setResponseCode(401)
+                            .setBody("""{"detail":"this plugin wants a fresh X-Device-Token"}""")
+                    }
+                    if (dbDown) {
+                        return MockResponse().setResponseCode(503).setHeader("Retry-After", "5")
+                            .setBody("""{"detail":"auth check unavailable — the server could not check credentials just now; try again shortly"}""")
                     }
                     if (path.startsWith("/api/fetch")) {
                         return MockResponse().setResponseCode(429).setHeader("Retry-After", "30")
@@ -229,6 +240,68 @@ class TokenHealthTest {
         get("/api/fetch")
         assertEquals(0L, health.waitMs(fake.url))
         assertTrue(get().isSuccess)
+    }
+
+    // ---- review fixes (2026-10-17) -------------------------------------------
+
+    @Test fun aDatabaseBlipIsNotARefusal() {
+        // S-T2: the server answers 503 when it cannot check credentials; a good
+        // token must survive it.
+        token = fake.goodToken
+        fake.dbDown = true
+        assertEquals(503, (get().exceptionOrNull() as ApiException).status)
+        assertFalse(health.isRejected(fake.url))
+        assertEquals(0L, health.waitMs(fake.url))
+        fake.dbDown = false
+        assertTrue(get().isSuccess)
+        assertEquals(fake.goodToken, fake.requests.last().getHeader(DEVICE_TOKEN_HEADER))
+    }
+
+    @Test fun onlyTheServersOwnRefusalDropsTheToken() {
+        // N-T2: a plugin's 401 naming the header is not the core's verdict.
+        token = fake.goodToken
+        get("/api/plugins/x/thing")
+        assertFalse(health.isRejected(fake.url))
+        assertTrue(isServerDeviceRefusal(401, """{"detail":"X-Device-Token or admin session required"}"""))
+        assertTrue(isServerDeviceRefusal(403, """{"detail":"X-Device-Token required — the dashboard cookie does not authorize device-tier actions"}"""))
+        assertFalse(isServerDeviceRefusal(401, """{"detail":"this plugin wants a fresh X-Device-Token"}"""))
+        assertFalse(isServerDeviceRefusal(503, """{"detail":"X-Device-Token or admin session required"}"""))
+    }
+
+    // ---- a pasted token is checked before it is saved -----------------------
+
+    @Test fun aPastedTokenTheServerTakesIsAccepted() {
+        token = null
+        assertEquals(TokenCheck.Accepted, runBlocking { api.checkDeviceToken(fake.goodToken) })
+        val probe = fake.requests.last()
+        assertTrue(probe.path!!.startsWith(TOKEN_CHECK_PATH))
+        assertEquals("the candidate, not the stored token", fake.goodToken, probe.getHeader(DEVICE_TOKEN_HEADER))
+        assertEquals(1, fake.requests.size)
+    }
+
+    @Test fun aWrongPasteIsRefusedOnceAndNeverRetried() {
+        assertEquals(TokenCheck.Refused, runBlocking { api.checkDeviceToken("old-custom-token-1") })
+        assertEquals("one wrong token on the server's count, no more", 1, fake.evaluated.size)
+        assertEquals(1, fake.requests.size)
+        assertFalse("not saved, so nothing is marked", health.isRejected(fake.url))
+    }
+
+    @Test fun aPasteDuringTheServersWaitIsNotSentAndSaysHowLong() {
+        fake.failures = 9
+        fake.lastFailure = now.get()
+        val first = runBlocking { api.checkDeviceToken(fake.goodToken) }
+        assertTrue(first is TokenCheck.Throttled && first.waitMs in 7_000L..8_000L)
+        val sent = fake.requests.size
+        val second = runBlocking { api.checkDeviceToken(fake.goodToken) }
+        assertTrue(second is TokenCheck.Throttled)
+        assertEquals("the wait is respected: nothing sent", sent, fake.requests.size)
+    }
+
+    @Test fun aPasteTheServerCouldNotCheckIsUnavailable() {
+        fake.dbDown = true
+        assertEquals(TokenCheck.Unavailable, runBlocking { api.checkDeviceToken(fake.goodToken) })
+        fake.server.shutdown()
+        assertEquals(TokenCheck.Unavailable, runBlocking { api.checkDeviceToken(fake.goodToken) })
     }
 
     @Test fun retryAfterIsReadAsSecondsOrADateClampedAndDefaulted() {

@@ -2434,16 +2434,44 @@ const LoginModal = ({ onClose }) => {
  * fetches the household token itself (auth.js autoPair), so the token
  * is never seen or typed, and the refused request is replayed the same
  * way. Dismissing that login comes back here rather than nowhere. */
+// What the pair prompt says when the server did not take a pasted token
+// (Auth.checkAndPair, 2026-10-17: an old custom token used to be stored
+// unchecked, and every page then failed).
+const PAIR_REFUSED_TEXT = "that token doesn't match this server — copy it from Settings → Devices → "
+  + "Household token on this server's dashboard, or sign in as an admin instead";
+const PAIR_UNCHECKED_TEXT = "couldn't check it with the server — try again";
+const pairWaitText = (ms) => `too many tries — wait ${tokenWaitClock(ms)} before the next one`;
+
 const PairModal = ({ onClose }) => {
   const [value, setValue] = useState('');
   const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [waitUntil, setWaitUntil] = useState(0);
+  const [, tick] = React.useReducer((x) => x + 1, 0);
   const tokenField = useFirstFieldFocus('pair');
+  const waitLeft = Math.max(0, waitUntil - Date.now());
+  useEffect(() => {
+    if (!(waitUntil > Date.now())) return undefined;
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [waitUntil]);
 
-  const submit = () => {
+  // Checked with the server before it is stored: one read carrying the
+  // candidate, never retried by itself. Refused, unchecked or waiting: the
+  // prompt stays, says why, and nothing is stored.
+  const submit = async () => {
     setErr(null);
     if (!value.trim()) { setErr('type the household token first'); return; }
-    Auth.pair(value);
-    onClose();
+    if (busy || waitLeft > 0) return;
+    if (!Auth.checkAndPair) { Auth.pair(value); onClose(); return; }
+    setBusy(true);
+    let out;
+    try { out = await Auth.checkAndPair(value); } catch { out = { kind: 'unavailable' }; }
+    setBusy(false);
+    if (out.kind === 'accepted') { onClose(); return; }
+    if (out.kind === 'refused') setErr(PAIR_REFUSED_TEXT);
+    else if (out.kind === 'waiting') setWaitUntil(Date.now() + (out.waitMs || 0));
+    else setErr(PAIR_UNCHECKED_TEXT);
   };
 
   // NOT onClose: this modal stays open underneath the login, so
@@ -2491,6 +2519,7 @@ const PairModal = ({ onClose }) => {
                  chose is not.</div>
           </div>
           {err && <div className="err">{err}</div>}
+          {waitLeft > 0 && <div className="err">{pairWaitText(waitLeft)}</div>}
           <div className="hint">
             An admin finds the token on their dashboard under
             <strong> Settings → Devices → Household token</strong>. It is also
@@ -2500,8 +2529,8 @@ const PairModal = ({ onClose }) => {
         </div>
         <div className="cal-modal-foot">
           <Button onClick={onClose}>cancel</Button>
-          <Button icon="link" onClick={submit} disabled={!value.trim()}>
-            pair
+          <Button icon="link" onClick={submit} disabled={!value.trim() || busy || waitLeft > 0}>
+            {busy ? 'checking…' : 'pair'}
           </Button>
         </div>
       </div>
@@ -3290,7 +3319,7 @@ const DeviceTokenNotice = () => {
         <Button type="button" variant="primary" icon="link" onClick={() => Auth.requestPairing()}>pair again</Button>
         <Button type="button" icon="key" onClick={() => Auth.openModal()}>sign in as admin</Button>
         {trouble.kind === 'refused' && !counting && (
-          <Button type="button" variant="ghost" onClick={() => Auth.retryRefusedDeviceToken()}>
+          <Button type="button" variant="ghost" onClick={() => { Auth.retryRefusedDeviceToken(); }}>
             try the old token again
           </Button>
         )}

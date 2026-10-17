@@ -148,3 +148,25 @@ fun isDeviceTokenRefusal(status: Int, body: String?): Boolean {
     return text.contains("device token", ignoreCase = true) ||
         text.contains(DEVICE_TOKEN_HEADER, ignoreCase = true)
 }
+
+/** The core's and the web's own device-tier refusals, word for word
+ *  (domovoi/admin_auth.py require_device / require_device_read, the
+ *  guest-queue gate): the only bodies that mean "this household token is
+ *  not accepted". [isDeviceTokenRefusal] matches any body naming the header,
+ *  which is right for raising the pairing screen; a plugin's own 401 that
+ *  happens to mention it must not make the phone drop its token (review
+ *  N-T2, 2026-10-17). */
+private val SERVER_DEVICE_REFUSALS = setOf(
+    "$DEVICE_TOKEN_HEADER or admin session required",
+    "$DEVICE_TOKEN_HEADER required — the dashboard cookie does not authorize device-tier actions",
+)
+
+fun isServerDeviceRefusal(status: Int, body: String?): Boolean {
+    if (status != 401 && status != 403) return false
+    val detail = runCatching {
+        (DomovoiJson.parseToJsonElement(body.orEmpty()) as? kotlinx.serialization.json.JsonObject)
+            ?.get("detail")?.let { it as? kotlinx.serialization.json.JsonPrimitive }
+            ?.takeIf { it.isString }?.content
+    }.getOrNull() ?: return false
+    return detail in SERVER_DEVICE_REFUSALS
+}

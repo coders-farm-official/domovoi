@@ -30,7 +30,7 @@ import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.data.ServerCredentials
 import com.domovoi.app.ui.components.DomovoiGlyph
-import com.domovoi.app.ui.screens.settings.PairingField
+import com.domovoi.app.ui.screens.settings.CheckedPairingField
 import com.domovoi.app.ui.theme.Domovoi
 
 /** `4:05` — minutes and seconds, rounded up so it never reads 0:00 while
@@ -102,7 +102,6 @@ internal fun TokenTroubleScreen(trouble: TokenTrouble) {
     val app = LocalApp.current
     val toast = LocalToast.current
     val serverUrl by app.prefs.serverUrl.collectAsState()
-    var token by remember(serverUrl) { mutableStateOf("") }
 
     Box(Modifier.fillMaxSize().imePadding(), contentAlignment = Alignment.Center) {
         Column(
@@ -138,17 +137,7 @@ internal fun TokenTroubleScreen(trouble: TokenTrouble) {
                 )
             }
             Spacer(Modifier.height(4.dp))
-            PairingField(
-                token = token,
-                onTokenChange = { token = it },
-                label = "pair again",
-                onPair = {
-                    app.prefs.setDeviceToken(token.trim())
-                    app.api.clearPairingRequired()
-                    token = ""
-                    toast("paired again")
-                },
-            )
+            CheckedPairingField(label = "pair again", onSaved = { toast("paired again") })
             Text(
                 tokenTroubleHint(trouble),
                 style = MaterialTheme.typography.bodySmall,

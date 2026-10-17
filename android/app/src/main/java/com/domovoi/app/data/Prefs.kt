@@ -364,12 +364,14 @@ class Prefs(
      * "this looks like a different Domovoi, or it was reinstalled" with
      * both fingerprints in view (ui/shell/IdentityChanged.kt). The one way
      * a pin changes without forgetting the server, and never without that
-     * yes. The token stays: a server whose identity file was rebuilt over
-     * the same database still knows it, and one that does not says so at
-     * once (TokenHealth), which offers pairing again.
+     * yes. The household token is DROPPED with the old pin: it belongs to
+     * the identity it was paired with, and must not go to whatever holds the
+     * new key (review S-T1, 2026-10-17). A reinstall is a new household and
+     * would refuse it anyway, so the phone goes on to pairing.
      */
     fun replacePin(url: String, pin: ServerIdentity.Pin) {
         val key = IdentityGate.pinKey(url) ?: return
+        setDeviceTokenFor(url, null)
         pin(key, pin)
         setTrustDecided(trustDecided + key)
     }

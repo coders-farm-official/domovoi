@@ -239,11 +239,12 @@ class IdentityGateTest {
         assertFalse(pins.book[key()]!!.fingerprint == rogueFingerprint)
     }
 
-    @Test fun aReinstalledServerIsTrustedAgainOnlyByReplacingThePinThenTheTokenFlows() {
+    @Test fun aReinstalledServerIsTrustedAgainOnlyByReplacingThePinAndNeverGetsTheOldToken() {
         // 2026-10-17: the same address, a reinstalled Domovoi with a new key.
         // The token is held (above) until the person says "it's mine": the
-        // shell then pins the key the server PROVED (the verdict carries it)
-        // and asks the gate to forget the old verdict.
+        // shell then pins the key the server PROVED (the verdict carries it),
+        // DROPS the old household's token (Prefs.replacePin, review S-T1) and
+        // asks the gate to forget the old verdict. The phone pairs again.
         read()
         fake.seed = hex("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb")
         gate.networkChanged()
@@ -251,11 +252,16 @@ class IdentityGateTest {
         val seen = (gate.status.value?.verdict as IdentityVerdict.Mismatch).seenPin!!
         assertEquals("nothing re-trusted by itself", 1, fake.reads().size)
 
-        pins.book[key()] = seen   // Prefs.replacePin, after the yes
+        pins.book[key()] = seen   // Prefs.replacePin, after the yes ...
+        token = null              // ... which drops the old household's token
         gate.pinChanged()
         read()
         assertEquals(2, fake.reads().size)
-        assertEquals("household-abc", fake.reads().last().getHeader(DEVICE_TOKEN_HEADER))
+        assertNull("the old token never reaches the new key", fake.reads().last().getHeader(DEVICE_TOKEN_HEADER))
+        // Paired again with the new household's token: it flows, proved against the new pin.
+        token = "new-household"
+        read()
+        assertEquals("new-household", fake.reads().last().getHeader(DEVICE_TOKEN_HEADER))
         assertEquals(IdentityVerdict.Verified(fake.fingerprint(), pinnedNow = false), gate.status.value?.verdict)
     }
 

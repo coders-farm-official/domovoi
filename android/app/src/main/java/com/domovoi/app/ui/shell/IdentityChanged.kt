@@ -34,9 +34,10 @@ import com.domovoi.app.ui.theme.Domovoi
  * carrying the household token goes to it. This is the warning that comes
  * FIRST, in household words, before anything about pairing (2026-10-17);
  * the person's yes, with both fingerprints in view, is the only thing that
- * pins the new key (Prefs.replacePin). If the server then refuses the old
- * token, the "doesn't recognise this phone" card offers to pair again
- * (TokenTroubleScreen.kt). Never silently re-trusted.
+ * pins the new key (Prefs.replacePin), and it drops the old household's
+ * token with the old key: the phone then pairs again from scratch (the
+ * pairing screen, which checks the pasted token before saving it). The old
+ * token never goes to the new key (review S-T1). Never silently re-trusted.
  */
 
 /** The local shell's banner when the identity changed. Pure. */
@@ -57,20 +58,22 @@ internal fun trustAgainText(pinned: String, now: String): String =
     "This phone trusted:\n$pinned\n\nIt now proves:\n$now\n\n" +
         "Say yes only if you reinstalled Domovoi or moved it to a new machine at this address. " +
         "The new identity should match Settings → About on its dashboard. On someone else's " +
-        "network, say no: nothing has been sent to it."
+        "network, say no: nothing has been sent to it. Yes forgets this phone's old household " +
+        "token; you then pair it with the token from that dashboard."
 
 /** The Mismatch verdict for [serverUrl] that can be answered with a yes:
  *  it carries the key the server proved. Null otherwise. Pure. */
 internal fun changedIdentity(verdict: IdentityVerdict?): IdentityVerdict.Mismatch? =
     (verdict as? IdentityVerdict.Mismatch)?.takeIf { it.seenPin != null }
 
-/** The yes: pin the key the server proved instead of the old one, and make
- *  the gate ask for a fresh proof against it. The token stays. */
+/** The yes: pin the key the server proved instead of the old one, drop the
+ *  old household's token (Prefs.replacePin), and make the gate ask for a
+ *  fresh proof against the new key. Pairing follows. */
 internal fun trustAgain(app: AppContainer, serverUrl: String, mismatch: IdentityVerdict.Mismatch, toast: (String) -> Unit) {
     val pin = mismatch.seenPin ?: return
     app.prefs.replacePin(serverUrl, pin)
     app.identity.pinChanged()
-    toast("trusting ${ServerCredentials.address(serverUrl)} again")
+    toast("trusting ${ServerCredentials.address(serverUrl)} again — pair this phone with it")
 }
 
 @Composable

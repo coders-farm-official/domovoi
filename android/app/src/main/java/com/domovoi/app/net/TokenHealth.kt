@@ -91,7 +91,7 @@ class TokenHealth(
         when (response.code) {
             401, 403 -> {
                 val body = peek(response)
-                if (!isDeviceTokenRefusal(response.code, body)) return
+                if (!isServerDeviceRefusal(response.code, body)) return
                 if (current?.trim() != sent.trim()) return
                 if (!book.isTokenRejected(url)) {
                     book.markTokenRejected(url)
@@ -100,13 +100,20 @@ class TokenHealth(
             }
             429 -> {
                 if (!isDeviceTokenThrottle(peek(response))) return
-                val waitMs = retryAfterMs(response.header("Retry-After"), clock = ::wallClockMs)
-                val key = ServerCredentials.normalize(url)
-                val until = clock() + waitMs
-                _waits.value = _waits.value + (key to until)
-                log("${ServerCredentials.address(url)} asked this phone to wait ${waitMs / 1000} s before it sends a household token again")
+                noteWait(url, retryAfterMs(response.header("Retry-After"), clock = ::wallClockMs))
             }
+            // 503 (the server could not check credentials just now) and
+            // anything else: not a verdict about the token, nothing learnt.
         }
+    }
+
+    /** The server asked [url]'s callers from this address to wait [waitMs]. */
+    fun noteWait(url: String, waitMs: Long) {
+        val key = ServerCredentials.normalize(url)
+        val until = clock() + waitMs
+        if (until <= (_waits.value[key] ?: 0L)) return
+        _waits.value = _waits.value + (key to until)
+        log("${ServerCredentials.address(url)} asked this phone to wait ${waitMs / 1000} s before it sends a household token again")
     }
 
     private fun peek(response: Response): String =

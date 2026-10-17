@@ -339,9 +339,20 @@ one credential the app has. The rules, all unit-tested under
     and the banner says "This looks like a different Domovoi, or it was
     reinstalled", with **it's my Domovoi — trust it again**. The yes,
     given with the pinned and the proven fingerprints side by side, pins
-    the key the server proved over this phone's challenge and keeps the
-    token. If the server then refuses the token, the refused-token card
-    below offers to pair again. Nothing is re-trusted without that yes.
+    the key the server proved over this phone's challenge and DROPS the
+    household token: it belongs to the identity it was paired with and never
+    goes to the new key. The pairing screen follows. Nothing is re-trusted
+    without that yes.
+- **A pasted token is checked first** (`ApiClient.checkDeviceToken`,
+  `CheckedPairingField`): the pairing screen, Settings → Connection
+  (**pair** / **replace**) and the refused-token card each make ONE
+  device-tier read (`GET /api/satellites`) carrying the candidate alone,
+  after the identity gate admits the server and never during the server's
+  wait. Taken, it is saved. Refused, it is not saved and the screen says
+  "That token doesn't match this server. Copy it from Settings → Devices →
+  Household token on this server's dashboard." A `429` counts the wait down
+  with the button off. A `503` or no answer says "Couldn't check it with
+  the server — try again" and saves nothing. Nothing retries by itself.
 - **A refused token** (`net/TokenHealth.kt`, `ui/shell/TokenTroubleScreen.kt`):
   the server answers "no token" and "wrong token" with the same `401`,
   but the app knows whether it sent one. A device-tier `401`/`403` to a
@@ -352,7 +363,11 @@ one credential the app has. The rules, all unit-tested under
   Instead of the workspace the app shows one card, **Domovoi doesn't
   recognise this phone any more**, with the pairing field (**pair again**),
   **try the old token again** and **use this phone's media**. A device-tier
-  `429` (its detail names the header) sets a wait from `Retry-After`. Until
+  `429` (its detail names the header) sets a wait from `Retry-After`. Only
+  the core's and the web's own refusal, word for word, marks a token refused
+  (`isServerDeviceRefusal`): a plugin's 401 that names the header does not,
+  and neither does the `503` the server answers when it cannot check
+  credentials (its database did not answer). Until
   it ends nothing carrying the token is sent to that server: the request
   fails in the app with `TokenThrottledException`, and the card counts the
   wait down. A phone holding an old token therefore costs the server's

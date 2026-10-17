@@ -36,8 +36,24 @@ changes only the words of one refusal.
   at the same address), the phone shows its own media with "This looks like
   a different Domovoi, or it was reinstalled" and asks first. Only **it's my
   Domovoi — trust it again** pins the new identity, with the old and new
-  fingerprints shown side by side. Pairing comes after that yes, and only
-  if the server also refuses the old token.
+  fingerprints shown side by side. That yes also drops the old household
+  token, which never goes to the new identity, and the pairing screen
+  follows.
+* **A pasted token is checked before it is saved**, in the app (the pairing
+  screen, Settings → Connection → **pair** / **replace**, the card) and in
+  the dashboard's pair prompt: one read with it, never retried. A token the
+  server doesn't take is not saved, and the screen says "That token doesn't
+  match this server. Copy it from Settings → Devices → Household token on
+  this server's dashboard." Too many tries counts the wait down; a server
+  that could not check it says "try again". Before, an old custom token
+  pasted into a reinstalled server was saved without a word and every page
+  failed.
+* **A database blip is "try again", not "wrong token".** When the server
+  cannot check credentials (its database not answering: a restart, too many
+  connections) it now answers `503` with `Retry-After` instead of the `401`
+  it shares with a wrong token. Still closed; it costs the address nothing
+  on the wrong-token count, and neither the app nor the dashboard drops a
+  token for it. Scripts that call the API may now see `503` there.
 * **The dashboard does the same.** A browser stops sending a household token
   the server refused: not as a header, not on the live socket, not in
   picture or video links, and not after a reload. While the server's wait

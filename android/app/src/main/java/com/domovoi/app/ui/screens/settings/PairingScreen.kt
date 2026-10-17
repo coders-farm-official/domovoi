@@ -25,6 +25,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,6 +41,8 @@ import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.DEVICE_TOKEN_MIN_LEN
+import com.domovoi.app.net.TokenCheck
+import kotlinx.coroutines.launch
 import com.domovoi.app.net.isStorableDeviceToken
 import com.domovoi.app.ui.components.DomovoiGlyph
 import com.domovoi.app.ui.theme.Domovoi
@@ -59,7 +63,6 @@ fun PairingScreen(onDone: () -> Unit, onSkip: (() -> Unit)? = null) {
     val app = LocalApp.current
     val toast = LocalToast.current
     val serverUrl by app.prefs.serverUrl.collectAsState()
-    var token by remember { mutableStateOf("") }
 
     // ShellContent returns this screen BEFORE either Scaffold is composed, so
     // the shells' keyboard handling cannot reach it. Without imePadding the
@@ -92,16 +95,10 @@ fun PairingScreen(onDone: () -> Unit, onSkip: (() -> Unit)? = null) {
                 color = Domovoi.colors.fgFaint,
             )
             Spacer(Modifier.height(4.dp))
-            PairingField(
-                token = token,
-                onTokenChange = { token = it },
-                onPair = {
-                    app.prefs.setDeviceToken(token.trim())
-                    app.api.clearPairingRequired()
-                    toast("this phone is paired")
-                    onDone()
-                },
-            )
+            CheckedPairingField(onSaved = {
+                toast("this phone is paired")
+                onDone()
+            })
             Text(
                 "An admin finds it on the dashboard under Settings → Devices → Household token.",
                 style = MaterialTheme.typography.bodySmall,
@@ -110,6 +107,92 @@ fun PairingScreen(onDone: () -> Unit, onSkip: (() -> Unit)? = null) {
             if (onSkip != null) {
                 OutlinedButton(onClick = onSkip) { Text("not now") }
             }
+        }
+    }
+}
+
+/** What the person sees after a pasted token was checked with the server
+ *  ([com.domovoi.app.net.ApiClient.checkDeviceToken]); null while there
+ *  is nothing to say (accepted, or not asked yet). Pure. */
+internal fun tokenCheckMessage(check: TokenCheck?, waitLeftMs: Long = 0): String? = when (check) {
+    null, TokenCheck.Accepted -> null
+    TokenCheck.Refused ->
+        "That token doesn't match this server. Copy it from Settings → Devices → Household token " +
+            "on this server's dashboard."
+    is TokenCheck.Throttled ->
+        if (waitLeftMs > 0) "Too many tries — wait ${waitClockText(waitLeftMs)} before the next one."
+        else "You can try again now."
+    TokenCheck.Unavailable -> "Couldn't check it with the server — try again."
+}
+
+internal fun waitClockText(ms: Long): String {
+    val s = (ms.coerceAtLeast(0) + 999) / 1000
+    return "%d:%02d".format(s / 60, s % 60)
+}
+
+/**
+ * The paste field that CHECKS the token with the server before saving it
+ * (2026-10-17: the owner pasted his old custom token into a reinstalled
+ * server's pairing screen, it was saved without a word, and every page
+ * then failed). One device-tier read with the candidate: accepted, saved
+ * and [onSaved]; refused, not saved, and the screen says where the right
+ * token is; a 429, the wait counted down (the button stays off); a 503 or
+ * no answer, "couldn't check it", not saved. Never retried by itself: a
+ * wrong paste costs one wrong token on the server's count, no more.
+ */
+@Composable
+internal fun CheckedPairingField(label: String = "pair", onSaved: () -> Unit) {
+    val app = LocalApp.current
+    val scope = rememberCoroutineScope()
+    var token by remember { mutableStateOf("") }
+    var checking by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<TokenCheck?>(null) }
+    var waitUntil by remember { mutableStateOf(0L) }
+    var now by remember { mutableStateOf(android.os.SystemClock.elapsedRealtime()) }
+    LaunchedEffect(waitUntil) {
+        while (android.os.SystemClock.elapsedRealtime() < waitUntil) {
+            now = android.os.SystemClock.elapsedRealtime()
+            kotlinx.coroutines.delay(1000)
+        }
+        now = android.os.SystemClock.elapsedRealtime()
+    }
+    val waitLeft = (waitUntil - now).coerceAtLeast(0)
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        PairingField(
+            token = token,
+            onTokenChange = { token = it; if (result != null && waitLeft == 0L) result = null },
+            label = when {
+                checking -> "checking…"
+                else -> label
+            },
+            enabled = !checking && waitLeft == 0L,
+            onPair = {
+                val candidate = token.trim()
+                checking = true
+                scope.launch {
+                    val check = app.api.checkDeviceToken(candidate)
+                    checking = false
+                    result = check
+                    when (check) {
+                        TokenCheck.Accepted -> {
+                            app.prefs.setDeviceToken(candidate)
+                            app.api.clearPairingRequired()
+                            token = ""
+                            result = null
+                            onSaved()
+                        }
+                        is TokenCheck.Throttled -> waitUntil = android.os.SystemClock.elapsedRealtime() + check.waitMs
+                        else -> Unit
+                    }
+                }
+            },
+        )
+        tokenCheckMessage(result, waitLeft)?.let { msg ->
+            Text(
+                msg,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (result == TokenCheck.Refused) Domovoi.colors.err else Domovoi.colors.warn,
+            )
         }
     }
 }
@@ -130,9 +213,10 @@ internal fun PairingField(
     onTokenChange: (String) -> Unit,
     onPair: () -> Unit,
     label: String = "pair",
+    enabled: Boolean = true,
 ) {
     val trimmed = token.trim()
-    val usable = isStorableDeviceToken(trimmed)
+    val usable = isStorableDeviceToken(trimmed) && enabled
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(
             Modifier.fillMaxWidth(),
