@@ -124,6 +124,12 @@ We build Domovoi in public. Here's where it stands.
   among them, join). Any room can start music, a podcast or an audiobook in
   another ("play some jazz in the garage"), and two people with the same
   name are never guessed between: a satellite asks "Is that you?" instead.
+  A satellite whose Wi-Fi drops tries to rejoin after 2 minutes, and
+  restarts itself at about 10 if that keeps failing; one missing a system
+  package it needs installs it again at its next boot (from its own SD card
+  when your server stays off the internet), and the Health card says so
+  until it is back
+  ([self-healing](satellite/PROVISIONING.md#83-reboot-helper-and-hardware-watchdog-self-healing-while-nobody-is-home)).
 - **No GPL or LGPL libraries in the server's Python code:** tag reading
   and the music player's client are Domovoi's own, and audio is encoded by
   the system's `ffmpeg`, run as a program. Every model, voice and dataset
@@ -393,7 +399,8 @@ python -m domovoi.env_bootstrap      # first run only: .env with a random Postgr
 cd domovoi
 docker compose up -d postgres        # Postgres 16 on 127.0.0.1:6432 (loopback only)
 docker compose run --rm flyway       # database migrations
-docker compose run --rm flyway-test  # migrate the test DB (so pytest can run)
+docker compose run --rm flyway-test  # migrate the test DB (to run pytest, see
+                                     # docs/CONTRIBUTING.md, "Running the tests")
 docker compose up -d searxng         # optional: the web-answers helper (saving Yes or Sometimes starts it too)
 cd ..
 python -m domovoi.main               # core voice service on :6370
