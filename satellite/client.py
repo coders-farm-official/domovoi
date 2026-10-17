@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import itertools
 import json
 import logging
 import queue
@@ -1042,6 +1043,55 @@ def _prime_wake_reset(oww: Any) -> bool:
     ):
         return False
     oww._domovoi_noise_features = features.copy()
+    return True
+
+
+def _lighten_wake_streaming(oww: Any) -> bool:
+    """Make openWakeWord's per-chunk melspectrogram read only the samples it
+    uses. Call once, straight after the model is built.
+
+    openWakeWord 0.6.0 keeps the last 10 s of audio in a deque of Python
+    ints (160,000 of them) and, on EVERY 80 ms chunk, copies the whole
+    deque into a list to slice the last 1,760 samples off it
+    (`AudioFeatures._streaming_melspectrogram`: `list(self.raw_data_buffer)
+    [-n_samples-160*3:]`). That copy touches every one of those objects
+    twice (a reference taken, then dropped), 12.5 times a second, on a
+    board with a 512 KB cache: measured at 25-45 % of the whole predict()
+    on an x86 PC (0.65-1.1 ms of 1.6-3 ms), and the Zero 2 W's cores are
+    far worse at it. The office satellite idled at 73-93 % of a core
+    (2026-10-17). This takes the same samples from the right-hand end of
+    the deque instead — identical values, identical scores (pinned by a
+    test against the library's own method) — and nothing else changes.
+
+    False, and the library's own method stays, for a model that is not
+    shaped as expected (a later openWakeWord, a stand-in)."""
+    pre = getattr(oww, "preprocessor", None)
+    own = getattr(pre, "__dict__", None)
+    buf = getattr(pre, "raw_data_buffer", None)
+    if (
+        not isinstance(own, dict)
+        or not isinstance(buf, deque)
+        or not callable(getattr(pre, "_get_melspectrogram", None))
+        or not isinstance(getattr(pre, "melspectrogram_buffer", None), np.ndarray)
+        or not isinstance(getattr(pre, "melspectrogram_max_len", None), int)
+        or not callable(getattr(type(pre), "_streaming_melspectrogram", None))
+    ):
+        return False
+
+    def _streaming_melspectrogram(n_samples: int) -> None:
+        raw = pre.raw_data_buffer
+        if len(raw) < 400:
+            raise ValueError("The number of input frames must be at least 400 samples @ 16khz (25 ms)!")
+        want = min(len(raw), n_samples + 160 * 3)
+        tail = list(itertools.islice(reversed(raw), want))
+        tail.reverse()
+        pre.melspectrogram_buffer = np.vstack(
+            (pre.melspectrogram_buffer, pre._get_melspectrogram(tail))
+        )
+        if pre.melspectrogram_buffer.shape[0] > pre.melspectrogram_max_len:
+            pre.melspectrogram_buffer = pre.melspectrogram_buffer[-pre.melspectrogram_max_len:, :]
+
+    own["_streaming_melspectrogram"] = _streaming_melspectrogram
     return True
 
 
@@ -5166,6 +5216,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # Every reset from here on reuses the noise features this load just
         # computed (see _WAKE_RESET_NOISE_SAMPLES) — one of them runs
         # between the wake acknowledgement and the capture.
+        if not _lighten_wake_streaming(oww):
+            log.warning(
+                "wake model: this openWakeWord is not shaped as expected, so it "
+                "keeps copying its whole 10 s audio buffer on every 80 ms chunk "
+                "(a quarter or more of its CPU on a Pi Zero 2 W)"
+            )
         if not _prime_wake_reset(oww):
             log.warning(
                 "wake model: this openWakeWord is not shaped as expected, so "
