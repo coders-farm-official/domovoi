@@ -53,6 +53,131 @@ PORTAL_PORT = 80
 BIND_HOST = "0.0.0.0"
 AP_CONNECTION = "domovoi-setup"
 
+# ── The setup network's radio settings ──────────────────────────────────
+#
+# Found on hardware (2026-10-17): a Samsung phone said "Couldn't connect to
+# network" to a Pi's setup hotspot every time, with the right password,
+# while a Motorola joined the same network at once (and the same Samsung
+# had set up every earlier satellite, in September). `nmcli device wifi
+# hotspot` leaves Protected Management Frames at NM's default, and for a
+# key-mgmt=wpa-psk access point NetworkManager (1.38 on) then runs
+# WPA2/WPA3 "transition mode": WPA-PSK plus SAE, PMF optional, whenever
+# wpa_supplicant and the driver report SAE, PMF and BIP support
+# (src/core/supplicant/nm-supplicant-config.c). Phones that pick WPA2 join;
+# phones that pick WPA3 when it is offered - Samsung's do - negotiate SAE
+# and PMF, which the Pi's Wi-Fi driver (brcmfmac) breaks in access-point
+# mode. So whether a phone could join depended on what the Pi's driver
+# happened to advertise and what the phone happened to prefer.
+#
+# PMF off is the standard workaround, and NM drops SAE with it (it never
+# runs transition mode with PMF disabled): the setup network is plain
+# WPA2-PSK with CCMP, which is exactly what the phones that already worked
+# were using. WPA2 still encrypts the link.
+#
+# The band and channel are pinned for the same reason: nothing left for the
+# driver to choose. 2.4 GHz, as before (NM picked a 2.4 GHz channel from
+# 1/6/11/13 by hashing the SSID), because every phone has it and the
+# Pi Zero 2 W has nothing else; channels 1, 6 and 11 only, because those
+# are the three that don't overlap AND are legal in every regulatory
+# domain, the "world" domain 00 included (12 and 13 are not legal in the
+# US, 14 almost nowhere) - so whatever wireless country the card was
+# prepared with, the channel is allowed.
+AP_BAND = "bg"
+AP_CHANNELS = (6, 1, 11)       # tie-break order: 6 first
+AP_PMF = "disable"
+# What `ap.json` on the boot partition may change, for testing a radio on
+# real hardware without rebuilding the card (key -> allowed values).
+# Anything else in it is ignored, and a value outside these never reaches
+# nmcli.
+RADIO_OVERRIDES = {
+    "channel": ("auto", "1", "6", "11"),
+    "pmf": ("disable", "optional", "default"),
+}
+
+# What NetworkManager's shared mode needs to run a hotspot. Missing any of
+# these, the hotspot can never come up, however often it is retried — and
+# retrying is what made a card built without its offline packages flap its
+# setup network up and down forever. Name the package, not just the file:
+# the person reading this is choosing what to rebuild.
+PREREQUISITES = (
+    ("nmcli", "network-manager"),
+    ("dnsmasq", "dnsmasq-base"),        # shared mode's DHCP + DNS
+    ("wpa_supplicant", "wpasupplicant"),  # NM runs the AP through it
+)
+# A systemd unit's PATH has these, but shutil.which() alone depends on the
+# caller's environment.
+_SBIN_DIRS = ("/usr/sbin", "/sbin", "/usr/local/sbin")
+
+# NetworkManager's dnsmasq lease file for the hotspot: one line per phone
+# that got an address, which a phone only does AFTER the Wi-Fi handshake
+# succeeded. So "phones that joined" counts leases, never association
+# attempts — exactly the number that reads 0 when the handshake is broken.
+LEASES_DIR = Path("/var/lib/NetworkManager")
+_REPORT_EVERY_SEC = 30.0
+
+
+class MissingPrerequisite(RuntimeError):
+    """The hotspot can never start on this card. Retrying won't help."""
+
+    permanent = True
+
+
+def _have(binary: str) -> bool:
+    if shutil.which(binary):
+        return True
+    return any(Path(d, binary).exists() for d in _SBIN_DIRS)
+
+
+def check_prerequisites() -> None:
+    """Raise :class:`MissingPrerequisite` naming every package the setup
+    hotspot needs and this card lacks."""
+    missing = [pkg for binary, pkg in PREREQUISITES if not _have(binary)]
+    if missing:
+        raise MissingPrerequisite(
+            f"this card is missing {', '.join(missing)}, which the setup "
+            "network needs. Flash stock Raspberry Pi OS Lite and prepare the "
+            "card again (with offline packages: the server needs Docker and "
+            "internet access while it prepares the card)."
+        )
+
+
+def radio_settings(overrides: dict[str, Any] | None = None) -> dict[str, str]:
+    """The band / channel / PMF the hotspot is raised with: the defaults
+    above, then any allowed override from ``ap.json``. ``channel`` is
+    ``"auto"`` until :func:`choose_channel` has had a scan to look at."""
+    out = {"band": AP_BAND, "channel": "auto", "pmf": AP_PMF}
+    for key, allowed in RADIO_OVERRIDES.items():
+        value = (overrides or {}).get(key)
+        if value is None:
+            continue
+        value = str(value).strip().lower()
+        if value in allowed:
+            out[key] = value
+        else:
+            log.warning("ignoring ap.json %s=%r (allowed: %s)",
+                        key, value, ", ".join(allowed))
+    return out
+
+
+def choose_channel(rows: list[dict[str, Any]]) -> int:
+    """The least crowded of 1, 6 and 11, from the scan taken before the
+    radio starts hosting. Each network seen costs the channels it overlaps
+    (within four of its own) by its signal strength; 5 GHz networks cost
+    nothing. A scan with no channels in it gives 6."""
+    cost = {c: 0 for c in AP_CHANNELS}
+    for row in rows:
+        try:
+            chan = int(row.get("chan") or 0)
+            signal = int(row.get("signal") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not 1 <= chan <= 14:
+            continue
+        for c in cost:
+            if abs(c - chan) < 5:
+                cost[c] += max(signal, 1)
+    return min(AP_CHANNELS, key=lambda c: cost[c])
+
 # ── The approval code ────────────────────────────────────────────────────
 #
 # The customer reads this off the portal page (and hears it from the
@@ -108,6 +233,11 @@ _IFACE_POLL_SEC = 1.0
 _NMCLI_TIMEOUT_SEC = 30.0
 
 
+def _no_iface() -> str:
+    return (f"no Wi-Fi interface after {_IFACE_WAIT_SEC:.0f}s — is the "
+            "radio rfkill-blocked for want of a wireless country?")
+
+
 def _nmcli() -> str | None:
     return shutil.which("nmcli")
 
@@ -122,11 +252,21 @@ def scan_networks(run=subprocess.run, *, iface: str | None = None,
     is up returns nothing at all, and "no networks found" on a form served
     by a working access point is a confusing thing to hand someone.
     """
+    return portal_pages.summarize_networks(
+        scan_rows(run=run, iface=iface, attempts=attempts))
+
+
+def scan_rows(run=subprocess.run, *, iface: str | None = None,
+              attempts: int | None = None) -> list[dict[str, Any]]:
+    """One row per network seen: ``ssid``, ``signal`` and, where nmcli
+    gave it, ``chan`` (what :func:`choose_channel` reads). Same
+    best-effort rules as :func:`scan_networks`."""
     nmcli = _nmcli()
     if nmcli is None:
         return []
     attempts = _SCAN_ATTEMPTS if attempts is None else attempts
-    cmd = [nmcli, "-t", "-f", "SSID,SIGNAL", "device", "wifi", "list", "--rescan", "yes"]
+    cmd = [nmcli, "-t", "-f", "SSID,SIGNAL,CHAN", "device", "wifi", "list",
+           "--rescan", "yes"]
     if iface:
         cmd += ["ifname", iface]
     proc = None
@@ -161,11 +301,11 @@ def scan_networks(run=subprocess.run, *, iface: str | None = None,
         parts = line.replace("\\:", "\x00").split(":")
         if len(parts) < 2:
             continue
-        rows.append({
-            "ssid": parts[0].replace("\x00", ":"),
-            "signal": parts[-1],
-        })
-    return portal_pages.summarize_networks(rows)
+        row = {"ssid": parts[0].replace("\x00", ":"), "signal": parts[1]}
+        if len(parts) >= 3:
+            row["chan"] = parts[2]
+        rows.append(row)
+    return rows
 
 
 class PortalTransport:
@@ -184,6 +324,7 @@ class PortalTransport:
         bind_host: str = BIND_HOST,
         profiles: list[str] | None = None,
         state_dir: Path | None = None,
+        radio: dict[str, Any] | None = None,
         run=subprocess.run,
         server_factory=None,
     ) -> None:
@@ -209,12 +350,25 @@ class PortalTransport:
         self._thread: threading.Thread | None = None
         self._ap_up = False
         self.phone_seen = False
+        # Requested settings (ap.json overrides applied); `channel` becomes
+        # a number once the scan has picked one.
+        self.radio = radio_settings(radio)
+        self.channel: int | None = None
+        # Phones that got an address from the hotspot (lease MACs, kept in
+        # memory only — the card gets the count).
+        self._phones: set[str] = set()
+        self._watch_stop = threading.Event()
+        self._watcher: threading.Thread | None = None
+        self._ap_iface: str | None = None
 
     # ── Transport seam ───────────────────────────────────────────────────
 
     def expose(self, device_info: dict[str, Any]) -> None:
         self.device_info = device_info
         self.nonce = device_info["nonce"]
+        # Before anything else: a card that cannot run a hotspot at all
+        # must say so once and stop, not raise half an AP every few seconds.
+        check_prerequisites()
         # A fresh code per session, for the same reason as the nonce: an
         # approval shown in a previous attempt must not still be valid.
         self.approval_code = generate_approval_code()
@@ -225,9 +379,20 @@ class PortalTransport:
         # perfectly — the wait used to live inside _start_ap(), which is
         # after this point, so the AP survived the race and the scan didn't.
         iface = self.wait_for_wifi_interface()
+        if iface is None:
+            # Said now, after the one wait: scanning without a radio and
+            # then waiting again in _start_ap doubled the time to the error
+            # (seen in a container with no Wi-Fi device, 2026-10-17).
+            raise RuntimeError(_no_iface())
         # Scan BEFORE the radio is committed to hosting — once the AP is up
-        # the interface can no longer survey the neighbourhood.
-        self.networks = scan_networks(run=self.run, iface=iface)
+        # the interface can no longer survey the neighbourhood. The same
+        # scan picks the quietest channel.
+        rows = scan_rows(run=self.run, iface=iface)
+        self.networks = portal_pages.summarize_networks(rows)
+        self.channel = (
+            int(self.radio["channel"]) if self.radio["channel"] != "auto"
+            else choose_channel(rows)
+        )
         self._persist_approval_code()
         # Serve BEFORE the radio exists, not after. A phone probes for a
         # captive portal the instant it associates, and a probe that finds
@@ -245,9 +410,13 @@ class PortalTransport:
             self._stop_server()      # don't leave a socket behind on failure
             raise
         log.info(
-            "setup portal up: ssid=%s http://%s:%d (%d networks visible)",
-            self.ap_ssid, self.ip, self.port, len(self.networks),
+            "setup portal up: ssid=%s channel=%s band=%s pmf=%s "
+            "http://%s:%d (%d networks visible)",
+            self.ap_ssid, self.channel, self.radio["band"], self.radio["pmf"],
+            self.ip, self.port, len(self.networks),
         )
+        self._report_up()
+        self._start_watcher()
 
     def wait_for_provision(self, nonce: str) -> dict[str, Any] | None:
         """Block until the portal handler accepts a payload. No polling and
@@ -258,6 +427,7 @@ class PortalTransport:
         return payload
 
     def withdraw(self) -> None:
+        self._stop_watcher()
         self._stop_server()
         self._stop_ap()
 
@@ -409,31 +579,66 @@ class PortalTransport:
         # driven directly, as the tests do.
         iface = iface or self.wait_for_wifi_interface()
         if iface is None:
-            raise RuntimeError(
-                f"no Wi-Fi interface after {_IFACE_WAIT_SEC:.0f}s — is the "
-                "radio rfkill-blocked for want of a wireless country?"
-            )
-        cmd = ["device", "wifi", "hotspot", "con-name", AP_CONNECTION,
-               "ssid", self.ap_ssid, "password", self.ap_psk, "ifname", iface]
-        # The PSK rides in argv, which is root-only readable here, and is
-        # never logged — same rule as apply_wifi().
-        self._nmcli(cmd, f"raising the setup AP on {iface}")
+            raise RuntimeError(_no_iface())
+        # A profile left by an earlier run (a crash, a power cut) would
+        # otherwise sit beside the new one under the same name. Absent is
+        # the usual case, so failure here means nothing.
+        try:
+            self._nmcli(["connection", "delete", "id", AP_CONNECTION],
+                        "clearing an old setup AP profile")
+        except RuntimeError:
+            pass
+        # ONE profile with every setting in it, then ONE activation. This
+        # used to be `nmcli device wifi hotspot` (which activates at once
+        # with NM's defaults: PMF optional, any channel, its own subnet),
+        # then a modify, then a second `up`: the setup network appeared,
+        # vanished, and came back re-addressed — and a phone that joined
+        # the first one was dropped.
+        self._nmcli(self.ap_profile_args(iface),
+                    f"creating the setup AP profile on {iface}")
+        # From here there is something to take down again.
         self._ap_up = True
-
-        # NetworkManager's shared mode picks its own subnet (10.42.x.1 by
-        # default, and which one depends on what's already in use). The
-        # captive-portal DNS drop-in written at prepare time points at a
-        # FIXED address, so pin the AP to match — otherwise every hostname
-        # resolves to an address nothing is listening on and the sign-in
-        # page never opens.
-        self._nmcli(
-            ["connection", "modify", AP_CONNECTION,
-             "ipv4.method", "shared", "ipv4.addresses", f"{self.ip}/24"],
-            "pinning the setup AP address",
-        )
-        self._nmcli(["connection", "up", AP_CONNECTION],
+        self._ap_iface = iface
+        self._nmcli(["connection", "up", "id", AP_CONNECTION],
                     "activating the setup AP")
         self._verify_ap_active()
+
+    def ap_profile_args(self, iface: str) -> list[str]:
+        """The nmcli arguments that create the setup AP's profile.
+
+        The PSK rides in argv, which is root-only readable here, and is
+        never logged — same rule as apply_wifi()."""
+        channel = self.channel or AP_CHANNELS[0]
+        return [
+            "connection", "add", "type", "wifi", "ifname", iface,
+            "con-name", AP_CONNECTION,
+            # Only ever brought up by this process. An AP profile that
+            # autoconnects is one NetworkManager may raise whenever the
+            # house network is out of sight (see dispose()).
+            "connection.autoconnect", "no",
+            "802-11-wireless.ssid", self.ap_ssid,
+            "802-11-wireless.mode", "ap",
+            "802-11-wireless.band", self.radio["band"],
+            "802-11-wireless.channel", str(channel),
+            # NetworkManager's shared mode picks its own subnet (10.42.x.1
+            # by default). The captive-portal DNS drop-in written at
+            # prepare time points at a FIXED address, so pin the AP to
+            # match — otherwise every hostname resolves to an address
+            # nothing is listening on and the sign-in page never opens.
+            "ipv4.method", "shared",
+            "ipv4.addresses", f"{self.ip}/24",
+            "ipv6.method", "ignore",
+            # WPA2-PSK with CCMP (AES) only: no WPA1, no TKIP, nothing a
+            # phone has to negotiate down from.
+            "802-11-wireless-security.key-mgmt", "wpa-psk",
+            "802-11-wireless-security.proto", "rsn",
+            "802-11-wireless-security.pairwise", "ccmp",
+            "802-11-wireless-security.group", "ccmp",
+            # See AP_PMF: brcmfmac breaks PMF in AP mode, Samsung phones
+            # take it when offered.
+            "802-11-wireless-security.pmf", self.radio["pmf"],
+            "802-11-wireless-security.psk", self.ap_psk,
+        ]
 
     def _verify_ap_active(self) -> None:
         """Confirm the AP is really there before anyone is told it is.
@@ -463,6 +668,91 @@ class PortalTransport:
         except RuntimeError as e:
             log.warning("%s", e)
         self._ap_up = False
+
+    # ── What the card says (satellite/setup_report.py) ───────────────────
+
+    def lease_file(self) -> Path | None:
+        iface = self._ap_iface or self.iface
+        if not iface:
+            return None
+        return LEASES_DIR / f"dnsmasq-{iface}.leases"
+
+    def _count_phones(self) -> bool:
+        """Fold the hotspot's current DHCP leases into the phones seen this
+        session. True when that added one."""
+        path = self.lease_file()
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace") if path else ""
+        except OSError:
+            return False
+        before = len(self._phones)
+        for row in text.splitlines():
+            # dnsmasq: "<expiry> <mac> <ip> <hostname> <client-id>"
+            fields = row.split()
+            if len(fields) >= 3:
+                self._phones.add(fields[1].lower())
+        return len(self._phones) > before
+
+    def network_report(self, state: str = "up", error: str | None = None) -> dict[str, Any]:
+        """The ``setup_network`` block for the card. Never the PSK."""
+        from satellite import setup_report
+
+        return {
+            "state": state,
+            "ssid": self.ap_ssid,
+            "band": self.radio["band"],
+            "channel": self.channel,
+            "pmf": self.radio["pmf"],
+            "address": self.ip,
+            "phones_joined": len(self._phones),
+            "page_opened": self.phone_seen,
+            "last_error": error,
+            "line": setup_report.line(
+                state=state, ssid=self.ap_ssid, channel=self.channel,
+                phones=len(self._phones), error=error,
+            ),
+        }
+
+    def _report_up(self) -> None:
+        """Best-effort, like everything that writes to the card."""
+        try:
+            from satellite import setup_report
+
+            self._count_phones()
+            info = self.device_info or {}
+            setup_report.update(
+                top={"status": info.get("status") or "awaiting_provision",
+                     "step": "setup-network-up",
+                     # A failed join's reason stays until the next attempt.
+                     "error": info.get("error")},
+                network=self.network_report("up", info.get("error")),
+            )
+        except Exception as e:  # noqa: BLE001 — never take the portal down
+            log.warning("could not report the setup network: %s", e)
+
+    def _start_watcher(self) -> None:
+        """Re-count phones every so often while the hotspot is up, so a
+        phone that joined but never opened the page still shows on the
+        card. Writes only when the count changed."""
+        self._watch_stop.clear()
+
+        def watch() -> None:
+            while not self._watch_stop.wait(_REPORT_EVERY_SEC):
+                try:
+                    if self._count_phones():
+                        self._report_up()
+                except Exception as e:  # noqa: BLE001
+                    log.debug("phone count failed: %s", e)
+
+        self._watcher = threading.Thread(target=watch, name="domovoi-portal-report",
+                                         daemon=True)
+        self._watcher.start()
+
+    def _stop_watcher(self) -> None:
+        self._watch_stop.set()
+        if self._watcher is not None:
+            self._watcher.join(timeout=5)
+            self._watcher = None
 
     # ── HTTP server ──────────────────────────────────────────────────────
 
@@ -605,6 +895,7 @@ def _make_handler(transport: PortalTransport):
                     from satellite.provisioning_mode import setup_status
 
                     setup_status("phone-connected")
+                    transport._report_up()
                 self._form(error=transport.setup_error())
             elif path == "/device-info":
                 self._send(json.dumps(transport.device_info),

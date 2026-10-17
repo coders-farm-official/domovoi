@@ -71,6 +71,16 @@ STATE_FILE = CONFIG_DIR / "provisioning_state.json"
 IMAGE_FILE = CONFIG_DIR / "setup_gadget.img"
 
 IMAGE_BYTES = 16 * 1024 * 1024
+
+# run()'s exit code when setup can never be exposed on this card (the setup
+# network's packages are missing). domovoi-provisioning.service names it in
+# RestartPreventExitStatus=, so the unit stays down — red ring, reason on
+# the card — instead of restarting into the same failure every few seconds.
+EXIT_CANNOT_SET_UP = 3
+# A setup network that failed for any other reason is retried in-process,
+# 15 s, 30 s, 60 s ... at most every 5 minutes.
+_EXPOSE_RETRY_SEC = 15.0
+_EXPOSE_RETRY_MAX_SEC = 300.0
 GADGET_DIR = Path("/sys/kernel/config/usb_gadget/domovoi")
 UDC_DIR = Path("/sys/class/udc")
 
@@ -140,7 +150,15 @@ def _read_ap_json(path: Path) -> dict[str, str] | None:
     except (OSError, ValueError):
         return None
     if isinstance(doc, dict) and doc.get("ssid") and doc.get("psk"):
-        return {"ssid": str(doc["ssid"]), "psk": str(doc["psk"])}
+        creds = {"ssid": str(doc["ssid"]), "psk": str(doc["psk"])}
+        # Optional radio settings (portal_transport.RADIO_OVERRIDES), which
+        # validates them: the boot partition is the one file a household
+        # can edit, so a setup network can be re-tuned there without
+        # rebuilding the card.
+        for key in ("channel", "pmf"):
+            if doc.get(key) is not None:
+                creds[key] = str(doc[key])
+        return creds
     log.warning("%s present but unusable — ignoring", path)
     return None
 
@@ -1372,6 +1390,7 @@ def _default_transport() -> GadgetBackend | Transport:
         # selected. A prepared card knows its own hardware, so asking the
         # customer is both pointless and a way to get it wrong.
         profiles=[profile],
+        radio={k: creds[k] for k in ("channel", "pmf") if k in creds},
     )
 
 
@@ -1417,6 +1436,7 @@ def run(
 
     board, model = read_board()
     loops = 0
+    failures = 0
     while True:
         # Fresh nonce per gadget session: a stale provision.json from a
         # previous plug can never validate against it.
@@ -1431,7 +1451,34 @@ def run(
             error=error,
             profiles_supported=_profiles(),
         )
-        transport.expose(info)
+        # So the card never shows a previous boot's failure as current
+        # while this attempt is still waiting for the radio.
+        _report(transport, "starting",
+                top={"status": status, "step": "setup-network-starting",
+                     "error": error},
+                error=error, attempts=failures + 1)
+        try:
+            transport.expose(info)
+        except Exception as e:  # noqa: BLE001 — reported, then retried or parked
+            permanent = bool(getattr(e, "permanent", False))
+            failures += 1
+            _setup_network_failed(transport, e, permanent=permanent,
+                                  status=status, attempt=failures)
+            if permanent:
+                # Nothing a retry can change (a package the card lacks): say
+                # so once and stay down. Exiting with this code is what the
+                # unit's RestartPreventExitStatus= recognises, so systemd
+                # doesn't restart it into the same failure every 5 s.
+                return EXIT_CANNOT_SET_UP
+            loops += 1
+            if max_loops is not None and loops >= max_loops:
+                return 1
+            # In-process and slowing down, rather than crashing for systemd
+            # to restart: every restart raised and dropped half a hotspot.
+            time.sleep(min(_EXPOSE_RETRY_MAX_SEC,
+                           _EXPOSE_RETRY_SEC * 2 ** (failures - 1)))
+            continue
+        failures = 0
         # The portal is live. This is the one moment a customer is actively
         # waiting on the device itself for a cue.
         setup_status("join-failed" if status == "wifi_failed" else "ready-to-setup")
@@ -1446,6 +1493,7 @@ def run(
         # phone drops the setup network and the device is their only signal.
         setup_status("joining")
         transport.withdraw()
+        _report(transport, "closed", top={"step": "joining-home-wifi", "error": None})
         ok, err = apply_provision(
             payload,
             transport=transport,
@@ -1455,6 +1503,8 @@ def run(
         )
         if ok:
             _write_state({"phase": "done"})
+            _report(None, None, top={"status": "provisioned",
+                                     "step": "joined-home-wifi", "error": None})
             # Held briefly so success is seen rather than inferred from the
             # reboot that follows it.
             setup_status("on-network")
@@ -1473,9 +1523,49 @@ def run(
         CONFIG_PATH.unlink(missing_ok=True)
         PAIRING_TOKEN_PATH.unlink(missing_ok=True)
         status, error = "wifi_failed", err
+        _report(None, None, top={"status": status, "step": "home-wifi-failed",
+                                 "error": err})
         loops += 1
         if max_loops is not None and loops >= max_loops:
             return 1
+
+
+def _report(transport, state: str | None, *, top: dict[str, Any] | None = None,
+            error: str | None = None, **extra: Any) -> None:
+    """Update the card's device-info.json (satellite/setup_report.py): the
+    top-level status stage 1 started and, for the setup portal, its
+    ``setup_network`` block. Best-effort: never stops setup."""
+    try:
+        from satellite import setup_report
+
+        network = None
+        if state and hasattr(transport, "network_report"):
+            network = transport.network_report(state, error)
+            network.update(extra)
+        setup_report.update(top=top, network=network)
+    except Exception as e:  # noqa: BLE001
+        log.warning("could not update the card's setup report: %s", e)
+
+
+def _setup_network_failed(transport, exc: BaseException, *, permanent: bool,
+                          status: str, attempt: int) -> None:
+    """The setup network (or the gadget) would not start: red on the ring,
+    the reason on the card, and nothing left half up."""
+    msg = str(exc) or type(exc).__name__
+    log.error("setup could not be exposed (attempt %d%s): %s", attempt,
+              ", will not retry" if permanent else ", retrying", msg)
+    setup_status("startup-failed")
+    _report(
+        transport, "unavailable" if permanent else "failed",
+        top={"status": status,
+             "step": "setup-network-unavailable" if permanent else "setup-network-failed",
+             "error": msg},
+        error=msg, attempts=attempt,
+    )
+    try:
+        transport.withdraw()
+    except Exception as e:  # noqa: BLE001 — it is already down or never came up
+        log.debug("withdraw after a failed expose: %s", e)
 
 
 def _profiles() -> list[str]:
