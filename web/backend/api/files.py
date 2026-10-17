@@ -208,7 +208,8 @@ def _kind_for(name: str, is_dir: bool) -> str:
 async def _trigger_reindex(reindex_kind: Optional[str], request: Request) -> bool:
     """Fire the post-write reindex for an indexed library. music proxies the
     core admin endpoint (credentials forwarded); audiobooks runs the in-process
-    indexer; everything else is a no-op. Best-effort — a failure never fails the
+    indexer, then asks the core for an MPD rescan when it added a book;
+    everything else is a no-op. Best-effort — a failure never fails the
     write (the file is already saved; the indexer's next sweep recovers it)."""
     if reindex_kind == "music":
         status, _ = await post_admin(
@@ -219,9 +220,9 @@ async def _trigger_reindex(reindex_kind: Optional[str], request: Request) -> boo
         return status == 200
     if reindex_kind == "audiobooks":
         try:
-            from domovoi.workers.audiobook_indexer import index_audiobooks_dir
+            from web.backend.api.audiobooks import index_and_tell_players
 
-            await index_audiobooks_dir()
+            await index_and_tell_players(request)
             return True
         except Exception as e:  # noqa: BLE001
             log.warning("files: audiobook reindex failed: %s", e)

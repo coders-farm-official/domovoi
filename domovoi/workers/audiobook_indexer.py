@@ -34,6 +34,7 @@ from sqlalchemy import text
 
 from domovoi.config import settings
 from domovoi.db.session import session_scope
+from domovoi.mpd_library_sync import update_rooms_for
 from domovoi.workers.base import Worker
 
 log = logging.getLogger(__name__)
@@ -218,6 +219,7 @@ async def index_audiobooks_dir() -> dict[str, int]:
 
     log.info("audiobook indexer: walking %s", root)
     scanned = inserted = errors = 0
+    added: list[Path] = []
     async with session_scope() as session:
         for entry in sorted(root.iterdir(), key=lambda p: p.name.lower()):
             try:
@@ -232,7 +234,10 @@ async def index_audiobooks_dir() -> dict[str, int]:
                 else:
                     continue
                 scanned += 1
-                inserted += await _upsert_book(session, fp, meta)
+                new = await _upsert_book(session, fp, meta)
+                inserted += new
+                if new:
+                    added.append(entry)
             except Exception as e:
                 errors += 1
                 log.warning("audiobook indexer: failed on %s: %s", entry, e)
@@ -248,6 +253,10 @@ async def index_audiobooks_dir() -> dict[str, int]:
         "audiobook indexer: scanned=%d inserted=%d errors=%d",
         scanned, inserted, errors,
     )
+    if added:
+        # The rooms' MPDs play a book by its path in their own database,
+        # which a Windows or network folder never tells them about (F-V023).
+        await update_rooms_for(added, reason="audiobook indexer")
     return {"scanned": scanned, "inserted": inserted, "errors": errors}
 
 

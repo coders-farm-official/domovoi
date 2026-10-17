@@ -27,6 +27,12 @@ artist, album or song (or a household name for one) is DECLINED — the
 fast path returns None and the router routes the turn on, to the tool
 model and the Q&A model, as if it had not matched. A tool call the LLM
 router makes about something outside the library is declined the same way.
+Except where the turn can only be about music (F-V022, the rc2 smoke: the
+Q&A model made up an answer about a band it had never heard of): a name
+taught for a target the library lacks that reads as a name, not a command,
+a question or something personal ("when I say gramps I mean <a band>"), and
+a names question about something called a band, album or song, are
+answered "I don't have anything called <X> in your library".
 
 Fully local (``requires_network="no"``). Not exposed to chat mode.
 """
@@ -37,7 +43,7 @@ import logging
 import re
 from collections.abc import Iterable
 from pathlib import PurePath
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -94,6 +100,34 @@ _NOW_SONG = frozenset({
 _NOW_ARTIST_RE = re.compile(r"^(?:this|that) (?:artist|band|singer|group|rapper)$")
 _NOW_ALBUM_RE = re.compile(r"^(?:this|that) (?:album|record)$")
 
+# What a taught name can't mean (F-V022): a command ("turn off the
+# lights"), a question, something personal ("my wife") or a description
+# ("something relaxing"). Such a target, when the library has nothing like
+# it, is not this handler's turn ("when I say goodnight I mean turn off the
+# lights": a plugin's tool may do it, the memory tool may keep it); any
+# other target the library lacks is answered plainly here, never left to
+# the Q&A model to invent an answer about.
+_NOT_A_NAME_RE = re.compile(
+    r"^(?:"
+    r"(?:turn|switch|set|start|stop|pause|resume|skip|open|close|shut|lock|unlock|dim|brighten|"
+    r"raise|lower|call|text|message|send|remind|tell|say|show|read|wake|cancel|run|make|add|"
+    r"remove|delete|mute|unmute|check|go|take|put|give|find|search|look|get|let|arm|disarm|"
+    r"activate|deactivate|enable|disable|record|announce|ring|order|buy|book|feed|water|"
+    r"vacuum|clean|restart|reboot|please|play|shuffle|queue)"
+    r"|(?:my|our|your|his|her|their|its|me|us|him|them|you|i|we|i'm|i’m)"
+    r"|(?:what|who|whom|whose|where|when|why|how|which|is|are|was|were|do|does|did|can|could|"
+    r"will|would|should|shall)"
+    r"|(?:a|an|any|some|something|anything|everything|nothing|somewhere|anywhere)"
+    r")\b"
+)
+# "the band X", "the album X", "the song X": a subject marked as music. A
+# names question about one the library lacks is answered plainly; a bare
+# name stays a question about the world ("what else is soccer called").
+_MUSIC_CARRIER_RE = re.compile(
+    r"^(?:the|that) (?:band|group|artist|singer|rapper|song|track|tune|album|record) (?=\S)",
+    re.IGNORECASE,
+)
+
 _QUOTES = "\"'“”‘’"
 
 
@@ -103,6 +137,28 @@ def _clean_capture(s: str) -> str:
 
 def _cap(s: str) -> str:
     return s[:1].upper() + s[1:] if s else s
+
+
+def _names_music(said_target: str) -> bool:
+    """Whether a taught name's target (cleaned) reads as the name of an
+    artist, album or song: not a command, a question, something personal
+    or a description (:data:`_NOT_A_NAME_RE`), and not a phrase another
+    handler's fast path takes on its own ("stop", "set a timer for ten
+    minutes", a plugin's command)."""
+    t = (said_target or "").strip().lower()
+    if not t or _NOT_A_NAME_RE.match(t):
+        return False
+    from domovoi.router import first_fast_path  # the router imports the registry
+
+    hit = first_fast_path(t)
+    return hit is None or hit[0].name == MusicAliasHandler.name
+
+
+def _not_in_library(said: str) -> str:
+    """The plain answer for a name the library has nothing called (a
+    "the band" / "the song" carrier dropped)."""
+    name = _MUSIC_CARRIER_RE.sub("", said.strip(), count=1).strip() or said.strip()
+    return f"I don't have anything called {name} in your library."
 
 
 def _and_join(items: list[str]) -> str:
@@ -192,17 +248,18 @@ class MusicAliasHandler(Handler):
     async def execute_from_tool(self, args: dict, ctx: Context, session: AsyncSession) -> Response | None:
         """The LLM router's call. Declined (None — the Q&A model answers
         instead) when it is not about a name in the library: an add with
-        no target or with one the library has nothing like ("when I say
-        goodnight I mean turn off the lights"), a name to forget that the
-        household never taught, a list for something the library does not
-        hold."""
+        no target, or with one the library lacks that is not a name ("when
+        I say goodnight I mean turn off the lights"), a name to forget that
+        the household never taught, a list for something the library does
+        not hold (unless it was called a band, album or song). A name the
+        library lacks is answered plainly, as on the fast path."""
         action = (args.get("action") or "").strip().lower()
         alias = str(args.get("alias") or "")
         target = str(args.get("target") or "")
         if action == "add":
             if not _clean_capture(target):
                 return None
-            return await self._add(alias, target, ctx, session, decline_unknown=True)
+            return await self._add(alias, target, ctx, session, unknown="decline_unless_a_name")
         if action == "forget":
             if not alias.strip():
                 return await self._forget_last(ctx, session)
@@ -216,7 +273,7 @@ class MusicAliasHandler(Handler):
     # ─── fast-path entries ─────────────────────────────────────────────
 
     async def _add_from_match(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response | None:
-        return await self._add(m.group(1), m.group(2), ctx, session, decline_unknown=True)
+        return await self._add(m.group(1), m.group(2), ctx, session, unknown="decline_unless_a_name")
 
     async def _forget_last_from_match(self, m: re.Match[str], ctx: Context, session: AsyncSession) -> Response:
         return await self._forget_last(ctx, session)
@@ -385,12 +442,16 @@ class MusicAliasHandler(Handler):
         ctx: Context,
         session: AsyncSession,
         *,
-        decline_unknown: bool = False,
+        unknown: Literal["answer", "decline", "decline_unless_a_name"] = "answer",
     ) -> Response | None:
-        """Teach ``raw_alias`` for ``raw_target``. ``decline_unknown``: a
-        target the library has nothing like is not this handler's turn
-        ("when I say goodnight I mean turn off the lights") — None, and the
-        router routes it on; otherwise "I couldn't find …"."""
+        """Teach ``raw_alias`` for ``raw_target``. A target the library has
+        nothing like is answered "I don't have anything called … in your
+        library" (``unknown="answer"``), or declined — None, and the router
+        routes the turn on — always (``"decline"``) or when it is not a
+        name (``"decline_unless_a_name"``: "when I say goodnight I mean turn
+        off the lights" is not this handler's turn, but "when I say gramps I
+        mean <a band the library lacks>" is, and never goes to the Q&A model
+        to be answered with something made up — F-V022)."""
         alias = _clean_capture(raw_alias)
         said_target = _clean_capture(raw_target)
         if not alias or not alias_key(alias):
@@ -424,9 +485,12 @@ class MusicAliasHandler(Handler):
                 )
                 return self._reply(ctx, prompt, expect_followup=True,
                                    data={"alias": alias, "candidate": best.to_dict()})
-        if decline_unknown and res.decision == "none":
+        if res.decision == "none" and (
+            unknown == "decline"
+            or (unknown == "decline_unless_a_name" and not _names_music(said_target))
+        ):
             return None
-        return self._reply(ctx, f"I couldn't find {said_target} in your library.")
+        return self._reply(ctx, _not_in_library(said_target), data={"found": False})
 
     async def _commit_add(
         self,
@@ -525,7 +589,12 @@ class MusicAliasHandler(Handler):
         household name nor something the resolver is SURE is in the
         library. "What else is the moon called" is a question about the
         moon, and a loose match ("Moon River") is not what was asked
-        about."""
+        about. A subject called a band, album or song ("what else is the
+        band <X> called") is about music whatever the library holds: one it
+        lacks is answered "I don't have anything called <X> in your
+        library" (F-V022), not left to the Q&A model to make something up.
+        A bare name the library lacks can't be told from a question about
+        the world ("what else is soccer called") and is still declined."""
         said = _clean_capture(raw_target)
         if not said:
             return self._reply(ctx, "Which artist, album or song?")
@@ -538,6 +607,8 @@ class MusicAliasHandler(Handler):
             res = await library_match.resolve_request(session, {"any": said})
             best = res.best
             if res.decision != "play" or best is None:
+                if _MUSIC_CARRIER_RE.match(said):
+                    return self._reply(ctx, _not_in_library(said), data={"found": False})
                 return None
             maybe = await self._target_from_candidate(best, session)
             if maybe is None:
@@ -583,7 +654,7 @@ class MusicAliasHandler(Handler):
             # name only when the library has something by it.
             return await self._add(
                 alias, reply.name, ctx, session,
-                decline_unknown=not (reply.negated or reply.explicit),
+                unknown="answer" if (reply.negated or reply.explicit) else "decline",
             )
         return None
 

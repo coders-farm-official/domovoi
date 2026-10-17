@@ -36,6 +36,7 @@ from web.backend.api.audio_serve import (
 from web.backend.api import paging
 from web.backend.api.paging import SortKey
 from web.backend.db import session_scope
+from web.backend.domovoi_client import auth_forward_headers, post_admin
 
 log = logging.getLogger(__name__)
 
@@ -46,7 +47,8 @@ router = APIRouter(prefix="/api/audiobooks", tags=["audiobooks"])
 # valid ``X-Device-Token`` or an admin Bearer, pre-setup LAN grace kept.
 # (The MUSIC library's reindex is admin tier instead, because the core
 # route it proxies to is; this one runs in the web process and touches
-# nothing outside ``audiobooks_dir``.)
+# nothing outside ``audiobooks_dir``, then asks the core's device-tier MPD
+# rescan when it added a book.)
 DEVICE = [Depends(require_device)]
 
 
@@ -181,15 +183,37 @@ async def get_book(book_id: int) -> dict[str, Any]:
     return _book_row(row)
 
 
-@router.post("/reindex", dependencies=DEVICE)
-async def reindex() -> dict[str, int]:
-    """Re-walk ``audiobooks_dir``. Runs the indexer directly in the web
-    process against the shared DB (best-effort — ffprobe for
-    chapters where present, domovoi.media_tags for tags)."""
+async def index_and_tell_players(request: Request) -> dict[str, int]:
+    """Index ``audiobooks_dir`` in this process, then, when a book was
+    added, ask the core to have every room's player read the library: the
+    rooms' MPDs live behind the core, and a Windows or network folder never
+    tells them about new files, so a new book would not play until "rescan
+    my library" (F-V023). The core route is the device-tier MPD rescan the
+    music upload uses. Best-effort: the books are indexed either way."""
     from domovoi.workers.audiobook_indexer import index_audiobooks_dir
 
+    counts = await index_audiobooks_dir()
+    if counts.get("inserted"):
+        status, _ = await post_admin(
+            "/v1/admin/music/mpd-rescan", headers=auth_forward_headers(request)
+        )
+        if status != 200:
+            log.warning(
+                "audiobook reindex: added %d book(s) but the rooms' players "
+                "couldn't be asked to read them (core status=%s)",
+                counts["inserted"], status,
+            )
+    return counts
+
+
+@router.post("/reindex", dependencies=DEVICE)
+async def reindex(request: Request) -> dict[str, int]:
+    """Re-walk ``audiobooks_dir``. Runs the indexer directly in the web
+    process against the shared DB (best-effort — ffprobe for
+    chapters where present, domovoi.media_tags for tags), then asks the
+    core to have the rooms' players read any book it added."""
     try:
-        return await index_audiobooks_dir()
+        return await index_and_tell_players(request)
     except Exception as e:
         log.warning("audiobook reindex failed: %s", e)
         raise HTTPException(status_code=502, detail=f"reindex failed: {e}")

@@ -33,6 +33,11 @@ Indexer fires from three places:
     device-tier upload does not have to reach an admin route to be
     indexed (F-A017).
 
+After adding files, both ask every room's MPD to read the folders they
+are in (``domovoi.mpd_library_sync``; F-V023): MPD's own folder watching
+sees nothing on a Windows or network folder. In the web process there are
+no rooms and that is a no-op; the upload asks the core instead.
+
 Metadata strategy:
 
   1. ID3 / Vorbis / MP4 / ASF tags via ``domovoi.media_tags`` (title,
@@ -71,6 +76,7 @@ from domovoi import executors
 from domovoi.config import settings
 from domovoi.db.session import session_scope
 from domovoi.library_naming import parse_title_artist as _parse_title_artist
+from domovoi.mpd_library_sync import update_rooms_for
 
 log = logging.getLogger(__name__)
 
@@ -291,12 +297,14 @@ async def index_paths(paths: Iterable[Path | str]) -> dict[str, int]:
         wanted.append(resolved)
 
     inserted = skipped = 0
+    added: list[Path] = []
     if wanted:
         async with session_scope() as session:
             for path in wanted:
                 try:
                     if await _insert_track(session, path):
                         inserted += 1
+                        added.append(path)
                     else:
                         skipped += 1
                 except Exception as e:
@@ -318,6 +326,8 @@ async def index_paths(paths: Iterable[Path | str]) -> dict[str, int]:
         "library indexer: indexed %d path(s) — inserted=%d skipped=%d errors=%d",
         len(wanted), inserted, skipped, errors,
     )
+    if added:
+        await update_rooms_for(added, reason="library indexer")
     return {
         "scanned": len(wanted),
         "inserted": inserted,
@@ -354,6 +364,7 @@ async def index_music_dir() -> dict[str, int]:
 
     log.info("library indexer: walking %s", music_dir)
     scanned = inserted = skipped = errors = 0
+    added: list[Path] = []
     found = await asyncio.to_thread(_audio_files, music_dir)
 
     async with session_scope() as session:
@@ -366,6 +377,7 @@ async def index_music_dir() -> dict[str, int]:
             try:
                 if await _insert_track(session, path, known_new=True):
                     inserted += 1
+                    added.append(path)
                 else:
                     skipped += 1
             except Exception as e:
@@ -392,4 +404,8 @@ async def index_music_dir() -> dict[str, int]:
         "library indexer: scanned=%d inserted=%d skipped=%d errors=%d",
         scanned, inserted, skipped, errors,
     )
+    if added:
+        # Each room's MPD plays from its own database, which a Windows or
+        # network music folder never tells about new files (F-V023).
+        await update_rooms_for(added, reason="library indexer")
     return {"scanned": scanned, "inserted": inserted, "skipped": skipped, "errors": errors}
