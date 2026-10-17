@@ -120,10 +120,11 @@ def _windows_readme(ap: dict | None) -> str:
         "   very end, and paste all the lines of this zip's config.txt there,",
         "   below everything else. Save it.",
         "5. cmdline.txt: open the card's own cmdline.txt in Notepad. It is",
-        "   one long line. Go to the end of that line, type a space, and paste",
-        "   this zip's cmdline.txt there, so everything stays on that one",
-        "   line. Save it. Never replace the card's cmdline.txt with this",
-        "   zip's: a Pi doesn't start without the card's own line.",
+        "   one long line. Click on it and press End (the end of that line,",
+        "   not below it), type a space, and paste the line from this zip's",
+        "   cmdline.txt there, so everything stays on that one line. Save",
+        "   it. Never replace the card's cmdline.txt with this zip's: a Pi",
+        "   doesn't start without the card's own line.",
     ]
     if portal:
         readme += [
