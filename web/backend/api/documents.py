@@ -966,6 +966,22 @@ def _assert_xlsx_fits(target: Path) -> None:
 # saves never run on the event loop and never two at once.
 _SHEET_SAVE_MAX_INFLATED_BYTES = 16 * 1024 * 1024
 _SHEET_SAVE_MAX_CSV_BYTES = 8 * 1024 * 1024
+_MIB = 1024 * 1024
+
+
+def _size_past_limit(size: int, limit: int) -> str:
+    """``size`` in words for a refusal that also names ``limit``, never
+    as the same number (F-053: "it is 8 MB, and the editor saves sheets up
+    to 8 MB" for an 8.4 MB file). Whole megabytes when that already reads
+    as more than the limit, else one decimal, else "just over"."""
+    mib, cap = size / _MIB, limit / _MIB
+    whole = f"{mib:.0f}"
+    if float(whole) > cap:
+        return f"{whole} MB"
+    tenth = f"{mib:.1f}"
+    if float(tenth) > cap:
+        return f"{tenth} MB"
+    return f"just over {cap:g} MB"
 
 
 def _assert_sheet_save_fits(target: Path) -> None:
@@ -978,19 +994,20 @@ def _assert_sheet_save_fits(target: Path) -> None:
         if target.suffix.lower() == ".csv":
             size = target.stat().st_size
             limit = _SHEET_SAVE_MAX_CSV_BYTES
-            what = f"is {size / (1024 * 1024):.0f} MB"
+            what = "is"
         else:
             with zipfile.ZipFile(target) as z:
                 size = sum(info.file_size for info in z.infolist())
             limit = _SHEET_SAVE_MAX_INFLATED_BYTES
-            what = f"unpacks to {size / (1024 * 1024):.0f} MB"
+            what = "unpacks to"
     except (zipfile.BadZipFile, OSError):
         return
     if size > limit:
         raise HTTPException(
             status_code=413,
-            detail=f"{target.name} is too large to save from the sheet editor: it {what}, and the "
-            f"editor saves sheets up to {limit // (1024 * 1024)} MB. Nothing was changed. "
+            detail=f"{target.name} is too large to save from the sheet editor: it {what} "
+            f"{_size_past_limit(size, limit)}, and the "
+            f"editor saves sheets up to {limit // _MIB} MB. Nothing was changed. "
             "Edit it in a spreadsheet app.",
         )
 
