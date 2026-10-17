@@ -58,6 +58,7 @@ from sqlalchemy import text
 from domovoi import connectivity, egress, net_safety, podcast_artwork
 from domovoi.config import settings
 from domovoi.db.session import session_scope
+from domovoi.mpd_library_sync import update_rooms_for
 from domovoi.workers.base import Worker
 
 log = logging.getLogger(__name__)
@@ -594,4 +595,9 @@ class PodcastFeedPoller(Worker):
             "podcast poller: polled=%d new=%d downloaded=%d evicted=%d",
             polled, new_eps, downloaded, evicted,
         )
+        if downloaded or evicted:
+            # The rooms' MPDs play an episode from their own database, which
+            # a Windows or network folder never tells about new or removed
+            # files (F-V023): ask them to read the podcasts folder.
+            await update_rooms_for(tops=["podcasts"], reason="podcast poller")
         return {"polled": polled, "new": new_eps, "downloaded": downloaded, "evicted": evicted}

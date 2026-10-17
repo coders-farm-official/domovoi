@@ -107,6 +107,9 @@ class MPDClient(Protocol):
     async def set_volume(self, level: int) -> None: ...
     async def get_volume(self) -> int | None: ...
     async def update_library(self) -> None: ...
+    # `update <uri>` for each folder or file ("" = the whole library): MPD
+    # reads just those. See domovoi.mpd_library_sync.
+    async def update_paths(self, uris: list[str]) -> None: ...
     async def seek_cur(self, delta_sec: float) -> None: ...
     async def seek_to(self, position_sec: float) -> None: ...
     async def elapsed_sec(self) -> float | None: ...
@@ -128,6 +131,8 @@ class MPDStubClient:
         # order on read, so a move can't leave the two inconsistent.
         self._queue: list[dict[str, Any]] = []
         self._next_song_id = 1
+        # Every `update` asked of this daemon, in order ("" = the whole library).
+        self.updated_paths: list[str] = []
 
     def _assign_ids(self, songs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -336,7 +341,10 @@ class MPDStubClient:
         return self._volume
 
     async def update_library(self) -> None:
-        pass
+        self.updated_paths.append("")
+
+    async def update_paths(self, uris: list[str]) -> None:
+        self.updated_paths.extend(uris)
 
     async def seek_cur(self, delta_sec: float) -> None:
         cur = float((self._song or {}).get("_elapsed", 0.0)) if self._song else 0.0
@@ -949,6 +957,23 @@ class RealMPDClient:
         """Trigger MPD to rescan the music_directory for new files."""
         async with self._connect() as c:
             await c.update()
+
+    async def update_paths(self, uris: list[str]) -> None:
+        """``update <uri>`` for each URI on one connection ("" is the whole
+        music_directory). MPD queues the jobs and reads only those folders
+        or files; a URI it refuses (gone again, or its update queue full)
+        is logged and the rest still go."""
+        async with self._connect() as c:
+            for uri in uris:
+                try:
+                    if uri:
+                        await c.update(uri)
+                    else:
+                        await c.update()
+                except Exception as e:
+                    if not _is_ack(e):
+                        raise
+                    log.warning("MPD refused update %r: %s", uri, e)
 
     async def seek_cur(self, delta_sec: float) -> None:
         """Relative seek within the current song. Used by spoken audio's

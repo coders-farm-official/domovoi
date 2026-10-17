@@ -11190,7 +11190,7 @@
           "audiobooks"
         ],
         "summary": "Reindex",
-        "description": "Re-walk ``audiobooks_dir``. Runs the indexer directly in the web\nprocess against the shared DB (best-effort \u2014 ffprobe for\nchapters where present, domovoi.media_tags for tags).",
+        "description": "Re-walk ``audiobooks_dir``. Runs the indexer directly in the web\nprocess against the shared DB (best-effort \u2014 ffprobe for\nchapters where present, domovoi.media_tags for tags), then asks the\ncore to have the rooms' players read any book it added.",
         "operationId": "reindex_api_audiobooks_reindex_post",
         "responses": {
           "200": {

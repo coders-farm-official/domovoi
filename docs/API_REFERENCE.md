@@ -1402,7 +1402,7 @@ workers; audio is served by this process.
 | `POST /api/podcasts/positions/{episode_id}` | `PositionSave` | Save position. |
 | `GET /api/audiobooks` | `?q=&sort=title\|author\|newest&limit=&cursor=` | Indexed books (also `/api/audiobooks/`), paged (§1.7: `{items, total, …}`; the bare array when no paging param is sent). `q` matches title, author and narrator. Each row includes `is_folder` and `file_ext` (single-file books; `null` for folder books, which download as a zip) instead of the private server path. |
 | `GET /api/audiobooks/{book_id}` | — | One book (files/chapters), with `is_folder` / `file_ext` as above. |
-| `POST /api/audiobooks/reindex` | — | Re-walk the audiobooks dir. |
+| `POST /api/audiobooks/reindex` | — | Re-walk the audiobooks dir; when a book was added, ask the core for an MPD rescan (`POST /v1/admin/music/mpd-rescan`, the caller's credentials forwarded) so every room can play it. |
 | `GET /api/audiobooks/{book_id}/audio` | `?file=&download=` | Stream a book file (`?file=` selects a chapter for folder books). `?download=1` serves it as an attachment — a single chapter for folder books, the whole file for single-file books. |
 | `GET /api/audiobooks/{book_id}/download` | — | Save a whole book to the device: single-file books come back as the file itself (attachment); folder books are zipped (one `<title>/<chapter>` entry per chapter) into a temp file removed after the response is sent. |
 | `GET /api/audiobooks/{book_id}/position` | `?device_id=&person_id=` | Resume position. |
