@@ -101,6 +101,15 @@ class ChatModeHandler(Handler):
     display = HandlerDisplay(label="Chat Mode", tone="comms")
     requires_network = "no"
 
+    @property
+    def example_phrases(self) -> tuple[str, ...]:  # type: ignore[override]
+        # Offered only while chat mode is on (CHAT_MODE_ENABLED, off by
+        # default): the manual, Home and "what can you do" never suggest a
+        # phrase that answers "chat mode is off".
+        from domovoi.config import settings
+
+        return ("let's have a chat",) if getattr(settings, "chat_mode_enabled", False) else ()
+
     tool_schema = {
         "name": "chat_mode",
         "description": (

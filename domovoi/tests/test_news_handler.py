@@ -271,3 +271,36 @@ async def test_favorite_that_favorites_last_read(db_session) -> None:
         text("SELECT favorited FROM news_items WHERE id = :id"), {"id": item_id}
     )
     assert fav.scalar() is True
+
+
+
+# ─── "what's new in X" keeps everything but the music library (2026-10-17) ──
+
+
+@pytest.mark.parametrize(
+    ("said", "category"),
+    [
+        ("what's new in science", "science"),
+        ("what's new in the world", "world"),
+        ("what's new in music", "music"),
+        ("what's new in my city", "my city"),
+        ("what's new in technology", "technology"),
+    ],
+)
+def test_whats_new_in_a_category_is_still_news(said: str, category: str) -> None:
+    from domovoi.handlers.news import _CATEGORY_RE
+
+    m = _CATEGORY_RE.match(said)
+    assert m and (m.group("cat") or m.group("cat2")) == category
+
+
+@pytest.mark.parametrize(
+    "said",
+    ["what's new in my music library", "what's new in the music library",
+     "what's new in my library", "what's new in the library", "what's new in my music",
+     "what's new in our collection"],
+)
+def test_whats_new_in_the_library_is_not_news(said: str) -> None:
+    from domovoi.handlers.news import _CATEGORY_RE
+
+    assert _CATEGORY_RE.match(said) is None

@@ -96,6 +96,7 @@ class RepeatHandler(Handler):
     #   anchored regexes still won't poach "play that again" (music).
     priority_band = 180
     display = HandlerDisplay(label="Repeat", tone="info")
+    example_phrases = ("say that again",)
     requires_network = "no"
 
     tool_schema = {

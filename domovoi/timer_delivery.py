@@ -84,6 +84,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -200,6 +201,11 @@ def lateness_phrase(late_sec: float) -> str | None:
     return f"{hours} hour{'s' if hours != 1 else ''} ago"
 
 
+# The label of a reminder set with no task: "10 minute reminder", "6 PM
+# reminder", "7 AM alarm" (handlers/reminder.py). Its fired line names it.
+_NO_TASK_LABEL_RE = re.compile(r"\S (?:reminder|alarm)$")
+
+
 def fire_line(
     kind: str,
     *,
@@ -222,8 +228,13 @@ def fire_line(
     if kind == "reminder":
         words = message or ""
         if not words.strip():
-            adjective = _duration_adjective(duration_sec)
-            core = f"Here's your {adjective} reminder" if adjective else "Here's your reminder"
+            if label and _NO_TASK_LABEL_RE.search(label):
+                # What the reminder handler named it: "10 minute reminder",
+                # "6 PM reminder" (a clock time), "7 AM alarm".
+                core = f"Here's your {label.strip()}"
+            else:
+                adjective = _duration_adjective(duration_sec)
+                core = f"Here's your {adjective} reminder" if adjective else "Here's your reminder"
             line = f"{core}, from {late}." if late else f"{core}."
             return f"From the {origin}: {line}" if elsewhere else line
         if elsewhere:

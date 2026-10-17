@@ -4,6 +4,59 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — Voice: clock times, "what can you do", the calendar
+
+Server update (core and dashboard; no migration).
+
+* **Reminders at a clock time.** "remind me at 6 pm to take the bins
+  out", "remind me tomorrow morning to call the plumber", "remind me on
+  Friday at 5 to call grandma", "wake me up at 7" and "set an alarm for
+  6:30" are understood now. Before, the routing model guessed a duration
+  ("in 10 hours", "in 7 hours", "in 24 hours"), silently wrong. The time is
+  the server's own time zone, the one "what time is it" answers in (set the
+  server's zone if it is on UTC); a time with no AM/PM is the next one
+  that comes, AM or PM, unless you say which, wake-ups included ("wake me
+  up at 5" at 3 PM is 5 PM, a nap; at 11 PM it is 5 AM); a time already
+  gone today is tomorrow's; "am", "pm", "in the morning", "tonight" and
+  the like always win; a day with no time takes 9 AM (morning), 2 PM (afternoon),
+  6 PM (evening) or 8 PM (tonight). **The reply always says the clock
+  time** ("I'll remind you tomorrow at 6 PM to take the bins out."). A
+  time already gone on a day that was named ("tonight at 9" at 10 PM) is
+  refused, not moved. Daylight-saving days keep the wall-clock time.
+  "cancel my alarm" / "cancel the 7 AM alarm" cancel them; "what reminders
+  do I have" reads one more than an hour away by its clock time.
+  Durations work as before.
+* **"What can you do", "what can I say" and "help"** are answered from the
+  server's own feature list: a few areas with one thing to say for each,
+  enabled plugins included, then "the rest is in the manual". Before, the
+  answer model made abilities up. A real question that starts the same way
+  ("what can you do about the noise") is still a question.
+* **The calendar by voice, read-only**: "what's on my calendar today /
+  tomorrow / this week", "what's next on my calendar", "do I have anything
+  on Friday", "am I free tomorrow". It reads the dashboard's calendar,
+  offline; it was offered as a web search. Asked to add or change an event,
+  it says where to do that. Every voice reads the one household calendar:
+  events have no owner yet.
+* **"What's new in my music library"** reads what was added in the last 30
+  days. News took it before; "what's new in science" is still news.
+* **A voice that isn't downloaded yet** ("let me hear Linda's voice" on a
+  server that has only Kristin and Norman) is no longer "I don't have a
+  voice called linda": Domovoi says she isn't downloaded yet and offers to
+  download her (about 64 MB) when the internet answer allows; under **No**
+  it says an admin can upload her in Settings, Voices. "download Linda's
+  voice" does it at once. A voice registered but missing from disk, with
+  no way to fetch it, says the same instead of playing a "sample" in the
+  fallback voice. "What voices are there" names the ones not downloaded.
+* **Every core feature lists example phrases** (`GET /v1/handlers`
+  `example_phrases`, so the manual's feature table and Home's first-run
+  hint have them): a field of its own, kept out of the tool descriptions
+  the routing model reads, so routing is unchanged. New core handlers
+  `help` (band 105) and `calendar` (175); the calendar's tool is offered
+  to the routing model only when a calendar is named, help's never.
+* `scripts/eval_routing.py --core` sends the household token
+  (`DOMOVOI_EVAL_TOKEN` or `--token`); a set-up core answered 401 before.
+
+
 ## 2026-10-17 — The AcoustID key in the dashboard
 
 Server update (core and dashboard; no migration).

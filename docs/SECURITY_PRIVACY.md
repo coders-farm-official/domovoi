@@ -389,6 +389,13 @@ and the same pre-setup grace:
   `GET /v1/admin/satellite/{room}/config` behind it); and the speech
   latency summary (below).
 
+**The calendar by voice (2026-10-17)** reads the same events aloud in the
+room that asked ("what's on my calendar today", "do I have anything on
+Friday"): a turn from a satellite or a paired phone, which `/v1/intent`'s
+device tier already admits. Read-only — nothing is added, moved or deleted
+by voice — and every voice reads the one household calendar (events carry
+no owner).
+
 `GET /api/music/now-playing` stays open — the kiosk reads it unpaired —
 but its `added_by`, the registered name of the device that queued what a
 room is playing ("Kamron's Pixel"), is named only to a household

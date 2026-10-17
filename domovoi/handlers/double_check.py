@@ -447,6 +447,7 @@ class DoubleCheckHandler(Handler):
     #   handlers ever grow such phrasings.
     priority_band = 190
     display = HandlerDisplay(label="Double-Check", tone="info")
+    example_phrases = ("are you sure?",)
     confirmation_kinds = ("core.self_doubt_offer", "core.prefs_offer")
     requires_network = "yes"
 

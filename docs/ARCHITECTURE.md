@@ -259,6 +259,7 @@ map (from `domovoi/handlers/__init__.py`):
 | Band | Handler | Why it sits here |
 |---|---|---|
 | 100 | `dismiss` | Brush-offs win before anything acts |
+| 105 | `help` | "What can you do" / "help": whole closed questions, answered from the live handler list |
 | 110 | `voice_profile` | "I'm Sarah" before any greedy capture |
 | 120 | `wifi` | "Fix the wifi" wins over any future "fix" |
 | 130 | `voice` | Device-control cluster near the top |
@@ -266,6 +267,7 @@ map (from `domovoi/handlers/__init__.py`):
 | 150 | `calculator` | Digit-anchored, well before media |
 | 160 | `timer` | |
 | 170 | `clock` | |
+| 175 | `calendar` | After clock ("what's tomorrow" is the date); before library's "do I have X" ("anything on Friday") |
 | 180 | `repeat` | Clusters with double_check |
 | 190 | `double_check` | Owns "verify" / "are you sure" |
 | 200 | `dropin` | Immediately before intercom |
@@ -278,6 +280,7 @@ map (from `domovoi/handlers/__init__.py`):
 | 270 | `spoken_audio` | Anchored media before playlist/music; its room path ("… in the garage") comes first within it |
 | 280 | *(radio plugin)* | Before music so "play 97.5 fm" isn't poached |
 | 290 | `playlist` | Before music's `^play` catch-all |
+| 295 | `music_alias` | "When I say X I mean Y" names, before music's `^play` |
 | 300 | `music` | Greedy `^play` catch-all; its room paths ("… in the garage") come first within it |
 | 310 | `library` | "Find X in my library" before a greedier "find X" |
 | 900 | *(media-provider plugin)* | Greedy `^find` catch-all — LAST band |

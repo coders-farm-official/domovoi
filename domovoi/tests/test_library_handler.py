@@ -282,3 +282,57 @@ async def test_db_fallback_sql_runs_on_postgres(monkeypatch, db_session) -> None
 
     assert "ember waltz" in response.text.lower()
     assert "satellite" not in response.text.lower()
+
+
+
+# ─── "what's new in my music library" (2026-10-17) ─────────────────────────
+# News's "what's new in X" (band 260) used to take it and answer with news.
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        "what's new in my music library",
+        "What's new in the music library?",
+        "what's new in my library",
+        "whats new in our library",
+        "what's new in my music",
+        "is there anything new in my library",
+        "anything new in the music library",
+        "what's been added to my library lately",
+        "what has been added to the music library recently",
+    ],
+)
+def test_whats_new_in_the_library_is_the_library(said: str) -> None:
+    from domovoi.tests.conftest import fast_path_winner
+
+    assert fast_path_winner(said) == "library"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_whats_new_reads_the_last_30_days(db_session) -> None:
+    from domovoi.router import plan_route
+
+    now = utcnow()
+    await db_session.execute(
+        text(
+            """
+            INSERT INTO library_tracks (file_path, title, artist, added_at)
+            VALUES
+                ('/music/a.mp3', 'Ember Waltz', 'Hearth Ensemble', :recent),
+                ('/music/b.mp3', 'Old Song', 'Beta', :old)
+            """
+        ),
+        {"recent": now - timedelta(days=3), "old": now - timedelta(days=90)},
+    )
+    await db_session.commit()
+    plan = plan_route("what's new in my music library")
+    ctx = Context(session_id=None, online=True)
+    response = await plan.fast_path.method(plan.handler, plan.match, ctx, db_session)
+    assert response.text == "One addition: Ember Waltz by Hearth Ensemble."
+
+    await db_session.execute(text("DELETE FROM library_tracks"))
+    await db_session.commit()
+    response = await plan.fast_path.method(plan.handler, plan.match, ctx, db_session)
+    assert response.text == "Nothing new in the library in the last 30 days."

@@ -626,7 +626,8 @@ _NOT_A_CREATE = [
     "remind me to call mom",
     "set a reminder",
     "set reminders for 10 minutes",
-    # a clock time is not a duration (absolute reminders are deferred)
+    # a clock time is not a duration: the clock-time paths take these
+    # (test_reminder_clock_times.py), never the duration ones
     "remind me at 6 pm to feed the dog",
     "set a reminder for 5 pm",
     "set a reminder for tomorrow at 9",

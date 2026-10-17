@@ -232,8 +232,9 @@
     {
       "utterance": "remind me to call mom at five",
       "handler": "reminder",
-      "tags": ["action"],
-      "note": "action routing guard"
+      "path": "fast",
+      "tags": ["action", "reminder"],
+      "note": "action routing guard; a clock time is a fast path since 2026-10-17 (5 o'clock, whichever comes next)"
     },
     {
       "utterance": "set a reminder for ten minutes",
@@ -259,8 +260,9 @@
     {
       "utterance": "remind me at six pm to feed the dog",
       "handler": "reminder",
+      "path": "fast",
       "tags": ["action", "reminder"],
-      "note": "an absolute time has no fast path; the reminder tool must stay on offer for it"
+      "note": "2026-10-17: a clock time is a fast path (it was the tool model's guess at a duration: 'in 10 hours')"
     },
     {
       "utterance": "my reminder for ten minutes didn't go off",
@@ -747,6 +749,96 @@
       "path": "fast",
       "tags": ["action", "rooms"],
       "note": "2026-10-15 an audiobook in another room ('play my audiobook' is a resume)"
+    },
+    {
+      "utterance": "wake me up at 7",
+      "handler": "reminder",
+      "path": "fast",
+      "tags": ["action", "reminder", "v1-voice"],
+      "note": "2026-10-17: 7 AM (the tool model made it 'in 7 hours')"
+    },
+    {
+      "utterance": "remind me tomorrow morning to call the plumber",
+      "handler": "reminder",
+      "path": "fast",
+      "tags": ["action", "reminder", "v1-voice"],
+      "note": "2026-10-17: tomorrow at 9 AM, said back (the tool model made it 'in 24 hours')"
+    },
+    {
+      "utterance": "set an alarm for 6:30",
+      "handler": "reminder",
+      "path": "fast",
+      "tags": ["action", "reminder", "v1-voice"],
+      "note": "2026-10-17: an alarm is a clock-time reminder"
+    },
+    {
+      "utterance": "what can you do",
+      "handler": "help",
+      "path": "fast",
+      "tags": ["action", "v1-voice"],
+      "note": "2026-10-17: answered from the live handler list (the answer model invented abilities)"
+    },
+    {
+      "utterance": "what can I say",
+      "handler": "help",
+      "path": "fast",
+      "tags": ["action", "v1-voice"],
+      "note": "2026-10-17: the live handler list"
+    },
+    {
+      "utterance": "help",
+      "handler": "help",
+      "path": "fast",
+      "tags": ["action", "v1-voice"],
+      "note": "2026-10-17: the live handler list (the answer model answered like a counsellor)"
+    },
+    {
+      "utterance": "what can you do about a leaky tap",
+      "handler": null,
+      "tags": ["qa", "v1-voice"],
+      "note": "2026-10-17: a real question that starts like 'what can you do' stays a question"
+    },
+    {
+      "utterance": "what's on my calendar today",
+      "handler": "calendar",
+      "path": "fast",
+      "tags": ["action", "v1-voice"],
+      "note": "2026-10-17: the household calendar (it was offered as a web search)"
+    },
+    {
+      "utterance": "do I have anything on Friday",
+      "handler": "calendar",
+      "path": "fast",
+      "tags": ["action", "v1-voice"],
+      "note": "2026-10-17: before the library's 'do i have X' (band 310)"
+    },
+    {
+      "utterance": "what's next on my calendar",
+      "handler": "calendar",
+      "path": "fast",
+      "tags": ["action", "v1-voice"],
+      "note": "2026-10-17: the next event"
+    },
+    {
+      "utterance": "what's new in my music library",
+      "handler": "library",
+      "path": "fast",
+      "tags": ["action", "v1-voice"],
+      "note": "2026-10-17: recently added (news's 'what's new in X' took it)"
+    },
+    {
+      "utterance": "what's new in science",
+      "handler": "news",
+      "path": "fast",
+      "tags": ["action", "v1-voice"],
+      "note": "2026-10-17: every other 'what's new in X' stays news"
+    },
+    {
+      "utterance": "let me hear Linda's voice",
+      "handler": "voice",
+      "path": "fast",
+      "tags": ["action", "v1-voice"],
+      "note": "2026-10-17: a voice not downloaded yet is offered for download, never called unknown"
     },
     {
       "utterance": "play my audiobook",

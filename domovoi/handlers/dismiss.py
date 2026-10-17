@@ -98,6 +98,7 @@ class DismissHandler(Handler):
     # never matches a bare "stop" (owned by music/radio/chat-exit).
     priority_band = 100
     display = HandlerDisplay(label="Dismiss", tone="neutral")
+    example_phrases = ("never mind",)
     requires_network = "no"
 
     tool_schema = {

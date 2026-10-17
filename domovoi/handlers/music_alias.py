@@ -187,6 +187,7 @@ class MusicAliasHandler(Handler):
     #   the corpus test proves no earlier band takes them.
     priority_band = 295
     display = HandlerDisplay(label="Music names", tone="media")
+    example_phrases = ("when I say Gramps I mean Hearth Ensemble",)
     requires_network = "no"
     confirmation_kinds = (ALIAS_REPLACE_KIND, ALIAS_TARGET_KIND)
     # "Do you mean …?" about a target takes "no, I mean <another>" too.

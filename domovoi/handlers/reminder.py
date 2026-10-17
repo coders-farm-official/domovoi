@@ -50,25 +50,48 @@ What the create grammar keeps and drops:
   connector ("set a reminder for 10 minutes to..." cut off at a pause) is
   no task.
 
-Absolute-time reminders ("remind me at 5pm") are deferred — they need a
-real natural-language datetime parser, which isn't worth bolting on
-yet. Until then they reach the tool model, which cannot see the clock and
-guesses a ``duration_sec`` (qwen3:8b, 2026-09-30: "remind me to call mom
-at five" → 5 hours; "remind me at 6 pm to feed the dog" → 10 hours or a
-week, depending on the prompt).
+Clock times (2026-10-17). "remind me at 6 pm to take the bins out",
+"remind me to call mom tomorrow at 7", "remind me tomorrow morning",
+"wake me up at 7" and "set an alarm for 6:30" are fast paths. The time is
+read by ``handlers/shared/clock_time`` and placed on the household's wall
+clock (``domovoi/household_time``: the server's own zone, the one "what
+time is it" answers from): the next time it comes, so "at 6 pm" said at
+23:20 is tomorrow's, and a time with no AM/PM is whichever comes first
+("wake me up at 5" at 15:00 is 5 PM, at 23:00 5 AM). The reply says the clock
+time ("I'll remind you tomorrow at 6 PM to take the bins out."). Before
+this they reached the tool model, which cannot see the clock and guessed
+a ``duration_sec`` (qwen3:8b: "remind me at 6 pm" at 23:20 → "in 10
+hours"; "wake me up at 7" → "in 7 hours"; "remind me tomorrow morning" →
+"in 24 hours"). A tool call whose ``message`` still holds the spoken time
+is read the same way (``_absolute_from_tool_message``).
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from domovoi import household_time
 from domovoi.db.repositories import TimerRepository, notify_timers_changed, utcnow
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.handlers.shared.clock_time import (
+    ALARM_WHEN_PATTERN,
+    TIME_PATTERN,
+    WHEN_FOR_PATTERN,
+    WHEN_PATTERN,
+    WhenProblem,
+    candidate_hours,
+    parse_when,
+    resolve as resolve_when,
+    spoken_day,
+    spoken_clock,
+    spoken_time_and_day,
+    spoken_when,
+)
 from domovoi.handlers.shared.number_words import (
     DURATION_PATTERN,
     NUMBER_WORDS,
@@ -257,6 +280,72 @@ _CREATE_PATTERNS = (
     _CREATE_DURATION_TOPIC_RE,
 )
 
+# ─── The clock-time grammars ─────────────────────────────────────────────
+#
+# Tried after every duration grammar, so "in 10 minutes" is never read as
+# a time. The time words are clock_time's closed vocabulary; what follows
+# them is the task, as in the duration grammars.
+
+_WHEN = rf"(?P<when>{WHEN_PATTERN})"
+
+# "remind me at 6 pm to take the bins out" / "remind me tomorrow morning to
+# call the plumber" / "remind me on friday about the dentist" / "remind me
+# at 6 pm" (no task)
+_CREATE_AT_RE = re.compile(rf"^remind me{_POLITE},? {_WHEN}{_POLITE}{_TASK_AFTER}$")
+
+# "remind me to take the bins out at 6 pm" / "remind me to call mom
+# tomorrow" / "remind me about the dentist on friday at 9". Not "that":
+# "remind me that the party is at 7" holds its time in the task.
+_CREATE_TASK_AT_RE = re.compile(
+    rf"^remind me{_POLITE} (?P<connector>to|about) (?P<message>.+?),? {_WHEN}{_POLITE}$"
+)
+
+# "set a reminder for 6 pm" / "a reminder at noon to eat" / "set a reminder
+# for tomorrow at 9 to call the bank". After "for", only a time that can't
+# be a count ("for 7" might be minutes; "for 7 pm" can't).
+_CREATE_NOUN_AT_RE = re.compile(
+    rf"^{_LEAD}{_MODIFIER}reminder{_FOR_ME}{_POLITE},? (?:for |on )?"
+    rf"(?P<when>{WHEN_FOR_PATTERN}){_POLITE}{_TASK_AFTER}$"
+)
+
+# "set a laundry reminder for 6 pm" / "dentist reminder tomorrow at 9"
+_CREATE_TOPIC_AT_RE = re.compile(
+    rf"^{_LEAD}{_MODIFIER}{_TOPIC} reminder{_FOR_ME}{_POLITE},? (?:for |on )?"
+    rf"(?P<when>{WHEN_FOR_PATTERN}){_POLITE}$"
+)
+
+# "wake me up at 7" (the next 7) / "wake me at 6:30 tomorrow" / "wake me up
+# tomorrow at 7"
+_WAKE_VERB = r"(?:wake (?:me|us)(?: up)?|get (?:me|us) up)"
+_WAKE_AT_RE = re.compile(rf"^{_WAKE_VERB}{_POLITE},? {_WHEN}{_POLITE}$")
+# "wake me up in 20 minutes"
+_WAKE_IN_RE = re.compile(
+    rf"^{_WAKE_VERB}{_POLITE} in (?P<duration>{DURATION_PATTERN}){_FROM_NOW}{_POLITE}$"
+)
+
+# "set an alarm for 7" / "set my alarm for 6:30 tomorrow" / "alarm at 7 am".
+# Any clock time after "alarm for", bare numbers too: nothing may follow it,
+# so "set an alarm for 10 minutes" doesn't fit and goes where it went.
+_CREATE_ALARM_RE = re.compile(
+    rf"^(?:(?:just |now )?{_SET_VERB} (?:me |us )?)?(?:an |a |my |the |another |one )?"
+    rf"alarm{_FOR_ME}{_POLITE},? (?:for |at |on )?(?P<when>{ALARM_WHEN_PATTERN}){_POLITE}$"
+)
+
+# "cancel my alarm" / "cancel the 7 am alarm" / "delete my alarms"
+_CANCEL_ALARM_RE = re.compile(
+    r"^(?:cancel|delete|remove|clear) (?:my |the |that |all (?:my |the )?)?"
+    rf"(?:(?P<clock>{TIME_PATTERN}) )?alarms?$"
+)
+
+# What "wake me up" says when it goes off ("Reminder: time to wake up").
+_WAKE_MESSAGE = "time to wake up"
+# The labels alarms get (lower-cased, a Postgres regex): "7 am alarm",
+# "6:30 am alarm", "noon alarm", "20 minute alarm".
+_ALARM_LABEL_SQL_RE = (
+    r"^(?:[0-9]{1,2}(?::[0-9]{2})? (?:am|pm)|noon|midnight"
+    r"|[0-9]+ (?:second|minute|hour)(?: and [0-9]+ minute)?) alarm$"
+)
+
 # ─── The tool-call ``message`` ───────────────────────────────────────────
 
 # A tool-call ``message`` that is only the command, not a task: "Reminder
@@ -413,6 +502,36 @@ def _cancel_phrase_from_tool(raw: object) -> str | None:
     return source
 
 
+# "feed the dog at 6 pm" / "call mom tomorrow": a tool call's task with its
+# time still on the end.
+_TOOL_TASK_AT_RE = re.compile(rf"^(?P<message>.+?),? {_WHEN}$")
+
+
+def _absolute_from_tool_message(raw: object) -> tuple[str | None, str | None, str] | None:
+    """``(task, connector, spoken time)`` when a tool call's ``message``
+    still holds a clock time, else None. The tool model can't see the
+    clock: given "remind me at 6 pm to feed the dog" it guesses a
+    ``duration_sec`` (10 hours at 20:00) but usually copies the time into
+    ``message`` - the transcript whole, or the task with its time ("feed
+    the dog at 6 pm"). Reading the time from there sets the reminder for
+    6 PM, not for whatever the guess was."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    source = _TOOL_HEADING_RE.sub("", raw.strip()).strip().rstrip(_END_PUNCT)
+    norm = source.lower()
+    if len(norm) != len(source):
+        source = norm  # a case fold that changed length: spans would drift
+    for pattern in (
+        _CREATE_AT_RE, _CREATE_TASK_AT_RE, _CREATE_NOUN_AT_RE, _CREATE_TOPIC_AT_RE,
+        _TOOL_TASK_AT_RE,
+    ):
+        m = pattern.match(norm)
+        if m:
+            task, connector = _task_of(m, source)
+            return task, connector, m.group("when")
+    return None
+
+
 def _connector_for_reply(connector: str | None) -> str:
     """"for the pasta" reads back as "about the pasta"; a bare task as "to"."""
     if connector in ("about", "for"):
@@ -420,6 +539,34 @@ def _connector_for_reply(connector: str | None) -> str:
     if connector == "that":
         return "that"
     return "to"
+
+
+def _spoken_due(expires_at: datetime) -> str:
+    """When a reminder goes off, as the list says it: "in 8 minutes" within
+    the hour, else its clock time ("at 6 PM", "tomorrow at 7 AM")."""
+    remaining = int((expires_at - utcnow()).total_seconds())
+    if remaining < 3600:
+        return f"in {_format_duration(max(1, remaining))}"
+    return spoken_when(household_time.to_local(expires_at), household_time.now())
+
+
+def _when_problem_text(problem: WhenProblem, kind: str, now: datetime) -> str:
+    """The reply when a spoken time can't be set: a named day's time has
+    gone ("9 PM has already gone tonight"), or a day needs a time. Nothing
+    hears an answer to a question here, so it says what to say instead."""
+    example = {
+        "wake": "wake me up at 7",
+        "alarm": "set an alarm for 7 AM",
+    }.get(kind, "remind me at 3 PM to call mom")
+    if problem.kind == "past" and problem.target is not None:
+        day = spoken_day(problem.target.date(), now.date())
+        if problem.target.hour >= 18 and day == "today":
+            day = "tonight"
+        return (
+            f"{spoken_clock(problem.target)} has already gone {day}. "
+            f"Say a time that's still to come, like \"{example}\"."
+        )
+    return f"What time? Say it with the time, like \"{example}\"."
 
 
 # "what reminders do I have" / "list my reminders" / "what are my reminders"
@@ -448,6 +595,13 @@ class ReminderHandler(Handler):
     #   over any future timer regex that might brush against "remind".
     priority_band = 140
     display = HandlerDisplay(label="Reminders", tone="info")
+    example_phrases = (
+        "remind me to call Mom in 20 minutes",
+        "remind me in 2 hours to take the bins out",
+        "remind me at 6 pm to take the bins out",
+        "wake me up at 7",
+        "what reminders do I have",
+    )
     requires_network = "no"
 
     tool_schema = {
@@ -498,6 +652,16 @@ class ReminderHandler(Handler):
             FastPath(_CREATE_NOUN_TASK_FIRST_RE, ReminderHandler._create_from_match),
             FastPath(_CREATE_DURATION_FIRST_RE, ReminderHandler._create_from_match),
             FastPath(_CREATE_DURATION_TOPIC_RE, ReminderHandler._create_from_match),
+            # Clock times, after every duration grammar. No early commit:
+            # a time can go on ("at 6 … tomorrow") and a task can follow.
+            FastPath(_CREATE_AT_RE, ReminderHandler._create_at_from_match),
+            FastPath(_CREATE_TASK_AT_RE, ReminderHandler._create_at_from_match),
+            FastPath(_CREATE_NOUN_AT_RE, ReminderHandler._create_at_from_match),
+            FastPath(_CREATE_TOPIC_AT_RE, ReminderHandler._create_at_from_match),
+            FastPath(_WAKE_AT_RE, ReminderHandler._wake_at_from_match),
+            FastPath(_WAKE_IN_RE, ReminderHandler._wake_in_from_match),
+            FastPath(_CREATE_ALARM_RE, ReminderHandler._alarm_from_match),
+            FastPath(_CANCEL_ALARM_RE, ReminderHandler._cancel_alarm_from_match),
         ]
 
     def offers_tool(self, transcript: str) -> bool:
@@ -522,6 +686,14 @@ class ReminderHandler(Handler):
     ) -> Response:
         action = args.get("action")
         if action == "create":
+            absolute = _absolute_from_tool_message(args.get("message"))
+            if absolute is not None:
+                task, connector, when_text = absolute
+                response = await self._create_at(
+                    when_text, task, ctx, session, connector=connector
+                )
+                if response is not None:
+                    return response
             task, connector = _task_from_tool_message(args.get("message"))
             duration = int(args.get("duration_sec") or 0)
             if duration <= 0:
@@ -589,7 +761,148 @@ class ReminderHandler(Handler):
             label_phrase = label_phrase.strip()
         return await self._cancel(label_phrase, ctx, session)
 
+    async def _create_at_from_match(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response | None:
+        task, connector = _task_of(m)
+        return await self._create_at(m.group("when"), task, ctx, session, connector=connector)
+
+    async def _wake_at_from_match(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response | None:
+        return await self._create_at(m.group("when"), None, ctx, session, kind="wake")
+
+    async def _wake_in_from_match(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response:
+        duration_sec = parse_duration_seconds(m.group("duration"))
+        if not duration_sec:
+            return self._reply(ctx, "When should I wake you?")
+        now = utcnow()
+        await TimerRepository(session).create(
+            expires_at=now + timedelta(seconds=duration_sec),
+            created_at=now,
+            label=f"{duration_adjective(duration_sec)} alarm",
+            message=_WAKE_MESSAGE,
+            room_id=ctx.satellite_room_id,
+        )
+        return self._reply(ctx, f"I'll wake you in {_format_duration(duration_sec)}.")
+
+    async def _alarm_from_match(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response | None:
+        return await self._create_at(m.group("when"), None, ctx, session, kind="alarm")
+
+    async def _cancel_alarm_from_match(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response | None:
+        """Cancel this room's alarms ("7 AM alarm" labels: "wake me up",
+        "set an alarm"), or the one at a time. Declines when there is no
+        alarm to cancel: "cancel the alarm" for a timer that is going off
+        then goes where it always went (the tool model)."""
+        clock: list[str] | None = None
+        if m.group("clock"):
+            when = parse_when(m.group("clock"))
+            if when is None or when.hour is None:
+                return None
+            # The labels the time can have: "the 7 alarm" is the 7 AM one
+            # or the 7 PM one, as "set an alarm for 7" would have set it.
+            clock = sorted({
+                spoken_clock(datetime(2000, 1, 1, hour, when.minute))
+                for hour, _extra in candidate_hours(when)
+            })
+        if clock is None and ctx.satellite_room_id is not None:
+            from domovoi.timer_delivery import ACK_WITHIN_SEC, ack_recent_fire
+
+            if await ack_recent_fire(
+                session, ctx.satellite_room_id, within_sec=ACK_WITHIN_SEC, kind="reminder",
+            ) is not None:
+                return self._reply(ctx, "Okay.")
+        if clock:
+            where, params = "lower(label) = ANY(:labels)", {
+                "labels": [f"{c.lower()} alarm" for c in clock]
+            }
+        else:
+            # Only the labels this handler gives an alarm ("7 AM alarm",
+            # "20 minute alarm"), never a task that ends in the word ("check
+            # the smoke alarm").
+            where, params = "lower(label) ~ :alarm_label", {"alarm_label": _ALARM_LABEL_SQL_RE}
+        result = await session.execute(
+            text(
+                f"""
+                DELETE FROM timers
+                WHERE room_id IS NOT DISTINCT FROM :room_id
+                  AND message IS NOT NULL
+                  AND {where}
+                """
+            ),
+            {"room_id": ctx.satellite_room_id, **params},
+        )
+        deleted = result.rowcount or 0
+        if not deleted:
+            return None
+        await notify_timers_changed(session, "cancelled")
+        if deleted == 1:
+            return self._reply(ctx, "Cancelled the alarm.")
+        return self._reply(ctx, f"Cancelled {deleted} alarms.")
+
     # ─── Core actions ─────────────────────────────────────────────────
+    def _reply(self, ctx: Context, text_: str) -> Response:
+        return Response(text=text_, session_id=ctx.session_id, matched_handler=self.name)
+
+    async def _create_at(
+        self,
+        when_text: str,
+        task: str | None,
+        ctx: Context,
+        session: AsyncSession,
+        *,
+        connector: str | None = None,
+        kind: str = "reminder",
+    ) -> Response | None:
+        """A reminder (``kind`` "reminder"), a wake-up ("wake") or an alarm
+        ("alarm") at a spoken clock time, on the household's wall clock.
+        None when the words hold no usable time (declined: the turn routes
+        on as before)."""
+        when = parse_when(when_text)
+        if when is None:
+            return None
+        now_utc = household_time.utc_now()
+        now_local = household_time.to_local(now_utc)
+        target = resolve_when(when, now_local)
+        if isinstance(target, WhenProblem):
+            return self._reply(ctx, _when_problem_text(target, kind, now_local))
+        expires_at = household_time.to_utc(target)
+        if expires_at <= now_utc:
+            # Only a wall-clock time the zone skips can land here (the
+            # spring-forward hour, read as the hour after): say it plainly.
+            return self._reply(ctx, _when_problem_text(WhenProblem("past", target), kind, now_local))
+        clock = spoken_clock(target)
+        said = spoken_when(target, now_local)
+        task = (task or "").strip()
+        if kind == "wake":
+            message, label = _WAKE_MESSAGE, f"{clock} alarm"
+            reply = f"I'll wake you {said}."
+        elif kind == "alarm":
+            message, label = "", f"{clock} alarm"
+            reply = f"Alarm set for {spoken_time_and_day(target, now_local)}."
+        elif task:
+            message, label = task, task[:100]
+            if connector == _TOPIC_CONNECTOR:
+                reply = f"Your {task} reminder is set for {spoken_time_and_day(target, now_local)}."
+            else:
+                reply = f"I'll remind you {said} {_connector_for_reply(connector)} {task}."
+        else:
+            message, label = "", f"{clock} reminder"
+            reply = f"I'll remind you {said}."
+        await TimerRepository(session).create(
+            expires_at=expires_at,
+            created_at=now_utc,
+            label=label,
+            message=message,
+            room_id=ctx.satellite_room_id,
+        )
+        return self._reply(ctx, reply)
     async def _create(
         self,
         message: str | None,
@@ -667,10 +980,9 @@ class ReminderHandler(Handler):
             )
         if len(rows) == 1:
             msg, expires = rows[0]
-            remaining = int((expires - utcnow()).total_seconds())
-            spoken = _format_duration(max(1, remaining))
+            due = _spoken_due(expires)
             return Response(
-                text=f"In {spoken}: {msg}.",
+                text=f"{due[:1].upper()}{due[1:]}: {msg}.",
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
@@ -678,11 +990,10 @@ class ReminderHandler(Handler):
         # the count. Reading every one aloud gets long fast.
         first_msg, first_exp = rows[0]
         second_msg, _ = rows[1]
-        first_spoken = _format_duration(max(1, int((first_exp - utcnow()).total_seconds())))
         return Response(
             text=(
-                f"You have {len(rows)} reminders. The next one, in "
-                f"{first_spoken}: {first_msg}. After that: {second_msg}."
+                f"You have {len(rows)} reminders. The next one, "
+                f"{_spoken_due(first_exp)}: {first_msg}. After that: {second_msg}."
             ),
             session_id=ctx.session_id,
             matched_handler=self.name,

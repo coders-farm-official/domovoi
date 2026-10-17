@@ -138,6 +138,33 @@ def normalize_fast_paths(handler: "Handler") -> None:
     handler.fast_paths = [as_fast_path(e) for e in handler.fast_paths]
 
 
+_EXAMPLE_PHRASE_RE = re.compile(r"[Ee]xamples?:\s*(.+)$")
+
+
+def _description_examples(tool_schema: dict[str, Any]) -> list[str]:
+    """The quoted phrases of a trailing "Example: 'a', 'b'." clause in a
+    tool description - how a plugin written before ``example_phrases``
+    (the bundled radio plugin) still lists its phrases."""
+    description = str((tool_schema or {}).get("description") or "")
+    m = _EXAMPLE_PHRASE_RE.search(description)
+    if not m:
+        return []
+    tail = m.group(1)
+    quoted = re.findall(r"['\"]([^'\"]+)['\"]", tail)
+    if quoted:
+        return quoted
+    return [tail.strip().rstrip(".")] if tail.strip() else []
+
+
+def example_phrases_of(handler: "Handler") -> list[str]:
+    """What to say to use ``handler``: its own ``example_phrases``, else
+    the "Example: '...'" clause of its tool description."""
+    own = getattr(handler, "example_phrases", None) or ()
+    if own:
+        return [str(p) for p in own]
+    return _description_examples(getattr(handler, "tool_schema", None) or {})
+
+
 def registry_sort_key(handler: "Handler") -> tuple[int, int, str, str]:
     """Deterministic dispatch order (design §4.2): ascending band;
     tie-break core handlers before plugin handlers, then plugin slug
@@ -183,6 +210,14 @@ class Handler(ABC):
     # from (its Wi-Fi link, say). A turn from a phone (Context.from_phone)
     # never reaches it: the router answers SATELLITE_SETTING_TEXT instead.
     satellite_only: bool = False
+    # What a person can say to use this handler: the user manual's feature
+    # table, Home's first-run hint and the "what can you do" answer (GET
+    # /v1/handlers ``example_phrases``, :func:`example_phrases_of`). Kept
+    # OUT of ``tool_schema`` on purpose: the routing model reads every word
+    # of a tool description, and example text there pulled other turns
+    # towards the tool (the router-bait fixes took it out). Each core
+    # phrase lands on its handler (domovoi/tests/test_example_phrases.py).
+    example_phrases: tuple[str, ...] = ()
 
     @abstractmethod
     async def execute(self, intent: Intent, ctx: Context, session: AsyncSession) -> Response:

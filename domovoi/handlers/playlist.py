@@ -84,6 +84,7 @@ class PlaylistHandler(Handler):
     #   greedy "^play (.+)$" catch-all matches.
     priority_band = 290
     display = HandlerDisplay(label="Playlists", tone="media")
+    example_phrases = ("play my favorites",)
     confirmation_kinds = ("core.playlist_choice", "core.playlist_add_choice")
     chat_exposed = True  # organic media tool in chat mode (#8)
     requires_network = "no"

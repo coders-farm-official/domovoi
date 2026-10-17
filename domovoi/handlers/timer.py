@@ -97,6 +97,11 @@ class TimerHandler(Handler):
     # band rationale: after reminder (140) — see the "remind" collision note there.
     priority_band = 160
     display = HandlerDisplay(label="Timers", tone="info")
+    example_phrases = (
+        "set a timer for 10 minutes",
+        "how much time left on the timer",
+        "cancel the timer",
+    )
     requires_network = "no"
 
     tool_schema = {

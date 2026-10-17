@@ -161,3 +161,183 @@ async def test_unknown_voice_lists_alternatives(seeded):
     assert "don't have a voice called bogus" in r.text
     assert "Lessac" in r.text  # suggests what it does have
     assert r.pi_action is None
+
+
+
+# ─── A voice Domovoi offers that isn't downloaded yet (2026-10-17) ─────────
+# "let me hear Linda's voice" answered "I don't have a voice called linda"
+# while Settings -> Voices offered her (manual-content finding 4.9).
+
+
+@pytest.fixture
+async def two_voices(db_session):
+    """A server that downloaded only Kristin and Norman (the internet
+    question answered: the other shipped voice isn't fetched)."""
+    await db_session.execute(text("DELETE FROM voices"))
+    repo = VoicesRepository(db_session)
+    await repo.create(name="Kristin", engine="piper", model_ref="en_US-kristin-medium",
+                      is_default=True)
+    await repo.create(name="Norman", engine="piper", model_ref="en_US-norman-medium")
+    await db_session.commit()
+    yield db_session
+    # Committed (the download registers through its own session), so empty
+    # the registry again: it is reference data, not in the truncate list.
+    await db_session.rollback()
+    await db_session.execute(text("DELETE FROM voices"))
+    await db_session.commit()
+
+
+def _session_ctx(**kw):
+    from uuid import uuid4
+
+    kw.setdefault("online", True)
+    return Context(room_id="kitchen", session_id=uuid4(), **kw)
+
+
+async def _pending(db_session, ctx) -> dict | None:
+    from domovoi.db.repositories import SessionRepository
+
+    data = await SessionRepository(db_session).get_context(ctx.session_id) or {}
+    return data.get("pending_confirmation")
+
+
+async def _with_session(db_session, **kw) -> Context:
+    """A context whose session row exists (a parked question lives there)."""
+    from domovoi.db.repositories import SessionRepository
+
+    sid = await SessionRepository(db_session).get_or_create(None, "kitchen")
+    kw.setdefault("online", True)
+    return Context(room_id="kitchen", session_id=sid, **kw)
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_voice_not_downloaded_is_offered_never_denied(two_voices, monkeypatch) -> None:
+    from domovoi import egress
+
+    ctx = await _with_session(two_voices)
+    with egress.override_policy("always"):
+        r = await VoiceHandler()._sample_response("linda", ctx, two_voices)
+    assert "don't have a voice called" not in r.text
+    assert r.text.startswith("Linda isn't downloaded on this server yet.")
+    assert "about 64 megabytes" in r.text and r.text.endswith("Want me to download her?")
+    assert r.expect_followup and r.voice_override is None
+    pending = await _pending(two_voices, ctx)
+    assert pending["kind"] == "core.voice_download"
+    assert pending["model_ref"] == "en_US-ljspeech-medium"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_yes_downloads_and_registers_her(two_voices, monkeypatch) -> None:
+    import asyncio
+
+    from domovoi import egress
+    from domovoi.clients import tts
+    from domovoi.handlers import voice as voice_mod
+
+    fetched: list[str] = []
+
+    async def fake_ensure(model_ref: str) -> None:
+        fetched.append(model_ref)
+
+    monkeypatch.setattr(tts, "ensure_piper_voice", fake_ensure)
+    monkeypatch.setattr(voice_mod, "piper_voice_on_disk", lambda ref: False)
+    ctx = _session_ctx()
+    with egress.override_policy("always"):
+        r = await VoiceHandler().handle_confirmation(
+            "core.voice_download",
+            {"model_ref": "en_US-ljspeech-medium", "name": "Linda", "then": "sample"},
+            True, ctx, two_voices,
+        )
+        assert r.text == (
+            'Okay, downloading Linda. It takes a minute or two. '
+            'Then say "let me hear Linda\'s voice".'
+        )
+        await asyncio.gather(*voice_mod._DOWNLOADS.values())
+    assert fetched == ["en_US-ljspeech-medium"]
+    rows = await VoicesRepository(two_voices).all()
+    assert {r["name"] for r in rows} == {"Kristin", "Norman", "Linda"}
+    voice_mod._DOWNLOADS.clear()
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_no_downloads_nothing(two_voices) -> None:
+    r = await VoiceHandler().handle_confirmation(
+        "core.voice_download", {"model_ref": "en_US-ljspeech-medium"}, False,
+        _session_ctx(), two_voices,
+    )
+    assert r.text == "Okay."
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_internet_turned_off_says_where_to_get_her(two_voices) -> None:
+    from domovoi import egress
+
+    with egress.override_policy("never"):
+        r = await VoiceHandler()._switch_response("linda", _session_ctx(), two_voices)
+    assert r.text.startswith("Linda isn't downloaded on this server yet.")
+    assert "stay off the internet" in r.text and "Settings, Voices" in r.text
+    assert r.pi_action is None and not r.expect_followup
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_offline_says_so(two_voices) -> None:
+    from domovoi import egress
+
+    with egress.override_policy("always"):
+        r = await VoiceHandler()._sample_response("linda", _session_ctx(online=False), two_voices)
+    assert "can't reach the internet right now" in r.text
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_registered_voice_missing_from_disk_is_not_faked(two_voices, monkeypatch) -> None:
+    """Norman is registered but his files aren't here and can't be
+    fetched: the sample would have been the system voice saying "Here's how
+    Norman sounds"."""
+    from domovoi import egress
+    from domovoi.handlers import voice as voice_mod
+
+    monkeypatch.setattr(voice_mod, "piper_voice_on_disk", lambda ref: ref != "en_US-norman-medium")
+    with egress.override_policy("never"):
+        r = await VoiceHandler()._sample_response("norman", _session_ctx(), two_voices)
+    assert r.voice_override is None
+    assert r.text.startswith("Norman isn't downloaded on this server yet.")
+    # on disk: the sample plays, as before
+    with egress.override_policy("never"):
+        r = await VoiceHandler()._sample_response("kristin", _session_ctx(), two_voices)
+    assert r.voice_override == "Kristin"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_list_names_who_isnt_downloaded(two_voices) -> None:
+    r = await VoiceHandler()._list_response(_session_ctx(), two_voices)
+    assert r.text == "I've got these voices: Kristin and Norman. Linda isn't downloaded yet."
+
+
+def test_download_phrases_route_to_voice_without_poaching() -> None:
+    from domovoi.tests.conftest import fast_path_winner
+
+    assert fast_path_winner("download Linda's voice") == "voice"
+    assert fast_path_winner("let me hear Linda's voice") == "voice"
+    assert fast_path_winner("get the linda voice") == "voice"
+    assert fast_path_winner("download the latest episode of the daily") != "voice"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_voice_on_disk_but_not_registered_is_registered_and_played(
+    two_voices, monkeypatch
+) -> None:
+    from domovoi.handlers import voice as voice_mod
+
+    monkeypatch.setattr(voice_mod, "piper_voice_on_disk", lambda ref: True)
+    r = await VoiceHandler()._sample_response("linda", _session_ctx(), two_voices)
+    assert r.voice_override == "Linda"
+    assert r.text == "Here's how Linda sounds."
+    assert await VoicesRepository(two_voices).get_by_name("Linda") is not None

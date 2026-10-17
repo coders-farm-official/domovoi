@@ -148,6 +148,11 @@ class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
     #   intentionally NOT claimed here.
     priority_band = 270
     display = HandlerDisplay(label="Podcasts & Books", tone="media")
+    example_phrases = (
+        "resume my audiobook",
+        "play the latest episode of The Daily",
+        "next chapter",
+    )
     requires_network = "degraded"
 
     tool_schema = {

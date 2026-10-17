@@ -41,6 +41,7 @@ DOMOVOI_API = "1.0.0"
 # /api/capabilities never consults the core's in-memory registry.
 CORE_HANDLER_DISPLAY: list[dict[str, str]] = [
     {"name": "dismiss",       "label": "Dismiss",        "tone": "neutral"},
+    {"name": "help",          "label": "Help",           "tone": "info"},
     {"name": "voice_profile", "label": "Voice Profile",  "tone": "info"},
     {"name": "wifi",          "label": "Wi-Fi",          "tone": "device"},
     {"name": "voice",         "label": "Voice",          "tone": "device"},
@@ -48,6 +49,7 @@ CORE_HANDLER_DISPLAY: list[dict[str, str]] = [
     {"name": "calculator",    "label": "Calculator",     "tone": "info"},
     {"name": "timer",         "label": "Timers",         "tone": "info"},
     {"name": "clock",         "label": "Clock",          "tone": "info"},
+    {"name": "calendar",      "label": "Calendar",       "tone": "info"},
     {"name": "repeat",        "label": "Repeat",         "tone": "info"},
     {"name": "double_check",  "label": "Double-Check",   "tone": "info"},
     {"name": "dropin",        "label": "Drop-In",        "tone": "comms"},
@@ -59,6 +61,7 @@ CORE_HANDLER_DISPLAY: list[dict[str, str]] = [
     {"name": "news",          "label": "News",           "tone": "info"},
     {"name": "spoken_audio",  "label": "Podcasts & Books", "tone": "media"},
     {"name": "playlist",      "label": "Playlists",      "tone": "media"},
+    {"name": "music_alias",   "label": "Music names",    "tone": "media"},
     {"name": "music",         "label": "Music",          "tone": "media"},
     {"name": "library",       "label": "Library",        "tone": "media"},
 ]

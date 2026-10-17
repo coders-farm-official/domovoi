@@ -102,6 +102,16 @@ _HAVE_RE = re.compile(
     r"^(?:do i have|have i got|is(?= .+ in my library$)) (.+?)(?: in my library)?$"
 )
 _ADDED_WHEN_RE = re.compile(r"^what did i add (today|yesterday|this week|recently)$")
+# "what's new in my music library" / "anything new in the library" /
+# "what's been added to my library lately": the recently added tracks.
+# News (band 260) leaves these to this handler: its "what's new in X"
+# keeps every other X ("what's new in science").
+_LIBRARY = r"(?:(?:my|our|the) (?:music )?(?:library|collection)|(?:my|our) music)"
+_WHATS_NEW_RE = re.compile(
+    rf"^(?:what'?s|whats|what is|is there anything|anything) new in {_LIBRARY}$"
+    rf"|^what(?:'s| has| have) (?:been )?(?:added|new) (?:to|in) {_LIBRARY}"
+    r"(?: (?:lately|recently|this week))?$"
+)
 _COUNT_RE = re.compile(r"^(?:how many (?:songs|tracks|albums)(?: do i have)?|library count)$")
 # Voice trigger for the AcoustID/Shazam fingerprint enrichment pass.
 # Phrasings tuned for the most natural spoken intent: clean up tags,
@@ -135,6 +145,11 @@ class LibraryHandler(Handler):
     #   provider plugin's catch-all lives in band 900, dead last).
     priority_band = 310
     display = HandlerDisplay(label="Library", tone="media")
+    example_phrases = (
+        "how many songs do I have",
+        "what did I add this week",
+        "what's new in my music library",
+    )
     chat_exposed = True  # organic media tool in chat mode (#8)
     requires_network = "no"
 
@@ -165,6 +180,9 @@ class LibraryHandler(Handler):
 
     def __init__(self) -> None:
         self.fast_paths = [
+            # Before "is X in my library": "is there anything new in my
+            # library" is this question, not a search for "there anything new".
+            FastPath(_WHATS_NEW_RE, LibraryHandler._whats_new_from_match),
             FastPath(_FIND_RE, LibraryHandler._find_from_match),
             FastPath(_HAVE_RE, LibraryHandler._have_from_match),
             FastPath(_ADDED_WHEN_RE, LibraryHandler._added_from_match),
@@ -229,6 +247,9 @@ class LibraryHandler(Handler):
 
     async def _added_from_match(self, m, ctx, session):
         return await self._added_within(m.group(1).strip().replace(" ", "_"), ctx, session)
+
+    async def _whats_new_from_match(self, m, ctx, session):
+        return await self._added_within("recently", ctx, session)
 
     async def _count_from_match(self, m, ctx, session):
         return await self._count(ctx, session)
@@ -403,7 +424,11 @@ class LibraryHandler(Handler):
         rows = result.all()
         if not rows:
             return Response(
-                text="Nothing added in that window.",
+                text=(
+                    "Nothing new in the library in the last 30 days."
+                    if window == "recently"
+                    else "Nothing added in that window."
+                ),
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )

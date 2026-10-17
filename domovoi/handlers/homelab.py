@@ -195,6 +195,7 @@ class HomelabHandler(Handler):
     # band rationale: utility; anchored status vocabulary, no known collisions.
     priority_band = 250
     display = HandlerDisplay(label="Homelab", tone="device")
+    example_phrases = ("how's domovoi doing",)
     requires_network = "no"
 
     tool_schema = {

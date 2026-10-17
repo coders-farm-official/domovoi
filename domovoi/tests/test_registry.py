@@ -24,6 +24,7 @@ from domovoi.handlers.base import (
 # pinned as data, not derived.
 CORE_BANDS = {
     "dismiss": 100,
+    "help": 105,
     "voice_profile": 110,
     "wifi": 120,
     "voice": 130,
@@ -31,6 +32,7 @@ CORE_BANDS = {
     "calculator": 150,
     "timer": 160,
     "clock": 170,
+    "calendar": 175,
     "repeat": 180,
     "double_check": 190,
     "dropin": 200,
@@ -216,6 +218,7 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
         "news": {"core.news_fetch", "core.news_fetch_topics"},
         "dropin": {"core.dropin_invite"},
         "music_alias": {"core.alias_replace", "core.alias_target"},
+        "voice": {"core.voice_download"},
     }
     for name, kinds in expected.items():
         assert set(HANDLER_BY_NAME[name].confirmation_kinds) == kinds

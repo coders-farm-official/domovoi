@@ -567,6 +567,12 @@ class VoiceProfileHandler(Handler):
     #   dismiss (100), which owns the closed "I'm good"/"I'm fine" set.
     priority_band = 110
     display = HandlerDisplay(label="Voice Profile", tone="info")
+    example_phrases = (
+        "my name is Sarah",
+        "who am I",
+        "forget me",
+        "never save my voice",
+    )
     confirmation_kinds = (
         "core.self_intro", "core.third_party_intro_confirm", "core.phone_voice_add",
         "core.room_voice_add",
