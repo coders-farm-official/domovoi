@@ -57,7 +57,7 @@ const HOME_PHONE_ROWS = 3;                 // attention rows and today rows a ph
 const HOME_TODAY_ROWS = 6;                 // ...and a desktop
 const HOME_PHONE_TIMERS = 2;               // timers a phone shows, so the rooms start above the fold
 const HOME_FRESH_MS = 5 * 1000;            // a read this young needs no re-read on (re)connect
-const HOME_MANUAL_MS = 30 * 60 * 1000;     // the manual's example phrases hardly change
+const HOME_MANUAL_MS = 30 * 60 * 1000;     // the manual's words hardly change
 const HOME_SOON_SEC = 600;                 // countdowns turn warn under 10 min
 const HOME_ROOM_EVENTS = [
   'satellites.presence.changed', 'satellites.wifi.changed', 'satellites.dropins.changed',
@@ -65,8 +65,9 @@ const HOME_ROOM_EVENTS = [
 ];
 const HOME_WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const HOME_MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-// The first-run hint prefers these handlers' example phrases, in order.
-const HOME_HINT_HANDLERS = ['timer', 'reminder', 'clock', 'music'];
+// The first-run hint is the user manual's Start here (manual-content.json,
+// the first "try saying" phrase there); this when the manual can't be read.
+// Both work on a fresh install: a timer, by its fast path, offline.
 const HOME_HINT_FALLBACK = 'set a timer for 10 minutes';
 
 /* Answers that outlive one mount of the page, for the reads whose cost is
@@ -1139,23 +1140,21 @@ const HomeToday = ({ events, answered, failed, now, shared }) => {
 
 /* ---- first run ----------------------------------------------------- */
 
-// An example phrase from the user manual's feature table
-// (/api/capabilities/manual), the timer's first.
+// The first phrase Start here offers (the manual's content file, the one
+// the #manual page shows): never a plugin's phrase, never one that needs a
+// room, the library or the internet (domovoi/tests/test_manual_content.py).
 const HomeHintPhrase = (manual) => {
-  const handlers = (manual && Array.isArray(manual.handlers)) ? manual.handlers : [];
-  for (const name of HOME_HINT_HANDLERS) {
-    const h = handlers.find((x) => x.name === name);
-    if (h && (h.example_phrases || []).length) return h.example_phrases[0];
-  }
-  const any = handlers.find((x) => (x.example_phrases || []).length);
-  return any ? any.example_phrases[0] : HOME_HINT_FALLBACK;
+  const blocks = manual && manual.start && Array.isArray(manual.start.blocks) ? manual.start.blocks : [];
+  const say = blocks.find((b) => b && b.type === 'say' && Array.isArray(b.phrases) && b.phrases.length);
+  const first = say && say.phrases.find((p) => p && typeof p.text === 'string' && !p.pending);
+  return first ? first.text : HOME_HINT_FALLBACK;
 };
 
 const HomeFirstRun = ({ manual }) => (
   <div className="home-firstrun">
     <span className="lab">try saying</span>
     <span className="mono">“{HomeHintPhrase(manual)}”</span>
-    <a href="#manual" className="home-link">how domovoi works</a>
+    <a href="#manual" className="home-link">start here</a>
   </div>
 );
 
@@ -1392,7 +1391,7 @@ const HomePage = ({ counts, badges }) => {
   // the manual. Only then is the manual asked for.
   const firstRun = HomeOk(sats) && !rooms.length && HomeOk(timers) && !active.length
     && HomeOk(cal) && !(cal.data || []).length;
-  const manual = HomeHooks.useCachedObject(firstRun ? '/api/capabilities/manual' : null, HOME_MANUAL_MS);
+  const manual = HomeHooks.useCachedObject(firstRun ? '/manual-content.json' : null, HOME_MANUAL_MS);
 
   // ── actions (device tier; data.js prompts and replays when unpaired) ──
   const [busy, setBusy] = React.useState({});
