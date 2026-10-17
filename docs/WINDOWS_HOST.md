@@ -362,7 +362,7 @@ the uninstaller names it:
 |---|---|
 | `install.log` | Every change Setup's helper made. |
 | `host.log` | DomovoiHost: the import, the holder (`wsl.exe -d domovoi --exec sleep infinity`), restarts, requests, the ports it waited for. |
-| `provision.log` | Everything `provision.sh` printed, including its `@@DOMOVOI` progress lines. When the start fails it also holds `systemctl status` of `domovoi-db`, `domovoi-core` and `domovoi-web` and their last 200 journal lines, so it names the real cause (a port already taken, a migration that failed). |
+| `provision.log` | Everything `provision.sh` printed, including its `@@DOMOVOI` progress lines. When the start fails it also holds `systemctl status` of `domovoi-db`, `domovoi-core` and `domovoi-web` and their last 200 journal lines, so it names the real cause (a port already taken, a migration that failed); when the database is the cause, also the Postgres container's state and its last 100 log lines (passwords blanked). |
 | `host-status.json` | (in the copy) What DomovoiHost last reported to Setup. |
 
 Setup's own record of the changes it made is `C:\ProgramData\Domovoi\state\install.log`

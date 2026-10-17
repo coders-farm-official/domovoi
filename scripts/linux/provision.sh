@@ -3161,6 +3161,47 @@ start_diagnostics() {
   log "the last 200 lines of journalctl -u domovoi-db -u domovoi-core -u domovoi-web:"
   journalctl -u domovoi-db.service -u domovoi-core.service -u domovoi-web.service --no-pager -n 200 -o short-iso 2>&1 \
     | scrub_log | sed 's/^/    /' || true
+  # The database's side, when it is (or may be) the reason: domovoi-db
+  # failed, or is still starting (2026-10-17: a first start that outran
+  # the health check left only "container is unhealthy").
+  if ! systemctl is-active --quiet domovoi-db.service 2>/dev/null; then
+    log "the Postgres container (scripts/linux/db-diagnostics.sh):"
+    db_diagnostics | scrub_log | sed 's/^/    /' || true
+  fi
+}
+
+# scripts/linux/db-diagnostics.sh from the verified copy: the Postgres
+# container's state, last health check and last 100 log lines (passwords
+# blanked), or with --summary the one-line reason. Read-only.
+db_diagnostics() {
+  local f
+  f=$(src_file scripts/linux/db-diagnostics.sh)
+  if [ -f "$f" ]; then bash "$f" "$@" 2>&1; else echo "(no $f in this checkout)"; fi
+}
+db_failed() { systemctl is-failed --quiet domovoi-db.service 2>/dev/null; }
+
+# A database volume whose first start was cut off before it made any
+# database (a reboot or a stopped distro during a slow initdb) fails every
+# later start, Setup's Retry included: scripts/linux/db-half-made.sh finds
+# it from the volume's files and removes it, so this start makes it again.
+# It never held data (no database in it); a volume with a database, or a
+# first start still running, is left alone. Only while domovoi-db is not
+# running; never fatal (a failed start then says why).
+repair_half_made_db() {
+  local f out img
+  systemctl is-active --quiet domovoi-db.service 2>/dev/null && return 0
+  f=$(src_file scripts/linux/db-half-made.sh)
+  [ -f "$f" ] || return 0
+  img=$(compose_refs 2>/dev/null | grep -m 1 '^postgres[:@]' || true)
+  out=$(DOMOVOI_PG_IMAGE="$img" bash "$f" --repair 2>&1) || warn "the database volume check failed: $(printf '%s' "$out" | tail -n 1)"
+  [ -z "$out" ] || printf '%s\n' "$out" | while IFS= read -r l; do log "$l"; done
+}
+# A failed domovoi-db in the failure message, with the reason in one line
+# (Setup shows that message).
+db_failure_text() {
+  local why
+  why=$(db_diagnostics --summary | tail -n 1 | scrub_log | cut -c1-300)
+  printf 'domovoi-db.service failed%s' "${why:+ ($why)}"
 }
 
 # wait_http URL TIMEOUT LABEL UNIT FROM TO: wait for URL, with progress
@@ -3177,19 +3218,29 @@ wait_http() {
     now=$(date +%s)
     if [ $((now - t0)) -ge "$timeout" ]; then
       start_diagnostics
+      if ! systemctl is-active --quiet domovoi-db.service 2>/dev/null; then
+        die "$label did not answer within ${timeout}s ($url): domovoi-db.service is $(systemctl is-active domovoi-db.service 2>/dev/null || true) ($(db_diagnostics --summary | tail -n 1 | scrub_log | cut -c1-300); journalctl -u domovoi-db.service)"
+      fi
       die "$label did not answer within ${timeout}s ($url; journalctl -u $unit)"
     fi
     # The starts are --no-block: a unit (or the database it needs) that has
     # already failed won't answer, however long this waits.
-    if systemctl is-failed --quiet domovoi-db.service 2>/dev/null \
-        || systemctl is-failed --quiet "$unit" 2>/dev/null; then
+    if db_failed || systemctl is-failed --quiet "$unit" 2>/dev/null; then
       start_diagnostics
-      die "$label won't answer: $(systemctl is-failed --quiet domovoi-db.service 2>/dev/null && echo domovoi-db.service || echo "$unit") failed (journalctl -u $unit)"
+      if db_failed; then die "$label won't answer: $(db_failure_text) (journalctl -u domovoi-db.service)"; fi
+      die "$label won't answer: $unit failed (journalctl -u $unit)"
     fi
     if [ $((now - last)) -ge 30 ]; then
       last=$now
-      emit_frac $(( from + (now - t0) * (to - from) / timeout )) "Waiting for $label ($((now - t0))s)"
-      log "waiting for $label ($((now - t0))s): $unit is $(systemctl is-active "$unit" 2>/dev/null || true)"
+      # A new database's first start can take minutes on a slow disk: say
+      # that is what the wait is for, rather than a core that is inactive.
+      if [ "$(systemctl is-active domovoi-db.service 2>/dev/null || true)" = activating ]; then
+        emit_frac $(( from + (now - t0) * (to - from) / timeout )) "Waiting for the database to start ($((now - t0))s)"
+        log "waiting for $label ($((now - t0))s): domovoi-db.service is still starting ($(db_diagnostics --summary | tail -n 1 | scrub_log | cut -c1-200))"
+      else
+        emit_frac $(( from + (now - t0) * (to - from) / timeout )) "Waiting for $label ($((now - t0))s)"
+        log "waiting for $label ($((now - t0))s): $unit is $(systemctl is-active "$unit" 2>/dev/null || true)"
+      fi
     fi
     sleep 3
   done
@@ -3233,6 +3284,7 @@ do_start() {
   for u in "${SHIPPED_UNITS[@]}"; do
     if systemctl is-failed --quiet "$u" 2>/dev/null; then systemctl reset-failed "$u" || true; fi
   done
+  repair_half_made_db
   if [ "${#restart[@]}" -gt 0 ]; then
     log "restarting ${restart[*]}: what they read changed"
     systemctl restart "${restart[@]}" --no-block

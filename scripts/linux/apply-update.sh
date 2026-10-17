@@ -315,6 +315,9 @@ OS_JOBS=$SCRIPT_DIR/os-jobs.sh
 # for an administrator who sets the NVIDIA Container Toolkit up themselves.
 MANAGE_GPU_RUNTIME=${DOMOVOI_MANAGE_GPU_RUNTIME:-1}
 GPU_RUNTIME=$SCRIPT_DIR/gpu-runtime.sh
+# Why domovoi-db failed (scripts/linux/db-diagnostics.sh, beside this
+# script; read-only): restart_db runs it when the database's restart fails.
+DB_DIAGNOSTICS=$SCRIPT_DIR/db-diagnostics.sh
 # 1 once the GPU step restarted Docker in this run (domovoi-db then restarts).
 GPU_DOCKER_RESTARTED=0
 
@@ -1138,7 +1141,21 @@ stop_services() {
 start_services() { systemctl start "$CORE_UNIT" "$WEB_UNIT" --no-block; }
 
 # domovoi-db is a oneshot: compose up -d postgres, then compose run flyway.
-restart_db() { systemctl restart "$DB_UNIT"; }
+# When it fails, the Postgres container's side follows (DB_DIAGNOSTICS: its
+# state, last health check and last 100 log lines, passwords blanked) into
+# the update's journal, and its one-line reason is the last line, which is
+# what the step's error in the result says (2026-10-17: "container is
+# unhealthy" alone never said why).
+restart_db() {
+  systemctl restart "$DB_UNIT" && return 0
+  local rc=$?
+  if [ -f "$DB_DIAGNOSTICS" ]; then
+    echo "the Postgres container ($DB_DIAGNOSTICS):"
+    bash "$DB_DIAGNOSTICS" 2>&1 | sed '$d' | sed 's/^/  /' || true
+    echo "$DB_UNIT failed: $(bash "$DB_DIAGNOSTICS" --summary 2>&1 | tail -n 1)"
+  fi
+  return "$rc"
+}
 
 pg_exec() { docker exec "$PG_CONTAINER" "$@"; }
 

@@ -277,7 +277,20 @@ case "${1-}" in
     case " $* " in *" up "*) echo true >"$SHIM_STATE/searxng-running" ;; esac
     exit 0
     ;;
+  logs)
+    # The Postgres container's log (scripts/linux/db-diagnostics.sh):
+    # pg-logs, while pg-state says there is a container.
+    [ -f "$SHIM_STATE/pg-state" ] || { echo "Error: No such container: ${!#}" >&2; exit 1; }
+    tail -n "$3" "$SHIM_STATE/pg-logs" 2>/dev/null
+    exit 0
+    ;;
   inspect)
+    # The Postgres container, as db-diagnostics.sh asks after it: pg-state
+    # ("status|health|exit code|restarts"), pg-health (its last check).
+    if [ "${!#}" = domovoi-postgres ] && [ "${2-}" = --format ] && [ -f "$SHIM_STATE/pg-state" ]; then
+      case $3 in *Health.Log*) cat "$SHIM_STATE/pg-health" 2>/dev/null ;; *) cat "$SHIM_STATE/pg-state" ;; esac
+      exit 0
+    fi
     # The chat helper (Letta) runs while letta-running exists.
     if [ "${!#}" = domovoi-letta ]; then
       if [ -f "$SHIM_STATE/letta-running" ]; then echo true; exit 0; fi
@@ -1383,6 +1396,32 @@ case_flyway_failure_without_growth() {
   check "no pg_restore into a database" not_called "pg_restore -U domovoi -d"
   check "core never started on the bad SHA" eq "$(grep -c 'systemctl start domovoi-core.service' "$STATE/calls.log")" 1
   check "bad_sha recorded" file_is "$UPD/bad_sha" "$sha_b"
+  end_case
+}
+
+# 2026-10-17: when domovoi-db's restart fails, the update's journal holds
+# the Postgres container's side (state, last health check, last 100 log
+# lines, passwords blanked) and the step's error says why in one line.
+case_db_restart_failure_says_why() {
+  new_case db_restart_failure_says_why
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'CREATE TABLE fine (id int);
+' >"$REPO/domovoi/db/migrations/V002__fine.sql"
+  local sha_b; sha_b=$(commit_all "B: a migration")
+  echo "$sha_b" >"$STATE/flyway-fail-when-head"
+  echo 'running|unhealthy|0|0' >"$STATE/pg-state"
+  echo "127.0.0.1:5432 - no response" >"$STATE/pg-health"
+  printf '%s
+' "LOG:  connection: host=127.0.0.1 user=domovoi password=hunter2-Secret"     "FATAL:  the database system is in recovery mode" >"$STATE/pg-logs"
+  run_update
+  check "status rolled_back" eq "$(field status)" '"rolled_back"'
+  check "100 log lines asked for" called "docker logs --tail 100 domovoi-postgres"
+  check "the journal has the container's state" grep -qF "Postgres container domovoi-postgres: running, health unhealthy" "$CASE/output.log"
+  check "and its log" grep -qF "FATAL:  the database system is in recovery mode" "$CASE/output.log"
+  check "no password in the journal" not_said "hunter2-Secret"
+  check "nor in the result" bash -c '! grep -qF hunter2-Secret "$1"' _ "$RESULT"
+  check "blanked" grep -qF "password [hidden]" "$CASE/output.log"
+  check "the error says why" eq "$(field error | grep -c 'domovoi-db.service failed: Postgres is unhealthy; its log: FATAL:  the database system is in recovery mode')" 1
   end_case
 }
 
@@ -4498,6 +4537,7 @@ CASES=(
   case_mpd_conf_only
   case_migration_health_failure_rolls_back
   case_flyway_failure_without_growth
+  case_db_restart_failure_says_why
   case_plugin_migration_health_failure_restores
   case_plugin_migration_kept_when_healthy
   case_test_twin_restored_on_its_own

@@ -4,6 +4,47 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — A new database's slow first start no longer fails the install
+
+Server update (`domovoi/docker-compose.yml`, `domovoi-db.service`, the
+Linux scripts; no migration).
+
+* **Postgres gets up to 10 minutes for its first start.** A Windows install
+  failed at "Starting Domovoi" with only *container domovoi-postgres is
+  unhealthy*: on a new install's fresh disk, creating the database took
+  longer than the 40 s the health check allowed, so the migrations never
+  ran and the core never started. Measured: about 3 s on a normal disk,
+  82 s with writes limited to 2 MB/s, 262 s at 1 MB/s on one CPU. The
+  check now has a 600 s start period; a normal start is still healthy in
+  seconds, and a running database that stops answering is still marked
+  unhealthy after 40 s.
+* **The check asks the real server**, over TCP where Flyway and the core
+  connect. Over the Unix socket it used to accept the temporary server the
+  image runs while it creates the databases. The image's own wait for
+  that temporary server (`PGCTLTIMEOUT`) is 600 s instead of 60 s: on a
+  slow disk its shutdown took longer, and the container exited and started
+  again in the middle of its first start.
+* **A failed database start says why.** `journalctl -u domovoi-db`, the
+  install's `provision.log` and the update's journal and result now hold
+  the Postgres container's state, its last health check and its last 100
+  log lines (`scripts/linux/db-diagnostics.sh`, passwords blanked), and
+  the failure message Setup shows names the reason ("Postgres is
+  unhealthy; its log: FATAL: ..."). While the core waits on a database
+  that is still being created, Setup says "Waiting for the database to
+  start".
+* **A first start that was cut off is made again.** A reboot (or the
+  distro stopped) during a slow first start could leave a volume with
+  Postgres's files but no `domovoi` database and no network login, and
+  every Retry failed. The install's start step now spots such a volume
+  from its files (no database in it at all, so no data) and removes it,
+  container first, so the start makes it again
+  (`scripts/linux/db-half-made.sh`). A volume with any database in it, or
+  a first start still running, is never touched.
+* **If Setup already failed this way:** press **Retry** once the database
+  has finished its first start (a minute or two). A Retry pressed while
+  it is still being created fails again at once ("container is
+  unhealthy"); the next one works.
+
 ## 2026-10-16 — Phone photos in chat: HEIC converted, refusals in words
 
 Dashboard update (the web process; no migration) and a new Android APK.
