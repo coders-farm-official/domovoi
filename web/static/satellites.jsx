@@ -912,9 +912,10 @@ const satUpgradeOutcome = (room, v, { line = false } = {}) => {
  * fallback voice under its name. */
 const RoomVoicePicker = ({ s, fire, refresh }) => {
   const admin = useAdminSignedIn();
-  const { items: registry } = useApiList('/api/voices', { quiet: true });
-  const { data: shipped } = useApiObject('/api/voice', { quiet: true });
-  const { data: sampleInfo } = useApiObject('/api/voice/samples', { quiet: true });
+  // refetchOnAuth: a list read before the sign-in landed came back empty.
+  const { items: registry } = useApiList('/api/voices', { quiet: true, refetchOnAuth: true });
+  const { data: shipped } = useApiObject('/api/voice', { quiet: true, refetchOnAuth: true });
+  const { data: sampleInfo } = useApiObject('/api/voice/samples', { quiet: true, refetchOnAuth: true });
   const [busy, setBusy] = React.useState(false);
 
   const onServer = !!s.voice_on_server;
@@ -939,7 +940,8 @@ const RoomVoicePicker = ({ s, fire, refresh }) => {
   const label = (
     <span className="mono" style={{ color: s.voice ? 'var(--fg)' : 'var(--fg-faint)' }}>{s.voice || serverLabel}</span>
   );
-  if (!changeable || !admin || options.length === 0) {
+  // No registry (not loaded, or unreadable): nothing to offer honestly.
+  if (!changeable || !admin || rows.length === 0) {
     const why = !admin ? 'sign in as an admin to change it here, or say “switch to <name>’s voice” in the room'
       : !changeable ? 'its satellite keeps its own voice: change it while the room is online'
       : 'say “switch to <name>’s voice” in the room to change it';
