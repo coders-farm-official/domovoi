@@ -103,10 +103,28 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-# (path, size, mtime_ns) -> verified, so a file is hashed once per change,
-# not on every request.
-_verified: dict[tuple[str, int, int], bool] = {}
+# (path, size, mtime_ns, inode, ctime_ns) -> verified, so a settled file is
+# hashed once per change, not on every request.
+#
+# The stat fields alone cannot tell a same-size rewrite made within one
+# timestamp tick from the file they were read from: Windows stamps file
+# times from a clock that moves every ~1-16 ms, Linux from the kernel's
+# coarse clock, and an in-place rewrite keeps the inode (and, on Windows,
+# the creation time st_ctime reports). A verdict cached for such a file
+# answered "pinned" for different bytes (the flaky
+# test_only_listed_and_pinned_bytes_are_served, 2026-10-17: two thirds of
+# immediate rewrites kept their mtime here). So, like git's "racy" index
+# entries, a verdict is kept only for a file last changed well before it
+# was hashed, and unchanged while it was; a fresh file is re-hashed on each
+# request until it settles (seconds, once, after a fetch).
+_VerifyKey = tuple[str, int, int, int, int]
+_verified: dict[_VerifyKey, bool] = {}
 _verified_lock = threading.Lock()
+_SETTLED_NS = 2_000_000_000
+
+
+def _verify_key(path: Path, st: Any) -> _VerifyKey:
+    return (str(path), st.st_size, st.st_mtime_ns, st.st_ino, st.st_ctime_ns)
 
 
 def _matches(path: Path, sha256: str, size: int) -> bool:
@@ -116,11 +134,20 @@ def _matches(path: Path, sha256: str, size: int) -> bool:
         return False
     if path.is_symlink() or not path.is_file() or st.st_size != size:
         return False
-    key = (str(path), st.st_size, st.st_mtime_ns)
+    key = _verify_key(path, st)
     with _verified_lock:
         known = _verified.get(key)
-    if known is None:
-        known = _sha256(path) == sha256
+    if known is not None:
+        return known
+    started = time.time_ns()
+    known = _sha256(path) == sha256
+    try:
+        after = path.stat()
+    except OSError:
+        return False
+    if _verify_key(path, after) != key:
+        return False  # changed while it was read: no verdict either way
+    if started - max(st.st_mtime_ns, st.st_ctime_ns) > _SETTLED_NS:
         with _verified_lock:
             _verified[key] = known
     return known

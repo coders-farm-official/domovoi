@@ -84,6 +84,110 @@ def test_only_listed_and_pinned_bytes_are_served(cache):
     assert st["ready"] is False and st["missing"] == ["numpy-2.5.4-cp314-cp314-win_amd64.whl"]
 
 
+# The digest cache (integration 1017d). The test above flaked: a same-size
+# rewrite inside one file-timestamp tick left size, mtime, inode and (on
+# Windows) st_ctime as they were, and the cached "pinned" verdict was
+# served for the new bytes. Pinned here without the timing: the rewrite's
+# mtime is put back by hand, which is what the tick did.
+
+NUMPY = "numpy-2.5.4-cp314-cp314-win_amd64.whl"
+
+
+def _rewrite_keeping_mtime(path: Path, body: bytes) -> None:
+    import os
+
+    before = path.stat()
+    path.write_bytes(body)
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+
+def _count_hashes(monkeypatch) -> list[Path]:
+    seen: list[Path] = []
+    real = sw._sha256
+
+    def counting(path):
+        seen.append(path)
+        return real(path)
+
+    monkeypatch.setattr(sw, "_sha256", counting)
+    return seen
+
+
+def test_a_fresh_file_rewritten_in_the_same_tick_is_not_served(cache):
+    lock = tiny_lock(FILES)
+    cache.mkdir(parents=True)
+    (cache / NUMPY).write_bytes(FILES[NUMPY])
+    assert sw.cached_file(lock, NUMPY) == cache / NUMPY
+    _rewrite_keeping_mtime(cache / NUMPY, b"M" * 300)     # same size, same mtime
+    assert sw.cached_file(lock, NUMPY) is None
+
+
+def test_a_fresh_file_is_hashed_on_each_request(cache, monkeypatch):
+    lock = tiny_lock(FILES)
+    cache.mkdir(parents=True)
+    (cache / NUMPY).write_bytes(FILES[NUMPY])
+    hashed = _count_hashes(monkeypatch)
+    for _ in range(3):
+        assert sw.cached_file(lock, NUMPY) == cache / NUMPY
+    assert len(hashed) == 3
+    assert not sw._verified, "no verdict is kept for a file changed this moment"
+
+
+class _LaterClock:
+    """The time module, an hour on: every file on disk has settled."""
+
+    def __getattr__(self, name):
+        import time
+
+        return getattr(time, name)
+
+    def time_ns(self):
+        import time
+
+        return time.time_ns() + 3600 * 10**9
+
+
+def test_a_settled_file_is_hashed_once_per_change(cache, monkeypatch):
+    lock = tiny_lock(FILES)
+    cache.mkdir(parents=True)
+    path = cache / NUMPY
+    path.write_bytes(FILES[NUMPY])
+    monkeypatch.setattr(sw, "time", _LaterClock())
+    hashed = _count_hashes(monkeypatch)
+    for _ in range(3):
+        assert sw.cached_file(lock, NUMPY) == path
+    assert len(hashed) == 1
+    # A later rewrite (a second on: the same-tick case is the tests above).
+    import os
+
+    before = path.stat()
+    path.write_bytes(b"M" * 300)
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 10**9))
+    assert sw.cached_file(lock, NUMPY) is None
+    assert len(hashed) == 2
+
+
+def test_a_file_that_changes_while_it_is_hashed_gets_no_verdict(cache, monkeypatch):
+    lock = tiny_lock(FILES)
+    cache.mkdir(parents=True)
+    path = cache / NUMPY
+    path.write_bytes(FILES[NUMPY])
+    real = sw._sha256
+
+    def racing(p):
+        import os
+
+        digest = real(p)
+        before = p.stat()
+        p.write_bytes(b"M" * 300)
+        os.utime(p, ns=(before.st_atime_ns, before.st_mtime_ns + 10**9))
+        return digest
+
+    monkeypatch.setattr(sw, "_sha256", racing)
+    assert sw.cached_file(lock, NUMPY) is None
+    assert not sw._verified
+
+
 def test_the_fetch_keeps_only_pinned_files_and_drops_strays(cache, monkeypatch):
     from domovoi.satellite_media import fetchers
 
