@@ -796,6 +796,13 @@ const FilesPage = () => {
   const isRemovable = activeLib?.kind === 'removable';
   const isDocuments = activeLib?.id === 'core:documents';
 
+  // The libraries are a device read: on a browser not paired yet it is
+  // refused and the pair modal opens. Once a credential arrives (the
+  // household token pasted there, or "sign in as an admin instead", which
+  // pairs the browser itself) the read runs again (data.js
+  // useRetryAfterCredential): the page used to keep "no libraries
+  // available" until you left it and came back (F-052).
+  const [libsRefusal, setLibsRefusal] = React.useState(null);
   const loadLibraries = React.useCallback(async () => {
     setLibLoading(true);
     try {
@@ -804,12 +811,16 @@ const FilesPage = () => {
       setLibraries(libs);
       setActiveId((prev) => (prev && libs.some((l) => l.id === prev)) ? prev
         : (libs.length ? libs[0].id : null));
+      setLibsRefusal(null);
     } catch (e) {
-      fire(`Couldn't load libraries: ${String(e.message || e).slice(0, 80)}`);
+      setLibsRefusal(e && (e.status === 401 || e.status === 403) ? e : null);
+      // A refusal that opened the sign-in or pair prompt: the prompt says it.
+      if (!(e && e.loginPrompted)) fire(`Couldn't load libraries: ${String(e.message || e).slice(0, 80)}`);
     } finally { setLibLoading(false); }
   }, []);
 
   React.useEffect(() => { loadLibraries(); }, [loadLibraries]);
+  useRetryAfterCredential(libsRefusal, loadLibraries);
 
   // One folder, a page at a time (data.js usePagedList). device_id only
   // affects `writable` / `blocked_reason` in the answer: reading is never

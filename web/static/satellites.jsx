@@ -1812,15 +1812,22 @@ const RoomLogsBody = ({ room, online }) => {
   const [view, setView] = React.useState('retained');
   const preRef = React.useRef(null);
 
+  // A refused read (the logs are an admin read) runs again once the
+  // sign-in it prompted for lands (data.js useRetryAfterCredential), like
+  // the Files page's libraries (F-052).
+  const [refusal, setRefusal] = React.useState(null);
   const load = React.useCallback(async () => {
     setLoading(true); setError(null);
     try {
       setData(await apiGet(`/api/satellites/${room}/logs?max_bytes=${LOG_VIEW_BYTES}`));
+      setRefusal(null);
     } catch (e) {
       setError(e.message || String(e));
+      setRefusal(e && (e.status === 401 || e.status === 403) ? e : null);
       setData(null);
     } finally { setLoading(false); }
   }, [room]);
+  useRetryAfterCredential(refusal, load);
 
   // Fetch on mount only. The drawer renders this component solely while its
   // tab is selected, so mounting IS the visit — nothing is pulled off the
