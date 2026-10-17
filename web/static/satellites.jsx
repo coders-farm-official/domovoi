@@ -1907,7 +1907,8 @@ const RoomLogsBody = ({ room, online }) => {
       setRefusal(null);
     } catch (e) {
       setError(e.message || String(e));
-      setRefusal(e && (e.status === 401 || e.status === 403) ? e : null);
+      setRefusal(e && (e.status === 401 || e.status === 403
+        || (e.status === 429 && e.deviceTokenWait)) ? e : null);
       setData(null);
     } finally { setLoading(false); }
   }, [room]);

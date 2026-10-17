@@ -440,7 +440,8 @@ const ChatPage = () => {
       setMessagesRefusal(null);
     } catch (e) {
       setMessages([]);
-      setMessagesRefusal(e && (e.status === 401 || e.status === 403) ? e : null);
+      setMessagesRefusal(e && (e.status === 401 || e.status === 403
+        || (e.status === 429 && e.deviceTokenWait)) ? e : null);
     }
   };
   const reloadMessages = React.useCallback(() => {

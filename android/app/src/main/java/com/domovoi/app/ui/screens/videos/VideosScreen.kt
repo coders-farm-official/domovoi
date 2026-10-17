@@ -55,11 +55,17 @@ import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.DeviceDownloads
 import com.domovoi.app.net.DomovoiJson
+import com.domovoi.app.net.Pager
 import com.domovoi.app.net.Paging
 import com.domovoi.app.net.decode
 import com.domovoi.app.net.rememberApi
 import com.domovoi.app.net.toPage
 import com.domovoi.app.ui.components.EmptyState
+import com.domovoi.app.ui.components.FILES_CHANGED
+import com.domovoi.app.ui.components.LibraryRefresh
+import com.domovoi.app.ui.components.LibraryRefreshBox
+import com.domovoi.app.ui.components.LibraryRefreshButton
+import com.domovoi.app.ui.components.rememberLibraryRefresh
 import com.domovoi.app.ui.components.ErrorState
 import com.domovoi.app.ui.components.LoadMoreNearEnd
 import com.domovoi.app.ui.components.LoadingState
@@ -132,6 +138,27 @@ private suspend fun savePosition(app: AppContainer, v: VideoRow, positionSec: Lo
 // Screen
 // ---------------------------------------------------------------------------
 
+/**
+ * The grid's list and its refresh. `files.changed` (the state socket): a video
+ * uploaded from this phone's "Your device" page or anywhere else, a delete, a
+ * file a plugin wrote, re-reads the grid while it is on screen (the videos
+ * have no index; the server says when one of their folders moved). The
+ * header's "rescan videos" and the pull-to-refresh re-walk the folders.
+ */
+@Composable
+internal fun rememberVideosList(listPath: String): Pair<Pager<VideoRow>, LibraryRefresh> {
+    val pager = rememberPager<VideoRow>(
+        listPath, keyOf = ::videoKey, eventTypes = setOf(FILES_CHANGED),
+    ) { a, req ->
+        a.api.get(Paging.path(listPath, req)).toPage<VideoRow>("videos", loadedBefore = req.offset)
+    }
+    val refresh = rememberLibraryRefresh {
+        pager.reload(fresh = true)
+        pager.idle()
+    }
+    return pager to refresh
+}
+
 @Composable
 fun VideosScreen() {
     val app = LocalApp.current
@@ -151,9 +178,7 @@ fun VideosScreen() {
     // library's tiles together under its header.
     val listPath = "/api/videos/list?sort=library" +
         (if (needle.isNotEmpty()) "&q=" + Uri.encode(needle) else "")
-    val pager = rememberPager<VideoRow>(listPath, keyOf = ::videoKey) { a, req ->
-        a.api.get(Paging.path(listPath, req)).toPage<VideoRow>("videos", loadedBefore = req.offset)
-    }
+    val (pager, refresh) = rememberVideosList(listPath)
     val list by pager.state.collectAsState()
     val totals = remember(list.extra) {
         runCatching {
@@ -218,7 +243,9 @@ fun VideosScreen() {
     }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        PageHeader("Videos", "videos across your files libraries · resume where you left off")
+        PageHeader("Videos", "videos across your files libraries · resume where you left off") {
+            LibraryRefreshButton(refresh, "rescan videos")
+        }
         OutlinedTextField(
             value = filter, onValueChange = { filter = it },
             placeholder = { Text("filter…") }, singleLine = true,
@@ -226,7 +253,7 @@ fun VideosScreen() {
         )
         Spacer(Modifier.height(12.dp))
 
-        when {
+        LibraryRefreshBox(refresh, Modifier.weight(1f)) { when {
             list.items.isEmpty() && list.loading -> LoadingState()
             list.items.isEmpty() && list.error != null ->
                 ErrorState(list.error ?: "request failed", pager::retry)
@@ -240,7 +267,7 @@ fun VideosScreen() {
                 columns = GridCells.Adaptive(160.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxSize(),
             ) {
                 // Rendered straight from `entries`, so a video's index there is its grid index.
                 items(
@@ -294,7 +321,7 @@ fun VideosScreen() {
                     PagedFooter(list, "videos", onRetry = pager::retry, onLoadMore = pager::loadMore)
                 }
             }
-        }
+        } }
     }
 
     feed?.let { open ->

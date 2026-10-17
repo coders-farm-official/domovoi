@@ -65,6 +65,13 @@ fetch = async (url, opts) => {
   const bearer = auth.startsWith('Bearer ') && srv.sessions.has(auth.slice(7));
   const household = bearer || hd['X-Device-Token'] === srv.device;
   window.__fetches.push({ method, path, household });
+  // An old install's household token while the address is made to wait.
+  if (!bearer && hd['X-Device-Token'] && hd['X-Device-Token'] !== srv.device && srv.throttled) {
+    return __answer(429, { detail: 'too many wrong X-Device-Token values from this address — '
+      + 'retry in 60s. A device or browser tab at this address may still be sending an old '
+      + 'household token (after a reinstall or a token change): pair it again or close it, '
+      + 'or sign in as an admin' });
+  }
   if (method === 'POST' && path === '/api/auth/login') {
     srv.n += 1; const token = `session-${srv.n}`; srv.sessions.add(token);
     return __answer(200, { ok: true, token });
@@ -131,6 +138,29 @@ SCENARIOS = {
                    shows: h.text().some((t) => t.includes('Documents')) };
         """,
     },
+    # The browser still holds an old install's household token and the
+    # server makes this address wait (429); its words say "sign in as an
+    # admin". The sign-in has to load the libraries and the folder.
+    "throttled": {
+        "files": FILES, "component": "(window.__Auth = Auth, FilesPage)", "props": {},
+        "setup": SETUP + r"""
+__store.set('domovoi-device-token', 'old-install-token');
+window.__srv.throttled = true;
+""",
+        "refs": True,
+        "script": r"""
+          const w = h.global('window'); const A = w.__Auth;
+          const step = () => w.__flush(h);
+          const libs = () => w.__gets('/api/files/libraries');
+          h.render(); await step();
+          const refused = { reads: libs().length,
+                            empty: h.text().some((t) => t.includes('no libraries available')) };
+          await A.login('the-admin-password'); await step();
+          return { refused, reads: libs().length,
+                   browsed: w.__gets('/api/files/browse').filter((f) => f.household).length,
+                   shows: h.text().some((t) => t.includes('Documents')) };
+        """,
+    },
 }
 
 
@@ -165,3 +195,12 @@ def test_pasting_the_household_token_loads_it_too(outcomes) -> None:
     o = outcomes["paired_by_token"]
     assert o["modalOnly"] == 1
     assert o["reads"] == 2 and o["shows"] is True
+
+
+def test_a_sign_in_lifts_the_wait_an_old_household_token_caused(outcomes) -> None:
+    """Batch 15: a 429 (an old token, the address made to wait) was never
+    retried, so the sign-in its own words suggest left the page empty."""
+    o = outcomes["throttled"]
+    assert o["refused"] == {"reads": 1, "empty": True}
+    assert o["reads"] == 2 and o["shows"] is True
+    assert o["browsed"] >= 1

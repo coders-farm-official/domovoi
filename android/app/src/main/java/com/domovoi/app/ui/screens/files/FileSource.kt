@@ -18,6 +18,7 @@ import com.domovoi.app.net.importFile
 import com.domovoi.app.net.moveFiles
 import com.domovoi.app.net.openFileDownload
 import com.domovoi.app.net.uploadFiles
+import com.domovoi.app.ui.components.FILES_CHANGED
 import com.domovoi.app.ui.screens.documents.SheetCell
 import com.domovoi.app.ui.screens.documents.SheetUnsupported
 import com.domovoi.app.ui.screens.documents.docTextPath
@@ -144,7 +145,10 @@ internal fun sheetApiPath(rel: String): String = "/api/documents/sheet/" + Uri.e
 internal class ServerFileSource(private val app: AppContainer) : FileSource {
     override val onPhone = false
     override val subtitle = "browse every library — music, docs, plugins & removable drives"
-    override val browseEvents = setOf("library.indexer.changed")
+    // library.indexer: the music index moved; files.changed: any library's
+    // folder changed (an upload from another device, a delete, a file a
+    // plugin wrote; web/backend/api/listing_cache.py).
+    override val browseEvents = setOf("library.indexer.changed", FILES_CHANGED)
 
     override suspend fun libraries(): List<FileLibrary> =
         app.api.get("/api/files/libraries").decode<LibrariesResponse>().libraries

@@ -200,9 +200,19 @@ const VideosPage = () => {
   const needle = debFilter.trim();
   const listPath = `/api/videos/list?sort=${encodeURIComponent(sort)}`
     + (needle ? `&q=${encodeURIComponent(needle)}` : '');
+  // `files.changed` (the state socket): a video uploaded from a phone, a
+  // delete, a file a plugin wrote into a library re-reads the grid while it
+  // is on screen; the videos have no index, so the server says when one of
+  // its folders moved (listing_cache). "Rescan" re-walks the folders.
   const list = usePagedList(listPath, {
     pick: (x) => x && x.videos, key: (v) => `${v.library_id}:${v.rel}`,
+    eventTypes: ['files.changed'],
   });
+  const [rescanning, setRescanning] = React.useState(false);
+  const rescan = async () => {
+    setRescanning(true);
+    try { await list.reload({ fresh: true }); } finally { setRescanning(false); }
+  };
   const videos = list.items;
   const loading = list.loading;
   const libTotals = {};
@@ -268,6 +278,8 @@ const VideosPage = () => {
                                        background: 'var(--card)', color: 'var(--fg)' }}>
                         {VID_SORTS.map((o) => <option key={o.v} value={o.v}>{o.l}</option>)}
                       </select>
+                      <Button icon="refresh-cw" title="look for new and removed videos" onClick={rescan}
+                              disabled={rescanning}>{rescanning ? 'Rescanning…' : 'Rescan'}</Button>
                     </div>
                   }/>
 

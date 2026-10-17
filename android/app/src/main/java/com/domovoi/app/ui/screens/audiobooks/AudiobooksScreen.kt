@@ -49,6 +49,8 @@ import com.domovoi.app.net.DeviceDownloads
 import com.domovoi.app.net.Paging
 import com.domovoi.app.net.decode
 import com.domovoi.app.net.toPage
+import com.domovoi.app.ui.components.LibraryRefreshBox
+import com.domovoi.app.ui.components.rememberLibraryRefresh
 import com.domovoi.app.ui.components.LoadMoreNearEnd
 import com.domovoi.app.ui.components.PagedFooter
 import com.domovoi.app.ui.components.rememberPager
@@ -131,7 +133,6 @@ fun AudiobooksScreen() {
     LoadMoreNearEnd(gridState, pager)
 
     val context = LocalContext.current
-    var busy by remember { mutableStateOf(false) }
     var resume by remember { mutableStateOf<ResumeRequest?>(null) }
 
     fun saveToDevice(book: AudiobookRow) {
@@ -152,20 +153,20 @@ fun AudiobooksScreen() {
         toast(err ?: "saving \"$name\" to Downloads/Domovoi")
     }
 
-    fun reindex() {
-        if (busy) return
-        busy = true
-        scope.launch {
-            runCatching { app.api.post("/api/audiobooks/reindex").jsonObject }
-                .onSuccess { r ->
-                    val scanned = r["scanned"]?.jsonPrimitive?.intOrNull ?: 0
-                    toast("Indexed $scanned book(s)")
-                    pager.reload()
-                }
-                .onFailure { toast(failureText("Reindex", it)) }
-            busy = false
-        }
+    // The header's reindex, the empty state's and the list's pull-to-refresh
+    // are one action: the server's own rescan of the audiobooks folder.
+    val refresh = rememberLibraryRefresh {
+        runCatching { app.api.post("/api/audiobooks/reindex").jsonObject }
+            .onSuccess { r ->
+                val scanned = r["scanned"]?.jsonPrimitive?.intOrNull ?: 0
+                toast("Indexed $scanned book(s)")
+                pager.reload()
+                pager.idle()
+            }
+            .onFailure { toast(failureText("Reindex", it)) }
     }
+    val busy = refresh.busy
+    fun reindex() = refresh.refresh()
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         PageHeader(
@@ -185,7 +186,7 @@ fun AudiobooksScreen() {
         )
         Spacer(Modifier.height(12.dp))
 
-        when {
+        LibraryRefreshBox(refresh, Modifier.fillMaxWidth().weight(1f)) { when {
             books.items.isEmpty() && books.loading -> LoadingState()
             books.items.isEmpty() && books.error != null ->
                 ErrorState(books.error ?: "request failed", pager::retry)
@@ -202,7 +203,7 @@ fun AudiobooksScreen() {
                 columns = GridCells.Adaptive(260.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxSize(),
             ) {
                 items(books.items, key = { it.id }) { book ->
                     BookCard(
@@ -214,7 +215,7 @@ fun AudiobooksScreen() {
                     PagedFooter(books, "books", onRetry = pager::retry, onLoadMore = pager::loadMore)
                 }
             }
-        }
+        } }
     }
 
     resume?.let { req ->

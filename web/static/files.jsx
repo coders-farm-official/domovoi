@@ -813,7 +813,8 @@ const FilesPage = () => {
         : (libs.length ? libs[0].id : null));
       setLibsRefusal(null);
     } catch (e) {
-      setLibsRefusal(e && (e.status === 401 || e.status === 403) ? e : null);
+      setLibsRefusal(e && (e.status === 401 || e.status === 403
+        || (e.status === 429 && e.deviceTokenWait)) ? e : null);
       // A refusal that opened the sign-in or pair prompt: the prompt says it.
       if (!(e && e.loginPrompted)) fire(`Couldn't load libraries: ${String(e.message || e).slice(0, 80)}`);
     } finally { setLibLoading(false); }
@@ -839,7 +840,11 @@ const FilesPage = () => {
       + (needle ? `&q=${encodeURIComponent(needle)}` : '')
       + (sort !== 'name' ? `&sort=${encodeURIComponent(sort)}` : '')
     : null;
-  const list = usePagedList(browsePath, { pick: (x) => x && x.entries, key: (e) => e.rel });
+  // `files.changed` (the state socket) re-reads the folder on screen when a
+  // library changed elsewhere: a phone uploaded into it, another browser
+  // deleted, a plugin saved a picture (listing_cache tells).
+  const list = usePagedList(browsePath, { pick: (x) => x && x.entries, key: (e) => e.rel,
+                                          eventTypes: ['files.changed'] });
   const view = list.extra;
   const browseLoading = list.loading && list.items.length === 0;
 
