@@ -443,6 +443,12 @@ const trackTagChanges = (form, track) => {
   return changes;
 };
 
+/* A library track's source: the provider plugin's slug that stamped it, or
+ * null for none. No source used to read "manual" in the drawer, the same
+ * word as added-via's "manual" beside it, so every file the library found
+ * on disk read "manual manual" (the app's trackSource, MusicBits.kt). */
+const trackSource = (source) => (typeof source === 'string' && source.trim()) || null;
+
 /* The track drawer. The header's title / artist / album flip into an
  * edit form (F-024: a mistagged track could never be fixed from the
  * dashboard); `onEdit(track, changes)` PATCHes only the changed tags. */
@@ -521,7 +527,9 @@ const Drawer = ({ track, rooms, onClose, onDelete, onEdit, onPlayInRoom, onQueue
             ['duration',  <div className="mono">{fmtDur(track.duration_sec)}</div>],
             ['added',     <div className="mono">{relTime(track.added_at)}</div>],
             ['added via', <div><Pill tone={track.added_via === 'voice' ? 'live' : 'idle'}>{track.added_via || '—'}</Pill></div>],
-            ['source',    <div><Pill tone={track.source ? 'live' : 'idle'}>{track.source || 'manual'}</Pill></div>],
+            ['source',    trackSource(track.source)
+                            ? <div><Pill tone="live">{trackSource(track.source)}</Pill></div>
+                            : <div className="mono">—</div>],
             ['enriched',  <div className="mono">{track.enriched_at ? relTime(track.enriched_at) : '—'}</div>],
             ['source id', <div className="mono" style={{ color: 'var(--fg-muted)', wordBreak: 'break-all' }}>{track.source_id || '—'}</div>],
           ].map(([label, value]) => (

@@ -4,6 +4,16 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — Dashboard: the track drawer reads "manual" once
+
+Dashboard update (the web process; no migration).
+
+* **Music → a track's drawer no longer reads "manual manual".** A track
+  the library found on disk showed "manual" under "added via" and again
+  under "source". The source now shows a pill only when a plugin added the
+  track, and "—" otherwise, as in the Android app. The library rows show
+  no source pill, as before.
+
 ## 2026-10-17 — A phone in room mode can change its voice
 
 Core update with a **migration (V031: `satellites.voice`)**, and a new
