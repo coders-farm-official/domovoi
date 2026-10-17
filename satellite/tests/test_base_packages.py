@@ -2,8 +2,8 @@
 
 The office unit never had mpg123 (the card side of why is pinned in
 domovoi/tests/test_satellite_base_packages.py). Pinned here, with a fake
-dpkg/apt (the real ones ran in a Debian trixie container, notes in the
-functional-testing folder for this branch):
+dpkg/apt (the real ones were run in a Debian trixie container when this
+was built):
 
 * "present" means dpkg's ``install ok installed`` under any of a package's
   names — an unpacked, unconfigured mpg123 is missing;

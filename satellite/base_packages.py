@@ -23,7 +23,7 @@ setup stages hand it on:
    marked itself done because the satellite service had started, so it
    never ran again.
 
-Proven in a Debian trixie container (functional-testing notes): the cached
+Reproduced in a Debian trixie container (2026-10-17): the cached
 mpg123 alone, ``dpkg -i`` → "install ok unpacked", no /usr/bin/mpg123; then
 ``apt-get update`` with no network and ``apt-get -f install -y`` → "The
 following packages will be REMOVED: mpg123".
