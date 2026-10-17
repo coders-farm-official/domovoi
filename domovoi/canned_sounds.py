@@ -547,9 +547,15 @@ def regenerate_blocking() -> None:
 
 _SETUP_DIR = _SOUNDS_DIR / "setup"
 
+# Each digit is its own clip, so each is said as a sentence of its own: with
+# a full stop. A bare word is not a sentence to a Piper voice, and Kristin
+# said the bare ones as a held first sound ("sss" for seven, "nnn" for nine,
+# "ffff" for four; "three" heard as "B") — the owner's first card on
+# 2026-10-17. The changed text is also what re-renders a card's clips that
+# an earlier build wrote bare.
 _DIGIT_WORDS = (
-    "zero", "one", "two", "three", "four",
-    "five", "six", "seven", "eight", "nine",
+    "Zero.", "One.", "Two.", "Three.", "Four.",
+    "Five.", "Six.", "Seven.", "Eight.", "Nine.",
 )
 
 # (wav, text). Spoken at four moments only — ready, joining, joined, and the
@@ -574,7 +580,7 @@ SETUP_LINES: list[tuple[str, str]] = [
      "I'm on your network. One moment while I finish setting up."),
     ("no_microphone.wav",
      "I can't find my microphone. Check that it's plugged in."),
-    ("your_code_is.wav", "Your setup code is"),
+    ("your_code_is.wav", "Your setup code is."),
     *[(f"digit_{d}.wav", word) for d, word in enumerate(_DIGIT_WORDS)],
 ]
 
