@@ -628,6 +628,9 @@ async def test_the_setting_needs_an_admin_bearer(hop, monkeypatch) -> None:
     send = (lambda c, **kw: c.post(path, json=body, **kw)) if hop == "core" else (
         lambda c, **kw: c.patch(path, json=body, **kw))
     client = _core if hop == "core" else _web
+    # Whatever a stray domovoi/.env says (a throwaway run in this checkout
+    # writes one), the refusals below must leave it as it was.
+    monkeypatch.setattr(settings, "voice_history_keep", "90")
     install_fake_db(monkeypatch, admin=True, sessions={"admin-token"}, device_token="household")
     async with client() as c:
         assert (await send(c)).status_code == 401
