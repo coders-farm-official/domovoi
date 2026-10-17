@@ -17,6 +17,7 @@ Honest answers to the questions people actually ask. For a term you don't recogn
 - [What music sources exist out of the box?](#what-music-sources-exist-out-of-the-box)
 - [Can I save music, podcasts, or audiobooks to my phone or computer?](#can-i-save-music-podcasts-or-audiobooks-to-my-phone-or-computer)
 - [Can I send pictures in chat?](#can-i-send-pictures-in-chat)
+- [How long is what we say kept, and can we delete it?](#how-long-is-what-we-say-kept-and-can-we-delete-it)
 - [Where is my data?](#where-is-my-data)
 - [How do I back up and restore?](#how-do-i-back-up-and-restore)
 - [Linux or Windows for the server?](#linux-or-windows-for-the-server)
@@ -207,7 +208,7 @@ There is no integration. Domovoi doesn't control lights, locks or thermostats, a
 
 ## Does it support multiple people?
 
-Yes — voice profiles. Say "I'm Sarah" and confirm, and Domovoi enrolls your voice locally (a voice embedding, stored in your Postgres — no cloud). After that it recognizes who's speaking and personalizes: per-person memories ("remember that I…"), per-person news topics, and a "who am I?" you can ask any time. You can introduce someone else ("this is my friend Alex"), and "forget me" deletes a person's profile and voice data outright — when it is their own voice saying it (a voice that only claimed the name loses just what it added; an admin can always remove a person on the People page). Matching thresholds are tunable per household if siblings' voices collide.
+Yes — voice profiles. Say "I'm Sarah" and confirm, and Domovoi enrolls your voice locally (a voice embedding, stored in your Postgres — no cloud). After that it recognizes who's speaking and personalizes: per-person memories ("remember that I…"), per-person news topics, and a "who am I?" you can ask any time. You can introduce someone else ("this is my friend Alex"), and "forget me" deletes a person's profile, voice data and what they've said to Domovoi outright — when it is their own voice saying it (a voice that only claimed the name loses just what it added; an admin can always remove a person on the People page). Matching thresholds are tunable per household if siblings' voices collide.
 
 If a room doesn't recognize you yet, say "I'm Sarah" there too: Domovoi asks "I already know someone called Sarah. Is that you?", and a yes teaches it your voice in that room. A no adds you as a new Sarah; with two Sarahs Domovoi won't guess which one is speaking when the name is said, so give one of you a different name on the People page (an admin can rename anyone there), or use a full name ("I'm Sarah Lee") from the start.
 
@@ -342,13 +343,36 @@ The vision model isn't installed by default (a server set up by `scripts/linux/p
 
 The default vision model is the pick for a box without a GPU: a 1.9 GB download, about 3 GB of memory while it is loaded. With an NVIDIA GPU, `qwen2.5vl:7b` is the pick for the Vision row instead: quick on the GPU, but minutes per picture on a processor alone. A change in the Vision row reaches the dashboard's chat when the dashboard restarts.
 
+## How long is what we say kept, and can we delete it?
+
+**90 days by default, and yes.** Domovoi writes down what people say to it
+and what it answered, so the Conversations and Sessions tabs can show it
+(to paired devices only). On the dashboard, **People → Voice history** has:
+
+- **Keep voice history**: 30 days, 90 days (the default), 1 year, or
+  Forever. Anything older is deleted once a day, and right away when you
+  pick a shorter time. It's also in Settings → Configuration → Privacy.
+- **Delete all voice history**: deletes everything said until now, in every
+  room and on every phone, after a confirmation that lists what goes.
+
+Forgetting one person ("forget me" in their own voice, or **forget person**
+on their Profile tab) deletes what *they* said, along with their voice and
+memories. A turn where someone else said their name isn't theirs, so it
+stays: Domovoi goes by who was speaking, not by the words.
+
+What stays either way: memories already saved, voice samples, notes,
+timers, the music played, chat threads, and the backups the Linux updater
+made before each update, which keep their copy until newer updates replace
+them. The details, store by store:
+[SECURITY_PRIVACY.md → Voice history](SECURITY_PRIVACY.md#voice-history-whats-kept-for-how-long).
+
 ## Where is my data?
 
 All on machines you own:
 
 | What | Where |
 |---|---|
-| Conversations, intents, people/voice profiles, memories, playlists, timers, plugin data | Postgres — the `domovoi` database, in the `domovoi-pgdata` Docker volume, published on host port 6432 |
+| Conversations, intents (kept 90 days by default: [how long](#how-long-is-what-we-say-kept-and-can-we-delete-it)), people/voice profiles, memories, playlists, timers, plugin data | Postgres — the `domovoi` database, in the `domovoi-pgdata` Docker volume, published on host port 6432 |
 | Server config & runtime artifacts | `~/.domovoi/` on the server — setup code, rendered voice clips (`sounds/`), wake-word models and training clips, uploaded Piper voices, album-art cache, per-plugin logs (`logs/`), podcasts, audiobooks |
 | Wake-word training data (once training is on) | The Docker volume `domovoi_oww_cache`: the downloaded training data, and per wake word its synthetic clips and the features computed for it (copies of the recorded clips are removed after each run) |
 | Service settings | `domovoi/.env` next to the code |
