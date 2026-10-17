@@ -606,6 +606,8 @@ static partial class Tests
             Throws<ArgumentException>(() => Options.Parse(new[] { "--service", "Domovoi Host'; x" }), "a service name with quotes");
             Throws<ArgumentException>(() => Options.Parse(new[] { "--profile", "../x" }), "a profile path");
             Throws<ArgumentException>(() => Options.Parse(new[] { "--bogus" }), "unknown");
+            Eq("http://localhost:6369/#manual", TrayApp.ManualUrl(Options.Parse(new string[0]).WebUrl), "the user manual");
+            Eq("http://127.0.0.1:6390/#manual", TrayApp.ManualUrl(Options.Parse(new[] { "--web-url", "http://127.0.0.1:6390" }).WebUrl), "the manual follows --web-url");
         });
         Run("admin: restart and copy-logs commands", delegate
         {

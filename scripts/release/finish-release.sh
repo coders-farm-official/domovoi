@@ -9,6 +9,7 @@
 #   bash scripts/release/finish-release.sh --no-publish       # all but GitHub: what it would do
 #   bash scripts/release/finish-release.sh --tag v1.0.0       # default: v + the Android versionName
 #   bash scripts/release/finish-release.sh --setup FILE       # a DomovoiSetup.exe built by build.ps1 -Pin <tag> from the tag
+#   bash scripts/release/finish-release.sh --setup F --tray T # ...and its DomovoiTray.exe (default: bin/ beside the Setup)
 #   bash scripts/release/finish-release.sh --since v1.0.0-rc2 # the tag the notes count from
 #
 # The Setup builds on Windows only (windows/build.ps1 -Pin in a clean

@@ -121,6 +121,12 @@ household.
   style), and its licence is in `domovoi/phonemizer/data/cmudict/LICENSE`.
 - Resemblyzer's speaker-encoder weights, for voice profiles, come inside
   its Python package (Apache-2.0), which is installed with the server.
+- The Windows tray icon's QR code ("Show a code for your phone",
+  `windows/tray/Qr.cs`) is adapted from Project Nayuki's
+  [QR Code generator library](https://www.nayuki.io/page/qr-code-generator-library)
+  (MIT). Its copyright notice and licence text are in that file and inside
+  `DomovoiTray.exe`. Nothing else is bundled into the Windows programs:
+  they use only .NET Framework 4.8.1, which is part of Windows.
 
 ## What the licences mean
 

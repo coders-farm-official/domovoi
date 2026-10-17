@@ -85,12 +85,27 @@ WizardSmallImageFile=art\small-58.png,art\small-77.png,art\small-97.png,art\smal
 ; The helper first: preflight extracts it before anything is installed.
 Source: "..\build\bin\{#Helper}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\bin\DomovoiHost.exe"; DestDir: "{app}"; Flags: ignoreversion
+; The notification-area icon (windows\tray): every account's, started at
+; sign-in by the Run value below and right after a successful install.
+Source: "..\build\bin\DomovoiTray.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "art\domovoi.ico"; DestDir: "{app}"; Flags: ignoreversion
 #ifdef ProvisionBundled
 ; provision.sh shipped inside Setup (pins.iss), extracted to {tmp} before
 ; the downloads and handed to DomovoiHost by the helper's job step.
 Source: "{#ProvisionSource}"; Flags: dontcopy
 #endif
+
+[Registry]
+; The tray icon for every account on this PC, at sign-in (machine-wide; the
+; uninstaller removes the value). An account that turns "Start with
+; Windows" off in the icon's menu keeps that in its own HKCU, and this
+; start then does nothing for it.
+Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "DomovoiTray"; ValueData: """{app}\DomovoiTray.exe"" --autostart"; Flags: uninsdeletevalue
+
+[Icons]
+; Start menu: "Domovoi" opens the dashboard (and brings the icon back if it
+; was hidden). Removed by the uninstaller.
+Name: "{autoprograms}\Domovoi"; Filename: "{app}\DomovoiTray.exe"; Parameters: "--open"; Comment: "Open Domovoi's dashboard"
 
 [UninstallDelete]
 ; The copy Setup runs after a restart (CreateRunOnceEntry), if one was made.
@@ -165,6 +180,29 @@ end;
 function AppHelper: String;
 begin
   Result := ExpandConstant('{app}\{#Helper}');
+end;
+
+{ Ends every running DomovoiTray.exe, every account's (Setup and the
+  uninstaller run as an administrator), so its file can be replaced or
+  deleted. Each comes back at its account's next sign-in. }
+procedure StopTrays;
+var
+  Code: Integer;
+begin
+  if Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM DomovoiTray.exe', '', SW_HIDE, ewWaitUntilTerminated, Code) then
+    Log('taskkill DomovoiTray.exe: exit ' + IntToStr(Code))
+  else
+    Log('taskkill DomovoiTray.exe did not run');
+end;
+
+{ The tray icon for the person running Setup, right away (not elevated:
+  as the account that started Setup). Everyone else's starts at sign-in. }
+procedure StartTray;
+var
+  Code: Integer;
+begin
+  if not ExecAsOriginalUser(ExpandConstant('{app}\DomovoiTray.exe'), '', '', SW_SHOWNORMAL, ewNoWait, Code) then
+    Log('Could not start DomovoiTray.exe: ' + SysErrorMessage(Code));
 end;
 
 { Runs the helper; Lines gets its stdout (key=value lines). Never logs the
@@ -456,9 +494,11 @@ begin
   N := N + 1;
   S := S + IntToStr(N) + '. C:\Program Files\Domovoi (this program) and C:\ProgramData\Domovoi (Domovoi''s Linux system, logs and settings; only administrators and domovoi-svc can open it). Setup won''t use a C:\ProgramData\Domovoi it didn''t make.' + #13#10#13#10;
   N := N + 1;
+  S := S + IntToStr(N) + '. Domovoi''s icon in the notification area (DomovoiTray.exe), for every account on this PC: it starts when anyone signs in (a DomovoiTray value under HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run), and the Start menu gets a Domovoi entry. It shows whether Domovoi is running, opens the dashboard and prepares satellite cards; it never runs as an administrator, and each account can turn its start off.' + #13#10#13#10;
+  N := N + 1;
   S := S + IntToStr(N) + '. Setup''s install record in the registry, HKLM\SOFTWARE\Domovoi: what Setup changed, so the uninstaller can undo it.' + #13#10#13#10;
   S := S + 'Downloads: about 10.5-13.5 GB (the AI models are most of it; the size depends on the models this PC''s memory gets). Ubuntu (418 MB) now; then, inside the distro, Domovoi''s code at commit {#Copy(DomovoiCommit, 1, 7)} (later updates follow the {#DomovoiChannel} channel{#ChannelWords}; you choose when, in Settings > Configuration > Version), Docker Engine, Python packages and the AI models (one of them reads pictures in chat), each checked against a pinned hash.' + #13#10#13#10;
-  S := S + 'Not changed: power and sleep settings (this preview doesn''t ask), Windows Update, Smart App Control, your user accounts and files.' + #13#10#13#10;
+  S := S + 'Not changed: power and sleep settings (the icon''s "Keep this PC awake" only holds Windows awake while someone is signed in), Windows Update, Smart App Control, your user accounts and files.' + #13#10#13#10;
   S := S + 'This preview is not code-signed: Windows SmartScreen may have warned before Setup started, and Windows may ask again about its programs.' + #13#10#13#10;
   S := S + 'Uninstalling never deletes files in your media folders: a media folder is removed only if it is empty.' + #13#10#13#10;
   S := S + 'You can undo all of this later from Settings > Apps > Installed apps > Domovoi.';
@@ -1169,9 +1209,11 @@ var
   Code: Integer;
 begin
   Result := '';
-  { A repair or a second run: stop the host so its exe can be replaced. }
+  { A repair or a second run: stop the host so its exe can be replaced,
+    and the tray icons, theirs. }
   if FileExists(AppHelper) then
     RunHelper(AppHelper, 'host-stop', Lines, Code);
+  StopTrays;
   if VmpState <> 'enabled' then
   begin
     Log('Enabling VirtualMachinePlatform');
@@ -1220,6 +1262,8 @@ begin
   if CurStep = ssPostInstall then
   begin
     InstallOk := MachineSetup;
+    if InstallOk then
+      StartTray;
     if not InstallOk then
     begin
       UndoOnExit := MsgBox(FailureText + #13#10#13#10 + 'Remove what Setup has changed so far? (Recommended unless you want to run Setup again later to carry on. Either way, the last page has a Copy logs button.)',
@@ -1364,6 +1408,17 @@ var
   HelperExe, LogFile, Later, LeftText, StillText: String;
   Kept: TArrayOfString;
 begin
+  if CurUninstallStep = usPostUninstall then
+  begin
+    { The tray's own settings, for the account running the uninstaller (the
+      Run value Setup made goes with the [Registry] entry; a copy of the
+      tray run on its own registers under HKCU instead). }
+    if RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'DomovoiTray', Later) and (Pos('DomovoiTray.exe', Later) > 0) then
+      RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'DomovoiTray');
+    RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Domovoi\Tray');
+    RegDeleteKeyIfEmpty(HKCU, 'Software\Domovoi');
+    Exit;
+  end;
   if CurUninstallStep <> usUninstall then
     Exit;
   HelperExe := ExpandConstant('{app}\{#Helper}');
@@ -1372,6 +1427,7 @@ begin
     SuppressibleMsgBox(HelperExe + ' is missing, so the uninstaller can''t undo what Setup changed. Run Domovoi Setup again (it repairs the program), then uninstall.', mbError, MB_OK, IDOK);
     Abort;
   end;
+  StopTrays;
   UninstallProgressForm.StatusLabel.Caption := 'Looking at what Setup changed...';
   SetArrayLength(UninstLines, 0);
   try

@@ -562,7 +562,9 @@ an account of its own that signs in automatically.
 there (it looks for the server's Windows service, its install record, its
 data folder, a server's own files in your account, and a server answering on
 this PC). Using the server PC as a room will come with the server's own
-tray icon instead.
+tray icon instead; today that icon shows Domovoi's state, opens the
+dashboard and prepares Raspberry Pi satellite cards
+([WINDOWS_HOST.md, The tray icon](WINDOWS_HOST.md#the-tray-icon)).
 
 **It brings Microsoft's Visual C++ runtime with it.** The wake word's
 onnxruntime needs `msvcp140.dll` and `msvcp140_1.dll` (14.44 or newer) and

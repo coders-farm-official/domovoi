@@ -113,6 +113,9 @@ namespace Domovoi.Windows.Tray
             open.Click += delegate { OpenUrl(opt.WebUrl + "/"); };
             items.Add(open);
             AddressItems(items, lan);
+            var manual = new ToolStripMenuItem("User manual");
+            manual.Click += delegate { OpenUrl(ManualUrl(opt.WebUrl)); };
+            items.Add(manual);
             items.Add(new ToolStripSeparator());
 
             var card = new ToolStripMenuItem("Prepare a satellite card...");
@@ -187,6 +190,10 @@ namespace Domovoi.Windows.Tray
         }
 
         // -- actions ----------------------------------------------------
+
+        // The dashboard's user manual (its #manual page), on the same
+        // dashboard "Open Domovoi" opens.
+        public static string ManualUrl(string webUrl) { return webUrl.TrimEnd('/') + "/#manual"; }
 
         public static void OpenUrl(string url)
         {

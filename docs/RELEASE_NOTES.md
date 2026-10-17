@@ -4,6 +4,50 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — Windows: Domovoi's tray icon, and satellite cards from Windows
+
+A new program on Windows installs (`DomovoiTray.exe`), the Windows Setup,
+and dashboard wording; no migration, nothing changes on Linux servers.
+
+* **Domovoi's icon beside the clock.** Setup now installs `DomovoiTray.exe`
+  and starts it at every account's sign-in (one `DomovoiTray` value under
+  `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`, and **Domovoi** in
+  the Start menu; the uninstaller ends every running icon and removes
+  both). Its dot and tooltip say whether Domovoi is running, starting or
+  updating, stopped, or which part isn't answering, from the `DomovoiHost`
+  service and the open `/api/health` and `/v1/alive` (nothing new is
+  opened on the server), with a notification when Domovoi stops or comes
+  back. Its menu: Open Domovoi, Open on this network (this PC's home
+  network address), Copy address, Show a code for your phone (a QR code),
+  User manual, Prepare a satellite card, Keep this PC awake (on by
+  default: no sleep while someone is signed in; the power plan is never
+  changed), Start with Windows, Save logs for support and Restart Domovoi
+  (each with an administrator's permission), Hide this icon. It never runs
+  as an administrator. [WINDOWS_HOST.md, The tray icon](WINDOWS_HOST.md#the-tray-icon).
+* **Satellite cards on Windows without unzipping by hand.** WSL can't see
+  SD cards, so the dashboard's zip was the only route, merged into
+  `config.txt` and `cmdline.txt` by hand (a replaced `cmdline.txt`
+  doesn't boot) with `domovoi/ap.json` typed in Notepad. **Prepare a
+  satellite card** in the icon's menu now takes the zip from Downloads,
+  lists only removable drives that look like a freshly flashed Pi card,
+  asks for the setup network password, writes the card byte for byte as
+  the server would (tested against the server's own edits), reads it back
+  and ejects it.
+* **The dashboard leads with the card helper on a Windows install**: the
+  prepare-satellite-media card, its download (**download for the card
+  helper**) and the setup details window say to use the tray icon; the
+  zip's `README.txt` starts with it and keeps the steps by hand, worded for
+  a household. Linux servers keep their wording. The microphone picker
+  shows boards by name (ReSpeaker 2-Mics HAT v2, ReSpeaker XVF3800 (USB,
+  4 mics)...) and says when a HAT needs its one-time overlay step on the
+  Pi (PROVISIONING §4); the values sent are unchanged.
+* **An install from before the icon** (1.0.0-rc1, rc2): download
+  `DomovoiTray.exe` from the release (it is in `SHA256SUMS`; the release
+  script now attaches it) and run it once from any folder: it starts for
+  that account at each sign-in from then on. Uninstalling and installing
+  again also works but deletes Domovoi's data (no keep-data uninstall
+  yet).
+
 ## 2026-10-16 — Phone photos in chat: HEIC converted, refusals in words
 
 Dashboard update (the web process; no migration) and a new Android APK.
