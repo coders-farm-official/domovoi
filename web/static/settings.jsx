@@ -1333,7 +1333,105 @@ const configLoadMessage = (error) => {
   return `couldn't load configuration (${error.status || 'no response'}): ${apiErrorText(error)}`;
 };
 
-const ConfigPanel = ({ setupAsked = false }) => {
+/* The AcoustID key (song recognition), a write-only setting: ConfigField
+ * draws the row (set / not set, paste a new key, clear); this adds the
+ * help and "test the key". The test asks AcoustID once — about the key
+ * typed in the box, else the saved one — and only when the household's
+ * internet answer lets song recognition go out: under No there is no
+ * button, just a line pointing at Settings → Internet (no dead controls).
+ * #settings/configuration/acoustid-key (ACOUSTID_KEY_ROUTE) lands here:
+ * `marked` lights the block up for a moment.
+ *
+ *   POST /api/config/acoustid-test · { key? } → { result, detail, fingerprints }
+ */
+const ACOUSTID_TEST_TEXT = {
+  works: 'The key works.',
+  refused: 'AcoustID refused this key. Is it the application key?',
+};
+const CONFIG_FIELD_MARKS = { 'acoustid-key': 'acoustid_api_key' };
+// Restart-required names with no field of their own in this panel.
+const CONFIG_RESTART_WORDS = { library_enricher_enabled: 'song recognition' };
+
+const AcoustidKeyField = ({ f, value, onChange, internetOff, marked }) => {
+  const [testing, setTesting] = React.useState(false);
+  const [test, setTest] = React.useState(null);   // { tone, text, extra? }
+  const typed = typeof value === 'string' ? value.trim() : '';
+  const clearing = value === '';
+  // A result is about the key it was asked about: a new one forgets it.
+  React.useEffect(() => { setTest(null); }, [typed, f.is_set]);
+  const canTest = !internetOff && !clearing && (!!typed || !!f.is_set);
+  const runTest = async () => {
+    if (testing) return;
+    setTesting(true); setTest(null);
+    try {
+      const r = await apiPost('/api/config/acoustid-test', typed ? { key: typed } : {});
+      const result = (r && r.result) || '';
+      if (result === 'works') {
+        setTest({ tone: 'ok', text: ACOUSTID_TEST_TEXT.works,
+                  extra: r.fingerprints === false ? 'chromaprint' : null });
+      } else if (result === 'refused') {
+        setTest({ tone: 'err', text: ACOUSTID_TEST_TEXT.refused });
+      } else {
+        setTest({ tone: 'warn', text: `Couldn’t check the key${r && r.detail ? `: ${r.detail}` : ''}.` });
+      }
+    } catch (e) {
+      const msg = isInternetOffError(e) ? INTERNET_OFF_MESSAGE : mutationErrorText(e, 'Test', { kept: false });
+      if (msg) setTest({ tone: 'err', text: msg });
+    } finally {
+      setTesting(false);
+    }
+  };
+  const toneColor = { ok: 'var(--ok)', err: 'var(--err)', warn: 'var(--warn)' };
+  return (
+    <div className="config-acoustid"
+         style={{ borderRadius: 'var(--r-sm)', transition: 'background 240ms cubic-bezier(0.2, 0, 0, 1)',
+                  background: marked ? 'var(--brand-soft)' : 'transparent' }}>
+      <ConfigField f={f} value={value} onChange={onChange}/>
+      <div className="config-acoustid-help" style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5, padding: '0 0 8px' }}>
+        A free <strong>application</strong> key from{' '}
+        <a href="https://acoustid.org/new-application" target="_blank" rel="noopener noreferrer">
+          acoustid.org/new-application
+        </a>
+        , not the user API key on your AcoustID profile (AcoustID refuses that one for lookups).
+        Applies at once; once saved it is never shown again.
+      </div>
+      {internetOff ? (
+        <div className="config-acoustid-off" style={{ fontSize: 12, color: 'var(--fg-muted)', padding: '0 0 10px' }}>
+          Song recognition is off: this box doesn’t use the internet. Change that in{' '}
+          <a href="#settings/internet">Settings → Internet</a>.
+        </div>
+      ) : canTest && (
+        <div className="config-acoustid-test"
+             style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '0 0 10px', fontSize: 12 }}>
+          <Button onClick={runTest} disabled={testing}
+                  title={typed ? 'asks AcoustID about the key you typed (not saved yet)' : 'asks AcoustID about the saved key'}>
+            {testing ? 'testing…' : 'test the key'}
+          </Button>
+          {test && (
+            <span className="config-acoustid-result" data-tone={test.tone} style={{ color: toneColor[test.tone] }}>
+              {test.text}
+              {test.extra === 'chromaprint' && (
+                <span style={{ color: 'var(--warn)' }}>
+                  {' '}But this server can’t fingerprint songs yet: install{' '}
+                  <a href="https://acoustid.org/chromaprint" target="_blank" rel="noopener noreferrer">
+                    Chromaprint’s fpcalc
+                  </a>.
+                </span>
+              )}
+            </span>
+          )}
+        </div>
+      )}
+      {f.set_in_environment && (
+        <div style={{ fontSize: 12, color: 'var(--warn)', padding: '0 0 10px' }}>
+          ACOUSTID_API_KEY is also set in the server’s environment, which wins at the next restart.
+        </div>
+      )}
+    </div>
+  );
+};
+
+const ConfigPanel = ({ setupAsked = false, mark = null }) => {
   // What comes back depends on WHO asks (CORE-6): the advanced section
   // and the unmasked secrets only for a live admin Bearer, the common
   // section with secrets masked for the cookie a reload keeps. So this
@@ -1374,9 +1472,47 @@ const ConfigPanel = ({ setupAsked = false }) => {
   // The reload window's length in words, for the note below ("an hour").
   const reloadWords = adminReloadState().windowWords;
 
-  const setEdit = (name, v) => setEdits(prev => ({ ...prev, [name]: v }));
-  const valueOf = (f) => (f.name in edits ? edits[f.name] : f.value);
+  // `undefined` drops the edit (a write-only field's box emptied again).
+  const setEdit = (name, v) => setEdits(prev => {
+    const next = { ...prev };
+    if (v === undefined) delete next[name]; else next[name] = v;
+    return next;
+  });
+  // A write-only field has no value to show: null until something is typed.
+  const valueOf = (f) => (f.name in edits ? edits[f.name] : (f.write_only ? null : f.value));
   const dirtyCount = Object.keys(edits).length;
+  // Restart-required names in words: a field's own label, else these.
+  const restartWords = (name) => {
+    const row = fields.find((x) => x.name === name);
+    return (row && row.label) || CONFIG_RESTART_WORDS[name] || name;
+  };
+
+  // #settings/configuration/<marker>: scroll to that field and put the
+  // cursor in it, once per arrival, as soon as it is on the page.
+  const markField = (mark && CONFIG_FIELD_MARKS[mark]) || null;
+  const [marked, setMarked] = React.useState(null);
+  const markDone = React.useRef(null);
+  React.useEffect(() => {
+    if (!markField) { markDone.current = null; return; }
+    if (markDone.current === markField || !fields.some((x) => x.name === markField)) return;
+    markDone.current = markField;
+    setMarked(markField);
+    const raf = window.requestAnimationFrame || ((fn) => setTimeout(fn, 0));
+    raf(() => {
+      try {
+        const row = document.querySelector(`[data-config-field="${markField}"]`);
+        if (!row) return;
+        row.scrollIntoView({ block: 'center' });
+        const input = row.querySelector('input');
+        if (input) input.focus({ preventScroll: true });
+      } catch { /* the field is still there; only the scroll is missing */ }
+    });
+  }, [markField, fields]);
+  React.useEffect(() => {
+    if (!marked) return undefined;
+    const t = setTimeout(() => setMarked(null), 2400);
+    return () => clearTimeout(t);
+  }, [marked]);
   const common = fields.filter(f => f.section !== 'advanced');
   const advanced = fields.filter(f => f.section === 'advanced');
   // CORE-6: the core sends the advanced block only to a caller holding an
@@ -1418,8 +1554,11 @@ const ConfigPanel = ({ setupAsked = false }) => {
       <div key={group} style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em',
                       color: 'var(--fg-muted)', fontWeight: 600, marginBottom: 2 }}>{group}</div>
-        {grouped[group].map(f => <ConfigField key={f.name} f={f} value={valueOf(f)} internetOff={internetOff}
-                                              onChange={v => setEdit(f.name, v)}/>)}
+        {grouped[group].map(f => (f.name === 'acoustid_api_key'
+          ? <AcoustidKeyField key={f.name} f={f} value={valueOf(f)} internetOff={internetOff}
+                              marked={marked === f.name} onChange={v => setEdit(f.name, v)}/>
+          : <ConfigField key={f.name} f={f} value={valueOf(f)} internetOff={internetOff}
+                         onChange={v => setEdit(f.name, v)}/>))}
       </div>
     ));
   };
@@ -1521,7 +1660,7 @@ const ConfigPanel = ({ setupAsked = false }) => {
             </div>}
           {result && result.restart_required && result.restart_required.length > 0 &&
             <div style={{ fontSize: 12, color: 'var(--warn)', marginBottom: 8 }}>
-              saved — restart the Domovoi server to apply: {result.restart_required.join(', ')}
+              saved — restart the Domovoi server to apply: {result.restart_required.map(restartWords).join(', ')}
             </div>}
           {result && !result.error && rejectedCount === 0 && (!result.restart_required || !result.restart_required.length) &&
            result.applied && result.applied.length > 0 &&
@@ -1583,6 +1722,11 @@ const SEARCH_HELPER_TEXT = {
   left: 'left as it is',
 };
 
+// A feature whose unmet condition someone can fix in the dashboard: its
+// "needs …" opens the place to do it (the AcoustID key field). Read at
+// render time: ACOUSTID_KEY_ROUTE is components.jsx's.
+const internetConditionRoute = (name) => (name === 'library_enricher_enabled' ? ACOUSTID_KEY_ROUTE : null);
+
 const InternetFeatureRow = ({ f, following, onFollow }) => {
   const later = f.next_boot_value !== f.value;
   const values = f.answer_values || {};
@@ -1594,7 +1738,9 @@ const InternetFeatureRow = ({ f, following, onFollow }) => {
         <div style={{ fontSize: 13, fontWeight: 500 }}>{f.label}</div>
         <div style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
           {['always', 'sometimes', 'never'].map((a) => `${INTERNET_ANSWER_LABEL[a]}: ${internetOnOff(values[a])}`).join(' · ')}
-          {f.condition && !f.condition_met && <> · {f.condition}</>}
+          {f.condition && !f.condition_met && <> · {internetConditionRoute(f.name)
+            ? <a href={`#${internetConditionRoute(f.name)}`} className="internet-condition-link">{f.condition}</a>
+            : f.condition}</>}
         </div>
       </div>
       <span className="mono" style={{ fontSize: 12 }}>{internetOnOff(f.value)}</span>
@@ -4057,7 +4203,7 @@ const SettingsPage = () => {
       {tab === 'satellites' && <SatellitesPanel/>}
       {tab === 'models' && <ModelsPanel/>}
       {tab === 'internet' && <InternetPanel/>}
-      {tab === 'config' && <ConfigPanel setupAsked={marks[0] === 'setup'}/>}
+      {tab === 'config' && <ConfigPanel setupAsked={marks[0] === 'setup'} mark={marks[0] || null}/>}
     </div>
   );
 };

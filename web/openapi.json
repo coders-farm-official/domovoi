@@ -6628,6 +6628,46 @@
         }
       }
     },
+    "/api/config/acoustid-test": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Acoustid Key Test",
+        "description": "Settings \u2192 Configuration's \"test the key\": one AcoustID lookup with\nthe typed key, else the saved one. Proxy of the core's\n``POST /v1/admin/config/acoustid-test`` \u2192\n``{result: works|refused|unreachable|unavailable, detail,\nfingerprints}``; 409 when the internet answer is No (nothing sent),\n422 with no key to test. The key is never echoed or logged.",
+        "operationId": "acoustid_key_test_api_config_acoustid_test_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcoustidTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/config/internet": {
       "get": {
         "tags": [
@@ -13486,6 +13526,23 @@
   },
   "components": {
     "schemas": {
+      "AcoustidTestRequest": {
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          }
+        },
+        "type": "object",
+        "title": "AcoustidTestRequest"
+      },
       "AddByQueryRequest": {
         "properties": {
           "room_id": {

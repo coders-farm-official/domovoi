@@ -367,16 +367,20 @@ const announceInternetChange = (access) => {
  * words in the address) or its `id` (the name in the code); the id is
  * rewritten to the slug in place.
  *
- * A segment after the tab is a marker for that tab. The one there is:
+ * A segment after the tab is a marker for that tab. The ones there are:
  * #settings/configuration/setup (SETUP_ROUTE), which the Windows installer's
  * "Open Domovoi" opens. Configuration always shows the first-run admin
  * setup on an unclaimed box; the marker only adds a short "already set up"
- * note on a claimed one. Addresses are hash segments only: no query
- * strings, no key=value pairs.
+ * note on a claimed one. And #settings/configuration/acoustid-key
+ * (ACOUSTID_KEY_ROUTE): Configuration scrolls to the AcoustID key field
+ * and puts the cursor in it — where "song recognition needs a free
+ * AcoustID key" (Music, Settings → Internet) sends people. Addresses are
+ * hash segments only: no query strings, no key=value pairs.
  *
  * The shell (index.html) shows the page named by the first segment; the
  * page's tabs follow the rest through useRouteTab. */
 const SETUP_ROUTE = 'settings/configuration/setup';
+const ACOUSTID_KEY_ROUTE = 'settings/configuration/acoustid-key';
 
 // '#Settings/configuration/' → ['settings', 'configuration']
 const routeParts = (route) => {
@@ -1881,6 +1885,27 @@ const ConfigField = ({ f, value, onChange, internetOff = false }) => {
                    step={f.type === 'int' ? 1 : 'any'} disabled={greyed} title={greyTitle}
                    onChange={e => onChange(e.target.value === '' ? '' : Number(e.target.value))}
                    style={{ ..._cfgInput, width: 110, textAlign: 'right' }}/>;
+  else if (f.write_only) {
+    // A write-only secret (the AcoustID key): the server never sends it
+    // back, to anyone, so there is nothing to show but whether one is set
+    // (the pill below). `value` is null when untouched, the new key while
+    // one is typed, '' for "clear" (ConfigPanel). Emptying the box makes it
+    // untouched again, never a clear: only the button clears.
+    input = value === ''
+      ? <span className="config-secret-clearing"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--warn)' }}>
+          removed when you save
+          <Button variant="ghost" onClick={() => onChange(undefined)}>keep it</Button>
+        </span>
+      : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <input type="password" value={value || ''} autoComplete="new-password" spellCheck={false}
+                 aria-label={f.label} className="config-secret-input"
+                 placeholder={f.is_set ? 'paste a new key to replace it' : 'paste the key'}
+                 onChange={e => onChange(e.target.value === '' ? undefined : e.target.value)}
+                 style={{ ..._cfgInput, minWidth: 220 }}/>
+          {f.is_set && <Button variant="ghost" onClick={() => onChange('')}>clear</Button>}
+        </span>;
+  }
   else if (f.masked)
     // A secret the server would not read back to this caller (CORE-6).
     // Read-only, so nobody saves the mask over the real value.
@@ -1892,21 +1917,28 @@ const ConfigField = ({ f, value, onChange, internetOff = false }) => {
                    disabled={greyed} title={greyTitle}
                    style={{ ..._cfgInput, minWidth: 240 }}/>;
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderTop: '1px solid var(--border-soft)' }}>
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+    // A write-only row wraps on a narrow screen (its box below the label)
+    // rather than squeezing the label under the box.
+    <div data-config-field={f.name}
+         style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderTop: '1px solid var(--border-soft)',
+                  flexWrap: f.write_only ? 'wrap' : undefined }}>
+      <div style={{ flex: f.write_only ? '1 1 auto' : 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ fontSize: 13, fontWeight: 500 }}>{f.label}</span>
         <span title={f.help} style={{ color: 'var(--fg-subtle)', cursor: 'help', display: 'inline-flex' }}>
           <Icon name="info" size={13}/>
         </span>
         {f.tier === 'restart' && <Pill tone="warn">restart</Pill>}
-        {f.masked && <Pill>hidden</Pill>}
+        {f.write_only
+          ? <Pill tone={f.is_set ? 'ok' : 'idle'}>{f.is_set ? 'set' : 'not set'}</Pill>
+          : f.masked && <Pill>hidden</Pill>}
         {f.follows_internet && (
           <span className="config-follows-internet" title="its default follows the answer in Settings → Internet; saving a value here pins it"
                 style={{ fontSize: 11, color: 'var(--fg-muted)' }}>follows the internet answer</span>
         )}
         {greyed && <NeedsInternetNote compact/>}
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+                    marginLeft: f.write_only ? 'auto' : undefined }}>
         {input}
         {f.unit && <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', width: 34 }}>{f.unit}</span>}
       </div>

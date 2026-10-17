@@ -2138,6 +2138,19 @@ const MusicPage = () => {
         no_provider: 'song recognition needs a free AcoustID key or the Shazam add-on',
         running: 'already identifying songs',
       };
+      // The missing key has a home in the dashboard: say so with a way there
+      // (Settings → Configuration, the AcoustID key field).
+      if (r && r.queued === false && r.reason === 'no_provider') {
+        fire(notQueued.no_provider, {
+          stay: true, key: 'enrich-no-provider',
+          actions: [{
+            label: 'add the AcoustID key',
+            title: 'Settings → Configuration → AcoustID key',
+            onClick: () => { try { window.location.hash = ACOUSTID_KEY_ROUTE; } catch { /* no location */ } },
+          }],
+        });
+        return;
+      }
       fire(r && r.queued === false
         ? (notQueued[r.reason] || `enrich didn't start (${r.reason || 'unknown reason'})`)
         : 'enrich started');

@@ -231,6 +231,10 @@ def test_allowlist_entries_are_still_open() -> None:
 
 SECURITY_TIER_ROUTES = [
     ("core", "POST", "/v1/admin/config"),
+    # "Test the key" (2026-10-17): sends the household's AcoustID key, or
+    # one an admin pasted, out of the house — the config write's tier.
+    ("core", "POST", "/v1/admin/config/acoustid-test"),
+    ("web", "POST", "/api/config/acoustid-test"),
     ("core", "POST", "/v1/admin/version/restart"),
     # The update channel (stable / main): what every later pull, and so
     # the update unit's root run, follows.

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -147,6 +147,46 @@ async def patch_editable_config(body: ConfigUpdateRequest, request: Request):
         headers=auth_forward_headers(request),
     )
     return bridge_response(status, answer)
+
+
+# The longest typed key the test forwards. Checked in the handler, not as a
+# pydantic max_length: that 422 quotes the value back (its "input").
+ACOUSTID_TEST_KEY_MAX = 256
+
+
+class AcoustidTestRequest(BaseModel):
+    # A key typed but not saved yet; absent or empty tests the saved one.
+    key: str | None = None
+
+
+@router.post(
+    "/config/acoustid-test",
+    # Security tier at both hops, like the config write beside it: it
+    # sends the household's AcoustID key out of the house.
+    dependencies=[Depends(require_admin_security)],
+)
+async def acoustid_key_test(body: AcoustidTestRequest, request: Request):
+    """Settings → Configuration's "test the key": one AcoustID lookup with
+    the typed key, else the saved one. Proxy of the core's
+    ``POST /v1/admin/config/acoustid-test`` →
+    ``{result: works|refused|unreachable|unavailable, detail,
+    fingerprints}``; 409 when the internet answer is No (nothing sent),
+    422 with no key to test. The key is never echoed or logged."""
+    if body.key and len(body.key) > ACOUSTID_TEST_KEY_MAX:
+        raise HTTPException(
+            status_code=422,
+            detail=f"that is longer than an AcoustID key ({ACOUSTID_TEST_KEY_MAX} characters at most)",
+        )
+    payload: dict = {}
+    if body.key:
+        payload["key"] = body.key
+    return bridge_response(
+        *await post_admin(
+            "/v1/admin/config/acoustid-test",
+            payload,
+            headers=auth_forward_headers(request),
+        )
+    )
 
 
 @router.get(

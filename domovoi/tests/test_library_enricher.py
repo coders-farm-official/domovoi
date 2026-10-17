@@ -103,6 +103,15 @@ async def test_acoustid_handles_missing_fpcalc_binary(monkeypatch, tmp_path) -> 
     assert result.unusable is True
 
 
+def _answer(score, recording_id, title, artist) -> dict:
+    """AcoustID's lookup answer for one recording, as pyacoustid's
+    ``match(..., parse=False)`` hands it back (the enricher parses it)."""
+    return {"status": "ok", "results": [{
+        "id": "acoustid-1", "score": score,
+        "recordings": [{"id": recording_id, "title": title, "artists": [{"name": artist}]}],
+    }]}
+
+
 @pytest.mark.asyncio
 async def test_acoustid_drops_low_score_match(monkeypatch, tmp_path) -> None:
     """Below the configured min-score, AcoustID matches are discarded
@@ -118,7 +127,7 @@ async def test_acoustid_drops_low_score_match(monkeypatch, tmp_path) -> None:
     f = tmp_path / "track.mp3"
     f.write_bytes(b"")
     # Score 0.5 is below the 0.7 threshold → AcoustID answered "no match".
-    with patch("acoustid.match", lambda *a, **kw: iter([(0.5, "rec-id", "Bad Match", "Wrong Artist")])):
+    with patch("acoustid.match", lambda *a, **kw: _answer(0.5, "rec-id", "Bad Match", "Wrong Artist")):
         result = await _enrich_via_acoustid(f)
     assert result.verdict is Verdict.NO_MATCH
     assert result.result is None
@@ -139,7 +148,7 @@ async def test_acoustid_returns_high_score_match(monkeypatch, tmp_path) -> None:
     f.write_bytes(b"")
     with patch(
         "acoustid.match",
-        lambda *a, **kw: iter([(0.92, "mb-recording-uuid", "Creep", "Radiohead")]),
+        lambda *a, **kw: _answer(0.92, "mb-recording-uuid", "Creep", "Radiohead"),
     ):
         lookup = await _enrich_via_acoustid(f)
     assert lookup.verdict is Verdict.MATCH

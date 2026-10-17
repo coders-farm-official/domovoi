@@ -138,6 +138,12 @@ PROFILE_BY_NAME: dict[str, ProfileDefault] = {pd.name: pd for pd in PROFILE_DEFA
 PROFILE_CONDITIONS: dict[str, str] = {
     "enricher_provider": "needs an AcoustID key or the Shazam add-on",
 }
+# The settings a `requires` condition reads: saving one of them can change
+# what a follower's next boot will be (domovoi.internet_profile
+# restart_followers_of).
+PROFILE_CONDITION_INPUTS: dict[str, tuple[str, ...]] = {
+    "enricher_provider": ("acoustid_api_key",),
+}
 
 
 def shazam_installed() -> bool:

@@ -496,8 +496,11 @@ WHERE enrich_outcome = 'no_match';
    (~30 seconds, no payment / approval) and use **that application's API
    key**: the key on your AcoustID user page is a *user* key, which the
    lookup API refuses (the enricher logs "AcoustID refused the key — it
-   must be an APPLICATION key" and stops the sweep). Set
-   `ACOUSTID_API_KEY=<the application key>` in `domovoi/.env`. Without a
+   must be an APPLICATION key" and stops the sweep). Paste it into the
+   dashboard, Settings → Configuration → Library → **AcoustID key**
+   (admin; **test the key** asks AcoustID whether it takes it), or set
+   `ACOUSTID_API_KEY=<the application key>` in `domovoi/.env` and
+   restart. The dashboard never shows a saved key again. Without a
    key the enricher still works via shazamio alone (the `shazam` extra),
    but you skip the open / MusicBrainz-IDs path; with neither, it does
    nothing.
