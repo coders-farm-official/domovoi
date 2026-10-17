@@ -4,6 +4,44 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — The dark theme is readable again, plugin icons included
+
+Dashboard update (web; no migration, no restart of the core needed — the
+web serves the new manifest key after its own restart).
+
+* **Plugin pages' icons show in the dark theme.** Images, Stations,
+  Games, Library and the media provider's page had black icons on the
+  dark sidebar (1.07:1). The dashboard drew each plugin's icon as a
+  picture, and a picture can't follow the theme. It now paints the
+  icon's shape in the text colour around it, like its own icons, in the
+  sidebar, the phone bar, Home's grid and Settings → Phone bar. A
+  coloured icon, or one with no transparent background, is still shown
+  as drawn; an icon that doesn't load shows the puzzle glyph.
+* **Plugins can ship a dark-theme icon** (optional): `nav_icon_dark`
+  beside `nav_icon` in `[[web.pages]]`; with both, each is shown as drawn
+  in its theme. Plugins with one icon need nothing. An icon path outside
+  the plugin's `web/static/` folder (or a URL) is ignored with a warning
+  in the load log, for both keys. See `docs/PLUGIN_DEVELOPMENT.md`.
+* **Settings → Satellites → "prepare satellite media"** had a black title
+  and icon in the dark theme (1.15:1) — not a "disabled" look: the browser
+  was told nothing about the theme, so a button with no colour of its own
+  drew black text. Each theme now tells the browser its colour scheme
+  (form controls, scrollbars and the date picker follow it too), and
+  buttons and fields take the colour of the text around them.
+* **Faint text reads.** Timestamps, counts, hints and empty-state lines
+  (`--fg-faint`) were 2.2:1 in the dark theme and 1.9:1 in the light one,
+  placeholders 4.0:1; every text colour now reads at 4.5:1 or better on
+  every surface in both themes, so that text is visibly brighter in dark
+  and darker in light. Amber links and the green / orange / red of status
+  pills and messages use a deeper shade of the same colour as text in the
+  light theme (about 2:1 on white before); the dark theme keeps its
+  colours. Disabled buttons are dimmed less (3:1 at least), and the
+  delete / forget buttons no longer put white text on red.
+* **To check a page**, including a plugin's:
+  `python scripts/dev/contrast_audit.py http://<dashboard> OUTDIR --token ... --password ...`
+  against a throwaway dashboard measures every page and tab in both
+  themes and screenshots what fails (`--help`).
+
 ## 2026-10-17 — A new database's slow first start no longer fails the install
 
 Server update (`domovoi/docker-compose.yml`, `domovoi-db.service`, the
