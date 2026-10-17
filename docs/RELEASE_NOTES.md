@@ -4,6 +4,44 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — The user manual, rebuilt for households
+
+Server update (core, dashboard; no migration) and a new Android APK.
+
+* **One manual, on the dashboard and in the app.** Settings → About →
+  **Open the user manual** (and Home's links) opens **Start here**: what
+  Domovoi is, things to say, and a "Getting set up" checklist that ticks
+  itself from what the server knows. Then the map: "Domovoi" in the middle,
+  seven topics around it (things to say, rooms and devices, your phone,
+  music and media, chat, files and calendar, people and privacy, keeping
+  it running); a click zooms into a topic's pieces, and a piece opens its
+  page. The middle opens How it works. A search box jumps to a piece.
+  Every "Settings → X" is a link.
+* **The words live in one file the server serves**,
+  `web/static/manual-content.json`, made by `scripts/manual/build_manual.py`
+  from `scripts/manual/manual.md`. The app reads it from the server it is
+  connected to and keeps a copy per server, so its manual always matches
+  that server's version; a server without the file gets "open the
+  dashboard". The app's old built-in manual text is gone.
+* **"More detail" links open the docs of the version the server runs**:
+  the release's tag when it runs a release exactly, else `main`.
+* **Each room's wake word reaches the dashboard.** `GET /api/satellites`
+  has `wake_word` (the openWakeWord slug the room named in its hello; the
+  core keeps a room's last one after it disconnects) and `wake_phrase` (a
+  trained word's phrase). The manual says "Hey Jarvis", the word a new
+  room answers to, and names the other words any room answers to.
+* **Home's first-run hint** is Start here's first phrase ("set a timer for
+  10 minutes"), never a plugin's, with a "start here" link. A bare
+  `#settings` opens About.
+* Small wording fixes: the app's chat note says HEIC and AVIF photos are
+  converted; the Models page no longer mentions a cloud voice; the Files
+  empty state says **Upload**; the app's Calendar subtitle loses a
+  developer note; `/api/capabilities/manual`'s offline fallback lists
+  Music names. The FAQ, glossary, CPU guide, troubleshooting and Windows
+  guide now say Settings → Configuration → Version and what the installers
+  pick (Whisper `small.en` on the processor, Qwen3 8B or 4B), and the
+  FAQ's "How do I add rooms?" follows the dashboard.
+
 ## 2026-10-16 — Phone photos in chat: HEIC converted, refusals in words
 
 Dashboard update (the web process; no migration) and a new Android APK.
