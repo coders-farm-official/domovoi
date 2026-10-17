@@ -245,6 +245,14 @@ def _reboot_helper_installed(cfg: Any) -> bool:
     return not engine_platform.is_windows_pc(cfg) and REBOOT_HELPER.exists()
 
 
+def _player_present(program: str) -> bool:
+    """Whether a player program can be started: on PATH, or a path that is
+    there. A missing one is the base package a card did not get (mpg123 on
+    the office unit, 2026-10-17), told apart before the wake word waits on
+    it rather than after."""
+    return bool(program) and shutil.which(program) is not None
+
+
 def _wifi_reset_helper_installed(cfg: Any) -> bool:
     """Whether the root radio-reset helper is there to ask (never on a
     Windows satellite, for the reason `_reboot_helper_installed` gives)."""
@@ -2675,6 +2683,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
     # 2026-09-28: "Back so soon?" routed as a command). Listening after the
     # acknowledgement removes the cause instead of filtering the symptom.
 
+    _ack_player_missing_said: bool = False
+
     def _acknowledge_wake(self, music_was_playing: bool, woke_at: float) -> None:
         """Acknowledge the wake word the way `cfg.wake_ack_mode` says, and
         return once the capture may start. Blocking: a greeting or chime
@@ -2701,6 +2711,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
             return
         device = self.cfg.music_alsa_device
         clip: Path | None = None
+        argv: list[str] = []
         if mode == "greeting":
             clip = self._pick_greeting()
             if clip is None:
@@ -2710,7 +2721,24 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 device, str(clip), self.cfg.tts_playback_gain
             )
             cap, what = _ACK_GREETING_CAP_SEC, clip.name
-        else:
+            if not _player_present(argv[0]):
+                # The greetings are MP3s and mpg123 is not on this unit (a
+                # base package a card's setup failed to install; the boot
+                # step puts it back, satellite/base_packages.py). The chime
+                # is a WAV that aplay plays - the same player the setup
+                # clips use - so the wake word is still acknowledged out
+                # loud, as a chime rather than a greeting, and the log says
+                # why once.
+                if not self._ack_player_missing_said:
+                    self._ack_player_missing_said = True
+                    log.warning(
+                        "wake ack: %s is not installed, so the spoken greetings "
+                        "cannot play; acknowledging with the chime (aplay) until "
+                        "it is - a reboot runs the boot step that installs it",
+                        argv[0],
+                    )
+                clip = None
+        if clip is None and mode != "none":
             try:
                 # The gain goes into the samples: aplay has no --scale, and
                 # this is the same factor mpg123 applies to the greetings.
