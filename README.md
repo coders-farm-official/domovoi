@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img alt="status: tested and ready" src="https://img.shields.io/badge/status-tested%20and%20ready-2EA043?style=flat-square&labelColor=1F1A14">
+  <a href="https://github.com/coders-farm-official/domovoi/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/coders-farm-official/domovoi?display_name=tag&sort=semver&label=latest%20release&color=2EA043&style=flat-square&labelColor=1F1A14"></a>
   <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-F2A618?style=flat-square&labelColor=1F1A14"></a>
   <br>
   <img alt="runs on: Linux, Windows, Raspberry Pi, Android" src="https://img.shields.io/badge/runs%20on-Linux%20%C2%B7%20Windows%20%C2%B7%20Raspberry%20Pi%20%C2%B7%20Android-F2A618?style=flat-square&labelColor=1F1A14">
