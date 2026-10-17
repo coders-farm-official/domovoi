@@ -54,24 +54,41 @@ internal fun tokenTroubleText(trouble: TokenTrouble, address: String): String = 
         append("the household token. This phone has stopped sending the old one.")
     }
     is TokenTrouble.Waiting -> buildString {
-        append("$address turned away too many wrong household tokens from this phone, so it won't check ")
-        append("another one for ${waitClock(trouble.waitMs)}. Nothing is sent until then, and this phone ")
-        append("tries again by itself when the wait is over.")
+        append("$address turned away too many wrong household tokens from this phone's address, often from ")
+        append("an app or a browser tab on it that still holds an old one, so it won't check another one for ")
+        append("${waitClock(trouble.waitMs)}. Nothing is sent until then, and this phone tries again by itself ")
+        append("when the wait is over.")
     }
 }
+
+/** The line under the explanation while a wait runs: what happens when it
+ *  ends. A refused token is NOT tried again, so its card never says
+ *  "trying again". Pure. */
+internal fun tokenTroubleWaitLine(trouble: TokenTrouble): String? = when {
+    trouble.waitMs <= 0 -> null
+    trouble is TokenTrouble.NotRecognised -> "a new token can be tried in ${waitClock(trouble.waitMs)}"
+    else -> "trying again in ${waitClock(trouble.waitMs)}"
+}
+
+/** The 2026-10-17 case: a dashboard tab in the phone's own browser, still
+ *  holding the old token, kept the address waiting for the app too. */
+private const val OLD_TAB_HINT =
+    " If a browser on this phone has the dashboard open from before, close that tab or pair it " +
+        "again too: it still sends the old token."
 
 /** What to do, under the explanation. Pure. */
 internal fun tokenTroubleHint(trouble: TokenTrouble): String = when {
     trouble is TokenTrouble.NotRecognised && trouble.waitMs > 0 ->
         "Paste the household token to pair again. An admin finds it on the dashboard under " +
             "Settings → Devices → Household token. Domovoi still wants this phone to wait " +
-            "${waitClock(trouble.waitMs)} after the wrong token, so the new one is tried when that is over."
+            "${waitClock(trouble.waitMs)} after the wrong token, so the new one is tried when that is over." +
+            OLD_TAB_HINT
     trouble is TokenTrouble.NotRecognised ->
         "Paste the household token to pair again. An admin finds it on the dashboard under " +
-            "Settings → Devices → Household token."
+            "Settings → Devices → Household token." + OLD_TAB_HINT
     else ->
         "If the household token changed, paste the new one now: it is tried when the wait is over. " +
-            "An admin finds it on the dashboard under Settings → Devices → Household token."
+            "An admin finds it on the dashboard under Settings → Devices → Household token." + OLD_TAB_HINT
 }
 
 /**
@@ -113,9 +130,9 @@ internal fun TokenTroubleScreen(trouble: TokenTrouble) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = Domovoi.colors.fgMuted,
             )
-            if (trouble.waitMs > 0) {
+            tokenTroubleWaitLine(trouble)?.let { line ->
                 Text(
-                    "trying again in ${waitClock(trouble.waitMs)}",
+                    line,
                     style = MaterialTheme.typography.titleSmall,
                     color = Domovoi.colors.warn,
                 )

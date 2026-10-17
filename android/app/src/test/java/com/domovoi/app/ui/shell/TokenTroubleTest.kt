@@ -87,6 +87,22 @@ class TokenTroubleTest {
         }
     }
 
+    @Test fun aRefusedTokenIsNeverSaidToBeTriedAgain() {
+        // Found on the emulator: the refused card said "trying again in 0:38",
+        // and the refused token is not tried again; only a new one is.
+        assertEquals("a new token can be tried in 0:38", tokenTroubleWaitLine(TokenTrouble.NotRecognised(38_000)))
+        assertEquals("trying again in 0:38", tokenTroubleWaitLine(TokenTrouble.Waiting(38_000)))
+        assertNull(tokenTroubleWaitLine(TokenTrouble.NotRecognised(0)))
+    }
+
+    @Test fun theCardNamesTheOldBrowserTab() {
+        // The owner's case: a dashboard tab in the phone's own browser.
+        for (t in listOf(TokenTrouble.NotRecognised(0), TokenTrouble.NotRecognised(5_000), TokenTrouble.Waiting(5_000))) {
+            assertTrue(tokenTroubleHint(t).contains("close that tab"))
+        }
+        assertTrue(tokenTroubleText(TokenTrouble.Waiting(5_000), "x").contains("browser tab"))
+    }
+
     @Test fun theWaitIsNamedOnBothCards() {
         assertTrue(tokenTroubleText(TokenTrouble.Waiting(53_000), "x").contains("0:53"))
         assertTrue(tokenTroubleHint(TokenTrouble.NotRecognised(125_000)).contains("2:05"))
