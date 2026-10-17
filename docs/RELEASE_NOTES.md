@@ -4,6 +4,67 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — Satellites: faster Wi-Fi recovery, mpg123 put back, less CPU
+
+Satellite update (pushed with the satellite code; **reboot each satellite
+once** afterwards for the package repair). New cards also get a Wi-Fi
+reset helper. No core or dashboard change is needed, and no migration.
+
+* **A satellite whose Wi-Fi drops is back sooner.** A unit at the edge of
+  range (the office Pi at -77 dBm) lost the house network outright and
+  sat red for up to 16 minutes: the first rejoin came after 6 minutes,
+  `nmcli connection up` timed out after 30 s every time, and only the
+  reboot at 16 minutes brought it back. When the **link** is down
+  (NetworkManager not connected and no route, not just the server), the
+  first rejoin now comes after 2 minutes and may take 45 s. A failed one is
+  retried 2.5 minutes later. After two failures it reboots at about 10
+  minutes instead of 15. Each self-check reboot in the last 6 hours doubles
+  the next one's wait (up to an hour), and the one-reboot-an-hour limit
+  still holds, so a flapping link cannot reboot a unit in a loop. Nothing
+  changes when the Wi-Fi works and only the server is down: the satellite
+  still leaves the Wi-Fi alone then. The `[health]` keys are
+  `link_down_escalate_min`, `link_down_retry_min`, `link_down_reboot_min`
+  and `reboot_backoff_cap_min`.
+* **New cards: the radio is turned off and on before the retry.** On a
+  card prepared from today, a rejoin that timed out on a down link runs
+  `/usr/local/sbin/domovoi-wifi-reset` (argv-less root helper, one new
+  sudoers line). It turns the radio off and on, then brings back the house
+  network by name. It refuses while the setup hotspot's profile is still
+  saved. Existing cards don't have it (a code push never installs root
+  helpers): they skip that step and reach the reboot sooner. To add it,
+  re-flash the card, or follow PROVISIONING.md §8.3.
+* **mpg123 is put back on satellites that lost it.** The office unit
+  logged `wake ack: could not run mpg123` on every wake. Debian's mpg123
+  needs libraries Pi OS Lite lacks, so setup's offline install leaves it
+  unconfigured. The online repair then ran with the Wi-Fi down, apt
+  **removed** mpg123, and setup marked itself done. Now:
+  * at every boot, the boot step installs any missing base package online
+    (`apt-get install --no-remove`, fixed names only) and records it in
+    `/var/lib/domovoi/base-packages.json`;
+  * the Health card says **reboot needed: system packages missing
+    (mpg123)** until it is there;
+  * setup's own repair never runs without fresh package lists and never
+    removes anything;
+  * preparing a card refetches a package cache that lacks a base package,
+    and the build warns **BASE PACKAGES NOT ON THIS CARD** when it still
+    does.
+  After the satellite code push, **reboot the satellite once with the
+  Wi-Fi up** (unplug and plug back in).
+* **Until then, the wake word gets the chime.** Without mpg123 the spoken
+  greeting cannot play. The satellite now plays the chime (a WAV, through
+  aplay, like the setup clips) instead of nothing, and logs why once.
+  Music still needs mpg123.
+* **Less CPU while listening.** An idle Zero 2 W used 73-93 % of a core.
+  Nothing was spinning: it is the wake-word model, 12.5 times a second.
+  But openWakeWord also copied its whole 10 s audio buffer (160,000
+  numbers) on every 80 ms chunk to use the last 1,760 of them. That was a
+  quarter or more of each prediction when measured on a PC. The satellite
+  now reads only those samples, and the scores are identical. Expect a
+  lower CPU figure on the Health card, though the wake model itself is
+  still most of it on a Zero 2 W. The busy figure was one core of four,
+  and the other three stayed free, so it is not what dropped the Wi-Fi:
+  the -77 dBm signal is.
+
 ## 2026-10-17 — Dashboard: the track drawer reads "manual" once
 
 Dashboard update (the web process; no migration).
