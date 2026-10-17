@@ -94,9 +94,21 @@ We build Domovoi in public. Here's where it stands.
   room offline ([the loop watchdog](docs/LINUX_HOST.md#the-loop-watchdog)).
   Its journal never holds the household token, and what people say shows
   up there only as a word count unless you turn on debug logging
-  ([data at rest](docs/SECURITY_PRIVACY.md#data-at-rest)).
+  ([data at rest](docs/SECURITY_PRIVACY.md#data-at-rest)). A new
+  install's database gets up to ten minutes for its first start (a slow
+  disk once made that fail), and when Postgres can't start, its own last
+  lines go to the journal and the install log, passwords blanked.
+- **Voice history is kept 90 days** by default, not for ever: what people
+  say to Domovoi and what it answered. People → Voice history sets 30
+  days, 90 days, a year or forever, and an admin can delete all of it.
+  "Forget me" (after a yes) and forgetting a person on the People page
+  delete what that person said too
+  ([voice history](docs/SECURITY_PRIVACY.md#voice-history-whats-kept-for-how-long)).
+- **Everyday voice answers locally:** an alarm or reminder at a clock time
+  ("wake me up at 7" is the next 7 o'clock), "what can you do", and
+  what's on your calendar each have their own handler.
 - **Updates from the dashboard,** on a release channel. Settings →
-  Configuration → Version names the release the server runs (`1.0.0-rc1 +
+  Configuration → Version names the release the server runs (`1.0.0-rc2 +
   14 (abc1234)` between releases) and pulls and applies updates, rolling
   back by itself when the new code doesn't come up healthy. Root only
   ever runs a verified copy of the commit, never the files in the checkout
@@ -108,7 +120,8 @@ We build Domovoi in public. Here's where it stands.
 - **Raspberry Pi satellites** put a voice in every room, with wake word,
   barge-in, and intercom and drop-in between rooms. The dashboard prepares
   a Pi's SD card, and you finish its setup from your phone over the Pi's
-  own setup Wi-Fi. Any room can start music, a podcast or an audiobook in
+  own setup Wi-Fi (plain WPA2, so phones that refused it, some Samsungs
+  among them, join). Any room can start music, a podcast or an audiobook in
   another ("play some jazz in the garage"), and two people with the same
   name are never guessed between: a satellite asks "Is that you?" instead.
 - **No GPL or LGPL libraries in the server's Python code:** tag reading
@@ -122,12 +135,18 @@ We build Domovoi in public. Here's where it stands.
 - **The web dashboard** manages all of it, from plugins to training your own
   wake word on the server (about 20 minutes on an NVIDIA GPU, longer on the
   CPU). After you sign in as admin, reloading the page keeps you signed in
-  for an hour.
+  for an hour. Its **user manual** (in the app too) has a map of everything
+  Domovoi does, what to say for each, and a getting-set-up checklist that
+  ticks itself; a new house's Home page points into it. Song recognition
+  takes its AcoustID key in Settings → Configuration, with a button to
+  test it. When a server no longer accepts the household token a browser
+  or phone holds (a reinstall, a new token), the dashboard and the app say
+  so and how to pair again, instead of failing page by page.
 - **The Android app** brings the dashboard, a music player, chat and drop-in
   to your phone, on Android 8.0 or later, 32-bit phones included
   ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)). With no server it
   still plays your phone's own music, videos and files. It is a signed
-  release, [v1.0.0-rc1](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc1)
+  release, [v1.0.0-rc2](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc2)
   on GitHub, and your server can hand it to phones: press **Download the
   app to this server** once on the dashboard, and a phone installs it from
   your server's own page by scanning a QR code
@@ -156,8 +175,12 @@ they have been tried on fewer devices than the rest, aren't yet held to
 - **A Windows installer.** `DomovoiSetup.exe` puts the Linux
   server inside WSL2 on a Windows 11 PC. It is not code-signed yet;
   download it from the
-  [v1.0.0-rc1 release](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc1)
-  ([Windows installer](docs/WINDOWS_HOST.md)).
+  [v1.0.0-rc2 release](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc2)
+  ([Windows installer](docs/WINDOWS_HOST.md)). From the next release,
+  Setup also puts Domovoi's icon beside the clock: whether Domovoi is
+  running, the dashboard, a QR code for phones, and a helper that prepares
+  a Raspberry Pi's SD card from Windows
+  ([the tray icon](docs/WINDOWS_HOST.md#the-tray-icon)).
 - **Satellites on spare devices.** A Linux or Windows laptop or PC, or an old
   phone or tablet through the Android app's room mode, can be a room instead
   of a Raspberry Pi. Each joins with a one-line command or a QR code from the
@@ -175,16 +198,16 @@ they have been tried on fewer devices than the rest, aren't yet held to
 
 **Coming next** (being finished now)
 
-1. **Domovoi v1.0.0-rc2,** a dress rehearsal of the v1.0.0 release itself:
-   the server, the app (1.0.0-rc2) and a Windows Setup that installs that
-   commit, one `SHA256SUMS` for every file, all published the way v1.0.0
-   will be ([Releasing](docs/CONTRIBUTING.md#releasing)).
-2. **Domovoi v1.0.0,** after
+1. **Domovoi v1.0.0,** after
    [v1.0.0-rc1](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc1)
-   and rc2: once the freeze fixes above have run for a week with no freeze
-   and no satellite dropping out, and the hardware checks on real phones
-   and spare computers are done. `stable` then points at it, and new
-   installs follow it.
+   and [v1.0.0-rc2](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc2),
+   the dress rehearsal (the server, the app and a Windows Setup, one
+   `SHA256SUMS` for every file, published the way v1.0.0 will be:
+   [Releasing](docs/CONTRIBUTING.md#releasing)). It adds the fixes from
+   rc2's smoke tests above, and ships once the freeze fixes have run for a
+   week with no freeze and no satellite dropping out, and the hardware
+   checks on real phones and spare computers are done. `stable` then
+   points at it, and new installs follow it.
 
 **Later**
 
@@ -634,6 +657,7 @@ Want to write one? Start at the
 
 | Doc | What's in it |
 |---|---|
+| [User manual](scripts/manual/manual.md) | The household's guide, read in the dashboard (**User Manual**) and in the app: what to say, every page, getting set up, with a map |
 | [Setup runbook](docs/SETUP_RUNBOOK.md) | Day-one bring-up in order — server, first satellite, fleet, verification gates |
 | [Will your Domovoi have internet?](docs/INTERNET.md) | The internet question: what Yes, Sometimes and No each switch, what's left to set up, and what to download before a server goes without |
 | [FAQ](docs/FAQ.md) | Quick answers — privacy, hardware, common "can it…?" questions |
