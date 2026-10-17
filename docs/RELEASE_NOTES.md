@@ -27,12 +27,12 @@ APK.
   with nothing to do; it is not a bug.
 * **For plugin authors:** optional `accent = "#rrggbb"` (and
   `accent_dark`) in `[plugin]`. The dashboard checks it in both themes
-  (text 4.5:1, buttons 3:1) and adjusts a colour that falls short, with a
+  (text 4.5:1, buttons 3:1, disabled buttons 3:1) and adjusts a colour that falls short, with a
   warning in the load log; a value that isn't a colour, or Domovoi's own
   amber, is refused with a warning and the slate is used. It never stops a
   plugin loading. `domovoi plugin pack` / `dev` print the same warnings,
   and `domovoi plugin new` offers both keys. The bundled radio plugin is
-  teal (`#2f7d6d`). See `docs/PLUGIN_DEVELOPMENT.md`, "The frame and your
+  teal (`#146859`, `#5fb8a4` in the dark theme). See `docs/PLUGIN_DEVELOPMENT.md`, "The frame and your
   accent".
 * `/api/plugins/manifest` and `/api/capabilities` carry each plugin's
   `publisher` and `accent` tokens (`docs/API_REFERENCE.md`).

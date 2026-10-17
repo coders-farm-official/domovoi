@@ -7,14 +7,16 @@ and, inside it, re-scopes the brand tokens (``--brand``, ``--brand-soft``,
 links and highlights take that colour while the shell around it stays
 amber. This module is the one place that colour is judged:
 
-* ``[plugin].accent`` (``"#2f7d6d"``) and the optional ``accent_dark``
+* ``[plugin].accent`` (``"#146859"``) and the optional ``accent_dark``
   (the dark theme's colour; without it the dark tokens are derived from
   ``accent``) are ``#rgb`` / ``#rrggbb`` hex strings.
 * Every derived token passes the dashboard's contrast rules on every
   surface of its theme (canvas, card, raised, sunken): text and links
   (``brand_ink``) 4.5:1, also on the accent's own wash; the button fill
   (``brand``) 3:1 as a UI part; the text on that fill (``brand_fg``) 4.5:1
-  on the fill and its hover and press shades. A colour that falls short
+  on the fill and its hover and press shades, and 3:1 on a disabled
+  button (both faded to the dashboard's disabled opacity). A colour that
+  falls short
   is moved in lightness (same hue and chroma) until it passes.
 * Nothing here ever fails a plugin. A value that isn't a colour, or one
   in Domovoi's own amber family (amber is core's alone), is rejected with
@@ -41,7 +43,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 TEXT = 4.5      # WCAG AA, normal text: brand_ink, brand_fg
-UI = 3.0        # WCAG 1.4.11, UI parts: the brand fill
+UI = 3.0        # WCAG 1.4.11, UI parts: the brand fill; a disabled button
+DISABLED_OPACITY = 0.65   # .btn:disabled in web/static/styles.css
 
 HEX_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
@@ -212,13 +215,23 @@ def _shades(theme: str, L: float, C: float, H: float) -> tuple[RGB, RGB, RGB]:
     return (_rgb(L, C, H), _rgb(_clamp_l(L + dh), C, H), _rgb(_clamp_l(L + dp), C, H))
 
 
-def _best_fg(theme: str, L: float, C: float, H: float) -> tuple[RGB, float]:
+def disabled_ratio(fg: RGB, fill: RGB, backs: list[RGB]) -> float:
+    """A disabled primary button: the whole button (fill and text) faded to
+    DISABLED_OPACITY over the surface it sits on; the worst surface."""
+    return min(ratio(over(fg, DISABLED_OPACITY, b), over(fill, DISABLED_OPACITY, b)) for b in backs)
+
+
+def _best_fg(theme: str, L: float, C: float, H: float, backs: list[RGB]) -> tuple[RGB, float]:
+    """The text colour for the fill, and how well it does as a share of the
+    rules (>= 1.0 passes): TEXT on the fill, hover and press, UI on the
+    disabled button."""
     triple = _shades(theme, L, C, H)
     best: tuple[RGB, float] | None = None
     for fg in _fg_candidates(H).values():
-        worst = min(ratio(fg, t) for t in triple)
-        if best is None or worst > best[1]:
-            best = (fg, worst)
+        score = min(min(ratio(fg, t) for t in triple) / TEXT,
+                    disabled_ratio(fg, triple[0], backs) / UI)
+        if best is None or score > best[1]:
+            best = (fg, score)
     assert best is not None
     return best
 
@@ -243,9 +256,9 @@ def derive_theme(theme: str, base: RGB) -> ThemeTokens:
     # 1. The fill reads as a UI part (3:1) on every surface.
     L = _move_until(L0, C, H, away, lambda l: min_ratio(_rgb(l, C, H), backs) >= UI)
     # 2. ... and carries readable text (4.5:1) on it, its hover and its press.
-    L = _move_until(L, C, H, away, lambda l: _best_fg(theme, l, C, H)[1] >= TEXT)
+    L = _move_until(L, C, H, away, lambda l: _best_fg(theme, l, C, H, backs)[1] >= 1.0)
     fill, hover, press = _shades(theme, L, C, H)
-    fg, _ = _best_fg(theme, L, C, H)
+    fg, _ = _best_fg(theme, L, C, H, backs)
 
     alphas = ALPHAS[theme]
     soft_backs = [over(fill, _alpha(alphas["soft"]), b) for b in backs]
@@ -285,7 +298,7 @@ class Accent:
 def accent_problem(value: Any) -> str | None:
     """Why ``value`` can't be an accent colour, or None when it can."""
     if not isinstance(value, str):
-        return "must be a hex colour string like \"#2f7d6d\""
+        return "must be a hex colour string like \"#146859\""
     if not HEX_RE.match(value.strip()):
         return "is not a hex colour (#rgb or #rrggbb)"
     L, C, H = rgb_to_oklch(parse_hex(value.strip()))
@@ -360,7 +373,7 @@ def _moved_warning(key: str, value: str, theme: str, t: ThemeTokens) -> str:
                f"(buttons need {UI:.0f}:1)")
     else:
         why = (f"can't carry readable button text ({TEXT}:1 on it and its hover "
-               f"and press shades) in the {theme} theme")
+               f"and press shades, {UI:.0f}:1 when disabled) in the {theme} theme")
     return f"plugin.{key} {value!r} {why}; the dashboard uses {t.tokens['brand']} there"
 
 

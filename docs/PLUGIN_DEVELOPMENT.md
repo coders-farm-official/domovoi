@@ -617,7 +617,9 @@ raised, sunken):
 * `--brand-ink` reads at **4.5:1**, also on your own `--brand-soft` wash;
 * `--brand` reads at **3:1** as a UI part;
 * `--brand-fg` reads at **4.5:1** on the fill and on its hover and pressed
-  shades (near-white or near-black, whichever reads).
+  shades (near-white or near-black, whichever reads), and at **3:1** on a
+  disabled button (fill and text both faded to the dashboard's disabled
+  opacity).
 
 A colour that falls short is moved in lightness (same hue) until it passes:
 darker in the light theme, lighter in the dark one. The dark theme always
@@ -630,10 +632,11 @@ chroma), is refused with a warning and the page gets the slate.
 of this ever fails your plugin's load.
 
 **Choosing it.** Set an accent when your plugin has a colour of its own (a
-brand or a theme). Pick a mid-tone that reads at 3:1 on white: the bundled
-radio plugin's teal `#2f7d6d` reads 4.9:1 on white (4.4:1 on the sunken
-grey) and is used as declared. A pale or neon colour works too; it just
-gets deepened for the light theme. Leave it out and the slate is a fine
+brand or a theme). For the light theme, a colour that carries white text
+passes as declared when it is fairly deep (about 6:1 on white; the
+disabled button is the tight rule): the bundled radio plugin's teal
+`#146859` is. A brighter or paler colour works too; it just gets deepened
+for the light theme, and the load log says to what. Leave it out and the slate is a fine
 default. A dialog your page renders in its own tree takes the accent too;
 something you append to `document.body` yourself sits outside the frame
 and gets the shell's amber, so render dialogs inside your page.
@@ -1643,14 +1646,14 @@ story. Here is the developer's tour, file by file.
 * **Web**: one script (`stations.jsx`), one page (`StationsPage`, nav label
   "Stations", a favorites-count badge), one player source (`kind = "radio"`
   with a stream proxy template).
-* **Accent** `accent = "#2f7d6d"`, a teal well away from the dashboard's
-  amber: the Stations page's buttons, selected scope chip, starred icons and
-  the frame's band take it (the page styles them with `--brand`,
-  `--brand-soft` and `--brand-ink`, nothing radio-specific). It reads 4.9:1
-  on white, so the light theme uses it as declared; there is no
-  `accent_dark`, so the dark theme gets the lighter shade the dashboard
-  derives from it (commented `accent_dark` line in the manifest shows the
-  key).
+* **Accent** `accent = "#146859"` and `accent_dark = "#5fb8a4"`, a deep and
+  a light teal well away from the dashboard's amber: the Stations page's
+  buttons, selected scope chip, starred icons and the frame's band take it
+  (the page styles them with `--brand`, `--brand-soft` and `--brand-ink`,
+  nothing radio-specific). Both pass the contrast rules as declared (white
+  text on the deep one, near-black on the light one), so the load log is
+  quiet. Without `accent_dark` the dark theme would get a shade derived
+  from `#146859`.
 * **Three `[[realtime]]` entries** — note the many-to-one mapping:
   `plugin_radio_stations_changed` *and* `plugin_radio_now_playing_changed`
   both feed the `radio.stations` realtime channel via `snapshot_stations`.

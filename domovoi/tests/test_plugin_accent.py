@@ -80,6 +80,8 @@ def _passes(tokens: dict[str, str], theme: str) -> list[str]:
         r = acc.ratio(fg, acc.parse_hex(tokens[k]))
         if r < acc.TEXT:
             bad.append(f"fg on {k} {r:.2f}")
+    if acc.disabled_ratio(fg, fill, backs) < acc.UI:
+        bad.append(f"disabled {acc.disabled_ratio(fg, fill, backs):.2f}")
     return bad
 
 
@@ -122,24 +124,41 @@ def test_core_amber_is_still_cores_alone() -> None:
 
 
 def test_a_good_accent_is_used_as_declared_without_warnings() -> None:
-    a = acc.resolve_accent("#2f7d6d")
+    a = acc.resolve_accent("#146859")
     assert a.source == "plugin" and a.warnings == []
-    assert a.light["brand"] == "#2f7d6d"           # it reads at 3:1 already
+    assert a.light["brand"] == "#146859"           # it passes every rule already
     assert set(a.light) == set(a.dark) == set(acc.TOKEN_KEYS)
     assert _passes(a.light, "light") == [] and _passes(a.dark, "dark") == []
     # The dark theme derives a lighter shade from the one colour.
-    assert acc.luminance(acc.parse_hex(a.dark["brand"])) > acc.luminance(acc.parse_hex("#2f7d6d"))
+    assert acc.luminance(acc.parse_hex(a.dark["brand"])) > acc.luminance(acc.parse_hex("#146859"))
 
 
 def test_accent_dark_is_the_dark_themes_own_colour() -> None:
-    a = acc.resolve_accent("#2f7d6d", "#5fb8a4")
+    a = acc.resolve_accent("#146859", "#5fb8a4")
     assert a.warnings == [] and a.dark["brand"] == "#5fb8a4"
     assert _passes(a.dark, "dark") == []
 
 
 def test_short_hex_and_case_are_accepted() -> None:
     a = acc.resolve_accent("#36C")
-    assert a.source == "plugin" and a.light["brand"] == "#3366cc"
+    assert a.source == "plugin"
+    assert (a.light, a.dark) == (acc.resolve_accent("#3366cc").light, acc.resolve_accent("#3366cc").dark)
+
+
+def test_a_mid_tone_is_deepened_until_its_disabled_button_reads() -> None:
+    # The owner's example teal reads 4.9:1 on white, but a disabled primary
+    # button (fill and white text faded to 0.65) would be 2.6:1.
+    a = acc.resolve_accent("#2f7d6d")
+    assert a.source == "plugin" and a.light["brand"] != "#2f7d6d"
+    (w,) = a.warnings
+    assert "3:1 when disabled" in w and a.light["brand"] in w
+    assert _passes(a.light, "light") == []
+
+
+def test_the_disabled_opacity_is_the_stylesheets() -> None:
+    styles = (REPO_ROOT / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+    m = re.search(r"\.btn:disabled,\s*\.btn\[disabled\]\s*\{[^}]*?opacity:\s*([\d.]+)", styles, re.S)
+    assert m and float(m.group(1)) == acc.DISABLED_OPACITY
 
 
 @pytest.mark.parametrize("bad", ["teal", "#12345", "#ggg", "", "2f7d6d", "#2f7d6d80", 5, ["#2f7d6d"]])
@@ -169,8 +188,8 @@ def test_a_low_contrast_accent_is_moved_until_it_passes_and_warns(pale: str) -> 
 
 
 def test_a_bad_accent_dark_falls_back_to_the_derived_shade() -> None:
-    a = acc.resolve_accent("#2f7d6d", "nope")
-    assert a.source == "plugin" and a.dark == acc.resolve_accent("#2f7d6d").dark
+    a = acc.resolve_accent("#146859", "nope")
+    assert a.source == "plugin" and a.dark == acc.resolve_accent("#146859").dark
     assert any("accent_dark" in w for w in a.warnings)
 
 
@@ -214,9 +233,9 @@ def test_the_default_is_a_muted_slate_far_from_amber_that_passes() -> None:
 
 
 def test_the_manifest_carries_the_keys_and_never_refuses_them() -> None:
-    m = parse_manifest(_manifest('accent = "#2f7d6d"\naccent_dark = "#5fb8a4"'))
-    assert (m.accent, m.accent_dark) == ("#2f7d6d", "#5fb8a4")
-    assert m.raw["plugin"]["accent"] == "#2f7d6d"
+    m = parse_manifest(_manifest('accent = "#146859"\naccent_dark = "#5fb8a4"'))
+    assert (m.accent, m.accent_dark) == ("#146859", "#5fb8a4")
+    assert m.raw["plugin"]["accent"] == "#146859"
     for bad in ('accent = "teal"', "accent = 5", 'accent = "#f2a618"'):
         parse_manifest(_manifest(bad))                     # no ManifestError
     assert parse_manifest(_manifest()).accent is None
@@ -235,7 +254,7 @@ def test_the_load_check_warns_and_still_loads(line: str, fragment: str) -> None:
 
 
 def test_the_load_check_is_quiet_for_a_good_accent_or_none() -> None:
-    for line in ('accent = "#2f7d6d"', ""):
+    for line in ('accent = "#146859"', ""):
         report = ContractReport()
         check_accent(parse_manifest(_manifest(line)), report)
         assert report.warnings == []
@@ -243,18 +262,18 @@ def test_the_load_check_is_quiet_for_a_good_accent_or_none() -> None:
 
 def test_the_bundled_radio_plugin_is_the_worked_example() -> None:
     m = parse_manifest((REPO_ROOT / "plugins/radio/domovoi-plugin.toml").read_text(encoding="utf-8"))
-    assert m.accent == "#2f7d6d"
+    assert (m.accent, m.accent_dark) == ("#146859", "#5fb8a4")
     assert acc.resolve_accent(m.accent, m.accent_dark).warnings == []
 
 
 def test_the_scaffold_offers_the_accent(tmp_path: Path) -> None:
     assert _cmd_new(argparse.Namespace(slug="paint", dir=str(tmp_path))) == 0
     text = (tmp_path / "paint" / "domovoi-plugin.toml").read_text(encoding="utf-8")
-    assert '# accent = "#2f7d6d"' in text and "# accent_dark = " in text
+    assert '# accent = "#146859"' in text and "# accent_dark = " in text
     assert parse_manifest(text).accent is None             # off until uncommented
     on = text.replace('# accent = "', 'accent = "').replace("# accent_dark = ", "accent_dark = ")
     m = parse_manifest(on)
-    assert (m.accent, m.accent_dark) == ("#2f7d6d", "#5fb8a4")
+    assert (m.accent, m.accent_dark) == ("#146859", "#5fb8a4")
     assert acc.resolve_accent(m.accent, m.accent_dark).warnings == []
 
 
@@ -282,10 +301,10 @@ def _frontend(plugin_extra: dict) -> dict:
 
 
 def test_frontend_manifest_carries_publisher_and_accent() -> None:
-    entry = _frontend({"accent": "#2f7d6d"})
+    entry = _frontend({"accent": "#146859"})
     assert entry["publisher"] == "Coders Farm" and entry["name"] == "Tint"
     assert entry["accent"]["source"] == "plugin"
-    assert entry["accent"]["light"]["brand"] == "#2f7d6d"
+    assert entry["accent"]["light"]["brand"] == "#146859"
     assert set(entry["accent"]["dark"]) == set(acc.TOKEN_KEYS)
 
 
@@ -298,11 +317,11 @@ def test_frontend_manifest_gives_a_plugin_without_an_accent_the_default() -> Non
 def test_capabilities_carry_the_frame_for_android(monkeypatch) -> None:
     from web.backend.api import capabilities as caps
 
-    monkeypatch.setattr(caps.HOST, "rows", {"tint": _row({"accent": "#2f7d6d"})})
+    monkeypatch.setattr(caps.HOST, "rows", {"tint": _row({"accent": "#146859"})})
     body = asyncio.run(caps.capabilities())
     (p,) = body["plugins"]
     assert (p["name"], p["publisher"]) == ("Tint", "Coders Farm")
-    assert p["accent"]["source"] == "plugin" and p["accent"]["light"]["brand"] == "#2f7d6d"
+    assert p["accent"]["source"] == "plugin" and p["accent"]["light"]["brand"] == "#146859"
     assert p["android_capabilities"] == ["tint"]
 
 
@@ -310,7 +329,7 @@ def test_capabilities_carry_the_frame_for_android(monkeypatch) -> None:
 
 RADIO = {
     "slug": "radio", "name": "Radio", "version": "1.3.1", "publisher": "Coders Farm",
-    "accent": acc.resolve_accent("#2f7d6d").as_dict(),
+    "accent": acc.resolve_accent("#146859").as_dict(),
 }
 PAGE = {"route": "stations", "page": "StationsPage", "nav_label": "Stations",
         "nav_icon": "/plugins/radio/static/icon.svg", "nav_icon_dark": None}
@@ -404,7 +423,7 @@ def _vars(rendered: dict, name: str) -> dict:
 def test_the_frame_scopes_the_brand_tokens_per_theme(rendered) -> None:
     light, dark = _vars(rendered, "style-light"), _vars(rendered, "style-dark")
     tokens = RADIO["accent"]
-    assert light["--brand"] == tokens["light"]["brand"] == "#2f7d6d"
+    assert light["--brand"] == tokens["light"]["brand"] == "#146859"
     assert light["--brand-ink"] == tokens["light"]["brand_ink"]
     assert light["--brand-soft"] == tokens["light"]["brand_soft"]
     assert light["--fg-on-brand"] == light["--brand-fg"] == tokens["light"]["brand_fg"]

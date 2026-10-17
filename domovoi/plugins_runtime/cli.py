@@ -45,7 +45,7 @@ domovoi_api = ">=1.0,<2.0"
 # Your dashboard page's colour (optional): its buttons, links and the frame
 # the dashboard draws around it. Hex; without it the page gets the neutral
 # plugin slate. Checked for contrast at load (docs/PLUGIN_DEVELOPMENT.md).
-# accent = "#2f7d6d"
+# accent = "#146859"
 # accent_dark = "#5fb8a4"     # optional: the dark theme's own colour
 
 [entry_points]
