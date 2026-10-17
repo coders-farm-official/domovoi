@@ -110,6 +110,13 @@ namespace Domovoi.Windows.Tray
             return new Label { Text = text, Bounds = new Rectangle(0, top, 560, height) };
         }
 
+        // A label beside a field: only as wide as the gap before it, so it
+        // never covers the field.
+        static Label FieldLabel(string text, int top)
+        {
+            return new Label { Text = text, Bounds = new Rectangle(0, top, 132, 20) };
+        }
+
         static LinkLabel Link(string text, int top, Action click)
         {
             var l = new LinkLabel { Text = text, AutoSize = true, Location = new Point(0, top) };
@@ -179,11 +186,11 @@ namespace Domovoi.Windows.Tray
         Control PasswordPage()
         {
             var p = new Panel();
-            p.Controls.Add(Para("Setup network", 4, 20));
+            p.Controls.Add(FieldLabel("Setup network", 4));
             ssidBox.SetBounds(140, 0, 260, 24);
             ssidBox.ReadOnly = true;
             p.Controls.Add(ssidBox);
-            p.Controls.Add(Para("Password", 40, 20));
+            p.Controls.Add(FieldLabel("Password", 40));
             pskBox.SetBounds(140, 36, 260, 24);
             pskBox.Font = new Font(FontFamily.GenericMonospace, 11f);
             pskBox.MaxLength = 40;

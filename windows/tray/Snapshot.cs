@@ -143,8 +143,24 @@ namespace Domovoi.Windows.Tray
             if (!f.Visible) f.Show();
             f.Activate();
             Pump(400);
-            Rectangle r = f.Bounds;
-            Save(r, name);
+            Save(VisibleBounds(f), name);
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        struct RECT { public int Left, Top, Right, Bottom; }
+
+        [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+        static extern int DwmGetWindowAttribute(IntPtr hwnd, int attr, out RECT rect, int size);
+
+        // The window as drawn (DWMWA_EXTENDED_FRAME_BOUNDS): Bounds also
+        // counts the invisible resize border, which would catch a strip of
+        // whatever is behind the window.
+        static Rectangle VisibleBounds(Form f)
+        {
+            RECT r;
+            if (DwmGetWindowAttribute(f.Handle, 9, out r, System.Runtime.InteropServices.Marshal.SizeOf(typeof(RECT))) == 0)
+                return Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
+            return f.Bounds;
         }
 
         static void MenuShot(TrayApp app, string name, Verdict v, List<LanAddress> lan, string awake, int openSubmenu)
@@ -154,24 +170,43 @@ namespace Domovoi.Windows.Tray
                 app.Build(m.Items, v, lan, awake);
                 m.Show(new Point(120, 120));
                 Pump(300);
-                Rectangle r = m.Bounds;
+                // Only the menu's own pixels (and its submenu's), never what
+                // is on the screen around them.
+                var parts = new List<Rectangle> { m.Bounds };
                 if (openSubmenu >= 0)
                 {
-                    int seen = 0;
                     foreach (ToolStripItem item in m.Items)
                     {
                         var mi = item as ToolStripMenuItem;
-                        if (mi != null && mi.HasDropDownItems && seen++ == 0)
+                        if (mi != null && mi.HasDropDownItems)
                         {
                             mi.ShowDropDown();
                             Pump(300);
-                            r = Rectangle.Union(r, mi.DropDown.Bounds);
+                            parts.Add(mi.DropDown.Bounds);
+                            break;
                         }
                     }
                 }
-                Save(r, name);
+                SaveParts(parts, name);
                 m.Close();
                 Pump(100);
+            }
+        }
+
+        // Each rectangle copied from the screen onto a plain canvas.
+        static void SaveParts(List<Rectangle> parts, string name)
+        {
+            Rectangle all = parts[0];
+            foreach (Rectangle r in parts) all = Rectangle.Union(all, r);
+            using (var bmp = new Bitmap(all.Width, all.Height))
+            {
+                using (Graphics g = Graphics.FromImage(bmp))
+                {
+                    g.Clear(Color.FromArgb(243, 243, 243));
+                    foreach (Rectangle r in parts)
+                        g.CopyFromScreen(r.Location, new Point(r.X - all.X, r.Y - all.Y), r.Size);
+                }
+                bmp.Save(Path.Combine(dir, name), ImageFormat.Png);
             }
         }
 
