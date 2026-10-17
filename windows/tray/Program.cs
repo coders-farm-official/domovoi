@@ -62,7 +62,11 @@ namespace Domovoi.Windows.Tray
                 }
 
                 string handOver;
-                LaunchAction act = Startup.OnLaunch(store, exe, opt.Autostart, File.Exists, out handOver);
+                // A copy run on its own registers its own private copy (LocalCopy).
+                string machine = Startup.ExeOf(store.MachineRun());
+                if (machine != null && !File.Exists(machine)) machine = null;
+                string runExe = opt.Dev ? exe : LocalCopy.Ensure(exe, machine);
+                LaunchAction act = Startup.OnLaunch(store, runExe, opt.Autostart, File.Exists, out handOver);
                 if (act == LaunchAction.Quit) return 0;
                 if (act == LaunchAction.HandOver && !opt.Dev)
                 {
@@ -76,7 +80,7 @@ namespace Domovoi.Windows.Tray
                 }
 
                 Log log = new Log(LogPath(opt), 1024L * 1024);
-                using (var app = new TrayApp(opt, store, log, exe))
+                using (var app = new TrayApp(opt, store, log, runExe))
                 {
                     var stop = new ManualResetEvent(false);
                     var waiter = new Thread(delegate ()

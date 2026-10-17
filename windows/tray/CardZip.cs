@@ -49,6 +49,7 @@ namespace Domovoi.Windows.Tray
         public string ConfigBlock;
         public List<string> CmdlineTokens;
         public string PayloadSha256;
+        public string ServerFingerprint;   // domovoi/server-identity.json, or null
         public List<CardFile> Files = new List<CardFile>();
 
         public bool IsPortal { get { return SetupTransport == "portal"; } }
@@ -86,6 +87,8 @@ namespace Domovoi.Windows.Tray
         static readonly Regex Sha256Line = new Regex(@"^([0-9a-f]{64})[ \t]+\*?payload\.tar\.gz\s*\z");
         static readonly Regex PlainName = new Regex(@"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\z");
         static readonly Regex Ssid = new Regex(@"^[\x21-\x7e]([\x20-\x7e]{0,30}[\x21-\x7e])?\z");
+        // Names Windows keeps for devices, with or without an extension.
+        static readonly Regex DeviceName = new Regex(@"^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\..*)?\z", RegexOptions.IgnoreCase);
 
         public static string Mib(long bytes)
         {
@@ -123,13 +126,39 @@ namespace Domovoi.Windows.Tray
             if (entry.StartsWith("domovoi/", StringComparison.Ordinal))
             {
                 string name = entry.Substring(8);
-                if (PlainName.IsMatch(name) && name != "." && name != "..")
+                if (PlainName.IsMatch(name) && !DeviceName.IsMatch(name) && !name.EndsWith(".", StringComparison.Ordinal))
                     return name == "ap.json" || name == "console.json" ? null : "domovoi\\" + name;
             }
             throw new CardZipException("This zip holds \"" + entry + "\", which a Domovoi card zip never does. Download the card files again from the dashboard.");
         }
 
+        // Open, with any failure (a damaged entry, an odd compression, a
+        // file in use) as a CardZipException the window can show.
         public static CardPackage Open(string path)
+        {
+            try { return OpenChecked(path); }
+            catch (CardZipException) { throw; }
+            catch (InvalidDataException) { throw new CardZipException("Part of that zip is damaged. Download the card files again from the dashboard."); }
+            catch (NotSupportedException) { throw new CardZipException("That zip uses a kind of compression Domovoi's zips never use. Download the card files again from the dashboard."); }
+            catch (IOException e) { throw new CardZipException("Can't read that file: " + e.Message); }
+            catch (UnauthorizedAccessException) { throw new CardZipException("Windows won't let this program read that file."); }
+            catch (OutOfMemoryException) { throw new CardZipException("That zip is far too big to be Domovoi's."); }
+        }
+
+        // Whether the card files were built by the Domovoi on this PC: the
+        // server identity they carry against the one the dashboard's open
+        // /api/health reports. It stops files that came from anywhere else
+        // (a download a web page pushed, say); the fingerprint is public,
+        // so it is not a signature.
+        public enum Origin { ThisServer, OtherServer, Unknown }
+
+        public static Origin FromThisServer(string zipFingerprint, string serverFingerprint)
+        {
+            if (string.IsNullOrEmpty(zipFingerprint) || string.IsNullOrEmpty(serverFingerprint)) return Origin.Unknown;
+            return zipFingerprint == serverFingerprint ? Origin.ThisServer : Origin.OtherServer;
+        }
+
+        static CardPackage OpenChecked(string path)
         {
             if (string.IsNullOrEmpty(path) || !File.Exists(path)) throw new CardZipException("There's no file there.");
             ZipArchive zip;
@@ -140,11 +169,15 @@ namespace Domovoi.Windows.Tray
             using (zip)
             {
                 var entries = new Dictionary<string, ZipArchiveEntry>(StringComparer.Ordinal);
+                // The card is FAT: names differing only in case (or in
+                // trailing dots and spaces) are the same file there.
+                var onCard = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (ZipArchiveEntry e in zip.Entries)
                 {
                     string name = e.FullName;
                     if (name.EndsWith("/", StringComparison.Ordinal) && e.Length == 0) continue;   // a folder entry
-                    if (entries.ContainsKey(name)) throw new CardZipException("This zip names \"" + name + "\" twice. Download the card files again.");
+                    if (entries.ContainsKey(name) || !onCard.Add(name.TrimEnd('.', ' ')))
+                        throw new CardZipException("This zip names \"" + name + "\" twice. Download the card files again.");
                     entries[name] = e;
                 }
                 foreach (string req in new[] { "domovoi/build-info.json", "domovoi/payload.sha256", "domovoi/payload.tar.gz", "domovoi/firstrun.sh", "domovoi/device-info.json", "config.txt", "cmdline.txt" })
@@ -194,17 +227,30 @@ namespace Domovoi.Windows.Tray
                 using (Stream s = entries["domovoi/payload.tar.gz"].Open()) actual = Sha256Hex(s);
                 if (actual != pkg.PayloadSha256)
                     throw new CardZipException("The satellite software in this zip is damaged (its SHA-256 doesn't match). Download the card files again.");
+                ZipArchiveEntry idEntry;
+                if (entries.TryGetValue("domovoi/server-identity.json", out idEntry))
+                    pkg.ServerFingerprint = Json.Str(ReadJson(idEntry, "server-identity.json"), "fingerprint");
                 return pkg;
             }
         }
 
+        const int TextMax = 1024 * 1024;
+
+        // At most TextMax bytes, counted as they are read (an entry can
+        // declare a smaller size than it inflates to).
         static string ReadText(ZipArchiveEntry e, string what)
         {
-            if (e.Length > 1024 * 1024) throw new CardZipException("This zip's " + what + " is far too big to be Domovoi's.");
+            if (e.Length > TextMax) throw new CardZipException("This zip's " + what + " is far too big to be Domovoi's.");
             using (Stream s = e.Open())
             using (var ms = new MemoryStream())
             {
-                s.CopyTo(ms);
+                var buf = new byte[65536];
+                int n;
+                while ((n = s.Read(buf, 0, buf.Length)) > 0)
+                {
+                    if (ms.Length + n > TextMax) throw new CardZipException("This zip's " + what + " is far too big to be Domovoi's.");
+                    ms.Write(buf, 0, n);
+                }
                 byte[] b = ms.ToArray();
                 try { return new UTF8Encoding(false, true).GetString(b); }
                 catch (DecoderFallbackException) { throw new CardZipException("This zip's " + what + " isn't text."); }

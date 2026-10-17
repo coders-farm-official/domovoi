@@ -224,7 +224,9 @@ namespace Domovoi.Windows.Tray
         public void OpenCardHelper()
         {
             if (wizard != null && !wizard.IsDisposed) { wizard.WindowState = FormWindowState.Normal; wizard.Activate(); return; }
-            wizard = new CardWizard(opt.WebUrl, new WindowsDrives(opt.FakeCards, !opt.Dev), opt.Downloads ?? Folders.Downloads(), OpenUrl);
+            string web = opt.WebUrl;
+            wizard = new CardWizard(web, new WindowsDrives(opt.FakeCards, !opt.Dev), opt.Downloads ?? Folders.Downloads(), OpenUrl,
+                delegate { return Probe.ServerFingerprint(web); });
             wizard.FormClosed += delegate { wizard.Dispose(); wizard = null; };
             wizard.Show();
             wizard.Activate();

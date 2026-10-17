@@ -149,6 +149,14 @@ namespace Domovoi.Windows.Tray
             return f;
         }
 
+        // The server identity's fingerprint the dashboard reports (the
+        // open /api/health), or null when it doesn't answer.
+        public static string ServerFingerprint(string webUrl)
+        {
+            Dictionary<string, object> health = GetJson(webUrl.TrimEnd('/') + "/api/health");
+            return Json.Str(Json.Obj(health, "identity"), "fingerprint");
+        }
+
         public static ServiceFact ServiceState(string name)
         {
             if (string.IsNullOrEmpty(name)) return ServiceFact.NotChecked;

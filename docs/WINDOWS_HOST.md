@@ -309,7 +309,9 @@ card's files as a zip and the icon's card helper puts them on the card:
    card helper**. Keep the setup network password it shows on screen.
 3. **Prepare a satellite card...** in the icon's menu. It picks the newest
    `domovoi-satellite-overlay*.zip` in Downloads (or **Browse**), checks it
-   (its shape, and the payload against its SHA-256), lists only removable
+   (its shape, the payload against its SHA-256, and that it was built by
+   the Domovoi on this PC: the server identity it carries against the one
+   the dashboard reports), lists only removable
    drives that look like a freshly flashed Raspberry Pi card (never a hard
    disk or the Windows drive), asks for the setup network password, writes
    the card, reads everything back to check it, and offers **Eject**.
@@ -335,13 +337,15 @@ An install made by a Setup without the icon (1.0.0-rc1, rc2) gets it in
 one of three ways:
 
 - **Run `DomovoiTray.exe` on its own** (keeps everything): download it
-  from the release page (its line is in `SHA256SUMS`), put it in any
-  folder and run it. It starts for your account at once and at each
-  sign-in from then on (value `DomovoiTray` under
-  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`; **Start with
-  Windows** turns it off). Each account that wants the icon runs it once.
-  Once a Setup with the icon is installed, its copy takes over and the
-  per-account start is removed.
+  from the release page (its line is in `SHA256SUMS`) and run it. It
+  starts for your account at once, copies itself to
+  `%LOCALAPPDATA%\Programs\Domovoi` (a folder only your account can
+  change, so nobody else on the PC can swap the program your sign-in
+  starts) and starts from there at each sign-in (value `DomovoiTray`
+  under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`; **Start
+  with Windows** turns it off). Each account that wants the icon runs it
+  once. Once a Setup with the icon is installed, its copy takes over and
+  the per-account start and copy are removed.
 - **Run the newer Setup over the install** (a repair): Setup stops
   Domovoi, replaces its programs (the icon included), and runs the newer
   `provision.sh` over the existing distro. The database, settings and

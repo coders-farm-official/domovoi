@@ -24,6 +24,7 @@ namespace Domovoi.Windows.Tray
         readonly string webUrl;
         readonly IDriveSource drives;
         readonly Action<string> openUrl;
+        readonly Func<string> serverFingerprint;
         readonly Label title = new Label(), lead = new Label();
         readonly Panel body = new Panel();
         readonly Button back = new Button(), next = new Button(), cancel = new Button();
@@ -59,11 +60,13 @@ namespace Domovoi.Windows.Tray
 
         public CardStep Step { get { return step; } }
 
-        public CardWizard(string webUrl, IDriveSource drives, string downloads, Action<string> openUrl)
+        // serverFingerprint: this PC's Domovoi's identity (Probe.ServerFingerprint), null when it doesn't answer.
+        public CardWizard(string webUrl, IDriveSource drives, string downloads, Action<string> openUrl, Func<string> serverFingerprint)
         {
             this.webUrl = webUrl.TrimEnd('/');
             this.drives = drives;
             this.openUrl = openUrl;
+            this.serverFingerprint = serverFingerprint;
             Text = "Prepare a satellite card";
             Icon = Icons.App(32);
             Font = SystemFonts.MessageBoxFont;
@@ -331,10 +334,25 @@ namespace Domovoi.Windows.Tray
             try
             {
                 Cursor = Cursors.WaitCursor;
-                package = CardZip.Open(path);
-                Note(zipResult, package.Summary(), OkColor);
+                CardPackage p = CardZip.Open(path);
+                string where = "\n" + Path.GetFileName(path) + ", saved " + File.GetLastWriteTime(path).ToString("d MMM yyyy, HH:mm") + ".";
+                switch (CardZip.FromThisServer(p.ServerFingerprint, serverFingerprint()))
+                {
+                    case CardZip.Origin.OtherServer:
+                        Note(zipResult, "These card files were built by a different Domovoi server, not the one on this PC, so a satellite made from them would never pair with it. Build them in this PC's dashboard (step 1)." + where, ErrorColor);
+                        break;
+                    case CardZip.Origin.Unknown:
+                        package = p;
+                        Note(zipResult, package.Summary() + where + "\nDomovoi on this PC isn't answering, so the helper can't check these files came from it. Use them only if you downloaded them from its dashboard.", WarnColor);
+                        break;
+                    default:
+                        package = p;
+                        Note(zipResult, package.Summary() + " Built by the Domovoi on this PC." + where, OkColor);
+                        break;
+                }
             }
             catch (CardZipException e) { Note(zipResult, e.Message, ErrorColor); }
+            catch (Exception e) { Note(zipResult, "That zip couldn't be read: " + e.Message, ErrorColor); }
             finally { Cursor = Cursors.Default; }
             chosen = null;
             UpdateButtons();
@@ -441,6 +459,7 @@ namespace Domovoi.Windows.Tray
                 catch (IOException e) { error = "Windows couldn't write to the card: " + e.Message + " Check the card is still in, then try again."; }
                 catch (UnauthorizedAccessException) { error = "Windows won't let this program write to the card. If the card has a lock switch, slide it to unlocked, then try again."; }
                 catch (InvalidDataException) { error = "The zip couldn't be read. Download the card files again."; }
+                catch (Exception e) { error = "Writing the card stopped: " + e.Message; }
                 BeginInvoke(new Action(delegate { WriteDone(result, error); }));
             });
             t.IsBackground = true;

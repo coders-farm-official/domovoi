@@ -90,6 +90,49 @@ namespace Domovoi.Windows.Tray
         }
     }
 
+    // Where a copy run on its own starts from at sign-in: its own folder in
+    // this account's local programs (%LOCALAPPDATA%\Programs\Domovoi),
+    // which only this account can write, never wherever it was downloaded
+    // to (a shared folder like C:\Users\Public\Downloads lets other
+    // accounts replace the exe, and the sign-in start would then run
+    // theirs). Setup's copy, in Program Files, needs none.
+    public static class LocalCopy
+    {
+        public static string Folder
+        {
+            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Programs\Domovoi"); }
+        }
+
+        // The exe to register: the local copy (made or refreshed from exe),
+        // or exe itself when Setup's copy is installed or no copy could be
+        // made. machineExe: Setup's, when it exists.
+        public static string Ensure(string exe, string machineExe)
+        {
+            return Ensure(exe, machineExe, Folder);
+        }
+
+        // folder: the tests pass their own.
+        public static string Ensure(string exe, string machineExe, string folder)
+        {
+            string target = Path.Combine(folder, "DomovoiTray.exe");
+            try
+            {
+                if (machineExe != null)
+                {
+                    // Setup's copy took over: the local one is not needed.
+                    if (File.Exists(target) && !string.Equals(Path.GetFullPath(exe), target, StringComparison.OrdinalIgnoreCase)) File.Delete(target);
+                    return exe;
+                }
+                if (string.Equals(Path.GetFullPath(exe), target, StringComparison.OrdinalIgnoreCase)) return target;
+                Directory.CreateDirectory(folder);
+                File.Copy(exe, target, true);
+                return target;
+            }
+            catch (IOException) { return File.Exists(target) && machineExe == null ? target : exe; }
+            catch (UnauthorizedAccessException) { return File.Exists(target) && machineExe == null ? target : exe; }
+        }
+    }
+
     public enum LaunchAction { Continue, Quit, HandOver }
 
     public static class Startup

@@ -57,7 +57,7 @@ namespace Domovoi.Windows.Tray
 
             string downloads = opt.Downloads ?? Folders.Downloads();
             var drives = new WindowsDrives(opt.FakeCards, false);
-            using (var w = new CardWizard(opt.WebUrl, new WindowsDrives(null, false), Path.Combine(dir, "no-such-folder"), delegate { }))
+            using (var w = new CardWizard(opt.WebUrl, new WindowsDrives(null, false), Path.Combine(dir, "no-such-folder"), delegate { }, delegate { return Probe.ServerFingerprint(opt.WebUrl); }))
             {
                 FormShot(w, "card-1-build.png");
                 w.GoTo(CardStep.Zip);
@@ -74,7 +74,7 @@ namespace Domovoi.Windows.Tray
                 }
             }
             if (CardZip.Newest(downloads) == null) { log.Write("no zip in " + downloads + ": the card steps after the zip are not pictured"); return 0; }
-            using (var w = new CardWizard(opt.WebUrl, drives, downloads, delegate { }))
+            using (var w = new CardWizard(opt.WebUrl, drives, downloads, delegate { }, delegate { return Probe.ServerFingerprint(opt.WebUrl); }))
             {
                 w.GoTo(CardStep.Zip);
                 FormShot(w, "card-2-zip.png");

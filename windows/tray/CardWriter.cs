@@ -155,16 +155,9 @@ namespace Domovoi.Windows.Tray
                 result.Written.Add("domovoi/ap.json");
             }
 
-            progress("Adding Domovoi's lines to config.txt and cmdline.txt", 88);
-            bool changed;
-            byte[] newConfig = BootText.Apply(File.ReadAllBytes(config), true, delegate (string t) { return BootText.EditConfig(t, pkg.ConfigBlock); }, out changed);
-            if (changed) { WriteBytes(config, newConfig); result.Written.Add("config.txt"); }
-            result.ConfigChanged = changed;
-            byte[] newCmdline = BootText.Apply(File.ReadAllBytes(cmdline), true, delegate (string t) { return BootText.EditCmdline(t, pkg.CmdlineTokens); }, out changed);
-            if (changed) { WriteBytes(cmdline, newCmdline); result.Written.Add("cmdline.txt"); }
-            result.CmdlineChanged = changed;
-
-            progress("Reading everything back to check it", 90);
+            // Every copied file read back and checked BEFORE the boot hook
+            // goes in: a card that fails here never starts Domovoi's setup.
+            progress("Reading the copied files back to check them", 86);
             foreach (KeyValuePair<string, string> kv in hashes)
             {
                 string got;
@@ -184,6 +177,17 @@ namespace Domovoi.Windows.Tray
                 if (!Same(File.ReadAllBytes(Path.Combine(root, "domovoi", "ap.json")), ap)) throw new CardWriteException("domovoi/ap.json on the card isn't what was written. Try another card.");
                 result.Checked.Add("domovoi/ap.json");
             }
+
+            progress("Adding Domovoi's lines to config.txt and cmdline.txt", 92);
+            bool changed;
+            byte[] newConfig = BootText.Apply(File.ReadAllBytes(config), true, delegate (string t) { return BootText.EditConfig(t, pkg.ConfigBlock); }, out changed);
+            if (changed) { WriteBytes(config, newConfig); result.Written.Add("config.txt"); }
+            result.ConfigChanged = changed;
+            byte[] newCmdline = BootText.Apply(File.ReadAllBytes(cmdline), true, delegate (string t) { return BootText.EditCmdline(t, pkg.CmdlineTokens); }, out changed);
+            if (changed) { WriteBytes(cmdline, newCmdline); result.Written.Add("cmdline.txt"); }
+            result.CmdlineChanged = changed;
+
+            progress("Reading config.txt and cmdline.txt back to check them", 96);
             byte[] cfg = File.ReadAllBytes(config), cmd = File.ReadAllBytes(cmdline);
             if (!Same(cfg, newConfig) || BootText.EditConfig(BootText.Read(cfg), pkg.ConfigBlock) != BootText.Read(cfg))
                 throw new CardWriteException("config.txt on the card isn't what was written. Try another card.");

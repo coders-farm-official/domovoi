@@ -260,6 +260,31 @@ static partial class Tests
             t.Extra.Add(new KeyValuePair<string, byte[]>("domovoi/ap.json", Encoding.ASCII.GetBytes("{}")));
             True(CardZip.Open(MakeZip(d, t)).Files.All(f => f.Dest != "domovoi\\ap.json"), "ap.json from a zip is not copied");
         });
+        Run("card zip: device names, FAT's case-blind names and trailing dots are refused", delegate
+        {
+            string d = TempDir("zip-fat");
+            foreach (string evil in new[] { "domovoi/NUL", "domovoi/con.txt", "domovoi/COM1", "domovoi/lpt9.log", "domovoi/notes." })
+            {
+                var s1 = new ZipSpec();
+                s1.Extra.Add(new KeyValuePair<string, byte[]>(evil, new byte[] { 1 }));
+                Refused(MakeZip(d, s1), "never does");
+            }
+            foreach (string twin in new[] { "domovoi/PAYLOAD.TAR.GZ", "domovoi/FirstRun.sh", "Config.txt", "domovoi/firstrun.sh." })
+            {
+                var s2 = new ZipSpec();
+                s2.Extra.Add(new KeyValuePair<string, byte[]>(twin, new byte[] { 1 }));
+                Refused(MakeZip(d, s2), "twice");
+            }
+        });
+        Run("card zip: built by this PC's Domovoi, another server's, or can't tell", delegate
+        {
+            CardPackage p = CardZip.Open(MakeZip(TempDir("zip-origin"), new ZipSpec()));
+            Eq("ab:cd", p.ServerFingerprint, "the zip's server identity");
+            Eq(CardZip.Origin.ThisServer, CardZip.FromThisServer("ab:cd", "ab:cd"), "same");
+            Eq(CardZip.Origin.OtherServer, CardZip.FromThisServer("ab:cd", "ef:01"), "another server");
+            Eq(CardZip.Origin.Unknown, CardZip.FromThisServer("ab:cd", null), "this PC's Domovoi not answering");
+            Eq(CardZip.Origin.Unknown, CardZip.FromThisServer(null, "ab:cd"), "a zip without an identity");
+        });
         Run("card zip: the setup password's rules (overlay.py's alphabet and length)", delegate
         {
             True(SetupPassword.Problem("k7tqmzr4wd") == null, "a good one");
@@ -576,6 +601,20 @@ static partial class Tests
             Eq(LaunchAction.Quit, Startup.OnLaunch(s, installed, true, exists, out to), "then its sign-in start does nothing");
             Eq(LaunchAction.Continue, Startup.OnLaunch(new MemStore { Machine = "\"" + @"C:\gone\DomovoiTray.exe" + "\" --autostart" }, copy, false, exists, out to), "a machine value whose exe is gone is ignored");
         });
+        Run("startup: a copy run on its own registers a private copy, which Setup's later replaces", delegate
+        {
+            string dl = TempDir("dl"), local = Path.Combine(TempDir("local"), "Programs-Domovoi");
+            string exe = Path.Combine(dl, "DomovoiTray.exe");
+            File.WriteAllText(exe, "v1");
+            string reg = LocalCopy.Ensure(exe, null, local);
+            Eq(Path.Combine(local, "DomovoiTray.exe"), reg, "registers the private copy");
+            Eq("v1", File.ReadAllText(reg), "copied");
+            File.WriteAllText(exe, "v2");
+            Eq("v2", File.ReadAllText(LocalCopy.Ensure(exe, null, local)), "a newer download refreshes it");
+            Eq(reg, LocalCopy.Ensure(reg, null, local), "run from the private copy: itself");
+            Eq(exe, LocalCopy.Ensure(exe, @"C:\Program Files\Domovoi\DomovoiTray.exe", local), "Setup's copy installed: nothing to register");
+            True(!File.Exists(reg), "and the private copy goes");
+        });
         Run("startup: the Run command's exe", delegate
         {
             Eq(installed, Startup.ExeOf("\"" + installed + "\" --autostart"), "quoted");
@@ -611,7 +650,12 @@ static partial class Tests
         });
         Run("admin: restart and copy-logs commands", delegate
         {
-            Eq("-NoProfile -NonInteractive -WindowStyle Hidden -Command \"Restart-Service -Name 'DomovoiHost'\"", Admin.RestartArguments("DomovoiHost"), "restart");
+            Eq("-NoProfile -NonInteractive -WindowStyle Hidden -Command \"$env:PSModulePath = [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine'); "
+                + @"Microsoft.PowerShell.Management\Restart-Service -Name 'DomovoiHost'" + "\"", Admin.RestartArguments("DomovoiHost"), "restart, from the machine's modules only");
+            True(Admin.InsideProfile(@"C:\Users\alex\Documents", @"C:\Users\alex"), "Documents in the profile");
+            True(Admin.InsideProfile(@"C:\Users\alex\OneDrive\Documents", @"C:\Users\alex\"), "OneDrive's Documents");
+            True(!Admin.InsideProfile(@"C:\Windows\System32", @"C:\Users\alex"), "a Documents pointed at Windows");
+            True(!Admin.InsideProfile(@"C:\Users\alexander\Documents", @"C:\Users\alex"), "another profile with the same start");
             Throws<ArgumentException>(() => Admin.RestartArguments("x'; Stop-Computer; '"), "no injection");
             Throws<ArgumentException>(() => Admin.RestartArguments(null), "no service");
             True(Admin.PowerShell.StartsWith(Environment.SystemDirectory, StringComparison.OrdinalIgnoreCase), "System32's PowerShell");

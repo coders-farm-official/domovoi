@@ -43,8 +43,9 @@ and dashboard wording; no migration, nothing changes on Linux servers.
   Pi (PROVISIONING §4); the values sent are unchanged.
 * **An install from before the icon** (1.0.0-rc1, rc2): download
   `DomovoiTray.exe` from the release (it is in `SHA256SUMS`; the release
-  script now attaches it) and run it once from any folder: it starts for
-  that account at each sign-in from then on. Uninstalling and installing
+  script now attaches it) and run it once: it copies itself to the
+  account's own `%LOCALAPPDATA%\Programs\Domovoi` and starts from there
+  at each sign-in. Uninstalling and installing
   again also works but deletes Domovoi's data (no keep-data uninstall
   yet).
 
