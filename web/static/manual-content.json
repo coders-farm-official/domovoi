@@ -2942,10 +2942,13 @@
        "text": "\"forget me\", in your own voice: deletes your profile, voice samples, memories and everything you said to Domovoi."
       },
       {
-       "text": "{admin} **Keep voice history** in [Settings → Configuration](route:settings/configuration): 30 days, 90 days (the default), 1 year or forever. **Delete all voice history** clears it at once."
+       "text": "{admin} [People](route:people) → **Voice history** → **Keep voice history**: 30 days, 90 days (the default), 1 year or Forever. Older turns are deleted every day. It's also in [Settings → Configuration](route:settings/configuration) → **Privacy**."
       },
       {
-       "text": "{admin} **forget person** on [People](route:people) does what \"forget me\" does, for anyone."
+       "text": "{admin} **Delete all voice history**, on the same page, deletes it all at once. People, voice samples, memories, notes, timers and chats stay."
+      },
+      {
+       "text": "{admin} **forget person** on [People](route:people) does what \"forget me\" does, for anyone: it deletes only what that person said."
       },
       {
        "text": "\"never save my voice\": Domovoi stops learning it."

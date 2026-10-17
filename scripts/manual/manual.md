@@ -967,10 +967,10 @@ adjusted in one place. Each "### name" replaces the {{name}} line above.
   spoken "what can you do"). Their phrases are marked pending in PHRASES
   (build_manual.py) until that work lands.
 - voice-history-*, forget-me-phrase: wf/voice-history's "Keep voice
-  history" setting, "Delete all voice history", and "forget me" deleting
-  that person's own turns.
-  TODO(voice-history): check the labels and where the setting lives
-  against that branch, then fix the route below.
+  history" setting (People → Voice history, and Settings → Configuration
+  → Privacy; 30 days, 90 days, 1 year or Forever, 90 by default), "Delete
+  all voice history", and "forget me" / forget person deleting that
+  person's own turns. Labels as that branch has them (f31ed01e).
 -->
 
 ### clock-reminders-intro
@@ -1040,9 +1040,11 @@ change events here: by voice it only reads.
 
 - "forget me", in your own voice: deletes your profile, voice samples,
   memories and everything you said to Domovoi.
-- *(admin)* **Keep voice history** in [Settings →
-  Configuration](#settings/configuration): 30 days, 90 days (the
-  default), 1 year or forever. **Delete all voice history** clears it at
-  once.
+- *(admin)* [People](#people) → **Voice history** → **Keep voice
+  history**: 30 days, 90 days (the default), 1 year or Forever. Older
+  turns are deleted every day. It's also in [Settings →
+  Configuration](#settings/configuration) → **Privacy**.
+- *(admin)* **Delete all voice history**, on the same page, deletes it all
+  at once. People, voice samples, memories, notes, timers and chats stay.
 - *(admin)* **forget person** on [People](#people) does what "forget me"
-  does, for anyone.
+  does, for anyone: it deletes only what that person said.
