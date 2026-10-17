@@ -18,7 +18,7 @@
 //              when the component leans on a shared helper such as relTime or
 //              webHref); a preloaded file's real components take the place of
 //              the stubs below for that scenario
-// Output: { <scenario name>: [ { type, props, text }, ... ] }
+// Output: { <scenario name>: [ { type, props, text, on }, ... ] }  (on: function-prop names)
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -93,12 +93,14 @@ const render = ({ file, component, props = {}, fnProps = [], apiObject = null, a
     const rendered = typeof node.type === 'function' ? node.type(node.props) : node;
     const p = (rendered && rendered.props) || {};
     const plain = {};
+    const on = [];  // names of the function props (onClick, onChange, ...)
     for (const [k, v] of Object.entries(p)) {
-      if (k === 'children' || typeof v === 'function' || (v && typeof v === 'object')) continue;
+      if (typeof v === 'function') { if (k !== 'children') on.push(k); continue; }
+      if (k === 'children' || (v && typeof v === 'object')) continue;
       plain[k] = v;
     }
     const text = (p.children || []).filter((c) => typeof c === 'string' || typeof c === 'number').join('');
-    out.push({ type, props: plain, text });
+    out.push({ type, props: plain, text, on });
     walk(p.children);
   };
   walk(Component(fullProps));
