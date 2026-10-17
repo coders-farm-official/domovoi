@@ -122,8 +122,24 @@ python -m web.scripts.dump_openapi       # regenerate web/openapi.json after end
 ## Running the tests
 
 ```powershell
+# Which test database: always named, never guessed (domovoi/tests/db_guard.py).
+# The dev compose Postgres publishes 6432, the same port an installed
+# Domovoi uses for its live database, so that port also needs the opt-in:
+$env:TEST_DATABASE_URL = "postgresql+asyncpg://domovoi:domovoi@127.0.0.1:6432/domovoi_test"
+$env:DOMOVOI_TEST_DB_ON_6432 = "1"     # "6432 here is my dev compose Postgres"
 pytest
 ```
+
+```bash
+export TEST_DATABASE_URL=postgresql+asyncpg://domovoi:domovoi@127.0.0.1:6432/domovoi_test
+export DOMOVOI_TEST_DB_ON_6432=1
+pytest
+```
+
+On a machine that also runs Domovoi for real, put the test database on
+another port instead (a second Postgres container), and leave
+`DOMOVOI_TEST_DB_ON_6432` unset: the suite then can never reach the
+household's database. `satellite/tests` alone needs no database at all.
 
 Facts about the suite you should know before touching it:
 
@@ -137,6 +153,11 @@ Facts about the suite you should know before touching it:
   appending `_test` to the `DATABASE_URL` dbname, and **refuses to run** if
   the resolved dbname doesn't end in `_test`. This is the single line
   protecting your real data — the suite TRUNCATEs tables. Never weaken it.
+  Before that, it stops when neither `TEST_DATABASE_URL` nor `DATABASE_URL`
+  is set (there is no built-in default any more), and when the database is
+  on port 6432 without `DOMOVOI_TEST_DB_ON_6432=1`
+  (`domovoi/tests/db_guard.py`; `python -m domovoi.tests.xdist_db` refuses
+  the same).
 * Your home is protected the same way. The repo-root `conftest.py`, loaded
   before any other, points `HOME`/`USERPROFILE` at a temp folder of each
   process's own (each `-n` worker too) and `DOMOVOI_HOME` at its

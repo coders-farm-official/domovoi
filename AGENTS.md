@@ -136,7 +136,11 @@ python -m web.scripts.dump_openapi   # writes web/openapi.json
   Plugins own their migrations in their own Postgres schema — plugins never
   run DDL against core tables.
 - **Tests must use the test DB.** `domovoi/tests/conftest.py` derives
-  `<dbname>_test` from `DATABASE_URL` and refuses to run otherwise.
+  `<dbname>_test` from `DATABASE_URL` and refuses to run otherwise. Set
+  `TEST_DATABASE_URL` (or `DATABASE_URL`) every time: with neither, the run
+  stops, and a test database on port 6432, the port an installed Domovoi's
+  live Postgres uses, needs `DOMOVOI_TEST_DB_ON_6432=1` as well
+  (`domovoi/tests/db_guard.py`).
 - **Tests never write the real `~/.domovoi`.** The repo-root `conftest.py`
   points `HOME`/`USERPROFILE` at a temp folder before anything imports
   domovoi, and fails the run, naming the paths, if the real folder changed
