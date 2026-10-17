@@ -15,8 +15,10 @@ Server update (core and dashboard; no migration).
   ("in 10 hours", "in 7 hours", "in 24 hours"), silently wrong. The time is
   the server's own time zone, the one "what time is it" answers in (set the
   server's zone if it is on UTC); a time with no AM/PM is the next one
-  that comes, a time already gone today is tomorrow's, "wake me up at 7"
-  is 7 AM, and a day with no time takes 9 AM (morning), 2 PM (afternoon),
+  that comes, AM or PM, unless you say which, wake-ups included ("wake me
+  up at 5" at 3 PM is 5 PM, a nap; at 11 PM it is 5 AM); a time already
+  gone today is tomorrow's; "am", "pm", "in the morning", "tonight" and
+  the like always win; a day with no time takes 9 AM (morning), 2 PM (afternoon),
   6 PM (evening) or 8 PM (tonight). **The reply always says the clock
   time** ("I'll remind you tomorrow at 6 PM to take the bins out."). A
   time already gone on a day that was named ("tonight at 9" at 10 PM) is

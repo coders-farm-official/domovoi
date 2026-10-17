@@ -165,13 +165,33 @@ async def test_six_pm_said_in_the_afternoon_is_todays(db_session) -> None:
 
 @requires_db
 @pytest.mark.asyncio
-async def test_wake_me_up_at_7_is_7_am(db_session) -> None:
-    with at(2026, 10, 16, 14, 0):
-        r = await _say(db_session, "wake me up at 7")
-    assert r.text == "I'll wake you tomorrow at 7 AM."
-    [(label, message, expires, _)] = await _rows(db_session)
-    assert (label, message) == ("7 AM alarm", "time to wake up")
-    assert expires == _utc(2026, 10, 17, 7, 0)
+@pytest.mark.parametrize(
+    ("said", "wall_now", "reply", "label", "due"),
+    [
+        # a bare time is the next one that comes, wake-ups too (owner,
+        # 2026-10-17): a nap at 3 PM, the morning at 11 PM
+        ("wake me up at 5", (2026, 10, 16, 15, 0), "I'll wake you at 5 PM.", "5 PM alarm",
+         (2026, 10, 16, 17, 0)),
+        ("wake me up at 5", (2026, 10, 16, 23, 0), "I'll wake you tomorrow at 5 AM.", "5 AM alarm",
+         (2026, 10, 17, 5, 0)),
+        ("wake me up at 7", (2026, 10, 16, 14, 0), "I'll wake you at 7 PM.", "7 PM alarm",
+         (2026, 10, 16, 19, 0)),
+        # said which, it wins
+        ("wake me up at 7 am", (2026, 10, 16, 14, 0), "I'll wake you tomorrow at 7 AM.",
+         "7 AM alarm", (2026, 10, 17, 7, 0)),
+        ("wake me up tomorrow morning at 7", (2026, 10, 16, 14, 0),
+         "I'll wake you tomorrow at 7 AM.", "7 AM alarm", (2026, 10, 17, 7, 0)),
+    ],
+)
+async def test_wake_me_up_is_the_next_time_it_comes(
+    db_session, said, wall_now, reply, label, due
+) -> None:
+    with at(*wall_now):
+        r = await _say(db_session, said)
+    assert r.text == reply
+    [(got_label, message, expires, _)] = await _rows(db_session)
+    assert (got_label, message) == (label, "time to wake up")
+    assert expires == _utc(*due)
 
 
 @requires_db
@@ -333,7 +353,7 @@ async def test_the_list_says_a_far_reminder_by_its_clock_time(db_session) -> Non
 @pytest.mark.asyncio
 async def test_cancel_an_alarm_by_its_time(db_session) -> None:
     with at(2026, 10, 16, 14, 0):
-        await _say(db_session, "wake me up at 7")
+        await _say(db_session, "wake me up at 7 am")
         await _say(db_session, "set an alarm for 9 pm")
         # a task that ends in the word is no alarm
         await _say(db_session, "remind me at 8 pm to check the smoke alarm")

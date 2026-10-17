@@ -27,10 +27,11 @@ and parsers for the text a fragment matched:
 
 The rules (owner, 2026-10-17):
 
-* "wake me up at 7" means 7 AM (``resolve(..., wake=True)``).
-* Otherwise a time with no AM/PM is the next time that comes: "at 7" at
-  23:20 is 7 AM tomorrow, at 14:00 it is 7 PM today; "at 6 pm" at 23:20 is
-  tomorrow's.
+* A time with no AM/PM is the next time that comes, AM or PM, unless the
+  person says which: "at 7" at 23:20 is 7 AM tomorrow, at 14:00 it is 7 PM
+  today; "at 6 pm" at 23:20 is tomorrow's. "wake me up at 5" is no
+  exception: at 15:00 it is 5 PM (a nap), at 23:00 5 AM. "am", "pm", "in
+  the morning", "tonight" and the like always win.
 * A day with no time takes the part of day's usual hour (morning 9 AM,
   afternoon 2 PM, evening 6 PM, tonight 8 PM) or 9 AM; the reply always
   says the clock time, so a wrong guess is heard.
@@ -296,7 +297,7 @@ DEFAULT_PART_HOUR: dict[str, int] = {"morning": 9, "afternoon": 14, "evening": 1
 DEFAULT_DAY_HOUR = 9
 
 
-def candidate_hours(w: SpokenWhen, *, wake: bool = False) -> list[tuple[int, int]]:
+def candidate_hours(w: SpokenWhen) -> list[tuple[int, int]]:
     """(hour 0-23, extra days) in the order to try: the extra day is for a
     time that belongs to the night after the named day (midnight, "1 at
     night")."""
@@ -322,13 +323,11 @@ def candidate_hours(w: SpokenWhen, *, wake: bool = False) -> list[tuple[int, int
             # "tonight at 12", "1 at night": the small hours after that day.
             return [(h % 12, 1 if w.day is not None else 0)]
         return [(h % 12 + 12, 0)]
-    if wake:
-        return [(h % 12, 0)]
-    # No AM/PM: whichever comes first.
+    # No AM/PM and no part of the day: whichever comes first.
     return [(h % 12, 0), (h % 12 + 12, 0)]
 
 
-def resolve(w: SpokenWhen, now: datetime, *, wake: bool = False) -> datetime | WhenProblem:
+def resolve(w: SpokenWhen, now: datetime) -> datetime | WhenProblem:
     """The wall-clock datetime ``w`` means, said at wall-clock ``now``
     (both naive, household zone): the first candidate after ``now``."""
     today = now.date()
@@ -347,7 +346,7 @@ def resolve(w: SpokenWhen, now: datetime, *, wake: bool = False) -> datetime | W
         if w.next_week and ahead == 0:
             ahead = 7
         days = [today + timedelta(days=ahead), today + timedelta(days=ahead + 7)]
-    candidates = candidate_hours(w, wake=wake)
+    candidates = candidate_hours(w)
     gone: datetime | None = None
     for d in days:
         options = sorted(

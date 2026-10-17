@@ -56,7 +56,8 @@ Clock times (2026-10-17). "remind me at 6 pm to take the bins out",
 read by ``handlers/shared/clock_time`` and placed on the household's wall
 clock (``domovoi/household_time``: the server's own zone, the one "what
 time is it" answers from): the next time it comes, so "at 6 pm" said at
-23:20 is tomorrow's; "wake me up at 7" is 7 AM. The reply says the clock
+23:20 is tomorrow's, and a time with no AM/PM is whichever comes first
+("wake me up at 5" at 15:00 is 5 PM, at 23:00 5 AM). The reply says the clock
 time ("I'll remind you tomorrow at 6 PM to take the bins out."). Before
 this they reached the tool model, which cannot see the clock and guessed
 a ``duration_sec`` (qwen3:8b: "remind me at 6 pm" at 23:20 → "in 10
@@ -313,7 +314,7 @@ _CREATE_TOPIC_AT_RE = re.compile(
     rf"(?P<when>{WHEN_FOR_PATTERN}){_POLITE}$"
 )
 
-# "wake me up at 7" (7 AM) / "wake me at 6:30 tomorrow" / "wake me up
+# "wake me up at 7" (the next 7) / "wake me at 6:30 tomorrow" / "wake me up
 # tomorrow at 7"
 _WAKE_VERB = r"(?:wake (?:me|us)(?: up)?|get (?:me|us) up)"
 _WAKE_AT_RE = re.compile(rf"^{_WAKE_VERB}{_POLITE},? {_WHEN}{_POLITE}$")
@@ -868,7 +869,7 @@ class ReminderHandler(Handler):
             return None
         now_utc = household_time.utc_now()
         now_local = household_time.to_local(now_utc)
-        target = resolve_when(when, now_local, wake=(kind == "wake"))
+        target = resolve_when(when, now_local)
         if isinstance(target, WhenProblem):
             return self._reply(ctx, _when_problem_text(target, kind, now_local))
         expires_at = household_time.to_utc(target)

@@ -1,9 +1,10 @@
 """Spoken clock times and days (handlers/shared/clock_time) and the
 household wall clock they are placed on (domovoi/household_time).
 
-DB-free. The rules (owner, 2026-10-17): "wake me up at 7" is 7 AM;
-otherwise the next time that comes, a time already gone today meaning
-tomorrow; the reply says the clock time. DST is tested on a hand-written
+DB-free. The rules (owner, 2026-10-17): a time with no AM/PM is the next
+time it comes, AM or PM, unless the person says which ("wake me up at 7"
+included); a time already gone today means tomorrow; the reply says the
+clock time. DST is tested on a hand-written
 US Eastern zone (household_time_testkit), which needs no tzdata.
 """
 
@@ -26,13 +27,15 @@ _ALARM_WHEN = re.compile(rf"^(?:{ct.ALARM_WHEN_PATTERN})$")
 LATE = datetime(2026, 10, 16, 23, 20)
 MORNING = datetime(2026, 10, 16, 5, 0)
 AFTERNOON = datetime(2026, 10, 16, 14, 0)
+NAP = datetime(2026, 10, 16, 15, 0)
+BEDTIME = datetime(2026, 10, 16, 23, 0)
 
 
-def _resolve(said: str, now: datetime, *, wake: bool = False):
+def _resolve(said: str, now: datetime):
     assert _WHEN.match(said), f"{said!r} is not a WHEN"
     w = ct.parse_when(said)
     assert w is not None, said
-    return ct.resolve(w, now, wake=wake)
+    return ct.resolve(w, now)
 
 
 # ─── What the grammar takes ───────────────────────────────────────────────
@@ -80,63 +83,66 @@ def test_a_bare_number_is_a_time_only_after_at_or_alarm() -> None:
 
 
 @pytest.mark.parametrize(
-    ("said", "now", "wake", "target", "spoken"),
+    ("said", "now", "target", "spoken"),
     [
         # a clock time, 12 and 24 hour: the next one that comes
-        ("at 6 pm", LATE, False, datetime(2026, 10, 17, 18, 0), "tomorrow at 6 PM"),
-        ("at 6 pm", AFTERNOON, False, datetime(2026, 10, 16, 18, 0), "at 6 PM"),
-        ("at 6 p.m.", AFTERNOON, False, datetime(2026, 10, 16, 18, 0), "at 6 PM"),
-        ("at 18:00", LATE, False, datetime(2026, 10, 17, 18, 0), "tomorrow at 6 PM"),
-        ("at 6:30 a.m", LATE, False, datetime(2026, 10, 17, 6, 30), "tomorrow at 6:30 AM"),
-        ("at 07:30", AFTERNOON, False, datetime(2026, 10, 17, 7, 30), "tomorrow at 7:30 AM"),
-        ("at 12 am", LATE, False, datetime(2026, 10, 17, 0, 0), "at midnight"),
+        ("at 6 pm", LATE, datetime(2026, 10, 17, 18, 0), "tomorrow at 6 PM"),
+        ("at 6 pm", AFTERNOON, datetime(2026, 10, 16, 18, 0), "at 6 PM"),
+        ("at 6 p.m.", AFTERNOON, datetime(2026, 10, 16, 18, 0), "at 6 PM"),
+        ("at 18:00", LATE, datetime(2026, 10, 17, 18, 0), "tomorrow at 6 PM"),
+        ("at 6:30 a.m", LATE, datetime(2026, 10, 17, 6, 30), "tomorrow at 6:30 AM"),
+        ("at 07:30", AFTERNOON, datetime(2026, 10, 17, 7, 30), "tomorrow at 7:30 AM"),
+        ("at 12 am", LATE, datetime(2026, 10, 17, 0, 0), "at midnight"),
         # "7" alone: whichever 7 comes next
-        ("at 7", LATE, False, datetime(2026, 10, 17, 7, 0), "tomorrow at 7 AM"),
-        ("at 7", AFTERNOON, False, datetime(2026, 10, 16, 19, 0), "at 7 PM"),
-        ("at 7", MORNING, False, datetime(2026, 10, 16, 7, 0), "at 7 AM"),
-        ("at seven", AFTERNOON, False, datetime(2026, 10, 16, 19, 0), "at 7 PM"),
-        # "wake me up at 7" is 7 AM
-        ("at 7", AFTERNOON, True, datetime(2026, 10, 17, 7, 0), "tomorrow at 7 AM"),
-        ("at 7", MORNING, True, datetime(2026, 10, 16, 7, 0), "at 7 AM"),
-        ("at 7 pm", AFTERNOON, True, datetime(2026, 10, 16, 19, 0), "at 7 PM"),
+        ("at 7", LATE, datetime(2026, 10, 17, 7, 0), "tomorrow at 7 AM"),
+        ("at 7", AFTERNOON, datetime(2026, 10, 16, 19, 0), "at 7 PM"),
+        ("at 7", MORNING, datetime(2026, 10, 16, 7, 0), "at 7 AM"),
+        ("at seven", AFTERNOON, datetime(2026, 10, 16, 19, 0), "at 7 PM"),
+        # no AM/PM and no exception for a wake-up: at 3 PM "5" is a nap's
+        # 5 PM, at 11 PM the morning's 5 AM; said explicitly, it wins
+        ("at 5", NAP, datetime(2026, 10, 16, 17, 0), "at 5 PM"),
+        ("at 5", BEDTIME, datetime(2026, 10, 17, 5, 0), "tomorrow at 5 AM"),
+        ("at 5 am", NAP, datetime(2026, 10, 17, 5, 0), "tomorrow at 5 AM"),
+        ("at 5 in the morning", NAP, datetime(2026, 10, 17, 5, 0), "tomorrow at 5 AM"),
+        ("at 7 pm", AFTERNOON, datetime(2026, 10, 16, 19, 0), "at 7 PM"),
         # words
-        ("at six thirty", AFTERNOON, False, datetime(2026, 10, 16, 18, 30), "at 6:30 PM"),
-        ("at half past six", LATE, False, datetime(2026, 10, 17, 6, 30), "tomorrow at 6:30 AM"),
-        ("at quarter to seven", AFTERNOON, False, datetime(2026, 10, 16, 18, 45), "at 6:45 PM"),
-        ("at ten to six", AFTERNOON, False, datetime(2026, 10, 16, 17, 50), "at 5:50 PM"),
-        ("at six oh five", AFTERNOON, False, datetime(2026, 10, 16, 18, 5), "at 6:05 PM"),
-        ("at 7 in the morning", AFTERNOON, False, datetime(2026, 10, 17, 7, 0), "tomorrow at 7 AM"),
-        ("at 9 at night", AFTERNOON, False, datetime(2026, 10, 16, 21, 0), "at 9 PM"),
+        ("at six thirty", AFTERNOON, datetime(2026, 10, 16, 18, 30), "at 6:30 PM"),
+        ("at half past six", LATE, datetime(2026, 10, 17, 6, 30), "tomorrow at 6:30 AM"),
+        ("at quarter to seven", AFTERNOON, datetime(2026, 10, 16, 18, 45), "at 6:45 PM"),
+        ("at ten to six", AFTERNOON, datetime(2026, 10, 16, 17, 50), "at 5:50 PM"),
+        ("at six oh five", AFTERNOON, datetime(2026, 10, 16, 18, 5), "at 6:05 PM"),
+        ("at 7 in the morning", AFTERNOON, datetime(2026, 10, 17, 7, 0), "tomorrow at 7 AM"),
+        ("at 9 at night", AFTERNOON, datetime(2026, 10, 16, 21, 0), "at 9 PM"),
         # noon and midnight
-        ("at noon", AFTERNOON, False, datetime(2026, 10, 17, 12, 0), "tomorrow at noon"),
-        ("at midnight", LATE, False, datetime(2026, 10, 17, 0, 0), "at midnight"),
-        ("tomorrow at midnight", LATE, False, datetime(2026, 10, 18, 0, 0), "at midnight tomorrow night"),
-        ("tonight at 12", AFTERNOON, False, datetime(2026, 10, 17, 0, 0), "at midnight"),
+        ("at noon", AFTERNOON, datetime(2026, 10, 17, 12, 0), "tomorrow at noon"),
+        ("at midnight", LATE, datetime(2026, 10, 17, 0, 0), "at midnight"),
+        ("tomorrow at midnight", LATE, datetime(2026, 10, 18, 0, 0), "at midnight tomorrow night"),
+        ("tonight at 12", AFTERNOON, datetime(2026, 10, 17, 0, 0), "at midnight"),
         # tomorrow / tonight / a weekday / a part of the day
-        ("tomorrow", LATE, False, datetime(2026, 10, 17, 9, 0), "tomorrow at 9 AM"),
-        ("tomorrow morning", LATE, False, datetime(2026, 10, 17, 9, 0), "tomorrow at 9 AM"),
-        ("tomorrow evening", LATE, False, datetime(2026, 10, 17, 18, 0), "tomorrow at 6 PM"),
-        ("tomorrow at 7", LATE, False, datetime(2026, 10, 17, 7, 0), "tomorrow at 7 AM"),
-        ("at 7 tomorrow", LATE, False, datetime(2026, 10, 17, 7, 0), "tomorrow at 7 AM"),
-        ("tonight", AFTERNOON, False, datetime(2026, 10, 16, 20, 0), "at 8 PM"),
-        ("tonight at 9", AFTERNOON, False, datetime(2026, 10, 16, 21, 0), "at 9 PM"),
-        ("at 9 tonight", AFTERNOON, False, datetime(2026, 10, 16, 21, 0), "at 9 PM"),
-        ("in the morning", LATE, False, datetime(2026, 10, 17, 9, 0), "tomorrow at 9 AM"),
-        ("this evening", AFTERNOON, False, datetime(2026, 10, 16, 18, 0), "at 6 PM"),
-        ("on monday at 5 pm", LATE, False, datetime(2026, 10, 19, 17, 0), "on Monday at 5 PM"),
-        ("monday", LATE, False, datetime(2026, 10, 19, 9, 0), "on Monday at 9 AM"),
+        ("tomorrow", LATE, datetime(2026, 10, 17, 9, 0), "tomorrow at 9 AM"),
+        ("tomorrow morning", LATE, datetime(2026, 10, 17, 9, 0), "tomorrow at 9 AM"),
+        ("tomorrow evening", LATE, datetime(2026, 10, 17, 18, 0), "tomorrow at 6 PM"),
+        ("tomorrow at 7", LATE, datetime(2026, 10, 17, 7, 0), "tomorrow at 7 AM"),
+        ("at 7 tomorrow", LATE, datetime(2026, 10, 17, 7, 0), "tomorrow at 7 AM"),
+        ("tonight", AFTERNOON, datetime(2026, 10, 16, 20, 0), "at 8 PM"),
+        ("tonight at 9", AFTERNOON, datetime(2026, 10, 16, 21, 0), "at 9 PM"),
+        ("at 9 tonight", AFTERNOON, datetime(2026, 10, 16, 21, 0), "at 9 PM"),
+        ("in the morning", LATE, datetime(2026, 10, 17, 9, 0), "tomorrow at 9 AM"),
+        ("this evening", AFTERNOON, datetime(2026, 10, 16, 18, 0), "at 6 PM"),
+        ("on monday at 5 pm", LATE, datetime(2026, 10, 19, 17, 0), "on Monday at 5 PM"),
+        ("monday", LATE, datetime(2026, 10, 19, 9, 0), "on Monday at 9 AM"),
         # today is Friday: a Friday time still to come is today, a gone one next week
-        ("on friday at 5 pm", MORNING, False, datetime(2026, 10, 16, 17, 0), "at 5 PM"),
-        ("on friday at 5 pm", LATE, False, datetime(2026, 10, 23, 17, 0),
+        ("on friday at 5 pm", MORNING, datetime(2026, 10, 16, 17, 0), "at 5 PM"),
+        ("on friday at 5 pm", LATE, datetime(2026, 10, 23, 17, 0),
          "on Friday, October 23rd at 5 PM"),
-        ("next friday at 5 pm", MORNING, False, datetime(2026, 10, 23, 17, 0),
+        ("next friday at 5 pm", MORNING, datetime(2026, 10, 23, 17, 0),
          "on Friday, October 23rd at 5 PM"),
-        ("the day after tomorrow at noon", LATE, False, datetime(2026, 10, 18, 12, 0),
+        ("the day after tomorrow at noon", LATE, datetime(2026, 10, 18, 12, 0),
          "on Sunday at noon"),
     ],
 )
-def test_resolve_places_the_time_and_says_it(said, now, wake, target, spoken) -> None:
-    got = _resolve(said, now, wake=wake)
+def test_resolve_places_the_time_and_says_it(said, now, target, spoken) -> None:
+    got = _resolve(said, now)
     assert got == target, said
     assert ct.spoken_when(got, now) == spoken
 
