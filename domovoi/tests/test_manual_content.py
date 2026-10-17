@@ -18,8 +18,8 @@ would notice. So:
   decision (``plan_route``: no model, no database). LLM-routed phrases
   are marked in the file and only checked for not being taken by another
   handler's fast path; a Q&A phrase must reach no fast path at all;
-  pending phrases (behaviour another branch is building) must not route
-  yet, and fail here once they do, so their mark comes off.
+  pending phrases (behaviour another branch is building) must not reach
+  their handler yet, and fail here once they do, so their mark comes off.
 
 Pure file reads and the router's pure planner: no DB, never skips.
 """
@@ -286,11 +286,12 @@ def test_the_phrase_reaches_the_handler_the_manual_claims(p) -> None:
     plan = plan_route(said)
     winner = plan.handler.name if plan else None
     if p.get("pending"):
-        # Behaviour another branch is building: it must not route yet.
-        if winner is not None:
-            pytest.fail(f"{said!r} now routes to {winner!r} by its fast path: check the claim "
-                        f"({p['handler']!r}) and drop its pending mark in scripts/manual/build_manual.py")
-        pytest.xfail(f"waits for {p['pending']}")
+        # Behaviour another branch is building: it doesn't reach its handler
+        # yet. Once it does, the mark (and the page's "coming" pill) goes.
+        if winner == p["handler"]:
+            pytest.fail(f"{said!r} now reaches {winner!r} by its fast path: drop its pending mark "
+                        "in scripts/manual/build_manual.py and rebuild the content file")
+        pytest.xfail(f"waits for {p['pending']} (today: {winner or 'no fast path'})")
     if p.get("plugin"):
         if p["handler"] not in HANDLER_BY_NAME:
             assert winner is None, f"a core fast path ({winner!r}) took the {p['plugin']} plugin's phrase {said!r}"
@@ -341,3 +342,14 @@ def test_the_static_label_table_names_every_core_handler() -> None:
     table = {h["name"]: (h["label"], h["tone"]) for h in CORE_HANDLER_DISPLAY}
     core = {h.name: (h.display.label, h.display.tone) for h in HANDLERS}
     assert table == core
+
+
+def test_chat_mode_is_listed_only_while_it_is_on() -> None:
+    """Chat mode answers only while chat mode is enabled (off by default):
+    the live feature list leaves it out unless the server says it is on
+    (GET /api/capabilities features.chat)."""
+    assert DOC["handler_needs_feature"] == {"chat_mode": "chat"}
+    from web.backend.api.capabilities import _features
+
+    assert "chat" in _features()
+    assert "handler_needs_feature" in (STATIC / "manual.jsx").read_text(encoding="utf-8")

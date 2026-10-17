@@ -109,6 +109,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.domovoi.app.LocalApp
+import com.domovoi.app.net.LocalCapabilities
 import com.domovoi.app.net.decode
 import com.domovoi.app.net.rememberApi
 import com.domovoi.app.ui.components.EmptyState
@@ -923,8 +924,11 @@ private fun LiveSlot(slot: String?, doc: ManualDoc, live: Live, links: ManualLin
                 }
             }
         }
-        "things-to-say" -> live.handlers?.let { handlers ->
+        "things-to-say" -> live.handlers?.let { all ->
             val ours = remember(doc) { phrasesByHandler(doc) }
+            val features = LocalCapabilities.current.features
+            val listed = listedHandlers(doc, all.map { it.name }, features).toSet()
+            val handlers = all.filter { it.name in listed }
             LiveBox {
                 handlers.forEachIndexed { i, h ->
                     if (i > 0) HorizontalDivider(color = c.borderSoft)

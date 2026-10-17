@@ -184,6 +184,9 @@ PHRASES: dict[str, tuple] = {
     "remind me to call Mom in 20 minutes": ("reminder", "fast", {}),
     "remind me in 2 hours to take the bins out": ("reminder", "fast", {}),
     "remind me at 6 pm to take the bins out": ("reminder", "fast", {"pending": PENDING_VOICE_FIXES}),
+    "wake me up at 7": ("reminder", "fast", {"pending": PENDING_VOICE_FIXES}),
+    "set an alarm for 6:30": ("reminder", "fast", {"pending": PENDING_VOICE_FIXES}),
+    "cancel the 7 am alarm": ("reminder", "fast", {"pending": PENDING_VOICE_FIXES}),
     "what reminders do I have": ("reminder", "fast", {}),
     "what time is it": ("clock", "fast", {}),
     "what day is it": ("clock", "fast", {}),
@@ -217,6 +220,7 @@ PHRASES: dict[str, tuple] = {
     "what do you remember about me": ("memory", "fast", {}),
     "forget that I parked on level 3": ("memory", "fast", {}),
     "what can you do": ("help", "fast", {"pending": PENDING_VOICE_FIXES}),
+    "what can I say": ("help", "fast", {"pending": PENDING_VOICE_FIXES}),
     "say that again": ("repeat", "fast", {}),
     "never mind": ("dismiss", "fast", {}),
     "what voices are there": ("voice", "fast", {}),
@@ -237,6 +241,7 @@ PHRASES: dict[str, tuple] = {
     "stop the radio": ("radio", "fast", {"plugin": "radio"}),
     "what's on my calendar today": ("calendar", "fast", {"pending": PENDING_VOICE_FIXES}),
     "what's next on my calendar": ("calendar", "fast", {"pending": PENDING_VOICE_FIXES}),
+    "do I have anything on Friday": ("calendar", "fast", {"pending": PENDING_VOICE_FIXES}),
     "my name is Sarah": ("voice_profile", "fast", {}),
     "who am I": ("voice_profile", "fast", {}),
     "forget me": ("voice_profile", "fast", {}),
@@ -262,6 +267,11 @@ WAKE_WORD = {
     "note_item": "“{phrase}” in {rooms}",
     "note_join": "; ",
 }
+
+# "Everything it can do": a feature listed only while the server has it
+# switched on (GET /api/capabilities features). Chat mode answers only
+# while chat mode is enabled, which it isn't by default.
+HANDLER_NEEDS_FEATURE = {"chat_mode": "chat"}
 
 LABELS = {
     "start_here": "start here",
@@ -635,7 +645,8 @@ def build(source: Path = SOURCE) -> dict:
             "live": ("Filled from the server when the page shows: things-to-say = GET "
                      "/api/capabilities/manual (each handler's display.label, example_phrases, "
                      "requires_network, origin; where it lists no phrases, the manual's own phrases "
-                     "for that handler); rooms = GET /api/satellites; plugins = GET /api/plugins; "
+                     "for that handler; a handler in handler_needs_feature shows only while GET "
+                     "/api/capabilities features names that feature on); rooms = GET /api/satellites; plugins = GET /api/plugins; "
                      "wake-word = the satellites' wake_word / wake_phrase. Nothing extra shows when "
                      "it can't be read."),
             "checklist": ("done_when: admin_claimed (GET /api/auth/status setup_complete), "
@@ -655,6 +666,7 @@ def build(source: Path = SOURCE) -> dict:
         "doc_base": "https://github.com/coders-farm-official/domovoi/blob/{ref}/",
         "labels": LABELS,
         "wake_word": WAKE_WORD,
+        "handler_needs_feature": HANDLER_NEEDS_FEATURE,
         "routes": ROUTES,
         "centre": {"id": "domovoi", "title": "Domovoi", "subtitle": "your home", "opens": "how-it-works"},
         "start": {"title": "Start here", **start, "checklist": checklist},

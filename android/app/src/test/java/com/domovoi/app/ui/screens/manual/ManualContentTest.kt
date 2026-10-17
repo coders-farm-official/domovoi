@@ -122,6 +122,12 @@ class ManualContentTest {
         assertEquals(listOf(true, false, false, true), some.take(4).map { it.second })
     }
 
+    @Test fun chatModeIsListedOnlyWhileItIsOn() {
+        val names = listOf("timer", "chat_mode", "music")
+        assertEquals(listOf("timer", "music"), listedHandlers(doc, names, emptyMap()))
+        assertEquals(names, listedHandlers(doc, names, mapOf("chat" to true)))
+    }
+
     @Test fun searchFindsAPieceByItsWords() {
         val visible = doc.pieces.map { it.id }.toSet()
         assertEquals("wake-word", searchManual(doc, visible, "wake")[0].id)

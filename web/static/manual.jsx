@@ -209,6 +209,7 @@ const useUmLive = () => {
         ? true : (heard.every((h) => Array.isArray(h)) ? false : null));
     });
     umQuiet('/api/capabilities/manual').then((v) => put('caps', v));
+    umQuiet('/api/capabilities').then((v) => put('features', v && v.features ? v.features : {}));
     umQuiet('/api/plugins').then((v) => put('plugins', v && Array.isArray(v.plugins) ? v.plugins : null));
     umQuiet('/api/config/version').then((v) => put('version', v && typeof v.version === 'string' ? v.version : null));
     umQuiet('/api/auth/status').then((v) => put('auth', v));
@@ -346,7 +347,10 @@ const UmPlugins = ({ ctx }) => {
  * manual's for that handler (never a pending one). */
 const UmThingsToSay = ({ ctx }) => {
   const caps = ctx.live.caps;
-  const handlers = caps && Array.isArray(caps.handlers) ? caps.handlers : null;
+  const needs = ctx.doc.handler_needs_feature || {};
+  const features = ctx.live.features || {};
+  const handlers = caps && Array.isArray(caps.handlers)
+    ? caps.handlers.filter((h) => !needs[h.name] || features[needs[h.name]] === true) : null;
   if (!handlers) return null;
   const net = ctx.doc.labels.net;
   return (
@@ -497,7 +501,7 @@ const umRing = (n, W, H, d) => {
 const umStageHeight = (W) => {
   const d = umDims(W);
   if (!d.phone) return 560;
-  return 4 * (d.NH + 22) + d.NH + 28;   // seven nodes: two rows above, two below
+  return 4 * (d.NH + 22) + d.NH + 56;   // seven nodes: two rows above, two below (titles may wrap)
 };
 
 /* ── the map ─────────────────────────────────────────────────────── */

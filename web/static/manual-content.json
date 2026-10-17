@@ -5,7 +5,7 @@
   "inline": "Text is a small Markdown subset: **bold** (on-screen labels), *italic*, `code`, and [text](target) links. A target is route:<id> (routes below), node:<id> (another piece of the manual) or doc:<repo path>#<anchor> (a GitHub doc, doc_base with the ref for the server's version). {admin}, {preview} and {plugin} are pills; {wake} is the wake word (wake_word below).",
   "blocks": "A page's blocks, in order. p {text, only?}; list {ordered, items:[{text, only?}]}; label {role: say|how|wrong|also|ways|checklist, text, admin?, note?}; say {phrases:[{text, handler, path, note?, then?, try?, plugin?, pending?}]}; table {header, rows}; live {slot}; checklist (Start here only). only: app = shown only in the app, dashboard = only on the dashboard.",
   "map": "The centre (Domovoi) opens the centre topic (How it works); the other topics ring it. A topic's pieces ring the topic; a piece opens its page. alias_of: the piece opens that piece's page. plugin: shown only while that plugin is installed and enabled.",
-  "live": "Filled from the server when the page shows: things-to-say = GET /api/capabilities/manual (each handler's display.label, example_phrases, requires_network, origin; where it lists no phrases, the manual's own phrases for that handler); rooms = GET /api/satellites; plugins = GET /api/plugins; wake-word = the satellites' wake_word / wake_phrase. Nothing extra shows when it can't be read.",
+  "live": "Filled from the server when the page shows: things-to-say = GET /api/capabilities/manual (each handler's display.label, example_phrases, requires_network, origin; where it lists no phrases, the manual's own phrases for that handler; a handler in handler_needs_feature shows only while GET /api/capabilities features names that feature on); rooms = GET /api/satellites; plugins = GET /api/plugins; wake-word = the satellites' wake_word / wake_phrase. Nothing extra shows when it can't be read.",
   "checklist": "done_when: admin_claimed (GET /api/auth/status setup_complete), internet_answered (GET /api/config internet_access not ''), rooms (GET /api/satellites not empty), room_heard (a room has a session: GET /api/satellites/<room>/sessions), people (GET /api/people not empty), music (GET /api/music/library/stats total_tracks > 0), phone_app (an android device in GET /api/devices, admin only), this_phone_paired (the app, paired). A read that fails leaves the line unticked, never ticked.",
   "doc_ref": "More-detail links open the docs of the version the server runs: the tag v<label> when the version label is a release exactly (1.0.0, 1.0.0-rc2), else main. The label is GET /api/config/version's version.",
   "phrases": "handler/path: what the router does with the phrase (fast = a fast path; llm = the tool model; qa = no handler). pending: being built elsewhere. domovoi/tests/test_manual_content.py routes the fast ones."
@@ -65,6 +65,9 @@
   "note": "Some rooms answer to another word: {list}.",
   "note_item": "“{phrase}” in {rooms}",
   "note_join": "; "
+ },
+ "handler_needs_feature": {
+  "chat_mode": "chat"
  },
  "routes": {
   "home": {
@@ -819,7 +822,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "Timers count down and ring. Reminders say your message out loud when the time comes: in a while (\"in 20 minutes\") or at a time (\"at 6 pm\", \"tomorrow at 9\"). Both are heard around the house."
+     "text": "Timers count down and ring. Reminders say your message out loud when the time comes: in a while (\"in 20 minutes\") or at a clock time (\"at 6 pm\", \"tomorrow morning\", \"on Friday at 5\"). Both are heard around the house. Domovoi says back the time it set. A time without \"am\" or \"pm\" is the next one to come, and \"wake me up at 7\" is 7 in the morning."
     },
     {
      "type": "label",
@@ -866,6 +869,24 @@
        "pending": "v1-voice-fixes"
       },
       {
+       "text": "wake me up at 7",
+       "handler": "reminder",
+       "path": "fast",
+       "pending": "v1-voice-fixes"
+      },
+      {
+       "text": "set an alarm for 6:30",
+       "handler": "reminder",
+       "path": "fast",
+       "pending": "v1-voice-fixes"
+      },
+      {
+       "text": "cancel the 7 am alarm",
+       "handler": "reminder",
+       "path": "fast",
+       "pending": "v1-voice-fixes"
+      },
+      {
        "text": "what reminders do I have",
        "handler": "reminder",
        "path": "fast"
@@ -892,8 +913,16 @@
      "text": "If something's wrong"
     },
     {
-     "type": "p",
-     "text": "There's no alarm clock yet. A reminder says your words; it doesn't ring."
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "A wake-up or an alarm is spoken in the room, like a reminder; it doesn't ring."
+      },
+      {
+       "text": "Times are the server's own time, the one \"what time is it\" answers in. If they're hours off, ask whoever set up Domovoi to set the server's time zone."
+      }
+     ]
     }
    ],
    "more": {
@@ -1295,7 +1324,7 @@
     },
     {
      "type": "p",
-     "text": "Ask \"what can you do?\" out loud and Domovoi names a few of these; this page has them all."
+     "text": "Ask \"what can you do?\" out loud and Domovoi names a few of these, with one thing to say for each; this page has them all."
     },
     {
      "type": "label",
@@ -1307,6 +1336,12 @@
      "phrases": [
       {
        "text": "what can you do",
+       "handler": "help",
+       "path": "fast",
+       "pending": "v1-voice-fixes"
+      },
+      {
+       "text": "what can I say",
        "handler": "help",
        "path": "fast",
        "pending": "v1-voice-fixes"
@@ -2600,7 +2635,7 @@
     },
     {
      "type": "p",
-     "text": "Domovoi reads the calendar out loud; add events here."
+     "text": "Domovoi reads this calendar out loud, with no internet needed. Add and change events here: by voice it only reads."
     },
     {
      "type": "label",
@@ -2618,6 +2653,12 @@
       },
       {
        "text": "what's next on my calendar",
+       "handler": "calendar",
+       "path": "fast",
+       "pending": "v1-voice-fixes"
+      },
+      {
+       "text": "do I have anything on Friday",
        "handler": "calendar",
        "path": "fast",
        "pending": "v1-voice-fixes"

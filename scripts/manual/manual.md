@@ -976,35 +976,48 @@ adjusted in one place. Each "### name" replaces the {{name}} line above.
 ### clock-reminders-intro
 
 Timers count down and ring. Reminders say your message out loud when the
-time comes: in a while ("in 20 minutes") or at a time ("at 6 pm",
-"tomorrow at 9"). Both are heard around the house.
+time comes: in a while ("in 20 minutes") or at a clock time ("at 6 pm",
+"tomorrow morning", "on Friday at 5"). Both are heard around the house.
+Domovoi says back the time it set. A time without "am" or "pm" is the
+next one to come, and "wake me up at 7" is 7 in the morning.
 
 ### clock-reminders-phrases
 
 - "remind me at 6 pm to take the bins out"
+- "wake me up at 7"
+- "set an alarm for 6:30"
+- "cancel the 7 am alarm"
 
 ### clock-reminders-wrong
 
-**If something's wrong:** there's no alarm clock yet. A reminder says
-your words; it doesn't ring.
+**If something's wrong**
+
+- A wake-up or an alarm is spoken in the room, like a reminder; it
+  doesn't ring.
+- Times are the server's own time, the one "what time is it" answers in.
+  If they're hours off, ask whoever set up Domovoi to set the server's
+  time zone.
 
 ### what-can-you-do
 
-Ask "what can you do?" out loud and Domovoi names a few of these; this
-page has them all.
+Ask "what can you do?" out loud and Domovoi names a few of these, with
+one thing to say for each; this page has them all.
 
 **Try saying**
 
 - "what can you do"
+- "what can I say"
 
 ### calendar-voice
 
-Domovoi reads the calendar out loud; add events here.
+Domovoi reads this calendar out loud, with no internet needed. Add and
+change events here: by voice it only reads.
 
 **Try saying**
 
 - "what's on my calendar today"
 - "what's next on my calendar"
+- "do I have anything on Friday"
 
 ### forget-me-phrase
 

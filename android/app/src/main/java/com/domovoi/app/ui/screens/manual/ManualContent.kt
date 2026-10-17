@@ -30,6 +30,9 @@ internal data class ManualDoc(
     val labels: JsonObject = JsonObject(emptyMap()),
     @SerialName("wake_word") val wakeWord: ManualWakeWord = ManualWakeWord(),
     val routes: Map<String, ManualRoute> = emptyMap(),
+    /** handler → the server feature it needs on (GET /api/capabilities
+     *  features) to be listed in "Everything it can do". */
+    @SerialName("handler_needs_feature") val handlerNeedsFeature: Map<String, String> = emptyMap(),
     val centre: ManualCentre = ManualCentre(),
     val start: ManualStart = ManualStart(),
     val topics: List<ManualTopic> = emptyList(),
@@ -361,3 +364,7 @@ internal fun startPhrase(doc: ManualDoc?): String? =
 
 /** A label read from a JSON element, for the few nested labels. */
 internal fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
+
+/** The features "Everything it can do" lists: those the server has on. */
+internal fun listedHandlers(doc: ManualDoc, names: List<String>, features: Map<String, Boolean>): List<String> =
+    names.filter { n -> doc.handlerNeedsFeature[n]?.let { features[it] == true } ?: true }
