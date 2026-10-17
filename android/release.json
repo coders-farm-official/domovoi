@@ -9,26 +9,26 @@
   ],
   "release": {
     "package": "com.domovoi.app",
-    "version_name": "1.0.0-rc1",
-    "version_code": 26101501,
-    "tag": "v1.0.0-rc1",
-    "commit": "4d6b4147f7d99d84fd0fcac2fdcb769c164eec92",
-    "published": "2026-10-16",
+    "version_name": "1.0.0-rc2",
+    "version_code": 26101602,
+    "tag": "v1.0.0-rc2",
+    "commit": "308c317432c67ef1e7323fa50f47293a07be1ce9",
+    "published": "2026-10-17",
     "cert_sha256": "296b175ca65d173a65156330bceffca319dbcef355cf2cd500028ef43465d5db",
     "apks": [
       {
         "abi": "arm64-v8a",
-        "file": "domovoi-1.0.0-rc1-arm64-v8a.apk",
-        "url": "https://github.com/coders-farm-official/domovoi/releases/download/v1.0.0-rc1/domovoi-1.0.0-rc1-arm64-v8a.apk",
-        "sha256": "268ff4212d5c403e1060870f30b61811a8fbe2b0878882de490ac8d17e20f474",
-        "size": 79996285
+        "file": "domovoi-1.0.0-rc2-arm64-v8a.apk",
+        "url": "https://github.com/coders-farm-official/domovoi/releases/download/v1.0.0-rc2/domovoi-1.0.0-rc2-arm64-v8a.apk",
+        "sha256": "0d4ab99f13ba44fb5b3d9cc3676dc352b14903159adc795e447de9ea2a90ff0d",
+        "size": 80078205
       },
       {
         "abi": "armeabi-v7a",
-        "file": "domovoi-1.0.0-rc1-armeabi-v7a.apk",
-        "url": "https://github.com/coders-farm-official/domovoi/releases/download/v1.0.0-rc1/domovoi-1.0.0-rc1-armeabi-v7a.apk",
-        "sha256": "206e595f6c515e33e3841231bc005f3845f2c80a160ad26b3fe90f4a5490b6c8",
-        "size": 48518461
+        "file": "domovoi-1.0.0-rc2-armeabi-v7a.apk",
+        "url": "https://github.com/coders-farm-official/domovoi/releases/download/v1.0.0-rc2/domovoi-1.0.0-rc2-armeabi-v7a.apk",
+        "sha256": "3c79ed1739a43d2ce85a3bb685498edb15f2abed9307e4bf96ebfb03130f91b6",
+        "size": 48600381
       }
     ]
   }
