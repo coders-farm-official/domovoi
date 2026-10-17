@@ -41,8 +41,8 @@ def test_fallback_strips_upload_noise_from_title() -> None:
 
 def test_fallback_handles_dash_without_trailing_space() -> None:
     """User has files like "ASAP Rocky- Fucken Problem.mp3" — the dash
-    has a leading space but no trailing space. The regex's `\\s*` on
-    both sides of the dash handles it."""
+    has a leading space but no trailing space. A dash spaced on one
+    side still separates (a hyphen inside a word never does)."""
     artist, title = _fallback_filename_parse(Path("ASAP Rocky- Fucken Problem.mp3"))
     assert artist == "ASAP Rocky"
     assert title == "Fucken Problem"
@@ -58,13 +58,20 @@ def test_fallback_no_separator_returns_title_only() -> None:
 
 def test_fallback_handles_unicode_dash() -> None:
     """En-dashes and em-dashes, not just ASCII hyphen — common in
-    classical / international filenames. Note: artist names containing
-    a hyphen (e.g. "Yo-Yo Ma") confuse the parser since it greedy-
-    matches the first separator. Acceptable trade-off — the user can
-    fix tags or rename the file."""
+    classical / international filenames."""
     artist, title = _fallback_filename_parse(Path("Beethoven – Symphony No. 5.mp3"))
     assert artist == "Beethoven"
     assert "Symphony No. 5" in title
+
+
+def test_fallback_keeps_a_hyphenated_word_whole() -> None:
+    """A hyphen inside a word is not a separator (F-P025): an artist like
+    "Yo-Yo Ma" stays whole, and a title with no spaced dash keeps its full
+    text with no artist."""
+    assert _fallback_filename_parse(Path("Yo-Yo Ma - Cello Suite No. 1.mp3")) == (
+        "Yo-Yo Ma", "Cello Suite No. 1")
+    assert _fallback_filename_parse(Path("Lo-fi Piano Sample.mp3")) == (
+        None, "Lo-fi Piano Sample")
 
 
 # ─── Metadata resolution ──────────────────────────────────────────────────

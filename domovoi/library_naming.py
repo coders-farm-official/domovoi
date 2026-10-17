@@ -17,7 +17,12 @@ from pathlib import Path
 # (modifier)". Structured artist/track metadata is only present for
 # official releases, so we fall back to parsing the title for everything
 # else. Em-dash and en-dash variants both appear in real-world titles.
-_ARTIST_TITLE_RE = re.compile(r"^(.+?)\s*[-–—]\s*(.+)$")
+# The separator is a dash with a space beside it: a hyphen inside a word
+# ("Lo-fi", "Jay-Z", "Blink-182") never splits. A dash spaced on both
+# sides wins; one spaced on one side only ("ASAP Rocky- Problem", a real
+# library's file names) is the fallback.
+_ARTIST_TITLE_RE = re.compile(r"^(.+?)\s+[-–—]\s+(.+)$")
+_ARTIST_TITLE_LOOSE_RE = re.compile(r"^(.+?)(?:\s+[-–—]|[-–—]\s+)\s*(.+)$")
 # Strip trailing parenthetical/bracket modifiers like "(Official Music
 # Video)", "(Lyrics)", "[HD]" — descriptor cruft, not the song title.
 _TITLE_TRAILING_RE = re.compile(r"\s*[\(\[][^\)\]]*[\)\]]\s*$")
@@ -37,7 +42,8 @@ def parse_title_artist(title: str) -> tuple[str | None, str | None]:
     """
     if not title:
         return None, None
-    m = _ARTIST_TITLE_RE.match(title.strip())
+    raw = title.strip()
+    m = _ARTIST_TITLE_RE.match(raw) or _ARTIST_TITLE_LOOSE_RE.match(raw)
     if not m:
         return None, None
     artist = m.group(1).strip()
