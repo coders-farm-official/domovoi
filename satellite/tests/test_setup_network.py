@@ -397,11 +397,17 @@ def test_the_watcher_records_a_phone_that_joins_later(card, tmp_path, monkeypatc
 
 def test_a_failed_join_reason_stays_on_the_card_when_the_portal_returns(card, tmp_path):
     t = _transport([], tmp_path)
-    t.expose(_info(status="wifi_failed", error="Secrets were required"))
+    t.expose(_info(status="wifi_failed",
+                   error="wifi join failed for 'HomeNet': Secrets were required"))
     t.withdraw()
-    doc = json.loads(card.read_text(encoding="utf-8"))
+    raw = card.read_text(encoding="utf-8")
+    doc = json.loads(raw)
     assert doc["status"] == "wifi_failed"
-    assert doc["error"] == "Secrets were required"
+    assert doc["error"] == setup_report.JOIN_FAILED
+    assert doc["setup_network"]["last_error"] == setup_report.JOIN_FAILED
+    # The house network's name stays off the card; the portal page keeps it.
+    assert "HomeNet" not in raw
+    assert "HomeNet" in t.device_info["error"]
 
 
 def test_no_card_no_file(satellite_paths_in_tmp, tmp_path):
@@ -478,3 +484,126 @@ def test_no_radio_fails_after_one_wait_without_scanning(monkeypatch, tmp_path):
         t.expose(_info())
     assert not any("wifi list" in c for c in calls)
     assert t._server is None
+
+
+# ─── review fixes (2026-10-17) ────────────────────────────────────────────
+
+
+def test_a_failed_join_never_puts_the_house_network_on_the_card(home, card, monkeypatch):
+    """The join error names the network ({ssid!r}); through every report a
+    failed join makes - the join itself, the next attempt's start, the
+    portal coming back - the card gets generic words only."""
+    snapshots = []
+
+    class _Retry(_FailingTransport):
+        def __init__(self):
+            super().__init__(lambda: None, succeed_after=0)
+            self.ap_ssid = "Domovoi-Setup-A4F2"
+
+        def expose(self, info):
+            snapshots.append(card.read_text(encoding="utf-8"))
+            super().expose(info)
+
+        def wait_for_provision(self, nonce):
+            return {"room_id": "den"}
+
+        def network_report(self, state, error):
+            return {"state": state, "last_error": error,
+                    "line": setup_report.line(state=state, error=error)}
+
+    monkeypatch.setattr(pm, "apply_provision", lambda *a, **k: (
+        False, "wifi join failed for 'Kitchen Router 5G': Secrets were required"))
+    pm.run(_Retry(), max_loops=2)
+    snapshots.append(card.read_text(encoding="utf-8"))
+    assert len(snapshots) == 3
+    for raw in snapshots:
+        assert "Kitchen Router" not in raw
+    doc = json.loads(snapshots[-1])
+    assert doc["error"] == setup_report.JOIN_FAILED
+
+
+@pytest.mark.parametrize("err, expected", [
+    ("wifi join failed for 'HomeNet': Secrets were required", setup_report.JOIN_FAILED),
+    ("wifi join timed out for 'HomeNet'", setup_report.JOIN_TIMED_OUT),
+    ("wifi network name refused: 'HomeNet' is too long", setup_report.JOIN_REFUSED),
+    ("wifi tooling unavailable: FileNotFoundError", setup_report.JOIN_NO_TOOLS),
+    ("anything else naming 'HomeNet'", setup_report.JOIN_FAILED),
+])
+def test_a_join_error_becomes_generic_words(err, expected):
+    assert setup_report.card_error("wifi_failed", err) == expected
+    assert "HomeNet" not in expected
+
+
+def test_setup_network_errors_pass_through_and_none_stays_none():
+    assert setup_report.card_error("awaiting_provision", "activating the setup AP failed")         == "activating the setup AP failed"
+    assert setup_report.card_error("wifi_failed", None) is None
+
+
+def test_a_card_file_that_does_not_parse_is_left_alone(card):
+    card.write_text('{"domovoi_setup": 1, "status": "bootstr', encoding="utf-8")
+    before = card.read_bytes()
+    assert setup_report.update(top={"step": "x"}, network={"state": "up"}) is False
+    assert card.read_bytes() == before
+
+
+def test_a_card_folder_without_the_file_gets_one(card):
+    card.unlink()
+    assert setup_report.update(top={"step": "x"}) is True
+    assert json.loads(card.read_text(encoding="utf-8")) == {"step": "x"}
+
+
+def test_concurrent_writers_never_tear_the_file(card):
+    """The state machine and the phone counter both write; they share one
+    temporary name, so they take turns."""
+    import threading
+
+    results, errors = [], []
+
+    def writer(n):
+        try:
+            for i in range(15):
+                results.append(setup_report.update(
+                    top={"step": f"w{n}-{i}"}, network={"phones_joined": i}))
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    threads = [threading.Thread(target=writer, args=(n,)) for n in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == [] and all(results) and len(results) == 90
+    doc = json.loads(card.read_text(encoding="utf-8"))
+    assert doc["domovoi_setup"] == 1 and doc["step"].startswith("w")
+
+
+def test_nmcli_error_text_is_scrubbed_before_it_reaches_the_card(home, card, tmp_path):
+    calls = []
+    t = _transport(calls, tmp_path)
+
+    def run(cmd, **kw):
+        joined = " ".join(cmd)
+        if "connection up" in joined:
+            return subprocess.CompletedProcess(
+                cmd, 4, stdout="", stderr=f"Error: secrets {PSK} rejected")
+        return _run(calls)(cmd, **kw)
+
+    t.run = run
+    pm.run(t, max_loops=1)
+    raw = card.read_text(encoding="utf-8")
+    assert PSK not in raw
+    assert "<psk>" in json.loads(raw)["error"]
+
+
+def test_an_nmcli_timeout_never_prints_the_command(tmp_path):
+    """TimeoutExpired's own text is the whole argv, the setup key with it."""
+    t = _transport([], tmp_path)
+
+    def run(cmd, **kw):
+        raise subprocess.TimeoutExpired(cmd, 30)
+
+    t.run = run
+    with pytest.raises(RuntimeError) as e:
+        t._nmcli(t.ap_profile_args("wlan0"), "creating the setup AP profile")
+    assert PSK not in str(e.value)
+    assert "timed out after 30s" in str(e.value)

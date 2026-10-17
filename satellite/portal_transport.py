@@ -520,12 +520,22 @@ class PortalTransport:
                 [nmcli, *args], capture_output=True, text=True,
                 timeout=_NMCLI_TIMEOUT_SEC, check=False,
             )
-        except (OSError, subprocess.TimeoutExpired) as e:
+        except subprocess.TimeoutExpired as e:
+            # Not str(e): a TimeoutExpired prints the whole command, PSK
+            # included, and this message reaches the journal and the card.
+            raise RuntimeError(
+                f"{what} timed out after {_NMCLI_TIMEOUT_SEC:.0f}s") from e
+        except OSError as e:
             raise RuntimeError(f"{what} failed: {e}") from e
         if proc.returncode != 0:
+            # nmcli's own words, through the same scrubber as a home-Wi-Fi
+            # join's (provisioning_mode._nmcli_detail): this text is
+            # written onto the card, which anyone holding it can read.
+            from satellite.provisioning_mode import _nmcli_detail
+
             raise RuntimeError(
                 f"{what} failed (rc={proc.returncode}): "
-                f"{(proc.stderr or '').strip()}"
+                f"{_nmcli_detail(proc, self.ap_psk)}"
             )
         return proc
 
@@ -720,12 +730,15 @@ class PortalTransport:
 
             self._count_phones()
             info = self.device_info or {}
+            # A failed join's reason stays until the next attempt — on the
+            # card in generic words: the named version carries the house
+            # network's name, which is for the portal page and the journal.
+            error = setup_report.card_error(info.get("status"), info.get("error"))
             setup_report.update(
                 top={"status": info.get("status") or "awaiting_provision",
                      "step": "setup-network-up",
-                     # A failed join's reason stays until the next attempt.
-                     "error": info.get("error")},
-                network=self.network_report("up", info.get("error")),
+                     "error": error},
+                network=self.network_report("up", error),
             )
         except Exception as e:  # noqa: BLE001 — never take the portal down
             log.warning("could not report the setup network: %s", e)

@@ -1455,8 +1455,8 @@ def run(
         # while this attempt is still waiting for the radio.
         _report(transport, "starting",
                 top={"status": status, "step": "setup-network-starting",
-                     "error": error},
-                error=error, attempts=failures + 1)
+                     "error": _card_error(status, error)},
+                error=_card_error(status, error), attempts=failures + 1)
         try:
             transport.expose(info)
         except Exception as e:  # noqa: BLE001 — reported, then retried or parked
@@ -1523,11 +1523,22 @@ def run(
         CONFIG_PATH.unlink(missing_ok=True)
         PAIRING_TOKEN_PATH.unlink(missing_ok=True)
         status, error = "wifi_failed", err
+        # The named reason (it carries the house network's name) goes to
+        # the portal page and the journal; the card gets generic words.
         _report(None, None, top={"status": status, "step": "home-wifi-failed",
-                                 "error": err})
+                                 "error": _card_error(status, err)})
         loops += 1
         if max_loops is not None and loops >= max_loops:
             return 1
+
+
+def _card_error(status: str, error: str | None) -> str | None:
+    try:
+        from satellite import setup_report
+
+        return setup_report.card_error(status, error)
+    except Exception:  # noqa: BLE001 — generic words rather than none
+        return "couldn't join your home Wi-Fi" if error else None
 
 
 def _report(transport, state: str | None, *, top: dict[str, Any] | None = None,

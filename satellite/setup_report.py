@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,34 @@ log = logging.getLogger(__name__)
 BOOT_DIRS = (Path("/boot/firmware"), Path("/boot"))
 NAME = "device-info.json"
 BLOCK = "setup_network"
+_LOCK = threading.Lock()
+
+# What the card says about a failed home-Wi-Fi join. The journal and the
+# portal page get the named version (nmcli's words and the network's name);
+# the card does not, because the house network's name has no business on a
+# card anyone can pull and read.
+JOIN_FAILED = "couldn't join your home Wi-Fi — wrong password?"
+JOIN_TIMED_OUT = "couldn't join your home Wi-Fi in time — is it in range?"
+JOIN_REFUSED = "the home Wi-Fi details were refused — check the name and password"
+JOIN_NO_TOOLS = "couldn't join your home Wi-Fi — the Wi-Fi tools on this card failed"
+
+
+def card_error(status: str | None, error: str | None) -> str | None:
+    """``error`` as the card may show it. A failed join's reason is
+    replaced by generic words; other errors (the setup network's own, which
+    name no house network) pass through."""
+    if not error:
+        return None
+    if status != "wifi_failed":
+        return error
+    low = error.lower()
+    if "timed out" in low:
+        return JOIN_TIMED_OUT
+    if "refused" in low:
+        return JOIN_REFUSED
+    if "tooling unavailable" in low:
+        return JOIN_NO_TOOLS
+    return JOIN_FAILED
 
 
 def report_path(boot_dirs=None) -> Path | None:
@@ -74,13 +103,30 @@ def update(*, top: dict[str, Any] | None = None,
     path = report_path(boot_dirs)
     if path is None:
         return False
+    # Two writers (the state machine and the portal's phone counter) share
+    # one temporary name; one at a time.
+    with _LOCK:
+        return _update_locked(path, top, network)
+
+
+def _update_locked(path: Path, top, network) -> bool:
     try:
         try:
-            doc = json.loads(path.read_text(encoding="utf-8"))
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            text = None
+        if text is None:
+            doc: dict[str, Any] = {}
+        else:
+            try:
+                doc = json.loads(text)
+            except ValueError:
+                doc = None
             if not isinstance(doc, dict):
-                doc = {}
-        except (OSError, ValueError):
-            doc = {}
+                # Stage 1's fields are in there, maybe half-written by a
+                # power cut. Ours are not worth more than theirs: leave it.
+                log.warning("%s does not parse; not rewriting it", path)
+                return False
         if top:
             doc.update(top)
         if network is not None:
@@ -90,7 +136,7 @@ def update(*, top: dict[str, Any] | None = None,
             block["updated"] = _now()
             doc[BLOCK] = block
         tmp = path.with_name(NAME + ".tmp")
-        # Readable as written: a dash stays a dash, not —.
+        # Readable as written: non-ASCII stays as typed, not escaped.
         raw = (json.dumps(doc, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
         with open(tmp, "wb") as fh:          # binary: no CRLF, whatever the OS
             fh.write(raw)
