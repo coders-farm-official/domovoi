@@ -74,7 +74,7 @@ FRAME_BYTES = 960
         "Pose the music.",                        # "pause the music", misheard
         "Could you put on something relaxing?",
         "What is the capital of France?",         # "what" fronts commands: routed
-        "Remind me to take out the trash tomorrow.",
+        "Remind me to call mom sometime.",          # no time the reminder fast path reads
         "Please let the kitchen know dinner is ready.",
     ],
 )
@@ -88,6 +88,7 @@ def test_these_go_to_the_tool_model(transcript: str) -> None:
         "Pause the music.", "pause the music", "Stop.",       # fast paths
         "Please pause the music.",                            # filler, then a fast path
         "Set a timer for ten minutes.",
+        "Remind me to take out the trash tomorrow.",  # a time: the fast path (wf/v1-voice-fixes)
         "Who wrote the Odyssey?", "Tell me a joke.",          # straight to Q&A
         "Yes.", "no", "Yeah, sure.",                          # a yes/no answer
         "", ".", "  ?! ",                                     # nothing in it

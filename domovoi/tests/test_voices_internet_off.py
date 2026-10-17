@@ -15,6 +15,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from domovoi import egress
+from domovoi.handlers import voice as voice_handler_module
 from domovoi.handlers.voice import VoiceHandler
 from domovoi.models import Context
 from domovoi.tests.auth_testkit import bearer, install_fake_db, web_app
@@ -122,10 +123,17 @@ async def test_sampling_a_piper_voice_still_works_under_never(fake_registry, mon
 
 @pytest.fixture
 def piper_voice(monkeypatch):
-    async def lookup(name, session):
-        return {"id": 1, "name": "Kristin", "engine": "piper", "model_ref": "en_US-kristin-medium"}
+    """Kristin, registered and on this server's disk. Since wf/v1-voice-fixes
+    the handler resolves a name through ``_resolve`` (registry, then the
+    voices Domovoi offers) and refuses to "speak in" a voice whose files
+    aren't here while it can't fetch them, so the fake is at that seam and
+    the files are present: what this module proves is that the internet
+    answer alone never stops a local voice."""
+    async def resolve(name, session):
+        return {"id": 1, "name": "Kristin", "engine": "piper", "model_ref": "en_US-kristin-medium"}, None
 
-    monkeypatch.setattr(VoiceHandler, "_lookup", staticmethod(lookup))
+    monkeypatch.setattr(VoiceHandler, "_resolve", staticmethod(resolve))
+    monkeypatch.setattr(voice_handler_module, "piper_voice_on_disk", lambda model_ref: True)
 
 
 @pytest.mark.parametrize("answer", ["", "never"])
