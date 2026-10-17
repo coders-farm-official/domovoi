@@ -355,9 +355,9 @@ and what it answered, so the Conversations and Sessions tabs can show it
 - **Delete all voice history**: deletes everything said until now, in every
   room and on every phone, after a confirmation that lists what goes.
 
-Forgetting one person ("forget me" in their own voice, or **forget person**
-on their Profile tab) deletes what *they* said, along with their voice and
-memories. A turn where someone else said their name isn't theirs, so it
+Forgetting one person ("forget me" in their own voice, then "yes" when
+Domovoi asks, or **forget person** on their Profile tab) deletes what *they*
+said, along with their voice and memories. A turn where someone else said their name isn't theirs, so it
 stays: Domovoi goes by who was speaking, not by the words.
 
 What stays either way: memories already saved, voice samples, notes,

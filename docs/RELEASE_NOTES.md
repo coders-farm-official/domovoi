@@ -21,15 +21,24 @@ changes no row).
   than 90 days.** To keep it, put `VOICE_HISTORY_KEEP=forever` in
   `domovoi/.env` before you restart into this update, or pick Forever
   straight after.
-* **Delete all voice history** (People → Voice history, an admin): every
-  turn said until then, everywhere, after a confirmation naming what goes.
-  It runs on the server in batches and shows its progress; a restart in
-  the middle finishes it.
+* **Delete all voice history** (People → Voice history, an admin; closed
+  until first-run setup, `501`): every turn said until then, everywhere,
+  after a confirmation naming what goes. It runs on the server in batches
+  and shows its progress; a restart in the middle finishes it, and
+  pressing again after a failure moves its cutoff up to the new press.
+* A `VOICE_HISTORY_KEEP` the server can't read (`6 months`, `2y`) keeps
+  everything and says so in the log; a whole number of days rounds up.
+  A daily run is skipped when the clock looks wrong (behind the newest
+  turn, or far enough ahead that every turn would go).
 * **"Forget me" and People → forget person now delete what that person
   said**: every turn voice identification attributed to them as the
   speaker, with the answers. Before, they only took the name off. A turn in
-  which someone else said their name stays. The voice reply now ends "…and
-  what you've said to me."
+  which someone else said their name stays. **"Forget me" now asks first**:
+  "…Say yes to delete everything you've said." Only a "yes" as the very
+  next turn, within a minute, from the same room or phone and not in
+  somebody else's recognized voice, deletes; anything else keeps it all.
+  The reply ends "…and what you've said to me." The tool router no longer
+  offers the forget command on "forget about it" / "forget that" talk.
 * **Not reached**: the update unit's pre-update database dumps (newest 5,
   `/var/lib/domovoi-update/backups/`) and a rolled-back database keep the
   history they were taken with until newer ones replace them; so does a
