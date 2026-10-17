@@ -646,6 +646,9 @@ static partial class Tests
             Throws<ArgumentException>(() => Options.Parse(new[] { "--profile", "../x" }), "a profile path");
             Throws<ArgumentException>(() => Options.Parse(new[] { "--bogus" }), "unknown");
             Eq("http://localhost:6369/#manual", TrayApp.ManualUrl(Options.Parse(new string[0]).WebUrl), "the user manual");
+            Eq("http://127.0.0.1:6369", Probe.Loopback("http://localhost:6369"), "probes go to IPv4 loopback");
+            Eq("http://127.0.0.1:6390", Probe.Loopback("http://127.0.0.1:6390"), "an address stays");
+            Eq("http://192.168.1.30:6369", Probe.Loopback("http://192.168.1.30:6369"), "a LAN address stays");
             Eq("http://127.0.0.1:6390/#manual", TrayApp.ManualUrl(Options.Parse(new[] { "--web-url", "http://127.0.0.1:6390" }).WebUrl), "the manual follows --web-url");
         });
         Run("admin: restart and copy-logs commands", delegate

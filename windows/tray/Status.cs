@@ -129,15 +129,18 @@ namespace Domovoi.Windows.Tray
         public Probe(string serviceName, string webUrl, string coreUrl)
         {
             this.serviceName = serviceName;
-            this.webUrl = webUrl.TrimEnd('/');
-            this.coreUrl = coreUrl.TrimEnd('/');
+            this.webUrl = Loopback(webUrl.TrimEnd('/'));
+            this.coreUrl = Loopback(coreUrl.TrimEnd('/'));
         }
 
         public Facts Gather()
         {
             var f = new Facts();
             f.Service = ServiceState(serviceName);
-            Dictionary<string, object> health = GetJson(webUrl + "/api/health");
+            // The dashboard asks the core before it answers, and a refused
+            // connection on Windows takes about two seconds per try: give it
+            // time to say "degraded" rather than counting it as silent.
+            Dictionary<string, object> health = GetJson(webUrl + "/api/health", HealthTimeoutMs);
             if (health != null)
             {
                 f.DbReachable = Json.Bool(health, "db_reachable") == true;
@@ -145,7 +148,7 @@ namespace Domovoi.Windows.Tray
                 f.CoreAlive = Json.Bool(health, "core_alive");
                 f.Web = Json.Str(health, "status") == "ok" ? WebFact.Ok : WebFact.Degraded;
             }
-            if (f.CoreAlive == null) f.CoreAlive = GetJson(coreUrl + "/v1/alive") != null;
+            if (f.CoreAlive == null) f.CoreAlive = GetJson(coreUrl + "/v1/alive", 4000) != null;
             return f;
         }
 
@@ -153,7 +156,7 @@ namespace Domovoi.Windows.Tray
         // open /api/health), or null when it doesn't answer.
         public static string ServerFingerprint(string webUrl)
         {
-            Dictionary<string, object> health = GetJson(webUrl.TrimEnd('/') + "/api/health");
+            Dictionary<string, object> health = GetJson(Loopback(webUrl.TrimEnd('/')) + "/api/health", HealthTimeoutMs);
             return Json.Str(Json.Obj(health, "identity"), "fingerprint");
         }
 
@@ -189,14 +192,26 @@ namespace Domovoi.Windows.Tray
 
         // A JSON object from an open GET, or null for no answer at all
         // (any HTTP answer with a JSON object counts, whatever its status).
-        static Dictionary<string, object> GetJson(string url)
+        public const int HealthTimeoutMs = 12000;
+
+        // http://localhost:N as http://127.0.0.1:N: Domovoi listens on IPv4,
+        // and Windows tries ::1 first, about two seconds lost on every poll.
+        public static string Loopback(string url)
+        {
+            Uri u;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out u) || !string.Equals(u.Host, "localhost", StringComparison.OrdinalIgnoreCase)) return url;
+            var b = new UriBuilder(u) { Host = "127.0.0.1" };
+            return b.Uri.GetLeftPart(UriPartial.Authority) + u.PathAndQuery.TrimEnd('/');
+        }
+
+        static Dictionary<string, object> GetJson(string url, int timeoutMs)
         {
             try
             {
                 var req = (HttpWebRequest)WebRequest.Create(url);
                 req.Method = "GET";
-                req.Timeout = 4000;
-                req.ReadWriteTimeout = 4000;
+                req.Timeout = timeoutMs;
+                req.ReadWriteTimeout = timeoutMs;
                 req.Proxy = null;
                 req.AllowAutoRedirect = false;
                 req.Accept = "application/json";
