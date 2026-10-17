@@ -26,6 +26,7 @@ namespace Domovoi.Windows.Tray
             Directory.CreateDirectory(dir);
             string logFile = Path.Combine(dir, "snapshot-tray.log");
             var log = new Log(logFile, 1024 * 1024);
+            if (opt.SnapshotLive != null) return Live(opt, store, exe, log);
 
             foreach (TrayState s in Enum.GetValues(typeof(TrayState)))
                 foreach (int size in new[] { 16, 24, 32, 64 })
@@ -86,7 +87,7 @@ namespace Domovoi.Windows.Tray
                 {
                     w.SetPassword("abcd0");
                     FormShot(w, "card-4-password-wrong.png");
-                    w.SetPassword(SamplePsk);
+                    w.SetPassword(opt.SnapshotPsk ?? SamplePsk);
                     FormShot(w, "card-4-password.png");
                     Click(w, "Next >");
                 }
@@ -98,6 +99,27 @@ namespace Domovoi.Windows.Tray
                 Click(w, "Next >");
                 FormShot(w, "card-6-done.png");
             }
+            return 0;
+        }
+
+        // The menu as the real status makes it right now (the probes the
+        // running tray makes, against --web-url, --core-url, --service), and
+        // what its tooltip would say.
+        static int Live(Options opt, ITrayStore store, string exe, Log log)
+        {
+            Facts f = new Probe(opt.Service, opt.WebUrl, opt.CoreUrl).Gather();
+            DateTime now = DateTime.UtcNow;
+            // A name starting with "starting" pictures the first minutes (inside
+            // the grace); any other, the tray after it has watched past it.
+            DateTime since = opt.SnapshotLive.StartsWith("starting", StringComparison.Ordinal) ? now : now - opt.Grace - TimeSpan.FromSeconds(1);
+            Verdict v = Status.Decide(f, since, now, opt.Grace);
+            File.WriteAllLines(Path.Combine(dir, "menu-live-" + opt.SnapshotLive + ".txt"), new[]
+            {
+                "service=" + f.Service + " web=" + f.Web + " db=" + f.DbReachable + " core_reachable=" + f.CoreReachable + " core_alive=" + f.CoreAlive,
+                "tooltip=" + v.Line, "state=" + v.State, "detail=" + v.Detail,
+            });
+            using (var app = new TrayApp(opt, store, log, exe))
+                MenuShot(app, "menu-live-" + opt.SnapshotLive + ".png", v, Addresses.Pick(Addresses.FromWindows()), Awake.CurrentSignedOutLine(), -1);
             return 0;
         }
 

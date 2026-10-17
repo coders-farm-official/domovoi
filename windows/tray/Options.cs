@@ -20,6 +20,9 @@
 //   --grace SECONDS how long "starting" lasts before "problem"
 //   --snapshot DIR  write pictures of the menu, the icons and the card
 //                   helper's steps to DIR, then exit
+//   --snapshot-live NAME  with --snapshot: only the menu as the real
+//                   status makes it now (DIR\menu-live-NAME.png), then exit
+//   --snapshot-psk P  with --snapshot: the password the card steps type
 
 using System;
 using System.Collections.Generic;
@@ -40,7 +43,7 @@ namespace Domovoi.Windows.Tray
         public string Downloads;
         public List<string> FakeCards = new List<string>();
         public TimeSpan Grace = Status.DefaultGrace;
-        public string Snapshot;
+        public string Snapshot, SnapshotLive, SnapshotPsk;
 
         public bool Dev { get { return Profile != null; } }
 
@@ -85,6 +88,12 @@ namespace Domovoi.Windows.Tray
                         dev = true;
                         break;
                     case "--snapshot": o.Snapshot = v; dev = true; break;
+                    case "--snapshot-live":
+                        if (!ProfileName.IsMatch(v)) throw new ArgumentException("--snapshot-live: letters, digits, - and _ only");
+                        o.SnapshotLive = v;
+                        dev = true;
+                        break;
+                    case "--snapshot-psk": o.SnapshotPsk = v; dev = true; break;
                     default: throw new ArgumentException("unknown option: " + a);
                 }
             }
