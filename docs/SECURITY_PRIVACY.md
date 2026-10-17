@@ -2963,8 +2963,9 @@ never remove a package. It records what it found and did in
 nothing, and the whole run has one 20-minute deadline. On a card prepared
 while the server's internet access was turned off (stage 1 leaves the
 root-owned flag `/var/lib/domovoi/internet-off`) it never goes online: no
-package lists are fetched and the install is `--no-download`, from the
-card's deb cache and apt's, as `domovoi-apply-payload` does. The names
+package lists are fetched, a package the card's own deb cache holds is
+installed from it with `dpkg -i`, and any other with `apt-get install
+--no-download`, as `domovoi-apply-payload` does. The names
 being constants does not make them root-owned: like the network settings,
 this runs from the satellite account's code tree. It is the same accepted
 path again, widened by one more action. The console

@@ -55,8 +55,9 @@ Two limits keep a run from doing harm on its own:
 * **Internet access turned off.** A card prepared while the server's
   ``INTERNET_ACCESS`` was ``never`` carries a root-owned flag
   (:data:`INTERNET_OFF_FLAG`, written by stage 1). Then nothing goes online:
-  no ``apt-get update``, and the install is ``--no-download`` from the
-  card's own deb cache and apt's, as ``domovoi-apply-payload`` does for a
+  no ``apt-get update``; a package the card's own deb cache holds is
+  installed from it with ``dpkg -i``, and any other with ``apt-get install
+  --no-download`` from apt's cache, as ``domovoi-apply-payload`` does for a
   plugin's packages. What the caches cannot provide stays missing, recorded
   as ``offline``, and the dashboard does not keep asking for a reboot that
   cannot help.
@@ -334,16 +335,23 @@ def repair(
             break
         if offline:
             debs = cached_debs(base, cache_dir)
-            targets = [str(p) for p in debs] or [install_name(base, run)]
-            argv = ["apt-get", *_APT_OPTS, "install", "-y", "--no-download",
-                    "--no-install-recommends", "--no-remove", *targets]
+            if debs:
+                # The card's own deb, as domovoi-apply-payload installs its
+                # cache. Not `apt-get install <file> --no-download`: apt
+                # refuses a local file then ("Pathname to install is not
+                # absolute", trixie, 2026-10-17). dpkg never removes
+                # anything; a dependency the cache lacks leaves it unpacked,
+                # which the configure step finishes once that arrives.
+                argv = ["dpkg", "--force-confdef", "--force-confold", "-i", *map(str, debs)]
+            else:
+                argv = ["apt-get", *_APT_OPTS, "install", "-y", "--no-download",
+                        "--no-install-recommends", "--no-remove", install_name(base, run)]
         else:
-            targets = [install_name(base, run)]
             argv = ["apt-get", *_APT_OPTS, "install", "-y", "--no-install-recommends",
-                    "--no-remove", *targets]
+                    "--no-remove", install_name(base, run)]
         rc, out = _run(run, argv, left(INSTALL_TIMEOUT_SEC))
         if rc == 0:
-            doc["installed"].append(base if offline else targets[0])
+            doc["installed"].append(base if offline else argv[-1])
         else:
             doc["errors"].append(f"{base}: rc={rc}: {out[-200:]}")
     doc["still_missing"] = missing(run)

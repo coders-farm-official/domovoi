@@ -59,7 +59,13 @@ class FakeApt:
         if self.tick is not None and argv[0] in ("apt-get", "dpkg"):
             self.tick[0][0] += self.tick[1]
         out, rc = "", 0
-        if argv[:2] == ["dpkg", "--force-confdef"]:
+        if argv[:4] == ["dpkg", "--force-confdef", "--force-confold", "-i"]:
+            if self.install_ok:
+                for target in argv[4:]:
+                    self.installed.add(Path(target).name.split("_", 1)[0])
+            else:
+                rc, out = 1, "dpkg: dependency problems"
+        elif argv[:2] == ["dpkg", "--force-confdef"]:
             if self.configure_fixes:
                 self.installed |= self.unpacked
                 self.unpacked = set()
@@ -333,8 +339,8 @@ def test_internet_off_nothing_goes_online(tmp_path, done):
     assert doc["state"] == "repaired" and doc["internet_off"] is True
     assert not any(c[:3] == ["ip", "route", "show"] for c in apt.calls)
     assert not any(c[0] == "apt-get" and "update" in c for c in apt.calls)
-    (install,) = [c for c in apt.calls if c[0] == "apt-get" and "install" in c]
-    assert "--no-download" in install and "--no-remove" in install
+    assert not any(c[0] == "apt-get" and "install" in c for c in apt.calls)
+    (install,) = [c for c in apt.calls if c[:4] == ["dpkg", "--force-confdef", "--force-confold", "-i"]]
     assert install[-1] == str(tmp_path / "debs" / "mpg123_1.0-1_arm64.deb"), "the card's own deb"
 
 
@@ -365,6 +371,7 @@ def test_an_interrupted_dpkg_is_finished_first_and_never_by_removing(tmp_path, d
                                sleep=lambda s: None)
     configure = [c for c in apt.calls if c[0] == "dpkg"]
     assert configure == [["dpkg", "--force-confdef", "--force-confold", "--configure", "-a"]]
+    assert not any("--remove" in c or "-r" in c or "--purge" in c for c in configure)
     first_install = next((i for i, c in enumerate(apt.calls) if c[0] == "apt-get" and "install" in c), None)
     assert first_install is None, "configure finished it: nothing left to install"
     assert doc["state"] == "repaired"
