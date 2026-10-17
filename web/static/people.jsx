@@ -62,7 +62,7 @@ const ConfirmForget = ({ person, sessionCount, turnCount, open, onClose, onConfi
           <p style={{ margin: 0, marginBottom: 10 }}>This is a cascade delete. Domovoi will lose:</p>
           <ul style={{ margin: 0, marginBottom: 8, paddingLeft: 18, color: 'var(--fg-muted)', fontSize: 12, lineHeight: 1.8 }}>
             <li><span className="mono" style={{ color: 'var(--fg)' }}>{person.voice_profile_count}</span> voice profile{person.voice_profile_count === 1 ? '' : 's'}</li>
-            <li>what they said: <span className="mono" style={{ color: 'var(--fg)' }}>{turnCount}{turnCount >= PERSON_TURNS_FETCHED ? '+' : ''}</span> conversation turn{turnCount === 1 ? '' : 's'} in <span className="mono" style={{ color: 'var(--fg)' }}>{sessionCount}</span> session{sessionCount === 1 ? '' : 's'}, with Domovoi's answers</li>
+            <li>what they said: <span className="mono" style={{ color: 'var(--fg)' }}>{turnCount}{turnCount >= PERSON_TURNS_FETCHED ? '+' : ''}</span> conversation turn{turnCount === 1 ? '' : 's'}{sessionCount > 0 && <> in <span className="mono" style={{ color: 'var(--fg)' }}>{sessionCount}</span> session{sessionCount === 1 ? '' : 's'}</>}, with Domovoi's answers</li>
             <li>their memories, favorites and preferences</li>
           </ul>
           <p style={{ margin: 0, marginBottom: 12, fontSize: 12, color: 'var(--fg-muted)' }}>
