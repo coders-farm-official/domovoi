@@ -18,8 +18,9 @@ namespace Domovoi.Windows.Tray
         public string Format;        // "FAT32"
         public bool Removable;
         public bool Ready;
-        public long Total;
+        public long Total;           // the volume: the card's boot partition
         public long Free;
+        public long CardBytes;       // the whole card (the disk behind the volume); 0 unknown
         public bool Fake;            // --dev-fake-card: a folder, labelled so
     }
 
@@ -28,6 +29,9 @@ namespace Domovoi.Windows.Tray
         List<DriveFacts> List();
         bool FileExists(string path);
         string ReadAllText(string path);
+        // The size of the disk (the card) the volume is on, or null when
+        // Windows won't say. Asked only for the drives that are offered.
+        long? DiskBytes(DriveFacts drive);
     }
 
     public sealed class CardTarget
@@ -92,6 +96,10 @@ namespace Domovoi.Windows.Tray
                 try { prepared = src.ReadAllText(Path.Combine(d.Root, "config.txt")).Contains(BootText.Marker); }
                 catch (IOException) { }
                 catch (UnauthorizedAccessException) { }
+                long? card = null;
+                try { card = src.DiskBytes(d); }
+                catch (Exception) { card = null; }   // the card's size is a nicety: never a reason to hide it
+                d.CardBytes = card.HasValue && card.Value > 0 ? card.Value : 0;
                 list.Add(new CardTarget { Drive = d, Prepared = prepared });
             }
             list.Sort(delegate (CardTarget a, CardTarget b) { return string.Compare(a.Drive.Root, b.Drive.Root, StringComparison.OrdinalIgnoreCase); });
@@ -142,7 +150,9 @@ namespace Domovoi.Windows.Tray
                 if (f.Ready)
                 {
                     long free, total;
-                    if (FreeSpace.Get(dir, out free, out total)) { f.Free = free; f.Total = total; }
+                    // Shown as a flashed card's boot partition would be (the
+                    // write's own free-space check reads the folder's drive).
+                    if (FreeSpace.Get(dir, out free, out total)) { f.Total = 512L * 1024 * 1024; f.Free = Math.Min(free, 430L * 1024 * 1024); }
                 }
                 list.Add(f);
             }
@@ -152,6 +162,61 @@ namespace Domovoi.Windows.Tray
         public bool FileExists(string path) { return File.Exists(path); }
 
         public string ReadAllText(string path) { return File.ReadAllText(path); }
+
+        // A test folder: a made-up 32 GB card.
+        public const long FakeCardBytes = 31914983424L;
+
+        readonly Dictionary<string, long?> diskCache = new Dictionary<string, long?>(StringComparer.OrdinalIgnoreCase);
+
+        public long? DiskBytes(DriveFacts d)
+        {
+            if (d.Fake) return FakeCardBytes;
+            // Remembered per drive and partition size: the list refreshes
+            // every few seconds and WMI is slow-ish.
+            string key = d.Root + "|" + Inv.S(d.Total);
+            long? v;
+            if (diskCache.TryGetValue(key, out v)) return v;
+            v = Wmi.DiskBytes(d.Root);
+            diskCache[key] = v;
+            return v;
+        }
+    }
+
+    // The disk behind a drive letter, from WMI (Win32_LogicalDisk ->
+    // Win32_DiskPartition -> Win32_DiskDrive.Size). No administrator needed;
+    // null when it can't be read.
+    public static class Wmi
+    {
+        public static long? DiskBytes(string root)
+        {
+            if (root == null || root.Length < 2 || root[1] != ':' || !char.IsLetter(root[0])) return null;
+            string letter = char.ToUpperInvariant(root[0]) + ":";
+            try
+            {
+                var opts = new System.Management.EnumerationOptions { Timeout = TimeSpan.FromSeconds(5), ReturnImmediately = false };
+                var scope = new System.Management.ManagementScope(@"\\.\root\cimv2");
+                using (var parts = new System.Management.ManagementObjectSearcher(scope, new System.Management.ObjectQuery(
+                    "ASSOCIATORS OF {Win32_LogicalDisk.DeviceID='" + letter + "'} WHERE AssocClass=Win32_LogicalDiskToPartition"), opts))
+                    foreach (System.Management.ManagementObject part in parts.Get())
+                        using (part)
+                        using (var disks = new System.Management.ManagementObjectSearcher(scope, new System.Management.ObjectQuery(
+                            "ASSOCIATORS OF {Win32_DiskPartition.DeviceID='" + Convert.ToString(part["DeviceID"], System.Globalization.CultureInfo.InvariantCulture).Replace("'", "")
+                            + "'} WHERE AssocClass=Win32_DiskDriveToDiskPartition"), opts))
+                            foreach (System.Management.ManagementObject disk in disks.Get())
+                                using (disk)
+                                {
+                                    object size = disk["Size"];
+                                    if (size != null) return Convert.ToInt64(size, System.Globalization.CultureInfo.InvariantCulture);
+                                }
+            }
+            catch (System.Management.ManagementException) { }
+            catch (System.Runtime.InteropServices.COMException) { }
+            catch (UnauthorizedAccessException) { }
+            catch (InvalidCastException) { }
+            catch (FormatException) { }
+            catch (OverflowException) { }
+            return null;
+        }
     }
 
     public static class FreeSpace

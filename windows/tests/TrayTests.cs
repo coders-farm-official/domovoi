@@ -307,6 +307,17 @@ static partial class Tests
         public List<DriveFacts> List() { return Drives; }
         public bool FileExists(string p) { return Files.ContainsKey(p); }
         public string ReadAllText(string p) { string v; if (!Files.TryGetValue(p, out v)) throw new FileNotFoundException(p); return v; }
+        // The fake WMI layer: the disk behind each drive, null when it won't
+        // say, an exception when it breaks (no entry).
+        public Dictionary<string, long?> Disks = new Dictionary<string, long?>(StringComparer.OrdinalIgnoreCase);
+        public List<string> DiskAsked = new List<string>();
+        public long? DiskBytes(DriveFacts d)
+        {
+            DiskAsked.Add(d.Root);
+            long? v;
+            if (!Disks.TryGetValue(d.Root, out v)) throw new InvalidOperationException("WMI broke");
+            return v;
+        }
 
         public void Boot(string root, bool prepared, bool dtb)
         {
@@ -354,6 +365,28 @@ static partial class Tests
             f.Boot(@"C:\", false, true);
             int others;
             Eq(0, CardDrives.Find(f, "bcm2710-rpi-zero-2-w.dtb", out others).Count, "none");
+        });
+        Run("card drives: the card's own size beside its boot partition's, from the WMI layer", delegate
+        {
+            var f = new FakeDrives();
+            foreach (string r in new[] { @"E:\", @"F:\", @"G:\" }) { f.Drives.Add(D(r, true, "FAT32", true)); f.Boot(r, false, true); }
+            f.Drives.Add(D(@"H:\", true, "NTFS", true));
+            f.Boot(@"H:\", false, true);
+            f.Disks[@"E:\"] = 31914983424L;     // a "32 GB" card
+            f.Disks[@"F:\"] = null;             // WMI doesn't say
+            // G: has no entry: the fake WMI throws
+            int others;
+            var list = CardDrives.Find(f, "bcm2710-rpi-zero-2-w.dtb", out others);
+            SeqEq(new[] { @"E:\", @"F:\", @"G:\" }, list.Select(t => t.Drive.Root), "all three still offered");
+            Eq(31914983424L, list[0].Drive.CardBytes, "the card");
+            Eq(0L, list[1].Drive.CardBytes, "unknown");
+            Eq(0L, list[2].Drive.CardBytes, "a broken WMI is unknown, not a hidden card");
+            True(!f.DiskAsked.Contains(@"H:\"), "only offered drives are looked up");
+            Eq(512L << 20, list[0].Drive.Total, "the boot partition's size is still the volume's");
+            Eq("32 GB", CardWizard.CardSize(31914983424L), "as the label says");
+            Eq("8.0 GB", CardWizard.CardSize(7969177600L), "a small card");
+            Eq("?", CardWizard.CardSize(0), "unknown");
+            True(Wmi.DiskBytes(@"\\server\share") == null, "not a drive letter: no query");
         });
         Run("card drives: an already prepared card is marked", delegate
         {

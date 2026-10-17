@@ -174,10 +174,14 @@ namespace Domovoi.Windows.Tray
             cardList.MultiSelect = false;
             cardList.HideSelection = false;
             cardList.HeaderStyle = ColumnHeaderStyle.Nonclickable;
-            cardList.Columns.Add("Drive", 160);
-            cardList.Columns.Add("Size", 80);
-            cardList.Columns.Add("Free", 80);
-            cardList.Columns.Add("", 230);
+            // The card's own size (what is printed on it) beside its boot
+            // partition's: a flashed card's drive in Windows is only that
+            // small first partition, which reads as "the wrong card".
+            cardList.Columns.Add("Drive", 150);
+            cardList.Columns.Add("Card", 72);
+            cardList.Columns.Add("Boot partition", 96);
+            cardList.Columns.Add("Free", 72);
+            cardList.Columns.Add("", 166);
             cardList.SelectedIndexChanged += delegate { CardChosen(); };
             var refresh = new Button { Text = "Refresh", Bounds = new Rectangle(460, 158, 100, 26) };
             refresh.Click += delegate { RefreshCards(); };
@@ -369,7 +373,7 @@ namespace Domovoi.Windows.Tray
             cardList.Items.Clear();
             foreach (CardTarget t in targets)
             {
-                var item = new ListViewItem(new[] { t.Title(), Bytes(t.Drive.Total), Bytes(t.Drive.Free), t.Prepared ? "already has Domovoi's files" : "freshly flashed" });
+                var item = new ListViewItem(new[] { t.Title(), CardSize(t.Drive.CardBytes), Bytes(t.Drive.Total), Bytes(t.Drive.Free), t.Prepared ? "already has Domovoi's files" : "freshly flashed" });
                 if (t.Prepared) item.ForeColor = WarnColor;
                 item.Tag = t;
                 cardList.Items.Add(item);
@@ -386,6 +390,15 @@ namespace Domovoi.Windows.Tray
             if (others > 0)
                 text += "\n" + (others == 1 ? "One other removable drive is" : Inv.S(others) + " other removable drives are") + " left out: not a freshly flashed Raspberry Pi card.";
             Note(cardNote, text, targets.Count == 0 ? WarnColor : SystemColors.ControlText);
+        }
+
+        // The card's capacity the way its label says it (decimal GB: a "32
+        // GB" card holds about 31.9 billion bytes); "?" when Windows won't say.
+        public static string CardSize(long bytes)
+        {
+            if (bytes <= 0) return "?";
+            double gb = bytes / 1e9;
+            return gb.ToString(gb >= 10 ? "0" : "0.0", System.Globalization.CultureInfo.InvariantCulture) + " GB";
         }
 
         static string Bytes(long bytes)
@@ -422,7 +435,7 @@ namespace Domovoi.Windows.Tray
         {
             title.Text = "Write the card";
             lead.Text = "Domovoi's files go onto " + chosen.Title() + ". Nothing is formatted or deleted: config.txt and cmdline.txt get Domovoi's lines added, and a domovoi folder is added.";
-            writeLead.Text = CardZip.Mib(package.CopyBytes) + " to copy" + (chosen.Drive.Free > 0 ? ", " + Bytes(chosen.Drive.Free) + " free on the card." : ".")
+            writeLead.Text = CardZip.Mib(package.CopyBytes) + " to copy" + (chosen.Drive.Free > 0 ? ", " + Bytes(chosen.Drive.Free) + " free on the card's boot partition." : ".")
                 + " Don't take the card out until this says it's done.";
             if (!written)
             {
