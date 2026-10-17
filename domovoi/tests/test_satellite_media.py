@@ -288,6 +288,32 @@ def test_the_zip_readme_follows_the_setup_route(tmp_path, monkeypatch):
     assert "domovoi/ap.json" not in usb
 
 
+def test_the_zip_readme_on_windows_leads_with_the_card_helper(tmp_path, monkeypatch):
+    """Inside WSL (the Windows installer's) the zip is the only way to
+    build a card, and the tray icon's card helper puts it on the card: the
+    README says so first, then the steps by hand for a household: add to
+    config.txt and cmdline.txt (never replace cmdline.txt, which wouldn't
+    boot), and save ap.json as "All files" (owner, 2026-10-17)."""
+    monkeypatch.setattr(builder, "is_wsl", lambda: True)
+    portal = _zip_readme(tmp_path / "win-portal", monkeypatch, "portal")
+    first = portal.splitlines()[0]
+    assert first == "On Windows, use Domovoi's tray icon → Prepare a satellite card."
+    for phrase in ("Never replace the card's cmdline.txt", "one long line", "type a space",
+                   "very end", "All files", "ap.json.txt", "domovoi/ap.json",
+                   "set it up from a phone", "no passwords", "choose No"):
+        assert phrase in portal, phrase
+    assert "plug it into the Domovoi server's USB" not in portal
+    usb = _zip_readme(tmp_path / "win-usb", monkeypatch, "usb")
+    assert usb.splitlines()[0] == first
+    assert "ap.json" not in usb and "plug it into the Domovoi server's USB" in usb
+
+    # Other hosts keep the README they had.
+    monkeypatch.setattr(builder, "is_wsl", lambda: False)
+    linux = _zip_readme(tmp_path / "linux", monkeypatch, "portal")
+    assert linux.splitlines()[0] == "Domovoi satellite overlay"
+    assert "tray icon" not in linux
+
+
 def test_builder_refuses_non_boot_target(tmp_path):
     with pytest.raises(ValueError, match="boot partition"):
         asyncio.run(

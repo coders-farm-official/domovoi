@@ -3,8 +3,9 @@
 Builds the Windows installer (a preview).
 
 .DESCRIPTION
-1. DomovoiHost.exe and DomovoiSetupHelper.exe, with the C# compiler that
-   ships inside .NET Framework 4.8.1 (C# 5; nothing to install).
+1. DomovoiHost.exe, DomovoiSetupHelper.exe and DomovoiTray.exe (the
+   notification-area icon), with the C# compiler that ships inside .NET
+   Framework 4.8.1 (C# 5; nothing to install).
 2. The unit tests in tests\Tests.cs (the same compiler), run at once.
 3. DomovoiSetup.exe, with Inno Setup 6's ISCC.exe.
 
@@ -165,8 +166,12 @@ $refs = @('System.dll', 'System.Core.dll', 'System.Web.Extensions.dll', 'System.
 $common = @(Get-ChildItem -LiteralPath (Join-Path $here 'common') -Filter '*.cs' | Sort-Object Name | ForEach-Object { $_.FullName })
 $manifest = Join-Path $here 'common\asInvoker.manifest.xml'
 
-function Invoke-Csc([string]$OutFile, [string[]]$Sources, [string[]]$ExtraArgs) {
-    $cscArgs = @('/nologo', '/noconfig', '/target:exe', '/platform:x64', '/optimize+', '/warn:4', '/warnaserror+',
+# The tray's windows (WinForms), its icon pictures and the card zip.
+$trayRefs = @('System.Windows.Forms.dll', 'System.Drawing.dll', 'System.IO.Compression.dll',
+              'System.IO.Compression.FileSystem.dll') | ForEach-Object { '/r:' + (Join-Path $fw $_) }
+
+function Invoke-Csc([string]$OutFile, [string[]]$Sources, [string[]]$ExtraArgs, [string]$Target = 'exe') {
+    $cscArgs = @('/nologo', '/noconfig', "/target:$Target", '/platform:x64', '/optimize+', '/warn:4', '/warnaserror+',
               '/utf8output', "/out:$OutFile") + $refs + $ExtraArgs + $Sources
     & $csc @cscArgs | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "csc failed for $OutFile" }
@@ -177,7 +182,12 @@ $manifestArg = '/win32manifest:' + $manifest
 $iconArg = '/win32icon:' + (Join-Path $here 'installer\art\domovoi.ico')
 Invoke-Csc (Join-Path $bin 'DomovoiHost.exe') ($common + @(Get-ChildItem -LiteralPath (Join-Path $here 'host') -Filter '*.cs' | ForEach-Object { $_.FullName })) @($manifestArg, $iconArg)
 Invoke-Csc (Join-Path $bin 'DomovoiSetupHelper.exe') ($common + @(Get-ChildItem -LiteralPath (Join-Path $here 'helper') -Filter '*.cs' | ForEach-Object { $_.FullName })) @($manifestArg, $iconArg)
-Write-Output "built $bin\DomovoiHost.exe and $bin\DomovoiSetupHelper.exe"
+# The tray: a Windows app (no console), its own manifest (DPI aware), the
+# icon embedded for the notification area too.
+$traySrc = @(Get-ChildItem -LiteralPath (Join-Path $here 'tray') -Filter '*.cs' | Sort-Object Name | ForEach-Object { $_.FullName })
+$trayIcon = '/resource:' + (Join-Path $here 'installer\art\domovoi.ico') + ',Domovoi.Tray.domovoi.ico'
+Invoke-Csc (Join-Path $bin 'DomovoiTray.exe') ($common + $traySrc) (@(('/win32manifest:' + (Join-Path $here 'tray\tray.manifest.xml')), $iconArg, $trayIcon) + $trayRefs) 'winexe'
+Write-Output "built $bin\DomovoiHost.exe, $bin\DomovoiSetupHelper.exe and $bin\DomovoiTray.exe"
 
 if (-not $SkipTests) {
     # The tests parse the generated firewall scripts with PowerShell's own
@@ -189,7 +199,10 @@ if (-not $SkipTests) {
     # the exes run.
     $helperSrc = @(Get-ChildItem -LiteralPath (Join-Path $here 'helper') -Filter '*.cs' | ForEach-Object { $_.FullName })
     $hostSrc = @(Get-ChildItem -LiteralPath (Join-Path $here 'host') -Filter '*.cs' | ForEach-Object { $_.FullName })
-    Invoke-Csc $testExe ($common + $helperSrc + $hostSrc + @((Join-Path $here 'tests\Tests.cs'))) @("/r:$sma", '/main:Tests')
+    # The tray's too (TrayTests.cs: its card goldens, tests\card-goldens.json,
+    # and QrReference.cs, matrices from an independent QR encoder).
+    $testSrc = @('Tests.cs', 'TrayTests.cs', 'QrReference.cs') | ForEach-Object { Join-Path $here ('tests\' + $_) }
+    Invoke-Csc $testExe ($common + $helperSrc + $hostSrc + $traySrc + $testSrc) (@("/r:$sma", '/main:Tests', $trayIcon) + $trayRefs)
     & $testExe
     if ($LASTEXITCODE -ne 0) { throw "unit tests failed" }
 }

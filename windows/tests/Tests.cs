@@ -3,7 +3,7 @@
 // and the host's own sources (so they are built and some of the helper's
 // file handling is exercised on throwaway folders under %TEMP%). Nothing
 // here changes the PC: no account, service, registry or firewall call is
-// made. build.ps1 builds and runs it; domovoi/tests/test_windows_installer.py
+// made. The tray's tests are in TrayTests.cs. build.ps1 builds and runs it; domovoi/tests/test_windows_installer.py
 // runs build.ps1 on Windows. Exit code 0 when every test passes.
 
 using System;
@@ -16,7 +16,7 @@ using System.Runtime.InteropServices;
 using System.ServiceProcess;
 using Domovoi.Windows;
 
-static class Tests
+static partial class Tests
 {
     static int passed, failed;
     static string current;
@@ -94,6 +94,7 @@ static class Tests
         LogCopies();
         UninstallTexts();
         LeftoverProfileTests();
+        TrayTests();
         Console.WriteLine();
         Console.WriteLine(Inv.F("{0} passed, {1} failed", passed, failed));
         return failed == 0 ? 0 : 1;

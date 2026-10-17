@@ -1,0 +1,748 @@
+{
+ "about": "Made by domovoi/tests/test_windows_card_parity.py from overlay.write_overlay; checked against the C# card helper by windows/tests/TrayTests.cs. Inputs are base64; each output is the SHA-256 and length of the file's bytes after the server's write.",
+ "ap_json": {
+  "bytes": "ewogICJzc2lkIjogIkRvbW92b2ktU2V0dXAtM0ZBOSIsCiAgInBzayI6ICJrN3RxbXpyNHdkIgp9",
+  "psk": "k7tqmzr4wd",
+  "ssid": "Domovoi-Setup-3FA9"
+ },
+ "cases": [
+  {
+   "cmdline_length": 293,
+   "cmdline_sha256": "5a5dfa6c6417d82fdb01bd56d7e58a717e29ebf29720081ce78f4e2e3ceaccbf",
+   "cmdline_written": true,
+   "config_length": 1374,
+   "config_sha256": "5e8b311700d82cd502d2327b48c02bd0022ea4a4a92531c1764e5b0dd6da8ad0",
+   "config_written": true,
+   "flags": "usb",
+   "input": 0,
+   "name": "bookworm stock"
+  },
+  {
+   "cmdline_length": 294,
+   "cmdline_sha256": "e5ab15f9799babe9d043dd0703a441c38b5425656a44a8826d46aec8429b4155",
+   "cmdline_written": true,
+   "config_length": 1447,
+   "config_sha256": "cc2b814dfd562ee23c175b6aa577d0cf17d7b55739ded8309a56d8e6c1b31cee",
+   "config_written": true,
+   "flags": "usb",
+   "input": 1,
+   "name": "trixie stock"
+  },
+  {
+   "cmdline_length": 293,
+   "cmdline_sha256": "5a5dfa6c6417d82fdb01bd56d7e58a717e29ebf29720081ce78f4e2e3ceaccbf",
+   "cmdline_written": true,
+   "config_length": 1374,
+   "config_sha256": "5e8b311700d82cd502d2327b48c02bd0022ea4a4a92531c1764e5b0dd6da8ad0",
+   "config_written": true,
+   "flags": "usb",
+   "input": 2,
+   "name": "bookworm CRLF"
+  },
+  {
+   "cmdline_length": 294,
+   "cmdline_sha256": "e5ab15f9799babe9d043dd0703a441c38b5425656a44a8826d46aec8429b4155",
+   "cmdline_written": true,
+   "config_length": 1447,
+   "config_sha256": "cc2b814dfd562ee23c175b6aa577d0cf17d7b55739ded8309a56d8e6c1b31cee",
+   "config_written": true,
+   "flags": "usb",
+   "input": 3,
+   "name": "trixie CRLF"
+  },
+  {
+   "cmdline_length": 293,
+   "cmdline_sha256": "5a5dfa6c6417d82fdb01bd56d7e58a717e29ebf29720081ce78f4e2e3ceaccbf",
+   "cmdline_written": true,
+   "config_length": 1374,
+   "config_sha256": "5e8b311700d82cd502d2327b48c02bd0022ea4a4a92531c1764e5b0dd6da8ad0",
+   "config_written": true,
+   "flags": "usb",
+   "input": 4,
+   "name": "no final newline"
+  },
+  {
+   "cmdline_length": 293,
+   "cmdline_sha256": "5a5dfa6c6417d82fdb01bd56d7e58a717e29ebf29720081ce78f4e2e3ceaccbf",
+   "cmdline_written": true,
+   "config_length": 1380,
+   "config_sha256": "3f2645e1c9077056dbf17b0fe39d0934f6067777efe99e80757f162bd5c357bc",
+   "config_written": true,
+   "flags": "usb",
+   "input": 5,
+   "name": "trailing spaces"
+  },
+  {
+   "cmdline_length": 210,
+   "cmdline_sha256": "ada73825e7fd03cd7caa6115c7a7b31f3f99e6a113dbcde4fc0f027307783785",
+   "cmdline_written": true,
+   "config_length": 1374,
+   "config_sha256": "5e8b311700d82cd502d2327b48c02bd0022ea4a4a92531c1764e5b0dd6da8ad0",
+   "config_written": true,
+   "flags": "usb",
+   "input": 6,
+   "name": "tabs and doubled spaces"
+  },
+  {
+   "cmdline_length": 309,
+   "cmdline_sha256": "d9baa34a4fc43d187d481089b07687a18db16203f441465d2fd1617dcdc27299",
+   "cmdline_written": true,
+   "config_length": 1374,
+   "config_sha256": "5e8b311700d82cd502d2327b48c02bd0022ea4a4a92531c1764e5b0dd6da8ad0",
+   "config_written": true,
+   "flags": "usb",
+   "input": 7,
+   "name": "an existing dwc_otg.speed"
+  },
+  {
+   "cmdline_length": 301,
+   "cmdline_sha256": "b8799db3acc905b2a46b0f1016d1cacd7327143771bcffb404ea599acb1c6b6d",
+   "cmdline_written": true,
+   "config_length": 1374,
+   "config_sha256": "5e8b311700d82cd502d2327b48c02bd0022ea4a4a92531c1764e5b0dd6da8ad0",
+   "config_written": true,
+   "flags": "usb",
+   "input": 8,
+   "name": "an existing modules-load"
+  },
+  {
+   "cmdline_length": 293,
+   "cmdline_sha256": "5a5dfa6c6417d82fdb01bd56d7e58a717e29ebf29720081ce78f4e2e3ceaccbf",
+   "cmdline_written": true,
+   "config_length": 1374,
+   "config_sha256": "5e8b311700d82cd502d2327b48c02bd0022ea4a4a92531c1764e5b0dd6da8ad0",
+   "config_written": true,
+   "flags": "usb",
+   "input": 9,
+   "name": "a second cmdline line"
+  },
+  {
+   "cmdline_length": 293,
+   "cmdline_sha256": "5a5dfa6c6417d82fdb01bd56d7e58a717e29ebf29720081ce78f4e2e3ceaccbf",
+   "cmdline_written": true,
+   "config_length": 1374,
+   "config_sha256": "5e8b311700d82cd502d2327b48c02bd0022ea4a4a92531c1764e5b0dd6da8ad0",
+   "config_written": true,
+   "flags": "usb",
+   "input": 10,
+   "name": "lone CR line ends"
+  },
+  {
+   "cmdline_length": 296,
+   "cmdline_sha256": "000b10b6224ba194ccec49ec2e9625aed6351885d064065cea6d7986f230faa0",
+   "cmdline_written": true,
+   "config_length": 1377,
+   "config_sha256": "54a14601c9289b8b01d318967573e18c776d509acd0cf74913aee37296ec8ae4",
+   "config_written": true,
+   "flags": "usb",
+   "input": 11,
+   "name": "a byte-order mark"
+  },
+  {
+   "cmdline_length": 302,
+   "cmdline_sha256": "7858624efebcbc8b95aebc5aad04b79b521a30be78aa6d7edc03a9cf9823984f",
+   "cmdline_written": true,
+   "config_length": 1396,
+   "config_sha256": "7a11150c185bed492c5eeaad81bc9ce95f9fd9352fe38258640c52d3952620f0",
+   "config_written": true,
+   "flags": "usb",
+   "input": 12,
+   "name": "bytes that aren't UTF-8"
+  },
+  {
+   "cmdline_length": 174,
+   "cmdline_sha256": "fe73c0d2c4acf9f6fdbebe18225ab52f8f559134188a954235d7608c61942159",
+   "cmdline_written": true,
+   "config_length": 1374,
+   "config_sha256": "5e8b311700d82cd502d2327b48c02bd0022ea4a4a92531c1764e5b0dd6da8ad0",
+   "config_written": true,
+   "flags": "usb",
+   "input": 13,
+   "name": "non-ASCII whitespace"
+  },
+  {
+   "cmdline_length": 139,
+   "cmdline_sha256": "b1d29bd52f0fb83a7e7d163bda08b4f7da49c483e6c63f3b9ad0f7a688de96bb",
+   "cmdline_written": true,
+   "config_length": 127,
+   "config_sha256": "a3b0b01aea9f0b9955650380655bcd4410ef8e0484c7cbcda8f4bbf89b89a491",
+   "config_written": true,
+   "flags": "usb",
+   "input": 14,
+   "name": "empty files"
+  },
+  {
+   "cmdline_length": 139,
+   "cmdline_sha256": "b1d29bd52f0fb83a7e7d163bda08b4f7da49c483e6c63f3b9ad0f7a688de96bb",
+   "cmdline_written": true,
+   "config_length": 129,
+   "config_sha256": "10358deee813f3787e27a410fa43b6f3aedaf5bfe6a59276051a9083d23e7c94",
+   "config_written": true,
+   "flags": "usb",
+   "input": 15,
+   "name": "only whitespace"
+  },
+  {
+   "cmdline_length": 148,
+   "cmdline_sha256": "edc2a884ce8078ecfc0037ef4ceac69f0983b0fd0ff8fc5ef22d07c74a997ab5",
+   "cmdline_written": true,
+   "config_length": 58,
+   "config_sha256": "85d2077405155f91590243521c01e2fd2d9b9ab5ea66ccf6d075ae413470637b",
+   "config_written": false,
+   "flags": "usb",
+   "input": 16,
+   "name": "a stray marker only"
+  },
+  {
+   "cmdline_length": 293,
+   "cmdline_sha256": "f1a79197f5897fc4867e51d401bf8c7a94ea4198c135f8f55eaa809bd8c6e2fc",
+   "cmdline_written": true,
+   "config_length": 1374,
+   "config_sha256": "5e8b311700d82cd502d2327b48c02bd0022ea4a4a92531c1764e5b0dd6da8ad0",
+   "config_written": true,
+   "flags": "usb",
+   "input": 17,
+   "name": "the first-boot hook already there"
+  },
+  {
+   "cmdline_length": 276,
+   "cmdline_sha256": "2a5f47cac38b58b52f38968e8296642e4db043eb7d87f89263ad0822b8be5671",
+   "cmdline_written": true,
+   "config_length": 1374,
+   "config_sha256": "5e8b311700d82cd502d2327b48c02bd0022ea4a4a92531c1764e5b0dd6da8ad0",
+   "config_written": true,
+   "flags": "usb",
+   "input": 18,
+   "name": "another first-boot script (Imager)"
+  },
+  {
+   "cmdline_length": 275,
+   "cmdline_sha256": "764b3cc3b95991b378bb1becac6b79296d476bebdf8603b4cc8a7523802ac7b4",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal",
+   "input": 0,
+   "name": "bookworm stock"
+  },
+  {
+   "cmdline_length": 276,
+   "cmdline_sha256": "d310352ecc1919ca1ab8d85121f1aad16eb3597eb5427f37ea590f9aff41c3ed",
+   "cmdline_written": true,
+   "config_length": 1413,
+   "config_sha256": "a1fc9908926f32c386821ce9ce26985f81845be66b8e00fd4bd8508a189479c1",
+   "config_written": true,
+   "flags": "portal",
+   "input": 1,
+   "name": "trixie stock"
+  },
+  {
+   "cmdline_length": 275,
+   "cmdline_sha256": "764b3cc3b95991b378bb1becac6b79296d476bebdf8603b4cc8a7523802ac7b4",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal",
+   "input": 2,
+   "name": "bookworm CRLF"
+  },
+  {
+   "cmdline_length": 276,
+   "cmdline_sha256": "d310352ecc1919ca1ab8d85121f1aad16eb3597eb5427f37ea590f9aff41c3ed",
+   "cmdline_written": true,
+   "config_length": 1413,
+   "config_sha256": "a1fc9908926f32c386821ce9ce26985f81845be66b8e00fd4bd8508a189479c1",
+   "config_written": true,
+   "flags": "portal",
+   "input": 3,
+   "name": "trixie CRLF"
+  },
+  {
+   "cmdline_length": 275,
+   "cmdline_sha256": "764b3cc3b95991b378bb1becac6b79296d476bebdf8603b4cc8a7523802ac7b4",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal",
+   "input": 4,
+   "name": "no final newline"
+  },
+  {
+   "cmdline_length": 275,
+   "cmdline_sha256": "764b3cc3b95991b378bb1becac6b79296d476bebdf8603b4cc8a7523802ac7b4",
+   "cmdline_written": true,
+   "config_length": 1346,
+   "config_sha256": "834175131473a432d642b26156cca6e6e338b75cef58dcd5180584211884d5fb",
+   "config_written": true,
+   "flags": "portal",
+   "input": 5,
+   "name": "trailing spaces"
+  },
+  {
+   "cmdline_length": 192,
+   "cmdline_sha256": "3f91756f94d372aa75a0b1f0b6c6d8bb5d5b95fcce6df4920d140d68d8df1d37",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal",
+   "input": 6,
+   "name": "tabs and doubled spaces"
+  },
+  {
+   "cmdline_length": 291,
+   "cmdline_sha256": "789e8e3e7becd99a61c54ed9e5f52c415ccfadc1a0e2ad14c845db499417af62",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal",
+   "input": 7,
+   "name": "an existing dwc_otg.speed"
+  },
+  {
+   "cmdline_length": 301,
+   "cmdline_sha256": "b8799db3acc905b2a46b0f1016d1cacd7327143771bcffb404ea599acb1c6b6d",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal",
+   "input": 8,
+   "name": "an existing modules-load"
+  },
+  {
+   "cmdline_length": 275,
+   "cmdline_sha256": "764b3cc3b95991b378bb1becac6b79296d476bebdf8603b4cc8a7523802ac7b4",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal",
+   "input": 9,
+   "name": "a second cmdline line"
+  },
+  {
+   "cmdline_length": 275,
+   "cmdline_sha256": "764b3cc3b95991b378bb1becac6b79296d476bebdf8603b4cc8a7523802ac7b4",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal",
+   "input": 10,
+   "name": "lone CR line ends"
+  },
+  {
+   "cmdline_length": 278,
+   "cmdline_sha256": "0e687de33ec177f51f893c733236a264a35f5b05ea0099a49be8066ada220b49",
+   "cmdline_written": true,
+   "config_length": 1343,
+   "config_sha256": "5040fccea775d41f22ecf3451ea234a458e69ec08062f89500856da4b9d6c794",
+   "config_written": true,
+   "flags": "portal",
+   "input": 11,
+   "name": "a byte-order mark"
+  },
+  {
+   "cmdline_length": 284,
+   "cmdline_sha256": "7437417a0f83afef28e708cf2231eb68c3c9a8aa8d17136156acc8061d465960",
+   "cmdline_written": true,
+   "config_length": 1362,
+   "config_sha256": "69358aed1e50d4f43089e430b11d6cf400fb64c1d50259d8ae75ac6d0e7c52a1",
+   "config_written": true,
+   "flags": "portal",
+   "input": 12,
+   "name": "bytes that aren't UTF-8"
+  },
+  {
+   "cmdline_length": 156,
+   "cmdline_sha256": "36569a15d62af0c87aa850f248fa70bcf3a156ff09bc1ef670fc709b3420350e",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal",
+   "input": 13,
+   "name": "non-ASCII whitespace"
+  },
+  {
+   "cmdline_length": 121,
+   "cmdline_sha256": "bb2642728fa8b48ffb025816611dc6a559d31a8b25e54786042a0a29b6433110",
+   "cmdline_written": true,
+   "config_length": 93,
+   "config_sha256": "f747af19d4bb0ba294bcb968214afb7d5fbe95c0d1ea3a73d2292667a682c213",
+   "config_written": true,
+   "flags": "portal",
+   "input": 14,
+   "name": "empty files"
+  },
+  {
+   "cmdline_length": 121,
+   "cmdline_sha256": "bb2642728fa8b48ffb025816611dc6a559d31a8b25e54786042a0a29b6433110",
+   "cmdline_written": true,
+   "config_length": 95,
+   "config_sha256": "fd65061550d36e422e6e2fcae3547c6979ede6bf47a7dec60fa4d2ebb0360b2a",
+   "config_written": true,
+   "flags": "portal",
+   "input": 15,
+   "name": "only whitespace"
+  },
+  {
+   "cmdline_length": 130,
+   "cmdline_sha256": "f370e70929a4409bea70dae36995cff4cbc85f0ad1c3597ff8886e35394a2df0",
+   "cmdline_written": true,
+   "config_length": 58,
+   "config_sha256": "85d2077405155f91590243521c01e2fd2d9b9ab5ea66ccf6d075ae413470637b",
+   "config_written": false,
+   "flags": "portal",
+   "input": 16,
+   "name": "a stray marker only"
+  },
+  {
+   "cmdline_length": 275,
+   "cmdline_sha256": "764b3cc3b95991b378bb1becac6b79296d476bebdf8603b4cc8a7523802ac7b4",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal",
+   "input": 17,
+   "name": "the first-boot hook already there"
+  },
+  {
+   "cmdline_length": 258,
+   "cmdline_sha256": "ca881877de050f2f9f65c839237c80607a95380a5a0ee6799d6d37dc22c6a665",
+   "cmdline_written": false,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal",
+   "input": 18,
+   "name": "another first-boot script (Imager)"
+  },
+  {
+   "cmdline_length": 291,
+   "cmdline_sha256": "89ecefd8c33d5aa3276a0ea9756c68bc8d80c054ebf5bd1fd5984fc177bb972d",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal-usb-mic",
+   "input": 0,
+   "name": "bookworm stock"
+  },
+  {
+   "cmdline_length": 292,
+   "cmdline_sha256": "9fdb89331394e5f1c06d9e7428f7a921297e3d4a69fd27d07c77c49d07073c02",
+   "cmdline_written": true,
+   "config_length": 1413,
+   "config_sha256": "a1fc9908926f32c386821ce9ce26985f81845be66b8e00fd4bd8508a189479c1",
+   "config_written": true,
+   "flags": "portal-usb-mic",
+   "input": 1,
+   "name": "trixie stock"
+  },
+  {
+   "cmdline_length": 291,
+   "cmdline_sha256": "89ecefd8c33d5aa3276a0ea9756c68bc8d80c054ebf5bd1fd5984fc177bb972d",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal-usb-mic",
+   "input": 2,
+   "name": "bookworm CRLF"
+  },
+  {
+   "cmdline_length": 292,
+   "cmdline_sha256": "9fdb89331394e5f1c06d9e7428f7a921297e3d4a69fd27d07c77c49d07073c02",
+   "cmdline_written": true,
+   "config_length": 1413,
+   "config_sha256": "a1fc9908926f32c386821ce9ce26985f81845be66b8e00fd4bd8508a189479c1",
+   "config_written": true,
+   "flags": "portal-usb-mic",
+   "input": 3,
+   "name": "trixie CRLF"
+  },
+  {
+   "cmdline_length": 291,
+   "cmdline_sha256": "89ecefd8c33d5aa3276a0ea9756c68bc8d80c054ebf5bd1fd5984fc177bb972d",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal-usb-mic",
+   "input": 4,
+   "name": "no final newline"
+  },
+  {
+   "cmdline_length": 291,
+   "cmdline_sha256": "89ecefd8c33d5aa3276a0ea9756c68bc8d80c054ebf5bd1fd5984fc177bb972d",
+   "cmdline_written": true,
+   "config_length": 1346,
+   "config_sha256": "834175131473a432d642b26156cca6e6e338b75cef58dcd5180584211884d5fb",
+   "config_written": true,
+   "flags": "portal-usb-mic",
+   "input": 5,
+   "name": "trailing spaces"
+  },
+  {
+   "cmdline_length": 208,
+   "cmdline_sha256": "6d077a69925e22f9e23f4864a15438bc3148091d84575ba83272eec75c3989b0",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal-usb-mic",
+   "input": 6,
+   "name": "tabs and doubled spaces"
+  },
+  {
+   "cmdline_length": 291,
+   "cmdline_sha256": "789e8e3e7becd99a61c54ed9e5f52c415ccfadc1a0e2ad14c845db499417af62",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal-usb-mic",
+   "input": 7,
+   "name": "an existing dwc_otg.speed"
+  },
+  {
+   "cmdline_length": 317,
+   "cmdline_sha256": "62e96fe9794561f4319026e8b88c83765c19536d25d41cd8ec5ec591ed9d2cfd",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal-usb-mic",
+   "input": 8,
+   "name": "an existing modules-load"
+  },
+  {
+   "cmdline_length": 291,
+   "cmdline_sha256": "89ecefd8c33d5aa3276a0ea9756c68bc8d80c054ebf5bd1fd5984fc177bb972d",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal-usb-mic",
+   "input": 9,
+   "name": "a second cmdline line"
+  },
+  {
+   "cmdline_length": 291,
+   "cmdline_sha256": "89ecefd8c33d5aa3276a0ea9756c68bc8d80c054ebf5bd1fd5984fc177bb972d",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal-usb-mic",
+   "input": 10,
+   "name": "lone CR line ends"
+  },
+  {
+   "cmdline_length": 294,
+   "cmdline_sha256": "5a1181efa83cc30b94cd0fa9fc16754afa38033a660da5704820808fbdd56792",
+   "cmdline_written": true,
+   "config_length": 1343,
+   "config_sha256": "5040fccea775d41f22ecf3451ea234a458e69ec08062f89500856da4b9d6c794",
+   "config_written": true,
+   "flags": "portal-usb-mic",
+   "input": 11,
+   "name": "a byte-order mark"
+  },
+  {
+   "cmdline_length": 300,
+   "cmdline_sha256": "67771c820d73010c336cd6afd5675c5334dbdc8722086f64656812af08c12916",
+   "cmdline_written": true,
+   "config_length": 1362,
+   "config_sha256": "69358aed1e50d4f43089e430b11d6cf400fb64c1d50259d8ae75ac6d0e7c52a1",
+   "config_written": true,
+   "flags": "portal-usb-mic",
+   "input": 12,
+   "name": "bytes that aren't UTF-8"
+  },
+  {
+   "cmdline_length": 172,
+   "cmdline_sha256": "7518908f0e113b2da667d96aaa141afdf6d6da703cb892db874e03bbce3c4855",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal-usb-mic",
+   "input": 13,
+   "name": "non-ASCII whitespace"
+  },
+  {
+   "cmdline_length": 137,
+   "cmdline_sha256": "06ddafe5df1de6bddcbbd949ffbad38314d586d8f35ff59950cfc2423731733b",
+   "cmdline_written": true,
+   "config_length": 93,
+   "config_sha256": "f747af19d4bb0ba294bcb968214afb7d5fbe95c0d1ea3a73d2292667a682c213",
+   "config_written": true,
+   "flags": "portal-usb-mic",
+   "input": 14,
+   "name": "empty files"
+  },
+  {
+   "cmdline_length": 137,
+   "cmdline_sha256": "06ddafe5df1de6bddcbbd949ffbad38314d586d8f35ff59950cfc2423731733b",
+   "cmdline_written": true,
+   "config_length": 95,
+   "config_sha256": "fd65061550d36e422e6e2fcae3547c6979ede6bf47a7dec60fa4d2ebb0360b2a",
+   "config_written": true,
+   "flags": "portal-usb-mic",
+   "input": 15,
+   "name": "only whitespace"
+  },
+  {
+   "cmdline_length": 146,
+   "cmdline_sha256": "00ba2fa42d923308d54fdca717d265d5454559ac5dd4f9d935796574975260e3",
+   "cmdline_written": true,
+   "config_length": 58,
+   "config_sha256": "85d2077405155f91590243521c01e2fd2d9b9ab5ea66ccf6d075ae413470637b",
+   "config_written": false,
+   "flags": "portal-usb-mic",
+   "input": 16,
+   "name": "a stray marker only"
+  },
+  {
+   "cmdline_length": 291,
+   "cmdline_sha256": "f797457cd73b2636117c326c3ea5ea4db039aa0f8114d3bfb8aeb5a43ae8688e",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal-usb-mic",
+   "input": 17,
+   "name": "the first-boot hook already there"
+  },
+  {
+   "cmdline_length": 274,
+   "cmdline_sha256": "e0da3887db260639d6a2c9f538b9a0aace166e6668cbeadaea554228acf67604",
+   "cmdline_written": true,
+   "config_length": 1340,
+   "config_sha256": "79ed807b878054989a43e4043e485acb424c3224d9c774198efe645e97edc3bc",
+   "config_written": true,
+   "flags": "portal-usb-mic",
+   "input": 18,
+   "name": "another first-boot script (Imager)"
+  }
+ ],
+ "inputs": [
+  {
+   "cmdline": "Y29uc29sZT1zZXJpYWwwLDExNTIwMCBjb25zb2xlPXR0eTEgcm9vdD1QQVJUVVVJRD00ZTYzOTA5MS0wMiByb290ZnN0eXBlPWV4dDQgZnNjay5yZXBhaXI9eWVzIHJvb3R3YWl0IHF1aWV0IGluaXQ9L3Vzci9saWIvcmFzcGJlcnJ5cGktc3lzLW1vZHMvZmlyc3Rib290Cg==",
+   "config": "IyBGb3IgbW9yZSBvcHRpb25zIGFuZCBpbmZvcm1hdGlvbiBzZWUKIyBodHRwOi8vcnB0bC5pby9jb25maWd0eHQKIyBTb21lIHNldHRpbmdzIG1heSBpbXBhY3QgZGV2aWNlIGZ1bmN0aW9uYWxpdHkuIFNlZSBsaW5rIGFib3ZlIGZvciBkZXRhaWxzCgojIFVuY29tbWVudCBzb21lIG9yIGFsbCBvZiB0aGVzZSB0byBlbmFibGUgdGhlIG9wdGlvbmFsIGhhcmR3YXJlIGludGVyZmFjZXMKI2R0cGFyYW09aTJjX2FybT1vbgojZHRwYXJhbT1pMnM9b24KI2R0cGFyYW09c3BpPW9uCgojIEVuYWJsZSBhdWRpbyAobG9hZHMgc25kX2JjbTI4MzUpCmR0cGFyYW09YXVkaW89b24KCiMgQWRkaXRpb25hbCBvdmVybGF5cyBhbmQgcGFyYW1ldGVycyBhcmUgZG9jdW1lbnRlZAojIC9ib290L2Zpcm13YXJlL292ZXJsYXlzL1JFQURNRQoKIyBBdXRvbWF0aWNhbGx5IGxvYWQgb3ZlcmxheXMgZm9yIGRldGVjdGVkIGNhbWVyYXMKY2FtZXJhX2F1dG9fZGV0ZWN0PTEKCiMgQXV0b21hdGljYWxseSBsb2FkIG92ZXJsYXlzIGZvciBkZXRlY3RlZCBEU0kgZGlzcGxheXMKZGlzcGxheV9hdXRvX2RldGVjdD0xCgojIEF1dG9tYXRpY2FsbHkgbG9hZCBpbml0cmFtZnMgZmlsZXMsIGlmIGZvdW5kCmF1dG9faW5pdHJhbWZzPTEKCiMgRW5hYmxlIERSTSBWQzQgVjNEIGRyaXZlcgpkdG92ZXJsYXk9dmM0LWttcy12M2QKbWF4X2ZyYW1lYnVmZmVycz0yCgojIERvbid0IGhhdmUgdGhlIGZpcm13YXJlIGNyZWF0ZSBhbiBpbml0aWFsIHZpZGVvPSBzZXR0aW5nIGluIGNtZGxpbmUudHh0LgojIFVzZSB0aGUga2VybmVsJ3MgZGVmYXVsdCBpbnN0ZWFkLgpkaXNhYmxlX2Z3X2ttc19zZXR1cD0xCgojIFJ1biBpbiA2NC1iaXQgbW9kZQphcm1fNjRiaXQ9MQoKIyBEaXNhYmxlIGNvbXBlbnNhdGlvbiBmb3IgZGlzcGxheXMgd2l0aCBvdmVyc2NhbgpkaXNhYmxlX292ZXJzY2FuPTEKCiMgUnVuIGFzIGZhc3QgYXMgZmlybXdhcmUgLyBib2FyZCBhbGxvd3MKYXJtX2Jvb3N0PTEKCltjbTRdCiMgRW5hYmxlIGhvc3QgbW9kZSBvbiB0aGUgMjcxMSBidWlsdC1pbiBYSENJIFVTQiBjb250cm9sbGVyLgojIFRoaXMgbGluZSBzaG91bGQgYmUgcmVtb3ZlZCBpZiB0aGUgbGVnYWN5IERXQzIgY29udHJvbGxlciBpcyByZXF1aXJlZAojIChlLmcuIGZvciBVU0IgZGV2aWNlIG1vZGUpIG9yIGlmIFVTQiBzdXBwb3J0IGlzIG5vdCByZXF1aXJlZC4Kb3RnX21vZGU9MQoKW2NtNV0KZHRvdmVybGF5PWR3YzIsZHJfbW9kZT1ob3N0CgpbYWxsXQo=",
+   "name": "bookworm stock"
+  },
+  {
+   "cmdline": "Y29uc29sZT1zZXJpYWwwLDExNTIwMCBjb25zb2xlPXR0eTEgcm9vdD1QQVJUVVVJRD04YTQzODkzMC0wMiByb290ZnN0eXBlPWV4dDQgZnNjay5yZXBhaXI9eWVzIHJvb3R3YWl0IHF1aWV0IHNwbGFzaCBwbHltb3V0aC5pZ25vcmUtc2VyaWFsLWNvbnNvbGVzIHJlc2l6ZQo=",
+   "config": "IyBGb3IgbW9yZSBvcHRpb25zIGFuZCBpbmZvcm1hdGlvbiBzZWUKIyBodHRwOi8vcnB0bC5pby9jb25maWd0eHQKIyBTb21lIHNldHRpbmdzIG1heSBpbXBhY3QgZGV2aWNlIGZ1bmN0aW9uYWxpdHkuIFNlZSBsaW5rIGFib3ZlIGZvciBkZXRhaWxzCgojIFVuY29tbWVudCBzb21lIG9yIGFsbCBvZiB0aGVzZSB0byBlbmFibGUgdGhlIG9wdGlvbmFsIGhhcmR3YXJlIGludGVyZmFjZXMKI2R0cGFyYW09aTJjX2FybT1vbgojZHRwYXJhbT1pMnM9b24KI2R0cGFyYW09c3BpPW9uCgojIEVuYWJsZSBhdWRpbyAobG9hZHMgc25kX2JjbTI4MzUpCmR0cGFyYW09YXVkaW89b24KCiMgQWRkaXRpb25hbCBvdmVybGF5cyBhbmQgcGFyYW1ldGVycyBhcmUgZG9jdW1lbnRlZAojIC9ib290L2Zpcm13YXJlL292ZXJsYXlzL1JFQURNRQoKIyBBdXRvbWF0aWNhbGx5IGxvYWQgb3ZlcmxheXMgZm9yIGRldGVjdGVkIGNhbWVyYXMKY2FtZXJhX2F1dG9fZGV0ZWN0PTEKCiMgQXV0b21hdGljYWxseSBsb2FkIG92ZXJsYXlzIGZvciBkZXRlY3RlZCBEU0kgZGlzcGxheXMKZGlzcGxheV9hdXRvX2RldGVjdD0xCgojIEF1dG9tYXRpY2FsbHkgbG9hZCBpbml0cmFtZnMgZmlsZXMsIGlmIGZvdW5kCmF1dG9faW5pdHJhbWZzPTEKCiMgRW5hYmxlIERSTSBWQzQgVjNEIGRyaXZlcgpkdG92ZXJsYXk9dmM0LWttcy12M2QKbWF4X2ZyYW1lYnVmZmVycz0yCgojIERvbid0IGhhdmUgdGhlIGZpcm13YXJlIGNyZWF0ZSBhbiBpbml0aWFsIHZpZGVvPSBzZXR0aW5nIGluIGNtZGxpbmUudHh0LgojIFVzZSB0aGUga2VybmVsJ3MgZGVmYXVsdCBpbnN0ZWFkLgpkaXNhYmxlX2Z3X2ttc19zZXR1cD0xCgojIFJ1biBpbiA2NC1iaXQgbW9kZQphcm1fNjRiaXQ9MQoKIyBEaXNhYmxlIGNvbXBlbnNhdGlvbiBmb3IgZGlzcGxheXMgd2l0aCBvdmVyc2NhbgpkaXNhYmxlX292ZXJzY2FuPTEKCiMgUnVuIGFzIGZhc3QgYXMgZmlybXdhcmUgLyBib2FyZCBhbGxvd3MKYXJtX2Jvb3N0PTEKCiMgRW5hYmxlIHRoZSBSUDEgUENJZSBsaW5rIGF0IEdlbiAyIHNwZWVkIG9uIFBpIDUKI2R0cGFyYW09cGNpZXgxX2dlbj0yCgpbY200XQojIEVuYWJsZSBob3N0IG1vZGUgb24gdGhlIDI3MTEgYnVpbHQtaW4gWEhDSSBVU0IgY29udHJvbGxlci4KIyBUaGlzIGxpbmUgc2hvdWxkIGJlIHJlbW92ZWQgaWYgdGhlIGxlZ2FjeSBEV0MyIGNvbnRyb2xsZXIgaXMgcmVxdWlyZWQKIyAoZS5nLiBmb3IgVVNCIGRldmljZSBtb2RlKSBvciBpZiBVU0Igc3VwcG9ydCBpcyBub3QgcmVxdWlyZWQuCm90Z19tb2RlPTEKCltjbTVdCmR0b3ZlcmxheT1kd2MyLGRyX21vZGU9aG9zdAoKW2FsbF0K",
+   "name": "trixie stock"
+  },
+  {
+   "cmdline": "Y29uc29sZT1zZXJpYWwwLDExNTIwMCBjb25zb2xlPXR0eTEgcm9vdD1QQVJUVVVJRD00ZTYzOTA5MS0wMiByb290ZnN0eXBlPWV4dDQgZnNjay5yZXBhaXI9eWVzIHJvb3R3YWl0IHF1aWV0IGluaXQ9L3Vzci9saWIvcmFzcGJlcnJ5cGktc3lzLW1vZHMvZmlyc3Rib290DQo=",
+   "config": "IyBGb3IgbW9yZSBvcHRpb25zIGFuZCBpbmZvcm1hdGlvbiBzZWUNCiMgaHR0cDovL3JwdGwuaW8vY29uZmlndHh0DQojIFNvbWUgc2V0dGluZ3MgbWF5IGltcGFjdCBkZXZpY2UgZnVuY3Rpb25hbGl0eS4gU2VlIGxpbmsgYWJvdmUgZm9yIGRldGFpbHMNCg0KIyBVbmNvbW1lbnQgc29tZSBvciBhbGwgb2YgdGhlc2UgdG8gZW5hYmxlIHRoZSBvcHRpb25hbCBoYXJkd2FyZSBpbnRlcmZhY2VzDQojZHRwYXJhbT1pMmNfYXJtPW9uDQojZHRwYXJhbT1pMnM9b24NCiNkdHBhcmFtPXNwaT1vbg0KDQojIEVuYWJsZSBhdWRpbyAobG9hZHMgc25kX2JjbTI4MzUpDQpkdHBhcmFtPWF1ZGlvPW9uDQoNCiMgQWRkaXRpb25hbCBvdmVybGF5cyBhbmQgcGFyYW1ldGVycyBhcmUgZG9jdW1lbnRlZA0KIyAvYm9vdC9maXJtd2FyZS9vdmVybGF5cy9SRUFETUUNCg0KIyBBdXRvbWF0aWNhbGx5IGxvYWQgb3ZlcmxheXMgZm9yIGRldGVjdGVkIGNhbWVyYXMNCmNhbWVyYV9hdXRvX2RldGVjdD0xDQoNCiMgQXV0b21hdGljYWxseSBsb2FkIG92ZXJsYXlzIGZvciBkZXRlY3RlZCBEU0kgZGlzcGxheXMNCmRpc3BsYXlfYXV0b19kZXRlY3Q9MQ0KDQojIEF1dG9tYXRpY2FsbHkgbG9hZCBpbml0cmFtZnMgZmlsZXMsIGlmIGZvdW5kDQphdXRvX2luaXRyYW1mcz0xDQoNCiMgRW5hYmxlIERSTSBWQzQgVjNEIGRyaXZlcg0KZHRvdmVybGF5PXZjNC1rbXMtdjNkDQptYXhfZnJhbWVidWZmZXJzPTINCg0KIyBEb24ndCBoYXZlIHRoZSBmaXJtd2FyZSBjcmVhdGUgYW4gaW5pdGlhbCB2aWRlbz0gc2V0dGluZyBpbiBjbWRsaW5lLnR4dC4NCiMgVXNlIHRoZSBrZXJuZWwncyBkZWZhdWx0IGluc3RlYWQuDQpkaXNhYmxlX2Z3X2ttc19zZXR1cD0xDQoNCiMgUnVuIGluIDY0LWJpdCBtb2RlDQphcm1fNjRiaXQ9MQ0KDQojIERpc2FibGUgY29tcGVuc2F0aW9uIGZvciBkaXNwbGF5cyB3aXRoIG92ZXJzY2FuDQpkaXNhYmxlX292ZXJzY2FuPTENCg0KIyBSdW4gYXMgZmFzdCBhcyBmaXJtd2FyZSAvIGJvYXJkIGFsbG93cw0KYXJtX2Jvb3N0PTENCg0KW2NtNF0NCiMgRW5hYmxlIGhvc3QgbW9kZSBvbiB0aGUgMjcxMSBidWlsdC1pbiBYSENJIFVTQiBjb250cm9sbGVyLg0KIyBUaGlzIGxpbmUgc2hvdWxkIGJlIHJlbW92ZWQgaWYgdGhlIGxlZ2FjeSBEV0MyIGNvbnRyb2xsZXIgaXMgcmVxdWlyZWQNCiMgKGUuZy4gZm9yIFVTQiBkZXZpY2UgbW9kZSkgb3IgaWYgVVNCIHN1cHBvcnQgaXMgbm90IHJlcXVpcmVkLg0Kb3RnX21vZGU9MQ0KDQpbY201XQ0KZHRvdmVybGF5PWR3YzIsZHJfbW9kZT1ob3N0DQoNClthbGxdDQo=",
+   "name": "bookworm CRLF"
+  },
+  {
+   "cmdline": "Y29uc29sZT1zZXJpYWwwLDExNTIwMCBjb25zb2xlPXR0eTEgcm9vdD1QQVJUVVVJRD04YTQzODkzMC0wMiByb290ZnN0eXBlPWV4dDQgZnNjay5yZXBhaXI9eWVzIHJvb3R3YWl0IHF1aWV0IHNwbGFzaCBwbHltb3V0aC5pZ25vcmUtc2VyaWFsLWNvbnNvbGVzIHJlc2l6ZQ0K",
+   "config": "IyBGb3IgbW9yZSBvcHRpb25zIGFuZCBpbmZvcm1hdGlvbiBzZWUNCiMgaHR0cDovL3JwdGwuaW8vY29uZmlndHh0DQojIFNvbWUgc2V0dGluZ3MgbWF5IGltcGFjdCBkZXZpY2UgZnVuY3Rpb25hbGl0eS4gU2VlIGxpbmsgYWJvdmUgZm9yIGRldGFpbHMNCg0KIyBVbmNvbW1lbnQgc29tZSBvciBhbGwgb2YgdGhlc2UgdG8gZW5hYmxlIHRoZSBvcHRpb25hbCBoYXJkd2FyZSBpbnRlcmZhY2VzDQojZHRwYXJhbT1pMmNfYXJtPW9uDQojZHRwYXJhbT1pMnM9b24NCiNkdHBhcmFtPXNwaT1vbg0KDQojIEVuYWJsZSBhdWRpbyAobG9hZHMgc25kX2JjbTI4MzUpDQpkdHBhcmFtPWF1ZGlvPW9uDQoNCiMgQWRkaXRpb25hbCBvdmVybGF5cyBhbmQgcGFyYW1ldGVycyBhcmUgZG9jdW1lbnRlZA0KIyAvYm9vdC9maXJtd2FyZS9vdmVybGF5cy9SRUFETUUNCg0KIyBBdXRvbWF0aWNhbGx5IGxvYWQgb3ZlcmxheXMgZm9yIGRldGVjdGVkIGNhbWVyYXMNCmNhbWVyYV9hdXRvX2RldGVjdD0xDQoNCiMgQXV0b21hdGljYWxseSBsb2FkIG92ZXJsYXlzIGZvciBkZXRlY3RlZCBEU0kgZGlzcGxheXMNCmRpc3BsYXlfYXV0b19kZXRlY3Q9MQ0KDQojIEF1dG9tYXRpY2FsbHkgbG9hZCBpbml0cmFtZnMgZmlsZXMsIGlmIGZvdW5kDQphdXRvX2luaXRyYW1mcz0xDQoNCiMgRW5hYmxlIERSTSBWQzQgVjNEIGRyaXZlcg0KZHRvdmVybGF5PXZjNC1rbXMtdjNkDQptYXhfZnJhbWVidWZmZXJzPTINCg0KIyBEb24ndCBoYXZlIHRoZSBmaXJtd2FyZSBjcmVhdGUgYW4gaW5pdGlhbCB2aWRlbz0gc2V0dGluZyBpbiBjbWRsaW5lLnR4dC4NCiMgVXNlIHRoZSBrZXJuZWwncyBkZWZhdWx0IGluc3RlYWQuDQpkaXNhYmxlX2Z3X2ttc19zZXR1cD0xDQoNCiMgUnVuIGluIDY0LWJpdCBtb2RlDQphcm1fNjRiaXQ9MQ0KDQojIERpc2FibGUgY29tcGVuc2F0aW9uIGZvciBkaXNwbGF5cyB3aXRoIG92ZXJzY2FuDQpkaXNhYmxlX292ZXJzY2FuPTENCg0KIyBSdW4gYXMgZmFzdCBhcyBmaXJtd2FyZSAvIGJvYXJkIGFsbG93cw0KYXJtX2Jvb3N0PTENCg0KIyBFbmFibGUgdGhlIFJQMSBQQ0llIGxpbmsgYXQgR2VuIDIgc3BlZWQgb24gUGkgNQ0KI2R0cGFyYW09cGNpZXgxX2dlbj0yDQoNCltjbTRdDQojIEVuYWJsZSBob3N0IG1vZGUgb24gdGhlIDI3MTEgYnVpbHQtaW4gWEhDSSBVU0IgY29udHJvbGxlci4NCiMgVGhpcyBsaW5lIHNob3VsZCBiZSByZW1vdmVkIGlmIHRoZSBsZWdhY3kgRFdDMiBjb250cm9sbGVyIGlzIHJlcXVpcmVkDQojIChlLmcuIGZvciBVU0IgZGV2aWNlIG1vZGUpIG9yIGlmIFVTQiBzdXBwb3J0IGlzIG5vdCByZXF1aXJlZC4NCm90Z19tb2RlPTENCg0KW2NtNV0NCmR0b3ZlcmxheT1kd2MyLGRyX21vZGU9aG9zdA0KDQpbYWxsXQ0K",
+   "name": "trixie CRLF"
+  },
+  {
+   "cmdline": "Y29uc29sZT1zZXJpYWwwLDExNTIwMCBjb25zb2xlPXR0eTEgcm9vdD1QQVJUVVVJRD00ZTYzOTA5MS0wMiByb290ZnN0eXBlPWV4dDQgZnNjay5yZXBhaXI9eWVzIHJvb3R3YWl0IHF1aWV0IGluaXQ9L3Vzci9saWIvcmFzcGJlcnJ5cGktc3lzLW1vZHMvZmlyc3Rib290",
+   "config": "IyBGb3IgbW9yZSBvcHRpb25zIGFuZCBpbmZvcm1hdGlvbiBzZWUKIyBodHRwOi8vcnB0bC5pby9jb25maWd0eHQKIyBTb21lIHNldHRpbmdzIG1heSBpbXBhY3QgZGV2aWNlIGZ1bmN0aW9uYWxpdHkuIFNlZSBsaW5rIGFib3ZlIGZvciBkZXRhaWxzCgojIFVuY29tbWVudCBzb21lIG9yIGFsbCBvZiB0aGVzZSB0byBlbmFibGUgdGhlIG9wdGlvbmFsIGhhcmR3YXJlIGludGVyZmFjZXMKI2R0cGFyYW09aTJjX2FybT1vbgojZHRwYXJhbT1pMnM9b24KI2R0cGFyYW09c3BpPW9uCgojIEVuYWJsZSBhdWRpbyAobG9hZHMgc25kX2JjbTI4MzUpCmR0cGFyYW09YXVkaW89b24KCiMgQWRkaXRpb25hbCBvdmVybGF5cyBhbmQgcGFyYW1ldGVycyBhcmUgZG9jdW1lbnRlZAojIC9ib290L2Zpcm13YXJlL292ZXJsYXlzL1JFQURNRQoKIyBBdXRvbWF0aWNhbGx5IGxvYWQgb3ZlcmxheXMgZm9yIGRldGVjdGVkIGNhbWVyYXMKY2FtZXJhX2F1dG9fZGV0ZWN0PTEKCiMgQXV0b21hdGljYWxseSBsb2FkIG92ZXJsYXlzIGZvciBkZXRlY3RlZCBEU0kgZGlzcGxheXMKZGlzcGxheV9hdXRvX2RldGVjdD0xCgojIEF1dG9tYXRpY2FsbHkgbG9hZCBpbml0cmFtZnMgZmlsZXMsIGlmIGZvdW5kCmF1dG9faW5pdHJhbWZzPTEKCiMgRW5hYmxlIERSTSBWQzQgVjNEIGRyaXZlcgpkdG92ZXJsYXk9dmM0LWttcy12M2QKbWF4X2ZyYW1lYnVmZmVycz0yCgojIERvbid0IGhhdmUgdGhlIGZpcm13YXJlIGNyZWF0ZSBhbiBpbml0aWFsIHZpZGVvPSBzZXR0aW5nIGluIGNtZGxpbmUudHh0LgojIFVzZSB0aGUga2VybmVsJ3MgZGVmYXVsdCBpbnN0ZWFkLgpkaXNhYmxlX2Z3X2ttc19zZXR1cD0xCgojIFJ1biBpbiA2NC1iaXQgbW9kZQphcm1fNjRiaXQ9MQoKIyBEaXNhYmxlIGNvbXBlbnNhdGlvbiBmb3IgZGlzcGxheXMgd2l0aCBvdmVyc2NhbgpkaXNhYmxlX292ZXJzY2FuPTEKCiMgUnVuIGFzIGZhc3QgYXMgZmlybXdhcmUgLyBib2FyZCBhbGxvd3MKYXJtX2Jvb3N0PTEKCltjbTRdCiMgRW5hYmxlIGhvc3QgbW9kZSBvbiB0aGUgMjcxMSBidWlsdC1pbiBYSENJIFVTQiBjb250cm9sbGVyLgojIFRoaXMgbGluZSBzaG91bGQgYmUgcmVtb3ZlZCBpZiB0aGUgbGVnYWN5IERXQzIgY29udHJvbGxlciBpcyByZXF1aXJlZAojIChlLmcuIGZvciBVU0IgZGV2aWNlIG1vZGUpIG9yIGlmIFVTQiBzdXBwb3J0IGlzIG5vdCByZXF1aXJlZC4Kb3RnX21vZGU9MQoKW2NtNV0KZHRvdmVybGF5PWR3YzIsZHJfbW9kZT1ob3N0CgpbYWxsXQ==",
+   "name": "no final newline"
+  },
+  {
+   "cmdline": "ICBjb25zb2xlPXNlcmlhbDAsMTE1MjAwIGNvbnNvbGU9dHR5MSByb290PVBBUlRVVUlEPTRlNjM5MDkxLTAyIHJvb3Rmc3R5cGU9ZXh0NCBmc2NrLnJlcGFpcj15ZXMgcm9vdHdhaXQgcXVpZXQgaW5pdD0vdXNyL2xpYi9yYXNwYmVycnlwaS1zeXMtbW9kcy9maXJzdGJvb3QgICAJCgo=",
+   "config": "IyBGb3IgbW9yZSBvcHRpb25zIGFuZCBpbmZvcm1hdGlvbiBzZWUKIyBodHRwOi8vcnB0bC5pby9jb25maWd0eHQKIyBTb21lIHNldHRpbmdzIG1heSBpbXBhY3QgZGV2aWNlIGZ1bmN0aW9uYWxpdHkuIFNlZSBsaW5rIGFib3ZlIGZvciBkZXRhaWxzCgojIFVuY29tbWVudCBzb21lIG9yIGFsbCBvZiB0aGVzZSB0byBlbmFibGUgdGhlIG9wdGlvbmFsIGhhcmR3YXJlIGludGVyZmFjZXMKI2R0cGFyYW09aTJjX2FybT1vbgojZHRwYXJhbT1pMnM9b24KI2R0cGFyYW09c3BpPW9uCgojIEVuYWJsZSBhdWRpbyAobG9hZHMgc25kX2JjbTI4MzUpCmR0cGFyYW09YXVkaW89b24KCiMgQWRkaXRpb25hbCBvdmVybGF5cyBhbmQgcGFyYW1ldGVycyBhcmUgZG9jdW1lbnRlZAojIC9ib290L2Zpcm13YXJlL292ZXJsYXlzL1JFQURNRQoKIyBBdXRvbWF0aWNhbGx5IGxvYWQgb3ZlcmxheXMgZm9yIGRldGVjdGVkIGNhbWVyYXMKY2FtZXJhX2F1dG9fZGV0ZWN0PTEKCiMgQXV0b21hdGljYWxseSBsb2FkIG92ZXJsYXlzIGZvciBkZXRlY3RlZCBEU0kgZGlzcGxheXMKZGlzcGxheV9hdXRvX2RldGVjdD0xCgojIEF1dG9tYXRpY2FsbHkgbG9hZCBpbml0cmFtZnMgZmlsZXMsIGlmIGZvdW5kCmF1dG9faW5pdHJhbWZzPTEKCiMgRW5hYmxlIERSTSBWQzQgVjNEIGRyaXZlcgpkdG92ZXJsYXk9dmM0LWttcy12M2QKbWF4X2ZyYW1lYnVmZmVycz0yCgojIERvbid0IGhhdmUgdGhlIGZpcm13YXJlIGNyZWF0ZSBhbiBpbml0aWFsIHZpZGVvPSBzZXR0aW5nIGluIGNtZGxpbmUudHh0LgojIFVzZSB0aGUga2VybmVsJ3MgZGVmYXVsdCBpbnN0ZWFkLgpkaXNhYmxlX2Z3X2ttc19zZXR1cD0xCgojIFJ1biBpbiA2NC1iaXQgbW9kZQphcm1fNjRiaXQ9MQoKIyBEaXNhYmxlIGNvbXBlbnNhdGlvbiBmb3IgZGlzcGxheXMgd2l0aCBvdmVyc2NhbgpkaXNhYmxlX292ZXJzY2FuPTEKCiMgUnVuIGFzIGZhc3QgYXMgZmlybXdhcmUgLyBib2FyZCBhbGxvd3MKYXJtX2Jvb3N0PTEKCltjbTRdCiMgRW5hYmxlIGhvc3QgbW9kZSBvbiB0aGUgMjcxMSBidWlsdC1pbiBYSENJIFVTQiBjb250cm9sbGVyLgojIFRoaXMgbGluZSBzaG91bGQgYmUgcmVtb3ZlZCBpZiB0aGUgbGVnYWN5IERXQzIgY29udHJvbGxlciBpcyByZXF1aXJlZAojIChlLmcuIGZvciBVU0IgZGV2aWNlIG1vZGUpIG9yIGlmIFVTQiBzdXBwb3J0IGlzIG5vdCByZXF1aXJlZC4Kb3RnX21vZGU9MQoKW2NtNV0KZHRvdmVybGF5PWR3YzIsZHJfbW9kZT1ob3N0CgpbYWxsXQogICAKCQo=",
+   "name": "trailing spaces"
+  },
+  {
+   "cmdline": "Y29uc29sZT1zZXJpYWwwLDExNTIwMAkJY29uc29sZT10dHkxICByb290PVBBUlRVVUlEPTRlNjM5MDkxLTAyIHJvb3R3YWl0Cg==",
+   "config": "IyBGb3IgbW9yZSBvcHRpb25zIGFuZCBpbmZvcm1hdGlvbiBzZWUKIyBodHRwOi8vcnB0bC5pby9jb25maWd0eHQKIyBTb21lIHNldHRpbmdzIG1heSBpbXBhY3QgZGV2aWNlIGZ1bmN0aW9uYWxpdHkuIFNlZSBsaW5rIGFib3ZlIGZvciBkZXRhaWxzCgojIFVuY29tbWVudCBzb21lIG9yIGFsbCBvZiB0aGVzZSB0byBlbmFibGUgdGhlIG9wdGlvbmFsIGhhcmR3YXJlIGludGVyZmFjZXMKI2R0cGFyYW09aTJjX2FybT1vbgojZHRwYXJhbT1pMnM9b24KI2R0cGFyYW09c3BpPW9uCgojIEVuYWJsZSBhdWRpbyAobG9hZHMgc25kX2JjbTI4MzUpCmR0cGFyYW09YXVkaW89b24KCiMgQWRkaXRpb25hbCBvdmVybGF5cyBhbmQgcGFyYW1ldGVycyBhcmUgZG9jdW1lbnRlZAojIC9ib290L2Zpcm13YXJlL292ZXJsYXlzL1JFQURNRQoKIyBBdXRvbWF0aWNhbGx5IGxvYWQgb3ZlcmxheXMgZm9yIGRldGVjdGVkIGNhbWVyYXMKY2FtZXJhX2F1dG9fZGV0ZWN0PTEKCiMgQXV0b21hdGljYWxseSBsb2FkIG92ZXJsYXlzIGZvciBkZXRlY3RlZCBEU0kgZGlzcGxheXMKZGlzcGxheV9hdXRvX2RldGVjdD0xCgojIEF1dG9tYXRpY2FsbHkgbG9hZCBpbml0cmFtZnMgZmlsZXMsIGlmIGZvdW5kCmF1dG9faW5pdHJhbWZzPTEKCiMgRW5hYmxlIERSTSBWQzQgVjNEIGRyaXZlcgpkdG92ZXJsYXk9dmM0LWttcy12M2QKbWF4X2ZyYW1lYnVmZmVycz0yCgojIERvbid0IGhhdmUgdGhlIGZpcm13YXJlIGNyZWF0ZSBhbiBpbml0aWFsIHZpZGVvPSBzZXR0aW5nIGluIGNtZGxpbmUudHh0LgojIFVzZSB0aGUga2VybmVsJ3MgZGVmYXVsdCBpbnN0ZWFkLgpkaXNhYmxlX2Z3X2ttc19zZXR1cD0xCgojIFJ1biBpbiA2NC1iaXQgbW9kZQphcm1fNjRiaXQ9MQoKIyBEaXNhYmxlIGNvbXBlbnNhdGlvbiBmb3IgZGlzcGxheXMgd2l0aCBvdmVyc2NhbgpkaXNhYmxlX292ZXJzY2FuPTEKCiMgUnVuIGFzIGZhc3QgYXMgZmlybXdhcmUgLyBib2FyZCBhbGxvd3MKYXJtX2Jvb3N0PTEKCltjbTRdCiMgRW5hYmxlIGhvc3QgbW9kZSBvbiB0aGUgMjcxMSBidWlsdC1pbiBYSENJIFVTQiBjb250cm9sbGVyLgojIFRoaXMgbGluZSBzaG91bGQgYmUgcmVtb3ZlZCBpZiB0aGUgbGVnYWN5IERXQzIgY29udHJvbGxlciBpcyByZXF1aXJlZAojIChlLmcuIGZvciBVU0IgZGV2aWNlIG1vZGUpIG9yIGlmIFVTQiBzdXBwb3J0IGlzIG5vdCByZXF1aXJlZC4Kb3RnX21vZGU9MQoKW2NtNV0KZHRvdmVybGF5PWR3YzIsZHJfbW9kZT1ob3N0CgpbYWxsXQo=",
+   "name": "tabs and doubled spaces"
+  },
+  {
+   "cmdline": "Y29uc29sZT1zZXJpYWwwLDExNTIwMCBjb25zb2xlPXR0eTEgcm9vdD1QQVJUVVVJRD00ZTYzOTA5MS0wMiByb290ZnN0eXBlPWV4dDQgZnNjay5yZXBhaXI9eWVzIHJvb3R3YWl0IHF1aWV0IGluaXQ9L3Vzci9saWIvcmFzcGJlcnJ5cGktc3lzLW1vZHMvZmlyc3Rib290IGR3Y19vdGcuc3BlZWQ9MAo=",
+   "config": "IyBGb3IgbW9yZSBvcHRpb25zIGFuZCBpbmZvcm1hdGlvbiBzZWUKIyBodHRwOi8vcnB0bC5pby9jb25maWd0eHQKIyBTb21lIHNldHRpbmdzIG1heSBpbXBhY3QgZGV2aWNlIGZ1bmN0aW9uYWxpdHkuIFNlZSBsaW5rIGFib3ZlIGZvciBkZXRhaWxzCgojIFVuY29tbWVudCBzb21lIG9yIGFsbCBvZiB0aGVzZSB0byBlbmFibGUgdGhlIG9wdGlvbmFsIGhhcmR3YXJlIGludGVyZmFjZXMKI2R0cGFyYW09aTJjX2FybT1vbgojZHRwYXJhbT1pMnM9b24KI2R0cGFyYW09c3BpPW9uCgojIEVuYWJsZSBhdWRpbyAobG9hZHMgc25kX2JjbTI4MzUpCmR0cGFyYW09YXVkaW89b24KCiMgQWRkaXRpb25hbCBvdmVybGF5cyBhbmQgcGFyYW1ldGVycyBhcmUgZG9jdW1lbnRlZAojIC9ib290L2Zpcm13YXJlL292ZXJsYXlzL1JFQURNRQoKIyBBdXRvbWF0aWNhbGx5IGxvYWQgb3ZlcmxheXMgZm9yIGRldGVjdGVkIGNhbWVyYXMKY2FtZXJhX2F1dG9fZGV0ZWN0PTEKCiMgQXV0b21hdGljYWxseSBsb2FkIG92ZXJsYXlzIGZvciBkZXRlY3RlZCBEU0kgZGlzcGxheXMKZGlzcGxheV9hdXRvX2RldGVjdD0xCgojIEF1dG9tYXRpY2FsbHkgbG9hZCBpbml0cmFtZnMgZmlsZXMsIGlmIGZvdW5kCmF1dG9faW5pdHJhbWZzPTEKCiMgRW5hYmxlIERSTSBWQzQgVjNEIGRyaXZlcgpkdG92ZXJsYXk9dmM0LWttcy12M2QKbWF4X2ZyYW1lYnVmZmVycz0yCgojIERvbid0IGhhdmUgdGhlIGZpcm13YXJlIGNyZWF0ZSBhbiBpbml0aWFsIHZpZGVvPSBzZXR0aW5nIGluIGNtZGxpbmUudHh0LgojIFVzZSB0aGUga2VybmVsJ3MgZGVmYXVsdCBpbnN0ZWFkLgpkaXNhYmxlX2Z3X2ttc19zZXR1cD0xCgojIFJ1biBpbiA2NC1iaXQgbW9kZQphcm1fNjRiaXQ9MQoKIyBEaXNhYmxlIGNvbXBlbnNhdGlvbiBmb3IgZGlzcGxheXMgd2l0aCBvdmVyc2NhbgpkaXNhYmxlX292ZXJzY2FuPTEKCiMgUnVuIGFzIGZhc3QgYXMgZmlybXdhcmUgLyBib2FyZCBhbGxvd3MKYXJtX2Jvb3N0PTEKCltjbTRdCiMgRW5hYmxlIGhvc3QgbW9kZSBvbiB0aGUgMjcxMSBidWlsdC1pbiBYSENJIFVTQiBjb250cm9sbGVyLgojIFRoaXMgbGluZSBzaG91bGQgYmUgcmVtb3ZlZCBpZiB0aGUgbGVnYWN5IERXQzIgY29udHJvbGxlciBpcyByZXF1aXJlZAojIChlLmcuIGZvciBVU0IgZGV2aWNlIG1vZGUpIG9yIGlmIFVTQiBzdXBwb3J0IGlzIG5vdCByZXF1aXJlZC4Kb3RnX21vZGU9MQoKW2NtNV0KZHRvdmVybGF5PWR3YzIsZHJfbW9kZT1ob3N0CgpbYWxsXQo=",
+   "name": "an existing dwc_otg.speed"
+  },
+  {
+   "cmdline": "Y29uc29sZT1zZXJpYWwwLDExNTIwMCBjb25zb2xlPXR0eTEgcm9vdD1QQVJUVVVJRD00ZTYzOTA5MS0wMiByb290ZnN0eXBlPWV4dDQgZnNjay5yZXBhaXI9eWVzIHJvb3R3YWl0IHF1aWV0IGluaXQ9L3Vzci9saWIvcmFzcGJlcnJ5cGktc3lzLW1vZHMvZmlyc3Rib290IG1vZHVsZXMtbG9hZD1kd2MyLGdfZXRoZXIK",
+   "config": "IyBGb3IgbW9yZSBvcHRpb25zIGFuZCBpbmZvcm1hdGlvbiBzZWUKIyBodHRwOi8vcnB0bC5pby9jb25maWd0eHQKIyBTb21lIHNldHRpbmdzIG1heSBpbXBhY3QgZGV2aWNlIGZ1bmN0aW9uYWxpdHkuIFNlZSBsaW5rIGFib3ZlIGZvciBkZXRhaWxzCgojIFVuY29tbWVudCBzb21lIG9yIGFsbCBvZiB0aGVzZSB0byBlbmFibGUgdGhlIG9wdGlvbmFsIGhhcmR3YXJlIGludGVyZmFjZXMKI2R0cGFyYW09aTJjX2FybT1vbgojZHRwYXJhbT1pMnM9b24KI2R0cGFyYW09c3BpPW9uCgojIEVuYWJsZSBhdWRpbyAobG9hZHMgc25kX2JjbTI4MzUpCmR0cGFyYW09YXVkaW89b24KCiMgQWRkaXRpb25hbCBvdmVybGF5cyBhbmQgcGFyYW1ldGVycyBhcmUgZG9jdW1lbnRlZAojIC9ib290L2Zpcm13YXJlL292ZXJsYXlzL1JFQURNRQoKIyBBdXRvbWF0aWNhbGx5IGxvYWQgb3ZlcmxheXMgZm9yIGRldGVjdGVkIGNhbWVyYXMKY2FtZXJhX2F1dG9fZGV0ZWN0PTEKCiMgQXV0b21hdGljYWxseSBsb2FkIG92ZXJsYXlzIGZvciBkZXRlY3RlZCBEU0kgZGlzcGxheXMKZGlzcGxheV9hdXRvX2RldGVjdD0xCgojIEF1dG9tYXRpY2FsbHkgbG9hZCBpbml0cmFtZnMgZmlsZXMsIGlmIGZvdW5kCmF1dG9faW5pdHJhbWZzPTEKCiMgRW5hYmxlIERSTSBWQzQgVjNEIGRyaXZlcgpkdG92ZXJsYXk9dmM0LWttcy12M2QKbWF4X2ZyYW1lYnVmZmVycz0yCgojIERvbid0IGhhdmUgdGhlIGZpcm13YXJlIGNyZWF0ZSBhbiBpbml0aWFsIHZpZGVvPSBzZXR0aW5nIGluIGNtZGxpbmUudHh0LgojIFVzZSB0aGUga2VybmVsJ3MgZGVmYXVsdCBpbnN0ZWFkLgpkaXNhYmxlX2Z3X2ttc19zZXR1cD0xCgojIFJ1biBpbiA2NC1iaXQgbW9kZQphcm1fNjRiaXQ9MQoKIyBEaXNhYmxlIGNvbXBlbnNhdGlvbiBmb3IgZGlzcGxheXMgd2l0aCBvdmVyc2NhbgpkaXNhYmxlX292ZXJzY2FuPTEKCiMgUnVuIGFzIGZhc3QgYXMgZmlybXdhcmUgLyBib2FyZCBhbGxvd3MKYXJtX2Jvb3N0PTEKCltjbTRdCiMgRW5hYmxlIGhvc3QgbW9kZSBvbiB0aGUgMjcxMSBidWlsdC1pbiBYSENJIFVTQiBjb250cm9sbGVyLgojIFRoaXMgbGluZSBzaG91bGQgYmUgcmVtb3ZlZCBpZiB0aGUgbGVnYWN5IERXQzIgY29udHJvbGxlciBpcyByZXF1aXJlZAojIChlLmcuIGZvciBVU0IgZGV2aWNlIG1vZGUpIG9yIGlmIFVTQiBzdXBwb3J0IGlzIG5vdCByZXF1aXJlZC4Kb3RnX21vZGU9MQoKW2NtNV0KZHRvdmVybGF5PWR3YzIsZHJfbW9kZT1ob3N0CgpbYWxsXQo=",
+   "name": "an existing modules-load"
+  },
+  {
+   "cmdline": "Y29uc29sZT1zZXJpYWwwLDExNTIwMCBjb25zb2xlPXR0eTEgcm9vdD1QQVJUVVVJRD00ZTYzOTA5MS0wMiByb290ZnN0eXBlPWV4dDQgZnNjay5yZXBhaXI9eWVzIHJvb3R3YWl0IHF1aWV0IGluaXQ9L3Vzci9saWIvcmFzcGJlcnJ5cGktc3lzLW1vZHMvZmlyc3Rib290CmNvbnNvbGU9dHR5MyBxdWlldAo=",
+   "config": "IyBGb3IgbW9yZSBvcHRpb25zIGFuZCBpbmZvcm1hdGlvbiBzZWUKIyBodHRwOi8vcnB0bC5pby9jb25maWd0eHQKIyBTb21lIHNldHRpbmdzIG1heSBpbXBhY3QgZGV2aWNlIGZ1bmN0aW9uYWxpdHkuIFNlZSBsaW5rIGFib3ZlIGZvciBkZXRhaWxzCgojIFVuY29tbWVudCBzb21lIG9yIGFsbCBvZiB0aGVzZSB0byBlbmFibGUgdGhlIG9wdGlvbmFsIGhhcmR3YXJlIGludGVyZmFjZXMKI2R0cGFyYW09aTJjX2FybT1vbgojZHRwYXJhbT1pMnM9b24KI2R0cGFyYW09c3BpPW9uCgojIEVuYWJsZSBhdWRpbyAobG9hZHMgc25kX2JjbTI4MzUpCmR0cGFyYW09YXVkaW89b24KCiMgQWRkaXRpb25hbCBvdmVybGF5cyBhbmQgcGFyYW1ldGVycyBhcmUgZG9jdW1lbnRlZAojIC9ib290L2Zpcm13YXJlL292ZXJsYXlzL1JFQURNRQoKIyBBdXRvbWF0aWNhbGx5IGxvYWQgb3ZlcmxheXMgZm9yIGRldGVjdGVkIGNhbWVyYXMKY2FtZXJhX2F1dG9fZGV0ZWN0PTEKCiMgQXV0b21hdGljYWxseSBsb2FkIG92ZXJsYXlzIGZvciBkZXRlY3RlZCBEU0kgZGlzcGxheXMKZGlzcGxheV9hdXRvX2RldGVjdD0xCgojIEF1dG9tYXRpY2FsbHkgbG9hZCBpbml0cmFtZnMgZmlsZXMsIGlmIGZvdW5kCmF1dG9faW5pdHJhbWZzPTEKCiMgRW5hYmxlIERSTSBWQzQgVjNEIGRyaXZlcgpkdG92ZXJsYXk9dmM0LWttcy12M2QKbWF4X2ZyYW1lYnVmZmVycz0yCgojIERvbid0IGhhdmUgdGhlIGZpcm13YXJlIGNyZWF0ZSBhbiBpbml0aWFsIHZpZGVvPSBzZXR0aW5nIGluIGNtZGxpbmUudHh0LgojIFVzZSB0aGUga2VybmVsJ3MgZGVmYXVsdCBpbnN0ZWFkLgpkaXNhYmxlX2Z3X2ttc19zZXR1cD0xCgojIFJ1biBpbiA2NC1iaXQgbW9kZQphcm1fNjRiaXQ9MQoKIyBEaXNhYmxlIGNvbXBlbnNhdGlvbiBmb3IgZGlzcGxheXMgd2l0aCBvdmVyc2NhbgpkaXNhYmxlX292ZXJzY2FuPTEKCiMgUnVuIGFzIGZhc3QgYXMgZmlybXdhcmUgLyBib2FyZCBhbGxvd3MKYXJtX2Jvb3N0PTEKCltjbTRdCiMgRW5hYmxlIGhvc3QgbW9kZSBvbiB0aGUgMjcxMSBidWlsdC1pbiBYSENJIFVTQiBjb250cm9sbGVyLgojIFRoaXMgbGluZSBzaG91bGQgYmUgcmVtb3ZlZCBpZiB0aGUgbGVnYWN5IERXQzIgY29udHJvbGxlciBpcyByZXF1aXJlZAojIChlLmcuIGZvciBVU0IgZGV2aWNlIG1vZGUpIG9yIGlmIFVTQiBzdXBwb3J0IGlzIG5vdCByZXF1aXJlZC4Kb3RnX21vZGU9MQoKW2NtNV0KZHRvdmVybGF5PWR3YzIsZHJfbW9kZT1ob3N0CgpbYWxsXQo=",
+   "name": "a second cmdline line"
+  },
+  {
+   "cmdline": "Y29uc29sZT1zZXJpYWwwLDExNTIwMCBjb25zb2xlPXR0eTEgcm9vdD1QQVJUVVVJRD00ZTYzOTA5MS0wMiByb290ZnN0eXBlPWV4dDQgZnNjay5yZXBhaXI9eWVzIHJvb3R3YWl0IHF1aWV0IGluaXQ9L3Vzci9saWIvcmFzcGJlcnJ5cGktc3lzLW1vZHMvZmlyc3Rib290DQ==",
+   "config": "IyBGb3IgbW9yZSBvcHRpb25zIGFuZCBpbmZvcm1hdGlvbiBzZWUNIyBodHRwOi8vcnB0bC5pby9jb25maWd0eHQNIyBTb21lIHNldHRpbmdzIG1heSBpbXBhY3QgZGV2aWNlIGZ1bmN0aW9uYWxpdHkuIFNlZSBsaW5rIGFib3ZlIGZvciBkZXRhaWxzDQ0jIFVuY29tbWVudCBzb21lIG9yIGFsbCBvZiB0aGVzZSB0byBlbmFibGUgdGhlIG9wdGlvbmFsIGhhcmR3YXJlIGludGVyZmFjZXMNI2R0cGFyYW09aTJjX2FybT1vbg0jZHRwYXJhbT1pMnM9b24NI2R0cGFyYW09c3BpPW9uDQ0jIEVuYWJsZSBhdWRpbyAobG9hZHMgc25kX2JjbTI4MzUpDWR0cGFyYW09YXVkaW89b24NDSMgQWRkaXRpb25hbCBvdmVybGF5cyBhbmQgcGFyYW1ldGVycyBhcmUgZG9jdW1lbnRlZA0jIC9ib290L2Zpcm13YXJlL292ZXJsYXlzL1JFQURNRQ0NIyBBdXRvbWF0aWNhbGx5IGxvYWQgb3ZlcmxheXMgZm9yIGRldGVjdGVkIGNhbWVyYXMNY2FtZXJhX2F1dG9fZGV0ZWN0PTENDSMgQXV0b21hdGljYWxseSBsb2FkIG92ZXJsYXlzIGZvciBkZXRlY3RlZCBEU0kgZGlzcGxheXMNZGlzcGxheV9hdXRvX2RldGVjdD0xDQ0jIEF1dG9tYXRpY2FsbHkgbG9hZCBpbml0cmFtZnMgZmlsZXMsIGlmIGZvdW5kDWF1dG9faW5pdHJhbWZzPTENDSMgRW5hYmxlIERSTSBWQzQgVjNEIGRyaXZlcg1kdG92ZXJsYXk9dmM0LWttcy12M2QNbWF4X2ZyYW1lYnVmZmVycz0yDQ0jIERvbid0IGhhdmUgdGhlIGZpcm13YXJlIGNyZWF0ZSBhbiBpbml0aWFsIHZpZGVvPSBzZXR0aW5nIGluIGNtZGxpbmUudHh0Lg0jIFVzZSB0aGUga2VybmVsJ3MgZGVmYXVsdCBpbnN0ZWFkLg1kaXNhYmxlX2Z3X2ttc19zZXR1cD0xDQ0jIFJ1biBpbiA2NC1iaXQgbW9kZQ1hcm1fNjRiaXQ9MQ0NIyBEaXNhYmxlIGNvbXBlbnNhdGlvbiBmb3IgZGlzcGxheXMgd2l0aCBvdmVyc2Nhbg1kaXNhYmxlX292ZXJzY2FuPTENDSMgUnVuIGFzIGZhc3QgYXMgZmlybXdhcmUgLyBib2FyZCBhbGxvd3MNYXJtX2Jvb3N0PTENDVtjbTRdDSMgRW5hYmxlIGhvc3QgbW9kZSBvbiB0aGUgMjcxMSBidWlsdC1pbiBYSENJIFVTQiBjb250cm9sbGVyLg0jIFRoaXMgbGluZSBzaG91bGQgYmUgcmVtb3ZlZCBpZiB0aGUgbGVnYWN5IERXQzIgY29udHJvbGxlciBpcyByZXF1aXJlZA0jIChlLmcuIGZvciBVU0IgZGV2aWNlIG1vZGUpIG9yIGlmIFVTQiBzdXBwb3J0IGlzIG5vdCByZXF1aXJlZC4Nb3RnX21vZGU9MQ0NW2NtNV0NZHRvdmVybGF5PWR3YzIsZHJfbW9kZT1ob3N0DQ1bYWxsXQ0=",
+   "name": "lone CR line ends"
+  },
+  {
+   "cmdline": "77u/Y29uc29sZT1zZXJpYWwwLDExNTIwMCBjb25zb2xlPXR0eTEgcm9vdD1QQVJUVVVJRD00ZTYzOTA5MS0wMiByb290ZnN0eXBlPWV4dDQgZnNjay5yZXBhaXI9eWVzIHJvb3R3YWl0IHF1aWV0IGluaXQ9L3Vzci9saWIvcmFzcGJlcnJ5cGktc3lzLW1vZHMvZmlyc3Rib290Cg==",
+   "config": "77u/IyBGb3IgbW9yZSBvcHRpb25zIGFuZCBpbmZvcm1hdGlvbiBzZWUKIyBodHRwOi8vcnB0bC5pby9jb25maWd0eHQKIyBTb21lIHNldHRpbmdzIG1heSBpbXBhY3QgZGV2aWNlIGZ1bmN0aW9uYWxpdHkuIFNlZSBsaW5rIGFib3ZlIGZvciBkZXRhaWxzCgojIFVuY29tbWVudCBzb21lIG9yIGFsbCBvZiB0aGVzZSB0byBlbmFibGUgdGhlIG9wdGlvbmFsIGhhcmR3YXJlIGludGVyZmFjZXMKI2R0cGFyYW09aTJjX2FybT1vbgojZHRwYXJhbT1pMnM9b24KI2R0cGFyYW09c3BpPW9uCgojIEVuYWJsZSBhdWRpbyAobG9hZHMgc25kX2JjbTI4MzUpCmR0cGFyYW09YXVkaW89b24KCiMgQWRkaXRpb25hbCBvdmVybGF5cyBhbmQgcGFyYW1ldGVycyBhcmUgZG9jdW1lbnRlZAojIC9ib290L2Zpcm13YXJlL292ZXJsYXlzL1JFQURNRQoKIyBBdXRvbWF0aWNhbGx5IGxvYWQgb3ZlcmxheXMgZm9yIGRldGVjdGVkIGNhbWVyYXMKY2FtZXJhX2F1dG9fZGV0ZWN0PTEKCiMgQXV0b21hdGljYWxseSBsb2FkIG92ZXJsYXlzIGZvciBkZXRlY3RlZCBEU0kgZGlzcGxheXMKZGlzcGxheV9hdXRvX2RldGVjdD0xCgojIEF1dG9tYXRpY2FsbHkgbG9hZCBpbml0cmFtZnMgZmlsZXMsIGlmIGZvdW5kCmF1dG9faW5pdHJhbWZzPTEKCiMgRW5hYmxlIERSTSBWQzQgVjNEIGRyaXZlcgpkdG92ZXJsYXk9dmM0LWttcy12M2QKbWF4X2ZyYW1lYnVmZmVycz0yCgojIERvbid0IGhhdmUgdGhlIGZpcm13YXJlIGNyZWF0ZSBhbiBpbml0aWFsIHZpZGVvPSBzZXR0aW5nIGluIGNtZGxpbmUudHh0LgojIFVzZSB0aGUga2VybmVsJ3MgZGVmYXVsdCBpbnN0ZWFkLgpkaXNhYmxlX2Z3X2ttc19zZXR1cD0xCgojIFJ1biBpbiA2NC1iaXQgbW9kZQphcm1fNjRiaXQ9MQoKIyBEaXNhYmxlIGNvbXBlbnNhdGlvbiBmb3IgZGlzcGxheXMgd2l0aCBvdmVyc2NhbgpkaXNhYmxlX292ZXJzY2FuPTEKCiMgUnVuIGFzIGZhc3QgYXMgZmlybXdhcmUgLyBib2FyZCBhbGxvd3MKYXJtX2Jvb3N0PTEKCltjbTRdCiMgRW5hYmxlIGhvc3QgbW9kZSBvbiB0aGUgMjcxMSBidWlsdC1pbiBYSENJIFVTQiBjb250cm9sbGVyLgojIFRoaXMgbGluZSBzaG91bGQgYmUgcmVtb3ZlZCBpZiB0aGUgbGVnYWN5IERXQzIgY29udHJvbGxlciBpcyByZXF1aXJlZAojIChlLmcuIGZvciBVU0IgZGV2aWNlIG1vZGUpIG9yIGlmIFVTQiBzdXBwb3J0IGlzIG5vdCByZXF1aXJlZC4Kb3RnX21vZGU9MQoKW2NtNV0KZHRvdmVybGF5PWR3YzIsZHJfbW9kZT1ob3N0CgpbYWxsXQo=",
+   "name": "a byte-order mark"
+  },
+  {
+   "cmdline": "Y29uc29sZT1zZXJpYWwwLDExNTIwMCBjb25zb2xlPXR0eTEgcm9vdD1QQVJUVVVJRD00ZTYzOTA5MS0wMiByb290ZnN0eXBlPWV4dDQgZnNjay5yZXBhaXI9eWVzIHJvb3R3YWl0IHF1aWV0IGluaXQ9L3Vzci9saWIvcmFzcGJlcnJ5cGktc3lzLW1vZHMvZmlyc3Rib290IHg9//4K",
+   "config": "IyBGb3IgbW9yZSBvcHRpb25zIGFuZCBpbmZvcm1hdGlvbiBzZWUKIyBodHRwOi8vcnB0bC5pby9jb25maWd0eHQKIyBTb21lIHNldHRpbmdzIG1heSBpbXBhY3QgZGV2aWNlIGZ1bmN0aW9uYWxpdHkuIFNlZSBsaW5rIGFib3ZlIGZvciBkZXRhaWxzCgojIFVuY29tbWVudCBzb21lIG9yIGFsbCBvZiB0aGVzZSB0byBlbmFibGUgdGhlIG9wdGlvbmFsIGhhcmR3YXJlIGludGVyZmFjZXMKI2R0cGFyYW09aTJjX2FybT1vbgojZHRwYXJhbT1pMnM9b24KI2R0cGFyYW09c3BpPW9uCgojIEVuYWJsZSBhdWRpbyAobG9hZHMgc25kX2JjbTI4MzUpCmR0cGFyYW09YXVkaW89b24KCiMgQWRkaXRpb25hbCBvdmVybGF5cyBhbmQgcGFyYW1ldGVycyBhcmUgZG9jdW1lbnRlZAojIC9ib290L2Zpcm13YXJlL292ZXJsYXlzL1JFQURNRQoKIyBBdXRvbWF0aWNhbGx5IGxvYWQgb3ZlcmxheXMgZm9yIGRldGVjdGVkIGNhbWVyYXMKY2FtZXJhX2F1dG9fZGV0ZWN0PTEKCiMgQXV0b21hdGljYWxseSBsb2FkIG92ZXJsYXlzIGZvciBkZXRlY3RlZCBEU0kgZGlzcGxheXMKZGlzcGxheV9hdXRvX2RldGVjdD0xCgojIEF1dG9tYXRpY2FsbHkgbG9hZCBpbml0cmFtZnMgZmlsZXMsIGlmIGZvdW5kCmF1dG9faW5pdHJhbWZzPTEKCiMgRW5hYmxlIERSTSBWQzQgVjNEIGRyaXZlcgpkdG92ZXJsYXk9dmM0LWttcy12M2QKbWF4X2ZyYW1lYnVmZmVycz0yCgojIERvbid0IGhhdmUgdGhlIGZpcm13YXJlIGNyZWF0ZSBhbiBpbml0aWFsIHZpZGVvPSBzZXR0aW5nIGluIGNtZGxpbmUudHh0LgojIFVzZSB0aGUga2VybmVsJ3MgZGVmYXVsdCBpbnN0ZWFkLgpkaXNhYmxlX2Z3X2ttc19zZXR1cD0xCgojIFJ1biBpbiA2NC1iaXQgbW9kZQphcm1fNjRiaXQ9MQoKIyBEaXNhYmxlIGNvbXBlbnNhdGlvbiBmb3IgZGlzcGxheXMgd2l0aCBvdmVyc2NhbgpkaXNhYmxlX292ZXJzY2FuPTEKCiMgUnVuIGFzIGZhc3QgYXMgZmlybXdhcmUgLyBib2FyZCBhbGxvd3MKYXJtX2Jvb3N0PTEKCltjbTRdCiMgRW5hYmxlIGhvc3QgbW9kZSBvbiB0aGUgMjcxMSBidWlsdC1pbiBYSENJIFVTQiBjb250cm9sbGVyLgojIFRoaXMgbGluZSBzaG91bGQgYmUgcmVtb3ZlZCBpZiB0aGUgbGVnYWN5IERXQzIgY29udHJvbGxlciBpcyByZXF1aXJlZAojIChlLmcuIGZvciBVU0IgZGV2aWNlIG1vZGUpIG9yIGlmIFVTQiBzdXBwb3J0IGlzIG5vdCByZXF1aXJlZC4Kb3RnX21vZGU9MQoKW2NtNV0KZHRvdmVybGF5PWR3YzIsZHJfbW9kZT1ob3N0CgpbYWxsXQojIGNhZukgwygg4oIg8J+YCg==",
+   "name": "bytes that aren't UTF-8"
+  },
+  {
+   "cmdline": "Y29uc29sZT10dHkxwqByb290d2FpdOKAg3F1aWV044CAc3BsYXNoCg==",
+   "config": "IyBGb3IgbW9yZSBvcHRpb25zIGFuZCBpbmZvcm1hdGlvbiBzZWUKIyBodHRwOi8vcnB0bC5pby9jb25maWd0eHQKIyBTb21lIHNldHRpbmdzIG1heSBpbXBhY3QgZGV2aWNlIGZ1bmN0aW9uYWxpdHkuIFNlZSBsaW5rIGFib3ZlIGZvciBkZXRhaWxzCgojIFVuY29tbWVudCBzb21lIG9yIGFsbCBvZiB0aGVzZSB0byBlbmFibGUgdGhlIG9wdGlvbmFsIGhhcmR3YXJlIGludGVyZmFjZXMKI2R0cGFyYW09aTJjX2FybT1vbgojZHRwYXJhbT1pMnM9b24KI2R0cGFyYW09c3BpPW9uCgojIEVuYWJsZSBhdWRpbyAobG9hZHMgc25kX2JjbTI4MzUpCmR0cGFyYW09YXVkaW89b24KCiMgQWRkaXRpb25hbCBvdmVybGF5cyBhbmQgcGFyYW1ldGVycyBhcmUgZG9jdW1lbnRlZAojIC9ib290L2Zpcm13YXJlL292ZXJsYXlzL1JFQURNRQoKIyBBdXRvbWF0aWNhbGx5IGxvYWQgb3ZlcmxheXMgZm9yIGRldGVjdGVkIGNhbWVyYXMKY2FtZXJhX2F1dG9fZGV0ZWN0PTEKCiMgQXV0b21hdGljYWxseSBsb2FkIG92ZXJsYXlzIGZvciBkZXRlY3RlZCBEU0kgZGlzcGxheXMKZGlzcGxheV9hdXRvX2RldGVjdD0xCgojIEF1dG9tYXRpY2FsbHkgbG9hZCBpbml0cmFtZnMgZmlsZXMsIGlmIGZvdW5kCmF1dG9faW5pdHJhbWZzPTEKCiMgRW5hYmxlIERSTSBWQzQgVjNEIGRyaXZlcgpkdG92ZXJsYXk9dmM0LWttcy12M2QKbWF4X2ZyYW1lYnVmZmVycz0yCgojIERvbid0IGhhdmUgdGhlIGZpcm13YXJlIGNyZWF0ZSBhbiBpbml0aWFsIHZpZGVvPSBzZXR0aW5nIGluIGNtZGxpbmUudHh0LgojIFVzZSB0aGUga2VybmVsJ3MgZGVmYXVsdCBpbnN0ZWFkLgpkaXNhYmxlX2Z3X2ttc19zZXR1cD0xCgojIFJ1biBpbiA2NC1iaXQgbW9kZQphcm1fNjRiaXQ9MQoKIyBEaXNhYmxlIGNvbXBlbnNhdGlvbiBmb3IgZGlzcGxheXMgd2l0aCBvdmVyc2NhbgpkaXNhYmxlX292ZXJzY2FuPTEKCiMgUnVuIGFzIGZhc3QgYXMgZmlybXdhcmUgLyBib2FyZCBhbGxvd3MKYXJtX2Jvb3N0PTEKCltjbTRdCiMgRW5hYmxlIGhvc3QgbW9kZSBvbiB0aGUgMjcxMSBidWlsdC1pbiBYSENJIFVTQiBjb250cm9sbGVyLgojIFRoaXMgbGluZSBzaG91bGQgYmUgcmVtb3ZlZCBpZiB0aGUgbGVnYWN5IERXQzIgY29udHJvbGxlciBpcyByZXF1aXJlZAojIChlLmcuIGZvciBVU0IgZGV2aWNlIG1vZGUpIG9yIGlmIFVTQiBzdXBwb3J0IGlzIG5vdCByZXF1aXJlZC4Kb3RnX21vZGU9MQoKW2NtNV0KZHRvdmVybGF5PWR3YzIsZHJfbW9kZT1ob3N0CgpbYWxsXQo=",
+   "name": "non-ASCII whitespace"
+  },
+  {
+   "cmdline": "",
+   "config": "",
+   "name": "empty files"
+  },
+  {
+   "cmdline": "ICAKIAo=",
+   "config": "Cgo=",
+   "name": "only whitespace"
+  },
+  {
+   "cmdline": "cm9vdHdhaXQK",
+   "config": "ZHRwYXJhbT1hdWRpbz1vbgojIC0tLSBkb21vdm9pIHNhdGVsbGl0ZSAobWVkaWEtcHJlcCkgLS0tCg==",
+   "name": "a stray marker only"
+  },
+  {
+   "cmdline": "Y29uc29sZT1zZXJpYWwwLDExNTIwMCBjb25zb2xlPXR0eTEgcm9vdD1QQVJUVVVJRD00ZTYzOTA5MS0wMiByb290ZnN0eXBlPWV4dDQgZnNjay5yZXBhaXI9eWVzIHJvb3R3YWl0IHF1aWV0IGluaXQ9L3Vzci9saWIvcmFzcGJlcnJ5cGktc3lzLW1vZHMvZmlyc3Rib290IHN5c3RlbWQucnVuPS9ib290L2Zpcm13YXJlL2RvbW92b2kvZmlyc3RydW4uc2gK",
+   "config": "IyBGb3IgbW9yZSBvcHRpb25zIGFuZCBpbmZvcm1hdGlvbiBzZWUKIyBodHRwOi8vcnB0bC5pby9jb25maWd0eHQKIyBTb21lIHNldHRpbmdzIG1heSBpbXBhY3QgZGV2aWNlIGZ1bmN0aW9uYWxpdHkuIFNlZSBsaW5rIGFib3ZlIGZvciBkZXRhaWxzCgojIFVuY29tbWVudCBzb21lIG9yIGFsbCBvZiB0aGVzZSB0byBlbmFibGUgdGhlIG9wdGlvbmFsIGhhcmR3YXJlIGludGVyZmFjZXMKI2R0cGFyYW09aTJjX2FybT1vbgojZHRwYXJhbT1pMnM9b24KI2R0cGFyYW09c3BpPW9uCgojIEVuYWJsZSBhdWRpbyAobG9hZHMgc25kX2JjbTI4MzUpCmR0cGFyYW09YXVkaW89b24KCiMgQWRkaXRpb25hbCBvdmVybGF5cyBhbmQgcGFyYW1ldGVycyBhcmUgZG9jdW1lbnRlZAojIC9ib290L2Zpcm13YXJlL292ZXJsYXlzL1JFQURNRQoKIyBBdXRvbWF0aWNhbGx5IGxvYWQgb3ZlcmxheXMgZm9yIGRldGVjdGVkIGNhbWVyYXMKY2FtZXJhX2F1dG9fZGV0ZWN0PTEKCiMgQXV0b21hdGljYWxseSBsb2FkIG92ZXJsYXlzIGZvciBkZXRlY3RlZCBEU0kgZGlzcGxheXMKZGlzcGxheV9hdXRvX2RldGVjdD0xCgojIEF1dG9tYXRpY2FsbHkgbG9hZCBpbml0cmFtZnMgZmlsZXMsIGlmIGZvdW5kCmF1dG9faW5pdHJhbWZzPTEKCiMgRW5hYmxlIERSTSBWQzQgVjNEIGRyaXZlcgpkdG92ZXJsYXk9dmM0LWttcy12M2QKbWF4X2ZyYW1lYnVmZmVycz0yCgojIERvbid0IGhhdmUgdGhlIGZpcm13YXJlIGNyZWF0ZSBhbiBpbml0aWFsIHZpZGVvPSBzZXR0aW5nIGluIGNtZGxpbmUudHh0LgojIFVzZSB0aGUga2VybmVsJ3MgZGVmYXVsdCBpbnN0ZWFkLgpkaXNhYmxlX2Z3X2ttc19zZXR1cD0xCgojIFJ1biBpbiA2NC1iaXQgbW9kZQphcm1fNjRiaXQ9MQoKIyBEaXNhYmxlIGNvbXBlbnNhdGlvbiBmb3IgZGlzcGxheXMgd2l0aCBvdmVyc2NhbgpkaXNhYmxlX292ZXJzY2FuPTEKCiMgUnVuIGFzIGZhc3QgYXMgZmlybXdhcmUgLyBib2FyZCBhbGxvd3MKYXJtX2Jvb3N0PTEKCltjbTRdCiMgRW5hYmxlIGhvc3QgbW9kZSBvbiB0aGUgMjcxMSBidWlsdC1pbiBYSENJIFVTQiBjb250cm9sbGVyLgojIFRoaXMgbGluZSBzaG91bGQgYmUgcmVtb3ZlZCBpZiB0aGUgbGVnYWN5IERXQzIgY29udHJvbGxlciBpcyByZXF1aXJlZAojIChlLmcuIGZvciBVU0IgZGV2aWNlIG1vZGUpIG9yIGlmIFVTQiBzdXBwb3J0IGlzIG5vdCByZXF1aXJlZC4Kb3RnX21vZGU9MQoKW2NtNV0KZHRvdmVybGF5PWR3YzIsZHJfbW9kZT1ob3N0CgpbYWxsXQo=",
+   "name": "the first-boot hook already there"
+  },
+  {
+   "cmdline": "Y29uc29sZT1zZXJpYWwwLDExNTIwMCBjb25zb2xlPXR0eTEgcm9vdD1QQVJUVVVJRD00ZTYzOTA5MS0wMiByb290ZnN0eXBlPWV4dDQgZnNjay5yZXBhaXI9eWVzIHJvb3R3YWl0IHF1aWV0IGluaXQ9L3Vzci9saWIvcmFzcGJlcnJ5cGktc3lzLW1vZHMvZmlyc3Rib290IHN5c3RlbWQucnVuPS9ib290L2ZpcnN0cnVuLnNoIHN5c3RlbWQucnVuX3N1Y2Nlc3NfYWN0aW9uPXJlYm9vdCBzeXN0ZW1kLnVuaXQ9a2VybmVsLWNvbW1hbmQtbGluZS50YXJnZXQK",
+   "config": "IyBGb3IgbW9yZSBvcHRpb25zIGFuZCBpbmZvcm1hdGlvbiBzZWUKIyBodHRwOi8vcnB0bC5pby9jb25maWd0eHQKIyBTb21lIHNldHRpbmdzIG1heSBpbXBhY3QgZGV2aWNlIGZ1bmN0aW9uYWxpdHkuIFNlZSBsaW5rIGFib3ZlIGZvciBkZXRhaWxzCgojIFVuY29tbWVudCBzb21lIG9yIGFsbCBvZiB0aGVzZSB0byBlbmFibGUgdGhlIG9wdGlvbmFsIGhhcmR3YXJlIGludGVyZmFjZXMKI2R0cGFyYW09aTJjX2FybT1vbgojZHRwYXJhbT1pMnM9b24KI2R0cGFyYW09c3BpPW9uCgojIEVuYWJsZSBhdWRpbyAobG9hZHMgc25kX2JjbTI4MzUpCmR0cGFyYW09YXVkaW89b24KCiMgQWRkaXRpb25hbCBvdmVybGF5cyBhbmQgcGFyYW1ldGVycyBhcmUgZG9jdW1lbnRlZAojIC9ib290L2Zpcm13YXJlL292ZXJsYXlzL1JFQURNRQoKIyBBdXRvbWF0aWNhbGx5IGxvYWQgb3ZlcmxheXMgZm9yIGRldGVjdGVkIGNhbWVyYXMKY2FtZXJhX2F1dG9fZGV0ZWN0PTEKCiMgQXV0b21hdGljYWxseSBsb2FkIG92ZXJsYXlzIGZvciBkZXRlY3RlZCBEU0kgZGlzcGxheXMKZGlzcGxheV9hdXRvX2RldGVjdD0xCgojIEF1dG9tYXRpY2FsbHkgbG9hZCBpbml0cmFtZnMgZmlsZXMsIGlmIGZvdW5kCmF1dG9faW5pdHJhbWZzPTEKCiMgRW5hYmxlIERSTSBWQzQgVjNEIGRyaXZlcgpkdG92ZXJsYXk9dmM0LWttcy12M2QKbWF4X2ZyYW1lYnVmZmVycz0yCgojIERvbid0IGhhdmUgdGhlIGZpcm13YXJlIGNyZWF0ZSBhbiBpbml0aWFsIHZpZGVvPSBzZXR0aW5nIGluIGNtZGxpbmUudHh0LgojIFVzZSB0aGUga2VybmVsJ3MgZGVmYXVsdCBpbnN0ZWFkLgpkaXNhYmxlX2Z3X2ttc19zZXR1cD0xCgojIFJ1biBpbiA2NC1iaXQgbW9kZQphcm1fNjRiaXQ9MQoKIyBEaXNhYmxlIGNvbXBlbnNhdGlvbiBmb3IgZGlzcGxheXMgd2l0aCBvdmVyc2NhbgpkaXNhYmxlX292ZXJzY2FuPTEKCiMgUnVuIGFzIGZhc3QgYXMgZmlybXdhcmUgLyBib2FyZCBhbGxvd3MKYXJtX2Jvb3N0PTEKCltjbTRdCiMgRW5hYmxlIGhvc3QgbW9kZSBvbiB0aGUgMjcxMSBidWlsdC1pbiBYSENJIFVTQiBjb250cm9sbGVyLgojIFRoaXMgbGluZSBzaG91bGQgYmUgcmVtb3ZlZCBpZiB0aGUgbGVnYWN5IERXQzIgY29udHJvbGxlciBpcyByZXF1aXJlZAojIChlLmcuIGZvciBVU0IgZGV2aWNlIG1vZGUpIG9yIGlmIFVTQiBzdXBwb3J0IGlzIG5vdCByZXF1aXJlZC4Kb3RnX21vZGU9MQoKW2NtNV0KZHRvdmVybGF5PWR3YzIsZHJfbW9kZT1ob3N0CgpbYWxsXQo=",
+   "name": "another first-boot script (Imager)"
+  }
+ ],
+ "zips": {
+  "portal": {
+   "cmdline": "c3lzdGVtZC5ydW49L2Jvb3QvZmlybXdhcmUvZG9tb3ZvaS9maXJzdHJ1bi5zaCBzeXN0ZW1kLnJ1bl9zdWNjZXNzX2FjdGlvbj1yZWJvb3Qgc3lzdGVtZC51bml0PWtlcm5lbC1jb21tYW5kLWxpbmUudGFyZ2V0Cg==",
+   "config": "IyAtLS0gZG9tb3ZvaSBzYXRlbGxpdGUgKG1lZGlhLXByZXApIC0tLQpkdHBhcmFtPXdhdGNoZG9nPW9uCiMgLS0tIGVuZCBkb21vdm9pIHNhdGVsbGl0ZSAtLS0K"
+  },
+  "portal-usb-mic": {
+   "cmdline": "ZHdjX290Zy5zcGVlZD0xIHN5c3RlbWQucnVuPS9ib290L2Zpcm13YXJlL2RvbW92b2kvZmlyc3RydW4uc2ggc3lzdGVtZC5ydW5fc3VjY2Vzc19hY3Rpb249cmVib290IHN5c3RlbWQudW5pdD1rZXJuZWwtY29tbWFuZC1saW5lLnRhcmdldAo=",
+   "config": "IyAtLS0gZG9tb3ZvaSBzYXRlbGxpdGUgKG1lZGlhLXByZXApIC0tLQpkdHBhcmFtPXdhdGNoZG9nPW9uCiMgLS0tIGVuZCBkb21vdm9pIHNhdGVsbGl0ZSAtLS0K"
+  },
+  "usb": {
+   "cmdline": "bW9kdWxlcy1sb2FkPWR3YzIgc3lzdGVtZC5ydW49L2Jvb3QvZmlybXdhcmUvZG9tb3ZvaS9maXJzdHJ1bi5zaCBzeXN0ZW1kLnJ1bl9zdWNjZXNzX2FjdGlvbj1yZWJvb3Qgc3lzdGVtZC51bml0PWtlcm5lbC1jb21tYW5kLWxpbmUudGFyZ2V0Cg==",
+   "config": "IyAtLS0gZG9tb3ZvaSBzYXRlbGxpdGUgKG1lZGlhLXByZXApIC0tLQpkdG92ZXJsYXk9ZHdjMixkcl9tb2RlPXBlcmlwaGVyYWwKZHRwYXJhbT13YXRjaGRvZz1vbgojIC0tLSBlbmQgZG9tb3ZvaSBzYXRlbGxpdGUgLS0tCg=="
+  }
+ }
+}
