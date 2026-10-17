@@ -32,6 +32,12 @@ services:
       POSTGRES_DB: domovoi
       POSTGRES_USER: domovoi
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-domovoi}
+      # How long the image's first-start script lets pg_ctl wait for its
+      # temporary server to start and to stop (60 s by default). On a slow
+      # new disk, the shutdown checkpoint after the init scripts took longer
+      # than 60 s, the script gave up and the container exited and started
+      # again; a kill at the wrong moment there leaves a database half made.
+      PGCTLTIMEOUT: "600"
     ports:
       - "127.0.0.1:6432:5432"
     volumes:
@@ -40,11 +46,25 @@ services:
       # alongside the prod DB so pytest never touches real data. Existing
       # pgdata volumes skip this; bootstrap manually per README.
       - ./db/init:/docker-entrypoint-initdb.d
+    # Healthy = the real server answers on TCP, where Flyway and the core
+    # connect. Over the Unix socket (pg_isready's default) the temporary
+    # server the image runs while it creates the databases answers too, and
+    # looks ready before it is.
+    #
+    # start_period: a new volume's first start (initdb, the init scripts)
+    # is slow on a slow disk: over 40 s on a new Windows install's fresh
+    # WSL disk, where 20 checks 2 s apart marked it unhealthy and the
+    # install failed (2026-10-17); 82 s measured with writes limited to
+    # 2 MB/s, 262 s at 1 MB/s with one CPU. Failed checks don't count for
+    # the first 600 s, and the first good one ends that period, so a
+    # normal start is healthy within seconds, and a running database that
+    # stops answering is still unhealthy after 40 s.
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U domovoi -d domovoi"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U domovoi -d domovoi"]
       interval: 2s
-      timeout: 2s
+      timeout: 5s
       retries: 20
+      start_period: 600s
     # Come back on its own after a crash or a Docker restart, like the MPD
     # rooms do. Ordering at boot (Postgres + Flyway before the core) stays
     # with the domovoi-db unit on Linux; this only covers the container.

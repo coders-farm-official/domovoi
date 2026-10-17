@@ -12,6 +12,11 @@ WorkingDirectory=/opt/domovoi/domovoi
 Environment=HOME=/home/domovoi
 ExecStart=/usr/bin/docker compose up -d postgres
 ExecStart=/usr/bin/docker compose run --rm flyway
+# When a start fails, say why in this unit's journal: the Postgres
+# container's state, its last health check and its last 100 log lines,
+# passwords blanked (Flyway's own error is already above them). Read-only,
+# and never fails the unit.
+ExecStopPost=-/bin/bash /opt/domovoi/scripts/linux/db-diagnostics.sh --unit
 # Sandboxing (docs/LINUX_HOST.md, "Sandboxing the units"). The docker CLI
 # only talks to the daemon's socket; the daemon does the real work, so
 # this unit can give up devices, the clock, capabilities and W+X memory.

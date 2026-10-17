@@ -224,6 +224,50 @@ def test_db_unit_is_locked_down_around_the_docker_cli() -> None:
     assert _one(svc, "ProtectHome") == "read-only"
 
 
+def test_a_failed_db_start_says_why_in_its_journal() -> None:
+    """2026-10-17: a new database's first start outran the health check and
+    the journal said only "container domovoi-postgres is unhealthy". When
+    the start fails, the unit runs the read-only diagnostics (the
+    container's state and last 100 log lines, passwords blanked), and that
+    can never fail the unit itself (the leading "-")."""
+    svc = _service("domovoi-db")
+    assert svc["ExecStopPost"] == ["-/bin/bash /opt/domovoi/scripts/linux/db-diagnostics.sh --unit"]
+    script = (REPO_ROOT / "scripts" / "linux" / "db-diagnostics.sh").read_text(encoding="utf-8")
+    # Nothing on a stop or a start that went fine.
+    assert '[ "${SERVICE_RESULT:-}" = success ] && exit 0' in script
+    # Only reads: docker inspect and docker logs, no other docker verb.
+    verbs = set(re.findall(r"\bdocker (\w+)", script))
+    assert verbs <= {"inspect", "logs", "info"}, verbs
+    assert "--tail" in script and "LINES=${DOMOVOI_DB_DIAG_LINES:-100}" in script
+
+
+def test_postgres_has_time_for_a_slow_first_start() -> None:
+    """The compose healthcheck flyway waits on: the real server over TCP
+    (the image's temporary init server answers only on the Unix socket),
+    a start period long enough for a first init on a slow disk (262 s
+    measured at 1 MB/s), quick checks after it, and pg_ctl's own wait in the
+    image's init script raised past its 60 s default."""
+    import yaml
+
+    compose = yaml.safe_load((REPO_ROOT / "domovoi" / "docker-compose.yml").read_text(encoding="utf-8"))
+    pg = compose["services"]["postgres"]
+    hc = pg["healthcheck"]
+    test = " ".join(hc["test"]) if isinstance(hc["test"], list) else hc["test"]
+    assert "pg_isready" in test and "-h 127.0.0.1" in test, test
+
+    def seconds(v: str) -> int:
+        m = re.fullmatch(r"(\d+)(s|m)", v)
+        assert m, v
+        return int(m.group(1)) * (60 if m.group(2) == "m" else 1)
+
+    assert seconds(hc["start_period"]) >= 300
+    # A running database that stops answering is still caught within a minute.
+    assert seconds(hc["interval"]) * hc["retries"] <= 60
+    assert int(pg["environment"]["PGCTLTIMEOUT"]) >= 300
+    # Flyway waits for exactly that health.
+    assert compose["services"]["flyway"]["depends_on"]["postgres"]["condition"] == "service_healthy"
+
+
 def test_linux_host_installs_the_shipped_units() -> None:
     doc = LINUX_HOST.read_text(encoding="utf-8")
     for name in NAMES:

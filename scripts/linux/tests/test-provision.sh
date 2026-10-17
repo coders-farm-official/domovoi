@@ -130,6 +130,7 @@ build_origin() {
   # same harness root.
   cp "$REAL_REPO/scripts/linux/os-jobs.sh" "$o/scripts/linux/os-jobs.sh"
   cp "$REAL_REPO/scripts/linux/gpu-runtime.sh" "$o/scripts/linux/gpu-runtime.sh"
+  cp "$REAL_REPO/scripts/linux/db-diagnostics.sh" "$REAL_REPO/scripts/linux/db-half-made.sh" "$o/scripts/linux/"
   cat >"$o/scripts/linux/install-update-unit.sh" <<'SH'
 #!/usr/bin/env bash
 echo "install-update-unit $*" >>"$SHIM_STATE/calls.log"
@@ -408,6 +409,7 @@ docker_starts() {
 case $cmd in
   is-active)
     if [ -f "$SHIM_STATE/active/${units[0]}" ]; then [ "$quiet" = 1 ] || echo active; exit 0; fi
+    if [ -f "$SHIM_STATE/activating/${units[0]}" ]; then [ "$quiet" = 1 ] || echo activating; exit 3; fi
     if [ -f "$SHIM_STATE/failed/${units[0]}" ]; then [ "$quiet" = 1 ] || echo failed; exit 3; fi
     [ "$quiet" = 1 ] || echo inactive; exit 3 ;;
   is-enabled)
@@ -437,6 +439,11 @@ case $cmd in
       # fails afterwards (domovoi-db's Flyway, say).
       if grep -qx -- "$u" "$SHIM_STATE/start-then-fail" 2>/dev/null; then
         touch "$SHIM_STATE/failed/$u"; continue
+      fi
+      # start-activating: a --no-block start that never finishes (a oneshot
+      # still running: domovoi-db waiting for a new database's first start).
+      if grep -qx -- "$u" "$SHIM_STATE/start-activating" 2>/dev/null; then
+        mkdir -p "$SHIM_STATE/activating"; touch "$SHIM_STATE/activating/$u"; continue
       fi
       # start-queued: a --no-block start whose job waits (the core's, for
       # the database's): a failed mark from before stays until it runs.
@@ -497,6 +504,34 @@ case "$1 ${2-}" in
     [ ! -f "$SHIM_STATE/pull-fail" ] || { echo "Error response from daemon: toomanyrequests" >&2; exit 1; }
     for r in $refs; do touch "$SHIM_STATE/images/${r//[:\/@]/_}"; done ;;
   "compose up") touch "$SHIM_STATE/searxng-running" ;;
+  # The Postgres container, as scripts/linux/db-diagnostics.sh asks after
+  # it: pg-state is "status|health|exit code|restarts", pg-health the
+  # last health check's output, pg-logs its log (no pg-state: no container).
+  # pg-volume: the volume domovoi-pgdata exists, holding what a look at
+  # its files prints (db-half-made.sh: "none" without PG_VERSION, else the
+  # names in base/).
+  "inspect --format")
+    if [ "${!#}" = domovoi-postgres ] && [ -f "$SHIM_STATE/pg-state" ]; then
+      case $3 in
+        *Health.Log*) cat "$SHIM_STATE/pg-health" 2>/dev/null ;;
+        *Config.Env*) cat "$SHIM_STATE/pg-env" 2>/dev/null ;;
+        *RestartCount*) cat "$SHIM_STATE/pg-state" ;;
+        *.Image*) echo sha256:0000pgimage ;;
+        *) cut -d'|' -f1 "$SHIM_STATE/pg-state" ;;
+      esac
+      exit 0
+    fi
+    echo "Error: No such object: ${!#}" >&2; exit 1 ;;
+  "logs "*) [ -f "$SHIM_STATE/pg-state" ] || { echo "Error: No such container: ${!#}" >&2; exit 1; }
+    # Written by perl, which (like docker logs, a Go program) dies of
+    # SIGPIPE when its reader stops early, and the pipeline's status says
+    # so; this image's cat (uutils) exits 0 instead and would hide that.
+    [ -f "$SHIM_STATE/pg-logs" ] || exit 0
+    if [ "$2" = --tail ]; then tail -n "$3" "$SHIM_STATE/pg-logs" | exec perl -pe ''; else exec perl -pe '' "$SHIM_STATE/pg-logs"; fi ;;
+  "volume inspect") [ -f "$SHIM_STATE/pg-volume" ] || { echo "Error: no such volume: $3" >&2; exit 1; } ;;
+  "volume rm") rm -f "$SHIM_STATE/pg-volume" ;;
+  "rm -f") rm -f "$SHIM_STATE/pg-state" ;;
+  "run --rm") [ -f "$SHIM_STATE/pg-volume" ] || exit 1; cat "$SHIM_STATE/pg-volume" ;;
   "inspect -f") if [ -f "$SHIM_STATE/searxng-running" ]; then echo true; else echo false; fi ;;
   "stop "*) rm -f "$SHIM_STATE/searxng-running" ;;
 esac
@@ -1822,6 +1857,225 @@ case_the_database_failing_after_a_no_block_start_stops_the_wait() {
   check "exit 1" eq "$RC" 1
   check "at once, not after --health-timeout" bash -c '[ "$1" -lt 60 ]' _ "$((SECONDS - t0))"
   check "names the database" said "the core (/v1/health) won't answer: domovoi-db.service failed"
+  end_case
+}
+
+# 2026-10-17: a first start of a new database outran Postgres's health
+# check and the log said only "container domovoi-postgres is unhealthy".
+# Now the failure says why: the container's state, its last health check
+# and its last 100 log lines (passwords blanked) in the output, and the
+# reason in the failure message Setup shows.
+case_a_failed_database_says_why() {
+  new_case a_failed_database_says_why
+  echo domovoi-db.service >"$STATE/start-then-fail"
+  echo 'running|unhealthy|0|1' >"$STATE/pg-state"
+  printf '%s\n' "" "127.0.0.1:5432 - no response" >"$STATE/pg-health"
+  { for i in $(seq 1 150); do echo "old line $i"; done
+    echo "2026-10-17 05:14:20.100 UTC [61] LOG:  statement: ALTER ROLE domovoi PASSWORD 'hunter2-Secret'"
+    echo "2026-10-17 05:14:21.200 UTC [62] FATAL:  could not write to file \"pg_wal/xlogtemp.62\": No space left on device"
+    echo "running bootstrap script ... ok"; } >"$STATE/pg-logs"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 1" eq "$RC" 1
+  check "the container's state" said "Postgres container domovoi-postgres: running, health unhealthy, exit code 0, restarts 1"
+  check "its last health check" said "its last health check: 127.0.0.1:5432 - no response"
+  check "100 log lines asked for" called "docker logs --tail 100 domovoi-postgres"
+  check "the last of them printed" said "running bootstrap script ... ok"
+  check "but no more than 100" not_said "old line 53"
+  check "line 54 is the first" said "old line 54"
+  check "no password" not_said "hunter2-Secret"
+  check "the statement without it" said "ALTER ROLE domovoi PASSWORD [hidden]"
+  check "the failure message says why" said "the core (/v1/health) won't answer: domovoi-db.service failed (Postgres is unhealthy, restarted 1 time; its log: FATAL:  could not write to file"
+  check "and so does the final line" bash -c 'grep "\"final\":true" "$1" | grep -q "Postgres is unhealthy"' _ "$CASE/output.log"
+  end_case
+}
+
+# No container at all (compose up failed before making one): said so.
+case_a_failed_database_without_a_container_says_so() {
+  new_case a_failed_database_without_a_container_says_so
+  echo domovoi-db.service >"$STATE/start-then-fail"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 1" eq "$RC" 1
+  check "the message says so" said "domovoi-db.service failed (there is no Postgres container (domovoi-postgres))"
+  check "no docker logs without one" not_called "docker logs"
+  end_case
+}
+
+# A database still making its first start when the core's wait runs out:
+# the progress and the failure say the database is what it waited for.
+case_a_database_still_starting_is_named() {
+  new_case a_database_still_starting_is_named
+  echo domovoi-db.service >"$STATE/start-activating"
+  echo 'running|starting|0|0' >"$STATE/pg-state"
+  printf '%s\n' "127.0.0.1:5432 - no response" >"$STATE/pg-health"
+  echo "performing post-bootstrap initialization ... ok" >"$STATE/pg-logs"
+  run_prov "${wsl_args[@]}" --skip-models --health-timeout 35
+  check "exit 1" eq "$RC" 1
+  check "the progress names the database" said '"message":"Waiting for the database to start (3'
+  check "its log line too" said "domovoi-db.service is still starting (Postgres is still starting (last check: 127.0.0.1:5432 - no response))"
+  check "the container's log" said "performing post-bootstrap initialization ... ok"
+  check "the failure names it" said "the core (/v1/health) did not answer within 35s (http://127.0.0.1:6370/v1/health): domovoi-db.service is activating (Postgres is still starting"
+  end_case
+}
+
+# A volume whose first start was cut off in initdb (a reboot during a slow
+# first start): Postgres runs without the domovoi database or the network
+# login line, so every Retry failed. The start step removes it, container
+# first, before starting domovoi-db, which then makes it again.
+case_a_half_made_database_volume_is_made_again() {
+  new_case a_half_made_database_volume_is_made_again
+  echo 'running|unhealthy|0|1' >"$STATE/pg-state"
+  printf '%s\n' "performing post-bootstrap initialization ... ok"     "PostgreSQL Database directory appears to contain a database; Skipping initialization" >"$STATE/pg-logs"
+  printf '%s\n' 1 4 5 "tablespaces 0" >"$STATE/pg-volume"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "says what it found" said "domovoi-pgdata is half made"
+  check "the container removed" called "docker rm -f domovoi-postgres"
+  check "the volume removed" called "docker volume rm domovoi-pgdata"
+  check "after the container" before "docker rm -f domovoi-postgres" "docker volume rm domovoi-pgdata"
+  check "before the database starts" before "docker volume rm domovoi-pgdata" "systemctl start domovoi-db.service"
+  check "read with the container's image, no network, read-only" called "docker run --rm --network none --entrypoint sh -v domovoi-pgdata:/pgdata:ro sha256:0000pgimage"
+  end_case
+}
+
+# Every other volume is left alone: one with a database in it (whatever
+# its container says), one still in its first start, none at all.
+case_a_database_volume_with_data_is_left_alone() {
+  new_case a_database_volume_with_data_is_left_alone
+  echo 'exited|unhealthy|1|3' >"$STATE/pg-state"
+  printf '%s\n' "Skipping initialization" >"$STATE/pg-logs"
+  printf '%s\n' 1 16384 16385 4 5 "tablespaces 0" >"$STATE/pg-volume"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "says so" said "domovoi-pgdata holds 2 database(s) besides initdb's own: left alone"
+  check "no container removed" not_called "docker rm"
+  check "no volume removed" not_called "docker volume rm"
+  end_case
+}
+
+# Review 2026-10-17: `docker logs | grep -q` under pipefail died of SIGPIPE
+# once the log passed ~64 KB (a crash-looping half-made Postgres writes
+# that in about 25 minutes), and the volume was left alone again.
+case_a_half_made_volume_with_a_long_log_is_made_again() {
+  new_case a_half_made_volume_with_a_long_log_is_made_again
+  echo 'running|unhealthy|0|9' >"$STATE/pg-state"
+  { echo "performing post-bootstrap initialization ... ok"
+    echo "PostgreSQL Database directory appears to contain a database; Skipping initialization"
+    for i in $(seq 1 4000); do
+      echo "2026-10-17 07:00:00.000 UTC [$i] FATAL:  no pg_hba.conf entry for host \"172.19.0.3\", user \"domovoi\", database \"domovoi\", no encryption"
+    done; } >"$STATE/pg-logs"
+  check "the log is long" bash -c '[ "$(wc -c <"$1")" -gt 200000 ]' _ "$STATE/pg-logs"
+  printf '%s\n' 1 4 5 "tablespaces 0" >"$STATE/pg-volume"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "found it" said "domovoi-pgdata is half made"
+  check "removed it" called "docker volume rm domovoi-pgdata"
+  end_case
+}
+
+# A database can live in a tablespace of its own, outside base/: a volume
+# with any tablespace is left alone, whatever base/ holds.
+case_a_database_volume_with_a_tablespace_is_left_alone() {
+  new_case a_database_volume_with_a_tablespace_is_left_alone
+  echo 'exited||1|0' >"$STATE/pg-state"
+  printf '%s\n' 1 4 5 "tablespaces 1" >"$STATE/pg-volume"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "says so" said "domovoi-pgdata has 1 tablespace(s): left alone"
+  check "nothing removed" not_called "docker volume rm"
+  end_case
+}
+
+# Review note: a paused container is left alone, half made or not.
+case_a_paused_database_is_left_alone() {
+  new_case a_paused_database_is_left_alone
+  echo 'paused|unhealthy|0|1' >"$STATE/pg-state"
+  printf '%s\n' "Skipping initialization" >"$STATE/pg-logs"
+  printf '%s\n' 1 4 5 "tablespaces 0" >"$STATE/pg-volume"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "says so" said "domovoi-postgres is paused: left alone"
+  check "nothing read" not_called "docker run --rm"
+  check "nothing removed" not_called "docker volume rm"
+  end_case
+}
+
+# A database name too long for bash's integers still counts as a database.
+case_a_database_oid_past_bash_integers_counts() {
+  new_case a_database_oid_past_bash_integers_counts
+  echo 'exited||1|0' >"$STATE/pg-state"
+  printf '%s\n' 1 4 5 99999999999999999999 "tablespaces 0" >"$STATE/pg-volume"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "says so" said "domovoi-pgdata holds 1 database(s) besides initdb's own: left alone"
+  check "nothing removed" not_called "docker volume rm"
+  end_case
+}
+
+# Review note: with domovoi-db running, the start step doesn't look at the
+# volume at all.
+case_a_running_database_is_not_checked() {
+  new_case a_running_database_is_not_checked
+  mkdir -p "$STATE/active"
+  touch "$STATE/active/domovoi-db.service"
+  printf '%s\n' 1 4 5 "tablespaces 0" >"$STATE/pg-volume"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "the start step ran" called "systemctl start domovoi-db.service domovoi-core.service domovoi-web.service --no-block"
+  check "no volume check" not_called "docker volume inspect"
+  check "nothing removed" not_called "docker volume rm"
+  end_case
+}
+
+# Review 2026-10-17: every password form the reviewer's real Postgres
+# logged, in any case and across a line break, and the database's own
+# password as it is (from the container's environment; the .env path is
+# the apply-update case's), in the report and in the reason Setup shows.
+case_a_failed_database_report_blanks_every_password() {
+  new_case a_failed_database_report_blanks_every_password
+  echo domovoi-db.service >"$STATE/start-then-fail"
+  echo 'running|unhealthy|0|0' >"$STATE/pg-state"
+  printf '%s\n' "PATH=/usr/bin" "POSTGRES_PASSWORD=Pg-Env-S3cret" "POSTGRES_USER=domovoi" >"$STATE/pg-env"
+  cat >"$STATE/pg-logs" <<'LOG'
+STATEMENT:  ALTER ROLE nosuch PASSWORD 'Leak1-plain'
+STATEMENT:  ALTER ROLE nosuch WITH ENCRYPTED PASSWORD 'Leak2-it''s-quoted'
+STATEMENT:  alter role nosuch Password 'Leak3-MixedCase'
+STATEMENT:  ALTER ROLE nosuch PASSWORD $$Leak4-dollar$$
+STATEMENT:  ALTER ROLE nosuch PASSWORD E'Leak5-escape'
+STATEMENT:  ALTER ROLE nosuch PASSWORD $tag$Leak6-tagged$tag$
+STATEMENT:  SELECT dblink_connect('host=x user=y password=Leak7-conninfo')
+STATEMENT:  SELECT 'postgresql://domovoi:Leak8-url@db/x'::int
+STATEMENT:  ALTER ROLE nosuch PASSWORD
+	'Leak9-newline'
+STATEMENT:  ALTER ROLE nosuch PASSWORD 'Leak10-never-closed
+LOG:  password authentication failed for user "domovoi"
+ERROR:  invalid input syntax for type integer: "Pg-Env-S3cret" at character 8
+LOG
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 1" eq "$RC" 1
+  check "the report is there" said "the last 100 lines of docker logs domovoi-postgres"
+  check "no LeakN anywhere" bash -c '! grep -qE "Leak[0-9]" "$1"' _ "$CASE/output.log"
+  check "nor the database's password" not_said "Pg-Env-S3cret"
+  check "mixed case kept, value blanked" said "alter role nosuch Password [hidden]"
+  check "across the line break" said "ALTER ROLE nosuch PASSWORD [hidden]"
+  check "a failed login still reads as one" said "password authentication failed for user"
+  check "the reason Setup shows, blanked" said 'domovoi-db.service failed (Postgres is unhealthy; its log: ERROR:  invalid input syntax for type integer: "[hidden]"'
+  end_case
+}
+
+case_a_first_start_still_running_is_left_alone() {
+  new_case a_first_start_still_running_is_left_alone
+  echo 'running|starting|0|0' >"$STATE/pg-state"
+  printf '%s\n' "running bootstrap script ... ok" >"$STATE/pg-logs"
+  printf '%s\n' 1 4 5 "tablespaces 0" >"$STATE/pg-volume"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "says so" said "domovoi-postgres is running and has not restarted since its first start: left alone"
+  check "nothing read" not_called "docker run --rm"
+  check "nothing removed" not_called "docker volume rm"
+  end_case
+}
+
+case_no_database_volume_yet_is_left_alone() {
+  new_case no_database_volume_yet_is_left_alone
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "says so" said "no volume domovoi-pgdata: a first start makes it"
+  check "nothing removed" not_called "docker volume rm"
   end_case
 }
 
@@ -3186,6 +3440,19 @@ CASES=(
   case_starts_do_not_block_on_ready
   case_a_unit_that_fails_after_a_no_block_start_stops_the_wait
   case_the_database_failing_after_a_no_block_start_stops_the_wait
+  case_a_failed_database_says_why
+  case_a_failed_database_without_a_container_says_so
+  case_a_database_still_starting_is_named
+  case_a_half_made_database_volume_is_made_again
+  case_a_database_volume_with_data_is_left_alone
+  case_a_first_start_still_running_is_left_alone
+  case_a_half_made_volume_with_a_long_log_is_made_again
+  case_a_database_volume_with_a_tablespace_is_left_alone
+  case_a_paused_database_is_left_alone
+  case_a_database_oid_past_bash_integers_counts
+  case_a_running_database_is_not_checked
+  case_a_failed_database_report_blanks_every_password
+  case_no_database_volume_yet_is_left_alone
   case_a_failed_mark_from_before_is_not_this_starts
   case_journal_opt_out_is_honoured
   case_os_jobs_opt_out_is_honoured

@@ -636,6 +636,11 @@ units](#sandboxing-the-units) says what each of those lines must cover.
 - **`domovoi-db.service`** brings up Postgres and runs the migrations
   before anything connects, exactly what `dev.sh` does first
   (`docker compose up -d postgres`, then `docker compose run --rm flyway`).
+  Flyway waits for Postgres's health check, which gives a new database's
+  first start up to 10 minutes (it can take minutes on a slow disk). When
+  the start fails, the unit's journal (`journalctl -u domovoi-db`) ends with
+  the Postgres container's state and its last 100 log lines
+  (`scripts/linux/db-diagnostics.sh`, passwords blanked).
 - **`domovoi-core.service`** is the voice service on :6370
   (`/opt/domovoi/.venv/bin/python -m domovoi.main`).
 - **`domovoi-web.service`** is the dashboard on :6369
