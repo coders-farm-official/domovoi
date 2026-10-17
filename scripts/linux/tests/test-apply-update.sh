@@ -288,7 +288,7 @@ case "${1-}" in
     # The Postgres container, as db-diagnostics.sh asks after it: pg-state
     # ("status|health|exit code|restarts"), pg-health (its last check).
     if [ "${!#}" = domovoi-postgres ] && [ "${2-}" = --format ] && [ -f "$SHIM_STATE/pg-state" ]; then
-      case $3 in *Health.Log*) cat "$SHIM_STATE/pg-health" 2>/dev/null ;; *) cat "$SHIM_STATE/pg-state" ;; esac
+      case $3 in *Health.Log*) cat "$SHIM_STATE/pg-health" 2>/dev/null ;; *Config.Env*) cat "$SHIM_STATE/pg-env" 2>/dev/null ;; *) cat "$SHIM_STATE/pg-state" ;; esac
       exit 0
     fi
     # The chat helper (Letta) runs while letta-running exists.
@@ -1405,14 +1405,15 @@ case_flyway_failure_without_growth() {
 case_db_restart_failure_says_why() {
   new_case db_restart_failure_says_why
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
-  printf 'CREATE TABLE fine (id int);
-' >"$REPO/domovoi/db/migrations/V002__fine.sql"
+  printf 'CREATE TABLE fine (id int);\n' >"$REPO/domovoi/db/migrations/V002__fine.sql"
   local sha_b; sha_b=$(commit_all "B: a migration")
   echo "$sha_b" >"$STATE/flyway-fail-when-head"
   echo 'running|unhealthy|0|0' >"$STATE/pg-state"
   echo "127.0.0.1:5432 - no response" >"$STATE/pg-health"
-  printf '%s
-' "LOG:  connection: host=127.0.0.1 user=domovoi password=hunter2-Secret"     "FATAL:  the database system is in recovery mode" >"$STATE/pg-logs"
+  printf 'POSTGRES_PASSWORD="Env-File-S3cret"\n' >"$REPO/domovoi/.env"
+  printf '%s\n' "LOG:  connection: host=127.0.0.1 user=domovoi password=hunter2-Secret" \
+    'ERROR:  invalid input syntax for type integer: "Env-File-S3cret"' \
+    "FATAL:  the database system is in recovery mode" >"$STATE/pg-logs"
   run_update
   check "status rolled_back" eq "$(field status)" '"rolled_back"'
   check "100 log lines asked for" called "docker logs --tail 100 domovoi-postgres"
@@ -1420,6 +1421,8 @@ case_db_restart_failure_says_why() {
   check "and its log" grep -qF "FATAL:  the database system is in recovery mode" "$CASE/output.log"
   check "no password in the journal" not_said "hunter2-Secret"
   check "nor in the result" bash -c '! grep -qF hunter2-Secret "$1"' _ "$RESULT"
+  check "nor .env's POSTGRES_PASSWORD, as it is" not_said "Env-File-S3cret"
+  check "which is blanked" grep -qF 'integer: "[hidden]"' "$CASE/output.log"
   check "blanked" grep -qF "password [hidden]" "$CASE/output.log"
   check "the error says why" eq "$(field error | grep -c 'domovoi-db.service failed: Postgres is unhealthy; its log: FATAL:  the database system is in recovery mode')" 1
   end_case

@@ -18,11 +18,20 @@
 # inspect and docker logs, nothing else; it always exits 0.
 #
 # No secrets: Postgres does not log its password, but a statement it
-# logs could hold one (ALTER ROLE ... PASSWORD '...'), and so could a
-# connection string (password=...). Both are blanked.
+# logs could hold one, and so could a connection string or a value that
+# ended up in an error. Blanked, in any letter case and across line
+# breaks: PASSWORD followed by a quoted string ('...' with '' inside,
+# E'...', $$...$$ or $tag$...$tag$, an unclosed '... to the end of its
+# line), password=... (quoted or bare), a password in a URL, and the
+# database's own password wherever it appears as it is: POSTGRES_PASSWORD
+# from domovoi/.env and from the container's environment. (Not the
+# historical default "domovoi", which is no secret and is also the
+# database's and the user's name.)
 #
 # DOMOVOI_PG_CONTAINER names the container (default domovoi-postgres);
-# DOMOVOI_DB_DIAG_LINES the log lines (default 100).
+# DOMOVOI_DB_DIAG_LINES the log lines (default 100); DOMOVOI_ENV_FILE the
+# .env (default: domovoi/.env of the checkout this script is in, else
+# ./.env, the unit's working directory).
 set -uo pipefail
 
 CONTAINER=${DOMOVOI_PG_CONTAINER:-domovoi-postgres}
@@ -35,10 +44,36 @@ if [ "$MODE" = --unit ]; then
   echo "domovoi-db.service failed (${SERVICE_RESULT:-unknown result}); what Postgres says:"
 fi
 
+# The literal passwords to blank, one per line (scrub reads them from the
+# environment, never from its command line).
+env_file=${DOMOVOI_ENV_FILE:-}
+if [ -z "$env_file" ]; then
+  env_file="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)/domovoi/.env"
+  [ -f "$env_file" ] || env_file=./.env
+fi
+pw_of() { sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}POSTGRES_PASSWORD[[:space:]]*=[[:space:]]*//p' | tail -n 1 | tr -d '\r' \
+  | sed -e "s/^'\(.*\)'[[:space:]]*\$/\1/" -e 's/^"\(.*\)"[[:space:]]*$/\1/'; }
+DIAG_SECRETS=$( { pw_of <"$env_file"; } 2>/dev/null
+  docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$CONTAINER" 2>/dev/null | pw_of)
+export DIAG_SECRETS
+
 scrub() {
-  LC_ALL=C sed -E \
-    -e "s/(PASSWORD|password)([[:space:]]+'[^']*'|[[:space:]]*=[[:space:]]*('[^']*'|[^[:space:]',;]+))/\\1 [hidden]/g" \
-    -e 's#(://[^:/@[:space:]]+:)[^@/[:space:]]+@#\1[hidden]@#g'
+  if command -v perl >/dev/null 2>&1; then
+    # The whole text at once (-0777), so a password on the line after its
+    # PASSWORD is caught too.
+    LC_ALL=C perl -0777 -pe '
+      BEGIN { @s = grep { length($_) && $_ ne "domovoi" } split /\n/, ($ENV{DIAG_SECRETS} // ""); }
+      for my $x (@s) { s/\Q$x\E/[hidden]/g; }
+      my $q = qr/(?:[Ee]?\x27(?:[^\x27\\]|\x27\x27|\\.)*\x27|\$(\w*)\$.*?\$\g{-1}\$|[Ee]?\x27[^\n]*)/s;
+      s/(?<![A-Za-z])(password)\s*=\s*(?:$q|[^\s\x27",;)]+)/$1 [hidden]/gis;
+      s/(?<![A-Za-z])(password)\s+$q/$1 [hidden]/gis;
+      s{(://[^:/@\s]+:)[^@/\s]+@}{$1\[hidden]@}g;
+    '
+  else
+    LC_ALL=C sed -E \
+      -e "s/([Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])([[:space:]]+[Ee]?'.*|[[:space:]]*=[[:space:]]*('[^']*'|[^[:space:]',;]+))/\1 [hidden]/g" \
+      -e 's#(://[^:/@[:space:]]+:)[^@/[:space:]]+@#\1[hidden]@#g'
+  fi
 }
 
 # One line from docker inspect: status|health|exit code|restarts, or empty

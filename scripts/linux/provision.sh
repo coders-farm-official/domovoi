@@ -3176,7 +3176,7 @@ start_diagnostics() {
 db_diagnostics() {
   local f
   f=$(src_file scripts/linux/db-diagnostics.sh)
-  if [ -f "$f" ]; then bash "$f" "$@" 2>&1; else echo "(no $f in this checkout)"; fi
+  if [ -f "$f" ]; then DOMOVOI_ENV_FILE="$CHECKOUT/domovoi/.env" bash "$f" "$@" 2>&1; else echo "(no $f in this checkout)"; fi
 }
 db_failed() { systemctl is-failed --quiet domovoi-db.service 2>/dev/null; }
 

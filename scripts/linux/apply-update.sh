@@ -1151,8 +1151,8 @@ restart_db() {
   local rc=$?
   if [ -f "$DB_DIAGNOSTICS" ]; then
     echo "the Postgres container ($DB_DIAGNOSTICS):"
-    bash "$DB_DIAGNOSTICS" 2>&1 | sed '$d' | sed 's/^/  /' || true
-    echo "$DB_UNIT failed: $(bash "$DB_DIAGNOSTICS" --summary 2>&1 | tail -n 1)"
+    DOMOVOI_ENV_FILE="$REPO_DIR/domovoi/.env" bash "$DB_DIAGNOSTICS" 2>&1 | sed '$d' | sed 's/^/  /' || true
+    echo "$DB_UNIT failed: $(DOMOVOI_ENV_FILE="$REPO_DIR/domovoi/.env" bash "$DB_DIAGNOSTICS" --summary 2>&1 | tail -n 1)"
   fi
   return "$rc"
 }

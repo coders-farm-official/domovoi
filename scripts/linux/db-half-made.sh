@@ -62,10 +62,15 @@ state=$(docker inspect --format '{{.State.Status}}' "$CONTAINER" 2>/dev/null) ||
 if [ -n "$state" ]; then
   IMAGE=$(docker inspect --format '{{.Image}}' "$CONTAINER" 2>/dev/null || true)
   IMAGE=${IMAGE:-${DOMOVOI_PG_IMAGE:-}}
+  # Paused: someone stopped it on purpose, mid-whatever. Not ours to judge.
+  if [ "$state" = paused ]; then not_half_made "$CONTAINER is paused: left alone"; fi
   if [ "$state" = running ] || [ "$state" = restarting ]; then
     # A first start still running: its log has the initialisation's lines
-    # and no "Skipping" yet. Slow, not broken.
-    if ! docker logs "$CONTAINER" 2>&1 | grep -q 'Skipping initialization'; then
+    # and no "Skipping" yet. Slow, not broken. grep -c reads the whole log:
+    # `grep -q` would stop at the first match, and docker logs, still
+    # writing a long log, would die of SIGPIPE and fail the pipeline.
+    skipped=$(docker logs "$CONTAINER" 2>&1 | grep -c 'Skipping initialization')
+    if [ "${skipped:-0}" = 0 ]; then
       not_half_made "$CONTAINER is $state and has not restarted since its first start: left alone"
     fi
   fi
@@ -83,7 +88,8 @@ oids=""
 while IFS= read -r d; do
   case $d in '' | *[!0-9]*) continue ;; esac
   oids="$oids $d"
-  if [ "$d" -ge 16384 ]; then dbs=$((dbs + 1)); fi
+  # By length first: a name too long for bash's integers is no template.
+  if [ "${#d}" -gt 5 ] || [ "$d" -ge 16384 ]; then dbs=$((dbs + 1)); fi
 done <<<"$listing"
 # A database in a tablespace of its own lives outside base/: any
 # tablespace at all, and the volume is not ours to judge.
