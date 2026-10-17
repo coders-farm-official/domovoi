@@ -488,6 +488,54 @@ const _maybeRequestPairing = () => {
   try { if (typeof Auth !== 'undefined' && Auth.requestPairing) Auth.requestPairing(); } catch {}
 };
 
+/* ── A household token the server no longer takes (2026-10-17) ────────
+ *
+ * What a refusal says about the token this browser SENT (auth.js keeps
+ * it): a device-tier 401/403 to a request that carried it marks it
+ * refused, and a 429 for wrong household tokens sets the server's wait.
+ * Either way the token stops going out (auth.js usableDeviceToken), so a
+ * forgotten tab can no longer keep its address locked out, and
+ * DeviceTokenNotice (components.jsx) says what happened instead of every
+ * panel failing on its own. */
+const _deviceTrouble = () => {
+  try { return typeof Auth !== 'undefined' && Auth.deviceTrouble ? Auth.deviceTrouble() : null; }
+  catch { return null; }
+};
+
+// A device-tier throttle: the server's detail names the header ("too many
+// wrong X-Device-Token values …"). A login's or a URL fetch's 429 is not
+// about the household token.
+const _isDeviceTokenThrottle = (status, text) => (
+  status === 429 && /x-device-token|device token|household token/i.test(String(text || ''))
+);
+
+// Seconds from Retry-After, which a cross-origin page cannot read (it is
+// not a CORS-safelisted header), then from the server's own "retry in Ns".
+const _retryAfterSeconds = (r, text) => {
+  try {
+    const h = r && r.headers && typeof r.headers.get === 'function' ? r.headers.get('Retry-After') : null;
+    const n = parseInt(h, 10);
+    if (Number.isFinite(n) && n > 0) return n;
+  } catch { /* fall through to the words */ }
+  const m = /retry in (\d+)\s*s/i.exec(String(text || ''));
+  return m ? parseInt(m[1], 10) : 60;
+};
+
+const _noteDeviceAnswer = (status, text, r, sentDevice) => {
+  if (typeof Auth === 'undefined' || !sentDevice) return;
+  try {
+    // Only the server's own refusal, word for word (auth.js): a plugin's 401
+    // naming the header, or a 503 while the server cannot check credentials,
+    // says nothing about the token.
+    const refusal = Auth.isServerDeviceRefusal ? Auth.isServerDeviceRefusal(status, text)
+      : _isDeviceTokenRefusal(status, text);
+    if (refusal && Auth.noteDeviceRefusal) Auth.noteDeviceRefusal(sentDevice);
+    else if (_isDeviceTokenThrottle(status, text) && Auth.noteDeviceWait) {
+      Auth.noteDeviceWait(_retryAfterSeconds(r, text));
+    }
+  } catch { /* best effort */ }
+};
+
 // Shared tail for apiFetch/apiUpload. `send` MUST rebuild its headers on
 // each call — that is how the replay carries the bearer (or the device
 // token) the first attempt was missing.
@@ -540,16 +588,26 @@ const _sendWithAuthRetry = async (send, { method, body, raw, quiet, noPrompt } =
   let deviceRefusal = false;
   let deviceBlock = null;
 
-  if (_isAuthStatus(r.status)) {
+  if (_isAuthStatus(r.status) || r.status === 429) {
     text = await r.text().catch(() => '');
     deviceRefusal = _isDeviceTokenRefusal(r.status, text);
+    // The token this request carried was refused, or the address was told
+    // to wait: it stops going out at once (auth.js), before anything below
+    // prompts or replays.
+    _noteDeviceAnswer(r.status, text, r, refusedDeviceToken);
     // Only a mutation can be the block — reads are never blocked — and
     // probing on every refused GET would cost a request per empty panel.
-    if (!deviceRefusal && _isMutation(method) && !noPrompt) deviceBlock = await _deviceBlockRefusal(text);
+    if (!deviceRefusal && _isMutation(method) && !noPrompt && _isAuthStatus(r.status)) {
+      deviceBlock = await _deviceBlockRefusal(text);
+    }
   }
+  // While the server makes this address wait, pairing cannot be answered
+  // (the token is held until the wait is over): no prompt, no replay; the
+  // notice counts the wait down.
+  const waiting = (() => { const t = _deviceTrouble(); return !!t && t.waitMs > 0; })();
 
   if (_isAuthStatus(r.status) && !deviceBlock && _isMutation(method) && _replayableBody(body)
-      && !noPrompt) {
+      && !noPrompt && !(deviceRefusal && waiting)) {
     promptedHere = true;
     const again = deviceRefusal ? _pairAgain(refusedDeviceToken) : _signInAgain(refusedToken);
     if (await again) { r = await send(); text = null; }
@@ -565,7 +623,12 @@ const _sendWithAuthRetry = async (send, { method, body, raw, quiet, noPrompt } =
     // restarting on purpose (above).
     const staleRefusal = !promptedHere && _isAuthStatus(r.status) && sentUnder !== _credentialVersion();
     const restartQuiet = !_isMutation(method) && ServerRestart.active();
-    const prompts = !promptedHere && !deviceBlock && !quietRead && !staleRefusal && !restartQuiet;
+    // A stored token the server refused (or a wait) is the notice's to say,
+    // with its own "pair again": a READ refused for it opens no modal, so
+    // every panel of the page does not each ask.
+    const noticeSays = _isDeviceTokenRefusal(r.status, text) && !!_deviceTrouble();
+    const prompts = !promptedHere && !deviceBlock && !quietRead && !staleRefusal && !restartQuiet
+      && !noticeSays;
     if (prompts) {
       if (_isDeviceTokenRefusal(r.status, text)) _maybeRequestPairing();
       else _maybeRequestLogin(r.status);
@@ -590,6 +653,9 @@ const _sendWithAuthRetry = async (send, { method, body, raw, quiet, noPrompt } =
     // read again under the new one (useApiObject / useApiList).
     if (staleRefusal) err.staleCredential = true;
     err.deviceTokenRequired = _isDeviceTokenRefusal(r.status, text);
+    // The server asked this address to wait (wrong household tokens): the
+    // notice says it; a caller may too, in its own words.
+    if (_isDeviceTokenThrottle(r.status, text)) err.deviceTokenWait = true;
     try { err.detail = JSON.parse(text); } catch { /* non-JSON body */ }
     throw err;
   }

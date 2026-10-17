@@ -230,13 +230,39 @@ class IdentityGateTest {
         assertEquals("the rogue saw a token-less probe and nothing else", 2, fake.probes().size)
         assertEquals(1, fake.reads().size)
         assertNull(fake.probes()[1].getHeader(DEVICE_TOKEN_HEADER))
-        assertEquals(
-            IdentityVerdict.Mismatch(pins.book[key()]!!.fingerprint, rogueFingerprint),
-            gate.status.value?.verdict,
-        )
+        val verdict = gate.status.value?.verdict as IdentityVerdict.Mismatch
+        assertEquals(pins.book[key()]!!.fingerprint, verdict.expected)
+        assertEquals(rogueFingerprint, verdict.seen)
+        assertEquals("the key it proved travels with the verdict", rogueFingerprint, verdict.seenPin?.fingerprint)
         assertFalse("not our server, so out of reach", runBlocking { api.answers() })
         // The pin is untouched: coming home, the real server proves itself again.
         assertFalse(pins.book[key()]!!.fingerprint == rogueFingerprint)
+    }
+
+    @Test fun aReinstalledServerIsTrustedAgainOnlyByReplacingThePinAndNeverGetsTheOldToken() {
+        // 2026-10-17: the same address, a reinstalled Domovoi with a new key.
+        // The token is held (above) until the person says "it's mine": the
+        // shell then pins the key the server PROVED (the verdict carries it),
+        // DROPS the old household's token (Prefs.replacePin, review S-T1) and
+        // asks the gate to forget the old verdict. The phone pairs again.
+        read()
+        fake.seed = hex("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb")
+        gate.networkChanged()
+        try { read(); fail("expected ServerIdentityException") } catch (_: ServerIdentityException) {}
+        val seen = (gate.status.value?.verdict as IdentityVerdict.Mismatch).seenPin!!
+        assertEquals("nothing re-trusted by itself", 1, fake.reads().size)
+
+        pins.book[key()] = seen   // Prefs.replacePin, after the yes ...
+        token = null              // ... which drops the old household's token
+        gate.pinChanged()
+        read()
+        assertEquals(2, fake.reads().size)
+        assertNull("the old token never reaches the new key", fake.reads().last().getHeader(DEVICE_TOKEN_HEADER))
+        // Paired again with the new household's token: it flows, proved against the new pin.
+        token = "new-household"
+        read()
+        assertEquals("new-household", fake.reads().last().getHeader(DEVICE_TOKEN_HEADER))
+        assertEquals(IdentityVerdict.Verified(fake.fingerprint(), pinnedNow = false), gate.status.value?.verdict)
     }
 
     @Test fun afterANetworkChangeTheSameServerProvesItselfOnceMore() {

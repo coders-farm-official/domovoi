@@ -697,6 +697,96 @@ async def test_wrong_tokens_start_costing_time_at_the_gate(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_the_429_names_the_usual_cause_for_a_person(monkeypatch) -> None:
+    """2026-10-17: a phone was locked out by a browser tab on the same phone
+    still holding a reinstalled server's token, and the 429 named neither.
+    It now says what usually causes it, and nothing else: no token, no
+    hint about how close a guess was. The app and the dashboard still
+    recognise it by the header's name, and a cross-origin dashboard reads
+    the wait from "retry in Ns" (it cannot see Retry-After)."""
+    install_fake_db(monkeypatch, admin=True, sessions={"admin-token"}, device_token="dev-token")
+    async with mini_client() as c:
+        for i in range(admin_auth.DEVICE_TOKEN_FREE_ATTEMPTS + 1):
+            await c.post("/device", headers={HEADER: f"stale-{i}"})
+        r = await c.post("/device", headers={HEADER: "stale-last"})
+    assert r.status_code == 429
+    detail = r.json()["detail"]
+    assert HEADER in detail
+    assert re.search(r"retry in \d+s", detail)
+    assert "browser tab" in detail and "old household token" in detail
+    assert "pair it again or close it" in detail and "sign in as an admin" in detail
+    assert "dev-token" not in detail and "stale" not in detail
+
+
+@pytest.mark.asyncio
+async def test_a_database_blip_is_503_not_a_wrong_token(monkeypatch) -> None:
+    """Review S-T2 (2026-10-17): when the credential check could not reach
+    its database, a GOOD token got the wrong-token 401, byte for byte, and
+    the app and the dashboard now stop sending a token refused that way.
+    It is a 503 with Retry-After, still fail-closed, and it costs the
+    address nothing on the wrong-token ledger."""
+    install_fake_db(monkeypatch, admin=True, sessions={"admin-token"}, device_token="dev-token")
+
+    async def db_down(*_a, **_k):
+        raise ConnectionError("connection refused (postgres restarting)")
+
+    async with mini_client() as c:
+        assert (await c.post("/device", headers={HEADER: "dev-token"})).status_code == 200
+        monkeypatch.setattr(admin_auth, "validate_device_token", db_down)
+        for _ in range(admin_auth.DEVICE_TOKEN_FREE_ATTEMPTS + 3):
+            r = await c.post("/device", headers={HEADER: "dev-token"})
+            assert r.status_code == 503
+            assert int(r.headers["retry-after"]) >= 1
+            assert "X-Device-Token" not in r.json()["detail"]   # not a device refusal to any client
+        # No token at all, with the admin check down too: 503, not 401.
+        monkeypatch.setattr(admin_auth, "has_admin_auth", db_down)
+        assert (await c.post("/device")).status_code == 503
+        assert (await c.get("/security-read")).status_code == 503
+    # None of those blips was charged: the address is not waiting.
+    assert admin_auth.DEVICE_TOKEN_BACKOFF.retry_after("127.0.0.1") == 0.0
+
+
+def test_a_released_reservation_leaves_no_trace() -> None:
+    b = _fresh_backoff(free_attempts=0, global_ceiling=False)
+    b.record_failure("lan")
+    before = b.retry_after("lan")
+    b.reserve("lan")
+    b.release("lan")
+    assert b.retry_after("lan") <= before
+    b.record_success("lan")
+    b.reserve("lan")
+    b.release("lan")
+    assert b.retry_after("lan") == 0.0
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_gate_refuses_while_the_database_is_down(monkeypatch) -> None:
+    install_fake_db(monkeypatch, admin=True, sessions={"admin-token"}, device_token="dev-token")
+
+    async def db_down(*_a, **_k):
+        raise ConnectionError("down")
+
+    monkeypatch.setattr(admin_auth, "validate_device_token", db_down)
+    ws = admin_auth_ws_stub({HEADER.lower(): "dev-token"})
+    assert await admin_auth.websocket_device_ok(ws) is False
+    assert await admin_auth.check_live_mic_websocket(ws) == "unauthorized"
+
+
+def admin_auth_ws_stub(headers: dict):
+    class _Client:
+        host = "127.0.0.1"
+
+    class _WS:
+        def __init__(self):
+            self.headers = headers
+            self.cookies = {}
+            self.query_params = {}
+            self.client = _Client()
+
+    return _WS()
+
+
+@pytest.mark.asyncio
 async def test_the_right_token_clears_the_counter_at_the_gate(monkeypatch) -> None:
     install_fake_db(monkeypatch, admin=True, sessions={"admin-token"}, device_token="dev-token")
     async with mini_client() as c:

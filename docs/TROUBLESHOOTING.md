@@ -12,6 +12,7 @@ Symptom → cause → fix, grouped by area. Start with [Which logs to check](#wh
 - [Everything offline, dashboard up](#everything-offline-dashboard-up)
 - [Chat can't answer](#chat-cant-answer)
 - [Admin locked out](#admin-locked-out)
+- [The app or dashboard says "too many wrong tokens"](#the-app-or-dashboard-says-too-many-wrong-tokens)
 - [GPU / CUDA issues](#gpu--cuda-issues)
 - [Docker issues](#docker-issues)
 - [Which logs to check](#which-logs-to-check)
@@ -265,6 +266,27 @@ The one-time action after the 2026-09-25 upgrade:
 | The Admin card says **Not signed out — the Domovoi server did not answer** (or **answered 502**) | You pressed **sign out** while the server was down or restarting, so the server never ended the session; the browser is still signed in, and says so | Press **try again** once the server is back (Settings → Configuration → Version shows when). Until then the session is live |
 | A reload, or a new tab, is still signed in as the admin without the password | Working as intended since 2026-10-14: for an hour (by default) after you enter the admin password in a browser, that browser's reloads and new tabs stay signed in. Only that browser — another device needs the password | To end it now, **sign out** (Settings → Configuration → Admin). To change how long it lasts, or turn it off (0), Settings → Configuration → Security → **Stay signed in after a reload** |
 | The admin login said **Failed to fetch** while a restart you had just signed in for went ahead (or popped up again during the restart) | The sign-in had worked: the password was accepted and the restart replayed. Up to and including the 2026-10-01 release, the login prompt stayed up through the rest of the sign-in, any read the server refused while it was coming back opened it again, and a password sent while the server was away showed the browser's own "Failed to fetch" | Nothing to do: wait for Settings → Configuration → Version to show the new version. With the fix that followed that release, the prompt closes the moment the password is accepted, the Version card says **Updating —** / **Restarting —** until the server answers, nothing asks for a sign-in while it is away, and a sign-in that cannot reach the server says so in words |
+
+## The app or dashboard says "too many wrong tokens"
+
+The household token is what a phone or a browser presents so the server
+knows it belongs to the household (Settings → Devices → Household token on
+an admin's dashboard). The server counts wrong tokens **per address**. It
+allows five, then makes that address wait: 1 s, doubling, up to 5 minutes.
+The answer is `429` with `Retry-After`. While the wait runs, every device
+at that address is turned away, even one holding the right token. A device
+that keeps sending an old token restarts the wait each time it ends.
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| The app shows **couldn't load rooms**, **calendar unavailable** and **offline**, and Videos says `429 Too Many Requests … too many wrong X-Device-Token values`. Or a browser shows the same 429 on every panel | Something at that address is sending a household token this server no longer accepts. Usually it is a **browser tab or an app that was paired before the server was reinstalled, moved to a new machine at the same address, or had its household token changed**. On 2026-10-17 it was a dashboard tab, left open in the phone's own browser, holding the old install's token: it locked out the app on that same phone | 1. Find the old holder on that device: an open dashboard tab on the server's address (close it, or pair it again), another app, or an old kiosk link with `device_token=` in it. 2. Wait up to 5 minutes. 3. Pair again with the current token: the app's card or Settings → Connection → Household token → **replace**; in a browser, **pair again** or **sign in as admin**, which fetches the token by itself. In the app you can also forget the server (tap the server name at the top, then the **✕** on its row) and add it again |
+| The app shows **Domovoi doesn't recognise this phone any more** | The server refused the household token this phone holds. Since 2026-10-17 the app stops sending it at once instead of retrying | Paste the current household token into the card and press **pair again**. If the card counts a wait down, the new token is tried when the wait is over. If it was a passing fault on the server (its database not answering refuses every token), **try the old token again** |
+| The app shows local media and **This looks like a different Domovoi, or it was reinstalled** | The server at the saved address proved a different identity from the one this phone trusted. The app sends it nothing until you decide | If you reinstalled or replaced your Domovoi, compare the new fingerprint with the dashboard's Settings → About, then press **it's my Domovoi — trust it again**, and paste that server's household token on the pairing screen that follows (the old token is forgotten with the old identity). Away from home, don't |
+| Pasting the household token says **That token doesn't match this server** | The token is another server's, or an old one: after a reinstall the server has a fresh token, and a custom one you chose before is gone | Copy it from **this** server's dashboard: Settings → Devices → Household token. Each paste is checked once with the server, so a few wrong ones make it ask you to wait (it counts down) |
+| A page or the app says **auth check unavailable**, or **Couldn't check it with the server** | The server could not reach its database for a moment (a restart, too many connections) | Try again in a few seconds. Nothing is dropped: since 2026-10-17 this is a `503`, not the wrong-token answer |
+| The dashboard says **This Domovoi doesn't recognise this browser any more** | The server refused the household token this browser stored. Since 2026-10-17 the browser stops sending it: not as a header, not on the live socket, not in picture or video links | **pair again** (paste the current token) or **sign in as admin**. Try **try the old token again** only if the server had a passing fault |
+| The dashboard says **This Domovoi asked this address to wait** | Too many wrong tokens came from this address, often from another tab or device | Wait out the countdown. The browser sends nothing meanwhile and tries again by itself. Then find whatever still holds the old token (first row) |
+
 
 ## GPU / CUDA issues
 

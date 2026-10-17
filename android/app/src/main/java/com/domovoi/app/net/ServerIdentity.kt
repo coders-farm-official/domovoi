@@ -62,8 +62,10 @@ object ServerIdentity {
          *  signature that fails. */
         data class Invalid(val reason: String) : Proof()
 
-        /** A valid proof — of a DIFFERENT key than the one pinned. */
-        data class Mismatch(val expected: String, val seen: String) : Proof()
+        /** A valid proof — of a DIFFERENT key than the one pinned. [seenPin]
+         *  is that key, proved over our challenge: what the person is shown
+         *  and, only if they say it is theirs, what gets pinned instead. */
+        data class Mismatch(val expected: String, val seen: String, val seenPin: Pin? = null) : Proof()
     }
 
     fun newChallenge(): String {
@@ -109,7 +111,9 @@ object ServerIdentity {
         val signature = field("signature")?.let(::unb64)?.takeIf { it.size == Ed25519.SIGNATURE_SIZE }
             ?: return Proof.Invalid("malformed signature")
         if (!Ed25519.verify(key, healthMessage(challenge), signature)) return Proof.Invalid("the signature does not verify")
-        if (pinned != null && pinned.public_key != keyB64) return Proof.Mismatch(pinned.fingerprint, fingerprint)
+        if (pinned != null && pinned.public_key != keyB64) {
+            return Proof.Mismatch(pinned.fingerprint, fingerprint, Pin(keyB64, fingerprint))
+        }
         return Proof.Verified(Pin(keyB64, fingerprint))
     }
 

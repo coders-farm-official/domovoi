@@ -43,12 +43,14 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -169,13 +171,38 @@ fun AppShell() {
     val activeVerdict = identity?.takeIf { it.base == IdentityGate.pinKey(serverUrl) }?.verdict
     val notOurs = activeVerdict is IdentityVerdict.Mismatch || activeVerdict is IdentityVerdict.Unproven
     val coreDown = activeVerdict is IdentityVerdict.Unavailable
+    val identityChanged = activeVerdict is IdentityVerdict.Mismatch
+
+    // The server answered but will not take this phone's token: it refused
+    // it, or asked the phone to wait after wrong ones (net/TokenHealth.kt).
+    // One card instead of "offline" and a page of errors (ShellMode.kt
+    // tokenTrouble); the wait counts down on screen.
+    val rejectedTokens by app.prefs.rejectedTokens.collectAsState()
+    val waits by app.tokenHealth.waits.collectAsState()
+    val activeToken by app.prefs.deviceToken.collectAsState()
+    val waitUntil = waits[ServerCredentials.normalize(serverUrl)]
+    var clockNow by remember { mutableLongStateOf(app.tokenHealth.clock()) }
+    LaunchedEffect(waitUntil) {
+        clockNow = app.tokenHealth.clock()
+        while (waitUntil != null && clockNow < waitUntil) {
+            delay(1000)
+            clockNow = app.tokenHealth.clock()
+        }
+    }
+    val trouble = tokenTrouble(
+        serverUrl = serverUrl,
+        paired = !activeToken.isNullOrBlank(),
+        rejected = ServerCredentials.normalize(serverUrl) in rejectedTokens,
+        waitMs = waitUntil?.let { it - clockNow } ?: 0L,
+        identityChanged = identityChanged,
+    )
     val choice = serverChoice(
         serverUrl = serverUrl,
         label = if (serverUrl.isBlank()) "" else app.prefs.serverLabel(),
         unreachable = unreachable,
         notOurs = notOurs,
         coreDown = coreDown,
-        pairingRequired = pairingRequired,
+        pairingRequired = pairingRequired || trouble is TokenTrouble.NotRecognised,
     )
     // Forgetting the active server (Settings, or the server list) leaves
     // the app with none and asks for the list: open the connection dialog.
@@ -196,11 +223,11 @@ fun AppShell() {
     ) {
         if (showConnection) ConnectionDialog(onDismiss = { showConnection = false })
         Box(Modifier.fillMaxSize().background(Domovoi.colors.canvas)) {
-            when (shellMode(serverUrl, unreachable, pairingRequired, preferLocal)) {
-                ShellMode.Local -> OfflineShell(choice)
+            when (shellMode(serverUrl, unreachable, pairingRequired, preferLocal, identityChanged, trouble != null)) {
+                ShellMode.Local -> OfflineShell(choice, activeVerdict)
                 // Kept in a saveable slot so a trip through local media
                 // (server out of reach) returns to the same screen.
-                ShellMode.Workspace -> workspaceState.SaveableStateProvider(serverUrl) { ShellContent() }
+                ShellMode.Workspace -> workspaceState.SaveableStateProvider(serverUrl) { ShellContent(trouble) }
             }
             // Toasts overlay. This Column is a SIBLING of the shells, so the
             // shells' own consumption of WindowInsets.ime cannot reach it —
@@ -238,8 +265,15 @@ fun AppShell() {
 }
 
 @Composable
-private fun ShellContent() {
+private fun ShellContent(trouble: TokenTrouble?) {
     val app = LocalApp.current
+    // The server will not take the token this phone holds (refused, or a
+    // wait after wrong ones): one card, with pair again, and no panel behind
+    // it asking the server for anything (TokenTroubleScreen.kt).
+    if (trouble != null) {
+        TokenTroubleScreen(trouble)
+        return
+    }
     // Refused for want of the household token: the phone goes to the pairing
     // screen rather than showing empty panels it cannot load (FE-2 / the
     // device tier). Pairing clears the flag and the shell comes back.
@@ -524,7 +558,7 @@ private fun TopChrome(content: @Composable () -> Unit) {
 // AppShell straight into the full workspace.
 // ---------------------------------------------------------------------------
 @Composable
-private fun OfflineShell(choice: ServerChoice) {
+private fun OfflineShell(choice: ServerChoice, verdict: IdentityVerdict?) {
     // Music, videos, files, and the on-device assistant where this install
     // has it (localTabs); the index of the one showing. A shared screen
     // (the kitchen tablet, as the saved server last answered) leaves Files
@@ -548,6 +582,23 @@ private fun OfflineShell(choice: ServerChoice) {
         return
     }
     val openConnection = LocalOpenConnection.current
+    val toast = LocalToast.current
+    // A reinstalled or replaced Domovoi at the saved address proved a new
+    // key: the banner says so in household words and offers the yes that
+    // pins it (IdentityChanged.kt). Never without the person's answer.
+    val changed = changedIdentity(verdict)
+    var askTrustAgain by remember { mutableStateOf(false) }
+    if (askTrustAgain && changed != null && savedServer.isNotBlank()) {
+        TrustAgainDialog(
+            address = ServerCredentials.address(savedServer),
+            mismatch = changed,
+            onDismiss = { askTrustAgain = false },
+            onConfirm = {
+                askTrustAgain = false
+                trustAgain(app, savedServer, changed, toast)
+            },
+        )
+    }
     // The banner is for a server that can't be used. Choosing "this phone"
     // with the server right there is not an outage, so it says nothing.
     // "Can't be used" has three faces (ShellMode.kt): nothing answered;
@@ -626,14 +677,11 @@ private fun OfflineShell(choice: ServerChoice) {
             if (outOfReach != null) {
                 val unreachableServer = outOfReach
                 Surface(color = Domovoi.colors.canvas) {
+                  Column {
                     Text(
                         when (choice) {
                             is ServerChoice.NotOurs ->
-                                "Whatever answers at $unreachableServer did not prove it is the Domovoi " +
-                                    "this phone paired with, so nothing was sent to it. Showing media on this " +
-                                    "phone; the workspace comes back when your Domovoi does. If you replaced " +
-                                    "the server, forget it — the X next to it in the server list, or under " +
-                                    "Settings → Connection → Trusted servers — then trust and pair it again."
+                                identityChangedText(unreachableServer, canTrustAgain = changed != null)
                             is ServerChoice.CoreDown ->
                                 "$unreachableServer is up but its core is not answering (starting, " +
                                     "updating, or busy), so nothing was sent to it yet. Showing media on " +
@@ -646,6 +694,13 @@ private fun OfflineShell(choice: ServerChoice) {
                         color = Domovoi.colors.fgMuted,
                         modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
                     )
+                    if (choice is ServerChoice.NotOurs && changed != null) {
+                        TextButton(
+                            onClick = { askTrustAgain = true },
+                            modifier = Modifier.padding(start = 8.dp),
+                        ) { Text("it's my Domovoi — trust it again") }
+                    }
+                  }
                 }
             }
           } }

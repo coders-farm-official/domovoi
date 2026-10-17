@@ -638,14 +638,17 @@ async def _authorize_state_socket(ws: WebSocket) -> object | None:
     as the header and the query, so the subprotocol is not a free oracle.
     """
     token, offered = _offered_token_subprotocol(ws)
-    result = await admin_auth.check_device_request(ws)
-    if result in ("ok", "admin", "pre-setup", "cookie-only"):
-        return offered
-    if result != "throttled" and token:
-        if await admin_auth.check_device_credential(ws, token) in (
-            "ok", "admin", "pre-setup", "cookie-only"
-        ):
+    try:
+        result = await admin_auth.check_device_request(ws)
+        if result in ("ok", "admin", "pre-setup", "cookie-only"):
             return offered
+        if result != "throttled" and token:
+            if await admin_auth.check_device_credential(ws, token) in (
+                "ok", "admin", "pre-setup", "cookie-only"
+            ):
+                return offered
+    except admin_auth.AuthCheckUnavailable:
+        pass   # the database did not answer: refused, and the client retries
     return _REFUSE
 
 

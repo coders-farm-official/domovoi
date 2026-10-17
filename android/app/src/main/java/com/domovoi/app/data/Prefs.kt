@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.domovoi.app.net.IdentityGate
 import com.domovoi.app.net.ServerIdentity
+import com.domovoi.app.net.TokenHealth
 import com.domovoi.app.player.LyricsNudge
 import com.domovoi.app.ui.theme.ThemeMode
 import kotlinx.coroutines.CoroutineScope
@@ -46,7 +47,7 @@ data class KnownServer(val url: String, val name: String? = null)
 class Prefs(
     private val context: Context,
     private val vault: TokenVault = TokenVault(PrefsVaultStore(context), KeystoreSealer()) { Log.w(TAG, it) },
-) : IdentityGate.PinStore, DeveloperOptions.Store {
+) : IdentityGate.PinStore, DeveloperOptions.Store, TokenHealth.RejectedBook {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val kServer = stringPreferencesKey("server_url")
@@ -58,6 +59,10 @@ class Prefs(
     /** Servers (by pin key) whose trust decision was taken with the identity
      *  in view — pinned from the dialog, or recorded as offering none. */
     private val kTrustDecided = stringPreferencesKey("trust_decisions")
+    /** Servers (by normalised address) that refused the token this phone
+     *  holds for them (net/TokenHealth.kt). No token or hash is kept here:
+     *  any change to a server's token clears its entry. */
+    private val kRejectedTokens = stringPreferencesKey("rejected_tokens")
     private val kTheme = stringPreferencesKey("theme_mode")
     private val kDeviceId = stringPreferencesKey("client_id")
     private val kListener = stringPreferencesKey("listener_person")
@@ -94,6 +99,11 @@ class Prefs(
 
     @Volatile
     private var trustDecided: Set<String> = emptySet()
+
+    /** Servers whose answer said the token this phone holds for them is
+     *  wrong (TokenHealth): the token is not sent there until it changes. */
+    private val _rejectedTokens = MutableStateFlow<Set<String>>(emptySet())
+    val rejectedTokens: StateFlow<Set<String>> = _rejectedTokens
 
     private val _themeMode = MutableStateFlow(ThemeMode.System)
     val themeMode: StateFlow<ThemeMode> = _themeMode
@@ -207,6 +217,7 @@ class Prefs(
             _deviceToken.value = ServerCredentials.tokenFor(deviceTokens, _serverUrl.value)
             _identityPins.value = ServerIdentity.decodePins(p[kIdentityPins])
             trustDecided = ServerCredentials.decodeTrusted(p[kTrustDecided])
+            _rejectedTokens.value = ServerCredentials.decodeTrusted(p[kRejectedTokens])
             _themeMode.value = runCatching { ThemeMode.valueOf(p[kTheme] ?: "System") }.getOrDefault(ThemeMode.System)
             _listenerPersonId.value = p[kListener]
             _owners.value = ServerCredentials.decodeOwners(p[kOwners])
@@ -289,8 +300,33 @@ class Prefs(
     fun setDeviceTokenFor(url: String, token: String?) {
         val next = ServerCredentials.withToken(deviceTokens, url, token)
         deviceTokens = next
+        // A new token (or none) is not the one the server refused.
+        clearTokenRejected(url)
         _deviceToken.value = ServerCredentials.tokenFor(next, _serverUrl.value)
         scope.launch { vault.write(next) }
+    }
+
+    // ── A token the server refused (TokenHealth.RejectedBook) ──────────
+
+    override fun isTokenRejected(url: String): Boolean =
+        ServerCredentials.normalize(url) in _rejectedTokens.value
+
+    /** Only while a token is held for [url]: "refused" describes that token. */
+    override fun markTokenRejected(url: String) {
+        if (ServerCredentials.tokenFor(deviceTokens, url) == null) return
+        setRejected(ServerCredentials.withTrusted(_rejectedTokens.value, url))
+    }
+
+    /** Send the held token to [url] again (the card's "check again", or a
+     *  new token replacing it). */
+    fun clearTokenRejected(url: String) {
+        if (!isTokenRejected(url)) return
+        setRejected(ServerCredentials.withoutTrusted(_rejectedTokens.value, url))
+    }
+
+    private fun setRejected(next: Set<String>) {
+        _rejectedTokens.value = next
+        scope.launch { context.dataStore.edit { it[kRejectedTokens] = ServerCredentials.encodeTrusted(next) } }
     }
 
     /** The token issued by the server at [url] (by its saved spelling), or
@@ -322,6 +358,23 @@ class Prefs(
 
     /** The identity pinned for a saved server address, if any. */
     fun pinForServer(url: String): ServerIdentity.Pin? = IdentityGate.pinKey(url)?.let(::pinFor)
+
+    /**
+     * Pin [pin] for [url] IN PLACE OF the one pinned: the person said yes to
+     * "this looks like a different Domovoi, or it was reinstalled" with
+     * both fingerprints in view (ui/shell/IdentityChanged.kt). The one way
+     * a pin changes without forgetting the server, and never without that
+     * yes. The household token is DROPPED with the old pin: it belongs to
+     * the identity it was paired with, and must not go to whatever holds the
+     * new key (review S-T1, 2026-10-17). A reinstall is a new household and
+     * would refuse it anyway, so the phone goes on to pairing.
+     */
+    fun replacePin(url: String, pin: ServerIdentity.Pin) {
+        val key = IdentityGate.pinKey(url) ?: return
+        setDeviceTokenFor(url, null)
+        pin(key, pin)
+        setTrustDecided(trustDecided + key)
+    }
 
     fun clearPinFor(url: String) {
         val key = IdentityGate.pinKey(url) ?: return

@@ -165,7 +165,10 @@ async def test_require_device_fails_closed_when_the_check_raises(monkeypatch) ->
 
     monkeypatch.setattr(admin_auth, "validate_device_token", boom)
     async with mini_client() as c:
-        assert (await c.post("/device", headers={HEADER: "dev-token"})).status_code == 401
+        # Still closed, but "try again" (503), not the wrong-token 401: a client
+        # stops sending a token the server called wrong (review S-T2, 2026-10-17).
+        r = await c.post("/device", headers={HEADER: "dev-token"})
+        assert r.status_code == 503 and int(r.headers["retry-after"]) >= 1
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@ package com.domovoi.app
 
 import android.content.Context
 import android.content.pm.ApplicationInfo
+import android.os.SystemClock
 import android.util.Log
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.domovoi.app.net.ReportUpload
@@ -21,6 +22,7 @@ import com.domovoi.app.net.IdentityGate
 import com.domovoi.app.net.NetworkWatch
 import com.domovoi.app.net.PhoneUploads
 import com.domovoi.app.net.StateBus
+import com.domovoi.app.net.TokenHealth
 import com.domovoi.app.ui.screens.manual.ManualRepository
 import com.domovoi.app.player.LyricsRepository
 import com.domovoi.app.player.PlayerController
@@ -64,7 +66,12 @@ class AppContainer(context: Context) {
         network = { network.fingerprint },
         log = { Log.i("IdentityGate", it) },
     )
-    val api: ApiClient = ApiClient(prefs, identity)
+    /** What the server's answers said about this phone's household token
+     *  (net/TokenHealth.kt): a refused token is not sent again (kept in
+     *  Prefs), and a server's "wait" (429 Retry-After) is honoured before
+     *  anything carrying the token goes to it. */
+    val tokenHealth = TokenHealth(prefs, clock = SystemClock::elapsedRealtime, log = { Log.i("TokenHealth", it) })
+    val api: ApiClient = ApiClient(prefs, identity, tokenHealth)
     val bus = StateBus(api, prefs)
     val player = PlayerController(context, api, prefs)
 

@@ -92,6 +92,10 @@ class DeviceAuthInterceptor(
     /** The active server; the token goes to it and nowhere else. */
     private val baseUrlProvider: () -> String?,
     private val gate: TokenGate? = null,
+    /** What the server has said about the token ([TokenHealth]): a token
+     *  it refused is not sent again, and while it asks the phone to wait,
+     *  nothing that would carry the token is sent at all. */
+    private val health: TokenHealth? = null,
 ) : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
@@ -104,8 +108,23 @@ class DeviceAuthInterceptor(
         val wsUpgrade = request.tag(TokenScope.WsUpgrade::class.java) != null
         if (!TokenScope.admits(base, request.url, wsUpgrade)) return chain.proceed(bare)
         val token = headerSafeToken(raw?.let(tokenFor)) ?: return chain.proceed(bare)
+        val server: String = raw ?: return chain.proceed(bare)
+        if (health != null) {
+            // Refused once: never again, until a new token (or the person)
+            // says otherwise. Without it the request is an unpaired phone's,
+            // which the server's wrong-token count never sees.
+            if (health.isRejected(server)) return chain.proceed(bare)
+            val wait = health.waitMs(server)
+            if (wait > 0) throw TokenThrottledException(wait)
+        }
         gate?.requireAdmitted(base!!)
-        return chain.proceed(bare.newBuilder().header(DEVICE_TOKEN_HEADER, token).build())
+        val response = chain.proceed(bare.newBuilder().header(DEVICE_TOKEN_HEADER, token).build())
+        // Only the server's own answers (its scheme, host and port) speak for
+        // its token; the drop-in socket on the core's port keeps its own count.
+        if (health != null && TokenScope.sameServer(base!!, request.url)) {
+            health.observe(server, token, headerSafeToken(tokenFor(server)), response)
+        }
+        return response
     }
 }
 
@@ -128,4 +147,26 @@ fun isDeviceTokenRefusal(status: Int, body: String?): Boolean {
     val text = body.orEmpty()
     return text.contains("device token", ignoreCase = true) ||
         text.contains(DEVICE_TOKEN_HEADER, ignoreCase = true)
+}
+
+/** The core's and the web's own device-tier refusals, word for word
+ *  (domovoi/admin_auth.py require_device / require_device_read, the
+ *  guest-queue gate): the only bodies that mean "this household token is
+ *  not accepted". [isDeviceTokenRefusal] matches any body naming the header,
+ *  which is right for raising the pairing screen; a plugin's own 401 that
+ *  happens to mention it must not make the phone drop its token (review
+ *  N-T2, 2026-10-17). */
+private val SERVER_DEVICE_REFUSALS = setOf(
+    "$DEVICE_TOKEN_HEADER or admin session required",
+    "$DEVICE_TOKEN_HEADER required — the dashboard cookie does not authorize device-tier actions",
+)
+
+fun isServerDeviceRefusal(status: Int, body: String?): Boolean {
+    if (status != 401 && status != 403) return false
+    val detail = runCatching {
+        (DomovoiJson.parseToJsonElement(body.orEmpty()) as? kotlinx.serialization.json.JsonObject)
+            ?.get("detail")?.let { it as? kotlinx.serialization.json.JsonPrimitive }
+            ?.takeIf { it.isString }?.content
+    }.getOrNull() ?: return false
+    return detail in SERVER_DEVICE_REFUSALS
 }

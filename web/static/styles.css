@@ -183,6 +183,23 @@
    it (ContainerGuardBanner keeps --guard-banner-h at its height; unset
    while no banner shows). */
 .main { scroll-padding-top: var(--guard-banner-h, 0px); }
+/* A household token the server refused, or its wait after wrong ones
+   (DeviceTokenNotice, components.jsx): one notice at the top of the page,
+   in the page's flow (the guard banner, if any, stays the sticky one). */
+.device-token-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--fg);
+  border: 1px solid var(--warn);
+  border-radius: var(--r-md);
+  background: linear-gradient(var(--warn-soft), var(--warn-soft)), var(--surface);
+}
+.device-token-notice-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.device-token-notice-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: none; }
 /* (Its phone rules sit in the shell's 760px block below, beside .main's
    16px padding they follow.) */
 
@@ -421,6 +438,9 @@ table.tbl .actions { text-align: right; }
   /* The container guard's banner follows .main's 16px padding. */
   .guard-banner { top: -16px; margin: -16px -16px 16px; padding: 10px 16px; }
   .guard-banner-actions { flex-direction: column; align-items: flex-end; gap: 4px; }
+  /* The token notice's buttons go under its words. */
+  .device-token-notice { flex-wrap: wrap; }
+  .device-token-notice-actions { flex: 1 1 100%; }
   /* A page's header actions wrap under its title instead of running off
      the right edge (Music's upload · rescan · enrich did at 375px, with
      the title squeezed into a column beside them). Home's header already

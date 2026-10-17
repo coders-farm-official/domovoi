@@ -169,8 +169,9 @@ def test_the_raw_fetches_send_it_too() -> None:
     streamed send is apiFetchRaw now, so it builds nothing itself."""
     static = REPO_ROOT / "web" / "static"
     auth_js = (static / "auth.js").read_text(encoding="utf-8")
-    # Login / setup / password change, and logout.
-    assert auth_js.count("'X-Requested-With': 'XMLHttpRequest'") == 2
+    # Login / setup / password change, logout, and the pasted-token check
+    # (checkDeviceToken, 2026-10-17: one read carrying the candidate alone).
+    assert auth_js.count("'X-Requested-With': 'XMLHttpRequest'") == 3
     for name in ("files.jsx", "doc_editor.jsx", "sheet_editor.jsx"):
         source = (static / name).read_text(encoding="utf-8")
         assert "apiHeaders()" in source, name

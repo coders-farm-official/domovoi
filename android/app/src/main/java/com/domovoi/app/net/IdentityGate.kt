@@ -64,8 +64,10 @@ sealed class IdentityVerdict {
      *  it always did for this server. */
     data class Legacy(val offered: ServerIdentity.Pin? = null) : IdentityVerdict()
 
-    /** Pinned, and whoever answered proved a DIFFERENT key. */
-    data class Mismatch(val expected: String, val seen: String) : IdentityVerdict()
+    /** Pinned, and whoever answered proved a DIFFERENT key ([seenPin]:
+     *  that key, for the "it was reinstalled, trust it again" answer). */
+    data class Mismatch(val expected: String, val seen: String, val seenPin: ServerIdentity.Pin? = null) :
+        IdentityVerdict()
 
     /** Pinned (or claiming an identity) and the answer proves nothing. */
     data class Unproven(val expected: String?, val reason: String) : IdentityVerdict()
@@ -143,6 +145,13 @@ class IdentityGate(
     fun networkChanged() {
         epoch++
         log("network changed; the server will have to prove its identity again")
+    }
+
+    /** A pin was replaced by the person's yes (Prefs.replacePin): every
+     *  verdict reached against the old one is stale. */
+    fun pinChanged() {
+        epoch++
+        log("a pin was replaced; the server will have to prove its identity again")
     }
 
     /** The app left the screen (MainActivity.onStop, not for a rotation). */
@@ -273,7 +282,7 @@ class IdentityGate(
             }
             is ServerIdentity.Proof.Mismatch -> {
                 log("identity: $key proved ${proof.seen}, not the pinned ${proof.expected}; token held")
-                IdentityVerdict.Mismatch(proof.expected, proof.seen)
+                IdentityVerdict.Mismatch(proof.expected, proof.seen, proof.seenPin)
             }
         }
     }
