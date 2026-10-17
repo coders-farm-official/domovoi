@@ -1495,7 +1495,21 @@ serves, is unchanged. Only those five kinds are decoded, at most 40
 megapixels, three at a time and off the event loop; a bigger picture is
 left out of what the model gets. A call that carries pictures also sends
 `think: false` (a refusal of the flag is retried once without it) and
-`ollama_vision_num_ctx` as its context window. Mutations fire the
+`ollama_vision_num_ctx` as its context window. Every call opens with one
+system message (`ollama.chat_system_prompt`): the model answers as Domovoi
+(the `bot_name` setting), this household's assistant, with the profile of
+the thread's person (`chat_threads.person_id`) when the thread has one. A
+call that may carry pictures adds how to read them (describe, read any text,
+a picture of the Domovoi name or cat logo is a picture of itself) and keeps
+the vision model's own Modelfile `SYSTEM` (from `/api/show`), and its
+history is cut to fit the vision window, less the system message and room
+for the reply: the message being answered always goes, older
+messages lose their pictures first (about 1,200 tokens each) and then
+drop out, oldest first. Every call also asks for at most
+`ollama_chat_num_predict` tokens (2048; 0 = no cap; with a cap, that much of
+the vision window is what is kept for the reply). A reply stopped there
+(`done_reason` `length`) ends with `…` and a short italic note, in the
+stream and in the kept row alike; it is not an error. Mutations fire the
 `chat.changed` WS event.
 
 Reads are **Device read** — the thread list (titles and snippets are message

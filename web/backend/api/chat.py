@@ -15,6 +15,12 @@ image uploads is answered by ``ollama_vision_model`` instead of the QA
 model; images ride base64 in the Ollama chat payload. A message with
 images whose vision model isn't installed (or isn't set) is answered at
 once with a plain refusal and no Ollama call (:func:`send_message`).
+Every call opens with the same system message
+(``ollama.chat_system_prompt``): the model answers as Domovoi, this
+household's assistant, with the thread's person's profile when the thread
+has one; a call carrying pictures adds how to read them and keeps the
+vision model's own Modelfile instructions, and its history is cut to the
+vision context window (:func:`_fit_history`).
 
 Failures (:func:`_failure`): whatever stopped a reply — the model missing,
 Ollama unreachable or too slow, any other error it reported — reaches the
@@ -88,6 +94,7 @@ from domovoi import executors, image_safety
 from domovoi.admin_auth import require_device, require_device_read
 from domovoi.clients import ollama as ollama_client
 from domovoi.config import settings as core_settings
+from domovoi.profile_context import build_profile_prefix
 from domovoi.voice_identifier import speaker_is_confident
 from web.backend.api.devices import valid_device_id
 from web.backend.db import session_scope
@@ -114,6 +121,17 @@ _HISTORY_LIMIT = 30
 # 1280 px a picture is ~1.1k tokens, and the default model still read the
 # screenshots, receipts and charts in the test.
 _VISION_MAX_EDGE = 1280
+# What one picture at that size costs in the vision model's context: ~1.1k
+# tokens measured (config.ollama_vision_num_ctx); qwen3-vl reads a 32 px
+# square per token, 40 x 30 for a 1280 x 960 photo.
+_PICTURE_TOKENS = 1200
+# Room kept in the vision window for the reply when the thread's history is
+# cut to fit (_fit_history), when the reply has no cap
+# (ollama_chat_num_predict 0); with one, the cap is the room kept.
+_REPLY_RESERVE_TOKENS = 1024
+# What a reply stopped by ollama_chat_num_predict ends with: the text it
+# had, "…", and this, so it reads as stopped rather than broken off.
+CUT_OFF_NOTE = "\n\n*Stopped here: this reply reached the chat's length limit.*"
 _EXIF_ORIENTATION = 0x0112
 
 _TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -562,7 +580,42 @@ def _vision_bytes(src: Path) -> bytes:
     return data
 
 
-async def _history_for_model(thread_id: int, with_images: bool = True) -> list[dict[str, Any]]:
+def _text_tokens(content: str | None) -> int:
+    """A generous guess at a message's tokens: ~3 characters each (English
+    runs nearer 4) plus the chat template's few per message."""
+    return len(content or "") // 3 + 4
+
+
+def _fit_history(
+    rows: list[tuple[str, str, Any]], budget: int | None,
+) -> list[tuple[str, str, list[dict[str, Any]]]]:
+    """``rows`` (newest first: role, content, images) cut to what fits in
+    ``budget`` tokens, oldest first. The newest message (the one being
+    answered) always goes, pictures and all. Walking back from it, a
+    message goes whole while it fits; one whose pictures don't fit goes
+    without them (its words, and the reply about them, still do); the walk
+    stops at the first message whose words don't fit. ``budget`` None: no
+    cut (the text model's calls, as before)."""
+    kept: list[tuple[str, str, list[dict[str, Any]]]] = []
+    used = 0
+    for i, (role, content, images) in enumerate(rows):
+        imgs = list(images or [])
+        words = _text_tokens(content)
+        pics = _PICTURE_TOKENS * len(imgs)
+        if budget is not None and i > 0:
+            if used + words > budget:
+                break
+            if used + words + pics > budget:
+                imgs, pics = [], 0
+        used += words + pics
+        kept.append((role, content, imgs))
+    kept.reverse()
+    return kept
+
+
+async def _history_for_model(
+    thread_id: int, with_images: bool = True, budget: int | None = None,
+) -> list[dict[str, Any]]:
     """The last N persisted turns in Ollama chat shape, images inlined as
     base64 (vision context survives across turns within the window), each
     upright and shrunk to the model's size (:func:`_vision_bytes`).
@@ -571,7 +624,12 @@ async def _history_for_model(thread_id: int, with_images: bool = True) -> list[d
     the text model, which can't read them: Ollama refuses a request that
     hands a text-only model an image (400, "Multimodal data provided, but
     model does not support multimodal requests." on 0.34), so one picture
-    early in a thread would otherwise break every text question after it."""
+    early in a thread would otherwise break every text question after it.
+
+    ``budget`` (tokens) cuts the turns to fit (:func:`_fit_history`): the
+    vision call's window, less the system message and room for the reply.
+    Ollama would otherwise drop the oldest part of an overlong prompt
+    itself, mid-message, or a picture's tokens with it."""
     async with session_scope() as s:
         rows = (
             await s.execute(
@@ -585,11 +643,15 @@ async def _history_for_model(thread_id: int, with_images: bool = True) -> list[d
                 {"id": thread_id, "lim": _HISTORY_LIMIT},
             )
         ).all()
+    fitted = _fit_history(
+        [(role, content, images if with_images else None) for role, content, images in rows],
+        budget,
+    )
     out: list[dict[str, Any]] = []
-    for role, content, images in reversed(rows):
+    for role, content, images in fitted:
         msg: dict[str, Any] = {"role": role, "content": content}
         b64s = []
-        for img in (images or []) if with_images else []:
+        for img in images:
             p = _upload_path(img.get("token", ""))
             if p is not None:
                 try:
@@ -604,6 +666,36 @@ async def _history_for_model(thread_id: int, with_images: bool = True) -> list[d
             msg["images"] = b64s
         out.append(msg)
     return out
+
+
+def _reply_cap() -> int | None:
+    """``ollama_chat_num_predict`` as a cap, or None for none."""
+    try:
+        cap = int(core_settings.ollama_chat_num_predict or 0)
+    except (TypeError, ValueError):
+        return None
+    return cap if cap > 0 else None
+
+
+def _reply_room() -> int:
+    """How much of the vision window is kept for the reply."""
+    return _reply_cap() or _REPLY_RESERVE_TOKENS
+
+
+async def _thread_profile(person_id: int | None) -> str | None:
+    """The profile blob (memories, favorites, preferences) of the person a
+    thread belongs to (``chat_threads.person_id``), for the system message,
+    as a voice turn gets its speaker's (router.py). A typed message doesn't
+    say who typed it, so a thread with no person gets none. A failure here
+    costs the personal touch, never the reply."""
+    if person_id is None:
+        return None
+    try:
+        async with session_scope() as s:
+            return await build_profile_prefix(int(person_id), s) or None
+    except Exception as e:  # noqa: BLE001 — answer without it
+        log.warning("chat: the profile of person %s could not be read: %s", person_id, e)
+        return None
 
 
 @router.post("/threads/{thread_id}/messages", dependencies=DEVICE)
@@ -637,10 +729,10 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
     device_id = valid_device_id(body.device_id)
 
     async with session_scope() as s:
-        exists = (
-            await s.execute(text("SELECT 1 FROM chat_threads WHERE id = :id"), {"id": thread_id})
+        thread = (
+            await s.execute(text("SELECT person_id FROM chat_threads WHERE id = :id"), {"id": thread_id})
         ).first()
-        if exists is None:
+        if thread is None:
             raise HTTPException(status_code=404, detail="thread not found")
         await s.execute(
             text(
@@ -677,14 +769,33 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
                 refusal = _missing_text(model, model_role)
 
     # The text model can't read pictures, so a text turn leaves the
-    # thread's earlier ones out (see _history_for_model).
-    history = [] if refusal else await _history_for_model(
-        thread_id, with_images=model_role != "chat",
-    )
+    # thread's earlier ones out (see _history_for_model). A turn that may
+    # carry pictures is cut to the vision window, less the system message
+    # (at its longest: with the pictures paragraph) and room for the reply.
+    with_images = model_role != "chat"
+    history: list[dict[str, Any]] = []
+    profile = model_system = None
+    if refusal is None:
+        profile = await _thread_profile(thread.person_id)
+        if with_images:
+            model_system = await ollama_client.model_system_or_none(model)
+        budget = None
+        window = (core_settings.ollama_vision_num_ctx or core_settings.ollama_num_ctx) if with_images else 0
+        if window:
+            longest = ollama_client.chat_system_prompt(profile, pictures=True, model_system=model_system)
+            budget = max(0, window - _text_tokens(longest) - _reply_room())
+        history = await _history_for_model(thread_id, with_images=with_images, budget=budget)
     # A call that carries pictures: no reasoning before the answer (only
     # the answer is streamed, so the reader would wait in silence), and the
     # vision context window, which four pictures need.
     vision_call = any(m.get("images") for m in history)
+    # Who is answering (:func:`chat_system_prompt`), first in every call.
+    system = {
+        "role": "system",
+        "content": ollama_client.chat_system_prompt(
+            profile, pictures=vision_call, model_system=model_system,
+        ),
+    }
     num_ctx = (core_settings.ollama_vision_num_ctx if vision_call else 0) or core_settings.ollama_num_ctx
     stream_knobs: dict[str, Any] = (
         {"think": False, "num_ctx": core_settings.ollama_vision_num_ctx} if vision_call else {}
@@ -710,12 +821,19 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         else:
             try:
                 async for delta in ollama_client.chat_stream(
-                    history, model=model, stats=ollama_stats, **stream_knobs,
+                    [system, *history], model=model, stats=ollama_stats,
+                    num_predict=_reply_cap(), **stream_knobs,
                 ):
                     if first_token_ms is None:
                         first_token_ms = (time.monotonic() - started) * 1000
                     chunks.append(delta)
                     yield f"event: delta\ndata: {json.dumps({'text': delta})}\n\n"
+                if chunks and ollama_stats.get("done_reason") == "length":
+                    # The cap stopped it (a loop, or an answer that long):
+                    # end it visibly, the same in the stream and the row.
+                    tail = "…" + CUT_OFF_NOTE
+                    chunks.append(tail)
+                    yield f"event: delta\ndata: {json.dumps({'text': tail})}\n\n"
             except Exception as e:  # noqa: BLE001 — surfaced as an SSE error event
                 code, error = _failure(e, model, model_role)
                 # The detail is for whoever reads the log; the user gets

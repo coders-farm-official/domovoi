@@ -313,6 +313,16 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "int", tier="restart", min=0, max=262144,
     ),
     FieldSpec(
+        "ollama_chat_num_predict", "Chat reply length limit", "Models",
+        "The longest reply the text chat asks for, in tokens (about three "
+        "quarters of a word each), for typed messages and pictures alike. A "
+        "reply that reaches it stops with a note, so a model that starts "
+        "repeating itself can't run on until its memory is full. 2048 (about "
+        "1,500 words) leaves room for any real answer. 0 means no limit. The "
+        "text chat picks it up when the dashboard restarts.",
+        "int", tier="restart", min=0, max=32768,
+    ),
+    FieldSpec(
         "ollama_keep_alive", "Keep models loaded for", "Models",
         "How long Ollama keeps a model in memory after its last request. "
         "Ollama's own default is only 5 minutes, so on a CPU host the models "
