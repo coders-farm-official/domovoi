@@ -141,7 +141,14 @@ We build Domovoi in public. Here's where it stands.
   takes its AcoustID key in Settings → Configuration, with a button to
   test it. When a server no longer accepts the household token a browser
   or phone holds (a reinstall, a new token), the dashboard and the app say
-  so and how to pair again, instead of failing page by page.
+  so and how to pair again, instead of failing page by page, and a page
+  opened before you sign in fills in once you do, without a reload. Its
+  dark theme is readable throughout (text and icons are checked for
+  contrast in both themes, plugin pages included), and a plugin's pages
+  sit in a frame with the plugin's name, publisher and colour and a link
+  to its row on the Plugins page. Videos and Files show a file uploaded
+  from another device without leaving the page, and each has a Rescan
+  button.
 - **The Android app** brings the dashboard, a music player, chat and drop-in
   to your phone, on Android 8.0 or later, 32-bit phones included
   ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)). With no server it
@@ -156,7 +163,11 @@ We build Domovoi in public. Here's where it stands.
   for a Google Play install, which updates itself). Phone photos in HEIC
   (or AVIF) send fine in chat: the app turns them into a JPEG on the phone
   first (HEIC from Android 9, AVIF from Android 12), and that copy leaves
-  the photo's location and camera details on the phone.
+  the photo's location and camera details on the phone. Its library
+  screens (Videos, Files, Podcasts, Audiobooks) refresh when you pull
+  them down, a video uploaded from the phone shows on the server's side
+  straight away, and screens a plugin provides (Stations, Images) carry
+  the plugin's frame and colour, as on the dashboard.
 
 **Previews**
 
@@ -648,6 +659,12 @@ Installing (dashboard → Plugins, admin login required):
    own plain-language warnings, and the resolved dependency tree.
 3. You read it and confirm — or don't. Plugins run with real access on your
    server, so only install ones you trust.
+
+A plugin's pages, on the dashboard and in the app, sit in a frame with its
+name, publisher and a "plugin" badge, in the plugin's own accent colour
+(a neutral slate when it declares none; Domovoi moves a declared colour
+that falls short until it passes contrast in both themes), so they read
+as the plugin's rather than Domovoi's.
 
 Media-provider functionality (pulling from external sources) ships as
 separately installed provider plugins — the core stays provider-neutral.
