@@ -146,8 +146,16 @@ _SUBJECT_B_RE = re.compile(
 )
 
 # ─── Category ────────────────────────────────────────────────────────────
+# "what's new in science". Not the music library: "what's new in my
+# library" / "in the music library" / "in my music" is the library's
+# recently-added question (handlers/library.py), which this pattern took
+# from band 260 before 2026-10-17 and answered as news.
+_NOT_A_NEWS_CATEGORY = (
+    r"(?!(?:(?:my|our|the)\s+)?(?:music\s+)?(?:library|collection)$"
+    r"|(?:my|our)\s+music$)"
+)
 _CATEGORY_RE = re.compile(
-    r"^(?:what'?s|whats|what is)\s+new\s+in\s+(?:the\s+)?(?P<cat>.+)$"
+    rf"^(?:what'?s|whats|what is)\s+new\s+in\s+{_NOT_A_NEWS_CATEGORY}(?:the\s+)?(?P<cat>.+)$"
     r"|^(?:any\s+)?news\s+in\s+(?:the\s+)?(?P<cat2>.+)$"
 )
 
@@ -174,6 +182,11 @@ class NewsHandler(Handler):
     #   claims). It deliberately does NOT claim a bare "stop" / "next".
     priority_band = 260
     display = HandlerDisplay(label="News", tone="info")
+    example_phrases = (
+        "what's the news",
+        "read me the headlines",
+        "any news about the city council",
+    )
     confirmation_kinds = ("core.news_fetch", "core.news_fetch_topics")
     requires_network = "degraded"
 

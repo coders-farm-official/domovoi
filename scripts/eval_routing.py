@@ -9,7 +9,10 @@ you actually run. This script does, against either of two targets:
                  router on a running core (its registry, its plugins, its
                  tool model). It writes intents_log / conversation_log
                  rows on that core, so use a bench room id, and only send
-                 read-shaped utterances at a production box.
+                 read-shaped utterances at a production box. /v1/intent
+                 takes the household token once the server is set up
+                 (401 without it): put it in DOMOVOI_EVAL_TOKEN (Settings ->
+                 Devices -> Household token), or pass --token.
 
   --ollama URL   Router-only, no core and no database: replays the
                  router's step 1 (fast-path dry run over the core
@@ -25,7 +28,7 @@ you actually run. This script does, against either of two targets:
                  token.
 
 Usage:
-    python scripts/eval_routing.py --core http://192.168.1.20:6370 --room bench
+    DOMOVOI_EVAL_TOKEN=<household token> python scripts/eval_routing.py --core http://192.168.1.20:6370 --room bench
     python scripts/eval_routing.py --ollama http://localhost:11434 --model qwen3:8b
     python scripts/eval_routing.py --ollama http://localhost:11434 --only qa --only double_check
     python scripts/eval_routing.py --ollama http://localhost:11434 --model qwen3:8b         --live-tools http://192.168.1.20:6370
@@ -114,14 +117,27 @@ def judge(case: Case, handler: str | None, path: str | None) -> bool:
 # ─── Target: a running core ───────────────────────────────────────────
 
 
-def run_core(cases: list[Case], base_url: str, room: str, timeout: float) -> list[Result]:
+def core_headers(token: str | None) -> dict[str, str]:
+    """The request headers for POST /v1/intent: JSON, and the household
+    token as ``X-Device-Token`` when there is one (the device tier; a set-up
+    server answers 401 without it)."""
+    headers = {"Content-Type": "application/json"}
+    if token and token.strip():
+        headers["X-Device-Token"] = token.strip()
+    return headers
+
+
+def run_core(
+    cases: list[Case], base_url: str, room: str, timeout: float, token: str | None = None
+) -> list[Result]:
     results: list[Result] = []
+    headers = core_headers(token)
     for case in cases:
         body = json.dumps({"transcript": case.utterance, "room_id": room}).encode()
         req = urllib.request.Request(
             base_url.rstrip("/") + "/v1/intent",
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             method="POST",
         )
         t0 = time.monotonic()
@@ -129,10 +145,16 @@ def run_core(cases: list[Case], base_url: str, room: str, timeout: float) -> lis
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+            detail = f"request failed: {e}"
+            if isinstance(e, urllib.error.HTTPError) and e.code == 401:
+                detail += (
+                    " (the core wants the household token: set DOMOVOI_EVAL_TOKEN"
+                    " or pass --token)"
+                )
             results.append(
                 Result(
                     case.utterance, case.handler, case.path, None, None,
-                    int((time.monotonic() - t0) * 1000), False, f"request failed: {e}",
+                    int((time.monotonic() - t0) * 1000), False, detail,
                 )
             )
             continue
@@ -327,6 +349,12 @@ def main(argv: list[str] | None = None) -> int:
     target.add_argument("--ollama", metavar="URL", help="Ollama server, e.g. http://localhost:11434")
     p.add_argument("--model", help="tool model for --ollama (default: settings.ollama_tool_model)")
     p.add_argument("--room", default="eval", help="room_id for --core turns (default: eval)")
+    p.add_argument(
+        "--token",
+        default=os.environ.get("DOMOVOI_EVAL_TOKEN"),
+        help="household token for --core (default: $DOMOVOI_EVAL_TOKEN; the "
+             "environment keeps it out of the process list)",
+    )
     p.add_argument("--only", action="append", default=[], metavar="TAG", help="run only cases with this tag (repeatable)")
     p.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
     p.add_argument("--timeout", type=float, default=120.0, help="per-request timeout for --core, seconds")
@@ -354,7 +382,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.core:
         print(f"target: core {args.core} (room {args.room}), {len(cases)} cases")
-        results = run_core(cases, args.core, args.room, args.timeout)
+        results = run_core(cases, args.core, args.room, args.timeout, token=args.token)
         target_name, model = args.core, None
     else:
         if args.live_tools:

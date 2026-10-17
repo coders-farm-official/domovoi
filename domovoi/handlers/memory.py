@@ -142,6 +142,10 @@ class MemoryHandler(Handler):
     #   "remember", "forget", "my favorite" — none collide.
     priority_band = 240
     display = HandlerDisplay(label="Memory", tone="info")
+    example_phrases = (
+        "remember that I parked on level 3",
+        "what do you remember about me",
+    )
     confirmation_kinds = ("core.pending_memory_offer",)
     requires_network = "no"
     tool_schema = {

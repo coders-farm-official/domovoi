@@ -113,6 +113,10 @@ class WifiHandler(Handler):
     #   tightly anchored regexes mean it still won't poach unrelated phrases.
     priority_band = 120
     display = HandlerDisplay(label="Wi-Fi", tone="device")
+    example_phrases = (
+        "how's the wifi",
+        "fix the wifi",
+    )
     requires_network = "no"
     # The satellite's own link, from its own reports: nothing a phone turn
     # can read or fix (Handler.satellite_only).

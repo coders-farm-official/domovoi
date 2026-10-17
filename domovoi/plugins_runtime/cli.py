@@ -71,10 +71,13 @@ class {cls}Handler(Handler):
     name = "{slug}"
     priority_band = 400                       # general plugin space (§4.2)
     display = HandlerDisplay(label="{title}", tone="info")
+    # What to say (the manual, "what can you do"); kept out of the tool
+    # description, which the routing model reads.
+    example_phrases = ("{slug} example phrase",)
     requires_network = "no"
     tool_schema = {{
         "name": "{slug}",
-        "description": "Run the {slug} action. Example: '{slug} example phrase'.",
+        "description": "Run the {slug} action.",
         "parameters": {{"type": "object", "properties": {{}}, "required": []}},
     }}
 

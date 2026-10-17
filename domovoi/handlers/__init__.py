@@ -8,6 +8,7 @@ core-before-plugin, then plugin slug, then handler name — see
 Condensed band map — core handlers occupy exactly the design §4.2 table:
 
     100 dismiss          brush-offs win before anything acts
+    105 help             "what can you do" / "help": whole closed questions
     110 voice_profile    "i'm Sarah" before any greedy capture
     120 wifi             "fix the wifi" wins over any future "fix"
     130 voice            device-control cluster near top
@@ -15,6 +16,8 @@ Condensed band map — core handlers occupy exactly the design §4.2 table:
     150 calculator       digit-anchored, well before media
     160 timer
     170 clock
+    175 calendar         after clock ("what's tomorrow" is the date); before
+                         library's "do i have X" ("anything on friday")
     180 repeat           clusters with double_check
     190 double_check     owns "verify"/"are you sure"
     200 dropin           immediately before intercom
@@ -53,7 +56,9 @@ from domovoi.handlers.clock import ClockHandler
 from domovoi.handlers.dismiss import DismissHandler
 from domovoi.handlers.double_check import DoubleCheckHandler
 from domovoi.handlers.dropin import DropInHandler
+from domovoi.handlers.help import HelpHandler
 from domovoi.handlers.homelab import HomelabHandler
+from domovoi.handlers.household_calendar import CalendarHandler
 from domovoi.handlers.intercom import IntercomHandler
 from domovoi.handlers.library import LibraryHandler
 from domovoi.handlers.memory import MemoryHandler
@@ -74,11 +79,13 @@ from domovoi.handlers.wifi import WifiHandler
 # sorts on (priority_band, core-first, plugin slug, name).
 _CORE_HANDLERS: list[Handler] = [
     CalculatorHandler(),
+    CalendarHandler(),
     ChatModeHandler(),
     ClockHandler(),
     DismissHandler(),
     DoubleCheckHandler(),
     DropInHandler(),
+    HelpHandler(),
     HomelabHandler(),
     IntercomHandler(),
     LibraryHandler(),
@@ -130,6 +137,7 @@ del _h
 
 __all__ = [
     "CalculatorHandler",
+    "CalendarHandler",
     "ChatModeHandler",
     "ClockHandler",
     "DismissHandler",
@@ -140,6 +148,7 @@ __all__ = [
     "HandlerDisplay",
     "HANDLERS",
     "HANDLER_BY_NAME",
+    "HelpHandler",
     "HomelabHandler",
     "IntercomHandler",
     "LibraryHandler",

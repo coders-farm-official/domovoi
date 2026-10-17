@@ -293,6 +293,8 @@ class HandlerInfo(BaseModel):
     priority_band: int
     origin: str = "core"
     display: dict[str, Any] = Field(default_factory=dict)
-    # Extracted from the tool_schema description ("Example: '...'") —
-    # the source the web manual page renders from (design §12).
+    # What a person can say to use it: Handler.example_phrases, else the
+    # "Example: '...'" clause of a plugin's tool description
+    # (handlers/base.py example_phrases_of) — what the web manual page,
+    # Home's hint and "what can you do" render from (design §12).
     example_phrases: list[str] = Field(default_factory=list)

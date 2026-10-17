@@ -85,6 +85,10 @@ class VoiceNotesHandler(Handler):
     # band rationale: after intercom (210) — see the "tell the kitchen X" note there.
     priority_band = 230
     display = HandlerDisplay(label="Voice Notes", tone="comms")
+    example_phrases = (
+        "jot down buy milk and eggs",
+        "read my notes",
+    )
     requires_network = "no"
 
     tool_schema = {

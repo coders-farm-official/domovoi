@@ -71,6 +71,10 @@ class DropInHandler(Handler):
     #   it sits above the media bands.
     priority_band = 200
     display = HandlerDisplay(label="Drop-In", tone="comms")
+    example_phrases = (
+        "drop in on the kitchen",
+        "hang up",
+    )
     confirmation_kinds = ("core.dropin_invite",)
     requires_network = "no"
 

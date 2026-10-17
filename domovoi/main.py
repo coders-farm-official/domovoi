@@ -1175,27 +1175,15 @@ async def stats_latency(
     return doc
 
 
-_EXAMPLE_PHRASE_RE = re.compile(r"[Ee]xamples?:\s*(.+)$")
-
-
-def _example_phrases(tool_schema: dict[str, Any]) -> list[str]:
-    """Pull example utterances out of the tool_schema description —
-    handler descriptions double as the manual's example-phrase source
-    (design §4.3.1/§12). Recognizes a trailing "Example: 'a', 'b'."
-    clause and returns the quoted phrases."""
-    description = str(tool_schema.get("description") or "")
-    m = _EXAMPLE_PHRASE_RE.search(description)
-    if not m:
-        return []
-    tail = m.group(1)
-    quoted = re.findall(r"['\"]([^'\"]+)['\"]", tail)
-    if quoted:
-        return quoted
-    return [tail.strip().rstrip(".")] if tail.strip() else []
-
-
 @app.get("/v1/handlers", response_model=list[HandlerInfo])
 async def handlers() -> list[HandlerInfo]:
+    """The live handler registry: core handlers and enabled plugins', in
+    dispatch order. ``example_phrases`` is each handler's own list
+    (``Handler.example_phrases``, kept out of the tool description the
+    routing model reads), else the "Example: '...'" clause of a plugin's
+    tool description (domovoi.handlers.base.example_phrases_of)."""
+    from domovoi.handlers.base import example_phrases_of
+
     return [
         HandlerInfo(
             name=h.name,
@@ -1209,7 +1197,7 @@ async def handlers() -> list[HandlerInfo]:
                 "tone": h.display.tone,
                 "icon": h.display.icon,
             },
-            example_phrases=_example_phrases(h.tool_schema),
+            example_phrases=example_phrases_of(h),
         )
         for h in HANDLERS
     ]

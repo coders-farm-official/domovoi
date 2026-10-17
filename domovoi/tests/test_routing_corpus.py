@@ -25,6 +25,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -41,7 +42,14 @@ from domovoi.tests.conftest import requires_db
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORPUS_PATH = REPO_ROOT / "scripts" / "routing_corpus.json"
 CORPUS = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))["cases"]
-GATED = {"calculator", "double_check", "news", "library", "reminder", "timer", "music_alias"}
+GATED = {
+    "calculator", "double_check", "news", "library", "reminder", "timer", "music_alias",
+    # offered only when the calendar is named; help never (its fast path is
+    # the whole question, and its tool would be bait for real questions)
+    "calendar", "help",
+}
+# Never offered to the routing model.
+NEVER_OFFERED = {"help"}
 
 
 def _normalize(utterance: str) -> str:
@@ -482,8 +490,11 @@ def test_every_registered_handler_is_offered_for_a_plain_command() -> None:
     """The gate withholds only on evidence — a command with a digit, a
     verification word, a news word and a music-names cue ("other names",
     music_alias's on-request tool) in it must see every tool."""
-    names = _offered("double check the latest news about the 3 timers i set and their other names")
-    assert set(names) == {h.name for h in HANDLERS}
+    names = _offered(
+        "double check the latest news about the 3 timers i set and their other names"
+        " on my calendar"
+    )
+    assert set(names) == {h.name for h in HANDLERS} - NEVER_OFFERED
 
 
 # ─── Routing prompt ───────────────────────────────────────────────────
@@ -611,15 +622,53 @@ def _load_eval_script():
     )
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
+    # Registered first: its @dataclass classes look their module up there.
+    sys.modules.setdefault("eval_routing", module)
     spec.loader.exec_module(module)
-    return module
+    return sys.modules["eval_routing"]
+
+
+def test_eval_core_mode_sends_the_household_token() -> None:
+    """--core posts with the household token (X-Device-Token): a set-up
+    core answers /v1/intent 401 without it (manual-content finding 4.12)."""
+    ev = _load_eval_script()
+    assert ev.core_headers("tok-123") == {
+        "Content-Type": "application/json", "X-Device-Token": "tok-123",
+    }
+    assert ev.core_headers(None) == {"Content-Type": "application/json"}
+    assert ev.core_headers("  ") == {"Content-Type": "application/json"}
+
+    sent: list = []
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"matched_handler": "timer", "matched_path": "fast", "text": "ok"}'
+
+    def fake_urlopen(req, timeout):
+        sent.append(dict(req.header_items()))
+        return _Resp()
+
+    cases = [ev.Case("set a timer for 10 minutes", "timer", "fast", ["action"], "")]
+    with patch.object(ev.urllib.request, "urlopen", fake_urlopen):
+        results = ev.run_core(cases, "http://core.invalid:6370", "eval", 5.0, token="tok-123")
+    assert results[0].ok
+    assert sent[0].get("X-device-token") == "tok-123"
 
 
 @pytest.mark.skipif(not _LIVE_URL, reason="set DOMOVOI_EVAL_CORE_URL=http://host:6370 to run the corpus against a live core")
 def test_live_core_routes_the_corpus() -> None:
     ev = _load_eval_script()
     cases = ev.load_corpus(CORPUS_PATH)
-    results = ev.run_core(cases, _LIVE_URL, os.environ.get("DOMOVOI_EVAL_ROOM", "eval"), 120.0)
+    results = ev.run_core(
+        cases, _LIVE_URL, os.environ.get("DOMOVOI_EVAL_ROOM", "eval"), 120.0,
+        token=os.environ.get("DOMOVOI_EVAL_TOKEN"),
+    )
     bad = [
         f"{r.utterance!r}: want {r.expected_handler}/{r.expected_path or '*'} "
         f"got {r.got_handler}/{r.got_path} ({r.detail})"

@@ -147,6 +147,10 @@ class ClockHandler(Handler):
     # band rationale: utility cluster; no known collisions.
     priority_band = 170
     display = HandlerDisplay(label="Clock", tone="info")
+    example_phrases = (
+        "what time is it",
+        "what day is it",
+    )
     requires_network = "no"
 
     tool_schema = {

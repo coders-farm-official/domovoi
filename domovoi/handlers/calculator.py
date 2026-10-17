@@ -466,6 +466,11 @@ class CalculatorHandler(Handler):
     #   in the media neighborhood from grabbing math queries first.
     priority_band = 150
     display = HandlerDisplay(label="Calculator", tone="info")
+    example_phrases = (
+        "what's 15 percent of 80",
+        "convert 5 miles to kilometers",
+        "how many days until Christmas",
+    )
     requires_network = "no"
 
     tool_schema = {

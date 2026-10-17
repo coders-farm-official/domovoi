@@ -360,6 +360,12 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
     confirmation_kinds = (MUSIC_CHOICE_KIND, ROOM_OR_TITLE_KIND)
     choice_kinds = (MUSIC_CHOICE_KIND,)
     display = HandlerDisplay(label="Music", tone="media")
+    example_phrases = (
+        "play some jazz",
+        "pause the music",
+        "play some music in the garage",
+        "what's playing",
+    )
     chat_exposed = True  # organic media tool in chat mode (#8)
     requires_network = "no"
 

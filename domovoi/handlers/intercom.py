@@ -144,6 +144,10 @@ class IntercomHandler(Handler):
     #   mis-routed into the notes capture verbs.
     priority_band = 210
     display = HandlerDisplay(label="Intercom", tone="comms")
+    example_phrases = (
+        "tell everyone dinner's ready",
+        "announce to the kitchen, dinner's ready",
+    )
     requires_network = "no"
 
     tool_schema = {
