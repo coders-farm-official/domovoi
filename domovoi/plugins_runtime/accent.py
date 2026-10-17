@@ -84,7 +84,7 @@ AMBER_MIN_CHROMA = 0.08     # below this a warm colour reads as a neutral
 
 # Slate: see the module docstring. Light and dark starting points; both go
 # through the same checks as an author's colour.
-DEFAULT_ACCENT_OKLCH = (0.50, 0.05, 240)
+DEFAULT_ACCENT_OKLCH = (0.46, 0.05, 240)
 DEFAULT_ACCENT_DARK_OKLCH = (0.74, 0.05, 240)
 
 TOKEN_KEYS = (
