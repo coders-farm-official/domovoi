@@ -248,7 +248,7 @@ const VoiceRow = ({ v, sampling, onPlay, onRename, onSetDefault, onDelete }) => 
         <div style={{ flex: 1, minWidth: 120 }}>
           <div style={{ fontSize: 14, fontWeight: 500 }}>{v.name}</div>
           {v.problem && (
-            <div style={{ fontSize: 12, color: 'var(--warn)' }}>
+            <div style={{ fontSize: 12, color: 'var(--warn-ink)' }}>
               Can’t speak here: {v.problem}. {dropped
                 ? 'It goes when the server restarts; rooms set to it speak in the default voice.'
                 : 'Rooms set to it speak with the system voice.'}
@@ -775,7 +775,7 @@ const AdminSection = ({ setupAsked = false }) => {
           // cookie are still alive there, so this browser IS still signed
           // in, and says so rather than "signed out" (auth.js logout).
           <span className="admin-sign-out-failed"
-                style={{ fontSize: 12, color: 'var(--err)', flexBasis: '100%', order: 1 }}>
+                style={{ fontSize: 12, color: 'var(--err-ink)', flexBasis: '100%', order: 1 }}>
             Not signed out — {signOutError}, so this browser is still signed
             in.{' '}
             <button type="button" className="home-link" onClick={signOut}>try again</button>
@@ -883,7 +883,7 @@ const LastUpdateWarnings = ({ lastUpdate }) => {
   if (!lines.length) return null;
   return (
     <div className="version-update-warnings mono"
-         style={{ padding: '0 16px 12px', fontSize: 11, color: 'var(--warn)', overflowWrap: 'anywhere' }}>
+         style={{ padding: '0 16px 12px', fontSize: 11, color: 'var(--warn-ink)', overflowWrap: 'anywhere' }}>
       {lines.map((line, i) => <div key={i}>{line}</div>)}
     </div>
   );
@@ -1191,7 +1191,7 @@ const VersionSection = () => {
       </div>
       {coreDown && (
         <div className="version-core-down" style={{ padding: '0 16px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ fontSize: 12, color: 'var(--err)' }}>
+          <div style={{ fontSize: 12, color: 'var(--err-ink)' }}>
             The Domovoi core isn’t answering, so the satellites and the app can’t reach it.
           </div>
           <CoreRestart onBack={() => { setStatus(null); return refreshCore(); }}/>
@@ -1205,14 +1205,14 @@ const VersionSection = () => {
       )}
       {lastUpdate && <LastUpdateWarnings lastUpdate={lastUpdate}/>}
       {codePending && mode !== 'busy' && (
-        <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--warn)' }}>
+        <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--warn-ink)' }}>
           New code is on disk but this process is still running the old
           modules{restartCapable ? ' — restart below to load it.'
                                  : ' — restart the Domovoi server for it to take effect.'}
         </div>
       )}
       {pending.plugins.length > 0 && mode !== 'busy' && (
-        <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--warn)' }}>
+        <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--warn-ink)' }}>
           Plugin upgrade{pending.plugins.length === 1 ? '' : 's'} waiting for a restart:{' '}
           <span className="mono">{pending.plugins.map(pluginUpgradeLabel).join(', ')}</span>
           {restartCapable ? ' — restart below to finish.' : ' — restart the Domovoi server to finish.'}
@@ -1244,7 +1244,7 @@ const VersionSection = () => {
         )}
         {internetOff && mode !== 'restart' && mode !== 'busy' && <NeedsInternetNote compact/>}
         {mode !== 'restart' && mode !== 'busy' && behind != null && (
-          <span className="version-check-result" style={{ fontSize: 12, color: behind > 0 ? 'var(--warn)' : 'var(--ok)' }}>
+          <span className="version-check-result" style={{ fontSize: 12, color: behind > 0 ? 'var(--warn-ink)' : 'var(--ok-ink)' }}>
             {versionCheckWords(status)}
           </span>
         )}
@@ -1284,7 +1284,7 @@ const VersionSection = () => {
       {status && status.tag_warning && mode !== 'busy' && (
         // A release tag that moved upstream (or tags that didn't arrive):
         // the labels may be off; the check and the pull work as ever.
-        <div className="version-tag-warning" style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--warn)' }}>
+        <div className="version-tag-warning" style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--warn-ink)' }}>
           {status.tag_warning}
         </div>
       )}
@@ -1305,7 +1305,7 @@ const VersionSection = () => {
         </div>
       )}
       {mode === 'held' && (
-        <div style={{ padding: '0 16px 14px', fontSize: 12, color: 'var(--warn)' }}>
+        <div style={{ padding: '0 16px 14px', fontSize: 12, color: 'var(--warn-ink)' }}>
           The latest commit ({shortCommit(badSha)}) failed to apply on this server
           and was rolled back, so it isn’t offered again. The next commit
           upstream will be.
@@ -1411,7 +1411,7 @@ const AcoustidKeyField = ({ f, value, onChange, internetOff, marked }) => {
             <span className="config-acoustid-result" data-tone={test.tone} style={{ color: toneColor[test.tone] }}>
               {test.text}
               {test.extra === 'chromaprint' && (
-                <span style={{ color: 'var(--warn)' }}>
+                <span style={{ color: 'var(--warn-ink)' }}>
                   {' '}But this server can’t fingerprint songs yet: install{' '}
                   <a href="https://acoustid.org/chromaprint" target="_blank" rel="noopener noreferrer">
                     Chromaprint’s fpcalc
@@ -1423,7 +1423,7 @@ const AcoustidKeyField = ({ f, value, onChange, internetOff, marked }) => {
         </div>
       )}
       {f.set_in_environment && (
-        <div style={{ fontSize: 12, color: 'var(--warn)', padding: '0 0 10px' }}>
+        <div style={{ fontSize: 12, color: 'var(--warn-ink)', padding: '0 0 10px' }}>
           ACOUSTID_API_KEY is also set in the server’s environment, which wins at the next restart.
         </div>
       )}
@@ -1649,22 +1649,22 @@ const ConfigPanel = ({ setupAsked = false, mark = null }) => {
         {fields.length > 0 && (
         <div style={{ marginTop: 8, borderTop: '1px solid var(--border-soft)', paddingTop: 12 }}>
           {result && result.error &&
-            <div style={{ fontSize: 12, color: 'var(--err)', marginBottom: 8 }}>{result.error}</div>}
+            <div style={{ fontSize: 12, color: 'var(--err-ink)', marginBottom: 8 }}>{result.error}</div>}
           {rejectedCount > 0 &&
-            <div style={{ fontSize: 12, color: 'var(--err)', marginBottom: 8 }}>
+            <div style={{ fontSize: 12, color: 'var(--err-ink)', marginBottom: 8 }}>
               rejected: {Object.entries(result.rejected).map(([k, v]) => `${k} (${v})`).join('; ')}
             </div>}
           {result && result.normalized && Object.keys(result.normalized).length > 0 &&
-            <div style={{ fontSize: 12, color: 'var(--warn)', marginBottom: 8 }}>
+            <div style={{ fontSize: 12, color: 'var(--warn-ink)', marginBottom: 8 }}>
               adjusted: {Object.entries(result.normalized).map(([k, v]) => `${k} (${v})`).join('; ')}
             </div>}
           {result && result.restart_required && result.restart_required.length > 0 &&
-            <div style={{ fontSize: 12, color: 'var(--warn)', marginBottom: 8 }}>
+            <div style={{ fontSize: 12, color: 'var(--warn-ink)', marginBottom: 8 }}>
               saved — restart the Domovoi server to apply: {result.restart_required.map(restartWords).join(', ')}
             </div>}
           {result && !result.error && rejectedCount === 0 && (!result.restart_required || !result.restart_required.length) &&
            result.applied && result.applied.length > 0 &&
-            <div style={{ fontSize: 12, color: 'var(--ok)', marginBottom: 8 }}>saved ✓</div>}
+            <div style={{ fontSize: 12, color: 'var(--ok-ink)', marginBottom: 8 }}>saved ✓</div>}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
               {dirtyCount > 0 ? `${dirtyCount} unsaved` : 'no changes'}
@@ -1745,7 +1745,7 @@ const InternetFeatureRow = ({ f, following, onFollow }) => {
       </div>
       <span className="mono" style={{ fontSize: 12 }}>{internetOnOff(f.value)}</span>
       {later && (
-        <span className="internet-feature-later" style={{ fontSize: 12, color: 'var(--warn)' }}>
+        <span className="internet-feature-later" style={{ fontSize: 12, color: 'var(--warn-ink)' }}>
           → {internetOnOff(f.next_boot_value)} after a restart
         </span>
       )}
@@ -1915,7 +1915,7 @@ const InternetPanel = () => {
             </label>
           ))}
           {locked && (
-            <div className="internet-locked" style={{ fontSize: 12, color: 'var(--warn)', marginTop: 8 }}>
+            <div className="internet-locked" style={{ fontSize: 12, color: 'var(--warn-ink)', marginTop: 8 }}>
               This answer is set in the server's environment (INTERNET_ACCESS), so it can't be changed
               here — change it where the Domovoi server is started, then restart it.
             </div>
@@ -1933,7 +1933,7 @@ const InternetPanel = () => {
           {helperShown && (
             <div className="internet-search-helper" data-state={helper.state}
                  style={{ fontSize: 12, marginTop: 6, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <span style={{ color: helper.state === 'failed' ? 'var(--err)' : 'var(--fg-muted)' }}>
+              <span style={{ color: helper.state === 'failed' ? 'var(--err-ink)' : 'var(--fg-muted)' }}>
                 Search helper: {SEARCH_HELPER_TEXT[helper.state] || helper.state}
                 {helper.state === 'failed' && helper.detail ? ` (${helper.detail})` : ''}
               </span>
@@ -1943,11 +1943,11 @@ const InternetPanel = () => {
                   {helperBusy ? 'starting…' : (helper.state === 'unknown' ? 'check it' : 'start it again')}
                 </Button>
               )}
-              {helperError && <span style={{ color: 'var(--err)' }}>{helperError}</span>}
+              {helperError && <span style={{ color: 'var(--err-ink)' }}>{helperError}</span>}
             </div>
           )}
           {warnings.length > 0 && (
-            <div className="internet-warnings" style={{ fontSize: 12, color: 'var(--warn)', marginTop: 8, lineHeight: 1.5 }}>
+            <div className="internet-warnings" style={{ fontSize: 12, color: 'var(--warn-ink)', marginTop: 8, lineHeight: 1.5 }}>
               {warnings.map((w, i) => <div key={i}>{w}</div>)}
             </div>
           )}
@@ -1959,20 +1959,20 @@ const InternetPanel = () => {
             </div>
           )}
           {result && result.error && (
-            <div style={{ fontSize: 12, color: 'var(--err)', marginTop: 8 }}>{result.error}</div>
+            <div style={{ fontSize: 12, color: 'var(--err-ink)', marginTop: 8 }}>{result.error}</div>
           )}
           {refusedText.length > 0 && (
-            <div className="internet-rejected" style={{ fontSize: 12, color: 'var(--err)', marginTop: 8 }}>
+            <div className="internet-rejected" style={{ fontSize: 12, color: 'var(--err-ink)', marginTop: 8 }}>
               not saved: {refusedText.map(([k, v]) => `${labelOf(k)} (${v})`).join('; ')}
             </div>
           )}
           {notes.length > 0 && (
-            <div style={{ fontSize: 12, color: 'var(--warn)', marginTop: 8 }}>
+            <div style={{ fontSize: 12, color: 'var(--warn-ink)', marginTop: 8 }}>
               {notes.map(noteText).join('; ')}
             </div>
           )}
           {restartNames.length > 0 && (
-            <div className="internet-restart" style={{ fontSize: 12, color: 'var(--warn)', marginTop: 8, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div className="internet-restart" style={{ fontSize: 12, color: 'var(--warn-ink)', marginTop: 8, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
               <Pill tone="warn">restart</Pill>
               <span>saved — restart the Domovoi server to apply: {restartNames.map(labelOf).join(', ')}</span>
             </div>
@@ -2092,7 +2092,7 @@ const WakeClipCard = ({ c, playing, onPlay, onToggle, onDelete }) => {
         <span className="mono" style={{ fontSize: 12, fontWeight: 600 }}>#{idx}</span>
         <Pill tone={tone}>{c.verdict}</Pill>
         {typeof c.score === 'number' && (
-          <span className="mono" style={{ fontSize: 11, color: c.score >= 0.5 ? 'var(--ok)' : 'var(--err)' }}>
+          <span className="mono" style={{ fontSize: 11, color: c.score >= 0.5 ? 'var(--ok-ink)' : 'var(--err-ink)' }}>
             {c.score.toFixed(2)}
           </span>
         )}
@@ -2105,9 +2105,9 @@ const WakeClipCard = ({ c, playing, onPlay, onToggle, onDelete }) => {
                                      display: 'flex', flexWrap: 'wrap', gap: 8 }}>
         <span>SNR {m.snr_db}dB</span>
         <span>{c.raw_duration_ms}ms{c.has_trimmed ? ` → ${c.trimmed_duration_ms}` : ''}</span>
-        {m.clipping_pct > 0 && <span style={{ color: 'var(--err)' }}>clip {m.clipping_pct}%</span>}
+        {m.clipping_pct > 0 && <span style={{ color: 'var(--err-ink)' }}>clip {m.clipping_pct}%</span>}
         {(c.issues || []).filter((i) => i !== 'clipping').map((i) => (
-          <span key={i} style={{ color: 'var(--warn)' }}>{i.replace(/_/g, ' ')}</span>
+          <span key={i} style={{ color: 'var(--warn-ink)' }}>{i.replace(/_/g, ' ')}</span>
         ))}
       </div>
       <div style={{ display: 'flex', gap: 6 }}>
@@ -2195,7 +2195,7 @@ const WakeClipGrid = ({ wid, canScore, fire }) => {
     <div style={{ padding: '2px 2px 8px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
         <span style={{ fontSize: 12, fontWeight: 500,
-                       color: selectedCount >= minClips ? 'var(--ok)' : 'var(--fg-muted)' }}>
+                       color: selectedCount >= minClips ? 'var(--ok-ink)' : 'var(--fg-muted)' }}>
           {selectedCount} / {minClips} selected for training
         </span>
         <span style={{ marginLeft: 'auto' }}/>
@@ -2305,7 +2305,7 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
         <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>“{w.phrase}”</span>
         <Pill tone={tone} live={capturing}>{w.status}</Pill>
         <span style={{ fontSize: 13, fontWeight: bumped ? 700 : 600,
-                       color: bumped ? 'var(--brand)'
+                       color: bumped ? 'var(--brand-ink)'
                                      : (w.clip_count >= minClips ? 'var(--ok)' : 'var(--fg-muted)'),
                        transition: 'color .25s ease' }}>
           {w.clip_count} / {minClips} clips
@@ -2325,7 +2325,7 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
       </div>
 
       {w.status === 'failed' && w.error && (
-        <div style={{ fontSize: 12, color: 'var(--err)' }}>{w.error}</div>
+        <div style={{ fontSize: 12, color: 'var(--err-ink)' }}>{w.error}</div>
       )}
 
       {/* Live recording banner — prominent while a take is capturing so a long
@@ -2336,7 +2336,7 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
                       background: 'oklch(0.62 0.21 25 / 0.10)' }}>
           <Pill tone="err" live>Recording</Pill>
           <span style={{ fontSize: 15, fontWeight: 700,
-                         color: bumped ? 'var(--brand)' : 'var(--fg)',
+                         color: bumped ? 'var(--brand-ink)' : 'var(--fg)',
                          transition: 'color .25s ease' }}>
             {w.clip_count} clip{w.clip_count === 1 ? '' : 's'} captured
           </span>
@@ -2488,7 +2488,7 @@ const TrainerProgress = ({ job }) => {
         style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{job.percent || 0}%</span></div>
       <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: 'var(--fg-muted)' }}>
         {_TRAINER_STAGES.map(([id, label], i) => (
-          <li key={id} style={{ color: i < at ? 'var(--ok)' : i === at ? 'var(--fg)' : undefined,
+          <li key={id} style={{ color: i < at ? 'var(--ok-ink)' : i === at ? 'var(--fg)' : undefined,
                                 fontWeight: i === at ? 600 : 400 }}>
             {label}{i < at ? ' ✓' : ''}
           </li>
@@ -2613,7 +2613,7 @@ const WakeTrainerCard = ({ status, error, refresh, fire }) => {
         <div>{estText ? `${estText[0].toUpperCase()}${estText.slice(1)}. ` : ''}
           A training stops after {Math.round((status.timeout_sec || 0) / 60)} minutes
           {status.timeout_auto ? ' (sized to this server)' : ''}.</div>
-        {!gpu && <div style={{ color: 'var(--warn)' }}>Voice answers more slowly while a word trains.</div>}
+        {!gpu && <div style={{ color: 'var(--warn-ink)' }}>Voice answers more slowly while a word trains.</div>}
         {notes.map((n) => <div key={n} style={{ color: 'var(--fg-muted)' }}>{n}</div>)}
         {admin && !status.training_active && (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -2636,7 +2636,7 @@ const WakeTrainerCard = ({ status, error, refresh, fire }) => {
         {needs}
         {notes.map((n) => <div key={n} style={{ color: 'var(--fg-muted)' }}>{n}</div>)}
         {refusals.length > 0 ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, color: 'var(--err)' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, color: 'var(--err-ink)' }}>
             <strong>Training can’t be turned on here:</strong>
             {refusals.map((r) => <div key={r}>{r}</div>)}
           </div>
@@ -2660,7 +2660,7 @@ const WakeTrainerCard = ({ status, error, refresh, fire }) => {
         {failed && !running && (
           <div style={{ border: '1px solid var(--err)', borderRadius: 8, padding: '8px 12px',
                         display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
-            <div style={{ color: 'var(--err)' }}>{job.error}</div>
+            <div style={{ color: 'var(--err-ink)' }}>{job.error}</div>
             {(job.log_tail || []).length > 0 && (
               <details>
                 <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--fg-muted)' }}>
@@ -2710,7 +2710,7 @@ const WakeTrainerCard = ({ status, error, refresh, fire }) => {
             then training is on for every wake word.</div>
           {needs}
           {asking.cpu && (
-            <div style={{ color: 'var(--warn)' }}>
+            <div style={{ color: 'var(--warn-ink)' }}>
               No GPU here that training can use, so each wake word takes about{' '}
               {est.minutes_per_word || 75} minutes on the CPU, and voice answers more slowly
               while it runs.
@@ -2919,7 +2919,7 @@ const AboutPanel = () => (
         BY-NC-SA 4.0, non-commercial) and the answer model <code>llama3.2:3b</code> (the Llama 3.2
         Community License). Fine at home; the list says what each means for anyone passing them
         on: <a href={LICENCES_DOC_URL} target="_blank" rel="noopener noreferrer"
-               style={{ color: 'var(--brand)' }}>licences of what Domovoi downloads</a>.
+               style={{ color: 'var(--brand-ink)' }}>licences of what Domovoi downloads</a>.
       </div>
       <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
         Build / version identifiers live under Configuration → Version.
@@ -3792,7 +3792,7 @@ const PhoneBarCard = ({ fire }) => {
     setUnkept(!PhoneBarStore.set(null));
     fire('phone bar back to home · music · videos · chat');
   };
-  const glyph = (it) => (it && !it.core ? <PluginNavIcon src={it.iconSrc}/> : <Icon name={(it && it.icon) || 'puzzle'} size={16}/>);
+  const glyph = (it) => (it && !it.core ? <PluginNavIcon src={it.iconSrc} srcDark={it.iconSrcDark}/> : <Icon name={(it && it.icon) || 'puzzle'} size={16}/>);
   const spare = items.filter((it) => !bar.includes(it.route));
   const full = bar.length >= PHONE_BAR_MAX;
   return (
@@ -3908,7 +3908,7 @@ const GetTheAppCard = () => {
               <div>The page there downloads Domovoi {app.release.version_name} and shows how to install it. Then open the app: it finds this server on your Wi-Fi.</div>
             </>
           ) : (
-            <div role="alert" style={{ color: 'var(--warn)' }}>{app.join_problem}</div>
+            <div role="alert" style={{ color: 'var(--warn-ink)' }}>{app.join_problem}</div>
           )}
         </div>
       </div>
@@ -4104,7 +4104,7 @@ const CapturesPanel = () => {
             {count} · {fmtBytes(data.bytes)} of {fmtBytes(data.cap_bytes)} · each kept {data.retention_days} days, oldest go first at the cap
           </div>
           {data.problem && (
-            <div style={{ fontSize: 12, color: 'var(--warn)' }}>
+            <div style={{ fontSize: 12, color: 'var(--warn-ink)' }}>
               not recording anywhere: {data.problem}
             </div>
           )}

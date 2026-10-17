@@ -169,7 +169,7 @@ const TopicManager = ({ personId, topics, categories, onChanged, fire, internetO
                 style={{ font: 'inherit', fontSize: 12, cursor: 'pointer', padding: '5px 11px',
                          borderRadius: 999, border: `1px solid ${on ? 'transparent' : 'var(--border)'}`,
                          background: on ? 'var(--brand)' : 'var(--card)',
-                         color: on ? 'white' : 'var(--fg-muted)', textTransform: 'capitalize' }}>
+                         color: on ? 'var(--brand-fg)' : 'var(--fg-muted)', textTransform: 'capitalize' }}>
                 {cat}
               </button>
             );
@@ -220,7 +220,7 @@ const SavedFeed = ({ personId, items, onChanged, fire }) => {
             <div key={it.id} style={{ display: 'flex', gap: 10, padding: '10px 14px', borderBottom: '1px solid var(--border-soft)' }}>
               <button onClick={() => toggleFav(it)} title={it.favorited ? 'unfavorite' : 'favorite'}
                       style={{ background: 'transparent', border: 'none', cursor: 'pointer',
-                               color: it.favorited ? 'var(--brand)' : 'var(--fg-faint)' }}>
+                               color: it.favorited ? 'var(--brand-ink)' : 'var(--fg-faint)' }}>
                 <Icon name="star" size={16}/>
               </button>
               <div style={{ minWidth: 0, flex: 1 }}>

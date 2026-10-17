@@ -40,9 +40,11 @@ const _scheduleLucideScan = () => {
  * swap THAT node — it's ours, not React's, so recreating it is safe and the
  * icon actually updates. The class/size/stroke live on the inner <i> (lucide
  * copies them onto the <svg>), so descendant CSS like `.nav-item .ico` and
- * `.btn .ic` matches exactly as before.
+ * `.btn .ic` matches exactly as before. `style` goes on the wrapper, so a
+ * `color` there is the glyph's colour (it used to be dropped without a word:
+ * a light star on the amber playlist cover in the dark theme, 1.39:1).
  */
-const Icon = ({ name, size = 16, stroke = 1.5, className = '' }) => {
+const Icon = ({ name, size = 16, stroke = 1.5, className = '', style = null }) => {
   const ref = React.useRef(null);
   React.useEffect(() => {
     const host = ref.current;
@@ -56,7 +58,7 @@ const Icon = ({ name, size = 16, stroke = 1.5, className = '' }) => {
     host.appendChild(i);
     _scheduleLucideScan();
   }, [name, size, stroke, className]);
-  return <span ref={ref} style={{ display: 'inline-flex', flexShrink: 0, lineHeight: 0 }}/>;
+  return <span ref={ref} style={{ display: 'inline-flex', flexShrink: 0, lineHeight: 0, ...(style || {}) }}/>;
 };
 
 /* ---- Cat glyph (the only custom mark in chrome) ------------- */
@@ -661,8 +663,8 @@ const DeleteConfirmDialog = ({ open = true, title = 'Delete?', busy = false, con
                       borderTop: '1px solid var(--border-soft)' }}>
           <Button icon="x" disabled={busy} onClick={onCancel}>Cancel</Button>
           <Button variant="primary" icon={icon} disabled={busy} onClick={onConfirm}
-                  style={{ background: 'var(--danger, #d8503c)', borderColor: 'var(--danger, #d8503c)',
-                           color: '#fff' }}>
+                  style={{ background: 'var(--danger)', borderColor: 'var(--danger)',
+                           color: 'var(--danger-fg)' }}>
             {busy ? 'Deleting…' : confirmLabel}
           </Button>
         </div>
@@ -1554,7 +1556,8 @@ const useSharedScreen = () => {
 
 /* Every nav destination, core and plugin, in sidebar order. Core items
  * carry `core: true` and their CORE_NAV_ITEMS fields; plugin pages carry
- * `core: false`, their `slug` and `iconSrc` (the manifest's nav_icon).
+ * `core: false`, their `slug`, `iconSrc` (the manifest's nav_icon) and
+ * `iconSrcDark` (its optional nav_icon_dark).
  * Interleaved by nav order; equal values sort core-first, then plugin slug
  * (design §5.2). The Sidebar draws it, and Home's "everything" grid draws
  * the part of the same list that is not on the phone bar, so the two
@@ -1564,7 +1567,7 @@ const buildNavItems = (manifest) => {
   (manifest?.plugins || []).forEach((p) => (p.pages || []).forEach((pg) => {
     items.push({
       route: pg.route, label: pg.nav_label || pg.route,
-      iconSrc: pg.nav_icon, order: pg.nav_order ?? 50,
+      iconSrc: pg.nav_icon, iconSrcDark: pg.nav_icon_dark || null, order: pg.nav_order ?? 50,
       core: false, slug: p.slug,
     });
   }));
@@ -1733,12 +1736,151 @@ const usePluginBadges = (manifest) => {
   return badges;
 };
 
-/* Small wrapper for plugin nav icons: manifest-supplied SVG URL when
- * present, generic puzzle-piece glyph otherwise. */
-const PluginNavIcon = ({ src }) => src
-  ? <img src={src} alt="" className="ico"
-         style={{ width: 16, height: 16, flexShrink: 0 }}/>
-  : <Icon name="puzzle" className="ico" size={16}/>;
+/* Is the dashboard showing its dark theme? Follows the <html data-theme>
+ * attribute the theme toggle sets, so a component deep in a page re-renders
+ * when it flips without the toggle's state being handed down to it. */
+const useDarkTheme = () => {
+  const read = () => {
+    try { return document.documentElement.getAttribute('data-theme') === 'dark'; } catch { return false; }
+  };
+  const [dark, setDark] = React.useState(read);
+  React.useEffect(() => {
+    if (typeof MutationObserver === 'undefined') return undefined;
+    const mo = new MutationObserver(() => setDark(read()));
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    setDark(read());
+    return () => mo.disconnect();
+  }, []);
+  return dark;
+};
+
+/* How a plugin icon is drawn when the plugin ships one icon for both
+ * themes: 'mask' (the default) paints the icon's shape in the surrounding
+ * text colour, like the lucide glyphs beside it; 'image' shows it as it
+ * is; 'missing' (it didn't load) falls back to the puzzle glyph. An <img>
+ * can't follow the theme: an SVG drawn with currentColor, or a black
+ * silhouette, is black on the dark sidebar (1.07:1 — Images, Stations,
+ * Games, Library… on 2026-10-17). So the icon's shape is what counts,
+ * whatever colour the plugin drew it in, unless it is real artwork: a
+ * coloured icon, or one with no transparent background (a mask of that
+ * would be a solid square). Judged once per URL from a small canvas copy
+ * (the icons are same-origin, so it can be read). */
+const PLUGIN_ICON_LOOK = new Map();
+const pluginIconLook = (src) => new Promise((resolve) => {
+  const img = new Image();
+  img.onload = () => {
+    try {
+      const n = 24;
+      const c = document.createElement('canvas');
+      c.width = n; c.height = n;
+      const x = c.getContext('2d', { willReadFrequently: true });
+      x.drawImage(img, 0, 0, n, n);
+      const d = x.getImageData(0, 0, n, n).data;
+      let shown = 0; let clear = 0; let chroma = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] < 16) { clear += 1; continue; }
+        shown += 1;
+        chroma += Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]);
+      }
+      const artwork = shown > 0 && (chroma / shown > 48 || clear < (n * n) / 20);
+      resolve(artwork ? 'image' : 'mask');
+    } catch { resolve('mask'); }
+  };
+  img.onerror = () => resolve('missing');
+  img.src = src;
+});
+
+/* A plugin page's nav icon (sidebar, phone strip, Home's grid, the phone
+ * bar editor). With `srcDark` (the manifest's nav_icon_dark) the plugin
+ * drew one icon per theme, and the one for the theme showing is used as it
+ * is — unless the dark one doesn't load, when the light one gets the
+ * one-icon treatment above. No icon at all: the puzzle glyph. */
+const PluginNavIcon = ({ src, srcDark = null, size = 16 }) => {
+  const dark = useDarkTheme();
+  const [, judged] = React.useReducer((n) => n + 1, 0);
+  React.useEffect(() => {
+    let live = true;
+    [src, srcDark].forEach((u) => {
+      if (u && !PLUGIN_ICON_LOOK.has(u)) {
+        pluginIconLook(u).then((v) => { PLUGIN_ICON_LOOK.set(u, v); if (live) judged(); });
+      }
+    });
+    return () => { live = false; };
+  }, [src, srcDark]);
+  const lookOf = (u) => PLUGIN_ICON_LOOK.get(u);
+  const pair = !!(src && srcDark);
+  const darkOne = pair && dark && lookOf(srcDark) !== 'missing';
+  const url = darkOne ? srcDark : src;
+  const asItIs = darkOne || (pair && !dark) || lookOf(url) === 'image';
+  if (!url || lookOf(url) === 'missing') return <Icon name="puzzle" className="ico" size={size}/>;
+  if (asItIs) {
+    return <img src={url} alt="" className="ico plugin-ico-img" draggable={false}
+                style={{ width: size, height: size, flexShrink: 0 }}/>;
+  }
+  return <span className="ico plugin-ico" aria-hidden="true"
+               style={{ width: size, height: size, '--plugin-ico': `url(${JSON.stringify(url)})` }}/>;
+};
+
+/* ---- The plugin page frame (2026-10-17) ----------------------
+ * Every plugin page is shown inside this frame, so it reads as a plugin
+ * and not as part of Domovoi: a band naming the plugin (its icon, name,
+ * publisher and a "plugin" badge) with a link to its row on the Plugins
+ * page (version, update, disable), and, inside the frame, the brand
+ * tokens re-scoped to the plugin's accent. The server sends the accent
+ * already checked for contrast in both themes (plugins_runtime/accent.py;
+ * the neutral plugin slate when the plugin declares none), so a plugin's
+ * primary buttons, links and washes take its colour while the shell
+ * around the frame keeps Domovoi's amber. */
+const PLUGIN_ACCENT_VARS = {
+  brand: ['--brand'], brand_hover: ['--brand-hover'], brand_press: ['--brand-press'],
+  brand_fg: ['--brand-fg', '--fg-on-brand'], brand_soft: ['--brand-soft'],
+  brand_halo: ['--brand-halo'], brand_ring: ['--brand-ring'], brand_ink: ['--brand-ink'],
+};
+const PLUGIN_ACCENT_HEX = /^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i;
+
+/* The CSS variables a plugin page's frame sets for the theme showing:
+ * only the brand family, only well-formed hex (anything else is left to
+ * the page's surroundings). */
+const pluginAccentStyle = (accent, dark) => {
+  const set = accent && (dark ? accent.dark : accent.light);
+  const out = {};
+  if (!set || typeof set !== 'object') return out;
+  Object.entries(PLUGIN_ACCENT_VARS).forEach(([key, names]) => {
+    const v = set[key];
+    if (typeof v === 'string' && PLUGIN_ACCENT_HEX.test(v)) names.forEach((n) => { out[n] = v; });
+  });
+  return out;
+};
+
+const PluginPageFrame = ({ plugin, page = null, children }) => {
+  const dark = useDarkTheme();
+  const p = plugin || {};
+  const pg = page || {};
+  const name = p.name || p.slug || 'plugin';
+  return (
+    <div className="plugin-frame" data-plugin={p.slug || ''}
+         data-accent={(p.accent && p.accent.source) || 'none'}
+         style={pluginAccentStyle(p.accent, dark)}>
+      <div className="plugin-frame-band" role="region" aria-label={`${name} plugin`}>
+        <span className="plugin-frame-icon">
+          <PluginNavIcon src={pg.nav_icon || null} srcDark={pg.nav_icon_dark || null} size={18}/>
+        </span>
+        <span className="plugin-frame-who">
+          <span className="plugin-frame-name">{name}</span>
+          {p.publisher && <span className="plugin-frame-publisher">by {p.publisher}</span>}
+        </span>
+        <span className="plugin-frame-badge">plugin</span>
+        <a className="plugin-frame-manage" href={`#plugins/${p.slug || ''}`}
+           title={`${name} on the Plugins page: version, update, disable`}>
+          {p.version && <span className="mono plugin-frame-version">v{p.version}</span>}
+          <span>manage</span>
+          <Icon name="chevron-right" size={14}/>
+        </a>
+      </div>
+      {children}
+    </div>
+  );
+};
 
 /* One nav row's classes. `primary` keeps the row in the phone strip (it is
  * on this device's phone bar); `brand-link` hides it in the desktop
@@ -1789,7 +1931,7 @@ const Sidebar = ({ route, setRoute, counts, manifest, badges: given }) => {
                  onClick={() => setRoute(it.route)}>
               {it.core
                 ? <Icon name={it.icon} className="ico" size={16}/>
-                : <PluginNavIcon src={it.iconSrc}/>}
+                : <PluginNavIcon src={it.iconSrc} srcDark={it.iconSrcDark}/>}
               <span>{it.label}</span>
               {it.core && it.countKey && counts[it.countKey] != null
                 && <span className="badge">{counts[it.countKey]}</span>}
@@ -1893,7 +2035,7 @@ const ConfigField = ({ f, value, onChange, internetOff = false }) => {
     // untouched again, never a clear: only the button clears.
     input = value === ''
       ? <span className="config-secret-clearing"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--warn)' }}>
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--warn-ink)' }}>
           removed when you save
           <Button variant="ghost" onClick={() => onChange(undefined)}>keep it</Button>
         </span>
@@ -2119,7 +2261,7 @@ const ServerSwitcher = ({ onClose }) => {
             {manualBusy ? 'checking…' : 'add'}
           </Button>
         </div>
-        {manualErr && <div className="meta" style={{ color: 'var(--err)', marginTop: 6 }}>{manualErr}</div>}
+        {manualErr && <div className="meta" style={{ color: 'var(--err-ink)', marginTop: 6 }}>{manualErr}</div>}
         <div className="meta" style={{ marginTop: 10 }}>
           switching reloads the page pointed at the selected backend
         </div>
@@ -3364,7 +3506,8 @@ const DeviceTokenNotice = () => {
 Object.assign(window, {
   Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, PreviewTag, PREVIEW_MEANS, RoomChip, Avatar,
   Card, Empty, Button, IconButton, Sidebar, Topbar, PageHeader, Stat, useToast, Tabs,
-  CORE_NAV_ITEMS, buildNavItems, navItemsFor, PluginNavIcon, usePluginBadges,
+  CORE_NAV_ITEMS, buildNavItems, navItemsFor, PluginNavIcon, useDarkTheme, usePluginBadges,
+  PluginPageFrame, pluginAccentStyle,
   SHARED_SCREEN_HIDDEN, useSharedScreen,
   PHONE_BAR_DEFAULT, PHONE_BAR_MAX, PHONE_BAR_MIN, PhoneBarStore, usePhoneBar, phoneBarRoutes, phoneBarEdit,
   SETTINGS_TAB_ROUTES, settingsTabRoute, resolveRoute, routeParts, routePage, currentRoute,

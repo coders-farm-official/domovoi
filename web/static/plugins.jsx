@@ -158,7 +158,7 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
                 </div>
               ))}
               {(perms.warnings || []).map((w, i) => (
-                <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, padding: '3px 0', color: 'var(--warn)' }}>
+                <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, padding: '3px 0', color: 'var(--warn-ink)' }}>
                   <Icon name="alert-octagon" size={13}/> {w}
                 </div>
               ))}
@@ -290,7 +290,7 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
                 * so the admin sees the source, not just a name and version. */}
               {(reqs.transitive || []).some((t) => t.origin_ok === false) && (
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12,
-                              color: 'var(--warn)', padding: '3px 0 6px' }}>
+                              color: 'var(--warn-ink)', padding: '3px 0 6px' }}>
                   <Icon name="alert-triangle" size={13}/>
                   {(reqs.transitive || []).filter((t) => t.origin_ok === false).length} dependenc
                   {(reqs.transitive || []).filter((t) => t.origin_ok === false).length === 1 ? 'y comes' : 'ies come'}{' '}
@@ -304,7 +304,7 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
                 ))}
                 {(reqs.transitive || []).map((t, i) => (
                   <div key={`t${i}`} className="mono"
-                       style={{ fontSize: 11, color: t.origin_ok === false ? 'var(--warn)' : 'var(--fg-faint)' }}>
+                       style={{ fontSize: 11, color: t.origin_ok === false ? 'var(--warn-ink)' : 'var(--fg-faint)' }}>
                     {t.name}=={t.version}{t.hashed === false ? '  (UNHASHED)' : ''}
                     {t.origin ? `  · from ${String(t.origin).replace(/^https?:\/\//, '')}` : ''}
                     {t.origin_ok === false ? '  (NOT the configured index)' : ''}
@@ -321,7 +321,7 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
             <div className="meta">capabilities: {(p.capabilities || []).join(', ')}</div>
           )}
           {p.downgrade && (
-            <div style={{ fontSize: 12, color: 'var(--err)' }}>
+            <div style={{ fontSize: 12, color: 'var(--err-ink)' }}>
               This is a DOWNGRADE — it may reintroduce vulnerabilities fixed in the newer
               version, and migrations never run backwards.
             </div>
@@ -586,14 +586,24 @@ const PluginUpgradeControls = ({ p, onUpgradeZip, onUpgradeUrl, internetOff = fa
 };
 
 /* ---- One installed-plugin row --------------------------------- */
-const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgradeUrl, internetOff = false }) => {
-  const [open, setOpen] = React.useState(false);
+const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgradeZip, onUpgradeUrl, internetOff = false,
+                     focused = false }) => {
+  // `focused`: the address named this plugin (#plugins/<slug>, the plugin
+  // frame's "manage" link): its row opens and scrolls into view.
+  const [open, setOpen] = React.useState(focused);
+  const rowRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!focused) return;
+    setOpen(true);
+    if (rowRef.current && rowRef.current.scrollIntoView) rowRef.current.scrollIntoView({ block: 'start' });
+  }, [focused]);
   const pill = STATUS_PILL[p.status] || { tone: 'idle', label: p.status };
   const perms = p.permissions || {};
   const activePerms = Object.keys(PERMISSION_LABELS).filter((k) => perms[k]);
   const browserErrors = useBrowserPluginErrors(p.slug);
   return (
-    <div style={{ borderBottom: '1px solid var(--border-soft)' }}>
+    <div ref={rowRef} id={`plugin-${p.slug}`} className={focused ? 'plugin-row focused' : 'plugin-row'}
+         style={{ borderBottom: '1px solid var(--border-soft)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', cursor: 'pointer' }}
            onClick={() => setOpen(!open)}>
         <Icon name={open ? 'chevron-down' : 'chevron-right'} size={14}/>
@@ -617,27 +627,27 @@ const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgr
             {activePerms.length > 0 && <> · {activePerms.join(', ')}</>}
           </div>
           {p.last_error && (
-            <div className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 2 }}>
+            <div className="mono" style={{ fontSize: 11, color: 'var(--err-ink)', marginTop: 2 }}>
               server: {p.last_error}
             </div>
           )}
           {p.web_load_error && (
-            <div className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 2 }}>
+            <div className="mono" style={{ fontSize: 11, color: 'var(--err-ink)', marginTop: 2 }}>
               server web module: {p.web_load_error}
             </div>
           )}
           {(p.worker_notes || []).map((n, i) => (
-            <div key={`wn${i}`} className="mono plugin-worker-note" style={{ fontSize: 11, color: 'var(--warn)', marginTop: 2 }}>
+            <div key={`wn${i}`} className="mono plugin-worker-note" style={{ fontSize: 11, color: 'var(--warn-ink)', marginTop: 2 }}>
               {n.worker || 'worker'}: {n.note}
             </div>
           ))}
           {(p.page_errors || []).map((msg, i) => (
-            <div key={`pg${i}`} className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 2 }}>
+            <div key={`pg${i}`} className="mono" style={{ fontSize: 11, color: 'var(--err-ink)', marginTop: 2 }}>
               web page: {msg}
             </div>
           ))}
           {browserErrors.map((e, i) => (
-            <div key={i} className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 2 }}>
+            <div key={i} className="mono" style={{ fontSize: 11, color: 'var(--err-ink)', marginTop: 2 }}>
               browser ({PHASE_LABEL[e.phase] || e.phase}): {e.message}{e.count > 1 ? ` ·×${e.count}` : ''}
             </div>
           ))}
@@ -695,7 +705,7 @@ const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgr
           {(perms.warnings || []).length > 0 && (
             <div>
               {(perms.warnings || []).map((w, i) => (
-                <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, color: 'var(--warn)', padding: '2px 0' }}>
+                <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, color: 'var(--warn-ink)', padding: '2px 0' }}>
                   <Icon name="alert-octagon" size={13}/> {w}
                 </div>
               ))}
@@ -732,6 +742,16 @@ const PluginsPage = () => {
   const internetCfg = useApiObject('/api/config', { quiet: true });
   const internetOff = !!(internetCfg.data && internetCfg.data.internet_access === 'never');
   const [uninstalling, setUninstalling] = React.useState(null);
+  // #plugins/<slug>: the plugin a page's frame sent us here for.
+  const [focusSlug, setFocusSlug] = React.useState(() => routeParts(currentRoute())[1] || null);
+  React.useEffect(() => {
+    const follow = () => {
+      const parts = routeParts(currentRoute());
+      if (parts[0] === 'plugins') setFocusSlug(parts[1] || null);
+    };
+    window.addEventListener('hashchange', follow);
+    return () => window.removeEventListener('hashchange', follow);
+  }, []);
 
   // The core answers 200 with {enabled: false, status: 'load_error',
   // error} when the plugin's contract checks refuse the load (a page
@@ -798,6 +818,7 @@ const PluginsPage = () => {
           <div>
             {plugins.map((p) => (
               <PluginRow key={p.slug} p={p} restartPending={waitingSlugs.has(p.slug)}
+                         focused={p.slug === focusSlug}
                          onEnable={onEnable} onDisable={onDisable}
                          onUninstall={setUninstalling}
                          onUpgradeZip={(slug) => flow.pickZip(slug)}

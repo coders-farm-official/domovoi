@@ -8,6 +8,14 @@ description = "Internet radio + FM via RTL-SDR: station search, play-or-favorite
 homepage = "https://github.com/coders-farm-official/domovoi"
 # 1.4: sdk.egress and connectivity.policy (the INTERNET_ACCESS answer).
 domovoi_api = ">=1.4,<2.0"
+# The Stations page's colour (docs/PLUGIN_DEVELOPMENT.md, "accent"): its
+# buttons, links and the band the dashboard draws above it. A deep teal,
+# well away from the dashboard's amber, that passes the contrast rules as
+# declared (white text on it, a disabled button included); accent_dark is
+# a lighter teal for the dark theme, which would otherwise derive its own
+# shade from accent.
+accent = "#146859"
+accent_dark = "#5fb8a4"
 
 [entry_points]
 core = "domovoi_plugin_radio.core"

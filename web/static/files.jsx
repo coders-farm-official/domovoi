@@ -199,7 +199,7 @@ const TextEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null }) =>
       <Icon name="file-text" size={16}/>
       <strong style={{ fontSize: 14 }}>{rel_path}</strong>
       <Pill tone="idle">text</Pill>
-      {dirty && <span style={{ fontSize: 11, color: 'var(--warn)' }}>unsaved — click Save</span>}
+      {dirty && <span style={{ fontSize: 11, color: 'var(--warn-ink)' }}>unsaved — click Save</span>}
       <span style={{ flex: 1 }}/>
       {state.status === 'ready' && (
         <Button variant="primary" icon="save" disabled={saving || !dirty || !!blocked}
@@ -593,7 +593,7 @@ const Crumb = ({ label, path, bold, disabled, onNav, onDropMove }) => {
                      borderRadius: 'var(--r-sm)', padding: drop.active ? '1px 5px' : '1px 5px',
                      background: drop.active ? 'var(--brand-soft)' : 'transparent',
                      cursor: disabled ? 'default' : 'pointer',
-                     color: bold ? 'var(--fg)' : 'var(--brand)', font: 'inherit',
+                     color: bold ? 'var(--fg)' : 'var(--brand-ink)', font: 'inherit',
                      fontWeight: bold ? 600 : 400 }}>
       {label}
     </button>
@@ -736,8 +736,8 @@ const FilesDeleteConfirm = ({ state, busy, onCancel, onConfirm }) => {
                          onCancel={onCancel} onConfirm={() => onConfirm(entries)}>
       {recursive ? (
         <div style={{ padding: '9px 11px', borderRadius: 'var(--r-md)',
-                      background: 'var(--danger-soft, rgba(220,80,60,0.12))',
-                      border: '1px solid var(--danger, #d8503c)', color: 'var(--fg)' }}>
+                      background: 'var(--danger-soft)',
+                      border: '1px solid var(--danger)', color: 'var(--fg)' }}>
           <strong>{folders.length} folder{folders.length === 1 ? '' : 's'}</strong>{' '}
           and everything inside {folders.length === 1 ? 'it' : 'them'} will be permanently
           deleted. This can’t be undone.

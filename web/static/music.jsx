@@ -67,7 +67,7 @@ const RoomChips = ({ rooms, room, onPick }) => {
                    padding: '4px 10px', borderRadius: 'var(--r-full)',
                    border: '1px solid var(--border)',
                    background: room === r ? 'var(--brand-soft)' : 'var(--card)',
-                   color: room === r ? 'var(--brand-press)' : 'var(--fg)' }}>{r}</button>
+                   color: room === r ? 'var(--brand-ink)' : 'var(--fg)' }}>{r}</button>
       ))}
     </div>
   );
@@ -144,7 +144,7 @@ const NPCard = ({ np, tick, guest, onPlayRandom, onPause, onResume, onSkip, onSt
                    display: 'inline-flex', alignItems: 'center', gap: 4,
                    fontSize: 11, lineHeight: 1, padding: '3px 8px',
                    borderRadius: 'var(--r-full)', textDecoration: 'none',
-                   color: 'var(--brand-press)', background: 'var(--brand-soft)',
+                   color: 'var(--brand-ink)', background: 'var(--brand-soft)',
                    border: '1px solid var(--border)',
                  }}>
                 <Icon name="external-link" size={11}/>open source ↗
@@ -191,7 +191,7 @@ const NPCard = ({ np, tick, guest, onPlayRandom, onPause, onResume, onSkip, onSt
             {!guest && <IconButton name="square" onClick={() => onStop(np.room_id)}/>}
             {!guest && (
               <IconButton name="heart" onClick={() => onFavorite(np.room_id)}
-                          style={np.favorited ? { color: 'var(--brand)' } : undefined}
+                          style={np.favorited ? { color: 'var(--brand-ink)' } : undefined}
                           title={np.favorited
                             ? 'already favorited'
                             : 'favorite (library track = save · external stream = fetch into library)'}/>
@@ -277,7 +277,7 @@ const AlsoCalledChip = ({ alias, onRemove }) => {
                    padding: alias.can_remove ? '2px 2px 2px 10px' : '2px 10px', borderRadius: 'var(--r-full)',
                    border: '1px solid var(--border)',
                    background: mb ? 'transparent' : 'var(--brand-soft)',
-                   color: mb ? 'var(--fg-muted)' : 'var(--brand-press)' }}>
+                   color: mb ? 'var(--fg-muted)' : 'var(--brand-ink)' }}>
       {alias.alias}
       {alias.can_remove && (
         <button type="button" title={`remove '${alias.alias}'`} onClick={onRemove}
@@ -573,7 +573,7 @@ const Drawer = ({ track, rooms, onClose, onDelete, onEdit, onPlayInRoom, onQueue
             also delete file on disk
           </label>
           <Button variant="secondary" icon="trash-2" onClick={() => onDelete(track, alsoFile)}
-                  style={{ background: 'var(--err-soft)', color: 'var(--err)', borderColor: 'transparent' }}>
+                  style={{ background: 'var(--err-soft)', color: 'var(--err-ink)', borderColor: 'transparent' }}>
             delete track
           </Button>
         </div>
@@ -730,7 +730,7 @@ const LibraryTab = ({ lib, libraryTotal, sourceOptions, onSelect, onToggleFavori
                     <IconButton name="corner-down-right" onClick={() => onPlayNextTrack(t)}
                                 title="play next in browser"/>
                     <IconButton name="heart" onClick={() => onToggleFavorite(t)}
-                                style={t.favorited ? { color: 'var(--brand)' } : undefined}
+                                style={t.favorited ? { color: 'var(--brand-ink)' } : undefined}
                                 title={t.favorited ? 'unfavorite' : 'favorite'}/>
                     <IconButton name="plus" onClick={() => onAddToPlaylist(t)}
                                 title="add to playlist…"/>
@@ -810,7 +810,7 @@ const AddMusicBar = ({ rooms, canFulfillQuery, fire, onQueued }) => {
         {busy ? 'queueing…' : 'add music'}
       </Button>
       {canFulfillQuery === false && (
-        <span className="meta" style={{ color: 'var(--warn)' }}>
+        <span className="meta" style={{ color: 'var(--warn-ink)' }}>
           no media provider installed — requests wait until one is
         </span>
       )}
@@ -847,7 +847,7 @@ const JobsTab = ({ jobs, availability, loading, rooms, onCancel, fire, refresh }
                   <td><Pill tone="idle">{a.kind}</Pill></td>
                   <td>
                     <Pill tone={pill.tone} live={!!pill.live}>{pill.label}</Pill>
-                    {a.error && <div className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 4 }}>{a.error}</div>}
+                    {a.error && <div className="mono" style={{ fontSize: 11, color: 'var(--err-ink)', marginTop: 4 }}>{a.error}</div>}
                   </td>
                   <td className="mono" style={{ fontSize: 11 }}>{a.requested_by || '—'}</td>
                   <td className="mono">{relTime(a.requested_at)}</td>
@@ -1096,7 +1096,7 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
         {rooms.map(r => (
           <button key={r} className="rq-room" onClick={() => setRoom(r)}
                   style={{ background: room === r ? 'var(--brand-soft)' : 'var(--card)',
-                           color: room === r ? 'var(--brand-press)' : 'var(--fg)' }}>{r}</button>
+                           color: room === r ? 'var(--brand-ink)' : 'var(--fg)' }}>{r}</button>
         ))}
         <span style={{ flex: 1 }}/>
         <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
@@ -1127,7 +1127,7 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
       )}
 
       {error && queue && (
-        <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--err)',
+        <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--err-ink)',
                       borderBottom: '1px solid var(--border-soft)' }}>
           couldn't refresh the queue — showing the last one loaded: {apiErrorText(error)}
         </div>
@@ -1169,7 +1169,7 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
                 </span>
                 <span className="rq-num">
                   {item.playing
-                    ? <Icon name="volume-2" size={13} style={{ color: 'var(--brand-press)' }}/>
+                    ? <Icon name="volume-2" size={13} style={{ color: 'var(--brand-ink)' }}/>
                     : <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{idx + 1}</span>}
                 </span>
                 <div className="rq-main">
@@ -1286,7 +1286,7 @@ const PlaylistCover = ({ playlist: p, size = 26 }) => (
     {p.cover_emoji && !p.is_virtual
       ? <span style={{ fontSize: Math.round(size * 0.55), lineHeight: 1 }}>{p.cover_emoji}</span>
       : <Icon name={p.is_virtual ? 'star' : 'list-music'} size={Math.round(size * 0.5)}
-              style={{ color: p.is_virtual ? 'var(--card)' : 'var(--fg-muted)' }}/>}
+              style={{ color: p.is_virtual ? 'var(--brand-fg)' : 'var(--fg-muted)' }}/>}
   </div>
 );
 
@@ -1518,7 +1518,7 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onRemoveT
           <div style={{ padding: 16, borderTop: '1px solid var(--border)', background: 'var(--sunken)' }}>
             <Button variant="secondary" icon="trash-2"
                     onClick={() => onDelete(playlist)}
-                    style={{ background: 'var(--err-soft)', color: 'var(--err)', borderColor: 'transparent' }}>
+                    style={{ background: 'var(--err-soft)', color: 'var(--err-ink)', borderColor: 'transparent' }}>
               delete playlist
             </Button>
           </div>
@@ -1618,7 +1618,7 @@ const LibraryAddDrawer = ({ track, onClose, fire, onMutated }) => {
                          background: inIt ? 'var(--brand-soft)' : 'var(--card)',
                          color: 'var(--fg)', cursor: 'pointer', textAlign: 'left' }}>
                 <Icon name={p.is_virtual ? 'star' : (inIt ? 'check' : 'plus')} size={14}
-                      style={inIt || p.is_virtual ? { color: 'var(--brand)' } : { color: 'var(--fg-muted)' }}/>
+                      style={inIt || p.is_virtual ? { color: 'var(--brand-ink)' } : { color: 'var(--fg-muted)' }}/>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 500 }}>{p.name}</div>
                   <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>

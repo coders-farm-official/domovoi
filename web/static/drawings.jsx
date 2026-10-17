@@ -304,7 +304,7 @@ const DrawingOverlay = ({ file, lib, onClose, onSaved, fire, blockedReason = nul
                     borderBottom: '1px solid var(--border)', background: 'var(--card)' }}>
         <Icon name="pen-tool" size={16}/>
         <strong style={{ fontSize: 14 }}>{file.rel_path || 'new whiteboard'}</strong>
-        {dirty && <span style={{ fontSize: 11, color: 'var(--warn)' }}>unsaved — click Save</span>}
+        {dirty && <span style={{ fontSize: 11, color: 'var(--warn-ink)' }}>unsaved — click Save</span>}
         <span style={{ flex: 1 }}/>
         <Button icon="image" disabled={saving || !ready || !!blocked}
                 title={blocked || undefined} onClick={() => doSave(true)}>Export SVG</Button>

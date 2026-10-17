@@ -362,7 +362,7 @@ const EventDetail = ({ event, onClose, onEdit, onDelete }) => {
       </div>
       <div className="cal-detail-foot">
         <Button icon="pencil" onClick={() => onEdit(event)}>edit</Button>
-        <Button icon="trash-2" onClick={() => onDelete(event)} style={{ color: 'var(--err)' }}>delete</Button>
+        <Button icon="trash-2" onClick={() => onDelete(event)} style={{ color: 'var(--err-ink)' }}>delete</Button>
       </div>
     </aside>
   );

@@ -61,7 +61,7 @@
   transition: background var(--dur-fast) var(--ease);
 }
 .brand-row:hover { background: var(--brand-soft); }
-.brand-row .glyph { width: 22px; height: 22px; color: var(--brand); }
+.brand-row .glyph { width: 22px; height: 22px; color: var(--brand); }   /* the logo: brand amber in both themes */
 .brand-row .word { font-size: 15px; font-weight: 600; letter-spacing: -0.02em; }
 
 .nav { display: flex; flex-direction: column; gap: 1px; }
@@ -78,8 +78,18 @@
 }
 .nav-item:hover { background: var(--brand-soft); color: var(--fg); }
 .nav-item.active { background: var(--brand-soft); color: var(--fg); border-color: var(--border); box-shadow: var(--inner-highlight); }
-.nav-item.active .ico { color: var(--brand); }
+.nav-item.active .ico { color: var(--brand-ink); }
+.nav-item.active .badge { color: var(--fg-muted); }   /* faint is too faint on the amber wash */
 .nav-item .ico { width: 16px; height: 16px; flex: none; color: var(--fg-subtle); }
+/* A plugin's nav icon drawn as a mask (PluginNavIcon, components.jsx): the
+   icon's shape, painted in the colour of the text around it, so it follows
+   the theme and the active state like the lucide glyphs do. */
+.plugin-ico {
+  display: inline-block; flex: none;
+  background-color: currentColor;
+  -webkit-mask: var(--plugin-ico) center / contain no-repeat;
+          mask: var(--plugin-ico) center / contain no-repeat;
+}
 .nav-item .badge { margin-left: auto; font-family: var(--ff-mono); font-size: 10px; color: var(--fg-faint); }
 /* Home's own row: on a desktop the brand row above is that link, so the
    row only exists in the phone strip (see the 760px block). */
@@ -138,7 +148,7 @@
   cursor: pointer; color: var(--fg-muted);
 }
 .theme-toggle:hover { color: var(--fg); }
-.theme-toggle.active { color: var(--brand); border-color: var(--brand); }
+.theme-toggle.active { color: var(--brand-ink); border-color: var(--brand); }
 .theme-toggle .ic { width: 14px; height: 14px; }
 
 /* Main content -------------------------------------------------- */
@@ -210,7 +220,7 @@
 .ctr-incident-head { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; }
 .ctr-incident-head .ctr-incident-summary { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .ctr-incident-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--fg-muted); padding-left: 16px; }
-.ctr-incident-meta .ctr-freezes { color: var(--err); }
+.ctr-incident-meta .ctr-freezes { color: var(--err-ink); }
 .ctr-incident-body { padding-left: 16px; display: flex; flex-direction: column; gap: 6px; }
 .ctr-incident-who { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--fg-muted); }
 .ctr-incident-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding-left: 16px; }
@@ -232,6 +242,56 @@
 .ctr-watch-name { min-width: 180px; }
 .ctr-watch-label { flex: 1; min-width: 140px; color: var(--fg-muted); }
 .ctr-watch-meta { font-size: 11px; color: var(--fg-muted); }
+
+/* The plugin page frame (components.jsx PluginPageFrame): one band across
+   the top of every plugin page, under the shell's own notices, so a plugin
+   reads as a plugin. It spans .main's padding like the guard banner (the
+   shell's chrome, not the page's), and tops the pane when nothing is above
+   it. Inside .plugin-frame the brand tokens are the plugin's accent (set
+   inline per theme), so the band's wash, icon and badge are its colour. */
+.plugin-frame-band {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  margin: 0 -24px 20px;
+  padding: 4px 24px;
+  font-size: 13px;
+  color: var(--fg);
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(var(--brand-soft), var(--brand-soft)), var(--surface);
+}
+.main > .plugin-frame:first-child > .plugin-frame-band { margin-top: -24px; }
+.plugin-frame-icon { display: inline-flex; flex: none; color: var(--brand-ink); }
+.plugin-frame-who { display: flex; align-items: baseline; gap: 6px; min-width: 0; overflow: hidden; }
+.plugin-frame-name { font-weight: 600; white-space: nowrap; }
+.plugin-frame-publisher {
+  font-size: 12px; color: var(--fg-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.plugin-frame-badge {
+  flex: none;
+  font-size: 11px; font-weight: 500; line-height: 18px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--brand-ink);
+}
+.plugin-frame-manage {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 32px; padding: 0 8px;
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  color: var(--fg-muted);
+  text-decoration: none;
+}
+.plugin-frame-manage:hover { color: var(--fg); background: var(--brand-soft); }
+.plugin-frame-version { font-size: 11px; }
+/* The Plugins page row the frame's "manage" link opened (#plugins/<slug>). */
+.plugin-row.focused > :first-child { background: var(--brand-soft); }
 
 /* Browser music player — brand-tinted range inputs (volume, EQ, seek). */
 .main input[type="range"] { accent-color: var(--brand); }
@@ -309,11 +369,13 @@
    across all three variants so a `disabled` attribute always reads as
    visually inactive. The skill's design tokens already include
    `--fg-faint` for muted text; reuse that rather than introduce a
-   new ramp. */
+   new ramp. 0.65, not 0.5: a dimmed button still has to be read (3:1
+   at least — a disabled amber "send" was 2.35:1 at 0.5 in the light
+   theme, a ghost one 2.32:1). */
 .btn:disabled,
 .btn[disabled] {
   cursor: not-allowed;
-  opacity: 0.5;
+  opacity: 0.65;
   /* Suppress hover/active state transitions so the disabled button
      doesn't shift colour when the user hovers over it. */
   pointer-events: none;
@@ -330,11 +392,11 @@
   font-size: 11px; font-weight: 500;
   border-radius: var(--r-sm);
 }
-.pill.ok    { background: var(--ok-soft);    color: var(--ok); }
-.pill.warn  { background: var(--warn-soft);  color: var(--warn); }
-.pill.err   { background: var(--err-soft);   color: var(--err); }
+.pill.ok    { background: var(--ok-soft);    color: var(--ok-ink); }
+.pill.warn  { background: var(--warn-soft);  color: var(--warn-ink); }
+.pill.err   { background: var(--err-soft);   color: var(--err-ink); }
 .pill.idle  { background: var(--idle-soft);  color: var(--fg-muted); }
-.pill.live  { background: var(--brand-soft); color: var(--brand-press); }
+.pill.live  { background: var(--brand-soft); color: var(--brand-ink); }
 
 .room-chip {
   display: inline-flex; align-items: center; gap: 6px;
@@ -432,12 +494,18 @@ table.tbl .actions { text-align: right; }
   .sidebar .nav-item:not(.primary) { display: none; }
   .sidebar .nav-item.brand-link { display: flex; }
   .sidebar .nav-item.more-active { background: var(--brand-soft); color: var(--fg); }
-  .sidebar .nav-item.more-active .ico { color: var(--brand); }
+  .sidebar .nav-item.more-active .ico { color: var(--brand-ink); }
   .sidebar .nav-item .badge { display: none; }
   .main { padding: 16px; padding-bottom: 88px; min-width: 0; }
   /* The container guard's banner follows .main's 16px padding. */
   .guard-banner { top: -16px; margin: -16px -16px 16px; padding: 10px 16px; }
   .guard-banner-actions { flex-direction: column; align-items: flex-end; gap: 4px; }
+  /* The plugin frame's band follows .main's 16px padding, and keeps to
+     one 44px row: the version gives way, then the publisher ellipsizes. */
+  .plugin-frame-band { margin: 0 -16px 16px; padding: 0 8px 0 16px; min-height: 44px; }
+  .main > .plugin-frame:first-child > .plugin-frame-band { margin-top: -16px; }
+  .plugin-frame-version { display: none; }
+  .plugin-frame-manage { min-height: 44px; }
   /* The token notice's buttons go under its words. */
   .device-token-notice { flex-wrap: wrap; }
   .device-token-notice-actions { flex: 1 1 100%; }
@@ -492,7 +560,7 @@ table.tbl .actions { text-align: right; }
 .mp-seek { display: flex; align-items: center; gap: 6px; width: 100%; }
 .mp-side { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
 .mp-side-desk { display: flex; align-items: center; gap: 6px; }
-.mp-sleep { font-size: 10px; color: var(--brand); display: inline-flex; align-items: center; gap: 3px; }
+.mp-sleep { font-size: 10px; color: var(--brand-ink); display: inline-flex; align-items: center; gap: 3px; }
 .mp-vol { display: flex; align-items: center; gap: 4px; }
 /* The bar sits outside .main, so `.main input[type="range"]` never gave
    its volume slider the brand accent: it drew in the browser's own blue. */
@@ -573,7 +641,7 @@ html.mp-docked { --player-h: 64px; }
   .mp-sheet .mp-sheet-play { width: 56px; height: 56px; border-radius: 50%; }
   .mp-sheet-vol { display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: center; gap: 8px; }
   .mp-sheet-vol input[type="range"] { width: 100%; height: 44px; margin: 0; accent-color: var(--brand); }
-  .mp-sheet-sleep { display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 11px; color: var(--brand-press); }
+  .mp-sheet-sleep { display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 11px; color: var(--brand-ink); }
   .mp-sheet-sec {
     background: var(--card); border: 1px solid var(--border); border-radius: var(--r-md);
     box-shadow: var(--inner-highlight); overflow: hidden;
@@ -971,7 +1039,7 @@ button.lyr-line:hover { background: var(--brand-soft); }
   color: var(--fg);
   font-family: var(--ff-mono);
 }
-.cal-tg-headcell.today .d { color: var(--brand); font-weight: 500; }
+.cal-tg-headcell.today .d { color: var(--brand-ink); font-weight: 500; }
 .cal-tg-headcell .n.today-pill {
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px;
@@ -1180,7 +1248,7 @@ button.lyr-line:hover { background: var(--brand-soft); }
 }
 .cal-inp:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
 textarea.cal-inp { resize: vertical; min-height: 64px; line-height: 1.4; }
-.cal-modal .err   { font-size: 11px; color: var(--err); font-family: var(--ff-mono); }
+.cal-modal .err   { font-size: 11px; color: var(--err-ink); font-family: var(--ff-mono); }
 .cal-modal .hint  { font-size: 10px; color: var(--fg-faint); margin-top: 2px; }
 .cal-modal .hint code { background: var(--sunken); padding: 1px 4px; border-radius: 3px; }
 /* The pair-this-browser modal's two ways in. The sign-in is the way out
@@ -1211,7 +1279,7 @@ textarea.cal-inp { resize: vertical; min-height: 64px; line-height: 1.4; }
   text-transform: lowercase;
 }
 .cal-source-pick .opt:hover { color: var(--fg); }
-.cal-source-pick .opt.on { background: var(--brand-soft); color: var(--brand-press); border-color: var(--brand); }
+.cal-source-pick .opt.on { background: var(--brand-soft); color: var(--brand-ink); border-color: var(--brand); }
 
 /* --- mobile list (hidden on wide screens) --- */
 .cal-mobile { display: none; }
@@ -1298,14 +1366,14 @@ textarea.cal-inp { resize: vertical; min-height: 64px; line-height: 1.4; }
 }
 .home-link {
   font: inherit; font-size: 12px; padding: 0; border: none; background: none;
-  color: var(--brand-press); text-decoration: none; cursor: pointer; text-align: left;
+  color: var(--brand-ink); text-decoration: none; cursor: pointer; text-align: left;
 }
 .home-link:hover { text-decoration: underline; }
 
 /* Links inside a sentence of help text (Settings → Configuration's AcoustID
    key, Settings → Internet's "needs an AcoustID key …"): amber words that
    stay in the line, not the phone's 44px .home-link target. */
-.config-acoustid a, a.internet-condition-link { color: var(--brand-press); text-decoration: none; }
+.config-acoustid a, a.internet-condition-link { color: var(--brand-ink); text-decoration: none; }
 .config-acoustid a:hover, a.internet-condition-link:hover { text-decoration: underline; }
 
 .home-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; margin-bottom: 8px; }
@@ -1339,7 +1407,7 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .home-timer-main { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 .home-timer-title { max-width: 100%; font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .home-timer-left { font-family: var(--ff-mono); font-size: 24px; font-variant-numeric: tabular-nums; color: var(--fg); white-space: nowrap; }
-.home-timer-left.soon { color: var(--warn); }
+.home-timer-left.soon { color: var(--warn-ink); }
 .home-bar { position: absolute; left: 16px; right: 16px; bottom: 4px; height: 2px; border-radius: 1px; background: var(--sunken); overflow: hidden; }
 .home-bar > span { display: block; height: 100%; background: var(--brand); }
 .home-timer-done {
@@ -1567,7 +1635,7 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .chat-md pre code { background: none; padding: 0; }
 .chat-md blockquote { border-left: 3px solid var(--border); padding-left: 10px; color: var(--fg-muted); }
 .chat-md hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
-.chat-md a { color: var(--brand); text-decoration: underline; }
+.chat-md a { color: var(--brand-ink); text-decoration: underline; }
 .chat-md table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: 12px; }
 .chat-md th, .chat-md td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
 .chat-md th { background: var(--sunken); font-weight: 600; }
@@ -1593,7 +1661,7 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .chat-details-rows { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 0; padding: 14px 16px; overflow-y: auto; font-size: 13px; }
 .chat-details-rows dt { color: var(--fg-muted); }
 .chat-details-rows dd { margin: 0; color: var(--fg); overflow-wrap: anywhere; }
-.chat-details-rows dd.err { color: var(--err); }
+.chat-details-rows dd.err { color: var(--err-ink); }
 .chat-details-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-soft); }
 /* A plain answer instead of a reply (a reply's error with a code), and the
  * composer's note on why a picture can't be read here. */

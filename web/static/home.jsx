@@ -1190,7 +1190,7 @@ const HomeEverything = ({ counts, badges: given, shared }) => {
             const badge = it.core ? (it.countKey ? c[it.countKey] : null) : badges[it.route];
             return (
               <a key={it.route} href={`#${it.route}`} className="home-tile">
-                {it.core ? <Icon name={it.icon} size={18}/> : <PluginNavIcon src={it.iconSrc}/>}
+                {it.core ? <Icon name={it.icon} size={18}/> : <PluginNavIcon src={it.iconSrc} srcDark={it.iconSrcDark} size={18}/>}
                 <span className="lab">{it.label}</span>
                 {badge != null && <span className="home-tile-badge">{badge}</span>}
               </a>

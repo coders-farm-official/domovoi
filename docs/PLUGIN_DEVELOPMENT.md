@@ -377,6 +377,8 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 | `description` | One or two sentences — shown on the install preview. |
 | `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.6.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
 | `homepage` | Optional URL. |
+| `accent` | Optional. Your dashboard page's colour, `"#rrggbb"` (or `"#rgb"`): its primary buttons, links, selection washes and the frame the dashboard draws around it. Checked for contrast at load; see [the frame and your accent](#the-frame-and-your-accent). Without it the page gets the neutral plugin slate. |
+| `accent_dark` | Optional, used only beside `accent`: the dark theme's colour, when the shade the dashboard derives from `accent` isn't the one you want. Same rules. |
 
 ### `[entry_points]`
 
@@ -532,6 +534,7 @@ route = "stations"
 page = "StationsPage"
 nav_label = "Stations"
 nav_icon = "web/static/icon.svg"
+# nav_icon_dark = "web/static/icon-dark.svg"   # optional: an icon drawn for the dark theme
 nav_order = 50
 badge = { endpoint = "/api/plugins/radio/badge", key = "favorites" }
 
@@ -561,11 +564,97 @@ stream_url_template = "/api/plugins/radio/stations/{id}/stream"
 * `[[web.pages]]` — sidebar entries. `page` names a key in that registry;
   `nav_order` slots among core pages (core publishes its own orders; default
   50); `badge` polls an endpoint and renders `payload[key]` as a count.
+* `nav_icon` — the page's icon in the sidebar, the phone bar and Home's
+  grid: a file under `web/static/` (a path outside it, `..` or a URL is
+  ignored, with a warning in the load log). Draw it like the dashboard's
+  own icons: one colour on a transparent background, 24×24, `stroke` or
+  `fill` set to `currentColor` (`plugins/radio/web/static/icon.svg`). The
+  dashboard paints the icon's **shape** in the theme's text colour (and
+  amber when the page is open), whatever colour you drew it in, so one
+  icon reads in both themes. A coloured icon, or one with no transparent
+  background, is shown as drawn instead; test it on the dark theme.
+* `nav_icon_dark` — optional. Ship it when you want to draw the dark-theme
+  icon yourself (a coloured logo that needs a lighter version, say). With
+  both keys the dashboard shows `nav_icon` in the light theme and
+  `nav_icon_dark` in the dark one, each exactly as drawn; it is used only
+  beside a `nav_icon`, follows the same rules, and if it fails to load the
+  dashboard falls back to `nav_icon`. Most plugins don't need it.
 * `[[web.player_sources]]` — teaches the browser player how to stream your
   `kind` of media (the template is a dashboard-relative URL).
 
+#### The frame and your accent
+
+Every plugin page is shown inside a frame the dashboard draws, so it reads
+as a plugin and not as part of Domovoi: one band across the top of the page
+with your `nav_icon`, your `[plugin].name` and `publisher`, a "plugin" badge
+and a **manage** link to your row on the Plugins page (version, update,
+disable). It is one 40px row (44px on a phone), and your page starts under
+it. Keep your own `PageHeader` for the page's title; don't repeat the plugin
+name as a heading.
+
+Inside the frame the brand tokens are **your accent** (`[plugin].accent`),
+not Domovoi's amber, which stays the dashboard's own:
+
+| Token | Use |
+|---|---|
+| `--brand` | primary button fill, active indicators, an accent border |
+| `--brand-hover`, `--brand-press` | the fill's hover and pressed shades |
+| `--brand-fg` (= `--fg-on-brand`) | text and icons **on** a `--brand` fill |
+| `--brand-soft` | hover and selection wash |
+| `--brand-halo`, `--brand-ring` | the live-pulse halo, the focus ring |
+| `--brand-ink` | your colour as **text or an icon**: links, a selected item's label, a starred icon |
+
+So a page built on the shared primitives (`Button variant="primary"`, the
+tab strip, focus rings) and on these tokens takes your colour with nothing
+else to do. Without an `accent` the page gets the **neutral plugin slate**
+(a muted blue-grey, the design system's colour for things that come from
+outside Domovoi): still not amber, so a plugin page always reads as one.
+
+The dashboard turns your one colour into those tokens for both themes and
+holds every one to the contrast rules on every surface (canvas, card,
+raised, sunken):
+
+* `--brand-ink` reads at **4.5:1**, also on your own `--brand-soft` wash;
+* `--brand` reads at **3:1** as a UI part;
+* `--brand-fg` reads at **4.5:1** on the fill and on its hover and pressed
+  shades (near-white or near-black, whichever reads), and at **3:1** on a
+  disabled button (fill and text both faded to the dashboard's disabled
+  opacity).
+
+A colour that falls short is moved in lightness (same hue) until it passes:
+darker in the light theme, lighter in the dark one. The dark theme always
+derives its shade from `accent` unless you give `accent_dark`. When your
+declared colour itself had to move for its button use, the load log says so
+and names the colour the page uses; a value that isn't a hex colour, or one
+in Domovoi's own amber family (hue within 20° of amber's at amber-like
+chroma), is refused with a warning and the page gets the slate.
+`domovoi plugin pack` and `domovoi plugin dev` print the same warnings. None
+of this ever fails your plugin's load.
+
+**Choosing it.** Set an accent when your plugin has a colour of its own (a
+brand or a theme). For the light theme, a colour that carries white text
+passes as declared when it is fairly deep (about 6:1 on white; the
+disabled button is the tight rule): the bundled radio plugin's teal
+`#146859` is. A brighter or paler colour works too; it just gets deepened
+for the light theme, and the load log says to what. Leave it out and the slate is a fine
+default. A dialog your page renders in its own tree takes the accent too;
+something you append to `document.body` yourself sits outside the frame
+and gets the shell's amber, so render dialogs inside your page.
+
 Static assets under `web/static/` are served at
 `/plugins/<slug>/static/...` (containment-checked).
+
+**Colours: use the dashboard's tokens.** The dashboard has a light and a
+dark theme (`<html data-theme="dark">`), and a page that hard-codes its
+colours is unreadable in one of them. Style your page with the CSS
+variables in `web/static/colors_and_type.css` — `var(--fg)`,
+`var(--fg-muted)`, `var(--fg-faint)` for text; `var(--card)`,
+`var(--sunken)`, `var(--border)` for surfaces; `var(--brand-ink)` for your
+accent as text (see above), `var(--ok-ink)`, `var(--warn-ink)`,
+`var(--err-ink)` for status text — and every text step reads at 4.5:1 or
+better in both themes. Check
+a page with `scripts/dev/contrast_audit.py` against a throwaway dashboard
+with your plugin installed (it measures every page and tab in both themes).
 
 Your page's writes go through the dashboard's `apiPost` / `apiPatch` /
 `apiDelete` helpers, which are in scope for a plugin script and carry the
@@ -1557,6 +1646,14 @@ story. Here is the developer's tour, file by file.
 * **Web**: one script (`stations.jsx`), one page (`StationsPage`, nav label
   "Stations", a favorites-count badge), one player source (`kind = "radio"`
   with a stream proxy template).
+* **Accent** `accent = "#146859"` and `accent_dark = "#5fb8a4"`, a deep and
+  a light teal well away from the dashboard's amber: the Stations page's
+  buttons, selected scope chip, starred icons and the frame's band take it
+  (the page styles them with `--brand`, `--brand-soft` and `--brand-ink`,
+  nothing radio-specific). Both pass the contrast rules as declared (white
+  text on the deep one, near-black on the light one), so the load log is
+  quiet. Without `accent_dark` the dark theme would get a shade derived
+  from `#146859`.
 * **Three `[[realtime]]` entries** — note the many-to-one mapping:
   `plugin_radio_stations_changed` *and* `plugin_radio_now_playing_changed`
   both feed the `radio.stations` realtime channel via `snapshot_stations`.

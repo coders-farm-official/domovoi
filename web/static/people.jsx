@@ -51,7 +51,7 @@ const ConfirmForget = ({ person, sessionCount, turnCount, open, onClose, onConfi
         <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-soft)',
                       display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'var(--err-soft)',
-                        display: 'grid', placeItems: 'center', color: 'var(--err)' }}>
+                        display: 'grid', placeItems: 'center', color: 'var(--err-ink)' }}>
             <Icon name="alert-triangle" size={14}/>
           </div>
           <div style={{ fontSize: 14, fontWeight: 600 }}>
@@ -81,8 +81,8 @@ const ConfirmForget = ({ person, sessionCount, turnCount, open, onClose, onConfi
                       display: 'flex', gap: 8, justifyContent: 'flex-end', background: 'var(--sunken)' }}>
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="primary" icon="trash-2" disabled={!ok} onClick={() => onConfirm(person)}
-                  style={{ background: ok ? 'var(--err)' : 'var(--err-soft)',
-                           color: ok ? 'white' : 'var(--err)',
+                  style={{ background: ok ? 'var(--danger)' : 'var(--danger-soft)',
+                           color: ok ? 'var(--danger-fg)' : 'var(--err-ink)',
                            borderColor: 'transparent' }}>
             Forget {person.name}
           </Button>
@@ -140,7 +140,7 @@ const PersonVoiceSampleRow = ({ sample, onDelete }) => (
       )}
     </div>
     <Button icon="trash-2" onClick={() => onDelete(sample)}
-            style={{ background: 'var(--err-soft)', color: 'var(--err)', borderColor: 'transparent' }}>
+            style={{ background: 'var(--err-soft)', color: 'var(--err-ink)', borderColor: 'transparent' }}>
       delete
     </Button>
   </div>
@@ -287,7 +287,7 @@ const ProfileTab = ({ person, sessionCount, turnCount, samples, onDeleteSample, 
       <div style={{ padding: 16, display: 'flex', alignItems: 'center', gap: 8, background: 'var(--sunken)', borderTop: '1px solid var(--border-soft)' }}>
         <div style={{ marginLeft: 'auto' }}>
           <Button icon="trash-2" onClick={onForget}
-                  style={{ background: 'var(--err-soft)', color: 'var(--err)', borderColor: 'transparent' }}>
+                  style={{ background: 'var(--err-soft)', color: 'var(--err-ink)', borderColor: 'transparent' }}>
             forget person
           </Button>
         </div>
@@ -317,7 +317,7 @@ const MemoryRow = ({ m, dimmed, onApprove, onReject, onDelete }) => (
     {onApprove && <Button icon="check" variant="primary" onClick={onApprove}>approve</Button>}
     {onReject && <Button icon="x" onClick={onReject}>reject</Button>}
     <Button icon="trash-2" onClick={onDelete}
-            style={{ background: 'var(--err-soft)', color: 'var(--err)', borderColor: 'transparent' }}>
+            style={{ background: 'var(--err-soft)', color: 'var(--err-ink)', borderColor: 'transparent' }}>
       forget
     </Button>
   </div>
@@ -616,7 +616,7 @@ const ConversationTurn = ({ c }) => {
         <span>{shown}{long && (
           <button onClick={() => setMore(m => !m)}
                   style={{ font: 'inherit', fontSize: 12, marginLeft: 4, background: 'none', border: 'none',
-                           color: 'var(--brand)', cursor: 'pointer', padding: 0 }}>
+                           color: 'var(--brand-ink)', cursor: 'pointer', padding: 0 }}>
             {more ? 'less' : 'more'}
           </button>
         )}</span>
@@ -722,7 +722,7 @@ const VoiceHistoryJobLine = ({ job }) => {
   if (job.state === 'queued' || job.state === 'running')
     return <span>Deleting all voice history… {turns} turn{turns === 1 ? '' : 's'} so far.</span>;
   if (job.state === 'failed')
-    return <span style={{ color: 'var(--err)' }}>The delete stopped ({job.error}). The server tries again within the hour.</span>;
+    return <span style={{ color: 'var(--err-ink)' }}>The delete stopped ({job.error}). The server tries again within the hour.</span>;
   return (
     <span>
       Deleted everything said before {new Date(job.cutoff).toLocaleString()} ({turns} turn{turns === 1 ? '' : 's'}), {relTime(job.finished_at)}.
@@ -825,7 +825,7 @@ const VoiceHistoryView = ({ vh, onBack, fire }) => {
             {data && data.keep === 'forever' && <span>Forever: nothing is deleted on its own.</span>}
             {data && data.keep !== 'forever' && cleanup && cleanup.finished_at && (
               cleanup.state === 'failed'
-                ? <span style={{ color: 'var(--err)' }}>the last cleanup, {relTime(cleanup.finished_at)}, stopped ({cleanup.error}); the server tries again within the hour</span>
+                ? <span style={{ color: 'var(--err-ink)' }}>the last cleanup, {relTime(cleanup.finished_at)}, stopped ({cleanup.error}); the server tries again within the hour</span>
                 : <span>last cleanup {relTime(cleanup.finished_at)}: {cleaned} turn{cleaned === 1 ? '' : 's'} deleted</span>
             )}
             {job && <VoiceHistoryJobLine job={job}/>}
@@ -833,7 +833,7 @@ const VoiceHistoryView = ({ vh, onBack, fire }) => {
 
           <div style={{ paddingTop: 14, borderTop: '1px solid var(--border-soft)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <Button icon="trash-2" disabled={!data || busy || running} onClick={() => setAskDelete(true)}
-                    style={{ background: 'var(--err-soft)', color: 'var(--err)', borderColor: 'transparent' }}>
+                    style={{ background: 'var(--err-soft)', color: 'var(--err-ink)', borderColor: 'transparent' }}>
               Delete all voice history
             </Button>
             <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
@@ -1023,7 +1023,7 @@ const PeoplePage = () => {
                         <div style={{ minWidth: 0 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                             <span style={{ fontSize: 14, fontWeight: 500,
-                                           color: active ? 'var(--brand-press)' : 'var(--fg)' }}>{p.name}</span>
+                                           color: active ? 'var(--brand-ink)' : 'var(--fg)' }}>{p.name}</span>
                             {live && <StatusDot tone="ok" live/>}
                             {p.namesakes > 0 && <span title="someone else has this name too"><StatusDot tone="warn"/></span>}
                           </div>
@@ -1047,7 +1047,7 @@ const PeoplePage = () => {
                            background: view === 'denylist' ? 'var(--brand-soft)' : 'var(--card)',
                            border: '1px solid var(--border)',
                            borderRadius: 'var(--r-md)',
-                           color: view === 'denylist' ? 'var(--brand-press)' : 'var(--fg)' }}>
+                           color: view === 'denylist' ? 'var(--brand-ink)' : 'var(--fg)' }}>
             <Icon name="mic-off" size={14}/>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 13, fontWeight: 500 }}>Voice denylist</div>
@@ -1062,7 +1062,7 @@ const PeoplePage = () => {
                            background: view === 'history' ? 'var(--brand-soft)' : 'var(--card)',
                            border: '1px solid var(--border)',
                            borderRadius: 'var(--r-md)',
-                           color: view === 'history' ? 'var(--brand-press)' : 'var(--fg)' }}>
+                           color: view === 'history' ? 'var(--brand-ink)' : 'var(--fg)' }}>
             <Icon name="history" size={14}/>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 13, fontWeight: 500 }}>Voice history</div>

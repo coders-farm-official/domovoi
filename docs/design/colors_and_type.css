@@ -44,9 +44,12 @@
 
   /* Text */
   --fg:            oklch(0.20 0.01 80);     /* primary text */
+  /* Every text step reads at 4.5:1 or better on canvas, card, raised and
+     sunken in its theme (WCAG AA; domovoi/tests/test_web_contrast.py
+     holds it). Faint was 1.9:1 here and 2.2:1 in dark before 2026-10-17. */
   --fg-muted:      oklch(0.45 0.01 80);     /* labels, meta */
-  --fg-subtle:     oklch(0.62 0.008 80);    /* placeholder, hint */
-  --fg-faint:      oklch(0.78 0.005 80);    /* timestamps in tables */
+  --fg-subtle:     oklch(0.50 0.008 80);    /* placeholder, hint */
+  --fg-faint:      oklch(0.53 0.006 80);    /* timestamps in tables */
   --fg-on-brand:   oklch(0.22 0.05 75);
 
   /* Borders */
@@ -63,6 +66,21 @@
   --err-soft:      oklch(0.62 0.21 25 / 0.12);
   --idle:          oklch(0.70 0.005 80);    /* idle / offline — gray */
   --idle-soft:     oklch(0.70 0.005 80 / 0.14);
+
+  /* Ink: the brand and status hues as TEXT or an icon on a light surface
+     (links, pills, "failed" in a row). The fills above stay for buttons,
+     dots and washes; at their lightness amber and green read about 2:1 as
+     text on white. Same hue, deeper, 4.5:1 on white and on their -soft
+     wash. Dark theme: the fills themselves already read, so ink = fill. */
+  --brand-ink:     oklch(0.52 0.13 70);
+  --ok-ink:        oklch(0.50 0.14 145);
+  --warn-ink:      oklch(0.52 0.13 60);
+  --err-ink:       oklch(0.52 0.19 25);
+
+  /* Destructive buttons (delete, forget): fill + the text on it. */
+  --danger:        oklch(0.52 0.19 25);
+  --danger-soft:   oklch(0.62 0.21 25 / 0.12);
+  --danger-fg:     oklch(0.99 0.003 80);
 
   /* Shadows — warm-tinted */
   --shadow-xs: 0 1px 2px oklch(0.20 0.01 80 / 0.06);
@@ -126,8 +144,8 @@
 
   --fg:            oklch(0.965 0.005 80);
   --fg-muted:      oklch(0.72 0.008 80);
-  --fg-subtle:     oklch(0.55 0.008 80);
-  --fg-faint:      oklch(0.42 0.008 80);
+  --fg-subtle:     oklch(0.66 0.008 80);
+  --fg-faint:      oklch(0.63 0.008 80);
 
   --border:        oklch(0.30 0.006 80);
   --border-strong: oklch(0.40 0.006 80);
@@ -150,12 +168,33 @@
   --idle:          oklch(0.55 0.006 80);
   --idle-soft:     oklch(0.55 0.006 80 / 0.18);
 
+  --brand-ink:     var(--brand);
+  --ok-ink:        var(--ok);
+  --warn-ink:      var(--warn);
+  --err-ink:       var(--err);
+
+  --danger:        var(--err);
+  --danger-soft:   var(--err-soft);
+  --danger-fg:     oklch(0.16 0.03 25);
+
   --shadow-xs: 0 1px 2px oklch(0 0 0 / 0.30);
   --shadow-sm: 0 2px 6px oklch(0 0 0 / 0.36), 0 1px 2px oklch(0 0 0 / 0.20);
   --shadow-md: 0 8px 24px oklch(0 0 0 / 0.45), 0 2px 6px oklch(0 0 0 / 0.30);
 }
 
 /* ---- BASE / SEMANTIC --------------------------------------- */
+/* Tell the browser which theme is showing, so what it draws itself
+   follows it: form controls, scrollbars, the date picker, and above all
+   the default text colour of a <button> or <input> that sets none (black
+   on the dark card: Settings -> Satellites' "prepare satellite media"
+   title, 1.15:1, 2026-10-17). */
+:root { color-scheme: light; }
+:root[data-theme='dark'] { color-scheme: dark; }
+/* A control with no colour of its own takes its surroundings', like any
+   other element, instead of the browser's ButtonText / FieldText. Zero
+   specificity: any class or inline colour still wins. */
+:where(button, input, select, textarea) { color: inherit; }
+:where(input, textarea)::placeholder { color: var(--fg-subtle); opacity: 1; }
 html, body {
   background: var(--canvas);
   color: var(--fg);

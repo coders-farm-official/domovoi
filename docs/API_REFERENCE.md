@@ -607,7 +607,7 @@ household device token instead of a caller's credential.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `GET /api/plugins/manifest` | Open | — | Everything the frontend shell needs to render plugin pages without a rebuild (pages, nav entries, realtime channels, load errors). Served by the plugin host router, ahead of the `/{slug}` matchers. |
+| `GET /api/plugins/manifest` | Open | — | Everything the frontend shell needs to render plugin pages without a rebuild (pages, nav entries, realtime channels, load errors), and for the plugin page frame each plugin's `publisher` and `accent`: `{source: "plugin"|"default", light: {...}, dark: {...}}`, each theme's `brand`, `brand_hover`, `brand_press`, `brand_fg`, `brand_soft`, `brand_halo`, `brand_ring`, `brand_ink` as `#rrggbb` / `#rrggbbaa`, already contrast-checked (the neutral plugin slate when the plugin declares no `[plugin].accent`). Served by the plugin host router, ahead of the `/{slug}` matchers. |
 | `GET /plugins/{slug}/static/{path}` | Open | — | A plugin's `web/static` assets. Containment-checked; `404` when the plugin is disabled. |
 | `GET /api/plugins` | Open | — | Installed plugins with the fields the admin list renders: manifest metadata, permissions, capabilities, handlers, pages, `web_load_error`, and `worker_notes` (since 2026-10-15: the core's `GET /v1/plugins` `worker_notes`, asked with a 1.5 s limit; `[]` when the core doesn't answer). |
 | `GET /api/plugins/{slug}/purge-preview` | Open | — | What uninstall-with-purge would drop: `{schema: "plugin_<slug>", tables: [{table, rows}]}`. |
@@ -622,7 +622,7 @@ household device token instead of a caller's credential.
 
 | Method & path | Auth | Response / purpose |
 |---|---|---|
-| `GET /api/capabilities` | Open | The live capability map (proxied view of the core registry) the sidebar's "+ add" affordances gate on. Also `host_kind` — `linux`, `wsl`, `windows` or `darwin` (`DOMOVOI_HOST_KIND` overrides the detection); `wsl` is a Windows install, where Settings → Satellites explains that USB adoption and writing a card aren't available. |
+| `GET /api/capabilities` | Open | The live capability map (proxied view of the core registry) the sidebar's "+ add" affordances gate on. Each plugin entry carries `name`, `publisher` and the same `accent` object as `/api/plugins/manifest` (the Android app's plugin screen frame). Also `host_kind` — `linux`, `wsl`, `windows` or `darwin` (`DOMOVOI_HOST_KIND` overrides the detection); `wsl` is a Windows install, where Settings → Satellites explains that USB adoption and writing a card aren't available. |
 | `GET /api/capabilities/manual` | Open | Handler metadata + example phrases for the "What can I say?" manual page (from core `GET /v1/handlers`). |
 
 ### 3.4 Acquisitions

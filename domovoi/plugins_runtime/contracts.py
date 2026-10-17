@@ -54,6 +54,7 @@ from domovoi.plugins_runtime.manifest import (
     PLUGIN_BAND_MIN,
     WEB_ROUTE_RE,
     PluginManifest,
+    nav_icon_problem,
 )
 
 IMPORT_TIME_BUDGET_SEC = 10.0
@@ -453,12 +454,37 @@ def check_web_routes(
                 f"route {route!r} — each page needs its own route"
             )
         seen[route] = page.page
+        # Icons: a warning, not an error — a bad icon path costs the page its
+        # icon (the dashboard shows the puzzle glyph), never the plugin.
+        for key in ("nav_icon", "nav_icon_dark"):
+            icon = getattr(page, key, None)
+            problem = nav_icon_problem(icon) if icon is not None else None
+            if problem:
+                report.warnings.append(
+                    f"web page {page.page!r} {key} {icon!r} {problem}; "
+                    f"the dashboard ignores it"
+                )
+        if page.nav_icon_dark and not page.nav_icon:
+            report.warnings.append(
+                f"web page {page.page!r} has nav_icon_dark but no nav_icon; "
+                f"the dark icon is used only beside a light one (nav_icon)"
+            )
         for other_route, other_slug in foreign_routes:
             if other_route == route and other_slug != slug:
                 report.errors.append(
                     f"web page {page.page!r} route {route!r} is already used "
                     f"by the enabled plugin {other_slug!r} — pick another route"
                 )
+
+
+def check_accent(manifest: PluginManifest, report: ContractReport) -> None:
+    """``[plugin].accent`` / ``accent_dark`` (2026-10-17): a warning, never
+    an error. A value that isn't a colour (or is core's amber) gets the
+    default plugin accent; one that fails the contrast rules is moved until
+    it passes. The warnings say which, and the colour the page gets."""
+    from domovoi.plugins_runtime.accent import resolve_accent
+
+    report.warnings.extend(resolve_accent(manifest.accent, manifest.accent_dark).warnings)
 
 
 def check_route_tiers(
@@ -573,6 +599,7 @@ def run_contract_checks(
         capability_names, report,
     )
     check_web_routes(slug, manifest, list(foreign_web_routes or []), report)
+    check_accent(manifest, report)
     check_containers(
         slug, manifest, list(container_ids or []),
         list(foreign_container_names or []), report,

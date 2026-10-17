@@ -188,7 +188,7 @@ const SatCard = ({ s, onOpen, tick, coreDown = false }) => {
           )}
         </div>
         <span style={{ flex: 1 }}/>
-        <span className="mono sat-card-seen" style={{ fontSize: 11, color: online ? 'var(--ok)' : 'var(--fg-faint)' }}>
+        <span className="mono sat-card-seen" style={{ fontSize: 11, color: online ? 'var(--ok-ink)' : 'var(--fg-faint)' }}>
           {online ? 'active now' : satLastSeen(s) ? `last heard ${relTime(satLastSeen(s))}` : 'never heard'}
         </span>
       </div>
@@ -275,7 +275,7 @@ const SatConversationTurn = ({ c }) => {
         <span>{shown}{long && (
           <button onClick={() => setMore(m => !m)}
                   style={{ font: 'inherit', fontSize: 12, marginLeft: 4, background: 'none', border: 'none',
-                           color: 'var(--brand)', cursor: 'pointer', padding: 0 }}>
+                           color: 'var(--brand-ink)', cursor: 'pointer', padding: 0 }}>
             {more ? 'less' : 'more'}
           </button>
         )}</span>
@@ -432,7 +432,7 @@ const SatBootSecurity = ({ boot }) => {
         </div>
       )}
       {satNeeds2023(boot) && (
-        <div role="note" className="sat-boot-2023" style={{ color: 'var(--warn)', lineHeight: 1.5, marginTop: 4 }}>
+        <div role="note" className="sat-boot-2023" style={{ color: 'var(--warn-ink)', lineHeight: 1.5, marginTop: 4 }}>
           This computer's firmware doesn't have Microsoft's 2023 Secure Boot certificate. It keeps
           starting as it is: its boot loader is frozen at the one the USB stick installed. Once Debian
           ships a boot loader signed with the 2023 certificate only, a stick made after that will stop
@@ -1289,7 +1289,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
         <div className="label">pairing</div>
         <div style={{ fontSize: 12 }}>
           {s.pairing && s.pairing.paired ? (
-            <span style={{ color: 'var(--ok)' }}>
+            <span style={{ color: 'var(--ok-ink)' }}>
               paired
               {s.pairing.paired_at && (
                 <span className="mono" style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>
@@ -1475,12 +1475,12 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
         {!upgrading && SAT_UPGRADE_FINISHED.includes(upView.state) && (
           <div className="sat-upgrade-result" data-state={upView.state}
                style={{ fontSize: 12, marginTop: 8,
-                        color: upView.state === 'done' ? 'var(--ok)' : 'var(--warn)' }}>
+                        color: upView.state === 'done' ? 'var(--ok-ink)' : 'var(--warn-ink)' }}>
             {satUpgradeOutcome(s.room_id, upView, { line: true })}
           </div>
         )}
         {upgradeErr && !upgrading && (
-          <div className="sat-upgrade-error" style={{ fontSize: 12, color: 'var(--err)', marginTop: 8 }}>
+          <div className="sat-upgrade-error" style={{ fontSize: 12, color: 'var(--err-ink)', marginTop: 8 }}>
             {upgradeErr}
           </div>
         )}
@@ -1662,7 +1662,7 @@ const RoomTimersBody = ({ room, fire }) => {
                 {SatTimerRowLabel(t, shared)}
               </td>
               <td className="mono">{relTime(t.expires_at)}</td>
-              <td className="num mono" style={{ color: remaining != null && remaining < 600 ? 'var(--warn)' : 'var(--fg)' }}>
+              <td className="num mono" style={{ color: remaining != null && remaining < 600 ? 'var(--warn-ink)' : 'var(--fg)' }}>
                 {fmtRemaining(remaining)}
               </td>
               <td className="actions">
@@ -1843,7 +1843,7 @@ const RoomSettingsBody = ({ room, fire }) => {
     <div style={{ padding: '12px 16px' }}>
       <div style={{ margin: '0 0 12px', padding: '8px 12px', borderRadius: 'var(--r-sm)', background: 'var(--sunken)', border: '1px solid var(--border-soft)', fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
         Saving rewrites the Pi's <code>config.toml</code> and <strong>restarts the satellite</strong> to apply — it drops offline for a few seconds.
-        {!reported && <div style={{ color: 'var(--warn)', marginTop: 4 }}>waiting for the satellite to report its current config…</div>}
+        {!reported && <div style={{ color: 'var(--warn-ink)', marginTop: 4 }}>waiting for the satellite to report its current config…</div>}
       </div>
       {renderGroups(common)}
       {advanced.length > 0 && (
@@ -1861,9 +1861,9 @@ const RoomSettingsBody = ({ room, fire }) => {
         </div>
       )}
       <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border-soft)' }}>
-        {result && result.error && <div style={{ fontSize: 12, color: 'var(--err)', marginBottom: 8 }}>save failed: {result.error}</div>}
-        {rejectedCount > 0 && <div style={{ fontSize: 12, color: 'var(--err)', marginBottom: 8 }}>rejected: {Object.entries(result.rejected).map(([k, v]) => `${k} (${v})`).join('; ')}</div>}
-        {result && result.restarting && <div style={{ fontSize: 12, color: 'var(--warn)', marginBottom: 8 }}>saved — {room} is restarting to apply. It'll reconnect shortly; reopen to confirm.</div>}
+        {result && result.error && <div style={{ fontSize: 12, color: 'var(--err-ink)', marginBottom: 8 }}>save failed: {result.error}</div>}
+        {rejectedCount > 0 && <div style={{ fontSize: 12, color: 'var(--err-ink)', marginBottom: 8 }}>rejected: {Object.entries(result.rejected).map(([k, v]) => `${k} (${v})`).join('; ')}</div>}
+        {result && result.restarting && <div style={{ fontSize: 12, color: 'var(--warn-ink)', marginBottom: 8 }}>saved — {room} is restarting to apply. It'll reconnect shortly; reopen to confirm.</div>}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{dirtyCount > 0 ? `${dirtyCount} unsaved` : 'no changes'}</span>
           <div style={{ marginLeft: 'auto' }}>
@@ -2231,8 +2231,8 @@ const AdoptModal = ({ pending, sats, force, onClose, onAdopted, fire }) => {
           <>
             <input value={roomId} onChange={e => setRoomId(e.target.value)} style={adoptInputStyle}
                    placeholder="kitchen, livingroom_tv, …" autoFocus disabled={force && !!pending.already_adopted_as}/>
-            {roomId && !idOk && <div className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 4 }}>lowercase letters, digits, _ — must start with a letter</div>}
-            {collision && <div className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 4 }}>that name is taken</div>}
+            {roomId && !idOk && <div className="mono" style={{ fontSize: 11, color: 'var(--err-ink)', marginTop: 4 }}>lowercase letters, digits, _ — must start with a letter</div>}
+            {collision && <div className="mono" style={{ fontSize: 11, color: 'var(--err-ink)', marginTop: 4 }}>that name is taken</div>}
           </>
         ))}
         {row('room label (optional — groups satellites in one room)', (
@@ -2262,7 +2262,7 @@ const AdoptModal = ({ pending, sats, force, onClose, onAdopted, fire }) => {
           </select>
         ))}
 
-        {err && <div className="mono" style={{ fontSize: 12, color: 'var(--err)', marginBottom: 10 }}>{err}</div>}
+        {err && <div className="mono" style={{ fontSize: 12, color: 'var(--err-ink)', marginBottom: 10 }}>{err}</div>}
 
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 6 }}>
           <Button onClick={close}>Cancel</Button>
@@ -2401,7 +2401,7 @@ const ApprovalCard = ({ a, busy, error, onApprove, onReject, onClearError }) => 
       {error && (
         <div role="alert"
              style={{ padding: '0 16px 10px', fontSize: 12, lineHeight: 1.5,
-                      color: error.tone === 'wait' ? 'var(--warn)' : 'var(--err)' }}>
+                      color: error.tone === 'wait' ? 'var(--warn-ink)' : 'var(--err-ink)' }}>
           {error.text}
         </div>
       )}
@@ -2436,7 +2436,7 @@ const PendingSatCard = ({ p, adopted, onAdopt }) => {
               ].filter(Boolean).join(' · ')}
         </div>
         {failed && p.error && (
-          <div className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 2 }}>{p.error}</div>
+          <div className="mono" style={{ fontSize: 11, color: 'var(--err-ink)', marginTop: 2 }}>{p.error}</div>
         )}
       </div>
       {adopted ? (
@@ -2497,7 +2497,7 @@ const SpareQr = ({ text }) => {
     }).catch((e) => { if (alive) setErr(e.message || String(e)); });
     return () => { alive = false; };
   }, [text]);
-  if (err) return <div style={{ fontSize: 12, color: 'var(--err)' }}>couldn’t draw the QR code: {err}</div>;
+  if (err) return <div style={{ fontSize: 12, color: 'var(--err-ink)' }}>couldn’t draw the QR code: {err}</div>;
   if (!matrix) return <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>drawing the QR code…</div>;
   const q = 4;   // the quiet zone, in modules
   const size = matrix.n + 2 * q;
@@ -2565,7 +2565,7 @@ const SpareWindows = ({ res, fire }) => {
                     borderRadius: 'var(--r-sm)', maxHeight: 160, overflow: 'auto' }}>{res.command_windows}</pre>
       <div><Button icon="copy" onClick={copy}>copy the Windows command</Button></div>
       <div role="note" className="spare-windows-unsigned"
-           style={{ fontSize: 11.5, color: 'var(--warn)', lineHeight: 1.5 }}>
+           style={{ fontSize: 11.5, color: 'var(--warn-ink)', lineHeight: 1.5 }}>
         Not signed yet: the satellite's own code carries no Coders Farm signature (Python itself is
         signed by the Python Software Foundation). Windows Security or another antivirus may warn
         about a command that downloads and starts programs; Windows shows its microphone-in-use
@@ -2581,7 +2581,7 @@ const SpareWindows = ({ res, fire }) => {
                 Get them now, or the PC downloads the same pinned files from python.org and PyPI
                 itself.{' '}
                 {rt.fetch && rt.fetch.ok === false && rt.fetch.message
-                  ? <span style={{ color: 'var(--err)' }}>Last try: {rt.fetch.message}</span> : null}</>}
+                  ? <span style={{ color: 'var(--err-ink)' }}>Last try: {rt.fetch.message}</span> : null}</>}
           {!rt.ready && (
             <div style={{ marginTop: 6 }}>
               <Button icon="download" disabled={running || fetching} onClick={getFiles}>
@@ -2698,8 +2698,8 @@ const AppOnServer = ({ app: initial, onReady }) => {
         <div>The app isn’t on this server yet (Domovoi {v}: {sizes}); until it is, the page tells the
           phone to ask you.</div>
       )}
-      {failed && <div role="alert" className="spare-app-error" style={{ color: 'var(--err)' }}>The download failed: {f.message}</div>}
-      {error && <div role="alert" className="spare-app-error" style={{ color: 'var(--err)' }}>{error}</div>}
+      {failed && <div role="alert" className="spare-app-error" style={{ color: 'var(--err-ink)' }}>The download failed: {f.message}</div>}
+      {error && <div role="alert" className="spare-app-error" style={{ color: 'var(--err-ink)' }}>{error}</div>}
       {kept && <div>Kept {kept}.</div>}
       {!running && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -2758,7 +2758,7 @@ const SpareLinuxPython = ({ res, fire }) => {
         : <>This server doesn't hold it yet ({spareMb(rt.bytes_total)}{rt.bytes_cached ? `, ${spareMb(rt.bytes_cached)} so far` : ''}).
             Get it now, or the laptop downloads the same pinned file from GitHub itself.{' '}
             {rt.fetch && rt.fetch.ok === false && rt.fetch.message
-              ? <span style={{ color: 'var(--err)' }}>Last try: {rt.fetch.message}</span> : null}</>}
+              ? <span style={{ color: 'var(--err-ink)' }}>Last try: {rt.fetch.message}</span> : null}</>}
       {!rt.ready && (
         <div style={{ marginTop: 6 }}>
           <Button icon="download" disabled={running || fetching} onClick={getIt}>
@@ -2855,7 +2855,7 @@ const SpareUsbStick = ({ res, body, fire }) => {
         <li>A USB stick of 2 GB or more (everything on it is replaced), and a disk of 8 GB or more in the computer.</li>
       </ul>
       {!st && !error && <div style={note}>asking the server about USB sticks…</div>}
-      {refusal && !running && <div role="alert" className="spare-stick-refusal" style={{ fontSize: 12, color: 'var(--warn)' }}>{refusal.message}</div>}
+      {refusal && !running && <div role="alert" className="spare-stick-refusal" style={{ fontSize: 12, color: 'var(--warn-ink)' }}>{refusal.message}</div>}
       {running ? (
         <div className="spare-stick-progress" style={note}>
           <div>{job.stage === 'download'
@@ -2878,8 +2878,8 @@ const SpareUsbStick = ({ res, body, fire }) => {
           )}
         </div>
       )}
-      {failed && <div role="alert" className="spare-stick-error" style={{ fontSize: 12, color: 'var(--err)' }}>Preparing the stick failed: {job.message}</div>}
-      {error && <div role="alert" className="spare-stick-error" style={{ fontSize: 12, color: 'var(--err)' }}>{error}</div>}
+      {failed && <div role="alert" className="spare-stick-error" style={{ fontSize: 12, color: 'var(--err-ink)' }}>Preparing the stick failed: {job.message}</div>}
+      {error && <div role="alert" className="spare-stick-error" style={{ fontSize: 12, color: 'var(--err-ink)' }}>{error}</div>}
       {mine && (
         <div className="spare-stick-ready" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={note}>
@@ -2922,7 +2922,7 @@ const SpareUsbStick = ({ res, body, fire }) => {
           <div>If the computer refuses it (“Access Denied”, “Secure Boot violation”), its firmware has
             Microsoft’s third-party certificate switched off (some Lenovo and Surface models since 2022): turn on
             “Allow Microsoft 3rd Party UEFI CA” in its firmware settings, or turn Secure Boot off.</div>
-          <div style={{ color: 'var(--warn)' }}>Some older PCs’ firmware only has Microsoft’s 2011 certificate,
+          <div style={{ color: 'var(--warn-ink)' }}>Some older PCs’ firmware only has Microsoft’s 2011 certificate,
             and Debian’s newer boot loaders are signed with the 2023 one only. So the room keeps the boot loader
             the stick installed (it is frozen, never updated), and this page warns on that room’s health card
             when its firmware lacks the 2023 certificate. To update the firmware by hand: install the maker’s
@@ -3030,7 +3030,7 @@ const SpareDeviceCard = ({ fire }) => {
             )}
           </div>
           {err && (
-            <div role="alert" style={{ fontSize: 12, color: 'var(--err)' }}>
+            <div role="alert" style={{ fontSize: 12, color: 'var(--err-ink)' }}>
               {err}{/home network/.test(err) && !editCore
                 ? ' — tick “a different server address” and give its address on your network.' : ''}
             </div>
@@ -3041,7 +3041,7 @@ const SpareDeviceCard = ({ fire }) => {
                 It connects as <span className="mono">{res.room_id}</span> to{' '}
                 <span className="mono">{res.core}</span>.
               </div>
-              {res.conflict && <div role="alert" style={{ fontSize: 12, color: 'var(--warn)' }}>{res.conflict}</div>}
+              {res.conflict && <div role="alert" style={{ fontSize: 12, color: 'var(--warn-ink)' }}>{res.conflict}</div>}
               <div className="spare-device-body" style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
                 <div style={{ flex: '1 1 320px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <div className="label">linux laptop or mini pc</div>
