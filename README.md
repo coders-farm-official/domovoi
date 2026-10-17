@@ -189,7 +189,10 @@ they have been tried on fewer devices than the rest, aren't yet held to
   openSUSE or Arch get the satellite's own pinned Python
   ([older Linux](docs/SPARE_DEVICE_SATELLITES.md#older-linux-and-fedora-opensuse-arch)),
   and a processor from before about 2009 is turned away before anything
-  is downloaded.
+  is downloaded. A phone room changes its voice like any room ("switch to
+  Kristin's voice"); the server keeps the choice for it. An admin can also
+  pick any room's voice in its drawer on the dashboard (Settings →
+  Satellites).
 - **A USB stick that turns an old PC into a room.** The dashboard prepares
   the stick, and an old 64-bit PC, laptop or Intel Mac installs Debian and
   the satellite from it after you type ERASE on it; a network cable for the
@@ -595,8 +598,9 @@ The differences are deliberate:
 - **Phone room mode** turns an old phone or tablet on its charger into a
   room: wake word, answers, the room's music, announcements, and drop-ins
   where the phone has an echo canceller. It has no barge-in and no chat
-  mode, and the dashboard doesn't restart, upgrade or reconfigure it; the
-  app updates like any other app
+  mode, and the dashboard doesn't restart, upgrade or reconfigure it
+  (beyond its voice, which the server keeps for it); the app updates like
+  any other app
   ([what a phone room does](docs/SPARE_DEVICE_SATELLITES.md#what-a-phone-room-does)).
 - **The dashboard** is the seat of management. It is the *only* place plugins
   can be installed, and installs are admin-gated behind an explicit trust
