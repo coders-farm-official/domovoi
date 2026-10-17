@@ -746,6 +746,32 @@ async def test_a_database_blip_is_503_not_a_wrong_token(monkeypatch) -> None:
     assert admin_auth.DEVICE_TOKEN_BACKOFF.retry_after("127.0.0.1") == 0.0
 
 
+@pytest.mark.asyncio
+async def test_a_failure_after_the_token_was_judged_wrong_still_counts(monkeypatch) -> None:
+    """Review 2026-10-17, round 2, L1: the token check answers "wrong", then
+    the admin check after it fails. That attempt used to be handed back
+    (an uncounted 503 for a wrong guess, 200 for the right one: an oracle
+    with no price). The wrong token is counted as soon as it is judged
+    wrong; only a failure of the token check itself is free."""
+    install_fake_db(monkeypatch, admin=True, sessions={"admin-token"}, device_token="dev-token")
+
+    async def db_down(*_a, **_k):
+        raise ConnectionError("connection refused (postgres restarting)")
+
+    admin_check = admin_auth.has_admin_auth
+    monkeypatch.setattr(admin_auth, "has_admin_auth", db_down)
+    async with mini_client() as c:
+        for i in range(admin_auth.DEVICE_TOKEN_FREE_ATTEMPTS + 1):
+            r = await c.post("/device", headers={HEADER: f"guess-{i}"})
+            assert r.status_code == 503   # still fail-closed, as "try again"
+        # Every judged-wrong guess was charged: the ladder has started...
+        assert admin_auth.DEVICE_TOKEN_BACKOFF.retry_after("127.0.0.1") > 0
+        # ...so once the database answers again, even the right token waits,
+        # as after any run of wrong ones.
+        monkeypatch.setattr(admin_auth, "has_admin_auth", admin_check)
+        assert (await c.post("/device", headers={HEADER: "dev-token"})).status_code == 429
+
+
 def test_a_released_reservation_leaves_no_trace() -> None:
     b = _fresh_backoff(free_attempts=0, global_ceiling=False)
     b.record_failure("lan")

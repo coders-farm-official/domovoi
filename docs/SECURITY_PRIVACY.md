@@ -546,7 +546,18 @@ Connection**, each with a forget button — the server in use included,
 after a confirmation that shows the pinned key next to the one it proves
 now, which is how a phone re-pairs after a reinstalled or replaced
 server — and a server switch drops trust (only the trust) that is no
-longer attached to a listed server. This is the pre-TLS interim, and the
+longer attached to a listed server. When the server in use proves a
+different key, the phone's warning can also **trust it again** (both
+fingerprints shown, after a valid signature from the new key): that pins
+the new key and forgets the household token first, so the old token never
+travels to the new key and the phone pairs again (`Prefs.replacePin`).
+**Known limit:** the token it forgets is the one saved under the address
+spelling in use. Tokens are keyed by the saved address as typed (trimmed,
+not lowercased) and pins by `scheme://host:port`, so a second saved
+spelling of the same server (a host-name case variant, say) would keep its
+old token under the new pin. That takes two saved spellings of one server,
+which is unlikely in practice; forgetting a spelling under **Settings →
+Connection** drops its token. This is the pre-TLS interim, and the
 proof is a signed nonce with no address bound to it: a relay that can reach
 the real core from a hostile network (a port-forward, an overlay network)
 would still pass it. TLS with a pinned certificate closes that and stays on

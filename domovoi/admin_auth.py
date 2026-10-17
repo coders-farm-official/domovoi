@@ -1425,13 +1425,17 @@ async def _classify_device(
                 if await validate_device_token(s, presented):
                     DEVICE_TOKEN_BACKOFF.record_success(source)
                     return "ok"
+                # Judged wrong: counted NOW (review 2026-10-17, L1). Only a
+                # failure of the token check itself hands the reservation
+                # back; one in the admin check after it must not, or a wrong
+                # guess would cost nothing whenever that check fails.
+                DEVICE_TOKEN_BACKOFF.record_failure(source)
+                pending.remove(source)
         admin = await check_admin_request(conn, s)
         if admin in ("ok", "pre-setup"):
             if reserved:
                 DEVICE_TOKEN_BACKOFF.record_success(source)
             return "admin" if admin == "ok" else "pre-setup"
-        if reserved:
-            DEVICE_TOKEN_BACKOFF.record_failure(source)
         if throttled:
             return "throttled"
         if presented is not None:
