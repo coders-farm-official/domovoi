@@ -30,7 +30,27 @@ const val CAP_IMAGEGEN = "imagegen"
 data class CapabilityPlugin(
     val slug: String = "",
     val version: String? = null,
+    /** For the plugin screen frame (ui/components/PluginFrame.kt): the
+     *  manifest's name and publisher, and the page colour per theme. Absent
+     *  from an older server: the frame then shows the slug and keeps the
+     *  app's own colours. */
+    val name: String? = null,
+    val publisher: String? = null,
+    val accent: PluginAccent? = null,
     @SerialName("android_capabilities") val androidCapabilities: List<String> = emptyList(),
+)
+
+/** A plugin's accent as the server derived it (plugins_runtime/accent.py):
+ *  per theme, `brand`, `brand_hover`, `brand_press`, `brand_fg`,
+ *  `brand_soft`, `brand_halo`, `brand_ring`, `brand_ink` as `#rrggbb` or
+ *  `#rrggbbaa`, already contrast-checked against the dashboard's surfaces
+ *  (the app's are the same tokens). `source` is "plugin" or "default"
+ *  (the neutral plugin slate). */
+@Serializable
+data class PluginAccent(
+    val source: String = "default",
+    val light: Map<String, String> = emptyMap(),
+    val dark: Map<String, String> = emptyMap(),
 )
 
 /** One handler's display metadata: server-supplied label + tone slug.
@@ -54,6 +74,10 @@ data class Capabilities(
     /** True when any installed plugin declares [capability]. */
     fun has(capability: String): Boolean =
         plugins.any { capability in it.androidCapabilities }
+
+    /** The plugin that provides [capability] (the first, as [has] counts). */
+    fun pluginFor(capability: String): CapabilityPlugin? =
+        plugins.firstOrNull { capability in it.androidCapabilities }
 
     /** Server-supplied tone slug for a handler/source name; `"neutral"`
      *  when the name is unknown (design §8). */

@@ -5,9 +5,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.domovoi.app.net.CAP_IMAGEGEN
+import com.domovoi.app.net.CAP_STATIONS
 import com.domovoi.app.net.LocalCapabilities
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.EmptyState
+import com.domovoi.app.ui.components.PluginScreenFrame
 import com.domovoi.app.ui.screens.assistant.AssistantScreen
 import com.domovoi.app.ui.screens.audiobooks.AudiobooksScreen
 import com.domovoi.app.ui.screens.calendar.CalendarScreen
@@ -58,12 +61,14 @@ fun ScreenRouter(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts 
         Route.Podcasts -> PodcastsScreen()
         Route.Audiobooks -> AudiobooksScreen()
         Route.Videos -> SourceSwitchPage(DevicePage.Videos, server = { VideosScreen() }, device = { YourDeviceVideos() })
-        Route.Images -> ImagesScreen()
+        // Screens a plugin provides sit in its frame (ui/components/PluginFrame.kt):
+        // its name, publisher and colour, as the dashboard frames its pages.
+        Route.Images -> PluginScreenFrame(CAP_IMAGEGEN, route.icon) { ImagesScreen() }
         Route.News -> NewsScreen()
         Route.People -> PeopleScreen()
         Route.Satellites -> SatellitesScreen()
         Route.Calendar -> CalendarScreen()
-        Route.Stations -> StationsScreen()
+        Route.Stations -> PluginScreenFrame(CAP_STATIONS, route.icon) { StationsScreen() }
         Route.Files -> SourceSwitchPage(DevicePage.Files, server = { FilesScreen() }, device = { YourDeviceFiles() })
         Route.Settings -> SettingsScreen(navigate)
         Route.Manual -> ManualScreen(navigate)
