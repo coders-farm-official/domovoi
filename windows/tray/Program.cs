@@ -40,6 +40,11 @@ namespace Domovoi.Windows.Tray
                 return Snapshot.Run(opt, store, exe);
             }
 
+            // Never as an administrator: started elevated (Setup carrying on
+            // after a restart, or "Run as administrator"), it starts again
+            // through the shell, as the signed-in person, and this copy ends.
+            if (Elevation.ElevatedWithSplitToken() && Elevation.RelaunchThroughShell(exe)) return 0;
+
             string name = opt.Dev ? "DomovoiTray-dev-" + opt.Profile : "DomovoiTray";
             bool created;
             using (var mutex = new Mutex(true, @"Local\" + name, out created))
@@ -95,6 +100,37 @@ namespace Domovoi.Windows.Tray
                 }
             }
             return 0;
+        }
+
+        static class Elevation
+        {
+            [System.Runtime.InteropServices.DllImport("advapi32.dll", SetLastError = true)]
+            static extern bool GetTokenInformation(IntPtr token, int cls, out int value, int size, out int returned);
+
+            // TokenElevationTypeFull: an administrator's elevated half of a
+            // split token (UAC on). With UAC off there is no other half to
+            // start as, so nothing is relaunched (and nothing loops).
+            public static bool ElevatedWithSplitToken()
+            {
+                using (var id = System.Security.Principal.WindowsIdentity.GetCurrent())
+                {
+                    int type, got;
+                    return GetTokenInformation(id.Token, 18, out type, 4, out got) && type == 2;
+                }
+            }
+
+            // explorer.exe hands the start to the running shell, which is
+            // the signed-in person's, unelevated.
+            public static bool RelaunchThroughShell(string exe)
+            {
+                try
+                {
+                    string explorer = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(explorer, "\"" + exe + "\"") { UseShellExecute = false });
+                    return true;
+                }
+                catch (System.ComponentModel.Win32Exception) { return false; }
+            }
         }
 
         static string LogPath(Options opt)
