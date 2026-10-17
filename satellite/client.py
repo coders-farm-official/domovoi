@@ -3324,7 +3324,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
         """Whether NetworkManager owns wlan0 on this device.
 
         A portal-onboarded satellite is NM end to end - the setup AP is an
-        `nmcli device wifi hotspot`, and the join is `nmcli device wifi
+        NM access-point profile, and the join is `nmcli device wifi
         connect`. Under NM, wpa_supplicant is driven over D-Bus and wpa_cli
         usually cannot reach its control socket at all, so the reassociate
         below is a no-op on exactly the devices the portal creates.

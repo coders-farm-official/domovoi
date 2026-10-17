@@ -33,6 +33,10 @@ ExecStart=@HOME@/satellite-venv/bin/python -m satellite.provisioning_mode
 WorkingDirectory=@HOME@/domovoi
 Restart=on-failure
 RestartSec=5
+# Exit 3: setup can never start on this card (provisioning_mode
+# EXIT_CANNOT_SET_UP: the setup network's packages are missing). The ring is
+# red and the card's device-info.json says why; restarting changes nothing.
+RestartPreventExitStatus=3
 
 [Install]
 WantedBy=multi-user.target

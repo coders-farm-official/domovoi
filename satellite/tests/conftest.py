@@ -169,6 +169,13 @@ def satellite_paths_in_tmp(tmp_path, monkeypatch):
             moved = _relocate(value, home)
             if moved is not None:
                 monkeypatch.setattr(module, attr, moved, raising=False)
+    # The card's boot partition (satellite/setup_report.py writes
+    # domovoi/device-info.json there). A tuple of roots outside the home, so
+    # the loop above can't move it; on a Linux runner /boot/firmware/domovoi
+    # could even exist. Nothing is written unless a test makes the folder.
+    from satellite import setup_report
+
+    monkeypatch.setattr(setup_report, "BOOT_DIRS", (home / "boot",))
     return home
 
 

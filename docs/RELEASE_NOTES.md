@@ -4,6 +4,52 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — Some Samsung phones couldn't join a new satellite's setup network
+
+Server update (the satellite code a prepared card carries; no migration).
+It reaches a satellite only through a card prepared after the update:
+**prepare the card again and rewrite it.** A card that is already written
+keeps the old setup network, and nothing on its boot partition changes
+that (its code was copied off the card at first boot); set it up from
+another phone, or rewrite it.
+
+* **Found on hardware:** a Samsung phone said "Couldn't connect to
+  network" to a new satellite's `Domovoi-Setup-<id>` every time, with the
+  right key, while a Motorola joined the same network at once. The same
+  Samsung had set up every earlier satellite. The setup network's security
+  was left to NetworkManager, which offers WPA3 alongside WPA2, with
+  Protected Management Frames (PMF) optional, whenever the Pi's Wi-Fi
+  driver says it can; phones that take WPA3 when it is offered then fail,
+  because the Pi's driver (brcmfmac) breaks PMF as an access point. What
+  changed since September (a newer Pi OS image or driver, or a phone
+  update) is not known.
+* **The setup network is now plain WPA2-PSK with AES (CCMP) and PMF off,
+  on 2.4 GHz, on whichever of channels 1, 6 and 11 is quietest** (all
+  three are legal in every country). Phones that already joined used WPA2
+  already, and see no difference. It is created once and started once:
+  before, it came up, was re-addressed and came up again.
+* **The card says what happened.** `domovoi/device-info.json` on the
+  card's boot partition, readable in any PC, now has a `setup_network`
+  block while the satellite waits for setup: whether the network is up,
+  its channel, how many phones have joined it (a phone that got an
+  address), whether the setup page was opened, the last error, and
+  `line`, one plain sentence. `status`, `step` and `error` at the top keep
+  going past stage 1 (`setup-network-up`, `setup-network-failed`,
+  `joining-home-wifi`, `home-wifi-failed`, `joined-home-wifi`).
+* **A card that can't run a setup network says so instead of looping.**
+  If a package the network needs is missing (NetworkManager, `dnsmasq`
+  from `dnsmasq-base`, `wpa_supplicant`), the ring turns solid red and
+  `error` names the package, once; setup stops there (rebuild the card).
+  Any other failure turns the ring red, records the reason and retries
+  after 15 s, 30 s, 60 s ... at most every 5 minutes, instead of crashing
+  and restarting every 5 seconds.
+* **Tuning without a rebuild:** on a card prepared after this update,
+  `domovoi/ap.json` on the boot partition also takes `"channel"` (`1`,
+  `6`, `11` or `"auto"`) and `"pmf"` (`"disable"`, `"optional"`,
+  `"default"`), read at every boot. Anything else is ignored.
+* Only a phone and a Pi can prove the fix; the tests pin the settings.
+
+
 ## 2026-10-17 — Chat answers as Domovoi, pictures included
 
 Dashboard update (the web process; no migration, no app update).

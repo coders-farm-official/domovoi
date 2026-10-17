@@ -399,7 +399,7 @@ def test_the_server_listens_before_the_ap_exists(monkeypatch, tmp_path):
     t = _transport(calls, tmp_path)
 
     def run(cmd, **kw):
-        if "hotspot" in " ".join(cmd):
+        if "connection up" in " ".join(cmd):
             seen["server_up_when_ap_raised"] = t._server is not None
         return base(cmd, **kw)
 
@@ -413,7 +413,7 @@ def test_the_server_listens_before_the_ap_exists(monkeypatch, tmp_path):
 
 def test_a_failed_ap_leaves_no_socket_behind(monkeypatch, tmp_path):
     monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
-    t = _transport([], tmp_path, fail_on="wifi hotspot")
+    t = _transport([], tmp_path, fail_on="connection add")
     with pytest.raises(RuntimeError):
         t.expose(_info())
     assert t._server is None
@@ -424,8 +424,8 @@ def test_expose_scans_before_raising_the_ap(portal):
     scan has to come first."""
     joined = [" ".join(c) for c in portal.calls]
     scan = next(i for i, c in enumerate(joined) if "list" in c)
-    hotspot = next(i for i, c in enumerate(joined) if "hotspot" in c)
-    assert scan < hotspot
+    create = next(i for i, c in enumerate(joined) if "connection add" in c)
+    assert scan < create
 
 
 def test_ap_psk_is_never_logged(portal, caplog):
@@ -526,19 +526,21 @@ def test_the_ap_is_pinned_to_the_advertised_address(portal):
     a FIXED address. If the AP comes up on NetworkManager's own subnet
     instead, every hostname resolves somewhere nothing is listening."""
     joined = [" ".join(c) for c in portal.calls]
-    modify = next(c for c in joined if "connection modify" in c)
-    assert "ipv4.addresses" in modify
-    assert f"{portal.ip}/24" in modify
-    assert "ipv4.method shared" in modify
-    # and re-activated so the new address actually applies
-    assert any("connection up" in c for c in joined)
+    create = next(c for c in joined if "connection add" in c)
+    assert f"ipv4.addresses {portal.ip}/24" in create
+    assert "ipv4.method shared" in create
 
 
-def test_pinning_happens_after_the_hotspot_exists(portal):
+def test_the_address_is_in_the_profile_before_the_one_activation(portal):
+    """The old flow raised the hotspot, modified its address, and raised it
+    again: the setup network flapped and came back re-addressed. Now the
+    profile carries everything and is activated exactly once."""
     joined = [" ".join(c) for c in portal.calls]
-    hotspot = next(i for i, c in enumerate(joined) if "hotspot" in c)
-    modify = next(i for i, c in enumerate(joined) if "connection modify" in c)
-    assert hotspot < modify
+    create = next(i for i, c in enumerate(joined) if "connection add" in c)
+    ups = [i for i, c in enumerate(joined) if "connection up" in c]
+    assert len(ups) == 1 and create < ups[0]
+    assert not any("connection modify" in c for c in joined)
+    assert not any("wifi hotspot" in c for c in joined)
 
 
 # ─── nmcli failures must not look like success ────────────────────────────
@@ -568,15 +570,15 @@ def _info():
 def test_a_failed_hotspot_raises_instead_of_pretending(monkeypatch, tmp_path):
     monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
     calls = []
-    t = _transport(calls, tmp_path, fail_on="wifi hotspot")
-    with pytest.raises(RuntimeError, match="raising the setup AP"):
+    t = _transport(calls, tmp_path, fail_on="connection add")
+    with pytest.raises(RuntimeError, match="creating the setup AP profile"):
         t.expose(_info())
     assert t._ap_up is False, "must not claim an AP that was never created"
 
 
 def test_the_failure_message_carries_nmcli_stderr(monkeypatch, tmp_path):
     monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
-    t = _transport([], tmp_path, fail_on="wifi hotspot")
+    t = _transport([], tmp_path, fail_on="connection add")
     with pytest.raises(RuntimeError, match="nmcli said no"):
         t.expose(_info())
 
@@ -584,7 +586,7 @@ def test_the_failure_message_carries_nmcli_stderr(monkeypatch, tmp_path):
 def test_the_failure_message_never_leaks_the_psk(monkeypatch, tmp_path):
     """The command is in argv; it must not end up in an exception or log."""
     monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
-    t = _transport([], tmp_path, fail_on="wifi hotspot")
+    t = _transport([], tmp_path, fail_on="connection add")
     try:
         t.expose(_info())
     except RuntimeError as e:
@@ -596,9 +598,9 @@ def test_the_failure_message_never_leaks_the_psk(monkeypatch, tmp_path):
 def test_the_interface_is_named_and_p2p_is_skipped(portal):
     """p2p-dev-wlan0 cannot host an AP but sits right next to wlan0 in
     nmcli's list. Letting nmcli choose is how this failed."""
-    hotspot = next(c for c in portal.calls if "hotspot" in " ".join(c))
-    assert "ifname" in hotspot
-    assert hotspot[hotspot.index("ifname") + 1] == "wlan0"
+    create = next(c for c in portal.calls if "connection add" in " ".join(c))
+    assert "ifname" in create
+    assert create[create.index("ifname") + 1] == "wlan0"
 
 
 def test_no_wifi_interface_is_a_clear_error(monkeypatch, tmp_path):
@@ -906,8 +908,9 @@ def test_a_successful_setup_deletes_the_hotspot_profile(monkeypatch, tmp_path):
     calls = []
     t = _transport(calls, tmp_path)
     t.expose(_info())
+    exposed = len(calls)
     t.dispose()
-    joined = [" ".join(c) for c in calls]
+    joined = [" ".join(c) for c in calls[exposed:]]
     down = next(i for i, c in enumerate(joined) if f"connection down {pt.AP_CONNECTION}" in c)
     delete = next(i for i, c in enumerate(joined) if f"connection delete id {pt.AP_CONNECTION}" in c)
     assert down < delete
@@ -920,8 +923,9 @@ def test_a_retry_after_a_failed_join_keeps_the_profile(monkeypatch, tmp_path):
     calls = []
     t = _transport(calls, tmp_path)
     t.expose(_info())
+    exposed = len(calls)
     t.withdraw()
-    assert not any("connection delete" in " ".join(c) for c in calls)
+    assert not any("connection delete" in " ".join(c) for c in calls[exposed:])
 
 
 def test_a_profile_that_will_not_delete_does_not_stop_the_reboot(monkeypatch, tmp_path):
