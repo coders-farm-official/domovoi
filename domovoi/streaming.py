@@ -2940,6 +2940,7 @@ class StreamSession:
                 voice = await SatellitesRepository(s).room_voice(self.room_id)
         except Exception as e:  # noqa: BLE001 - speak in the server's voice
             log.warning("room voice: could not read %s's voice: %s", self.room_id, e)
+        voice = await self._registered_voice(voice)
         voices = self.ws.app.state.satellite_voice
         if voice:
             voices[self.room_id] = voice
@@ -2949,6 +2950,23 @@ class StreamSession:
         else:
             voices.pop(self.room_id, None)
         return voice
+
+    async def _registered_voice(self, name: str | None) -> str | None:
+        """``name`` while the voices registry still has it, else None: a
+        renamed or removed voice has no clips to mirror, and the room speaks
+        in the server's voice anyway (``resolve_voice``). The name as given
+        when the registry can't be read."""
+        if not name:
+            return None
+        from domovoi.db.repositories import VoicesRepository
+
+        try:
+            async with session_scope() as s:
+                row = await VoicesRepository(s).get_by_name(name)
+        except Exception as e:  # noqa: BLE001
+            log.debug("room voice: registry unreadable for %r: %s", name, e)
+            return name
+        return row["name"] if row else None
 
     def _declared_pi_action(
         self, pi_action: str | None, pi_action_arg: str | None
@@ -6030,7 +6048,9 @@ class StreamSession:
         if not self.abilities.allows("voice"):
             # Whose clips to mirror, for a device whose voice the server
             # keeps (domovoi/room_voice.py; None: the server's own voice).
-            frame["room_voice"] = self.ws.app.state.satellite_voice.get(self.room_id)
+            frame["room_voice"] = await self._registered_voice(
+                self.ws.app.state.satellite_voice.get(self.room_id)
+            )
         await self._safe_send_text(frame)
 
     # ── Wake-word clip recording / model push (Feature 5) ─────────────────

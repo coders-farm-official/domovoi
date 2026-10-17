@@ -205,6 +205,29 @@ async def test_an_unreadable_kept_voice_speaks_in_the_servers_voice(paired, kept
     assert "could not read" in caplog.text
 
 
+async def test_a_kept_voice_the_registry_no_longer_has_is_not_said(paired, kept, monkeypatch):
+    """Renamed or removed: no clips to mirror (the phone would prune its
+    greetings), and the room speaks in the server's voice anyway."""
+
+    class Voices:
+        def __init__(self, _s):
+            pass
+
+        async def get_by_name(self, name):
+            return {"name": "Kristin"} if name.lower() == "kristin" else None
+
+    monkeypatch.setattr(repositories, "VoicesRepository", Voices)
+    kept.voices[PHONE["room_id"]] = "Ryan"
+    _, ws, seen = await _run(PHONE)
+    assert ws.sent[0]["room_voice"] is None and seen["voice"] is None
+    kept.voices[PHONE["room_id"]] = "kristin"
+    phone, pws = await _hello(PHONE)
+    assert phone.ws.app.state.satellite_voice[PHONE["room_id"]] == "Kristin", "the registry's spelling"
+    phone.ws.app.state.satellite_voice[PHONE["room_id"]] = "Ryan"  # removed while connected
+    await phone.notify_sounds_changed()
+    assert pws.sent == [{"type": "sounds_changed", "room_voice": None}]
+
+
 async def test_voice_status_from_a_phone_room_is_ignored_and_from_a_pi_cached(paired, kept):
     state = _state()
     kept.voices[PHONE["room_id"]] = "Ryan"
@@ -309,9 +332,17 @@ async def test_the_kept_voice_is_stored_upserted_and_cleared(_clean_satellites):
 
 @requires_db
 async def test_a_phone_room_reconnects_in_the_voice_it_was_switched_to(_clean_satellites, paired):
-    from domovoi.db.session import session_scope
+    from domovoi.db.session import engine, session_scope
 
-    async with session_scope() as s:
-        await repositories.SatellitesRepository(s).set_room_voice(PHONE["room_id"], "Ryan")
-    _, ws, seen = await _run(PHONE)
-    assert ws.sent[0]["room_voice"] == "Ryan" and seen["voice"] == "Ryan"
+    async with engine.begin() as conn:
+        await conn.execute(text("DELETE FROM voices WHERE name = 'RoomVoiceTest'"))
+        await conn.execute(text(
+            "INSERT INTO voices (name, engine, model_ref) VALUES ('RoomVoiceTest', 'piper', 'x.onnx')"))
+    try:
+        async with session_scope() as s:
+            await repositories.SatellitesRepository(s).set_room_voice(PHONE["room_id"], "RoomVoiceTest")
+        _, ws, seen = await _run(PHONE)
+        assert ws.sent[0]["room_voice"] == "RoomVoiceTest" and seen["voice"] == "RoomVoiceTest"
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(text("DELETE FROM voices WHERE name = 'RoomVoiceTest'"))
