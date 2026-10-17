@@ -780,6 +780,13 @@ the `plugins` table and **never imports plugin code**.
 The poll loop stays authoritative: LISTEN is an accelerator, not a
 replacement. A missed notification is caught by the next 1.5 s poll.
 
+The plugin registry is the exception: nothing polls it. The web re-reads it
+on every `plugins_changed`, once each time its LISTEN connection
+(re)connects (whatever changed while nothing listened), and after every
+plugin action it proxies to the core, before answering. A change to the
+plugin channel set adds and removes listeners on the live connection; it
+never reconnects, so a `plugins_changed` sent meanwhile is not lost.
+
 ---
 
 ## 8. Configuration

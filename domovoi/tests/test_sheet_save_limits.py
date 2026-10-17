@@ -146,3 +146,39 @@ def test_a_save_runs_in_the_sheets_pool_and_the_loop_keeps_running(docs_dir, mon
     assert gap < 0.5, f"the loop stalled {gap:.2f} s"
     assert seen and seen[0].startswith("domovoi-sheets")
     assert executors.POOL_SIZES["sheets"] == 1
+
+
+# ─── The refusal's sizes read as different numbers (F-053) ─────────────────
+#
+# rc2 smoke: an 8,820,000-byte CSV (8.4 MiB) was refused with "it is 8 MB,
+# and the editor saves sheets up to 8 MB": both sizes rounded to the same
+# whole number, so the sentence contradicted itself for any file just over
+# the cap.
+
+
+@pytest.mark.parametrize(
+    ("size", "limit", "words"),
+    [
+        (8_820_000, 8 * 1024 * 1024, "8.4 MB"),               # the smoke's file
+        (8 * 1024 * 1024 + 1024, 8 * 1024 * 1024, "just over 8 MB"),
+        (int(9.6 * 1024 * 1024), 8 * 1024 * 1024, "10 MB"),
+        (101 * 1024 * 1024, 8 * 1024 * 1024, "101 MB"),
+        (16 * 1024 * 1024 + 64 * 1024, 16 * 1024 * 1024, "16.1 MB"),
+        (16 * 1024 * 1024 + 1024, 16 * 1024 * 1024, "just over 16 MB"),
+        (int(16.5 * 1024 * 1024), 16 * 1024 * 1024, "16.5 MB"),
+    ],
+)
+def test_the_size_named_is_never_the_limit(size, limit, words) -> None:
+    assert docs._size_past_limit(size, limit) == words
+
+
+def test_the_csv_refusal_names_a_size_past_the_limit(docs_dir) -> None:
+    target = docs_dir / "big-smoke.csv"
+    _big_csv(target, 8_820_000)
+    with target.open("r+b") as fh:          # exactly the smoke's size
+        fh.truncate(8_820_000)
+    r = _put("big-smoke.csv", [[{"v": "2", "f": None}]])
+    assert r.status_code == 413, r.text
+    detail = r.json()["detail"]
+    assert "it is 8.4 MB, and the editor saves sheets up to 8 MB" in detail
+    assert "it is 8 MB" not in detail

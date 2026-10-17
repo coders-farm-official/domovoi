@@ -9,6 +9,7 @@ import hashlib
 import io
 import secrets
 import shutil
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -43,6 +44,18 @@ pytestmark = [pytest.mark.asyncio, requires_db, pytest.mark.xdist_group("pg-role
 FIXTURE = Path(__file__).parent / "fixtures" / "compliments"
 SLUG = "compliments"
 SCHEMA = f"plugin_{SLUG}"
+PKG = f"domovoi_plugin_{SLUG}"
+
+
+def _forget_imports() -> dict:
+    """Drop the fixture package from sys.modules; returns what was there.
+    Each test starts like a fresh core, with nothing of the plugin
+    imported: an install of a slug whose code is already cached waits for
+    a restart (installer.confirm_install)."""
+    ours = {n: m for n, m in sys.modules.items() if n == PKG or n.startswith(PKG + ".")}
+    for name in ours:
+        del sys.modules[name]
+    return ours
 
 
 def build_fixture_zip(
@@ -112,6 +125,7 @@ async def _plugin_env(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(loader_mod, "installed_root", lambda: installed)
     monkeypatch.setattr(loader_mod, "bundled_root", lambda: bundled)
     admin_rows_before = await _admin_rows()
+    saved_modules = _forget_imports()
 
     yield
 
@@ -126,6 +140,8 @@ async def _plugin_env(tmp_path: Path, monkeypatch):
     await reg.delete_plugin(SLUG)
     async with engine.begin() as conn:
         await conn.execute(text(f'DROP SCHEMA IF EXISTS "{SCHEMA}" CASCADE'))
+    _forget_imports()
+    sys.modules.update(saved_modules)
     # Regression guard, checked last so a trip never skips the cleanup
     # above: an admin credential a test commits and leaves behind ends
     # the pre-setup grace for every module that runs later (26

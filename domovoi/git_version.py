@@ -12,11 +12,15 @@ Two things to keep straight:
   the per-file MANIFEST sha256, NOT this commit SHA. When the tree is dirty,
   `current_sha()` appends a ``-dirty`` suffix so the label can't masquerade
   as a clean checkout.
-* Every git call shells out via ``subprocess.run`` inside
+* Every git call shells out via :func:`domovoi.git_run.run` inside
   ``asyncio.to_thread`` (git is blocking) with ``cwd=settings.repo_dir`` and a
   short timeout, and **never raises into the caller** — a missing git binary,
   a timeout, or any other failure collapses into a structured result so an
-  admin endpoint can report "unknown / offline" instead of 500ing.
+  admin endpoint can report "unknown / offline" instead of 500ing. git never
+  asks anything (no password, no host key, no askpass window on the
+  desktop), and the timeout holds: its whole process tree is killed when
+  time is up (F-051). A failed fetch says why in plain words
+  (:func:`_fetch_failure`).
 
 On a Linux host with the update unit installed (docs/LINUX_HOST.md,
 "Updates from the dashboard") this module is also the core's half of that
@@ -57,7 +61,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from domovoi import egress, self_restart
+from domovoi import egress, git_run, self_restart
 from domovoi.config import settings
 
 log = logging.getLogger(__name__)
@@ -70,9 +74,7 @@ _GIT_TIMEOUT_SEC = 10.0
 # On Windows a console-less parent (pythonw, a service, uvicorn launched from
 # a detached shell) gets a fresh conhost window for EVERY console child it
 # spawns. The dashboard polls the snapshot every 1.5 s, which used to mean a
-# flicker of git.exe windows all day. CREATE_NO_WINDOW only exists on Windows;
-# 0 is a no-op elsewhere.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# flicker of git.exe windows all day: git_run.run starts git without one.
 
 # How long the snapshot may reuse a SHA before asking git again. The tree only
 # moves on a pull (which invalidates the cache) or a manual edit, and the
@@ -87,16 +89,13 @@ def _run(*args: str) -> subprocess.CompletedProcess[str]:
     Blocking — callers wrap this in ``asyncio.to_thread``. Raises on the usual
     subprocess failure modes (FileNotFoundError, TimeoutExpired,
     CalledProcessError is NOT raised here since check=False); the async
-    wrappers catch and translate."""
-    return subprocess.run(
+    wrappers catch and translate. No prompts, and the timeout holds
+    (:mod:`domovoi.git_run`)."""
+    return git_run.run(
         ["git", *args],
         cwd=settings.repo_dir,
-        capture_output=True,
-        text=True,
         timeout=_GIT_TIMEOUT_SEC,
-        check=False,
-        creationflags=_NO_WINDOW,
-        env={**os.environ, **_GIT_ENV},
+        env=_GIT_ENV,
     )
 
 
@@ -530,7 +529,7 @@ def _switch_channel(channel: str, pin: list[str] | None = None) -> dict:
     """Blocking half of :func:`switch_channel`."""
     fetched, _tag_warning_ignored = _fetch_branches_and_tags("origin")
     if fetched.returncode != 0:
-        return _channel_answer(False, (fetched.stderr or "git fetch failed").strip()[:_ERROR_MAX_CHARS])
+        return _channel_answer(False, _fetch_failure(fetched.stderr))
     target = _full_sha(f"refs/remotes/origin/{channel}")
     if target is None:
         why = " (no release has been published on it yet)" if channel == "stable" else ""
@@ -628,7 +627,9 @@ async def switch_channel(channel: str) -> dict:
     except FileNotFoundError:
         return _channel_answer(False, "git not installed")
     except subprocess.TimeoutExpired:
-        return _channel_answer(False, "git timed out")
+        return _channel_answer(
+            False, f"git timed out after {_GIT_TIMEOUT_SEC:g} s; the channel was not changed"
+        )
     except Exception as e:  # noqa: BLE001 — never raise into the endpoint
         return _channel_answer(False, str(e)[:_ERROR_MAX_CHARS])
 
@@ -1107,6 +1108,47 @@ def _tag_warning(stderr: str) -> str:
     )[:_ERROR_MAX_CHARS]
 
 
+# What git's stderr says when the remote wanted something git may not ask
+# for here (a password, a token, a host key to trust), when the name did not
+# resolve, and when nothing answered. Lowercased substrings.
+_ASKED_MARKERS = (
+    "terminal prompts disabled", "could not read username", "could not read password",
+    "host key verification failed", "permission denied", "authentication failed",
+    "could not read from remote repository",
+)
+_DNS_MARKERS = (
+    "could not resolve host", "could not resolve hostname", "name or service not known",
+    "temporary failure in name resolution", "no such host is known",
+)
+_UNREACHABLE_MARKERS = (
+    "failed to connect", "couldn't connect", "could not connect", "connection refused",
+    "connection timed out", "operation timed out", "network is unreachable",
+    "no route to host", "connection reset",
+)
+
+
+def _fetch_failure(stderr: str | None) -> str:
+    """A failed ``git fetch`` in plain words, git's own last line after it
+    (F-051): what the Version card shows after "update check failed:"."""
+    text = (stderr or "").strip()
+    low = text.lower()
+    if any(m in low for m in _ASKED_MARKERS):
+        why = ("the update server wants a password or a host key this server doesn't "
+               "have, and git here never asks")
+    elif any(m in low for m in _DNS_MARKERS):
+        why = "can't look up the update server (no internet, or DNS is down)"
+    elif any(m in low for m in _UNREACHABLE_MARKERS):
+        why = "can't reach the update server"
+    else:
+        why = "git fetch failed"
+    last = _last_line(text)
+    return (f"{why} (git: {last})" if last else why)[:_ERROR_MAX_CHARS]
+
+
+def _timed_out() -> str:
+    return f"the update server didn't answer in {_GIT_TIMEOUT_SEC:g} s (git fetch timed out)"
+
+
 def _fetch_branches_and_tags(*remote: str) -> tuple[subprocess.CompletedProcess, str | None]:
     """Blocking. ``(the branch fetch, tag_warning)``: the tags are fetched
     only after the branches, and their failure is ``tag_warning``, never the
@@ -1138,12 +1180,12 @@ async def fetch() -> dict:
     try:
         proc, warning = await asyncio.to_thread(_fetch_branches_and_tags)
         if proc.returncode != 0:
-            return {"ok": False, "error": (proc.stderr or "git fetch failed").strip(), "tag_warning": None}
+            return {"ok": False, "error": _fetch_failure(proc.stderr), "tag_warning": None}
         return {"ok": True, "error": None, "tag_warning": warning}
     except FileNotFoundError:
         return {"ok": False, "error": "git not installed"}
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "git fetch timed out"}
+        return {"ok": False, "error": _timed_out()}
     except Exception as e:  # noqa: BLE001 — never raise into the endpoint
         return {"ok": False, "error": str(e)}
 
@@ -1274,7 +1316,7 @@ async def pull() -> dict:
     try:
         fetched, tag_warning = await asyncio.to_thread(_fetch_branches_and_tags)
         if fetched.returncode != 0:
-            return _not_pulled((fetched.stderr or "git fetch failed").strip())
+            return _not_pulled(_fetch_failure(fetched.stderr))
         upstream, refusal = await asyncio.to_thread(_upstream_target)
         if upstream is None:
             return _not_pulled(refusal)
@@ -1288,7 +1330,7 @@ async def pull() -> dict:
     except FileNotFoundError:
         return _not_pulled("git not installed")
     except subprocess.TimeoutExpired:
-        return _not_pulled("git pull timed out")
+        return _not_pulled(f"git timed out after {_GIT_TIMEOUT_SEC:g} s; nothing was pulled")
     except Exception as e:  # noqa: BLE001
         return _not_pulled(str(e))
 

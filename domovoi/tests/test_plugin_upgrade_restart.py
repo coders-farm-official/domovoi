@@ -72,7 +72,7 @@ def register(ctx) -> None:
 '''
 
 
-def build_zip(version: str, *, new_worker: bool = False) -> bytes:
+def build_zip(version: str, *, new_worker: bool = False, extra_code: bytes = b"") -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for f in sorted(FIXTURE.rglob("*")):
@@ -85,8 +85,8 @@ def build_zip(version: str, *, new_worker: bool = False) -> bytes:
                 if new_worker:
                     assert b"[permissions]" in data
                     data = data.replace(b"[permissions]", _NEW_WORKER_TOML + b"[permissions]")
-            elif rel.endswith("/core.py") and new_worker:
-                data += _NEW_WORKER_CODE
+            elif rel.endswith("/core.py"):
+                data += (_NEW_WORKER_CODE if new_worker else b"") + extra_code
             zf.writestr(rel, data)
     return buf.getvalue()
 
@@ -128,6 +128,10 @@ async def _plugin_env(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(loader_mod, "bundled_root", lambda: dirs["bundled"])
     saved_modules = {n: m for n, m in sys.modules.items() if _ours(n)}
     saved_path = list(sys.path)
+    # A fresh core: nothing of the plugin imported yet (an earlier module's
+    # tests may have left it cached, and a cached slug's install waits for
+    # a restart).
+    _forget_imports()
 
     yield
 
@@ -355,3 +359,87 @@ async def test_a_disabled_plugin_never_imported_needs_no_restart() -> None:
     out = await enable_plugin(SLUG)
     assert out == {"enabled": True, "slug": SLUG}
     assert "compliment_counter" in WORKERS.worker_names(SLUG)
+
+
+# ─── uninstall, then install again in the same process (rc2 smoke, part C) ─
+#
+# Uninstalling unloads the plugin but cannot un-import it: its modules stay
+# cached. A fresh install of the same slug then hot-loaded the CACHED code
+# and answered "loaded", with no restart asked for, whatever the new zip
+# held. Upgrades checked for the cached import; a fresh install did not.
+# Now it is staged for the restart exactly like such an upgrade.
+
+
+async def test_a_reinstall_in_the_same_process_waits_for_the_restart() -> None:
+    await _install()
+    old_core = sys.modules[f"{PKG}.core"]
+    await uninstall_plugin(SLUG, data="keep")
+    assert code_imported(SLUG)                       # what uninstall can't undo
+
+    staged = await stage_zip(build_zip("1.0.1", new_worker=True))
+    result = await confirm_install(staged.staged_id)
+
+    assert result["installed"] is True
+    assert result["loaded"] is False and result["restart_required"] is True
+    # The cached 1.0.0 module was not registered as if it were 1.0.1.
+    assert SLUG not in LOADER.loaded
+    assert "compliments" not in HANDLER_BY_NAME
+    assert sys.modules[f"{PKG}.core"] is old_core
+    marker = LOADER.pending_restart[SLUG]
+    assert (marker["from_version"], marker["to_version"]) == ("1.0.0", "1.0.1")
+    row = await reg.get_plugin(SLUG)
+    assert row is not None and (row.version, row.enabled, row.status) == ("1.0.1", True, "ok")
+
+    # An enable before the restart doesn't load the old code either.
+    await disable_plugin(SLUG)
+    assert (await enable_plugin(SLUG))["restart_required"] is True
+    assert SLUG not in LOADER.loaded
+
+    await _simulate_restart()
+
+    # The new code runs: its new worker is there.
+    assert LOADER.loaded[SLUG].manifest.version == "1.0.1"
+    assert "compliment_counter" in WORKERS.worker_names(SLUG)
+    assert sys.modules[f"{PKG}.core"] is not old_core
+    assert LOADER.pending_restart == {}
+
+
+async def test_the_same_version_reinstalled_still_waits(monkeypatch) -> None:
+    """Same version number, changed files: the cached copy can't be told
+    apart from the new one, so the restart is asked for all the same, and
+    the version and plugin APIs report it."""
+    from domovoi import git_version
+    from domovoi import main as core_main
+
+    async def sha() -> str:
+        return "abc1234"
+
+    monkeypatch.setattr(git_version, "current_sha", sha)
+    monkeypatch.setattr(git_version, "_BOOT_SHA", "abc1234", raising=False)
+    await _install()
+    await uninstall_plugin(SLUG, data="purge")
+
+    # Changed code, the same declarations: the old hot load "loaded" it.
+    staged = await stage_zip(build_zip("1.0.0", extra_code=b"REBUILT = True" + bytes([10])))
+    result = await installer.api_confirm(staged.staged_id)
+    assert result["restart_required"] is True and result["loaded"] is False
+
+    version = await core_main.admin_version()
+    assert version["restart_required"] is True
+    [entry] = version["plugins_pending_restart"]
+    assert (entry["slug"], entry["from_version"], entry["to_version"]) == (SLUG, "1.0.0", "1.0.0")
+    listed = next(p for p in (await core_main.list_plugins())["plugins"] if p["slug"] == SLUG)
+    assert listed["pending_restart"]["to_version"] == "1.0.0"
+    assert (await core_main.plugin_status(SLUG))["handlers"] == []
+
+    await _simulate_restart()
+    assert getattr(sys.modules[f"{PKG}.core"], "REBUILT", False) is True
+
+
+async def test_a_first_install_still_loads_at_once() -> None:
+    assert not code_imported(SLUG)
+    staged = await stage_zip(build_zip("1.0.0"))
+    result = await confirm_install(staged.staged_id)
+    assert result["loaded"] is True and result["restart_required"] is False
+    assert SLUG in LOADER.loaded and "compliments" in HANDLER_BY_NAME
+    assert SLUG not in LOADER.pending_restart

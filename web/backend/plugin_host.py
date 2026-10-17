@@ -357,10 +357,19 @@ class PluginHost:
         # slug → the version of the web module this process imported. A
         # row that moves past it needs a restart to reach this process.
         self.mounted_versions: dict[str, str] = {}
+        # Mounted slugs whose registry row went away (uninstalled) since,
+        # and those installed again after that: this process still runs the
+        # web module it imported first, whatever the new copy holds, so
+        # they wait for a restart at any version (stale_mounts).
+        self._gone: set[str] = set()
+        self.reinstalled: set[str] = set()
         self.load_errors: dict[str, str] = {}            # slug → error string
         self.snapshots: dict[str, Callable[[], Awaitable[Any]]] = {}
         self._manifest_cache: dict[str, Any] | None = None
         self._resync_lock = asyncio.Lock()
+        # What the last resync read, for telling a change from a re-read
+        # (None until the first one).
+        self._seen: list[tuple] | None = None
         # web/realtime callbacks installed by main.py at startup:
         self.on_channels_changed: Callable[[], Awaitable[None]] | None = None
         self.broadcast: Callable[[str, dict], Awaitable[None]] | None = None
@@ -551,7 +560,7 @@ class PluginHost:
             if not r or r["status"] == "uninstalled":
                 continue
             running = self.mounted_versions[slug]
-            if r["version"] != running:
+            if r["version"] != running or slug in self.reinstalled:
                 out.append(
                     {"slug": slug, "from_version": running,
                      "to_version": r["version"], "where": ["web"]}
@@ -589,14 +598,36 @@ class PluginHost:
     # ── the resync cycle ─────────────────────────────────────────────
     async def resync(self, app: FastAPI | None = None) -> None:
         """(Re)read the registry, mount anything new, refresh realtime
-        wiring, invalidate caches. Called at boot and on every
-        ``plugins_changed`` NOTIFY."""
+        wiring, invalidate caches. Called at boot, on every
+        ``plugins_changed`` NOTIFY, once on every (re)connect of the
+        LISTEN task (what changed while nothing listened), and after every
+        plugin lifecycle action this process proxies to the core
+        (web/backend/api/plugins.py), so the list the Plugins page reads
+        next is the registry's (F-054).
+
+        Only a resync that read something new pushes ``plugins.changed``
+        to the open dashboards: that push is the "plugins changed — reload"
+        toast, and a re-read that found the same rows is no news."""
         async with self._resync_lock:
             if app is not None:
                 self.app = app
             rows = await fetch_plugin_rows()
             self.rows = {r["slug"]: r for r in rows}
             self._manifest_cache = None
+            for slug in self.mounted_versions:
+                r = self.rows.get(slug)
+                if not r or r["status"] == "uninstalled":
+                    self._gone.add(slug)
+                elif slug in self._gone:
+                    self._gone.discard(slug)
+                    self.reinstalled.add(slug)
+            seen = [
+                (r["slug"], r.get("version"), r.get("enabled"), r.get("status"),
+                 r.get("last_error"), r.get("updated_at"))
+                for r in rows
+            ]
+            changed = seen != self._seen
+            self._seen = seen
 
             if self.app is not None:
                 for r in rows:
@@ -646,7 +677,7 @@ class PluginHost:
                 except Exception as e:
                     log.warning("listen-channel refresh failed: %s", e)
 
-            if self.broadcast is not None:
+            if self.broadcast is not None and changed:
                 try:
                     await self.broadcast(
                         "plugins.changed",

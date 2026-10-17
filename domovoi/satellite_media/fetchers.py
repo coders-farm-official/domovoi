@@ -44,7 +44,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from domovoi import egress, net_safety
+from domovoi import egress, git_run, net_safety
 from domovoi.satellite_media import cache
 
 log = logging.getLogger(__name__)
@@ -393,7 +393,7 @@ def verify_xvf_host_tree(src: Path) -> str | None:
     return None
 
 
-def fetch_xvf_host(run=subprocess.run) -> tuple[bool, str]:
+def fetch_xvf_host(run=git_run.run) -> tuple[bool, str]:
     """The xvf_host LED/control tool into the cache. (ok, message).
 
     NOT a single file: xvf_host loads ``libcommand_map.so`` from its OWN

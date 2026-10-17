@@ -29,6 +29,30 @@ const smBytes = (n) => {
   return `${Math.max(1, Math.round(n / 1024))} KiB`;
 };
 
+/* The cache row under Prepare, one entry per bucket: "(empty)" only where
+ * "Refresh caches" fills it. The wheels and the wake-word models are what
+ * it downloads; the debs need Docker (without it the refresh skips them,
+ * and the row says so). The mic-board overlays have no fetcher at all
+ * (domovoi/satellite_media/fetchers.py): the XVF3800 needs none, and with
+ * no prebuilt one here a 2-Mics HAT card leaves it to the Pi, whose first
+ * boot points at the by-hand compile (satellite/PROVISIONING.md §4). That
+ * row is a fact, not a status: no dot (tone null). */
+const smCacheRows = (cache, dockerAvailable) => {
+  const files = (k) => (cache[k] && cache[k].ok ? cache[k].files : 0);
+  const bucket = (k, emptyText) => (files(k)
+    ? { key: k, tone: 'ok', text: `${k} (${files(k)})` }
+    : { key: k, tone: 'idle', text: emptyText || `${k} (empty)` });
+  return [
+    bucket('wheels'),
+    bucket('debs', dockerAvailable === false ? 'debs (needs docker)' : null),
+    files('dtbo')
+      ? { key: 'dtbo', tone: 'ok', text: `mic-board overlay (${files('dtbo')})` }
+      : { key: 'dtbo', tone: null,
+          text: 'mic-board overlay: XVF3800 needs none · 2-Mics HAT: built on the Pi by hand (PROVISIONING §4)' },
+    bucket('oww_models'),
+  ];
+};
+
 /* ---- Setup credentials -----------------------------------------------
  *
  * What the person holding the card needs in order to connect to the
@@ -345,10 +369,10 @@ const PrepareMediaCard = ({ fire }) => {
 
           <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 8,
                                          display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            {['wheels', 'debs', 'dtbo', 'oww_models'].map(k => (
-              <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                <StatusDot tone={cache[k]?.ok ? 'ok' : 'idle'}/>
-                {k} {cache[k]?.ok ? `(${cache[k].files})` : '(empty)'}
+            {smCacheRows(cache, status?.docker_available).map(r => (
+              <span key={r.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                {r.tone ? <StatusDot tone={r.tone}/> : <Icon name="info" size={11}/>}
+                {r.text}
               </span>
             ))}
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>

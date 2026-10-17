@@ -4,6 +4,43 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — Files, Plugins and the update check: fixes from the rc2 smoke
+
+Server update (core and dashboard; no migration).
+
+* **Files keeps working while a drive can't be read.** On a Windows-hosted
+  server, a card reader holding an unformatted card (any removable drive
+  Windows can't read) made every Files call answer 500. Such a drive is
+  now left out of the list until it can be read; everything else works.
+* **The Plugins page shows the registry as it is after every change.** An
+  upgrade waiting for its restart could vanish from the list and the nav,
+  and a plugin refused at load could show "ok". The dashboard now re-reads
+  the registry after each install, enable, disable, upgrade or uninstall
+  before it answers, no longer misses a change while it re-subscribes to
+  the database, and catches up after its database connection drops.
+* **A plugin installed again after an uninstall asks for the restart.** The
+  server can't drop code it has already run, so installing the same plugin
+  again in the same run kept the old code while saying "complete". Now it
+  says "installed — restart to finish it" and the Plugins page lists it
+  under the restart, at any version, like an upgrade of a running plugin.
+* **"Check for updates" never asks anything, and stops on time.** Every git
+  the server runs has its questions turned off: no password or host-key
+  prompt, no askpass window on a Windows desktop. A git that hangs is
+  stopped, with everything it started, at its timeout. A failed check says
+  why ("can't reach the update server", "the update server wants a
+  password or a host key this server doesn't have", "the update server
+  didn't answer in 10 s"), with git's own last line, instead of "domovoi
+  unreachable". A checkout whose origin is SSH and whose host key the
+  server's account doesn't know now fails at once: use the https origin
+  the installers set up, or add the key.
+* **Files loads as soon as the browser is paired.** Signing in from the
+  "pair this browser" prompt, or pasting the household token there, now
+  loads the libraries; the page used to stay empty until you left it. A
+  satellite's log tab reads again after its sign-in the same way.
+* **The sheet editor's "too large to save" names two different sizes**
+  ("it is 8.4 MB, and the editor saves sheets up to 8 MB"; it said 8 and
+  8).
+
 ## 2026-10-16 — Phone photos in chat: HEIC converted, refusals in words
 
 Dashboard update (the web process; no migration) and a new Android APK.

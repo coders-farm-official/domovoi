@@ -317,6 +317,11 @@ async def fake_plugin(tmp_path):
             {"slug": _SLUG, "install_dir": str(tmp_path),
              "manifest": json.dumps(_MANIFEST_JSONB)},
         )
+    # HOST outlives the test: a row this fixture deleted after an earlier
+    # test and inserts again here is a fresh install for this test, not a
+    # reinstall over the web module that test imported.
+    HOST._gone.discard(_SLUG)
+    HOST.reinstalled.discard(_SLUG)
     try:
         await HOST.resync(web_app)
         yield tmp_path
@@ -599,6 +604,68 @@ async def test_a_row_that_moves_past_the_mounted_version_asks_for_a_restart(
     assert body["code_restart_required"] is False
     assert {"slug": _SLUG, "from_version": "1.0.0", "to_version": "1.1.0",
             "where": ["web"]} in body["plugins_pending_restart"]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_plugin_installed_again_asks_for_a_restart_at_any_version(
+    fake_plugin, monkeypatch,
+) -> None:
+    """Uninstalled, then installed again while this process still runs the
+    web module it imported the first time (it can't import it again): the
+    same version number is no proof the code is the same, so the plugin
+    waits for the restart here too, beside the core's own marker (rc2
+    smoke, part C), and the Plugins page lists it as waiting."""
+    import json
+
+    from domovoi.db.session import session_scope
+    from web.backend.api import config as config_api
+
+    assert HOST.mounted_versions[_SLUG] == "1.0.0"
+    async with session_scope() as s:
+        row = (await s.execute(text("SELECT * FROM plugins WHERE slug = :slug"),
+                               {"slug": _SLUG})).mappings().one()
+        await s.execute(text("DELETE FROM plugins WHERE slug = :slug"), {"slug": _SLUG})
+    await HOST.resync(web_app)
+    assert all(e["slug"] != _SLUG for e in HOST.stale_mounts())    # nothing installed
+
+    async with session_scope() as s:
+        await s.execute(
+            text(
+                "INSERT INTO plugins (slug, name, version, publisher, license, "
+                "domovoi_api, enabled, bundled, install_source, install_dir, "
+                "manifest, status) VALUES (:slug, 'Web Demo', '1.0.0', "
+                "'Coders Farm', 'MIT', '>=1.0,<2.0', TRUE, FALSE, 'zip', "
+                ":install_dir, CAST(:manifest AS JSONB), 'ok')"
+            ),
+            {"slug": _SLUG, "install_dir": row["install_dir"],
+             "manifest": json.dumps(row["manifest"]) if not isinstance(row["manifest"], str)
+             else row["manifest"]},
+        )
+    await HOST.resync(web_app)
+    assert [e for e in HOST.stale_mounts() if e["slug"] == _SLUG] == [
+        {"slug": _SLUG, "from_version": "1.0.0", "to_version": "1.0.0", "where": ["web"]}
+    ]
+
+    async def core_version(path, timeout=10.0, headers=None):
+        return 200, {"running_sha": "abc1234", "checkout_sha": "abc1234",
+                     "restart_required": True, "code_restart_required": False,
+                     "plugins_pending_restart": [
+                         {"slug": _SLUG, "from_version": "1.0.0", "to_version": "1.0.0",
+                          "since": "now", "where": ["core"]}]}
+
+    monkeypatch.setattr(config_api, "get_admin", core_version)
+    async with _web() as client:
+        body = (await client.get("/api/config/version")).json()
+        listed = next(p for p in (await client.get("/api/plugins")).json()["plugins"]
+                      if p["slug"] == _SLUG)
+    [entry] = [e for e in body["plugins_pending_restart"] if e["slug"] == _SLUG]
+    assert entry["where"] == ["core", "web"] and body["restart_required"] is True
+    assert (listed["version"], listed["status"], listed["enabled"]) == ("1.0.0", "ok", True)
+
+    # A restart is the only thing that clears it: a later resync doesn't.
+    await HOST.resync(web_app)
+    assert any(e["slug"] == _SLUG for e in HOST.stale_mounts())
 
 
 def test_web_pending_restarts_fold_into_the_core_answer() -> None:
