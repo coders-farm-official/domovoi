@@ -169,12 +169,11 @@ class ComplimentsHandler(Handler):
     name = "compliments"
     priority_band = 400                      # general plugin space
     display = HandlerDisplay(label="Compliments", tone="info")
+    example_phrases = ("give me a compliment",)  # the manual, "what can you do"
     requires_network = "no"
     tool_schema = {
         "name": "compliments",
-        "description": (
-            "Pay the user a compliment. Example: 'give me a compliment'."
-        ),
+        "description": "Pay the user a compliment.",
         "parameters": {"type": "object", "properties": {}, "required": []},
     }
 
@@ -204,6 +203,12 @@ Notes on the shape:
   rejects it anywhere lower.
 * Fast-path methods are passed **unbound** (`ComplimentsHandler._compliment`)
   and receive `(self, match, ctx, session)`.
+* `example_phrases` is what a person can say to use the handler: the
+  dashboard's user manual lists it, Home can offer the first one as a hint,
+  and "what can you do" names it. Keep it out of the tool description: the
+  routing model reads every word there, and example text pulls other turns
+  towards the tool. (A handler without the field still gets the quoted
+  phrases of a trailing `Example: '…'` in its description.)
 * `requires_network = "no"` means this handler must work fully offline. If
   you declare `"yes"` or `"degraded"`, you must override
   `fallback_offline()` — also contract-checked.
