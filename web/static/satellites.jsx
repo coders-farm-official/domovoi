@@ -113,8 +113,7 @@ const SatCard = ({ s, onOpen, tick, coreDown = false }) => {
                      background: 'var(--card)', border: '1px solid var(--border)',
                      borderRadius: 'var(--r-md)', boxShadow: 'var(--inner-highlight)',
                      padding: 0, overflow: 'hidden',
-                     opacity: online ? 1 : 0.78,
-                     transition: 'transform .18s ease, box-shadow .18s ease, opacity .2s ease' }}
+                     transition: 'transform .18s ease, box-shadow .18s ease' }}
             onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = 'var(--shadow-md), var(--inner-highlight)'; }}
             onMouseLeave={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = 'var(--inner-highlight)'; }}>
       <div style={{ padding: '14px 16px 10px', display: 'flex', alignItems: 'center', gap: 10 }}>

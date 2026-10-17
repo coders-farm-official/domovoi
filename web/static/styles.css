@@ -1431,7 +1431,10 @@ a.home-att-row:hover { background: var(--brand-soft); }
   transition: background var(--dur-fast) var(--ease);
 }
 .home-room:hover { background: var(--raised); }
-.home-room.dim { opacity: 0.6; }
+/* An offline or stale room reads as such from its pill and dot, and a muted
+   name; no opacity over the card, which took its faint text and the
+   "offline" pill under 4.5:1 (contrast audit, both themes). */
+.home-room.dim .home-room-name { color: var(--fg-muted); }
 .home-room-skel { background: var(--sunken); }
 .home-room-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; padding-left: 16px; color: var(--fg); text-decoration: none; }
 .home-room-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
