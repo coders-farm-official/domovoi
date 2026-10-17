@@ -532,6 +532,7 @@ route = "stations"
 page = "StationsPage"
 nav_label = "Stations"
 nav_icon = "web/static/icon.svg"
+# nav_icon_dark = "web/static/icon-dark.svg"   # optional: an icon drawn for the dark theme
 nav_order = 50
 badge = { endpoint = "/api/plugins/radio/badge", key = "favorites" }
 
@@ -561,11 +562,37 @@ stream_url_template = "/api/plugins/radio/stations/{id}/stream"
 * `[[web.pages]]` — sidebar entries. `page` names a key in that registry;
   `nav_order` slots among core pages (core publishes its own orders; default
   50); `badge` polls an endpoint and renders `payload[key]` as a count.
+* `nav_icon` — the page's icon in the sidebar, the phone bar and Home's
+  grid: a file under `web/static/` (a path outside it, `..` or a URL is
+  ignored, with a warning in the load log). Draw it like the dashboard's
+  own icons: one colour on a transparent background, 24×24, `stroke` or
+  `fill` set to `currentColor` (`plugins/radio/web/static/icon.svg`). The
+  dashboard paints the icon's **shape** in the theme's text colour (and
+  amber when the page is open), whatever colour you drew it in, so one
+  icon reads in both themes. A coloured icon, or one with no transparent
+  background, is shown as drawn instead; test it on the dark theme.
+* `nav_icon_dark` — optional. Ship it when you want to draw the dark-theme
+  icon yourself (a coloured logo that needs a lighter version, say). With
+  both keys the dashboard shows `nav_icon` in the light theme and
+  `nav_icon_dark` in the dark one, each exactly as drawn; it is used only
+  beside a `nav_icon`, follows the same rules, and if it fails to load the
+  dashboard falls back to `nav_icon`. Most plugins don't need it.
 * `[[web.player_sources]]` — teaches the browser player how to stream your
   `kind` of media (the template is a dashboard-relative URL).
 
 Static assets under `web/static/` are served at
 `/plugins/<slug>/static/...` (containment-checked).
+
+**Colours: use the dashboard's tokens.** The dashboard has a light and a
+dark theme (`<html data-theme="dark">`), and a page that hard-codes its
+colours is unreadable in one of them. Style your page with the CSS
+variables in `web/static/colors_and_type.css` — `var(--fg)`,
+`var(--fg-muted)`, `var(--fg-faint)` for text; `var(--card)`,
+`var(--sunken)`, `var(--border)` for surfaces; `var(--brand-ink)`,
+`var(--ok-ink)`, `var(--warn-ink)`, `var(--err-ink)` for amber or status
+text — and every text step reads at 4.5:1 or better in both themes. Check
+a page with `scripts/dev/contrast_audit.py` against a throwaway dashboard
+with your plugin installed (it measures every page and tab in both themes).
 
 Your page's writes go through the dashboard's `apiPost` / `apiPatch` /
 `apiDelete` helpers, which are in scope for a plugin script and carry the

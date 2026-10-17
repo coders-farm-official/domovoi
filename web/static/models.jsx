@@ -87,8 +87,8 @@ const GpuCard = ({ g }) => {
         {_bar(memPct, memPct > 90 ? 'err' : memPct > 70 ? 'warn' : 'brand')}
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--fg-muted)' }}>
-        <span>free <span className="mono" style={{ color: 'var(--ok)' }}>{(totalGb - usedGb).toFixed(1)} GB</span></span>
-        <span style={{ color: hot ? 'var(--err)' : 'var(--fg-muted)' }}>{g.temp_c}°C</span>
+        <span>free <span className="mono" style={{ color: 'var(--ok-ink)' }}>{(totalGb - usedGb).toFixed(1)} GB</span></span>
+        <span style={{ color: hot ? 'var(--err-ink)' : 'var(--fg-muted)' }}>{g.temp_c}°C</span>
       </div>
     </div>
   );
@@ -418,7 +418,7 @@ const ActiveRow = ({ r, installed, whisperNames, hw, catalogByName, onSwitch, on
         </div>
       )}
       {failed && r.installed === false && (
-        <div style={{ flexBasis: '100%', fontSize: 11, color: 'var(--err)' }}>
+        <div style={{ flexBasis: '100%', fontSize: 11, color: 'var(--err-ink)' }}>
           install failed{job.error ? `: ${job.error}` : ''}
         </div>
       )}
@@ -470,7 +470,7 @@ const PullJob = ({ j, onCancel }) => {
         {active && <IconButton name="x" title="cancel pull" onClick={() => onCancel(j)}/>}
       </div>
       {active && _bar(j.pct, 'brand')}
-      <div style={{ fontSize: 11, color: j.status === 'failed' ? 'var(--err)' : 'var(--fg-faint)' }}>
+      <div style={{ fontSize: 11, color: j.status === 'failed' ? 'var(--err-ink)' : 'var(--fg-faint)' }}>
         {j.error || j.status_text || (active ? 'starting…' : '')}
       </div>
     </div>

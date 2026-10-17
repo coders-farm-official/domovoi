@@ -123,7 +123,7 @@ const SleepTimerControl = ({ p }) => {
         </button>
       )}
       {active && (
-        <span className="mono" style={{ fontSize: 11, color: 'var(--brand)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <span className="mono" style={{ fontSize: 11, color: 'var(--brand-ink)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
           {p.sleepRemainingSec < 0 ? 'ends after track' : fmtDur(p.sleepRemainingSec)}
           <IconButton name="x" onClick={p.cancelSleep}/>
         </span>
@@ -154,7 +154,7 @@ const OfflineControl = ({ p }) => {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
       <Button icon={pinned ? 'download' : 'download-cloud'} onClick={toggle}
-              style={pinned ? { color: 'var(--brand)' } : undefined}>
+              style={pinned ? { color: 'var(--brand-ink)' } : undefined}>
         {pinned ? 'pinned offline' : 'download for offline'}
       </Button>
       <span className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)' }}>{usedMb} / {budgetMb} MB</span>

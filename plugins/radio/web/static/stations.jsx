@@ -255,10 +255,11 @@ const StationSearch = ({ onFavorite, onPlay, fire, internetOff = false }) => {
                            padding: '6px 14px', borderRadius: 'var(--r-sm)',
                            border: '1px solid var(--border)',
                            background: scope === s.id ? 'var(--brand-soft)' : 'var(--card)',
-                           color: scope === s.id ? 'var(--brand-press)' : 'var(--fg)',
+                           color: scope === s.id ? 'var(--brand-ink)' : 'var(--fg)',
                            fontWeight: scope === s.id ? 500 : 400 }}>
             {s.label}
-            <span className="mono" style={{ marginLeft: 6, fontSize: 10, color: 'var(--fg-faint)' }}>
+            <span className="mono" style={{ marginLeft: 6, fontSize: 10,
+                                            color: scope === s.id ? 'var(--fg-muted)' : 'var(--fg-faint)' }}>
               {s.sub}
             </span>
           </button>
@@ -423,7 +424,7 @@ const FavoriteMatchRow = ({ s, onPlay, internetOff }) => (
       {s.now_playing ? ` · ${s.now_playing}` : ''}
     </span>
     <span style={{ flex: 1 }}/>
-    <Icon name="play" size={12} style={{ color: 'var(--brand)', flexShrink: 0 }}/>
+    <Icon name="play" size={12} style={{ color: 'var(--brand-ink)', flexShrink: 0 }}/>
   </button>
 );
 
@@ -505,7 +506,7 @@ const SearchResultRow = ({ hit, scope, onFavorite, onPlay, fire, internetOff = f
       <td onClick={e => e.stopPropagation()} style={{ width: 40 }}>
         <IconButton name="star" onClick={toggle}
                     title={favorited ? 'unfavorite' : 'favorite'}
-                    style={favorited ? { color: 'var(--brand)' } : undefined}/>
+                    style={favorited ? { color: 'var(--brand-ink)' } : undefined}/>
       </td>
       {scope === 'online' ? (
         <>
@@ -645,7 +646,7 @@ const RecentRow = ({ s, onPlay, onFavorite, fire, internetOff = false }) => {
       <div style={{ paddingRight: 8, flexShrink: 0 }}>
         <IconButton name="star" onClick={toggleFavorite}
                     title={s.favorited ? 'unfavorite' : 'favorite'}
-                    style={s.favorited ? { color: 'var(--brand)' } : undefined}/>
+                    style={s.favorited ? { color: 'var(--brand-ink)' } : undefined}/>
       </div>
     </div>
   );
@@ -736,7 +737,7 @@ const FavoriteRow = ({ s, active, onSelect, onPlay, onDelete, refresh, fire, int
                          display: 'grid', gridTemplateColumns: '1fr auto', gap: 8,
                          alignItems: 'center',
                          background: 'transparent', border: 'none',
-                         color: active ? 'var(--brand-press)' : 'var(--fg)' }}>
+                         color: active ? 'var(--brand-ink)' : 'var(--fg)' }}>
           <div style={{ minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <Icon name={s.source === 'fm' ? 'radio-tower' : 'radio'} size={12}/>
@@ -780,7 +781,7 @@ const FavoriteRow = ({ s, active, onSelect, onPlay, onDelete, refresh, fire, int
               <Button icon="pencil" onClick={() => setEditing(true)}>interval</Button>
               <span style={{ flex: 1 }}/>
               <Button icon="trash-2" onClick={() => onDelete(s)}
-                      style={{ background: 'var(--err-soft)', color: 'var(--err)', borderColor: 'transparent' }}>
+                      style={{ background: 'var(--err-soft)', color: 'var(--err-ink)', borderColor: 'transparent' }}>
                 forget
               </Button>
             </>
@@ -961,13 +962,13 @@ const StationDetail = ({ s, fire, internetOff = false }) => (
       <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)',
                     background: 'var(--brand-soft)', display: 'flex', alignItems: 'center', gap: 8 }}>
         <Icon name="music" size={14}/>
-        <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--brand-press)',
+        <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--brand-ink)',
                        minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
                        whiteSpace: 'nowrap', flex: 1 }}>
           {s.now_playing}
         </span>
         {s.now_playing_updated_at && (
-          <span className="mono" style={{ fontSize: 11, color: 'var(--brand-press)', opacity: 0.7 }}>
+          <span className="mono" style={{ fontSize: 11, color: 'var(--brand-ink)', opacity: 0.7 }}>
             {relTime(s.now_playing_updated_at)}
           </span>
         )}

@@ -56,6 +56,19 @@ corpus = ["{slug} example phrase"]
 
 [permissions]
 warnings = []
+
+# A dashboard page of your own (optional): uncomment, then add the script
+# and the icon under web/static/ (docs/PLUGIN_DEVELOPMENT.md, "[web]").
+# [web]
+# scripts = ["web/static/{slug}.jsx"]
+#
+# [[web.pages]]
+# route = "{slug}"
+# page = "MainPage"
+# nav_label = "{title}"
+# nav_icon = "web/static/icon.svg"            # one colour (currentColor), transparent background
+# nav_icon_dark = "web/static/icon-dark.svg"  # optional: draw the dark-theme icon yourself
+# nav_order = 60
 '''
 
 _SCAFFOLD_CORE = '''"""Core entry point for the {slug} plugin."""

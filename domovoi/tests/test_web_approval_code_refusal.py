@@ -636,8 +636,8 @@ def test_the_throttle_is_toned_as_a_wait_not_as_an_error(driven):
     tones = {c: driven[c]["after"]["alerts"][0]["color"]
              for c in ("wrong_code", "throttled")}
     assert tones["throttled"] != tones["wrong_code"], tones
-    assert tones["wrong_code"] == "var(--err)", tones
-    assert tones["throttled"] == "var(--warn)", tones
+    assert tones["wrong_code"] == "var(--err-ink)", tones
+    assert tones["throttled"] == "var(--warn-ink)", tones
 
 
 def test_typing_again_clears_the_refusal(driven):

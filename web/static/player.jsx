@@ -1492,7 +1492,7 @@ const MiniPlayer = () => {
           <div className="mp-text">
             <div className="mp-title">{it.title}</div>
             <div className="mp-sub mono">
-              {remote && <span style={{ color: 'var(--brand)' }}>◆ {p.target.roomId} · </span>}
+              {remote && <span style={{ color: 'var(--brand-ink)' }}>◆ {p.target.roomId} · </span>}
               {it.artist || (it.seekable === false ? 'live stream' : '—')}
             </div>
           </div>
@@ -1544,13 +1544,13 @@ const MiniPlayer = () => {
             {lyrId != null && (
               <IconButton name="mic-vocal" title="lyrics" aria-label="lyrics" aria-pressed={showLyrics}
                           onClick={() => { setShowQueue(false); setShowCast(false); setShowLyrics((s) => !s); }}
-                          style={showLyrics ? { color: 'var(--brand)' } : undefined}/>
+                          style={showLyrics ? { color: 'var(--brand-ink)' } : undefined}/>
             )}
             <IconButton name="list-music" onClick={() => { setShowLyrics(false); setShowQueue((s) => !s); }} title="queue"/>
             <IconButton name={remote ? 'cast' : 'monitor-speaker'}
                         onClick={() => { setShowLyrics(false); setShowCast((s) => !s); }}
                         title="cast target"
-                        style={remote ? { color: 'var(--brand)' } : undefined}/>
+                        style={remote ? { color: 'var(--brand-ink)' } : undefined}/>
             <IconButton name="chevron-up" onClick={() => { window.location.hash = 'music'; }} title="open full player"/>
           </div>
           <button ref={expandRef} className="btn btn-ghost btn-icon mp-phone mp-expand" onClick={openSheet}
@@ -1868,7 +1868,7 @@ const PlayerCastTargets = ({ p, onPicked, big = false }) => {
           {loading ? 'looking for rooms…' : 'no rooms online — connect a satellite'}
         </div>
       )}
-      {err && <div style={{ padding: '10px 14px', fontSize: 11, color: 'var(--err)', borderTop: '1px solid var(--border-soft)' }}>{err}</div>}
+      {err && <div style={{ padding: '10px 14px', fontSize: 11, color: 'var(--err-ink)', borderTop: '1px solid var(--border-soft)' }}>{err}</div>}
     </>
   );
 };

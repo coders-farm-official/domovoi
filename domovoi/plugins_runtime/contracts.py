@@ -54,6 +54,7 @@ from domovoi.plugins_runtime.manifest import (
     PLUGIN_BAND_MIN,
     WEB_ROUTE_RE,
     PluginManifest,
+    nav_icon_problem,
 )
 
 IMPORT_TIME_BUDGET_SEC = 10.0
@@ -453,6 +454,21 @@ def check_web_routes(
                 f"route {route!r} — each page needs its own route"
             )
         seen[route] = page.page
+        # Icons: a warning, not an error — a bad icon path costs the page its
+        # icon (the dashboard shows the puzzle glyph), never the plugin.
+        for key in ("nav_icon", "nav_icon_dark"):
+            icon = getattr(page, key, None)
+            problem = nav_icon_problem(icon) if icon is not None else None
+            if problem:
+                report.warnings.append(
+                    f"web page {page.page!r} {key} {icon!r} {problem}; "
+                    f"the dashboard ignores it"
+                )
+        if page.nav_icon_dark and not page.nav_icon:
+            report.warnings.append(
+                f"web page {page.page!r} has nav_icon_dark but no nav_icon; "
+                f"the dark icon is used only beside a light one (nav_icon)"
+            )
         for other_route, other_slug in foreign_routes:
             if other_route == route and other_slug != slug:
                 report.errors.append(

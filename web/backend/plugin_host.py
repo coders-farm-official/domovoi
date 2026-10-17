@@ -59,6 +59,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from sqlalchemy import text
 
+from domovoi.plugins_runtime.manifest import nav_icon_problem
 from web.backend.db import session_scope
 from web.backend.static_cache import STATIC_CACHE_CONTROL
 
@@ -713,6 +714,14 @@ class PluginHost:
                         break
                 return f"{static_base}/{rel}"
 
+            def _icon_url(p: Any) -> str | None:
+                # nav_icon / nav_icon_dark: one of the plugin's own static
+                # files or nothing (the dashboard then shows the puzzle
+                # glyph); the loader logged why (contracts.check_web_routes).
+                if not isinstance(p, str) or nav_icon_problem(p):
+                    return None
+                return _asset_url(p)
+
             pages = []
             for pg in web.get("pages") or []:
                 if pg.get("route") in CORE_ROUTES:
@@ -722,7 +731,12 @@ class PluginHost:
                         "route": pg.get("route"),
                         "page": pg.get("page"),
                         "nav_label": pg.get("nav_label"),
-                        "nav_icon": _asset_url(pg.get("nav_icon")),
+                        "nav_icon": _icon_url(pg.get("nav_icon")),
+                        # Only beside a light icon: a lone dark one is ignored.
+                        "nav_icon_dark": (
+                            _icon_url(pg.get("nav_icon_dark"))
+                            if _icon_url(pg.get("nav_icon")) else None
+                        ),
                         "nav_order": pg.get("nav_order", 50),
                         "badge": pg.get("badge"),
                     }

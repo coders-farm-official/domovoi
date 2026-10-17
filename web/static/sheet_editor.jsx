@@ -157,7 +157,7 @@ const SheetEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null }) =
         <Icon name="table" size={16}/>
         <strong style={{ fontSize: 14 }}>{rel_path}</strong>
         <Pill tone="idle">spreadsheet</Pill>
-        {dirty && <span style={{ fontSize: 11, color: 'var(--warn)' }}>unsaved — click Save</span>}
+        {dirty && <span style={{ fontSize: 11, color: 'var(--warn-ink)' }}>unsaved — click Save</span>}
         <span style={{ flex: 1 }}/>
         <Button icon="file-down" title="export as .csv" onClick={() => onExport('csv')}>csv</Button>
         <Button icon="file-down" title="export as .xlsx" onClick={() => onExport('xlsx')}>xlsx</Button>
@@ -179,7 +179,7 @@ const SheetEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null }) =
           <div style={{ padding: 20, color: 'var(--fg-faint)', fontSize: 13 }}>Loading…</div>
         )}
         {state.status === 'error' && (
-          <div style={{ padding: 20, color: 'var(--err)', fontSize: 13 }}>
+          <div style={{ padding: 20, color: 'var(--err-ink)', fontSize: 13 }}>
             Couldn’t load: {state.message}
           </div>
         )}

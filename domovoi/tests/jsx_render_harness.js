@@ -18,6 +18,10 @@
 //              when the component leans on a shared helper such as relTime or
 //              webHref); a preloaded file's real components take the place of
 //              the stubs below for that scenario
+//   theme    — 'dark' | 'light': what <html data-theme> reads (a minimal
+//              `document` with just that attribute; none without it)
+//   setup    — code run after `file` is evaluated, before the component renders
+//              (seed a page file's own cache, e.g. PLUGIN_ICON_LOOK.set(...))
 // Output: { <scenario name>: [ { type, props, text, on }, ... ] }  (on: function-prop names)
 'use strict';
 const fs = require('fs');
@@ -42,7 +46,8 @@ const compile = (file) => {
 const STUBS = ['Stat', 'Empty', 'Card', 'Icon', 'Button', 'IconButton', 'Pill', 'Tabs',
                'PageHeader', 'StatusDot', 'Sidebar', 'Topbar', 'LoginModal'];
 
-const render = ({ file, component, props = {}, fnProps = [], apiObject = null, apiList = null, preload = [] }) => {
+const render = ({ file, component, props = {}, fnProps = [], apiObject = null, apiList = null, preload = [],
+                  theme = null, setup = null }) => {
   const React = {
     createElement: (type, p, ...children) => ({ type, props: { ...(p || {}), children: children.flat(Infinity) } }),
     Fragment: 'Fragment',
@@ -72,9 +77,13 @@ const render = ({ file, component, props = {}, fnProps = [], apiObject = null, a
   sandbox.useDebouncedValue = (v) => v;
   sandbox.stateBus = { subscribe: () => () => {} };
   sandbox.globalThis = sandbox;
+  if (theme) {
+    sandbox.document = { documentElement: { getAttribute: (n) => (n === 'data-theme' ? theme : null) } };
+  }
   vm.createContext(sandbox);
   for (const pre of preload) vm.runInContext(compile(pre), sandbox, { filename: pre });
   vm.runInContext(compile(file) + `\n;window.__component = ${component};`, sandbox, { filename: file });
+  if (setup) vm.runInContext(setup, sandbox, { filename: 'setup' });
   const Component = sandbox.window.__component;
 
   const fullProps = { ...props };

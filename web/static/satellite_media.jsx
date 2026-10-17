@@ -173,7 +173,7 @@ const MediaJobRow = ({ j, onShowCredentials, cardHelper }) => {
         </span>
         <span style={{ flex: 1 }}/>
         {j.status === 'done' && j.has_artifact && (
-          <a className="mono" style={{ fontSize: 12, color: 'var(--brand)' }}
+          <a className="mono" style={{ fontSize: 12, color: 'var(--brand-ink)' }}
              href={`${API_BASE}/api/satellites/media/jobs/${j.id}/download`}>
             {cardHelper ? 'download for the card helper' : 'download zip'}
           </a>
@@ -189,7 +189,7 @@ const MediaJobRow = ({ j, onShowCredentials, cardHelper }) => {
         </div>
       )}
       {j.status === 'failed' && j.error && (
-        <div className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 4 }}>{j.error}</div>
+        <div className="mono" style={{ fontSize: 11, color: 'var(--err-ink)', marginTop: 4 }}>{j.error}</div>
       )}
       {j.status === 'done' && j.target_kind === 'zip' && cardHelper && (
         <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
@@ -418,7 +418,7 @@ const PrepareMediaCard = ({ fire }) => {
             <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 6 }}>
               {smMicLabel(mic)} needs a one-time overlay step on the Pi:{' '}
               <a href={SM_OVERLAY_DOC_URL} target="_blank" rel="noopener noreferrer"
-                 style={{ color: 'var(--brand)' }}>PROVISIONING §4</a>
+                 style={{ color: 'var(--brand-ink)' }}>PROVISIONING §4</a>
             </div>
           )}
 
@@ -460,7 +460,7 @@ const PrepareMediaCard = ({ fire }) => {
                   {p.slug} {smBytes(p.payload_bytes)}
                   {p.satellite_root && (
                     <span title="this plugin runs root steps on satellites"
-                          style={{ color: 'var(--warn)', display: 'inline-flex',
+                          style={{ color: 'var(--warn-ink)', display: 'inline-flex',
                                    alignItems: 'center', gap: 2 }}>
                       {' '}<Icon name="shield-alert" size={10}/> root
                     </span>

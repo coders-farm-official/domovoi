@@ -156,7 +156,7 @@ const DocEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null }) => 
         <Icon name="file-text" size={16}/>
         <strong style={{ fontSize: 14 }}>{rel_path}</strong>
         <Pill tone="idle">markdown</Pill>
-        {dirty && <span style={{ fontSize: 11, color: 'var(--warn)' }}>unsaved — click Save</span>}
+        {dirty && <span style={{ fontSize: 11, color: 'var(--warn-ink)' }}>unsaved — click Save</span>}
         <span style={{ flex: 1 }}/>
         <Button icon={preview ? 'edit' : 'eye'} onClick={() => setPreview(!preview)}>
           {preview ? 'Edit' : 'Preview'}
@@ -190,7 +190,7 @@ const DocEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null }) => 
           <div style={{ padding: 20, color: 'var(--fg-faint)', fontSize: 13 }}>Loading…</div>
         )}
         {state.status === 'error' && (
-          <div style={{ padding: 20, color: 'var(--err)', fontSize: 13 }}>
+          <div style={{ padding: 20, color: 'var(--err-ink)', fontSize: 13 }}>
             Couldn’t load: {state.message}
           </div>
         )}

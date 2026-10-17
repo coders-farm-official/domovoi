@@ -88,7 +88,7 @@ const ChatReplyError = ({ m, admin }) => {
   if (!err) return null;
   if (!err.code) {
     return (
-      <div className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 4 }}>{err.text}</div>
+      <div className="mono" style={{ fontSize: 11, color: 'var(--err-ink)', marginTop: 4 }}>{err.text}</div>
     );
   }
   return (

@@ -193,6 +193,10 @@ class WebPageDecl:
     page: str
     nav_label: str
     nav_icon: str | None = None
+    # Optional dark-theme variant of nav_icon (2026-10-17). With both, the
+    # dashboard shows each in its theme as drawn; with nav_icon alone it
+    # paints the icon's shape in the theme's text colour.
+    nav_icon_dark: str | None = None
     nav_order: int = 50
     badge: dict[str, str] | None = None
 
@@ -338,6 +342,25 @@ def _opt_str(table: dict, key: str, where: str) -> str | None:
     if not isinstance(val, str):
         raise ManifestError(f"{where}.{key} must be a string")
     return val
+
+
+def nav_icon_problem(path: str) -> str | None:
+    """Why a ``[[web.pages]]`` icon path can't be one of the plugin's own
+    static files, or None when it can. The dashboard serves icons through
+    ``/plugins/<slug>/static/<path>``, which refuses anything outside the
+    plugin's ``web/static`` folder; this says so at load time, for
+    ``nav_icon`` and ``nav_icon_dark`` alike, instead of a broken image.
+    """
+    rel = path.replace("\\", "/")
+    if not rel.strip():
+        return "is empty"
+    if any(ord(ch) < 32 for ch in rel):
+        return "contains a control character"
+    if rel.startswith("/") or (len(rel) > 1 and rel[1] == ":") or "://" in rel:
+        return "must be a path inside the plugin (web/static/...), not an absolute path or URL"
+    if any(part == ".." for part in rel.split("/")):
+        return "must stay inside the plugin's web/static folder (no '..')"
+    return None
 
 
 def _str_list(table: dict, key: str, where: str) -> tuple[str, ...]:
@@ -540,6 +563,7 @@ def parse_manifest(toml_text: str) -> PluginManifest:
                 page=_req_str(p, "page", "web.pages"),
                 nav_label=_req_str(p, "nav_label", "web.pages"),
                 nav_icon=_opt_str(p, "nav_icon", "web.pages"),
+                nav_icon_dark=_opt_str(p, "nav_icon_dark", "web.pages"),
                 nav_order=nav_order,
                 badge=badge,
             )
