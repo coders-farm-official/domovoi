@@ -978,8 +978,8 @@ adjusted in one place. Each "### name" replaces the {{name}} line above.
 Timers count down and ring. Reminders say your message out loud when the
 time comes: in a while ("in 20 minutes") or at a clock time ("at 6 pm",
 "tomorrow morning", "on Friday at 5"). Both are heard around the house.
-Domovoi says back the time it set. A time without "am" or "pm" is the
-next one to come, and "wake me up at 7" is 7 in the morning.
+Domovoi says back the time it set. A time on its own means the next
+time it comes; add morning, evening, am or pm to be sure.
 
 ### clock-reminders-phrases
 
