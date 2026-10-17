@@ -14,6 +14,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -152,6 +155,12 @@ import kotlin.random.Random
  */
 
 private const val CLUSTER = 0.34f                  // a cluster's scale against its parent's
+private const val PHONE_MAX_DP = 600f               // narrower: two nodes to a row
+private const val PHONE_NODE_DP = 104f              // a phone's node: one size for all
+private const val PHONE_ROW_GAP = 18f
+
+/** A phone's map: seven nodes, two rows above the middle and two below. */
+private fun phoneStageHeight(): Float = 4 * (PHONE_NODE_DP + PHONE_ROW_GAP) + PHONE_NODE_DP + 32f
 private const val MOVE_MS = 280
 private const val FADE_MS = 180
 private val EASE = CubicBezierEasing(0.2f, 0f, 0f, 1f)
@@ -331,14 +340,19 @@ private fun ManualBody(doc: ManualDoc, cached: Boolean, navigate: (Route) -> Uni
             when {
                 at == "start" -> StartPage(doc, live, links) { go("map") }
                 piece != null -> PiecePage(doc, piece, visible, live, links)
-                else -> Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-                    ManualMap(doc, visible, topicOf(at), reduce, go, Modifier.weight(1f))
+                else -> BoxWithConstraints(Modifier.fillMaxSize()) {
+                    // A phone's map is taller than the space under the bar
+                    // and the search: it scrolls, at the height its rows need.
+                    val stage = if (maxWidth.value < PHONE_MAX_DP) phoneStageHeight() else max(maxHeight.value - 40f, 420f)
+                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 12.dp)) {
+                    ManualMap(doc, visible, topicOf(at), reduce, go, Modifier.height(stage.dp))
                     val t = doc.topic(topicOf(at))
                     Text(
                         t?.intro ?: if (t == null) doc.label("map_hint") else "",
                         style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgFaint,
                         modifier = Modifier.padding(vertical = 8.dp),
                     )
+                    }
                 }
             }
         }
@@ -471,7 +485,7 @@ private fun ring(n: Int, w: Float, h: Float, phone: Boolean, nw: Float, nh: Floa
     }
     val rows = ceil(n / 2.0).toInt()
     val upRows = ceil(rows / 2.0).toInt()
-    val step = nh + 22
+    val step = nh + PHONE_ROW_GAP
     val dx = nw / 2 + 5
     return List(n) { i ->
         val r = i / 2
@@ -493,9 +507,9 @@ private fun ManualMap(
     ) {
         val w = maxWidth.value
         val h = maxHeight.value
-        val phone = w < 600
+        val phone = w < PHONE_MAX_DP
         val nw = if (phone) (w - 14) / 2 else 196f
-        val nh = if (phone) 76f else 66f
+        val nh = if (phone) PHONE_NODE_DP else 66f
         val ringTopics = doc.ringTopics
         val centreTopic = doc.centre.opens
 
@@ -612,7 +626,7 @@ private fun ManualMap(
                             translationY = bob(id, t) * density
                         },
                 ) {
-                    MapNode(title, sub, icon, preview, plugin, hub, nh.dp, levelKey, reduce, onClick)
+                    MapNode(title, sub, icon, preview, plugin, hub, nh.dp, phone, levelKey, reduce, onClick)
                 }
             }
         }
@@ -622,14 +636,17 @@ private fun ManualMap(
 @Composable
 private fun MapNode(
     title: String, sub: String?, icon: ImageVector?, preview: Boolean, plugin: Boolean, hub: Boolean,
-    minHeight: Dp, levelKey: String, reduce: Boolean, onClick: () -> Unit,
+    minHeight: Dp, fixed: Boolean, levelKey: String, reduce: Boolean, onClick: () -> Unit,
 ) {
+    // On a phone every node is one size, so the rows never run into each
+    // other: two lines of name, two of subtitle, a pill folded into it.
+    val tags = listOfNotNull("preview".takeIf { preview }, "plugin".takeIf { plugin })
     Surface(
         shape = RoundedCornerShape(10.dp),
         color = Domovoi.colors.card,
         border = BorderStroke(1.dp, if (hub) Domovoi.colors.borderStrong else Domovoi.colors.border),
         shadowElevation = 1.dp,
-        modifier = Modifier.fillMaxWidth().heightIn(min = minHeight)
+        modifier = Modifier.fillMaxWidth().then(if (fixed) Modifier.height(minHeight) else Modifier.heightIn(min = minHeight))
             .clickable(role = Role.Button, onClick = onClick)
             .semantics { contentDescription = listOfNotNull(title, sub).joinToString(": ") },
     ) {
@@ -638,14 +655,20 @@ private fun MapNode(
                 if (icon != null) Icon(icon, null, Modifier.size(15.dp), tint = Domovoi.colors.brand)
                 ScrambleText(title, levelKey, reduce)
             }
-            if (sub != null) {
-                Text(sub, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
-            }
-            if (preview || plugin) {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (preview) Pill("preview")
-                    if (plugin) Pill("plugin")
-                }
+            if (sub != null || tags.isNotEmpty()) {
+                Text(
+                    buildAnnotatedString {
+                        append(sub.orEmpty())
+                        tags.forEach { t ->
+                            append(if (length > 0) "  " else "")
+                            withStyle(SpanStyle(color = Domovoi.colors.fgMuted, background = Domovoi.colors.idleSoft, fontSize = 11.sp)) {
+                                append(" $t ")
+                            }
+                        }
+                    },
+                    style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }
@@ -654,6 +677,7 @@ private fun MapNode(
 /** A node's name, which scrambles into place as its level opens. */
 @Composable
 private fun ScrambleText(text: String, key: String, reduce: Boolean) {
+    // (two lines at most: a phone's node is one fixed size)
     var shown by remember(text) { mutableStateOf(text) }
     LaunchedEffect(key, text) {
         if (reduce) { shown = text; return@LaunchedEffect }
@@ -672,6 +696,7 @@ private fun ScrambleText(text: String, key: String, reduce: Boolean) {
         shown,
         style = MaterialTheme.typography.titleSmall.copy(fontFamily = MonoFamily, fontWeight = FontWeight.SemiBold, fontSize = 13.sp),
         color = Domovoi.colors.fg,
+        maxLines = 2, overflow = TextOverflow.Ellipsis,
     )
 }
 

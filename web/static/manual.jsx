@@ -92,6 +92,8 @@ const UM_CSS = `
 .um-nhead .ic { color: var(--brand); display: inline-flex; }
 .um-name { font-family: var(--ff-mono); font-weight: 600; font-size: 13px; letter-spacing: 0.01em; line-height: 1.3; }
 .um-sub { font-size: 12px; color: var(--fg-muted); line-height: 1.3; }
+.um-node.fixed .um-name, .um-node.fixed .um-sub { display: -webkit-box; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2; overflow: hidden; }
 .um-hint { font-size: 11px; color: var(--fg-faint); font-family: var(--ff-mono); }
 .um-stage-hint { font-size: 11px; color: var(--fg-faint); margin-top: -8px; }
 
@@ -472,7 +474,9 @@ const UmBlocks = ({ blocks, ctx }) => blocks.filter(umShown).map((b, i) => {
 // Node size for a stage `W` wide: on a phone two to a row.
 const umDims = (W) => {
   const phone = W < 600;
-  return { phone, NW: phone ? Math.floor((W - 14) / 2) : 196, NH: phone ? 76 : 66 };
+  // A phone's nodes are one fixed size (two lines of name, two of
+  // subtitle), so its rows never run into each other.
+  return { phone, NW: phone ? Math.floor((W - 14) / 2) : 196, NH: phone ? 104 : 66 };
 };
 
 // n nodes around a cluster's middle, at full size. Wide: an ellipse that
@@ -488,7 +492,7 @@ const umRing = (n, W, H, d) => {
   }
   const rows = Math.ceil(n / 2);
   const up = Math.ceil(rows / 2);
-  const step = d.NH + 22;
+  const step = d.NH + 18;
   const dx = d.NW / 2 + 5;
   return Array.from({ length: n }, (_, i) => {
     const r = Math.floor(i / 2);
@@ -501,7 +505,7 @@ const umRing = (n, W, H, d) => {
 const umStageHeight = (W) => {
   const d = umDims(W);
   if (!d.phone) return 560;
-  return 4 * (d.NH + 22) + d.NH + 56;   // seven nodes: two rows above, two below (titles may wrap)
+  return 4 * (d.NH + 18) + d.NH + 32;   // seven nodes: two rows above, two below
 };
 
 /* ── the map ─────────────────────────────────────────────────────── */
@@ -646,9 +650,10 @@ const UmMap = ({ doc, visiblePieces, focus, away, onGo, nodeRefs }) => {
     if (!g) return null;
     const on = shown.has(id);
     return (
-      <button key={id} type="button" className={`um-node ${cls}${on ? '' : ' off'}`}
+      <button key={id} type="button" className={`um-node ${cls}${on ? '' : ' off'}${d.phone ? ' fixed' : ''}`}
               ref={(el) => { nodeRefs.current[id] = el; }}
-              style={{ left: g.x, top: g.y, width: d.NW, minHeight: d.NH, '--um-s': g.s }}
+              style={{ left: g.x, top: g.y, width: d.NW, '--um-s': g.s,
+                       ...(d.phone ? { height: d.NH } : { minHeight: d.NH }) }}
               tabIndex={on ? 0 : -1} aria-hidden={on ? undefined : true} aria-label={label}
               onClick={onClick} {...hover(id)}>
         <span className="um-nhead">
