@@ -186,12 +186,45 @@ def enrich_running() -> bool:
 _key_hint_logged = False
 
 
+def _is_refusal(code: object, message: object) -> bool:
+    """AcoustID's error ``code`` / ``message`` say it refused the key
+    itself (error 4 "invalid API key"; 17 "unknown application")."""
+    msg = str(message or "").lower()
+    return code in (4, 17) or "api key" in msg or "apikey" in msg or "unknown application" in msg
+
+
 def _is_key_refusal(e: Exception) -> bool:
     """AcoustID refused the key itself (error 4 "invalid API key"; 17
     "unknown application") — not the line, not this file."""
-    code = getattr(e, "code", None)
-    msg = (getattr(e, "message", None) or str(e) or "").lower()
-    return code in (4, 17) or "api key" in msg or "apikey" in msg or "unknown application" in msg
+    return _is_refusal(getattr(e, "code", None), getattr(e, "message", None) or str(e))
+
+
+def _answer_error(answer: object) -> tuple[object, str] | None:
+    """``(code, message)`` of the error AcoustID answered with, or None
+    for an ``ok`` answer. pyacoustid hands an error answer back as data
+    (HTTP 400 with ``{"status": "error", "error": {"code": 4, ...}}``),
+    and its ``match`` then raises ``WebServiceError("status: error")``
+    with the code gone — so the answer is read here, not the exception."""
+    if not isinstance(answer, dict):
+        return None, "AcoustID's answer wasn't readable"
+    if answer.get("status") == "ok":
+        return None
+    error = answer.get("error") if isinstance(answer.get("error"), dict) else {}
+    return error.get("code"), str(error.get("message") or f"status: {answer.get('status')}")
+
+
+def _match_results(acoustid: Any, answer: object) -> list[Any]:
+    """The ``(score, recording_id, title, artist)`` tuples of a lookup
+    answer (``acoustid.match(..., parse=False)``); an error answer raises
+    ``WebServiceError`` carrying AcoustID's own code and message."""
+    error = _answer_error(answer)
+    if error is not None:
+        code, message = error
+        exc = acoustid.WebServiceError(message)
+        if code is not None:
+            exc.code = code
+        raise exc
+    return list(acoustid.parse_lookup_result(answer))
 
 
 def _note_acoustid_error(e: Exception) -> None:
@@ -261,6 +294,23 @@ def _is_network_error(e: BaseException) -> bool:
     return module in ("aiohttp", "httpx", "requests", "urllib3")
 
 
+# pyacoustid's own address is plain HTTP, which would carry the key and
+# every fingerprint across the network in the clear; AcoustID answers the
+# same over HTTPS.
+ACOUSTID_API_PLAIN = "http://api.acoustid.org/v2/"
+ACOUSTID_API = "https://api.acoustid.org/v2/"
+
+
+def _acoustid() -> Any:
+    """pyacoustid (ImportError when it isn't installed), talking to
+    AcoustID over HTTPS. A base URL somebody set on purpose is kept."""
+    import acoustid
+
+    if getattr(acoustid, "API_BASE_URL", None) == ACOUSTID_API_PLAIN:
+        acoustid.set_base_url(ACOUSTID_API)
+    return acoustid
+
+
 async def _enrich_via_acoustid(file_path: Path) -> Lookup:
     """Run Chromaprint via fpcalc, query AcoustID, return what it said.
     Never raises — the verdict carries the outcome."""
@@ -268,7 +318,7 @@ async def _enrich_via_acoustid(file_path: Path) -> Lookup:
     if not api_key:
         return Lookup(Verdict.NOT_ASKED, detail="no AcoustID key")
     try:
-        import acoustid
+        acoustid = _acoustid()
     except ImportError:
         log.warning("AcoustID enrichment: pyacoustid isn't installed; skipping AcoustID")
         return Lookup(Verdict.NOT_ASKED, detail="pyacoustid not installed", unusable=True)
@@ -278,10 +328,12 @@ async def _enrich_via_acoustid(file_path: Path) -> Lookup:
         return Lookup(Verdict.ERROR, detail=str(e), transient=True)
 
     # acoustid.match is sync (shells out to fpcalc, hits the API),
-    # so run in the thread pool to keep the event loop responsive.
+    # so run in the thread pool to keep the event loop responsive. The
+    # answer comes back unparsed so a refusal keeps AcoustID's error code
+    # (_match_results): parsed, a refused key read as a line failure.
     try:
         results = await asyncio.to_thread(
-            lambda: list(acoustid.match(api_key, str(file_path))),
+            lambda: _match_results(acoustid, acoustid.match(api_key, str(file_path), parse=False)),
         )
     except acoustid.NoBackendError:
         log.warning(
@@ -329,6 +381,103 @@ async def _enrich_via_acoustid(file_path: Path) -> Lookup:
             source="acoustid",
         ),
     )
+
+
+# ─── "Test the key" (Settings → Configuration) ───────────────────────────
+
+# A Chromaprint fingerprint (fpcalc 1.6.0, its default algorithm) of 30 s of a
+# generated chord progression with a little noise — nobody's recording.
+# Any valid fingerprint does: the test asks whether AcoustID accepts the
+# KEY, not whether it knows the song (it doesn't).
+KEY_CHECK_DURATION = 30
+KEY_CHECK_FINGERPRINT = (
+    "AQAA3Uo0TY8U4VdxH0yP_EOyG8cTPTirgcdP4XFxKkTo3EEzHc8OHfzxHXya48eLdyiVH1SN"
+    "Pxd-ZO_xHJOOp8A-Cc-P-wdz_Eh2m8jx6HgUagF7_BTu4ieeN0h7nD-khvhxvKnxgy_egc-P"
+    "UoZ_4QRd5DwxCU8F7JPw4FfB_DhyJOuN53jEBiw5_MZ3_MbfFGGao_yhZwGP44sL3id-PMOd"
+    "HaXSgPqFH_yRhyeOSTlunNhf_Cp4H8WPZEd-PG5wxgOPn8LjBqeKprmDkDqeHTr443vBp8cf"
+    "nHhRKj9c76B_8EfeEw8mHU9x7BWeH_cPBkeyH3nwPLjigT1-CnfxE88bpD3OH1JD_PiOpzm4"
+    "4wxePD8YyvAvnARt5CcmHU-BT8J-PLXAHEd4JK_xHVfEBjyH3_iO38TfIG2O_9CzgPiPx8Xp"
+    "gw-e4ebBUCn8Cz9-ZA9P1Bhz3LiE_fhV3AfTI_-Q7MbxxMYZgyf-DH-DMynC-OgPPTvY4sf3"
+    "4unxg2fwHgyVEu6P__gBoBCCUjGHDCEMCMiBJkYxIBRAwHJKiCEACiCQFIAjBJAA3EjBEDEC"
+    "CAkZIoIYQYFQwFIKCHEAIwE4QkpBtohRCAgpIEAGOAE0FUAAzBFxwBAkjEAAoMEUApBJbQQi"
+    "DAjIgSZGMSAAUMBySgggBgkjkACoIwSQAGwoihASQEjIEBHECAqEQshyighxACIlgBgYoTYU"
+    "IoQAIQUEyADiBBAEIKA4R8QBQ6AAAgA0mEIISsUcMoQBAQFnTgFDgQBIAUupIMQQAQU"
+)
+KEY_CHECK_TIMEOUT_SEC = 15.0
+
+# One test at a time: a button pressed again while one is out waits for it.
+_key_check_lock = asyncio.Lock()
+
+
+@dataclass(frozen=True)
+class KeyCheck:
+    """What "test the key" found. ``result``: ``works``, ``refused``,
+    ``unreachable`` or ``unavailable``. ``detail`` never holds the key."""
+
+    result: str
+    detail: str = ""
+    # Whether this server can fingerprint songs at all (Chromaprint's
+    # fpcalc, or its library with audioread): None when unknown.
+    fingerprints: bool | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"result": self.result, "detail": self.detail, "fingerprints": self.fingerprints}
+
+
+def can_fingerprint(acoustid: Any) -> bool:
+    """Whether ``acoustid.match`` can fingerprint a file here: the
+    Chromaprint library with audioread, or the ``fpcalc`` program (on
+    PATH, or where ``FPCALC`` points) — pyacoustid's own order."""
+    import os
+    import shutil
+
+    if getattr(acoustid, "have_audioread", False) and getattr(acoustid, "have_chromaprint", False):
+        return True
+    command = os.environ.get(getattr(acoustid, "FPCALC_ENVVAR", "FPCALC"), "") or getattr(
+        acoustid, "FPCALC_COMMAND", "fpcalc"
+    )
+    return shutil.which(command) is not None
+
+
+def _without(text: object, key: str) -> str:
+    """``text`` with the key blanked, should a library ever quote it."""
+    out = str(text or "")
+    return out.replace(key, "***") if key else out
+
+
+async def check_acoustid_key(key: str) -> KeyCheck:
+    """One AcoustID lookup of :data:`KEY_CHECK_FINGERPRINT` with ``key``,
+    through the same pyacoustid the sweep uses. Raises
+    ``egress.InternetTurnedOff`` under ``INTERNET_ACCESS=never`` before
+    anything is sent. Logs the outcome, never the key."""
+    key = (key or "").strip()
+    try:
+        acoustid = _acoustid()
+    except ImportError:
+        return KeyCheck("unavailable", "pyacoustid isn't installed on the Domovoi server")
+    egress.require_internet("AcoustID key test")
+    fingerprints = can_fingerprint(acoustid)
+    async with _key_check_lock:
+        try:
+            answer = await asyncio.to_thread(
+                acoustid.lookup, key, KEY_CHECK_FINGERPRINT, KEY_CHECK_DURATION,
+                ["recordingids"], KEY_CHECK_TIMEOUT_SEC,
+            )
+        except Exception as e:  # WebServiceError wraps the line's failures
+            detail = _without(getattr(e, "message", None) or e, key)
+            log.info("AcoustID key test: no answer (%s)", detail)
+            return KeyCheck("unreachable", detail, fingerprints)
+    error = _answer_error(answer)
+    if error is None:
+        log.info("AcoustID key test: the key works")
+        return KeyCheck("works", "", fingerprints)
+    code, message = error
+    detail = _without(message, key)
+    if _is_refusal(code, message):
+        log.info("AcoustID key test: AcoustID refused the key (%s)", detail)
+        return KeyCheck("refused", detail, fingerprints)
+    log.info("AcoustID key test: AcoustID answered with an error (%s, code %s)", detail, code)
+    return KeyCheck("unreachable", f"AcoustID answered: {detail}", fingerprints)
 
 
 async def _enrich_via_shazam(file_path: Path) -> Lookup:

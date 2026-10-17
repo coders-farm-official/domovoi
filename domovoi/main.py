@@ -5410,6 +5410,11 @@ async def admin_get_config(
       "sign in to see these" instead of showing nothing.
 
     ``advanced_available`` tells the page which of those it got.
+
+    A write-only secret (``config_schema.WRITE_ONLY_SETTING_NAMES``: the
+    AcoustID key) is never read back at all: an admin — the Bearer or
+    the dashboard cookie — gets the mask and ``is_set``, and any other
+    caller (the pre-setup grace) doesn't get the row.
     """
     import os
 
@@ -5425,6 +5430,7 @@ async def admin_get_config(
 
     auth = await check_admin_request(request)
     full_read = auth == "ok"            # a live admin Bearer
+    admin_reader = auth in ("ok", "cookie-only")   # an admin, live or view-only
     advanced_ok = full_read or auth == "pre-setup"
     if wants == "advanced" and not advanced_ok:
         raise HTTPException(
@@ -5447,7 +5453,12 @@ async def admin_get_config(
             continue
         if spec.section == "advanced" and not advanced_ok:
             continue
+        if spec.write_only and not admin_reader:
+            continue
         value = getattr(settings, spec.name, None)
+        if spec.write_only:
+            value = str(value or "").strip()
+        masked = bool(spec.secret and (spec.write_only or not full_read))
         in_profile = spec.name in PROFILE_FIELD_NAMES
         fields.append(
             {
@@ -5466,8 +5477,12 @@ async def admin_get_config(
                 # ``masked`` says the value in this row is the mask, not
                 # the setting — the page renders it read-only rather than
                 # letting someone save the mask back over the real value.
-                "masked": bool(spec.secret and not full_read),
-                "value": value if (full_read or not spec.secret) else mask_secret(value),
+                "masked": masked,
+                "value": mask_secret(value) if masked else value,
+                # Write-only: the page offers "paste a new one" and "clear",
+                # never the value; ``is_set`` is all it learns about it.
+                "write_only": spec.write_only,
+                "is_set": bool(value) if spec.write_only else None,
                 "choice_labels": spec.choice_labels,
                 # Greyed with "needs internet" under INTERNET_ACCESS=never.
                 "needs_internet": spec.needs_internet,
@@ -5676,6 +5691,13 @@ async def admin_update_config(body: _AdminConfigUpdateBody) -> dict[str, Any]:
             except Exception as e:
                 log.warning("config save: .env write failed: %s", e)
                 rejected["__persist__"] = f".env write failed: {e}"
+            else:
+                # A setting a follower's condition reads (the AcoustID key):
+                # the follower itself (song recognition) is restart-tier,
+                # so say so when its next boot just changed.
+                for name in internet_profile.restart_followers_of(persist):
+                    if name not in restart_required:
+                        restart_required.append(name)
 
         # The internet answer. .env is where BOTH processes read it
         # (egress.policy), so an answer that can't be written there is not
@@ -5746,6 +5768,57 @@ async def admin_update_config(body: _AdminConfigUpdateBody) -> dict[str, Any]:
         # Settings that follow the internet answer again (follow_internet).
         "followed": followed,
     }
+
+
+class _AcoustidTestBody(BaseModel):
+    # A key typed but not saved yet; absent or empty tests the saved one.
+    key: str | None = Field(default=None, max_length=256)
+
+
+@app.post(
+    "/v1/admin/config/acoustid-test",
+    # The security tier, like the config write beside it: it sends the
+    # household's key (or one an admin pasted) out of the house.
+    dependencies=[Depends(require_admin_security)],
+)
+async def admin_acoustid_test(body: _AcoustidTestBody | None = None) -> dict[str, Any]:
+    """Settings → Configuration → "test the key": one AcoustID lookup with
+    the key — the one in ``key``, else the saved ``ACOUSTID_API_KEY`` — of
+    a fixed fingerprint (``library_enricher.check_acoustid_key``).
+
+    ``{result, detail, fingerprints}``: ``result`` is ``works``,
+    ``refused`` (AcoustID refused the key: a user key, a typo),
+    ``unreachable`` (no answer about the key: the line, the service) or
+    ``unavailable`` (pyacoustid isn't installed); ``fingerprints`` says
+    whether this server can fingerprint songs at all (Chromaprint's
+    ``fpcalc``), without which a working key still identifies nothing.
+    Under ``INTERNET_ACCESS=never`` it is the 409 internet-off refusal and
+    nothing is sent; with no key to test, 422. The key is never echoed,
+    logged or stored here."""
+    from domovoi import egress
+    from domovoi.config_schema import FIELD_BY_NAME, coerce_and_validate
+    from domovoi.workers import library_enricher
+
+    if egress.internet_turned_off():
+        raise egress.http_exception("the AcoustID key test")
+    typed = (body.key if body is not None else None) or ""
+    if typed.strip():
+        try:
+            key = str(coerce_and_validate(FIELD_BY_NAME["acoustid_api_key"], typed))
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    else:
+        key = str(settings.acoustid_api_key or "").strip()
+    if not key:
+        raise HTTPException(
+            status_code=422,
+            detail="no AcoustID key to test: paste one, or save one first",
+        )
+    try:
+        check = await library_enricher.check_acoustid_key(key)
+    except egress.InternetTurnedOff:
+        raise egress.http_exception("the AcoustID key test")
+    return check.as_dict()
 
 
 # ─── Settings → Internet ──────────────────────────────────────────────────

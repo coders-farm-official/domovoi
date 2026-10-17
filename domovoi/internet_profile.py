@@ -42,6 +42,7 @@ from pydantic import TypeAdapter
 from domovoi import config_env_writer, egress
 from domovoi.config import (
     PROFILE_BY_NAME,
+    PROFILE_CONDITION_INPUTS,
     PROFILE_CONDITIONS,
     PROFILE_DEFAULTS,
     PROFILE_FIELD_NAMES,
@@ -288,6 +289,26 @@ def apply_answer(old: str, new: str) -> InternetApplyResult:
     return result
 
 
+def restart_followers_of(changed: object) -> list[str]:
+    """The restart-tier settings whose next boot a save of ``changed``
+    (setting names, already in ``.env``) just moved: a follower whose
+    ``requires`` condition reads one of them, that isn't set by hand, and
+    whose next-boot value now differs from the live one. Saving an
+    AcoustID key on a box whose song recognition was off for want of one
+    lists ``library_enricher_enabled``; under the answer No, or with song
+    recognition switched off by hand, nothing moves."""
+    names = set(changed)  # type: ignore[call-overload]
+    hand = hand_set_fields()
+    out: list[str] = []
+    for pd in PROFILE_DEFAULTS:
+        inputs = PROFILE_CONDITION_INPUTS.get(pd.requires, ()) if pd.requires else ()
+        if pd.applies != "restart" or pd.name in hand or not names.intersection(inputs):
+            continue
+        if next_boot_value(pd.name) != getattr(settings, pd.name):
+            out.append(pd.name)
+    return out
+
+
 def follow_again(names: list[str]) -> tuple[list[str], dict[str, str], list[str]]:
     """Let hand-set profile fields follow the answer again: comment their
     ``.env`` lines out and re-derive. Returns ``(followed, refused,
@@ -469,6 +490,7 @@ __all__ = [
     "follow_again",
     "hand_set_fields",
     "next_boot_value",
+    "restart_followers_of",
     "schedule_probe_recheck",
     "status",
 ]

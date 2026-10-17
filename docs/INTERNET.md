@@ -133,15 +133,28 @@ stays yours to do:
 
 2. **Song recognition for badly tagged music:** create a free AcoustID
    **application** at [acoustid.org/new-application](https://acoustid.org/new-application)
-   and put its API key in `domovoi/.env`:
+   and paste its API key into the dashboard: Settings → Configuration →
+   Library → **AcoustID key** (signed in as admin). The Music page's
+   "song recognition needs a free AcoustID key" and the song-recognition
+   row of Settings → Internet open that field. **test the key** asks
+   AcoustID once whether it takes the key (it isn't offered when the
+   answer is **No**). It must be an application key: the key on your
+   AcoustID user page is refused for lookups, and both the test and the
+   core's log say so. Once saved, the key is never shown again, only
+   whether one is set; **clear** removes it. (Or install the `shazam`
+   extra; either one is enough.)
+
+   The key applies at once. Where song recognition was off only because
+   there was no key, it turns on after a restart: the save says so, and
+   Settings → Internet shows "→ on after a restart". A key never turns it
+   on under **No**, or when you switched it off yourself.
+
+   Without the dashboard, put the key in `domovoi/.env` instead and
+   restart the core:
 
    ```
    ACOUSTID_API_KEY=<the application's key>
    ```
-
-   then restart the core. It must be an application key: the key on your
-   AcoustID user page is refused for lookups, and the core's log then
-   says so. (Or install the `shazam` extra; either one is enough.)
 
    *Why:* tracks with missing or wrong tags get their real artist and
    title, so voice requests find them. Tracks the server looked at before

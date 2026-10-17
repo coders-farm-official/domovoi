@@ -108,6 +108,12 @@ class FieldSpec:
         masked without anyone having to remember a flag."""
         return is_secret_setting(self.name)
 
+    @property
+    def write_only(self) -> bool:
+        """Whether the dashboard may only WRITE this value (see
+        :data:`WRITE_ONLY_SETTING_NAMES`): never read back, to anyone."""
+        return is_write_only_setting(self.name)
+
 
 # Settings whose VALUE is a credential, whether or not they are editable
 # from the dashboard: the config read masks these for every caller but a
@@ -128,6 +134,21 @@ def is_secret_setting(name: str) -> bool:
     """True when ``name`` names a settings value that must never be read
     back to anything short of an admin Bearer."""
     return name in SECRET_SETTING_NAMES
+
+
+# Secrets the dashboard WRITES and never reads back, to anyone: the config
+# read says whether one is set (the mask, and ``is_set``), never what it
+# is, even to a live admin Bearer, and leaves the row out altogether for a
+# caller who isn't an admin (the pre-setup LAN grace). A key pasted into a
+# browser once has no reason to travel back to one. A subset of the
+# secrets above; the database URL stays readable to an admin Bearer, who
+# edits it in place.
+WRITE_ONLY_SETTING_NAMES: frozenset[str] = frozenset({"acoustid_api_key"})
+
+
+def is_write_only_setting(name: str) -> bool:
+    """True when ``name`` is a secret the config read never returns."""
+    return name in WRITE_ONLY_SETTING_NAMES
 
 
 def mask_secret(value: object) -> str:
@@ -397,6 +418,25 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     ),
 
     # ─── Library ───────────────────────────────────────────────────────
+    # Write-only (WRITE_ONLY_SETTING_NAMES): the read says set / not set,
+    # never the key. 'hot' because the enricher reads it at every lookup
+    # (library_enricher._enrich_via_acoustid, provider_available); song
+    # recognition itself (LIBRARY_ENRICHER_ENABLED, restart-tier) may follow
+    # it — a save lists it in restart_required when its next boot changes.
+    FieldSpec(
+        "acoustid_api_key", "AcoustID key", "Library",
+        "The key song recognition uses to ask AcoustID what a badly tagged "
+        "song is. A free APPLICATION key from acoustid.org/new-application, "
+        "not the user API key on your AcoustID profile (AcoustID refuses "
+        "that one for lookups). Once saved it is never shown again, only "
+        "whether one is set; clear it to stop using AcoustID. Applies at "
+        "once. Where song recognition is off only because there was no key, "
+        "it turns on after a restart; it never turns on when the internet "
+        "answer is No or you turned it off.",
+        "str", tier="hot",
+        pattern=r"[A-Za-z0-9._\-]{0,128}",
+        pattern_help="expected the key alone, with no spaces or other words",
+    ),
     FieldSpec(
         "library_enricher_acoustid_min_score", "AcoustID match floor", "Library",
         "Minimum fingerprint-match score to accept metadata (artist/album) "
@@ -1015,6 +1055,10 @@ def coerce_and_validate(spec: FieldSpec, value: object) -> object:
             raise ValueError("expected a number")
     elif t in ("str", "choice"):
         coerced = str(value)
+        if spec.write_only:
+            # A pasted key arrives with a stray space or newline more
+            # often than not, and nobody can see it to fix it afterwards.
+            coerced = coerced.strip()
         # A newline would end the .env line early: the text after it reads
         # as a setting of its own to every line-based reader (review of
         # 2026-10-13). No setting needs a control character.

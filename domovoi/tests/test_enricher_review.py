@@ -39,17 +39,17 @@ ENRICHER = "domovoi.workers.library_enricher"
 @pytest.fixture
 def refused_key(monkeypatch):
     """A key AcoustID refuses, through the REAL _enrich_via_acoustid."""
-    import acoustid
-
     monkeypatch.setattr(f"{ENRICHER}.settings.acoustid_api_key", "user-key")
     monkeypatch.setattr(le, "_key_hint_logged", False)
     asked: list[str] = []
 
-    def refused(_key, path):
+    def refused(_key, path, parse=True):
+        # What pyacoustid 1.3.1 really does: the HTTP 400 comes back as
+        # data (parse=False, how the enricher asks); parsed, it would be a
+        # WebServiceError("status: error") with the code gone.
         asked.append(Path(path).name)
-        raise acoustid.WebServiceError(
-            "invalid API key", '{"status": "error", "error": {"code": 4, "message": "invalid API key"}}'
-        )
+        assert parse is False, "the enricher must read the answer itself"
+        return {"status": "error", "error": {"code": 4, "message": "invalid API key"}}
 
     with patch("acoustid.match", refused):
         yield asked

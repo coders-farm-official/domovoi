@@ -272,8 +272,8 @@ yourself. Then, before you add music or build satellites:
 - **Yes, always, or Sometimes:** do
   [the items that stay yours](INTERNET.md#if-your-domovoi-will-have-internet):
   your town for local news, an AcoustID **application** key for song
-  recognition (`ACOUSTID_API_KEY` in `domovoi/.env`, then restart), your
-  radio market. Tracks the server looked at before it had a key are tried
+  recognition (Settings → Configuration → Library → **AcoustID key**, or
+  `ACOUSTID_API_KEY` in `domovoi/.env` and a restart), your radio market. Tracks the server looked at before it had a key are tried
   again by themselves, so the order no longer matters.
 - **No:** work through
   [Before you disconnect](INTERNET.md#before-you-disconnect) while the

@@ -141,6 +141,36 @@ async def patch_editable_config(body: ConfigUpdateRequest, request: Request):
     return bridge_response(status, answer)
 
 
+class AcoustidTestRequest(BaseModel):
+    # A key typed but not saved yet; absent or empty tests the saved one.
+    key: str | None = Field(default=None, max_length=256)
+
+
+@router.post(
+    "/config/acoustid-test",
+    # Security tier at both hops, like the config write beside it: it
+    # sends the household's AcoustID key out of the house.
+    dependencies=[Depends(require_admin_security)],
+)
+async def acoustid_key_test(body: AcoustidTestRequest, request: Request):
+    """Settings → Configuration's "test the key": one AcoustID lookup with
+    the typed key, else the saved one. Proxy of the core's
+    ``POST /v1/admin/config/acoustid-test`` →
+    ``{result: works|refused|unreachable|unavailable, detail,
+    fingerprints}``; 409 when the internet answer is No (nothing sent),
+    422 with no key to test. The key is never echoed or logged."""
+    payload: dict = {}
+    if body.key:
+        payload["key"] = body.key
+    return bridge_response(
+        *await post_admin(
+            "/v1/admin/config/acoustid-test",
+            payload,
+            headers=auth_forward_headers(request),
+        )
+    )
+
+
 @router.get(
     "/config/internet",
     # A read like /config/editable beside it: the dashboard cookie renders

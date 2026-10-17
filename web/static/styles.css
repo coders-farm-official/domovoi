@@ -1282,6 +1282,12 @@ textarea.cal-inp { resize: vertical; min-height: 64px; line-height: 1.4; }
 }
 .home-link:hover { text-decoration: underline; }
 
+/* Links inside a sentence of help text (Settings → Configuration's AcoustID
+   key, Settings → Internet's "needs an AcoustID key …"): amber words that
+   stay in the line, not the phone's 44px .home-link target. */
+.config-acoustid a, a.internet-condition-link { color: var(--brand-press); text-decoration: none; }
+.config-acoustid a:hover, a.internet-condition-link:hover { text-decoration: underline; }
+
 .home-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; margin-bottom: 8px; }
 .home-group-label { font-size: 11px; font-weight: 500; color: var(--fg-muted); padding: 0 0 8px; }
 .home-room-group + .home-room-group { margin-top: 16px; }

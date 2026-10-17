@@ -4,6 +4,48 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-17 — The AcoustID key in the dashboard
+
+Server update (core and dashboard; no migration).
+
+* **Settings → Configuration → Library → AcoustID key** (admin). Song
+  recognition's key no longer has to be typed into `domovoi/.env`, which
+  on the Windows install sits inside its WSL distro. Paste a free
+  **application** key from https://acoustid.org/new-application (not the
+  user API key on your AcoustID profile); **test the key** asks AcoustID
+  once and says "The key works." or "AcoustID refused this key. Is it the
+  application key?". Under the internet answer **No** there is no button,
+  only a line pointing at Settings → Internet. The Music page's "song
+  recognition needs a free AcoustID key or the Shazam add-on" (after
+  **Enrich tags**) and Settings → Internet's song-recognition row open the
+  field: `#settings/configuration/acoustid-key`.
+* **Write-only.** A saved key is never read back, not even to an admin
+  Bearer: `GET /v1/admin/config` (and `GET /api/config/editable`) gives an
+  admin the mask with `write_only: true` and `is_set`, and leaves the row
+  out entirely before setup. Every row now carries `write_only` and
+  `is_set`. A script that read the key back with a Bearer gets the mask.
+  Clearing it is a save of `""`.
+* **When it applies.** At once: the enricher reads the key at every
+  lookup. Where song recognition (`LIBRARY_ENRICHER_ENABLED`, which follows
+  the internet answer) was off only because there was no key, it turns on
+  after a restart, and the save lists `library_enricher_enabled` in
+  `restart_required`. A key never turns it on under **No**, or when it was
+  switched off by hand.
+* **New route:** `POST /v1/admin/config/acoustid-test` and its proxy
+  `POST /api/config/acoustid-test` (security tier, `409` under **No** with
+  nothing sent): `{result: works|refused|unreachable|unavailable, detail,
+  fingerprints}`.
+* **A refused key is recognized as one.** pyacoustid hands AcoustID's
+  refusal back as data, and parsing it dropped the error code, so a user
+  key looked like the line being down: no "APPLICATION key" hint in the
+  log; without the Shazam add-on a sweep stopped after five lookups, and
+  with it AcoustID was asked about every file and every track Shazam
+  couldn't place stayed undecided, tried again each sweep. The enricher
+  now reads AcoustID's answer itself: a refused key is like no key for
+  the rest of the sweep, as documented.
+* **AcoustID over HTTPS.** pyacoustid's own address is plain HTTP; the key
+  and the fingerprints now go to `https://api.acoustid.org`.
+
 ## 2026-10-16 — Phone photos in chat: HEIC converted, refusals in words
 
 Dashboard update (the web process; no migration) and a new Android APK.

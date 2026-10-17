@@ -592,8 +592,9 @@ says what each answer switches; on Linux it comes down to this:
   online", news feed discovery — and the [update unit](#updates-from-the-dashboard)
   keeps it in step after every update; Docker brings it back after a
   reboot. Then do [what stays yours](INTERNET.md#if-your-domovoi-will-have-internet):
-  your town for local news, an AcoustID **application** key in
-  `domovoi/.env` for song recognition, your radio market.
+  your town for local news, an AcoustID **application** key for song
+  recognition (Settings → Configuration → Library → **AcoustID key**, or
+  `domovoi/.env`), your radio market.
 - **No.** While the box is still online, work through
   [Before you disconnect](INTERNET.md#before-you-disconnect): the Whisper
   fallback model, the Ollama models, the satellite media cache, and the
