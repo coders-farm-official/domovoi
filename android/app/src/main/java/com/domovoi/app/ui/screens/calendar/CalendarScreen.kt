@@ -142,7 +142,7 @@ fun CalendarScreen() {
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         PageHeader(
             "Calendar",
-            "${events.size} events · source of truth until calendarhandler ships",
+            "${events.size} events · the household's calendar",
             actions = {
                 Button(onClick = { editorDraft = blankDraft(anchor) }) { Text("new event") }
             },

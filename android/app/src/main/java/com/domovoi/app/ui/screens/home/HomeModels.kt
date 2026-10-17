@@ -216,16 +216,6 @@ internal data class HomeEvent(
 )
 
 @Serializable
-internal data class HomeManualHandler(
-    val name: String = "",
-    val example_phrases: List<String> = emptyList(),
-)
-
-/** GET /api/capabilities/manual — only asked for on a first run. */
-@Serializable
-internal data class HomeManual(val handlers: List<HomeManualHandler> = emptyList())
-
-@Serializable
 internal data class HomeAnnounceResult(val announced_to: List<String> = emptyList())
 
 // ─── Small helpers ────────────────────────────────────────────────────────
@@ -834,17 +824,15 @@ internal fun calendarPath(dayStartMs: Long, zone: ZoneId): String {
 
 // ─── First run ────────────────────────────────────────────────────────────
 
-private val HOME_HINT_HANDLERS = listOf("timer", "reminder", "clock", "music")
+/** When the server's manual can't be read. Like Start here's own first
+ *  phrase, it works on a fresh install: a timer, by its fast path, offline
+ *  (domovoi/tests/test_manual_content.py). */
 internal const val HOME_HINT_FALLBACK = "set a timer for 10 minutes"
 
-/** An example phrase from the user manual's feature table, the timer's first. */
-internal fun hintPhrase(manual: HomeManual?): String {
-    val handlers = manual?.handlers.orEmpty()
-    for (name in HOME_HINT_HANDLERS) {
-        handlers.firstOrNull { it.name == name }?.example_phrases?.firstOrNull()?.let { return it }
-    }
-    return handlers.firstOrNull { it.example_phrases.isNotEmpty() }?.example_phrases?.first() ?: HOME_HINT_FALLBACK
-}
+/** The first-run hint: the user manual's Start here, its first "try saying"
+ *  phrase ([startPhrase] of the connected server's manual), else the
+ *  fallback. The dashboard's Home says the same (web/static/home.jsx). */
+internal fun hintPhrase(startPhrase: String?): String = startPhrase?.takeIf { it.isNotBlank() } ?: HOME_HINT_FALLBACK
 
 // ─── Everything ───────────────────────────────────────────────────────────
 

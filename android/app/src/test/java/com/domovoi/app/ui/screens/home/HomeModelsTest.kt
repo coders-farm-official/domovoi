@@ -532,17 +532,12 @@ class HomeModelsTest {
 
     // ─── first run, everything ───────────────────────────────────────────
 
-    @Test fun firstRunHintPrefersTheTimersPhrase() {
-        val manual = HomeManual(
-            listOf(
-                HomeManualHandler("music", listOf("play some jazz")),
-                HomeManualHandler("timer", listOf("set a timer for 5 minutes")),
-            ),
-        )
-        assertEquals("set a timer for 5 minutes", hintPhrase(manual))
-        assertEquals("play some jazz", hintPhrase(HomeManual(listOf(HomeManualHandler("music", listOf("play some jazz"))))))
-        assertEquals("what time is it", hintPhrase(HomeManual(listOf(HomeManualHandler("other", listOf("what time is it"))))))
+    @Test fun firstRunHintIsStartHeresFirstPhrase() {
+        // Start here's first phrase, else the fallback (which works on a fresh install).
+        assertEquals("what time is it", hintPhrase("what time is it"))
         assertEquals(HOME_HINT_FALLBACK, hintPhrase(null))
+        assertEquals(HOME_HINT_FALLBACK, hintPhrase(" "))
+        assertEquals("set a timer for 10 minutes", HOME_HINT_FALLBACK)
     }
 
     @Test fun everythingGridHidesPersonalScreensOnASharedScreen() {

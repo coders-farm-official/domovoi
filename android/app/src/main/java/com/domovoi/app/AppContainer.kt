@@ -21,6 +21,7 @@ import com.domovoi.app.net.IdentityGate
 import com.domovoi.app.net.NetworkWatch
 import com.domovoi.app.net.PhoneUploads
 import com.domovoi.app.net.StateBus
+import com.domovoi.app.ui.screens.manual.ManualRepository
 import com.domovoi.app.player.LyricsRepository
 import com.domovoi.app.player.PlayerController
 import com.domovoi.app.player.ServerScope
@@ -69,6 +70,10 @@ class AppContainer(context: Context) {
 
     /** Lyrics for what plays, household tier only (player/Lyrics.kt). */
     val lyrics = LyricsRepository(api)
+
+    /** The connected server's user manual, kept per server
+     *  (ui/screens/manual/ManualRepository.kt). */
+    internal val manual = ManualRepository(api, java.io.File(context.filesDir, "manual"))
 
     /** Timer and reminder alerts: live notifications plus the local alarm
      *  mirror (alerts/TimerAlerts.kt). Started by DomovoiApplication. */

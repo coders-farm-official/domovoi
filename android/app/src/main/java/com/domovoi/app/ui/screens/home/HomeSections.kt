@@ -1003,7 +1003,7 @@ internal fun HomeFirstRun(phrase: String, onManual: () -> Unit) {
                 color = Domovoi.colors.fg,
                 modifier = Modifier.align(Alignment.CenterVertically),
             )
-            HomeLink("how domovoi works", onClick = onManual)
+            HomeLink("start here", onClick = onManual)
         }
     }
 }
