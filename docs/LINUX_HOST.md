@@ -1416,6 +1416,51 @@ stolen token, a merged pull request) would be root on this box at its next
 The bound is a signature: see [Signed updates](#signed-updates). Until
 you set it up, every pull and every update says so.
 
+### An interrupted update
+
+A git that is killed outright never removes its lock: by a timeout, a
+power cut, or `wsl --terminate` when Windows shuts down with Domovoi's
+distro running. After that, every git that needs the lock refuses with
+"Unable to create '.../.git/index.lock': File exists". A fast-forward cut
+off partway also leaves some files already at the new version (a torn
+tree), and git won't fast-forward over them. Domovoi cleans up after both
+(`domovoi/git_lock.py`, and the same code in `apply-update.sh` and
+`provision.sh`):
+
+- **A stale lock goes.** A lock counts as stale when no git process works
+  in the checkout (read from `/proc`; a git whose working directory can't
+  be read counts as working there) and the lock is more than 60 s old. A
+  lock a running git holds is never touched, and neither is a younger
+  one. The pull, the update check, every update run and every
+  `provision.sh` run look, and the journal names each lock removed. A git
+  the core stops for running too long has its own lock removed at once.
+- **A torn tree is put back.** Before it fast-forwards, the pull checks
+  out from the index again every file that holds, byte for byte, a
+  version of itself from the commits being pulled, or the start of one
+  (the file git was writing). It also removes a new file of those commits
+  that is there untracked with such content. Nothing is lost, because git
+  holds every such content. Anything else is a change of your own: git's
+  refusal names it, and the pull leaves it alone. `provision.sh` does the
+  same against the checkout's upstream. Only after it has found an update
+  interrupted, it also copies any other blocking change to
+  `/var/lib/domovoi-provision/checkout-kept-<time>/` (root's, 0700) and
+  puts it back too. HEAD never moves there: the next pull does that, with
+  the update unit's backup and rollback.
+- **One git on the checkout at a time.** The update unit holds
+  `/var/lib/domovoi-update/checkout.lock` for its whole run. A pull or a
+  channel switch takes the same lock before it moves the checkout, waits
+  10 s for it, and otherwise says a restart or update is under way. The
+  core's git takes no optional locks (`GIT_OPTIONAL_LOCKS=0`), so the
+  Version card's `git status` never holds `index.lock`.
+
+The Version card then says "an earlier update was interrupted; Domovoi
+cleaned up and is trying again" rather than git's own text. A lock that
+a running git still holds reads "another git command is working in
+Domovoi's checkout right now". A box on a build from before this has no
+cleanup to pull, so run `provision.sh` again (on Windows: a newer Setup
+over the install), or as the service user remove the lock once no git
+runs: `sudo -u domovoi rm /opt/domovoi/.git/index.lock`.
+
 ### The update verifier
 
 [`scripts/linux/update-verifier.sh`](../scripts/linux/update-verifier.sh),

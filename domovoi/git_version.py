@@ -51,17 +51,20 @@ user, and root does not take its word for it, nor run its files.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import math
 import os
 import re
 import subprocess
+import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from domovoi import egress, git_run, self_restart
+from domovoi import egress, git_lock, git_run, self_restart
 from domovoi.config import settings
 
 log = logging.getLogger(__name__)
@@ -70,6 +73,16 @@ log = logging.getLogger(__name__)
 # wedged (lock contention, network for fetch) and we'd rather report an
 # error than pin the calling endpoint open.
 _GIT_TIMEOUT_SEC = 10.0
+
+# The fast-forward itself writes the whole update into the tree: hundreds
+# of files from one release to the next (363 from 1.0.0-rc2 to batch 17),
+# on a box that may be busy loading models. Killed at 10 s it left a torn
+# tree and a stale index.lock (git_lock). The web waits 90 s for the pull.
+_MERGE_TIMEOUT_SEC = 45.0
+
+# How long a pull waits for the checkout lock the update unit holds
+# (:func:`_checkout_lock`) before it says an update is under way.
+_CHECKOUT_LOCK_WAIT_SEC = 10.0
 
 # On Windows a console-less parent (pythonw, a service, uvicorn launched from
 # a detached shell) gets a fresh conhost window for EVERY console child it
@@ -91,10 +104,21 @@ def _run(*args: str) -> subprocess.CompletedProcess[str]:
     CalledProcessError is NOT raised here since check=False); the async
     wrappers catch and translate. No prompts, and the timeout holds
     (:mod:`domovoi.git_run`)."""
+    # The fast-forward writes the whole update into the tree: its own bound.
+    timeout = _MERGE_TIMEOUT_SEC if args[:1] == ("merge",) else _GIT_TIMEOUT_SEC
+    return _git(args, timeout)
+
+
+def _git(args: tuple[str, ...], timeout: float) -> subprocess.CompletedProcess[str]:
+    # advice.graftFileDeprecated: GIT_GRAFT_FILE (_GIT_ENV) names a graft
+    # file git can open, so every git printed "hint: Support for
+    # <GIT_DIR>/info/grafts is deprecated" into its stderr, and so into the
+    # errors the Version card shows (the root verifier silenced it for its
+    # own git only).
     return git_run.run(
-        ["git", *args],
+        ["git", "-c", "advice.graftFileDeprecated=false", *args],
         cwd=settings.repo_dir,
-        timeout=_GIT_TIMEOUT_SEC,
+        timeout=timeout,
         env=_GIT_ENV,
     )
 
@@ -102,8 +126,11 @@ def _run(*args: str) -> subprocess.CompletedProcess[str]:
 # Every git call reads the objects as they are: no refs/replace and no
 # grafts, so a commit can't be swapped for another one under its SHA when
 # its signature is checked (rc2 review C3; the update unit's root git does
-# the same).
-_GIT_ENV = {"GIT_NO_REPLACE_OBJECTS": "1", "GIT_GRAFT_FILE": os.devnull}
+# the same). And no optional locks: the version card's `git status` (every
+# minute or so) used to take .git/index.lock for its whole run, so a pull
+# at that moment failed with "index.lock: File exists", and a status killed
+# then (a timeout, a Windows shutdown) left the lock behind for good.
+_GIT_ENV = {"GIT_NO_REPLACE_OBJECTS": "1", "GIT_GRAFT_FILE": os.devnull, "GIT_OPTIONAL_LOCKS": "0"}
 
 
 async def current_sha() -> str:
@@ -567,15 +594,21 @@ def _switch_channel(channel: str, pin: list[str] | None = None) -> dict:
             f"the local branch {channel} holds commits of its own ({local[:12]}), which a "
             "switch would drop; nothing was changed",
         )
-    if track["branch"] != channel:
-        # -B at HEAD: the branch is (re)made where the checkout already is,
-        # so no file changes and local edits stay where they are.
-        moved = _run("checkout", "-q", "-B", channel)
-        if moved.returncode != 0:
-            return _channel_answer(False, (moved.stderr or "git checkout failed").strip()[:_ERROR_MAX_CHARS])
-    tracked = _run("branch", "-q", "--set-upstream-to", f"origin/{channel}", channel)
-    if tracked.returncode != 0:
-        return _channel_answer(False, (tracked.stderr or "git branch failed").strip()[:_ERROR_MAX_CHARS])
+    try:
+        with _checkout_lock():
+            _tidy_checkout()
+            if track["branch"] != channel:
+                # -B at HEAD: the branch is (re)made where the checkout
+                # already is, so no file changes and local edits stay where
+                # they are.
+                moved = _run("checkout", "-q", "-B", channel)
+                if moved.returncode != 0:
+                    return _channel_answer(False, _git_failure(moved, "git checkout failed"))
+            tracked = _run("branch", "-q", "--set-upstream-to", f"origin/{channel}", channel)
+            if tracked.returncode != 0:
+                return _channel_answer(False, _git_failure(tracked, "git branch failed"))
+    except _CheckoutBusy:
+        return _channel_answer(False, "a restart or update is under way; switch again once it has finished")
     if _full_sha("HEAD") != head:  # never: -B at HEAD keeps the commit
         return _channel_answer(False, "HEAD moved during the switch; check the checkout by hand")
     # What the household chose now, so the card's "switch to stable" note
@@ -1212,6 +1245,11 @@ async def commits_behind() -> dict:
     if egress.internet_turned_off():
         return {"behind": 0, "ahead": 0, "upstream": False,
                 "upstream_sha": None, "error": egress.TURNED_OFF_REASON}
+    # A lock an interrupted git left would fail the next pull: gone now if
+    # it is stale (git_lock), whoever looks first. Before the fetch, whose
+    # own background maintenance (git maintenance run --auto) is a git at
+    # work in the checkout for a while, so no lock would count as stale.
+    await asyncio.to_thread(git_lock.clear_stale_locks, settings.repo_dir)
     fetched = await fetch()
     try:
         target, refusal = await asyncio.to_thread(_upstream_target)
@@ -1278,14 +1316,121 @@ def _not_pulled(error: str, signature: dict | None = None) -> dict:
             "prev_sha": None, "signature": signature}
 
 
+# ─── the checkout: one git at a time, and what an interrupted one left ───
+
+#: Beside the update unit's last-result.json, root-owned (apply-update.sh
+#: makes it): the update unit holds it for its whole run, and a pull or a
+#: channel switch takes it before moving the checkout, so the two never run
+#: git on the working tree at the same time. The core opens it read-only
+#: (flock needs no more). Without the unit there is no file, and only this
+#: process's own pulls are kept apart (:data:`_CHECKOUT_MUTEX`).
+CHECKOUT_LOCK_NAME = "checkout.lock"
+_CHECKOUT_MUTEX = threading.Lock()
+
+
+class _CheckoutBusy(Exception):
+    """The checkout lock stayed taken: an update or another pull runs."""
+
+
+@contextlib.contextmanager
+def _checkout_lock(wait: float = _CHECKOUT_LOCK_WAIT_SEC):
+    """Blocking. Hold the checkout lock (:data:`CHECKOUT_LOCK_NAME`) for the
+    block, waiting up to ``wait`` seconds; raises :class:`_CheckoutBusy`
+    when it stays taken."""
+    if not _CHECKOUT_MUTEX.acquire(timeout=wait):
+        raise _CheckoutBusy()
+    fd = None
+    try:
+        path = Path(settings.update_result_file).parent / CHECKOUT_LOCK_NAME
+        if sys.platform != "win32" and path.is_file():
+            import fcntl
+
+            try:
+                fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0))
+            except OSError as e:
+                log.warning("can't open %s (%s): this pull is not kept apart from the update unit", path, e)
+            if fd is not None:
+                deadline = time.monotonic() + wait
+                while True:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() >= deadline:
+                            raise _CheckoutBusy() from None
+                        time.sleep(0.2)
+        yield
+    finally:
+        if fd is not None:
+            os.close(fd)  # releases the flock
+        _CHECKOUT_MUTEX.release()
+
+
+def _tidy_checkout(base: str | None = None, tip: str | None = None) -> bool:
+    """Blocking, under :func:`_checkout_lock`. Clean up after a git that
+    was killed in the checkout (:mod:`domovoi.git_lock`): its stale locks,
+    and with ``base`` (HEAD) and ``tip`` (what is being pulled) the files a
+    killed fast-forward had already rewritten. True when there was
+    something to clean up."""
+    repo = settings.repo_dir
+    cleared = git_lock.clear_stale_locks(repo)
+    repaired: dict = {}
+    if base and tip and base != tip:
+        repaired = git_lock.repair_interrupted_checkout(_run, repo, base, tip)
+    return bool(cleared["removed"] or repaired.get("restored") or repaired.get("removed"))
+
+
+def _git_failure(proc: subprocess.CompletedProcess, fallback: str) -> str:
+    """A failed git that moves the checkout, as the Version card says it:
+    a lock still held is said in plain words (git_lock.BUSY_MESSAGE), and
+    git's own text never carries its hint: lines."""
+    if git_lock.is_lock_error(proc.stderr):
+        return git_lock.BUSY_MESSAGE
+    return (git_lock.without_hints(proc.stderr) or fallback)[:_ERROR_MAX_CHARS]
+
+
+def _fast_forward(target: str) -> tuple[subprocess.CompletedProcess, str | None]:
+    """Blocking. ``git merge --ff-only target`` under the checkout lock,
+    after cleaning up what an interrupted git left. Returns the merge and
+    the notice for the Version card (git_lock.INTERRUPTED_NOTICE) when it
+    cleaned up. Raises :class:`_CheckoutBusy` while an update holds the
+    checkout, and ``subprocess.TimeoutExpired`` (its locks already removed
+    by git_run) past :data:`_MERGE_TIMEOUT_SEC`."""
+    with _checkout_lock():
+        # Again, now that nothing else can start on the checkout: an update
+        # that began while this pull fetched applies the HEAD it read.
+        if self_restart.underway(read_last_update()):
+            raise _CheckoutBusy()
+        head = _full_sha("HEAD")
+        notice = git_lock.INTERRUPTED_NOTICE if _tidy_checkout(head, target) else None
+        proc = _run("merge", "--ff-only", target)
+        if proc.returncode != 0 and git_lock.is_lock_error(proc.stderr):
+            # A lock that turned stale since the look above (its git died
+            # meanwhile): once more, if it goes now.
+            if git_lock.clear_stale_locks(settings.repo_dir)["removed"]:
+                notice = git_lock.INTERRUPTED_NOTICE
+                proc = _run("merge", "--ff-only", target)
+        if notice:
+            log.warning("pull: %s", notice)
+        return proc, notice
+
+
 async def pull() -> dict:
     """A fast-forward pull, in three steps: ``git fetch``, verify the
     fetched tip's signature, ``git merge --ff-only <that tip>``. A
     deliberate, separate admin action (never run by a check). Returns
     ``{"pulled": bool, "new_sha": str|None, "error": str|None, "prev_sha":
-    str|None, "signature": dict|None}``. A dirty or diverged tree fails the
-    fast-forward and comes back ``pulled=False`` with the git stderr as
-    ``error`` — we never force a merge or reset. Never raises.
+    str|None, "signature": dict|None, "notice": str|None}``. A dirty or
+    diverged tree fails the fast-forward and comes back ``pulled=False``
+    with the git stderr as ``error`` — we never force a merge or reset.
+    Never raises.
+
+    An interrupted git (:mod:`domovoi.git_lock`): before the fast-forward,
+    under the lock the update unit holds too (:func:`_checkout_lock`), a
+    stale lock it left is removed and the files a killed fast-forward had
+    rewritten are put back; ``notice`` then says so in plain words
+    (git_lock.INTERRUPTED_NOTICE), and a lock a live git still holds is
+    ``error`` = git_lock.BUSY_MESSAGE, never git's own text.
 
     Signed updates: while the allowed-signers file exists, a tip that does
     not verify against it is refused BEFORE the tree moves (``pulled=False``,
@@ -1313,6 +1458,8 @@ async def pull() -> dict:
         baseline = await asyncio.to_thread(_rollback_baseline)
     except Exception:  # noqa: BLE001 — the pull matters more than the record
         baseline = None
+    # Before the fetch, as at the check (commits_behind says why).
+    cleared_first = bool((await asyncio.to_thread(git_lock.clear_stale_locks, settings.repo_dir))["removed"])
     try:
         fetched, tag_warning = await asyncio.to_thread(_fetch_branches_and_tags)
         if fetched.returncode != 0:
@@ -1358,16 +1505,28 @@ async def pull() -> dict:
             target[:12], signature["detail"], signature["allowed_signers"],
         )
     try:
-        proc = await asyncio.to_thread(_run, "merge", "--ff-only", target)
+        proc, notice = await asyncio.to_thread(_fast_forward, target)
     except FileNotFoundError:
         return _not_pulled("git not installed", signature)
+    except _CheckoutBusy:
+        return _not_pulled(
+            "a restart or update is under way; pull again once it has finished", signature
+        )
     except subprocess.TimeoutExpired:
-        return _not_pulled("git pull timed out", signature)
+        return _not_pulled(
+            f"the update took longer than {_MERGE_TIMEOUT_SEC:g} s and was stopped; Domovoi "
+            "cleaned up after it, so press Pull again",
+            signature,
+        )
     except Exception as e:  # noqa: BLE001
         return _not_pulled(str(e), signature)
 
+    if cleared_first:
+        notice = git_lock.INTERRUPTED_NOTICE
     if proc.returncode != 0:
-        return _not_pulled((proc.stderr or "git pull failed").strip(), signature)
+        out = _not_pulled(_git_failure(proc, "git pull failed"), signature)
+        out["notice"] = notice
+        return out
     invalidate_sha_cache()
     invalidate_signature_cache()
     if baseline is not None:
@@ -1378,6 +1537,9 @@ async def pull() -> dict:
         "error": None,
         "prev_sha": baseline,
         "signature": signature,
+        # git_lock.INTERRUPTED_NOTICE when an interrupted git's leftovers
+        # were cleaned up first, else None.
+        "notice": notice,
         # Tags that could not be fetched (one moved upstream): the labels
         # may be off; the pull itself went ahead.
         "tag_warning": tag_warning,

@@ -4512,8 +4512,236 @@ case_verifier_refuses_a_state_dir_others_can_write() {
   end_case
 }
 
+# ─── a git killed in the checkout (stale_lock_*, checkout_lock_*) ─────────
+#
+# A git killed outright leaves .git/index.lock, and every git after it
+# refuses (2026-10-20, a Windows install whose Pull failed for good). The
+# run removes a stale lock before its own git (the stale-lock block), and
+# holds the checkout lock a dashboard pull takes (domovoi/git_version.py).
+
+# fake_proc [PID COMM CWD [ARGS...]]: the proc file system the stale-lock
+# block reads (the case's test root's): empty, or with one process. A CWD
+# of "-" is one whose working directory can't be read (another user's).
+fake_proc() {
+  mkdir -p "$OSROOT/proc"
+  [ $# -gt 0 ] || return 0
+  mkdir -p "$OSROOT/proc/$1"
+  printf '%s\n' "$2" >"$OSROOT/proc/$1/comm"
+  if [ "$3" != - ]; then ln -s "$3" "$OSROOT/proc/$1/cwd"; fi
+  printf '%s\0' "$2" "${@:4}" >"$OSROOT/proc/$1/cmdline"
+}
+# old_lock FILE [SECONDS]: a lock file last touched SECONDS (600) ago.
+old_lock() {
+  mkdir -p "$(dirname "$1")"
+  : >"$1"
+  touch -d "@$(( $(date +%s) - ${2:-600} ))" "$1"
+}
+said() { grep -qF -- "$1" "$CASE/output.log" || { echo "      not said: [$1]"; return 1; }; }
+need_flock() { command -v flock >/dev/null 2>&1 || { skip_case "no flock(1) here"; return 1; }; }
+
+case_stale_lock_cleared_before_the_update() {
+  new_case stale_lock_cleared_before_the_update
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  fake_proc
+  old_lock "$REPO/.git/index.lock"
+  old_lock "$REPO/.git/refs/heads/main.lock"
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the index lock is gone" test ! -e "$REPO/.git/index.lock"
+  check "and the ref lock" test ! -e "$REPO/.git/refs/heads/main.lock"
+  check "says so" said "removed a stale git lock index.lock in $REPO"
+  check "the ref lock by name" said "removed a stale git lock refs/heads/main.lock in $REPO"
+  check "no step of its own" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "the next git can take the index" g update-index -q --refresh
+  end_case
+}
+
+case_stale_lock_removed_as_the_service_user() {
+  new_case stale_lock_removed_as_the_service_user
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_root_shims "$CASE/rootbin"
+  fake_proc
+  old_lock "$REPO/.git/index.lock"
+  run_update "$CASE/rootbin"
+  check "exit 0" eq "$RC" 0
+  check "the lock is gone" test ! -e "$REPO/.git/index.lock"
+  check "removed through runuser, as the checkout's owner" called "runuser -u tester -- rm -f -- $REPO/.git/index.lock"
+  end_case
+}
+
+case_stale_lock_a_running_git_keeps_its_lock() {
+  new_case stale_lock_a_running_git_keeps_its_lock
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  fake_proc 4242 git "$REPO/domovoi" commit -a
+  old_lock "$REPO/.git/index.lock" 3600
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "the live lock stays" test -e "$REPO/.git/index.lock"
+  check "says why" said "left alone: a git process works there"
+  check "nothing removed" not_said "removed a stale git lock"
+  end_case
+}
+
+case_stale_lock_a_git_naming_the_checkout_keeps_its_lock() {
+  new_case stale_lock_a_git_naming_the_checkout_keeps_its_lock
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  fake_proc 4243 git / -C "$REPO" status
+  old_lock "$REPO/.git/index.lock" 3600
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "the lock stays" test -e "$REPO/.git/index.lock"
+  end_case
+}
+
+case_stale_lock_a_git_elsewhere_does_not_count() {
+  new_case stale_lock_a_git_elsewhere_does_not_count
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  mkdir -p "$CASE/elsewhere"
+  fake_proc 4244 git "$CASE/elsewhere" -C "$CASE/elsewhere" status
+  fake_proc 4245 python3 "$REPO" -m domovoi.main
+  old_lock "$REPO/.git/index.lock"
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "the stale lock is gone" test ! -e "$REPO/.git/index.lock"
+  end_case
+}
+
+case_stale_lock_a_git_it_cant_see_into_counts() {
+  new_case stale_lock_a_git_it_cant_see_into_counts
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  fake_proc 4246 git - status
+  old_lock "$REPO/.git/index.lock" 3600
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "the lock stays" test -e "$REPO/.git/index.lock"
+  end_case
+}
+
+case_stale_lock_a_fresh_lock_stays() {
+  new_case stale_lock_a_fresh_lock_stays
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  fake_proc
+  old_lock "$REPO/.git/index.lock" 5
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "the lock stays" test -e "$REPO/.git/index.lock"
+  check "says why" said "left alone: only"
+  end_case
+}
+
+case_stale_lock_without_proc_nothing_is_removed() {
+  new_case stale_lock_without_proc_nothing_is_removed
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  old_lock "$REPO/.git/index.lock" 3600
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "the lock stays: no way to see a git" test -e "$REPO/.git/index.lock"
+  end_case
+}
+
+# A git killed during the run (here: by the stop of the services, as the
+# core's own would be) left its lock: the rollback's reset still runs.
+case_stale_lock_cleared_before_the_rollback() {
+  new_case stale_lock_cleared_before_the_rollback
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  fake_proc
+  printf 'raise SystemExit("broken")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: broken code")
+  echo "$sha_b" >"$STATE/curl-fail-when-head"
+  mkdir -p "$CASE/lockbin"
+  cat >"$CASE/lockbin/systemctl" <<'SH'
+#!/usr/bin/env bash
+if [ "${1-}" = stop ]; then
+  : >"$SHIM_REPO/.git/index.lock"
+  touch -d "@$(( $(date +%s) - 600 ))" "$SHIM_REPO/.git/index.lock"
+fi
+exec "$SHIM_STATE/../bin/systemctl" "$@"
+SH
+  chmod +x "$CASE/lockbin/systemctl"
+  run_update "$CASE/lockbin"
+  check "status rolled_back" eq "$(field status)" '"rolled_back"'
+  check "checkout back at A" eq "$(g rev-parse HEAD)" "$SHA_A"
+  check "the rollback's checkout step ok" step_is rollback-checkout ok
+  check "the lock was cleared first" said "removed a stale git lock index.lock in $REPO"
+  end_case
+}
+
+case_checkout_lock_held_for_the_whole_run() {
+  new_case checkout_lock_held_for_the_whole_run
+  need_flock || return 0
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  mkdir -p "$CASE/probebin"
+  cat >"$CASE/probebin/systemctl" <<'SH'
+#!/usr/bin/env bash
+case ${1-} in stop|start)
+  if flock -n "$SHIM_STATE/../update/checkout.lock" true; then echo "$1 free"; else echo "$1 held"; fi >>"$SHIM_STATE/lock-probe" ;;
+esac
+exec "$SHIM_STATE/../bin/systemctl" "$@"
+SH
+  chmod +x "$CASE/probebin/systemctl"
+  run_update "$CASE/probebin"
+  check "exit 0" eq "$RC" 0
+  check "the lock file is there" test -f "$UPD/checkout.lock"
+  check "readable by the core (0644)" eq "$(stat -c %a "$UPD/checkout.lock")" 644
+  check "held at the stop" has_probe "stop held"
+  check "held at the start" has_probe "start held"
+  check "never free during the run" not grep -q free "$STATE/lock-probe"
+  check "free once the run is over" flock -n "$UPD/checkout.lock" true
+  end_case
+}
+has_probe() { grep -qxF -- "$1" "$STATE/lock-probe" 2>/dev/null || { echo "      no [$1] in the probe"; return 1; }; }
+
+case_checkout_lock_waits_for_a_pull() {
+  new_case checkout_lock_waits_for_a_pull
+  need_flock || return 0
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  : >"$UPD/checkout.lock"
+  # A dashboard pull holding the checkout lock for two seconds.
+  flock "$UPD/checkout.lock" sleep 2 &
+  local holder=$!
+  sleep 0.5
+  local t0=$SECONDS
+  run_update
+  wait "$holder" 2>/dev/null
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "says it waits" said "waiting for a pull or channel switch from the dashboard to finish with the checkout"
+  check "and did wait" test $((SECONDS - t0)) -ge 1
+  check "never went on without it" not_said "going on without it"
+  end_case
+}
+
+case_checkout_lock_wait_is_bounded() {
+  new_case checkout_lock_wait_is_bounded
+  need_flock || return 0
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  : >"$UPD/checkout.lock"
+  flock "$UPD/checkout.lock" sleep 30 &
+  local holder=$!
+  sleep 0.5
+  DOMOVOI_UPDATE_CHECKOUT_LOCK_WAIT=1 run_update
+  kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "says it went on" said "the checkout lock was still held after 1 s; going on without it"
+  end_case
+}
+
 CASES=(
   case_noop_restart
+  case_stale_lock_cleared_before_the_update
+  case_stale_lock_removed_as_the_service_user
+  case_stale_lock_a_running_git_keeps_its_lock
+  case_stale_lock_a_git_naming_the_checkout_keeps_its_lock
+  case_stale_lock_a_git_elsewhere_does_not_count
+  case_stale_lock_a_git_it_cant_see_into_counts
+  case_stale_lock_a_fresh_lock_stays
+  case_stale_lock_without_proc_nothing_is_removed
+  case_stale_lock_cleared_before_the_rollback
+  case_checkout_lock_held_for_the_whole_run
+  case_checkout_lock_waits_for_a_pull
+  case_checkout_lock_wait_is_bounded
   case_core_restart_drop_in_for_a_unit_that_would_stay_down
   case_core_restart_drop_in_on_a_full_update
   case_core_restart_a_households_own_policy_is_kept

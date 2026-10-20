@@ -196,6 +196,10 @@ export GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null
 # And without the hint git prints for that graft file, in every git it
 # starts (the service user's included): one config entry, from the environment.
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=advice.graftFileDeprecated GIT_CONFIG_VALUE_0=false
+# And no optional locks: git status here (the update's preflight) doesn't
+# take .git/index.lock, so it can't collide with one a pull holds or leave
+# one behind if it is killed (domovoi/git_lock.py).
+export GIT_OPTIONAL_LOCKS=0
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
@@ -759,6 +763,112 @@ as_user() {
 }
 
 git_as() { as_user git -C "$REPO_DIR" "$@"; }
+
+# The stale-lock block below looks for git processes in /proc (the test
+# root's under the harness) and removes a lock as the service user.
+GL_PROC=$TEST_ROOT/proc
+GL_AS=as_user
+
+# >>> stale-git-lock block >>>
+# The same text in scripts/linux/apply-update.sh and scripts/linux/provision.sh,
+# character for character (domovoi/tests/test_git_stale_lock.py holds the two
+# together); the core does the same in domovoi/git_lock.py.
+#
+# A git that is killed outright (a timeout's SIGKILL, wsl --terminate at a
+# Windows shutdown, a power cut) never removes the lock it held, and every git
+# after it refuses: "Unable to create '.../.git/index.lock': File exists". On a
+# household's server nobody has a shell to remove it (2026-10-20, a Windows
+# install whose Pull failed for good). clear_stale_git_locks DIR removes each
+# lock in DIR/.git (index.lock, HEAD.lock, ORIG_HEAD.lock, packed-refs.lock,
+# config.lock, shallow.lock, any *.lock under refs/) that is stale: no git
+# process works in DIR (its working directory under DIR, or DIR on its command
+# line; one whose working directory can't be read counts as working there)
+# and the lock is older than GIT_LOCK_STALE_SEC. A live lock is never touched,
+# and neither is a fresh one. The caller sets GL_PROC (/proc, a test root's
+# under a harness) and GL_AS (the command that runs one as the checkout's
+# owner, who removes the lock: root never deletes in a directory that user can
+# write). Logs what it removes; never fails.
+GIT_LOCK_STALE_SEC=60
+# 1 once clear_stale_git_locks removed a lock: an update was interrupted.
+GL_REMOVED=0
+
+# gl_git_running DIR: 0 while a git process works in DIR, or while that can't
+# be told (no proc file system); 1 when none does.
+gl_git_running() {
+  local dir=$1 d comm cwd args
+  [ -d "$GL_PROC" ] || return 0
+  for d in "$GL_PROC"/[0-9]*; do
+    comm=$(cat "$d/comm" 2>/dev/null) || continue
+    case $comm in git|git-*) ;; *) continue ;; esac
+    if ! cwd=$(readlink "$d/cwd" 2>/dev/null); then
+      [ -e "$d" ] || continue
+      return 0
+    fi
+    case $cwd/ in "$dir"/*) return 0 ;; esac
+    args=$(tr '\0' ' ' 2>/dev/null <"$d/cmdline") || args=""
+    case " $args " in *" $dir "*|*" $dir/"*|*"=$dir "*|*"=$dir/"*) return 0 ;; esac
+  done
+  return 1
+}
+
+clear_stale_git_locks() {
+  local dir=${1%/} gd f now st ino mtime age
+  local -a locks=()
+  gd=$dir/.git
+  if [ ! -d "$gd" ] || [ -L "$gd" ]; then return 0; fi
+  for f in index.lock HEAD.lock ORIG_HEAD.lock packed-refs.lock config.lock shallow.lock; do
+    if [ -e "$gd/$f" ] || [ -L "$gd/$f" ]; then locks+=("$gd/$f"); fi
+  done
+  if [ -d "$gd/refs" ]; then
+    while IFS= read -r -d '' f; do locks+=("$f"); done < <(find "$gd/refs" -name '*.lock' -print0 2>/dev/null)
+  fi
+  [ "${#locks[@]}" -gt 0 ] || return 0
+  if gl_git_running "$dir"; then
+    log "git's lock in $dir left alone: a git process works there (${locks[*]#"$gd/"})"
+    return 0
+  fi
+  now=$(date +%s)
+  for f in "${locks[@]}"; do
+    st=$(stat -c '%i %Y' -- "$f" 2>/dev/null) || continue
+    read -r ino mtime <<<"$st"
+    age=$((now - mtime))
+    # Dated well in the future: from before the clock moved back, so old.
+    if [ "$age" -lt -300 ]; then age=$GIT_LOCK_STALE_SEC; fi
+    if [ "$age" -lt "$GIT_LOCK_STALE_SEC" ]; then
+      log "git's lock ${f#"$gd/"} in $dir left alone: only ${age} s old"
+      continue
+    fi
+    if [ "$(stat -c '%i' -- "$f" 2>/dev/null)" = "$ino" ] && "$GL_AS" rm -f -- "$f"; then
+      GL_REMOVED=1
+      log "removed a stale git lock ${f#"$gd/"} in $dir: ${age} s old and no git process works there (a git was killed before it could clean up)"
+    fi
+  done
+  return 0
+}
+# <<< stale-git-lock block <<<
+
+# The checkout lock (domovoi/git_version.py, CHECKOUT_LOCK_NAME): held for
+# this whole run, so a dashboard pull or channel switch, which takes it
+# before it moves the checkout, never runs git on the working tree beside
+# this run's own (git status, the rollback's reset). Root-owned, in the
+# root-owned update dir; the core opens it read-only (flock needs no more).
+# A pull holds it for seconds; one that still holds it after
+# CHECKOUT_LOCK_WAIT seconds is waited for no longer, and the run goes on.
+CHECKOUT_LOCK_WAIT=${DOMOVOI_UPDATE_CHECKOUT_LOCK_WAIT:-120}
+hold_checkout_lock() {
+  local f=$UPDATE_DIR/checkout.lock
+  command -v flock >/dev/null 2>&1 || return 0
+  if ! { exec 8>>"$f"; } 2>/dev/null; then
+    log "WARNING: can't open $f: this run is not kept apart from a dashboard pull"
+    return 0
+  fi
+  chmod 0644 "$f" 2>/dev/null || true
+  if flock -n 8; then return 0; fi
+  log "waiting for a pull or channel switch from the dashboard to finish with the checkout"
+  if ! flock -w "$CHECKOUT_LOCK_WAIT" 8; then
+    log "WARNING: the checkout lock was still held after ${CHECKOUT_LOCK_WAIT} s; going on without it"
+  fi
+}
 
 is_sha() { [[ $1 =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; }
 
@@ -2608,6 +2718,9 @@ rollback() {
   log "update failed at $failed_step; rolling back to ${PREV_SHA:0:12}"
   SERVICES_STOPPED=1
   run_step rollback-stop stop_services || true
+  # A git killed in the run (the stop above takes the core's down with it)
+  # may have left its lock: the reset needs the index.
+  clear_stale_git_locks "$REPO_DIR"
   if run_step rollback-checkout git_as reset --keep "$PREV_SHA"; then
     if [ "$DEPS_CHANGED" = 1 ]; then
       run_step rollback-deps sync_deps || rb_failed rollback-deps
@@ -2710,6 +2823,11 @@ main() {
   # The unit starts in /, and the service user's commands (python -m pip
   # puts the cwd on sys.path) should run somewhere they can read.
   cd "$REPO_DIR"
+  # Before any git here: no dashboard pull beside this run, and nothing
+  # left by a git that was killed (a stale index.lock would fail the
+  # rollback's reset, and every later pull).
+  hold_checkout_lock
+  clear_stale_git_locks "$REPO_DIR"
   # The venv first: dotenv_get reads domovoi/.env through it.
   resolve_venv
   resolve_core_state_dir

@@ -3363,6 +3363,111 @@ case_a_tag_not_named_v_wins_over_a_branch() {
   end_case
 }
 
+# ─── a git killed in the existing checkout (tidy_*) ──────────────────────
+#
+# A household whose dashboard pull is stuck on what a killed git left (a
+# stale index.lock, files a killed fast-forward rewrote) can't get the code
+# that cleans up at a pull through that pull: a repair by Setup re-runs
+# this script, which cleans up at every run (tidy_checkout).
+
+# old_lock FILE [SECONDS]: a lock file last touched SECONDS (600) ago.
+old_lock() { : >"$1"; touch -d "@$(( $(date +%s) - ${2:-600} ))" "$1"; }
+
+case_tidy_a_stale_lock_in_the_checkout_is_removed() {
+  new_case tidy_a_stale_lock_in_the_checkout_is_removed
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "first run exit 0" eq "$RC" 0
+  old_lock "$CHECKOUT/.git/index.lock"
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "exit 0" eq "$RC" 0
+  check "the lock is gone" absent "$CHECKOUT/.git/index.lock"
+  check "says so" said "removed a stale git lock index.lock in $CHECKOUT"
+  check "as the service user" grep -q "^runuser -u domovoi -- .* rm -f -- $CHECKOUT/.git/index.lock" "$STATE/calls.log"
+  check "HEAD not moved" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$FIXTURE_A"
+  check "the dashboard's pull can go now" git -C "$CHECKOUT" merge -q --ff-only origin/main
+  end_case
+}
+
+case_tidy_a_lock_a_running_git_holds_stays() {
+  new_case tidy_a_lock_a_running_git_holds_stays
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "first run exit 0" eq "$RC" 0
+  mkdir -p "$ROOT/proc/4242"
+  echo git >"$ROOT/proc/4242/comm"
+  ln -s "$CHECKOUT" "$ROOT/proc/4242/cwd"
+  printf 'git\0status\0' >"$ROOT/proc/4242/cmdline"
+  old_lock "$CHECKOUT/.git/index.lock" 3600
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "exit 0" eq "$RC" 0
+  check "the live lock stays" test -e "$CHECKOUT/.git/index.lock"
+  check "says why" said "left alone: a git process works there"
+  end_case
+}
+
+case_tidy_a_killed_fast_forward_is_put_back() {
+  new_case tidy_a_killed_fast_forward_is_put_back
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "first run exit 0" eq "$RC" 0
+  # What a pull to main killed partway leaves: B's pyproject.toml already
+  # written, a file B adds there untracked, and the lock.
+  git -C "$ORIGIN" show "$FIXTURE_B:pyproject.toml" >"$CHECKOUT/pyproject.toml"
+  old_lock "$CHECKOUT/.git/index.lock"
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "exit 0" eq "$RC" 0
+  check "the lock is gone" absent "$CHECKOUT/.git/index.lock"
+  check "the tree is clean again" eq "$(git -C "$CHECKOUT" status --porcelain --untracked-files=no)" ""
+  check "says so" said "an interrupted update had rewritten 1 file(s) and added 0 in $CHECKOUT"
+  check "HEAD not moved" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$FIXTURE_A"
+  check "the dashboard's pull can go now" git -C "$CHECKOUT" merge -q --ff-only origin/main
+  end_case
+}
+
+case_tidy_the_households_own_edit_stays() {
+  new_case tidy_the_households_own_edit_stays
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "first run exit 0" eq "$RC" 0
+  printf '[project]\nname = "my own"\n' >"$CHECKOUT/pyproject.toml"
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "exit 0" eq "$RC" 0
+  check "the edit stays" grep -q 'my own' "$CHECKOUT/pyproject.toml"
+  check "nothing put back" not_said "an interrupted update had rewritten"
+  end_case
+}
+
+case_tidy_a_file_cut_short_is_put_back() {
+  new_case tidy_a_file_cut_short_is_put_back
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "first run exit 0" eq "$RC" 0
+  # The file the killed git was writing: the first bytes of B's version.
+  git -C "$ORIGIN" show "$FIXTURE_B:pyproject.toml" | head -c 12 >"$CHECKOUT/pyproject.toml"
+  old_lock "$CHECKOUT/.git/index.lock"
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "exit 0" eq "$RC" 0
+  check "the tree is clean again" eq "$(git -C "$CHECKOUT" status --porcelain --untracked-files=no)" ""
+  check "nothing kept aside: it held nothing of its own" not_said "were copied to"
+  check "the dashboard's pull can go now" git -C "$CHECKOUT" merge -q --ff-only origin/main
+  end_case
+}
+
+case_tidy_after_an_interruption_other_changes_are_kept_aside() {
+  new_case tidy_after_an_interruption_other_changes_are_kept_aside
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "first run exit 0" eq "$RC" 0
+  printf 'neither version of it\n' >"$CHECKOUT/pyproject.toml"
+  old_lock "$CHECKOUT/.git/index.lock"
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "exit 0" eq "$RC" 0
+  check "the tree is clean again" eq "$(git -C "$CHECKOUT" status --porcelain --untracked-files=no)" ""
+  local kept
+  kept=$(ls -d "$ROOT"/var/lib/domovoi-provision/checkout-kept-* 2>/dev/null | head -n 1)
+  check "a copy kept in root's state" test -n "$kept"
+  check "with the file as it was" grep -qx 'neither version of it' "$kept/pyproject.toml"
+  check "root's only (0700)" called "install -d -m 0700 -o root -g root $kept"
+  check "said, as a warning" said "were copied to $kept before they were put back"
+  check "the dashboard's pull can go now" git -C "$CHECKOUT" merge -q --ff-only origin/main
+  end_case
+}
+
 CASES=(
   case_rerun_takes_nothing_from_the_working_tree
   case_rerun_refuses_an_unverified_head
@@ -3397,6 +3502,12 @@ CASES=(
   case_wsl_without_systemd_stops_for_a_restart
   case_lock_busy_has_its_own_exit_code
   case_existing_checkout_is_not_moved
+  case_tidy_a_stale_lock_in_the_checkout_is_removed
+  case_tidy_a_lock_a_running_git_holds_stays
+  case_tidy_a_killed_fast_forward_is_put_back
+  case_tidy_the_households_own_edit_stays
+  case_tidy_a_file_cut_short_is_put_back
+  case_tidy_after_an_interruption_other_changes_are_kept_aside
   case_ref_sha_follows_the_track_branch
   case_ref_off_the_track_branch_stops
   case_new_install_follows_stable

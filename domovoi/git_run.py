@@ -27,6 +27,12 @@ core, 2026-10-16):
   a 10 s timeout ran for minutes, and the web gave up first and blamed
   "domovoi unreachable". :func:`run` kills git's whole process tree when
   time is up and never waits on its output for more than a moment.
+
+A git killed that way can't remove the lock it held (``.git/index.lock``
+during a status or a merge), and every git after it would refuse: so the
+kill is followed by :func:`domovoi.git_lock.cleanup_after_kill`, which
+removes a lock made in ``cwd`` since that git started, once no git works
+there (the lock behind a household's stuck Pull, 2026-10-20).
 """
 
 from __future__ import annotations
@@ -36,6 +42,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from collections.abc import Mapping, Sequence
 
 log = logging.getLogger(__name__)
@@ -111,26 +118,28 @@ def run(
     timeout: float,
     cwd: str | os.PathLike | None = None,
     env: Mapping[str, str] | None = None,
+    binary: bool = False,
     **_ignored: object,
-) -> subprocess.CompletedProcess[str]:
+) -> subprocess.CompletedProcess:
     """Run ``cmd`` (``cmd[0]`` is git) and capture its text output, like
     ``subprocess.run(cmd, capture_output=True, text=True, timeout=...,
     check=False)``, so it drops in where that was called (extra keywords
     such as ``capture_output`` are accepted and ignored).
 
     ``env`` is added to this process's environment; the no-prompt settings
-    (:func:`no_prompt_env`) always win. Raises ``FileNotFoundError`` with
+    (:func:`no_prompt_env`) always win. ``binary`` gives the output as
+    bytes (a blob's content, git_lock), not text. Raises ``FileNotFoundError`` with
     no git, and ``subprocess.TimeoutExpired`` once ``timeout`` has passed:
-    by then git and everything it started have been killed."""
+    by then git and everything it started have been killed, and the locks
+    it left in ``cwd`` removed."""
+    started_at = time.time()
     proc = subprocess.Popen(
         list(cmd),
         cwd=cwd,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
+        **({} if binary else {"text": True, "encoding": "utf-8", "errors": "replace"}),
         env=no_prompt_env(env),
         **_popen_kwargs(),
     )
@@ -151,5 +160,9 @@ def run(
             log.warning("git %s: its output was still open after it was killed", cmd[1:2])
         except (OSError, ValueError):
             pass
+        if cwd is not None:
+            from domovoi import git_lock
+
+            git_lock.cleanup_after_kill(cwd, started_at)
         raise subprocess.TimeoutExpired(list(cmd), timeout, output=out, stderr=err) from None
     return subprocess.CompletedProcess(list(cmd), proc.returncode, out, err)

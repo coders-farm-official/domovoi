@@ -657,7 +657,7 @@ const VoicesPanel = () => {
  *   GET   /api/config/version      · domovoi git SHA → { sha, restart_mode, last_update, bad_sha, … }
  *   POST  /api/config/version/check· git fetch + count → { behind, ahead, upstream, upstream_sha, error,
  *                                    channel, upstream_version, latest_release, tag_warning }
- *   POST  /api/config/version/pull · git pull --ff-only → { pulled, new_sha, error }
+ *   POST  /api/config/version/pull · git pull --ff-only → { pulled, new_sha, error, notice }
  *   POST  /api/config/version/channel · follow stable or main; HEAD never moves → { ok, changed, channel, error }
  *   POST  /api/config/version/restart · bounce core+web, or start the update unit → { ok, mode, units, error }
  *   GET   /api/config/core/restart · when the core doesn't answer: what "Restart the core" would do
@@ -988,12 +988,15 @@ const VersionSection = () => {
     setPulling(true);
     try {
       const res = await apiPost('/api/config/version/pull', {});
+      // notice: Domovoi cleaned up after an interrupted git first
+      // (domovoi/git_lock.py), said in plain words rather than git's own.
+      const notice = res && res.notice ? `${res.notice}. ` : '';
       if (res && res.pulled) {
-        fire(`pulled${res.new_sha ? ` — now ${res.new_sha}` : ''}. Restart to apply.`);
+        fire(`${notice}pulled${res.new_sha ? ` — now ${res.new_sha}` : ''}. Restart to apply.`);
         setStatus(null);
         refreshCore();
       } else {
-        fire(`pull failed: ${(res && res.error) || 'unknown'}`);
+        fire(`${notice}pull failed: ${(res && res.error) || 'unknown'}`);
       }
     } catch (e) {
       reportMutationFailure(fire, 'pull', e);

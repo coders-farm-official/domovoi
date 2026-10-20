@@ -1712,6 +1712,208 @@ g() { as_svc git -C "$CHECKOUT" "$@"; }
 # gd DIR ARGS...: git in another directory, as the service user.
 gd() { local d=$1; shift; as_svc git -C "$d" "$@"; }
 
+# The stale-lock block below looks for git processes in /proc (the test
+# root's under the harness) and removes a lock as the service user.
+GL_PROC=$PROC
+GL_AS=as_svc
+
+# >>> stale-git-lock block >>>
+# The same text in scripts/linux/apply-update.sh and scripts/linux/provision.sh,
+# character for character (domovoi/tests/test_git_stale_lock.py holds the two
+# together); the core does the same in domovoi/git_lock.py.
+#
+# A git that is killed outright (a timeout's SIGKILL, wsl --terminate at a
+# Windows shutdown, a power cut) never removes the lock it held, and every git
+# after it refuses: "Unable to create '.../.git/index.lock': File exists". On a
+# household's server nobody has a shell to remove it (2026-10-20, a Windows
+# install whose Pull failed for good). clear_stale_git_locks DIR removes each
+# lock in DIR/.git (index.lock, HEAD.lock, ORIG_HEAD.lock, packed-refs.lock,
+# config.lock, shallow.lock, any *.lock under refs/) that is stale: no git
+# process works in DIR (its working directory under DIR, or DIR on its command
+# line; one whose working directory can't be read counts as working there)
+# and the lock is older than GIT_LOCK_STALE_SEC. A live lock is never touched,
+# and neither is a fresh one. The caller sets GL_PROC (/proc, a test root's
+# under a harness) and GL_AS (the command that runs one as the checkout's
+# owner, who removes the lock: root never deletes in a directory that user can
+# write). Logs what it removes; never fails.
+GIT_LOCK_STALE_SEC=60
+# 1 once clear_stale_git_locks removed a lock: an update was interrupted.
+GL_REMOVED=0
+
+# gl_git_running DIR: 0 while a git process works in DIR, or while that can't
+# be told (no proc file system); 1 when none does.
+gl_git_running() {
+  local dir=$1 d comm cwd args
+  [ -d "$GL_PROC" ] || return 0
+  for d in "$GL_PROC"/[0-9]*; do
+    comm=$(cat "$d/comm" 2>/dev/null) || continue
+    case $comm in git|git-*) ;; *) continue ;; esac
+    if ! cwd=$(readlink "$d/cwd" 2>/dev/null); then
+      [ -e "$d" ] || continue
+      return 0
+    fi
+    case $cwd/ in "$dir"/*) return 0 ;; esac
+    args=$(tr '\0' ' ' 2>/dev/null <"$d/cmdline") || args=""
+    case " $args " in *" $dir "*|*" $dir/"*|*"=$dir "*|*"=$dir/"*) return 0 ;; esac
+  done
+  return 1
+}
+
+clear_stale_git_locks() {
+  local dir=${1%/} gd f now st ino mtime age
+  local -a locks=()
+  gd=$dir/.git
+  if [ ! -d "$gd" ] || [ -L "$gd" ]; then return 0; fi
+  for f in index.lock HEAD.lock ORIG_HEAD.lock packed-refs.lock config.lock shallow.lock; do
+    if [ -e "$gd/$f" ] || [ -L "$gd/$f" ]; then locks+=("$gd/$f"); fi
+  done
+  if [ -d "$gd/refs" ]; then
+    while IFS= read -r -d '' f; do locks+=("$f"); done < <(find "$gd/refs" -name '*.lock' -print0 2>/dev/null)
+  fi
+  [ "${#locks[@]}" -gt 0 ] || return 0
+  if gl_git_running "$dir"; then
+    log "git's lock in $dir left alone: a git process works there (${locks[*]#"$gd/"})"
+    return 0
+  fi
+  now=$(date +%s)
+  for f in "${locks[@]}"; do
+    st=$(stat -c '%i %Y' -- "$f" 2>/dev/null) || continue
+    read -r ino mtime <<<"$st"
+    age=$((now - mtime))
+    # Dated well in the future: from before the clock moved back, so old.
+    if [ "$age" -lt -300 ]; then age=$GIT_LOCK_STALE_SEC; fi
+    if [ "$age" -lt "$GIT_LOCK_STALE_SEC" ]; then
+      log "git's lock ${f#"$gd/"} in $dir left alone: only ${age} s old"
+      continue
+    fi
+    if [ "$(stat -c '%i' -- "$f" 2>/dev/null)" = "$ino" ] && "$GL_AS" rm -f -- "$f"; then
+      GL_REMOVED=1
+      log "removed a stale git lock ${f#"$gd/"} in $dir: ${age} s old and no git process works there (a git was killed before it could clean up)"
+    fi
+  done
+  return 0
+}
+# <<< stale-git-lock block <<<
+
+# repair_torn_checkout DIR: put back the files a killed fast-forward
+# towards DIR's upstream had already rewritten (the core does the same at a
+# pull: domovoi/git_lock.py, repair_interrupted_checkout), so the
+# dashboard's next pull can fast-forward. An existing checkout is otherwise
+# never moved here (updates are the dashboard's job, with its backup and
+# rollback), and HEAD never moves.
+#
+#   * A tracked file that differs from the index but holds, byte for byte,
+#     a version of itself from HEAD..@{u}, or the start of one (the file
+#     the killed git was writing), is checked out from the index again, and
+#     a file added in HEAD..@{u} that is there untracked with such content
+#     is removed. Nothing is lost: every such content is in git's objects.
+#   * Only when this run found an update interrupted (a stale lock went,
+#     or a file was put back as above): any other change to a tracked file
+#     that HEAD..@{u} touches, and any untracked file in a path it adds, is
+#     copied to $STATE_DIR/checkout-kept-<time>/ (root's, 0700) and then
+#     put back too, since the pull would refuse it. On a Windows install
+#     the checkout has no edits of the household's by design; on a Linux
+#     server nothing of an admin's goes without a copy, and nothing at all
+#     without that evidence.
+#
+# Never fails.
+repair_torn_checkout() {
+  local dir=$1 head up meta p h st kept="" n
+  local -a dirty=() added=() untracked=() paths=() torn=() new=() other=() others=()
+  local -A known=()
+  if [ -e "$dir/.git/index.lock" ]; then return 0; fi
+  head=$(gd "$dir" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) || return 0
+  up=$(gd "$dir" rev-parse -q --verify '@{u}^{commit}' 2>/dev/null) || return 0
+  [ "$head" != "$up" ] || return 0
+  mapfile -d '' dirty < <(gd "$dir" diff --name-only --no-renames -z 2>/dev/null)
+  mapfile -d '' added < <(gd "$dir" diff --name-only --no-renames --diff-filter=A -z "$head" "$up" 2>/dev/null)
+  if [ "${#added[@]}" -gt 0 ]; then
+    local -A inidx=()
+    while IFS= read -r -d '' p; do inidx[$p]=1; done < <(gd "$dir" ls-files -z 2>/dev/null)
+    for p in "${added[@]}"; do
+      if [ -z "${inidx[$p]-}" ] && { [ -e "$dir/$p" ] || [ -L "$dir/$p" ]; }; then untracked+=("$p"); fi
+    done
+  fi
+  paths=(${dirty[@]+"${dirty[@]}"} ${untracked[@]+"${untracked[@]}"})
+  [ "${#paths[@]}" -gt 0 ] || return 0
+  # ":<old mode> <new mode> <old blob> <new blob> <status>" NUL <path> NUL.
+  while IFS= read -r -d '' meta; do
+    meta=${meta//$'\n'/}
+    [[ $meta == :* ]] || continue
+    IFS= read -r -d '' p || break
+    read -r _ _ _ h st <<<"${meta#:}"
+    if [[ $st == D* ]]; then h=-; fi
+    known[$p]="${known[$p]-} $h "
+  done < <(gd "$dir" log --format= --raw --no-abbrev --no-renames -z "$head..$up" 2>/dev/null)
+  for p in ${dirty[@]+"${dirty[@]}"}; do
+    [ -n "${known[$p]-}" ] || continue
+    if from_the_update "$dir" "$p" "${known[$p]}"; then torn+=("$p"); else other+=("$p"); fi
+  done
+  for p in ${untracked[@]+"${untracked[@]}"}; do
+    [ -n "${known[$p]-}" ] || continue
+    if [ -f "$dir/$p" ] && [ ! -L "$dir/$p" ] && from_the_update "$dir" "$p" "${known[$p]}"; then new+=("$p"); else others+=("$p"); fi
+  done
+  if [ "${#torn[@]}" -gt 0 ] || [ "$GL_REMOVED" = 1 ]; then
+    if [ "${#other[@]}" -gt 0 ] || [ "${#others[@]}" -gt 0 ]; then
+      kept=$STATE_DIR/checkout-kept-$(date -u +%Y%m%dT%H%M%SZ)
+      install -d -m 0700 -o root -g root "$kept" || { warn "can't make $kept: the other changes in $dir stay"; other=(); others=(); kept=""; }
+      for p in ${other[@]+"${other[@]}"} ${others[@]+"${others[@]}"}; do
+        if [ -e "$dir/$p" ] || [ -L "$dir/$p" ]; then
+          (cd "$dir" && cp -P --parents -- "$p" "$kept/") || { warn "can't copy $p to $kept: the other changes in $dir stay"; other=(); others=(); break; }
+        fi
+      done
+      torn+=(${other[@]+"${other[@]}"})
+      new+=(${others[@]+"${others[@]}"})
+    fi
+  fi
+  if [ "${#torn[@]}" -gt 0 ]; then
+    if ! printf '%s\0' "${torn[@]}" | gd "$dir" checkout -q --pathspec-from-file=- --pathspec-file-nul; then
+      warn "an interrupted update had rewritten ${#torn[@]} file(s) in $dir, and they could not be put back"
+      return 0
+    fi
+  fi
+  for p in ${new[@]+"${new[@]}"}; do as_svc rm -f -- "$dir/$p" || true; done
+  n=$(( ${#torn[@]} + ${#new[@]} ))
+  if [ "$n" -gt 0 ]; then
+    log "an interrupted update had rewritten ${#torn[@]} file(s) and added ${#new[@]} in $dir: put back as they were at ${head:0:12}, so the dashboard's next pull can run (${torn[*]:0:3} ${new[*]:0:3})"
+  fi
+  if [ -n "$kept" ]; then
+    warn "${#other[@]} changed and ${#others[@]} untracked file(s) in $dir, which the interrupted update's pull would have refused, were copied to $kept before they were put back"
+  fi
+  return 0
+}
+
+# from_the_update DIR PATH " BLOB BLOB - ": whether DIR/PATH holds one of
+# those versions of itself, or the start of one (a file the killed git was
+# writing); "-" is a version that deletes it.
+from_the_update() {
+  local dir=$1 p=$2 known=$3 h size bsize
+  if [ -L "$dir/$p" ]; then return 1; fi
+  if [ ! -e "$dir/$p" ]; then case $known in *" - "*) return 0 ;; esac; return 1; fi
+  [ -f "$dir/$p" ] || return 1
+  h=$(gd "$dir" hash-object -- "$p" 2>/dev/null) || return 1
+  case $known in *" $h "*) return 0 ;; esac
+  size=$(stat -c %s -- "$dir/$p" 2>/dev/null) || return 1
+  for h in $known; do
+    [ "$h" != - ] || continue
+    bsize=$(gd "$dir" cat-file -s "$h" 2>/dev/null) || continue
+    [ "$size" -lt "$bsize" ] || continue
+    if cmp -s -n "$size" -- "$dir/$p" <(gd "$dir" cat-file blob "$h" 2>/dev/null); then return 0; fi
+  done
+  return 1
+}
+
+# tidy_checkout: what a git killed in the existing checkout left (its
+# stale locks, the files a killed fast-forward rewrote), cleaned up at
+# every run, a repair by Setup included: the one way in for a household
+# whose dashboard pull is stuck on them, since the code that would clean up
+# at a pull can't arrive through that pull.
+tidy_checkout() {
+  [ -d "$CHECKOUT/.git" ] || return 0
+  clear_stale_git_locks "$CHECKOUT"
+  repair_torn_checkout "$CHECKOUT"
+}
+
 # Where a new clone is made and checked out before it is renamed to
 # --checkout-dir: beside it (the same file system), dot-named. Only a
 # finished, verified checkout ever appears at --checkout-dir, so a failed
@@ -3533,6 +3735,7 @@ for step in "${STEP_IDS[@]:1}"; do
   case $step in
     user) SVC_HOME=$(svc_home) || true; [ -n "$SVC_HOME" ] || SVC_HOME=/home/$SVC_USER ;;
     checkout)
+      if ! dry; then tidy_checkout; fi
       if [ -d "$CHECKOUT/.git" ] && [ -z "$HEAD_SHA" ]; then HEAD_SHA=$(g rev-parse HEAD 2>/dev/null || true); fi
       make_verified_copy
       if ! manifest_ready; then

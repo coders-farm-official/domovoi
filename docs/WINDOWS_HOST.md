@@ -492,6 +492,18 @@ you share them.
 - **Setup stopped partway:** run Setup again; it carries on, and
   `provision.sh` resumes where it stopped. Or uninstall, which undoes a
   half-finished setup too.
+- **Pull says `index.lock`: File exists** (Settings → Version, on a
+  build from before the fix below): an earlier update was cut off (a
+  Windows restart or shutdown in the middle of one, say) and git left its
+  lock behind. Nobody has a shell in the distro, so run a newer Setup over
+  the install (a repair, as above). Its `provision.sh` removes a lock no
+  git holds any more and puts back any files the cut-off update had
+  already rewritten, then you **Pull** and **Restart** as usual. If the
+  repair stops, answer **No** when it offers to remove what it changed.
+  "Yes" uninstalls, and the uninstall deletes the database. Newer
+  installs clean up on their own at the next Pull: the Version card says
+  "an earlier update was interrupted; Domovoi cleaned up and is trying
+  again" ([LINUX_HOST.md, An interrupted update](LINUX_HOST.md#an-interrupted-update)).
 - **The uninstaller stopped:** read its message and the log it names. The
   most likely cause is WSL itself (being updated, or not answering): wait,
   or restart Windows, then uninstall again. If it says the service is
