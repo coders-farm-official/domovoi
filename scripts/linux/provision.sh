@@ -1688,6 +1688,12 @@ make_verified_copy() {
     upd=$ROOT${upd:-/var/lib/domovoi-update}
     [ -d "$upd" ] || install -d -m 0755 -o root -g root "$upd" || die "can't create $upd"
     vx_root_only "$upd" || die "$VX_ERROR: root keeps the update unit's verified mirror there"
+    # The checkout lock (tidy_checkout, apply-update.sh's hold_checkout_lock,
+    # the core's pull): there from the first run on, so a later run finds it
+    # as it was.
+    if [ ! -e "$upd/checkout.lock" ]; then
+      : >>"$upd/checkout.lock" && chmod 0644 "$upd/checkout.lock" || warn "can't make $upd/checkout.lock"
+    fi
     VX_MIRROR=$upd/mirror.git
     parent=$ROOT/run/domovoi-provision
   fi
@@ -1743,7 +1749,9 @@ GL_REMOVED=0
 # gl_git_running DIR: 0 while a git process works in DIR, or while that can't
 # be told (no proc file system); 1 when none does.
 gl_git_running() {
-  local dir=$1 d comm cwd args
+  local dir=$1 d comm cwd args real
+  # The checkout by the name given and by its real path (a link to it).
+  real=$(realpath -m -- "$dir" 2>/dev/null) || real=$dir
   [ -d "$GL_PROC" ] || return 0
   for d in "$GL_PROC"/[0-9]*; do
     comm=$(cat "$d/comm" 2>/dev/null) || continue
@@ -1752,9 +1760,10 @@ gl_git_running() {
       [ -e "$d" ] || continue
       return 0
     fi
-    case $cwd/ in "$dir"/*) return 0 ;; esac
+    case $cwd/ in "$dir"/* | "$real"/*) return 0 ;; esac
     args=$(tr '\0' ' ' 2>/dev/null <"$d/cmdline") || args=""
     case " $args " in *" $dir "*|*" $dir/"*|*"=$dir "*|*"=$dir/"*) return 0 ;; esac
+    case " $args " in *" $real "*|*" $real/"*|*"=$real "*|*"=$real/"*) return 0 ;; esac
   done
   return 1
 }
@@ -1810,32 +1819,37 @@ clear_stale_git_locks() {
 #   * Only when this run found an update interrupted (a stale lock went,
 #     or a file was put back as above): any other change to a tracked file
 #     that HEAD..@{u} touches, and any untracked file in a path it adds, is
-#     copied to $STATE_DIR/checkout-kept-<time>/ (root's, 0700) and then
-#     put back too, since the pull would refuse it. On a Windows install
-#     the checkout has no edits of the household's by design; on a Linux
-#     server nothing of an admin's goes without a copy, and nothing at all
-#     without that evidence.
+#     copied into $STATE_DIR/checkout-kept-<time>/ (root's, 0700; numbered
+#     files and a MANIFEST naming each one's path) and then put back too,
+#     since the pull would refuse it. On a Windows install the checkout has
+#     no edits of the household's by design; on a Linux server nothing of
+#     an admin's goes without a copy, and nothing at all without that
+#     evidence.
+#
+# Root never opens, tests, copies or removes a path of the checkout itself
+# (review of wf/git-stale-lock, 2026-10-20: a path the service user put in
+# the index or the commits, s/../../tmp/x behind a planted link, made root
+# write a file of its choosing anywhere). The path names come from git,
+# which the service user controls, so every one is checked first
+# (safe_checkout_path), and every look at a file, and every change, runs as
+# the service user (gl_classify, git checkout, rm, cat). Root only writes
+# its own kept directory, under names it makes up.
 #
 # Never fails.
 repair_torn_checkout() {
-  local dir=$1 head up meta p h st kept="" n
-  local -a dirty=() added=() untracked=() paths=() torn=() new=() other=() others=()
-  local -A known=()
+  local dir=$1 head up meta p h st kept="" n rd r i=0
+  local -a dirty=() added=() untracked=() torn=() new=() other=() others=() raw=()
+  local -A known=() inidx=() class=()
   if [ -e "$dir/.git/index.lock" ]; then return 0; fi
+  rd=$(realpath -e -- "$dir" 2>/dev/null) || return 0
   head=$(gd "$dir" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) || return 0
   up=$(gd "$dir" rev-parse -q --verify '@{u}^{commit}' 2>/dev/null) || return 0
   [ "$head" != "$up" ] || return 0
-  mapfile -d '' dirty < <(gd "$dir" diff --name-only --no-renames -z 2>/dev/null)
-  mapfile -d '' added < <(gd "$dir" diff --name-only --no-renames --diff-filter=A -z "$head" "$up" 2>/dev/null)
-  if [ "${#added[@]}" -gt 0 ]; then
-    local -A inidx=()
-    while IFS= read -r -d '' p; do inidx[$p]=1; done < <(gd "$dir" ls-files -z 2>/dev/null)
-    for p in "${added[@]}"; do
-      if [ -z "${inidx[$p]-}" ] && { [ -e "$dir/$p" ] || [ -L "$dir/$p" ]; }; then untracked+=("$p"); fi
-    done
-  fi
-  paths=(${dirty[@]+"${dirty[@]}"} ${untracked[@]+"${untracked[@]}"})
-  [ "${#paths[@]}" -gt 0 ] || return 0
+  mapfile -d '' raw < <(gd "$dir" diff --name-only --no-renames -z 2>/dev/null)
+  for p in ${raw[@]+"${raw[@]}"}; do safe_checkout_path "$rd" "$p" && dirty+=("$p"); done
+  mapfile -d '' raw < <(gd "$dir" diff --name-only --no-renames --diff-filter=A -z "$head" "$up" 2>/dev/null)
+  for p in ${raw[@]+"${raw[@]}"}; do safe_checkout_path "$rd" "$p" && added+=("$p"); done
+  if [ "${#dirty[@]}" -eq 0 ] && [ "${#added[@]}" -eq 0 ]; then return 0; fi
   # ":<old mode> <new mode> <old blob> <new blob> <status>" NUL <path> NUL,
   # merges too (-m): the tip's version of a file is often a merge's own
   # result, which a plain log --raw never shows.
@@ -1844,24 +1858,53 @@ repair_torn_checkout() {
     [[ $meta == :* ]] || continue
     IFS= read -r -d '' p || break
     read -r _ _ _ h st <<<"${meta#:}"
+    [[ $h =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || continue
     if [[ $st == D* ]]; then h=-; fi
     known[$p]="${known[$p]-} $h "
   done < <(gd "$dir" log -m --format= --raw --no-abbrev --no-renames -z "$head..$up" 2>/dev/null)
+  if [ "${#added[@]}" -gt 0 ]; then
+    while IFS= read -r -d '' p; do inidx[$p]=1; done < <(gd "$dir" ls-files -z 2>/dev/null)
+  fi
+  # What each path holds, looked at as the service user: yes (a version
+  # from the update, or the start of one), gone (deleted, as the update
+  # deletes it), absent (not there), no (anything else).
+  while IFS= read -r -d '' r && IFS= read -r -d '' p; do
+    class[$p]=$r
+  done < <(
+    {
+      for p in ${dirty[@]+"${dirty[@]}"}; do [ -n "${known[$p]-}" ] && printf '%s\0%s\0' "$p" "${known[$p]}"; done
+      for p in ${added[@]+"${added[@]}"}; do
+        [ -z "${inidx[$p]-}" ] && [ -n "${known[$p]-}" ] && printf '%s\0%s\0' "$p" "${known[$p]}"
+      done
+    } | as_svc bash -c "$GL_CLASSIFY" gl-classify "$dir" 2>/dev/null
+  )
   for p in ${dirty[@]+"${dirty[@]}"}; do
-    [ -n "${known[$p]-}" ] || continue
-    if from_the_update "$dir" "$p" "${known[$p]}"; then torn+=("$p"); else other+=("$p"); fi
+    [ -n "${class[$p]-}" ] || continue
+    case ${class[$p]} in yes|gone) torn+=("$p") ;; *) other+=("$p") ;; esac
   done
-  for p in ${untracked[@]+"${untracked[@]}"}; do
-    [ -n "${known[$p]-}" ] || continue
-    if [ -f "$dir/$p" ] && [ ! -L "$dir/$p" ] && from_the_update "$dir" "$p" "${known[$p]}"; then new+=("$p"); else others+=("$p"); fi
+  for p in ${added[@]+"${added[@]}"}; do
+    [ -z "${inidx[$p]-}" ] && [ -n "${class[$p]-}" ] || continue
+    case ${class[$p]} in yes) new+=("$p") ;; absent|gone) ;; *) others+=("$p") ;; esac
   done
   if [ "${#torn[@]}" -gt 0 ] || [ "$GL_REMOVED" = 1 ]; then
     if [ "${#other[@]}" -gt 0 ] || [ "${#others[@]}" -gt 0 ]; then
       kept=$STATE_DIR/checkout-kept-$(date -u +%Y%m%dT%H%M%SZ)
-      install -d -m 0700 -o root -g root "$kept" || { warn "can't make $kept: the other changes in $dir stay"; other=(); others=(); kept=""; }
+      if ! install -d -m 0700 -o root -g root "$kept" "$kept/files"; then
+        warn "can't make $kept: the other changes in $dir stay"; other=(); others=(); kept=""
+      fi
       for p in ${other[@]+"${other[@]}"} ${others[@]+"${others[@]}"}; do
-        if [ -e "$dir/$p" ] || [ -L "$dir/$p" ]; then
-          (cd "$dir" && cp -P --parents -- "$p" "$kept/") || { warn "can't copy $p to $kept: the other changes in $dir stay"; other=(); others=(); break; }
+        [ -n "$kept" ] || break
+        i=$((i + 1))
+        # The service user reads it; root writes only its own numbered file.
+        if as_svc test -L "$dir/$p"; then
+          printf '%s\tlink to %s\t%s\n' "$i" "$(as_svc readlink -- "$dir/$p")" "$p" >>"$kept/MANIFEST"
+        elif as_svc test -f "$dir/$p"; then
+          if ! as_svc cat -- "$dir/$p" >"$kept/files/$i"; then
+            warn "can't copy $p to $kept: the other changes in $dir stay"; other=(); others=(); break
+          fi
+          printf '%s\tfile\t%s\n' "$i" "$p" >>"$kept/MANIFEST"
+        else
+          printf '%s\tnot a file (deleted, or a directory)\t%s\n' "$i" "$p" >>"$kept/MANIFEST"
         fi
       done
       torn+=(${other[@]+"${other[@]}"})
@@ -1874,46 +1917,85 @@ repair_torn_checkout() {
       return 0
     fi
   fi
-  for p in ${new[@]+"${new[@]}"}; do as_svc rm -f -- "$dir/$p" || true; done
+  for p in ${new[@]+"${new[@]}"}; do as_svc rm -rf -- "$dir/$p" || true; done
   n=$(( ${#torn[@]} + ${#new[@]} ))
   if [ "$n" -gt 0 ]; then
     log "an interrupted update had rewritten ${#torn[@]} file(s) and added ${#new[@]} in $dir: put back as they were at ${head:0:12}, so the dashboard's next pull can run (${torn[*]:0:3} ${new[*]:0:3})"
   fi
   if [ -n "$kept" ]; then
-    warn "${#other[@]} changed and ${#others[@]} untracked file(s) in $dir, which the interrupted update's pull would have refused, were copied to $kept before they were put back"
+    warn "${#other[@]} changed and ${#others[@]} untracked file(s) in $dir, which the interrupted update's pull would have refused, were copied to $kept before they were put back (its MANIFEST names each one)"
   fi
   return 0
 }
 
-# from_the_update DIR PATH " BLOB BLOB - ": whether DIR/PATH holds one of
-# those versions of itself, or the start of one (a file the killed git was
-# writing); "-" is a version that deletes it.
-from_the_update() {
-  local dir=$1 p=$2 known=$3 h size bsize
-  if [ -L "$dir/$p" ]; then return 1; fi
-  if [ ! -e "$dir/$p" ]; then case $known in *" - "*) return 0 ;; esac; return 1; fi
-  [ -f "$dir/$p" ] || return 1
-  h=$(gd "$dir" hash-object -- "$p" 2>/dev/null) || return 1
-  case $known in *" $h "*) return 0 ;; esac
-  size=$(stat -c %s -- "$dir/$p" 2>/dev/null) || return 1
-  for h in $known; do
-    [ "$h" != - ] || continue
-    bsize=$(gd "$dir" cat-file -s "$h" 2>/dev/null) || continue
-    [ "$size" -lt "$bsize" ] || continue
-    if cmp -s -n "$size" -- "$dir/$p" <(gd "$dir" cat-file blob "$h" 2>/dev/null); then return 0; fi
-  done
-  return 1
+# safe_checkout_path REALDIR PATH: whether root may hand PATH (a name git
+# gave, so the service user's) to anything at all: relative, no empty, "."
+# or ".." part, not in .git, and every directory above it in the checkout
+# a real one (no link planted to lead somewhere else).
+safe_checkout_path() {
+  local rd=$1 p=$2 parent
+  case /$p/ in //* | *//* | */./* | */../*) return 1 ;; esac
+  case $p in .git | .git/*) return 1 ;; esac
+  [[ $p == */* ]] || return 0
+  parent=${p%/*}
+  [ "$(realpath -m -- "$rd/$parent" 2>/dev/null)" = "$rd/$parent" ]
 }
+
+# What repair_torn_checkout's look at each file runs, as the service user,
+# in the checkout: reads "PATH NUL KNOWN NUL" records (KNOWN: " BLOB BLOB - ",
+# the versions from the update, "-" one that deletes it) and prints
+# "CLASS NUL PATH NUL" for each.
+# shellcheck disable=SC2016
+GL_CLASSIFY='
+cd -- "$1" || exit 1
+while IFS= read -r -d "" p && IFS= read -r -d "" known; do
+  r=no
+  if [ -L "$p" ]; then r=no
+  elif [ ! -e "$p" ]; then case $known in *" - "*) r=gone ;; *) r=absent ;; esac
+  elif [ -f "$p" ]; then
+    h=$(git hash-object -- "$p" 2>/dev/null) || h=""
+    case $known in *" $h "*) [ -n "$h" ] && r=yes ;; esac
+    if [ "$r" = no ] && size=$(stat -c %s -- "$p" 2>/dev/null); then
+      for b in $known; do
+        [ "$b" != - ] || continue
+        bs=$(git cat-file -s "$b" 2>/dev/null) || continue
+        [ "$size" -lt "$bs" ] || continue
+        if cmp -s -n "$size" -- "$p" <(git cat-file blob "$b" 2>/dev/null); then r=yes; break; fi
+      done
+    fi
+  fi
+  printf "%s\0%s\0" "$r" "$p"
+done
+'
 
 # tidy_checkout: what a git killed in the existing checkout left (its
 # stale locks, the files a killed fast-forward rewrote), cleaned up at
 # every run, a repair by Setup included: the one way in for a household
 # whose dashboard pull is stuck on them, since the code that would clean up
-# at a pull can't arrive through that pull.
+# at a pull can't arrive through that pull. Under the update unit's
+# checkout lock (apply-update.sh, hold_checkout_lock), when it is there,
+# so a dashboard pull never runs beside it.
 tidy_checkout() {
+  local upd lockf=""
   [ -d "$CHECKOUT/.git" ] || return 0
-  clear_stale_git_locks "$CHECKOUT"
-  repair_torn_checkout "$CHECKOUT"
+  upd=$(update_default DOMOVOI_UPDATE_DIR)
+  upd=$ROOT${upd:-/var/lib/domovoi-update}
+  # Who counts as root for vx_root_only, as make_verified_copy says it.
+  if [ -n "$ROOT" ]; then VX_ROOT_UIDS="0 $EUID"; VX_TOP=$(dirname "$ROOT"); else VX_ROOT_UIDS=0; VX_TOP=/; fi
+  if command -v flock >/dev/null 2>&1 && [ -d "$upd" ] && vx_root_only "$upd" 2>/dev/null; then
+    lockf=$upd/checkout.lock
+    # Opened, never made here: make_verified_copy makes it at the first
+    # run, so a second run changes nothing.
+    if [ -f "$lockf" ] && [ ! -L "$lockf" ] && { exec 7<"$lockf"; } 2>/dev/null; then
+      flock -w 120 7 || log "the checkout lock was still held after 120 s; going on without it"
+    else
+      lockf=""
+    fi
+  fi
+  clear_stale_git_locks "$CHECKOUT" 7>&-
+  repair_torn_checkout "$CHECKOUT" 7>&-
+  if [ -n "$lockf" ]; then exec 7>&-; fi
+  return 0
 }
 
 # Where a new clone is made and checked out before it is renamed to

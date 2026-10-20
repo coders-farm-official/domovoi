@@ -379,6 +379,94 @@ def test_an_untracked_file_of_its_own_is_never_removed(server, monkeypatch):
     assert (srv / "pkg" / "new.txt").read_bytes() == b"the household's own file\n"
 
 
+# ─── path names from git are never trusted (review, 2026-10-20) ──────────
+
+
+@pytest.mark.parametrize(("path", "ok"), [
+    ("a.txt", True), ("pkg/b.txt", True),
+    ("s/../../tmp/x", False), ("../x", False), ("/etc/cron.d/x", False), ("a//b", False),
+    ("./a", False), ("a/./b", False), ("", False), ("dir/", False), (".git/config", False),
+    (".GIT/hooks/x", False), ("C:/x", False), ("a\\..\\..\\x", False),
+])
+def test_only_plain_paths_in_the_checkout_pass(tmp_path, path, ok):
+    assert git_lock.safe_path(tmp_path, path) is ok
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink") or sys.platform == "win32", reason="symlinks")
+def test_a_path_through_a_planted_link_is_refused(tmp_path):
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "repo").mkdir()
+    os.symlink(tmp_path / "elsewhere", tmp_path / "repo" / "s")
+    assert git_lock.safe_path(tmp_path / "repo", "s/f") is False
+    (tmp_path / "repo" / "real").mkdir()
+    assert git_lock.safe_path(tmp_path / "repo", "real/f") is True
+
+
+@requires_git
+def test_a_path_out_of_the_checkout_in_the_commits_is_never_touched(server, monkeypatch):
+    """The review's probe, the core's side: a commit upstream adds
+    x/../../escaped/f, and a file with that content sits there, outside the
+    checkout. The repair must not remove it (nor look at it)."""
+    _no_gits(monkeypatch)
+    _work, srv, _a, _b = server
+    blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=srv, input="planted\n",
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+    def mktree(entry: str) -> str:
+        return subprocess.run(["git", "mktree"], cwd=srv, input=entry, capture_output=True,
+                              text=True, check=True).stdout.strip()
+
+    t = mktree(f"100644 blob {blob}\tf\n")
+    t = mktree(f"040000 tree {t}\tescaped\n")
+    t = mktree(f"040000 tree {t}\t..\n")
+    t = mktree(f"040000 tree {t}\t..\n")
+    t = mktree(f"040000 tree {t}\tx\n")
+    head_tree = _git(srv, "ls-tree", "HEAD")
+    top = mktree(head_tree + "\n" + subprocess.run(["git", "ls-tree", t], cwd=srv, capture_output=True,
+                                                     text=True, check=True).stdout)
+    tip = _git(srv, "commit-tree", top, "-p", "HEAD", "-m", "planted")
+    (srv / "x").mkdir()
+    outside = srv.parent / "escaped" / "f"
+    outside.parent.mkdir()
+    outside.write_bytes(b"planted\n")
+
+    planted = "x/../../escaped/f"
+    real = git_version._run
+    seen: list[tuple] = []
+
+    def run(*args):
+        seen.append(args)
+        # git's own ls-files refuses a path outside the checkout; a git
+        # (or an index) that names it anyway must not get it removed.
+        if args[0] == "ls-files":
+            return subprocess.CompletedProcess(["git", *args], 0, planted + "\0", "")
+        return real(*args)
+
+    out = git_lock.repair_interrupted_checkout(run, srv, _git(srv, "rev-parse", "HEAD"), tip)
+
+    assert out == {"restored": [], "removed": []}
+    assert outside.read_bytes() == b"planted\n"
+    # And the name went to nothing at all (git's own pathspec checks are
+    # a second wall, not the first).
+    assert not [a for a in seen if planted in a], seen
+
+
+def test_the_update_units_children_never_hold_the_checkout_lock():
+    """A child of apply-update.sh that outlived the run would keep fd 8,
+    and with it the lock every dashboard pull waits for."""
+    text = APPLY.read_text(encoding="utf-8")
+    body = text[text.index("as_user() {"):]
+    body = body[:body.index("\n}\n")]
+    assert body.count("8>&-") == 2, body
+
+
+def test_provision_holds_the_checkout_lock_around_its_cleanup():
+    text = PROVISION.read_text(encoding="utf-8")
+    body = text[text.index("tidy_checkout() {"):]
+    body = body[:body.index("\n}\n")]
+    assert "flock -w 120 7" in body and "checkout.lock" in body
+
+
 # ─── git_run's timeout cleans up after the git it killed ─────────────────
 
 

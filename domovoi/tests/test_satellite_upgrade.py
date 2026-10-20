@@ -277,6 +277,20 @@ async def test_hello_caches_none_when_never_synced() -> None:
 # ─── git_version (never-raises contract) ─────────────────────────────────
 
 
+def _git_subcommand(cmd):
+    """The git subcommand in ``cmd``, past git's own options (``-c KEY=VALUE``,
+    ``--no-optional-locks``) that git_version puts before it."""
+    i = 1
+    while i < len(cmd):
+        if cmd[i] == "-c":
+            i += 2
+        elif cmd[i] == "--no-optional-locks":
+            i += 1
+        else:
+            return cmd[i]
+    return None
+
+
 def _completed(args, returncode=0, stdout="", stderr=""):
     return subprocess.CompletedProcess(args, returncode, stdout=stdout, stderr=stderr)
 
@@ -298,8 +312,8 @@ async def test_current_sha_appends_dirty_when_porcelain_nonempty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def _fake_run(cmd, **kwargs):
-        # cmd is ["git", subcommand, ...]
-        sub = cmd[1]
+        # cmd is ["git", (git's own options), subcommand, ...]
+        sub = _git_subcommand(cmd)
         if sub == "rev-parse":
             return _completed(cmd, 0, stdout="deadbee\n")
         if sub == "status":
@@ -317,7 +331,7 @@ async def test_current_sha_clean_tree_no_dirty_suffix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def _fake_run(cmd, **kwargs):
-        sub = cmd[1]
+        sub = _git_subcommand(cmd)
         if sub == "rev-parse":
             return _completed(cmd, 0, stdout="cafef00\n")
         if sub == "status":

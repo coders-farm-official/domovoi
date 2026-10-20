@@ -754,11 +754,13 @@ resolve_mpd_names() {
 }
 
 # Run a command as the service user (a no-op wrapper when not root).
+# Without fd 8, the checkout lock (hold_checkout_lock): a child that
+# outlived this run must not keep holding it.
 as_user() {
   if [ "$RUN_AS_ROOT" = 1 ] && [ "$SERVICE_USER" != root ]; then
-    runuser -u "$SERVICE_USER" -- "$@"
+    runuser -u "$SERVICE_USER" -- "$@" 8>&-
   else
-    "$@"
+    "$@" 8>&-
   fi
 }
 
@@ -795,7 +797,9 @@ GL_REMOVED=0
 # gl_git_running DIR: 0 while a git process works in DIR, or while that can't
 # be told (no proc file system); 1 when none does.
 gl_git_running() {
-  local dir=$1 d comm cwd args
+  local dir=$1 d comm cwd args real
+  # The checkout by the name given and by its real path (a link to it).
+  real=$(realpath -m -- "$dir" 2>/dev/null) || real=$dir
   [ -d "$GL_PROC" ] || return 0
   for d in "$GL_PROC"/[0-9]*; do
     comm=$(cat "$d/comm" 2>/dev/null) || continue
@@ -804,9 +808,10 @@ gl_git_running() {
       [ -e "$d" ] || continue
       return 0
     fi
-    case $cwd/ in "$dir"/*) return 0 ;; esac
+    case $cwd/ in "$dir"/* | "$real"/*) return 0 ;; esac
     args=$(tr '\0' ' ' 2>/dev/null <"$d/cmdline") || args=""
     case " $args " in *" $dir "*|*" $dir/"*|*"=$dir "*|*"=$dir/"*) return 0 ;; esac
+    case " $args " in *" $real "*|*" $real/"*|*"=$real "*|*"=$real/"*) return 0 ;; esac
   done
   return 1
 }
@@ -863,6 +868,8 @@ hold_checkout_lock() {
     return 0
   fi
   chmod 0644 "$f" 2>/dev/null || true
+  # Every command the service user runs gets it closed (as_user): only
+  # this script's own shell holds the lock, and it goes when the run ends.
   if flock -n 8; then return 0; fi
   log "waiting for a pull or channel switch from the dashboard to finish with the checkout"
   if ! flock -w "$CHECKOUT_LOCK_WAIT" 8; then

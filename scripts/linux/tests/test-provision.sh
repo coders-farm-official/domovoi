@@ -69,10 +69,13 @@ export GIT_CONFIG_GLOBAL=$WORK/gitconfig GIT_CONFIG_NOSYSTEM=1
 export GIT_AUTHOR_NAME=harness GIT_AUTHOR_EMAIL=harness@example.invalid
 export GIT_COMMITTER_NAME=harness GIT_COMMITTER_EMAIL=harness@example.invalid
 SHIM_REAL_INSTALL=$(command -v install)
+# The real flock(1), for a wait on a descriptor (tidy_checkout's on the
+# checkout lock), which the shim below hands over to it; empty without one.
+SHIM_REAL_FLOCK=$(command -v flock || true)
 SHIM_REAL_READLINK=$(command -v readlink)
 SHIM_REAL_GIT=$(command -v git)
 SHIM_REAL_TAR=$(command -v tar)
-export SHIM_REAL_INSTALL SHIM_REAL_READLINK SHIM_REAL_GIT SHIM_REAL_TAR
+export SHIM_REAL_INSTALL SHIM_REAL_READLINK SHIM_REAL_GIT SHIM_REAL_TAR SHIM_REAL_FLOCK
 
 # A remote's URL as git on Linux would print it (see the git shim).
 origin_url() {
@@ -627,9 +630,14 @@ SH
 
   # flock [-n] [-E CODE] [-o] FILE COMMAND...: busy (exit CODE, 1 without
   # -E) when the case holds the lock, else runs COMMAND, as flock does.
+  # flock -w SECONDS FD (a wait on a descriptor) is the real flock's.
   cat >"$bin/flock" <<'SH'
 #!/usr/bin/env bash
 echo "flock $*" >>"$SHIM_STATE/calls.log"
+if [ "${1-}" = -w ] && [[ ${3-} =~ ^[0-9]+$ ]] && [ $# -eq 3 ]; then
+  [ -n "$SHIM_REAL_FLOCK" ] || exit 0
+  exec "$SHIM_REAL_FLOCK" "$@"
+fi
 code=1
 while [ $# -gt 0 ]; do
   case $1 in -n|-o) shift ;; -E) code=$2; shift 2 ;; *) break ;; esac
@@ -3461,10 +3469,70 @@ case_tidy_after_an_interruption_other_changes_are_kept_aside() {
   local kept
   kept=$(ls -d "$ROOT"/var/lib/domovoi-provision/checkout-kept-* 2>/dev/null | head -n 1)
   check "a copy kept in root's state" test -n "$kept"
-  check "with the file as it was" grep -qx 'neither version of it' "$kept/pyproject.toml"
-  check "root's only (0700)" called "install -d -m 0700 -o root -g root $kept"
+  check "with the file as it was" grep -qx 'neither version of it' "$kept/files/1"
+  check "and its path in the MANIFEST" has_line "$kept/MANIFEST" "$(printf '1\tfile\tpyproject.toml')"
+  check "root's only (0700)" called "install -d -m 0700 -o root -g root $kept $kept/files"
+  check "read as the service user" grep -q "^runuser -u domovoi -- .* cat -- $CHECKOUT/pyproject.toml" "$STATE/calls.log"
   check "said, as a warning" said "were copied to $kept before they were put back"
   check "the dashboard's pull can go now" git -C "$CHECKOUT" merge -q --ff-only origin/main
+  end_case
+}
+
+# The review's probe (2026-10-20): the service user, who can write the
+# checkout's .git, puts a path with ".." behind a planted link into the
+# commits the checkout's upstream names, plus a stale lock as the evidence
+# that lets root copy "other changes" aside. Root must never write (or
+# read, or remove) anything outside the checkout and its own kept dir.
+case_tidy_a_path_out_of_the_checkout_is_never_touched() {
+  new_case tidy_a_path_out_of_the_checkout_is_never_touched
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "first run exit 0" eq "$RC" 0
+  local blob t c i
+  blob=$(echo "planted by the service user" | git -C "$CHECKOUT" hash-object -w --stdin)
+  t=$(printf '100644 blob %s\tf\n' "$blob" | git -C "$CHECKOUT" mktree)
+  t=$(printf '040000 tree %s\tescaped\n' "$t" | git -C "$CHECKOUT" mktree)
+  for i in 1 2 3 4; do t=$(printf '040000 tree %s\t..\n' "$t" | git -C "$CHECKOUT" mktree); done
+  t=$(printf '040000 tree %s\ts\n' "$t" | git -C "$CHECKOUT" mktree)
+  t=$( { git -C "$CHECKOUT" ls-tree HEAD; git -C "$CHECKOUT" ls-tree "$t"; } | git -C "$CHECKOUT" mktree)
+  c=$(git -C "$CHECKOUT" commit-tree "$t" -p HEAD -m "B, planted")
+  git -C "$CHECKOUT" update-ref refs/remotes/origin/main "$c"
+  # The link, and the file it leads to: s/../../../../escaped/f is this.
+  mkdir -p "$CASE/deep/a/b/c/d" "$CASE/deep/escaped"
+  echo "content the service user chose" >"$CASE/deep/escaped/f"
+  ln -s "$CASE/deep/a/b/c/d" "$CHECKOUT/s"
+  old_lock "$CHECKOUT/.git/index.lock"
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  # (The run then stops at the verified copy: the mirror's fsck refuses a
+  # tree with a ".." entry. The tidy before it is what is tested here.)
+  check "the stale lock still goes" absent "$CHECKOUT/.git/index.lock"
+  # Where the copy-aside used to land: four levels above the kept dir.
+  check "nothing written where the path led" absent "$ROOT/var/escaped/f"
+  check "nor anywhere above the root" test -z "$(find "$CASE" -path "$CASE/deep" -prune -o -name f -path '*escaped*' -print)"
+  check "the file it named is left alone" grep -qx "content the service user chose" "$CASE/deep/escaped/f"
+  check "nothing kept aside for it" not_said "were copied to"
+  check "the link stays" test -L "$CHECKOUT/s"
+  end_case
+}
+
+case_tidy_waits_for_the_checkout_lock() {
+  new_case tidy_waits_for_the_checkout_lock
+  command -v flock >/dev/null 2>&1 || { skip_case "no flock(1) here"; return 0; }
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "first run exit 0" eq "$RC" 0
+  local lock=$ROOT/var/lib/domovoi-update/checkout.lock holder t0
+  check "the update dir is there" test -d "$ROOT/var/lib/domovoi-update"
+  : >>"$lock"
+  # A dashboard pull holding the checkout for three seconds.
+  flock "$lock" sleep 3 &
+  holder=$!
+  sleep 0.5
+  t0=$SECONDS
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  wait "$holder" 2>/dev/null
+  check "exit 0" eq "$RC" 0
+  check "it waited for the pull" test $((SECONDS - t0)) -ge 2
+  check "on the checkout lock" called "flock -w 120 7"
+  check "and let go after" flock -n "$lock" true
   end_case
 }
 
@@ -3508,6 +3576,8 @@ CASES=(
   case_tidy_the_households_own_edit_stays
   case_tidy_a_file_cut_short_is_put_back
   case_tidy_after_an_interruption_other_changes_are_kept_aside
+  case_tidy_a_path_out_of_the_checkout_is_never_touched
+  case_tidy_waits_for_the_checkout_lock
   case_ref_sha_follows_the_track_branch
   case_ref_off_the_track_branch_stops
   case_new_install_follows_stable

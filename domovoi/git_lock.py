@@ -406,6 +406,27 @@ def _cut_short(repo: str | os.PathLike, path: str, known: set[str], budget: list
     return False
 
 
+def safe_path(repo: str | os.PathLike, path: str) -> bool:
+    """Whether ``path``, a name git gave (so one anyone who can write the
+    checkout's .git chose), may be opened, removed or checked out at all:
+    relative, no empty, "." or ".." part, not in .git, and every directory
+    above it in the checkout a real one, no link planted to lead elsewhere
+    (review of wf/git-stale-lock, 2026-10-20: s/../../tmp/x behind a
+    link)."""
+    if not path or path.startswith(("/", "\\")) or "\0" in path:
+        return False
+    parts = path.replace("\\", "/").split("/")
+    if any(x in ("", ".", "..") for x in parts) or parts[0].lower() == ".git":
+        return False
+    if os.path.splitdrive(path)[0]:
+        return False
+    if len(parts) == 1:
+        return True
+    real = os.path.realpath(repo)
+    parent = os.path.join(real, *parts[:-1])
+    return os.path.realpath(parent) == os.path.normpath(parent)
+
+
 def repair_interrupted_checkout(run: GitRun, repo: str | os.PathLike, base: str, tip: str) -> dict:
     """Put back what a fast-forward from ``base`` (HEAD) towards ``tip``
     had rewritten when it was killed (module docstring). ``run(*args)`` runs
@@ -416,14 +437,14 @@ def repair_interrupted_checkout(run: GitRun, repo: str | os.PathLike, base: str,
         changed = run("diff", "--name-only", "--no-renames", "-z")
         if changed.returncode != 0:
             return out
-        dirty = _nul(changed.stdout)
+        dirty = [x for x in _nul(changed.stdout) if safe_path(repo, x)]
         added_proc = run("diff", "--name-only", "--no-renames", "--diff-filter=A", "-z", base, tip)
-        added = _nul(added_proc.stdout) if added_proc.returncode == 0 else []
+        added = [x for x in _nul(added_proc.stdout) if safe_path(repo, x)] if added_proc.returncode == 0 else []
         untracked: list[str] = []
         for part in _chunks(added):
             others = run("ls-files", "--others", "-z", "--", *part)
             if others.returncode == 0:
-                untracked.extend(_nul(others.stdout))
+                untracked.extend(x for x in _nul(others.stdout) if safe_path(repo, x))
         if not dirty and not untracked:
             return out
         versions = _versions(run, base, tip, sorted(set(dirty) | set(untracked)))

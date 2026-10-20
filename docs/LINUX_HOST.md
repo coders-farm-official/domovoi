@@ -1443,9 +1443,14 @@ tree), and git won't fast-forward over them. Domovoi cleans up after both
   refusal names it, and the pull leaves it alone. `provision.sh` does the
   same against the checkout's upstream. Only after it has found an update
   interrupted, it also copies any other blocking change to
-  `/var/lib/domovoi-provision/checkout-kept-<time>/` (root's, 0700) and
-  puts it back too. HEAD never moves there: the next pull does that, with
-  the update unit's backup and rollback.
+  `/var/lib/domovoi-provision/checkout-kept-<time>/` (root's, 0700:
+  numbered files, and a `MANIFEST` naming each one's path) and puts it
+  back too. HEAD never moves there: the next pull does that, with the
+  update unit's backup and rollback. The path names come from git, which
+  the service user can write, so a name with an empty, `.` or `..` part,
+  one in `.git`, or one behind a link is never used. Every look at a
+  file and every change runs as the service user. Root writes only its
+  own kept directory, under names it makes up.
 - **One git on the checkout at a time.** The update unit holds
   `/var/lib/domovoi-update/checkout.lock` for its whole run. A pull or a
   channel switch takes the same lock before it moves the checkout, waits
