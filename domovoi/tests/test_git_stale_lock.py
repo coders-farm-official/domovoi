@@ -387,6 +387,9 @@ def test_an_untracked_file_of_its_own_is_never_removed(server, monkeypatch):
     ("s/../../tmp/x", False), ("../x", False), ("/etc/cron.d/x", False), ("a//b", False),
     ("./a", False), ("a/./b", False), ("", False), ("dir/", False), (".git/config", False),
     (".GIT/hooks/x", False), ("C:/x", False), ("a\\..\\..\\x", False),
+    # Control bytes (review round 2, p3: a newline and tabs forged a MANIFEST line).
+    ("evil\n7\tfile\trestore-me", False), ("a\tb", False), ("a\x7fb", False), ("a\x01b", False),
+    ("caf\u00e9.txt", True),
 ])
 def test_only_plain_paths_in_the_checkout_pass(tmp_path, path, ok):
     assert git_lock.safe_path(tmp_path, path) is ok

@@ -3472,7 +3472,7 @@ case_tidy_after_an_interruption_other_changes_are_kept_aside() {
   check "with the file as it was" grep -qx 'neither version of it' "$kept/files/1"
   check "and its path in the MANIFEST" has_line "$kept/MANIFEST" "$(printf '1\tfile\tpyproject.toml')"
   check "root's only (0700)" called "install -d -m 0700 -o root -g root $kept $kept/files"
-  check "read as the service user" grep -q "^runuser -u domovoi -- .* cat -- $CHECKOUT/pyproject.toml" "$STATE/calls.log"
+  check "read as the service user, bounded" grep -q "^runuser -u domovoi -- .* head -c 67108865 -- $CHECKOUT/pyproject.toml" "$STATE/calls.log"
   check "said, as a warning" said "were copied to $kept before they were put back"
   check "the dashboard's pull can go now" git -C "$CHECKOUT" merge -q --ff-only origin/main
   end_case
@@ -3536,6 +3536,90 @@ case_tidy_waits_for_the_checkout_lock() {
   end_case
 }
 
+# plant_upstream NAME CONTENT: origin/main becomes a commit on HEAD that adds
+# the file NAME (any bytes but NUL and "/"-free parts) holding CONTENT.
+plant_upstream() {
+  local blob t c
+  blob=$(printf '%s' "$2" | git -C "$CHECKOUT" hash-object -w --stdin)
+  t=$( { git -C "$CHECKOUT" ls-tree -z HEAD; printf '100644 blob %s\t%s\0' "$blob" "$1"; } | git -C "$CHECKOUT" mktree -z)
+  c=$(git -C "$CHECKOUT" commit-tree "$t" -p HEAD -m "B, adds a file")
+  git -C "$CHECKOUT" update-ref refs/remotes/origin/main "$c"
+}
+
+# Review round 2, p2: an ignored directory with the household's files in
+# it, at a path the update makes a file, after an interruption. It must
+# stay, all of it (an rm -rf took it, with nothing kept).
+case_tidy_an_ignored_directory_the_update_makes_a_file_stays() {
+  new_case tidy_an_ignored_directory_the_update_makes_a_file_stays
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "first run exit 0" eq "$RC" 0
+  plant_upstream data "file now"$'\n'
+  mkdir -p "$CHECKOUT/data/sub"
+  echo "household data, only copy" >"$CHECKOUT/data/sub/precious.txt"
+  old_lock "$CHECKOUT/.git/index.lock"
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "exit 0" eq "$RC" 0
+  check "the stale lock went" absent "$CHECKOUT/.git/index.lock"
+  check "the directory stays, with its file" grep -qx "household data, only copy" "$CHECKOUT/data/sub/precious.txt"
+  check "nothing removed recursively" not grep -q -- "rm -rf -- $CHECKOUT/data" "$STATE/calls.log"
+  end_case
+}
+
+# p3: a name with a newline and tabs would forge a MANIFEST line.
+case_tidy_a_name_with_control_bytes_is_never_used() {
+  new_case tidy_a_name_with_control_bytes_is_never_used
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "first run exit 0" eq "$RC" 0
+  local evil
+  evil=$(printf 'evil\n7\tfile\trestore-me-into-etc-cron.d')
+  plant_upstream "$evil" "x"$'\n'
+  printf 'not from git\n' >"$CHECKOUT/$evil"
+  old_lock "$CHECKOUT/.git/index.lock"
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "exit 0" eq "$RC" 0
+  check "the file is left alone" grep -qx "not from git" "$CHECKOUT/$evil"
+  check "no MANIFEST line it wrote" test -z "$(cat "$ROOT"/var/lib/domovoi-provision/checkout-kept-*/MANIFEST 2>/dev/null)"
+  end_case
+}
+
+# The copy aside is bounded: a file over 64 MB (a sparse one here) is not
+# copied, so it stays where it is, and nothing of it is left in root's dir.
+case_tidy_a_huge_file_is_left_where_it_is() {
+  new_case tidy_a_huge_file_is_left_where_it_is
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "first run exit 0" eq "$RC" 0
+  truncate -s 100M "$CHECKOUT/pyproject.toml"
+  old_lock "$CHECKOUT/.git/index.lock"
+  local t0=$SECONDS
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "exit 0" eq "$RC" 0
+  check "promptly" test $((SECONDS - t0)) -lt 60
+  check "the file stays as it was" eq "$(stat -c %s "$CHECKOUT/pyproject.toml")" 104857600
+  check "said why" said "too big to copy aside"
+  check "no copy left in root's dir" test -z "$(find "$ROOT"/var/lib/domovoi-provision -path '*checkout-kept*/files/*' -type f 2>/dev/null)"
+  check "read bounded, as the service user" grep -q "^runuser -u domovoi -- .* head -c 67108865 -- $CHECKOUT/pyproject.toml" "$STATE/calls.log"
+  end_case
+}
+
+# A FIFO where a file of the update was: never read (it would never end),
+# left where it is.
+case_tidy_a_fifo_is_left_where_it_is() {
+  new_case tidy_a_fifo_is_left_where_it_is
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "first run exit 0" eq "$RC" 0
+  rm -f "$CHECKOUT/pyproject.toml"
+  mkfifo "$CHECKOUT/pyproject.toml"
+  old_lock "$CHECKOUT/.git/index.lock"
+  local t0=$SECONDS
+  # Up to the checkout only: later steps read pyproject.toml themselves.
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A" --stop-before docker
+  check "exit 0" eq "$RC" 0
+  check "promptly" test $((SECONDS - t0)) -lt 60
+  check "the FIFO stays" test -p "$CHECKOUT/pyproject.toml"
+  check "never read" not grep -q "head -c .* -- $CHECKOUT/pyproject.toml" "$STATE/calls.log"
+  end_case
+}
+
 CASES=(
   case_rerun_takes_nothing_from_the_working_tree
   case_rerun_refuses_an_unverified_head
@@ -3578,6 +3662,10 @@ CASES=(
   case_tidy_after_an_interruption_other_changes_are_kept_aside
   case_tidy_a_path_out_of_the_checkout_is_never_touched
   case_tidy_waits_for_the_checkout_lock
+  case_tidy_an_ignored_directory_the_update_makes_a_file_stays
+  case_tidy_a_name_with_control_bytes_is_never_used
+  case_tidy_a_huge_file_is_left_where_it_is
+  case_tidy_a_fifo_is_left_where_it_is
   case_ref_sha_follows_the_track_branch
   case_ref_off_the_track_branch_stops
   case_new_install_follows_stable

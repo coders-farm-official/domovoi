@@ -1448,9 +1448,13 @@ tree), and git won't fast-forward over them. Domovoi cleans up after both
   back too. HEAD never moves there: the next pull does that, with the
   update unit's backup and rollback. The path names come from git, which
   the service user can write, so a name with an empty, `.` or `..` part,
-  one in `.git`, or one behind a link is never used. Every look at a
-  file and every change runs as the service user. Root writes only its
-  own kept directory, under names it makes up.
+  a control character, one in `.git`, or one behind a link is never used.
+  Every look at a file and every change runs as the service user. Root
+  writes only its own kept directory, under names it makes up. Anything
+  that is not a regular file (a directory, an ignored one with your files
+  in it included, a link, a FIFO) stays where it is. So does a file that
+  can't be copied aside within 60 s or within 64 MB, or once that run's
+  copies reach 256 MB. The pull then names what is in its way.
 - **One git on the checkout at a time.** The update unit holds
   `/var/lib/domovoi-update/checkout.lock` for its whole run. A pull or a
   channel switch takes the same lock before it moves the checkout, waits

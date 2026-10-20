@@ -413,7 +413,11 @@ def safe_path(repo: str | os.PathLike, path: str) -> bool:
     above it in the checkout a real one, no link planted to lead elsewhere
     (review of wf/git-stale-lock, 2026-10-20: s/../../tmp/x behind a
     link)."""
-    if not path or path.startswith(("/", "\\")) or "\0" in path:
+    if not path or path.startswith(("/", "\\")):
+        return False
+    # No control byte (NUL, a newline or a tab would forge a log or a
+    # MANIFEST line; provision.sh refuses the same).
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in path):
         return False
     parts = path.replace("\\", "/").split("/")
     if any(x in ("", ".", "..") for x in parts) or parts[0].lower() == ".git":

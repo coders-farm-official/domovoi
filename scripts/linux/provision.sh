@@ -1876,15 +1876,18 @@ repair_torn_checkout() {
       for p in ${added[@]+"${added[@]}"}; do
         [ -z "${inidx[$p]-}" ] && [ -n "${known[$p]-}" ] && printf '%s\0%s\0' "$p" "${known[$p]}"
       done
-    } | as_svc bash -c "$GL_CLASSIFY" gl-classify "$dir" 2>/dev/null
+    } | timeout -k 5 300 runuser -u "$SVC_USER" -- env HOME="$SVC_HOME" PATH="$SVC_PATH" LANG=C.UTF-8 \
+          bash -c "$GL_CLASSIFY" gl-classify "$dir" "$GL_KEEP_FILE_BYTES" 2>/dev/null
   )
   for p in ${dirty[@]+"${dirty[@]}"}; do
     [ -n "${class[$p]-}" ] || continue
-    case ${class[$p]} in yes|gone) torn+=("$p") ;; *) other+=("$p") ;; esac
+    # odd: not a regular file (a directory, a link, a FIFO...): left where
+    # it is, whatever it holds.
+    case ${class[$p]} in yes|gone) torn+=("$p") ;; no|absent) other+=("$p") ;; esac
   done
   for p in ${added[@]+"${added[@]}"}; do
     [ -z "${inidx[$p]-}" ] && [ -n "${class[$p]-}" ] || continue
-    case ${class[$p]} in yes) new+=("$p") ;; absent|gone) ;; *) others+=("$p") ;; esac
+    case ${class[$p]} in yes) new+=("$p") ;; no) others+=("$p") ;; esac
   done
   if [ "${#torn[@]}" -gt 0 ] || [ "$GL_REMOVED" = 1 ]; then
     if [ "${#other[@]}" -gt 0 ] || [ "${#others[@]}" -gt 0 ]; then
@@ -1892,21 +1895,26 @@ repair_torn_checkout() {
       if ! install -d -m 0700 -o root -g root "$kept" "$kept/files"; then
         warn "can't make $kept: the other changes in $dir stay"; other=(); others=(); kept=""
       fi
-      for p in ${other[@]+"${other[@]}"} ${others[@]+"${others[@]}"}; do
+      GL_KEPT_BYTES=0
+      local -a kept_t=() kept_u=()
+      for p in ${other[@]+"${other[@]}"}; do
         [ -n "$kept" ] || break
         i=$((i + 1))
-        # The service user reads it; root writes only its own numbered file.
-        if as_svc test -L "$dir/$p"; then
-          printf '%s\tlink to %s\t%s\n' "$i" "$(as_svc readlink -- "$dir/$p")" "$p" >>"$kept/MANIFEST"
-        elif as_svc test -f "$dir/$p"; then
-          if ! as_svc cat -- "$dir/$p" >"$kept/files/$i"; then
-            warn "can't copy $p to $kept: the other changes in $dir stay"; other=(); others=(); break
-          fi
-          printf '%s\tfile\t%s\n' "$i" "$p" >>"$kept/MANIFEST"
-        else
-          printf '%s\tnot a file (deleted, or a directory)\t%s\n' "$i" "$p" >>"$kept/MANIFEST"
+        if [ "${class[$p]}" = absent ]; then
+          # Deleted: nothing to copy; the checkout puts it back.
+          printf '%s\tdeleted\t%s\n' "$i" "$p" >>"$kept/MANIFEST"
+          kept_t+=("$p")
+        elif gl_keep "$dir" "$p" "$kept" "$i"; then
+          kept_t+=("$p")
         fi
       done
+      for p in ${others[@]+"${others[@]}"}; do
+        [ -n "$kept" ] || break
+        i=$((i + 1))
+        if gl_keep "$dir" "$p" "$kept" "$i"; then kept_u+=("$p"); fi
+      done
+      other=(${kept_t[@]+"${kept_t[@]}"})
+      others=(${kept_u[@]+"${kept_u[@]}"})
       torn+=(${other[@]+"${other[@]}"})
       new+=(${others[@]+"${others[@]}"})
     fi
@@ -1917,7 +1925,12 @@ repair_torn_checkout() {
       return 0
     fi
   fi
-  for p in ${new[@]+"${new[@]}"}; do as_svc rm -rf -- "$dir/$p" || true; done
+  # Regular files only (looked at again, as the service user), and never
+  # rm -r: a directory there (an ignored one, with the household's files in
+  # it) stays where it is.
+  for p in ${new[@]+"${new[@]}"}; do
+    if as_svc test -f "$dir/$p" && ! as_svc test -L "$dir/$p"; then as_svc rm -f -- "$dir/$p" || true; fi
+  done
   n=$(( ${#torn[@]} + ${#new[@]} ))
   if [ "$n" -gt 0 ]; then
     log "an interrupted update had rewritten ${#torn[@]} file(s) and added ${#new[@]} in $dir: put back as they were at ${head:0:12}, so the dashboard's next pull can run (${torn[*]:0:3} ${new[*]:0:3})"
@@ -1928,12 +1941,52 @@ repair_torn_checkout() {
   return 0
 }
 
+# gl_keep DIR PATH KEPT N: copy DIR/PATH aside as KEPT/files/N and name it
+# in KEPT/MANIFEST; 0 when it was copied (and may be put back), 1 when it
+# stays where it is. Read by the service user, only while it is a regular
+# file (looked at again right before), within GL_KEEP_SECONDS and
+# GL_KEEP_FILE_BYTES, and while this run's copies stay under
+# GL_KEEP_TOTAL_BYTES: a FIFO or a huge sparse file can't stall Setup or
+# fill /var/lib. Root writes only its own numbered file. PATH passed
+# safe_checkout_path, so it holds no tab, newline or other control byte
+# that could forge a MANIFEST line.
+GL_KEEP_SECONDS=60
+GL_KEEP_FILE_BYTES=$((64 * 1024 * 1024))
+GL_KEEP_TOTAL_BYTES=$((256 * 1024 * 1024))
+GL_KEPT_BYTES=0
+gl_keep() {
+  local dir=$1 p=$2 kept=$3 n=$4 got
+  if [ "$GL_KEPT_BYTES" -ge "$GL_KEEP_TOTAL_BYTES" ]; then
+    warn "$p in $dir stays as it is: this run's copies reached $GL_KEEP_TOTAL_BYTES bytes"
+    return 1
+  fi
+  if ! as_svc test -f "$dir/$p" || as_svc test -L "$dir/$p" \
+      || ! timeout -k 5 "$GL_KEEP_SECONDS" runuser -u "$SVC_USER" -- env HOME="$SVC_HOME" PATH="$SVC_PATH" LANG=C.UTF-8 \
+           head -c "$((GL_KEEP_FILE_BYTES + 1))" -- "$dir/$p" >"$kept/files/$n" 2>/dev/null; then
+    rm -f -- "$kept/files/$n"
+    warn "$p in $dir stays as it is: it could not be copied aside (no longer a regular file, or not read within ${GL_KEEP_SECONDS} s)"
+    return 1
+  fi
+  got=$(stat -c %s -- "$kept/files/$n" 2>/dev/null) || got=$((GL_KEEP_FILE_BYTES + 1))
+  if [ "$got" -gt "$GL_KEEP_FILE_BYTES" ] || [ $((GL_KEPT_BYTES + got)) -gt "$GL_KEEP_TOTAL_BYTES" ]; then
+    rm -f -- "$kept/files/$n"
+    warn "$p in $dir stays as it is: too big to copy aside (over $GL_KEEP_FILE_BYTES bytes, or past this run's $GL_KEEP_TOTAL_BYTES)"
+    return 1
+  fi
+  GL_KEPT_BYTES=$((GL_KEPT_BYTES + got))
+  printf '%s\tfile\t%s\n' "$n" "$p" >>"$kept/MANIFEST"
+  return 0
+}
+
 # safe_checkout_path REALDIR PATH: whether root may hand PATH (a name git
 # gave, so the service user's) to anything at all: relative, no empty, "."
-# or ".." part, not in .git, and every directory above it in the checkout
-# a real one (no link planted to lead somewhere else).
+# or ".." part, no control byte (a newline or a tab would forge a MANIFEST
+# line), not in .git, and every directory above it in the checkout a real
+# one (no link planted to lead somewhere else).
 safe_checkout_path() {
   local rd=$1 p=$2 parent
+  local LC_ALL=C
+  if [[ $p == *[[:cntrl:]]* ]]; then return 1; fi
   case /$p/ in //* | *//* | */./* | */../*) return 1 ;; esac
   case $p in .git | .git/*) return 1 ;; esac
   [[ $p == */* ]] || return 0
@@ -1942,17 +1995,23 @@ safe_checkout_path() {
 }
 
 # What repair_torn_checkout's look at each file runs, as the service user,
-# in the checkout: reads "PATH NUL KNOWN NUL" records (KNOWN: " BLOB BLOB - ",
+# in the checkout (within 300 s; a file over GL_KEEP_FILE_BYTES is never
+# hashed, and counts as "no"): reads "PATH NUL KNOWN NUL" records (KNOWN: " BLOB BLOB - ",
 # the versions from the update, "-" one that deletes it) and prints
-# "CLASS NUL PATH NUL" for each.
+# "CLASS NUL PATH NUL" for each: yes (a version from the update, or the
+# start of one), no (a regular file holding anything else), gone (not
+# there, as the update deletes it), absent (not there), odd (not a regular
+# file: a directory, a link, a FIFO; always left where it is).
 # shellcheck disable=SC2016
 GL_CLASSIFY='
 cd -- "$1" || exit 1
 while IFS= read -r -d "" p && IFS= read -r -d "" known; do
   r=no
-  if [ -L "$p" ]; then r=no
+  if [ -L "$p" ]; then r=odd
   elif [ ! -e "$p" ]; then case $known in *" - "*) r=gone ;; *) r=absent ;; esac
-  elif [ -f "$p" ]; then
+  elif [ ! -f "$p" ]; then r=odd
+  elif [ "$(stat -c %s -- "$p" 2>/dev/null || echo 0)" -gt "$2" ]; then r=no
+  else
     h=$(git hash-object -- "$p" 2>/dev/null) || h=""
     case $known in *" $h "*) [ -n "$h" ] && r=yes ;; esac
     if [ "$r" = no ] && size=$(stat -c %s -- "$p" 2>/dev/null); then
