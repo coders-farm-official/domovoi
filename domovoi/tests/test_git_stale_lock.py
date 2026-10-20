@@ -332,6 +332,28 @@ def test_the_file_the_killed_git_was_writing_is_put_back_too(server, monkeypatch
 
 
 @requires_git
+def test_a_version_only_a_merge_made_counts(server, monkeypatch):
+    """main's a.txt is a merge's own result (no single-parent commit has
+    it): a tree torn to it is still put back."""
+    _no_gits(monkeypatch)
+    work, srv, _a, _b = server
+    _git(work, "checkout", "-q", "-b", "side", "HEAD~1")
+    _write(work, "side.txt", "side\n")
+    _commit(work, "side")
+    _git(work, "checkout", "-q", "main")
+    _git(work, "merge", "-q", "--no-ff", "--no-commit", "side")
+    _write(work, "a.txt", "made by the merge\n")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-q", "-m", "merge side")
+    tip = _git(work, "rev-parse", "HEAD")
+    _git(srv, "fetch", "-q")
+    _write(srv, "a.txt", "made by the merge\n")
+    out = git_lock.repair_interrupted_checkout(git_version._run, srv, _git(srv, "rev-parse", "HEAD"), tip)
+    assert out["restored"] == ["a.txt"]
+    assert _pull()["pulled"] is True
+
+
+@requires_git
 def test_thousands_of_torn_files_fit_the_command_line(server, monkeypatch):
     """A killed fast-forward of a big update: the paths go in runs."""
     _no_gits(monkeypatch)

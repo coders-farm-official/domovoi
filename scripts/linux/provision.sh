@@ -1836,7 +1836,9 @@ repair_torn_checkout() {
   fi
   paths=(${dirty[@]+"${dirty[@]}"} ${untracked[@]+"${untracked[@]}"})
   [ "${#paths[@]}" -gt 0 ] || return 0
-  # ":<old mode> <new mode> <old blob> <new blob> <status>" NUL <path> NUL.
+  # ":<old mode> <new mode> <old blob> <new blob> <status>" NUL <path> NUL,
+  # merges too (-m): the tip's version of a file is often a merge's own
+  # result, which a plain log --raw never shows.
   while IFS= read -r -d '' meta; do
     meta=${meta//$'\n'/}
     [[ $meta == :* ]] || continue
@@ -1844,7 +1846,7 @@ repair_torn_checkout() {
     read -r _ _ _ h st <<<"${meta#:}"
     if [[ $st == D* ]]; then h=-; fi
     known[$p]="${known[$p]-} $h "
-  done < <(gd "$dir" log --format= --raw --no-abbrev --no-renames -z "$head..$up" 2>/dev/null)
+  done < <(gd "$dir" log -m --format= --raw --no-abbrev --no-renames -z "$head..$up" 2>/dev/null)
   for p in ${dirty[@]+"${dirty[@]}"}; do
     [ -n "${known[$p]-}" ] || continue
     if from_the_update "$dir" "$p" "${known[$p]}"; then torn+=("$p"); else other+=("$p"); fi

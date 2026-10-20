@@ -328,10 +328,12 @@ def _chunks(paths: Sequence[str], limit: int = 6000) -> Iterable[list[str]]:
 
 def _versions(run: GitRun, base: str, tip: str, paths: Sequence[str]) -> dict[str, set[str]]:
     """For each of ``paths``: every blob the commits ``base..tip`` gave it,
-    and "" where one of them deleted it."""
+    and "" where one of them deleted it. Merges too (``-m``): the tip's
+    version of a file is often a merge's own result, which a plain
+    ``git log --raw`` never shows (2026-10-20, rc2 to main: two files)."""
     out: dict[str, set[str]] = {}
     for part in _chunks(paths):
-        proc = run("log", "--format=", "--raw", "--no-abbrev", "--no-renames", "-z", f"{base}..{tip}", "--", *part)
+        proc = run("log", "-m", "--format=", "--raw", "--no-abbrev", "--no-renames", "-z", f"{base}..{tip}", "--", *part)
         if proc.returncode != 0:
             continue
         # ":<old mode> <new mode> <old blob> <new blob> <status>" NUL <path> NUL, per change.
