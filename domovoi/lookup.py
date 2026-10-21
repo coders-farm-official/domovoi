@@ -102,6 +102,9 @@ class LookupHit:
     url: str | None = None
     section: str | None = None
     score: float = 0.0
+    #: The text's licence when the source knows it ("CC BY-SA 4.0" for a
+    #: Wikipedia page), shown under a reply. Optional (added in 1.8).
+    licence: str | None = None
 
 
 @dataclass(frozen=True)
@@ -113,6 +116,7 @@ class LookupDocument:
     text: str
     url: str | None = None
     section: str | None = None
+    licence: str | None = None
 
 
 @runtime_checkable
@@ -176,7 +180,8 @@ class RegisteredSource:
             text = text[:FETCH_MAX_CHARS]
         return LookupDocument(id=str(doc.id)[:200], title=str(doc.title or "")[:_TITLE_MAX], text=text,
                               url=(str(doc.url)[:500] if doc.url else None),
-                              section=(str(doc.section)[:_TITLE_MAX] if doc.section else None))
+                              section=(str(doc.section)[:_TITLE_MAX] if doc.section else None),
+                              licence=_clean_licence(getattr(doc, "licence", None)))
 
 
 def decided_class(claimed: str, *, slug: str, core: bool) -> str:
@@ -220,10 +225,19 @@ def _registry(registry: Any | None) -> Any:
     return CAPABILITIES
 
 
-def ordered_sources(registry: Any | None = None, *, classes: tuple[str, ...] | None = None) -> list[Any]:
+def ordered_sources(registry: Any | None = None, *, classes: tuple[str, ...] | None = None,
+                    household_order: Any = None) -> list[Any]:
     """Every registered source, in the core's order: class (local, API,
-    web), then registration slug. Nothing on the source object changes it.
-    ``classes`` keeps only those (``(LOCAL,)`` under internet "never")."""
+    web), then core sources before plugins', then registration slug.
+    Nothing on the source object changes it. ``classes`` keeps only those
+    (``(LOCAL,)`` under internet "never").
+
+    ``household_order`` (Settings → Chat & AI → Search, the household's
+    own choice, never a plugin's): source slugs or registration slugs,
+    first first. A source it names goes before every source it doesn't, in
+    its order; the rest keep the core's order. It changes which passages
+    are read first, never whether a source asks before it is used: that
+    is the class's (:func:`needs_permission`)."""
     reg = _registry(registry)
     pairs: list[tuple[int, int, str, Any]] = []
     # Both sorted by slug, so they pair up.
@@ -241,7 +255,56 @@ def ordered_sources(registry: Any | None = None, *, classes: tuple[str, ...] | N
             continue
         pairs.append((CLASS_ORDER.index(cls), 0 if source.core else 1, slug, source))
     pairs.sort(key=lambda p: (p[0], p[1], p[2]))
-    return [p[3] for p in pairs]
+    out = [p[3] for p in pairs]
+    wanted = [str(x).strip() for x in (household_order or []) if str(x).strip()]
+    if wanted:
+        def rank(src: Any) -> int:
+            for i, name in enumerate(wanted):
+                if name in (getattr(src, "slug", None), getattr(src, "registered_as", None)):
+                    return i
+            return len(wanted)
+
+        out = sorted(out, key=rank)  # stable: the core's order within a rank
+    return out
+
+
+def parse_household_order(raw: Any) -> list[str]:
+    """``lookup_source_order`` ("kiwix, core.wikipedia") as a list of slugs."""
+    if isinstance(raw, (list, tuple)):
+        items = raw
+    else:
+        items = str(raw or "").replace(";", ",").split(",")
+    out: list[str] = []
+    for x in items:
+        x = str(x).strip()[:64]
+        if x and x not in out:
+            out.append(x)
+    return out[:32]
+
+
+def describe_sources(registry: Any | None = None, *, household_order: Any = None) -> list[dict[str, Any]]:
+    """The sources a person can see and reorder (Settings → Search): slug,
+    name, class, whether asking it needs the internet question, whether it
+    is the core's. In the order they are asked."""
+    return [
+        {
+            "slug": getattr(s, "slug", ""),
+            "registered_as": getattr(s, "registered_as", getattr(s, "slug", "")),
+            "name": getattr(s, "name", ""),
+            "lookup_class": getattr(s, "lookup_class", WEB),
+            "needs_permission": needs_permission(s),
+            "core": bool(getattr(s, "core", False)),
+        }
+        for s in ordered_sources(registry, household_order=household_order)
+    ]
+
+
+_LICENCE_MAX = 60
+
+
+def _clean_licence(value: Any) -> str | None:
+    text = " ".join(str(value or "").split())[:_LICENCE_MAX]
+    return text or None
 
 
 def _clean_hit(hit: Any) -> LookupHit | None:
@@ -257,6 +320,7 @@ def _clean_hit(hit: Any) -> LookupHit | None:
         url=(str(hit.url)[:500] if hit.url else None),
         section=(str(hit.section)[:_TITLE_MAX] if hit.section else None),
         score=float(hit.score or 0.0),
+        licence=_clean_licence(getattr(hit, "licence", None)),
     )
 
 
@@ -267,12 +331,24 @@ async def search_sources(
     classes: tuple[str, ...] | None = None,
     registry: Any | None = None,
     timeout: float = SEARCH_TIMEOUT_SEC,
+    household_order: Any = None,
+    enough: int | None = None,
+    sources: list[Any] | None = None,
 ) -> list[tuple[Any, list[LookupHit]]]:
     """Ask each source in order; ``[(source, hits)]`` for those that found
     something. A source that raises, times out or returns junk is skipped
-    with a log line: one broken plugin never costs the others' answers."""
+    with a log line: one broken plugin never costs the others' answers.
+
+    ``enough``: stop asking once that many hits are in hand, so a question
+    the offline library answers never reaches the internet sources after
+    it. ``sources``: ask these (already ordered) instead of the registry's."""
     out: list[tuple[Any, list[LookupHit]]] = []
-    for source in ordered_sources(registry, classes=classes):
+    found = 0
+    if sources is None:
+        sources = ordered_sources(registry, classes=classes, household_order=household_order)
+    for source in sources:
+        if enough is not None and found >= enough:
+            break
         try:
             raw = await asyncio.wait_for(source.search(query, limit=limit), timeout)
         except asyncio.CancelledError:
@@ -284,6 +360,7 @@ async def search_sources(
         hits = [h for h in (_clean_hit(x) for x in (raw or [])[:MAX_HITS_PER_SOURCE]) if h]
         if hits:
             out.append((source, hits[:limit]))
+            found += len(hits[:limit])
     return out
 
 
@@ -296,8 +373,10 @@ __all__ = [
     "LookupHit",
     "LookupSource",
     "WEB",
+    "describe_sources",
     "needs_permission",
     "ordered_sources",
+    "parse_household_order",
     "register",
     "RegisteredSource",
     "search_sources",
