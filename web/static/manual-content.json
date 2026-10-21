@@ -2137,7 +2137,7 @@
        "text": "**Summarize a long document:** it is read in parts, with \"reading part 3 of 8 · about 1 min left\" and **stop**. Stop keeps what was read; **carry on** reads the rest. Leave Chat and it pauses at the end of the part, then carries on when you come back."
       },
       {
-       "text": "**use home server** appears only when your home server is measured to be faster than this phone for that document. It sends the file to be read there; nothing is kept there."
+       "text": "**use home server** appears only when your home server is measured to be faster than this phone for that document (reading all of it, plus sending it). It sends the file to be read there; nothing is kept there. If the server can't finish, Chat says so and offers **read it on this phone**."
       }
      ]
     }
@@ -2629,7 +2629,7 @@
     },
     {
      "type": "p",
-     "text": "**Summarize a long document:** ask for a summary and Domovoi reads it in parts, then combines them. The reply's place shows \"reading part 3 of 8 · about 1 min left\" (the time comes from how fast your server has been) with **stop**. Stop keeps what was read (\"Summary of pages 1-9 (stopped)\"), and **carry on** reads the rest. You can leave the page: the summary is there when you come back. A question asked by voice while it reads goes first."
+     "text": "**Summarize a long document:** ask for a summary and Domovoi reads it in parts, then combines them. The reply's place shows \"reading part 3 of 8 · about 1 min left\" (the time comes from how fast your server has been) with **stop**. Stop keeps what was read (\"Summary of pages 1-9 (stopped)\"), and **carry on** reads the rest. You can leave the page: the summary is there when you come back. A question asked by voice while it reads goes next, after the part being read (a few seconds on a GPU, up to about a minute on a server without one). Each point cites a page; a part Domovoi couldn't cite anything from is named under the summary. After a server restart the chat asks \"carry on?\" before it reads any more. One summary reads at a time per chat, and two in the house."
     },
     {
      "type": "p",

@@ -176,6 +176,15 @@ const ChatDocs = (() => {
     );
   };
 
+  /* A job a restart interrupted (review round 1): it waits to be asked,
+   * "this summary was interrupted — carry on?". */
+  const JobInterrupted = ({ job, onCarryOn }) => (
+    <div className="chat-doc-job" role="status">
+      <span className="mono chat-doc-job-line">{job.line || 'this summary was interrupted — carry on?'}</span>
+      {job.state === 'interrupted' && <CarryOn job={job} onCarryOn={onCarryOn}/>}
+    </div>
+  );
+
   const DocAnswer = ({ doc, stoppedJob, onCarryOn }) => {
     const [open, setOpen] = React.useState(null);
     const close = React.useCallback(() => setOpen(null), []);
@@ -243,7 +252,7 @@ const ChatDocs = (() => {
   };
 
   return { ACCEPT, READS, isPicture, upload, refusalText, fileUrl, DocChip, DocAnswer, PassageSheet,
-           AskButton, extOf, JobProgress, isLive, stopJob, resumeJob };
+           AskButton, extOf, JobProgress, JobInterrupted, isLive, stopJob, resumeJob };
 })();
 
 window.ChatDocs = ChatDocs;

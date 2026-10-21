@@ -16,7 +16,9 @@ table; Flyway applies it on update). No new dependencies.
   19,000-character parts, about 2 GB released when the job ends); where the
   GPU won't load it runs on the CPU, with a longer estimate.
   The reply says "Read in 8 parts. Points that span parts may be missed."
-  and cites only real pages.
+  Every point in it cites a page that one of the parts' notes cited: a
+  point with no page, or a page no part cited, is left out, and a part the
+  model cited nothing from adds nothing (the reply says which pages).
 * **Progress, with stop.** While it reads, the reply's place says
   "reading part 3 of 8 · about 1 min left", on the dashboard and in the
   app. **Stop** keeps what was read: the reply is "Summary of pages 1-9
@@ -24,7 +26,11 @@ table; Flyway applies it on update). No new dependencies.
 * **It carries on when you leave.** On the home server the job doesn't
   depend on the page: close it and the summary is there when you come back
   (the chat shows the job running in the meantime). After a server restart
-  it carries on from the next part when the chat is opened. On a phone it
+  the chat says "this summary was interrupted — carry on?" and reads the
+  rest only when asked (with AI features off: "stopped (AI is off)"). One
+  summary reads at a time in a chat (asking again follows the one
+  reading), and at most two in the house; a third chat is told to ask
+  again when one has finished. On a phone it
   runs while Chat is open, pauses at the end of the part when you leave,
   and carries on when you come back, also after the app was closed.
 * **Time estimates come from measured speeds** (the token rates every
@@ -33,14 +39,17 @@ table; Flyway applies it on update). No new dependencies.
 * **"Use home server" on a phone**, offered only when the home server's
   measured speed (plus sending the file) beats the phone's, and AI features
   are on there. It is private: the file is deleted on the server as soon as
-  it has been read, its text is kept only in memory until the phone takes
-  the summary (24 hours at most), and nothing is written to the database. A
+  it has been read, its text goes when the job ends, the summary is kept
+  only in memory until the phone takes it (24 hours at most, and 10
+  minutes if no phone is watching), and nothing is written to the database. A
   CPU-only server is often slower than a recent phone, so the offer often
   won't appear: that is the point of measuring.
-* **Voice comes first.** Between parts a job asks the core whether a voice
-  turn is being answered (new: `GET /v1/voice/activity`) and waits while
-  one is, so a question in a room waits at most for the one part being
-  read.
+* **Voice comes first.** Before every model call (each part, and the
+  combine step) a job asks the core whether a voice turn is being answered
+  (new: `GET /v1/voice/activity`, which says only busy or not) and waits
+  while one is. A question in a room waits at most for the one call
+  already running: a few seconds on a GPU, but on a CPU-only server about
+  a minute (a part takes that long there).
 * **With AI features turned off,** a running job stops at its next part
   (keeping its notes) and no new one starts.
 

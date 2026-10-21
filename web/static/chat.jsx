@@ -921,6 +921,12 @@ const ChatPageMain = () => {
                            ? stoppedJobs.find((j) => j.id === m.doc.job.id) : null}
                          onCarryOn={carryOn}/>
           ))}
+          {!sending && jobs.filter((j) => j.state === 'interrupted' || (j.line === 'stopped (AI is off)')).map((j) => (
+            <div key={`int-${j.id}`} style={{ display: 'flex', gap: 10, maxWidth: '86%' }}>
+              <span style={{ flexShrink: 0, marginTop: 3 }}><DomovoiGlyph size={14}/></span>
+              <ChatDocs.JobInterrupted job={j} onCarryOn={carryOn}/>
+            </div>
+          ))}
           {!sending && liveJobs.map((j) => (
             <div key={j.id} style={{ display: 'flex', gap: 10, maxWidth: '86%' }}>
               <span style={{ flexShrink: 0, marginTop: 3 }}><DomovoiGlyph size={14}/></span>
