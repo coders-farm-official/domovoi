@@ -1,6 +1,5 @@
 package com.domovoi.app.ui.shell
 
-import com.domovoi.app.ui.screens.chat.CHAT_ROUTE
 import android.os.SystemClock
 import android.util.Log
 import androidx.activity.compose.BackHandler
@@ -326,7 +325,6 @@ private fun ShellContent(trouble: TokenTrouble?) {
             "home" -> Route.Home
             CHAT_ROUTE -> Route.Chat
             CONTAINERS_ROUTE -> Route.Containers
-            CHAT_ROUTE -> Route.Chat
             else -> null
         }
         if (target != null) {

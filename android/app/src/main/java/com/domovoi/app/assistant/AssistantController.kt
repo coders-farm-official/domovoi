@@ -817,9 +817,7 @@ class AssistantController(
             val stats = llm.lastStats()
             // The sources line, written here, never by the model.
             val footer = help?.let { LocalHelp.footer(it, text.toString()) }.orEmpty()
-            val said = if (footer.isEmpty()) text.toString() else text.toString().trimEnd() + "
-
-" + footer
+            val said = if (footer.isEmpty()) text.toString() else text.toString().trimEnd() + "\n\n" + footer
             return finishReply(
                 viewed,
                 live().copy(text = said, firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }),

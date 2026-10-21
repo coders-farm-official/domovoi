@@ -6,7 +6,7 @@ import com.domovoi.app.assistant.DeviceTier
 import com.domovoi.app.assistant.docs.DocExtract
 import com.domovoi.app.net.LocalCapabilities
 import com.domovoi.app.net.LocalSharedScreen
-import com.domovoi.app.ui.screens.chat.CHAT_ROUTE
+import com.domovoi.app.alerts.CHAT_ROUTE
 import com.domovoi.app.ui.screens.chat.ChatOpenRequest
 import com.domovoi.app.ui.screens.chat.chatFromDocument
 import com.domovoi.app.ui.screens.chat.docFailureText

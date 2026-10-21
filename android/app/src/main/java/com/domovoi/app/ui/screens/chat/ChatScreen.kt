@@ -703,7 +703,7 @@ internal fun ConversationPane(
         scope.launch {
             runCatching {
                 sendStreaming(
-                    app, target.id, "", emptyList(),
+                    app, target.id, "", emptyList(), emptyList(),
                     onDelta = {
                         if (live.firstWordsAtMs == null) live.firstWordsAtMs = System.currentTimeMillis()
                         live.content += it
@@ -1059,7 +1059,6 @@ internal fun MessageBubble(
     val app = LocalApp.current
     val context = LocalContext.current
     val toast = LocalToast.current
-    val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     val haptics = LocalHapticFeedback.current
     val isUser = m.role == "user"
