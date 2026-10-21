@@ -4,6 +4,29 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-21 — Ask about a photo in a phone chat
+
+App only; no server change.
+
+* **Pictures on the phone.** A chat **on this phone** takes one photo per
+  question, from the in-app camera or Android's photo picker, and the model
+  on the phone answers about it, in airplane mode too. The photo is shrunk
+  to 1,024 px and read in memory: it isn't saved to the gallery or the
+  app's storage, never leaves the phone, and is wiped once answered. The
+  chat keeps a "photo (not kept)" mark, not the photo, so a photo question
+  has no **try again**.
+* **Only where the phone is fast enough.** The camera and gallery buttons
+  show only on phones whose GPU runs the model's photo encoder. The first
+  time a phone chat opens after an update, the app tries it once with a
+  test picture and remembers the answer for that model file and app build.
+  Phones where it fails (or where the encoder only runs on the CPU, which
+  was too slow and used too much memory on the owner's test phone) get no
+  buttons; if the app dies during that try, the next start treats it as a
+  failure and doesn't try again until the next update.
+* **Camera permission:** asked on the first tap of **take a photo**, after
+  a one-line reason. The gallery needs no permission (the photo picker).
+* Home-server chats send pictures to the server as before.
+
 ## 2026-10-21 — Ask about a document in Chat
 
 Core and dashboard update with one migration, **V036** (two columns on

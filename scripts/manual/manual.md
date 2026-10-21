@@ -637,7 +637,16 @@ assistant on this phone** →
 unless you **allow mobile data**.
 
 It needs a 64-bit phone with 8 GB of memory or more. To report a bad
-reply, long-press it. **Export all phone chats** (in a phone chat, the
+reply, long-press it.
+
+**Ask about a photo:** on phones whose graphics chip can run the model's
+photo reader, the **take a photo** and **choose a photo** buttons sit
+beside the mic. One photo per question; type a question or just send it
+("what's in this photo?"). The photo is read on the phone, isn't saved to
+your gallery, and is gone once Domovoi has answered: the chat keeps only
+a **photo (not kept)** mark. The camera asks for its permission the first
+time. Phones without the buttons can't do it quickly enough; a home-server
+chat's **attach image** still works there. **Export all phone chats** (in a phone chat, the
 model settings button) saves them as Markdown and JSON where you pick. Its chats stay on the phone, marked **on this
 phone**; away from home they are the only ones Chat lists. They never mix
 with your home server's chats.
