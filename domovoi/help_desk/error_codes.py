@@ -149,6 +149,14 @@ ERROR_CODES: dict[str, ErrorHelp] = {
         "to finish; the chat shows the new reply.",
         "chat",
     ),
+    "stale_version": _e(
+        "A newer version of the draft came in",
+        "While you were editing the draft by hand, someone else (or another device, or a change "
+        "asked for in the chat) saved a newer version, so your edit wasn't saved over it. Your text "
+        "is still in the editor: copy it if you need it, open the newest version from the version "
+        "picker, and make your change there.",
+        "chat",
+    ),
     # ── the app's chat mic ───────────────────────────────────────────────
     "core_timeout": _e(
         "Domovoi took too long to answer",
