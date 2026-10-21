@@ -13,6 +13,7 @@ import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.PluginScreenFrame
 import com.domovoi.app.ui.screens.assistant.AssistantScreen
 import com.domovoi.app.ui.screens.audiobooks.AudiobooksScreen
+import com.domovoi.app.ui.screens.audiobooks.SavedBooksScreen
 import com.domovoi.app.ui.screens.calendar.CalendarScreen
 import com.domovoi.app.ui.screens.chat.ChatScreen
 import com.domovoi.app.ui.screens.containers.ContainersScreen
@@ -56,10 +57,11 @@ fun ScreenRouter(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts 
     when (route) {
         Route.Home -> HomeScreen(navigate, counts)
         Route.Chat -> ChatScreen()
-        // Music, Videos and Files carry the server / "your device" switch.
+        // Music, Videos, Audiobooks and Files carry the server / "your device" switch.
         Route.Music -> SourceSwitchPage(DevicePage.Music, server = { MusicScreen() }, device = { YourDeviceMusic() })
         Route.Podcasts -> PodcastsScreen()
-        Route.Audiobooks -> AudiobooksScreen()
+        // Audiobooks' device side: the books saved on this phone.
+        Route.Audiobooks -> SourceSwitchPage(DevicePage.Audiobooks, server = { AudiobooksScreen() }, device = { SavedBooksScreen() })
         Route.Videos -> SourceSwitchPage(DevicePage.Videos, server = { VideosScreen() }, device = { YourDeviceVideos() })
         // Screens a plugin provides sit in its frame (ui/components/PluginFrame.kt):
         // its name, publisher and colour, as the dashboard frames its pages.

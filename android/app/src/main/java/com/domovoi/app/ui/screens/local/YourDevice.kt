@@ -59,7 +59,9 @@ import com.domovoi.app.ui.shell.title
 import com.domovoi.app.ui.theme.Domovoi
 
 /**
- * "Your device" on the connected Files, Music and Videos pages: a switch at
+ * "Your device" on the connected Files, Music, Videos and Audiobooks pages
+ * (Audiobooks' device side is the books saved on the phone,
+ * SavedBooksScreen): a switch at
  * the top of the page between the server's content and the phone's own,
  * shown exactly as the unconnected pages show it (LocalMusicScreen,
  * LocalVideosScreen, FilesBrowser over PhoneFileSource — the same screens,
@@ -72,7 +74,7 @@ import com.domovoi.app.ui.theme.Domovoi
  */
 
 /** The pages that offer "Your device". */
-internal enum class DevicePage { Files, Music, Videos }
+internal enum class DevicePage { Files, Music, Videos, Audiobooks }
 
 /** Which side of the switch a page shows. */
 internal enum class ContentSource { Server, Device }

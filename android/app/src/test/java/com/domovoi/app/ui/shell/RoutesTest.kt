@@ -143,6 +143,18 @@ class RoutesTest {
         assertEquals(listOf(Route.Home, Route.Music), PhoneBar.routes(saved, Capabilities.EMPTY, shared = false))
     }
 
+    /** Books saved on the phone play with no server: the local shell gets
+     *  an Audiobooks tab once there is one, after the phone's files. */
+    @Test fun savedBooksGiveTheLocalShellAnAudiobooksTab() {
+        assertEquals(listOf(Route.Music, Route.Videos, Route.Files), localTabs(assistant = false))
+        assertEquals(
+            listOf(Route.Music, Route.Videos, Route.Files, Route.Audiobooks, Route.Assistant),
+            localTabs(assistant = true, savedBooks = true),
+        )
+        // Not somebody's own page: a shared screen keeps it.
+        assertEquals(listOf(Route.Music, Route.Videos, Route.Audiobooks), localTabs(assistant = true, shared = true, savedBooks = true))
+    }
+
     @Test fun theLocalShellIsTheAssistantsFirstHome() {
         // No server needed: a tab of the local shell, after the phone's media.
         assertEquals(listOf(Route.Music, Route.Videos, Route.Files, Route.Assistant), localTabs(assistant = true))

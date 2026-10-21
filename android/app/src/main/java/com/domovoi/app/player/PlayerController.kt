@@ -85,7 +85,8 @@ class PlayerController(
         // (PlayKind.Device) in offline/local mode.
         val dataSource = DefaultDataSource.Factory(context, OkHttpDataSource.Factory(api.http))
         ExoPlayer.Builder(context)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSource))
+            // A book of several files plays as one item (BookMediaSources).
+            .setMediaSourceFactory(BookMediaSources(DefaultMediaSourceFactory(dataSource)))
             .setHandleAudioBecomingNoisy(true)
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -251,6 +252,11 @@ class PlayerController(
             .setMediaId(item.uid)
             .setUri(resolveSrc(item.src))
             .setMediaMetadata(meta)
+            .apply {
+                if (item.parts.size > 1) {
+                    setTag(BookMediaSources.Parts(item.parts.map { resolveSrc(it.src) }, item.parts.map { it.durationSec }))
+                }
+            }
             .build()
     }
 
@@ -499,7 +505,27 @@ class PlayerController(
         else -> null
     }
 
+    /**
+     * The phone's places in books (audiobooks/BookPositions.kt), set by
+     * AppContainer: ONE place per book, for streaming and a saved copy
+     * alike, kept on the phone and sent to the book's server when it is the
+     * connected one. Null (the tests' default): books use the server's slot
+     * directly, as podcasts do.
+     */
+    var bookPositions: com.domovoi.app.audiobooks.PositionSync? = null
+
+    /** The server a book's place belongs to: a saved book's own, else the
+     *  connected one's. */
+    private fun bookServer(item: PlayItem): ServerScope? = item.origin ?: activeServer
+
+    private var bookPushJob: Job? = null
+
     suspend fun fetchPosition(item: PlayItem): Pair<Double, Float> {
+        val books = bookPositions
+        if (item.kind == PlayKind.Audiobook && books != null) {
+            val server = bookServer(item) ?: return 0.0 to 1.0f
+            return withContext(Dispatchers.IO) { books.open(item.id, server) }
+        }
         val base = positionPath(item) ?: return 0.0 to 1.0f
         val person = prefs.listenerPersonId.value
         val q = "?device_id=${prefs.deviceId}" + (person?.let { "&person_id=$it" } ?: "")
@@ -513,6 +539,19 @@ class PlayerController(
 
     private fun flushSpokenPosition() {
         val item = current ?: return
+        val books = bookPositions
+        if (item.kind == PlayKind.Audiobook && books != null) {
+            val server = bookServer(item) ?: return
+            val pos = _positionSec.value
+            val sp = _speed.value
+            scope.launch(Dispatchers.IO) {
+                runCatching { books.record(item.id, server, pos, sp) }
+                if (bookPushJob?.isActive != true) {
+                    bookPushJob = scope.launch(Dispatchers.IO) { runCatching { books.push(item.id, server) } }
+                }
+            }
+            return
+        }
         val path = positionPath(item) ?: return
         val pos = _positionSec.value
         val sp = _speed.value

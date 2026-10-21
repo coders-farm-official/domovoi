@@ -14,7 +14,13 @@ import com.domovoi.app.assistant.ModelDownloader
 import com.domovoi.app.alerts.TimerAlerts
 import com.domovoi.app.data.DeveloperOptions
 import com.domovoi.app.data.Prefs
+import com.domovoi.app.audiobooks.ApiPositionRemote
+import com.domovoi.app.audiobooks.BookDownloads
+import com.domovoi.app.audiobooks.BookStore
+import com.domovoi.app.audiobooks.PositionStore
+import com.domovoi.app.audiobooks.PositionSync
 import com.domovoi.app.net.ApiClient
+import com.domovoi.app.net.HouseholdLock
 import com.domovoi.app.net.DeviceAuthInterceptor
 import com.domovoi.app.net.DeviceDownloads
 import com.domovoi.app.net.Discovery
@@ -50,6 +56,10 @@ class AppContainer(context: Context) {
         onChange = {
             identity.networkChanged()
             DeviceDownloads.networkChanged(context)
+            // A new network is most often home again: books waiting to
+            // save try now, and places set while away go up
+            // (audiobooks/BookDownloads.kt, BookPositions.kt).
+            booksReconnected(context)
         },
         log = { Log.i("NetworkWatch", it) },
     )
@@ -74,6 +84,33 @@ class AppContainer(context: Context) {
     val api: ApiClient = ApiClient(prefs, identity, tokenHealth)
     val bus = StateBus(api, prefs)
     val player = PlayerController(context, api, prefs)
+
+    /** Books saved to the phone (audiobooks/BookStore.kt): the app's own
+     *  storage, filesDir/audiobooks. */
+    val books = BookStore.forApp(context)
+
+    /** The server the app talks to now, as books and their places know it. */
+    fun activeServerScope(): ServerScope = ServerScope.of(prefs.serverUrl.value, prefs.pinForServer(prefs.serverUrl.value))
+
+    /** One place per book on the phone, synced to the book's server
+     *  (audiobooks/BookPositions.kt). */
+    val bookPositions = PositionSync(
+        store = PositionStore(java.io.File(context.filesDir, "audiobook-positions.json")),
+        remote = {
+            if (prefs.serverUrl.value.isBlank() || HouseholdLock.roomModeActive) null
+            else ApiPositionRemote(api, prefs, activeServerScope())
+        },
+        person = { prefs.listenerPersonId.value },
+    )
+
+    private fun booksReconnected(context: Context) {
+        scope.launch(Dispatchers.IO) {
+            // Let the new network settle before asking the server.
+            kotlinx.coroutines.delay(3_000)
+            runCatching { BookDownloads.kickWaiting(context, books) }
+            runCatching { bookPositions.pushAll(activeServerScope()) }
+        }
+    }
 
     /** Lyrics for what plays, household tier only (player/Lyrics.kt). */
     val lyrics = LyricsRepository(api)
@@ -105,6 +142,7 @@ class AppContainer(context: Context) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     init {
+        player.bookPositions = bookPositions
         // What the phone queued from a server belongs to that server
         // (player/ServerScope.kt): the player hears which server the app
         // talks to — by its pinned identity, else its address — now, and on

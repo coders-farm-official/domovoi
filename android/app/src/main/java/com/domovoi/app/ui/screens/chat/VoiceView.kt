@@ -445,17 +445,17 @@ internal class VoiceController(
         val p = app.player
         when (action) {
             is DeviceAction.Play -> {
-                val first = action.items.first()
-                if (action.resume && first.isSpoken) {
-                    // Where this phone's listener left off, as the
-                    // Audiobooks and Podcasts screens start it.
+                if (action.items.any { it.kind == com.domovoi.app.player.PlayKind.Audiobook }) {
+                    // A book comes by id and title only: its files (a
+                    // folder book plays file by file) or the saved copy
+                    // first, then as below (audiobooks/BookPlay.kt).
                     scope.launch {
-                        val (pos, speed) = p.fetchPosition(first)
-                        p.playItems(action.items, 0, pos, speed)
+                        val items = action.items.map { com.domovoi.app.audiobooks.resolveBookItem(app, it) }
+                        play(p, items, action.resume)
                     }
-                } else {
-                    p.playItems(action.items)
+                    return
                 }
+                play(p, action.items, action.resume)
             }
             DeviceAction.Pause -> p.pause()
             DeviceAction.Resume -> p.resume()
@@ -463,6 +463,20 @@ internal class VoiceController(
             DeviceAction.Next -> p.next()
             DeviceAction.Previous -> p.prev()
             is DeviceAction.Volume -> setVolume(action)
+        }
+    }
+
+    private fun play(p: com.domovoi.app.player.PlayerController, items: List<com.domovoi.app.player.PlayItem>, resume: Boolean) {
+        val first = items.first()
+        if (resume && first.isSpoken) {
+            // Where this phone's listener left off, as the
+            // Audiobooks and Podcasts screens start it.
+            scope.launch {
+                val (pos, speed) = p.fetchPosition(first)
+                p.playItems(items, 0, pos, speed)
+            }
+        } else {
+            p.playItems(items)
         }
     }
 

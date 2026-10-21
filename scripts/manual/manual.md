@@ -540,11 +540,15 @@ the 32-bit app from the same page. [More detail](docs/ANDROID_COMPATIBILITY.md)
 
 **How to**
 
-- Save a song, episode, book or video to the phone with **save to device**
+- Save a song, episode or video to the phone with **save to device**
   (or **save**). Files go to Downloads/Domovoi and play with no server.
-- Music, Videos and Files switch between the server and **your device**.
-  From your device you can upload to the server. In Files, **add folder**
-  shows a folder of the phone's own.
+- Save a book with **save to phone** on its page. The size shows first.
+  Books stay inside the app, play with their chapters with no server, and
+  keep one place in step with the server. A save that stops when you leave
+  home finishes by itself when the server is in reach again.
+- Music, Videos, Audiobooks and Files switch between the server and **your
+  device**. From your device you can upload to the server. In Files,
+  **add folder** shows a folder of the phone's own.
 
 [More detail](docs/FAQ.md#can-i-save-music-podcasts-or-audiobooks-to-my-phone-or-computer)
 
@@ -659,7 +663,8 @@ Books in the server's audiobooks folder, with chapters, resumed where you
 left off.
 
 **How to:** [Audiobooks](#audiobooks) → **play**; **reindex** after
-adding books.
+adding books. In the app, open a book for its chapters and **save to
+phone**; **add** sends books from the phone to the server.
 
 **Try saying**
 

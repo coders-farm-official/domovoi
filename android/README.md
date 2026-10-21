@@ -632,9 +632,35 @@ browser at the connected server's Settings page (`<server>/#settings`);
 with no server configured the button is disabled with a hint.
 
 While connected, the save-to-device actions across Music / Videos /
-Podcasts / Audiobooks download through the system `DownloadManager` into
+Podcasts download through the system `DownloadManager` into
 `Downloads/Domovoi`, which MediaStore indexes — so anything saved shows
 up in local mode automatically.
+
+Audiobooks save into the app's own storage instead (`audiobooks/`,
+2026-10-20): `filesDir/audiobooks/b<id>-<random>/` holds the audio, the
+cover and `book.json` (title, chapters, files, the server it came from),
+so a saved book plays with its chapters and no server, needs no storage
+permission on any Android version, and never shows up as songs. Each save
+is a WorkManager job (`BookDownloads`): any network, then a check that the
+book's server answers; out of reach it retries with a linear back-off from
+a minute (and at once when the phone joins a network), resuming each
+file's `.part` with a Range request over the app's own client, so no
+header is kept in a system database. The book page shows the size before
+saving; the notification and the page cancel. One place per book
+(`BookPositions`): streaming and the saved copy share it, it is kept on
+the phone and sent to the book's server's slot for this phone when
+connected; when both moved, the newer wins. "Continue from the kitchen"
+reads `/api/audiobooks/{id}/positions`. A folder book plays as one item
+(`player/BookMediaSources.kt` joins its files). Audiobooks → **your
+device** lists the saved books and the space they use; the local shell
+has an Audiobooks tab once one is saved. **Add to server** uploads files
+(a book each) or a folder (one book, `create_dir=true`) into
+`core:audiobooks`; **remove from server** asks for the admin password,
+sends it only to a server that just proved the identity the phone pinned
+for it (`IdentityAdmission`: a verified pin, paired or not; a legacy
+server without a key is refused), signs in for that one delete
+(`/api/files/delete`) and signs out (residual: a kill in between leaves the
+session to its 30-day expiry; docs/SECURITY_PRIVACY.md).
 
 ## Layout
 
@@ -642,6 +668,7 @@ up in local mode automatically.
 app/src/main/java/com/domovoi/app/
 ├── AppContainer.kt        # singleton graph: prefs, api, bus, player, alerts, assistant
 ├── assistant/             # on-device assistant: model catalog, store, download job, engine, conversations
+├── audiobooks/            # books saved to the phone: store, resumable download job, one place per book
 ├── net/                   # ApiClient (data.js analog), StateBus (/ws/state), rememberApi hooks
 ├── alerts/                # timer/reminder notifications + the local alarm mirror (process-wide)
 ├── audio/MicArbiter.kt    # one microphone owner: room mode, drop-in, chat mic, assistant
