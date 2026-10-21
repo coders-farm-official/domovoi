@@ -19,6 +19,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 
 /*
@@ -313,3 +314,48 @@ internal fun serverSources(doc: ServerDocReply?, pdf: (String) -> (suspend () ->
     doc?.sources.orEmpty().map { s ->
         SourceView(s.label, s.text, s.match, s.cited, s.page, pdf = if (s.page != null && s.name.lowercase().endsWith(".pdf")) pdf(s.token) else null)
     }
+
+/** `POST /api/chat/letters/read`'s answer (documents plan D6). */
+@Serializable
+internal data class ServerLetterRead(
+    val blur: Double? = null,
+    val kind: String? = null,
+    val text: String? = null,
+    val stopped: Boolean = false,
+    val seconds: Double? = null,
+)
+
+/** How long the home server may take to read one letter photo: a CPU-only
+ *  box takes a few minutes (the D6 eval: about 2 minutes on contended
+ *  E-cores), with nothing sent meanwhile. */
+private const val LETTER_READ_TIMEOUT_MIN = 8L
+
+/**
+ * A phone chat's letter photo ([jpeg]), read by the home server: it keeps
+ * nothing, and the explanation is written on this phone. With
+ * [stopIfHandwritten], a handwritten letter comes back with no text, so
+ * its card can show first. Throws [ApiException] (its body names why:
+ * AI features off, no picture model, unreadable).
+ */
+internal suspend fun readLetterOnServer(app: AppContainer, jpeg: ByteArray, stopIfHandwritten: Boolean):
+    com.domovoi.app.assistant.LetterServerRead = withContext(Dispatchers.IO) {
+    val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+        .addFormDataPart("file", "letter.jpg", jpeg.toRequestBody("image/jpeg".toMediaType()))
+        .addFormDataPart("stop_if_handwritten", if (stopIfHandwritten) "true" else "false")
+        .build()
+    val req = Request.Builder().url(app.api.absolute("/api/chat/letters/read"))
+        .header("X-Requested-With", "DomovoiApp").post(body).build()
+    val client = app.api.http.newBuilder()
+        .readTimeout(LETTER_READ_TIMEOUT_MIN, java.util.concurrent.TimeUnit.MINUTES)
+        .callTimeout(LETTER_READ_TIMEOUT_MIN + 1, java.util.concurrent.TimeUnit.MINUTES)
+        .build()
+    client.newCall(req).execute().use { resp ->
+        val text = resp.body?.string().orEmpty()
+        if (!resp.isSuccessful) {
+            throw ApiException(resp.code, docFailureText("read", ApiException(resp.code, "${resp.code} ${resp.message}", body = text.take(4096))),
+                body = text.take(4096), refusal = resp.header("X-Domovoi-Refusal"))
+        }
+        val r = DomovoiJson.decodeFromString(ServerLetterRead.serializer(), text)
+        com.domovoi.app.assistant.LetterServerRead(r.blur, r.kind, r.text, r.stopped)
+    }
+}

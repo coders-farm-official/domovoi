@@ -136,6 +136,9 @@ internal class AssistantActions(
     /** A photo for the next question (N3); null where phone chats take no
      *  photos (the buttons also need the GPU probe to have passed). */
     val attachPhoto: ((com.domovoi.app.assistant.PendingPhoto) -> Unit)? = null,
+    /** A letter's photo for the home server to read (D6: this phone can't
+     *  read photos); null where none is paired. */
+    val attachServerLetter: ((com.domovoi.app.assistant.PendingPhoto) -> Unit)? = null,
     /** The waiting photo goes, unsent. */
     val dropPhoto: () -> Unit = {},
     /** The phone's own copy of a document of the conversation on screen, by id. */
@@ -339,6 +342,17 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
         } else {
             null
         }
+    // "What does this letter say?" on a phone that can't read photos (D6):
+    // the paired home server reads it, with its AI features on, and keeps
+    // nothing; the explanation is still written on this phone.
+    val aiOnServer = com.domovoi.app.net.LocalCapabilities.current.aiEnabled
+    androidx.compose.runtime.DisposableEffect(choice, aiOnServer) {
+        val ok = choice is com.domovoi.app.ui.shell.ServerChoice.Available && !choice.needsPairing && aiOnServer
+        assistant.setLetterServer(if (ok) com.domovoi.app.assistant.LetterServer { jpeg, stop ->
+            com.domovoi.app.ui.screens.chat.readLetterOnServer(app, jpeg, stop)
+        } else null)
+        onDispose { assistant.setLetterServer(null) }
+    }
     // A long document read in parts (documents plan D2): the card's time
     // left ticks down while a part is read.
     androidx.compose.runtime.LaunchedEffect(ui.docJob?.id, ui.docJob?.state) {
@@ -469,6 +483,7 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
             pickHeadsUp = actions.pickHeadsUp, neverWarn = actions.neverWarn, headsUpSkip = headsUpPrefs.skip,
             cardPrimary = cards.primary, cardSecondary = cards.secondary,
             attachPhoto = actions.attachPhoto, dropPhoto = actions.dropPhoto,
+            attachServerLetter = actions.attachServerLetter,
             closeVideo = assistant::videoClosed,
             clockOpens = assistant::clockOpens,
         ),
@@ -655,6 +670,9 @@ private fun actionsFor(
     closeDocProblem = a::closeDocProblem,
     attachPhoto = { photo ->
         if (!a.attachPhoto(photo)) toast("one photo per question: send or remove the one waiting first")
+    },
+    attachServerLetter = { photo ->
+        if (!a.attachServerLetter(photo)) toast("one photo per question: send or remove the one waiting first")
     },
     dropPhoto = a::dropPhoto,
     docFile = { id -> a.docFile(id) },

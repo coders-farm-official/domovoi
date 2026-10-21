@@ -73,6 +73,11 @@ interface LlmEngine : AutoCloseable {
     fun replyToPhoto(system: String, jpeg: ByteArray, question: String, now: String? = null): Flow<String> =
         flow { throw UnsupportedOperationException("this engine takes no photos") }
 
+    /** [replyToPhoto] with its own cap on the answer, tokens: one word for
+     *  "printed or handwritten?", a page for a letter's transcription (D6). */
+    fun replyToPhoto(system: String, jpeg: ByteArray, question: String, now: String?, maxOutput: Int): Flow<String> =
+        replyToPhoto(system, jpeg, question, now)
+
     /** The reply to the last turn of [history] (which must be the user's),
      *  as text deltas in order. Cancelling collection stops the model.
      *  [now]: the phone's clock for this turn (Persona.clockLine), or null;
