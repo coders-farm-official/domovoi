@@ -64,7 +64,10 @@
 #   models       the tier's two Ollama models and its vision model (pictures
 #                in chat, about 1.9 GB; --no-vision-model: not pulled), each
 #                checked against the manifest digest after the pull
-#                                                          (--skip-models: no)
+#                (--skip-models: no; --no-ai-models, AI chat and questions
+#                left out: no, and AI_FEATURES=false in domovoi/.env; the
+#                env and ollama steps run either way, see "AI chat and
+#                questions" below)
 #   whisper      the Whisper model at the manifest's Hugging Face revision,
 #                model.bin checked against its SHA-256; the small files
 #                beside it (config.json, tokenizer.json, vocabulary.*) come
@@ -125,6 +128,18 @@
 # a changed input re-runs only the steps it feeds. A second run on a
 # finished box skips every step and restarts nothing.
 #
+# AI chat and questions (owner decision 2026-10-21: optional, included by
+# default). --ai-models includes them, --no-ai-models leaves them out; the
+# answer goes into domovoi/.env as AI_FEATURES=true|false (a managed key,
+# like the models'), and No skips the models step only: Whisper, the Piper
+# voices and Ollama itself are installed either way, so turning AI on
+# later in Settings (Models) needs no root. With neither option: a box
+# whose domovoi/.env already has AI_FEATURES keeps that answer, else the
+# one question this script asks, only when stdin is a terminal and not in
+# a dry run ("Include AI chat and questions? ... [Y/n]", on stderr; Enter
+# or yes includes them, n or no leaves them out, anything else asks again,
+# end of input includes them), else yes.
+#
 # Machine-readable progress for the Windows installer's UI: every line on
 # stdout that starts with "@@DOMOVOI " is one JSON object:
 #   {"v":1,"step":"venv","index":9,"total":22,"state":"start","percent":25,
@@ -140,7 +155,9 @@
 # "exit_code", "failed_step", "message" (why, for anything but ok) and
 # "gpu": the names of the GPUs Ollama found at its last start, a JSON list,
 # [] when it runs on the CPU alone, null when that is unknown (no Ollama
-# start in this boot's journal yet, or a run that stopped before it).
+# start in this boot's journal yet, or a run that stopped before it), and
+# "ai": true when AI chat and questions are included, false when they are
+# left out, null when the run stopped before that was settled.
 # Only a SIGKILL leaves no final line. Everything else on stdout and stderr
 # is for people. A run that got past the run lock keeps the same final
 # object in /var/lib/domovoi-provision/result.json (a refused one leaves
@@ -176,6 +193,8 @@
 # system path this reads or writes (/etc, /var, /proc, /usr/local, ...). It
 # takes effect only together with DOMOVOI_PROVISION_TEST_HARNESS=1; either one
 # without the other makes the script refuse to run. Never set them on a host.
+# With both set, DOMOVOI_PROVISION_TEST_TTY=1 has the script take its stdin
+# for a terminal (the AI question), which a hermetic test can't give it.
 
 set -Eeuo pipefail
 
@@ -264,6 +283,10 @@ HEAD_SHA=""
 # The GPUs Ollama found (detect_gpus): a JSON list of names, [] for the
 # CPU alone, null while unknown.
 GPU_JSON=null
+# AI chat and questions (see the top of this file): yes or no once
+# settled (decide_ai), empty before; AI_WHY says where the answer came from.
+AI=""
+AI_WHY=""
 # 1 once this run is past its checks and holds the run lock: only then is
 # result.json its to write, and the restart question worth asking.
 STARTED=0
@@ -318,10 +341,11 @@ final_line() {
   [ "$result" != ok ] || pct=100
   STEP_ID=finish
   STEP_INDEX=$STEP_TOTAL
-  obj=$(printf '{"v":1,"step":"finish","index":%d,"total":%d,"state":"%s","percent":%d,"message":%s,"final":true,"result":"%s","restart_required":%s,"exit_code":%d,"failed_step":%s,"head":%s,"tier":%s,"wsl":%s,"gpu":%s,"warnings":%d,"dashboard":"%s"}' \
+  obj=$(printf '{"v":1,"step":"finish","index":%d,"total":%d,"state":"%s","percent":%d,"message":%s,"final":true,"result":"%s","restart_required":%s,"exit_code":%d,"failed_step":%s,"head":%s,"tier":%s,"wsl":%s,"gpu":%s,"ai":%s,"warnings":%d,"dashboard":"%s"}' \
     "$STEP_TOTAL" "$STEP_TOTAL" "$state" "$pct" "$(json_str "$msg")" "$result" \
     "$RESTART_REQUIRED" "$code" "$fs" "$head" "$(json_str "$TIER_EFF")" \
-    "$([ "$WSL" = 1 ] && echo true || echo false)" "$GPU_JSON" "$WARNINGS" "$DASHBOARD_URL")
+    "$([ "$WSL" = 1 ] && echo true || echo false)" "$GPU_JSON" \
+    "$(case $AI in yes) echo true ;; no) echo false ;; *) echo null ;; esac)" "$WARNINGS" "$DASHBOARD_URL")
   printf '%s%s\n' "$PROGRESS_PREFIX" "$obj"
   FINAL_EMITTED=1
   if [ "$STARTED" = 1 ] && [ "$DRY_RUN" = 0 ] && [ -d "$STATE_DIR" ]; then
@@ -483,6 +507,8 @@ MEDIA_ARGS=()
 WSL_OPT=auto
 SKIP_MODELS=0
 PULL_VISION=1
+# --ai-models / --no-ai-models: yes or no; empty, neither was given.
+AI_FLAG=""
 DRY_RUN=0
 HEALTH_TIMEOUT=900
 ALLOWED_SIGNERS=""
@@ -540,11 +566,26 @@ skipped, a killed run resumes, a changed option re-runs what it feeds.
                         in Settings or by hand is kept, with a warning.
   --wsl, --no-wsl       force WSL mode on or off (default: detected from the
                         kernel, the rule domovoi/host_kind.py uses)
+  --ai-models           include AI chat and questions (the default): pull
+                        the tier's AI models, about 6.4 GB (about 9.1 GB on
+                        a box with 24 GB of memory or more), and write
+                        AI_FEATURES=true in domovoi/.env
+  --no-ai-models        leave AI chat and questions out: no AI models are
+                        pulled, and AI_FEATURES=false. Voice commands,
+                        music, timers and everything else work either way;
+                        speech recognition, the voices and the wake word
+                        are installed as usual. Ollama itself is installed
+                        too, so AI can be turned on later on the dashboard
+                        (Settings, Models), which downloads the models then.
+                        With neither option: a box set up before keeps the
+                        answer in its domovoi/.env; otherwise the script
+                        asks once when run from a terminal (Enter: yes),
+                        and takes yes when it can't ask
   --no-vision-model     don't pull the tier's vision model, which reads
-                        pictures in chat (about 1.9 GB). It is still the one
-                        configured: chat then says it isn't installed, and
-                        an admin can install it later on the dashboard
-                        (Settings, Models)
+                        pictures in chat (about 1.9 GB, part of the sizes
+                        above). It is still the one configured: chat then
+                        says it isn't installed, and an admin can install
+                        it later on the dashboard (Settings, Models)
   --skip-models         no Ollama pulls and no Whisper download (tests)
   --allowed-signers F   install F as /etc/domovoi/allowed_signers first, so
                         HEAD and every later update must verify against it
@@ -604,12 +645,16 @@ while [ $# -gt 0 ]; do
         --stop-before) STOP_BEFORE=$val ;;
       esac
       ;;
-    --wsl|--no-wsl|--skip-models|--no-vision-model|--dry-run|--keep-downloads|-h|--help)
+    --wsl|--no-wsl|--skip-models|--no-vision-model|--ai-models|--no-ai-models|--dry-run|--keep-downloads|-h|--help)
       [ "$has_val" = 0 ] || usage_error "$opt takes no value"
       case $opt in
         --wsl) WSL_OPT=yes ;;
         --no-wsl) WSL_OPT=no ;;
         --skip-models) SKIP_MODELS=1 ;;
+        --ai-models|--no-ai-models)
+          a=yes; [ "$opt" = --ai-models ] || a=no
+          [ -z "$AI_FLAG" ] || [ "$AI_FLAG" = "$a" ] || usage_error "--ai-models and --no-ai-models: give one of them, not both"
+          AI_FLAG=$a ;;
         --no-vision-model) PULL_VISION=0 ;;
         --dry-run) DRY_RUN=1 ;;
         --keep-downloads) KEEP_DOWNLOADS=1 ;;
@@ -2600,6 +2645,8 @@ env_keys() {
   # Written whether it is pulled or not (--no-vision-model): chat then
   # names it as the one to install.
   echo "OLLAMA_VISION_MODEL=$(tier_vision)"
+  # AI chat and questions, the household's answer (decide_ai).
+  if [ "$AI" = no ]; then echo "AI_FEATURES=false"; else echo "AI_FEATURES=true"; fi
   if [ "$WSL" = 1 ]; then
     # WSL sees no removable drives, so USB adoption has nothing to scan.
     echo "SATELLITE_ADOPTION_ENABLED=false"
@@ -2614,8 +2661,13 @@ env_keys() {
 # this script creates has the template's value of each recorded as the
 # script's own, so a later run with another option still replaces it.
 ENV_MANAGED_KEYS=(WHISPER_MODEL WHISPER_DEVICE WHISPER_COMPUTE_TYPE OLLAMA_URL OLLAMA_MODEL
-  OLLAMA_TOOL_MODEL OLLAMA_TOOL_THINK OLLAMA_VISION_MODEL SATELLITE_ADOPTION_ENABLED MPD_HTTP_BASE
+  OLLAMA_TOOL_MODEL OLLAMA_TOOL_THINK OLLAMA_VISION_MODEL AI_FEATURES SATELLITE_ADOPTION_ENABLED MPD_HTTP_BASE
   MUSIC_DIR PICTURES_DIR DOCUMENTS_DIR AUDIOBOOKS_DIR PODCASTS_DIR VIDEOS_DIR)
+# Keys a checkout older than this script may have no setting for (an older
+# release installed with --ref, or stable before the release that has it):
+# its core ignores them (Settings reads .env with extra="ignore"), so the
+# verify step names them instead of failing.
+ENV_NEWER_KEYS=(AI_FEATURES)
 
 # What domovoi/.env assigns now to the keys in PROVISION_ENV_NAMES, as
 # KEY=VALUE lines, read the way the core reads it (env_bootstrap.env_values:
@@ -2642,11 +2694,15 @@ PY_ENV_VERIFY='#provision:env-verify
 import os, sys
 from domovoi.config import Settings
 s = Settings()
+newer = os.environ.get("PROVISION_ENV_NEWER", "").split()
 bad = []
 for l in os.environ["PROVISION_ENV_KEYS"].splitlines():
     if not l:
         continue
     k, v = l.split("=", 1)
+    if k in newer and k.lower() not in type(s).model_fields:
+        print("not-in-this-core %s" % k)
+        continue
     got = getattr(s, k.lower())
     if str(got).lower() != v.lower():
         bad.append("%s: the core would read %r, expected %r" % (k, got, v))
@@ -2665,6 +2721,8 @@ plan_env() {
     echo "tier $TIER_EFF (MemTotal ${MEM_MIB} MiB)"
     env_keys
     echo "(each written only when absent or still as this script last wrote it; a value changed in Settings or by hand is kept)"
+    if [ "$AI" = no ]; then echo "(AI_FEATURES=true instead with --ai-models)"
+    else echo "(AI_FEATURES=false instead with --no-ai-models)"; fi
   else
     echo "(the keys depend on the pin manifest, read after the clone)"
   fi
@@ -2754,8 +2812,23 @@ do_env() {
     warn "domovoi/.env: $k holds a value this script did not write (set in Settings, or by hand); left as it is (this run would have written ${want[$k]})"
   done
   if [ "${#write[@]}" -gt 0 ] || [ "${#same[@]}" -gt 0 ]; then
-    env_py "$PY_ENV_VERIFY" PROVISION_ENV_KEYS="$(for k in "${write[@]}" "${same[@]}"; do printf '%s=%s\n' "$k" "${want[$k]}"; done)" \
-      || die "the core would not read domovoi/.env as written"
+    if ! out=$(env_py "$PY_ENV_VERIFY" PROVISION_ENV_NEWER="${ENV_NEWER_KEYS[*]}" \
+        PROVISION_ENV_KEYS="$(for k in "${write[@]}" "${same[@]}"; do printf '%s=%s\n' "$k" "${want[$k]}"; done)"); then
+      [ -z "$out" ] || printf '%s\n' "$out"
+      die "the core would not read domovoi/.env as written"
+    fi
+    while IFS= read -r line; do
+      case $line in
+        "not-in-this-core AI_FEATURES")
+          if [ "$AI" = no ]; then
+            warn "domovoi/.env: AI_FEATURES=false is written, but the core of this checkout has no such setting yet: chat stays on its pages until an update brings it (the AI models are still left out)"
+          else
+            log "domovoi/.env: AI_FEATURES written for a later core (this checkout's core has no such setting yet)"
+          fi ;;
+        "not-in-this-core "*) log "domovoi/.env: ${line#not-in-this-core } written for a later core (this checkout's core has no such setting yet)" ;;
+        ?*) printf '%s\n' "$line" ;;
+      esac
+    done <<<"$out"
   fi
   # The start step restarts core and web when this hash moves: only when
   # this script changed the file (now, or in a run killed mid-way).
@@ -2998,7 +3071,19 @@ model_pairs() {
   fi
 }
 
-skip_models() { if [ "$SKIP_MODELS" = 1 ]; then echo "--skip-models: no Ollama models pulled"; return 0; fi; return 1; }
+skip_models() {
+  if [ "$SKIP_MODELS" = 1 ]; then echo "--skip-models: no Ollama models pulled"; return 0; fi
+  if [ "$AI" = no ]; then
+    echo "$AI_WHY: AI chat and questions are off; no AI models pulled (turn them on later in Settings, Models)"
+    return 0
+  fi
+  return 1
+}
+# The AI answer is not among these: a run that leaves AI out skips this
+# step before its inputs are read, and leaves its marker as it was. So a
+# later run that includes AI finds no marker (runs), or the marker of an
+# earlier run that pulled the same models, which check_models then holds
+# to Ollama's list (any one gone: it runs again).
 inputs_models() { model_pairs; }
 check_models() {
   local tag want
@@ -3007,6 +3092,7 @@ check_models() {
 plan_models() {
   model_pairs | sed 's/^/ollama pull /'
   if [ "$PULL_VISION" = 0 ]; then echo "(--no-vision-model: $(tier_vision) is not pulled)"; fi
+  echo "(--no-ai-models: none of these is pulled; Ollama itself is still installed)"
 }
 do_models() {
   local tag want got i=0 n
@@ -3786,6 +3872,11 @@ do_finish() {
     log "no setup code file at $code_file: the admin is already claimed, or the core has not written it yet"
   fi
   log "dashboard: $DASHBOARD_URL (the core on :6370)"
+  if [ "$AI" = no ]; then
+    log "AI chat and questions: off (turn them on later on the dashboard: Settings, Models)"
+  else
+    log "AI chat and questions: on"
+  fi
   detect_gpus
   if [ "$RESTART_REQUIRED" = true ]; then
     log "restart required: /etc/wsl.conf changed. Run 'wsl --terminate <this distro>' and start it again."
@@ -3820,9 +3911,72 @@ take_lock() {
   die "flock on $LOCK_FILE did not answer within 20 s"
 }
 
+# AI chat and questions (see the top of this file).
+
+# The AI question can be asked: stdin is a terminal (or, for the test
+# harness alone, DOMOVOI_PROVISION_TEST_TTY=1 says to take it for one).
+stdin_is_tty() {
+  [ -t 0 ] && return 0
+  [ -n "$ROOT" ] && [ "${DOMOVOI_PROVISION_TEST_TTY:-}" = 1 ]
+}
+
+# ask_ai: the one question this script asks, on stderr (stdout carries the
+# progress lines). Status 0 for yes (Enter, y, yes, or the end of input),
+# 1 for no (n, no); anything else asks again.
+ask_ai() {
+  local ans less=""
+  [ "$PULL_VISION" = 1 ] || less=" (--no-vision-model: about 1.9 GB less)"
+  while :; do
+    printf '\n%s\n%s [Y/n] ' \
+      "Include AI chat and questions? It downloads about 6.4 GB of AI models (about 9.1 GB on a box with 24 GB of memory or more)$less." \
+      "Voice commands, music, timers and everything else work either way." >&2
+    if ! IFS= read -r ans; then printf '\n' >&2; return 0; fi
+    # A terminal echoes the Enter; anything else (the harness) gets one.
+    [ -t 0 ] || printf '\n' >&2
+    ans=${ans//[[:space:]]/}
+    case ${ans,,} in
+      ""|y|yes) return 0 ;;
+      n|no) return 1 ;;
+    esac
+    printf '%s\n' "Please answer y (yes) or n (no)." >&2
+  done
+}
+
+# decide_ai: settle AI and AI_WHY. The option given; else the answer a box
+# set up before has in its domovoi/.env (as the household left it: Settings
+# may have changed it), never asked again; else the question, when it can
+# be asked; else yes.
+decide_ai() {
+  local prev=""
+  if [ -n "$AI_FLAG" ]; then
+    AI=$AI_FLAG
+    if [ "$AI" = yes ]; then AI_WHY=--ai-models; else AI_WHY=--no-ai-models; fi
+    return 0
+  fi
+  if [ "$(id -u)" = 0 ] && [ -f "$CHECKOUT/domovoi/.env" ]; then
+    prev=$(dotenv_get AI_FEATURES 2>/dev/null) || prev=""
+  fi
+  case ${prev,,} in
+    true|1|yes|on) AI=yes; AI_WHY="AI_FEATURES=true in domovoi/.env"; return 0 ;;
+    false|0|no|off) AI=no; AI_WHY="AI_FEATURES=false in domovoi/.env"; return 0 ;;
+  esac
+  if ! dry && stdin_is_tty; then
+    if ask_ai; then AI=yes; AI_WHY="answered yes"; else AI=no; AI_WHY="answered no"; fi
+    return 0
+  fi
+  AI=yes
+  AI_WHY="the default"
+}
+
 if [ "$DRY_RUN" = 0 ] && [ "$(id -u)" != 0 ]; then
   refuse 1 failed "run it as root (sudo bash $0 ...); --dry-run and --help work without"
 fi
+
+SVC_HOME=$(svc_home) || SVC_HOME=""
+[ -n "$SVC_HOME" ] || SVC_HOME=/home/$SVC_USER
+# Before the run lock: a run waiting at the question keeps no other one
+# waiting, and one stopped there (Ctrl-C) leaves result.json as it was.
+decide_ai
 
 TMP_DIR=$(mktemp -d)
 
@@ -3841,9 +3995,11 @@ log "repo $REPO_URL @ $REF -> $CHECKOUT as $SVC_USER; internet ${INTERNET:-unans
 if [ -n "$TIMEZONE_IGNORED" ]; then
   warn "--timezone $TIMEZONE_IGNORED is ignored on WSL: the distro's zone follows Windows, which WSL sets at every distro start (change it in Windows' settings)"
 fi
-
-SVC_HOME=$(svc_home) || SVC_HOME=""
-[ -n "$SVC_HOME" ] || SVC_HOME=/home/$SVC_USER
+if [ "$AI" = yes ]; then log "AI chat and questions: included ($AI_WHY)"
+else log "AI chat and questions: left out ($AI_WHY); Ollama is still installed, so they can be turned on later in Settings, Models"; fi
+if dry; then
+  log "dry run, either answer: --ai-models pulls the tier's AI models and writes AI_FEATURES=true; --no-ai-models skips the models step and writes AI_FEATURES=false (Whisper, the voices and Ollama are installed either way)"
+fi
 
 run_step preflight
 
