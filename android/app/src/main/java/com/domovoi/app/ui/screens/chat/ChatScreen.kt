@@ -135,9 +135,9 @@ internal data class ThreadRow(
     val title_by_user: Boolean = false,
     /** A search hit (`?q=`): the words around the match in a message. */
     val match_snippet: String? = null,
-    /** "Allow in this chat" is on (V037): lookups go without asking. */
+    /** "Allow in this chat" is on (V038): lookups go without asking. */
     val internet_allowed: Boolean = false,
-    /** A lookup in it went online (V037): the list's globe. */
+    /** A lookup in it went online (V038): the list's globe. */
     val used_internet: Boolean = false,
 )
 
@@ -178,7 +178,12 @@ internal data class MessageRow(
 )
 
 @Serializable
-internal data class MessageList(val messages: List<MessageRow> = emptyList())
+internal data class MessageList(
+    val messages: List<MessageRow> = emptyList(),
+    /** Long-document jobs (documents plan D2): running ones show their
+     *  progress, a stopped one lets its reply carry on. */
+    val jobs: List<ServerJobView> = emptyList(),
+)
 
 /** Documents per message the backend accepts (documents plan D1). */
 internal const val MAX_CHAT_DOCUMENTS = 4
@@ -248,6 +253,8 @@ internal class LiveMessage(
     var content by mutableStateOf(content)
     /** A reply's sources and notes about the chat's documents. */
     var doc by mutableStateOf(doc)
+    /** A long document read in parts for this pending reply: how far. */
+    var job by mutableStateOf<ServerJobView?>(null)
     var error by mutableStateOf(error)
     /** The server's code for [error] (`stats.error_code`, or the live
      *  stream's `error` event); null for an error this phone made. */
@@ -294,6 +301,8 @@ private suspend fun sendStreaming(
     /** (detail, code, model): the server's plain sentence and its code. */
     onError: (String, String?, String?) -> Unit,
     onDone: (MessageRow) -> Unit = {},
+    /** A long document's job (documents plan D2): its `job` and `progress` views. */
+    onJob: (ServerJobView) -> Unit = {},
     /** "Try again" (`POST .../retry`): no body, a new reply to the last
      *  question in place of the last reply. */
     retry: Boolean = false,
@@ -362,6 +371,9 @@ private suspend fun sendStreaming(
                             // The persisted row: its id, timestamp and model.
                             "done" -> payload.decode<MessageRow>().let {
                                 withContext(Dispatchers.Main) { onDone(it) }
+                            }
+                            "job", "progress" -> payload.decode<ServerJobView>().let {
+                                withContext(Dispatchers.Main) { onJob(it) }
                             }
                         }
                     }
@@ -456,12 +468,18 @@ internal fun ConversationPane(
     // server's replies too): the report sheet, over the conversation.
     var reporting by remember { mutableStateOf<ReplyReport?>(null) }
 
+    // The thread's long-document jobs (documents plan D2).
+    val jobs = remember { mutableStateListOf<ServerJobView>() }
+    var reloads by remember { mutableStateOf(0) }
     // A thread's messages, read from the server (opening it, and after
-    // "try again").
+    // "try again"), with its jobs.
     suspend fun loadMessages(threadId: Long) {
         runCatching {
-            app.api.get("/api/chat/threads/$threadId/messages").decode<MessageList>().messages
-        }.onSuccess { rows ->
+            app.api.get("/api/chat/threads/$threadId/messages").decode<MessageList>()
+        }.onSuccess { list ->
+            val rows = list.messages
+            jobs.clear()
+            jobs.addAll(list.jobs)
             transcript.clear()
             rows.forEach {
                 transcript.add(
@@ -487,7 +505,7 @@ internal fun ConversationPane(
         }
     }
     // A thread opened from the list: its messages. A new chat has none.
-    LaunchedEffect(thread?.id) {
+    LaunchedEffect(thread?.id, reloads) {
         if (thread != null) loadMessages(thread.id)
     }
     // Keep the newest message pinned to the bottom. Two triggers, because the
@@ -544,6 +562,26 @@ internal fun ConversationPane(
     }
     LaunchedEffect(transcript.size) {
         if (transcript.isNotEmpty()) listState.animateScrollToItem(transcript.size - 1)
+    }
+    // A job running in this chat that this screen didn't start (Chat was
+    // left and opened again, another device asked): its progress every two
+    // seconds until it ends, then the thread again (its reply is in).
+    val liveIds = jobs.filter { it.live }.joinToString(",") { it.id }
+    LaunchedEffect(liveIds, sending) {
+        if (liveIds.isEmpty() || sending) return@LaunchedEffect
+        while (true) {
+            kotlinx.coroutines.delay(2_000)
+            var ended = false
+            jobs.filter { it.live }.forEach { j ->
+                val v = runCatching { fetchJob(app, j.id) }.getOrNull()
+                if (v == null || !v.live) ended = true
+                else jobs.indexOfFirst { it.id == v.id }.takeIf { it >= 0 }?.let { jobs[it] = v }
+            }
+            if (ended) {
+                reloads++
+                return@LaunchedEffect
+            }
+        }
     }
     // Follow a streaming reply down as it grows — the size trigger above only
     // fires when a message is ADDED, and the reply grows inside one item.
@@ -692,6 +730,7 @@ internal fun ConversationPane(
                         if (model != null) live.model = model
                     },
                     onDone = { row -> live.finishWith(row) },
+                    onJob = { live.job = it },
                 )
             }.onFailure { live.error = failureText("send", it) }
             // Refused for want of the vision model: re-read what's installed,
@@ -701,6 +740,8 @@ internal fun ConversationPane(
             if (live.createdAt == null) live.createdAt = Instant.now().toString()
             live.pending = false
             sending = false
+            // A long summary that was stopped can carry on: the jobs again.
+            if (live.job != null) reloads++
         }
     }
 
@@ -833,6 +874,9 @@ internal fun ConversationPane(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                // A stopped summary: its newest reply offers "carry on".
+                val stopped = jobs.filter { it.state == "stopped" || it.state == "failed" }
+                val carryAt = stopped.associate { j -> j.id to transcript.indexOfLast { it.doc?.job?.id == j.id } }
                 itemsIndexed(transcript) { i, m ->
                     if (i == windowAt) WindowDivider()
                     // A lookup's permission card: the exact words, where they
@@ -843,12 +887,47 @@ internal fun ConversationPane(
                         return@itemsIndexed
                     }
                     // The draft is made at the tap, from the transcript then.
+                    val stoppedJob = m.doc?.job?.id?.let { id -> stopped.firstOrNull { it.id == id && carryAt[id] == i } }
                     MessageBubble(
                         m, threadId,
                         onReport = if (canReport(m)) ({ reporting = reportableAt(i) }) else null,
                         onSource = { openSource = it },
+                        carryOnLeft = stoppedJob?.let { it.parts - it.read }.takeIf { !sending },
+                        onCarryOn = {
+                            stoppedJob?.let { j ->
+                                scope.launch {
+                                    runCatching { resumeServerJob(app, j.id) }
+                                        .onSuccess { v -> jobs.indexOfFirst { it.id == v.id }.takeIf { it >= 0 }?.let { jobs[it] = v } }
+                                        .onFailure { toast(docFailureText("carry on", it)) }
+                                }
+                            }
+                        },
                         onRetry = if (i == transcript.lastIndex && !sending && canRetry(transcript)) ({ retry() }) else null,
                     )
+                }
+                // A job a restart interrupted: carried on only when asked.
+                if (!sending) {
+                    items(jobs.filter { it.state == "interrupted" }, key = { "int-" + it.id }) { j ->
+                        DocJobCard(j.line.ifEmpty { "this summary was interrupted — carry on?" }, j.read, j.parts, onStop = null,
+                            offer = carryOnText(j.parts - j.read), onOffer = {
+                                scope.launch {
+                                    runCatching { resumeServerJob(app, j.id) }
+                                        .onSuccess { v -> jobs.indexOfFirst { it.id == v.id }.takeIf { it >= 0 }?.let { jobs[it] = v } }
+                                        .onFailure { toast(docFailureText("carry on", it)) }
+                                }
+                            })
+                    }
+                }
+                // A job this screen didn't start, while it runs.
+                if (!sending) {
+                    items(jobs.filter { it.live }, key = { "job-" + it.id }) { j ->
+                        DocJobCard(j.line, j.read, j.parts, onStop = {
+                            scope.launch {
+                                runCatching { stopServerJob(app, j.id) }.onFailure { toast(docFailureText("stop", it)) }
+                                reloads++
+                            }
+                        })
+                    }
                 }
             }
         }
@@ -1164,6 +1243,9 @@ internal fun MessageBubble(
     onReport: (() -> Unit)? = null,
     onRetry: (() -> Unit)? = null,
     onSource: (SourceView) -> Unit = {},
+    /** A stopped summary's parts still to read: "carry on" shows (null: no). */
+    carryOnLeft: Int? = null,
+    onCarryOn: () -> Unit = {},
 ) {
     val app = LocalApp.current
     val context = LocalContext.current
@@ -1228,10 +1310,18 @@ internal fun MessageBubble(
                             color = Domovoi.colors.fg,
                         )
                     } else {
-                        MarkdownText(m.content, trailing = cursor)
+                        val job = m.job
+                        if (m.pending && job != null && m.content.isEmpty()) {
+                            // A long document read in parts: how far, and stop.
+                            DocJobCard(job.line.ifEmpty { "reading part ${job.part} of ${job.parts}" }, job.read, job.parts,
+                                onStop = if (job.live) ({ app.scope.launch { runCatching { stopServerJob(app, job.id) } } }) else null)
+                        } else {
+                            MarkdownText(m.content, trailing = cursor)
+                        }
                         if (!m.pending) {
                             val sources = serverSources(m.doc) { token -> { serverDocumentFile(app, context.cacheDir, token) } }
                             ReplyDocs(m.doc?.notes.orEmpty().map { it.text }, sources, onSource)
+                            carryOnLeft?.let { left -> CarryOnButton(left, onCarryOn) }
                         }
                     }
                     chatErrorView(m.error, m.errorCode, m.model)?.let { err ->

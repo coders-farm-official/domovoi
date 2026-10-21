@@ -79,7 +79,10 @@ yourself.
 Documents you attach or write in a phone chat stay in the app's private
 storage. A PDF this phone can't read itself goes to your Domovoi server
 only when you tap "ask the home server", which reads its text, sends it
-back and keeps nothing.
+back and keeps nothing. "Use home server" on a long summary is the same:
+the document goes to your own Domovoi server only when you tap it, is
+deleted there as soon as it has been read, and its text is held in memory
+only until the phone has the summary.
 
 ## What goes to your Domovoi server
 

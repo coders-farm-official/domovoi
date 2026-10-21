@@ -124,6 +124,11 @@ ADMIN_READ_TIER = [
     ("GET", "/v1/admin/satellite/{room_id}/logs"),
 ]
 
+# Device-tier reads (household token or admin Bearer).
+DEVICE_READS = [
+    ("GET", "/v1/voice/activity"),
+]
+
 
 def _dependency_calls(dependant: Any) -> Iterator[Any]:
     if dependant is None:
@@ -553,3 +558,21 @@ async def test_the_tiers_hold_against_the_real_tables(_db) -> None:
             "/v1/admin/announce", json=body, headers={HEADER: rotated}
         )
         assert r.status_code == 503, r.text
+
+
+@pytest.mark.parametrize(("method", "path"), DEVICE_READS, ids=[f"{m} {p}" for m, p in DEVICE_READS])
+def test_device_reads_are_on_the_device_tier(method, path) -> None:
+    gates = _gates_for(method, path)
+    assert admin_auth.require_device in gates
+    assert admin_auth.require_admin_mutation not in gates
+
+
+@pytest.mark.asyncio
+async def test_voice_activity_says_busy_and_nothing_else_to_the_household_token(monkeypatch) -> None:
+    """Documents plan D2, review round 1: refused with no credential after
+    setup; with the household token, {busy} only (no counts or timings)."""
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=DEVICE_TOKEN)
+    async with _client() as c:
+        assert (await c.get("/v1/voice/activity")).status_code == 401
+        r = await c.get("/v1/voice/activity", headers={HEADER: DEVICE_TOKEN})
+    assert r.status_code == 200 and r.json() == {"busy": False}

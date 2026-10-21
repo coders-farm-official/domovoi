@@ -6,12 +6,14 @@ package com.domovoi.app.assistant.docs
  *
  * - **The heads-up (D3)**: [check] is asked before a document reply is
  *   written and returns the card to show; D3 fills it in from the measured
- *   weak-spots table (`chat-weak-spots.json`). D1 shows none.
- * - **Map/reduce (D2)**: a summary of a document longer than one pass
- *   answers with [DocQa.summaryTooLongText] and no model call until then;
- *   [mapChunks] already groups parts into the ~3,500-token pieces a map step
- *   reads. "Summarize the whole thing" and "search the whole document" are
- *   not offered before they exist (no control that can't do what it says).
+ *   weak-spots table (`chat-weak-spots.json`). D1 and D2 show none. It is
+ *   also asked with mode "long_summary" before a long document's job starts
+ *   (AssistantController.startDocJob), where D3's "too big for the model"
+ *   card goes.
+ * - **Map/reduce** arrived with D2: [DocLong] and AssistantController's
+ *   document jobs. [mapChunks] is kept for its D1 callers. "Search the whole
+ *   document" is not offered before it exists (no control that can't do
+ *   what it says).
  */
 object DocHeadsUp {
     /** A heads-up card: what it says and its options. */

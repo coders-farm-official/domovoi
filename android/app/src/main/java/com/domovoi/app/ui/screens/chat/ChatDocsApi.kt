@@ -30,6 +30,14 @@ import java.io.File
  * and "Ask the home server" for a phone chat's PDF (POST
  * /api/chat/documents/extract: the text comes back, nothing is kept there,
  * and the answer is still written on the phone).
+ *
+ * Long documents (documents plan D2, web/backend/api/chat_doc_jobs.py): a
+ * summary read in parts by a job, its `job`/`progress` events and the
+ * thread's `jobs` ([ServerJobView]); stop and carry on; the home server's
+ * measured speed (GET /api/chat/doc-jobs/speed, for the phone chat's "use
+ * home server" offer); and a phone chat's private job (POST
+ * /api/chat/doc-jobs: the server keeps nothing, and the summary is written
+ * into the phone's conversation).
  */
 
 /** A document attached to a home-server chat (the upload's answer, and the
@@ -68,7 +76,136 @@ internal data class ServerDocReply(
     val found: Boolean = true,
     val sources: List<ServerSource> = emptyList(),
     val notes: List<DocNote> = emptyList(),
+    /** A summary a long-document job wrote: which job, and how far it read. */
+    val job: ServerJobRef? = null,
 )
+
+@Serializable
+internal data class ServerJobRef(val id: String = "", val state: String = "", val parts: Int = 0, val read: Int = 0)
+
+/** A job's result: the reply's text and `doc` (and, in a home-server chat,
+ *  the persisted message row). */
+@Serializable
+internal data class ServerJobResult(val content: String = "", val doc: ServerDocReply? = null)
+
+@Serializable
+internal data class ServerJobError(val detail: String = "", val code: String? = null)
+
+/** A long-document job as the server shows it (chat_doc_jobs.Job.view). */
+@Serializable
+internal data class ServerJobView(
+    val id: String = "",
+    /** running | reducing | stopped | failed | done */
+    val state: String = "",
+    val waiting_for_voice: Boolean = false,
+    val part: Int = 0,
+    val parts: Int = 0,
+    val read: Int = 0,
+    val eta_s: Double? = null,
+    val estimate_s: Double? = null,
+    val line: String = "",
+    val private: Boolean = false,
+    val thread_id: Long? = null,
+    val covers: String = "",
+    val result: ServerJobResult? = null,
+    val error: ServerJobError? = null,
+) {
+    val live: Boolean get() = state == "running" || state == "reducing"
+}
+
+/** `GET /api/chat/doc-jobs/speed`'s answer. */
+@Serializable
+internal data class ServerDocSpeed(val ai: Boolean = false, val estimate_s: Double? = null, val parts: Int? = null)
+
+internal suspend fun fetchDocSpeed(app: AppContainer, chars: Int): ServerDocSpeed = withContext(Dispatchers.IO) {
+    app.api.get("/api/chat/doc-jobs/speed?chars=$chars").decode<ServerDocSpeed>()
+}
+
+internal suspend fun fetchJob(app: AppContainer, id: String): ServerJobView = withContext(Dispatchers.IO) {
+    app.api.get("/api/chat/doc-jobs/$id").decode<ServerJobView>()
+}
+
+internal suspend fun stopServerJob(app: AppContainer, id: String): ServerJobView = withContext(Dispatchers.IO) {
+    app.api.post("/api/chat/doc-jobs/$id/stop").decode<ServerJobView>()
+}
+
+internal suspend fun resumeServerJob(app: AppContainer, id: String): ServerJobView = withContext(Dispatchers.IO) {
+    app.api.post("/api/chat/doc-jobs/$id/resume").decode<ServerJobView>()
+}
+
+internal suspend fun deleteServerJob(app: AppContainer, id: String) {
+    withContext(Dispatchers.IO) { runCatching { app.api.delete("/api/chat/doc-jobs/$id") } }
+}
+
+/** Reads an SSE body, calling [onEvent] (event, data) per frame. */
+internal fun readSseFrames(source: okio.BufferedSource, onEvent: (String, String) -> Unit) {
+    var event = "message"
+    val data = StringBuilder()
+    while (true) {
+        val line = source.readUtf8Line() ?: break
+        when {
+            line.startsWith("event: ") -> event = line.removePrefix("event: ").trim()
+            line.startsWith("data: ") -> data.append(line.removePrefix("data: "))
+            line.isEmpty() && data.isNotEmpty() -> {
+                onEvent(event, data.toString())
+                event = "message"
+                data.setLength(0)
+            }
+        }
+    }
+}
+
+/** A job event's view, or null for an event that isn't one. */
+internal fun jobEventView(event: String, data: String): ServerJobView? =
+    if (event in setOf("job", "progress", "done")) runCatching { DomovoiJson.decodeFromString(ServerJobView.serializer(), data) }.getOrNull() else null
+
+private fun streamJob(app: AppContainer, req: Request, onView: (String, ServerJobView) -> Unit): ServerJobView? {
+    var last: ServerJobView? = null
+    app.api.http.newCall(req).execute().use { resp ->
+        if (!resp.isSuccessful) throw ApiException(resp.code, "${resp.code} ${resp.message}", body = resp.body?.string().orEmpty().take(4096))
+        val source = resp.body?.source() ?: return null
+        readSseFrames(source) { event, data ->
+            if (event == "error") return@readSseFrames
+            jobEventView(event, data)?.let { v ->
+                last = v
+                onView(event, v)
+            }
+        }
+    }
+    return last
+}
+
+/**
+ * "Use home server": [file] goes to the home server's private job with the
+ * request, and its progress comes back to [onView] ("job", "progress",
+ * "done"). Returns the last view (the result on it), or throws.
+ */
+internal suspend fun runPrivateJob(app: AppContainer, file: File, name: String, question: String,
+                                   onView: (String, ServerJobView) -> Unit): ServerJobView? = withContext(Dispatchers.IO) {
+    val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+        .addFormDataPart("file", name, file.asRequestBody("application/octet-stream".toMediaType()))
+        .addFormDataPart("question", question)
+        .build()
+    val req = Request.Builder().url(app.api.absolute("/api/chat/doc-jobs"))
+        .header("X-Requested-With", "DomovoiApp").post(body).build()
+    streamJob(app, req, onView)
+}
+
+/** A job's progress from now on (coming back to one). */
+internal suspend fun followServerJob(app: AppContainer, id: String, onView: (String, ServerJobView) -> Unit): ServerJobView? =
+    withContext(Dispatchers.IO) {
+        val req = Request.Builder().url(app.api.absolute("/api/chat/doc-jobs/$id/events"))
+            .header("X-Requested-With", "DomovoiApp").get().build()
+        streamJob(app, req, onView)
+    }
+
+/** A server job's sources as the phone keeps them (the document's index in
+ *  the phone's conversation is the caller's to set). */
+internal fun phoneSourcesOf(doc: ServerDocReply?): List<com.domovoi.app.assistant.docs.DocSource> =
+    doc?.sources.orEmpty().map { s ->
+        com.domovoi.app.assistant.docs.DocSource(label = s.label, partLabel = s.label, text = s.text, match = s.match,
+            cited = s.cited, page = s.page)
+    }
 
 /** `POST /api/chat/documents/extract`'s answer. */
 @Serializable

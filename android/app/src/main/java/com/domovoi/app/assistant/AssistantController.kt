@@ -15,6 +15,8 @@ import com.domovoi.app.assistant.docs.DocCancel
 import com.domovoi.app.assistant.docs.DocExtract
 import com.domovoi.app.assistant.docs.DocExtraction
 import com.domovoi.app.assistant.docs.DocHeadsUp
+import com.domovoi.app.assistant.docs.DocLong
+import com.domovoi.app.assistant.docs.DocSource
 import com.domovoi.app.assistant.docs.DocNote
 import com.domovoi.app.assistant.docs.DocNotes
 import com.domovoi.app.assistant.docs.DocQa
@@ -38,6 +40,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -140,6 +143,9 @@ data class AssistantUi(
     val pendingPdf: PendingDocument? = null,
     /** Why the last attachment wasn't taken, in words, until closed. */
     val docProblem: String? = null,
+    /** A long document read in parts (documents plan D2), on this phone or
+     *  handed to the home server: how far it is, for the progress card. */
+    val docJob: DocJobView? = null,
 ) {
     val installed: Boolean get() = setup == ModelSetup.Installed
 
@@ -252,6 +258,10 @@ class AssistantController(
     /** Where phone chats' lookups go (assistant/lookup/); null: none, and
      *  the model is never told it could look anything up. */
     private val lookups: PhoneLookups? = null,
+    /** An 8K engine for long-document jobs, loaded on the GPU for the job
+     *  and released after (Fold bench 2026-10-21: 7.5 s, about 2 GB); null:
+     *  jobs run on the chat's own engine. */
+    private val newJobEngine: (() -> LlmEngine)? = null,
 ) {
     private val _state = MutableStateFlow(
         AssistantUi(
@@ -335,7 +345,10 @@ class AssistantController(
                 readHistory()
                 readReports()
             }
-            if (screensShowing > 0) prepare()
+            if (screensShowing > 0) {
+                prepare()
+                resumeJobIfAny()
+            }
             jobs.job.collect { onJob(it) }
         }
     }
@@ -708,7 +721,9 @@ class AssistantController(
         screensShowing++
         unloadTimer?.cancel()
         unloadTimer = null
+        jobPause = false
         refresh()
+        resumeJobIfAny()
     }
 
     /** The screen left (another tab, the app in the background): the model
@@ -719,6 +734,10 @@ class AssistantController(
         if (screensShowing > 0) return
         // The mic is open only while the assistant is on screen.
         if (_state.value.voicePhase == VoicePhase.Listening) voice?.stop()
+        // A long document's job pauses at the end of the part being read
+        // and carries on when Chat is back (plan part 4: no foreground
+        // service; a killed app loses at most one part).
+        if (_state.value.conversation.job?.state == PhoneDocJob.STATE_RUNNING) jobPause = true
         unloadTimer?.cancel()
         unloadTimer = scope.launch {
             delay(unloadAfterMs)
@@ -952,6 +971,7 @@ class AssistantController(
                 onDelta(held.toString())
             }
             val stats = llm.lastStats()
+            recordSpeed(backend, stats, Persona.SYSTEM_PROMPT.length + sentTurns.sumOf { it.text.length })
             // The sources line, written here, never by the model.
             val footer = help?.let { LocalHelp.footer(it, text.toString()) }.orEmpty()
             val said = if (footer.isEmpty()) text.toString() else text.toString().trimEnd() + "\n\n" + footer
@@ -1226,6 +1246,7 @@ class AssistantController(
 
     /** Stops the reply being written and any voice: what it has so far stays. */
     fun stop() {
+        if (_state.value.docJob != null && _state.value.replying) jobStopping = true
         voice?.stop()
         engine?.cancel()
         replyJob?.cancel()
@@ -1245,7 +1266,7 @@ class AssistantController(
         scope.launch {
             stopReply()
             settings.currentConversation = null
-            _state.update { it.copy(conversation = conversations.create(clock())) }
+            _state.update { it.copy(conversation = conversations.create(clock()), docJob = null) }
         }
     }
 
@@ -1258,7 +1279,8 @@ class AssistantController(
                 return@launch
             }
             settings.currentConversation = loaded.id
-            _state.update { it.copy(conversation = loaded) }
+            _state.update { it.copy(conversation = loaded, docJob = null) }
+            resumeJobIfAny()
         }
     }
 
@@ -1649,7 +1671,8 @@ class AssistantController(
         val mode = DocQa.chooseMode(question)
         DocHeadsUp.check(mode, qaDocs, question) // D3: the heads-up card; none in D1
         if (mode == "summary" && !DocQa.fitsOnePass(qaDocs, DocQa.PHONE_SINGLE_PASS_CHARS)) {
-            return finishReply(asked, own(DocQa.summaryTooLongText(names, asked.documents.sumOf { it.words }), "summary"))
+            // Longer than one pass: read in parts, then combined (D2).
+            return startDocJob(asked, question, onDelta)
         }
         val given = DocQa.retrieve(qaDocs, question, previous, mode = mode, singlePass = DocQa.PHONE_SINGLE_PASS_CHARS)
         if (given.isEmpty()) {
@@ -1706,9 +1729,443 @@ class AssistantController(
         )
     }
 
+    // ── Long documents: map/reduce in parts (documents plan, D2) ────────
+
+    /** Set when Chat leaves the screen: the job stops at the end of its part. */
+    @Volatile private var jobPause = false
+
+    /** Set by [stop] while a job runs: it keeps what it read and says so. */
+    @Volatile private var jobStopping = false
+
+    /** Set by [handOverToServer]: the job goes to the home server. */
+    @Volatile private var jobHandOver = false
+
+    /** When the part being read began (the time left counts down). */
+    @Volatile private var partStartedMs: Long? = null
+
+    private fun recordSpeed(backend: LlmBackend, stats: LlmStats?, promptChars: Int) {
+        val row = PhoneDocJobs.row(stats, promptChars) ?: return
+        runCatching { settings.speedRows = PhoneDocJobs.addRow(settings.speedRows, backend, row) }
+    }
+
+    /** This phone's measured speed on [backend], or the Fold's bench until
+     *  it has measured any ([DocLong.benchSpeed]). */
+    private fun measuredSpeed(backend: LlmBackend): com.domovoi.app.assistant.docs.DocSpeed =
+        PhoneDocJobs.speed(settings.speedRows, backend) ?: DocLong.benchSpeed(backend == LlmBackend.GPU)
+
+    private fun PhoneDocJob.engineBackend(): LlmBackend = if (backend == "GPU") LlmBackend.GPU else settings.backend
+
+    @Volatile private var jobEngine: LlmEngine? = null
+    @Volatile private var jobEngineBackend: LlmBackend? = null
+
+    /**
+     * The document job's engine: [newJobEngine] on the GPU (the chat's
+     * engine is closed first, for the memory). [cpuFallback]: a job whose
+     * parts were sized for the 8K GPU engine loads it on the CPU when the
+     * GPU won't load now (slower, but its parts fit). Null: none loads.
+     */
+    private suspend fun openJobEngine(cpuFallback: Boolean): Pair<LlmEngine, LlmBackend>? {
+        val make = newJobEngine ?: return null
+        jobEngine?.let { e -> if (e.isLoaded) return e to (jobEngineBackend ?: LlmBackend.GPU) }
+        closeEngine()
+        runCatching { beforeLoad() }
+        val file = store.fileFor(chatModel, chatModel.files.single())
+        for (b in if (cpuFallback) listOf(LlmBackend.GPU, LlmBackend.CPU) else listOf(LlmBackend.GPU)) {
+            val e = make()
+            try {
+                withContext(io) { e.load(file, b) }
+                jobEngine = e
+                jobEngineBackend = b
+                return e to b
+            } catch (c: CancellationException) {
+                runCatching { e.close() }
+                throw c
+            } catch (t: Throwable) {
+                runCatching { e.close() }
+                Log.i(TAG, "the document job's engine did not load on the ${b.label}: ${plainReason(t)}")
+            }
+        }
+        return null
+    }
+
+    private fun releaseJobEngine() {
+        jobEngine?.let { e -> runCatching { e.close() } }
+        jobEngine = null
+        jobEngineBackend = null
+    }
+
+    private suspend fun jobDocs(c: StoredConversation, job: PhoneDocJob): List<QaDoc>? =
+        job.docIds.map { id -> c.documents.firstOrNull { it.id == id }?.let { docParts(c.id, it) } ?: return null }
+
+    private fun showJob(c: StoredConversation, job: PhoneDocJob, names: List<String>, state: String) {
+        val eta = if (state == "reading" || state == "reducing") {
+            PhoneDocJobs.eta(job, measuredSpeed(job.engineBackend()), partStartedMs, clock(), state == "reducing")
+        } else {
+            null
+        }
+        val v = PhoneDocJobs.view(c.id, job, names, state, eta)
+        _state.update { if (it.conversation.id == c.id) it.copy(docJob = v, thinking = false) else it }
+    }
+
+    /** A summary job for the conversation's documents: planned, saved, run. */
+    private suspend fun startDocJob(asked: StoredConversation, question: String, onDelta: (String) -> Unit): StoredConversation {
+        val qaDocs = asked.documents.map { docParts(asked.id, it) }
+        // On the GPU when it loads (Fold bench: a 4K-token part in about 13 s
+        // there, against about a minute on the CPU), in bigger parts for its
+        // 8K window; otherwise the chat's CPU engine, with its honest, longer
+        // estimate.
+        val gpu = openJobEngine(cpuFallback = false)?.second == LlmBackend.GPU
+        val backend = if (gpu) LlmBackend.GPU else settings.backend
+        val chunks = DocLong.planChunks(qaDocs, if (gpu) DocLong.PHONE_GPU_MAP_CHUNK_TOKENS else DocLong.PHONE_MAP_CHUNK_TOKENS)
+        val estimate = DocLong.estimateSeconds(chunks.map { it.chars }, measuredSpeed(backend))
+        DocHeadsUp.check("long_summary", qaDocs, question) // D3: the heads-up card; none in D2
+        val job = PhoneDocJob(
+            id = PhoneDocJobs.newId(clock()), question = question, docIds = asked.documents.map { it.id },
+            chunks = chunks, notes = List(chunks.size) { null }, estimateMs = estimate?.let { (it * 1000).toLong() },
+            started = clock(), backend = if (gpu) "GPU" else "CPU",
+        )
+        val withJob = asked.copy(job = job)
+        withContext(NonCancellable) { save(withJob) }
+        _state.update { it.copy(conversation = withJob) }
+        return runDocJob(withJob, onDelta)
+    }
+
+    /** The conversation on screen has a job that isn't being run (Chat was
+     *  away, the app was killed): it carries on from its next part. */
+    private fun resumeJobIfAny() {
+        val ui = _state.value
+        val job = ui.conversation.job ?: return
+        if (screensShowing == 0 || ui.replying || !ui.installed) {
+            if (job.state == PhoneDocJob.STATE_PAUSED || job.state == PhoneDocJob.STATE_RUNNING) {
+                scope.launch { jobDocs(ui.conversation, job)?.let { showJob(ui.conversation, job, it.map { d -> d.name }, "paused") } }
+            }
+            return
+        }
+        when (job.state) {
+            PhoneDocJob.STATE_RUNNING, PhoneDocJob.STATE_PAUSED -> carryOnJob()
+            PhoneDocJob.STATE_SERVER -> scope.launch {
+                jobDocs(ui.conversation, job)?.let { showJob(ui.conversation, job, it.map { d -> d.name }, "server") }
+            }
+            // Waits for the person ("read it on this phone?").
+            PhoneDocJob.STATE_HELD -> scope.launch {
+                jobDocs(ui.conversation, job)?.let { showJob(ui.conversation, job, it.map { d -> d.name }, "held") }
+            }
+        }
+    }
+
+    /** "carry on": a stopped (or paused) job reads the parts it hasn't. */
+    fun carryOnJob() {
+        val ui = _state.value
+        val job = ui.conversation.job ?: return
+        if (ui.replying || voice?.active == true) return
+        val c = ui.conversation.copy(job = job.copy(state = PhoneDocJob.STATE_RUNNING, serverJob = null))
+        jobPause = false
+        _state.update { it.copy(conversation = c, replying = true, thinking = false) }
+        replyJob = scope.launch { runDocJob(c) {} }
+    }
+
+    /**
+     * Reads the job's parts not read yet, saving each part's notes as it
+     * finishes, then writes the summary. Leaving the screen pauses it at the
+     * end of the part; [stop] keeps what was read ("Summary of pages 1-9
+     * (stopped)"); [handOverToServer] hands it to the home server.
+     */
+    private suspend fun runDocJob(start: StoredConversation, onDelta: (String) -> Unit): StoredConversation {
+        var conv = start
+        var job = conv.job ?: return conv
+        val qaDocs = jobDocs(conv, job) ?: run {
+            val gone = conv.copy(job = null)
+            return finishReply(gone, StoredMessage(Speaker.DOMOVOI, "", clock(), error = "The document is no longer on this phone."))
+        }
+        val names = qaDocs.map { it.name }
+        var backend = settings.backend
+        jobStopping = false
+        jobHandOver = false
+        try {
+            val onJobEngine = if (job.backend == "GPU") openJobEngine(cpuFallback = true) else null
+            if (onJobEngine != null) backend = onJobEngine.second
+            val llm = onJobEngine?.first ?: ensureEngine() ?: run {
+                val why = (_state.value.engine as? EngineState.Failed)?.reason ?: "the model did not load"
+                return finishReply(conv, StoredMessage(Speaker.DOMOVOI, "", clock(), error = "The model could not start: $why"))
+            }
+            var reply: String
+            if (job.total == 1 && job.notes.firstOrNull() == null) {
+                // One part: the summary straight from it (no notes stage).
+                val given = DocLong.chunkGiven(job.chunks[0], qaDocs)
+                val prompt = DocQa.buildPrompt(job.question, given, names, mode = "summary")
+                partStartedMs = clock()
+                showJob(conv, job, names, "reducing")
+                val t0 = nanos()
+                reply = collectReply(llm, prompt.rules, prompt.user, DocLong.REDUCE_MAX_CHARS)
+                job = recordStep(job, backend, llm, Persona.SYSTEM_PROMPT.length + prompt.rules.length + prompt.user.length,
+                    job.chunks[0].chars, (nanos() - t0) / 1_000_000).let { it.copy(notes = listOf("")) }
+            } else {
+                for (i in job.chunks.indices) {
+                    if (job.notes.getOrNull(i) != null) continue
+                    if (jobPause) return pauseJob(conv, job, names)
+                    val p = DocLong.buildMapPrompt(job.chunks[i], qaDocs, i, job.total, job.question)
+                    partStartedMs = clock()
+                    showJob(conv, job, names, "reading")
+                    val t0 = nanos()
+                    val text = collectReply(llm, p.rules, p.user, DocLong.MAP_MAX_CHARS)
+                    val ms = (nanos() - t0) / 1_000_000
+                    val note = DocLong.cleanNote(text, p.given)
+                    job = recordStep(job, backend, llm, Persona.SYSTEM_PROMPT.length + p.rules.length + p.user.length, job.chunks[i].chars, ms)
+                        .let { j -> j.copy(notes = j.notes.toMutableList().also { it[i] = note }) }
+                    partStartedMs = null
+                    // A title written meanwhile (chat titles) is kept.
+                    conv = conv.copy(job = job).withMetaOf(_state.value.conversation)
+                    withContext(NonCancellable) { save(conv) }
+                    _state.update { if (it.conversation.id == conv.id) it.copy(conversation = conv) else it }
+                }
+                partStartedMs = clock()
+                showJob(conv, job, names, "reducing")
+                var notes = job.notes.map { it.orEmpty() }
+                // Sized for this phone's window (4K on the CPU, 8K on the GPU
+                // engine), not the server's (review round 1).
+                val reduceLimit = if (backend == LlmBackend.GPU && job.backend == "GPU") DocLong.PHONE_REDUCE_CHARS_GPU
+                    else DocLong.PHONE_REDUCE_CHARS_CPU
+                val all = DocLong.allGiven(qaDocs)
+                val noted = DocLong.notedLabels(notes, all)
+                while (true) {
+                    val groups = DocLong.reduceGroups(notes, reduceLimit)
+                    if (groups.size <= 1) break
+                    notes = groups.map { g ->
+                        val rp = DocLong.buildReducePrompt(g.map { notes[it] }, names, job.question)
+                        DocLong.keepSupportedLines(collectReply(llm, rp.rules, rp.user, DocLong.REDUCE_MAX_CHARS), all, noted)
+                            .ifEmpty { g.map { notes[it] }.filter { it.isNotBlank() }.joinToString("\n") }
+                    }
+                }
+                val rp = DocLong.buildReducePrompt(notes, names, job.question)
+                val t0 = nanos()
+                reply = collectReply(llm, rp.rules, rp.user, DocLong.REDUCE_MAX_CHARS)
+                job = recordStep(job, backend, llm, Persona.SYSTEM_PROMPT.length + rp.rules.length + rp.user.length, 0, (nanos() - t0) / 1_000_000, part = false)
+            }
+            partStartedMs = null
+            val all = DocLong.allGiven(qaDocs)
+            // Only lines citing a page some part's notes cited (review round
+            // 1): the combine step can't add a claim. None left: the notes.
+            val direct = job.total == 1
+            val noted = if (direct) DocLong.chunkGiven(job.chunks[0], qaDocs).map { DocQa.normLabel(it.cite) }.toSet()
+                else DocLong.notedLabels(job.notes, all)
+            val content = DocLong.keepSupportedLines(reply, all, noted)
+                .ifEmpty { job.notes.filterNotNull().filter { it.isNotBlank() }.joinToString("\n") }
+            val extra = (if (job.total > 1) listOf(DocLong.partsNote(job.total)) else emptyList()) +
+                listOfNotNull(if (direct) null else DocLong.nothingCitedNote(job.chunks, qaDocs, job.notes))
+            val done = conv.copy(job = null)
+            _state.update { it.copy(docJob = null) }
+            if (content.isEmpty()) {
+                onDelta(DocLong.NOTHING_CITED)
+                return finishReply(done, summaryMessage(DocLong.NOTHING_CITED, emptyList(), extra, job, backend))
+            }
+            val checked = DocQa.checkReply(content, all, job.question, names)
+            onDelta(checked.content)
+            return finishReply(done, summaryMessage(checked.content, citedSources(checked.sources, qaDocs), checked.notes + extra, job, backend))
+        } catch (e: CancellationException) {
+            partStartedMs = null
+            when {
+                jobStopping -> withContext(NonCancellable) { stopJobKeepingNotes(conv, job, qaDocs) }
+                jobHandOver -> withContext(NonCancellable) {
+                    val handed = conv.copy(job = job.copy(state = PhoneDocJob.STATE_SERVER))
+                    save(handed)
+                    _state.update { if (it.conversation.id == handed.id) it.copy(conversation = handed, replying = false, thinking = false) else it.copy(replying = false) }
+                }
+                else -> withContext(NonCancellable) { pauseJob(conv, job, names) }
+            }
+            throw e
+        } catch (e: Throwable) {
+            partStartedMs = null
+            Log.w(TAG, "a document job failed", e)
+            val kept = conv.copy(job = job.copy(state = PhoneDocJob.STATE_STOPPED))
+            _state.update { it.copy(docJob = null) }
+            val text = if (job.read > 0) DocLong.stoppedText(DocLong.readPhrase(job.chunks, qaDocs, job.read), job.notes.map { it.orEmpty() }) else ""
+            return finishReply(kept, StoredMessage(Speaker.DOMOVOI, text, clock(), error = "The model stopped: ${plainReason(e)}",
+                docMode = "summary", jobId = job.id))
+        } finally {
+            jobStopping = false
+            jobHandOver = false
+            // The GPU job engine's 2 GB go back as soon as the job does.
+            releaseJobEngine()
+        }
+    }
+
+    /** One job step's reply, stopped at [maxChars] (the server's output caps:
+     *  a step that runs on can't fill the window; review round 1). */
+    private suspend fun collectReply(llm: LlmEngine, rules: String, user: String, maxChars: Int): String {
+        val text = StringBuilder()
+        llm.reply(Persona.SYSTEM_PROMPT + "\n\n" + rules, listOf(ChatTurn(fromUser = true, text = user)), null)
+            .takeWhile { text.length < maxChars }
+            .collect { text.append(it) }
+        return text.toString()
+    }
+
+    private fun recordStep(job: PhoneDocJob, backend: LlmBackend, llm: LlmEngine, promptChars: Int, chars: Int, ms: Long, part: Boolean = true): PhoneDocJob {
+        val stats = llm.lastStats()
+        recordSpeed(backend, stats, promptChars)
+        val row = PhoneDocJobs.row(stats, promptChars)
+        return job.copy(
+            stats = PhoneDocJobs.plus(job.stats, row),
+            steps = job.steps + 1,
+            partMs = if (part) job.partMs + ms else job.partMs,
+            partChars = if (part) job.partChars + chars else job.partChars,
+        )
+    }
+
+    private suspend fun pauseJob(conv: StoredConversation, job: PhoneDocJob, names: List<String>): StoredConversation {
+        val paused = conv.copy(job = job.copy(state = PhoneDocJob.STATE_PAUSED))
+        save(paused)
+        _state.update {
+            if (it.conversation.id == paused.id) it.copy(conversation = paused, replying = false, thinking = false) else it.copy(replying = false, thinking = false)
+        }
+        showJob(paused, paused.job!!, names, "paused")
+        return paused
+    }
+
+    /** Stopped by the person: what was read so far is the reply, with no model call. */
+    private suspend fun stopJobKeepingNotes(conv: StoredConversation, job: PhoneDocJob, qaDocs: List<QaDoc>) {
+        val phrase = DocLong.readPhrase(job.chunks, qaDocs, job.read)
+        var text = DocLong.stoppedText(phrase, job.notes.map { it.orEmpty() })
+        var sources = emptyList<DocSource>()
+        if (job.read > 0) {
+            val checked = DocQa.checkReply(text, DocLong.allGiven(qaDocs))
+            if (checked.found) text = checked.content
+            sources = citedSources(checked.sources, qaDocs)
+        }
+        val kept = conv.copy(job = job.copy(state = PhoneDocJob.STATE_STOPPED))
+        _state.update { it.copy(docJob = null) }
+        finishReply(kept, StoredMessage(
+            Speaker.DOMOVOI, text, clock(), docMode = "summary", stopped = true, sources = sources,
+            notes = listOf(DocLong.stoppedNote(job.read, job.total, phrase)), jobId = job.id,
+        ))
+    }
+
+    private fun citedSources(sources: List<DocSource>, qaDocs: List<QaDoc>): List<DocSource> =
+        sources.filter { it.cited }.map { src -> src.copy(page = qaDocs.getOrNull(src.doc)?.parts?.getOrNull(src.part)?.page) }
+
+    private fun summaryMessage(text: String, sources: List<DocSource>, notes: List<com.domovoi.app.assistant.docs.DocNote>,
+                               job: PhoneDocJob, backend: LlmBackend): StoredMessage =
+        StoredMessage(Speaker.DOMOVOI, text, clock(), backend = backend.label, docMode = "summary", sources = sources,
+            notes = notes, jobId = job.id)
+
+    // ── "Use home server" (plan part 4, owner decision Q6) ─────────────
+
+    /**
+     * Hands the running job to the home server: the part being read here is
+     * abandoned (the notes so far stay with the conversation), the job is
+     * marked "server", and the screen gets what to send. Null when there is
+     * no job of one document to hand over.
+     */
+    suspend fun handOverToServer(): HandOver? {
+        val ui = _state.value
+        val c = ui.conversation
+        val job = c.job ?: return null
+        if (job.docIds.size != 1 || job.state == PhoneDocJob.STATE_STOPPED) return null
+        val d = c.documents.firstOrNull { it.id == job.docIds[0] } ?: return null
+        val file = docs?.file(c.id, d.id, d.name)?.takeIf { it.isFile } ?: return null
+        if (ui.replying) {
+            jobHandOver = true
+            engine?.cancel()
+            replyJob?.let { it.cancel(); it.join() }
+        } else {
+            val handed = c.copy(job = job.copy(state = PhoneDocJob.STATE_SERVER))
+            save(handed)
+            _state.update { it.copy(conversation = handed) }
+        }
+        val names = c.documents.filter { it.id in job.docIds }.map { it.name }
+        _state.update { s -> s.copy(docJob = s.conversation.job?.let { PhoneDocJobs.view(c.id, it, names, "server", null).copy(line = "sending ${d.name} to your home server…") }) }
+        return HandOver(c.id, job.id, file, d.name, job.question)
+    }
+
+    /** The home server took the job ([serverId]: its private job). */
+    fun serverJobStarted(conversation: String, serverId: String) {
+        scope.launch { updateJob(conversation) { it.copy(serverJob = serverId, state = PhoneDocJob.STATE_SERVER) } }
+    }
+
+    /** The home server's job id for [conversation]'s job as it stands now
+     *  (read at the moment it is needed, never from a captured screen state:
+     *  review round 2); null when there is none. */
+    fun serverJobOf(conversation: String): String? =
+        _state.value.conversation.takeIf { it.id == conversation }?.job?.serverJob
+            ?: conversations.load(conversation)?.job?.serverJob
+
+    /** The home server's progress line, for the card. */
+    fun serverProgress(conversation: String, line: String, read: Int, parts: Int, etaS: Double?) {
+        _state.update { s ->
+            val v = s.docJob
+            if (s.conversation.id != conversation || v == null) s
+            else s.copy(docJob = v.copy(state = "server", line = line, read = read, parts = parts, part = read, etaS = etaS))
+        }
+    }
+
+    /** The home server's summary: it becomes the reply here (marked as read
+     *  there), and the job ends. */
+    fun serverFinished(conversation: String, content: String, sources: List<DocSource>, notes: List<com.domovoi.app.assistant.docs.DocNote>, stopped: Boolean) {
+        scope.launch {
+            val c = _state.value.conversation.takeIf { it.id == conversation } ?: withContext(io) { conversations.load(conversation) } ?: return@launch
+            val job = c.job ?: return@launch
+            val msg = StoredMessage(Speaker.DOMOVOI, content, clock(), docMode = "summary", sources = sources,
+                notes = notes + PhoneDocJobs.SERVER_NOTE, jobId = job.id, stopped = stopped)
+            val done = c.copy(job = null, updated = clock(), messages = c.messages + msg)
+            withContext(NonCancellable) { save(done) }
+            _state.update { if (it.conversation.id == conversation) it.copy(conversation = done, docJob = null) else it }
+        }
+    }
+
+    /** The home server couldn't (it went, it lost the job): this phone reads on. */
+    fun serverFailed(conversation: String, why: String) {
+        // Said, and held for the person: no empty summary is filed, and
+        // nothing is read here until they say so (review round 1).
+        scope.launch {
+            updateJob(conversation) { it.copy(state = PhoneDocJob.STATE_HELD, serverJob = null) }
+            if (_state.value.conversation.id == conversation) {
+                _state.update { it.copy(docJob = null, docProblem = why) }
+                resumeJobIfAny()
+            }
+        }
+    }
+
+    private suspend fun updateJob(conversation: String, change: (PhoneDocJob) -> PhoneDocJob) {
+        val c = _state.value.conversation.takeIf { it.id == conversation } ?: withContext(io) { conversations.load(conversation) } ?: return
+        val job = c.job ?: return
+        val next = c.copy(job = change(job))
+        withContext(NonCancellable) { save(next) }
+        _state.update { if (it.conversation.id == conversation) it.copy(conversation = next) else it }
+    }
+
+    /** The time left on the card, read again (it counts down while a part
+     *  is read; the screen calls this every couple of seconds). */
+    fun tickJob() {
+        val ui = _state.value
+        val v = ui.docJob ?: return
+        val job = ui.conversation.job ?: return
+        if (v.state != "reading" && v.state != "reducing") return
+        val eta = PhoneDocJobs.eta(job, measuredSpeed(job.engineBackend()), partStartedMs, clock(), v.state == "reducing")
+        val line = com.domovoi.app.assistant.docs.DocLong.progressLine(v.state, v.part, v.parts, eta)
+        _state.update { it.copy(docJob = v.copy(etaS = eta, line = line)) }
+    }
+
+    /** The phone's own time left for the running job, seconds (the offer
+     *  compares the server's with it); null until something was measured. */
+    fun phoneEtaS(): Double? {
+        val job = _state.value.conversation.job ?: return null
+        return PhoneDocJobs.eta(job, measuredSpeed(job.engineBackend()), partStartedMs, clock(), false)
+    }
+
+    /** The bytes "use home server" would send (the job's one document). */
+    fun handOverBytes(): Long? {
+        val c = _state.value.conversation
+        val job = c.job ?: return null
+        if (job.docIds.size != 1) return null
+        val d = c.documents.firstOrNull { it.id == job.docIds[0] } ?: return null
+        return docs?.file(c.id, d.id, d.name)?.takeIf { it.isFile }?.length()
+    }
+
     companion object {
         /** A document taking longer than this to read is given up on. */
         const val DOC_READ_TIMEOUT_MS = 90_000L
+
+        /** The window of the engine a long-document job loads on the GPU. */
+        const val DOC_JOB_MAX_TOKENS = 8192
 
         /** Unload the model this long after the assistant leaves the screen. */
         const val UNLOAD_AFTER_MS = 5 * 60 * 1000L
@@ -1752,6 +2209,7 @@ class AssistantController(
                 docs = ChatDocStore(File(app.filesDir, "chat-docs/attachments")),
                 pdfText = { PhonePdfText.readerOrNull() },
                 lookups = lookups,
+                newJobEngine = { LiteRtLlmEngine(File(app.cacheDir, "litertlm"), maxTokens = DOC_JOB_MAX_TOKENS) },
             ).also { it.attach(app) }
         }
 

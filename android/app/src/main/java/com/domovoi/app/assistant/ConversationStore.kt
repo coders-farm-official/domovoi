@@ -68,6 +68,9 @@ data class StoredMessage(
     /** A reply from a lookup: what was fetched (the sources line under it
      *  is written from these, never by the model). */
     val lookupSources: List<SourceLine> = emptyList(),
+    /** A summary written by a long-document job ([PhoneDocJob.id]): a
+     *  stopped one offers "carry on" while the job is kept. */
+    val jobId: String? = null,
 ) {
     val fromUser: Boolean get() = from == Speaker.USER
 }
@@ -101,6 +104,9 @@ data class StoredConversation(
     val internetAllowed: Boolean = false,
     /** A lookup in this chat went online: the history list shows a globe. */
     val usedInternet: Boolean = false,
+    /** A long document being summarized in parts (documents plan D2): its
+     *  notes so far, so it carries on after the app was away. */
+    val job: PhoneDocJob? = null,
 ) {
     /** The history list's title: the name it was given, or the first five
      *  words of the first thing asked ([ChatTitles.firstWords]); "About

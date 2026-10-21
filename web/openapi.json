@@ -14246,6 +14246,312 @@
         }
       }
     },
+    "/api/chat/doc-jobs/speed": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Doc Speed",
+        "description": "This server's measured speed for documents, and (with ``chars``) how\nlong a summary of a document that long would take here: what a phone\ncompares with its own before it offers \"Use home server\". ``ai``\nfalse: the household turned AI features off (no offer).",
+        "operationId": "doc_speed_api_chat_doc_jobs_speed_get",
+        "parameters": [
+          {
+            "name": "chars",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 8000000,
+              "minimum": 0,
+              "default": 0,
+              "title": "Chars"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Doc Speed Api Chat Doc Jobs Speed Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/doc-jobs": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Start Private Job",
+        "description": "\"Use home server\" from a phone chat: summarize ``file`` here and send\nthe progress and the summary back over SSE (``event: job``, ``event:\nprogress``, ``event: done``). Nothing is kept: the file is deleted as\nsoon as it has been read, its text lives in this process's memory\nonly, and the job is forgotten when the phone deletes it\n(``DELETE /doc-jobs/{id}``), after 24 hours, or at a restart.",
+        "operationId": "start_private_job_api_chat_doc_jobs_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_start_private_job_api_chat_doc_jobs_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Start Private Job Api Chat Doc Jobs Post"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Too large: {\"detail\", \"code\": \"file_too_large\", \"max_mb\": 100}"
+          },
+          "415": {
+            "description": "Not a kind Chat reads: {\"detail\", \"code\": \"unsupported_format\" | \"old_format\"}"
+          },
+          "422": {
+            "description": "Couldn't be read: {\"detail\": the reason in a sentence, \"code\": \"unreadable\"}"
+          }
+        }
+      }
+    },
+    "/api/chat/doc-jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Get Job",
+        "description": "A job's progress, or its result once it ended (a phone coming back\nto a private job, a dashboard re-opening a chat).",
+        "operationId": "get_job_api_chat_doc_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Job Api Chat Doc Jobs  Job Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Delete Job",
+        "description": "A phone took its private job's summary: the job goes, its text with\nit. (A home-server chat's job goes with its chat.)",
+        "operationId": "delete_job_api_chat_doc_jobs__job_id__delete",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Job Api Chat Doc Jobs  Job Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/doc-jobs/{job_id}/events": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Job Stream",
+        "description": "The job's progress as SSE from now on (the same events as the start).",
+        "operationId": "job_stream_api_chat_doc_jobs__job_id__events_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/doc-jobs/{job_id}/stop": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Stop Job",
+        "description": "Stops the job: the part being read is abandoned, the notes kept, and\nthe reply is the summary of what was read (\"(stopped)\").",
+        "operationId": "stop_job_api_chat_doc_jobs__job_id__stop_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Stop Job Api Chat Doc Jobs  Job Id  Stop Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/doc-jobs/{job_id}/resume": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Resume Job",
+        "description": "Carry on: a stopped (or failed) home-server chat's job reads the parts\nit hasn't, then writes the whole summary as a new reply.",
+        "operationId": "resume_job_api_chat_doc_jobs__job_id__resume_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Resume Job Api Chat Doc Jobs  Job Id  Resume Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/help/search": {
       "get": {
         "tags": [
@@ -15958,6 +16264,26 @@
           "phone_id"
         ],
         "title": "Body_send_voice_api_chat_threads__thread_id__voice_post"
+      },
+      "Body_start_private_job_api_chat_doc_jobs_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          },
+          "question": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Question",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_start_private_job_api_chat_doc_jobs_post"
       },
       "Body_upload_api_chat_uploads_post": {
         "properties": {

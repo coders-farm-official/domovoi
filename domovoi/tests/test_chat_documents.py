@@ -254,7 +254,7 @@ def test_a_follow_up_uses_the_previous_question(model):
 
 
 @requires_db
-def test_a_summary_reads_a_short_document_whole_and_a_long_one_says_it_cant_yet(model):
+def test_a_summary_reads_a_short_document_whole_and_a_long_one_in_a_job(model):
     model.reply = "- Rent is $1,200 [p. 1]\n- Deposit $1,500 [p. 2]"
     with _client() as c:
         tok = _upload(c).json()["token"]
@@ -267,9 +267,11 @@ def test_a_summary_reads_a_short_document_whole_and_a_long_one_says_it_cant_yet(
         tok2 = _upload(c, "long.pdf", _pdf(long_pages)).json()["token"]
         tid2 = c.post("/api/chat/threads", json={}).json()["id"]
         done2, _ = _send(c, tid2, "give me an overview", [tok2])
-        assert len(model.calls) == 1               # no model call
-        assert "more than Domovoi can summarize in one go yet" in done2["content"]
-        assert done2["doc"]["found"] is False
+        # Longer than one pass: a job (chat_doc_jobs.py, D2) reads it; this
+        # one fits a single part, so one call writes the summary.
+        assert len(model.calls) == 2
+        assert done2["doc"]["mode"] == "summary" and done2["doc"]["job"]["parts"] == 1
+        assert done2["doc"]["found"] is True
 
 
 @requires_db

@@ -1,4 +1,4 @@
--- V037 — Chat lookups: a thread's internet permission, and whether it used it.
+-- V038 — Chat lookups: a thread's internet permission, and whether it used it.
 --
 -- A home-server chat may look things up (assistant plan part 5, W1:
 -- web/backend/api/chat.py). Before anything leaves the house the chat
@@ -15,8 +15,8 @@
 --                     Never set by a lookup that stayed in the house (the
 --                     manual, an offline library).
 --
--- (V034 chat titles, V035 the help desk and V036 chat documents are in
--- flight beside this; the numbers are in order once they all land.)
+-- (V034 chat titles, V035 the help desk, V036 chat documents and V037 document
+-- jobs landed beside this; the numbers are in order.)
 -- IF NOT EXISTS throughout, so a test lane patched by hand takes it again
 -- cleanly.
 

@@ -661,8 +661,13 @@ async def run_phone_turn(
         )
     _BUSY.add(room)
     try:
-        return await _answer(app, room=room, phone_id=phone_id, thread_id=thread_id,
-                             pcm=pcm, player=player or {}, speak=speak)
+        # A voice turn in progress (voice_activity.py): a home-server
+        # document job waits between its parts until it ends.
+        from domovoi import voice_activity
+
+        async with voice_activity.turn("phone"):
+            return await _answer(app, room=room, phone_id=phone_id, thread_id=thread_id,
+                                 pcm=pcm, player=player or {}, speak=speak)
     finally:
         _BUSY.discard(room)
 

@@ -40,6 +40,7 @@ from sqlalchemy import text  # noqa: E402
 from domovoi import admin_auth as admin_auth_mod  # noqa: E402
 from domovoi import git_version  # noqa: E402
 from domovoi import self_restart  # noqa: E402
+from domovoi import voice_activity  # noqa: E402
 from domovoi import server_identity  # noqa: E402
 from domovoi.container_guard import freeze as container_freeze  # noqa: E402
 from domovoi.admin_auth import (  # noqa: E402
@@ -971,6 +972,17 @@ from domovoi.printing.routes import router as printing_router  # noqa: E402
 app.include_router(printing_router)
 
 
+@app.get("/v1/voice/activity", dependencies=[Depends(require_device)])
+async def get_voice_activity() -> dict[str, Any]:
+    """Whether a voice turn is being answered now (domovoi/voice_activity.py):
+    ``{"busy"}`` and nothing else (review round 1: no counts or timings
+    over the device tier). The web process's document jobs ask before
+    every model call (parts and the combine step) and wait while it is
+    true, so a question in a room waits at most for the one call already
+    running. Device tier, like the turns themselves."""
+    return {"busy": bool(voice_activity.snapshot()["busy"])}
+
+
 @app.post(
     "/v1/intent",
     # Device tier: a turn here runs handlers as any room (it can play
@@ -987,8 +999,11 @@ async def post_intent(intent: Intent):
         online=probe.online,
         bot_name=settings.bot_name,
     )
-    async with session_scope() as s:
-        response = await route(intent, ctx, s)
+    # A voice turn in progress for its routing (voice_activity.py): a
+    # home-server document job waits between its parts while it runs.
+    async with voice_activity.turn("intent"):
+        async with session_scope() as s:
+            response = await route(intent, ctx, s)
 
     if not intent.synthesize:
         return response

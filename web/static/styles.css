@@ -1704,6 +1704,13 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .chat-passage-why { font-size: 11px; color: var(--fg-muted); align-self: center; }
 .chat-doc-ask-why { flex-basis: 100%; font-size: 11px; color: var(--fg-muted); }
 .chat-doc-checking { display: block; font-size: 11px; color: var(--fg-muted); }
+/* A long document read in parts (chat_documents.jsx JobProgress, D2). */
+.chat-doc-job { display: flex; flex-direction: column; gap: 6px; min-width: min(320px, 100%); max-width: 460px; padding: 8px 10px; background: var(--card); border: 1px solid var(--border); border-radius: var(--r-md); }
+.chat-doc-job-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.chat-doc-job-line { flex: 1; min-width: 0; font-size: 11px; color: var(--fg-muted); }
+.chat-doc-job-bar { height: 4px; border-radius: 999px; background: var(--border); overflow: hidden; }
+.chat-doc-job-bar > span { display: block; height: 100%; background: var(--brand); transition: width .4s ease; }
+.chat-doc-carry { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 @media (max-width: 760px) {
   .chat-more { width: 36px; height: 36px; }
   .chat-menu-item { min-height: 44px; }

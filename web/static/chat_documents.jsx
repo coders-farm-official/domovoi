@@ -17,7 +17,11 @@
  *     cited passage reads at full strength, one only read stays faint;
  *   * PassageSheet — a source opened: its label, the passage with the
  *     sentence that matched marked, and for a PDF "open page N", which
- *     opens the file in a new tab at #page=N.
+ *     opens the file in a new tab at #page=N;
+ *   * JobProgress — a long document read in parts (chat_doc_jobs.py, D2):
+ *     "reading part 3 of 8 · about 1 min left", a bar of the parts read,
+ *     and stop (what was read is kept: "Summary of pages 1-9 (stopped)");
+ *     a stopped reply offers "carry on" (DocAnswer's onCarryOn).
  * Every top-level name starts ChatDoc: page scripts share one scope.
  */
 
@@ -116,7 +120,72 @@ const ChatDocs = (() => {
     );
   };
 
-  const DocAnswer = ({ doc }) => {
+  // A job is live while it reads or writes the summary (chat_doc_jobs.LIVE).
+  const LIVE = ['running', 'reducing'];
+  const isLive = (job) => !!job && LIVE.includes(job.state);
+  const stopJob = (job) => apiPost(`/api/chat/doc-jobs/${job.id}/stop`, {});
+  const resumeJob = (job) => apiPost(`/api/chat/doc-jobs/${job.id}/resume`, {});
+
+  /* The progress of a long document's job: the server's own line (it
+   * words the time left from measured speeds), a bar of the parts read,
+   * and stop. */
+  const JobProgress = ({ job, onStop }) => {
+    const [stopping, setStopping] = React.useState(false);
+    if (!job) return null;
+    const pct = job.parts ? Math.round((100 * (job.read || 0)) / job.parts) : 0;
+    const stop = async () => {
+      setStopping(true);
+      try { await onStop(job); } catch { /* the next poll says how it stands */ }
+      setStopping(false);
+    };
+    const line = job.line || `reading part ${job.part || 1} of ${job.parts || 1}`;
+    return (
+      <div className="chat-doc-job" role="status" aria-live="polite">
+        <div className="chat-doc-job-row">
+          <span className="mono chat-doc-job-line">{line}</span>
+          {onStop && (
+            <Button icon="square" disabled={stopping} onClick={stop}
+                    title="stop reading; what was read so far is kept">
+              {stopping ? 'stopping…' : 'stop'}
+            </Button>
+          )}
+        </div>
+        <div className="chat-doc-job-bar" aria-hidden="true"><span style={{ width: `${pct}%` }}/></div>
+      </div>
+    );
+  };
+
+  /* "carry on" under a stopped summary: the job reads the parts it hasn't
+   * and writes the whole summary as a new reply. */
+  const CarryOn = ({ job, onCarryOn }) => {
+    const [busy, setBusy] = React.useState(false);
+    const [why, setWhy] = React.useState(null);
+    const go = async () => {
+      setBusy(true);
+      setWhy(null);
+      try { await onCarryOn(job); } catch (e) { setWhy(refusalText(e)); }
+      setBusy(false);
+    };
+    return (
+      <div className="chat-doc-carry">
+        <Button icon="play" disabled={busy} onClick={go}>
+          {busy ? 'starting…' : `carry on (${job.parts - job.read} part${job.parts - job.read === 1 ? '' : 's'} left)`}
+        </Button>
+        {why && <span className="chat-doc-ask-why" role="status">{why}</span>}
+      </div>
+    );
+  };
+
+  /* A job a restart interrupted (review round 1): it waits to be asked,
+   * "this summary was interrupted — carry on?". */
+  const JobInterrupted = ({ job, onCarryOn }) => (
+    <div className="chat-doc-job" role="status">
+      <span className="mono chat-doc-job-line">{job.line || 'this summary was interrupted — carry on?'}</span>
+      {job.state === 'interrupted' && <CarryOn job={job} onCarryOn={onCarryOn}/>}
+    </div>
+  );
+
+  const DocAnswer = ({ doc, stoppedJob, onCarryOn }) => {
     const [open, setOpen] = React.useState(null);
     const close = React.useCallback(() => setOpen(null), []);
     if (!doc) return null;
@@ -141,6 +210,7 @@ const ChatDocs = (() => {
             ))}
           </div>
         )}
+        {stoppedJob && onCarryOn && <CarryOn job={stoppedJob} onCarryOn={onCarryOn}/>}
         {open && <PassageSheet source={open} onClose={close}/>}
       </div>
     );
@@ -182,7 +252,7 @@ const ChatDocs = (() => {
   };
 
   return { ACCEPT, READS, isPicture, upload, refusalText, fileUrl, DocChip, DocAnswer, PassageSheet,
-           AskButton, extOf };
+           AskButton, extOf, JobProgress, JobInterrupted, isLive, stopJob, resumeJob };
 })();
 
 window.ChatDocs = ChatDocs;
