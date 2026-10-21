@@ -377,6 +377,11 @@ def check_manifest_drift(
                 f"— design §2.2)"
             )
     for cap in registered_caps:
+        # A lookup source has its own SDK call (ctx.add_lookup_source) and
+        # nothing consumes it by name: no manifest line is asked for, so a
+        # plugin can register one on a 1.8 core and still load on older.
+        if cap == "lookup-source":
+            continue
         if cap not in manifest.provides:
             report.warnings.append(
                 f"capability {cap!r} registered but not declared in the "
