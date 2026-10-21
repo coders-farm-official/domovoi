@@ -249,12 +249,63 @@ class ActionEvalTest {
         "I want to watch the video", "open the video", "play that video again", "never mind",
     )
 
+    /** Review round 2's 115 new near-misses (review-r2-probe.txt): everyday
+     *  senses of continue, next, play, hear, watch, put on, stop, turn off. */
+    private val reviewNear2: List<String> = listOf(
+        "continue the story", "continue where you left off", "please continue", "continue please", "can you continue",
+        "continue with the recipe", "continue writing", "ok continue", "go ahead and continue", "continue from step 3",
+        "next step", "what's next", "next please", "next week", "next time", "next tuesday", "the next one",
+        "next item on the list", "ok next", "next idea", "give me the next one", "skip to the next step",
+        "skip this question", "skip breakfast", "skip the small talk",
+        "play a game with me", "let's play a game", "play twenty questions", "play tic tac toe", "play devil's advocate",
+        "play along", "play nice", "play it safe", "play it cool", "play by the rules", "play a trick on my sister",
+        "play a role", "play the victim", "play dead", "play hide and seek", "play word games with me",
+        "play the part of a pirate", "play trivia", "play a riddle game", "play with words",
+        "let me hear your opinion", "I want to hear a story", "can I hear a joke", "let's hear your thoughts",
+        "I'd love to hear more", "let me hear it", "hear me out", "I hear you", "did you hear that", "let's hear the next one",
+        "watch your language", "watch my back", "watch the time", "watch the oven", "watch the weather",
+        "watch out for ice", "I want to watch the sunset", "watch this space", "watch me", "watch the baby",
+        "put on your thinking cap", "put on a show", "put on a brave face", "put on weight", "put on the kettle",
+        "put on some coffee", "put on a coat", "put on a pot of rice", "put on a happy face", "put on my shoes",
+        "stop talking", "stop worrying", "stop being silly", "stop the story", "stop asking questions",
+        "stop right there", "stop repeating yourself", "stop smoking tips", "stop it", "stop that",
+        "turn off the lights", "turn off the oven", "turn off the tv", "turn off wifi", "turn off my alarm",
+        "turn off do not disturb", "turn off the heating", "turn off airplane mode", "turn off the fan", "that's a turn off",
+        "start over", "listen to me", "listen carefully", "listen up", "resume my training plan",
+        "pause for a second and think", "turn up the heat", "play the next chapter of the story", "keep going with the list",
+        "show me another one", "back to the recipe", "go back to the first question", "repeat the last step",
+        "hear the birds", "listen to the kids", "put on a play", "play a song for me in your head",
+        "watch a tutorial on knots", "put on a podcast voice", "keep playing along",
+    )
+
+    /**
+     * The phone's library the eval runs against (review round 2: a "play"
+     * acts only on what the library holds, AssistantController.musicFor):
+     * the bench's music, and decoys whose titles hold "play" and "home".
+     */
+    private val library: List<Triple<String, String?, String?>> = listOf(
+        Triple("So What", "Miles Davis", "Kind of Blue"), Triple("Let It Be", "The Beatles", "Let It Be"),
+        Triple("Glass Harbor", "Velvet Kites", "Harbor Lights"), Triple("Paper Moon", "Velvet Kites", "Harbor Lights"),
+        Triple("Moment's Notice", "John Coltrane", "Blue Train"), Triple("Clair de Lune", "Claude Debussy", "Relaxing"),
+        Triple("Run Boy Run", "Woodkid", "Running"), Triple("Eye of the Tiger", "Survivor", "Workout"),
+        Triple("Play That Funky Music", "Wild Cherry", null), Triple("Games People Play", "Joe South", null),
+        Triple("Home", "Michael Bublé", null), Triple("To Build a Home", "The Cinematic Orchestra", null),
+        Triple("New Rules", "Dua Lipa", null), Triple("Kids in America", "Kim Wilde", null), Triple("Happy", "Pharrell Williams", null),
+    )
+    private val genres = listOf("Jazz", "Classical", "Rock", "Lo-Fi Beats", "Pop")
+
+    private fun inLibrary(a: PhoneAction): Boolean = a.query.isNullOrBlank() || genres.any { MusicEvidence.genre(a, it) } ||
+        library.withIndex().any { (i, s) ->
+            MusicEvidence.matches(a, com.domovoi.app.player.PlayItem.fromDeviceAudio(i.toLong(), s.first, s.second, s.third, 1.0, "x", null))
+        }
+
     /** What the product's fast paths do with [text], as the bench's tool
      *  call (name and arguments); null for no action. A read the bench
      *  doesn't score (the weather's "I can't", the clock) is no action. */
     private fun run(text: String, playback: Boolean = true): Pair<String, Map<String, Any?>>? {
         when (val ask = ActionPatterns.match(text, now, playback)) {
-            is ActionAsk.Do -> return toTool(ask.action)
+            // Not in the library: the controller hands it to the model.
+            is ActionAsk.Do -> if (ask.action.kind != ActionKind.PLAY_MUSIC || inLibrary(ask.action)) return toTool(ask.action) else return null
             ActionAsk.House, ActionAsk.Undo -> return "house_or_undo" to emptyMap()
             null -> Unit
         }
@@ -312,6 +363,13 @@ class ActionEvalTest {
         assertTrue("actions at 95% or better\n$report", pct >= 95.0)
         assertTrue("no false action on a near-miss\n$report", falseNear.isEmpty())
         assertTrue("no false action on chit-chat\n$report", falseChat.isEmpty())
+    }
+
+    @Test fun theSecondReviewsNearMissesNeverAct() {
+        assertEquals(115, reviewNear2.size)
+        val acted = reviewNear2.mapNotNull { t -> run(t, playback = false)?.let { "\"$t\" -> $it" } }
+        println("review round 2 near-misses: ${reviewNear2.size - acted.size}/${reviewNear2.size} left alone")
+        assertTrue("false actions on round 2's near-misses: " + acted.joinToString("; "), acted.isEmpty())
     }
 
     @Test fun theReviewsNearMissesNeverAct() {

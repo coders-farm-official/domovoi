@@ -54,6 +54,8 @@ class FakeActionHost(
     var songs: List<PlayItem>? = emptyList(),
     var books: List<BookChoice> = emptyList(),
     var videos: List<VideoChoice>? = emptyList(),
+    /** Genre name → its songs. */
+    var genreMap: Map<String, List<PlayItem>> = emptyMap(),
 ) : PhoneActionHost {
     val sent = CopyOnWriteArrayList<ClockRequest>()
     /** How long the Clock app takes to answer (a tap and a spoken yes can
@@ -68,6 +70,8 @@ class FakeActionHost(
     override suspend fun songs(query: String, limit: Int): List<PlayItem>? = songs?.filter {
         query.isBlank() || it.title.contains(query, true) || it.artist?.contains(query, true) == true || it.album?.contains(query, true) == true
     }?.take(limit)
+    override suspend fun genres(): List<String>? = if (songs == null) null else genreMap.keys.toList()
+    override suspend fun genreSongs(name: String, limit: Int): List<PlayItem>? = genreMap[name]?.take(limit)
     override suspend fun books() = books
     override suspend fun videos(query: String, limit: Int) = videos?.filter { it.title.contains(query, true) }?.take(limit)
 }
@@ -312,6 +316,7 @@ class PhoneActionsControllerTest {
         listOf("pause", "next", "go back", "stop", "set a sleep timer for 20 minutes", "play some jazz", "continue my book").forEach { said ->
             playing("Glass Harbor", "Blue Train", "Clair de Lune", index = 1, pos = 42.0)
             host.songs = listOf(song(7, "Jazz Night"), song(8, "Jazz Morning"))
+            host.genreMap = mapOf("Jazz" to host.songs!!)
             host.books = listOf(BookChoice(book(), "Dune", "Frank Herbert", 3725.0, 1.25f, 100))
             val before = player.state
             val r = c.ask(said)
@@ -367,7 +372,7 @@ class PhoneActionsControllerTest {
         phone.serverSet = true
         val c = controller()
         val r = c.ask("pause")
-        assertEquals("That's a house thing — ask in a home-server chat.", r.text)
+        assertEquals(PhoneQuestions.HOUSE_THINGS, r.text)
         assertFalse("the room is never named", r.text.contains("kitchen"))
         assertTrue(player.calls.isEmpty())
     }
@@ -382,9 +387,11 @@ class PhoneActionsControllerTest {
         val all = c.ask("shuffle my music")
         assertTrue(all.text, all.text.endsWith(", then 2 more, shuffled."))
         assertEquals(setOf(1L, 2L, 3L), player.state.queue.map { it.id }.toSet())
-        assertEquals("I can't find any music matching \"polka\" on this phone.", c.ask("play polka").text)
+        // Nothing in the library by that name: not an action, the model's.
+        assertNull(c.ask("play polka").fastPath)
         host.songs = null
-        assertEquals(ActionTexts.NO_MUSIC_PERMISSION, c.ask("play some jazz").text)
+        assertEquals(ActionTexts.NO_MUSIC_PERMISSION, c.ask("play some music by velvet kites").text)
+        assertNull("no permission, no music word: the model's", c.ask("put on my shoes").fastPath)
     }
 
     @Test fun aSavedBookContinuesAtItsPlace() {
@@ -422,10 +429,10 @@ class PhoneActionsControllerTest {
         phone.serverSet = true
         val c = controller()
         val r = c.ask("play jazz in the kitchen")
-        assertEquals("That's a house thing — ask in a home-server chat.", r.text)
+        assertEquals(PhoneQuestions.HOUSE_THINGS, r.text)
         assertNull(r.card)
-        assertEquals(ActionTexts.HOUSE, c.ask("cancel the kitchen timer").text)
-        assertEquals(ActionTexts.HOUSE, c.ask("set a timer for 10 minutes in the kitchen").text)
+        assertEquals(PhoneQuestions.HOUSE_THINGS, c.ask("cancel the kitchen timer").text)
+        assertEquals(PhoneQuestions.HOUSE_THINGS, c.ask("set a timer for 10 minutes in the kitchen").text)
         assertTrue(player.calls.isEmpty())
         assertTrue(engines.isEmpty())
     }
@@ -447,7 +454,7 @@ class PhoneActionsControllerTest {
         }
         player.casting = "larkspur"
         val r = c.ask("next")
-        assertEquals(ActionTexts.HOUSE, r.text)
+        assertEquals(PhoneQuestions.HOUSE_THINGS, r.text)
         assertFalse(r.text.contains("larkspur"))
     }
 
@@ -498,7 +505,7 @@ class PhoneActionsControllerTest {
         player.casting = "kitchen" // cast from the Music screen
         player.calls.clear()
         val r = c.ask("undo")
-        assertEquals(ActionTexts.HOUSE, r.text)
+        assertEquals(PhoneQuestions.HOUSE_THINGS, r.text)
         assertEquals(AssistantController.FAST_ACTION_HOUSE, r.fastPath)
         assertTrue("nothing reaches the room: ${player.calls}", player.calls.isEmpty())
         // The button too.
@@ -610,5 +617,167 @@ class PhoneActionsControllerTest {
         assertEquals(ClockRequest(ClockIntent.SHOW_TIMERS, skipUi = false), host.sent.last())
         host.clockIntents = setOf(ClockIntent.SET_TIMER)
         assertFalse("no button when nothing opens them", c.clockOpens(done))
+    }
+
+    // ── Review round 2 ──────────────────────────────────────────────────
+
+    private fun timerCardTapped(): Pair<AssistantController, String> {
+        val c = controller()
+        c.ask("set a timer for 10 minutes")
+        val id = c.state.value.conversation.id
+        host.clockDelayMs = 300
+        c.actionConfirmed(id, 1)
+        until("the tap is in the Clock app call") { host.sent.size == 1 }
+        return c to id
+    }
+
+    private fun diskCard(id: String, i: Int) = conversations.load(id)!!.messages[i].card?.state
+
+    @Test fun aTapThenAModelQuestionKeepsTheCardTaken() {
+        script = { _, emit -> kotlinx.coroutines.delay(600); emit("Rome is the capital of Italy.") }
+        val (c, id) = timerCardTapped()
+        assertEquals(CardState.SENDING, diskCard(id, 1))
+        c.ask("what is the capital of italy and why is it famous")
+        until("the tap's DONE") { c.card(1)?.state == CardState.DONE }
+        Thread.sleep(300)
+        assertEquals(CardState.DONE, c.card(1)?.state)
+        assertEquals(CardState.DONE, diskCard(id, 1))
+        host.clockDelayMs = 0
+        c.actionConfirmed(id, 1)
+        Thread.sleep(400)
+        assertEquals("exactly one request", 1, host.sent.size)
+    }
+
+    @Test fun aTapThenHmmIsAlreadyAnswered() {
+        val (c, _) = timerCardTapped()
+        val r = c.ask("hmm")
+        assertEquals(ActionTexts.ALREADY_ANSWERED, r.text)
+        assertNull("no second card", r.card)
+        assertEquals(CardState.DONE, c.card(1)?.state)
+        host.clockDelayMs = 0
+        c.ask("yes")
+        assertEquals("exactly one request", 1, host.sent.size)
+    }
+
+    @Test fun aTapThenNoIsAlreadyAnswered() {
+        val (c, id) = timerCardTapped()
+        val r = c.ask("no")
+        assertEquals(ActionTexts.ALREADY_ANSWERED, r.text)
+        assertEquals(CardState.DONE, c.card(1)?.state)
+        assertEquals(CardState.DONE, diskCard(id, 1))
+        assertEquals(1, host.sent.size)
+    }
+
+    @Test fun aTapThenANewChatKeepsTheCardDoneOnDisk() {
+        val (c, id) = timerCardTapped()
+        c.newConversation()
+        until("a new chat") { c.state.value.conversation.id != id }
+        until("the tap's DONE on disk") { diskCard(id, 1) == CardState.DONE }
+        c.open(id)
+        until("reopened") { c.state.value.conversation.id == id }
+        assertEquals(CardState.DONE, c.card(1)?.state)
+        host.clockDelayMs = 0
+        c.actionConfirmed(id, 1)
+        Thread.sleep(400)
+        assertEquals("exactly one request", 1, host.sent.size)
+    }
+
+    @Test fun nextOneAfterAJokeIsTheModelsEvenWhileMusicPlays() {
+        playing("Glass Harbor", "Paper Moon")
+        script = { _, emit -> emit("Why did the fox cross the road?") }
+        val c = controller()
+        c.ask("tell me a joke")
+        assertNull(c.ask("next one").fastPath)
+        c.ask("tell me a story")
+        assertNull(c.ask("continue").fastPath)
+        assertNull(c.ask("keep going").fastPath)
+        assertTrue("the player was never touched: ${player.calls}", player.calls.isEmpty())
+        // After a playback turn, "next one" is the player's again.
+        c.ask("pause")
+        assertEquals("action_next", c.ask("next one").fastPath)
+    }
+
+    @Test fun aModelTurnEndsTheUndo() {
+        playing("Glass Harbor")
+        val c = controller()
+        c.ask("pause")
+        c.ask("tell me a joke")
+        assertEquals(ActionTexts.NOTHING_TO_UNDO, c.ask("undo").text)
+        c.ask("play")
+        c.ask("pause")
+        c.ask("what time is it")
+        assertEquals(ActionTexts.NOTHING_TO_UNDO, c.ask("undo").text)
+        assertFalse(player.calls.contains("restore"))
+    }
+
+    @Test fun undoAfterThePersonResumedItThemselvesIsRefused() {
+        playing("A", "B", "C")
+        val c = controller()
+        c.ask("pause")
+        player.state = player.state.copy(playing = true, positionSec = 50.0)
+        assertEquals(ActionTexts.UNDO_CHANGED, c.ask("undo").text)
+        assertFalse(player.calls.contains("restore"))
+    }
+
+    /** The A/B's real requests (review round 2, ab-probe.txt), each in the library. */
+    private val realTitles = listOf(
+        "Sweater Weather" to "play Sweater Weather", "Deck the Halls" to "play Deck the Halls", "Your Song" to "play Your Song",
+        "Piano Man" to "play Piano Man", "Story of My Life" to "play Story of My Life", "To Build a Home" to "play To Build a Home",
+        "The Smile" to "play The Smile", "Smile" to "play Smile by Lily Allen", "Jumper" to "play Jumper",
+        "Fool in the Rain" to "play Fool in the Rain", "Guitar Man" to "play Guitar Man", "Harmonica Blues" to "play Harmonica Blues",
+        "Coat of Many Colors" to "play Coat of Many Colors", "Your Love Is My Drug" to "play Your Love Is My Drug",
+        "His Eyes" to "play His Eyes", "Their Way" to "play Their Way", "To Zion" to "play To Zion",
+        "Trick of the Light" to "play Trick of the Light", "Movies" to "play Movies by Weezer", "Stories" to "play Stories",
+        "Jokes" to "play Jokes", "Film" to "play Film", "Hat" to "play Hat", "Drums of Death" to "play Drums of Death",
+        "Scarf" to "play Scarf", "Prank" to "play Prank", "Harmonica Song" to "play the harmonica song",
+        "Sweater Weather" to "put on Sweater Weather", "Your Song" to "listen to Your Song", "Piano Man" to "let me hear Piano Man",
+        "One" to "play One", "Please Please Me" to "play Please Please Me", "Here" to "play Here", "New" to "play New",
+        "Long Game" to "play Long Game", "Some Nights" to "play Some Nights", "My Way" to "play My Way",
+        "That's Life" to "play That's Life", "New Rules" to "play New Rules",
+    )
+
+    private fun library(): List<PlayItem> = realTitles.map { it.first }.distinct().mapIndexed { i, t ->
+        when (t) {
+            "Smile" -> song(100L + i, t, "Lily Allen")
+            "Movies" -> song(100L + i, t, "Weezer")
+            else -> song(100L + i, t)
+        }
+    } + listOf(song(90, "Lone Rider", "Video Age"))
+
+    @Test fun realSongTitlesInTheLibraryPlay() {
+        host.songs = library()
+        val c = controller()
+        val missed = realTitles.filter { (title, said) ->
+            val r = c.ask(said)
+            r.fastPath != "action_play_music" || player.state.current?.title != title
+        }
+        assertEquals("every title plays: $missed", emptyList<Pair<String, String>>(), missed)
+        assertEquals("action_play_music", c.ask("play songs by Video Age").fastPath)
+    }
+
+    /** Review round 2's near-misses that still played (review-r2-probe.txt). */
+    private val stillPlayed = listOf(
+        "play tic tac toe", "play by the rules", "play word games with me", "play the part of a pirate", "let's hear the next one",
+        "put on some coffee", "put on a happy face", "put on my shoes", "play the next chapter of the story", "listen to the kids",
+        "put on a play", "play a song for me in your head", "put on a podcast voice",
+    )
+
+    @Test fun nearMissesNeverPlayEvenWithPlayAndHomeInTheLibrary() {
+        host.songs = listOf(
+            song(1, "Play That Funky Music", "Wild Cherry"), song(2, "Games People Play"), song(3, "Home", "Michael Bublé"),
+            song(4, "To Build a Home", "The Cinematic Orchestra"), song(5, "Coffee Shop Blues"), song(6, "New Rules"),
+            song(7, "Kids in America"), song(8, "Happy"),
+        )
+        host.genreMap = mapOf("Pop" to host.songs!!.take(2), "Jazz" to listOf(song(9, "Blue in Green")))
+        script = { _, emit -> emit("Sure.") }
+        val c = controller()
+        for (said in stillPlayed) {
+            val r = c.ask(said)
+            assertNull("$said -> ${r.text}", r.fastPath)
+        }
+        assertTrue("nothing played: ${player.calls}", player.calls.isEmpty())
+        // The library still answers real requests, a genre among them.
+        assertEquals("Playing \"Blue in Green\".", c.ask("play some jazz").text)
+        assertEquals("action_play_music", c.ask("play home").fastPath)
     }
 }

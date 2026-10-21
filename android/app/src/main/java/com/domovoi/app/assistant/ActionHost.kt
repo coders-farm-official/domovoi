@@ -38,7 +38,8 @@ data class ClockRequest(
  */
 class ClockPacer(
     private val gapMs: Long = GAP_MS,
-    private val nowMs: () -> Long = System::currentTimeMillis,
+    /** Monotonic: a wall-clock change never stretches the wait. */
+    private val nowMs: () -> Long = { System.nanoTime() / 1_000_000 },
     private val pause: suspend (Long) -> Unit = { delay(it) },
 ) {
     private val lock = Mutex()
@@ -46,7 +47,8 @@ class ClockPacer(
 
     suspend fun <T> send(block: suspend () -> T): T = lock.withLock {
         lastMs?.let { last ->
-            val wait = gapMs - (nowMs() - last)
+            // Never longer than the gap, whatever the clock says.
+            val wait = (gapMs - (nowMs() - last)).coerceAtMost(gapMs)
             if (wait > 0) pause(wait)
         }
         try {
@@ -130,6 +132,13 @@ interface PhoneActionHost {
     /** The phone's songs matching [query] (empty: all), as queue items;
      *  null without the music permission. */
     suspend fun songs(query: String, limit: Int): List<PlayItem>? = null
+
+    /** The genres of the phone's songs, by name; null without the music
+     *  permission. */
+    suspend fun genres(): List<String>? = emptyList()
+
+    /** The phone's songs in genre [name] (as [genres] gave it). */
+    suspend fun genreSongs(name: String, limit: Int): List<PlayItem>? = emptyList()
 
     /** The books saved whole on the phone. */
     suspend fun books(): List<BookChoice> = emptyList()
@@ -294,9 +303,9 @@ object ActionTexts {
         ClockIntent.SHOW_ALARMS -> "This phone has no clock app that can show its alarms."
     }
 
-    /** House actions (rooms, house timers, the home server): one line,
-     *  owner's wording (2026-10-21). Phone chats are phone-only. */
-    const val HOUSE = "That's a house thing — ask in a home-server chat."
+    /** A card a tap (or a yes) already took. */
+    const val ALREADY_ANSWERED = "That's already answered."
+    const val SENDING_LINE = "sending to the Clock app"
 
     const val NOTHING_TO_UNDO = "There's nothing to undo."
     const val UNDO_CHANGED = "The player has changed since then, so I left it as it is."

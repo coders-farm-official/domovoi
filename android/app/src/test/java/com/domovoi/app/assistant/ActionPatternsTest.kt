@@ -220,11 +220,11 @@ class ActionPatternsTest {
     // ── Review round 2 (wf/phone-actions) ───────────────────────────────
 
     @Test fun searchVerbsNeedARealQuery() {
+        // Pronouns only: nothing to look for. (Whether any other words are
+        // music is the library's to say: MusicEvidenceTest and the
+        // controller's library tests.)
         listOf(
-            "let's hear it", "can I hear it", "Can I hear that again?", "let's hear a joke", "listen to your heart",
-            "listen to this joke", "put on a sweater", "put on a smile", "put on a movie", "play a joke on him",
-            "play a prank on my brother", "play hooky", "play the fool", "play the long game", "play the harmonica",
-            "start a new playlist", "play something to make me laugh", "shuffle the deck",
+            "let's hear it", "can I hear it", "Can I hear that again?", "play that again",
             "I want to watch the video", "open the video", "Can I watch a video?", "play that video again",
         ).forEach { assertNull(it, ActionPatterns.match(it, afternoon)) }
         // Real queries still go.

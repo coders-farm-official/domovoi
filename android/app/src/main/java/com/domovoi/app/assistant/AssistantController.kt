@@ -805,9 +805,12 @@ class AssistantController(
         // A retry's question is already on disk with the reply it may
         // replace: that copy stays until the new reply is finished.
         if (retryingFrom == null) save(asked)
-        clockReply(asked, onDelta)?.let { return it }
-        if (asked.documents.isNotEmpty()) return docReply(asked, onDelta)
+        // Any turn that isn't an action (the model's, the clock, a phone
+        // question) ends the Undo, so "undo" only reaches the turn before.
+        clockReply(asked, onDelta)?.let { undoEntry = null; return it }
+        if (asked.documents.isNotEmpty()) { undoEntry = null; return docReply(asked, onDelta) }
         actionTurn(asked, onDelta)?.let { return it }
+        undoEntry = null
         phoneReply(asked, onDelta)?.let { return it }
         // A question about Domovoi: the manual on the phone (LocalHelp).
         val help = helpTurn(asked)
@@ -951,6 +954,9 @@ class AssistantController(
         val undoAfter: PlayerSnapshot? = null,
         /** An earlier card this turn marks: (its index, its new state). */
         val mark: Pair<Int, CardState>? = null,
+        /** Not an action after all (a "play" whose words aren't in the
+         *  library): the turn goes on to the model. */
+        val notAnAction: Boolean = false,
     )
 
     /** The Undo on screen: the player as it was before the last action done
@@ -970,6 +976,9 @@ class AssistantController(
     /** One action at a time: a tap and a spoken yes can't both run a card. */
     private val actionLock = Mutex()
 
+    /** A card's state and a finished reply reach the disk one at a time. */
+    private val diskLock = Mutex()
+
     /**
      * An action turn (N2), answered with no model: a yes or no to the card
      * just asked; "undo"; or one of [ActionPatterns]. Null: not an action
@@ -982,25 +991,29 @@ class AssistantController(
         // it, anything short and unclear asks again; a longer sentence is a
         // new question and leaves the card as it is.
         val cardIndex = asked.messages.lastIndex - 1
-        val pending = asked.messages.getOrNull(cardIndex)?.card?.takeIf { it.kind == CardKind.ACTION && it.state == CardState.OPEN }
+        // Open, or SENDING (a tap is in the Clock app call): a reply to it
+        // then waits for the tap and hears it's already answered.
+        val pending = asked.messages.getOrNull(cardIndex)?.card
+            ?.takeIf { it.kind == CardKind.ACTION && (it.state == CardState.OPEN || it.state == CardState.SENDING) }
         var isUndo = false
-        val out: ActionOutcome? = if (pending != null) {
-            when (actionReply(question.text)) {
-                ActionReply.Yes -> actionLock.withLock {
-                    // A tap on the card got there first: nothing runs twice,
-                    // and the card keeps the state the tap gave it (this
-                    // turn's copy of the conversation still has it open).
-                    val now = _state.value.conversation.takeIf { it.id == asked.id }?.messages?.getOrNull(cardIndex)?.card
-                    if (now != null && now.state != CardState.OPEN) {
-                        ActionOutcome("That's already answered.", FAST_ACTION_YES, mark = cardIndex to now.state)
-                    } else {
-                        val (ran, line) = runConfirmed(pending)
-                        val st = if (ran) CardState.DONE else CardState.FAILED
-                        // Marked before the lock goes: a tap waiting on it
-                        // sees the card answered.
-                        markCardNow(asked.id, cardIndex, st)
-                        ActionOutcome(line, FAST_ACTION_YES, mark = cardIndex to st)
-                    }
+        val reply0 = if (pending != null) actionReply(question.text) else null
+        val out: ActionOutcome? = if (pending != null && reply0 != null) actionLock.withLock {
+            // A tap on the card got there first (it is SENDING or DONE):
+            // nothing runs twice, and the card keeps the state the tap gave
+            // it (this turn's copy of the conversation still has it open).
+            val now = cardNow(asked.id, cardIndex)
+            if (now != null && now.state != CardState.OPEN) {
+                return@withLock ActionOutcome(ActionTexts.ALREADY_ANSWERED, FAST_ACTION_YES, mark = cardIndex to now.state)
+            }
+            when (reply0) {
+                ActionReply.Yes -> {
+                    markCard(asked.id, cardIndex, CardState.SENDING)
+                    val (ran, line) = runConfirmed(pending)
+                    val st = if (ran) CardState.DONE else CardState.FAILED
+                    // Marked before the lock goes: a tap waiting on it sees
+                    // the card answered.
+                    markCard(asked.id, cardIndex, st)
+                    ActionOutcome(line, FAST_ACTION_YES, mark = cardIndex to st)
                 }
                 ActionReply.No -> ActionOutcome(ActionTexts.DECLINED, FAST_ACTION_NO, mark = cardIndex to CardState.DISMISSED)
                 ActionReply.Unclear -> {
@@ -1013,7 +1026,6 @@ class AssistantController(
                         mark = cardIndex to CardState.REPLACED,
                     )
                 }
-                null -> null
             }
         } else {
             null
@@ -1028,10 +1040,12 @@ class AssistantController(
             val ask = ActionPatterns.match(question.text, now, playback = playbackContext(asked)) ?: return null
             isUndo = ask == ActionAsk.Undo
             when (ask) {
-                ActionAsk.House -> ActionOutcome(ActionTexts.HOUSE, FAST_ACTION_HOUSE)
+                ActionAsk.House -> ActionOutcome(PhoneQuestions.HOUSE_THINGS, FAST_ACTION_HOUSE)
                 ActionAsk.Undo -> undoNow(asked.id)
                 is ActionAsk.Do -> try {
-                    actionLock.withLock { runAction(ask.action, question.text) }
+                    // "put on my shoes": not in the library, so not music;
+                    // the model answers it as chat.
+                    actionLock.withLock { runAction(ask.action, question.text) }.takeIf { !it.notAnAction } ?: return null
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -1056,6 +1070,23 @@ class AssistantController(
             undoEntry = null
         }
         return finishReply(base, reply)
+    }
+
+    /** This conversation with each card at least as far along as in [other]. */
+    private fun StoredConversation.keepingCards(other: StoredConversation?): StoredConversation {
+        if (other == null || other.id != id) return this
+        var changed = false
+        val out = messages.mapIndexed { i, m ->
+            val mine = m.card ?: return@mapIndexed m
+            val theirs = other.messages.getOrNull(i)?.card ?: return@mapIndexed m
+            if (theirs.kind == mine.kind && theirs.state.rank > mine.state.rank) {
+                changed = true
+                m.copy(card = mine.copy(state = theirs.state))
+            } else {
+                m
+            }
+        }
+        return if (changed) copy(messages = out) else this
     }
 
     private fun StoredConversation.withCard(index: Int, card: PhoneCard): StoredConversation =
@@ -1111,7 +1142,11 @@ class AssistantController(
     private suspend fun playback(a: PhoneAction, fp: String): ActionOutcome {
         val player = actions.player ?: return ActionOutcome(ActionTexts.NO_PLAYER, fp)
         // Casting to a room: that's the house's, and the room isn't named.
-        if (player.castingTo() != null) return ActionOutcome(ActionTexts.HOUSE, FAST_ACTION_HOUSE)
+        // "put on my shoes", "listen to the kids": a "play" acts only on
+        // what the library holds (MusicEvidence), before anything else.
+        val songs = if (a.kind == ActionKind.PLAY_MUSIC) musicFor(a) else null
+        if (songs is MusicPick.NotMusic) return ActionOutcome("", fp, notAnAction = true)
+        if (player.castingTo() != null) return ActionOutcome(PhoneQuestions.HOUSE_THINGS, FAST_ACTION_HOUSE)
         val before = player.snapshot()
         fun said(text: String) = ActionOutcome(text, fp)
         val text: String = when (a.kind) {
@@ -1155,16 +1190,19 @@ class AssistantController(
             }
             ActionKind.PLAY_MUSIC -> {
                 val q = a.query.orEmpty()
-                val found = findSongs(q) ?: return said(ActionTexts.NO_MUSIC_PERMISSION)
-                if (found.isEmpty()) {
-                    // "play jazz in the larkspur": nothing on the phone has
-                    // that name, so it's a room the patterns don't know.
-                    if (Regex(" (?:in|on) (?:the|my|our) [a-z' ]{2,40}$").containsMatchIn(q)) return ActionOutcome(ActionTexts.HOUSE, FAST_ACTION_HOUSE)
-                    return said(if (q.isEmpty()) "There's no music saved on this phone." else "I can't find any music matching \"$q\" on this phone.")
+                val found = when (songs) {
+                    is MusicPick.Found -> songs.items
+                    MusicPick.NoPermission -> return said(ActionTexts.NO_MUSIC_PERMISSION)
+                    MusicPick.House -> return ActionOutcome(PhoneQuestions.HOUSE_THINGS, FAST_ACTION_HOUSE)
+                    else -> emptyList()
                 }
+                if (found.isEmpty()) return said("There's no music saved on this phone.")
                 val items = if (a.shuffle) found.shuffled(random) else found
                 // A song asked for by its name starts the queue.
-                val start = if (a.shuffle || q.isEmpty()) 0 else items.indexOfFirst { it.title.equals(q, ignoreCase = true) }.coerceAtLeast(0)
+                // The words as said first ("the smile" is The Smile, not Smile).
+                val start = if (a.shuffle || q.isEmpty()) 0 else listOfNotNull(a.phrase, q).firstNotNullOfOrNull { said ->
+                    items.indexOfFirst { it.title.equals(said.trim(), ignoreCase = true) }.takeIf { it >= 0 }
+                } ?: items.indexOfFirst { MusicEvidence.words(it.title) == MusicEvidence.words(q) }.coerceAtLeast(0)
                 player.play(items, start)
                 val first = items[start]
                 "Playing \"${first.title}\"" + (first.artist?.takeIf { it.isNotBlank() }?.let { " by $it" } ?: "") +
@@ -1191,12 +1229,14 @@ class AssistantController(
      *  the last playback turn. */
     private suspend fun playbackContext(asked: StoredConversation): Boolean {
         val last = asked.messages.dropLast(1).lastOrNull { !it.fromUser }
+        // The model spoke last (a joke, a story): "next one" and "continue"
+        // are for it, whatever is playing.
+        if (last != null && last.fastPath == null) return false
         if (last?.fastPath in PLAYBACK_FAST_PATHS) return true
+        // A fresh chat (or a phone question before): playing or paused music.
         val player = actions.player ?: return false
         val s = runCatching { player.snapshot() }.getOrNull() ?: return false
-        if (s.playing) return true
-        // Paused: the player's unless the model spoke last (a story, a joke).
-        return !s.empty && (last == null || last.fastPath != null)
+        return s.playing || !s.empty
     }
 
     private fun bookMatches(b: BookChoice, q: String): Boolean {
@@ -1205,22 +1245,40 @@ class AssistantController(
         return b.title.contains(q, ignoreCase = true) || (words.isNotEmpty() && words.all { it in have })
     }
 
-    /** The phone's songs for [q]: as written; "X by Y" as a title by an
-     *  artist; then every word of it, wherever it is. Null: no permission. */
-    private suspend fun findSongs(q: String): List<com.domovoi.app.player.PlayItem>? {
-        val exact = actions.songs(q, MUSIC_LIMIT) ?: return null
-        if (exact.isNotEmpty() || q.isBlank()) return exact
-        Regex("^(.+?) by (.+)$").matchEntire(q)?.let { m ->
-            val (title, artist) = m.destructured
-            actions.songs(title, MUSIC_LIMIT).orEmpty().filter { it.artist?.contains(artist, ignoreCase = true) == true }
-                .takeIf { it.isNotEmpty() }?.let { return it }
+    /** What a "play" finds in the phone's library. */
+    private sealed interface MusicPick {
+        data class Found(val items: List<com.domovoi.app.player.PlayItem>) : MusicPick
+        data object NoPermission : MusicPick
+        /** Nothing has that name, and it ends like a room ("in the larkspur"). */
+        data object House : MusicPick
+        /** Nothing in the library is what was asked for: not music. */
+        data object NotMusic : MusicPick
+    }
+
+    /**
+     * The phone's songs for [a], by library evidence only (MusicEvidence): a
+     * title, artist, album or genre the words really name, as a phrase. "Play
+     * music" (no query) is every song. No permission: the permission line
+     * only when the words say music ("play some music by …"); otherwise the
+     * library can't vouch for it, and it is the model's.
+     */
+    private suspend fun musicFor(a: PhoneAction): MusicPick {
+        val q = a.query.orEmpty()
+        if (q.isBlank()) return actions.songs("", MUSIC_LIMIT)?.let { MusicPick.Found(it) } ?: MusicPick.NoPermission
+        val genres = actions.genres()
+        val searched = (MusicEvidence.asked(a) + listOfNotNull(Regex("^(.+?) by .+$").matchEntire(q)?.groupValues?.get(1)))
+            .distinct().map { actions.songs(it, MUSIC_LIMIT * 4) }
+        if (genres == null || searched.any { it == null }) {
+            val musicWords = Regex("\\b(?:music|songs?|album|playlist|artist|band|tracks?|tunes)\\b")
+            return if (musicWords.containsMatchIn(a.phrase ?: q)) MusicPick.NoPermission else MusicPick.NotMusic
         }
-        val words = searchWords(q).filter { it != "by" }
-        if (words.size < 2) return exact
-        return actions.songs(words.maxBy { it.length }, MUSIC_LIMIT * 4).orEmpty().filter { item ->
-            val have = searchWords(listOfNotNull(item.title, item.artist, item.album).joinToString(" "))
-            words.all { it in have }
-        }.take(MUSIC_LIMIT)
+        val byName = searched.flatMap { it.orEmpty() }.distinctBy { it.uid }.filter { MusicEvidence.matches(a, it) }
+        val byGenre = genres.filter { MusicEvidence.genre(a, it) }.flatMap { actions.genreSongs(it, MUSIC_LIMIT).orEmpty() }
+        val items = (byName + byGenre).distinctBy { it.uid }.take(MUSIC_LIMIT)
+        if (items.isNotEmpty()) return MusicPick.Found(items)
+        // "play jazz in the larkspur": a room the patterns don't know.
+        if (Regex(" (?:in|on) (?:the|my|our) [a-z' ]{2,40}$").containsMatchIn(q)) return MusicPick.House
+        return MusicPick.NotMusic
     }
 
     /** The phone's videos for [q] (as written, then every word: "glacier
@@ -1244,7 +1302,7 @@ class AssistantController(
             ?: return ActionOutcome(ActionTexts.NOTHING_TO_UNDO, FAST_ACTION_UNDO)
         return when (val r = undoRun(e)) {
             null -> ActionOutcome(undoneText(e.before), FAST_ACTION_UNDO, mark = e.index to CardState.DONE)
-            ActionTexts.HOUSE -> ActionOutcome(r, FAST_ACTION_HOUSE)
+            PhoneQuestions.HOUSE_THINGS -> ActionOutcome(r, FAST_ACTION_HOUSE)
             else -> ActionOutcome(r, FAST_ACTION_UNDO)
         }
     }
@@ -1256,11 +1314,13 @@ class AssistantController(
         // A later action (or the other Undo) got there first.
         if (undoEntry != e) return@withLock ActionTexts.NOTHING_TO_UNDO
         val player = actions.player ?: return@withLock ActionTexts.NO_PLAYER
-        if (player.castingTo() != null) return@withLock ActionTexts.HOUSE
+        if (player.castingTo() != null) return@withLock PhoneQuestions.HOUSE_THINGS
         val after = e.after
         if (after != null) {
             val now = player.snapshot()
-            val moved = now.queue.map { it.uid } != after.queue.map { it.uid } || (!now.empty && now.index != after.index)
+            // Another queue, another song, or played or paused since.
+            val moved = now.queue.map { it.uid } != after.queue.map { it.uid } ||
+                (!now.empty && (now.index != after.index || now.playing != after.playing))
             if (moved) {
                 undoEntry = null
                 return@withLock ActionTexts.UNDO_CHANGED
@@ -1311,29 +1371,45 @@ class AssistantController(
             val card = _state.value.conversation.takeIf { it.id == conversationId }?.messages?.getOrNull(index)?.card
                 ?.takeIf { it.kind == CardKind.ACTION && it.state == CardState.OPEN } ?: return@launch
             val (ran, line) = actionLock.withLock {
-                // Answered meanwhile (a spoken yes, a second tap): nothing
-                // runs twice. The card is marked before the lock goes.
-                val still = _state.value.conversation.takeIf { it.id == conversationId }?.messages?.getOrNull(index)?.card
-                if (still?.state != CardState.OPEN) return@launch
+                // Answered meanwhile (a spoken yes, a no, a second tap):
+                // nothing runs twice.
+                if (cardNow(conversationId, index)?.state != CardState.OPEN) return@launch
+                // SENDING, on screen and on disk, before the Clock call: a
+                // reply finishing meanwhile, a "hmm", a "no" or a new chat
+                // all see it taken.
+                markCard(conversationId, index, CardState.SENDING)
                 runConfirmed(card).also { (ran, _) ->
-                    markCardNow(conversationId, index, if (ran) CardState.DONE else CardState.FAILED)
+                    markCard(conversationId, index, if (ran) CardState.DONE else CardState.FAILED)
                 }
             }
             if (!ran) say(line.lowercase().removeSuffix("."))
         }
     }
 
-    /** Marks card [index] of the conversation on screen [state] at once (the
-     *  disk follows), so a second tap sees it already answered. */
-    private fun markCardNow(conversationId: String, index: Int, state: CardState) {
-        var changed: StoredConversation? = null
+    /** Card [index] of conversation [conversationId] as it stands now: the
+     *  screen's copy, else the disk's. */
+    private suspend fun cardNow(conversationId: String, index: Int): PhoneCard? =
+        (_state.value.conversation.takeIf { it.id == conversationId } ?: withContext(io) { conversations.load(conversationId) })
+            ?.messages?.getOrNull(index)?.card
+
+    /** Marks card [index] [state] on screen and on disk at once, even while
+     *  a reply is written (finishReply keeps the more advanced state) and
+     *  when another chat is on screen. */
+    private suspend fun markCard(conversationId: String, index: Int, state: CardState) {
         _state.update { ui ->
             val c = ui.conversation.takeIf { it.id == conversationId } ?: return@update ui
             val card = c.messages.getOrNull(index)?.card ?: return@update ui
-            changed = c.withCard(index, card.copy(state = state))
-            ui.copy(conversation = changed!!)
+            ui.copy(conversation = c.withCard(index, card.copy(state = state)))
         }
-        changed?.let { c -> scope.launch { withContext(NonCancellable) { if (!_state.value.replying) save(c, makeCurrent = false) } } }
+        withContext(NonCancellable) {
+            diskLock.withLock {
+                // Only this card changes on disk: the screen's copy may hold a
+                // question whose reply isn't written yet.
+                val disk = withContext(io) { conversations.load(conversationId) } ?: return@withLock
+                val card = disk.messages.getOrNull(index)?.card ?: return@withLock
+                save(disk.withCard(index, card.copy(state = state)), makeCurrent = false)
+            }
+        }
     }
 
     /** A done timer or alarm card's "open Clock": shown only when some app
@@ -1593,11 +1669,26 @@ class AssistantController(
         if (failedRetry) say(reply.error?.let { "couldn't try again: $it" } ?: "the earlier reply is kept")
         val last = if (failedRetry) old!! else reply
         // A rename while the reply was written is kept.
-        val done = asked.withMetaOf(_state.value.conversation)
+        val written = asked.withMetaOf(_state.value.conversation)
             .copy(updated = if (failedRetry) asked.updated else reply.at.coerceAtLeast(asked.updated),
                 messages = asked.messages + last)
-        _state.update { it.copy(conversation = done, replying = false, thinking = false, lastStopMs = voice?.lastStopMs) }
-        withContext(NonCancellable) { save(done) }
+        val done = withContext(NonCancellable) {
+            diskLock.withLock {
+                // A card a tap moved on meanwhile (SENDING, DONE) is never
+                // written back to an earlier state: the most advanced of
+                // this copy's, the screen's and the disk's is kept.
+                val disk = withContext(io) { conversations.load(written.id) }
+                var merged = written
+                // Merged with the screen as it is at this instant: a tap's
+                // mark landing now is never lost.
+                _state.update { ui ->
+                    merged = written.keepingCards(ui.conversation.takeIf { it.id == written.id }).keepingCards(disk)
+                    ui.copy(conversation = merged, replying = false, thinking = false, lastStopMs = voice?.lastStopMs)
+                }
+                save(merged)
+                merged
+            }
+        }
         startTitle(done)
         return done
     }

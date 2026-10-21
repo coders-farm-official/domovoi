@@ -55,7 +55,22 @@ data class HandOff(
 /** Where a card stands. [REPLACED]: an action card asked again below (the
  *  answer wasn't a clear yes or no); [FAILED]: the other app didn't take it. */
 @Serializable
-enum class CardState { OPEN, DONE, DISMISSED, REPLACED, FAILED }
+enum class CardState {
+    OPEN, DONE, DISMISSED, REPLACED, FAILED,
+
+    /** An action card whose yes (a tap or a spoken one) is being sent to
+     *  the Clock app: taken, not open; DONE or FAILED follows. */
+    SENDING,
+    ;
+
+    /** How far along a card is: a card is never written back to a lower
+     *  rank (AssistantController.finishReply). */
+    val rank: Int get() = when (this) {
+        OPEN -> 0
+        SENDING -> 1
+        DONE, DISMISSED, REPLACED, FAILED -> 2
+    }
+}
 
 /** The kind of card a reply carries: a hand-off, a permission, an action
  *  asked first (N2), or the Undo of one done at once (N2). */

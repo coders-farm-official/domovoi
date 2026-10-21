@@ -103,6 +103,18 @@ class AppActionHost(
         }
     }
 
+    override suspend fun genres(): List<String>? = withContext(Dispatchers.IO) {
+        if (!LocalMedia.hasPermission(ctx, LocalMedia.audioPermission())) return@withContext null
+        runCatching { LocalMedia.genres(ctx) }.getOrDefault(emptyList())
+    }
+
+    override suspend fun genreSongs(name: String, limit: Int): List<PlayItem>? = withContext(Dispatchers.IO) {
+        if (!LocalMedia.hasPermission(ctx, LocalMedia.audioPermission())) return@withContext null
+        runCatching { LocalMedia.genreTracks(ctx, name, limit) }.getOrDefault(emptyList()).map {
+            PlayItem.fromDeviceAudio(it.id, it.title, it.artist, it.album, it.durationSec, it.uri, it.albumArtUri)
+        }
+    }
+
     override suspend fun books(): List<BookChoice> = withContext(Dispatchers.IO) {
         runCatching { bookStore.list() }.getOrDefault(emptyList()).filter { it.meta.complete }.mapNotNull { b ->
             val item = BookItems.saved(b, bookStore) ?: return@mapNotNull null

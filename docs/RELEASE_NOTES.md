@@ -126,15 +126,22 @@ Android app only; nothing to run on the server.
     place. Undo is for the last action only: after a timer or an alarm,
     after you changed the music yourself, or while the phone casts to a
     room, it leaves the player alone. A bare "continue" or "next one"
-    right after a story or a joke is for the chat, not the player.
+    right after a story or a joke is for the chat, not the player. "Play
+    …" plays only what the phone's music really holds (a title, artist,
+    album or genre by that name): "put on my shoes" is chat.
   * **A video saved on the phone** ("play the glacier trip video") asks
     first, then plays over the chat.
 * An action no app on the phone can do is not offered (no Clock app: the
   chat says so). Phone chats are phone-only: house things ("play
-  jazz in the kitchen", "cancel the kitchen timer") get one line, "That's
-  a house thing — ask in a home-server chat.", and a home-server chat
+  jazz in the kitchen", "cancel the kitchen timer") get one line, "Those
+  are in your home server chats.", and a home-server chat
   does them as before. A phone chat never reads the house's timers or
   names its rooms.
+* Known limits: there is no volume action ("turn it up" goes to the
+  chat); "07:30" with no am or pm is read like "7:30" (the next one to
+  come), and "1 tomorrow night" is 1:00 AM tomorrow (the card says
+  so), not the small hours after tomorrow evening; "wake me at 12:30" is 12:30 PM; a room name the phone doesn't
+  know ("play jazz in Emma's room") is searched as music.
 * **New normal permission** `SET_ALARM` (install-time, no prompt), which
   Android requires for handing a timer or an alarm to the Clock app.
 

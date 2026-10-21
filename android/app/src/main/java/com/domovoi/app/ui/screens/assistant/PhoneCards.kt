@@ -68,6 +68,7 @@ internal fun cardFace(card: PhoneCard, clockOpens: Boolean = false): CardFace? =
                     else -> "opened"
                 }
                 CardState.DISMISSED, CardState.REPLACED, CardState.FAILED -> "not now"
+                CardState.SENDING -> "opening"
             },
         )
     }
@@ -80,6 +81,7 @@ internal fun cardFace(card: PhoneCard, clockOpens: Boolean = false): CardFace? =
                 CardState.OPEN -> null
                 CardState.DONE -> "allowed"
                 CardState.DISMISSED, CardState.REPLACED, CardState.FAILED -> "not allowed: Domovoi won't ask again"
+                CardState.SENDING -> "asking"
             },
         )
     }
@@ -93,6 +95,7 @@ internal fun cardFace(card: PhoneCard, clockOpens: Boolean = false): CardFace? =
                 CardState.DONE -> ActionTexts.doneLine(a)
                 CardState.DISMISSED -> ActionTexts.DECLINED_LINE
                 CardState.REPLACED -> "asked again below"
+                CardState.SENDING -> ActionTexts.SENDING_LINE
                 CardState.FAILED -> if (a.kind == ActionKind.PLAY_VIDEO) "couldn't play it" else "the Clock app didn't take it"
             },
             doneButton = OPEN_CLOCK.takeIf {

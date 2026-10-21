@@ -21,6 +21,13 @@ class ClockPacerTest {
         assertEquals(listOf(560L), waits)
     }
 
+    @Test fun aClockThatGoesBackNeverWaitsLongerThanTheGap() = runBlocking {
+        pacer.send { }
+        nowMs -= 3_600_000
+        pacer.send { }
+        assertEquals(listOf(600L), waits)
+    }
+
     @Test fun intentsFarApartDoNotWait() = runBlocking {
         pacer.send { }
         nowMs += 5_000

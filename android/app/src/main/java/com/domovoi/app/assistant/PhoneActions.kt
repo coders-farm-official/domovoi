@@ -74,6 +74,9 @@ data class PhoneAction(
     val seconds: Int? = null,
     /** SET_TIMER: its name ("pasta"). */
     val label: String? = null,
+    /** PLAY_MUSIC: the words as said after the verb ("some nights"), for
+     *  the library check beside [query] ("nights"). */
+    val phrase: String? = null,
     /** SET_ALARM: 0-23 and 0-59. */
     val hour: Int? = null,
     val minute: Int? = null,
@@ -216,7 +219,7 @@ object ActionPatterns {
      *  "next one" after a joke): the player's only in a playback context. */
     private val BARE = setOf(
         "continue", "go on", "keep going", "carry on", "next", "next one", "next please", "skip", "skip it",
-        "back", "go back", "play", "play it", "play again",
+        "back", "go back", "play", "play it", "play again", "stop it",
     )
 
     /**
@@ -281,13 +284,17 @@ object ActionPatterns {
         bookTitled.matchEntire(t)?.let { return PhoneAction(ActionKind.PLAY_BOOK, query = it.groups["title"]!!.value.trim()) }
         bookContinue.matchEntire(t)?.let { m ->
             val title = m.groups["title"]!!.value.trim()
+            // "keep playing along": not a book.
+            if (notMusic.containsMatchIn(title)) return null
             // "continue playing the music": the player's, not a book.
             if (musicOnly.matches(title) || title.startsWith("the music") || title == "it") return PhoneAction(ActionKind.RESUME)
             return PhoneAction(ActionKind.PLAY_BOOK, query = title)
         }
         video.matchEntire(t)?.let { m ->
             val q = (m.groups["q1"] ?: m.groups["q2"])!!.value.trim().removePrefix("the ")
-            if (q.isNotEmpty() && !notMusic.containsMatchIn(q) && realQuery(q)) return PhoneAction(ActionKind.PLAY_VIDEO, query = q)
+            // "play that video again": a video, but no name for it.
+            if (!realQuery(q)) return null
+            if (q.isNotEmpty() && !notMusic.containsMatchIn(q)) return PhoneAction(ActionKind.PLAY_VIDEO, query = q)
         }
         if (shuffleAll.matches(t)) return PhoneAction(ActionKind.PLAY_MUSIC, query = "", shuffle = true)
         (play.matchEntire(t) ?: startMix.matchEntire(t))?.let { m ->
@@ -295,45 +302,26 @@ object ActionPatterns {
             if (notMusic.containsMatchIn(what) || instrument.containsMatchIn(what)) return null
             val shuffle = t.startsWith("shuffle")
             val q = musicQuery(what)
-            // "let's hear it", "listen to your heart", "put on a sweater":
-            // better to miss a fast path than to play the wrong thing.
+            // "let's hear it": nothing to look for. Anything else plays only
+            // when it is in the phone's library (MusicEvidence, checked by
+            // the controller): "put on my shoes" then goes to the model.
             if (q.isNotEmpty() && !realQuery(q)) return null
-            return PhoneAction(ActionKind.PLAY_MUSIC, query = q, shuffle = shuffle)
+            return PhoneAction(ActionKind.PLAY_MUSIC, query = q, shuffle = shuffle, phrase = what)
         }
         return null
     }
 
     private val NOT_LABELS = setOf("me", "a", "an", "it", "this")
 
-    /** Words that are never a search by themselves ("it", "that again", "the"). */
-    private val STOPWORDS = setOf(
-        "it", "that", "this", "these", "those", "them", "the", "a", "an", "again", "one", "ones", "some", "more",
-        "there", "here", "now", "then", "too", "please", "my", "me", "us",
-    )
+    /** Words that are never a search by themselves ("it", "that", "the"). */
+    private val PRONOUNS = setOf("it", "that", "this", "these", "those", "them", "the", "a", "an", "again")
 
-    /** What a phone's songs or videos are never named for, said after
-     *  "play", "put on", "hear", "listen to" ("a joke", "a sweater", "the
-     *  fool", "the harmonica", "a new playlist"). */
-    private val NOT_MEDIA = setOf(
-        "joke", "jokes", "prank", "pranks", "story", "stories", "riddle", "riddles", "trick", "tricks", "game", "games",
-        "deck", "hooky", "fool", "sweater", "jumper", "coat", "jacket", "hat", "scarf", "gloves", "smile",
-        "movie", "movies", "film", "films", "video", "videos", "harmonica", "piano", "guitar", "drums", "violin", "ukulele", "flute",
-        "cello", "harp", "banjo", "trumpet", "saxophone", "sax", "clarinet", "kazoo",
-    )
-
-    /** A query worth searching the phone for: more than pronouns and
-     *  stopwords, not someone else's ("your heart"), not a purpose ("to make
-     *  me laugh"), and not a known non-media thing. */
+    /** A query worth searching the phone for: more than pronouns ("let's
+     *  hear it", "can I watch a video"). Whether it is music is the
+     *  library's to say ([MusicEvidence]), not a word list. */
     internal fun realQuery(q: String): Boolean {
         val words = q.lowercase().split(Regex("[^\\p{L}\\p{N}']+")).filter { it.isNotEmpty() }
-        if (words.isEmpty() || words.all { it in STOPWORDS }) return false
-        if (words.first() in setOf("your", "his", "her", "their", "to")) return false
-        val rest = words.dropWhile { it in STOPWORDS }
-        val head = rest.firstOrNull() ?: return false
-        // "start a new playlist", "play the long game": whole phrases only
-        // (New Order and Long Tall Sally are music).
-        if (rest == listOf("new") || rest.take(2) == listOf("long", "game")) return false
-        return head !in NOT_MEDIA
+        return words.isNotEmpty() && !words.all { it in PRONOUNS }
     }
 
     /** "some relaxing music" → "relaxing", "my running playlist" →
@@ -407,6 +395,50 @@ object ActionPatterns {
     }
 
     private val DAY_NAMES = linkedMapOf("sun" to 1, "mon" to 2, "tues" to 3, "wednes" to 4, "thurs" to 5, "fri" to 6, "satur" to 7)
+}
+
+/**
+ * Whether the phone's library holds what a "play" asked for: the query, as
+ * a phrase, equal to a title, artist, album or genre, contained in one as
+ * most of its words, or containing one as most of its own ("play some
+ * nights" finds "Some Nights", "play the beatles" finds "The Beatles"; "put
+ * on a play" never finds "Play That Funky Music"). Words, not letters:
+ * "kid" is not in "kids". A leading "the" is ignored on both sides.
+ */
+object MusicEvidence {
+    private const val MIN_CHARS = 3
+
+    internal fun words(s: String): List<String> = s.lowercase().replace(Regex("[’‘`´]"), "'")
+        .split(Regex("[^\\p{L}\\p{N}']+")).filter { it.isNotEmpty() }
+        .let { if (it.size > 1 && it.first() == "the") it.drop(1) else it }
+
+    private fun within(hay: List<String>, needle: List<String>): Boolean =
+        needle.isNotEmpty() && hay.size >= needle.size && (0..hay.size - needle.size).any { i -> hay.subList(i, i + needle.size) == needle }
+
+    /** [said] and [field] as phrases (see the object's note). */
+    fun phrase(said: String?, field: String?): Boolean {
+        val a = words(said ?: return false)
+        val b = words(field ?: return false)
+        if (a.joinToString(" ").length < MIN_CHARS || b.joinToString(" ").length < MIN_CHARS) return false
+        if (a == b) return true
+        if (within(b, a) && a.size * 2 > b.size) return true
+        return within(a, b) && b.size * 2 > a.size
+    }
+
+    /** What [a] asked for, as the phrases to check: the query and the words
+     *  as said, and "X by Y" as a title by an artist. */
+    fun asked(a: PhoneAction): List<String> = listOfNotNull(a.query, a.phrase).map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+
+    /** [item] is what [a] asked for. */
+    fun matches(a: PhoneAction, item: com.domovoi.app.player.PlayItem): Boolean = asked(a).any { q ->
+        phrase(q, item.title) || phrase(q, item.artist) || phrase(q, item.album) ||
+            Regex("^(.+?) by (.+)$").matchEntire(q.lowercase())?.destructured?.let { (t, by) ->
+                phrase(t, item.title) && phrase(by, item.artist)
+            } == true
+    }
+
+    /** The genre named [genre] is what [a] asked for. */
+    fun genre(a: PhoneAction, genre: String): Boolean = asked(a).any { phrase(it, genre) }
 }
 
 // ─── Numbers and durations (port of domovoi/handlers/shared/number_words.py) ─
