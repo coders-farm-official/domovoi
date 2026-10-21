@@ -11,6 +11,12 @@
  * reply's error reads as a plain sentence (ChatDetails.errorView), with
  * Settings → Models one press away for an admin.
  *
+ * Documents (PDF, Word, OpenDocument, Excel, CSV, text, markdown) ride the
+ * same paperclip to /api/chat/documents (chat_documents.jsx, ChatDocs); a
+ * thread with documents is answered from them, each reply with its sources
+ * and notes. #chat/<id> opens a thread (the Documents page's "Ask about
+ * this document" lands there).
+ *
  * Design notes: the cat glyph marks assistant-attributed lines (one of its
  * three sanctioned homes); user bubbles sit right-aligned on the card
  * surface; assistant text renders as Markdown (chat_markdown.js: the
@@ -307,7 +313,10 @@ const ChatMessage = ({ m, threadId, onCopy, admin }) => {
           ))}
         </div>
       )}
-      {isUser ? (
+      {(m.documents || []).map((d) => (
+        <ChatDocs.DocChip key={d.token} doc={d} mine={isUser}/>
+      ))}
+      {isUser && !m.content && (m.documents || []).length > 0 ? null : isUser ? (
         <div {...bubbleEvents}
              style={{ maxWidth: '76%', padding: '9px 13px', fontSize: 13, lineHeight: 1.55,
                       background: 'var(--card)', border: '1px solid var(--border)',
@@ -322,6 +331,7 @@ const ChatMessage = ({ m, threadId, onCopy, admin }) => {
                style={{ fontSize: 13, lineHeight: 1.6, overflowWrap: 'break-word', minWidth: 0 }}>
             <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(m.content || '') }}/>
             {m.pending && <span className="mono" style={{ color: 'var(--fg-faint)' }}>▍</span>}
+            {!m.pending && <ChatDocs.DocAnswer doc={m.doc}/>}
             <ChatReplyError m={m} admin={admin}/>
           </div>
         </div>
@@ -410,6 +420,9 @@ const ChatPage = () => {
   const [messages, setMessages] = React.useState([]);
   const [draft, setDraft] = React.useState('');
   const [attachments, setAttachments] = React.useState([]); // [{token, name}]
+  // Documents staged for the next message (chat_documents.jsx): their metadata.
+  const [docAttachments, setDocAttachments] = React.useState([]);
+  const [docBusy, setDocBusy] = React.useState(0);
   const [sending, setSending] = React.useState(false);
   const pageRef = React.useRef(null);
   const narrow = useChatNarrow(pageRef);
@@ -459,6 +472,21 @@ const ChatPage = () => {
     loadMessages(t.id);
     hideRailOnPhone();
   };
+
+  // #chat/<id>: open that thread (the Documents page's "Ask about this
+  // document" makes one and lands here). The address goes back to #chat.
+  React.useEffect(() => {
+    const follow = () => {
+      const m = /^#?chat\/(\d+)$/.exec(String(window.location.hash || ''));
+      if (!m) return;
+      selectThread({ id: Number(m[1]) });
+      try { window.history.replaceState(null, '', '#chat'); } catch { /* the address stays */ }
+      refreshThreads();
+    };
+    follow();
+    window.addEventListener('hashchange', follow);
+    return () => window.removeEventListener('hashchange', follow);
+  }, []);
 
   // The thread keeps its newest line in view: on a new message, and when
   // the thread itself gets shorter or taller (the keyboard coming up, the
@@ -512,7 +540,15 @@ const ChatPage = () => {
   };
 
   const attach = async (files) => {
-    for (const f of Array.from(files).slice(0, 4 - attachments.length)) {
+    const all = Array.from(files);
+    const pictures = all.filter((f) => ChatDocs.isPicture(f));
+    const documents = all.filter((f) => !ChatDocs.isPicture(f));
+    // A picture with no vision model to read it: the note says why.
+    if (pictures.length && visionMissing) {
+      setPictureNote(true);
+      refreshModels();
+    }
+    for (const f of visionMissing ? [] : pictures.slice(0, 4 - attachments.length)) {
       const form = new FormData();
       form.append('file', f);
       try {
@@ -523,11 +559,24 @@ const ChatPage = () => {
         fire(ChatDetails.uploadRefusalText(e.status, e.detail) || 'upload failed');
       }
     }
+    for (const f of documents.slice(0, 4 - docAttachments.length)) {
+      setDocBusy((n) => n + 1);
+      try {
+        const meta = await ChatDocs.upload(f);
+        setDocAttachments((cur) => [...cur, meta]);
+      } catch (e) {
+        // Every refusal is a sentence: an old .doc, a scan, a zip bomb.
+        fire(ChatDocs.refusalText(e));
+      } finally {
+        setDocBusy((n) => n - 1);
+      }
+    }
   };
 
   const send = async () => {
     const content = draft.trim();
-    if (!content || sending) return;
+    const docs = docAttachments;
+    if ((!content && docs.length === 0) || sending || docBusy) return;
     let id = threadId;
     if (id == null) {
       try {
@@ -539,16 +588,18 @@ const ChatPage = () => {
     const images = attachments;
     setDraft('');
     setAttachments([]);
+    setDocAttachments([]);
     setSending(true);
     setMessages((cur) => [
       ...cur,
-      { id: `u-${Date.now()}`, role: 'user', content, images,
+      { id: `u-${Date.now()}`, role: 'user', content, images, documents: docs,
         created_at: new Date().toISOString(), device: 'this browser' },
       { id: 'pending', role: 'assistant', content: '', pending: true },
     ]);
     try {
       // device_id: which install sent it, for the message's details (V017).
-      const body = { content, images, device_id: DeviceIdentity.id() };
+      const body = { content, images, documents: docs.map((d) => ({ token: d.token })),
+                     device_id: DeviceIdentity.id() };
       const { done, errorDetail, errorCode, errorModel } = await chatSendStream(id, body, (delta) => {
         setMessages((cur) => cur.map((m) =>
           m.id === 'pending' ? { ...m, content: m.content + delta } : m));
@@ -581,12 +632,9 @@ const ChatPage = () => {
   // The paperclip: the picker, or — when a picture would be refused —
   // the note saying why (and a fresh read, in case an admin has since
   // installed the model; the note goes once the read says so).
+  // Documents are read on the server whatever the vision model, so the
+  // picker always opens; a picture is the one thing the note may stop.
   const pickPictures = () => {
-    if (visionMissing) {
-      setPictureNote(true);
-      refreshModels();
-      return;
-    }
     setPictureNote(false);
     if (fileRef.current) fileRef.current.click();
   };
@@ -606,14 +654,15 @@ const ChatPage = () => {
   const clip = (
     <IconButton name="paperclip"
                 title={visionMissing
-                  ? "attach pictures — the vision model isn't installed"
-                  : 'attach pictures (up to 4)'}
-                aria-label="attach pictures"
+                  ? "attach documents (pictures need the vision model, which isn't installed)"
+                  : 'attach pictures or documents (up to 4 of each)'}
+                aria-label="attach pictures or documents"
                 onClick={pickPictures}/>
   );
   const sendButton = (
     <Button variant="primary" icon="send" className="btn btn-primary chat-send" onClick={send}
-            disabled={sending || !draft.trim()} aria-label={sending ? 'thinking…' : 'send'}
+            disabled={sending || docBusy > 0 || (!draft.trim() && docAttachments.length === 0)}
+            aria-label={sending ? 'thinking…' : 'send'}
             title={narrow ? (sending ? 'thinking…' : 'send') : undefined}>
       <span className="chat-send-label">{sending ? 'thinking…' : 'send'}</span>
     </Button>
@@ -667,7 +716,7 @@ const ChatPage = () => {
         <div ref={scrollRef} className="chat-thread" onScroll={onThreadScroll}>
           {threadId == null && messages.length === 0 ? (
             <Empty glyph="sleeping" title="ask anything"
-                   sub="chats run on your own hardware — attach an image and the vision model reads it"
+                   sub="chats run on your own hardware — attach a document to ask about it, or an image for the vision model"
                    action={narrow && threads.length > 0
                      ? <Button icon="panel-left-open" onClick={() => setRailOpen(true)}>
                          your chats ({threads.length})
@@ -695,11 +744,20 @@ const ChatPage = () => {
               {visionPill}
             </div>
           )}
+          {(docAttachments.length > 0 || docBusy > 0) && (
+            <div className="chat-doc-staged" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+              {docAttachments.map((d) => (
+                <ChatDocs.DocChip key={d.token} doc={d}
+                                  onRemove={() => setDocAttachments((cur) => cur.filter((x) => x.token !== d.token))}/>
+              ))}
+              {docBusy > 0 && <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', alignSelf: 'center' }}>reading the document…</span>}
+            </div>
+          )}
           {showPictureNote && (
             <ChatPictureNote model={modelsInfo.vision_model} admin={admin}
                              onClose={() => setPictureNote(false)}/>
           )}
-          <input ref={fileRef} type="file" accept="image/*" multiple hidden
+          <input ref={fileRef} type="file" accept={ChatDocs.ACCEPT} multiple hidden
                  onChange={(e) => { attach(e.target.files); e.target.value = ''; }}/>
           {narrow ? (
             <div className="chat-composer-row">{clip}{textarea}{sendButton}</div>
