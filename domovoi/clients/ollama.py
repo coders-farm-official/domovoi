@@ -239,6 +239,7 @@ async def chat_stream(
     think: bool | None = None,
     num_ctx: int | None = None,
     num_predict: int | None = None,
+    temperature: float | None = None,
 ) -> AsyncIterator[str]:
     """Stream one multi-turn chat completion via ``POST /api/chat``, yielding
     assistant-content deltas as they arrive.
@@ -268,7 +269,8 @@ async def chat_stream(
     is this call's context window; unset or 0 uses ``ollama_num_ctx``.
     ``num_predict`` caps the reply's length in tokens (unset or 0: no cap);
     a reply stopped by it ends with ``done_reason`` ``"length"`` in
-    ``stats``."""
+    ``stats``. ``temperature`` (None: the model's own) goes out as that
+    option: 0 for a call that copies (a letter's transcription)."""
     import httpx
 
     url = f"{_ollama_base(base_url)}/api/chat"
@@ -280,6 +282,8 @@ async def chat_stream(
     cap = _positive_int(num_predict)
     if cap is not None:
         options = {**options, "num_predict": cap}
+    if temperature is not None:
+        options = {**options, "temperature": float(temperature)}
     if options:
         body["options"] = options
     if think is not None:

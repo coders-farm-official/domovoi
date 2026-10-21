@@ -186,6 +186,8 @@ REQUESTS = [
                                  "picture": {"blur": 12.5}}),
     ("blurry, nothing to read", {"mode": "picture", "question": "Is this a nice sunset?", "where": "server",
                                  "picture": {"blur": 12.5}}),
+    ("blurry, a bill to explain (D6)", {"mode": "picture", "question": "What do I need to do about this bill?",
+                                        "where": "phone", "picture": {"blur": 12.5}}),
     ("sharp", {"mode": "picture", "question": "Read me this receipt", "where": "server", "picture": {"blur": 900.0}}),
     ("handwritten", {"mode": "picture", "question": "What does the note say?", "where": "phone",
                      "picture": {"blur": 900.0, "handwritten": True}}),

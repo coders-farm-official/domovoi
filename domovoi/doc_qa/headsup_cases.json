@@ -1482,6 +1482,31 @@
    "cards": []
   },
   {
+   "name": "blurry, a bill to explain (D6)",
+   "request": {
+    "mode": "picture",
+    "question": "What do I need to do about this bill?",
+    "where": "phone",
+    "picture": {
+     "blur": 12.5
+    }
+   },
+   "cards": [
+    {
+     "kind": "blurry",
+     "text": "This photo looks blurry, so some words may be guessed.",
+     "options": [
+      "choose_another",
+      "send_anyway"
+     ],
+     "note": null,
+     "op": null,
+     "after": null,
+     "note_only": false
+    }
+   ]
+  },
+  {
    "name": "sharp",
    "request": {
     "mode": "picture",

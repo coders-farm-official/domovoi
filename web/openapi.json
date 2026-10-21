@@ -14608,6 +14608,60 @@
         }
       }
     },
+    "/api/chat/letters/read": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Read Letter",
+        "description": "A phone chat's letter photo, read by the home server (documents plan\nD6): ``{\"blur\", \"kind\", \"text\", \"stopped\", \"seconds\"}``. ``blur`` is the\nvariance of the Laplacian (the phone decides the blurry card, which it\nshows before sending); ``kind`` \"printed\", \"handwritten\" or null;\n``text`` the transcript. With ``stop_if_handwritten`` (the default) a\nhandwritten photo comes back with ``stopped`` true and no text, so the\nphone can show the handwriting card first and ask again with false.\n\nNothing is kept: the photo is read in memory and never written, and\nnothing about it is logged beyond its timing. The explanation is\nwritten on the phone.",
+        "operationId": "read_letter_api_chat_letters_read_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_read_letter_api_chat_letters_read_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Read Letter Api Chat Letters Read Post"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The household's AI features are off (`X-Domovoi-Refusal: ai-off`)"
+          },
+          "413": {
+            "description": "{\"detail\": \"...\", \"code\": \"file_too_large\"|\"too_many_pixels\"}"
+          },
+          "415": {
+            "description": "{\"detail\": \"...\", \"code\": \"unsupported_format\"}"
+          },
+          "503": {
+            "description": "{\"detail\": \"...\", \"code\": \"vision_model_missing\"|\"read_failed\"}"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/help/search": {
       "get": {
         "tags": [
@@ -16282,6 +16336,25 @@
           "file"
         ],
         "title": "Body_extract_document_api_chat_documents_extract_post"
+      },
+      "Body_read_letter_api_chat_letters_read_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          },
+          "stop_if_handwritten": {
+            "type": "boolean",
+            "title": "Stop If Handwritten",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_read_letter_api_chat_letters_read_post"
       },
       "Body_send_voice_api_chat_threads__thread_id__voice_post": {
         "properties": {

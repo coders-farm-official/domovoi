@@ -393,6 +393,14 @@ const ChatMessage = ({ m, threadId, onCopy, admin, onLookup, onHeadsUp, busy, st
             {m.pending && m.status === 'checking' && !m.content && (
               <span className="mono chat-doc-checking">reading the passages and checking the answer…</span>
             )}
+            {m.pending && (m.status === 'reading_letter' || m.status === 'checking_letter') && !m.content && (
+              // A letter photo (documents plan D6): read, then explained and
+              // its dates and amounts checked against what was read.
+              <span className="mono chat-doc-checking">
+                {m.status === 'reading_letter' ? 'reading the letter in the photo…'
+                  : 'explaining it and checking its dates and amounts…'}
+              </span>
+            )}
             {m.pending && m.job && !m.content && (
               <ChatDocs.JobProgress job={m.job} onStop={ChatDocs.isLive(m.job) ? ChatDocs.stopJob : null}/>
             )}
