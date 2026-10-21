@@ -295,8 +295,12 @@ class PhoneDocJobTest {
         assertTrue(h.file.isFile)
         until("handed over") { c.ui().conversation.job?.state == PhoneDocJob.STATE_SERVER && !c.ui().replying }
         assertEquals("server", c.ui().docJob!!.state)
+        assertNull(c.serverJobOf(h.conversation))
         c.serverJobStarted(h.conversation, "a".repeat(32))
         until("server id kept") { c.ui().conversation.job?.serverJob == "a".repeat(32) }
+        // Read when needed (a stream that failed deletes this id), never a
+        // copy captured before the server named it (review round 2).
+        assertEquals("a".repeat(32), c.serverJobOf(h.conversation))
         c.serverProgress(h.conversation, "reading part 2 of 3 · about 10 s left", 1, 3, 10.0)
         assertEquals("reading part 2 of 3 · about 10 s left", c.ui().docJob!!.line)
         c.serverFinished(h.conversation, "- Rent [p. 1]", listOf(DocSource(label = "p. 1", text = "Clause 1", cited = true, page = 1)),
@@ -306,6 +310,7 @@ class PhoneDocJobTest {
         assertEquals("- Rent [p. 1]", reply.text)
         assertTrue(reply.notes.contains(PhoneDocJobs.SERVER_NOTE))
         assertNull(c.ui().conversation.job)
+        assertNull(c.serverJobOf(h.conversation))
         assertNull(c.ui().docJob)
     }
 

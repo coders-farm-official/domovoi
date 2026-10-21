@@ -400,7 +400,7 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Throwable) {
-                    ui.conversation.job?.serverJob?.let { id -> com.domovoi.app.ui.screens.chat.deleteServerJob(app, id) }
+                    assistant.serverJobOf(h.conversation)?.let { id -> com.domovoi.app.ui.screens.chat.deleteServerJob(app, id) }
                     assistant.serverFailed(h.conversation, com.domovoi.app.ui.screens.chat.docFailureText("the home server", e) +
                         ". It can be read on this phone instead.")
                 } finally {
