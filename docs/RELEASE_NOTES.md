@@ -4,6 +4,56 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-21 — Domovoi as its own help desk
+
+Core, dashboard and app. **Run Flyway** (V035: `devices.owner_person_id`,
+`help_deliveries`); without it help still answers, and voice help says no
+phone is marked as yours.
+
+* **Ask Domovoi about Domovoi.** Chat and voice answer questions about
+  Domovoi itself from its own help: the user manual, `docs/FAQ.md`,
+  `docs/TROUBLESHOOTING.md`, a help entry for every dashboard error code
+  and the help files of installed plugins. Answers come only from what is
+  found, name the section and link to it; when nothing covers the
+  question the answer is "The manual doesn't cover that." and no model is
+  asked. Live facts (version, rooms, the internet and AI answers, plugins
+  and their versions) come from the server, exact, and "why is the kitchen
+  offline?" / "why did the update fail?" read the system's own records:
+  Home's attention checks, the rooms' health and self-checks, the update
+  record, the container guard. Redacted: no addresses, tokens or codes;
+  update details only for an admin.
+* **On the dashboard:** a **?** in the top bar of every page opens help
+  for that page (a search of the help, then **ask Domovoi**, which starts
+  a chat titled "Help: <page>"), and error messages have **ask Domovoi
+  about this**, prefilled with the error's code. Chat takes a pasted
+  screenshot as well as an attached one; in a help chat the vision model
+  reads it on the server. **report a problem** builds a redacted summary
+  to copy or save and post yourself; nothing is sent.
+* **With AI features off** help is a plain search of the manual and the
+  docs, and no screenshot is read.
+* **Voice "how do I…"** ("how do I add a room?") gives a short answer from
+  the manual, then asks "Want me to send the steps to your phone?". Yes
+  sends them to the asker only: the phones marked "This phone belongs to"
+  them (the app's Settings → Connection), as a chat "Help: …" and a
+  notification. A voice Domovoi doesn't know is asked "Who should I send it
+  to?"; no answer sends nothing. It never sends to every phone. A how-to
+  question the help doesn't hold ("how do I make pancakes") is answered
+  as before.
+* **App:** it tells the server whose phone it is when it registers, posts
+  the help notification for its owner, and a chat on the phone answers
+  Domovoi questions from the app's own copy of the manual, offline.
+* **Plugins (SDK 1.8.0):** lookup sources (`domovoi.lookup`:
+  `search(query)` / `fetch(id)` and a class of local, api or web;
+  `ctx.add_lookup_source`; the core orders them by class, and local ones
+  need no permission), and an optional `[plugin] help = "HELP.md"`, indexed
+  with the manual (required for Coders Farm's own plugins; a core before
+  1.8 ignores it). The bundled radio plugin has one (radio 1.4.0).
+* **API:** `GET /api/help/search` (open), `GET /api/help/facts`, `GET
+  /api/help/checks`, `GET /api/help/deliveries` (device read), `POST
+  /api/help/report` (device); `owner_person_id` on `POST
+  /api/devices/register`; the `help_deliveries` socket channel; a help
+  chat reply's `stats.help`.
+
 ## 2026-10-21 — Chat history and titles
 
 * **Chats name themselves, and can be renamed, pinned, archived, searched.**
@@ -97,7 +147,8 @@ keeps AI on, exactly as before.
   language model: voice commands keep working on their usual phrases, and
   speech recognition, the voices and the wake word stay. A question gets
   "I can't answer that one — I'm set up for home commands. Say 'what can
-  you do' to hear them." Chat is hidden on the dashboard, and the app keeps only this phone's own chats where it can run its model
+  you do' to hear them." Chat is hidden on the dashboard, and the app keeps
+  only this phone's own chats where it can run its model
   (`features.ai` in `GET /api/capabilities`; a server without the key has
   AI), and a send gets 409 `X-Domovoi-Refusal: ai-off`. The news briefing
   summary, memory suggestions, the warm-up, "are you sure?" and voice chat

@@ -37,6 +37,7 @@ from web.backend.api import calendar as calendar_api
 from web.backend.api import captures as captures_api
 from web.backend.api import capabilities as capabilities_api
 from web.backend.api import chat as chat_api
+from web.backend.api import help as help_api
 from web.backend.api import config as config_api
 from web.backend.api import containers as containers_api
 from web.backend.api import denylist as denylist_api
@@ -408,6 +409,7 @@ app.include_router(audiobooks_api.router)
 app.include_router(videos_api.router)
 app.include_router(images_api.router)
 app.include_router(chat_api.router)
+app.include_router(help_api.router)
 app.include_router(models_api.router)
 app.include_router(news_api.router)
 app.include_router(stats_api.router)

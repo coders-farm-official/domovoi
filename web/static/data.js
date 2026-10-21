@@ -635,6 +635,8 @@ const _sendWithAuthRetry = async (send, { method, body, raw, quiet, noPrompt } =
     }
     const err = new Error(`${r.status} ${r.statusText}: ${text.slice(0, 200)}`);
     err.status = r.status;   // callers branch on auth failures
+    // X-Domovoi-Refusal (ai-off, internet-off): the code help explains.
+    try { err.refusal = (r.headers && r.headers.get('X-Domovoi-Refusal')) || null; } catch { err.refusal = null; }
     // Lets a caller say "cancelled" instead of "failed": the operator
     // dismissed the sign-in (or the pairing), they did not hit a broken
     // endpoint.
@@ -758,6 +760,20 @@ const apiErrorText = (e, max = 160) => {
   return clipSentence(text, max);
 };
 
+/* The code a refused request carries, for "ask Domovoi about this"
+ * (help.jsx; every code has a help entry, domovoi/help_desk/error_codes.py):
+ * the plugin installer's {detail: {error: {code}}}, a coded {detail, code}
+ * or {detail: {code}}, else the X-Domovoi-Refusal header. null for none. */
+const apiErrorCode = (e) => {
+  const body = e && e.detail;
+  const nested = body && body.detail;
+  const code = (nested && typeof nested === 'object' && nested.error && nested.error.code)
+    || (nested && typeof nested === 'object' && nested.code)
+    || (body && typeof body === 'object' && typeof body.code === 'string' && body.code)
+    || (e && e.refusal);
+  return typeof code === 'string' && /^[a-z0-9_-]{2,60}$/.test(code) ? code : null;
+};
+
 /* The reason an admin's per-device block refused this write, or null.
  * A caller that holds the operator's unsent work renders it beside the
  * button rather than in a toast — the block is not transient and the
@@ -824,7 +840,8 @@ const mutationErrorText = (e, verb = 'Save', { kept = true } = {}) => {
  * same rule for a plugin page that may meet an older dashboard. */
 const reportMutationFailure = (fire, verb, e, { kept = false } = {}) => {
   const msg = mutationErrorText(e, verb, { kept });
-  if (msg) fire(msg);
+  // "ask Domovoi about this" on the toast, with the error's code (help.jsx).
+  if (msg) fire(msg, { help: { code: apiErrorCode(e) } });
   return msg;
 };
 

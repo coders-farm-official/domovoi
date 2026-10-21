@@ -1818,3 +1818,35 @@ a.home-att-row:hover { background: var(--brand-soft); }
   .health-row .health-text, .health-row .health-fix { grid-column: 2; justify-self: start; }
   .health-disclose { min-height: 44px; }
 }
+
+/* ---- Help (help.jsx): the "?" panel and "ask Domovoi about this" ---- */
+.help-backdrop { position: fixed; inset: 0; z-index: 105; background: oklch(0 0 0 / 0.4);
+  display: flex; align-items: flex-start; justify-content: center; padding: 8vh 16px 16px; }
+.help-panel { width: 560px; max-width: 100%; max-height: 84vh; overflow: auto; padding: 16px;
+  display: flex; flex-direction: column; gap: 10px; }
+.help-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.help-page { font-size: 13px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.help-code { font-size: 11px; color: var(--fg-muted); border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 1px 6px; }
+.help-search, .help-textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 14px;
+  color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: 8px 10px; }
+.help-textarea { resize: vertical; }
+.help-textarea.mono { font-family: var(--ff-mono); font-size: 12px; }
+.help-results { display: flex; flex-direction: column; gap: 8px; }
+.help-result { border-top: 1px solid var(--border-soft, var(--border)); padding-top: 8px; }
+.help-result-head { display: flex; align-items: baseline; gap: 8px; }
+.help-result-section { font-size: 13px; font-weight: 600; color: var(--fg); flex: 1; min-width: 0; }
+.help-result-snippet { font-size: 13px; color: var(--fg-muted); margin-top: 2px; overflow-wrap: anywhere; }
+.help-note { font-size: 12px; color: var(--fg-muted); line-height: 1.5; }
+.help-error { font-size: 12px; color: var(--err-ink, var(--err)); }
+.help-label { font-size: 12px; color: var(--fg-muted); }
+.help-check { font-size: 12px; color: var(--fg-muted); display: flex; gap: 6px; align-items: center; }
+.help-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.help-report { display: flex; flex-direction: column; gap: 8px; }
+.toast-help { margin-left: 6px; background: none; border: 0; padding: 0; font: inherit; font-size: 12px;
+  color: var(--brand-ink); text-decoration: underline; cursor: pointer; white-space: nowrap; }
+@media (max-width: 760px) {
+  .help-backdrop { padding-top: 16px; }
+  .help-actions .btn { height: 44px; }
+}

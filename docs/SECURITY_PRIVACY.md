@@ -1597,6 +1597,15 @@ What the install flow *does* do (verified in
   code is in-process, unsandboxed Python running as the application's
   database user anyway. The boundary against malice is the publisher you
   trust.
+- **The lookup-source rules hold against honest plugins, not hostile ones.**
+  The core decides a lookup source's class at registration and puts its
+  own sources first (`domovoi/lookup.py`): a plugin's "local" claim counts
+  only for an allowlisted plugin, and a later change to the claim changes
+  nothing. Those rules bind a plugin that registers through
+  `ctx.add_lookup_source`. Plugin code runs in the core's own process, so a
+  hostile plugin could build a `RegisteredSource(core=True)` itself and
+  register it directly, or patch the module; nothing in-process can stop
+  that. Same boundary as above: install plugins from publishers you trust.
 - **Plugin HTTP routes are admin-gated by default in both processes.** A
   plugin's routers on the core (`/v1/plugins/<slug>/…`) and on the web
   dashboard (`/api/plugins/<slug>/…`) sit behind the same rule
@@ -1787,6 +1796,68 @@ migration V021 (`track_lyrics`, the `track_lyrics_shown` view,
 | **Where they never appear** | On an open page: the open library, now-playing and cover reads carry no lyrics, and the kiosk display (`display.html`) never loads the lyrics view. On Home, in a toast, in a browser tab's title. On the realtime socket: its `lyrics.changed` push is a digest of counts and states, never a title or a line. In the core snapshot: its `lyrics` / `lyrics_index` keys are the workers' status only. In a log: the workers log ids, counts and timings, the routes log nothing about a song's words, and no error message or error body carries a line. The household's own spoken words in a voice turn ("play the song that goes …") are a transcript like any other turn's (see *Data at rest*); the lyric data Domovoi matches them against is not logged. |
 | **What LRCLIB receives** | Only while "Synced lyrics from LRCLIB" is on (its default follows the internet answer: on for **Yes** and **Sometimes**, off for **No** and while unanswered; a hand-set value wins) and the server is online: for songs that have no timed lyrics of their own, each song's title, artist credit and primary performer, album and length in seconds, to lrclib.net, about one request a second. Nothing else — no file, no path, no account, no listening history. See the table below. |
 | **What is written to your music folders** | With "Save lyrics as .lrc files" on (only while LRCLIB is), LRCLIB's TIMED lyrics are saved as a `.lrc` next to a song that has none, marked `[re:Domovoi]`. Domovoi never changes or deletes a `.lrc` it did not write — nor one it wrote that you have since edited or deleted — and never writes outside `MUSIC_DIR`. Plain-only lyrics stay in the database. |
+
+## Asking Domovoi for help: screenshots, records and the problem report
+
+Chat and voice answer questions about Domovoi from its own help (the
+manual, the FAQ, the troubleshooting guide, installed plugins' help files)
+and from the system's own state (`domovoi/help_desk`, `/api/help`).
+
+* **Screenshots stay at home.** A screenshot pasted or attached in a
+  home-server chat is an ordinary chat picture: stored under
+  `~/.domovoi/chat_uploads` like every other, read by the vision model on
+  this server, shown to the household like the rest of the chat, deleted
+  with the chat. Nothing about it leaves the network. With AI features off
+  no screenshot is read at all. A chat on the phone can't read pictures;
+  it offers a home-server chat instead and sends nothing by itself.
+* **The records help reads are summaries, and redacted.** Troubleshooting
+  picks named fields from the rooms' health samples and outage reports,
+  the update record, plugins' status and the container guard's household
+  view; the network-name, gateway, host-name and boot-id fields are never
+  read. A free-text value (an exit reason, an error line, a plugin's load
+  error) can still hold anything, so every one goes through two passes
+  (`domovoi/help_desk/redact.py`): first the values this install actually
+  holds, by **exact match** (`domovoi/help_desk/known.py`, read per
+  request: the household token, the setup code, the admin password's and
+  sessions' and pairings' hashes, the Wi-Fi network names, host names and
+  gateways the satellites reported, this server's host name, the hosts and
+  domains of its configured URLs, people's names); then patterns as a
+  backstop (addresses, MACs, `host:port`, domain names, URLs, e-mail
+  addresses, quoted text, long tokens, word-phrase and six-digit codes,
+  secret or network `key=value` pairs, home folders). What neither can
+  promise is a value Domovoi never saw, written in a way no pattern
+  matches. Reading the checks is household tier (`GET /api/help/checks`),
+  and what Home shows only to an admin (the update's details, the internet
+  question) is shown only to one, on that page — **never in a chat**: a
+  help chat on the home server is household-shared, so its answers use the
+  household view whoever asks, and say where an admin reads the rest. The
+  passages and records reach a model only on this box, in a block marked
+  as data with a marker no passage can know; a plugin's help file is quoted
+  as third-party text with its web addresses removed, and a reply keeps
+  only links to Domovoi's own pages.
+* **"Report a problem" sends nothing.** `POST /api/help/report` builds a
+  Markdown summary (version, host kind, the AI and internet answers,
+  plugins, how many rooms in which state, the checks' findings, what the
+  person wrote) and returns it. Room names become `room 1`, `room 2`…
+  unless the person ticks "include room names". The same two passes take
+  out the values the install knows and what the patterns recognise, what
+  the person typed included, and the whole text once more at the end. Its
+  first line tells the person to read it all before they post it, because
+  a value Domovoi never saw can still be in a free-text line. The server
+  keeps no copy; the person reads it, then copies or saves it and posts it
+  themselves.
+* **Sending help steps is limited.** At most 3 sends an hour to a person
+  (their phones share it) and 3 from one asking session, and the same
+  steps to the same person once an hour; after "Who should I send it
+  to?", only a name the household knows counts as the answer.
+* **Help steps go to the asker's own phones.** Voice "how do I…" sends
+  steps only to the phones marked "This phone belongs to <person>" for the
+  recognised speaker, or for the person named when asked; never to every
+  phone. The app now tells the server that mark (`devices.owner_person_id`,
+  V035), self-asserted like the rest of the device row: it decides where
+  help steps are offered, nothing more. The steps are a home-server chat
+  (household-shared, like every server chat); the delivery row holds only
+  the person, the chat and its title.
 
 ## The container guard (what it does and does not detect)
 

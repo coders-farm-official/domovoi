@@ -2,8 +2,11 @@ package com.domovoi.app.net
 
 import android.os.Build
 import com.domovoi.app.AppContainer
+import com.domovoi.app.data.ServerCredentials
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -54,14 +57,32 @@ suspend fun registerDevice(app: AppContainer): DeviceRow? = runCatching {
     val server = app.prefs.serverUrl.value
     app.api.post(
         "/api/devices/register",
-        buildJsonObject {
-            put("device_id", app.prefs.deviceId)
-            put("name", suggestedDeviceName())
-            put("platform", "android")
-            put("user_agent", "Android ${Build.VERSION.RELEASE}; ${Build.MODEL}")
-        },
+        registerPayload(
+            deviceId = app.prefs.deviceId,
+            name = suggestedDeviceName(),
+            userAgent = "Android ${Build.VERSION.RELEASE}; ${Build.MODEL}",
+            ownerPersonId = ServerCredentials.ownerFor(app.prefs.owners.value, server),
+        ),
     ).decode<DeviceRow>().also { app.prefs.setSharedScreen(server, sharedScreenAnswer(it)) }
 }.getOrNull()
+
+/**
+ * The register body. [ownerPersonId] is this server's "This phone belongs
+ * to" (Settings → Connection, a `people.id` kept as text): always sent, so
+ * the server knows whose phone this is when a voice "send the steps to my
+ * phone" picks where help goes (assistant plan part 9). Null (nobody, or
+ * an id that isn't a number) clears it on the server; the field is never
+ * left out, which would keep a stale owner there.
+ */
+fun registerPayload(deviceId: String, name: String, userAgent: String, ownerPersonId: String?): JsonObject =
+    buildJsonObject {
+        put("device_id", deviceId)
+        put("name", name)
+        put("platform", "android")
+        put("user_agent", userAgent)
+        val owner = ownerPersonId?.trim()?.toLongOrNull()?.takeIf { it >= 1 }
+        if (owner == null) put("owner_person_id", JsonNull) else put("owner_person_id", owner)
+    }
 
 /** Rename this device. Throws so the Settings panel can report the failure. */
 suspend fun renameDevice(app: AppContainer, name: String): DeviceRow {

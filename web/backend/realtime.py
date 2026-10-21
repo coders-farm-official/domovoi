@@ -43,6 +43,12 @@ Channels emitted (core; enabled plugins add their own via manifest
 * ``containers`` — the container guard's open and recent incidents in
   plain words, the banner every page shows and whether the freeze is on
   (V024, docs/CONTAINER_GUARD.md); fires on every incident write
+* ``help_deliveries`` — help steps sent by voice to a person's phones in
+  the last hour (V035: ``{id, person_id, thread_id, title, created_at}``,
+  newest first, at most 20); fires when one is sent. A phone posts a
+  notification for a row whose person is its owner ("This phone belongs
+  to"); every other phone ignores it. The titles are those of chats every
+  household device can read already
 * ``lyrics`` — a digest of the lyrics tables (V021): counts, the newest
   ``updated_at`` and the lyrics workers' states. Never a title or a lyric:
   the words are household-tier HTTP reads (web/backend/api/lyrics.py); this
@@ -187,6 +193,10 @@ NOTIFY_CHANNEL_TO_REALTIME: dict[str, str] = {
     # `containers.changed` event (the household view: plain words, no
     # image references — an admin reads those over HTTP).
     "container_incidents_changed": "containers",
+    # Help steps sent by voice to a person's phones (V035,
+    # domovoi/help_desk/delivery.py). The app's notification rides the
+    # resulting `help_deliveries.changed` event.
+    "help_deliveries_changed": "help_deliveries",
 }
 
 # Plugin NOTIFY → realtime channel entries, replaced wholesale on every
@@ -953,6 +963,33 @@ def _fire_json(fire: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+HELP_DELIVERIES_PUSH_WINDOW_SEC = 3600
+HELP_DELIVERIES_PUSH_MAX = 20
+
+
+async def _snapshot_help_deliveries() -> list[dict[str, Any]]:
+    """Help steps sent by voice in the last hour, newest first
+    (``help_deliveries.changed``). ``[]`` when V035 is missing."""
+    try:
+        async with session_scope() as s:
+            rows = (
+                await s.execute(
+                    text(
+                        "SELECT id, person_id, thread_id, title, created_at FROM help_deliveries "
+                        "WHERE created_at > now() - make_interval(secs => :w) ORDER BY id DESC LIMIT :n"
+                    ),
+                    {"w": HELP_DELIVERIES_PUSH_WINDOW_SEC, "n": HELP_DELIVERIES_PUSH_MAX},
+                )
+            ).mappings().all()
+    except Exception:  # noqa: BLE001 — table missing (run Flyway, V035)
+        return []
+    return [
+        {"id": int(r["id"]), "person_id": int(r["person_id"]), "thread_id": int(r["thread_id"]),
+         "title": r["title"], "created_at": _isoformat(r["created_at"])}
+        for r in rows
+    ]
+
+
 # Bind the snapshot helpers to the StatePollLoop so emit_for_channel
 # can resolve them by channel name. Done outside the class body
 # because the helpers themselves are defined further down in the
@@ -985,6 +1022,8 @@ StatePollLoop._CHANNEL_HELPERS = {
     # The container guard's open and recent incidents, the banner and the
     # freeze state (web/backend/api/containers.py: the household view).
     "containers": _snapshot_containers,
+    # Help steps sent by voice to a person's phones (V035).
+    "help_deliveries": _snapshot_help_deliveries,
     # The filesystem libraries (Videos, Pictures, Documents, any Files
     # library): their change counts (listing_cache), pushed as
     # `files.changed` so a page on screen shows an upload, a delete or a

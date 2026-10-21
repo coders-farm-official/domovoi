@@ -147,6 +147,11 @@ data class AssistantUi(
  * - **The clock:** "what time is it", "what's the date", "what day is it"
  *   and the like ([ClockQuestions]) are answered from the phone's own clock
  *   at once, typed or spoken, without the model.
+ * - **Help:** a question about Domovoi itself ("how do I add a room?") is
+ *   looked up in the manual the app carries ([LocalHelp]): the model is
+ *   given what was found and told to answer only from it, and the reply
+ *   names the sources; nothing found is "The manual doesn't cover that.",
+ *   without the model.
  *
  * Nothing here touches the network: the download job is the only network
  * use, and it lives in the worker ([ModelDownloadWorker]).
@@ -188,6 +193,9 @@ class AssistantController(
     /** How the phone shows the time (zone, locale, 12/24-hour), read every
      *  turn; [clock] gives the moment. */
     private val clockStyle: () -> ClockStyle = { ClockStyle.system(is24Hour = false) },
+    /** The manual the phone carries, for questions about Domovoi itself
+     *  ([LocalHelp]); null: none, the model answers as ever. */
+    private val helpIndex: suspend () -> HelpIndex? = { null },
 ) {
     private val _state = MutableStateFlow(
         AssistantUi(
@@ -730,6 +738,9 @@ class AssistantController(
         // replace: that copy stays until the new reply is finished.
         if (retryingFrom == null) save(asked)
         clockReply(asked, onDelta)?.let { return it }
+        // A question about Domovoi: the manual on the phone (LocalHelp).
+        val help = helpTurn(asked)
+        if (help != null && help.passages.isEmpty()) return notCoveredReply(asked, help, onDelta)
         val backend = settings.backend
         val llm = try {
             ensureEngine()
@@ -753,7 +764,8 @@ class AssistantController(
         fun live(): StoredMessage = StoredMessage(Speaker.DOMOVOI, text.toString(), clock(), backend = backend.label)
         _state.update { it.copy(conversation = viewed.withMetaOf(it.conversation).copy(messages = viewed.messages + live())) }
         try {
-            llm.reply(Persona.SYSTEM_PROMPT, window.of(turns), clockLine()).collect { delta ->
+            val sentTurns = window.of(turns).let { if (help != null) LocalHelp.withPassages(it, help) else it }
+            llm.reply(Persona.SYSTEM_PROMPT, sentTurns, clockLine()).collect { delta ->
                 if (firstMs == null && delta.isNotBlank()) firstMs = (nanos() - sent) / 1_000_000
                 text.append(delta)
                 onDelta(delta)
@@ -765,7 +777,15 @@ class AssistantController(
                 }
             }
             val stats = llm.lastStats()
-            return finishReply(viewed, live().copy(firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }))
+            // The sources line, written here, never by the model.
+            val footer = help?.let { LocalHelp.footer(it, text.toString()) }.orEmpty()
+            val said = if (footer.isEmpty()) text.toString() else text.toString().trimEnd() + "
+
+" + footer
+            return finishReply(
+                viewed,
+                live().copy(text = said, firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }),
+            )
         } catch (e: CancellationException) {
             finishReply(viewed, live().copy(stopped = true, firstTextMs = firstMs, stopMs = voice?.lastStopMs))
             throw e
@@ -792,6 +812,31 @@ class AssistantController(
         onDelta(text)
         val reply = StoredMessage(Speaker.DOMOVOI, text, clock(), firstTextMs = (nanos() - sent) / 1_000_000, fromClock = true)
         return finishReply(asked, reply)
+    }
+
+    /** The last question, planned against the manual ([LocalHelp.plan]);
+     *  null: not about Domovoi, or no manual on the phone. */
+    private suspend fun helpTurn(asked: StoredConversation): HelpTurn? {
+        val question = asked.messages.lastOrNull()?.takeIf { it.fromUser } ?: return null
+        if (!LocalHelp.isHelpQuestion(question.text)) return null
+        val index = try {
+            helpIndex()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "the manual could not be read", e)
+            null
+        }
+        return LocalHelp.plan(index, question.text)
+    }
+
+    /** A help question the manual doesn't answer: said at once, without the
+     *  model, so nothing is made up about the app. */
+    private suspend fun notCoveredReply(asked: StoredConversation, help: HelpTurn, onDelta: (String) -> Unit): StoredConversation {
+        val sent = nanos()
+        val text = LocalHelp.notCovered(help)
+        onDelta(LocalHelp.NOT_COVERED)
+        return finishReply(asked, StoredMessage(Speaker.DOMOVOI, text, clock(), firstTextMs = (nanos() - sent) / 1_000_000))
     }
 
     /** The phone's clock for the model, read now (Persona.clockLine); null
@@ -1105,6 +1150,7 @@ class AssistantController(
                 appVersion = runCatching { app.packageManager.getPackageInfo(app.packageName, 0).versionName }
                     .getOrNull().orEmpty(),
                 clockStyle = { ClockStyle.system(android.text.format.DateFormat.is24HourFormat(app)) },
+                helpIndex = BundledManual(app)::index,
             ).also { it.attach(app) }
         }
 

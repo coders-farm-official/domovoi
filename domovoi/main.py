@@ -340,6 +340,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     image_safety.configure_pillow()
 
+    # Domovoi's own help (the manual, FAQ, troubleshooting) as the first
+    # lookup source (domovoi/lookup.py, SDK 1.8): local, always on.
+    from domovoi.help_desk.source import register_core_source
+
+    register_core_source()
+
     # Pin the version label to the code this process actually imported,
     # before anything can pull underneath us. See git_version.capture_boot_state.
     await git_version.capture_boot_state()

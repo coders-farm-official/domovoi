@@ -240,6 +240,32 @@ def first_fast_path(
     return None
 
 
+# "Is there a way to set a timer for ten minutes" is a request worded as a
+# question: the command after the preamble is the turn when a fast path
+# takes it (and that fast path is not the help's). "How do I …" is NOT
+# stripped: that one is a question, and help_desk answers it from the
+# manual. Applied wherever the fast paths are chosen (route, plan_route,
+# goes_to_the_tool_model), so planning and routing always agree, and the
+# command then meets every gate the router applies to it.
+_REQUEST_PREAMBLE_RE = re.compile(
+    r"^is there (?:a|any) way (?:to|that i can|i can|you can)\s+(?:please\s+)?(?P<cmd>.+)$"
+)
+
+
+def strip_request_preamble(transcript: str, handlers: Iterable[Handler] | None = None) -> str:
+    """``transcript`` (normalized, filler-stripped) without a leading "is
+    there a way to" when what follows is a fast-path command (of
+    ``handlers``, the live registry by default); else as is."""
+    m = _REQUEST_PREAMBLE_RE.match(transcript)
+    if not m:
+        return transcript
+    cmd = strip_leading_filler(m.group("cmd"))
+    hit = first_fast_path(cmd, handlers)
+    if hit is None or hit[0].name in ("help", "help_desk"):
+        return transcript
+    return cmd
+
+
 def dispatchable_confirmation(
     pending: Any, *, warn: bool = False
 ) -> tuple[Handler, str] | None:
@@ -357,7 +383,7 @@ def plan_route(raw_transcript: str, *, pending: Any = None) -> RoutePlan | None:
                 path="confirmation", handler=target[0], transcript=transcript,
                 kind=target[1],
             )
-    transcript = strip_leading_filler(transcript)
+    transcript = strip_request_preamble(strip_leading_filler(transcript))
     hit = first_fast_path(transcript)
     if hit is None:
         return None
@@ -381,7 +407,7 @@ def goes_to_the_tool_model(raw_transcript: str) -> bool:
         return False
     if _parse_yes_no(transcript) is not None:
         return False
-    transcript = strip_leading_filler(transcript)
+    transcript = strip_request_preamble(strip_leading_filler(transcript))
     if first_fast_path(transcript) is not None:
         return False
     return not answers_without_tools(transcript)
@@ -769,7 +795,7 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # tool-call and QA fallback paths below intentionally use
     # `intent.transcript` (raw) so the LLM sees the user's natural
     # phrasing, not the stripped version.
-    transcript = strip_leading_filler(transcript)
+    transcript = strip_request_preamble(strip_leading_filler(transcript))
 
     # 1. Fast paths (with offline gate), over the band-sorted registry.
     #

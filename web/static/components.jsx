@@ -786,6 +786,11 @@ const satBoardLabel = (s) => {
  * (a page clears an action's error when that action is tried again). The
  * Models page's pulls, deletes and switches use it (2026-10-13: an error
  * there vanished on its own before it could be read).
+ *
+ * "Ask Domovoi about this" (help.jsx): an error that stays has it always;
+ * any toast has it with `help: { code }` (reportMutationFailure passes the
+ * error's code). It opens help prefilled with the code, the message and the
+ * page. `help: false` leaves it off.
  */
 const useToast = () => {
   const [items, setItems] = React.useState([]);
@@ -799,7 +804,8 @@ const useToast = () => {
     const text = String(msg);
     const item = { id, text, key: o.key || null, stay: !!o.stay,
                    detail: o.detail ? String(o.detail) : null,
-                   actions: Array.isArray(o.actions) ? o.actions : null };
+                   actions: Array.isArray(o.actions) ? o.actions : null,
+                   help: o.help === false ? null : (o.help || (o.stay ? {} : null)) };
     setItems((cur) => [...cur.filter((t) => !item.key || t.key !== item.key), item]);
     if (item.stay) return;
     const ttl = Math.min(12000, 2400 + text.length * 35);
@@ -819,6 +825,13 @@ const useToast = () => {
    * timer alert cards (TimerFireAlerts, 85), which share that bottom edge
    * on a phone and stay until dismissed: the answer to a press must never
    * sit under them. */
+  const askAbout = (t) => {
+    dismiss(t.id);
+    if (window.DomovoiHelp) {
+      window.DomovoiHelp.open({ code: (t.help && t.help.code) || null,
+                                message: [t.text, t.detail].filter(Boolean).join(' — ') });
+    }
+  };
   const node = items.length > 0 && (
     <div className="toast-stack"
          style={{ position: 'fixed', bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)', left: '50%', transform: 'translateX(-50%)',
@@ -834,12 +847,17 @@ const useToast = () => {
             </div>
             <IconButton name="x" title="dismiss" aria-label="dismiss" onClick={() => dismiss(t.id)}/>
           </div>
-          {t.actions && t.actions.length > 0 && (
+          {((t.actions && t.actions.length > 0) || t.help) && (
             <div className="toast-stay-actions">
-              {t.actions.map((a, i) => (
+              {(t.actions || []).map((a, i) => (
                 <Button key={i} variant={i === 0 ? 'primary' : 'secondary'} title={a.title}
                         onClick={() => { dismiss(t.id); a.onClick(); }}>{a.label}</Button>
               ))}
+              {t.help && (
+                <Button icon="circle-help" title="open help about this error" onClick={() => askAbout(t)}>
+                  ask Domovoi about this
+                </Button>
+              )}
             </div>
           )}
         </div>
@@ -851,6 +869,10 @@ const useToast = () => {
                       cursor: 'pointer' }}>
           <StatusDot tone="brand" live/>
           <span style={{ overflowWrap: 'anywhere' }}>{t.text}</span>
+          {t.help && (
+            <button type="button" className="toast-help" title="open help about this error"
+                    onClick={(e) => { e.stopPropagation(); askAbout(t); }}>ask Domovoi about this</button>
+          )}
         </div>
       )))}
     </div>
@@ -2199,6 +2221,11 @@ const Topbar = ({ route, setRoute, theme, setTheme }) => {
               title="switch domovoi">
         <Icon name="server" size={14} className="ic"/>
         <span style={{ fontSize: 12 }} className="mono">{ServerStore.currentLabel()}</span>
+      </button>
+      {/* Help (help.jsx): Domovoi's own help desk, about this page. */}
+      <button className="theme-toggle" title="help: ask about this page" aria-label="help"
+              onClick={() => window.DomovoiHelp && window.DomovoiHelp.open({ page: labels[route] || route })}>
+        <Icon name="circle-help" size={14} className="ic"/>
       </button>
       <button className={`theme-toggle ${route === 'settings' ? 'active' : ''}`}
               onClick={() => setRoute('settings')} title="settings">

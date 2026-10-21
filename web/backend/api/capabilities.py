@@ -43,6 +43,7 @@ DOMOVOI_API = "1.0.0"
 CORE_HANDLER_DISPLAY: list[dict[str, str]] = [
     {"name": "dismiss",       "label": "Dismiss",        "tone": "neutral"},
     {"name": "help",          "label": "Help",           "tone": "info"},
+    {"name": "help_desk",     "label": "Help desk",      "tone": "info"},
     {"name": "voice_profile", "label": "Voice Profile",  "tone": "info"},
     {"name": "wifi",          "label": "Wi-Fi",          "tone": "device"},
     {"name": "voice",         "label": "Voice",          "tone": "device"},
