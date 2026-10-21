@@ -798,11 +798,16 @@ private fun Block(b: ManualBlock, doc: ManualDoc, live: Live, links: ManualLinks
             if (b.admin) Pill(doc.label("admin", "text", "admin"), Tone.Warn)
             b.note?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = c.fgMuted) }
         }
-        "say" -> Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            b.phrases.forEachIndexed { i, p ->
-                if (p.then) return@forEachIndexed
-                val next = b.phrases.getOrNull(i + 1)?.takeIf { it.then }
-                SayRow(p, next, doc, links)
+        "say" -> {
+            // What the language models answer is left out while the server's
+            // AI features are off (features.ai false).
+            val phrases = shownPhrases(b.phrases, LocalCapabilities.current.features)
+            if (phrases.isNotEmpty()) Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                phrases.forEachIndexed { i, p ->
+                    if (p.then) return@forEachIndexed
+                    val next = phrases.getOrNull(i + 1)?.takeIf { it.then }
+                    SayRow(p, next, doc, links)
+                }
             }
         }
         "table" -> Column(Modifier.border(1.dp, c.borderSoft, RoundedCornerShape(8.dp))) {

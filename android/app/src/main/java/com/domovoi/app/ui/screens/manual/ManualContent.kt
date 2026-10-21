@@ -165,7 +165,16 @@ internal data class ManualPhrase(
     val then: Boolean = false,
     val plugin: String? = null,
     val pending: String? = null,
+    /** A GET /api/capabilities feature the phrase needs ("ai": the language
+     *  models answer it); left out while the server reports it false. */
+    val needs: String? = null,
 )
+
+/** The phrases of a "say" block this server answers: one whose [ManualPhrase.needs]
+ *  feature is reported false (features.ai false: AI chat and questions are
+ *  off) is left out, with its "then" reply; an unknown feature shows it. */
+internal fun shownPhrases(phrases: List<ManualPhrase>, features: Map<String, Boolean>): List<ManualPhrase> =
+    phrases.filter { p -> p.needs == null || features[p.needs] != false }
 
 /** Shown in the app: everything but the dashboard-only lines. */
 internal fun shownInApp(only: String?): Boolean = only == null || only == "app"

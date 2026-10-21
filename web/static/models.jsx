@@ -699,15 +699,27 @@ const FoldedSummary = ({ icon, title, sub, count, countLabel, tab }) => (
 /* ---- the AI switch -------------------------------------------- */
 
 const _AI_ROLE_LABEL = { qa: 'questions', tool: 'commands in your own words', vision: 'pictures in chat' };
+/* What a role's model being absent does, said only for a model that is
+ * (router.py: no router model means the Q&A model answers; no Q&A model
+ * means a question hears it isn't installed; no vision model means chat
+ * can't read pictures). */
+const _AI_ROLE_MISSING = {
+  qa: 'questions and Chat say the model isn’t installed',
+  tool: 'commands in your own words go to the question model instead',
+  vision: 'Chat can’t read pictures',
+};
+const _aiMissingModels = (ai) => (ai.models || []).filter((m) => m.installed !== true && !m.duplicate);
 
 /* What turning AI on downloads, one line per model ("questions: <model> ·
- * about 2.0 GB"). `ai` is GET /api/models/ai. */
-const AiDownloadList = ({ ai }) => (
+ * about 2.0 GB"); with `effects`, what each missing one stops meanwhile.
+ * `ai` is GET /api/models/ai. */
+const AiDownloadList = ({ ai, effects = false }) => (
   <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12, color: 'var(--fg-muted)' }}>
-    {(ai.models || []).filter((m) => m.installed !== true && !m.duplicate).map((m) => (
+    {_aiMissingModels(ai).map((m) => (
       <li key={m.model}>
         {_AI_ROLE_LABEL[m.role] || m.role}: <span className="mono">{m.model}</span>
         {m.download_gb != null ? ` · about ${m.download_gb.toFixed(1)} GB` : ''}
+        {effects && _AI_ROLE_MISSING[m.role] ? ` — until then, ${_AI_ROLE_MISSING[m.role]}` : ''}
       </li>
     ))}
   </ul>
@@ -745,8 +757,8 @@ const AiFeaturesCard = ({ ai, internetOff, onSet }) => {
       )}
       {on && missing.length > 0 && !asking && (
         <div style={{ padding: '10px 14px', fontSize: 12, color: 'var(--fg-muted)' }}>
-          Not downloaded yet, so a question gets {'“'}my question-answering model isn{'’'}t installed{'”'}:
-          <AiDownloadList ai={ai}/>
+          {_aiMissingModels(ai).length === 1 ? 'One model isn’t downloaded yet:' : 'These models aren’t downloaded yet:'}
+          <AiDownloadList ai={ai} effects/>
           <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <Button icon="download" disabled={busy || internetOff}
                     title={internetOff ? NEEDS_INTERNET_TEXT : undefined}

@@ -80,6 +80,24 @@ class ManualContentTest {
         assertFalse(manualRouteOpens(ManualRoute(), Capabilities.EMPTY))
     }
 
+    /** What the language models answer ("are you sure?", "why is the sky
+     *  blue", the weather and its "yes") is left out of the try-saying lists
+     *  while the server's AI features are off; on, or an older server with
+     *  no switch, every phrase shows. */
+    @Test fun aiPhrasesAreLeftOutWithTheServersAiOff() {
+        val say = (listOf(doc.start.blocks) + doc.pieces.map { it.blocks }).flatten().filter { it.type == "say" }
+        val all = say.flatMap { it.phrases }
+        val needsAi = all.filter { it.needs == "ai" }.map { it.text }.toSet()
+        assertTrue("are you sure?" in needsAi && "why is the sky blue" in needsAi)
+        assertFalse("set a timer for 10 minutes" in needsAi)
+        val off = say.flatMap { shownPhrases(it.phrases, mapOf(FEATURE_AI to false)) }.map { it.text }
+        assertFalse("are you sure?" in off || "why is the sky blue" in off)
+        assertTrue("set a timer for 10 minutes" in off)
+        assertEquals(all.size, say.flatMap { shownPhrases(it.phrases, emptyMap()) }.size)
+        assertEquals(all.size, say.flatMap { shownPhrases(it.phrases, mapOf(FEATURE_AI to true)) }.size)
+        assertEquals("ai", doc.handlerNeedsFeature["double_check"])
+    }
+
     @Test fun inlineMarkupBecomesSpans() {
         val spans = parseInline("**Say** {wake}, see [Settings → Voices](route:settings/voices) {admin} *now* `:6369`.")
         assertEquals(
