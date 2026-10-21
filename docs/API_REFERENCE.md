@@ -1527,6 +1527,41 @@ token as `?device_token=`. The model picker (`/models`) stays **Open**. Every
 write — creating, renaming or deleting a thread, sending a message, staging an
 upload — is **Device** tier.
 
+**Documents** (documents plan D1, `web/backend/api/chat_documents.py`, V035).
+A PDF, Word (.docx), OpenDocument (.odt), Excel (.xlsx), CSV, text or
+markdown file staged with `POST /api/chat/documents` is kept under
+`~/.domovoi/chat_uploads/documents/<token><ext>`, read once in a short-lived
+worker process (`domovoi/doc_extract`: a 120 s time limit, a memory and CPU
+cap, zip-bomb and size checks, an XML parser that refuses DOCTYPEs and
+entities, no network), and its text cached beside it as
+`<token>-parts.json`: an ordered list of parts, each with the label an
+answer cites (`p. 7`, `Section: Deposit`, `Section: Deposit (para 3)`,
+`para 14`, `Sheet Budget, rows 2-41`, `Sheet Budget, column totals`,
+`page header`, `footnotes`). A user row that attached documents carries
+`documents: [{token, name, kind, pages, words, parts, scanned_pages,
+garbled_pages, summary, notes, size}]`; the text itself is never in the
+transcript. A thread with documents is answered from them (find, then
+answer; `domovoi/doc_qa`), unless the message carries pictures: an
+attachment with no words gets `I've read lease.pdf (30 pages). Ask me
+anything about it.`; a question gets the best passages (BM25, at most 4
+and about 1,200 tokens, the previous question's words added for a
+follow-up) in a marked block of data after the rules, and the reply is
+checked before it is kept — citations of a passage the app didn't give are
+taken out, quotes must match their passage, and a reply saying the
+passages don't answer becomes exactly `I couldn't find that in the
+document.`; when no passage matches, that sentence is the reply and the
+model is never asked. "Summarize" (and "overview", "key points", "tl;dr")
+reads a document of up to 10,000 characters whole; a longer one is
+answered with a sentence saying it can't yet (map/reduce is D2). The reply
+row carries `doc: {mode: "question" | "summary" | "attached", found,
+sources: [{token, name, label, page, text, match, cited}], notes: [{code,
+text}]}` (`sources` are the passages given, best first; `cited` the ones
+the checked reply names) and `stats.model_role` `documents`. Deleting the
+thread deletes its documents' files when no other thread refers to them.
+While the household's AI features are off (the AI-optional switch, where
+the server has it) the routes that feed a chat refuse with `409`; reading
+text for a phone (`/documents/extract`) asks no model and stays open.
+
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/chat/threads` | `?archived=` | Thread list, newest first, with message counts + last snippet. |
@@ -1538,6 +1573,12 @@ upload — is **Device** tier.
 | `POST /api/chat/threads/{id}/voice` | multipart `audio`, `phone_id`, `player?`, `speak?` | A push-to-talk turn from the app's chat mic, answered into this thread: forwarded with the caller's credentials to the core's `POST /v1/phone/voice` (§2.1), whose answer or refusal comes back as it was given. `413` over 30 s of audio, `502` (`core_unreachable`) when the core isn't answering, `504` (`core_timeout`) after 180 s. |
 | `POST /api/chat/uploads` | multipart `file` | Stage an image (20 MB cap) → `{token, name}`. It must really be a JPEG, PNG, GIF, WebP or BMP (`415` otherwise, whatever its name) of at most 40 megapixels (`413`), read from its header. A refusal is `{detail, code, ...}`: `detail` is a plain sentence to show, `code` a stable one to word it by — `415 unsupported_format` with `format` naming what the bytes are when they show a camera format (`"HEIC"`, `"HEIF"`, `"AVIF"`, `"JPEG XL"`, `"TIFF"`; read from the magic bytes, nothing decoded) or `null`; `413 too_many_pixels` with `max_megapixels`; `413 file_too_large` with `max_mb`. (A body past the transport cap gets the body guard's bare `413` with no `code`.) The Android app converts what the server can't read (HEIC and the like, or a photo over the limits) to a JPEG of at most 2560 px on its long edge before it uploads, and the dashboard words the refusal (a HEIC photo: send it from the app, or save it as a JPEG). |
 | `GET /api/chat/uploads/{token}` | — | Serve a chat image inline. |
+| `POST /api/chat/documents` | multipart `file` | Stage a document for a message (Device, AI features on; 100 MB) → `{token, name, kind, pages, words, parts, scanned_pages, garbled_pages, summary, notes, size}`. `kind` is `pdf`, `docx`, `odt`, `xlsx`, `csv`, `txt` or `md`; `pages` is a PDF's (else null); `summary` the one-line marker (`lease.pdf · 30 pages · about 9,800 words`); `notes` `[{code, text}]` with `code` `scanned_pages` (pages that are pictures of text, not searched), `garbled_pages` (text the file stores scrambled), `formulas_without_value`, `long_document`. A refusal is `{detail, code}`, `detail` the sentence to show: `415 old_format` (.doc, .rtf, .xls, .ods, .pages: what to save it as) or `415 unsupported_format`; `413 file_too_large` with `max_mb`; `422 unreadable` (damaged, a zip bomb, XML entities, encrypted, a password-protected PDF, a scan with no text, a file that isn't what its name says, a read that took too long); `409` with AI features off. Then send `documents: [{token}]` (at most 4) in `SendBody`; `content` may be empty when documents go with it. |
+| `POST /api/chat/documents/extract` | multipart `file` | Read a document's text for a phone that can't read a PDF itself (Device; works with AI features off; nothing is kept: the file is read in a temporary folder that is removed before the answer) → `{kind, pages, parts: [{label, page, text, head}], scanned_pages, garbled_pages, words, chars, notes}`. Refusals as above. |
+| `GET /api/chat/documents/{token}/parts` | — | Device read. `{meta, parts: [{label, page, text, head}]}`: the text a citation points at (the app's page sheet). `404` unknown token. |
+| `GET /api/chat/documents/{token}/file` | — | Device read (`?device_token=` allowed). The original file: a PDF inline (`application/pdf`; the dashboard opens it at `#page=N`), any other kind as a download; `nosniff`, and a sandbox CSP on anything not shown inline. |
+| `GET /api/chat/threads/{id}/documents` | — | Device read. `{documents: [...]}`: the thread's documents in the order attached. `404` unknown thread. |
+| `POST /api/chat/threads/from-document` | `{rel_path}` | "Ask about this document" (Device, AI features on): a new thread `About <name>` about a file in the Documents library (`rel_path` relative to `documents_dir`, read through the Documents routes' containment and secret-name checks; `400` outside it, `404` missing or secret-shaped), copied into the chat's uploads and read, with the attachment and its reply already in it → `{thread, document}`. Refusals as for `/documents`. |
 | `GET /api/chat/models` | Open | `{installed, default_model, vision_model, vision_installed}`: the installed Ollama models and the configured defaults. `vision_installed` is `false` when a picture would be refused (the vision model isn't installed, or none is set), `null` when Ollama couldn't be asked; the clients explain the first before a picture is attached. |
 
 A reply's `stats` (V017) is an object whose keys are all optional:
