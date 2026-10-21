@@ -123,6 +123,32 @@ ERROR_CODES: dict[str, ErrorHelp] = {
         "Chat takes pictures up to 20 MB. Send a smaller copy.",
         "chat",
     ),
+    # ── chat documents and try again ─────────────────────────────────────
+    "unreadable": _e(
+        "That document couldn't be read",
+        "Domovoi couldn't read the file you attached: it may be damaged, password-protected, "
+        "scanned pages with no text, or a format chat doesn't take (old .doc and .rtf files: "
+        "save them as .docx or PDF first). The message says which.",
+        "chat",
+    ),
+    "missing": _e(
+        "The attached document is gone",
+        "The document a chat was asked about is no longer on this Domovoi (it was removed or the "
+        "attachment expired). Attach it again to ask more about it.",
+        "chat",
+    ),
+    "not_found": _e(
+        "Domovoi couldn't find that in the document",
+        "The passages Domovoi found don't answer the question, so it says so instead of guessing. "
+        "Ask with words the document uses, or attach the right file.",
+        "chat",
+    ),
+    "already_retried": _e(
+        "That reply is already being tried again",
+        "Another try again on the same reply is running, or has already replaced it. Wait for it "
+        "to finish; the chat shows the new reply.",
+        "chat",
+    ),
     # ── the app's chat mic ───────────────────────────────────────────────
     "core_timeout": _e(
         "Domovoi took too long to answer",
