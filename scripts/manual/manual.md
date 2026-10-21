@@ -585,8 +585,21 @@ the 32-bit app from the same page. [More detail](docs/ANDROID_COMPATIBILITY.md)
 phone** (the assistant, below). Each chat shows where it runs, and a new
 one starts where you chatted last.
 
+Chat opens on your chats, pinned ones first, then the most recent; type
+in **Message Domovoi…** at the bottom to start a new one. A chat is named
+by its first words, then Domovoi gives it a short title after the first
+reply; a name you give it stays.
+
 **How to**
 
+- Long-press a chat (or its **chat actions** button) to **rename**, **pin** (pins stay on
+  this phone), **archive**, **share** or **delete** it; swipe to archive.
+  Archived chats are under **archived** at the end of the list.
+- **search chats** finds words in titles and messages, in both kinds of
+  chat.
+- Long-press a reply to **copy**, **share** or **try again**.
+- A line saying **earlier messages are beyond what Domovoi can keep in
+  mind** marks where the model stops seeing the older part of a long chat.
 - Tap **talk** to speak a message: **hold to talk**, release to send,
   slide away to cancel. Up to 30 seconds.
 - "my name is …" in the chat mic teaches Domovoi your voice from this
@@ -609,7 +622,8 @@ assistant on this phone** →
 unless you **allow mobile data**.
 
 It needs a 64-bit phone with 8 GB of memory or more. To report a bad
-reply, long-press it. Its chats stay on the phone, marked **on this
+reply, long-press it. **Export all phone chats** (in a phone chat, the
+model settings button) saves them as Markdown and JSON where you pick. Its chats stay on the phone, marked **on this
 phone**; away from home they are the only ones Chat lists. They never mix
 with your home server's chats.
 
@@ -744,7 +758,9 @@ name.
 Type to Domovoi. Answers come from the models on your server.
 
 **How to:** [Chat](#chat) → **new chat**. Press the paperclip to add up to
-4 pictures (PNG, JPEG, GIF, WebP or BMP, 20 MB each).
+4 pictures (PNG, JPEG, GIF, WebP or BMP, 20 MB each). Beside each chat in
+the list: rename, archive and delete; **search chats** above the list, and
+**archived** at its end.
 
 **App:** the picture button is **attach image**, and the app also takes
 HEIC photos. See [Chat and the chat mic](#node:phone-chat).

@@ -56,20 +56,108 @@ data class StoredConversation(
     val created: Long = 0,
     val updated: Long = 0,
     val messages: List<StoredMessage> = emptyList(),
+    /** The chat's name once the model or the person gave it one; null:
+     *  the first words of the first message ([title]). */
+    val name: String? = null,
+    /** The person named it (rename): the model's title never replaces it. */
+    val titleByUser: Boolean = false,
+    /** The model has written [name] (the title job doesn't run again). */
+    val titled: Boolean = false,
+    /** Model titles that failed or weren't usable ([ChatTitles.MAX_TRIES]). */
+    val titleTries: Int = 0,
+    /** In the history list's "archived" view, not the main list. */
+    val archived: Boolean = false,
+    /** Where the model's view of this chat began on the last reply, as an
+     *  index into [messages]; null when it saw it all. The conversation
+     *  view draws "earlier messages are beyond what Domovoi can keep in
+     *  mind" above that message. */
+    val windowFrom: Int? = null,
 ) {
-    /** The first thing the user asked, cut short: the history list's title. */
+    /** The history list's title: the name it was given, or the first five
+     *  words of the first thing asked ([ChatTitles.firstWords]). */
     val title: String
-        get() = messages.firstOrNull { it.fromUser && it.text.isNotBlank() }?.text?.trim()?.lineSequence()?.first()
-            ?.let { if (it.length > TITLE_CHARS) it.take(TITLE_CHARS).trimEnd() + "…" else it }
-            ?: "new conversation"
+        get() = name?.takeIf { it.isNotBlank() }
+            ?: ChatTitles.firstWords(messages.firstOrNull { it.fromUser && it.text.isNotBlank() }?.text)
+            ?: NEW_TITLE
+
+    /** The first question and the first good answer after it, for the
+     *  model's title; null until there is one. */
+    fun firstExchange(): Pair<String, String>? {
+        val q = messages.indexOfFirst { it.fromUser && it.text.isNotBlank() }
+        if (q < 0) return null
+        val a = messages.drop(q + 1).firstOrNull { !it.fromUser && it.text.isNotBlank() && it.error == null && !it.stopped }
+            ?: return null
+        return messages[q].text to a.text
+    }
+
+    /** The title job has something to do for this chat. */
+    val needsTitle: Boolean
+        get() = !titleByUser && !titled && titleTries < ChatTitles.MAX_TRIES && firstExchange() != null
+
+    /** This chat with [other]'s name, archive mark and title state (the same
+     *  chat changed meanwhile: renamed, or titled, while a reply ran). */
+    fun withMetaOf(other: StoredConversation): StoredConversation =
+        if (other.id != id) this
+        else copy(name = other.name, titleByUser = other.titleByUser, titled = other.titled,
+            titleTries = other.titleTries, archived = other.archived)
 
     companion object {
-        const val TITLE_CHARS = 60
+        const val TITLE_CHARS = ChatTitles.MAX_CHARS
+        const val NEW_TITLE = "new chat"
     }
 }
 
 /** A conversation as the history list shows it. */
-data class ConversationSummary(val id: String, val title: String, val updated: Long, val messages: Int)
+data class ConversationSummary(
+    val id: String,
+    val title: String,
+    val updated: Long,
+    val messages: Int,
+    val archived: Boolean = false,
+    val titleByUser: Boolean = false,
+)
+
+/** A conversation a search found: [snippet] is the words around the first
+ *  match in a message (null when only the title matched). */
+data class ConversationHit(val summary: ConversationSummary, val snippet: String?)
+
+internal fun StoredConversation.summary() =
+    ConversationSummary(id, title, updated, messages.size, archived, titleByUser)
+
+/**
+ * The conversations matching [query], newest first: those whose title or
+ * any message contains it, case and spacing ignored; [conversations] as
+ * the store reads them. A blank query finds nothing.
+ */
+fun searchConversations(conversations: List<StoredConversation>, query: String): List<ConversationHit> {
+    val q = query.trim().split(SPACES).filter { it.isNotEmpty() }.joinToString(" ")
+    if (q.isEmpty()) return emptyList()
+    return conversations.mapNotNull { c ->
+        val inMessage = c.messages.asReversed().firstNotNullOfOrNull { matchSnippet(it.text, q) }
+        when {
+            inMessage != null -> ConversationHit(c.summary(), inMessage)
+            c.title.contains(q, ignoreCase = true) -> ConversationHit(c.summary(), null)
+            else -> null
+        }
+    }.sortedWith(compareByDescending<ConversationHit> { it.summary.updated }.thenByDescending { it.summary.id })
+}
+
+private val SPACES = Regex("\\s+")
+
+/** Characters shown either side of a search match. */
+private const val MATCH_CONTEXT = 40
+
+/** The words around the first place [q] appears in [text] (case ignored,
+ *  spacing flattened), "…" where it was cut; null when it isn't there. */
+internal fun matchSnippet(text: String, q: String): String? {
+    if (q.isEmpty()) return null
+    val flat = text.split(SPACES).filter { it.isNotEmpty() }.joinToString(" ")
+    val at = flat.indexOf(q, ignoreCase = true)
+    if (at < 0) return null
+    val start = (at - MATCH_CONTEXT).coerceAtLeast(0)
+    val end = (at + q.length + MATCH_CONTEXT).coerceAtMost(flat.length)
+    return (if (start > 0) "…" else "") + flat.substring(start, end).trim() + (if (end < flat.length) "…" else "")
+}
 
 /**
  * The on-phone conversations: one JSON file per conversation in [dir]
@@ -93,8 +181,14 @@ class ConversationStore(val dir: File) {
 
     /** Every readable conversation, newest first. */
     fun list(): List<ConversationSummary> =
-        files().mapNotNull { f -> read(f)?.let { ConversationSummary(it.id, it.title, it.updated, it.messages.size) } }
+        files().mapNotNull { f -> read(f)?.summary() }
             .sortedWith(compareByDescending<ConversationSummary> { it.updated }.thenByDescending { it.id })
+
+    /** Every readable conversation, whole (search, export). */
+    fun all(): List<StoredConversation> = files().mapNotNull { read(it) }
+
+    /** The conversations whose title or text contains [query] ([searchConversations]). */
+    fun search(query: String): List<ConversationHit> = searchConversations(all(), query)
 
     fun load(id: String): StoredConversation? = if (isValidId(id)) read(file(id)) else null
 

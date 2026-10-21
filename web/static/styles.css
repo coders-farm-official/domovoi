@@ -1565,6 +1565,13 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .chat-rail { width: 250px; flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
 .chat-rail-head { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
 .chat-rail-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 2px; }
+.chat-rail-search { position: relative; }
+.chat-rail-search input { font: inherit; font-size: 13px; width: 100%; height: 32px; padding: 0 10px 0 28px; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--card); color: var(--fg); box-shadow: var(--inner-highlight); box-sizing: border-box; }
+.chat-rail-search-icon { position: absolute; left: 9px; top: 9px; color: var(--fg-subtle); pointer-events: none; }
+.chat-rail-archived { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 8px 12px; font: inherit; font-size: 12px; color: var(--fg-muted); background: transparent; border: 0; border-radius: var(--r-sm); cursor: pointer; text-align: left; }
+.chat-rail-archived:hover { background: var(--raised); color: var(--fg); }
+.chat-page.narrow .chat-rail-search input { height: 44px; }
+.chat-page.narrow .chat-rail-archived { min-height: 44px; }
 .chat-pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
 .chat-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .chat-head-title { font-size: 14px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

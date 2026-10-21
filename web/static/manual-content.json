@@ -2067,6 +2067,10 @@
      "text": "**Chat** holds your chats with Domovoi: those **on home server** (see [Chat](node:chat)), shared with the household, and those **on this phone** (the assistant, below). Each chat shows where it runs, and a new one starts where you chatted last."
     },
     {
+     "type": "p",
+     "text": "Chat opens on your chats, pinned ones first, then the most recent; type in **Message Domovoi…** at the bottom to start a new one. A chat is named by its first words, then Domovoi gives it a short title after the first reply; a name you give it stays."
+    },
+    {
      "type": "label",
      "role": "how",
      "text": "How to"
@@ -2075,6 +2079,18 @@
      "type": "list",
      "ordered": false,
      "items": [
+      {
+       "text": "Long-press a chat (or its **chat actions** button) to **rename**, **pin** (pins stay on this phone), **archive**, **share** or **delete** it; swipe to archive. Archived chats are under **archived** at the end of the list."
+      },
+      {
+       "text": "**search chats** finds words in titles and messages, in both kinds of chat."
+      },
+      {
+       "text": "Long-press a reply to **copy**, **share** or **try again**."
+      },
+      {
+       "text": "A line saying **earlier messages are beyond what Domovoi can keep in mind** marks where the model stops seeing the older part of a long chat."
+      },
       {
        "text": "Tap **talk** to speak a message: **hold to talk**, release to send, slide away to cancel. Up to 30 seconds."
       },
@@ -2120,7 +2136,7 @@
     },
     {
      "type": "p",
-     "text": "It needs a 64-bit phone with 8 GB of memory or more. To report a bad reply, long-press it. Its chats stay on the phone, marked **on this phone**; away from home they are the only ones Chat lists. They never mix with your home server's chats."
+     "text": "It needs a 64-bit phone with 8 GB of memory or more. To report a bad reply, long-press it. **Export all phone chats** (in a phone chat, the model settings button) saves them as Markdown and JSON where you pick. Its chats stay on the phone, marked **on this phone**; away from home they are the only ones Chat lists. They never mix with your home server's chats."
     }
    ],
    "more": {
@@ -2542,7 +2558,7 @@
     },
     {
      "type": "p",
-     "text": "[Chat](route:chat) → **new chat**. Press the paperclip to add up to 4 pictures (PNG, JPEG, GIF, WebP or BMP, 20 MB each)."
+     "text": "[Chat](route:chat) → **new chat**. Press the paperclip to add up to 4 pictures (PNG, JPEG, GIF, WebP or BMP, 20 MB each). Beside each chat in the list: rename, archive and delete; **search chats** above the list, and **archived** at its end."
     },
     {
      "type": "p",

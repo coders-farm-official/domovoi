@@ -48,7 +48,7 @@ class ConversationStoreTest {
         assertEquals("second question", list[0].title)
         assertEquals("x".repeat(StoredConversation.TITLE_CHARS) + "…", list[1].title)
         assertEquals(2, list[2].messages)
-        assertEquals("new conversation", StoredConversation(id = "c-9-z").title)
+        assertEquals("new chat", StoredConversation(id = "c-9-z").title)
     }
 
     @Test fun savingAgainReplacesTheFile() {

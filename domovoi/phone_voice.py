@@ -75,6 +75,7 @@ from uuid import UUID
 
 from sqlalchemy import text
 
+from domovoi.chat_titles import first_words_title
 from domovoi.clients.tts import get_tts_client
 from domovoi.clients.whisper import (
     FULL_WINDOW_SEC,
@@ -572,11 +573,14 @@ async def _write_turn(
                     """
                     UPDATE chat_threads
                        SET updated_at = now(),
-                           title = COALESCE(title, LEFT(:c, 60))
+                           title = COALESCE(title, :c)
                      WHERE id = :t
                     """
                 ),
-                {"t": thread_id, "c": transcript.strip().splitlines()[0] if transcript.strip() else ""},
+                # The first five words, as a typed first message is titled
+                # (domovoi/chat_titles.py); the web's title job may then
+                # write a better one.
+                {"t": thread_id, "c": first_words_title(transcript)},
             )
             await s.execute(text("SELECT pg_notify('chat_changed', 'message')"))
     except IntegrityError as e:

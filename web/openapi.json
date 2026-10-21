@@ -13299,10 +13299,37 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "boolean",
-              "default": false,
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "true: the archived threads; false: the others. Without a search the default is false; a search (`q`) looks in both unless this says which.",
               "title": "Archived"
-            }
+            },
+            "description": "true: the archived threads; false: the others. Without a search the default is false; a search (`q`) looks in both unless this says which."
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Search: threads whose title or any message contains this (case ignored), newest first, at most 100, each with `match_snippet` (the words around the first match in a message).",
+              "title": "Q"
+            },
+            "description": "Search: threads whose title or any message contains this (case ignored), newest first, at most 100, each with `match_snippet` (the words around the first match in a message)."
           }
         ],
         "responses": {
@@ -13378,6 +13405,7 @@
           "chat"
         ],
         "summary": "Patch Thread",
+        "description": "Rename and/or archive a thread. A title set here is the person's\n(``title_by_user``): the model's title job never writes over it. A\nblank title is refused (400).",
         "operationId": "patch_thread_api_chat_threads__thread_id__patch",
         "parameters": [
           {
@@ -13517,7 +13545,7 @@
           "chat"
         ],
         "summary": "Send Message",
-        "description": "Persist the user turn, stream the assistant reply as SSE, persist the\nassistant turn at stream end. Events:\n\n  ``event: delta``  data: {\"text\": \"...\"}\n  ``event: done``   data: {<the persisted assistant message row>}\n  ``event: error``  data: {\"detail\": \"...\", \"code\": \"...\", \"model\": \"...\"}\n                    (also persisted on the row: ``error``, ``stats.error_code``)\n\nA message with pictures whose vision model isn't installed \u2014 or none\nis set \u2014 gets its answer up front: the user turn is kept, the reply is\nthe refusal (``vision_model_missing``) and Ollama is never asked. When\nOllama can't be asked whether the model is there, the send goes ahead\nand a failure is reported as it happens.",
+        "description": "Persist the user turn, stream the assistant reply as SSE, persist the\nassistant turn at stream end. Events:\n\n  ``event: delta``  data: {\"text\": \"...\"}\n  ``event: done``   data: {<the persisted assistant message row>}\n  ``event: error``  data: {\"detail\": \"...\", \"code\": \"...\", \"model\": \"...\"}\n                    (also persisted on the row: ``error``, ``stats.error_code``)\n\nA message with pictures whose vision model isn't installed \u2014 or none\nis set \u2014 gets its answer up front: the user turn is kept, the reply is\nthe refusal (``vision_model_missing``) and Ollama is never asked. When\nOllama can't be asked whether the model is there, the send goes ahead\nand a failure is reported as it happens.\n\nThe thread's first message titles it with its first five words\n(``domovoi/chat_titles.py``); once a reply has finished, the chat model\nwrites a better title in the background (:func:`_write_title`), unless\na person has named the thread. A title being written when the next\nmessage arrives is stopped, and written after that reply instead.",
         "operationId": "send_message_api_chat_threads__thread_id__messages_post",
         "parameters": [
           {
@@ -13548,6 +13576,50 @@
                 "schema": {}
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/threads/{thread_id}/retry": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Retry Reply",
+        "description": "\"Try again\": a new reply to the thread's last question, in place of\nthe reply it got. Streams as ``POST .../messages`` does; the old row is\ndeleted and the new one written in one transaction once the new reply\nis complete (the ``done`` event says which with ``replaces``: the old\nrow's id). A retry that fails writes nothing: the thread stays as it\nwas, the stream ends with the ``error`` event and a ``done`` carrying\nthe reply that was kept (``kept: true``), and it can be tried again.\n\nOnly the chat model's reply to a typed message can be tried again\n(:func:`reply_retryable`): 409 ``not_retryable`` for a spoken turn's\nreply (the core may have set a timer with it) or another writer's, 409\n``nothing_to_retry`` when the thread doesn't end with a reply to a\nquestion, 409 ``already_retried`` when another try again is replacing\nit. The model doesn't see the reply being replaced.",
+        "operationId": "retry_reply_api_chat_threads__thread_id__retry_post",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "409": {
+            "description": "{\"detail\": \"...\", \"code\": \"...\"}: `nothing_to_retry` (the thread doesn't end with a reply to a question), `not_retryable` (a spoken turn's or another writer's reply, not the chat model's), `already_retried` (another try again on this reply is running, or has replaced it)"
           },
           "422": {
             "description": "Validation Error",
