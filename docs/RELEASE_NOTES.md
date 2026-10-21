@@ -4,6 +4,36 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-21 — The phone's own assistant knows the phone (app)
+
+Android app only; nothing to run on the server.
+
+* A chat **on this phone** answers about the phone at once, with no
+  model: what's playing, the battery, free space, Wi-Fi or mobile data,
+  the next alarm, Do Not Disturb, the timers this phone mirrors from the
+  server, which phone and Android, which model is answering, connected
+  headphones. The model is told what's playing, the sleep timer, whether
+  the home server is connected, its room names (as the app last saw them)
+  and the listener's first name, and can look up the phone's music,
+  videos and saved audiobooks; it mentions none of it unless asked.
+* **Hand-offs**: "text Sam", "call Mom", "email Alex", "directions to…",
+  "add … to my calendar", "open example.org", "share this" show a card;
+  a tap opens the dialer, Messages, the email app, Maps, the calendar
+  app's editor, the browser or the share sheet, and the person finishes
+  there. Nothing is sent by Domovoi itself.
+* **New optional permissions**, each asked in the chat the first time it
+  is needed, with the reason: location (where am I, the Wi-Fi name),
+  contacts (calling by name; the contact picker works without it), the
+  calendar (reading the phone's own). A refusal is kept and never asked
+  again. Never: texts, the call log, notifications.
+* **Each place answers from its own world**: a phone chat never asks the
+  home server (the household calendar, its timers or its rooms' state);
+  where the server would know, it says so in one line.
+
+What an operator should know: the app's install screen on Google Play
+will list location, contacts and calendar; the Play Console's Data safety
+form needs a check at v1 (`android/play/DATA_SAFETY.md`, owner note).
+
 ## 2026-10-21 — Printing and scanning
 
 Domovoi prints to network printers and scans from network scanners, with
