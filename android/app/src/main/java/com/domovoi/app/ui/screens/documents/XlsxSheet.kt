@@ -480,6 +480,67 @@ internal object XlsxSheet {
         return SheetCell(v = text)
     }
 
+    // ── read every sheet, for Chat (documents plan part 1) ─────────────
+
+    /** A whole workbook as Chat reads it: every sheet by name, every row
+     *  (not the editor's window), cells as text: a formula's saved value,
+     *  or the formula itself when the file kept none ([formulasWithoutValue]
+     *  counts those, as the phone's own editor writes them). */
+    internal class ChatWorkbook(val sheets: List<Pair<String, List<List<String>>>>, val formulasWithoutValue: Int)
+
+    internal fun readForChat(bytes: ByteArray, maxInflated: Long = MAX_UNZIPPED): ChatWorkbook {
+        val entries = unzip(bytes, maxInflated)
+        val book = book(entries)
+        val wb = entries.text(book.workbookPath) ?: throw IOException("not an xlsx file (no workbook)")
+        val wbDir = book.workbookPath.substringBeforeLast('/', "")
+        val wbRels = rels(entries.text(relsPathOf(book.workbookPath)))
+        val strings = sharedStrings(book.sharedStringsPath?.let { entries.text(it) })
+        val st = styles(book.stylesPath?.let { entries.text(it) })
+        var noValue = 0
+        val sheets = ArrayList<Pair<String, List<List<String>>>>()
+        for (tag in MiniXml.tags(wb).filter { it.name == "sheet" && it.kind != Kind.Close }) {
+            val rel = wbRels.firstOrNull { it.id == tag.attr("id") } ?: continue
+            val xml = entries.text(resolve(wbDir, rel.target)) ?: continue
+            val sc = scan(xml)
+            val masters = HashMap<String, Pair<String, CellAt>>()
+            val grid = ArrayList<MutableList<String>>()
+            for (row in sc.rows) {
+                for (cell in row.cells) {
+                    val cv = cellValue(xml, cell, strings, st, book.date1904, masters) ?: continue
+                    val formula = cv.f
+                    val text = if (formula != null) {
+                        savedValue(xml, cell, strings, st, book.date1904) ?: formula.also { noValue++ }
+                    } else {
+                        cv.v ?: continue
+                    }
+                    while (grid.size <= cell.at.row) grid += mutableListOf<String>()
+                    val r = grid[cell.at.row]
+                    while (r.size <= cell.at.col) r += ""
+                    r[cell.at.col] = text
+                }
+            }
+            for (r in grid) while (r.isNotEmpty() && r.last().isEmpty()) r.removeAt(r.lastIndex)
+            sheets += (tag.attr("name") ?: "Sheet${sheets.size + 1}") to grid
+        }
+        return ChatWorkbook(sheets, noValue)
+    }
+
+    /** A formula cell's saved value (its `<v>`), as text; null when none. */
+    private fun savedValue(xml: String, cell: CellSpan, strings: List<String>, st: Styles, date1904: Boolean): String? {
+        val v = child(xml, cell, "v")?.let { innerText(xml, it) }?.takeIf { it.isNotEmpty() } ?: return null
+        val style = cell.open.attr("s")?.toIntOrNull() ?: 0
+        return when (cell.open.attr("t") ?: "n") {
+            "s" -> strings.getOrNull(v.trim().toIntOrNull() ?: -1) ?: ""
+            "b" -> if ((v.trim().toIntOrNull() ?: 0) != 0) "True" else "False"
+            "str", "e", "inlineStr" -> v
+            else -> if (style in st.dates) {
+                v.trim().toDoubleOrNull()?.let { excelDateText(it, date1904, style in st.timedeltas) } ?: numberText(v)
+            } else {
+                numberText(v)
+            }
+        }
+    }
+
     // ── patch ────────────────────────────────────────────────────────────
 
     /**

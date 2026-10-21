@@ -37,7 +37,9 @@ class NoNetworkTest {
 
     @Test fun onlyTheModelDownloaderTouchesTheNetwork() {
         val classes = classesIn("com/domovoi/app/assistant", AssistantBench::class.java) +
-            classesIn("com/domovoi/app/ui/screens/assistant", Class.forName("com.domovoi.app.ui.screens.assistant.AssistantBenchmarkCardKt", false, javaClass.classLoader))
+            classesIn("com/domovoi/app/ui/screens/assistant", Class.forName("com.domovoi.app.ui.screens.assistant.AssistantBenchmarkCardKt", false, javaClass.classLoader)) +
+            // Documents in phone chats (D1): read on the phone, never sent.
+            classesIn("com/domovoi/app/assistant/docs", com.domovoi.app.assistant.docs.DocQa::class.java)
         assertTrue("no classes found", classes.size > 10)
         val offenders = classes.filterNot { (name, _) -> name.startsWith("ModelDownloader") }
             .mapNotNull { (name, bytes) ->
