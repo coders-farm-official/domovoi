@@ -251,7 +251,9 @@ internal fun ChatRowCard(row: ChatRow, chip: String, onOpen: () -> Unit, onDelet
                         )
                     }
                 }
-                row.snippet?.let {
+                // A reply that failed leaves the server's snippet blank: no
+                // empty line under the chip.
+                row.snippet?.takeIf { it.isNotBlank() }?.let {
                     Text(
                         it,
                         style = MaterialTheme.typography.bodySmall,
