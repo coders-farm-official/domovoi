@@ -642,7 +642,7 @@ app, and it asks first: tap **set**, or in a voice chat say yes (any
 "set a sleep timer for 20 minutes" and "continue my book" happen at once,
 with **undo** under the reply for a few seconds; saying "undo" works too.
 "Play the beach video" asks first, then plays it. Music in the house's
-rooms and the home server's timers stay with a home-server chat.
+rooms and the house's timers are a house thing: ask in a home-server chat.
 
 "Text Sam", "call Mom", "email Alex", "directions to the station", "add
 lunch tomorrow at noon to my calendar", "open a link" and "share this"

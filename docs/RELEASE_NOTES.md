@@ -124,9 +124,11 @@ Android app only; nothing to run on the server.
   * **A video saved on the phone** ("play the glacier trip video") asks
     first, then plays over the chat.
 * An action no app on the phone can do is not offered (no Clock app: the
-  chat says so). Things for the house's rooms ("play jazz in the
-  kitchen", server timers) are not done from a phone chat yet; it says so
-  in one sentence, and a home-server chat does them as before.
+  chat says so). Phone chats are phone-only: house things ("play
+  jazz in the kitchen", "cancel the kitchen timer") get one line, "That's
+  a house thing — ask in a home-server chat.", and a home-server chat
+  does them as before. A phone chat never reads the house's timers or
+  names its rooms.
 * **New normal permission** `SET_ALARM` (install-time, no prompt), which
   Android requires for handing a timer or an alarm to the Clock app.
 
