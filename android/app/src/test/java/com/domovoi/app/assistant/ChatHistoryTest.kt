@@ -34,6 +34,13 @@ class ChatHistoryTest {
         assertEquals("Sky", conv("c-1-a", 1, "Why is the sky blue at noon?").copy(name = "Sky").title)
     }
 
+    @Test fun titlesDropControlAndBidiCharacters() {
+        assertEquals("evilgnp.exe and more", ChatTitles.firstWords("evil\u202Egnp.exe and\tmore"))
+        assertEquals("Dinner plans", ChatTitles.clean("\u200BDinner\u2066 plans\u2069\u0007"))
+        assertEquals("Our trip", ChatTitles.plainTitle("  Our\u202E  trip\n "))
+        assertEquals("", ChatTitles.plainTitle("\u202E"))
+    }
+
     @Test fun theModelsWordsAreCleanedIntoATitle() {
         val cases = mapOf(
             "Sky Colour Question" to "Sky Colour Question",

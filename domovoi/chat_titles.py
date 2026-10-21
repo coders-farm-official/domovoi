@@ -19,6 +19,7 @@ kept on the phone (``ChatTitles.kt``); keep the two in step.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 #: The most words a title has, by either step.
 TITLE_WORDS = 5
@@ -40,11 +41,31 @@ _WRAP = "\"'`*_#“”‘’«»[]()<> "
 _TRAIL = ".,;:!?-–—…"
 
 
+def _plain_text(text: str) -> str:
+    """``text`` without control or format characters: control characters
+    (tabs, escapes) become spaces, format characters (bidi overrides such
+    as U+202E, zero-width marks) go, so a title can't reorder or hide what
+    the list shows around it."""
+    out = []
+    for ch in text:
+        cat = unicodedata.category(ch)
+        if cat == "Cf":
+            continue
+        out.append(" " if cat in ("Cc", "Zl", "Zp") else ch)
+    return "".join(out)
+
+
+def plain_title(text: str | None) -> str:
+    """A name a person typed, as kept: no control or format characters,
+    spacing flattened (empty when nothing is left)."""
+    return " ".join(_plain_text(text or "").split())
+
+
 def first_words_title(text: str | None) -> str | None:
     """The first :data:`TITLE_WORDS` words of ``text``, with "…" when
     there were more (or the words ran past :data:`TITLE_MAX_CHARS`); None
     for a message with no words (a picture alone, say)."""
-    words = (text or "").split()
+    words = _plain_text(text or "").split()
     if not words:
         return None
     title = " ".join(words[:TITLE_WORDS])
@@ -61,7 +82,7 @@ def clean_model_title(raw: str | None) -> str | None:
     :data:`TITLE_WORDS` words. None when nothing is left, so the chat
     keeps the title it has."""
     for line in (raw or "").splitlines():
-        line = line.strip()
+        line = _plain_text(line).strip()
         if not line:
             continue
         line = _LEAD.sub("", line.strip(_WRAP)).strip(_WRAP)

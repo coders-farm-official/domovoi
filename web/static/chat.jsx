@@ -700,7 +700,7 @@ const ChatPage = () => {
               ? <div style={{ fontSize: 12, color: 'var(--fg-faint)', padding: 8 }}>
                   {threadsError && threadsError.deviceTokenRequired
                     ? 'paired devices only — pair this browser, or sign in, to read the chats'
-                    : railQ.trim() ? 'no chats match'
+                    : railQ.trim() ? (railList.error ? "couldn't search" : 'no chats match')
                     : showArchived ? 'no archived chats' : 'no chats yet'}
                 </div>
               : railItems.map((t) => (

@@ -12694,7 +12694,7 @@
           "chat"
         ],
         "summary": "Retry Reply",
-        "description": "\"Try again\": a new reply to the thread's last question, in place of\nthe reply it got. Streams as ``POST .../messages`` does; the new row\nreplaces the old one only once it is written (the ``done`` event says\nwhich with ``replaces``: the old row's id), so a retry that fails\nleaves the old reply where it was, with the failure as the new row.\nThe thread must end with a reply to a typed or spoken question (409\notherwise). The model doesn't see the reply being replaced.",
+        "description": "\"Try again\": a new reply to the thread's last question, in place of\nthe reply it got. Streams as ``POST .../messages`` does; the old row is\ndeleted and the new one written in one transaction once the new reply\nis complete (the ``done`` event says which with ``replaces``: the old\nrow's id). A retry that fails writes nothing: the thread stays as it\nwas, the stream ends with the ``error`` event and a ``done`` carrying\nthe reply that was kept (``kept: true``), and it can be tried again.\n\nOnly the chat model's reply to a typed message can be tried again\n(:func:`reply_retryable`): 409 ``not_retryable`` for a spoken turn's\nreply (the core may have set a timer with it) or another writer's, 409\n``nothing_to_retry`` when the thread doesn't end with a reply to a\nquestion, 409 ``already_retried`` when another try again is replacing\nit. The model doesn't see the reply being replaced.",
         "operationId": "retry_reply_api_chat_threads__thread_id__retry_post",
         "parameters": [
           {
@@ -12717,7 +12717,7 @@
             }
           },
           "409": {
-            "description": "{\"detail\": \"...\", \"code\": \"nothing_to_retry\"}: the thread doesn't end with a reply to a question"
+            "description": "{\"detail\": \"...\", \"code\": \"...\"}: `nothing_to_retry` (the thread doesn't end with a reply to a question), `not_retryable` (a spoken turn's or another writer's reply, not the chat model's), `already_retried` (another try again on this reply is running, or has replaced it)"
           },
           "422": {
             "description": "Validation Error",

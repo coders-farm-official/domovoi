@@ -265,8 +265,10 @@ class ChatHomeTest {
             text,
         )
         val asked = LiveMessage("user", "q")
-        val replied = LiveMessage("assistant", "a")
+        val replied = LiveMessage("assistant", "a", retryable = true)
         assertTrue(canRetry(listOf(asked, replied)))
+        // A spoken turn's or the help desk's reply: the server says no.
+        assertFalse(canRetry(listOf(asked, LiveMessage("assistant", "Timer set.", retryable = false))))
         assertFalse(canRetry(listOf(asked)))
         assertFalse(canRetry(listOf(asked, LiveMessage("assistant", "", pending = true))))
         assertFalse(canRetry(listOf(replied)))

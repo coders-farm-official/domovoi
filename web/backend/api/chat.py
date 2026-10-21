@@ -259,7 +259,7 @@ async def list_threads(
 
 @router.post("/threads", dependencies=DEVICE)
 async def create_thread(body: ThreadCreate) -> dict[str, Any]:
-    title = (body.title or "").strip() or None
+    title = chat_titles.plain_title(body.title) or None
     async with session_scope() as s:
         row = (
             await s.execute(
@@ -290,7 +290,7 @@ async def patch_thread(thread_id: int, body: ThreadPatch) -> dict[str, Any]:
     blank title is refused (400)."""
     sets, params = [], {"id": thread_id}
     if body.title is not None:
-        title = body.title.strip()
+        title = chat_titles.plain_title(body.title)
         if not title:
             raise HTTPException(status_code=400, detail="a title can't be empty")
         sets.append("title = :t")
@@ -373,6 +373,9 @@ def _msg_dict(r: Any) -> dict[str, Any]:
     d["speaker_confident"] = d.get("speaker_person_id") is not None and speaker_is_confident(
         d.get("speaker_confidence")
     )
+    # Whether "try again" may replace this reply (the chat model's own
+    # reply to a typed message); always false for a person's message.
+    d["retryable"] = d.get("role") == "assistant" and reply_retryable(d.get("source"), d.get("stats"))
     stats = d.get("stats") if isinstance(d.get("stats"), dict) else {}
     if d.get("role") == "assistant" and d.get("error") and not stats.get("error_code"):
         # A row from before the plain answers kept the exception's own
@@ -828,8 +831,9 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
     ]
     # Well-formed or nothing, as every other route that reads a device id.
     device_id = valid_device_id(body.device_id)
-    # The model's attention is the reply's now (the title waits for it).
-    cancel_title_job(thread_id)
+    # The model's attention is the reply's now: every title job stops and
+    # waits for it.
+    stop_title_jobs()
 
     async with session_scope() as s:
         thread = (
@@ -865,22 +869,65 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
     return await _answer(thread_id, thread.person_id, has_images=bool(images), override=body.model)
 
 
+#: Who wrote a reply that "try again" may replace: the chat model, for a
+#: typed message (``stats.model_role``). A spoken turn's reply ("voice":
+#: the core answered it, maybe with an action such as a timer) and any
+#: other writer's (``"help"``: the help desk's delivered steps) are not
+#: the chat model's to write again. A row with no ``model_role`` (from
+#: before V017) counts as the chat model's when it was typed.
+RETRYABLE_ROLES = frozenset({"chat", "vision", "override"})
+
+
+def reply_retryable(source: str | None, stats: Any) -> bool:
+    """Whether "try again" may replace an assistant row with this
+    ``source`` and ``stats`` (:data:`RETRYABLE_ROLES`)."""
+    if (source or "typed") != "typed":
+        return False
+    if isinstance(stats, str):
+        try:
+            stats = json.loads(stats)
+        except ValueError:
+            stats = None
+    role = stats.get("model_role") if isinstance(stats, dict) else None
+    if stats and isinstance(stats, dict) and stats.get("matched_handler"):
+        return False
+    return role is None or role in RETRYABLE_ROLES
+
+
+# Threads with a retry streaming in this process: a second one waits its
+# turn as a 409, not a second answer.
+_retrying: set[int] = set()
+
+
+def _retry_refused(code: str, detail: str) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": detail, "code": code})
+
+
 @router.post(
     "/threads/{thread_id}/retry",
     dependencies=DEVICE,
-    responses={409: {"description": '{"detail": "...", "code": "nothing_to_retry"}: the thread doesn\'t end '
-                                    "with a reply to a question"}},
+    responses={409: {"description": '{"detail": "...", "code": "..."}: `nothing_to_retry` (the thread doesn\'t '
+                                    "end with a reply to a question), `not_retryable` (a spoken turn's or another "
+                                    "writer's reply, not the chat model's), `already_retried` (another try again "
+                                    "on this reply is running, or has replaced it)"}},
 )
 async def retry_reply(thread_id: int) -> StreamingResponse:
     """"Try again": a new reply to the thread's last question, in place of
-    the reply it got. Streams as ``POST .../messages`` does; the new row
-    replaces the old one only once it is written (the ``done`` event says
-    which with ``replaces``: the old row's id), so a retry that fails
-    leaves the old reply where it was, with the failure as the new row.
-    The thread must end with a reply to a typed or spoken question (409
-    otherwise). The model doesn't see the reply being replaced."""
+    the reply it got. Streams as ``POST .../messages`` does; the old row is
+    deleted and the new one written in one transaction once the new reply
+    is complete (the ``done`` event says which with ``replaces``: the old
+    row's id). A retry that fails writes nothing: the thread stays as it
+    was, the stream ends with the ``error`` event and a ``done`` carrying
+    the reply that was kept (``kept: true``), and it can be tried again.
+
+    Only the chat model's reply to a typed message can be tried again
+    (:func:`reply_retryable`): 409 ``not_retryable`` for a spoken turn's
+    reply (the core may have set a timer with it) or another writer's, 409
+    ``nothing_to_retry`` when the thread doesn't end with a reply to a
+    question, 409 ``already_retried`` when another try again is replacing
+    it. The model doesn't see the reply being replaced."""
     _refuse_with_ai_off()
-    cancel_title_job(thread_id)
+    stop_title_jobs()
     async with session_scope() as s:
         thread = (
             await s.execute(text("SELECT person_id FROM chat_threads WHERE id = :id"), {"id": thread_id})
@@ -891,7 +938,7 @@ async def retry_reply(thread_id: int) -> StreamingResponse:
             await s.execute(
                 text(
                     """
-                    SELECT id, role, images FROM chat_messages
+                    SELECT id, role, images, source, stats FROM chat_messages
                      WHERE thread_id = :id ORDER BY id DESC LIMIT 2
                     """
                 ),
@@ -899,14 +946,20 @@ async def retry_reply(thread_id: int) -> StreamingResponse:
             )
         ).all()
     if len(last) < 2 or last[0].role != "assistant" or last[1].role != "user":
-        return JSONResponse(
-            status_code=409,
-            content={"detail": "there is no reply to try again", "code": "nothing_to_retry"},
-        )
+        return _retry_refused("nothing_to_retry", "there is no reply to try again")
+    if not reply_retryable(last[0].source, last[0].stats):
+        return _retry_refused("not_retryable", "this reply can't be tried again")
+    if thread_id in _retrying:
+        return _retry_refused("already_retried", "this reply is already being tried again")
     asked_images = [
         i for i in (last[1].images or []) if _upload_path((i or {}).get("token", "")) is not None
     ]
-    return await _answer(thread_id, thread.person_id, has_images=bool(asked_images), replace_id=last[0].id)
+    _retrying.add(thread_id)
+    try:
+        return await _answer(thread_id, thread.person_id, has_images=bool(asked_images), replace_id=last[0].id)
+    except BaseException:
+        _retrying.discard(thread_id)
+        raise
 
 
 async def _answer(
@@ -986,6 +1039,17 @@ async def _answer(
         ).scalar_one()
 
     async def sse() -> AsyncIterator[str]:
+        # The model is the reply's while it streams: no title job runs.
+        _reply_started()
+        try:
+            async for event in _reply_events():
+                yield event
+        finally:
+            if replace_id is not None:
+                _retrying.discard(thread_id)
+            _reply_finished()
+
+    async def _reply_events() -> AsyncIterator[str]:
         chunks: list[str] = []
         error: str | None = None
         code: str | None = None
@@ -1042,8 +1106,10 @@ async def _answer(
                 stats["window_from_id"] = window["from_id"]
         if code is not None:
             stats["error_code"] = code
-        # A failed retry keeps the reply it was to replace.
-        replaced = replace_id if (replace_id is not None and error is None) else None
+        if replace_id is not None:
+            async for event in _finish_retry(replace_id, content, error, code, stats):
+                yield event
+            return
         async with session_scope() as s:
             row = (
                 await s.execute(
@@ -1057,11 +1123,6 @@ async def _answer(
                     {"t": thread_id, "c": content, "m": model, "e": error, "st": json.dumps(stats)},
                 )
             ).mappings().first()
-            if replaced is not None:
-                await s.execute(
-                    text("DELETE FROM chat_messages WHERE id = :id AND thread_id = :t AND role = 'assistant'"),
-                    {"id": replaced, "t": thread_id},
-                )
             await s.execute(
                 text("UPDATE chat_threads SET updated_at = now() WHERE id = :t"),
                 {"t": thread_id},
@@ -1071,12 +1132,70 @@ async def _answer(
         if error is not None:
             payload = {"detail": error, "code": code, "model": model}
             yield f"event: error\ndata: {json.dumps(payload)}\n\n"
-        done = _msg_dict(row)
-        if replaced is not None:
-            done["replaces"] = replaced
-        yield f"event: done\ndata: {json.dumps(done)}\n\n"
+        yield f"event: done\ndata: {json.dumps(_msg_dict(row))}\n\n"
         if error is None:
             schedule_title_job(thread_id)
+
+    async def _finish_retry(
+        old_id: int, content: str, error: str | None, code: str | None, stats: dict[str, Any],
+    ) -> AsyncIterator[str]:
+        """The end of a retry. Failed: nothing is written; the error, then
+        the kept reply. Done: the old reply is deleted first, in the same
+        transaction as the new one is written; when it is already gone
+        (another try again replaced it), nothing is written and the stream
+        ends with the ``already_retried`` error."""
+        if error is not None:
+            async with session_scope() as s:
+                kept = (
+                    await s.execute(
+                        text(
+                            """
+                            SELECT {cols}, NULL::text AS device_name, NULL::text AS speaker_name
+                              FROM chat_messages m WHERE m.id = :id AND m.thread_id = :t
+                            """.format(cols=_MSG_COLUMNS)
+                        ),
+                        {"id": old_id, "t": thread_id},
+                    )
+                ).mappings().first()
+            yield f"event: error\ndata: {json.dumps({'detail': error, 'code': code, 'model': model})}\n\n"
+            if kept is not None:
+                yield f"event: done\ndata: {json.dumps(_msg_dict(kept) | {'kept': True})}\n\n"
+            return
+        async with session_scope() as s:
+            gone = (
+                await s.execute(
+                    text(
+                        """
+                        DELETE FROM chat_messages
+                         WHERE id = :id AND thread_id = :t AND role = 'assistant'
+                        RETURNING id
+                        """
+                    ),
+                    {"id": old_id, "t": thread_id},
+                )
+            ).first()
+            if gone is None:
+                await s.rollback()
+                payload = {"detail": "this reply was already tried again", "code": "already_retried", "model": model}
+                yield f"event: error\ndata: {json.dumps(payload)}\n\n"
+                return
+            row = (
+                await s.execute(
+                    text(
+                        """
+                        INSERT INTO chat_messages AS m (thread_id, role, content, model, error, stats)
+                        VALUES (:t, 'assistant', :c, :m, NULL, CAST(:st AS JSONB))
+                        RETURNING {cols}, NULL::text AS device_name, NULL::text AS speaker_name
+                        """.format(cols=_MSG_COLUMNS)
+                    ),
+                    {"t": thread_id, "c": content, "m": model, "st": json.dumps(stats)},
+                )
+            ).mappings().first()
+            await s.execute(text("UPDATE chat_threads SET updated_at = now() WHERE id = :t"), {"t": thread_id})
+            await _notify_chat(s, "message")
+            await s.commit()
+        yield f"event: done\ndata: {json.dumps(_msg_dict(row) | {'replaces': old_id})}\n\n"
+        schedule_title_job(thread_id)
 
     return StreamingResponse(
         sse(),
@@ -1088,21 +1207,37 @@ async def _answer(
 # ─── Titles written by the model ────────────────────────────────────────────
 # After a reply has finished, a thread with no generated title (and no name
 # a person gave it) gets one from the chat model, in the background: the
-# reply is already on its way, so nothing waits for this. One job per
-# thread; the next message to the thread stops it (the model's time is the
-# reply's), and the reply after that starts it again. Titles stay as the
-# first five words when the household's AI features are off, in stub runs
-# (AUTO_TITLES), or when the model has failed twice for the thread.
+# reply is already on its way, so nothing waits for this. One job at a
+# time, from one queue (oldest first): a title never runs beside another
+# title. Any message, try again or voice turn to any thread stops the job
+# running (it goes back to the front of the queue) and the queue waits
+# until no reply is streaming here; it starts again after that reply.
+# Titles stay as the first five words when the household's AI features are
+# off, in stub runs (AUTO_TITLES), or when the model has failed twice for
+# the thread. Threads someone else titled on purpose are skipped:
+# `title_generated` already true (the help desk sets it on the "Help: …"
+# threads it makes), or a title starting HELP_TITLE_PREFIX.
+#
+# Limit: a satellite's voice turn goes to the core, not through this
+# process, so it doesn't pause the queue; a title can then share the model
+# with it. It is short (at most TITLE_MAX_TOKENS tokens, after a
+# TITLE_DELAY_SEC pause), so it delays such a turn by about one title.
 
 #: None: on, except in stub runs (USE_STUBS, every test run). Tests of the
 #: job set it to True and replace :func:`_model_title`.
 AUTO_TITLES: bool | None = None
-#: How long after a reply the job waits before asking the model, so a
+#: How long after a reply the queue waits before asking the model, so a
 #: quick follow-up message doesn't have to stop it.
 TITLE_DELAY_SEC = 1.5
+#: Threads whose title is the help desk's ("Help: …"): never retitled.
+HELP_TITLE_PREFIX = "Help:"
 _TITLE_FAILURES_MAX = 2
-_title_jobs: dict[int, asyncio.Task[None]] = {}
 _title_failures: dict[int, int] = {}
+_title_queue: list[int] = []
+_title_worker: asyncio.Task[None] | None = None
+_title_running: int | None = None
+# Replies streaming in this process (sends, retries, voice turns).
+_replies_busy = 0
 
 
 def _ai_turned_off() -> bool:
@@ -1134,31 +1269,88 @@ def _auto_titles_on() -> bool:
     return on and not _ai_turned_off()
 
 
-def cancel_title_job(thread_id: int) -> None:
-    """Stops the title being written for ``thread_id``, if one is."""
-    task = _title_jobs.pop(thread_id, None)
-    if task is not None and not task.done():
-        task.cancel()
+def _stop_worker() -> None:
+    """Cancels the queue's worker; the thread it was titling goes back to
+    the front of the queue."""
+    global _title_worker, _title_running
+    if _title_running is not None and _title_running not in _title_queue:
+        _title_queue.insert(0, _title_running)
+    _title_running = None
+    worker, _title_worker = _title_worker, None
+    if worker is not None and not worker.done():
+        worker.cancel()
 
 
-def schedule_title_job(thread_id: int) -> None:
-    """Starts the title job for ``thread_id`` (it checks for itself whether
-    the thread still needs one)."""
-    if not _auto_titles_on() or _title_failures.get(thread_id, 0) >= _TITLE_FAILURES_MAX:
+def _ensure_worker() -> None:
+    global _title_worker
+    if not _title_queue:
         return
-    cancel_title_job(thread_id)
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return
-    task = loop.create_task(_write_title(thread_id), name=f"chat-title-{thread_id}")
-    _title_jobs[thread_id] = task
+    worker = _title_worker
+    # (A worker of another event loop is one a finished test client left.)
+    if worker is not None and not worker.done() and worker.get_loop() is loop:
+        return
+    _title_worker = loop.create_task(_title_loop(), name="chat-titles")
 
-    def _forget(t: asyncio.Task[None]) -> None:
-        if _title_jobs.get(thread_id) is t:
-            del _title_jobs[thread_id]
 
-    task.add_done_callback(_forget)
+async def _title_loop() -> None:
+    global _title_running
+    while _title_queue:
+        await asyncio.sleep(TITLE_DELAY_SEC)
+        while _replies_busy > 0:
+            await asyncio.sleep(0.2)
+        if not _title_queue:
+            return
+        thread_id = _title_queue.pop(0)
+        _title_running = thread_id
+        try:
+            await _write_title(thread_id)
+        finally:
+            if _title_running == thread_id:
+                _title_running = None
+
+
+def stop_title_jobs() -> None:
+    """A message, try again or voice turn is coming: the title being
+    written stops (and is written later); the queue waits for the reply."""
+    _stop_worker()
+
+
+def _reply_started() -> None:
+    global _replies_busy
+    _replies_busy += 1
+    _stop_worker()
+
+
+def _reply_finished() -> None:
+    global _replies_busy
+    _replies_busy = max(0, _replies_busy - 1)
+    _ensure_worker()
+
+
+def cancel_title_job(thread_id: int) -> None:
+    """Drops ``thread_id`` from the title queue, and stops its title if it
+    is being written (a rename: the person's name wins)."""
+    if thread_id in _title_queue:
+        _title_queue.remove(thread_id)
+    if _title_running == thread_id:
+        _stop_worker()
+        if thread_id in _title_queue:
+            _title_queue.remove(thread_id)
+        _ensure_worker()
+
+
+def schedule_title_job(thread_id: int) -> None:
+    """Queues ``thread_id`` for a title (the job checks for itself whether
+    the thread still needs one)."""
+    if not _auto_titles_on() or _title_failures.get(thread_id, 0) >= _TITLE_FAILURES_MAX:
+        return
+    if thread_id not in _title_queue and thread_id != _title_running:
+        _title_queue.append(thread_id)
+    _ensure_worker()
 
 
 async def _model_title(question: str, answer: str) -> str | None:
@@ -1182,16 +1374,19 @@ async def _model_title(question: str, answer: str) -> str | None:
 async def _write_title(thread_id: int) -> None:
     """The title job: the thread's first question and first good answer,
     to the model, and its title onto the thread, unless a person has named
-    the thread in the meantime (checked again as the title is written)."""
-    await asyncio.sleep(TITLE_DELAY_SEC)
+    the thread in the meantime (checked again as the title is written), or
+    the thread's title was given on purpose (``title_generated`` set by
+    whoever made it, or a "Help: …" thread)."""
     async with session_scope() as s:
         flags = (
             await s.execute(
-                text("SELECT title_by_user, title_generated FROM chat_threads WHERE id = :id"),
+                text("SELECT title, title_by_user, title_generated FROM chat_threads WHERE id = :id"),
                 {"id": thread_id},
             )
         ).first()
         if flags is None or flags.title_by_user or flags.title_generated:
+            return
+        if (flags.title or "").startswith(HELP_TITLE_PREFIX):
             return
         first = (
             await s.execute(
@@ -1231,6 +1426,7 @@ async def _write_title(thread_id: int) -> None:
                 """
                 UPDATE chat_threads SET title = :t, title_generated = true
                  WHERE id = :id AND NOT title_by_user AND NOT title_generated
+                   AND COALESCE(title, '') NOT LIKE 'Help:%'
                 """
             ),
             {"t": title, "id": thread_id},
@@ -1280,7 +1476,6 @@ async def send_voice(
     on a declared Content-Length and on a streamed overrun alike), which
     leaves room for the longest recording (30 s, 960 kB) and its form."""
     data = await audio.read(_VOICE_MAX_BYTES + 1)
-    cancel_title_job(thread_id)
     if len(data) > _VOICE_MAX_BYTES:
         raise HTTPException(status_code=413, detail="a voice turn is at most 30 seconds")
     form = {"phone_id": phone_id, "thread_id": str(thread_id)}
@@ -1294,6 +1489,8 @@ async def send_voice(
         ),
     }
     url = f"{domovoi_url().rstrip('/')}/v1/phone/voice"
+    # The core's model is this turn's: no title job runs until it is done.
+    _reply_started()
     try:
         async with _core_client() as client:
             r = await client.post(url, data=form, files=files, headers=auth_forward_headers(request))
@@ -1309,6 +1506,8 @@ async def send_voice(
             status_code=502,
             content={"detail": "Domovoi's voice service isn't answering.", "code": "core_unreachable"},
         )
+    finally:
+        _reply_finished()
     try:
         payload = r.json()
     except ValueError:

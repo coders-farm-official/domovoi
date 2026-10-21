@@ -136,6 +136,9 @@ const val WINDOW_NOTE = "earlier messages are beyond what Domovoi can keep in mi
 /** The confirmation for deleting a home-server chat: it is the household's. */
 const val SERVER_DELETE_NOTE = "Deletes it for everyone in the house."
 
+/** What the list says when a search couldn't run in some place. */
+const val SEARCH_FAILED = "couldn't search"
+
 /** Chat's search field. */
 const val SEARCH_HINT = "search chats"
 
@@ -253,7 +256,8 @@ interface ChatPlace {
     fun setArchived(row: ChatRow, archived: Boolean) {}
 
     /** This place's chats whose title or messages contain [query], archived
-     *  ones too, each with the words around the match. */
+     *  ones too, each with the words around the match. Throws when the
+     *  search couldn't run (the list says so, rather than "no chats match"). */
     suspend fun search(query: String): List<ChatRow> = emptyList()
 
     /** [row] as plain text for the share sheet; null when it can't be read. */

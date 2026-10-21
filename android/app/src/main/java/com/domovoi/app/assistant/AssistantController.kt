@@ -217,6 +217,12 @@ class AssistantController(
     /** The model writing a chat's title ([writeTitle]), and for which chat. */
     @Volatile private var titleJob: Job? = null
     @Volatile private var titleFor: String? = null
+    /** "Try again" running: the reply it would replace, kept until the new
+     *  one exists, and put back if it doesn't come. */
+    @Volatile private var retryingFrom: StoredMessage? = null
+    /** One change to a conversation's name, archive mark or title state at
+     *  a time, so archive and the title job can't undo each other. */
+    private val changeLock = Mutex()
     private var loadJob: Job? = null
     private var unloadTimer: Job? = null
     @Volatile private var screensShowing = 0
@@ -720,7 +726,9 @@ class AssistantController(
         // rename meanwhile, is kept.
         pauseTitle()
         val asked = question.withMetaOf(_state.value.conversation)
-        save(asked)
+        // A retry's question is already on disk with the reply it may
+        // replace: that copy stays until the new reply is finished.
+        if (retryingFrom == null) save(asked)
         clockReply(asked, onDelta)?.let { return it }
         val backend = settings.backend
         val llm = try {
@@ -794,9 +802,17 @@ class AssistantController(
     }.onFailure { Log.w(TAG, "the phone's clock could not be read", it) }.getOrNull()
 
     private suspend fun finishReply(asked: StoredConversation, reply: StoredMessage): StoredConversation {
+        // "Try again" that brought no new reply (it failed, came back empty
+        // or was stopped): the reply it was to replace goes back.
+        val old = retryingFrom
+        retryingFrom = null
+        val failedRetry = old != null && (reply.error != null || reply.stopped || reply.text.isBlank())
+        if (failedRetry) say(reply.error?.let { "couldn't try again: $it" } ?: "the earlier reply is kept")
+        val last = if (failedRetry) old!! else reply
         // A rename while the reply was written is kept.
         val done = asked.withMetaOf(_state.value.conversation)
-            .copy(updated = reply.at.coerceAtLeast(asked.updated), messages = asked.messages + reply)
+            .copy(updated = if (failedRetry) asked.updated else reply.at.coerceAtLeast(asked.updated),
+                messages = asked.messages + last)
         _state.update { it.copy(conversation = done, replying = false, thinking = false, lastStopMs = voice?.lastStopMs) }
         withContext(NonCancellable) { save(done) }
         startTitle(done)
@@ -883,19 +899,25 @@ class AssistantController(
 
     /** Changes conversation [id] with [change], on screen and on disk; false
      *  when it can't be read. */
-    private suspend fun changeConversation(id: String, change: (StoredConversation) -> StoredConversation): Boolean {
-        val shown = _state.value.conversation.takeIf { it.id == id && it.messages.isNotEmpty() }
-        val current = shown ?: withContext(io) { conversations.load(id) } ?: return false
-        val changed = change(current)
-        _state.update { if (it.conversation.id == id) it.copy(conversation = changed.copy(messages = it.conversation.messages)) else it }
-        withContext(NonCancellable) { save(changed, makeCurrent = false) }
-        return true
-    }
+    private suspend fun changeConversation(id: String, change: (StoredConversation) -> StoredConversation): Boolean =
+        changeLock.withLock {
+            val ui = _state.value
+            val shown = ui.conversation.takeIf { it.id == id && it.messages.isNotEmpty() }
+            val current = shown ?: withContext(io) { conversations.load(id) } ?: return@withLock false
+            val changed = change(current)
+            _state.update { if (it.conversation.id == id) it.copy(conversation = changed.copy(messages = it.conversation.messages)) else it }
+            // A reply being written to it: the screen has the change, and the
+            // finished reply saves it (finishReply keeps it); a save now would
+            // write the half-written reply (or drop the one a retry replaces).
+            if (shown != null && ui.replying) return@withLock true
+            withContext(NonCancellable) { save(changed, makeCurrent = false) }
+            true
+        }
 
     /** Names conversation [id] [title]: the person's name, which the
      *  model's title never replaces. A blank name changes nothing. */
     fun rename(id: String, title: String) {
-        val name = title.trim().take(RENAME_MAX_CHARS)
+        val name = ChatTitles.plainTitle(title).take(RENAME_MAX_CHARS)
         if (name.isEmpty()) return
         scope.launch {
             if (titleFor == id) pauseTitle()
@@ -925,6 +947,7 @@ class AssistantController(
         val ui = _state.value
         if (!canRetry(ui)) return
         val asked = retryBase(ui.conversation) ?: return
+        retryingFrom = ui.conversation.messages.last()
         _state.update { it.copy(conversation = asked, replying = true, thinking = true) }
         replyJob = scope.launch { reply(asked) }
     }

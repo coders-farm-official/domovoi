@@ -32,7 +32,9 @@ internal fun rememberExportPhoneChats(assistant: AssistantController): () -> Uni
                 val bundle = assistant.exportAll()
                 val bytes = ChatExport.zip(bundle)
                 withContext(Dispatchers.IO) {
-                    context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) } ?: error("no file")
+                    // "wt": a file picked to overwrite is cut to the new zip, not
+                    // written over in place (a longer old file left a tail).
+                    context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(bytes) } ?: error("no file")
                 }
                 bundle.count
             }

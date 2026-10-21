@@ -229,6 +229,7 @@ internal fun ChatHome(
     var showArchived by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var hits by remember { mutableStateOf<List<ChatRow>?>(null) }
+    var searchFailed by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf("") }
     var autoOpened by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
@@ -261,7 +262,19 @@ internal fun ChatHome(
             return@LaunchedEffect
         }
         delay(SEARCH_DEBOUNCE_MS)
-        hits = withPins(places.flatMap { p -> p.search(q) }, pins, server).sortedByDescending { it.updatedMs }
+        var failed = false
+        val found = places.flatMap { p ->
+            try {
+                p.search(q)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failed = true
+                emptyList()
+            }
+        }
+        searchFailed = failed
+        hits = withPins(found, pins, server).sortedByDescending { it.updatedMs }
     }
 
     val current = open
@@ -356,11 +369,17 @@ internal fun ChatHome(
         LaunchedEffect(listState) {
             snapshotFlow { listState.isScrollInProgress }.collect { if (it) listTouched = true }
         }
+        if (searching && searchFailed && shown.isNotEmpty()) {
+            Text("$SEARCH_FAILED everywhere: some chats may be missing", style = MaterialTheme.typography.bodySmall,
+                color = Domovoi.colors.fgMuted)
+            Spacer(Modifier.height(6.dp))
+        }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when {
                 searching && hits == null -> Unit
                 shown.isEmpty() -> EmptyState(
                     when {
+                        searching && searchFailed -> SEARCH_FAILED
                         searching -> "no chats match"
                         showArchived -> "no archived chats"
                         else -> "no chats yet"

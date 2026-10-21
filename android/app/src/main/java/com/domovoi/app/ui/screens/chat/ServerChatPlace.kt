@@ -127,9 +127,10 @@ private class ServerChatPlace(
         }
     }
 
+    // A failure is thrown: the list says it couldn't search, not "no chats
+    // match".
     override suspend fun search(query: String): List<ChatRow> =
-        runCatching { app.api.get(threadSearchPath(query)).decode<ThreadList>().threads.map { it.toChatRow() } }
-            .getOrElse { emptyList() }
+        app.api.get(threadSearchPath(query)).decode<ThreadList>().threads.map { it.toChatRow() }
 
     override suspend fun shareText(row: ChatRow): String? = runCatching {
         val messages = app.api.get("/api/chat/threads/${row.id}/messages").decode<MessageList>().messages

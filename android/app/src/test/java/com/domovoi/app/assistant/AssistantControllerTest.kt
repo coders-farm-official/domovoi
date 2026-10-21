@@ -565,6 +565,54 @@ class AssistantControllerTest {
         assertTrue(kotlinx.coroutines.runBlocking { c.transcript(id) }!!.contains("Domovoi: A better answer."))
     }
 
+    @Test fun aRetryThatFailsOrIsStoppedKeepsTheGoodAnswer() {
+        install()
+        val c = controller()
+        until("installed") { c.ui().installed }
+        c.send("tell me a joke")
+        until("replied") { !c.ui().replying && c.ui().conversation.messages.size == 2 }
+        val id = c.ui().conversation.id
+        val good = c.ui().conversation.messages.last()
+
+        // The model fails: the good answer comes back, on screen and on disk.
+        engines.single().failNext = RuntimeException("out of memory")
+        c.retry()
+        until("restored") { !c.ui().replying && c.ui().conversation.messages.lastOrNull() == good }
+        until("said why") { said.any { it.startsWith("couldn't try again: The model stopped") } }
+        until("on disk") { conversations.load(id)?.messages == listOf(c.ui().conversation.messages[0], good) }
+
+        // Stopped part-way: the earlier answer is kept as well.
+        val gate = CompletableDeferred<Unit>()
+        engines.single().gate = gate
+        c.retry()
+        until("the retry's first words") { c.ui().conversation.messages.lastOrNull()?.text == "Hello" && c.ui().replying }
+        // While it runs, the disk still has the good answer.
+        assertEquals(good, conversations.load(id)!!.messages.last())
+        c.stop()
+        until("stopped") { !c.ui().replying }
+        assertEquals(good, c.ui().conversation.messages.last())
+        until("on disk again") { conversations.load(id)?.messages?.last() == good }
+    }
+
+    @Test fun archiveDuringAReplyIsKeptAndNotUndoneByTheTitle() {
+        install()
+        val gate = CompletableDeferred<Unit>()
+        configure = { it.gate = gate; it.title = "Model Title" }
+        val c = controller()
+        until("installed") { c.ui().installed }
+        c.send("plan a dinner")
+        until("writing") { c.ui().conversation.messages.lastOrNull()?.text == "Hello" }
+        val id = c.ui().conversation.id
+        c.setArchived(id, true)
+        until("archived on screen") { c.ui().conversation.archived }
+        gate.complete(Unit)
+        until("titled") { conversations.load(id)?.titled == true }
+        val saved = conversations.load(id)!!
+        assertTrue("the title job kept the archive", saved.archived)
+        assertEquals("Model Title", saved.title)
+        assertEquals(2, saved.messages.size)
+    }
+
     @Test fun aLongChatSaysWhereTheModelsViewBegins() {
         install()
         val c = controller()
@@ -633,6 +681,8 @@ class ScriptedEngine : LlmEngine {
     var failLoad: Throwable? = null
     var script = listOf("Hello", " there.")
     var gate: CompletableDeferred<Unit>? = null
+    /** The next reply throws this (then it is cleared). */
+    @Volatile var failNext: Throwable? = null
     /** What [oneShot] answers (a title), and what it waits for first. */
     @Volatile var title: String? = null
     @Volatile var titleGate: CompletableDeferred<Unit>? = null
@@ -652,6 +702,7 @@ class ScriptedEngine : LlmEngine {
         systems += system
         replies += history
         nows += now.orEmpty()
+        failNext?.let { failNext = null; throw it }
         script.forEachIndexed { i, d ->
             emit(d)
             if (i == 0) gate?.await()

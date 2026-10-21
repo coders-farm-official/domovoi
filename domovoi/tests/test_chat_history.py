@@ -90,6 +90,10 @@ def titles(monkeypatch):
     monkeypatch.setattr(chat_api, "TITLE_DELAY_SEC", 0)
     monkeypatch.setattr(chat_api, "_model_title", _model_title)
     monkeypatch.setattr(chat_api, "_title_failures", {})
+    monkeypatch.setattr(chat_api, "_title_queue", [])
+    monkeypatch.setattr(chat_api, "_title_worker", None)
+    monkeypatch.setattr(chat_api, "_title_running", None)
+    monkeypatch.setattr(chat_api, "_replies_busy", 0)
     return _T
 
 
@@ -347,13 +351,19 @@ def test_try_again_replaces_the_last_reply(replies) -> None:
         # The model was asked the question again, without the old reply.
         assert replies.calls[-1][1:] == [{"role": "user", "content": "tell me a joke"}]
 
-        # A retry that fails keeps the reply it was to replace.
+        # A retry that fails writes nothing: the reply stays, no error row,
+        # and it can be tried again.
         replies.next = RuntimeError("model gone")
         events = _sse(c.post(f"/api/chat/threads/{t}/retry").text)
+        assert [e for e, _ in events][-2:] == ["error", "done"]
         done = next(d for e, d in events if e == "done")
-        assert "replaces" not in done and done["error"]
+        assert done["kept"] is True and "replaces" not in done and done["content"] == "A better joke"
         msgs = c.get(f"/api/chat/threads/{t}/messages").json()["messages"]
-        assert [m["content"] for m in msgs][:2] == ["tell me a joke", "A better joke"]
+        assert [(m["content"], m["error"]) for m in msgs] == [("tell me a joke", None), ("A better joke", None)]
+        assert msgs[-1]["retryable"] is True and msgs[0]["retryable"] is False
+        replies.next = ["Third", " time"]
+        events = _sse(c.post(f"/api/chat/threads/{t}/retry").text)
+        assert next(d for e, d in events if e == "done")["content"] == "Third time"
         c.delete(f"/api/chat/threads/{t}")
 
 

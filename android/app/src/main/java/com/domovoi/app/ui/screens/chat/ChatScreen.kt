@@ -162,6 +162,10 @@ internal data class MessageRow(
     val speaker_confidence: Double? = null,
     /** The match was clear enough to draw the speaker marker at full strength. */
     val speaker_confident: Boolean = false,
+    /** "Try again" may replace this reply (the chat model's own reply to
+     *  a typed message, V034); false for a spoken turn's or the help
+     *  desk's, and from a server that has no try again. */
+    val retryable: Boolean = false,
 )
 
 @Serializable
@@ -202,6 +206,7 @@ internal class LiveMessage(
     speakerPersonId: Long? = null,
     speakerName: String? = null,
     speakerConfident: Boolean = false,
+    retryable: Boolean = false,
 ) {
     var content by mutableStateOf(content)
     var error by mutableStateOf(error)
@@ -217,6 +222,7 @@ internal class LiveMessage(
     var speakerPersonId by mutableStateOf(speakerPersonId)
     var speakerName by mutableStateOf(speakerName)
     var speakerConfident by mutableStateOf(speakerConfident)
+    var retryable by mutableStateOf(retryable)
     /** Measured on this phone while a reply streams (details dialog only). */
     var sentAtMs: Long? = null
     var firstWordsAtMs: Long? = null
@@ -408,6 +414,7 @@ internal fun ConversationPane(
                         speakerPersonId = it.speaker_person_id,
                         speakerName = it.speaker_name,
                         speakerConfident = it.speaker_confident,
+                        retryable = it.retryable,
                     ),
                 )
             }
@@ -594,6 +601,7 @@ internal fun ConversationPane(
                         live.createdAt = row.created_at
                         live.model = row.model ?: live.model
                         live.stats = row.stats
+                        live.retryable = row.retryable
                         row.error?.let { live.error = it }
                         row.stats?.error_code?.let { live.errorCode = it }
                     },
@@ -611,7 +619,8 @@ internal fun ConversationPane(
 
     // "Try again": the last reply makes way for a new one to the same
     // question; the server swaps them once the new one is written, and the
-    // thread is read back after (a failed retry keeps the old reply there).
+    // thread is read back after (a failed retry writes nothing there, so the
+    // old reply comes back, and why is said).
     fun retry() {
         val target = current ?: return
         if (sending || !canRetry(transcript)) return
@@ -644,6 +653,7 @@ internal fun ConversationPane(
             }
             live.pending = false
             sending = false
+            live.error?.let { toast("couldn't try again: $it") }
             loadMessages(target.id)
         }
     }
@@ -874,7 +884,7 @@ private fun LiveMessage.asRow() = MessageRow(role = role, content = content, err
 internal fun canRetry(transcript: List<LiveMessage>): Boolean {
     val last = transcript.lastOrNull() ?: return false
     val before = transcript.getOrNull(transcript.size - 2) ?: return false
-    return last.role != "user" && !last.pending && before.role == "user"
+    return last.role != "user" && !last.pending && before.role == "user" && last.retryable
 }
 
 /**

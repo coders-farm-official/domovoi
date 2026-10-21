@@ -14,8 +14,8 @@ a way that would otherwise get reported as a bug.
   off. The app's Chat opens on its history (pinned first, then by last use)
   with "Message Domovoi…" at the bottom; a long press renames, pins (kept
   on this phone), archives, shares or deletes, and a swipe archives. Search
-  finds both kinds of chat; copy, share and "try again" are on every
-  reply; a quiet line marks where older messages fall out of what the model
+  finds both kinds of chat; copy and share are on every reply, and "try
+  again" on the last reply to a typed question; a quiet line marks where older messages fall out of what the model
   can see; "export all phone chats" (the phone model's settings) saves
   Markdown plus JSON where you pick. The dashboard's chat gets search,
   rename and the archived list. The update applies migration **V034**
