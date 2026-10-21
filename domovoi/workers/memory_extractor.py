@@ -31,6 +31,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
+from domovoi import ai_features
 from domovoi.clients.ollama import get_ollama_client
 from domovoi.config import settings
 from domovoi.db.repositories import MemoriesRepository, PeopleRepository
@@ -60,6 +61,12 @@ class MemoryExtractor(Worker):
         extraction passes that ran this tick (one per person who
         crossed the threshold) — useful for tests and instrumentation.
         """
+        # AI features off (domovoi/ai_features.py): extraction is a
+        # language model reading the conversation, so the pass is skipped
+        # (and nothing is stamped: it picks up where it was when AI is
+        # turned on again).
+        if ai_features.turned_off():
+            return 0
         since = datetime.now(tz=timezone.utc) - _ACTIVE_WINDOW
         async with session_scope() as session:
             people_repo = PeopleRepository(session)

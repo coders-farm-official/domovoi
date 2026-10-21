@@ -238,6 +238,19 @@ def _register_core_reapply_hooks() -> None:
     ):
         reapply.on_reapply(field, schedule_llm_warmup)
     reapply.on_reapply("log_level", _reapply_log_level)
+    # The AI switch (domovoi/ai_features.py): settings takes the value the
+    # save left in .env, where both processes read it (a failed write
+    # leaves it as it was), then turning it on loads the models ahead of
+    # the first question; turning it off needs nothing — every caller asks
+    # ai_features before it asks a model.
+    from domovoi import ai_features as _ai
+
+    def _reapply_ai_features() -> None:
+        settings.ai_features = _ai.enabled()
+        if settings.ai_features:
+            schedule_llm_warmup()
+
+    reapply.on_reapply("ai_features", _reapply_ai_features)
     # Saving fastlane_mode loads (shadow) or drops (off) the fast lane's
     # model on the spot (domovoi/fast_lane.py).
     from domovoi import fast_lane
@@ -5654,7 +5667,7 @@ async def admin_update_config(body: _AdminConfigUpdateBody) -> dict[str, Any]:
     follow the answer again; the response lists them in ``followed``."""
     import time
 
-    from domovoi import internet_profile
+    from domovoi import ai_features, internet_profile
     from domovoi import reapply as reapply_registry
     from domovoi.config_env_writer import write_env_values
     from domovoi.config_schema import FIELD_BY_NAME, coerce_and_validate
@@ -5709,6 +5722,9 @@ async def admin_update_config(body: _AdminConfigUpdateBody) -> dict[str, Any]:
                 continue
             if name == "internet_access" and internet_profile.answer_locked():
                 rejected[name] = internet_profile.ANSWER_LOCKED
+                continue
+            if name == "ai_features" and ai_features.locked():
+                rejected[name] = ai_features.ANSWER_LOCKED
                 continue
             try:
                 coerced = coerce_and_validate(spec, raw)

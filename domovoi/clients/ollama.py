@@ -1672,6 +1672,21 @@ class RealOllamaClient:
                     cold.append(model)
         return list(dict.fromkeys(cold))
 
+    async def missing_models(self, *roles: str) -> list[str] | None:
+        """The configured models for ``roles`` ("tool", "qa") that Ollama
+        doesn't have at all (not in ``/api/tags``): never pulled, or
+        deleted in Settings. None when Ollama can't be asked. A model that
+        isn't there can't be "woken up", so the router asks this before it
+        says so (router._ready_for)."""
+        if self._url is None:
+            return []
+        tags = await tags_or_none(self._url, 2.0)
+        if tags is None:
+            return None
+        wanted = {"tool": self._tool_model, "qa": self._qa_model}
+        out = [wanted[r] for r in roles if wanted.get(r) and not model_installed(wanted[r], tags)]
+        return list(dict.fromkeys(out))
+
     def for_cold_start(self) -> "RealOllamaClient":
         """This client, but with a read timeout long enough for Ollama to
         load a model before its first byte (``ollama_load_timeout_sec``).

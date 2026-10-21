@@ -239,6 +239,22 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     # Ollama swaps models per-request, so clearing the cached client
     # (reset_ollama_client) is enough — no server restart, unlike
     # Whisper (whisper_model is 'restart', loaded once at boot).
+    # The household's AI switch comes first: Settings → Models shows it as
+    # its own card (web/static/models.jsx), and with it off the model rows
+    # below have nothing to do.
+    FieldSpec(
+        "ai_features", "AI chat and questions", "Models",
+        "On: Domovoi answers questions, understands commands said in your "
+        "own words, summarises your news briefing, and the dashboard and "
+        "app have Chat. Off: nothing uses the AI models. Voice commands "
+        "still work on their usual phrases (timers, music, the clock, "
+        "intercom, notes, news headlines and more), and so do speech "
+        "recognition, the voices and the wake word; a question gets 'I'm "
+        "set up for home commands', and Chat is hidden. Turning it on needs "
+        "the AI models (Settings → Models offers to download them). "
+        "Applies immediately.",
+        "bool", tier="reapply",
+    ),
     FieldSpec(
         "ollama_model", "Q&A model", "Models",
         "The Ollama model for conversational Q&A ('tell me a joke' fallthrough). "
