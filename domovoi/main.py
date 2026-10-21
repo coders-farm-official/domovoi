@@ -1579,16 +1579,22 @@ async def admin_satellite_setup_code(body: _SetupCodeBody) -> dict[str, Any]:
 
 
 @app.get("/v1/satellite-setup/codes/{code}")
-async def satellite_setup_code(code: str) -> dict[str, Any]:
+async def satellite_setup_code(code: str, challenge: str | None = None) -> dict[str, Any]:
     """What the Setup gets for a live code: the room's enrolment payload
     and the satellite bundle's SHA-256, as the PowerShell command carries
-    them, plus the parts it shows (room, fingerprint). Public on the LAN
-    like the bundle: nothing in it is a secret. 404 for an unknown or
-    expired code; 423 while the container guard's freeze is on."""
+    them, plus the parts it shows (room, fingerprint). With ``challenge``
+    (16 random bytes in hex, the Setup's), signed by this server's
+    identity key (``public_key``, ``signature``: domovoi/satellite_setup.py
+    setup_message), which is what the Setup holds the answer to. Public on
+    the LAN like the bundle: nothing in it is a secret. 404 for an unknown
+    or expired code, 422 for a malformed challenge; 423 while the container
+    guard's freeze is on."""
     await container_freeze.require_unfrozen("satellite_channel", public=True)
     from domovoi import satellite_bundle, satellite_setup
     from satellite import enrolment
 
+    if challenge is not None and not satellite_setup.valid_challenge(challenge):
+        raise HTTPException(status_code=422, detail="the challenge must be 32 lower-case hex digits")
     payload = satellite_setup.lookup(code)
     if payload is None:
         raise HTTPException(status_code=404, detail="that setup code is not known here: it has expired "
@@ -1597,8 +1603,9 @@ async def satellite_setup_code(code: str) -> dict[str, Any]:
     bundle = await asyncio.to_thread(
         satellite_bundle.current, SATELLITE_CODE_DIR, _is_allowed_satellite_code
     )
-    return {
+    answer = {
         "format": 1,
+        "code": satellite_setup.normalize_code(code),
         "payload": payload,
         "core": parsed.core,
         "room": parsed.room,
@@ -1609,6 +1616,13 @@ async def satellite_setup_code(code: str) -> dict[str, Any]:
         "bundle_path": "/v1/satellite-code/bundle.tar.gz",
         "expires_at": satellite_setup.expires_at(code),
     }
+    if challenge is not None:
+        identity = server_identity.load_or_create()
+        message = satellite_setup.setup_message(challenge, answer["code"], payload, bundle.sha256)
+        answer.update(challenge=challenge, algorithm=server_identity.ALGORITHM,
+                      public_key=identity.public_key_b64,
+                      signature=server_identity.b64(identity.sign(message)))
+    return answer
 
 
 async def _satellite_setup_download(code: str) -> FileResponse:

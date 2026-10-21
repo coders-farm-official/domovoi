@@ -7,9 +7,9 @@ Builds the Windows installer (a preview).
    notification-area icon), with the C# compiler that ships inside .NET
    Framework 4.8.1 (C# 5; nothing to install).
 2. The unit tests in tests\Tests.cs (the same compiler), run at once.
-3. DomovoiSetup.exe, with Inno Setup 6's ISCC.exe, and beside it
-   DomovoiSatelliteSetup.exe (installer\DomovoiSatelliteSetup.iss: the
-   double-click Setup that makes a spare Windows PC a room).
+3. DomovoiSatelliteSetup.exe (installer\DomovoiSatelliteSetup.iss: the
+   double-click Setup that makes a spare Windows PC a room), then
+   DomovoiSetup.exe, which carries it, with Inno Setup 6's ISCC.exe.
 
 Output goes to windows\build\ (ignored by git). Windows PowerShell 5.1.
 Building changes nothing on this PC beyond that folder.
@@ -220,10 +220,11 @@ if (-not $SkipInstaller) {
         }
     }
     if (-not $Iscc) { throw 'Inno Setup 6 not found (ISCC.exe). Install it, or pass -Iscc.' }
-    & $Iscc '/Q' "/O$out" (Join-Path $here 'installer\DomovoiSetup.iss')
-    if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
+    # The satellite Setup first: DomovoiSetup.exe carries it.
     & $Iscc '/Q' "/O$out" (Join-Path $here 'installer\DomovoiSatelliteSetup.iss')
     if ($LASTEXITCODE -ne 0) { throw 'ISCC failed for DomovoiSatelliteSetup.iss' }
+    & $Iscc '/Q' "/O$out" (Join-Path $here 'installer\DomovoiSetup.iss')
+    if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
     foreach ($name in 'DomovoiSetup.exe', 'DomovoiSatelliteSetup.exe') {
         $setup = Join-Path $out $name
         $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()

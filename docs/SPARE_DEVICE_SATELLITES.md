@@ -609,29 +609,32 @@ a one-line PowerShell command. Both install exactly the same thing.
 **Settings → Satellites → add a spare device**, the room's name, **make
 the code**. Under **windows laptop or pc** the card shows:
 
-- a **setup code**, like `K7M4-QX2P`, and your **server**'s address. The
-  code works for **24 hours**, for this room only (make a new one after
-  that, or after the server restarts). It is **not a password**: it only
-  tells the Setup which server and which room, and the PC still has to be
-  approved with its own six-digit code (step 3);
+- a **setup code**, like `K7M4-QX2P-9TRA`, and your **server**'s address.
+  The code works for **24 hours**, for this room only (make a new one after
+  that, or after the server restarts). It is **not a password**: it tells
+  the Setup which server and which room, the PC still has to be approved
+  with its own six-digit code (step 3), and the Setup checks that the
+  server answering is really the one the code was made on (the code is
+  made from that server's fingerprint and the room);
 - **Download the Windows Setup**, and a short address to type into the
-  PC's browser instead, like `http://192.168.1.20:6370/win/K7M4-QX2P`.
+  PC's browser instead, like `http://192.168.1.20:6370/win/K7M4-QX2P-9TRA`.
 
 The file comes **from your own Domovoi server**, over your home network,
 and its name carries the code and the server
-(`DomovoiSatelliteSetup_K7M4QX2P_192.168.1.20_6370.exe`), so the Setup
+(`DomovoiSatelliteSetup_K7M4QX2P9TRA_192.168.1.20_6370.exe`), so the Setup
 fills them in by itself: don't rename it (if you do, it just asks for
 both).
 
-The first time, the card may say the server doesn't have the Setup yet:
-press **get the Windows Setup** once, and the server downloads it (a few
-MB) from Domovoi's release on GitHub, checked against that release's
-`SHA256SUMS`. Every Windows PC in the house then gets it from your
-server. Under `INTERNET_ACCESS=never` the server can't fetch it: download
-`DomovoiSatelliteSetup.exe` from
-[Domovoi's releases](https://github.com/coders-farm-official/domovoi/releases/latest)
-on the PC itself and type the code and the server into it, or use the
-PowerShell command.
+**Where your server gets the Setup.** A server installed with Domovoi's
+Windows Setup has it already: `DomovoiSetup.exe` carries the satellite
+Setup of the same version and puts it where the dashboard finds it, so it
+works with no internet at all. A **Linux** server downloads it once from
+Domovoi's release on GitHub: when a release carries it, the card offers
+**get the Windows Setup** (a few MB, checked against that release's
+`SHA256SUMS`), and every Windows PC in the house then gets it from your
+server. Until a release carries it (the first is the release after
+1.0.0-rc3), or under `INTERNET_ACCESS=never`, the card shows the
+PowerShell command first, which installs exactly the same thing.
 
 The card may also say the server doesn't hold the **Windows files** yet
 (Python and its libraries, about 96 MB): press **get the Windows files**
@@ -657,15 +660,20 @@ On the PC, signed in as the person whose account it will run in:
    Setup needs no administrator rights (and stops if you start it with
    **Run as administrator**).
 3. **Follow it.** The code and the server are filled in; it asks the
-   server which room the code is for and shows it with your server's
-   **fingerprint** (the same as **Settings → About**). Then two choices:
+   server which room the code is for, and the server has to **prove** it
+   is the one the code was made on (it signs a fresh challenge with the
+   key behind its fingerprint, which is part of the code); if anything
+   else answers, Setup stops before it downloads anything. It then shows
+   the room, the code (check it is the one on the dashboard) and your
+   server's **fingerprint** (the same as **Settings → About**). Then two
+   choices:
    whether the server may **update and restart the satellite on its own**
    ("Ask me first" or "Automatic", [below](#automatic-or-ask-me-on-windows))
    and, while plugged in, **never sleep** and **keep running with the lid
    closed** (both unticked unless you tick them; see the PowerShell steps
    below for what they change). **Install** does the rest, the same steps
    as the command: it downloads the satellite from your server and runs
-   nothing unless it is exactly what the server announced for that code,
+   nothing unless it is exactly what the server signed for that code,
    refuses the PC that runs your Domovoi server, makes your server prove
    its fingerprint before anything is written, and installs into
    `%LOCALAPPDATA%\Domovoi\Satellite` for this account only.
@@ -677,7 +685,7 @@ On the PC, signed in as the person whose account it will run in:
 A few minutes, mostly downloads. It takes about 350 MB on disk.
 
 For admins: the Setup also runs silently, `DomovoiSatelliteSetup.exe
-/VERYSILENT /SERVER=192.168.1.20 /CODE=K7M4-QX2P /PERMISSIONS=ask
+/VERYSILENT /SERVER=192.168.1.20 /CODE=K7M4-QX2P-9TRA /PERMISSIONS=ask
 /POWER=no` (`/POWER=standby`, `lid` or `yes` for the power choices).
 
 ### 3. Approve it
@@ -862,7 +870,8 @@ same question as on every Pi; see the wake-word notes).
 | The Setup says the server "does not know the code" | The code is more than 24 hours old, the server restarted since, or it was mistyped. Make a new code on the dashboard (the same room gets the same code again while it lives). |
 | The Setup says "that is not the address of a Domovoi server on your home network" | Type the server as the card shows it (`192.168.1.20`, or `192.168.1.20:6400` for another port). The Setup talks only to an address on your home network (or this PC), never anywhere else. |
 | The Setup says "no Domovoi server answered" | This PC is on another network (a guest Wi-Fi), or the server is off. |
-| "This is not the download the dashboard expected" (or "the server announced", in the Setup) | Domovoi was updated since the command was made (or the download was changed on the way). Make a new command. |
+| The Setup says the server "did not prove it is the Domovoi server this code was made on" | The address or the code is not the one on the dashboard, or another machine answers at that address. Check both on the dashboard (Settings → Satellites); nothing was downloaded or installed. |
+| "This is not the download the dashboard expected" (or "the server signed for this code", in the Setup) | Domovoi was updated since the command was made (or the download was changed on the way). Make a new command. |
 | "this window runs as administrator" (or the Setup says it runs as administrator) | Open a normal PowerShell window and paste it again; for the Setup, start it with a double-click, not **Run as administrator**. |
 | "never installed on the PC that runs the Domovoi server" | This PC runs the server. Use another PC. |
 | "did not prove it is the one in the code" | As on Linux: a different machine answers at that address. Compare the fingerprint with **Settings → About**. |

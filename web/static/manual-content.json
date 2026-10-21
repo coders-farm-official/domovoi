@@ -1602,7 +1602,7 @@
        "text": "**Linux:** press **copy the command** and run it on that computer, signed in as the account it should use."
       },
       {
-       "text": "**Windows:** on that PC, signed in as the account it should use, press **Download the Windows Setup** (or type the short address the card shows into its browser) and open the file. The setup code is in its name, so there is nothing to type. Press **get the Windows Setup** on the card once first if it asks."
+       "text": "**Windows:** on that PC, signed in as the account it should use, press **Download the Windows Setup** (or type the short address the card shows into its browser) and open the file. The setup code is in its name, so there is nothing to type. If the card shows only a command, paste that into PowerShell on the PC instead (a Linux server may offer **get the Windows Setup** first)."
       },
       {
        "text": "Windows says **\"Windows protected your PC\"**: click **More info**, then **Run anyway**. Domovoi isn't signed by Microsoft yet; the file comes from your own server."

@@ -2525,31 +2525,10 @@ const SpareQr = ({ text }) => {
  * libraries come from this server's cache when an admin has fetched them,
  * else straight from python.org and PyPI, the same pinned files. */
 const spareMb = (b) => b == null ? '—' : `${Math.round(b / 1e6)} MB`;
-const SPARE_SETUP_RELEASES = 'https://github.com/coders-farm-official/domovoi/releases/latest';
-const SpareWindowsSetup = ({ ws, fire }) => {
-  const [st, setSt] = React.useState(ws.setup || null);
-  const [fetching, setFetching] = React.useState(false);
-  React.useEffect(() => { setSt(ws.setup || null); }, [ws]);
-  React.useEffect(() => {
-    if (!st || !st.fetch || !st.fetch.running) return undefined;
-    const t = setInterval(async () => {
-      try { setSt(await apiGet('/api/satellites/windows-setup')); } catch (e) { /* keep the last */ }
-    }, 3000);
-    return () => clearInterval(t);
-  }, [st && st.fetch && st.fetch.running]);
-  const getSetup = async () => {
-    setFetching(true);
-    try {
-      setSt(await apiPost('/api/satellites/windows-setup/fetch', {}));
-    } catch (e) {
-      fire(apiErrorText(e, 0));
-    } finally {
-      setFetching(false);
-    }
-  };
+// The Setup's steps, when this server holds it: the code, the download,
+// what the browser and SmartScreen show and why.
+const SpareWindowsSetup = ({ ws, st }) => {
   const note = { fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 };
-  const running = !!(st && st.fetch && st.fetch.running);
-  const ready = !!(st && st.ready);
   return (
     <div className="spare-windows-setup" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div className="spare-windows-code" style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'baseline' }}>
@@ -2558,55 +2537,80 @@ const SpareWindowsSetup = ({ ws, fire }) => {
         <div><span className="label">server</span> <span className="mono">{ws.server}</span></div>
       </div>
       <div style={{ fontSize: 11.5, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
-        The code works for 24 hours, for this room only. It is not a password: it only tells Setup
-        which server and which room.
+        The code works for 24 hours, for this room only. It is not a password: it tells Setup which
+        server and which room, and Setup checks that the server answering really is this one.
       </div>
-      {ready ? (
-        <ol className="spare-windows-steps" style={{ ...note, margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <li>On that PC, signed in as the account it will run in, download the Setup:{' '}
-            <a className="btn btn-primary spare-windows-download" href={ws.download_url}
-               style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <Icon name="download" size={14}/>Download the Windows Setup ({spareMb(st.size)})
-            </a>
-            <div style={{ marginTop: 4 }}>Or type this into its browser:{' '}
-              <span className="mono spare-windows-short" style={{ userSelect: 'all' }}>{ws.short_url}</span>.
-              The file's name carries the code and the server, so Setup fills them in by itself.</div>
-          </li>
-          <li>Your browser may say the file isn't commonly downloaded or can't be downloaded securely
-            (it comes over your home network, without https). Choose <b>Keep</b>.</li>
-          <li>Open it. Windows shows a blue box, <b>“Windows protected your PC”</b>. Click <b>More info</b>,
-            check that the app is <b>DomovoiSatelliteSetup</b>, then click <b>Run anyway</b>. Why: Domovoi isn't
-            signed by Microsoft yet, so Windows doesn't recognise it; the file comes from your own
-            Domovoi server.</li>
-          <li>Follow Setup. It needs no administrator rights, and stops on the PC that runs this Domovoi
-            server. At the end it shows a six-digit approval code: type it above, under waiting for approval.</li>
-        </ol>
-      ) : (
-        <div className="spare-windows-setup-missing" style={{ ...note, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <div>This server doesn't have the Windows Setup yet. Get it once (a few MB, from Domovoi's release
-            on GitHub, checked against that release's checksum list), and every Windows PC in the house
-            downloads it from here.</div>
-          {st && st.internet_off && <div style={{ color: 'var(--warn-ink)' }}>Internet access is off
-            (Settings → Internet), so this server can't fetch it. Download <span className="mono">DomovoiSatelliteSetup.exe</span> on
-            that PC from <a href={SPARE_SETUP_RELEASES} target="_blank" rel="noopener noreferrer">Domovoi's releases</a> and
-            type the code and server above into it, or use the PowerShell command below.</div>}
-          {st && st.fetch && st.fetch.ok === false && st.fetch.message &&
-            <div role="alert" style={{ color: 'var(--err-ink)' }}>Last try: {st.fetch.message}</div>}
-          <div>
-            <Button icon="download" disabled={running || fetching || (st && st.internet_off)} onClick={getSetup}>
-              {running ? 'getting the Windows Setup…' : 'get the Windows Setup'}
-            </Button>
-          </div>
-        </div>
-      )}
+      <ol className="spare-windows-steps" style={{ ...note, margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <li>On that PC, signed in as the account it will run in, download the Setup:{' '}
+          <a className="btn btn-primary spare-windows-download" href={ws.download_url}
+             style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <Icon name="download" size={14}/>Download the Windows Setup ({spareMb(st.size)})
+          </a>
+          <div style={{ marginTop: 4 }}>Or type this into its browser:{' '}
+            <span className="mono spare-windows-short" style={{ userSelect: 'all' }}>{ws.short_url}</span>.
+            The file's name carries the code and the server, so Setup fills them in by itself.</div>
+        </li>
+        <li>Your browser may say the file isn't commonly downloaded or can't be downloaded securely
+          (it comes over your home network, without https). Choose <b>Keep</b>.</li>
+        <li>Open it. Windows shows a blue box, <b>“Windows protected your PC”</b>. Click <b>More info</b>,
+          check that the app is <b>DomovoiSatelliteSetup</b>, then click <b>Run anyway</b>. Why: Domovoi isn't
+          signed by Microsoft yet, so Windows doesn't recognise it; the file comes from your own
+          Domovoi server.</li>
+        <li>Follow Setup. Check that the setup code it shows is the one above. It needs no administrator
+          rights, and stops on the PC that runs this Domovoi server. At the end it shows a six-digit
+          approval code: type it above, under waiting for approval.</li>
+      </ol>
+    </div>
+  );
+};
+
+// When this server doesn't hold the Setup: what would bring it, in plain
+// words, and the button only when pressing it can work (a Linux server,
+// and a release on GitHub that carries the Setup).
+const SpareWindowsSetupOffer = ({ st, running, fetching, onGet }) => {
+  const note = { fontSize: 11.5, color: 'var(--fg-faint)', lineHeight: 1.5 };
+  if (!st) return null;
+  if (st.windows_install) {
+    return (
+      <div className="spare-windows-setup-offer" style={note}>
+        A double-click Setup comes with Domovoi's Windows Setup: once this server is updated with a
+        DomovoiSetup.exe that carries it, it is offered here instead of the command.
+      </div>
+    );
+  }
+  if (!st.fetchable) {
+    return (
+      <div className="spare-windows-setup-offer" style={note}>
+        {st.internet_off
+          ? 'Internet access is off (Settings → Internet), so this server can’t get the double-click Setup; the command above does the same.'
+          : 'A double-click Setup will be offered here once a Domovoi release carries it; until then, the command above does the same.'}
+      </div>
+    );
+  }
+  const where = st.fetchable === 'latest' ? 'the latest Domovoi release' : `Domovoi’s release ${st.fetchable}`;
+  return (
+    <div className="spare-windows-setup-offer" style={{ ...note, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div>Or, so nobody has to paste anything: this server can get the double-click Setup once (a few MB,
+        from {where} on GitHub, checked against that release’s checksum list), and every Windows PC in
+        the house then downloads it from here.</div>
+      {st.fetch && st.fetch.ok === false && st.fetch.message &&
+        <div role="alert" style={{ color: 'var(--err-ink)' }}>That didn’t work: {st.fetch.message}</div>}
+      <div>
+        <Button icon="download" disabled={running || fetching} onClick={onGet}>
+          {running ? 'getting the Windows Setup…' : 'get the Windows Setup'}
+        </Button>
+      </div>
     </div>
   );
 };
 
 const SpareWindows = ({ res, fire }) => {
+  const ws = res.windows_setup;
   const [rt, setRt] = React.useState(res.windows_runtime || null);
   const [fetching, setFetching] = React.useState(false);
-  React.useEffect(() => { setRt(res.windows_runtime || null); }, [res]);
+  const [st, setSt] = React.useState((ws && ws.setup) || null);
+  const [gettingSetup, setGettingSetup] = React.useState(false);
+  React.useEffect(() => { setRt(res.windows_runtime || null); setSt((res.windows_setup && res.windows_setup.setup) || null); }, [res]);
   React.useEffect(() => {
     if (!rt || !rt.fetch || !rt.fetch.running) return undefined;
     const t = setInterval(async () => {
@@ -2614,6 +2618,13 @@ const SpareWindows = ({ res, fire }) => {
     }, 3000);
     return () => clearInterval(t);
   }, [rt && rt.fetch && rt.fetch.running]);
+  React.useEffect(() => {
+    if (!st || !st.fetch || !st.fetch.running) return undefined;
+    const t = setInterval(async () => {
+      try { setSt(await apiGet('/api/satellites/windows-setup')); } catch (e) { /* keep the last */ }
+    }, 3000);
+    return () => clearInterval(t);
+  }, [st && st.fetch && st.fetch.running]);
   const getFiles = async () => {
     setFetching(true);
     try {
@@ -2622,6 +2633,16 @@ const SpareWindows = ({ res, fire }) => {
       fire(apiErrorText(e, 0));
     } finally {
       setFetching(false);
+    }
+  };
+  const getSetup = async () => {
+    setGettingSetup(true);
+    try {
+      setSt(await apiPost('/api/satellites/windows-setup/fetch', {}));
+    } catch (e) {
+      fire(apiErrorText(e, 0));
+    } finally {
+      setGettingSetup(false);
     }
   };
   const copy = async () => {
@@ -2633,7 +2654,8 @@ const SpareWindows = ({ res, fire }) => {
     }
   };
   const running = !!(rt && rt.fetch && rt.fetch.running);
-  const ws = res.windows_setup;
+  // The Setup first only when this server can hand it out right now.
+  const setupReady = !!(ws && st && st.ready);
   const command = (
     <>
       <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
@@ -2653,7 +2675,9 @@ const SpareWindows = ({ res, fire }) => {
   return (
     <div className="spare-windows" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div className="label">windows laptop or pc (windows 10 or 11, 64-bit)</div>
-      {ws ? <SpareWindowsSetup ws={ws} fire={fire}/> : command}
+      {setupReady ? <SpareWindowsSetup ws={ws} st={st}/> : command}
+      {!setupReady && ws && <SpareWindowsSetupOffer st={st} fetching={gettingSetup}
+                                                    running={!!(st && st.fetch && st.fetch.running)} onGet={getSetup}/>}
       <div role="note" className="spare-windows-unsigned"
            style={{ fontSize: 11.5, color: 'var(--warn-ink)', lineHeight: 1.5 }}>
         Not signed yet: neither the Setup nor the satellite's own code carries a signature (Python itself is
@@ -2681,7 +2705,7 @@ const SpareWindows = ({ res, fire }) => {
           )}
         </div>
       )}
-      {ws && (
+      {setupReady && (
         <details className="spare-windows-advanced">
           <summary style={{ fontSize: 12, cursor: 'pointer' }}>advanced: the PowerShell command instead of the Setup</summary>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>{command}</div>

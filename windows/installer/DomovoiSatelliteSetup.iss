@@ -17,7 +17,10 @@
 ;
 ; The setup code and the server: a download from the dashboard's link is
 ; named DomovoiSatelliteSetup_<code>_<host>_<port>.exe by the server, and
-; Setup reads them back from its own file name; otherwise it asks. On the
+; Setup reads them back from its own file name; otherwise it asks. The
+; worker holds the server's answer to the code: the code is the hash of the
+; room's enrolment payload, and the answer must be signed by the identity
+; key the payload's fingerprint names (satellite-setup.ps1). On the
 ; command line: /SERVER= /CODE= /PERMISSIONS=ask|automatic
 ; /POWER=no|standby|lid|yes /INSTALLROOT= (with /VERYSILENT for a silent
 ; install).
@@ -386,7 +389,7 @@ begin
   ChoicePage := CreateCustomPage(AfterID, 'This PC as a room', 'Two choices, both changeable later.');
   { Two short lines, filled in when the page opens (CurPageChanged). }
   RoomText := AddText(ChoicePage, ' ', 0, 0, False);
-  Y := RoomText.Top + ScaleY(40);
+  Y := RoomText.Top + ScaleY(56);
   T := AddText(ChoicePage, 'May the Domovoi server update and restart this satellite on its own?', Y, 0, False);
   Y := T.Top + T.Height + ScaleY(6);
   RadioAsk := AddRadio(ChoicePage, 'Ask me first', Y);
@@ -498,7 +501,7 @@ begin
   CodePage := CreateInputQueryPage(wpWelcome, 'Your setup code', 'From the dashboard: Settings > Satellites > add a spare device > windows laptop or pc.',
     'Type both as the dashboard shows them. A Setup downloaded from the dashboard''s link has them filled in already: just click Next.');
   CodePage.Add('Domovoi server (for example 192.168.1.20):', False);
-  CodePage.Add('Setup code (for example K7M4-QX2P):', False);
+  CodePage.Add('Setup code (for example K7M4-QX2P-9TRA):', False);
   Prefill;
   CreateChoicePage(CodePage.ID);
   WorkPage := CreateOutputMarqueeProgressPage('Making this PC a room', 'A few minutes, mostly downloads from your Domovoi server. You can keep using the PC.');
@@ -528,7 +531,9 @@ begin
   if CurPageID = ChoicePage.ID then
   begin
     WizardForm.PageDescriptionLabel.Caption := 'This PC becomes the room "' + Room + '".';
-    RoomText.Caption := 'Domovoi server: ' + Core + #13#10 + 'Its fingerprint: ' + Fingerprint;
+    RoomText.Caption := 'Domovoi server: ' + Core + ', which proved it is the one the code was made on.' + #13#10 +
+      'Setup code: ' + Clean(CodePage.Values[1]) + ' (check it is the one on the dashboard)' + #13#10 +
+      'Its fingerprint: ' + Fingerprint;
     RoomText.AdjustHeight;
   end
   else if CurPageID = wpFinished then

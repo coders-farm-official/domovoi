@@ -95,6 +95,7 @@ static partial class Tests
         UninstallTexts();
         LeftoverProfileTests();
         TrayTests();
+        SatelliteSetupTests();
         Console.WriteLine();
         Console.WriteLine(Inv.F("{0} passed, {1} failed", passed, failed));
         return failed == 0 ? 0 : 1;
@@ -1504,6 +1505,43 @@ static partial class Tests
             Eq(@"C:\Users\domovoi-svc.DESKTOP-ALEX\.wslconfig", WslConfig.FileIn(@"C:\Users\domovoi-svc.DESKTOP-ALEX"), "where Windows made the profile");
             Throws<ArgumentException>(delegate { WslConfig.FileIn(""); }, "no profile");
             True(UninstallFacts.IsDomovoiProfilePath(@"C:\Users\domovoi-svc.DESKTOP-ALEX"), "the uninstall recognises it");
+        });
+    }
+
+    // -- the satellite Setup DomovoiHost places (2026-10-21) ---------------
+
+    static void SatelliteSetupTests()
+    {
+        string sha = new string('a', 64);
+        Run("satellite setup: the record is the core's shape", delegate
+        {
+            Eq("{\"sha256\": \"" + sha + "\", \"size\": 3252640, \"release\": \"bundled\", \"fetched_at\": 1761000000}",
+               SatelliteSetupPlacement.Record(sha, 3252640, 1761000000), "record");
+            bool threw = false;
+            try { SatelliteSetupPlacement.Record("not-hex'; rm -rf /", 1, 1); } catch (ArgumentException) { threw = true; }
+            True(threw, "only a SHA-256 goes into the script");
+        });
+        Run("satellite setup: placed in the core's cache, then the record, then checked", delegate
+        {
+            string s = SatelliteSetupPlacement.PlaceScript(sha, 5, 6);
+            string d = "/home/domovoi/.domovoi/satellite_media/cache/satellite_setup";
+            True(s.StartsWith("set -e; umask 022; mkdir -p " + d + "; cat > "), s);
+            True(s.IndexOf("mv -f " + d + "/.DomovoiSatelliteSetup.exe.placing " + d + "/DomovoiSatelliteSetup.exe") > 0, "moved in");
+            True(s.IndexOf("/DomovoiSatelliteSetup.exe;") < s.IndexOf("/setup.json;"), "the file before its record");
+            True(s.EndsWith("sha256sum " + d + "/DomovoiSatelliteSetup.exe"), "checked");
+            Eq("sha256sum " + d + "/DomovoiSatelliteSetup.exe 2>/dev/null || true", SatelliteSetupPlacement.CheckScript(), "check");
+        });
+        Run("satellite setup: none beside the host is none", delegate
+        {
+            string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "domovoi-sat-" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(dir);
+            try
+            {
+                True(SatelliteSetupPlacement.Source(dir) == null, "absent");
+                System.IO.File.WriteAllBytes(System.IO.Path.Combine(dir, "DomovoiSatelliteSetup.exe"), new byte[] { 77, 90 });
+                Eq(System.IO.Path.Combine(dir, "DomovoiSatelliteSetup.exe"), SatelliteSetupPlacement.Source(dir), "present");
+            }
+            finally { System.IO.Directory.Delete(dir, true); }
         });
     }
 

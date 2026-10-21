@@ -2539,10 +2539,11 @@ command. It is only a wizard in front of the same install
 `satellite-setup.ps1`), so everything above holds; what it adds:
 
 * **A setup code is not a credential.** The dashboard's "make the code"
-  (admin tier, `POST /v1/admin/satellite-setup/codes`) gives an 8-character
-  code (Crockford base 32, 40 bits) that names that room's enrolment
-  payload for **24 hours**, in the core's memory only (a restart forgets
-  every code; at most 64 live). `GET /v1/satellite-setup/codes/{code}` is
+  (admin tier, `POST /v1/admin/satellite-setup/codes`) gives a 12-character
+  code (Crockford base 32): **60 bits of the SHA-256 of the room's
+  enrolment payload**, which holds the server's fingerprint. It names
+  that payload for **24 hours**, in the core's memory only (a restart
+  forgets every code; at most 64 live). `GET /v1/satellite-setup/codes/{code}` is
   public on the LAN, like the bundle, and answers with the payload and the
   bundle's SHA-256: exactly what the PowerShell command carries, and
   nothing secret (an address, a public fingerprint, a room name). So the
@@ -2551,41 +2552,68 @@ command. It is only a wizard in front of the same install
   history or a log can keep it: it expires, and guessing one gains
   nothing the server's `/v1/health` doesn't already say. Joining still
   needs the device's six-digit approval code typed into the dashboard.
-* **The same checks, in the same order.** The Setup asks the server for
-  the code, downloads the bundle from that server, runs nothing unless its
-  SHA-256 is the one the server gave for the code, and runs the bundle's
-  `install-windows.ps1`, which proves the fingerprint before anything is
-  written. As with the command, that chain is as trustworthy as the LAN
-  answer it starts from (plain HTTP): compare the fingerprint the Setup
-  shows with **Settings → About** on another device to rule out a
-  rewritten answer.
+* **The answer is bound to your server** (review of wf/win-sat-installer,
+  round 1). The Setup asks for the code with a fresh 16-byte challenge.
+  The answer must carry a payload whose own hash **is** that code, the
+  public key whose fingerprint that payload names, and that key's Ed25519
+  signature over the challenge, the code, the payload and the bundle's
+  SHA-256 (`domovoi-satellite-setup-v1`, `domovoi/satellite_setup.py`
+  `setup_message`; the worker verifies it with its own Ed25519, since
+  .NET Framework has none). Only then does it download the bundle, and it
+  runs nothing unless the bundle has that signed SHA-256; the bundle's
+  `install-windows.ps1` then proves the fingerprint again before anything
+  is written. So a rogue host on the LAN, a renamed download pointing at
+  it, or something on the path of the plain-HTTP talk can't make the Setup
+  run its code: it can't sign as your server, and finding another payload
+  with the same code (one with its own fingerprint in it) is a 2^60
+  search, against a code that lives 24 hours. Every request goes direct,
+  never through the system proxy (no WPAD detour), and follows no
+  redirect.
+* **What it still trusts.** The code itself, as it reaches the PC. Typed
+  from the dashboard, it is as good as the dashboard page (plain HTTP on
+  the LAN, as for the command): someone who can rewrite that page can
+  show you their own code. In a file name, it is as good as the file:
+  someone who hands you a renamed Setup can name their own server and
+  code in it, which is why the Setup shows the code and asks you to check
+  it against the dashboard, and the server's fingerprint beside it (the
+  same as **Settings → About**).
 * **Only a home-network server.** The Setup talks to an address on the
   home network (the enrolment code's rule: a private address, or a name
   ending in `.local`, `.home.arpa`, `.lan` or `.internal`) or to the PC
   itself, and refuses any other, whether it came from its file name or
-  was typed: a renamed or doctored download, or a "type this server"
-  message, can't make it download and run code from the internet. It
-  follows no redirect from the server.
+  was typed. **A limit:** a name is taken by its ending, not resolved and
+  checked, so a `.lan` or `.internal` name the network's DNS points
+  elsewhere is still asked; what keeps that harmless is the signature
+  above, not the name.
 * **No elevation, nothing of its own left.** It runs as the signed-in
   account (`PrivilegesRequired=lowest`), stops if started elevated, copies
   no file, writes no registry value and has no uninstaller of its own; its
   worker runs from its temporary folder, which Setup deletes when it
   closes. The satellite it installs is removed by its own uninstaller, as
   above.
-* **Where the Setup file comes from.** Only when an admin presses **get
-  the Windows Setup**, the core downloads it from Domovoi's GitHub release
-  (the one `android/release.json` names, else the latest), through the
-  outbound gate, and keeps it only if its SHA-256 is the one that
-  release's `SHA256SUMS` lists and it is a Windows program; it serves it
-  only while its bytes are still those. Refused under
-  `INTERNET_ACCESS=never`. `scripts/release/finish-release` builds it from
-  the tag's own files and attaches it beside `DomovoiSetup.exe`.
+* **Where the Setup file comes from.** On a server installed by
+  Domovoi's Windows Setup: from that Setup, which carries the
+  `DomovoiSatelliteSetup.exe` of the same build; DomovoiHost places it,
+  with its SHA-256 in a record, in the core's cache at every start, and
+  the core serves it only while its bytes match. Nothing is fetched from
+  GitHub for it there. On a Linux server: only when an admin presses
+  **get the Windows Setup**, which the card offers only when a release
+  has it (the core reads that release's `SHA256SUMS`, at most every six
+  hours and never under `INTERNET_ACCESS=never`), the core downloads it
+  from Domovoi's GitHub release (the one `android/release.json` names,
+  preferred because it matches this server's version, else the latest),
+  through the outbound gate, and keeps it only if its SHA-256 is the one
+  that release's `SHA256SUMS` lists and it is a Windows program; it serves
+  it only while its bytes are still those. `scripts/release/finish-release`
+  builds both Setups from the tag's own files and attaches them.
 
 **The unsigned installer, plainly.** The Setup is **not code-signed**
 (owner decision 2026-10-21; signing is on hold), so nothing
-cryptographic ties the file to Coders Farm: what vouches for it is
-GitHub's HTTPS and the release's own `SHA256SUMS`, both on GitHub, and
-then your server, which hands the laptops the copy it checked. Someone who
+cryptographic ties the file to Coders Farm: what vouches for it is the
+server's own Setup (on Windows) or GitHub's HTTPS and the release's own
+`SHA256SUMS` (on Linux), and then your server, which hands the laptops the
+copy it checked. What the Setup then runs is bound to your server's key
+(above); the Setup program itself is not. Someone who
 could replace a release asset and its checksum list on GitHub, or the
 file in your server's cache, could hand out a different program, and
 nothing on the laptop would notice. Windows SmartScreen says "Windows

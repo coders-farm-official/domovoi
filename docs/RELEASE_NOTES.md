@@ -8,15 +8,19 @@ a way that would otherwise get reported as a bug.
 
 A spare Windows laptop or PC becomes a room with `DomovoiSatelliteSetup.exe`
 instead of a PowerShell command. **Settings → Satellites → add a spare
-device → make the code**: the Windows column now shows a setup code (24
-hours, not a password) and **Download the Windows Setup**, whose file name
-carries the code and the server, so nothing is typed. The PowerShell
-command is still there, under "advanced".
+device → make the code**: when the server holds the Setup, the Windows
+column shows a setup code (24 hours, not a password) and **Download the
+Windows Setup**, whose file name carries the code and the server, so
+nothing is typed; the PowerShell command moves under "advanced". The
+Setup checks that the server answering is the one the code was made on
+(a signature by its identity key) before it downloads anything.
 
-* **Once per server, an admin presses "get the Windows Setup"**: the
-  server downloads it (a few MB) from Domovoi's GitHub release, checked
-  against the release's `SHA256SUMS`, and hands it to the house's PCs.
-  A release from before this one has no Setup to fetch.
+* **A Windows server** gets the Setup with its own: the next
+  `DomovoiSetup.exe` carries it and puts it in place, offline.
+* **A Linux server** downloads it once from Domovoi's GitHub release, on
+  an admin's press of **get the Windows Setup** (offered only when a
+  release carries it: the first is the release after 1.0.0-rc3). Until
+  then the card shows the PowerShell command first, as before.
 * **It is not code-signed yet.** Windows SmartScreen says "Windows
   protected your PC": **More info → Run anyway**. The dashboard and
   docs/SPARE_DEVICE_SATELLITES.md say so step by step; the limit is in

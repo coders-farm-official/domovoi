@@ -16,9 +16,17 @@ This module is the core's half:
   ``POST /v1/admin/satellite-setup/codes``; it names that room's enrolment
   payload (``domovoi-room:1?core=…&fp=…&room=…``, satellite/enrolment.py)
   for :data:`CODE_TTL_SEC` (24 hours, like the server's own first-run setup
-  code). ``GET /v1/satellite-setup/codes/{code}`` answers the Setup with
-  the payload and the satellite bundle's digest — exactly what the
-  PowerShell command quotes. **A code is not a credential**: the payload
+  code). **The code is the payload's own hash** (:func:`code_for`: 60 bits
+  of its SHA-256), so it commits to the server's fingerprint inside it.
+  ``GET /v1/satellite-setup/codes/{code}?challenge=…`` answers the Setup
+  with the payload and the satellite bundle's digest, exactly what the
+  PowerShell command quotes, **signed with this server's identity key**
+  over the Setup's fresh challenge (:func:`setup_message`). The Setup
+  checks that the payload hashes to the code it was given, that the key
+  is the one the payload's fingerprint names, and that the signature
+  holds: a host that answers in this server's place (a rogue box, a
+  renamed download, something on the path) can neither sign as it nor
+  find another payload with that code. **A code is not a credential**: the payload
   carries no secret (an address, a public fingerprint, a room name), the
   device still has to be approved with its own six-digit code, and the
   server still has to prove the fingerprint before anything is written. A
@@ -28,6 +36,10 @@ This module is the core's half:
   them (the dashboard makes a new one), and at most :data:`MAX_CODES` are
   live, the oldest dropped first.
 * **The Setup file** (:func:`fetch`, :func:`cached_file`, :func:`status`).
+  A server installed on Windows gets it with its own Setup: DomovoiSetup.exe
+  carries the DomovoiSatelliteSetup.exe of the same build, and DomovoiHost
+  places it, with its record, in this cache at every start (a version
+  that matches, offline). For a Linux server,
   ``DomovoiSatelliteSetup.exe`` is attached to Domovoi's GitHub releases
   by scripts/release/finish-release.ps1, beside ``DomovoiSetup.exe``, and
   listed in that release's ``SHA256SUMS``. Only when an admin presses the
@@ -49,7 +61,6 @@ import json
 import logging
 import os
 import re
-import secrets
 import threading
 import time
 import urllib.parse
@@ -77,9 +88,13 @@ SHORT_PATH = "/win/"
 CODE_TTL_SEC = 24 * 3600
 MAX_CODES = 64
 #: Crockford's base 32: no I, L, O or U, so a code read aloud or typed from
-#: a phone's screen has no look-alikes; 8 of them are 40 bits.
+#: a phone's screen has no look-alikes; 12 of them are 60 bits of the
+#: payload's SHA-256 (:func:`code_for`).
 ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-CODE_LEN = 8
+CODE_LEN = 12
+#: What the identity key signs for the Setup (:func:`setup_message`).
+SETUP_CONTEXT = b"domovoi-satellite-setup-v1"
+_CHALLENGE_RE = re.compile(r"^[0-9a-f]{32}$")
 _LOOKALIKES = str.maketrans({"O": "0", "I": "1", "L": "1"})
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 #: A host the file name may carry: an IPv4 address or a DNS name (no IPv6,
@@ -98,7 +113,7 @@ _codes_lock = threading.Lock()
 
 
 def normalize_code(text: str) -> str | None:
-    """The code as stored (8 characters of :data:`ALPHABET`), from what a
+    """The code as stored (12 characters of :data:`ALPHABET`), from what a
     person typed: case, dashes and spaces don't matter, and O, I and L are
     read as 0, 1 and 1. None when it can't be a code."""
     if not isinstance(text, str) or len(text) > 32:
@@ -110,8 +125,33 @@ def normalize_code(text: str) -> str | None:
 
 
 def display_code(code: str) -> str:
-    """``K7M4QX2P`` as people read it: ``K7M4-QX2P``."""
-    return f"{code[:4]}-{code[4:]}"
+    """``K7M4QX2P9TRA`` as people read it: ``K7M4-QX2P-9TRA``."""
+    return f"{code[:4]}-{code[4:8]}-{code[8:]}"
+
+
+def code_for(payload: str) -> str:
+    """The setup code of ``payload``: the first 60 bits of its SHA-256 (of
+    its UTF-8 bytes), in :data:`ALPHABET`, most significant first. The
+    Setup's worker (windows/installer/satellite-setup.ps1) computes the
+    same and refuses an answer whose payload has another code: finding a
+    second payload, with another fingerprint in it, that has a given code
+    is a 2^60 search."""
+    top = int.from_bytes(hashlib.sha256(payload.encode("utf-8")).digest()[:8], "big") >> 4
+    return "".join(ALPHABET[(top >> (5 * (CODE_LEN - 1 - i))) & 31] for i in range(CODE_LEN))
+
+
+def valid_challenge(text: object) -> bool:
+    """A Setup's challenge: 16 random bytes in lower-case hex."""
+    return isinstance(text, str) and bool(_CHALLENGE_RE.match(text))
+
+
+def setup_message(challenge: str, code: str, payload: str, bundle_sha256: str) -> bytes:
+    """The bytes this server's identity key signs for a Setup: the Setup's
+    challenge (so an old answer can't be replayed), the code, the payload
+    and the bundle's SHA-256, one per line. Every part is ASCII (the
+    payload is percent-encoded)."""
+    return b"\n".join([SETUP_CONTEXT, challenge.encode("ascii"), code.encode("ascii"),
+                       payload.encode("utf-8"), bundle_sha256.encode("ascii")])
 
 
 def _expire(now: float) -> None:
@@ -133,13 +173,10 @@ def make_code(payload: str, *, now: float | None = None) -> dict[str, Any]:
     now = time.time() if now is None else now
     with _codes_lock:
         _expire(now)
-        code = next((c for c, t in _codes.items() if t["payload"] == payload), None)
-        if code is None:
+        code = code_for(payload)
+        if code not in _codes:
             while len(_codes) >= MAX_CODES:
                 del _codes[min(_codes, key=lambda c: _codes[c]["made_at"])]
-            code = "".join(secrets.choice(ALPHABET) for _ in range(CODE_LEN))
-            while code in _codes:
-                code = "".join(secrets.choice(ALPHABET) for _ in range(CODE_LEN))
             _codes[code] = {"payload": payload, "made_at": now}
         _codes[code]["expires_at"] = now + CODE_TTL_SEC
         entry = dict(_codes[code])
@@ -189,9 +226,9 @@ def server_text(core: str) -> str:
 def download_name(code: str, core: str) -> str:
     """The file name a download from the dashboard's link gets, which the
     Setup reads its code and server back out of:
-    ``DomovoiSatelliteSetup_K7M4QX2P_192.168.1.20_6370.exe``. An https
+    ``DomovoiSatelliteSetup_K7M4QX2P9TRA_192.168.1.20_6370.exe``. An https
     server or an IPv6 address doesn't fit a file name: then it carries the
-    code only (``DomovoiSatelliteSetup_K7M4QX2P.exe``) and the Setup asks
+    code only (``DomovoiSatelliteSetup_K7M4QX2P9TRA.exe``) and the Setup asks
     for the server. A browser that adds " (1)" to a second download keeps
     it readable."""
     stem = f"DomovoiSatelliteSetup_{code}"
@@ -313,17 +350,83 @@ def cached_file() -> Path | None:
     return path if satellite_windows._matches(path, rec["sha256"], rec["size"]) else None
 
 
-def status() -> dict[str, Any]:
+#: The record DomovoiHost writes beside a Setup it placed (windows/host):
+#: ``release`` is this, so the card knows it came with the server.
+BUNDLED = "bundled"
+#: How long a look at the releases is trusted (:func:`release_with_setup`).
+PROBE_TTL_SEC = 6 * 3600
+PROBE_RETRY_SEC = 10 * 60
+_probe: dict[str, Any] = {"at": 0.0, "found": None}
+_probe_lock = threading.Lock()
+
+
+def windows_install() -> bool:
+    """Whether this server is the one Domovoi's Windows Setup installed
+    (inside its WSL distro): its Setup brings the satellite's, and nothing
+    is fetched from GitHub for it."""
+    from domovoi import host_kind
+
+    try:
+        return host_kind.is_wsl()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def release_with_setup(*, now: float | None = None) -> str | None:
+    """The release (this checkout's, else the latest) whose ``SHA256SUMS``
+    lists the Setup, or None: what "get the Windows Setup" would fetch.
+    Asked of GitHub at most every :data:`PROBE_TTL_SEC` (a no every
+    :data:`PROBE_RETRY_SEC`), never under ``INTERNET_ACCESS=never``, never
+    on a Windows install; a checksum list is all it reads."""
+    from domovoi import egress
+
+    if windows_install() or egress.internet_turned_off():
+        return None
+    now = time.time() if now is None else now
+    with _probe_lock:
+        ttl = PROBE_TTL_SEC if _probe["found"] else PROBE_RETRY_SEC
+        if _probe["at"] and now - _probe["at"] < ttl:
+            return _probe["found"]
+    found = None
+    for label, base in sources(release_tag()):
+        try:
+            sums = _get(base + SUMS_ASSET, None, MAX_SUMS_BYTES)
+        except Exception:  # noqa: BLE001 — no answer is "not there"
+            continue
+        if isinstance(sums, bytes) and parse_sums(sums.decode("utf-8", "replace")):
+            found = label
+            break
+    with _probe_lock:
+        _probe.update(at=now, found=found)
+    return found
+
+
+def forget_probe() -> None:
+    with _probe_lock:
+        _probe.update(at=0.0, found=None)
+
+
+def status(*, probe: bool = True) -> dict[str, Any]:
+    """What the card shows. ``fetchable``: the label of the release "get the
+    Windows Setup" would fetch from (a Linux server that doesn't hold it
+    yet), else None, and then the card offers no such button."""
     from domovoi import egress
 
     rec = read_record() if cached_file() is not None else None
+    windows = windows_install()
+    fetchable = None
+    if rec is None and not windows and probe:
+        fetchable = release_with_setup()
     return {
         "ready": rec is not None,
         "file": SETUP_ASSET,
         "size": rec["size"] if rec else None,
         "sha256": rec["sha256"] if rec else None,
         "release": rec.get("release") if rec else None,
+        "bundled": bool(rec and rec.get("release") == BUNDLED),
         "fetched_at": rec.get("fetched_at") if rec else None,
+        "windows_install": windows,
+        "fetchable": fetchable,
         "internet_off": egress.internet_turned_off(),
         "fetch": dict(_job),
     }
@@ -333,11 +436,14 @@ def fetch() -> tuple[bool, str]:
     """Download the Setup from the GitHub release (see the module notes),
     keep it only if ``SHA256SUMS`` there vouches for it. Blocking: run it
     off the event loop. ``(ok, message)``."""
-    from domovoi.satellite_media import fetchers
+    from domovoi import egress
 
-    refused = fetchers._turned_off("the Windows satellite Setup")
-    if refused:
-        return refused
+    if windows_install():
+        return False, ("this server came with Domovoi's Windows Setup, which brings the satellite Setup "
+                       "with it: run the newest DomovoiSetup.exe to update it")
+    if egress.internet_turned_off():
+        return False, ("internet access is off (Settings → Internet), so this server can't download "
+                       "the Windows Setup")
     dest = _bucket()
     problems: list[str] = []
     for label, base in sources(release_tag()):
@@ -346,7 +452,7 @@ def fetch() -> tuple[bool, str]:
             assert isinstance(sums, bytes)
             want = parse_sums(sums.decode("utf-8", "replace"))
             if want is None:
-                problems.append(f"{label}: its {SUMS_ASSET} has no {SETUP_ASSET} (a release from before it)")
+                problems.append(f"{label}: no Setup in that release")
                 continue
             part = dest / f".{SETUP_ASSET}.download"
             try:
@@ -365,8 +471,12 @@ def fetch() -> tuple[bool, str]:
             continue
         record = {"sha256": want, "size": size, "release": label, "fetched_at": time.time()}
         (dest / RECORD_NAME).write_text(json.dumps(record, indent=2), encoding="utf-8")
+        forget_probe()
         return True, f"{SETUP_ASSET} from the {label} release verified ({size} bytes)"
-    return False, "; ".join(problems)[:900]
+    # The details go to the log; the card says it in plain words.
+    log.warning("Windows satellite Setup not fetched: %s", "; ".join(problems)[:900])
+    return False, ("the Windows Setup could not be downloaded from Domovoi's releases just now; "
+                   "try again later, or use the PowerShell command")
 
 
 def start_fetch() -> bool:
