@@ -10,14 +10,17 @@ the phone's "Continue from the kitchen (2 h 13 m)" (``GET
 
 When the voice path starts or resumes a book in a room it records WHO
 asked, in :data:`ROOM_BOOKS`: the book, the room's device slot, the person
-(None for an unidentified listener) and the MPD files the book is made of.
-Each tick asks every recorded room's MPD what it is doing; a room PLAYING
-one of its book's files has exactly that slot written — MPD's elapsed in
-the file, plus, for a per-chapter folder book, that file's start in the
-book. Nobody else's place is ever touched: an unidentified listener writes
-only the anonymous slot, a person only their own, and a room whose player
-has moved on to something else (music, another book started some other
-way) is forgotten and writes nothing. (Review 2026-10-20: the first cut
+(None for an unidentified listener), the MPD files the book is made of and
+the song ids of the queue entries it put in the room's queue. Each tick
+asks every recorded room's MPD what it is doing; a room PLAYING one of
+those very entries has exactly that slot written — MPD's elapsed in the
+file, plus, for a per-chapter folder book, that file's start in the book.
+Nobody else's place is ever touched: an unidentified listener writes only
+the anonymous slot, a person only their own. A paused room keeps its
+record (a voice resume carries on). A stopped room, or one playing any
+other entry — music, or the same file queued again by anything else (round
+2 review: a music search's "play Emma" landed on the book's file and would
+have moved Alex's 2 h place to 5 s) — is forgotten and writes nothing. (Review 2026-10-20: the first cut
 wrote the newest place for the book and room, whoever's, so a book playing
 there for any other reason moved a person's two-hour place to 5 s.)
 
@@ -50,6 +53,11 @@ class RoomBook:
     device_id: str              # the room's slot in playback_positions
     person_id: int | None       # None: the unidentified listener's slot
     starts: dict[str, int] = field(default_factory=dict)  # MPD file → start in the book
+    # The room-queue entries (MPD song ids) the voice path queued for it.
+    # A song id names one queue entry for its life, so the same FILE played
+    # later by anything else (a music search over MPD's database, a
+    # re-queue) is a different id and is never taken for this book.
+    song_ids: frozenset[int] = frozenset()
 
 
 ROOM_BOOKS: dict[str, RoomBook] = {}
@@ -68,20 +76,30 @@ def forget_room(room_id: str) -> None:
         ROOM_BOOKS.pop(room_id, None)
 
 
-async def _room_place(client: Any) -> tuple[str, float] | None:
-    """``(MPD file, elapsed)`` when the room's player is playing."""
+async def _room_place(client: Any) -> tuple[str, Any, float, Any] | None:
+    """``(state, song id, elapsed, MPD file)`` of the room's player, or
+    None when it couldn't be asked."""
     try:
-        if await client.state() != "play":
-            return None
+        state = await client.state()
+        if state != "play":
+            return state, None, 0.0, None
         song = await client.current_song() or {}
         elapsed = await client.elapsed_sec()
     except Exception as e:  # noqa: BLE001 — one room's player never stops the rest
         log.debug("room book positions: MPD probe failed: %s", e)
         return None
-    f = str(song.get("file") or "")
-    if not f or elapsed is None:
-        return None
-    return f, float(elapsed)
+    sid = song.get("id", song.get("Id"))
+    try:
+        sid = int(sid) if sid is not None else None
+    except (TypeError, ValueError):
+        sid = None
+    return state, sid, float(elapsed or 0.0), str(song.get("file") or "")
+
+
+def _forget_if(room: str, book: RoomBook) -> None:
+    with _LOCK:
+        if ROOM_BOOKS.get(room) is book:
+            del ROOM_BOOKS[room]
 
 
 async def save_room_book_positions(clients: list[tuple[str, Any]] | None = None) -> int:
@@ -103,13 +121,19 @@ async def save_room_book_positions(clients: list[tuple[str, Any]] | None = None)
             continue
         place = await _room_place(client)
         if place is None:
-            continue  # paused or stopped: the place last written stands
-        mpd_file, elapsed = place
-        if mpd_file not in book.starts:
-            # The room plays something else now: this book is not playing.
-            with _LOCK:
-                if ROOM_BOOKS.get(room) is book:
-                    del ROOM_BOOKS[room]
+            continue  # the player didn't answer: try again next tick
+        state, sid, elapsed, mpd_file = place
+        if state == "pause":
+            continue  # paused: the place last written stands, a voice resume goes on
+        if state != "play":
+            # Stopped (or gone): the book is over here. Whatever plays in
+            # this room next is someone's new start, not this record's.
+            _forget_if(room, book)
+            continue
+        if sid is None or sid not in book.song_ids or mpd_file not in book.starts:
+            # The room plays something else now (even the same file, queued
+            # again by something else): this book is not playing.
+            _forget_if(room, book)
             continue
         writes.append((book, int(book.starts[mpd_file] + elapsed)))
     if not writes:

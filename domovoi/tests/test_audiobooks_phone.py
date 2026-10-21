@@ -776,7 +776,13 @@ async def _playing(files: list[str], *, at: int = 0, sec: float = 0, play: bool 
     return client
 
 
+async def _ids(client: MPDStubClient) -> frozenset[int]:
+    """The queue entries the voice path would have recorded."""
+    return frozenset(int(e["id"]) for e in await client.queue_list())
+
+
 DUNE_FILES = ["audiobooks/Dune/01 Arrakis.mp3", "audiobooks/Dune/02 Muad'Dib.mp3"]
+EMMA = {"audiobooks/Emma.mp3": 0}
 
 
 @requires_db
@@ -789,23 +795,24 @@ async def test_a_playing_room_has_its_place_saved(db_session, books, room_books)
     await db_session.execute(text("INSERT INTO people (id, name) VALUES (1, 'Alex')"))
     await _position(db_session, book_id, "kitchen", person=1, pos=0)
     await _position(db_session, emma_id, "den", person=None, pos=0)
-    room_books.record_room_book("kitchen", room_books.RoomBook(
-        item_id=book_id, device_id="kitchen", person_id=1,
-        starts={DUNE_FILES[0]: 0, DUNE_FILES[1]: 10}))
-    room_books.record_room_book("den", room_books.RoomBook(
-        item_id=emma_id, device_id="den", person_id=None, starts={"audiobooks/Emma.mp3": 0}))
-    room_books.record_room_book("garage", room_books.RoomBook(
-        item_id=emma_id, device_id="garage", person_id=None, starts={"audiobooks/Emma.mp3": 0}))
     kitchen = await _playing(DUNE_FILES, at=1, sec=7)
     den = await _playing(["audiobooks/Emma.mp3"], sec=42)
     office = await _playing(["audiobooks/Emma.mp3"], sec=99)          # nobody started it by voice
     garage = await _playing(["audiobooks/Emma.mp3"], sec=5, play=False)  # paused: left alone
+    room_books.record_room_book("kitchen", room_books.RoomBook(
+        item_id=book_id, device_id="kitchen", person_id=1,
+        starts={DUNE_FILES[0]: 0, DUNE_FILES[1]: 10}, song_ids=await _ids(kitchen)))
+    room_books.record_room_book("den", room_books.RoomBook(
+        item_id=emma_id, device_id="den", person_id=None, starts=EMMA, song_ids=await _ids(den)))
+    room_books.record_room_book("garage", room_books.RoomBook(
+        item_id=emma_id, device_id="garage", person_id=None, starts=EMMA, song_ids=await _ids(garage)))
     n = await room_books.save_room_book_positions(
         [("kitchen", kitchen), ("den", den), ("office", office), ("garage", garage)])
     assert n == 2
     places = {(d, p): pos for d, p, pos in (await db_session.execute(text(
         "SELECT device_id, person_id, position_sec FROM playback_positions"))).all()}
     assert places == {("kitchen", 1): 17, ("den", None): 42}
+    assert "garage" in room_books.ROOM_BOOKS               # paused: still its book
 
 
 @requires_db
@@ -823,15 +830,16 @@ async def test_the_room_writes_only_the_slot_of_who_started_the_book(db_session,
                                   "WHERE person_id = 1"))
     await db_session.commit()
     kitchen = await _playing(["audiobooks/Emma.mp3"], sec=5)
+    ids = await _ids(kitchen)
     # Nobody's voice started it: nothing is written.
     assert await room_books.save_room_book_positions([("kitchen", kitchen)]) == 0
     # The unidentified listener started it: only the anonymous slot moves.
     room_books.record_room_book("kitchen", room_books.RoomBook(
-        item_id=emma, device_id="kitchen", person_id=None, starts={"audiobooks/Emma.mp3": 0}))
+        item_id=emma, device_id="kitchen", person_id=None, starts=EMMA, song_ids=ids))
     assert await room_books.save_room_book_positions([("kitchen", kitchen)]) == 1
     # Sam started it, and has no row there: nothing is made up for Sam.
     room_books.record_room_book("kitchen", room_books.RoomBook(
-        item_id=emma, device_id="kitchen", person_id=2, starts={"audiobooks/Emma.mp3": 0}))
+        item_id=emma, device_id="kitchen", person_id=2, starts=EMMA, song_ids=ids))
     assert await room_books.save_room_book_positions([("kitchen", kitchen)]) == 0
     rows = sorted((await db_session.execute(text(
         "SELECT person_id, position_sec FROM playback_positions"))).all(), key=lambda r: r[0] or 0)
@@ -841,10 +849,95 @@ async def test_the_room_writes_only_the_slot_of_who_started_the_book(db_session,
 @pytest.mark.asyncio
 async def test_a_room_that_moved_on_is_forgotten(room_books) -> None:
     room_books.record_room_book("kitchen", room_books.RoomBook(
-        item_id=1, device_id="kitchen", person_id=None, starts={"audiobooks/Emma.mp3": 0}))
+        item_id=1, device_id="kitchen", person_id=None, starts=EMMA, song_ids=frozenset({1})))
     music = await _playing(["Artist/Album/01 Song.mp3"], sec=3)
     assert await room_books.save_room_book_positions([("kitchen", music)]) == 0
     assert "kitchen" not in room_books.ROOM_BOOKS
+
+
+async def _alex_plays_emma_by_voice(db_session, books):
+    from domovoi.handlers.spoken_audio import _PLAY_BOOK_RE
+    from domovoi.models import Context
+
+    mw.write_mp3(books / "Emma.mp3", [mw.TIT2("Emma")])
+    await _index()
+    emma = (await _rows(db_session))[0]["id"]
+    await db_session.execute(text("INSERT INTO people (id, name) VALUES (1, 'Alex')"))
+    await db_session.commit()
+    kitchen = MPDStubClient()
+    mpd_module._clients = {"kitchen": kitchen}
+    h, _ = _handler_with_memory()
+    ctx = Context(session_id=uuid4(), room_id="kitchen", online=True, person_id=1)
+    await h._play_book_from_match(_PLAY_BOOK_RE.match("play the audiobook emma"), ctx, db_session)
+    await db_session.commit()
+    await sa.upsert_position(db_session, item_type=sa.ITEM_AUDIOBOOK, item_id=emma,
+                             device_id="kitchen", person_id=1, position_sec=7200)
+    await db_session.commit()
+    return emma, kitchen, h, ctx
+
+
+async def _places(db_session):
+    return (await db_session.execute(text(
+        "SELECT person_id, position_sec FROM playback_positions"))).all()
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_stopped_room_forgets_whose_book_it_was(db_session, books, room_books) -> None:
+    """Round-2 review: Alex's book stopped in the kitchen; the next
+    morning a music search's "play Emma" lands on the same file. Alex's 2 h
+    place must stay 2 h."""
+    _, kitchen, _, _ = await _alex_plays_emma_by_voice(db_session, books)
+    await kitchen.stop()
+    assert await room_books.save_room_book_positions([("kitchen", kitchen)]) == 0
+    assert "kitchen" not in room_books.ROOM_BOOKS
+    other = MPDStubClient()
+    await other.prepare_files(["audiobooks/Emma.mp3"], start_sec=5)
+    await other.resume()
+    assert await room_books.save_room_book_positions([("kitchen", other)]) == 0
+    assert await _places(db_session) == [(1, 7200)]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_paused_book_then_the_same_file_queued_again_writes_nothing(db_session, books, room_books) -> None:
+    """The book paused (the record kept), then something else queues the
+    same file in that room: a new queue entry, not the book's."""
+    _, kitchen, _, _ = await _alex_plays_emma_by_voice(db_session, books)
+    await kitchen.pause()
+    assert await room_books.save_room_book_positions([("kitchen", kitchen)]) == 0
+    assert "kitchen" in room_books.ROOM_BOOKS
+    await kitchen.prepare_files(["audiobooks/Emma.mp3"], start_sec=5)   # e.g. a music search
+    await kitchen.resume()
+    assert await room_books.save_room_book_positions([("kitchen", kitchen)]) == 0
+    assert "kitchen" not in room_books.ROOM_BOOKS
+    assert await _places(db_session) == [(1, 7200)]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_paused_book_resumed_saves_to_the_right_place(db_session, books, room_books) -> None:
+    from domovoi.handlers.spoken_audio import _RESUME_RE
+
+    _, kitchen, h, ctx = await _alex_plays_emma_by_voice(db_session, books)
+    await kitchen.resume()
+    await kitchen.seek_to(40.0)
+    assert await room_books.save_room_book_positions([("kitchen", kitchen)]) == 1
+    await kitchen.pause()
+    assert await room_books.save_room_book_positions([("kitchen", kitchen)]) == 0
+    await kitchen.resume()                       # "resume the music": same entry
+    await kitchen.seek_to(55.0)
+    assert await room_books.save_room_book_positions([("kitchen", kitchen)]) == 1
+    assert await _places(db_session) == [(1, 55)]
+    # "resume my book" by voice: queued again, recorded again, still Alex's.
+    await kitchen.stop()
+    await room_books.save_room_book_positions([("kitchen", kitchen)])
+    await h._resume_from_match(_RESUME_RE.match("resume my book"), ctx, db_session)
+    await db_session.commit()
+    await kitchen.resume()
+    await kitchen.seek_to(70.0)
+    assert await room_books.save_room_book_positions([("kitchen", kitchen)]) == 1
+    assert await _places(db_session) == [(1, 70)]
 
 
 @requires_db
@@ -856,7 +949,8 @@ async def test_a_voice_command_records_whose_book_plays_in_the_room(db_session, 
     book_id = await _folder_book_row(db_session, books)
     await db_session.execute(text("INSERT INTO people (id, name) VALUES (1, 'Alex')"))
     await db_session.commit()
-    mpd_module._clients = {"kitchen": MPDStubClient()}
+    stub = MPDStubClient()
+    mpd_module._clients = {"kitchen": stub}
     h, _ = _handler_with_memory()
     ctx = Context(session_id=uuid4(), room_id="kitchen", online=True, person_id=1)
     await h._play_book_from_match(_PLAY_BOOK_RE.match("play the audiobook dune"), ctx, db_session)
@@ -864,6 +958,7 @@ async def test_a_voice_command_records_whose_book_plays_in_the_room(db_session, 
     rb = room_books.ROOM_BOOKS["kitchen"]
     assert (rb.item_id, rb.device_id, rb.person_id) == (book_id, "kitchen", 1)
     assert rb.starts == {DUNE_FILES[0]: 0, DUNE_FILES[1]: 10}
+    assert rb.song_ids == await _ids(stub) and len(rb.song_ids) == 2
 
 
 # ─── The MPD client: start in the middle of the list ─────────────────────
