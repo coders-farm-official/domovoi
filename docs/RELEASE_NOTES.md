@@ -25,6 +25,15 @@ a way that would otherwise get reported as a bug.
   queues stay). Without the rebuild the guard keeps expecting the old
   image, and a room created on the new one would be reported.
 
+## 2026-10-21 — Android: the tablet sidebar clears the status bar
+
+* On a tablet, or a phone turned sideways, the side menu's "domovoi /
+  android" header no longer sits under the clock, and the menu stays clear
+  of a camera cutout or a side navigation bar, as does the narrower icon
+  rail on a small phone. The rest of the screen (the
+  top bar's theme switch included) also clears a cutout or navigation bar
+  on its far edge. Nothing to do: update the app.
+
 ## 2026-10-20 — 1.0.0-rc3: audiobooks on the phone, and everything since rc2
 
 Version 1.0.0rc3 (the app 1.0.0-rc3, versionCode 26102001; the Windows

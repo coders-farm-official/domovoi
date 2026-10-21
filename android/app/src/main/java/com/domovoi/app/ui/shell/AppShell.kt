@@ -805,7 +805,7 @@ private fun RailShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCo
     // No Scaffold here, so the shrink is on the root: imePadding() ends the
     // whole shell — rail included — at the top of the keyboard.
     Row(Modifier.fillMaxSize().imePadding()) {
-        NavigationRail(containerColor = Domovoi.colors.card) {
+        NavigationRail(containerColor = Domovoi.colors.card, windowInsets = drawerSheetInsets) {
             // The top-left glyph is the way home, as the brand is everywhere.
             Box(
                 Modifier
@@ -827,7 +827,7 @@ private fun RailShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCo
                 }
             }
         }
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.weight(1f).windowInsetsPadding(shellContentInsets)) {
             TopChrome { Topbar(route, navigate) }
             ContainerGuardBanner(route, navigate)
             Box(Modifier.weight(1f)) { ScreenRouter(route, navigate, counts) }
@@ -846,7 +846,7 @@ private fun DrawerShell(route: Route, navigate: (Route) -> Unit, counts: Sidebar
     // As RailShell: no Scaffold, so the root carries the keyboard inset.
     Row(Modifier.fillMaxSize().imePadding()) {
         Surface(color = Domovoi.colors.card, modifier = Modifier.width(232.dp).fillMaxSize()) {
-            Column(Modifier.padding(12.dp).verticalScroll(rememberScrollState())) {
+            Column(Modifier.windowInsetsPadding(drawerSheetInsets).padding(12.dp).verticalScroll(rememberScrollState())) {
                 // The brand row is the way home, as on the web desktop, so
                 // the workspace list below leaves Home out.
                 Row(
@@ -884,7 +884,7 @@ private fun DrawerShell(route: Route, navigate: (Route) -> Unit, counts: Sidebar
                 SidebarItem(Route.Manual, route == Route.Manual, counts) { navigate(Route.Manual) }
             }
         }
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.weight(1f).windowInsetsPadding(shellContentInsets)) {
             TopChrome { Topbar(route, navigate) }
             ContainerGuardBanner(route, navigate)
             Box(Modifier.weight(1f)) { ScreenRouter(route, navigate, counts) }
