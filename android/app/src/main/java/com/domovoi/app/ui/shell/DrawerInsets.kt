@@ -26,6 +26,12 @@ import androidx.compose.runtime.Composable
  * nothing extra while it is up.
  *
  * End is left out: the sidebar never touches the end edge.
+ *
+ * RailShell's NavigationRail takes the same insets in place of M3's default
+ * (system bars only, no cutout): a small phone sideways is MEDIUM, and at 90°
+ * its camera cutout is on the start edge, over the rail's icons. The rail
+ * pads outside its 80dp minimum width, so it grows by the cutout instead of
+ * squeezing its items.
  */
 internal val drawerSheetInsets: WindowInsets
     @Composable get() = WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.Start)

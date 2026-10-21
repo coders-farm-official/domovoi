@@ -8,7 +8,8 @@ a way that would otherwise get reported as a bug.
 
 * On a tablet, or a phone turned sideways, the side menu's "domovoi /
   android" header no longer sits under the clock, and the menu stays clear
-  of a camera cutout or a side navigation bar. The rest of the screen (the
+  of a camera cutout or a side navigation bar, as does the narrower icon
+  rail on a small phone. The rest of the screen (the
   top bar's theme switch included) also clears a cutout or navigation bar
   on its far edge. Nothing to do: update the app.
 

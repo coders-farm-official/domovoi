@@ -805,7 +805,7 @@ private fun RailShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCo
     // No Scaffold here, so the shrink is on the root: imePadding() ends the
     // whole shell — rail included — at the top of the keyboard.
     Row(Modifier.fillMaxSize().imePadding()) {
-        NavigationRail(containerColor = Domovoi.colors.card) {
+        NavigationRail(containerColor = Domovoi.colors.card, windowInsets = drawerSheetInsets) {
             // The top-left glyph is the way home, as the brand is everywhere.
             Box(
                 Modifier

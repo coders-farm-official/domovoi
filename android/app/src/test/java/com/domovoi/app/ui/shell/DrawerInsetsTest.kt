@@ -51,6 +51,13 @@ class DrawerInsetsTest {
         assertTrue(body, body.contains("WindowInsets.safeDrawing.only(WindowInsetsSides.End)"))
     }
 
+    @Test fun theRailTakesTheSameStartInsetsInPlaceOfM3sDefault() {
+        // M3's default rail insets leave out the cutout, which a small phone
+        // sideways (MEDIUM) has on the start edge at 90°.
+        val rail = source("ui/shell/AppShell.kt").substringAfter("private fun RailShell(").substringBefore("\n}\n")
+        assertTrue(rail, rail.contains("NavigationRail(containerColor = Domovoi.colors.card, windowInsets = drawerSheetInsets) {"))
+    }
+
     @Test fun theDrawerInsetsAreSafeDrawingOnTheTopBottomAndStartEdges() {
         // safeDrawing, not statusBars alone: a phone in landscape is EXPANDED
         // too and its camera cutout sits on the start edge in one rotation.
