@@ -187,6 +187,25 @@ internal fun attachBudget(attached: Int, picked: Int, cap: Int = MAX_CHAT_IMAGES
 }
 
 /** Mutable transcript entry (the streaming assistant bubble updates live). */
+/**
+ * The server's kept row for a reply that streamed into [this]: its id,
+ * time, model, figures, error and sources, and its TEXT. The kept text
+ * replaces what streamed: for a reply about documents the server checks
+ * the model's words first (citations of passages it never gave are taken
+ * out, "couldn't find" is said exactly), so the row, not the stream, is
+ * what the reply says.
+ */
+internal fun LiveMessage.finishWith(row: MessageRow) {
+    id = row.id.takeIf { it > 0 }
+    createdAt = row.created_at
+    model = row.model ?: model
+    stats = row.stats
+    row.error?.let { error = it }
+    row.stats?.error_code?.let { errorCode = it }
+    doc = row.doc
+    if (row.error == null) content = row.content
+}
+
 internal class LiveMessage(
     val role: String,
     content: String,
@@ -622,15 +641,7 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
                         live.errorCode = code
                         if (model != null) live.model = model
                     },
-                    onDone = { row ->
-                        live.id = row.id.takeIf { it > 0 }
-                        live.createdAt = row.created_at
-                        live.model = row.model ?: live.model
-                        live.stats = row.stats
-                        row.error?.let { live.error = it }
-                        row.stats?.error_code?.let { live.errorCode = it }
-                        live.doc = row.doc
-                    },
+                    onDone = { row -> live.finishWith(row) },
                 )
             }.onFailure { live.error = failureText("send", it) }
             // Refused for want of the vision model: re-read what's installed,

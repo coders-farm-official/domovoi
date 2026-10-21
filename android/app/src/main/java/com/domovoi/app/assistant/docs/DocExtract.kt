@@ -26,7 +26,21 @@ data class DocExtraction(
     val notes: List<DocNote> = emptyList(),
     /** Read by the home server ("Ask the home server"), not on the phone. */
     val readByServer: Boolean = false,
+    /** A limit cut the document short (the text cap, a sheet's columns or
+     *  cells): only the first part of it was read. */
+    val truncated: Boolean = false,
 )
+
+/** A read that ran past its time: the reading loops call [check] as they
+ *  go, so the thread the read runs on (runInterruptible) stops when the
+ *  timeout interrupts it, instead of reading on unseen. */
+object DocCancel {
+    const val TOO_LONG = "Reading that document took too long, so Domovoi stopped."
+
+    fun check() {
+        if (Thread.currentThread().isInterrupted) throw DocRefused(TOO_LONG)
+    }
+}
 
 /**
  * Text out of an attached document on the phone (documents plan part 1):
@@ -42,6 +56,12 @@ object DocExtract {
     const val FORMAT_VERSION = 1
     const val MAX_FILE_BYTES = 100L * 1024 * 1024
     const val MAX_PAGES = 5000
+    /** The most text kept from one document (review round 1): past it, the
+     *  rest is left out and a note says so. A few MB keeps the cache, the
+     *  index and every question's search small. */
+    const val MAX_TEXT_CHARS = 4_000_000
+    /** A text or markdown file is read up to this many bytes. */
+    const val MAX_PLAIN_BYTES = 16 * 1024 * 1024
 
     val KIND_BY_EXT = mapOf(
         "pdf" to "pdf", "docx" to "docx", "odt" to "odt", "xlsx" to "xlsx", "csv" to "csv", "tsv" to "csv",
@@ -117,20 +137,48 @@ object DocExtract {
             }
             "docx" -> base.copy(parts = DocWord.extract(file))
             "odt" -> base.copy(parts = DocOdt.extract(file))
-            "xlsx" -> DocSheets.xlsx(file).let { base.copy(parts = it.parts, sheets = it.sheets, formulasWithoutValue = it.formulasWithoutValue) }
-            "csv" -> DocSheets.csv(file).let { base.copy(parts = it.parts, encoding = it.encoding) }
-            else -> DocPlain.extract(file.readBytes(), markdown = kind == "md").let { (p, enc) -> base.copy(parts = p, encoding = enc) }
+            "xlsx" -> DocSheets.xlsx(file).let {
+                base.copy(parts = it.parts, sheets = it.sheets, formulasWithoutValue = it.formulasWithoutValue, truncated = it.truncated)
+            }
+            "csv" -> DocSheets.csv(file).let { base.copy(parts = it.parts, encoding = it.encoding, truncated = it.truncated) }
+            else -> {
+                val cut = file.length() > MAX_PLAIN_BYTES
+                val bytes = file.inputStream().use { s -> s.readNBytes(MAX_PLAIN_BYTES) }
+                DocPlain.extract(bytes, markdown = kind == "md").let { (p, enc) -> base.copy(parts = p, encoding = enc, truncated = cut) }
+            }
         }
         return finish(base, singlePass)
     }
 
-    /** Counts, empties dropped, notes; refuses a document with no text. */
-    fun finish(e: DocExtraction, singlePass: Int = DocQa.PHONE_SINGLE_PASS_CHARS): DocExtraction {
-        val parts = e.parts.filter { it.text.isNotBlank() }
-        if (parts.isEmpty()) throw DocRefused(if (e.scannedPages.isNotEmpty()) DocNotes.NO_TEXT_SCANNED else DocNotes.NO_TEXT)
+    /** Counts, empties dropped, the text cap, notes; refuses a document
+     *  with no text. */
+    fun finish(e: DocExtraction, singlePass: Int = DocQa.PHONE_SINGLE_PASS_CHARS, maxChars: Int = MAX_TEXT_CHARS): DocExtraction {
+        val all = e.parts.filter { it.text.isNotBlank() }
+        if (all.isEmpty()) throw DocRefused(if (e.scannedPages.isNotEmpty()) DocNotes.NO_TEXT_SCANNED else DocNotes.NO_TEXT)
+        // The text cap: parts are kept whole until it; the one that crosses
+        // it is cut; the rest is left out.
+        val parts = ArrayList<DocPart>()
+        var used = 0
+        var cut = e.truncated
+        for (p in all) {
+            val size = p.text.length + p.head.length
+            if (used + size <= maxChars) {
+                parts += p
+                used += size
+                continue
+            }
+            cut = true
+            val room = maxChars - used - p.head.length
+            if (room > 0 && parts.isEmpty()) parts += p.copy(text = p.text.take(room))
+            break
+        }
         val words = DocNotes.countWords(parts)
         val chars = parts.sumOf { it.text.length + it.head.length }
-        val notes = DocNotes.attachNotes(e.scannedPages, e.garbledPages, e.formulasWithoutValue, chars, words, singlePass)
-        return e.copy(parts = parts, words = words, chars = chars, notes = notes)
+        val notes = DocNotes.attachNotes(e.scannedPages, e.garbledPages, e.formulasWithoutValue, chars, words, singlePass).toMutableList()
+        if (cut) {
+            val pagesRead = if (e.kind == "pdf") parts.mapNotNull { it.page }.maxOrNull() else null
+            notes += DocNotes.truncatedNote(pagesRead, words)
+        }
+        return e.copy(parts = parts, words = words, chars = chars, notes = notes, truncated = cut)
     }
 }

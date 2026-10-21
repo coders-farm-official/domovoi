@@ -228,8 +228,7 @@ private fun ChatPane(
         ) {
             if (attach != null && ui.voicePhase == VoicePhase.Idle && !ui.replying) {
                 DocAttachButton(enabled = ui.reading == null) { name, open ->
-                    attach(name, open)
-                    draft = ""
+                    draft = attachWithDraft(attach, name, open, draft)
                 }
             }
             LocalComposerField.current(draft, { draft = it }, Modifier.weight(1f))
@@ -334,7 +333,11 @@ private fun EngineLine(ui: AssistantUi, actions: AssistantActions, onModel: () -
                 TextButton(onClick = onModel) { Text("model settings", color = Domovoi.colors.fgMuted) }
             }
         }
-        else -> if (ui.thinking) {
+        else -> if (ui.checking) {
+            Row(Modifier.padding(top = 6.dp).semantics { liveRegion = LiveRegionMode.Polite }) {
+                Pill("reading the passages and checking the answer", Tone.Brand, live = true)
+            }
+        } else if (ui.thinking) {
             Row(Modifier.padding(top = 6.dp).semantics { liveRegion = LiveRegionMode.Polite }) { Pill("thinking", Tone.Brand, live = true) }
         }
     }
@@ -657,4 +660,17 @@ internal fun durationText(ms: Long): String {
         s < 3600 -> "${s / 60} min ${s % 60} s"
         else -> "${s / 3600} h ${(s % 3600) / 60} min"
     }
+}
+
+/** The paperclip in a phone chat: the document goes with what is typed as
+ *  its question (review round 1: the draft used to be dropped), and the
+ *  box is cleared. Returns the new draft. */
+internal fun attachWithDraft(
+    attach: (String, () -> java.io.InputStream, String) -> Unit,
+    name: String,
+    open: () -> java.io.InputStream,
+    draft: String,
+): String {
+    attach(name, open, draft.trim())
+    return ""
 }

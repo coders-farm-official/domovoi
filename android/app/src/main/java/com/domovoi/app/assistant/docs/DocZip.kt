@@ -70,7 +70,8 @@ class DocZip(private val file: File, private val what: String) : AutoCloseable {
     companion object {
         const val MAX_MEMBERS = 5000
         const val MAX_UNZIPPED = 200L * 1024 * 1024
-        const val MAX_MEMBER_BYTES = 64 * 1024 * 1024
+        /** The largest single part read (a 1,000-page .docx is about 20 MB). */
+        const val MAX_MEMBER_BYTES = 32 * 1024 * 1024
         const val MAX_RATIO = 200
         const val RATIO_FLOOR = 1024L * 1024
         private const val MB = 1024 * 1024

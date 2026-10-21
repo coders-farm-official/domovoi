@@ -94,7 +94,8 @@ internal class AssistantActions(
     val clearReports: () -> Unit = {},
     /** The paperclip: attach a document (its name, and how to read it);
      *  null where phone chats take no documents. */
-    val attachDocument: ((String, () -> java.io.InputStream) -> Unit)? = null,
+    /** Attach (name, opener, the typed question). */
+    val attachDocument: ((String, () -> java.io.InputStream, String) -> Unit)? = null,
     /** "Ask the home server" for a PDF this phone can't read; null when no
      *  paired home server is in reach. */
     val askServer: ((com.domovoi.app.assistant.PendingDocument) -> Unit)? = null,
@@ -342,8 +343,8 @@ private fun actionsFor(
     },
     deleteReport = a::deleteReport,
     clearReports = a::clearReports,
-    attachDocument = if (a.canAttach) { name, open ->
-        a.attach(name, open)
+    attachDocument = if (a.canAttach) { name, open, question ->
+        a.attach(name, open, question)
         used()
     } else {
         null

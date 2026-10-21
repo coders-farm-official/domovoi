@@ -11,6 +11,7 @@ import com.domovoi.app.audio.MicArbiter
 import com.domovoi.app.audio.MicOwnership
 import androidx.work.WorkInfo
 import com.domovoi.app.assistant.docs.ChatDocStore
+import com.domovoi.app.assistant.docs.DocCancel
 import com.domovoi.app.assistant.docs.DocExtract
 import com.domovoi.app.assistant.docs.DocExtraction
 import com.domovoi.app.assistant.docs.DocHeadsUp
@@ -42,6 +43,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.runInterruptible
 import java.io.File
 import java.util.Locale
 import kotlin.coroutines.CoroutineContext
@@ -110,6 +112,9 @@ data class AssistantUi(
     val reports: List<ReplyReport> = emptyList(),
     /** A document being read for the conversation (its name). */
     val reading: String? = null,
+    /** A reply about documents is being checked against them before it is
+     *  shown (the model's own words are never shown unchecked). */
+    val checking: Boolean = false,
     /** A PDF this phone can't read the text of, waiting for "Ask the home
      *  server" or to be dropped. */
     val pendingPdf: PendingDocument? = null,
@@ -1040,16 +1045,14 @@ class AssistantController(
 
     fun closeDocProblem() = _state.update { it.copy(docProblem = null) }
 
-    /** Reads with a time limit: a file that would take longer is given up
-     *  on (the read runs on [io], so Chat is never blocked by it). */
-    private suspend fun readWithin(read: () -> DocExtraction): DocExtraction {
-        val job = scope.async(io) { read() }
-        return withTimeoutOrNull(docReadTimeoutMs) { job.await() }
-            ?: run {
-                job.cancel()
-                throw DocRefused("Reading that document took too long, so Domovoi stopped.")
-            }
-    }
+    /** Reads with a time limit (the read runs on [io], so Chat is never
+     *  blocked by it). At the limit the read's thread is interrupted
+     *  (runInterruptible) and the reading loops stop at their next
+     *  [DocCancel.check], so a file that would take longer is really given
+     *  up on, not left reading unseen. */
+    private suspend fun readWithin(read: () -> DocExtraction): DocExtraction =
+        withTimeoutOrNull(docReadTimeoutMs) { runInterruptible(io) { read() } }
+            ?: throw DocRefused(DocCancel.TOO_LONG)
 
     private suspend fun addDocument(conversation: String, id: String, name: String, e: DocExtraction, question: String) {
         withContext(io) { docs?.saveParts(conversation, id, e) }
@@ -1132,22 +1135,28 @@ class AssistantController(
         val sent = nanos()
         var firstMs: Long? = null
         val text = StringBuilder()
-        fun live(): StoredMessage = StoredMessage(Speaker.DOMOVOI, text.toString(), clock(), backend = backend.label, docMode = mode)
-        _state.update { it.copy(conversation = asked.copy(messages = asked.messages + live())) }
+        // The model's words are held back until the app has checked them
+        // (review round 1): nothing unchecked is shown or spoken. Meanwhile
+        // the reply is empty and the chat says it is checking.
+        fun live(): StoredMessage = StoredMessage(Speaker.DOMOVOI, "", clock(), backend = backend.label, docMode = mode)
+        _state.update { it.copy(checking = true, conversation = asked.copy(messages = asked.messages + live())) }
         try {
             llm.reply(system, listOf(ChatTurn(fromUser = true, text = prompt.user)), clockLine()).collect { delta ->
                 if (firstMs == null && delta.isNotBlank()) firstMs = (nanos() - sent) / 1_000_000
                 text.append(delta)
-                onDelta(delta)
-                _state.update { ui -> ui.copy(thinking = text.isBlank(), conversation = asked.copy(messages = asked.messages + live())) }
             }
         } catch (e: CancellationException) {
+            _state.update { it.copy(checking = false) }
             finishReply(asked, live().copy(stopped = true, firstTextMs = firstMs, stopMs = voice?.lastStopMs))
             throw e
         } catch (e: Throwable) {
+            _state.update { it.copy(checking = false) }
             return finishReply(asked, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
         }
         val checked = DocQa.checkReply(text.toString(), given, question, names)
+        _state.update { it.copy(checking = false) }
+        // Only the checked reply is shown, and spoken in a voice turn.
+        onDelta(checked.content)
         val stats = llm.lastStats()
         return finishReply(
             asked,

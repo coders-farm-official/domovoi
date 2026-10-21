@@ -21,6 +21,11 @@ import java.util.Locale
  */
 object DocSheets {
     const val ROWS_PER_PART = 40
+    /** A sheet's bounds for Chat (review round 1): columns past this are
+     *  left out, a sheet stops at [MAX_CELLS] cells, and rows are never
+     *  padded to the header's width. */
+    const val MAX_COLS = 256
+    const val MAX_CELLS = 200_000
     private const val NUMERIC_SHARE = 0.6
     private val XML_REFUSED = Regex("(?i)<!DOCTYPE|<!ENTITY")
     private val MIDNIGHT = Regex("""^(\d{4}-\d{2}-\d{2}) 00:00:00$""")
@@ -72,8 +77,12 @@ object DocSheets {
     }
 
     /** One sheet's rows (row 1 first) as parts (sheets.py `sheet_parts`). */
-    fun sheetParts(rows: List<List<String>>, sheet: String?): List<DocPart> {
-        val numbered = rows.mapIndexed { i, r -> (i + 1) to r }.toMutableList()
+    fun sheetParts(rows: List<List<String>>, sheet: String?): List<DocPart> =
+        sheetPartsNumbered(rows.mapIndexed { i, r -> (i + 1) to r }, sheet)
+
+    /** The same for sparse rows: (row number, its cells), in order. */
+    fun sheetPartsNumbered(rowsIn: List<Pair<Int, List<String>>>, sheet: String?): List<DocPart> {
+        val numbered = rowsIn.toMutableList()
         while (numbered.isNotEmpty() && numbered.last().second.none { it.isNotBlank() }) numbered.removeAt(numbered.lastIndex)
         val first = numbered.indexOfFirst { (_, r) -> r.any { it.isNotBlank() } }
         if (first < 0) return emptyList()
@@ -82,10 +91,11 @@ object DocSheets {
         val prefix = if (sheet != null) "Sheet $sheet, " else ""
         if (data.isEmpty()) return listOf(DocPart("${prefix}row $headerNo".trim(), DocStructure.mdTable(listOf(header))))
         val head = DocStructure.mdTable(listOf(header))
-        val width = maxOf(header.size, data.maxOf { it.second.size })
         val parts = ArrayList<DocPart>()
         for (chunk in data.chunked(ROWS_PER_PART)) {
-            val body = chunk.joinToString("\n") { (_, r) -> DocStructure.mdRow(r, width) }
+            DocCancel.check()
+            // Each row as it is: never padded to the header's width.
+            val body = chunk.joinToString("\n") { (_, r) -> DocStructure.mdRow(r, r.size) }
             val lo = chunk.first().first
             val hi = chunk.last().first
             parts += DocPart(if (hi != lo) "${prefix}rows $lo-$hi" else "${prefix}row $lo", body, head)
@@ -112,28 +122,46 @@ object DocSheets {
         else -> DocText.clean(v)
     }
 
-    data class Workbook(val parts: List<DocPart>, val sheets: Int, val formulasWithoutValue: Int)
+    data class Workbook(val parts: List<DocPart>, val sheets: Int, val formulasWithoutValue: Int, val truncated: Boolean = false)
+
+    /** Whether [bytes] declare a DOCTYPE or an entity, read as XML (by its
+     *  BOM) and as raw bytes in the 8- and 16-bit forms, so a part with no
+     *  XML name, or one in another encoding, can't carry one past us. */
+    private fun declaresEntities(bytes: ByteArray): Boolean {
+        if (XML_REFUSED.containsMatchIn(DocZip.decodeXml(bytes))) return true
+        for (cs in listOf(Charsets.ISO_8859_1, Charsets.UTF_16LE, Charsets.UTF_16BE)) {
+            if (XML_REFUSED.containsMatchIn(String(bytes, cs))) return true
+        }
+        return false
+    }
 
     fun xlsx(file: File): Workbook {
-        DocZip(file, "spreadsheet").use { z ->
+        // Every part, whatever its name (a sheet can be reached through a
+        // relationship as "sheet1.bin"), is read ONCE through the central
+        // directory and checked; the reader then gets those same bytes, so
+        // a second, local-only copy of a part is never what is parsed.
+        val members = DocZip(file, "spreadsheet").use { z ->
             if (!z.has("xl/workbook.xml")) throw DocRefused("That isn't an Excel workbook Domovoi can read (no workbook part inside).")
-            for (name in z.names()) {
-                if (name.endsWith(".xml", true) || name.endsWith(".rels", true)) {
-                    if (XML_REFUSED.containsMatchIn(DocZip.decodeXml(z.read(name)))) {
-                        throw DocRefused("That spreadsheet has XML entity declarations, which Domovoi doesn't read.")
-                    }
+            z.names().filter { !it.endsWith("/") }.map { name ->
+                DocCancel.check()
+                val bytes = z.read(name)
+                if (declaresEntities(bytes)) {
+                    throw DocRefused("That spreadsheet has XML entity declarations, which Domovoi doesn't read.")
                 }
+                name to bytes
             }
         }
         val book = try {
-            XlsxSheet.readForChat(file.readBytes())
+            XlsxSheet.readForChat(members, XlsxSheet.ChatLimits(cols = MAX_COLS, cells = MAX_CELLS, chars = DocExtract.MAX_TEXT_CHARS), DocCancel::check)
         } catch (e: DocRefused) {
             throw e
         } catch (e: Exception) {
             throw DocRefused("That spreadsheet is damaged and couldn't be read.")
         }
-        val parts = book.sheets.flatMap { (name, rows) -> sheetParts(rows.map { r -> r.map(::cellText) }, DocText.clean(name)) }
-        return Workbook(parts, book.sheets.size, book.formulasWithoutValue)
+        val parts = book.sheets.flatMap { (name, rows) ->
+            sheetPartsNumbered(rows.map { (n, r) -> n to r.map(::cellText) }, DocText.clean(name))
+        }
+        return Workbook(parts, book.sheets.size, book.formulasWithoutValue, book.truncated)
     }
 
     /** (text, encoding): a UTF-8 BOM dropped, UTF-16 by its BOM, then strict
@@ -182,12 +210,89 @@ object DocSheets {
         return n
     }
 
-    data class Csv(val parts: List<DocPart>, val encoding: String, val delimiter: Char)
+    data class Csv(val parts: List<DocPart>, val encoding: String, val delimiter: Char, val truncated: Boolean = false)
+
+    /** CSV rows within the bounds: at most [maxCols] fields a row (the rest
+     *  of a row is skipped, never stored), at most [maxCells] fields and
+     *  [maxChars] characters in all (rows past them are left out). The same
+     *  quoting rules as [CsvSheet.parse]. (rows, cut short) */
+    fun parseCapped(
+        text: String,
+        delimiter: Char,
+        maxCols: Int = MAX_COLS,
+        maxCells: Int = MAX_CELLS,
+        maxChars: Int = DocExtract.MAX_TEXT_CHARS,
+    ): Pair<List<List<String>>, Boolean> {
+        val rows = ArrayList<List<String>>()
+        var row = ArrayList<String>()
+        val field = StringBuilder()
+        var quoted = false
+        var afterQuote = false
+        var cells = 0
+        var chars = 0
+        var cut = false
+        var i = 0
+        fun save() {
+            if (row.size < maxCols) {
+                row.add(field.toString())
+                cells++
+                chars += field.length
+            } else {
+                cut = true
+            }
+            field.setLength(0)
+        }
+        fun end() {
+            rows.add(row)
+            row = ArrayList()
+        }
+        while (i < text.length) {
+            if (i and 0xFFFF == 0) DocCancel.check()
+            if (cells >= maxCells || chars >= maxChars) {
+                cut = true
+                break
+            }
+            val c = text[i]
+            if (quoted) {
+                if (c == '"') {
+                    if (i + 1 < text.length && text[i + 1] == '"') {
+                        if (row.size < maxCols) field.append('"')
+                        i += 2
+                        continue
+                    }
+                    quoted = false
+                    afterQuote = true
+                } else if (row.size < maxCols) {
+                    field.append(c)
+                }
+                i++
+                continue
+            }
+            when {
+                c == '"' && field.isEmpty() && !afterQuote -> quoted = true
+                c == delimiter -> { save(); afterQuote = false }
+                c == '\r' || c == '\n' -> {
+                    save()
+                    end()
+                    afterQuote = false
+                    if (c == '\r' && i + 1 < text.length && text[i + 1] == '\n') i++
+                }
+                else -> if (row.size < maxCols) field.append(c)
+            }
+            i++
+        }
+        if (!cut && (field.isNotEmpty() || row.isNotEmpty())) {
+            save()
+            end()
+        }
+        return rows to cut
+    }
 
     fun csv(file: File): Csv {
         val (text, enc) = decodeText(file.readBytes())
         val d = sniffDelimiter(text)
-        val rows = CsvSheet.parse(text, d).map { r -> r.map { DocText.clean(it) } }
-        return Csv(sheetParts(rows, null), enc, d)
+        val (raw, cut) = parseCapped(text, d)
+        val rows = raw.map { r -> r.map { DocText.clean(it) } }
+        return Csv(sheetParts(rows, null), enc, d, cut)
     }
 }
