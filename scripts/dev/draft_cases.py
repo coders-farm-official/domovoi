@@ -113,7 +113,7 @@ SAMPLES = [
     ("long-letter", "letter-block", long_letter()),
 ]
 
-#: Review round 2's phrase sets (functional-testing/review-documents-d4-r2/phrases.json):
+#: Review round 2's phrase sets (the reviewer's phrases.json):
 #: everyday messages never revise, after a draft or not; the revisions do.
 #: ("try again" is in both of the reviewer's lists: right after a draft it is the
 #: chat's own retry, so it stays with the everyday ones.)
