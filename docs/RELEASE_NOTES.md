@@ -4,6 +4,12 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-21 — Android: the tablet sidebar clears the status bar
+
+* On a tablet, or a phone turned sideways, the side menu's "domovoi /
+  android" header no longer sits under the clock, and the menu stays clear
+  of a camera cutout or a side navigation bar. Nothing to do: update the app.
+
 ## 2026-10-20 — 1.0.0-rc3: audiobooks on the phone, and everything since rc2
 
 Version 1.0.0rc3 (the app 1.0.0-rc3, versionCode 26102001; the Windows

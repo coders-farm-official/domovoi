@@ -846,7 +846,7 @@ private fun DrawerShell(route: Route, navigate: (Route) -> Unit, counts: Sidebar
     // As RailShell: no Scaffold, so the root carries the keyboard inset.
     Row(Modifier.fillMaxSize().imePadding()) {
         Surface(color = Domovoi.colors.card, modifier = Modifier.width(232.dp).fillMaxSize()) {
-            Column(Modifier.padding(12.dp).verticalScroll(rememberScrollState())) {
+            Column(Modifier.windowInsetsPadding(drawerSheetInsets).padding(12.dp).verticalScroll(rememberScrollState())) {
                 // The brand row is the way home, as on the web desktop, so
                 // the workspace list below leaves Home out.
                 Row(
