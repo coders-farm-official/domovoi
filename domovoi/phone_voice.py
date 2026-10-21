@@ -711,6 +711,7 @@ async def _answer(
         app=app,
         device_kind="phone",
         device_player=player,
+        chat_thread_id=int(thread_id),
     )
     intent = Intent(transcript=request, room_id=room, session_id=session_id)
 

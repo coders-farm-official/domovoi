@@ -5,6 +5,9 @@ What it owns (plan part 8), all anchored:
 * "print my cover letter", "print two copies of the lease, double-sided",
   "print a test page" — every voice print confirms first: "That's 2 pages
   to the office printer. Print it?";
+* "print it" (or "print the letter", "print the draft") said into the
+  app's chat mic in a home-server chat with a draft (documents plan D4):
+  that chat's latest draft version, as its PDF, confirmed the same way;
 * "stop printing" / "cancel the print";
 * "how much ink is left?", "how much toner is left?", "is the printer low
   on ink?";
@@ -89,6 +92,8 @@ _SCAN_RE = re.compile(
     r"(?: (?:page|letter|document|receipt|form|paper|sheet))?"
     r"(?: (?:to|into|in) (?:my |the )?documents)?$"
 )
+# "print the letter", "print my draft": a chat's draft, in a chat that has one.
+_DRAFT_WORDS = re.compile(r"^(?:the|my|this|that) (?:draft|letter|cover letter|resume|cv|document)$")
 # Never ours: the music library's rescans.
 _NOT_SCAN_RE = re.compile(r"^scan for |^(?:re)?scan (?:my |the )?(?:music|library|songs|tracks)")
 
@@ -292,9 +297,75 @@ class PrintingHandler(Handler):
         colour = m.group("colour")
         if colour:
             wanted["color"] = "color" if colour.startswith("colo") else "monochrome"
+        if ctx.chat_thread_id is not None and (what in ("it", "that", "this") or _DRAFT_WORDS.match(what)):
+            draft = await self._chat_draft(ctx, session)
+            if draft is not None:
+                return await self._print_draft(draft, wanted, ctx, session)
         if what in ("it", "that", "this", "them", "something"):
             return self._reply(ctx, "Which document? Say print and its name, like print my cover letter.")
         return await self._print(what, wanted, ctx, session)
+
+    # ─── a chat's draft (documents plan D4) ──────────────────────────────
+
+    @staticmethod
+    async def _chat_draft(ctx: Context, session: AsyncSession):
+        from domovoi.drafts import store as drafts
+
+        try:
+            return await drafts.latest_in_thread(session, int(ctx.chat_thread_id or 0))
+        except Exception as e:  # noqa: BLE001 — no draft then
+            log.warning("printing: the chat's draft could not be read: %s", e)
+            return None
+
+    async def _print_draft(self, d, wanted: dict, ctx: Context, session: AsyncSession) -> Response:
+        """The chat's draft, confirmed first like every voice print."""
+        from domovoi.drafts import store as drafts
+        from domovoi.printing import devices, jobs, options, store
+
+        try:
+            row = await devices.pick_printer(None, ctx.satellite_room_id)
+            devices.ipp_printer(row)
+        except devices.AmbiguousPrinter as e:
+            return self._reply(ctx, _said("Which printer? Print it from the draft in the chat, or say print and the "
+                                          "document's name on %s." % devices.the(e.names[0])))
+        except devices.DeviceError as e:
+            return self._reply(ctx, _said(self._no_printer_text(str(e))))
+        title = "%s v%d" % (d.title, d.version)
+        path = drafts.pdf_to_temp(d)
+        try:
+            pages, r = await jobs.count_pages(path, filename="draft.pdf", title=title, row=row, wanted=wanted)
+            lim = await store.get_limits()
+            over = jobs.over_limit_text(pages, r.copies, options.sheets_for(pages, r.copies, r.sides), lim)
+        except jobs.PrintRefused as e:
+            return self._reply(ctx, _said(str(e)))
+        finally:
+            path.unlink(missing_ok=True)
+        if over:
+            return self._reply(ctx, _said(over))
+        text = "That's %s, %d page%s, to %s. Print it?" % (title, pages, "" if pages == 1 else "s",
+                                                           self._printer_phrase(row))
+        return await self._ask(ctx, session, PRINT_CONFIRM, _said(text),
+                               {"draft": d.draft_id, "version": d.version, "printer_id": row["id"],
+                                "wanted": r.as_json(), "title": title})
+
+    async def _submit_draft(self, data: dict, ctx: Context) -> Response:
+        from domovoi.db.session import session_scope
+        from domovoi.drafts import store as drafts
+        from domovoi.printing import jobs
+
+        async with session_scope() as s:
+            d = await drafts.get(s, int(data.get("draft") or 0), int(data.get("version") or 0))
+        if d is None:
+            return self._reply(ctx, "That draft isn't in the chat any more.")
+        path = drafts.pdf_to_temp(d)
+        try:
+            await jobs.submit(path, filename="%s.pdf" % d.title[:80], title=str(data.get("title") or d.title),
+                              printer_id=data.get("printer_id"), wanted=data.get("wanted") or {}, who=self._who(ctx))
+        except jobs.PrintRefused as e:
+            return self._reply(ctx, _said(str(e)))
+        finally:
+            path.unlink(missing_ok=True)
+        return self._reply(ctx, "Printing.")
 
     # ─── printing ────────────────────────────────────────────────────────
 
@@ -595,7 +666,9 @@ class PrintingHandler(Handler):
                 return self._reply(ctx, _said(str(e)))
             return self._reply(ctx, "Printing a test page.")
         if kind == PRINT_CONFIRM:
-            return await self._submit(data, ctx) if affirmative else self._reply(ctx, "OK, not printing.")
+            if not affirmative:
+                return self._reply(ctx, "OK, not printing.")
+            return await (self._submit_draft(data, ctx) if data.get("draft") else self._submit(data, ctx))
         if kind == PRINTER_ADD:
             return await self._add(str(data.get("key") or ""), ctx) if affirmative else \
                 self._reply(ctx, "OK, I won't add it.")

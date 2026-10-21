@@ -285,7 +285,7 @@ const ChatDetailsDialog = ({ m, threadId, onCopy, onClose }) => {
 // A touch held this long opens the menu (iOS fires no contextmenu event).
 const CHAT_LONG_PRESS_MS = 500;
 
-const ChatMessage = ({ m, threadId, onCopy, admin }) => {
+const ChatMessage = ({ m, threadId, onCopy, admin, draftHooks = null }) => {
   const isUser = m.role === 'user';
   const [menuAt, setMenuAt] = React.useState(null);
   const [details, setDetails] = React.useState(false);
@@ -360,8 +360,19 @@ const ChatMessage = ({ m, threadId, onCopy, admin }) => {
         <div style={{ display: 'flex', gap: 10, maxWidth: '86%' }}>
           <span style={{ flexShrink: 0, marginTop: 3 }}><DomovoiGlyph size={14}/></span>
           <div {...bubbleEvents}
-               style={{ fontSize: 13, lineHeight: 1.6, overflowWrap: 'break-word', minWidth: 0 }}>
-            <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(m.content || '') }}/>
+               style={{ fontSize: 13, lineHeight: 1.6, overflowWrap: 'break-word', minWidth: 0,
+                        flex: m.draft && !m.pending ? 1 : undefined }}>
+            {m.draft && !m.pending && window.ChatDrafts && draftHooks ? (
+              // A draft (chat_drafts.jsx): the card, not the text.
+              <window.ChatDrafts.DraftCard m={m} latest={draftHooks.latest[m.draft.id] || null}
+                                          onOpen={draftHooks.open} onSave={draftHooks.save}
+                                          onPrint={draftHooks.print} canPrint={draftHooks.canPrint}/>
+            ) : (
+              <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(m.content || '') }}/>
+            )}
+            {m.pending && m.status === 'drafting' && (
+              <span className="mono chat-doc-checking">writing the draft…</span>
+            )}
             {m.pending && m.status === 'checking' && !m.content && (
               <span className="mono chat-doc-checking">reading the passages and checking the answer…</span>
             )}
@@ -443,13 +454,35 @@ const useChatNarrow = (ref) => {
  * page is off every launcher then (navItemsFor), and a link or an old
  * bookmark that still lands here says why instead of offering a composer
  * whose every send would be refused. */
-const ChatAiOff = () => (
-  <div style={{ padding: 24 }}>
-    <Empty title="chat is off"
-           sub="AI chat and questions are turned off for this home. Voice commands still work. An admin can turn AI on in Settings → Models."
-           action={<a href="#settings/models" className="home-link">Settings → Models</a>}/>
-  </div>
-);
+const ChatAiOff = () => {
+  // Drafts written before AI was turned off can still be saved, downloaded
+  // and printed (no drafting: chat_drafts.jsx's list, then its panel).
+  const Drafts = window.ChatDrafts || null;
+  const [open, setOpen] = React.useState(null);
+  const [fire, toastNode] = useToast();
+  const printing = (typeof usePrintingAvailability === 'function' ? usePrintingAvailability : () => ({}))();
+  const [printDraft, setPrintDraft] = React.useState(null);
+  return (
+    <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <Empty title="chat is off"
+             sub="AI chat and questions are turned off for this home. Voice commands still work. An admin can turn AI on in Settings → Models."
+             action={<a href="#settings/models" className="home-link">Settings → Models</a>}/>
+      {Drafts && !open && <Drafts.List onOpen={(id) => setOpen(id)}/>}
+      {Drafts && open && (
+        <Drafts.Canvas draftId={open} reloadKey={0} wide={false} fire={fire}
+                       canPrint={!!printing.hasPrinter} onClose={() => setOpen(null)}
+                       onPrint={(id, version) => setPrintDraft({ id, version })}/>
+      )}
+      {printDraft && typeof PrintDialog === 'function' && (
+        <PrintDialog name="draft" fire={fire} target={{ version: printDraft.version }}
+                     previewPath={`/api/chat/drafts/${printDraft.id}/print/preview`}
+                     submitPath={`/api/chat/drafts/${printDraft.id}/print/jobs`}
+                     onClose={() => setPrintDraft(null)}/>
+      )}
+      {toastNode}
+    </div>
+  );
+};
 
 const ChatPage = () => {
   const ai = useAiFeatures();
@@ -486,6 +519,17 @@ const ChatPageMain = () => {
   const [sending, setSending] = React.useState(false);
   const pageRef = React.useRef(null);
   const narrow = useChatNarrow(pageRef);
+  // Drafts (chat_drafts.jsx): the document panel, which draft it shows and
+  // a counter that makes it read the draft again after a new version; the
+  // thread's drafts (for "latest v4" on an older card); the Print dialog.
+  const Drafts = window.ChatDrafts || null;
+  const useWide = (Drafts && Drafts.useWidthAtLeast) || (() => false);
+  const wideCanvas = useWide(pageRef, Drafts ? Drafts.WIDE_MIN : 1100);
+  const printing = (typeof usePrintingAvailability === 'function' ? usePrintingAvailability : () => ({}))();
+  const [canvas, setCanvas] = React.useState(null);        // {id, version}
+  const [canvasKey, setCanvasKey] = React.useState(0);
+  const [draftLatest, setDraftLatest] = React.useState({});
+  const [printDraft, setPrintDraft] = React.useState(null); // {id, version, title}
   // Narrow: the list or the conversation, and a chat page opens on the
   // conversation (the "ask anything" state and the composer) with the
   // list one press away. Wide: the list beside it, as before.
@@ -548,7 +592,36 @@ const ChatPageMain = () => {
     setThreadId(t.id);
     loadMessages(t.id);
     hideRailOnPhone();
+    if (t.id !== threadId) setCanvas(null);
   };
+
+  // The thread's drafts, read again whenever a draft row comes or goes.
+  const draftRows = messages.filter((m) => m.draft && !m.pending).length;
+  React.useEffect(() => {
+    if (!Drafts || threadId == null || draftRows === 0) { setDraftLatest({}); return; }
+    let stop = false;
+    Drafts.api.thread(threadId).then((r) => {
+      if (stop) return;
+      const by = {};
+      (r.drafts || []).forEach((d) => { by[d.id] = d; });
+      setDraftLatest(by);
+    }).catch(() => {});
+    return () => { stop = true; };
+  }, [threadId, draftRows, canvasKey]);
+  const draftHooks = Drafts ? {
+    latest: draftLatest,
+    canPrint: !!printing.hasPrinter,
+    open: (id, version) => { setCanvas({ id, version }); setCanvasKey((k) => k + 1); },
+    print: (id, version) => setPrintDraft({ id, version,
+      title: ((draftLatest[id] || {}).title) || 'draft' }),
+    save: async (id, version) => {
+      try {
+        const r = await Drafts.api.save(id, version, null);
+        fire(`saved ${r.rel_path} · ${r.check ? r.check.line : ''}`);
+        setCanvasKey((k) => k + 1);
+      } catch (e) { fire((typeof apiErrorText === 'function' && apiErrorText(e, 0)) || 'save failed'); }
+    },
+  } : null;
 
   // #chat/<id>: open that thread (the Documents page's "Ask about this
   // document" makes one and lands here). The address goes back to #chat.
@@ -711,6 +784,15 @@ const ChatPageMain = () => {
                        model: errorModel || m.model })
           : m));
       refreshThreads();
+      // A draft written or revised: the panel shows the new version (it
+      // opens by itself beside the conversation on a wide screen).
+      const madeDraft = done && done.draft && done.draft.action !== 'print' ? done.draft : null;
+      if (madeDraft && Drafts) {
+        if ((canvas && canvas.id === madeDraft.id) || wideCanvas) {
+          setCanvas({ id: madeDraft.id, version: madeDraft.version });
+        }
+        setCanvasKey((k) => k + 1);
+      }
       // Refused for want of the vision model: re-read what's installed, so
       // the paperclip explains it next time instead of opening the picker.
       const code = (done && done.stats && done.stats.error_code) || errorCode;
@@ -844,7 +926,13 @@ const ChatPageMain = () => {
           )}
         </div>
 
-        <div ref={scrollRef} className="chat-thread" onScroll={onThreadScroll}>
+        {canvas && Drafts && !wideCanvas && (
+          <Drafts.Canvas draftId={canvas.id} version={canvas.version} reloadKey={canvasKey} wide={false}
+                         fire={fire} canPrint={!!printing.hasPrinter} onClose={() => setCanvas(null)}
+                         onPrint={draftHooks.print}/>
+        )}
+        <div ref={scrollRef} className="chat-thread" onScroll={onThreadScroll}
+             style={canvas && Drafts && !wideCanvas ? { display: 'none' } : undefined}>
           {threadId == null && messages.length === 0 ? (
             <Empty glyph="sleeping" title="ask anything"
                    sub="chats run on your own hardware — attach a document to ask about it, or an image for the vision model"
@@ -854,7 +942,8 @@ const ChatPageMain = () => {
                        </Button>
                      : null}/>
           ) : messages.map((m) => (
-            <ChatMessage key={m.id} m={m} threadId={threadId} onCopy={copyMessage} admin={admin}/>
+            <ChatMessage key={m.id} m={m} threadId={threadId} onCopy={copyMessage} admin={admin}
+                         draftHooks={draftHooks}/>
           ))}
         </div>
 
@@ -904,6 +993,18 @@ const ChatPageMain = () => {
           )}
         </div>
       </div>
+      )}
+      {canvas && Drafts && wideCanvas && (
+        <Drafts.Canvas draftId={canvas.id} version={canvas.version} reloadKey={canvasKey} wide
+                       fire={fire} canPrint={!!printing.hasPrinter} onClose={() => setCanvas(null)}
+                       onPrint={draftHooks.print}/>
+      )}
+      {printDraft && typeof PrintDialog === 'function' && (
+        <PrintDialog name={printDraft.title} fire={fire}
+                     target={{ version: printDraft.version }}
+                     previewPath={`/api/chat/drafts/${printDraft.id}/print/preview`}
+                     submitPath={`/api/chat/drafts/${printDraft.id}/print/jobs`}
+                     onClose={() => setPrintDraft(null)}/>
       )}
       {toastNode}
     </div>

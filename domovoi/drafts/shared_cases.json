@@ -1,0 +1,2478 @@
+{
+ "kinds": {
+  "resume": {
+   "label": "Resume",
+   "template": "resume-plain",
+   "format": "docx"
+  },
+  "cover_letter": {
+   "label": "Cover letter",
+   "template": "letter-block",
+   "format": "docx"
+  },
+  "letter": {
+   "label": "Letter",
+   "template": "letter-block",
+   "format": "pdf"
+  }
+ },
+ "card_line": [
+  {
+   "in": [
+    "resume",
+    3,
+    380
+   ],
+   "out": "draft v3 · resume · 380 words"
+  },
+  {
+   "in": [
+    "letter",
+    1,
+    1
+   ],
+   "out": "draft v1 · letter · 1 word"
+  },
+  {
+   "in": [
+    "cover_letter",
+    2,
+    245
+   ],
+   "out": "draft v2 · cover letter · 245 words"
+  }
+ ],
+ "fonts": {
+  "LiberationSans-Regular": {
+   "units_per_em": 2048,
+   "glyphs": 2620,
+   "has_ff": false,
+   "has_bullet": true,
+   "widths": [
+    {
+     "text": "a",
+     "units": 1139
+    },
+    {
+     "text": "W",
+     "units": 1933
+    },
+    {
+     "text": " ",
+     "units": 569
+    },
+    {
+     "text": "Jordan Avery",
+     "units": 12066
+    },
+    {
+     "text": "•",
+     "units": 717
+    },
+    {
+     "text": "·",
+     "units": 682
+    },
+    {
+     "text": "—",
+     "units": 2048
+    },
+    {
+     "text": "“q”",
+     "units": 2503
+    },
+    {
+     "text": "café",
+     "units": 3871
+    },
+    {
+     "text": "0123456789",
+     "units": 11390
+    }
+   ]
+  },
+  "LiberationSans-Bold": {
+   "units_per_em": 2048,
+   "glyphs": 2620,
+   "has_ff": false,
+   "has_bullet": true,
+   "widths": [
+    {
+     "text": "a",
+     "units": 1139
+    },
+    {
+     "text": "W",
+     "units": 1933
+    },
+    {
+     "text": " ",
+     "units": 569
+    },
+    {
+     "text": "Jordan Avery",
+     "units": 13090
+    },
+    {
+     "text": "•",
+     "units": 717
+    },
+    {
+     "text": "·",
+     "units": 682
+    },
+    {
+     "text": "—",
+     "units": 2048
+    },
+    {
+     "text": "“q”",
+     "units": 3299
+    },
+    {
+     "text": "café",
+     "units": 4099
+    },
+    {
+     "text": "0123456789",
+     "units": 11390
+    }
+   ]
+  },
+  "LiberationSerif-Regular": {
+   "units_per_em": 2048,
+   "glyphs": 2602,
+   "has_ff": false,
+   "has_bullet": true,
+   "widths": [
+    {
+     "text": "a",
+     "units": 909
+    },
+    {
+     "text": "W",
+     "units": 1933
+    },
+    {
+     "text": " ",
+     "units": 512
+    },
+    {
+     "text": "Jordan Avery",
+     "units": 11090
+    },
+    {
+     "text": "•",
+     "units": 717
+    },
+    {
+     "text": "·",
+     "units": 682
+    },
+    {
+     "text": "—",
+     "units": 2048
+    },
+    {
+     "text": "“q”",
+     "units": 2842
+    },
+    {
+     "text": "café",
+     "units": 3409
+    },
+    {
+     "text": "0123456789",
+     "units": 10240
+    }
+   ]
+  },
+  "LiberationSerif-Bold": {
+   "units_per_em": 2048,
+   "glyphs": 2602,
+   "has_ff": false,
+   "has_bullet": true,
+   "widths": [
+    {
+     "text": "a",
+     "units": 1024
+    },
+    {
+     "text": "W",
+     "units": 2048
+    },
+    {
+     "text": " ",
+     "units": 512
+    },
+    {
+     "text": "Jordan Avery",
+     "units": 12116
+    },
+    {
+     "text": "•",
+     "units": 717
+    },
+    {
+     "text": "·",
+     "units": 683
+    },
+    {
+     "text": "—",
+     "units": 2048
+    },
+    {
+     "text": "“q”",
+     "units": 3187
+    },
+    {
+     "text": "café",
+     "units": 3524
+    },
+    {
+     "text": "0123456789",
+     "units": 10240
+    }
+   ]
+  }
+ },
+ "prepare": [
+  {
+   "in": "coﬀee oﬃce ﬂy",
+   "out": "coffee office fly"
+  },
+  {
+   "in": "two  spaces\tand a tab",
+   "out": "two spaces and a tab"
+  },
+  {
+   "in": " lead ",
+   "out": "lead"
+  },
+  {
+   "in": "① circled",
+   "out": "1 circled"
+  },
+  {
+   "in": "CJK 中文 here",
+   "out": "CJK ?? here"
+  },
+  {
+   "in": "“smart” — dash",
+   "out": "“smart” — dash"
+  },
+  {
+   "in": "  ",
+   "out": ""
+  }
+ ],
+ "wrap": [
+  {
+   "font": "LiberationSans-Regular",
+   "size": 1150,
+   "room": 18000,
+   "text": "if I can help, I will, and if I can't I will say so plainly",
+   "out": [
+    "if I can help, I will, and if I can't I ",
+    "will say so plainly"
+   ]
+  },
+  {
+   "font": "LiberationSans-Regular",
+   "size": 1050,
+   "room": 9000,
+   "text": "Supercalifragilisticexpialidocious-and-then-some-more-letters",
+   "out": [
+    "Supercalifragilistic",
+    "expialidocious-and",
+    "-then-some-more-l",
+    "etters"
+   ]
+  },
+  {
+   "font": "LiberationSans-Regular",
+   "size": 1050,
+   "room": 46800,
+   "text": "short",
+   "out": [
+    "short"
+   ]
+  },
+  {
+   "font": "LiberationSans-Regular",
+   "size": 1050,
+   "room": 46800,
+   "text": "",
+   "out": []
+  },
+  {
+   "font": "LiberationSans-Regular",
+   "size": 1800,
+   "room": 20000,
+   "text": "one two three four five six seven eight nine ten eleven twelve",
+   "out": [
+    "one two three four five ",
+    "six seven eight nine ten ",
+    "eleven twelve"
+   ]
+  }
+ ],
+ "blocks": [
+  {
+   "in": "# Jordan Avery\nToledo, OH · 555-0142 · jordan.avery@example.com\n\n## Summary\nWarehouse lead with six years of experience running receiving and shipping teams. Known for safe, steady work and for training new staff; coffee-fuelled, efficient and calm when the trucks are late.\n\n## Work Experience\n**Warehouse Lead, Lakeshore Supply — 2021 to 2024**\n- Led a team of eight associates across two shifts, cutting late shipments by a third over two years.\n- Trained new hires on forklift safety and the scanner system.\n- Kept the inventory count within half a percent at every quarterly audit.\n\n**Associate, Lakeshore Supply — 2018 to 2021**\n- Received, checked and shelved about 200 cartons a day.\n\n## Education\n**Toledo Technical College — Certificate in Logistics, 2018**\n\n## Skills\nForklift (certified), inventory systems, scheduling, first aid\n",
+   "out": [
+    [
+     "title",
+     [
+      "Jordan Avery"
+     ]
+    ],
+    [
+     "body",
+     [
+      "Toledo, OH · 555-0142 · jordan.avery@example.com"
+     ]
+    ],
+    [
+     "heading",
+     [
+      "Summary"
+     ]
+    ],
+    [
+     "body",
+     [
+      "Warehouse lead with six years of experience running receiving and shipping teams. Known for safe, steady work and for training new staff; coffee-fuelled, efficient and calm when the trucks are late."
+     ]
+    ],
+    [
+     "heading",
+     [
+      "Work Experience"
+     ]
+    ],
+    [
+     "strong",
+     [
+      "Warehouse Lead, Lakeshore Supply — 2021 to 2024"
+     ]
+    ],
+    [
+     "bullet",
+     [
+      "Led a team of eight associates across two shifts, cutting late shipments by a third over two years."
+     ]
+    ],
+    [
+     "bullet",
+     [
+      "Trained new hires on forklift safety and the scanner system."
+     ]
+    ],
+    [
+     "bullet",
+     [
+      "Kept the inventory count within half a percent at every quarterly audit."
+     ]
+    ],
+    [
+     "strong",
+     [
+      "Associate, Lakeshore Supply — 2018 to 2021"
+     ]
+    ],
+    [
+     "bullet",
+     [
+      "Received, checked and shelved about 200 cartons a day."
+     ]
+    ],
+    [
+     "heading",
+     [
+      "Education"
+     ]
+    ],
+    [
+     "strong",
+     [
+      "Toledo Technical College — Certificate in Logistics, 2018"
+     ]
+    ],
+    [
+     "heading",
+     [
+      "Skills"
+     ]
+    ],
+    [
+     "body",
+     [
+      "Forklift (certified), inventory systems, scheduling, first aid"
+     ]
+    ]
+   ]
+  },
+  {
+   "in": "Jordan Avery\n12 Example Street\nToledo, OH 43604\njordan.avery@example.com\n\nOctober 21, 2026\n\nDana Whitfield\nLakeshore Mutual Insurance Company\n1200 Example Avenue\nToledo, OH 43604\n\n**Re: Request for review of claim LM-2026-048213**\n\nDear Ms. Whitfield,\n\nThank you for your letter of October 3. I'm asking for a review of the decision on the food lost from the refrigerator. If I may say so, the building's power was off for nine hours on September 28 — the manager's notice is attached — so the loss followed a power outage, as section 4 of my policy requires.\n\nI've enclosed the receipts (total $212.40), the manager's notice and two photos. Please send the decision to the address above or to jordan.avery@example.com.\n\nSincerely,\n\nJordan Avery\n",
+   "out": [
+    [
+     "body",
+     [
+      "Jordan Avery",
+      "12 Example Street",
+      "Toledo, OH 43604",
+      "jordan.avery@example.com"
+     ]
+    ],
+    [
+     "body",
+     [
+      "October 21, 2026"
+     ]
+    ],
+    [
+     "body",
+     [
+      "Dana Whitfield",
+      "Lakeshore Mutual Insurance Company",
+      "1200 Example Avenue",
+      "Toledo, OH 43604"
+     ]
+    ],
+    [
+     "strong",
+     [
+      "Re: Request for review of claim LM-2026-048213"
+     ]
+    ],
+    [
+     "body",
+     [
+      "Dear Ms. Whitfield,"
+     ]
+    ],
+    [
+     "body",
+     [
+      "Thank you for your letter of October 3. I'm asking for a review of the decision on the food lost from the refrigerator. If I may say so, the building's power was off for nine hours on September 28 — the manager's notice is attached — so the loss followed a power outage, as section 4 of my policy requires."
+     ]
+    ],
+    [
+     "body",
+     [
+      "I've enclosed the receipts (total $212.40), the manager's notice and two photos. Please send the decision to the address above or to jordan.avery@example.com."
+     ]
+    ],
+    [
+     "body",
+     [
+      "Sincerely,"
+     ]
+    ],
+    [
+     "body",
+     [
+      "Jordan Avery"
+     ]
+    ]
+   ]
+  },
+  {
+   "in": "# Name ##\n\n* star bullet\n+ plus bullet\n• dot bullet\n\n---\n\n```\ncode line\n```",
+   "out": [
+    [
+     "title",
+     [
+      "Name"
+     ]
+    ],
+    [
+     "bullet",
+     [
+      "star bullet"
+     ]
+    ],
+    [
+     "bullet",
+     [
+      "plus bullet"
+     ]
+    ],
+    [
+     "bullet",
+     [
+      "dot bullet"
+     ]
+    ],
+    [
+     "body",
+     [
+      "code line"
+     ]
+    ]
+   ]
+  },
+  {
+   "in": "**Bold** start but more\n**all bold**\n__also bold__\nA [link](https://example.com) and `code` and *it* and snake_case_word and 2*3*4.",
+   "out": [
+    [
+     "body",
+     [
+      "Bold start but more"
+     ]
+    ],
+    [
+     "strong",
+     [
+      "all bold"
+     ]
+    ],
+    [
+     "strong",
+     [
+      "also bold"
+     ]
+    ],
+    [
+     "body",
+     [
+      "A link and code and it and snake_case_word and 2*3*4."
+     ]
+    ]
+   ]
+  },
+  {
+   "in": "\n\n  \n",
+   "out": []
+  },
+  {
+   "in": "### Third level\nplain \\*escaped\\* text",
+   "out": [
+    [
+     "heading",
+     [
+      "Third level"
+     ]
+    ],
+    [
+     "body",
+     [
+      "plain \\escaped\\ text"
+     ]
+    ]
+   ]
+  }
+ ],
+ "plain_text": [
+  {
+   "in": "# Jordan Avery\nToledo, OH · 555-0142 · jordan.avery@example.com\n\n## Summary\nWarehouse lead with six years of experience running receiving and shipping teams. Known for safe, steady work and for training new staff; coffee-fuelled, efficient and calm when the trucks are late.\n\n## Work Experience\n**Warehouse Lead, Lakeshore Supply — 2021 to 2024**\n- Led a team of eight associates across two shifts, cutting late shipments by a third over two years.\n- Trained new hires on forklift safety and the scanner system.\n- Kept the inventory count within half a percent at every quarterly audit.\n\n**Associate, Lakeshore Supply — 2018 to 2021**\n- Received, checked and shelved about 200 cartons a day.\n\n## Education\n**Toledo Technical College — Certificate in Logistics, 2018**\n\n## Skills\nForklift (certified), inventory systems, scheduling, first aid\n",
+   "out": "Jordan Avery\nToledo, OH · 555-0142 · jordan.avery@example.com\nSummary\nWarehouse lead with six years of experience running receiving and shipping teams. Known for safe, steady work and for training new staff; coffee-fuelled, efficient and calm when the trucks are late.\nWork Experience\nWarehouse Lead, Lakeshore Supply — 2021 to 2024\nLed a team of eight associates across two shifts, cutting late shipments by a third over two years.\nTrained new hires on forklift safety and the scanner system.\nKept the inventory count within half a percent at every quarterly audit.\nAssociate, Lakeshore Supply — 2018 to 2021\nReceived, checked and shelved about 200 cartons a day.\nEducation\nToledo Technical College — Certificate in Logistics, 2018\nSkills\nForklift (certified), inventory systems, scheduling, first aid",
+   "words": 123
+  },
+  {
+   "in": "October 21, 2026\n\nDear Mr. Okafor,\n\nThe heater in apartment 3B has stopped working again, and the nights are getting cold. Could someone take a look this week? I'm home after five every day, and the office is welcome to use the spare key.\n\nThank you for your help,\n\nSam Lee\n",
+   "out": "October 21, 2026\nDear Mr. Okafor,\nThe heater in apartment 3B has stopped working again, and the nights are getting cold. Could someone take a look this week? I'm home after five every day, and the office is welcome to use the spare key.\nThank you for your help,\nSam Lee",
+   "words": 51
+  }
+ ],
+ "layout": [
+  {
+   "name": "resume",
+   "template": "resume-plain",
+   "markdown": "# Jordan Avery\nToledo, OH · 555-0142 · jordan.avery@example.com\n\n## Summary\nWarehouse lead with six years of experience running receiving and shipping teams. Known for safe, steady work and for training new staff; coffee-fuelled, efficient and calm when the trucks are late.\n\n## Work Experience\n**Warehouse Lead, Lakeshore Supply — 2021 to 2024**\n- Led a team of eight associates across two shifts, cutting late shipments by a third over two years.\n- Trained new hires on forklift safety and the scanner system.\n- Kept the inventory count within half a percent at every quarterly audit.\n\n**Associate, Lakeshore Supply — 2018 to 2021**\n- Received, checked and shelved about 200 cartons a day.\n\n## Education\n**Toledo Technical College — Certificate in Logistics, 2018**\n\n## Skills\nForklift (certified), inventory systems, scheduling, first aid\n",
+   "width": 61200,
+   "height": 79200,
+   "pages": [
+    [
+     [
+      "title",
+      "LiberationSans-Bold",
+      1800,
+      5400,
+      7200,
+      "Jordan Avery",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSans-Regular",
+      1050,
+      5400,
+      9050,
+      "Toledo, OH · 555-0142 · jordan.avery@example.com",
+      "",
+      0
+     ],
+     [
+      "heading",
+      "LiberationSans-Bold",
+      1200,
+      5400,
+      11950,
+      "Summary",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSans-Regular",
+      1050,
+      5400,
+      13600,
+      "Warehouse lead with six years of experience running receiving and shipping teams. Known for safe, steady ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSans-Regular",
+      1050,
+      5400,
+      14950,
+      "work and for training new staff; coffee-fuelled, efficient and calm when the trucks are late.",
+      "",
+      0
+     ],
+     [
+      "heading",
+      "LiberationSans-Bold",
+      1200,
+      5400,
+      17850,
+      "Work Experience",
+      "",
+      0
+     ],
+     [
+      "strong",
+      "LiberationSans-Bold",
+      1050,
+      5400,
+      19900,
+      "Warehouse Lead, Lakeshore Supply — 2021 to 2024",
+      "",
+      0
+     ],
+     [
+      "bullet",
+      "LiberationSans-Regular",
+      1050,
+      6800,
+      21350,
+      "Led a team of eight associates across two shifts, cutting late shipments by a third over two years.",
+      "•",
+      5400
+     ],
+     [
+      "bullet",
+      "LiberationSans-Regular",
+      1050,
+      6800,
+      22900,
+      "Trained new hires on forklift safety and the scanner system.",
+      "•",
+      5400
+     ],
+     [
+      "bullet",
+      "LiberationSans-Regular",
+      1050,
+      6800,
+      24450,
+      "Kept the inventory count within half a percent at every quarterly audit.",
+      "•",
+      5400
+     ],
+     [
+      "strong",
+      "LiberationSans-Bold",
+      1050,
+      5400,
+      26400,
+      "Associate, Lakeshore Supply — 2018 to 2021",
+      "",
+      0
+     ],
+     [
+      "bullet",
+      "LiberationSans-Regular",
+      1050,
+      6800,
+      27850,
+      "Received, checked and shelved about 200 cartons a day.",
+      "•",
+      5400
+     ],
+     [
+      "heading",
+      "LiberationSans-Bold",
+      1200,
+      5400,
+      30550,
+      "Education",
+      "",
+      0
+     ],
+     [
+      "strong",
+      "LiberationSans-Bold",
+      1050,
+      5400,
+      32600,
+      "Toledo Technical College — Certificate in Logistics, 2018",
+      "",
+      0
+     ],
+     [
+      "heading",
+      "LiberationSans-Bold",
+      1200,
+      5400,
+      35200,
+      "Skills",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSans-Regular",
+      1050,
+      5400,
+      36850,
+      "Forklift (certified), inventory systems, scheduling, first aid",
+      "",
+      0
+     ]
+    ]
+   ],
+   "text": "Jordan Avery\nToledo, OH · 555-0142 · jordan.avery@example.com\nSummary\nWarehouse lead with six years of experience running receiving and shipping teams. Known for safe, steady \nwork and for training new staff; coffee-fuelled, efficient and calm when the trucks are late.\nWork Experience\nWarehouse Lead, Lakeshore Supply — 2021 to 2024\n• Led a team of eight associates across two shifts, cutting late shipments by a third over two years.\n• Trained new hires on forklift safety and the scanner system.\n• Kept the inventory count within half a percent at every quarterly audit.\nAssociate, Lakeshore Supply — 2018 to 2021\n• Received, checked and shelved about 200 cartons a day.\nEducation\nToledo Technical College — Certificate in Logistics, 2018\nSkills\nForklift (certified), inventory systems, scheduling, first aid"
+  },
+  {
+   "name": "resume-classic",
+   "template": "resume-classic",
+   "markdown": "# Jordan Avery\nToledo, OH · 555-0142 · jordan.avery@example.com\n\n## Summary\nWarehouse lead with six years of experience running receiving and shipping teams. Known for safe, steady work and for training new staff; coffee-fuelled, efficient and calm when the trucks are late.\n\n## Work Experience\n**Warehouse Lead, Lakeshore Supply — 2021 to 2024**\n- Led a team of eight associates across two shifts, cutting late shipments by a third over two years.\n- Trained new hires on forklift safety and the scanner system.\n- Kept the inventory count within half a percent at every quarterly audit.\n\n**Associate, Lakeshore Supply — 2018 to 2021**\n- Received, checked and shelved about 200 cartons a day.\n\n## Education\n**Toledo Technical College — Certificate in Logistics, 2018**\n\n## Skills\nForklift (certified), inventory systems, scheduling, first aid\n",
+   "width": 61200,
+   "height": 79200,
+   "pages": [
+    [
+     [
+      "title",
+      "LiberationSerif-Bold",
+      1800,
+      5400,
+      7200,
+      "Jordan Avery",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1100,
+      5400,
+      9300,
+      "Toledo, OH · 555-0142 · jordan.avery@example.com",
+      "",
+      0
+     ],
+     [
+      "heading",
+      "LiberationSerif-Bold",
+      1250,
+      5400,
+      12600,
+      "Summary",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1100,
+      5400,
+      14450,
+      "Warehouse lead with six years of experience running receiving and shipping teams. Known for safe, steady work ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1100,
+      5400,
+      15900,
+      "and for training new staff; coffee-fuelled, efficient and calm when the trucks are late.",
+      "",
+      0
+     ],
+     [
+      "heading",
+      "LiberationSerif-Bold",
+      1250,
+      5400,
+      19200,
+      "Work Experience",
+      "",
+      0
+     ],
+     [
+      "strong",
+      "LiberationSerif-Bold",
+      1100,
+      5400,
+      21550,
+      "Warehouse Lead, Lakeshore Supply — 2021 to 2024",
+      "",
+      0
+     ],
+     [
+      "bullet",
+      "LiberationSerif-Regular",
+      1100,
+      6900,
+      23100,
+      "Led a team of eight associates across two shifts, cutting late shipments by a third over two years.",
+      "•",
+      5400
+     ],
+     [
+      "bullet",
+      "LiberationSerif-Regular",
+      1100,
+      6900,
+      24850,
+      "Trained new hires on forklift safety and the scanner system.",
+      "•",
+      5400
+     ],
+     [
+      "bullet",
+      "LiberationSerif-Regular",
+      1100,
+      6900,
+      26600,
+      "Kept the inventory count within half a percent at every quarterly audit.",
+      "•",
+      5400
+     ],
+     [
+      "strong",
+      "LiberationSerif-Bold",
+      1100,
+      5400,
+      28850,
+      "Associate, Lakeshore Supply — 2018 to 2021",
+      "",
+      0
+     ],
+     [
+      "bullet",
+      "LiberationSerif-Regular",
+      1100,
+      6900,
+      30400,
+      "Received, checked and shelved about 200 cartons a day.",
+      "•",
+      5400
+     ],
+     [
+      "heading",
+      "LiberationSerif-Bold",
+      1250,
+      5400,
+      33500,
+      "Education",
+      "",
+      0
+     ],
+     [
+      "strong",
+      "LiberationSerif-Bold",
+      1100,
+      5400,
+      35850,
+      "Toledo Technical College — Certificate in Logistics, 2018",
+      "",
+      0
+     ],
+     [
+      "heading",
+      "LiberationSerif-Bold",
+      1250,
+      5400,
+      38750,
+      "Skills",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1100,
+      5400,
+      40600,
+      "Forklift (certified), inventory systems, scheduling, first aid",
+      "",
+      0
+     ]
+    ]
+   ],
+   "text": "Jordan Avery\nToledo, OH · 555-0142 · jordan.avery@example.com\nSummary\nWarehouse lead with six years of experience running receiving and shipping teams. Known for safe, steady work \nand for training new staff; coffee-fuelled, efficient and calm when the trucks are late.\nWork Experience\nWarehouse Lead, Lakeshore Supply — 2021 to 2024\n• Led a team of eight associates across two shifts, cutting late shipments by a third over two years.\n• Trained new hires on forklift safety and the scanner system.\n• Kept the inventory count within half a percent at every quarterly audit.\nAssociate, Lakeshore Supply — 2018 to 2021\n• Received, checked and shelved about 200 cartons a day.\nEducation\nToledo Technical College — Certificate in Logistics, 2018\nSkills\nForklift (certified), inventory systems, scheduling, first aid"
+  },
+  {
+   "name": "letter",
+   "template": "letter-block",
+   "markdown": "Jordan Avery\n12 Example Street\nToledo, OH 43604\njordan.avery@example.com\n\nOctober 21, 2026\n\nDana Whitfield\nLakeshore Mutual Insurance Company\n1200 Example Avenue\nToledo, OH 43604\n\n**Re: Request for review of claim LM-2026-048213**\n\nDear Ms. Whitfield,\n\nThank you for your letter of October 3. I'm asking for a review of the decision on the food lost from the refrigerator. If I may say so, the building's power was off for nine hours on September 28 — the manager's notice is attached — so the loss followed a power outage, as section 4 of my policy requires.\n\nI've enclosed the receipts (total $212.40), the manager's notice and two photos. Please send the decision to the address above or to jordan.avery@example.com.\n\nSincerely,\n\nJordan Avery\n",
+   "width": 61200,
+   "height": 79200,
+   "pages": [
+    [
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      8350,
+      "Jordan Avery",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      9850,
+      "12 Example Street",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      11350,
+      "Toledo, OH 43604",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      12850,
+      "jordan.avery@example.com",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      15350,
+      "October 21, 2026",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      17850,
+      "Dana Whitfield",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      19350,
+      "Lakeshore Mutual Insurance Company",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      20850,
+      "1200 Example Avenue",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      22350,
+      "Toledo, OH 43604",
+      "",
+      0
+     ],
+     [
+      "strong",
+      "LiberationSerif-Bold",
+      1150,
+      7200,
+      24850,
+      "Re: Request for review of claim LM-2026-048213",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      27350,
+      "Dear Ms. Whitfield,",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      29850,
+      "Thank you for your letter of October 3. I'm asking for a review of the decision on the food lost from ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      31350,
+      "the refrigerator. If I may say so, the building's power was off for nine hours on September 28 — the ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      32850,
+      "manager's notice is attached — so the loss followed a power outage, as section 4 of my policy ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      34350,
+      "requires.",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      36850,
+      "I've enclosed the receipts (total $212.40), the manager's notice and two photos. Please send the ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      38350,
+      "decision to the address above or to jordan.avery@example.com.",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      40850,
+      "Sincerely,",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      43350,
+      "Jordan Avery",
+      "",
+      0
+     ]
+    ]
+   ],
+   "text": "Jordan Avery\n12 Example Street\nToledo, OH 43604\njordan.avery@example.com\nOctober 21, 2026\nDana Whitfield\nLakeshore Mutual Insurance Company\n1200 Example Avenue\nToledo, OH 43604\nRe: Request for review of claim LM-2026-048213\nDear Ms. Whitfield,\nThank you for your letter of October 3. I'm asking for a review of the decision on the food lost from \nthe refrigerator. If I may say so, the building's power was off for nine hours on September 28 — the \nmanager's notice is attached — so the loss followed a power outage, as section 4 of my policy \nrequires.\nI've enclosed the receipts (total $212.40), the manager's notice and two photos. Please send the \ndecision to the address above or to jordan.avery@example.com.\nSincerely,\nJordan Avery"
+  },
+  {
+   "name": "personal",
+   "template": "letter-personal",
+   "markdown": "October 21, 2026\n\nDear Mr. Okafor,\n\nThe heater in apartment 3B has stopped working again, and the nights are getting cold. Could someone take a look this week? I'm home after five every day, and the office is welcome to use the spare key.\n\nThank you for your help,\n\nSam Lee\n",
+   "width": 61200,
+   "height": 79200,
+   "pages": [
+    [
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      8350,
+      "October 21, 2026",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      10850,
+      "Dear Mr. Okafor,",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      13350,
+      "The heater in apartment 3B has stopped working again, and the nights are getting cold. Could ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      14850,
+      "someone take a look this week? I'm home after five every day, and the office is welcome to use the ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      16350,
+      "spare key.",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      18850,
+      "Thank you for your help,",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      21350,
+      "Sam Lee",
+      "",
+      0
+     ]
+    ]
+   ],
+   "text": "October 21, 2026\nDear Mr. Okafor,\nThe heater in apartment 3B has stopped working again, and the nights are getting cold. Could \nsomeone take a look this week? I'm home after five every day, and the office is welcome to use the \nspare key.\nThank you for your help,\nSam Lee"
+  },
+  {
+   "name": "traps",
+   "template": "resume-plain",
+   "markdown": "# Typography ﬀ trap\n\nThe oﬃce coﬀee is ﬂuffy. “Smart quotes” — and an em dash; café naïve résumé. A very long address: https://example.com/a/really/long/path/that/goes/on/and/on/without/any/spaces/at/all/for/a/while/now\n",
+   "width": 61200,
+   "height": 79200,
+   "pages": [
+    [
+     [
+      "title",
+      "LiberationSans-Bold",
+      1800,
+      5400,
+      7200,
+      "Typography ff trap",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSans-Regular",
+      1050,
+      5400,
+      9050,
+      "The office coffee is fluffy. “Smart quotes” — and an em dash; café naïve résumé. A very long address: ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSans-Regular",
+      1050,
+      5400,
+      10400,
+      "https://example.com/a/really/long/path/that/goes/on/and/on/without/any/spaces/at/all/for/a/while/now",
+      "",
+      0
+     ]
+    ]
+   ],
+   "text": "Typography ff trap\nThe office coffee is fluffy. “Smart quotes” — and an em dash; café naïve résumé. A very long address: \nhttps://example.com/a/really/long/path/that/goes/on/and/on/without/any/spaces/at/all/for/a/while/now"
+  },
+  {
+   "name": "long-letter",
+   "template": "letter-block",
+   "markdown": "Jordan Avery\n12 Example Street\nToledo, OH 43604\njordan.avery@example.com\n\nOctober 21, 2026\n\nDana Whitfield\nLakeshore Mutual Insurance Company\n1200 Example Avenue\nToledo, OH 43604\n\n**Re: Request for review of claim LM-2026-048213**\n\nDear Ms. Whitfield,\n\nThank you for your letter of October 3. I'm asking for a review of the decision on the food lost from the refrigerator. If I may say so, the building's power was off for nine hours on September 28 — the manager's notice is attached — so the loss followed a power outage, as section 4 of my policy requires.\n\nI've enclosed the receipts (total $212.40), the manager's notice and two photos. Please send the decision to the address above or to jordan.avery@example.com.\n\nThis paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. \n\nThis paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. \n\nThis paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. \n\nThis paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. \n\nThis paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. \n\nThis paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. \n\nThis paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the page break is held to the same rules on both renderers. \n\nSincerely,\n\nJordan Avery\n",
+   "width": 61200,
+   "height": 79200,
+   "pages": [
+    [
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      8350,
+      "Jordan Avery",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      9850,
+      "12 Example Street",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      11350,
+      "Toledo, OH 43604",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      12850,
+      "jordan.avery@example.com",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      15350,
+      "October 21, 2026",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      17850,
+      "Dana Whitfield",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      19350,
+      "Lakeshore Mutual Insurance Company",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      20850,
+      "1200 Example Avenue",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      22350,
+      "Toledo, OH 43604",
+      "",
+      0
+     ],
+     [
+      "strong",
+      "LiberationSerif-Bold",
+      1150,
+      7200,
+      24850,
+      "Re: Request for review of claim LM-2026-048213",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      27350,
+      "Dear Ms. Whitfield,",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      29850,
+      "Thank you for your letter of October 3. I'm asking for a review of the decision on the food lost from ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      31350,
+      "the refrigerator. If I may say so, the building's power was off for nine hours on September 28 — the ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      32850,
+      "manager's notice is attached — so the loss followed a power outage, as section 4 of my policy ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      34350,
+      "requires.",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      36850,
+      "I've enclosed the receipts (total $212.40), the manager's notice and two photos. Please send the ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      38350,
+      "decision to the address above or to jordan.avery@example.com.",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      40850,
+      "This paragraph is here to make the letter run onto a second page, so the page break is held to the ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      42350,
+      "same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      43850,
+      "page break is held to the same rules on both renderers. This paragraph is here to make the letter run ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      45350,
+      "onto a second page, so the page break is held to the same rules on both renderers. This paragraph is ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      46850,
+      "here to make the letter run onto a second page, so the page break is held to the same rules on both ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      48350,
+      "renderers.",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      50850,
+      "This paragraph is here to make the letter run onto a second page, so the page break is held to the ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      52350,
+      "same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      53850,
+      "page break is held to the same rules on both renderers. This paragraph is here to make the letter run ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      55350,
+      "onto a second page, so the page break is held to the same rules on both renderers. This paragraph is ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      56850,
+      "here to make the letter run onto a second page, so the page break is held to the same rules on both ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      58350,
+      "renderers.",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      60850,
+      "This paragraph is here to make the letter run onto a second page, so the page break is held to the ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      62350,
+      "same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      63850,
+      "page break is held to the same rules on both renderers. This paragraph is here to make the letter run ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      65350,
+      "onto a second page, so the page break is held to the same rules on both renderers. This paragraph is ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      66850,
+      "here to make the letter run onto a second page, so the page break is held to the same rules on both ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      68350,
+      "renderers.",
+      "",
+      0
+     ]
+    ],
+    [
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      8350,
+      "This paragraph is here to make the letter run onto a second page, so the page break is held to the ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      9850,
+      "same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      11350,
+      "page break is held to the same rules on both renderers. This paragraph is here to make the letter run ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      12850,
+      "onto a second page, so the page break is held to the same rules on both renderers. This paragraph is ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      14350,
+      "here to make the letter run onto a second page, so the page break is held to the same rules on both ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      15850,
+      "renderers.",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      18350,
+      "This paragraph is here to make the letter run onto a second page, so the page break is held to the ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      19850,
+      "same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      21350,
+      "page break is held to the same rules on both renderers. This paragraph is here to make the letter run ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      22850,
+      "onto a second page, so the page break is held to the same rules on both renderers. This paragraph is ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      24350,
+      "here to make the letter run onto a second page, so the page break is held to the same rules on both ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      25850,
+      "renderers.",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      28350,
+      "This paragraph is here to make the letter run onto a second page, so the page break is held to the ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      29850,
+      "same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      31350,
+      "page break is held to the same rules on both renderers. This paragraph is here to make the letter run ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      32850,
+      "onto a second page, so the page break is held to the same rules on both renderers. This paragraph is ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      34350,
+      "here to make the letter run onto a second page, so the page break is held to the same rules on both ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      35850,
+      "renderers.",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      38350,
+      "This paragraph is here to make the letter run onto a second page, so the page break is held to the ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      39850,
+      "same rules on both renderers. This paragraph is here to make the letter run onto a second page, so the ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      41350,
+      "page break is held to the same rules on both renderers. This paragraph is here to make the letter run ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      42850,
+      "onto a second page, so the page break is held to the same rules on both renderers. This paragraph is ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      44350,
+      "here to make the letter run onto a second page, so the page break is held to the same rules on both ",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      45850,
+      "renderers.",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      48350,
+      "Sincerely,",
+      "",
+      0
+     ],
+     [
+      "body",
+      "LiberationSerif-Regular",
+      1150,
+      7200,
+      50850,
+      "Jordan Avery",
+      "",
+      0
+     ]
+    ]
+   ],
+   "text": "Jordan Avery\n12 Example Street\nToledo, OH 43604\njordan.avery@example.com\nOctober 21, 2026\nDana Whitfield\nLakeshore Mutual Insurance Company\n1200 Example Avenue\nToledo, OH 43604\nRe: Request for review of claim LM-2026-048213\nDear Ms. Whitfield,\nThank you for your letter of October 3. I'm asking for a review of the decision on the food lost from \nthe refrigerator. If I may say so, the building's power was off for nine hours on September 28 — the \nmanager's notice is attached — so the loss followed a power outage, as section 4 of my policy \nrequires.\nI've enclosed the receipts (total $212.40), the manager's notice and two photos. Please send the \ndecision to the address above or to jordan.avery@example.com.\nThis paragraph is here to make the letter run onto a second page, so the page break is held to the \nsame rules on both renderers. This paragraph is here to make the letter run onto a second page, so the \npage break is held to the same rules on both renderers. This paragraph is here to make the letter run \nonto a second page, so the page break is held to the same rules on both renderers. This paragraph is \nhere to make the letter run onto a second page, so the page break is held to the same rules on both \nrenderers.\nThis paragraph is here to make the letter run onto a second page, so the page break is held to the \nsame rules on both renderers. This paragraph is here to make the letter run onto a second page, so the \npage break is held to the same rules on both renderers. This paragraph is here to make the letter run \nonto a second page, so the page break is held to the same rules on both renderers. This paragraph is \nhere to make the letter run onto a second page, so the page break is held to the same rules on both \nrenderers.\nThis paragraph is here to make the letter run onto a second page, so the page break is held to the \nsame rules on both renderers. This paragraph is here to make the letter run onto a second page, so the \npage break is held to the same rules on both renderers. This paragraph is here to make the letter run \nonto a second page, so the page break is held to the same rules on both renderers. This paragraph is \nhere to make the letter run onto a second page, so the page break is held to the same rules on both \nrenderers.\fThis paragraph is here to make the letter run onto a second page, so the page break is held to the \nsame rules on both renderers. This paragraph is here to make the letter run onto a second page, so the \npage break is held to the same rules on both renderers. This paragraph is here to make the letter run \nonto a second page, so the page break is held to the same rules on both renderers. This paragraph is \nhere to make the letter run onto a second page, so the page break is held to the same rules on both \nrenderers.\nThis paragraph is here to make the letter run onto a second page, so the page break is held to the \nsame rules on both renderers. This paragraph is here to make the letter run onto a second page, so the \npage break is held to the same rules on both renderers. This paragraph is here to make the letter run \nonto a second page, so the page break is held to the same rules on both renderers. This paragraph is \nhere to make the letter run onto a second page, so the page break is held to the same rules on both \nrenderers.\nThis paragraph is here to make the letter run onto a second page, so the page break is held to the \nsame rules on both renderers. This paragraph is here to make the letter run onto a second page, so the \npage break is held to the same rules on both renderers. This paragraph is here to make the letter run \nonto a second page, so the page break is held to the same rules on both renderers. This paragraph is \nhere to make the letter run onto a second page, so the page break is held to the same rules on both \nrenderers.\nThis paragraph is here to make the letter run onto a second page, so the page break is held to the \nsame rules on both renderers. This paragraph is here to make the letter run onto a second page, so the \npage break is held to the same rules on both renderers. This paragraph is here to make the letter run \nonto a second page, so the page break is held to the same rules on both renderers. This paragraph is \nhere to make the letter run onto a second page, so the page break is held to the same rules on both \nrenderers.\nSincerely,\nJordan Avery"
+  }
+ ],
+ "display_text": [
+  {
+   "in": "# Jordan Avery\nToledo, OH · 555-0142 · jordan.avery@example.com\n\n## Summary\nWarehouse lead with six years of experience running receiving and shipping teams. Known for safe, steady work and for training new staff; coffee-fuelled, efficient and calm when the trucks are late.\n\n## Work Experience\n**Warehouse Lead, Lakeshore Supply — 2021 to 2024**\n- Led a team of eight associates across two shifts, cutting late shipments by a third over two years.\n- Trained new hires on forklift safety and the scanner system.\n- Kept the inventory count within half a percent at every quarterly audit.\n\n**Associate, Lakeshore Supply — 2018 to 2021**\n- Received, checked and shelved about 200 cartons a day.\n\n## Education\n**Toledo Technical College — Certificate in Logistics, 2018**\n\n## Skills\nForklift (certified), inventory systems, scheduling, first aid\n",
+   "out": "Jordan Avery\n\nToledo, OH · 555-0142 · jordan.avery@example.com\n\nSummary\n\nWarehouse lead with six years of experience running receiving and shipping teams. Known for safe, steady work and for training new staff; coffee-fuelled, efficient and calm when the trucks are late.\n\nWork Experience\n\nWarehouse Lead, Lakeshore Supply — 2021 to 2024\n\n• Led a team of eight associates across two shifts, cutting late shipments by a third over two years.\n• Trained new hires on forklift safety and the scanner system.\n• Kept the inventory count within half a percent at every quarterly audit.\n\nAssociate, Lakeshore Supply — 2018 to 2021\n\n• Received, checked and shelved about 200 cartons a day.\n\nEducation\n\nToledo Technical College — Certificate in Logistics, 2018\n\nSkills\n\nForklift (certified), inventory systems, scheduling, first aid"
+  },
+  {
+   "in": "October 21, 2026\n\nDear Mr. Okafor,\n\nThe heater in apartment 3B has stopped working again, and the nights are getting cold. Could someone take a look this week? I'm home after five every day, and the office is welcome to use the spare key.\n\nThank you for your help,\n\nSam Lee\n",
+   "out": "October 21, 2026\n\nDear Mr. Okafor,\n\nThe heater in apartment 3B has stopped working again, and the nights are getting cold. Could someone take a look this week? I'm home after five every day, and the office is welcome to use the spare key.\n\nThank you for your help,\n\nSam Lee"
+  }
+ ],
+ "tokens": [
+  {
+   "in": "a  b\nc\n\n\nd",
+   "out": [
+    "a",
+    " ",
+    "b",
+    "\n",
+    "c",
+    "\n\n",
+    "d"
+   ]
+  },
+  {
+   "in": " lead",
+   "out": [
+    " ",
+    "lead"
+   ]
+  },
+  {
+   "in": "",
+   "out": []
+  }
+ ],
+ "diff": [
+  {
+   "old": "# Jordan Avery\nToledo, OH · 555-0142 · jordan.avery@example.com\n\n## Summary\nWarehouse lead with six years of experience running receiving and shipping teams. Known for safe, steady work and for training new staff; coffee-fuelled, efficient and calm when the trucks are late.\n\n## Work Experience\n**Warehouse Lead, Lakeshore Supply — 2021 to 2024**\n- Led a team of eight associates across two shifts, cutting late shipments by a third over two years.\n- Trained new hires on forklift safety and the scanner system.\n- Kept the inventory count within half a percent at every quarterly audit.\n\n**Associate, Lakeshore Supply — 2018 to 2021**\n- Received, checked and shelved about 200 cartons a day.\n\n## Education\n**Toledo Technical College — Certificate in Logistics, 2018**\n\n## Skills\nForklift (certified), inventory systems, scheduling, first aid\n",
+   "new": "# Jordan Avery\nToledo, OH · 555-0142 · jordan.avery@example.com\n\n## Summary\nWarehouse lead with six years of experience running receiving and shipping teams. Known for safe, steady work and for training new staff; coffee-fuelled, efficient and calm when the trucks are late.\n\n## Work Experience\n**Warehouse Lead, Lakeshore Supply — 2021 to 2024**\n- Led eight associates over two shifts.\n- Trained new hires on forklift safety and the scanner system.\n- Kept the inventory count within half a percent at every quarterly audit.\n\n**Associate, Lakeshore Supply — 2018 to 2021**\n- Received, checked and shelved about 200 cartons a day.\n\n## Education\n**Toledo Technical College — Certificate in Logistics, 2018**\n\n## Skills\nForklift (certified), inventory systems, scheduling, first aid\n",
+   "ops": [
+    [
+     "=",
+     "Jordan Avery\n\nToledo, OH · 555-0142 · jordan.avery@example.com\n\nSummary\n\nWarehouse lead with six years of experience running receiving and shipping teams. Known for safe, steady work and for training new staff; coffee-fuelled, efficient and calm when the trucks are late.\n\nWork Experience\n\nWarehouse Lead, Lakeshore Supply — 2021 to 2024\n\n• Led "
+    ],
+    [
+     "-",
+     "a team of "
+    ],
+    [
+     "=",
+     "eight associates "
+    ],
+    [
+     "-",
+     "across two shifts, cutting late shipments by a third "
+    ],
+    [
+     "=",
+     "over two "
+    ],
+    [
+     "-",
+     "years."
+    ],
+    [
+     "+",
+     "shifts."
+    ],
+    [
+     "=",
+     "\n• Trained new hires on forklift safety and the scanner system.\n• Kept the inventory count within half a percent at every quarterly audit.\n\nAssociate, Lakeshore Supply — 2018 to 2021\n\n• Received, checked and shelved about 200 cartons a day.\n\nEducation\n\nToledo Technical College — Certificate in Logistics, 2018\n\nSkills\n\nForklift (certified), inventory systems, scheduling, first aid"
+    ]
+   ],
+   "change": "cut 12 words (127 → 115)"
+  },
+  {
+   "old": "Jordan Avery\n12 Example Street\nToledo, OH 43604\njordan.avery@example.com\n\nOctober 21, 2026\n\nDana Whitfield\nLakeshore Mutual Insurance Company\n1200 Example Avenue\nToledo, OH 43604\n\n**Re: Request for review of claim LM-2026-048213**\n\nDear Ms. Whitfield,\n\nThank you for your letter of October 3. I'm asking for a review of the decision on the food lost from the refrigerator. If I may say so, the building's power was off for nine hours on September 28 — the manager's notice is attached — so the loss followed a power outage, as section 4 of my policy requires.\n\nI've enclosed the receipts (total $212.40), the manager's notice and two photos. Please send the decision to the address above or to jordan.avery@example.com.\n\nSincerely,\n\nJordan Avery\n",
+   "new": "Jordan Avery\n12 Example Street\nToledo, OH 43604\njordan.avery@example.com\n\nOctober 21, 2026\n\nDana Whitfield\nLakeshore Mutual Insurance Company\n1200 Example Avenue\nToledo, OH 43604\n\n**Re: Request for review of claim LM-2026-048213**\n\nDear Ms. Whitfield,\n\nI'm asking for a review of the decision on the food lost from the refrigerator. If I may say so, the building's power was off for nine hours on September 28 — the manager's notice is attached — so the loss followed a power outage, as section 4 of my policy requires.\n\nI've enclosed the receipts (total $212.40), the manager's notice and two photos. Please send the decision to the address above or to jordan.avery@example.com.\n\nSincerely,\n\nJordan Avery\n",
+   "ops": [
+    [
+     "=",
+     "Jordan Avery\n12 Example Street\nToledo, OH 43604\njordan.avery@example.com\n\nOctober 21, 2026\n\nDana Whitfield\nLakeshore Mutual Insurance Company\n1200 Example Avenue\nToledo, OH 43604\n\nRe: Request for review of claim LM-2026-048213\n\nDear Ms. Whitfield,\n\n"
+    ],
+    [
+     "-",
+     "Thank you for your letter of October 3. "
+    ],
+    [
+     "=",
+     "I'm asking for a review of the decision on the food lost from the refrigerator. If I may say so, the building's power was off for nine hours on September 28 — the manager's notice is attached — so the loss followed a power outage, as section 4 of my policy requires.\n\nI've enclosed the receipts (total $212.40), the manager's notice and two photos. Please send the decision to the address above or to jordan.avery@example.com.\n\nSincerely,\n\nJordan Avery"
+    ]
+   ],
+   "change": "changed 8 words (120 → 112)"
+  },
+  {
+   "old": "October 21, 2026\n\nDear Mr. Okafor,\n\nThe heater in apartment 3B has stopped working again, and the nights are getting cold. Could someone take a look this week? I'm home after five every day, and the office is welcome to use the spare key.\n\nThank you for your help,\n\nSam Lee\n",
+   "new": "October 21, 2026\n\nDear Mr. Okafor,\n\nThe heater in apartment 3B has stopped working again, and the nights are getting cold. Could someone take a look this week? I'm home after five every day, and the office is welcome to use the spare key.\n\nThank you for your help,\n\nSam Lee\n\nP.S. The radiator in the bathroom is fine.\n",
+   "ops": [
+    [
+     "=",
+     "October 21, 2026\n\nDear Mr. Okafor,\n\nThe heater in apartment 3B has stopped working again, and the nights are getting cold. Could someone take a look this week? I'm home after five every day, and the office is welcome to use the spare key.\n\nThank you for your help,\n\nSam Lee"
+    ],
+    [
+     "+",
+     "\n\nP.S. The radiator in the bathroom is fine."
+    ]
+   ],
+   "change": "added 8 words (51 → 59)"
+  },
+  {
+   "old": "October 21, 2026\n\nDear Mr. Okafor,\n\nThe heater in apartment 3B has stopped working again, and the nights are getting cold. Could someone take a look this week? I'm home after five every day, and the office is welcome to use the spare key.\n\nThank you for your help,\n\nSam Lee\n",
+   "new": "October 21, 2026\n\nDear Mr. Okafor,\n\nThe heater in apartment 3B has stopped working again, and the nights are getting cold. Could someone take a look this week? I'm home after five every day, and the office is welcome to use the spare key.\n\nThank you for your help,\n\nSam Lee\n",
+   "ops": [
+    [
+     "=",
+     "October 21, 2026\n\nDear Mr. Okafor,\n\nThe heater in apartment 3B has stopped working again, and the nights are getting cold. Could someone take a look this week? I'm home after five every day, and the office is welcome to use the spare key.\n\nThank you for your help,\n\nSam Lee"
+    ]
+   ],
+   "change": "no changes"
+  },
+  {
+   "old": "",
+   "new": "# New\n\nA first line.",
+   "ops": [
+    [
+     "+",
+     "New\n\nA first line."
+    ]
+   ],
+   "change": "changed 4 words (0 → 4)"
+  },
+  {
+   "old": "One two three four five six seven eight nine ten.",
+   "new": "One two three four five six seven eight nine eleven.",
+   "ops": [
+    [
+     "=",
+     "One two three four five six seven eight nine "
+    ],
+    [
+     "-",
+     "ten."
+    ],
+    [
+     "+",
+     "eleven."
+    ]
+   ],
+   "change": "changed 1 word (10 → 10)"
+  }
+ ],
+ "phrases": [
+  {
+   "in": "Write a cover letter for the warehouse lead job at Acme Logistics.",
+   "normalized": "write a cover letter for the warehouse lead job at acme logistics",
+   "draft": {
+    "kind": "cover_letter",
+    "template": "letter-block",
+    "topic": "for the warehouse lead job at Acme Logistics"
+   },
+   "revise": false,
+   "print": false
+  },
+  {
+   "in": "can you please draft a letter to my landlord about the broken heater?",
+   "normalized": "draft a letter to my landlord about the broken heater",
+   "draft": {
+    "kind": "letter",
+    "template": "letter-personal",
+    "topic": "to my landlord about the broken heater"
+   },
+   "revise": false,
+   "print": false
+  },
+  {
+   "in": "Help me write my resume",
+   "normalized": "help me write my resume",
+   "draft": {
+    "kind": "resume",
+    "template": "resume-plain",
+    "topic": ""
+   },
+   "revise": false,
+   "print": false
+  },
+  {
+   "in": "I need a cover letter for Beta Corp",
+   "normalized": "i need a cover letter for beta corp",
+   "draft": {
+    "kind": "cover_letter",
+    "template": "letter-block",
+    "topic": "for Beta Corp"
+   },
+   "revise": false,
+   "print": false
+  },
+  {
+   "in": "write a thank-you letter to my neighbour",
+   "normalized": "write a thank-you letter to my neighbour",
+   "draft": {
+    "kind": "letter",
+    "template": "letter-personal",
+    "topic": "to my neighbour"
+   },
+   "revise": false,
+   "print": false
+  },
+  {
+   "in": "Draft my résumé",
+   "normalized": "draft my resume",
+   "draft": {
+    "kind": "resume",
+    "template": "resume-plain",
+    "topic": ""
+   },
+   "revise": false,
+   "print": false
+  },
+  {
+   "in": "Could you write me a complaint letter to the phone company about my bill",
+   "normalized": "write me a complaint letter to the phone company about my bill",
+   "draft": {
+    "kind": "letter",
+    "template": "letter-block",
+    "topic": "to the phone company about my bill"
+   },
+   "revise": false,
+   "print": false
+  },
+  {
+   "in": "make a CV",
+   "normalized": "make a cv",
+   "draft": {
+    "kind": "resume",
+    "template": "resume-plain",
+    "topic": ""
+   },
+   "revise": false,
+   "print": false
+  },
+  {
+   "in": "How do I write a cover letter?",
+   "normalized": "how do i write a cover letter",
+   "draft": null,
+   "revise": false,
+   "print": false
+  },
+  {
+   "in": "What should a resume include?",
+   "normalized": "what should a resume include",
+   "draft": null,
+   "revise": false,
+   "print": false
+  },
+  {
+   "in": "write an email to my boss",
+   "normalized": "write an email to my boss",
+   "draft": null,
+   "revise": false,
+   "print": false
+  },
+  {
+   "in": "write a poem about letters",
+   "normalized": "write a poem about letters",
+   "draft": null,
+   "revise": false,
+   "print": false
+  },
+  {
+   "in": "I got a letter from the bank",
+   "normalized": "i got a letter from the bank",
+   "draft": null,
+   "revise": false,
+   "print": false
+  },
+  {
+   "in": "Shorter",
+   "normalized": "shorter",
+   "draft": null,
+   "revise": true,
+   "print": false
+  },
+  {
+   "in": "make it more formal",
+   "normalized": "make it more formal",
+   "draft": null,
+   "revise": true,
+   "print": false
+  },
+  {
+   "in": "Make the letter shorter, please.",
+   "normalized": "make the letter shorter, please",
+   "draft": null,
+   "revise": true,
+   "print": false
+  },
+  {
+   "in": "It’s too long",
+   "normalized": "it's too long",
+   "draft": null,
+   "revise": true,
+   "print": false
+  },
+  {
+   "in": "mention my forklift licence",
+   "normalized": "mention my forklift licence",
+   "draft": null,
+   "revise": true,
+   "print": false
+  },
+  {
+   "in": "add that I can start on Monday",
+   "normalized": "add that i can start on monday",
+   "draft": null,
+   "revise": true,
+   "print": false
+  },
+  {
+   "in": "Can you rewrite the opening?",
+   "normalized": "rewrite the opening",
+   "draft": null,
+   "revise": true,
+   "print": false
+  },
+  {
+   "in": "what does ATS mean?",
+   "normalized": "what does ats mean",
+   "draft": null,
+   "revise": false,
+   "print": false
+  },
+  {
+   "in": "thanks!",
+   "normalized": "thanks",
+   "draft": null,
+   "revise": false,
+   "print": false
+  },
+  {
+   "in": "print it",
+   "normalized": "print it",
+   "draft": null,
+   "revise": false,
+   "print": true
+  },
+  {
+   "in": "Print the letter.",
+   "normalized": "print the letter",
+   "draft": null,
+   "revise": false,
+   "print": true
+  },
+  {
+   "in": "please print a copy",
+   "normalized": "print a copy",
+   "draft": null,
+   "revise": false,
+   "print": true
+  },
+  {
+   "in": "print my cover letter",
+   "normalized": "print my cover letter",
+   "draft": null,
+   "revise": false,
+   "print": true
+  },
+  {
+   "in": "print two copies of the lease",
+   "normalized": "print two copies of the lease",
+   "draft": null,
+   "revise": false,
+   "print": false
+  }
+ ],
+ "titles": [
+  {
+   "in": [
+    "Cover letter",
+    "for the warehouse lead job at Acme Logistics"
+   ],
+   "out": "Cover letter for the warehouse lead job at Acme Logistics"
+  },
+  {
+   "in": [
+    "Resume",
+    ""
+   ],
+   "out": "Resume"
+  },
+  {
+   "in": [
+    "Letter",
+    "to my landlord"
+   ],
+   "out": "Letter to my landlord"
+  }
+ ],
+ "clean": [
+  {
+   "in": "Here is your cover letter:\n\n```markdown\nDear Ms. Lee,\n\nI'm writing to apply.\n```\n\nLet me know if you'd like any changes.",
+   "out": "Dear Ms. Lee,\n\nI'm writing to apply."
+  },
+  {
+   "in": "Hello. I am Domovoi, your household assistant.\n\n# Jordan Avery\n\n## Summary\nSteady worker.",
+   "out": "# Jordan Avery\n\n## Summary\nSteady worker."
+  },
+  {
+   "in": "Hi Sam,\n\nThe heater is broken.\n\nThanks,\nAlex",
+   "out": "Hi Sam,\n\nThe heater is broken.\n\nThanks,\nAlex"
+  },
+  {
+   "in": "Sure! Here's a shorter version:\n\nDear Dana,\n\nPlease review my claim.\n\nSincerely,\nJordan\n\nI hope this helps!",
+   "out": "Dear Dana,\n\nPlease review my claim.\n\nSincerely,\nJordan"
+  },
+  {
+   "in": "<<<DOCUMENT\nDear Dana,\nDOCUMENT>>>",
+   "out": "Dear Dana,"
+  }
+ ],
+ "prompts": {
+  "rules": "You write documents for the person, in markdown, following the skeleton exactly: the same headings and parts, in the same order. Write only the document itself: no greeting, no introduction, no remarks before or after it, no code fences. Use only facts the person gave. Where a fact is missing, write a short placeholder in square brackets, like [your phone number]. Never invent names, employers, dates, numbers, addresses or skills.",
+  "revise_rules": "You revise a document. You get the current version and one instruction. Write the whole document again with the instruction applied. Keep every fact unless the instruction removes it, add no facts the person didn't give, and keep the same skeleton: the same headings and parts, in the same order. Write only the revised document, in markdown: no greeting, no remarks, no code fences.",
+  "skeletons": {
+   "resume-plain": "# [Full name]\n[City, State] · [phone] · [email]\n\n## Summary\n[Two or three sentences.]\n\n## Work Experience\n**[Job title], [Employer] — [start] to [end]**\n- [What you did, starting with a verb]\n- [Another one]\n\n## Education\n**[School] — [qualification], [year]**\n\n## Skills\n[Skill], [skill], [skill]\n",
+   "letter-block": "[Your name]\n[Street]\n[City, State ZIP]\n[email or phone]\n\n[Date]\n\n[Recipient name]\n[Organisation]\n[Street]\n[City, State ZIP]\n\n**Re: [subject]**\n\nDear [name],\n\n[Paragraph.]\n\n[Paragraph.]\n\nSincerely,\n\n[Your name]\n",
+   "letter-personal": "[Date]\n\nDear [name],\n\n[Paragraph.]\n\n[Paragraph.]\n\nBest wishes,\n\n[Your name]\n",
+   "resume-classic": "# [Full name]\n[City, State] · [phone] · [email]\n\n## Summary\n[Two or three sentences.]\n\n## Work Experience\n**[Job title], [Employer] — [start] to [end]**\n- [What you did, starting with a verb]\n- [Another one]\n\n## Education\n**[School] — [qualification], [year]**\n\n## Skills\n[Skill], [skill], [skill]\n"
+  },
+  "first_draft": [
+   {
+    "in": [
+     "cover_letter",
+     "letter-block",
+     "Write a cover letter for Acme",
+     "October 21, 2026"
+    ],
+    "out": {
+     "system": "You write documents for the person, in markdown, following the skeleton exactly: the same headings and parts, in the same order. Write only the document itself: no greeting, no introduction, no remarks before or after it, no code fences. Use only facts the person gave. Where a fact is missing, write a short placeholder in square brackets, like [your phone number]. Never invent names, employers, dates, numbers, addresses or skills.",
+     "user": "Write a cover letter.\nThe person asked: Write a cover letter for Acme\nToday's date: October 21, 2026\n\nSkeleton:\n[Your name]\n[Street]\n[City, State ZIP]\n[email or phone]\n\n[Date]\n\n[Recipient name]\n[Organisation]\n[Street]\n[City, State ZIP]\n\n**Re: [subject]**\n\nDear [name],\n\n[Paragraph.]\n\n[Paragraph.]\n\nSincerely,\n\n[Your name]\n"
+    }
+   }
+  ],
+  "revision": [
+   {
+    "in": [
+     "October 21, 2026\n\nDear Mr. Okafor,\n\nThe heater in apartment 3B has stopped working again, and the nights are getting cold. Could someone take a look this week? I'm home after five every day, and the office is welcome to use the spare key.\n\nThank you for your help,\n\nSam Lee\n",
+     "shorter"
+    ],
+    "out": {
+     "system": "You revise a document. You get the current version and one instruction. Write the whole document again with the instruction applied. Keep every fact unless the instruction removes it, add no facts the person didn't give, and keep the same skeleton: the same headings and parts, in the same order. Write only the revised document, in markdown: no greeting, no remarks, no code fences.",
+     "user": "Current version:\n<<<DOCUMENT\nOctober 21, 2026\n\nDear Mr. Okafor,\n\nThe heater in apartment 3B has stopped working again, and the nights are getting cold. Could someone take a look this week? I'm home after five every day, and the office is welcome to use the spare key.\n\nThank you for your help,\n\nSam Lee\nDOCUMENT>>>\n\nInstruction: shorter"
+    }
+   }
+  ]
+ },
+ "ats": {
+  "passed": "text readable · single column",
+  "expected_words": [
+   {
+    "in": "October 21, 2026\n\nDear Mr. Okafor,\n\nThe heater in apartment 3B has stopped working again, and the nights are getting cold. Could someone take a look this week? I'm home after five every day, and the office is welcome to use the spare key.\n\nThank you for your help,\n\nSam Lee\n",
+    "out": [
+     "October",
+     "21,",
+     "2026",
+     "Dear",
+     "Mr.",
+     "Okafor,",
+     "The",
+     "heater",
+     "in",
+     "apartment",
+     "3B",
+     "has",
+     "stopped",
+     "working",
+     "again,",
+     "and",
+     "the",
+     "nights",
+     "are",
+     "getting",
+     "cold.",
+     "Could",
+     "someone",
+     "take",
+     "a",
+     "look",
+     "this",
+     "week?",
+     "I'm",
+     "home",
+     "after",
+     "five",
+     "every",
+     "day,",
+     "and",
+     "the",
+     "office",
+     "is",
+     "welcome",
+     "to",
+     "use",
+     "the",
+     "spare",
+     "key.",
+     "Thank",
+     "you",
+     "for",
+     "your",
+     "help,",
+     "Sam",
+     "Lee"
+    ]
+   },
+   {
+    "in": "- • bullet · x",
+    "out": [
+     "bullet",
+     "x"
+    ]
+   }
+  ],
+  "compare": [
+   {
+    "read": [
+     "a",
+     "b"
+    ],
+    "want": [
+     "a",
+     "b"
+    ],
+    "out": {
+     "ok": true,
+     "line": "text readable · single column",
+     "read": 2,
+     "expected": 2
+    }
+   },
+   {
+    "read": [
+     "a",
+     "c"
+    ],
+    "want": [
+     "a",
+     "b"
+    ],
+    "out": {
+     "ok": false,
+     "line": "text check: “b” reads as “c” (word 2 of 2)",
+     "read": 2,
+     "expected": 2
+    }
+   },
+   {
+    "read": [
+     "a"
+    ],
+    "want": [
+     "a",
+     "b"
+    ],
+    "out": {
+     "ok": false,
+     "line": "text check: “b” reads as “nothing” (word 2 of 2)",
+     "read": 1,
+     "expected": 2
+    }
+   },
+   {
+    "read": [
+     "a",
+     "b",
+     "c"
+    ],
+    "want": [
+     "a",
+     "b"
+    ],
+    "out": {
+     "ok": false,
+     "line": "text check: 1 extra words after the end",
+     "read": 3,
+     "expected": 2
+    }
+   },
+   {
+    "read": [
+     "coee"
+    ],
+    "want": [
+     "coffee"
+    ],
+    "out": {
+     "ok": false,
+     "line": "text check: “coffee” reads as “coee” (word 1 of 1)",
+     "read": 1,
+     "expected": 1
+    }
+   }
+  ]
+ }
+}
