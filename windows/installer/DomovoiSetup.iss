@@ -7,8 +7,12 @@
 ; only runs Windows' own dism.exe and msiexec.exe (System32) when WSL's
 ; prerequisites are missing, before the install.
 ;
-; Flow (PLAN 4.1-4.12): preflight (ports by owner, Retry/Cancel), what
-; changes, the internet question, the media folder, downloads (pinned,
+; Flow (PLAN 4.1-4.12): preflight (ports by owner, Retry/Cancel), the AI
+; question (AI chat and questions: Yes on a first install, the household's
+; current answer on a re-run; only when the pinned provision.sh takes the
+; answer, pins.iss ProvisionAiChoice; the download sizes on the pages after
+; it follow the answer), what changes, the internet
+; question, the media folder, downloads (pinned,
 ; SHA-256 checked), Virtual Machine Platform and WSL with restart and
 ; resume, then the helper's steps and DomovoiHost's progress (the ports
 ; checked again right before Domovoi starts, and after a failed step),
@@ -149,7 +153,17 @@ var
 
   PreflightPage: TOutputMsgMemoWizardPage;
   ConsentPage: TOutputMsgMemoWizardPage;
+  AiPage: TWizardPage;
+  RadioAiYes, RadioAiNo: TNewRadioButton;
+  AiYesText, AiNoText, AiLaterText: TNewStaticText;
+  AiModelsGb: String;
+  { The helper's saved-ai (a re-run): yes or no, and household, record or
+    none; '' before it ran. }
+  AiSavedDefault, AiSavedFrom: String;
+  { What provision.sh reported once Domovoi was up: yes, no, or ''. }
+  AiReported: String;
   InternetPage: TWizardPage;
+  InternetIntro: TNewStaticText;
   RadioAlways, RadioSometimes, RadioNever: TNewRadioButton;
   MediaPage: TInputDirWizardPage;
   DownloadPage: TDownloadWizardPage;
@@ -404,6 +418,50 @@ begin
     and (GetArrayLength(KvValues(Lines, 'port_owner')) > 0);
 end;
 
+{ A Setup run again on an install (repair, upgrade): the AI page starts at
+  the answer this home has now, never at a Yes that would pull the AI models
+  into a home that turned AI off in Settings > Models (review round 1,
+  2026-10-21). The helper's saved-ai reads the household's AI_FEATURES
+  through DomovoiHost, else the install record's last answer; a first
+  install gets Yes. /ai= on the command line wins over both. }
+procedure ReadSavedAi;
+var
+  Lines: TArrayOfString;
+  Code: Integer;
+begin
+#ifdef ProvisionAiChoice
+  AiSavedDefault := '';
+  AiSavedFrom := '';
+  CheckPage.SetText('Reading this home''s current answers...', '');
+  CheckPage.Show;
+  try
+    CheckPage.Animate;
+    if RunHelper(TmpHelper, 'saved-ai', Lines, Code) and (Code = 0) then
+    begin
+      AiSavedDefault := KvValue(Lines, 'ai_default');
+      AiSavedFrom := KvValue(Lines, 'ai_from');
+    end
+    else
+      Log('saved-ai did not answer: ' + KvValue(Lines, 'error'));
+  finally
+    CheckPage.Hide;
+  end;
+  Log('AI page default: ' + AiSavedDefault + ' (from ' + AiSavedFrom + ')');
+  if ExpandConstant('{param:ai|}') <> '' then
+    Exit;
+  if AiSavedDefault = 'no' then
+    RadioAiNo.Checked := True
+  else
+    RadioAiYes.Checked := True;
+  if AiSavedFrom = 'household' then
+    AiPage.Description := 'Picked as this home has it now (Settings > Models); change it if you like.'
+  else if (AiSavedFrom = 'record') and (AiSavedDefault = 'no') then
+    AiPage.Description := 'Picked as your last Setup left it; change it if you like.'
+  else if AiSavedFrom = 'record' then
+    AiPage.Description := 'Picked as your last Setup left it. Left at Yes, AI stays as this home has it now.';
+#endif
+end;
+
 function RunPreflight: Boolean;
 var
   Fatal, Warn: TArrayOfString;
@@ -446,6 +504,7 @@ begin
   LanSubnet := KvValue(Preflight, 'lan_subnet');
   LanPrivate := KvValue(Preflight, 'lan_private');
   WslMemGb := KvValue(Preflight, 'wsl_memory_gb');
+  AiModelsGb := KvValue(Preflight, 'ai_models_gb');
   VmpState := KvValue(Preflight, 'vmp');
   WslState := KvValue(Preflight, 'wsl');
   Warn := KvValues(Preflight, 'warn');
@@ -463,7 +522,65 @@ begin
     'Ports Domovoi needs: free' + #13#10 + #13#10 +
     JoinLines(Warn, 'Note: ');
   PreflightDone := True;
+  ReadSavedAi;
   Result := True;
+end;
+
+{ "Include AI chat and questions?" (owner decision 2026-10-21): yes or no,
+  as the page says. The page starts at Yes, at this home's current answer
+  on a re-run (ReadSavedAi), or at the /ai= answer on the command line (the
+  resume after a restart passes it). Without ProvisionAiChoice (pins.iss:
+  the pinned provision.sh always pulls the models) there is no page: yes. }
+function AiAnswer: String;
+begin
+#ifdef ProvisionAiChoice
+  if RadioAiNo.Checked then
+    Result := 'no'
+  else
+    Result := 'yes';
+#else
+  Result := 'yes';
+#endif
+end;
+
+{ For the helper's prepare --ai: the answer, or keep when it is a Yes that
+  came from the install record alone and was left as it was (the
+  household's own value could not be read, by a DomovoiHost from before
+  that request or one not running): provision.sh then gets neither option
+  and keeps what domovoi/.env says, so a home that turned AI off since
+  stays off. The resume after a restart passes it on as /ai=. }
+function AiPrepareArg: String;
+begin
+  Result := AiAnswer;
+#ifdef ProvisionAiChoice
+  if Resumed then
+  begin
+    if CompareText(ExpandConstant('{param:ai|}'), 'keep') = 0 then
+      Result := 'keep';
+  end
+  else if (ExpandConstant('{param:ai|}') = '') and (AiSavedFrom = 'record') and (AiSavedDefault = 'yes') and (Result = 'yes') then
+    Result := 'keep';
+#endif
+end;
+
+{ After the install: what provision.sh reported (AiReported), else the
+  answer. }
+function AiOutcome: String;
+begin
+  if AiReported <> '' then
+    Result := AiReported
+  else
+    Result := AiAnswer;
+end;
+
+{ What the AI models download on this PC (the helper's preflight works it
+  out from the memory the distro gets), or both sizes when it didn't say. }
+function AiModelsText: String;
+begin
+  if AiModelsGb <> '' then
+    Result := 'about ' + AiModelsGb + ' GB of AI models'
+  else
+    Result := 'about 6.4 GB of AI models (about 9.1 GB on a PC with 32 GB of memory or more)';
 end;
 
 function ConsentText: String;
@@ -501,7 +618,12 @@ begin
   S := S + IntToStr(N) + '. Domovoi''s icon in the notification area (DomovoiTray.exe), for every account on this PC: it starts when anyone signs in (a DomovoiTray value under HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run), and the Start menu gets a Domovoi entry. It shows whether Domovoi is running, opens the dashboard and prepares satellite cards; it never runs as an administrator, and each account can turn its start off.' + #13#10#13#10;
   N := N + 1;
   S := S + IntToStr(N) + '. Setup''s install record in the registry, HKLM\SOFTWARE\Domovoi: what Setup changed, so the uninstaller can undo it.' + #13#10#13#10;
-  S := S + 'Downloads: about 10.5-13.5 GB (the AI models are most of it; the size depends on the models this PC''s memory gets). Ubuntu (418 MB) now; then, inside the distro, Domovoi''s code at commit {#Copy(DomovoiCommit, 1, 7)} (later updates follow the {#DomovoiChannel} channel{#ChannelWords}; you choose when, in Settings > Configuration > Version), Docker Engine, Python packages and the AI models (one of them reads pictures in chat), each checked against a pinned hash.' + #13#10#13#10;
+  { Without the AI models: the 10.5-13.5 GB less the 6.4 or 9.1 GB of
+    them (AiModels in windows\common\Provision.cs). }
+  if AiAnswer = 'no' then
+    S := S + 'Downloads: about 4.5 GB (no AI models: you left out AI chat and questions). Ubuntu (418 MB) now; then, inside the distro, Domovoi''s code at commit {#Copy(DomovoiCommit, 1, 7)} (later updates follow the {#DomovoiChannel} channel{#ChannelWords}; you choose when, in Settings > Configuration > Version), Docker Engine, Python packages and the speech recognition model, each checked against a pinned hash.' + #13#10#13#10
+  else
+    S := S + 'Downloads: about 10.5-13.5 GB (the AI models are most of it; the size depends on the models this PC''s memory gets). Ubuntu (418 MB) now; then, inside the distro, Domovoi''s code at commit {#Copy(DomovoiCommit, 1, 7)} (later updates follow the {#DomovoiChannel} channel{#ChannelWords}; you choose when, in Settings > Configuration > Version), Docker Engine, Python packages and the AI models (one of them reads pictures in chat), each checked against a pinned hash.' + #13#10#13#10;
   S := S + 'Not changed: power and sleep settings (the icon''s "Keep this PC awake" only holds Windows awake while someone is signed in), Windows Update, Smart App Control, your user accounts and files.' + #13#10#13#10;
   S := S + 'This preview is not code-signed: Windows SmartScreen may have warned before Setup started, and Windows may ask again about its programs.' + #13#10#13#10;
   S := S + 'Uninstalling never deletes files in your media folders: a media folder is removed only if it is empty.' + #13#10#13#10;
@@ -540,7 +662,7 @@ begin
   Result.AdjustHeight;
 end;
 
-function AddRadio(Page: TWizardPage; const Caption: String; Top: Integer): TNewRadioButton;
+function NewRadio(Page: TWizardPage; const Caption: String; Top: Integer): TNewRadioButton;
 begin
   Result := TNewRadioButton.Create(Page);
   Result.Parent := Page.Surface;
@@ -551,7 +673,65 @@ begin
   Result.Caption := Caption;
   Result.Font.Style := [fsBold];
   Result.Checked := False;
+end;
+
+function AddRadio(Page: TWizardPage; const Caption: String; Top: Integer): TNewRadioButton;
+begin
+  Result := NewRadio(Page, Caption, Top);
   Result.OnClick := @InternetChoiceClick;
+end;
+
+{ -- the AI question (owner decision 2026-10-21) ------------------------ }
+
+{ AI chat and questions are optional: Yes (picked to begin with) downloads
+  the AI models, No leaves them out (provision.sh --no-ai-models). Speech
+  recognition, Domovoi's voices and the wake word come either way. The
+  Yes line's size is set when the page shows (AiYesText), once the
+  preflight has said what this PC's memory gets; it starts with both. }
+
+{ Places what follows the Yes line under it, as tall as its text is now. }
+procedure LayoutAiPage;
+var
+  Y: Integer;
+begin
+  AiYesText.AdjustHeight;
+  Y := AiYesText.Top + AiYesText.Height + ScaleY(8);
+  RadioAiNo.Top := Y;
+  AiNoText.Top := RadioAiNo.Top + RadioAiNo.Height;
+  AiLaterText.Top := AiNoText.Top + AiNoText.Height + ScaleY(10);
+end;
+
+procedure CreateAiPage(AfterID: Integer);
+var
+  T: TNewStaticText;
+  Y: Integer;
+begin
+  AiPage := CreateCustomPage(AfterID, 'Include AI chat and questions?', 'Yes is picked for you; change it if you like.');
+  T := AddText(AiPage, 'Domovoi''s AI models answer questions and chat with you. They run on this PC, like the rest of Domovoi, and they are most of the download.', 0, 0, False, False);
+  Y := T.Top + T.Height + ScaleY(10);
+  RadioAiYes := NewRadio(AiPage, 'Yes, include AI chat and questions (recommended).', Y);
+  AiYesText := AddText(AiPage, 'Ask Domovoi questions and chat with it. Downloads ' + AiModelsText + '.', RadioAiYes.Top + RadioAiYes.Height, ScaleX(18), True, False);
+  Y := AiYesText.Top + AiYesText.Height + ScaleY(8);
+  RadioAiNo := NewRadio(AiPage, 'No, leave AI out.', Y);
+  AiNoText := AddText(AiPage, 'Voice commands, music, timers and everything else still work. Setup downloads about 4.5 GB in all.', RadioAiNo.Top + RadioAiNo.Height, ScaleX(18), True, False);
+  Y := AiNoText.Top + AiNoText.Height + ScaleY(10);
+  AiLaterText := AddText(AiPage, 'You can turn AI on later in the dashboard: Settings > Models.', Y, 0, False, False);
+  if CompareText(ExpandConstant('{param:ai|yes}'), 'no') = 0 then
+    RadioAiNo.Checked := True
+  else
+    RadioAiYes.Checked := True;
+end;
+
+{ -- the internet page -------------------------------------------------- }
+
+{ Its first line, with the download the AI answer means (set again each
+  time the page shows: the AI page comes before it). }
+function InternetIntroText(WithAi: Boolean): String;
+begin
+  if not WithAi then
+    Result := 'Setup needs the internet right now to download Domovoi (about 4.5 GB). After that, Domovoi works with or without it. Your voice and recordings never leave this PC either way.'
+  else
+    Result := 'Setup needs the internet right now to download Domovoi (about 10.5-13.5 GB). After that, Domovoi works with or without it. Your voice and recordings never leave this PC either way.';
 end;
 
 procedure CreateInternetPage(AfterID: Integer);
@@ -561,7 +741,9 @@ var
   Y: Integer;
 begin
   InternetPage := CreateCustomPage(AfterID, 'Will this PC have internet after setup?', 'Pick one answer to continue.');
-  T := AddText(InternetPage, 'Setup needs the internet right now to download Domovoi (about 10.5-13.5 GB). After that, Domovoi works with or without it. Your voice and recordings never leave this PC either way.', 0, 0, False, False);
+  { Laid out with the longer text, so the shorter one never overlaps. }
+  InternetIntro := AddText(InternetPage, InternetIntroText(True), 0, 0, False, False);
+  T := InternetIntro;
   Y := T.Top + T.Height + ScaleY(10);
   RadioAlways := AddRadio(InternetPage, 'Yes, always. It''s on our home internet.', Y);
   T := AddText(InternetPage, 'Turns on the extras that use the internet: web answers (weather, scores, news), song lyrics, other names for artists, podcast downloads. They pause by themselves if the internet drops.', RadioAlways.Top + RadioAlways.Height, ScaleX(18), True, False);
@@ -690,6 +872,13 @@ function ModelsText(const Raw, Tier: String): String;
 var
   Names: String;
 begin
+  { AI left out (as provision.sh reported it): no chat or voice-command
+    models to run anywhere. }
+  if AiOutcome = 'no' then
+  begin
+    Result := 'AI chat and questions are left out; you can turn them on later in Settings > Models. Speech recognition runs on the processor.';
+    Exit;
+  end;
   Names := '';
   if (Raw <> '') and (Raw <> 'none') then
     Names := GpuNames(Raw);
@@ -917,6 +1106,13 @@ begin
     begin
       GpuRaw := KvValue(Lines, 'gpu');
       TierText := KvValue(Lines, 'tier');
+      { AI chat and questions as provision.sh settled them (its options,
+        or the household's domovoi/.env): the last page says that, and the
+        install record keeps it, not the click. }
+      AiReported := KvValue(Lines, 'ai');
+      if AiReported <> '' then
+        if not RunHelper(AppHelper, 'record-ai', Ignored, Code) or (Code <> 0) then
+          Log('record-ai did not work: ' + KvValue(Ignored, 'error'));
       Result := True;
       Exit;
     end;
@@ -1010,8 +1206,10 @@ begin
   StopRequested := False;
   ProgressPage.Show;
   StopButton.Visible := True;
+  if AiAnswer = 'no' then
+    ProgressPage.Description := 'Most of this time is downloading. You can keep using the PC.';
   try
-    if not Step('Recording your answers', 'prepare --internet ' + InternetAnswer + ' --media-root ' + AddQuotes(RemoveBackslashUnlessRoot(MediaPage.Values[0])) + ' --commit {#DomovoiCommit}', 2, Lines) then Exit;
+    if not Step('Recording your answers', 'prepare --internet ' + InternetAnswer + ' --ai ' + AiPrepareArg + ' --media-root ' + AddQuotes(RemoveBackslashUnlessRoot(MediaPage.Values[0])) + ' --commit {#DomovoiCommit}', 2, Lines) then Exit;
     Deny := '';
     if NoDenyLogon then
       Deny := ' --no-deny-logon';
@@ -1048,7 +1246,7 @@ begin
   if not SameText(ExpandConstant('{srcexe}'), ResumeExe) then
     if not ForceDirectories(ExtractFileDir(ResumeExe)) or not CopyFile(ExpandConstant('{srcexe}'), ResumeExe, False) then
       RaiseException('Setup could not copy itself to ' + ResumeExe + ' to carry on after the restart.');
-  Data := AddQuotes(ResumeExe) + ' /resume=1 /internet=' + InternetAnswer +
+  Data := AddQuotes(ResumeExe) + ' /resume=1 /internet=' + InternetAnswer + ' /ai=' + AiPrepareArg +
     ' /mediaroot=' + AddQuotes(RemoveBackslashUnlessRoot(MediaPage.Values[0]));
   if NoDenyLogon then
     Data := Data + ' /nodenylogon=1';
@@ -1076,6 +1274,17 @@ begin
   end;
   Resumed := ExpandConstant('{param:resume|0}') = '1';
   NoDenyLogon := ExpandConstant('{param:nodenylogon|0}') = '1';
+#ifndef ProvisionAiChoice
+  { This build's provision.sh always pulls the AI models (pins.iss): say so
+    now, not after the account, the firewall rules and the downloads. }
+  if CompareText(ExpandConstant('{param:ai|}'), 'no') = 0 then
+  begin
+    SuppressibleMsgBox('This Setup always includes AI chat and questions: the Domovoi it installs (commit {#Copy(DomovoiCommit, 1, 7)}) can''t leave the AI models out, so /ai=no can''t be done. Run it without /ai=no, or use a newer Setup.',
+      mbCriticalError, MB_OK, IDOK);
+    Result := False;
+    Exit;
+  end;
+#endif
   ExtractTemporaryFile('{#Helper}');
   Result := True;
 end;
@@ -1085,7 +1294,14 @@ var
   Root: String;
 begin
   PreflightPage := CreateOutputMsgMemoPage(wpWelcome, 'This PC', 'What Setup found', 'Setup checked this PC. Nothing has been changed yet.', '');
+  { Before the changes page: its download size follows the answer. Only
+    when the pinned provision.sh takes it (pins.iss ProvisionAiChoice). }
+#ifdef ProvisionAiChoice
+  CreateAiPage(PreflightPage.ID);
+  ConsentPage := CreateOutputMsgMemoPage(AiPage.ID, 'What Setup will change', 'Read this before you go on',
+#else
   ConsentPage := CreateOutputMsgMemoPage(PreflightPage.ID, 'What Setup will change', 'Read this before you go on',
+#endif
     'Domovoi runs a small Linux system on this PC, as its own hidden account. To set that up, Setup makes these changes:', '');
   CreateInternetPage(ConsentPage.ID);
   MediaPage := CreateInputDirPage(InternetPage.ID, 'Your media folder', 'Where your music, pictures and videos live',
@@ -1112,17 +1328,33 @@ end;
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := False;
-  { After the restart the answers come back on the command line. }
+  { After the restart the answers come back on the command line (the AI
+    one as /ai=, which the AI page starts at). }
   if Resumed and (ExpandConstant('{param:internet|}') <> '') then
+#ifdef ProvisionAiChoice
+    Result := (PageID = AiPage.ID) or (PageID = ConsentPage.ID) or (PageID = InternetPage.ID) or (PageID = MediaPage.ID);
+#else
     Result := (PageID = ConsentPage.ID) or (PageID = InternetPage.ID) or (PageID = MediaPage.ID);
+#endif
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
 begin
+#ifdef ProvisionAiChoice
+  if CurPageID = AiPage.ID then
+  begin
+    AiYesText.Caption := 'Ask Domovoi questions and chat with it. Downloads ' + AiModelsText + '.';
+    LayoutAiPage;
+  end
+  else
+#endif
   if CurPageID = ConsentPage.ID then
     ConsentPage.RichEditViewer.Lines.Text := ConsentText
   else if CurPageID = InternetPage.ID then
-    WizardForm.NextButton.Enabled := RadioAlways.Checked or RadioSometimes.Checked or RadioNever.Checked
+  begin
+    InternetIntro.Caption := InternetIntroText(AiAnswer <> 'no');
+    WizardForm.NextButton.Enabled := RadioAlways.Checked or RadioSometimes.Checked or RadioNever.Checked;
+  end
   else if CurPageID = wpFinished then
     ShowFinish;
 end;
@@ -1196,8 +1428,21 @@ begin
 end;
 
 function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo, MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
+var
+  Ai: String;
 begin
-  Result := 'Internet after setup:' + NewLine + Space + InternetAnswer + NewLine + NewLine +
+  if AiAnswer = 'no' then
+    Ai := 'no (about 4.5 GB to download in all)'
+  else if AiPrepareArg = 'keep' then
+    Ai := 'as this home has it now (Settings > Models; unchanged)'
+  else
+    Ai := 'yes (' + AiModelsText + ')';
+#ifdef ProvisionAiChoice
+  Result := 'AI chat and questions:' + NewLine + Space + Ai + NewLine + NewLine;
+#else
+  Result := '';
+#endif
+  Result := Result + 'Internet after setup:' + NewLine + Space + InternetAnswer + NewLine + NewLine +
     'Media folder:' + NewLine + Space + RemoveBackslashUnlessRoot(MediaPage.Values[0]) + NewLine + NewLine +
     'Domovoi:' + NewLine + Space + 'commit {#DomovoiCommit}' + NewLine + NewLine +
 #ifdef ProvisionBundled

@@ -41,6 +41,7 @@ import com.domovoi.app.data.ServerCredentials
 import com.domovoi.app.net.Discovery
 import com.domovoi.app.net.IdentityGate
 import com.domovoi.app.net.IdentityVerdict
+import com.domovoi.app.net.LocalCapabilities
 import com.domovoi.app.net.ServerAddress
 import com.domovoi.app.net.ServerIdentity
 import com.domovoi.app.net.decode
@@ -73,6 +74,7 @@ internal fun ConnectionPanel() {
     val themeMode by app.prefs.themeMode.collectAsState()
     val listenerId by app.prefs.listenerPersonId.collectAsState()
     val owners by app.prefs.owners.collectAsState()
+    val aiOn = LocalCapabilities.current.aiEnabled
     // Per server: a person id belongs to the server that issued it.
     val ownerId = ServerCredentials.ownerFor(owners, serverUrl)
     val connected by app.bus.connected.collectAsState()
@@ -310,7 +312,9 @@ internal fun ConnectionPanel() {
             }
         }
 
-        item {
+        // Only the chat mic reads it (ChatScreen): with the server's AI
+        // features off there is no Chat, so no card for it.
+        if (aiOn) item {
             PanelCard(
                 "This phone belongs to",
                 "Who usually talks to the domovoi from this phone's chat mic. Voice messages still " +

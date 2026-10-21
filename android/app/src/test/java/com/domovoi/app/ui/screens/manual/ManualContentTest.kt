@@ -1,8 +1,11 @@
 package com.domovoi.app.ui.screens.manual
 
 import com.domovoi.app.net.ApiClient
+import com.domovoi.app.net.Capabilities
+import com.domovoi.app.net.FEATURE_AI
 import com.domovoi.app.ui.screens.settings.SettingsTab
 import com.domovoi.app.ui.shell.Route
+import com.domovoi.app.ui.shell.onDeviceAssistant
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -57,6 +60,42 @@ class ManualContentTest {
                 r.app.tab?.let { assertTrue("$id: tab $it", r.app.screen == "Settings" && it in tabs) }
             }
         }
+    }
+
+    /** The manual's link to Chat reads as plain text while the server's AI
+     *  features are off (no link that bounces back to Home); on, or on an
+     *  older server that has no switch, it is a link. */
+    @Test fun aLinkToChatIsPlainTextWithTheServersAiOff() {
+        val chat = doc.routes["chat"]!!
+        val aiOff = Capabilities(features = mapOf(FEATURE_AI to false))
+        // No on-device assistant here (after One Chat, Chat stays for it).
+        onDeviceAssistant = { false }
+        assertFalse(manualRouteOpens(chat, aiOff))
+        assertTrue(manualRouteOpens(chat, Capabilities.EMPTY))
+        assertTrue(manualRouteOpens(chat, Capabilities(features = mapOf(FEATURE_AI to true))))
+        assertTrue(manualRouteOpens(doc.routes["music"]!!, aiOff))
+        // The dashboard opens whatever the app shows; no screen and no
+        // dashboard opens nothing.
+        assertTrue(manualRouteOpens(ManualRoute(dashboard = "#x", app = ManualAppRoute(dashboard = true)), aiOff))
+        assertFalse(manualRouteOpens(ManualRoute(), Capabilities.EMPTY))
+    }
+
+    /** What the language models answer ("are you sure?", "why is the sky
+     *  blue", the weather and its "yes") is left out of the try-saying lists
+     *  while the server's AI features are off; on, or an older server with
+     *  no switch, every phrase shows. */
+    @Test fun aiPhrasesAreLeftOutWithTheServersAiOff() {
+        val say = (listOf(doc.start.blocks) + doc.pieces.map { it.blocks }).flatten().filter { it.type == "say" }
+        val all = say.flatMap { it.phrases }
+        val needsAi = all.filter { it.needs == "ai" }.map { it.text }.toSet()
+        assertTrue("are you sure?" in needsAi && "why is the sky blue" in needsAi)
+        assertFalse("set a timer for 10 minutes" in needsAi)
+        val off = say.flatMap { shownPhrases(it.phrases, mapOf(FEATURE_AI to false)) }.map { it.text }
+        assertFalse("are you sure?" in off || "why is the sky blue" in off)
+        assertTrue("set a timer for 10 minutes" in off)
+        assertEquals(all.size, say.flatMap { shownPhrases(it.phrases, emptyMap()) }.size)
+        assertEquals(all.size, say.flatMap { shownPhrases(it.phrases, mapOf(FEATURE_AI to true)) }.size)
+        assertEquals("ai", doc.handlerNeedsFeature["double_check"])
     }
 
     @Test fun inlineMarkupBecomesSpans() {

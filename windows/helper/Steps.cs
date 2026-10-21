@@ -81,20 +81,132 @@ namespace Domovoi.Windows.Helper
 
         // -- prepare: the admin-only tree and the answers ---------------
 
-        public static void Prepare(Output o, string internet, string mediaRoot, string commit)
+        public static void Prepare(Output o, string internet, string ai, string mediaRoot, string commit)
         {
             if (internet != "always" && internet != "sometimes" && internet != "never")
                 throw new ArgumentException("--internet must be always, sometimes or never");
+            if (ai != "yes" && ai != "no" && ai != "keep") throw new ArgumentException("--ai must be yes, no or keep");
             Folders.CheckMediaRoot(mediaRoot);
             if (commit.Length != 40) throw new ArgumentException("--commit must be a full SHA");
             Ledger l = LoadLedger() ?? new Ledger();
             if (!Directory.Exists(Paths.ProgramData)) { l.ProgramDataCreated = true; SaveLedger(l); }
             Folders.EnsureProgramDataBase(l.ProgramDataCreated, o.Say);
             l.Internet = internet;
+            RecordAiAnswer(l, ai);
             l.MediaRoot = MediaPaths.Normalize(mediaRoot);
             l.Commit = commit;
             SaveLedger(l);
-            o.Say("recorded the answers (internet: " + internet + "; media folder: " + l.MediaRoot + ")");
+            o.Say("recorded the answers (internet: " + internet + "; AI chat and questions: " + ai + "; media folder: " + l.MediaRoot + ")");
+        }
+
+        // prepare --ai: yes or no, said out loud to provision.sh; keep (Setup's
+        // page left at a Yes that came from this record alone, the
+        // household's own value unread): neither option, so provision.sh
+        // keeps domovoi/.env's. A keep over a recorded No is a No: Setup
+        // never pulls the models on a guess.
+        public static void RecordAiAnswer(Ledger l, string ai)
+        {
+            if (ai == "keep" && l.IncludeAi)
+            {
+                l.AiKeep = true;
+                return;
+            }
+            l.AiKeep = false;
+            l.IncludeAi = ai == "yes";
+        }
+
+        // -- saved-ai: what Setup's AI page starts at on a re-run ---------
+        // Prints ai_default=yes|no and ai_from=household|record|none
+        // (SavedAiAnswer). The household's value comes from DomovoiHost (a
+        // one-off request: the distro is the hidden account's), only while
+        // it says Domovoi is ready; an older host, or none, leaves the
+        // record's answer.
+
+        public static void SavedAi(Output o)
+        {
+            Ledger l = null;
+            try { l = LoadLedger(); }
+            catch (FormatException) { l = null; }
+            bool? household = null;
+            if (l != null)
+            {
+                string why;
+                household = AskHouseholdAi(15, out why);
+                o.LogOnly(household == null ? "the household's AI_FEATURES: not read (" + why + ")"
+                    : "the household's AI_FEATURES reads " + (household.Value ? "on" : "off"));
+            }
+            SavedAiAnswer a = SavedAiAnswer.Decide(l, household);
+            o.Kv("ai_default", a.Yes ? "yes" : "no");
+            o.Kv("ai_from", a.From);
+        }
+
+        static bool? AskHouseholdAi(int timeoutSec, out string why)
+        {
+            using (var s = HostService.Find())
+            {
+                if (s == null) { why = "no " + Paths.ServiceName; return null; }
+                s.Refresh();
+                if (s.Status != ServiceControllerStatus.Running) { why = Paths.ServiceName + " is not running"; return null; }
+            }
+            Dictionary<string, object> status = null;
+            try { status = ReadHostFile(Paths.Status); }
+            catch (FormatException) { }
+            catch (IOException) { }
+            if (status == null || HostStatus.FromJson(status).State != "ready") { why = "Domovoi is not running"; return null; }
+            if (!Directory.Exists(Paths.HostIn)) { why = "no " + Paths.HostIn; return null; }
+            string id = Guid.NewGuid().ToString("N");
+            var req = new Dictionary<string, object>();
+            req["v"] = 1;
+            req["verb"] = "ai-features";
+            string reqFile = Paths.RequestFile(id), respFile = Paths.ResponseFile(id);
+            Json.WriteFile(reqFile, req);
+            try
+            {
+                DateTime until = DateTime.UtcNow.AddSeconds(timeoutSec);
+                while (!File.Exists(respFile))
+                {
+                    if (DateTime.UtcNow > until) { why = Paths.ServiceName + " did not answer"; return null; }
+                    Thread.Sleep(300);
+                }
+                Thread.Sleep(200);
+                Dictionary<string, object> resp;
+                try { resp = ReadHostFile(respFile); }
+                catch (FormatException e) { why = e.Message; return null; }
+                bool? value = resp == null ? null : Json.Bool(resp, "ai_features");
+                if (resp == null || Json.Bool(resp, "ok") != true || value == null)
+                {
+                    why = resp == null ? "no answer" : (Json.Str(resp, "error") ?? "no value");
+                    return null;
+                }
+                why = "";
+                return value;
+            }
+            finally
+            {
+                try { File.Delete(reqFile); } catch (IOException) { }
+            }
+        }
+
+        // -- record-ai: the install record takes what provision.sh said ---
+        // Once DomovoiHost reports Domovoi ready, its status carries the
+        // final line's "ai"; the record keeps that (AiReport). Prints
+        // ai=yes|no, or ai= when the host didn't say.
+
+        public static void RecordAi(Output o)
+        {
+            Ledger l = NeedLedger();
+            Dictionary<string, object> d = null;
+            try { d = ReadHostFile(Paths.Status); }
+            catch (FormatException) { }
+            catch (IOException) { }
+            HostStatus st = d == null ? null : HostStatus.FromJson(d);
+            bool? ai = AiReport.Reported(st);
+            if (AiReport.Apply(l, st))
+            {
+                SaveLedger(l);
+                o.Say("recorded what provision.sh reported: AI chat and questions " + (ai.Value ? "on" : "off"));
+            }
+            o.Kv("ai", ai == null ? "" : (ai.Value ? "yes" : "no"));
         }
 
         // -- the account and the service --------------------------------
@@ -249,6 +361,23 @@ namespace Domovoi.Windows.Helper
             o.Say("copied " + Path.GetFileName(src) + " to " + dest + " (SHA-256 checked)");
         }
 
+        // The provision.sh options from the recorded answers (all but the LAN
+        // address, which WriteJob looks up). scriptText: the pinned
+        // provision.sh, for the options it takes.
+        public static ProvisionOptions JobOptions(Ledger l, string repoUrl, string commit, string trackBranch, string scriptText)
+        {
+            var opts = new ProvisionOptions();
+            opts.RepoUrl = repoUrl;
+            opts.Ref = commit;
+            opts.TrackBranch = trackBranch;
+            opts.Internet = l.Internet;
+            opts.IncludeAi = l.IncludeAi;
+            opts.KeepAi = l.AiKeep;
+            opts.ScriptHasAiChoice = ProvisionScript.SupportsAiChoice(scriptText);
+            opts.Media = MediaPaths.Under(l.MediaRoot);
+            return opts;
+        }
+
         public static void WriteJob(Output o, string image, string imageSha, string provision, string provisionSha, string repoUrl, string commit, string trackBranch, string lanIp)
         {
             Ledger l = NeedLedger();
@@ -258,18 +387,14 @@ namespace Domovoi.Windows.Helper
             CopyPinned(image, imageDest, imageSha, o);
             CopyPinned(provision, provDest, provisionSha, o);
 
-            var opts = new ProvisionOptions();
-            opts.RepoUrl = repoUrl;
-            opts.Ref = commit;
-            opts.TrackBranch = trackBranch;
-            opts.Internet = l.Internet;
+            // The copy just checked against its pin: what DomovoiHost runs.
+            ProvisionOptions opts = JobOptions(l, repoUrl, commit, trackBranch, File.ReadAllText(provDest, Encoding.UTF8));
             if (lanIp == "auto")
             {
                 Preflight.LanInfo lan = Preflight.Lan();
                 opts.LanIp = lan != null && lan.Private ? lan.Ip : null;
             }
             else if (lanIp != "none") opts.LanIp = lanIp;
-            opts.Media = MediaPaths.Under(l.MediaRoot);
 
             var w = new WslConfigOptions();
             w.MemoryGb = WslConfig.MemoryCapGb(Preflight.InstalledRamBytes());
@@ -373,6 +498,7 @@ namespace Domovoi.Windows.Helper
             o.Kv("failed_step", st.FailedStep ?? "");
             o.Kv("tier", st.Tier ?? "");
             o.Kv("gpu", st.GpuKnown ? (st.Gpu.Count == 0 ? "none" : string.Join(", ", st.Gpu.ToArray())) : "");
+            o.Kv("ai", st.Ai == null ? "" : (st.Ai.Value ? "yes" : "no"));
             o.Kv("generation", Inv.S(st.Generation));
             o.Kv("attempt", Inv.S(st.Attempt));
             if (st.Bytes != null) o.Kv("bytes", Inv.S(st.Bytes.Value));

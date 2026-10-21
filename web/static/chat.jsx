@@ -23,6 +23,9 @@
  * data.js) — the query the server accepts on reads and nowhere else. */
 const chatUploadUrl = (token) => withDeviceToken(`${API_BASE}/api/chat/uploads/${token}`);
 
+/* What a send says when the household's AI features are off. */
+const CHAT_AI_OFF_TEXT = 'AI chat is turned off on your home server';
+
 /* SSE reader for the send endpoint: fetch + ReadableStream, calling
  * onDelta(text) per chunk and resolving with the final done payload. */
 const chatSendStream = async (threadId, body, onDelta) => {
@@ -36,6 +39,12 @@ const chatSendStream = async (threadId, body, onDelta) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+  // The household turned AI chat off (Settings → Models): the server
+  // answers 409 with X-Domovoi-Refusal: ai-off before any reply; say so
+  // plainly instead of "409 Conflict" or an empty bubble.
+  if (r.status === 409 && r.headers && r.headers.get && r.headers.get('X-Domovoi-Refusal') === 'ai-off') {
+    throw new Error(CHAT_AI_OFF_TEXT);
+  }
   if (!r.body) throw new Error(`${r.status} ${r.statusText}`);
   const reader = r.body.getReader();
   const decoder = new TextDecoder();
@@ -394,7 +403,24 @@ const useChatNarrow = (ref) => {
   return narrow;
 };
 
+/* Chat while the household's AI features are off (Settings → Models): the
+ * page is off every launcher then (navItemsFor), and a link or an old
+ * bookmark that still lands here says why instead of offering a composer
+ * whose every send would be refused. */
+const ChatAiOff = () => (
+  <div style={{ padding: 24 }}>
+    <Empty title="chat is off"
+           sub="AI chat and questions are turned off for this home. Voice commands still work. An admin can turn AI on in Settings → Models."
+           action={<a href="#settings/models" className="home-link">Settings → Models</a>}/>
+  </div>
+);
+
 const ChatPage = () => {
+  const ai = useAiFeatures();
+  return ai ? <ChatPageMain/> : <ChatAiOff/>;
+};
+
+const ChatPageMain = () => {
   const [fire, toastNode] = useToast();
   const copyMessage = async (text) => fire((await chatCopyText(text || '')) ? 'copied' : 'copy failed');
   const { items: threads, error: threadsError, refresh: refreshThreads } =

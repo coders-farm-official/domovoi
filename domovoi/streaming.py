@@ -460,7 +460,7 @@ from uuid import UUID
 from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy import text
 
-from domovoi import command_captures
+from domovoi import ai_features, command_captures
 from domovoi import fast_lane
 from domovoi.admin_auth import TRUSTED_PROXIES, SlidingWindowLimiter, token_sha256
 from domovoi.clients.letta import get_letta_client
@@ -4168,7 +4168,10 @@ class StreamSession:
                         transcript=transcript,
                         ctx=ctx,
                         session_id=self.session_id,
-                        exiting=_is_chat_exit(transcript),
+                        # AI features turned off mid-chat: the chat ends
+                        # (its goodbye), as if asked to — nothing may ask
+                        # the model now (domovoi/ai_features.py).
+                        exiting=_is_chat_exit(transcript) or ai_features.turned_off(),
                     )
                     # The chat row carries the pre-route stages (see
                     # _persist_chat_turn); nothing to merge afterwards.

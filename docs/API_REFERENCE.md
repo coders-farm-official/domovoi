@@ -628,7 +628,7 @@ household device token instead of a caller's credential.
 
 | Method & path | Auth | Response / purpose |
 |---|---|---|
-| `GET /api/capabilities` | Open | The live capability map (proxied view of the core registry) the sidebar's "+ add" affordances gate on. Each plugin entry carries `name`, `publisher` and the same `accent` object as `/api/plugins/manifest` (the Android app's plugin screen frame). Also `host_kind` — `linux`, `wsl`, `windows` or `darwin` (`DOMOVOI_HOST_KIND` overrides the detection); `wsl` is a Windows install, where Settings → Satellites explains that USB adoption and writing a card aren't available. |
+| `GET /api/capabilities` | Open | The live capability map (proxied view of the core registry) the sidebar's "+ add" affordances gate on. Each plugin entry carries `name`, `publisher` and the same `accent` object as `/api/plugins/manifest` (the Android app's plugin screen frame). Also `host_kind` — `linux`, `wsl`, `windows` or `darwin` (`DOMOVOI_HOST_KIND` overrides the detection); `wsl` is a Windows install, where Settings → Satellites explains that USB adoption and writing a card aren't available. `features` holds `chat` (voice chat mode), `office` and `ai`: the household's AI switch (`AI_FEATURES`, Settings → Models), read live from `.env`; `false` hides Chat in the dashboard and the app, and a server without the key has AI. |
 | `GET /api/capabilities/manual` | Open | Handler metadata + example phrases for the "What can I say?" manual page (from core `GET /v1/handlers`). |
 
 ### 3.4 Acquisitions
@@ -1609,6 +1609,8 @@ conversational one and the tool-routing one — switchable independently.
 | `GET /api/models/jobs` | — | Running/finished pull jobs with progress. |
 | `POST /api/models/pull` | `PullBody` | **Admin (Bearer).** Start downloading a model (background job). A reference that names its own registry host (`host/ns/model:tag`) is `400` when that host fails the outbound-URL rules. Under `never` it is `409` before any `model_jobs` row is written and before Ollama is asked, unless the reference names a registry on the house network. |
 | `POST /api/models/pull/{job_id}/cancel` | — | **Admin (Bearer).** Cancel a pull. |
+| `GET /api/models/ai` | — | The household's AI switch for Settings → Models: `{enabled, locked, ollama_reachable, internet_off, models: [{role, model, installed, download_gb, duplicate}], missing: [model], missing_gb}`. `models` are the `qa`, `tool` and `vision` role models; `installed` is null when Ollama can't be asked; `download_gb` is the size the repo records for the installers' models (null for another); `missing_gb` is what turning AI on would download (null when part of it is unknown). `locked`: `AI_FEATURES` is set in the server's environment, so the dashboard can't change it. |
+| `POST /api/models/ai` | `{enabled: bool, install?: bool}` | **Admin (Bearer).** Turn AI chat and questions on or off: writes `ai_features` through `POST /v1/admin/config` (answers as that does, plus `pulls` and `pull_errors`). With `enabled` and `install`, then starts a pull (as `POST /api/models/pull`) for each role model Ollama doesn't have; one that can't start is named in `pull_errors` with why. While AI is off, `POST /api/chat/threads/{id}/messages` and `POST /api/chat/uploads` answer `409` with `X-Domovoi-Refusal: ai-off`; reading threads stays open. |
 
 ### 3.20 News
 

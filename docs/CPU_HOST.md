@@ -680,7 +680,16 @@ restarted, or another model pushed it out of memory), the satellite says
 "Just a moment, I'm waking up my language model." (`ollama_cold_start_notice`)
 and that call gets `ollama_load_timeout_sec` (300 s) instead of the ordinary
 `ollama_timeout_sec`, so a slow load never ends in "my language model isn't
-answering".
+answering". A model that isn't installed at all (Ollama's `/api/tags` doesn't
+list it: never downloaded, or deleted) is never "woken": the router model is
+skipped, and a question hears "My question-answering model isn't installed
+yet — an admin can add it in Settings, Models."
+
+The lightest box of all runs no language model: **AI chat and questions**
+off (Settings → Models, `AI_FEATURES=false`, or No at the installers'
+question) leaves only the fast paths, Whisper and Piper, and saves the
+6.4-9.1 GB of models and the memory they take while loaded
+([FAQ](FAQ.md#is-ai-optional)).
 
 If you'd rather manage this on the Ollama side, blank out
 `ollama_keep_alive` so Domovoi sends nothing (a per-request value

@@ -422,7 +422,7 @@ async def test_capabilities_manifest_serves_without_core(fake_plugin, monkeypatc
         display = {h["name"]: h for h in body["handler_display"]}
         assert display["music"]["tone"] == "media"       # core static table
         assert display[_SLUG]["label"] == "Web Demo"     # plugin manifest
-        assert body["features"].keys() == {"chat", "office"}
+        assert body["features"].keys() == {"chat", "office", "ai"}
 
         # /manual degrades to the static table when core is down and no
         # cache exists (stale flag set).

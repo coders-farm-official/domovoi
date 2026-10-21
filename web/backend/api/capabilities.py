@@ -78,19 +78,29 @@ CORE_SOURCE_TONES: dict[str, str] = {
 
 def _features() -> dict[str, bool]:
     """Feature booleans for compiled-in screens/tabs that aren't plugin
-    capabilities. Read from the web process's settings copy — these are
-    restart-tier flags, so staleness is not a concern."""
+    capabilities. ``chat`` and ``office`` come from the web process's
+    settings copy — restart-tier flags, so staleness is not a concern;
+    ``ai`` is live."""
+    from domovoi import ai_features
+
+    # The household's AI switch (Settings → Models), read live from .env
+    # like the core does (domovoi/ai_features.py): false hides Chat in the
+    # dashboard and the app, which treat a missing key as true (an older
+    # server). Not restart-tier, unlike the flags below.
+    ai = ai_features.enabled()
     try:
         from domovoi.config import settings
 
         return {
-            "chat": bool(getattr(settings, "chat_mode_enabled", False)),
+            # Voice chat mode (Letta) — needs the AI features as well.
+            "chat": bool(getattr(settings, "chat_mode_enabled", False)) and ai,
             # The Documents suite is homegrown/in-page now — always on
             # (the former flag gated the OnlyOffice/Collabora sidecars).
             "office": True,
+            "ai": ai,
         }
     except Exception:  # pragma: no cover - config import failure
-        return {"chat": False, "office": True}
+        return {"chat": False, "office": True, "ai": ai}
 
 
 @router.get("")

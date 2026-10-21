@@ -39,6 +39,7 @@ import re
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi import egress
+from domovoi import ai_features
 from domovoi.clients.ollama import get_ollama_client
 from domovoi.clients.searxng import SearchOutcome, SearchResult, get_searxng_client
 from domovoi.config import settings
@@ -447,7 +448,12 @@ class DoubleCheckHandler(Handler):
     #   handlers ever grow such phrasings.
     priority_band = 190
     display = HandlerDisplay(label="Double-Check", tone="info")
-    example_phrases = ("are you sure?",)
+    @property
+    def example_phrases(self) -> tuple[str, ...]:  # type: ignore[override]
+        # Not suggested while AI features are off: a fact-check is the
+        # model reading the search results (domovoi/ai_features.py).
+        return ("are you sure?",) if ai_features.enabled() else ()
+
     confirmation_kinds = ("core.self_doubt_offer", "core.prefs_offer")
     requires_network = "yes"
 
@@ -739,9 +745,24 @@ class DoubleCheckHandler(Handler):
         """
         return await self._answer_question_from_web(question, ctx, session)
 
+    def _ai_off(self, ctx: Context) -> Response | None:
+        """The fixed reply while AI features are off: a fact-check or a
+        web answer is the model reading the search results, so there is
+        nothing to do without it (domovoi/ai_features.py). None when on."""
+        if ai_features.enabled():
+            return None
+        return Response(
+            text=ai_features.OFF_LOOKUP_LINE,
+            session_id=ctx.session_id,
+            matched_handler=self.name,
+        )
+
     async def _answer_question_from_web(
         self, question: str, ctx: Context, session: AsyncSession
     ) -> Response:
+        off = self._ai_off(ctx)
+        if off is not None:
+            return off
         outcome = await self._search(question)
         results = outcome.results
         if not results:
@@ -793,6 +814,9 @@ class DoubleCheckHandler(Handler):
     async def _verify(self, ctx: Context, session: AsyncSession) -> Response:
         """The main fact-check path: pull last_assistant_response,
         extract a claim, search, judge."""
+        off = self._ai_off(ctx)
+        if off is not None:
+            return off
         last = await self._read_last_assistant_response(ctx, session)
         if not last:
             return Response(
@@ -823,6 +847,9 @@ class DoubleCheckHandler(Handler):
     ) -> Response:
         """Tool-call entry point + the back half of the fast-path flow:
         we already have a claim, search and judge it."""
+        off = self._ai_off(ctx)
+        if off is not None:
+            return off
         outcome = await self._search(claim)
         results = outcome.results
         if not results:

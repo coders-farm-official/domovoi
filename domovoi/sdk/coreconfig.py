@@ -27,6 +27,10 @@ CORE_CONFIG_WHITELIST: tuple[str, ...] = (
     "mpd_http_base",
     "use_stubs",
     "log_level",
+    # The household's AI switch, live (domovoi/ai_features.py): False means
+    # nothing may ask a language model, and sdk.http refuses requests that
+    # would (SDK 1.7). Read it to skip a summary step up front.
+    "ai_features",
 )
 
 
@@ -41,6 +45,10 @@ class CoreConfigView:
             # Always a usable URL prefix: the setting's default is the
             # literal "auto", which only the core knows how to resolve.
             return lan_address.mpd_http_base()
+        if name == "ai_features":
+            from domovoi import ai_features
+
+            return ai_features.enabled()
         return getattr(settings, name)
 
     def __setattr__(self, name: str, value: Any) -> None:

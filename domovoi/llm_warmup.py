@@ -25,6 +25,7 @@ import asyncio
 import logging
 import time
 
+from domovoi import ai_features
 from domovoi.config import settings
 
 log = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ _task: asyncio.Task | None = None
 async def warm_up_models(reason: str) -> list[str]:
     """Load whichever voice models Ollama doesn't have ready. Returns the
     models loaded (empty when there was nothing to do or it failed)."""
-    if settings.use_stubs or not settings.ollama_warmup:
+    if settings.use_stubs or not settings.ollama_warmup or ai_features.turned_off():
         return []
     from domovoi.clients.ollama import get_ollama_client
     from domovoi.router import offered_tool_schemas
@@ -87,9 +88,10 @@ async def warm_up_models(reason: str) -> list[str]:
 def schedule_warm_up(reason: str) -> asyncio.Task | None:
     """Start :func:`warm_up_models` in the background, replacing a warm-up
     still in flight (it was loading what the settings no longer ask for).
-    None when warm-up is off, under stubs, or with no running loop."""
+    None when warm-up is off, AI features are off (nothing may load a
+    language model), under stubs, or with no running loop."""
     global _task
-    if settings.use_stubs or not settings.ollama_warmup:
+    if settings.use_stubs or not settings.ollama_warmup or ai_features.turned_off():
         return None
     try:
         loop = asyncio.get_running_loop()

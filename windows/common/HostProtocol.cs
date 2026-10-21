@@ -4,7 +4,8 @@
 //
 //   * host\in\job.json        what the host should bring up; written by the
 //                             installer; the account can read, not write
-//   * host\in\req-<id>.json   a one-off request (the setup code); same ACL
+//   * host\in\req-<id>.json   a one-off request (the setup code; the
+//                             household's AI_FEATURES); same ACL
 //   * host\in\<image>, provision.sh   the pinned downloads; same ACL, so
 //                             the account (and the distro) can't change them
 //   * host\out\status.json    what the host is doing; written by the host
@@ -147,6 +148,10 @@ namespace Domovoi.Windows
         public string Tier;
         public List<string> Gpu;
         public bool GpuKnown;
+        // provision.sh's final "ai" in this host's run: AI chat and
+        // questions on (true) or left out (false); null: unknown (no run
+        // yet, or one that didn't say).
+        public bool? Ai;
         public string Updated;
         public string Holder = "stopped";
         public int HostPid;
@@ -169,6 +174,7 @@ namespace Domovoi.Windows
             d["head"] = Head;
             d["tier"] = Tier;
             d["gpu"] = GpuKnown && Gpu != null ? (object)Gpu.ToArray() : null;
+            d["ai"] = Ai == null ? null : (object)Ai.Value;
             d["updated"] = Updated;
             d["holder"] = Holder;
             d["host_pid"] = HostPid;
@@ -193,6 +199,7 @@ namespace Domovoi.Windows
             s.Tier = Json.Str(d, "tier");
             s.Gpu = Json.StrList(d, "gpu");
             s.GpuKnown = s.Gpu != null;
+            s.Ai = Json.Bool(d, "ai");
             s.Updated = Json.Str(d, "updated");
             s.Holder = Json.Str(d, "holder") ?? "";
             s.HostPid = Json.Int(d, "host_pid") ?? 0;

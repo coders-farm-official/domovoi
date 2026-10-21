@@ -12,6 +12,15 @@ plugin's request to a host that is not on this network raises
 ``egress.InternetTurnedOff`` before anything is sent. A plugin that builds
 its own raw ``httpx`` client is outside this gate — its author's job
 (docs/PLUGIN_DEVELOPMENT.md).
+
+The household's AI switch is enforced here too (SDK 1.7): while AI
+features are off (``domovoi/ai_features.py``) every request to this box's
+Ollama (port 11434, or the configured ``OLLAMA_URL``) but its read-only
+listings raises ``ai_features.AITurnedOffConnectError`` before anything is
+sent — denied by host and port, so the OpenAI-compatible ``/v1/...`` paths
+are covered as well as the native ones — so a plugin's
+summary or answer step fails cleanly, the way it fails when Ollama is
+down. ``sdk.core_config.ai_features`` says which it is up front.
 """
 
 from __future__ import annotations
@@ -33,9 +42,9 @@ class HttpFactory:
         FIRST in ``event_hooks["request"]`` (the caller's own hooks run
         after it). httpx is imported lazily — it ships with plugin/web
         extras, not the minimal core install."""
-        from domovoi import egress
+        from domovoi import ai_features, egress
 
         headers = {"User-Agent": self.user_agent}
         headers.update(kwargs.pop("headers", None) or {})
         kwargs.setdefault("timeout", 15.0)
-        return egress.async_client(headers=headers, **kwargs)
+        return egress.async_client(headers=headers, **ai_features.with_request_hook(kwargs))

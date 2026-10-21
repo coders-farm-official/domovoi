@@ -1,6 +1,11 @@
 /* Models page — the model-management hub.
  *
  * One page, top-down:
+ *   0. AI chat and questions — the household's AI switch (ai_features,
+ *                         domovoi/ai_features.py). Off hides what only the
+ *                         chat models use: their role rows, Installed and
+ *                         Browse & install. Turning it on shows what it
+ *                         downloads first, then pulls it (progress below).
  *   1. Hardware panel   — per-GPU VRAM/util/temp + CPU/RAM/disk. The
  *                         denominator for every fit badge.
  *   2. Active models    — Q&A / tool-routing / vision / speech-to-text role
@@ -691,6 +696,99 @@ const FoldedSummary = ({ icon, title, sub, count, countLabel, tab }) => (
   </div>
 );
 
+/* ---- the AI switch -------------------------------------------- */
+
+const _AI_ROLE_LABEL = { qa: 'questions', tool: 'commands in your own words', vision: 'pictures in chat' };
+/* What a role's model being absent does, said only for a model that is
+ * (router.py: no router model means the Q&A model answers; no Q&A model
+ * means a question hears it isn't installed; no vision model means chat
+ * can't read pictures). */
+const _AI_ROLE_MISSING = {
+  qa: 'questions and Chat say the model isn’t installed',
+  tool: 'commands in your own words go to the question model instead',
+  vision: 'Chat can’t read pictures',
+};
+const _aiMissingModels = (ai) => (ai.models || []).filter((m) => m.installed !== true && !m.duplicate);
+
+/* What turning AI on downloads, one line per model ("questions: <model> ·
+ * about 2.0 GB"); with `effects`, what each missing one stops meanwhile.
+ * `ai` is GET /api/models/ai. */
+const AiDownloadList = ({ ai, effects = false }) => (
+  <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12, color: 'var(--fg-muted)' }}>
+    {_aiMissingModels(ai).map((m) => (
+      <li key={m.model}>
+        {_AI_ROLE_LABEL[m.role] || m.role}: <span className="mono">{m.model}</span>
+        {m.download_gb != null ? ` · about ${m.download_gb.toFixed(1)} GB` : ''}
+        {effects && _AI_ROLE_MISSING[m.role] ? ` — until then, ${_AI_ROLE_MISSING[m.role]}` : ''}
+      </li>
+    ))}
+  </ul>
+);
+
+const AiFeaturesCard = ({ ai, internetOff, onSet }) => {
+  const [asking, setAsking] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  if (!ai) return null;
+  const on = !!ai.enabled;
+  const missing = ai.missing || [];
+  const run = async (body) => {
+    setBusy(true);
+    try { await onSet(body); } finally { setBusy(false); setAsking(false); }
+  };
+  const turnOn = () => {
+    if (missing.length) setAsking(true);
+    else run({ enabled: true });
+  };
+  const size = ai.missing_gb != null ? `about ${ai.missing_gb.toFixed(1)} GB` : 'several GB';
+  return (
+    <Card title="AI chat and questions"
+          sub={on
+            ? 'On: Domovoi answers questions, understands commands said in your own words, summarises your news briefing, and the dashboard and app have Chat.'
+            : 'Off: nothing uses the AI models. Voice commands still work on their usual phrases (timers, reminders, music, the clock, intercom, notes, news headlines and more), and so do speech recognition, the voices and the wake word. A question gets “I’m set up for home commands”, and Chat is hidden.'}
+          action={ai.locked
+            ? <Pill tone="idle">set on the server</Pill>
+            : on
+              ? <Button icon="power" disabled={busy} onClick={() => run({ enabled: false })}>turn off</Button>
+              : <Button variant="primary" icon="power" disabled={busy || asking} onClick={turnOn}>turn on</Button>}>
+      {ai.locked && (
+        <div style={{ padding: '10px 14px', fontSize: 12, color: 'var(--fg-muted)' }}>
+          The server{'’'}s environment sets AI_FEATURES, so it can{'’'}t be changed here.
+        </div>
+      )}
+      {on && missing.length > 0 && !asking && (
+        <div style={{ padding: '10px 14px', fontSize: 12, color: 'var(--fg-muted)' }}>
+          {_aiMissingModels(ai).length === 1 ? 'One model isn’t downloaded yet:' : 'These models aren’t downloaded yet:'}
+          <AiDownloadList ai={ai} effects/>
+          <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Button icon="download" disabled={busy || internetOff}
+                    title={internetOff ? NEEDS_INTERNET_TEXT : undefined}
+                    onClick={() => run({ enabled: true, install: true })}>download {size}</Button>
+            {internetOff && <NeedsInternetNote compact/>}
+          </div>
+        </div>
+      )}
+      {asking && (
+        <div style={{ padding: '12px 14px', fontSize: 13, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div>Turning AI on downloads {size} of AI models:</div>
+          <AiDownloadList ai={ai}/>
+          <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+            {internetOff
+              ? 'This box is set to stay off the internet, so they can’t be downloaded now. AI turns on, and a question says the model isn’t installed until it is.'
+              : 'The download runs in the background (progress below), and you can leave this page. Questions work once it finishes.'}
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Button variant="primary" icon={internetOff ? 'power' : 'download'} disabled={busy}
+                    onClick={() => run({ enabled: true, install: !internetOff })}>
+              {internetOff ? 'turn on anyway' : `download ${size} and turn on`}
+            </Button>
+            <Button icon="x" disabled={busy} onClick={() => setAsking(false)}>cancel</Button>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+};
+
 /* ============================================================== */
 /* Page                                                           */
 /* ============================================================== */
@@ -712,6 +810,10 @@ const ModelsPanel = () => {
   const internetCfg = useApiObject('/api/config', { quiet: true });
   const internetOff = !!(internetCfg.data && internetCfg.data.internet_access === 'never');
 
+  // The household's AI switch, live, and what turning it on downloads.
+  const { data: aiData, refresh: refreshAi } =
+    useApiObject('/api/models/ai', { refetchOnAuth: true, eventTypes: ['model_jobs.changed'] });
+  const aiOn = !aiData || aiData.enabled !== false;
   const { data: hwData, loading: hwLoading, refresh: refreshHw } =
     useApiObject('/api/models/hardware');
   const { data: catalog } = useApiObject('/api/models/catalog');
@@ -750,6 +852,8 @@ const ModelsPanel = () => {
   }, [hwData]);
 
   const installed = (installedData && installedData.installed) || [];
+  // AI off: only speech-to-text is a role this page still manages.
+  const shownRole = (r) => aiOn || r.role === 'stt';
   const ollamaReachable = installedData ? installedData.ollama_reachable : true;
   const installedNames = new Set(installed.map((m) => m.name));
   const roles = (activeData && activeData.roles) || [];
@@ -926,6 +1030,32 @@ const ModelsPanel = () => {
     body: <div>The model files are removed from this machine. It can be pulled again from the catalog later.</div>,
   });
 
+  // The switch: saved through the core's config path; turning it on can
+  // start the downloads in the same press (POST /api/models/ai). The
+  // shell's nav reads features.ai again, so Chat comes and goes at once.
+  const setAi = (body) => guard(async () => {
+    const res = await apiPost('/api/models/ai', body);
+    ((res && res.pulls) || []).forEach((job) => {
+      if (job && job.id != null) {
+        setWatching((w) => ({ ...w, [job.id]: { model: job.model, since: Date.now(), seen: false } }));
+      }
+    });
+    await refreshAi();
+    refreshActive();
+    refreshJobs();
+    try { CapabilitiesStore.ask(true); } catch { /* the nav catches up on its next read */ }
+    return res;
+  }, (res) => {
+    const why = res && res.rejected && res.rejected.ai_features;
+    if (why) return { error: `not saved: ${why}` };
+    const failed = Object.entries((res && res.pull_errors) || {});
+    if (failed.length) {
+      return { error: `AI is on, but not downloaded: ${failed.map(([m, e]) => `${m} (${e})`).join('; ')}` };
+    }
+    if (!body.enabled) return 'AI chat and questions are off';
+    return (res && res.pulls && res.pulls.length) ? 'AI is on, downloading the models' : 'AI chat and questions are on';
+  }, { verb: body.enabled ? 'Turn AI on' : 'Turn AI off', key: 'ai-features' });
+
   const [pullName, setPullName] = React.useState('');
   const submitPull = (e) => {
     e?.preventDefault?.();
@@ -937,15 +1067,18 @@ const ModelsPanel = () => {
 
   return (
     <React.Fragment>
+      <AiFeaturesCard ai={aiData} internetOff={internetOff} onSet={setAi}/>
       <SttStatusBanner stt={hwData && hwData.stt}/>
       <HardwarePanel data={hw} loading={hwLoading}/>
 
-      <Card title="Active models" sub="One model per role. Switching writes config — Ollama applies instantly; Whisper needs a restart.">
+      <Card title="Active models" sub={aiOn
+              ? 'One model per role. Switching writes config — Ollama applies instantly; Whisper needs a restart.'
+              : 'Speech-to-text: voice control needs it, so it stays with AI off. Switching needs a restart.'}>
         {roles.length === 0
           ? <div style={{ padding: 14, fontSize: 12, color: 'var(--fg-muted)' }}>
               {activeMessage(activeData, activeError)}
             </div>
-          : roles.map((r) => (
+          : roles.filter(shownRole).map((r) => (
               <ActiveRow key={r.role} r={r} installed={installed} whisperNames={whisperNames}
                          hw={hw} catalogByName={catalogByName} onSwitch={switchModel}
                          onInstall={install} job={r.role === 'stt' ? null : jobFor(r.model)}
@@ -960,6 +1093,7 @@ const ModelsPanel = () => {
         </Card>
       )}
 
+      {aiOn && (
       <Card title={`Installed (${installed.length})`}
             sub="On-disk Ollama models. 'loaded' means it's resident in VRAM right now.">
         {!ollamaReachable ? (
@@ -970,7 +1104,9 @@ const ModelsPanel = () => {
           installed.map((m) => <InstalledRow key={m.name} m={m} hw={hw} onDelete={del}/>)
         )}
       </Card>
+      )}
 
+      {aiOn && (
       <Card title="Browse & install"
             sub="Curated Ollama models with fit estimates. Or pull anything by name.">
         <form onSubmit={submitPull}
@@ -996,6 +1132,7 @@ const ModelsPanel = () => {
           ))}
         </div>
       </Card>
+      )}
 
       <Card title="Speech-to-text (Whisper)"
             sub="Selecting a row writes whisper_model and its compute type — a restart-tier change. auto runs float16 on a GPU and int8 on the CPU; int8 halves VRAM at near-identical accuracy.">

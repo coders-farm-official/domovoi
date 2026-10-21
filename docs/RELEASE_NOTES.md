@@ -4,6 +4,53 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-21 — AI chat and questions are optional
+
+Core, dashboard, installers and app. Nothing to run: an existing install
+keeps AI on, exactly as before.
+
+* **A household switch.** Settings → Models → **AI chat and questions**
+  (admin; `AI_FEATURES` in `domovoi/.env`, default on). Off, nothing asks a
+  language model: voice commands keep working on their usual phrases, and
+  speech recognition, the voices and the wake word stay. A question gets
+  "I can't answer that one — I'm set up for home commands. Say 'what can
+  you do' to hear them." Chat is hidden on the dashboard, and the app keeps only this phone's own chats where it can run its model
+  (`features.ai` in `GET /api/capabilities`; a server without the key has
+  AI), and a send gets 409 `X-Domovoi-Refusal: ai-off`. The news briefing
+  summary, memory suggestions, the warm-up, "are you sure?" and voice chat
+  mode stop too. Turning it on shows the download size, then downloads the
+  models (`POST /api/models/ai`, progress on the page).
+* **Both installers ask "Include AI chat and questions?"** (default Yes,
+  with the size: about 6.4 GB, or 9.1 GB on a box with 24 GB of memory or
+  more). No skips the chat, router and vision models, keeps Whisper and
+  the wake word, and writes `AI_FEATURES=false`; Ollama itself is still
+  installed, so turning AI on later needs no reinstall.
+  `provision.sh --no-ai-models` / `--ai-models` (no flag: asks on a
+  terminal, else Yes); Windows Setup has a page for it and `/ai=no`, shown
+  once the release build re-pins to a `provision.sh` with the options.
+* **No more "waking up my language model" for a model that was never
+  downloaded.** The router model is skipped, and a question hears that the
+  question-answering model isn't installed and where to add it.
+* **Plugins (SDK 1.7.0):** `sdk.core_config.ai_features` is the switch,
+  live; with it off, `sdk.http` (and the web host's `http()`) refuses every
+  request to this box's Ollama but its read-only listings (`/api/tags`,
+  `/api/ps`, `/api/version`), the OpenAI-compatible `/v1/...` paths
+  included, with `ai_features.AITurnedOffConnectError` (also an
+  `httpx.ConnectError`).
+* **Kiwix 1.2.5** (its own release): with AI off, a voice lookup still
+  answers at once from the article's opening sentences, offline, and skips
+  the spoken summary follow-up, as if "Spoken summaries" were off; the
+  Library tab shows the lookup as "extract only". Kiwix 1.2.4 and older,
+  on a core with AI off, promise a summary that never comes: update the
+  plugin.
+* **Installers, on a re-run:** the household's saved answer wins.
+  `provision.sh` pulls the AI models only when `domovoi/.env` has AI on
+  after its env step (an `--ai-models` over a household "off" keeps it off
+  and pulls nothing), and its result's `"ai"` is that answer. Windows Setup
+  starts its page at the home's current answer, and shows the page only
+  when its pinned `provision.sh` has the options (`ProvisionAiChoice` in
+  `pins.iss`, set by `build.ps1 -Pin`).
+
 ## 2026-10-21 — A repair by Setup no longer trips the container guard
 
 * **"The music player image was replaced outside Domovoi" after running
@@ -85,6 +132,7 @@ Setup checks that the server answering is the one the code was made on
   beside `DomovoiSetup.exe` and lists it in `SHA256SUMS`;
   `windows\build.ps1` builds both.
 
+||||||| 0d9555a1
 ## 2026-10-20 — 1.0.0-rc3: audiobooks on the phone, and everything since rc2
 
 Version 1.0.0rc3 (the app 1.0.0-rc3, versionCode 26102001; the Windows
