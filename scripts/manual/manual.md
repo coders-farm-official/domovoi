@@ -112,6 +112,15 @@ An NVIDIA graphics card makes them faster: Ollama uses it by itself, on
 Linux and on Windows. An admin can change models in [Settings →
 Models](#settings/models). [More detail](docs/CPU_HOST.md)
 
+**AI chat and questions are optional.** The installers ask whether to
+include them, and an admin can turn them off or on at any time under **AI
+chat and questions** in [Settings → Models](#settings/models). Off, no
+routing, answer or vision model is used: voice commands still work on
+their usual phrases, and so do speech recognition, the voices and the wake
+word. A question then gets "I'm set up for home commands", and Chat is
+hidden. Turning them on shows the download size first, then downloads the
+models.
+
 ### Speaks
 
 Replies are spoken on the server, in one of three voices: **Kristin** (the
@@ -213,6 +222,12 @@ household allows the internet.
 
 - "I'm set to stay off the internet": your household chose No in
   [Settings → Internet](#settings/internet).
+- "I'm set up for home commands" or "I can't look that up with AI turned
+  off": AI chat and questions are off for your home. Commands still work;
+  an admin can turn AI on in [Settings → Models](#settings/models).
+- "My question-answering model isn't installed yet": AI is on but its
+  model hasn't been downloaded. An admin can download it in [Settings →
+  Models](#settings/models).
 - "My search helper isn't running": ask whoever set up Domovoi.
 - An answer sounds wrong? Say "are you sure?".
 
@@ -721,6 +736,9 @@ HEIC photos. See [Chat and the chat mic](#node:phone-chat).
 
 - "Pictures need the vision model": ask whoever set up Domovoi to install
   it in [Settings → Models](#settings/models).
+- Chat isn't there, or says "chat is off": AI chat and questions are off
+  for your home. An admin can turn them on in [Settings →
+  Models](#settings/models).
 - A HEIC phone photo is refused on the dashboard: send it from the app,
   which converts it.
 
@@ -941,6 +959,11 @@ publishers you trust.
 
 *(admin)* **Install** or **Switch** one. With an NVIDIA card, Qwen2.5-VL
 7B reads pictures faster.
+
+*(admin)* **AI chat and questions** at the top turns the AI models off or
+on for the whole home. Off keeps speech-to-text and hides the rest of the
+model rows. On says how much it will download (about 6.4 GB, or 9.1 GB on
+a server with 24 GB of memory or more) before it starts.
 
 [More detail](docs/CPU_HOST.md#the-short-version)
 

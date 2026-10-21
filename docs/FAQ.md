@@ -85,6 +85,18 @@ Full parts list and step-by-step setup: [Satellite Hardware](SATELLITE_HARDWARE.
 
 Yes, with tradeoffs. A server set up by the installers already runs this way: Whisper `small.en` on the processor, and the Qwen3 router sized to its memory. By hand, Whisper's device is a setting (`WHISPER_DEVICE`, choices `cuda` or `cpu` — dashboard settings gear, advanced section). On CPU you'll want a smaller Whisper model than the by-hand default `large-v3` (e.g. `small.en` or `medium`), and Ollama will run its models on CPU too, so responses get noticeably slower. The system works; it just stops feeling instant. If you're GPU-less, also prefer the fast-path voice commands (timers, music, announcements) — those never touch the LLM at all.
 
+## Is AI optional?
+
+AI chat and questions are. Both installers ask "Include AI chat and questions?" (the default is Yes) and say how much it downloads: about 6.4 GB of AI models, or about 9.1 GB on a server with 24 GB of memory or more. An admin can turn them off or on later under **AI chat and questions** in Settings → Models (`AI_FEATURES=false` in `domovoi/.env` does the same).
+
+With them off, Domovoi never asks a language model anything:
+
+- **Still works:** every voice command on its usual phrases (timers, reminders, alarms, the clock and calendar, the calculator, music, playlists, podcasts and audiobooks, intercom, drop-in, announcements, voice notes, "remember that ...", news headlines, Wi-Fi and volume, "what can you do"), plugins' own commands, the dashboard and the app.
+- **Stays, because voice control needs it:** speech recognition (Whisper), Domovoi's voices (Piper), the wake word and voice recognition of who is talking. These are small machine-learning models too; they run on your server and never leave it.
+- **Off:** answers to open questions and jokes, commands said in your own words that no fixed phrase matches, "are you sure?" and the weather, the personal news briefing summary, pictures in chat, background memory suggestions and voice chat mode. A question gets "I can't answer that one — I'm set up for home commands. Say 'what can you do' to hear them." Chat is hidden in the dashboard and the app. Plugins that ask the AI models (a Kiwix summary) get a clean "AI features are turned off" and skip that step. The phone's own assistant in the app is separate: it runs on the phone and is set up there, if you want it.
+
+The Ollama program stays installed either way, so turning AI on later is a switch and a download, not a reinstall: Settings → Models shows the size first, then downloads the models with a progress bar. On a box set to stay off the internet, the download has to come from a registry in the house.
+
 ## Does it work offline?
 
 Yes — local-first is a tested contract, not a slogan. Every voice handler declares how much network it needs (`no`, `degraded`, or `yes`), and any handler that isn't fully local **must** implement an offline fallback — the test suite enforces this. A background connectivity probe tells the router whether the internet is reachable, and the router picks the right path per turn.
