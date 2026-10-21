@@ -1,6 +1,6 @@
 <p align="center">
   <img src="docs/assets/banner.jpg" width="100%"
-       alt="Domovoi, the open-source voice assistant: the amber cat answering &quot;Hey Domovoi&quot;. Your voice stays home, local and privacy-first. github.com/coders-farm-official/domovoi">
+       alt="Domovoi, the home computer system that just works. Keeps it in the house. The amber cat saying &quot;Hello Domo&quot;, with music, movies, files, every room and your phone. Private AI at home, when you want it. Free, open source, no cloud, no subscription. github.com/coders-farm-official/domovoi">
 </p>
 
 <h1 align="center">Domovoi</h1>
