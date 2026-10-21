@@ -2719,13 +2719,47 @@ async def admin_containers() -> dict[str, Any]:
     from domovoi.container_guard import engine as cg_engine
     from domovoi.container_guard import views as cg_views
 
+    from domovoi import mpd_provisioner
+
     rows, readable = await _guard_incidents()
+    why = mpd_provisioner.rebuild_unavailable()
     return {
         "guard": cg_engine.get_guard().status,
         "incidents_readable": readable,
         "freeze_operations": sorted(container_freeze.OPERATIONS),
+        # Whether the Containers page offers "rebuild the music player
+        # image" (POST /v1/admin/containers/mpd-image/rebuild), and why not.
+        "mpd_rebuild": {"available": why is None, "why": why},
         **cg_views.household_payload(rows, admin=True),
     }
+
+
+@app.post(
+    "/v1/admin/containers/mpd-image/rebuild",
+    # Security tier, like the clear: it makes the guard trust a new music
+    # player image (the baseline), so no pre-setup grace.
+    dependencies=[Depends(require_admin_security)],
+)
+async def admin_containers_mpd_rebuild() -> dict[str, Any]:
+    """Rebuild the music player image now, exactly as the core builds it
+    when it is missing, make it the image the guard expects, and move every
+    room's player onto it (recreated with its data volume, as an update
+    does). 409 while one is running; 503 when it can't run here (internet
+    access turned off, no image configured) or the build failed. A tamper
+    incident stays open until the admin clears it."""
+    from domovoi import mpd_provisioner
+
+    log.warning("container guard: the admin asked for a music player image rebuild")
+    try:
+        result = await mpd_provisioner.rebuild_image()
+    except mpd_provisioner.RebuildBusy as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001 — docker, the build, the egress gate
+        log.warning("music player image rebuild failed: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)[:500]) from e
+    from domovoi.container_guard import engine as cg_engine
+
+    return {**result, "guard": await cg_engine.get_guard().check(force=True)}
 
 
 @app.post(
