@@ -90,7 +90,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi import executors, image_safety
+from domovoi import ai_features, executors, image_safety
 from domovoi.admin_auth import require_device, require_device_read
 from domovoi.clients import ollama as ollama_client
 from domovoi.config import settings as core_settings
@@ -106,6 +106,19 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 DEVICE = [Depends(require_device)]
 READ = [Depends(require_device_read)]
+
+
+def _require_ai() -> None:
+    """A message to the model, or a picture for one, while the household's
+    AI features are off (Settings → Models, domovoi/ai_features.py): the 409
+    ai-off refusal, before anything is stored or Ollama is asked. Reading
+    the threads already there stays open."""
+    if ai_features.turned_off():
+        raise ai_features.http_exception("chat")
+
+
+# Sending to the model: device tier, and AI features on.
+SEND = [Depends(require_device), Depends(_require_ai)]
 
 UPLOADS_DIR = Path.home() / ".domovoi" / "chat_uploads"
 _UPLOAD_EXTS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"})
@@ -698,7 +711,7 @@ async def _thread_profile(person_id: int | None) -> str | None:
         return None
 
 
-@router.post("/threads/{thread_id}/messages", dependencies=DEVICE)
+@router.post("/threads/{thread_id}/messages", dependencies=SEND)
 async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
     """Persist the user turn, stream the assistant reply as SSE, persist the
     assistant turn at stream end. Events:
@@ -1048,7 +1061,7 @@ def _unsupported(data: bytes) -> JSONResponse:
 
 @router.post(
     "/uploads",
-    dependencies=DEVICE,
+    dependencies=SEND,
     responses={
         413: {"description": 'Too large: {"detail": "...", "code": "too_many_pixels", "max_megapixels": 40} '
                              'or {"detail": "...", "code": "file_too_large", "max_mb": 20}'},

@@ -175,6 +175,9 @@ _WEB_BACKEND_CORE_IMPORTS = (
     # ...and, once it has ended a frozen core, the note the Version card
     # shows (core-watchdog-last.json), written the core's own way.
     "domovoi.loop_watchdog",
+    # The household's AI switch: Capabilities, Chat and the Models page
+    # read it, and every plugin http() client carries its request hook.
+    "domovoi.ai_features",
 )
 
 
@@ -334,15 +337,20 @@ class WebPluginContext:
         with the internet-answer hook (``egress.async_request_hook``)
         first in ``event_hooks["request"]``: under INTERNET_ACCESS=never a
         request to a host that is not on this network raises
-        ``egress.InternetTurnedOff`` before anything is sent."""
-        from domovoi import egress
+        ``egress.InternetTurnedOff`` before anything is sent; and while the
+        household's AI features are off, a request that runs a model on
+        this box's Ollama raises ``ai_features.AITurnedOff``
+        (``domovoi/ai_features.py``)."""
+        from domovoi import ai_features, egress
 
         headers = kwargs.pop("headers", {}) or {}
         headers.setdefault(
             "User-Agent",
             "domovoi (+github.com/coders-farm-official/domovoi)",
         )
-        return egress.async_client(headers=headers, **kwargs)
+        return egress.async_client(
+            headers=headers, **ai_features.with_request_hook(kwargs)
+        )
 
     def add_router(self, router: APIRouter) -> None:
         self.routers.append(router)
