@@ -543,3 +543,38 @@ def test_a_lookup_timeout_has_help() -> None:
     from domovoi.help_desk.error_codes import ERROR_CODES
 
     assert "lookup_timeout" in ERROR_CODES and "too_many" in ERROR_CODES
+
+
+# ── Round 2 review: the page work is bounded, the pace key normalised ────
+
+
+def test_page_work_runs_in_a_child_that_is_killed_when_it_runs_over() -> None:
+    from domovoi import page_worker
+
+    with pytest.raises(page_worker.PageTooSlow):
+        page_worker.run_child(b"<p>hello</p>", "utf-8", "text/html", "q", 3000, timeout=0.01)
+    child = page_worker.LAST_CHILD[0]
+    assert child is not None and child.poll() is not None      # gone: its CPU is free
+    title, text, extract = page_worker.run_child(b"<main><p>Red pandas eat bamboo.</p></main>",
+                                                 "utf-8", "text/html", "what do red pandas eat", 3000)
+    assert text == "Red pandas eat bamboo." and page_worker.LAST_CHILD[0].poll() == 0
+
+
+def test_a_page_of_stray_angle_brackets_parses_in_one_pass() -> None:
+    import time
+
+    from domovoi import page_worker
+
+    start = time.monotonic()
+    page_text.main_text("<p>" + "<a" * (512 * 1024))
+    assert time.monotonic() - start < 2.0
+    # The parser is given at most MAX_BYTES of a page.
+    _, text, _ = page_worker.read_text(b"<p>" + b"x" * (3 * 1024 * 1024) + b"</p>", "utf-8", "text/html", "q")
+    assert len(text) <= page_worker.MAX_BYTES
+
+
+def test_the_pace_key_is_the_normalised_credential() -> None:
+    k = lookup_web.caller_key
+    assert k({"x-device-token": "  Cork-Vine-Bison  "}, "a") == k({"x-device-token": "cork-vine-bison"}, "b")
+    assert k({"authorization": "Bearer abc"}, "a") == k({"authorization": "bearer   abc "}, "b")
+    assert k({"x-device-token": "cork-vine-bison"}, "a") != k({"x-device-token": "other-token-here"}, "a")

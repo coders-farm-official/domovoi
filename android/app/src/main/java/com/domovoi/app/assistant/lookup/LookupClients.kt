@@ -115,11 +115,50 @@ object PublicDns : okhttp3.Dns {
     }
 }
 
+private val DOTTED_QUAD = Regex("""^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$""")
+private val NUMBER_LABEL = Regex("""^(0x[0-9a-f]*|[0-9]+)$""")
+
+/**
+ * Whether a URL's host may not be asked by a public-only client: written
+ * as an address (OkHttp asks no Dns for one, so [PublicDns] can't see it)
+ * that is private, loopback, link-local or otherwise not public, in any
+ * spelling: dotted, bracketed IPv6, an IPv4-mapped IPv6, or the integer,
+ * octal, hex and short forms a resolver would accept ("2130706433",
+ * "0177.0.0.1", "0x7f.1", "127.1"), which are refused outright. A name
+ * isn't judged here: [PublicDns] judges what it resolves to.
+ */
+internal fun refusedHost(host: String): Boolean {
+    val h = host.trim().removePrefix("[").removeSuffix("]").lowercase().trimEnd('.')
+    if (h.isEmpty()) return true
+    if (':' in h) {
+        val a = runCatching { java.net.InetAddress.getByName(h) }.getOrNull() ?: return true
+        return !PublicDns.isPublic(a)
+    }
+    val labels = h.split('.')
+    if (labels.all { NUMBER_LABEL.matches(it) }) {
+        if (!DOTTED_QUAD.matches(h)) return true
+        return !PublicDns.isPublic(java.net.InetAddress.getByName(h))
+    }
+    return h == "localhost" || h.endsWith(".localhost")
+}
+
 /** A client with no household token, no cookies and no https→http hop.
  *  [publicOnly]: only public addresses (everything but the person's own
- *  SearXNG, which may be on their network). */
+ *  SearXNG, which may be on their network): names through [PublicDns], an
+ *  address written in the URL through [refusedHost] (in [fetch], on every
+ *  hop), and the address actually connected to checked again by a network
+ *  interceptor before a byte of the request is sent. */
 fun plainClient(publicOnly: Boolean = true): OkHttpClient = OkHttpClient.Builder()
-    .apply { if (publicOnly) dns(PublicDns) }
+    .apply {
+        if (publicOnly) {
+            dns(PublicDns)
+            addNetworkInterceptor { chain ->
+                val addr = chain.connection()?.route()?.socketAddress?.address
+                if (addr == null || !PublicDns.isPublic(addr)) throw IOException("not a public address")
+                chain.proceed(chain.request())
+            }
+        }
+    }
     .cookieJar(CookieJar.NO_COOKIES)
     .followRedirects(false)
     .followSslRedirects(false)
@@ -153,7 +192,14 @@ internal suspend fun fetch(
     // Redirects are followed here, at most 3, and only to https (or, for a
     // plain-http start such as a LAN SearXNG, to the same scheme and host).
     // The caller's own headers (a Brave key) go on the first request only.
+    val publicOnly = http.dns === PublicDns
     repeat(MAX_HOPS + 1) {
+        // A public-only client never asks an address on this network,
+        // whichever way it is written, on the first hop or a redirect's.
+        if (publicOnly) {
+            val host = current.toHttpUrlOrNull()?.host ?: throw IOException("not an address")
+            if (refusedHost(host)) throw IOException("not a public address")
+        }
         val req = try {
             Request.Builder().url(current).header("User-Agent", agent)
                 .apply { if (hop == 0) headers.forEach { (k, v) -> header(k, v) } }.build()

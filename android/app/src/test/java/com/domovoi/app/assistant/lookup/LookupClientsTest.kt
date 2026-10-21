@@ -172,4 +172,26 @@ class LookupClientsTest {
         assertEquals(1, Regex("\\*Sources:\\*").findAll(out).count())
         assertTrue(out.startsWith("Paris is the capital."))
     }
+
+    // ── Round 2 review: an address written in the URL ────────────────────
+
+    @Test fun anAddressWrittenInTheUrlIsRefusedBeforeAnyConnection() = runBlocking {
+        val port = server.port
+        val urls = listOf(
+            "https://127.0.0.1:$port/", "https://[::1]:$port/", "https://169.254.169.254/", "https://192.168.1.1/",
+            "https://2130706433/", "https://0177.0.0.1/", "https://0x7f.1/", "https://[::ffff:127.0.0.1]/",
+            "http://127.0.0.1:$port/",
+        )
+        val lines = urls.map { u ->
+            val outcome = runCatching { fetch(plainClient(), u, "a", 1024) }
+            "$u -> " + (outcome.exceptionOrNull()?.let { "${it.javaClass.simpleName}: ${it.message}" } ?: "answered")
+        }
+        lines.forEach { println("okhttp-dns: $it") }
+        assertTrue(lines.joinToString(" | "), lines.all { it.contains("not a public address") })
+        assertEquals(0, seen.size)
+        // A redirect to one is refused at the hop, and the page reader says so.
+        val out = PageReader(plainClient(), "1").read("https://127.0.0.1:$port/hop")
+        assertNotNull(out.error)
+        assertEquals(0, seen.size)
+    }
 }

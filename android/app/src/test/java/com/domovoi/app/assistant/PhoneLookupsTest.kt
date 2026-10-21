@@ -259,6 +259,28 @@ class PhoneLookupsTest {
         assertEquals(null, yesOrNo("tell me more about red pandas please"))
     }
 
+    @Test fun anUnclearReplyAsksTheCardAgainAndSendsNothing() {
+        val c = controller().apply { ready() }
+        c.ask("look up red panda")
+        c.ask("okay, what")
+        val again = c.last()
+        assertTrue(again.text.startsWith(DIDNT_CATCH))
+        assertEquals(LookupCard.PENDING, again.lookupCard!!.state)
+        c.ask("okay, never mind")
+        assertEquals(NOT_LOOKED_UP, c.last().text)
+        assertEquals(0, wiki.calls.size)
+    }
+
+    @Test fun yesWithMoreTakesTheYesAndSaysTheRestWasntDone() {
+        wiki.results = listOf(LookupResult("Red panda", null, "en.wikipedia.org", "", "The red panda eats bamboo.", "Wikipedia", "api"))
+        val c = controller().apply { ready() }
+        c.ask("look up red panda")
+        engine.queue += listOf("Bamboo.")
+        c.ask("yes play some jazz")
+        assertEquals(1, wiki.calls.size)
+        assertTrue(c.last().text.startsWith("I'll look that up first; ask me “play some jazz” again after."))
+    }
+
     @Test fun aSpokenLookupHearsTheCardsQuestionAndTheRefusals() {
         val heard = CopyOnWriteArrayList<String>()
         home = FakeBackend("default").apply { homeStatus = com.domovoi.app.assistant.lookup.HomeStatus("never", null) }

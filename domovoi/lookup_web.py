@@ -644,8 +644,12 @@ async def read_page(url: str, *, query: str = "") -> LookupOutcome:
     if ctype not in _HTML_TYPES and ctype != "text/plain" and ctype:
         raise LookupRefused("not_a_page", "That address isn't a web page Domovoi can read (only HTML and text).")
     try:
-        title, text, extract = await _off_the_loop(_read_text, res.content, charset, ctype, query)
-    except asyncio.TimeoutError:
+        from domovoi import page_worker
+
+        title, text, extract = await page_worker.read_page_text(
+            res.content, charset, ctype, query, EXTRACT_MAX_CHARS * 2,
+        )
+    except (asyncio.TimeoutError, TimeoutError):
         raise LookupRefused("too_slow", "That page took too long to read, so Domovoi stopped.")
     if text is None:
         raise LookupRefused("not_a_page", "That address isn't a web page Domovoi can read (only HTML and text).")
@@ -660,17 +664,20 @@ async def read_page(url: str, *, query: str = "") -> LookupOutcome:
     return outcome
 
 
-#: The longest the text work for one page may take (in a worker thread,
-#: never on the event loop; the work itself is capped, so this is a
-#: backstop).
+#: The longest choosing a passage from a source's text may take (linear and
+#: capped, in this module's own small pool, never on the event loop).
 TEXT_WORK_TIMEOUT_SEC = 5.0
 
 
 async def _off_the_loop(fn: Any, *args: Any) -> Any:
-    """``fn(*args)`` in a worker thread, at most :data:`TEXT_WORK_TIMEOUT_SEC`:
-    parsing a page and choosing its passage never hold the core's event
-    loop (and with it every room's voice)."""
-    return await asyncio.wait_for(asyncio.to_thread(fn, *args), TEXT_WORK_TIMEOUT_SEC)
+    """``fn(*args)`` in the page worker's own thread pool, at most
+    :data:`TEXT_WORK_TIMEOUT_SEC`. Only for work that is linear and capped
+    (a passage): a page's HTML goes to a child process instead
+    (:mod:`domovoi.page_worker`), which is killed when it runs over."""
+    from domovoi import page_worker
+
+    loop = asyncio.get_running_loop()
+    return await asyncio.wait_for(loop.run_in_executor(page_worker._POOL, fn, *args), TEXT_WORK_TIMEOUT_SEC)
 
 
 def _passage(text: str, query: str, max_chars: int) -> str:
@@ -680,21 +687,11 @@ def _passage(text: str, query: str, max_chars: int) -> str:
 
 
 def _read_text(content: bytes, charset: str, ctype: str, query: str) -> tuple[str, str | None, str]:
-    """(title, text or None for not a page, extract) of a fetched page."""
-    from domovoi import lookup_answer, page_text
+    """(title, text or None for not a page, extract) of a fetched page, in
+    this process (what the child runs: :func:`domovoi.page_worker.read_text`)."""
+    from domovoi import page_worker
 
-    try:
-        raw = content.decode(charset, "replace")
-    except LookupError:
-        raw = content.decode("utf-8", "replace")
-    if ctype in _HTML_TYPES or (not ctype and raw.lstrip()[:1] == "<"):
-        title, text = page_text.main_text(raw)
-    elif ctype == "text/plain":
-        title, text = "", page_text.plain_text(raw)
-    else:
-        return "", None, ""
-    extract = lookup_answer.best_passage(text, query or title, max_chars=EXTRACT_MAX_CHARS * 2) if text else ""
-    return title, text, extract
+    return page_worker.read_text(content, charset, ctype, query, EXTRACT_MAX_CHARS * 2)
 
 
 # ─── The Test button (Settings → Search → Use your own search) ────────────
@@ -760,16 +757,33 @@ PACE = Pace()
 
 
 def caller_key(headers: Any, client_host: str | None) -> str:
-    """Who is asking, for the pace: a digest of the device token or Bearer
-    the caller sent (never the credential itself), else the address the
-    request came from (the web's hop forwards the browser's)."""
+    """Who is asking, for the pace: a digest of the credential the caller
+    sent, normalised first (a device token in its canonical form, a Bearer
+    without its scheme's case or spacing), so spelling it differently is the
+    same caller; never the credential itself. Else the address the request
+    came from (the web's hop forwards the browser's).
+
+    "Per caller" is per credential: phones and browsers that share the
+    household token share its minute (the device id they may send is
+    self-asserted, so it isn't trusted to split it)."""
     import hashlib
 
-    for name in ("x-device-token", "authorization"):
-        v = (headers.get(name) or "").strip() if headers is not None else ""
-        if v:
-            return name[:1] + hashlib.sha256(v.encode()).hexdigest()[:16]
-    fwd = (headers.get("x-forwarded-for") or "").split(",")[0].strip() if headers is not None else ""
+    get = (lambda n: (headers.get(n) or "")) if headers is not None else (lambda n: "")
+    token = get("x-device-token").strip()
+    if token:
+        try:
+            from domovoi.admin_auth import normalize_device_token
+
+            token = normalize_device_token(token) or token.lower()
+        except Exception:  # noqa: BLE001 — the raw value, lower-cased
+            token = token.lower()
+        return "d" + hashlib.sha256(token.encode()).hexdigest()[:16]
+    auth = " ".join(get("authorization").split())
+    if auth:
+        scheme, _, value = auth.partition(" ")
+        cred = value.strip() if scheme.lower() == "bearer" else auth
+        return "b" + hashlib.sha256(cred.encode()).hexdigest()[:16]
+    fwd = get("x-forwarded-for").split(",")[0].strip()
     return "a" + (fwd or client_host or "?")
 
 

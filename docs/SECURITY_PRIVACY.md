@@ -1881,7 +1881,13 @@ decides, what goes where, and what can't happen:
   the household's own search. A page a person names is fetched through
   `net_safety` (public addresses only, every redirect re-checked, 2 MB,
   HTTPS only, no cookies, `Domovoi-User/<version>`). The lookup route is
-  device tier with no pre-setup grace and paced at 30 lookups a minute.
+  device tier with no pre-setup grace and paced at 30 lookups a minute
+  for the house and 10 per credential. "Per credential" means per
+  household token where phones and browsers share it (the device id an
+  app sends is self-asserted and doesn't split it); a local-only search
+  isn't counted. A page's HTML is read in a short-lived child process
+  (`domovoi/page_worker.py`: at most 256 KB, 5 s, then killed; two at a
+  time from its own pool), so a hostile page can't keep a core busy.
   The log names the source and the count, never the words.
 * **Fetched text is data, never instructions.** It reaches the model in a
   block fenced by a random marker made for that call (a page's own copy
@@ -1902,7 +1908,16 @@ decides, what goes where, and what can't happen:
   to the home server's route (and a server set to `never` is respected:
   the phone doesn't go around it); away, to Wikipedia directly
   (`DomovoiApp/<version>`, which Wikimedia asks for) or the person's own
-  search. Those clients carry no household token and no cookies. The
+  search. Those clients carry no household token and no cookies, never
+  re-send a key on a redirect, and ask only public addresses: a name
+  through their DNS check, an address written in the URL (any spelling:
+  bracketed IPv6, IPv4-mapped, integer, octal or hex forms) before each
+  hop, and the address actually connected to once more before a request
+  goes out (the person's own SearXNG, which may be on their network, is
+  the one exception). A card is answered by a tap, or by a short spoken
+  or typed reply: any no-word ("never mind", "stop", "cancel") makes it a
+  no, only a clear yes ("yes", "go ahead", "look it up") is a yes, and
+  anything else asks the card again. The
   assistant's no-network test allows exactly this package, and the
   controller's tests count every call to prove none is made before an
   allow.

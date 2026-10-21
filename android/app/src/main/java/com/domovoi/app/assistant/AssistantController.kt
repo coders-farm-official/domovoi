@@ -851,19 +851,32 @@ class AssistantController(
         // Lookups (part 5, W1): offered on a plain question, never on a help,
         // document or retried turn. "look up …" needs no model to say so.
         val offered = lookups != null && help == null && retryingFrom == null
-        cardAnswer(asked)?.let { (index, decision) ->
+        cardAnswer(asked)?.let { (index, answer) ->
             val card = asked.messages[index].lookupCard!!
-            val marked = asked.copy(
-                messages = asked.messages.toMutableList().also { m ->
-                    m[index] = m[index].copy(lookupCard = card.copy(state = if (decision == "once") "allowed_once" else "declined"))
-                },
+            fun mark(state: String) = asked.copy(
+                messages = asked.messages.toMutableList().also { m -> m[index] = m[index].copy(lookupCard = card.copy(state = state)) },
             )
             val original = asked.messages.take(index).lastOrNull { it.fromUser }?.text.orEmpty()
-            return if (decision == "once") {
-                lookupReply(marked, Proposal(card.kind, card.query), onDelta, decided = true, question = original)
-            } else {
-                onDelta(NOT_LOOKED_UP)
-                finishReply(marked, StoredMessage(Speaker.DOMOVOI, NOT_LOOKED_UP, clock()))
+            return when (answer) {
+                is CardReply.Yes -> {
+                    // "yes, play some jazz": the yes is taken; the rest is not
+                    // carried out, and the reply says so plainly.
+                    val preface = answer.rest?.let { "I'll look that up first; ask me “$it” again after.\n\n" }.orEmpty()
+                    if (preface.isNotEmpty()) onDelta(preface)
+                    lookupReply(mark("allowed_once"), Proposal(card.kind, card.query), onDelta, decided = true,
+                        question = original, preface = preface)
+                }
+                CardReply.No -> {
+                    onDelta(NOT_LOOKED_UP)
+                    finishReply(mark("declined"), StoredMessage(Speaker.DOMOVOI, NOT_LOOKED_UP, clock()))
+                }
+                CardReply.Unclear -> {
+                    // Not a clear yes or no: the card again, nothing sent.
+                    val again = StoredMessage(Speaker.DOMOVOI, "$DIDNT_CATCH ${cardText(Proposal(card.kind, card.query), card.destination)}",
+                        clock(), lookupCard = card)
+                    onDelta("$DIDNT_CATCH ${spokenCard(Proposal(card.kind, card.query), card.destination)}")
+                    finishReply(mark("asked_again"), again)
+                }
             }
         }
         if (offered) {
@@ -1010,20 +1023,9 @@ class AssistantController(
      * lookup, then the answer from what came back. A home server set to
      * "never" is respected: the phone doesn't go around it.
      */
-    /** The card a yes or no just answered: (its index, "once" / "no"), when
-     *  the message before this one is a pending card and this one says yes
-     *  or no (spoken or typed). */
-    private fun cardAnswer(asked: StoredConversation): Pair<Int, String>? {
-        val said = asked.messages.lastOrNull()?.takeIf { it.fromUser }?.text ?: return null
-        val index = asked.messages.lastIndex - 1
-        val card = asked.messages.getOrNull(index)?.lookupCard ?: return null
-        if (card.state != LookupCard.PENDING) return null
-        return yesOrNo(said)?.let { index to if (it) "once" else "no" }
-    }
-
     private suspend fun lookupReply(
         asked: StoredConversation, proposal: Proposal, onDelta: (String) -> Unit, decided: Boolean = false,
-        question: String? = null,
+        question: String? = null, preface: String = "",
     ): StoredConversation {
         val l = lookups ?: return finishReply(asked, StoredMessage(Speaker.DOMOVOI, LookupRules.NOTHING_FOUND, clock()))
         val plan = try { l.plan() } catch (e: CancellationException) { throw e } catch (e: Exception) {
@@ -1059,7 +1061,7 @@ class AssistantController(
         } else {
             LookupOutcome(error = "away")
         }
-        if (out.internetOff) return lookupFixed(asked, proposal, LookupRules.HOME_NEVER, out, onDelta = onDelta)
+        if (out.internetOff) return lookupFixed(asked, proposal, LookupRules.HOME_NEVER, out, onDelta = onDelta, preface = preface)
         if (home == null || (out.error != null && !out.internetUsed && out.results.isEmpty())) {
             // Away from home (or the home server didn't answer): Wikipedia,
             // or the person's own search.
@@ -1069,17 +1071,28 @@ class AssistantController(
         out.error?.let { why ->
             if (out.results.isEmpty()) {
                 val said = if (proposal.kind == Proposal.PAGE) why else "I couldn't look that up just now: $why."
-                return lookupFixed(asked, proposal, said, out, onDelta = onDelta)
+                return lookupFixed(asked, proposal, said, out, onDelta = onDelta, preface = preface)
             }
         }
-        return lookupAnswer(asked, question, proposal, out, onDelta)
+        return lookupAnswer(asked, question, proposal, out, onDelta, preface)
+    }
+
+    /** The card a reply answers: (its index, the reply), when the message
+     *  before this one is a pending card and this one is a short answer
+     *  (spoken or typed, [cardReply]); null for anything else. */
+    private fun cardAnswer(asked: StoredConversation): Pair<Int, CardReply>? {
+        val said = asked.messages.lastOrNull()?.takeIf { it.fromUser }?.text ?: return null
+        val index = asked.messages.lastIndex - 1
+        val card = asked.messages.getOrNull(index)?.lookupCard ?: return null
+        if (card.state != LookupCard.PENDING) return null
+        return cardReply(said)?.let { index to it }
     }
 
     private suspend fun lookupFixed(
         asked: StoredConversation, proposal: Proposal, text: String, out: LookupOutcome,
-        sources: List<SourceLine> = emptyList(), onDelta: (String) -> Unit = {},
+        sources: List<SourceLine> = emptyList(), onDelta: (String) -> Unit = {}, preface: String = "",
     ): StoredConversation {
-        val said = LookupRules.fixed(text, sources, out.notice)
+        val said = preface + LookupRules.fixed(text, sources, out.notice)
         onDelta(text)
         val base = if (out.internetUsed) asked.copy(usedInternet = true) else asked
         return finishReply(base, StoredMessage(Speaker.DOMOVOI, said, clock(), lookupSources = sources))
@@ -1089,14 +1102,15 @@ class AssistantController(
      *  and the question; no tools; the sources line written here. */
     private suspend fun lookupAnswer(
         asked: StoredConversation, question: String, proposal: Proposal, out: LookupOutcome, onDelta: (String) -> Unit,
+        preface: String = "",
     ): StoredConversation {
         val results = out.results.take(LookupRules.MAX_PASSAGES)
         val sources = results.map { SourceLine.of(it) }
-        if (results.isEmpty()) return lookupFixed(asked, proposal, LookupRules.NOTHING_FOUND, out, onDelta = onDelta)
+        if (results.isEmpty()) return lookupFixed(asked, proposal, LookupRules.NOTHING_FOUND, out, onDelta = onDelta, preface = preface)
         val ask = if (proposal.kind == Proposal.SEARCH) proposal.query else question
         val passages = LookupRules.rankPassages(ask, results)
         if (proposal.kind == Proposal.SEARCH && !LookupRules.covers(passages)) {
-            return lookupFixed(asked, proposal, LookupRules.COULDNT_FIND, out, sources, onDelta)
+            return lookupFixed(asked, proposal, LookupRules.COULDNT_FIND, out, sources, onDelta, preface)
         }
         val base = if (out.internetUsed) asked.copy(usedInternet = true) else asked
         val llm = ensureEngine()
@@ -1123,7 +1137,7 @@ class AssistantController(
         } catch (e: Throwable) {
             return finishReply(base, live().copy(error = "The model stopped: ${plainReason(e)}", lookupSources = sources))
         }
-        val said = LookupRules.finish(text.toString(), sources, out.notice)
+        val said = preface + LookupRules.finish(text.toString(), sources, out.notice)
         return finishReply(base, live().copy(text = said, firstTextMs = firstMs, lookupSources = sources))
     }
 
@@ -1869,18 +1883,57 @@ data class HistoryWindow(
 /** What a "no" to a card answers. */
 internal const val NOT_LOOKED_UP = "OK, I won't look that up."
 
-private val YES = Regex("^(?:yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|please do|allow|allow once)\\b", RegexOption.IGNORE_CASE)
-private val NO = Regex("^(?:no|nope|nah|not now|don't|do not|never mind|cancel|stop)\\b", RegexOption.IGNORE_CASE)
+/** What a reply to a pending card means (spoken or typed). */
+internal sealed interface CardReply {
+    /** Yes; [rest] is what followed a leading "yes" ("yes play some jazz"),
+     *  which is not carried out. */
+    data class Yes(val rest: String? = null) : CardReply
+    data object No : CardReply
+    data object Unclear : CardReply
+}
 
-/** A short yes or no (true / false), or null for anything else. */
-internal fun yesOrNo(text: String): Boolean? {
-    val t = text.trim().trim('.', '!', ',').trim()
-    if (t.split(Regex("\\s+")).size > 4) return null
-    return when {
-        NO.containsMatchIn(t) -> false
-        YES.containsMatchIn(t) -> true
-        else -> null
+internal const val DIDNT_CATCH = "I didn't catch that."
+
+/** Words that make any reply a no, wherever they are ("okay, never mind",
+ *  "sure, cancel that"): checked first. */
+private val NO_WORDS = Regex(
+    "\\b(?:no|nope|nah|not now|don'?t|do not|never ?mind|stop|cancel|wait|not yet|leave it)\\b",
+    RegexOption.IGNORE_CASE,
+)
+
+/** The whole of a clear yes. */
+private val YES_PHRASES = setOf(
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "go ahead", "do it", "please do", "yes please",
+    "sure go ahead", "ok go ahead", "okay go ahead", "yes go ahead", "allow", "allow once", "look it up",
+    "yes look it up", "go for it", "sure thing", "ok sure", "okay sure", "yes do it", "yeah go ahead",
+)
+
+/** A leading yes that may be followed by something else to do. */
+private val LEADING_YES = Regex("^(?:yes|yeah|yep|yup)\\s+(.+)$", RegexOption.IGNORE_CASE)
+
+/** How a reply answers a pending card: any no-word makes it a no; a clear
+ *  yes phrase (the whole reply) is a yes; "yes …" is a yes with the rest set
+ *  aside; any other short reply is [CardReply.Unclear] (the card is asked
+ *  again); a longer one is a new question (null). */
+internal fun cardReply(text: String): CardReply? {
+    val t = text.lowercase().replace(Regex("[^a-z' ]+"), " ").split(Regex("\\s+")).filter { it.isNotEmpty() }
+        .joinToString(" ")
+    if (t.isEmpty()) return CardReply.Unclear
+    if (NO_WORDS.containsMatchIn(t)) return CardReply.No
+    if (t in YES_PHRASES) return CardReply.Yes()
+    LEADING_YES.find(t)?.let { m ->
+        val rest = m.groupValues[1].trim()
+        return if (rest in YES_PHRASES || rest == "please") CardReply.Yes() else CardReply.Yes(rest)
     }
+    return if (t.split(" ").size <= 6) CardReply.Unclear else null
+}
+
+/** For the old callers and tests: true for a clear yes, false for a no,
+ *  null for anything else. */
+internal fun yesOrNo(text: String): Boolean? = when (val r = cardReply(text)) {
+    is CardReply.Yes -> if (r.rest == null) true else null
+    CardReply.No -> false
+    else -> null
 }
 
 /** Thrown inside a reply's collection when its lookup line is complete:

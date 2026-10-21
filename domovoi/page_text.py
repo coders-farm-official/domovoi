@@ -40,6 +40,7 @@ _BLOCK = frozenset({
     "address", "details", "summary",
 })
 _HIDDEN_STYLE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)
+_STRAY_LT = re.compile(r"<(?=[^<>]*<)")
 _WS = re.compile(r"[ \t\r\f\v ]+")
 
 
@@ -131,8 +132,12 @@ def main_text(html: str, *, max_chars: int = 64 * 1024) -> tuple[str, str]:
     """``(title, text)`` of an HTML page: its main part's words, trimmed to
     ``max_chars``. Never raises on a malformed page."""
     reader = _Reader()
+    # A "<" with another "<" before any ">" can't open a tag: it is text.
+    # Escaped first, so a page of "<a<a<a…" (quadratic for html.parser)
+    # parses in one pass.
+    html = _STRAY_LT.sub("&lt;", html or "")
     try:
-        reader.feed(html or "")
+        reader.feed(html)
         reader.close()
     except Exception:  # noqa: BLE001 — a broken page gives what was read so far
         pass

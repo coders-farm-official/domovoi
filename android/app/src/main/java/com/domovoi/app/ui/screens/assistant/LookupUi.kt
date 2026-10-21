@@ -88,6 +88,7 @@ internal fun cardStateText(state: String): String = when (state) {
     "allowed_once" -> "allowed once"
     "allowed_chat" -> "allowed in this chat"
     "declined" -> "not looked up"
+    "asked_again" -> "asked again below"
     else -> state
 }
 
