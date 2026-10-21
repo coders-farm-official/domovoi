@@ -515,3 +515,27 @@ def test_each_version_records_the_device_that_made_it(model):
         vs = c.get(f"/api/chat/drafts/{did}").json()["versions"]
         assert [v["device_id"] for v in vs] == ["browser-aaaa", "android-bbbb"]
         assert "device_name" in vs[1]
+
+
+@requires_db
+async def test_a_version_names_its_device_and_the_person_whose_device_it_is():
+    from sqlalchemy import text as sql
+
+    from web.backend.db import session_scope
+
+    async with session_scope() as s:
+        pid = (await s.execute(sql("INSERT INTO people (name) VALUES ('Sam D4') RETURNING id"))).scalar_one()
+        await s.execute(sql("INSERT INTO devices (device_id, name, platform, owner_person_id) "
+                            "VALUES ('android-d4own', 'Sam''s phone', 'android', :p)"), {"p": pid})
+        await s.commit()
+    try:
+        tid, did = await _new_draft()
+        await drafts_api.edit_draft(did, drafts_api.EditBody(text=LETTER + "\nMine.\n", base_version=1,
+                                                             device_id="android-d4own"))
+        v = (await _all_versions(did))[1]
+        assert (v["device_id"], v["device_name"], v["person_id"]) == ("android-d4own", "Sam's phone", pid)
+    finally:
+        async with session_scope() as s:
+            await s.execute(sql("DELETE FROM devices WHERE device_id = 'android-d4own'"))
+            await s.execute(sql("DELETE FROM people WHERE id = :p"), {"p": pid})
+            await s.commit()

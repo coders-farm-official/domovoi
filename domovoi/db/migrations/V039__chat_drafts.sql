@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS chat_draft_versions (
     saved        JSONB,
     based_on     INTEGER,
     device_id    TEXT,
-    person_id    BIGINT,
+    person_id    BIGINT REFERENCES people(id) ON DELETE SET NULL,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (draft_id, version)
 );

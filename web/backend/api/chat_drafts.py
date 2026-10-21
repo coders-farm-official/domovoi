@@ -126,6 +126,8 @@ async def _draft(s: Any, draft_id: int) -> dict[str, Any] | None:
 _VERSION_COLS = ("v.version, v.body, v.instruction, v.author, v.model, v.saved, v.based_on, v.device_id, "
                  "v.person_id, v.created_at, dv.name AS device_name")
 _VERSION_FROM = "chat_draft_versions v LEFT JOIN devices dv ON dv.device_id = v.device_id"
+#: The person a version's device belongs to, when it has an owner.
+_OWNER = "(SELECT owner_person_id FROM devices WHERE device_id = :dev)"
 
 
 async def _versions(s: Any, draft_id: int) -> list[dict[str, Any]]:
@@ -257,8 +259,8 @@ class DraftTurn:
                                     {"d": self.draft_id})
                     await s.execute(text(
                         "INSERT INTO chat_draft_versions "
-                        "(draft_id, version, body, instruction, author, model, based_on, device_id) "
-                        "VALUES (:d, :v, :b, :i, 'model', :m, :bo, :dev)"),
+                        "(draft_id, version, body, instruction, author, model, based_on, device_id, person_id) "
+                        "VALUES (:d, :v, :b, :i, 'model', :m, :bo, :dev, " + _OWNER + ")"),
                         {"d": self.draft_id, "v": version, "b": body,
                          "i": self.request[:500] if self.action == "revise" else None, "m": self.model or None,
                          "bo": based_on, "dev": self.device_id})
@@ -515,8 +517,8 @@ async def edit_draft(draft_id: int, body: EditBody, request: Request = None) -> 
                 return {"version": latest, "unchanged": True}
             version = (latest["version"] if latest else 0) + 1
             await s.execute(text(
-                "INSERT INTO chat_draft_versions (draft_id, version, body, instruction, author, device_id) "
-                "VALUES (:d, :v, :b, NULL, 'person', :dev)"),
+                "INSERT INTO chat_draft_versions (draft_id, version, body, instruction, author, device_id, person_id) "
+                "VALUES (:d, :v, :b, NULL, 'person', :dev, " + _OWNER + ")"),
                 {"d": draft_id, "v": version, "b": text_, "dev": device})
             await s.execute(text("UPDATE chat_drafts SET updated_at = now() WHERE id = :d"), {"d": draft_id})
             await _notify(s, "draft-edited")

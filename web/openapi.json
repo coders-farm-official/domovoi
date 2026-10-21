@@ -14197,7 +14197,7 @@
           "chat"
         ],
         "summary": "Edit Draft",
-        "description": "A hand edit: saved as the next version, \"edited by you\".",
+        "description": "A hand edit: saved as the next version, \"edited by you\" on the device\nthat made it. Characters XML can't hold are taken out first. Two edits\nfrom the same version at once: one is saved, the other is a 409\n``stale_version`` (the draft's row is locked while the version is\nwritten).",
         "operationId": "edit_draft_api_chat_drafts__draft_id__versions_post",
         "parameters": [
           {
@@ -17627,6 +17627,19 @@
             "type": "integer",
             "minimum": 1.0,
             "title": "Base Version"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
           }
         },
         "type": "object",
@@ -22069,6 +22082,18 @@
               }
             ],
             "title": "Device Id"
+          },
+          "revise_draft": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revise Draft"
           }
         },
         "type": "object",
