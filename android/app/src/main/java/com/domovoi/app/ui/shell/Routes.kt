@@ -169,7 +169,14 @@ val EverythingRoutes = listOf(
  * launchers leave off ([SharedScreenHidden]): the tablet's own files and
  * the assistant's conversations kept on it (delta review N7, 2026-10-16).
  * Presentational, like the rest of the shared view.
+ *
+ * Audiobooks joins them once a book is saved on the phone ([savedBooks]):
+ * the saved books play with no server (audiobooks/BookStore.kt). A phone
+ * with none has nothing to show there, so it has no tab.
  */
-fun localTabs(assistant: Boolean = onDeviceAssistant(), shared: Boolean = false): List<Route> =
-    (listOf(Route.Music, Route.Videos, Route.Files) + if (assistant) listOf(Route.Assistant) else emptyList())
-        .filterNot { shared && it in SharedScreenHidden }
+fun localTabs(assistant: Boolean = onDeviceAssistant(), shared: Boolean = false, savedBooks: Boolean = false): List<Route> =
+    (
+        listOf(Route.Music, Route.Videos, Route.Files) +
+            (if (savedBooks) listOf(Route.Audiobooks) else emptyList()) +
+            (if (assistant) listOf(Route.Assistant) else emptyList())
+        ).filterNot { shared && it in SharedScreenHidden }

@@ -4,6 +4,42 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-20 — Android: audiobooks on the go, and managed from the phone
+
+App update (the APK). It reads the server's new audiobook fields (size,
+cover, `files`, `library_path`, `/positions`, upload `create_dir`) and
+works with an older server, with less: no size before saving, no cover, no
+"continue from" offer, no remove from server, and single files only for
+"add to server".
+
+* **Save to phone** on a book's page keeps the book in the **app's own
+  storage**, with its cover and chapters, and shows its size first. It is
+  no longer a file in `Downloads/Domovoi/` (it used to show up as songs in
+  the phone's Music, and nothing in the app played it). Books saved there
+  by earlier versions stay where they are; remove them with the Files app
+  if they are not wanted. No storage permission is asked on any Android
+  version, and the books go away with the app.
+* **The download finishes by itself.** It runs in the background with a
+  notification and a cancel; leave home halfway and it pauses, then
+  carries on (from where it stopped) the next time the server is in reach.
+  There is no mobile-data setting: the server is only on the home network.
+* **One place per book on the phone.** Streaming and the saved copy share
+  it; it is kept on the phone and sent to the server whenever the phone is
+  connected (a listen offline goes up on the next connection). Rooms keep
+  their own; when a room got further in the same book for the same person,
+  the app offers **continue from the kitchen (2 h 13 m)**.
+* **Folder books play** in the app, streamed or saved: the chapter files
+  play as one book with one seek bar. They used to fail (no `?file=`).
+* **Audiobooks has a "your device" side** (as Music, Videos and Files do):
+  the saved books, the space they use, **remove from phone**. With no
+  server, the app's local tabs gain **Audiobooks** once a book is saved.
+* **Add to server**: pick audio files (a book each) or a folder (one book,
+  a file per chapter) on the phone; they go to the server's Audiobooks
+  library, which re-reads itself. **Remove from server** (admins): the app
+  asks for the admin password, uses it for that one delete and signs out
+  again; the password and the session are not kept.
+* The book grid sorts by title, author or newest.
+
 ## 2026-10-17 — Satellites: faster Wi-Fi recovery, mpg123 put back, less CPU
 
 Satellite update (pushed with the satellite code; **reboot each satellite

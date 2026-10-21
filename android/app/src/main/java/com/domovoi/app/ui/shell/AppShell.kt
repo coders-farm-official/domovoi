@@ -570,7 +570,13 @@ private fun OfflineShell(choice: ServerChoice, verdict: IdentityVerdict?) {
     val shared = savedServer.isNotBlank() && isSharedScreen(
         ServerCredentials.sharedAnswerFor(sharedAnswers, savedServer), !savedToken.isNullOrBlank(),
     )
-    val tabs = remember(shared) { localTabs(shared = shared) }
+    // Audiobooks is a tab once the phone holds a saved book (Routes.localTabs).
+    val savedBooks by androidx.compose.runtime.produceState(false, app) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { app.books.list().isNotEmpty() }.getOrDefault(false)
+        }
+    }
+    val tabs = remember(shared, savedBooks) { localTabs(shared = shared, savedBooks = savedBooks) }
     var tab by rememberSaveable { mutableStateOf(0) }
     LaunchedEffect(tabs) { if (tab >= tabs.size) tab = 0 }
     // This phone's own settings (voice, problem reports, the app's version
@@ -733,6 +739,7 @@ private fun OfflineShell(choice: ServerChoice, verdict: IdentityVerdict?) {
                 Route.Videos -> com.domovoi.app.ui.screens.local.LocalVideosScreen()
                 Route.Files -> com.domovoi.app.ui.screens.files.LocalFilesScreen()
                 Route.Assistant -> com.domovoi.app.ui.screens.assistant.AssistantScreen()
+                Route.Audiobooks -> com.domovoi.app.ui.screens.audiobooks.SavedBooksScreen(offline = true)
                 else -> com.domovoi.app.ui.screens.local.LocalMusicScreen()
             }
         }

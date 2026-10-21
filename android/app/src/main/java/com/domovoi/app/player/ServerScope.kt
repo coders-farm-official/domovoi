@@ -16,7 +16,8 @@ import com.domovoi.app.net.ServerIdentity
  * and clears it (PlayerController.serverChanged). The same server again
  * (at another address, or once its identity is learned) keeps it all, and
  * so does the local/server mode switch, which does not change servers.
- * The phone's own songs (PlayKind.Device) belong to no server and stay.
+ * The phone's own songs (PlayKind.Device) belong to no server and stay, and
+ * so do books saved on the phone (PlayItem.savedKey): their files are here.
  */
 
 /** A server as the player tells servers apart: its pinned identity's
@@ -61,7 +62,7 @@ data class ServerSwitchPlan(
 
 object ServerSwitch {
     /** Media that came from a server, by path; everything but the phone's own. */
-    fun fromServer(item: PlayItem): Boolean = item.kind != PlayKind.Device
+    fun fromServer(item: PlayItem): Boolean = item.kind != PlayKind.Device && item.savedKey == null
 
     fun plan(queue: List<PlayItem>, index: Int): ServerSwitchPlan {
         val kept = queue.filterNot(::fromServer)

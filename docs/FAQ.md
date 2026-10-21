@@ -340,9 +340,13 @@ Anything beyond that — pulling music from external sources — is the job of *
 **Yes.** Any track, downloaded podcast episode, or audiobook has a **save** button (a download icon) next to its play control. It pulls the actual audio file off your Domovoi server onto the device you're using:
 
 - **Web dashboard** — the file goes to your browser's normal downloads folder, named after the track/episode/book.
-- **Android app** — the file is handed to the system DownloadManager and lands in **`Downloads/Domovoi/`**, with a progress notification; it shows up in your Files app afterwards.
+- **Android app** — tracks, episodes and videos are handed to the system DownloadManager and land in **`Downloads/Domovoi/`**, with a progress notification; they show up in your Files app afterwards.
 
-Single-file audiobooks (a `.m4b`, say) save as that one file. **Folder audiobooks** (a book split into per-chapter files) come down as a single **zip** of all the chapters, so on Android you'll see a brief "zipping chapters" note while the server builds it. This is a plain file copy from your own server — nothing goes to the internet.
+On the dashboard, single-file audiobooks (a `.m4b`, say) save as that one file, and **folder audiobooks** (a book split into per-chapter files) come down as a single **zip** of all the chapters.
+
+**Audiobooks in the Android app** save differently. Open a book and choose **save to phone**: the app shows the book's size first, then keeps the book in its **own storage** (not Downloads, and never in the phone's Music), with its cover and chapters, so it plays with no server at all. It needs no storage permission and goes away with the app. The download runs in the background with a notification you can cancel from; if you leave home halfway, it pauses and **finishes by itself** the next time the server is in reach (there is no mobile-data setting: the server is only on your home network). The book keeps **one place on the phone** for streaming and the saved copy, sent to the server whenever the phone is connected; if a room got further in the same book for you, the app offers to **continue from** that room. Saved books are on Audiobooks → **your device**, which shows the space they use and removes them, and on the app's Audiobooks tab when there is no server. Books saved to `Downloads/Domovoi/` by earlier versions stay there.
+
+All of this is a plain file copy from your own server — nothing goes to the internet.
 
 ## Can I send pictures in chat?
 
