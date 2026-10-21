@@ -189,6 +189,37 @@ async def acoustid_key_test(body: AcoustidTestRequest, request: Request):
     )
 
 
+class SearchTestRequest(BaseModel):
+    kind: str = Field(..., pattern="^(brave|searxng)$")
+    # A key or address typed but not saved yet; absent tests the saved one.
+    key: str | None = None
+    url: str | None = None
+
+
+@router.post(
+    "/config/search-test",
+    # Security tier at both hops, like the AcoustID test: it sends the
+    # household's search key (or one typed) out of the house.
+    dependencies=[Depends(require_admin_security)],
+)
+async def search_key_test(body: SearchTestRequest, request: Request):
+    """Settings → Chat & AI → Search → "Use your own search" → Test: proxy
+    of the core's ``POST /v1/admin/config/search-test`` →
+    ``{result: works|refused|unreachable|error, detail}``; 409 when the
+    internet answer is No (nothing sent), 422 with nothing to test. The
+    key is never echoed or logged."""
+    if body.key and len(body.key) > 256:
+        raise HTTPException(status_code=422, detail="that is longer than a Brave Search key")
+    payload: dict = {"kind": body.kind}
+    if body.key:
+        payload["key"] = body.key
+    if body.url:
+        payload["url"] = body.url[:400]
+    return bridge_response(
+        *await post_admin("/v1/admin/config/search-test", payload, headers=auth_forward_headers(request))
+    )
+
+
 @router.get(
     "/config/internet",
     # A read like /config/editable beside it: the dashboard cookie renders

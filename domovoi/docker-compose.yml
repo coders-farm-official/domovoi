@@ -140,6 +140,11 @@ services:
       # no fallback: the value every install used to share is what made it
       # worthless, so compose refuses to run without one.
       SEARXNG_SECRET: ${SEARXNG_SECRET:?SEARXNG_SECRET is missing from domovoi/.env - run python -m domovoi.env_bootstrap --repair in the checkout (docs/LINUX_HOST.md)}
+      # SearXNG reads settings.yml only when it starts, and `up -d` keeps a
+      # running container whose compose entry is unchanged. Bump this when
+      # searxng/settings.yml changes, so the next update recreates the
+      # container with it (2: Wikipedia and Wikidata ranked first, W1).
+      DOMOVOI_SEARXNG_SETTINGS_REV: "2"
     restart: unless-stopped
 
   # ─── Letta — conversational chat mode (#8), OPT-IN ────────────────────

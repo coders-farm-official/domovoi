@@ -12,6 +12,13 @@ default level the line shows only how many words there were
 shows them, as before. So the journal, kept on disk, holds the household's
 words only while someone has chosen to log at DEBUG.
 
+A client's own request line is treated the same way: httpx logs every
+request's URL at INFO, so :func:`scrub` blanks a search's words in it
+(``?q=``, ``query``, ``srsearch``, ``search``, ``term``, ``pattern``) and the
+page title in a Wikipedia ``/wiki/`` or ``/page/summary/`` path to
+``<words>`` unless the process logs at DEBUG (W1 review: a lookup's words
+reached the journal through httpx).
+
 Credentials
 -----------
 
@@ -76,9 +83,24 @@ MASK = "***"
 _MARK = "_domovoi_log_scrub"
 
 
+#: Search words in a URL a client logs (httpx's "HTTP Request: GET …?q=…"):
+#: a lookup's or a check's words, which are what people said. Blanked at the
+#: default level like :func:`said`'s words, shown at DEBUG.
+_WORDS_RE = re.compile(
+    r"(?P<lead>[?&](?:q|query|srsearch|search|term|pattern)=)(?P<value>[^&\s\"'#]+)", re.IGNORECASE,
+)
+#: A page title in a Wikipedia API or page path, derived from the words.
+_TITLE_PATH_RE = re.compile(r"(?P<lead>/(?:page/summary|wiki)/)(?P<value>[^?#\s\"']+)")
+WORDS_MASK = "<words>"
+
+
+def _words_hidden() -> bool:
+    return not logging.getLogger().isEnabledFor(logging.DEBUG)
+
+
 def _may_hold(text: str) -> bool:
     lowered = text.lower()
-    return "=" in text or "bearer" in lowered
+    return "=" in text or "bearer" in lowered or "/wiki/" in text or "/page/summary/" in text
 
 
 def scrub(text: str) -> str:
@@ -87,6 +109,9 @@ def scrub(text: str) -> str:
     if not text or not _may_hold(text):
         return text
     out = _PARAM_RE.sub(lambda m: f"{m.group('lead')}{m.group('name')}={MASK}", text)
+    if _words_hidden():
+        out = _WORDS_RE.sub(lambda m: f"{m.group('lead')}{WORDS_MASK}", out)
+        out = _TITLE_PATH_RE.sub(lambda m: f"{m.group('lead')}{WORDS_MASK}", out)
     if "earer" in out:
         out = _BEARER_RE.sub(lambda m: f"{m.group('lead')}{MASK}", out)
     return out

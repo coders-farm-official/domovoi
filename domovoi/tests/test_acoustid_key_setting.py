@@ -204,8 +204,11 @@ async def test_an_admin_bearer_reads_only_whether_a_key_is_set(box, monkeypatch)
     assert row["is_set"] is True and row["value"] == "•••• set" and row["masked"] is True
     # The other secrets keep CORE-6: the Bearer reads the database URL whole.
     assert _rows(r.json())["database_url"]["masked"] is False
-    # Every other row says it isn't write-only.
-    assert all(f["write_only"] is False for f in r.json()["fields"] if f["name"] != "acoustid_api_key")
+    # Every other row says it isn't write-only, but the Brave Search key
+    # (Settings → Chat & AI → Search, W1), which is kept the same way.
+    write_only = {"acoustid_api_key", "lookup_brave_key"}
+    assert all(f["write_only"] is False for f in r.json()["fields"] if f["name"] not in write_only)
+    assert _rows(r.json())["lookup_brave_key"]["write_only"] is True
 
 
 @pytest.mark.asyncio

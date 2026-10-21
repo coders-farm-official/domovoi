@@ -24,6 +24,7 @@ internal fun ThreadRow.toChatRow(): ChatRow = ChatRow(
     messages = message_count,
     archived = archived,
     match = match_snippet,
+    usedInternet = used_internet,
 )
 
 /** The search route for [query]: `GET /api/chat/threads?q=` (archived

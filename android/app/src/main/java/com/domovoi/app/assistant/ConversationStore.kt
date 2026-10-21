@@ -3,6 +3,8 @@ package com.domovoi.app.assistant
 import com.domovoi.app.assistant.docs.DocNote
 import com.domovoi.app.assistant.docs.DocSource
 import com.domovoi.app.assistant.docs.StoredDocument
+import com.domovoi.app.assistant.lookup.LookupCard
+import com.domovoi.app.assistant.lookup.SourceLine
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -59,6 +61,13 @@ data class StoredMessage(
     /** ...the notes under it ("couldn't find", "uncited", a quote that
      *  doesn't match). */
     val notes: List<DocNote> = emptyList(),
+    /** A lookup's permission card (part 5, W1): the exact words, where
+     *  they'd go and the person's answer. Not a reply: the model never
+     *  sees it. */
+    val lookupCard: LookupCard? = null,
+    /** A reply from a lookup: what was fetched (the sources line under it
+     *  is written from these, never by the model). */
+    val lookupSources: List<SourceLine> = emptyList(),
 ) {
     val fromUser: Boolean get() = from == Speaker.USER
 }
@@ -87,6 +96,11 @@ data class StoredConversation(
     val windowFrom: Int? = null,
     /** Documents attached in this conversation (kept in [ChatDocStore]). */
     val documents: List<StoredDocument> = emptyList(),
+    /** "Allow in this chat" was chosen, or the chip turned it on: this
+     *  chat's lookups go ahead without asking (part 5, W1). */
+    val internetAllowed: Boolean = false,
+    /** A lookup in this chat went online: the history list shows a globe. */
+    val usedInternet: Boolean = false,
 ) {
     /** The history list's title: the name it was given, or the first five
      *  words of the first thing asked ([ChatTitles.firstWords]); "About
@@ -116,7 +130,8 @@ data class StoredConversation(
     fun withMetaOf(other: StoredConversation): StoredConversation =
         if (other.id != id) this
         else copy(name = other.name, titleByUser = other.titleByUser, titled = other.titled,
-            titleTries = other.titleTries, archived = other.archived)
+            titleTries = other.titleTries, archived = other.archived, internetAllowed = other.internetAllowed,
+            usedInternet = usedInternet || other.usedInternet)
 
     companion object {
         const val TITLE_CHARS = ChatTitles.MAX_CHARS
@@ -132,6 +147,8 @@ data class ConversationSummary(
     val messages: Int,
     val archived: Boolean = false,
     val titleByUser: Boolean = false,
+    /** A lookup in it went online (the list's globe). */
+    val usedInternet: Boolean = false,
 )
 
 /** A conversation a search found: [snippet] is the words around the first
@@ -139,7 +156,7 @@ data class ConversationSummary(
 data class ConversationHit(val summary: ConversationSummary, val snippet: String?)
 
 internal fun StoredConversation.summary() =
-    ConversationSummary(id, title, updated, messages.size, archived, titleByUser)
+    ConversationSummary(id, title, updated, messages.size, archived, titleByUser, usedInternet)
 
 /**
  * The conversations matching [query], newest first: those whose title or

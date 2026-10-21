@@ -45,6 +45,14 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.runInterruptible
+import com.domovoi.app.assistant.lookup.LookupBackend
+import com.domovoi.app.assistant.lookup.LookupCard
+import com.domovoi.app.assistant.lookup.LookupOutcome
+import com.domovoi.app.assistant.lookup.LookupRules
+import com.domovoi.app.assistant.lookup.OwnSearch
+import com.domovoi.app.assistant.lookup.OwnSearchStore
+import com.domovoi.app.assistant.lookup.Proposal
+import com.domovoi.app.assistant.lookup.SourceLine
 import java.io.File
 import java.util.Locale
 import kotlin.coroutines.CoroutineContext
@@ -108,6 +116,14 @@ data class AssistantUi(
     val heardSpeech: Boolean = false,
     /** Typed questions' replies are read aloud too (plan decision 7: off). */
     val speakTyped: Boolean = false,
+    /** Phone chats may look things up (this install has the lookup clients). */
+    val lookups: Boolean = false,
+    /** "Always allow internet" for phone chats (off: each lookup asks). */
+    val alwaysAllowInternet: Boolean = false,
+    /** "Use your own search" on this phone: its kind ("searxng" / "brave")
+     *  and the SearXNG address; null: none. The key is never here. */
+    val ownSearchKind: String? = null,
+    val ownSearchUrl: String = "",
     /** Which voice speaks, once it has been opened. */
     val voiceName: String? = null,
     /** The last stop's tap to silence, ms. */
@@ -233,6 +249,9 @@ class AssistantController(
     private val pdfText: () -> PdfTextReader? = { null },
     /** The longest a document may take to read before Chat gives up on it. */
     private val docReadTimeoutMs: Long = DOC_READ_TIMEOUT_MS,
+    /** Where phone chats' lookups go (assistant/lookup/); null: none, and
+     *  the model is never told it could look anything up. */
+    private val lookups: PhoneLookups? = null,
 ) {
     private val _state = MutableStateFlow(
         AssistantUi(
@@ -244,6 +263,10 @@ class AssistantController(
             lastDownloadMs = settings.lastDownloadMs,
             voiceBytes = models.filter { it.kind != ModelKind.LLM }.sumOf { it.totalBytes },
             speakTyped = settings.speakTyped,
+            lookups = lookups != null,
+            alwaysAllowInternet = settings.alwaysAllowInternet,
+            ownSearchKind = lookups?.own?.own?.kind,
+            ownSearchUrl = lookups?.own?.own?.url.orEmpty(),
         ),
     )
     val state: StateFlow<AssistantUi> = _state
@@ -551,6 +574,46 @@ class AssistantController(
 
     /** Typed questions' replies read aloud too, or (the default, plan
      *  decision 7) only replies to spoken questions. */
+    /** "Always allow internet" for phone chats (off by default). */
+    fun setAlwaysAllowInternet(on: Boolean) {
+        settings.alwaysAllowInternet = on
+        _state.update { it.copy(alwaysAllowInternet = on) }
+        say(if (on) "phone chats look things up without asking" else "phone chats ask before looking anything up")
+    }
+
+    /** The chip: "Allow in this chat" on or off for the chat on screen. */
+    fun setChatInternet(allowed: Boolean) {
+        val id = _state.value.conversation.id
+        scope.launch {
+            if (_state.value.conversation.messages.isEmpty()) {
+                _state.update { it.copy(conversation = it.conversation.copy(internetAllowed = allowed)) }
+            } else {
+                changeConversation(id) { it.copy(internetAllowed = allowed) }
+            }
+            say(if (allowed) "this chat may look things up" else "this chat asks first again")
+        }
+    }
+
+    /** "Use your own search" on this phone: kept sealed by the keystore;
+     *  null goes back to Wikipedia. */
+    fun setOwnSearch(own: OwnSearch?) {
+        val store = lookups?.own ?: return
+        if (own?.kind == OwnSearch.BRAVE && !com.domovoi.app.assistant.lookup.BRAVE_KEY.matches(own.key)) {
+            say("that isn't a Brave Search key (letters, digits, - and _ only): paste it again")
+            return
+        }
+        store.own = own
+        _state.update { it.copy(ownSearchKind = own?.kind, ownSearchUrl = own?.url.orEmpty()) }
+        say(if (own == null) "lookups away from home use Wikipedia" else "your own search is saved on this phone")
+    }
+
+    /** The settings' Test button for [own] (or the saved one). */
+    suspend fun testOwnSearch(own: OwnSearch?): String {
+        val l = lookups ?: return "lookups aren't available on this phone"
+        val o = own ?: l.own.own ?: return "nothing to test yet"
+        return l.test(o)
+    }
+
     fun setSpeakTyped(on: Boolean) {
         settings.speakTyped = on
         _state.update { it.copy(speakTyped = on) }
@@ -740,6 +803,12 @@ class AssistantController(
         return { timing -> fileTiming(done, timing) }
     }
 
+    /** A spoken turn without the mic, for the tests: [onDelta] hears what
+     *  the voice would read aloud. */
+    internal fun speakForTest(transcript: String, onDelta: (String) -> Unit) {
+        kotlinx.coroutines.runBlocking { answerSpoken(transcript, onDelta) }
+    }
+
     /** Writes a spoken turn's timing onto its reply (the long-press details)
      *  and logs it, for the gate's numbers. */
     private fun fileTiming(done: StoredConversation, timing: VoiceTiming) {
@@ -779,6 +848,42 @@ class AssistantController(
         // A question about Domovoi: the manual on the phone (LocalHelp).
         val help = helpTurn(asked)
         if (help != null && help.passages.isEmpty()) return notCoveredReply(asked, help, onDelta)
+        // Lookups (part 5, W1): offered on a plain question, never on a help,
+        // document or retried turn. "look up …" needs no model to say so.
+        val offered = lookups != null && help == null && retryingFrom == null
+        cardAnswer(asked)?.let { (index, answer) ->
+            val card = asked.messages[index].lookupCard!!
+            fun mark(state: String) = asked.copy(
+                messages = asked.messages.toMutableList().also { m -> m[index] = m[index].copy(lookupCard = card.copy(state = state)) },
+            )
+            val original = asked.messages.take(index).lastOrNull { it.fromUser }?.text.orEmpty()
+            return when (answer) {
+                is CardReply.Yes -> {
+                    // "yes, play some jazz": the yes is taken; the rest is not
+                    // carried out, and the reply says so plainly.
+                    val preface = answer.rest?.let { "I'll look that up first; ask me “$it” again after.\n\n" }.orEmpty()
+                    if (preface.isNotEmpty()) onDelta(preface)
+                    lookupReply(mark("allowed_once"), Proposal(card.kind, card.query), onDelta, decided = true,
+                        question = original, preface = preface)
+                }
+                CardReply.No -> {
+                    onDelta(NOT_LOOKED_UP)
+                    finishReply(mark("declined"), StoredMessage(Speaker.DOMOVOI, NOT_LOOKED_UP, clock()))
+                }
+                CardReply.Unclear -> {
+                    // Not a clear yes or no: the card again, nothing sent.
+                    val again = StoredMessage(Speaker.DOMOVOI, "$DIDNT_CATCH ${cardText(Proposal(card.kind, card.query), card.destination)}",
+                        clock(), lookupCard = card)
+                    onDelta("$DIDNT_CATCH ${spokenCard(Proposal(card.kind, card.query), card.destination)}")
+                    finishReply(mark("asked_again"), again)
+                }
+            }
+        }
+        if (offered) {
+            asked.messages.lastOrNull()?.takeIf { it.fromUser }?.let { q ->
+                LookupRules.fastPath(q.text)?.let { return lookupReply(asked, it, onDelta) }
+            }
+        }
         val backend = settings.backend
         val llm = try {
             ensureEngine()
@@ -803,16 +908,48 @@ class AssistantController(
         _state.update { it.copy(conversation = viewed.withMetaOf(it.conversation).copy(messages = viewed.messages + live())) }
         try {
             val sentTurns = window.of(turns).let { if (help != null) LocalHelp.withPassages(it, help) else it }
-            llm.reply(Persona.SYSTEM_PROMPT, sentTurns, clockLine()).collect { delta ->
-                if (firstMs == null && delta.isNotBlank()) firstMs = (nanos() - sent) / 1_000_000
-                text.append(delta)
-                onDelta(delta)
-                _state.update { ui ->
-                    ui.copy(
-                        thinking = text.isBlank(),
-                        conversation = viewed.withMetaOf(ui.conversation).copy(messages = viewed.messages + live()),
-                    )
-                }
+            // While a reply might still be a lookup line ("LOOK_UP: …"), its
+            // first characters are held back: a proposal never reaches the
+            // screen, or the voice, as words.
+            val held = StringBuilder()
+            var holding = offered
+            var proposing = false
+            try {
+                llm.reply(if (offered) Persona.SYSTEM_PROMPT_LOOKUPS else Persona.SYSTEM_PROMPT, sentTurns, clockLine())
+                    .collect { piece ->
+                        if (firstMs == null && piece.isNotBlank()) firstMs = (nanos() - sent) / 1_000_000
+                        var delta = piece
+                        if (holding) {
+                            held.append(piece)
+                            val head = held.trimStart().toString()
+                            if (!proposing && head.length < 12 && LookupRules.mayBeProposal(head)) return@collect
+                            if (proposing || LookupRules.startsProposal(head)) {
+                                proposing = true
+                                val lines = head.split("\n", limit = 2)
+                                if ((lines.size > 1 && lines[0].isNotBlank()) || head.length > 400) throw ProposalLine()
+                                return@collect
+                            }
+                            holding = false
+                            delta = held.toString()
+                            held.clear()
+                        }
+                        text.append(delta)
+                        onDelta(delta)
+                        _state.update { ui ->
+                            ui.copy(
+                                thinking = text.isBlank(),
+                                conversation = viewed.withMetaOf(ui.conversation).copy(messages = viewed.messages + live()),
+                            )
+                        }
+                    }
+            } catch (_: ProposalLine) {
+                llm.cancel()
+            }
+            if (held.isNotEmpty()) {
+                val proposal = if (proposing) LookupRules.parseProposal(held.toString()) else null
+                if (proposal != null) return lookupReply(viewed, proposal, onDelta)
+                text.append(held)
+                onDelta(held.toString())
             }
             val stats = llm.lastStats()
             // The sources line, written here, never by the model.
@@ -864,6 +1001,193 @@ class AssistantController(
             null
         }
         return LocalHelp.plan(index, question.text)
+    }
+
+    // ── Lookups (assistant plan part 5, W1) ─────────────────────────────
+
+    /** The card's question as a spoken turn says it. */
+    private fun spokenCard(p: Proposal, destination: String): String =
+        if (p.kind == Proposal.PAGE) "May I read that page on $destination? Say yes or no."
+        else "May I look up ${p.query} online, through $destination? Say yes or no."
+
+    /** The card's question, as it is kept on the card message. */
+    private fun cardText(p: Proposal, destination: String): String =
+        if (p.kind == Proposal.PAGE) "May I read this page? ${p.query} → $destination"
+        else "May I look this up online? “${p.query}” → $destination"
+
+    /**
+     * What a lookup proposal becomes in a phone chat: at home, the home
+     * server's own sources first (its manual, an offline library: no card);
+     * then, unless this chat or "Always allow internet" lets it go, the
+     * permission card, and nothing is sent; with the allow ([decided]), the
+     * lookup, then the answer from what came back. A home server set to
+     * "never" is respected: the phone doesn't go around it.
+     */
+    private suspend fun lookupReply(
+        asked: StoredConversation, proposal: Proposal, onDelta: (String) -> Unit, decided: Boolean = false,
+        question: String? = null, preface: String = "",
+    ): StoredConversation {
+        val l = lookups ?: return finishReply(asked, StoredMessage(Speaker.DOMOVOI, LookupRules.NOTHING_FOUND, clock()))
+        val plan = try { l.plan() } catch (e: CancellationException) { throw e } catch (e: Exception) {
+            LookupPlan(null, l.away())
+        }
+        val allowed = decided || settings.alwaysAllowInternet || asked.withMetaOf(_state.value.conversation).internetAllowed
+        val question = question ?: asked.messages.lastOrNull { it.fromUser }?.text.orEmpty()
+        val home = plan.home
+        if (proposal.kind == Proposal.SEARCH && home != null && !allowed) {
+            val local = home.search(proposal.query, internet = false)
+            if (local.results.isNotEmpty()) return lookupAnswer(asked, question, proposal, local, onDelta)
+        }
+        // At home: the home server's own answer about where a search goes
+        // (its search helper, Brave with the household's key, its SearXNG),
+        // and under its "never" no card at all, the honest line instead.
+        val status = if (home != null && !allowed) home.status() else null
+        if (status?.internet == "never") {
+            return lookupFixed(asked, proposal, LookupRules.HOME_NEVER, LookupOutcome(internetOff = true), onDelta = onDelta)
+        }
+        if (!allowed) {
+            val dest = if (proposal.kind == Proposal.PAGE) com.domovoi.app.assistant.lookup.siteOf(proposal.query)
+                .ifEmpty { "that site" } else status?.destination ?: (home ?: plan.away).destination
+            val card = StoredMessage(
+                Speaker.DOMOVOI, cardText(proposal, dest), clock(),
+                lookupCard = LookupCard(proposal.kind, proposal.query, dest),
+            )
+            // A spoken turn hears the question, and a "yes" or "no" answers it.
+            onDelta(spokenCard(proposal, dest))
+            return finishReply(asked, card)
+        }
+        var out: LookupOutcome = if (home != null) {
+            if (proposal.kind == Proposal.PAGE) home.read(proposal.query) else home.search(proposal.query, true)
+        } else {
+            LookupOutcome(error = "away")
+        }
+        if (out.internetOff) return lookupFixed(asked, proposal, LookupRules.HOME_NEVER, out, onDelta = onDelta, preface = preface)
+        if (home == null || (out.error != null && !out.internetUsed && out.results.isEmpty())) {
+            // Away from home (or the home server didn't answer): Wikipedia,
+            // or the person's own search.
+            val away = plan.away
+            out = if (proposal.kind == Proposal.PAGE) away.read(proposal.query) else away.search(proposal.query, true)
+        }
+        out.error?.let { why ->
+            if (out.results.isEmpty()) {
+                val said = if (proposal.kind == Proposal.PAGE) why else "I couldn't look that up just now: $why."
+                return lookupFixed(asked, proposal, said, out, onDelta = onDelta, preface = preface)
+            }
+        }
+        return lookupAnswer(asked, question, proposal, out, onDelta, preface)
+    }
+
+    /** The card a reply answers: (its index, the reply), when the message
+     *  before this one is a pending card and this one is a short answer
+     *  (spoken or typed, [cardReply]); null for anything else. */
+    private fun cardAnswer(asked: StoredConversation): Pair<Int, CardReply>? {
+        val said = asked.messages.lastOrNull()?.takeIf { it.fromUser }?.text ?: return null
+        val index = asked.messages.lastIndex - 1
+        val card = asked.messages.getOrNull(index)?.lookupCard ?: return null
+        if (card.state != LookupCard.PENDING) return null
+        return cardReply(said)?.let { index to it }
+    }
+
+    private suspend fun lookupFixed(
+        asked: StoredConversation, proposal: Proposal, text: String, out: LookupOutcome,
+        sources: List<SourceLine> = emptyList(), onDelta: (String) -> Unit = {}, preface: String = "",
+    ): StoredConversation {
+        val said = preface + LookupRules.fixed(text, sources, out.notice)
+        onDelta(text)
+        val base = if (out.internetUsed) asked.copy(usedInternet = true) else asked
+        return finishReply(base, StoredMessage(Speaker.DOMOVOI, said, clock(), lookupSources = sources))
+    }
+
+    /** The answer from what a lookup found: a few ranked passages, fenced,
+     *  and the question; no tools; the sources line written here. */
+    private suspend fun lookupAnswer(
+        asked: StoredConversation, question: String, proposal: Proposal, out: LookupOutcome, onDelta: (String) -> Unit,
+        preface: String = "",
+    ): StoredConversation {
+        val results = out.results.take(LookupRules.MAX_PASSAGES)
+        val sources = results.map { SourceLine.of(it) }
+        if (results.isEmpty()) return lookupFixed(asked, proposal, LookupRules.NOTHING_FOUND, out, onDelta = onDelta, preface = preface)
+        val ask = if (proposal.kind == Proposal.SEARCH) proposal.query else question
+        val passages = LookupRules.rankPassages(ask, results)
+        if (proposal.kind == Proposal.SEARCH && !LookupRules.covers(passages)) {
+            return lookupFixed(asked, proposal, LookupRules.COULDNT_FIND, out, sources, onDelta, preface)
+        }
+        val base = if (out.internetUsed) asked.copy(usedInternet = true) else asked
+        val llm = ensureEngine()
+            ?: return finishReply(base, StoredMessage(Speaker.DOMOVOI, "", clock(), error = "The model could not start"))
+        val sent = nanos()
+        var firstMs: Long? = null
+        val text = StringBuilder()
+        fun live() = StoredMessage(Speaker.DOMOVOI, text.toString(), clock(), backend = settings.backend.label)
+        _state.update { it.copy(conversation = base.withMetaOf(it.conversation).copy(messages = base.messages + live())) }
+        try {
+            llm.reply(LookupRules.systemPrompt(passages), listOf(ChatTurn(fromUser = true, text = question.ifBlank { ask })), clockLine())
+                .collect { delta ->
+                    if (firstMs == null && delta.isNotBlank()) firstMs = (nanos() - sent) / 1_000_000
+                    text.append(delta)
+                    onDelta(delta)
+                    _state.update { ui ->
+                        ui.copy(thinking = text.isBlank(),
+                            conversation = base.withMetaOf(ui.conversation).copy(messages = base.messages + live()))
+                    }
+                }
+        } catch (e: CancellationException) {
+            finishReply(base, live().copy(stopped = true, firstTextMs = firstMs, lookupSources = sources))
+            throw e
+        } catch (e: Throwable) {
+            return finishReply(base, live().copy(error = "The model stopped: ${plainReason(e)}", lookupSources = sources))
+        }
+        val said = preface + LookupRules.finish(text.toString(), sources, out.notice)
+        return finishReply(base, live().copy(text = said, firstTextMs = firstMs, lookupSources = sources))
+    }
+
+    /**
+     * The person's answer to the card at message [index] of the chat on
+     * screen: "once" / "chat" look it up and answer ("chat" also allows this
+     * chat's later lookups), "no" answers without looking. A card is
+     * answered once.
+     */
+    fun decideLookup(index: Int, decision: String) {
+        val ui = _state.value
+        if (ui.replying) return
+        val c = ui.conversation
+        val card = c.messages.getOrNull(index)?.lookupCard ?: return
+        if (card.state != LookupCard.PENDING) return
+        val state = when (decision) { "once" -> "allowed_once"; "chat" -> "allowed_chat"; else -> "declined" }
+        val marked = c.copy(
+            internetAllowed = c.internetAllowed || decision == "chat",
+            messages = c.messages.toMutableList().also { it[index] = it[index].copy(lookupCard = card.copy(state = state)) },
+        )
+        _state.update { it.copy(conversation = marked, replying = true, thinking = true) }
+        replyJob = scope.launch {
+            save(marked)
+            if (decision == "once" || decision == "chat") {
+                lookupReply(marked, Proposal(card.kind, card.query), {}, decided = true)
+            } else {
+                declinedReply(marked)
+            }
+        }
+    }
+
+    /** "Not now": the model answers from what it knows, told it didn't look. */
+    private suspend fun declinedReply(asked: StoredConversation): StoredConversation {
+        val llm = ensureEngine()
+            ?: return finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), error = "The model could not start"))
+        val text = StringBuilder()
+        fun live() = StoredMessage(Speaker.DOMOVOI, text.toString(), clock(), backend = settings.backend.label)
+        try {
+            llm.reply(Persona.SYSTEM_PROMPT + "\n\n" + LookupRules.DECLINED_NOTE, window.of(modelTurns(asked.messages).map { it.turn }),
+                clockLine()).collect { delta ->
+                text.append(delta)
+                _state.update { it.copy(thinking = text.isBlank(), conversation = asked.copy(messages = asked.messages + live())) }
+            }
+        } catch (e: CancellationException) {
+            finishReply(asked, live().copy(stopped = true))
+            throw e
+        } catch (e: Throwable) {
+            return finishReply(asked, live().copy(error = "The model stopped: ${plainReason(e)}"))
+        }
+        return finishReply(asked, live())
     }
 
     /** A help question the manual doesn't answer: said at once, without the
@@ -1399,7 +1723,10 @@ class AssistantController(
 
         /** The app's assistant, built by AppContainer. [phoneVoice]: the
          *  phone's own Domovoi voice, opened without asking a server. */
-        fun forApp(context: Context, beforeLoad: () -> Unit, phoneVoice: suspend () -> PhoneSpeech?): AssistantController {
+        fun forApp(
+            context: Context, beforeLoad: () -> Unit, phoneVoice: suspend () -> PhoneSpeech?,
+            lookups: PhoneLookups? = null,
+        ): AssistantController {
             val app = context.applicationContext
             val store = ModelStore.forApp(app)
             return AssistantController(
@@ -1424,6 +1751,7 @@ class AssistantController(
                 helpIndex = BundledManual(app)::index,
                 docs = ChatDocStore(File(app.filesDir, "chat-docs/attachments")),
                 pdfText = { PhonePdfText.readerOrNull() },
+                lookups = lookups,
             ).also { it.attach(app) }
         }
 
@@ -1477,6 +1805,7 @@ fun modelTurns(messages: List<StoredMessage>): List<IndexedTurn> {
     val out = mutableListOf<IndexedTurn>()
     fun lastFromUser() = out.lastOrNull()?.turn?.fromUser == true
     for ((i, m) in messages.withIndex()) {
+        if (m.lookupCard != null) continue
         if (m.fromUser) {
             // An unanswered question before this one: drop it.
             if (lastFromUser()) out.removeAt(out.lastIndex)
@@ -1550,3 +1879,76 @@ data class HistoryWindow(
         const val LOW_CHARS = 4_500
     }
 }
+
+/** What a "no" to a card answers. */
+internal const val NOT_LOOKED_UP = "OK, I won't look that up."
+
+/** What a reply to a pending card means (spoken or typed). */
+internal sealed interface CardReply {
+    /** Yes; [rest] is what followed a leading "yes" ("yes play some jazz"),
+     *  which is not carried out. */
+    data class Yes(val rest: String? = null) : CardReply
+    data object No : CardReply
+    data object Unclear : CardReply
+}
+
+internal const val DIDNT_CATCH = "I didn't catch that."
+
+/** Words that make any reply a no, wherever they are ("okay, never mind",
+ *  "sure, cancel that"): checked first. */
+private val NO_WORDS = Regex(
+    "\\b(?:no|nope|nah|not now|don'?t|do not|never ?mind|stop|cancel|wait|not yet|leave it)\\b",
+    RegexOption.IGNORE_CASE,
+)
+
+/** The whole of a clear yes. */
+private val YES_PHRASES = setOf(
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "go ahead", "do it", "please do", "yes please",
+    "sure go ahead", "ok go ahead", "okay go ahead", "yes go ahead", "allow", "allow once", "look it up",
+    "yes look it up", "go for it", "sure thing", "ok sure", "okay sure", "yes do it", "yeah go ahead",
+)
+
+/** A leading yes that may be followed by something else to do. */
+private val LEADING_YES = Regex("^(?:yes|yeah|yep|yup)\\s+(.+)$", RegexOption.IGNORE_CASE)
+
+/** How a reply answers a pending card: any no-word makes it a no; a clear
+ *  yes phrase (the whole reply) is a yes; "yes …" is a yes with the rest set
+ *  aside; any other short reply is [CardReply.Unclear] (the card is asked
+ *  again); a longer one is a new question (null). */
+internal fun cardReply(text: String): CardReply? {
+    val t = text.lowercase().replace(Regex("[^a-z' ]+"), " ").split(Regex("\\s+")).filter { it.isNotEmpty() }
+        .joinToString(" ")
+    if (t.isEmpty()) return CardReply.Unclear
+    if (NO_WORDS.containsMatchIn(t)) return CardReply.No
+    if (t in YES_PHRASES) return CardReply.Yes()
+    LEADING_YES.find(t)?.let { m ->
+        val rest = m.groupValues[1].trim()
+        return if (rest in YES_PHRASES || rest == "please") CardReply.Yes() else CardReply.Yes(rest)
+    }
+    return if (t.split(" ").size <= 6) CardReply.Unclear else null
+}
+
+/** For the old callers and tests: true for a clear yes, false for a no,
+ *  null for anything else. */
+internal fun yesOrNo(text: String): Boolean? = when (val r = cardReply(text)) {
+    is CardReply.Yes -> if (r.rest == null) true else null
+    CardReply.No -> false
+    else -> null
+}
+
+/** Thrown inside a reply's collection when its lookup line is complete:
+ *  the rest isn't needed. */
+private class ProposalLine : RuntimeException()
+
+/** Where this turn's lookups go: [home] while the home server is in reach,
+ *  [away] (Wikipedia, or the person's own search) otherwise. */
+data class LookupPlan(val home: LookupBackend?, val away: LookupBackend)
+
+/** The phone's lookups (assistant/lookup/): the plan for a turn, the
+ *  person's own search as the keystore keeps it, and its Test button. */
+class PhoneLookups(
+    val own: OwnSearchStore,
+    val away: () -> LookupBackend,
+    val plan: suspend () -> LookupPlan,
+    val test: suspend (OwnSearch) -> String,
+)

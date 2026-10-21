@@ -181,6 +181,10 @@ private fun ChatPane(
                 Icon(Icons.Outlined.Tune, contentDescription = "model settings", tint = Domovoi.colors.fgMuted)
             }
         }
+        // Whether this chat may go online (part 5, W1).
+        if (ui.lookups) {
+            Row(Modifier.padding(bottom = 4.dp)) { InternetChip(ui, ui.conversation, actions.setChatInternet) }
+        }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (messages.isEmpty()) {
                 Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -206,6 +210,11 @@ private fun ChatPane(
                         Column {
                             // Above the first message the model still sees.
                             if (index == ui.conversation.windowFrom && index > 0) WindowDivider()
+                            val card = m.lookupCard
+                            if (card != null) {
+                                LookupCardView(card, enabled = !ui.replying) { d -> actions.decideLookup(index, d) }
+                                return@Column
+                            }
                             MessageBubble(
                                 m,
                                 writing = writing,
@@ -582,6 +591,7 @@ private fun ModelPane(ui: AssistantUi, actions: AssistantActions, onClose: () ->
             Spacer(Modifier.height(10.dp))
             OutlinedButton(onClick = { confirmDelete = true }) { Text("delete model", color = Domovoi.colors.err) }
         }
+        LookupSettingsCard(ui, actions)
         DomovoiCard(Modifier.fillMaxWidth()) {
             Text("Speech", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg, modifier = Modifier.asHeading())
             Text(speechSummary(ui), style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)

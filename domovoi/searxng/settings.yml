@@ -1,16 +1,24 @@
 # SearxNG configuration for local-only domovoi use.
 #
-# Two non-default things matter here:
-#   * `formats` includes `json` — the core's DoubleCheckHandler
+# Three non-default things matter here:
+#   * `formats` includes `json` — the core (double check, news, lookups)
 #     hits the JSON API rather than scraping HTML.
 #   * `bind_address` is 0.0.0.0 inside the container, but the
 #     docker-compose port mapping pins the host side to 127.0.0.1 so
 #     the LAN can't reach it. Don't set bind_address to 127.0.0.1
 #     here — the container would only listen on its own loopback,
 #     unreachable from the host's port mapping.
+#   * `engines` (below) turns on the engines that are public APIs with
+#     real terms — Wikipedia (its page summaries, and its full-text search
+#     as "wikipedia search") and Wikidata — lists their answers, and gives
+#     them the highest weight, so they rank first and a lookup always has
+#     a source that works when the scraped engines break or block. The
+#     core's lookups ask them by name (domovoi/lookup_web.py API_ENGINES).
 #
 # Everything else is SearxNG defaults; change in-place if you want to
-# tune which engines run.
+# tune which engines run. After changing this file, bump
+# DOMOVOI_SEARXNG_SETTINGS_REV in docker-compose.yml so an update
+# recreates the container (SearXNG reads this file only at start).
 
 use_default_settings: true
 
@@ -34,3 +42,32 @@ ui:
   default_locale: ""
   query_in_title: true
   infinite_scroll: false
+
+engines:
+  # Merged by name into SearXNG's own list (use_default_settings).
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    disabled: false
+    weight: 3
+    display_type: ["infobox", "list"]
+    categories: [general]
+  - name: wikidata
+    engine: wikidata
+    shortcut: wd
+    disabled: false
+    timeout: 3.0
+    weight: 3
+    display_type: ["infobox", "list"]
+    categories: [general]
+  # Wikipedia's own full-text search (the MediaWiki API): finds the page
+  # for a question, where the summary engine above needs the exact title.
+  - name: wikipedia search
+    engine: mediawiki
+    shortcut: wps
+    disabled: false
+    weight: 3
+    timeout: 4.0
+    categories: [general]
+    base_url: "https://{language}.wikipedia.org/"
+    search_type: text

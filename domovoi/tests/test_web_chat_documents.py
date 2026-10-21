@@ -21,7 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 HARNESS = Path(__file__).with_name("jsx_interact_harness.js")
 DATA_JS = REPO_ROOT / "web" / "static" / "data.js"
 FILES = ["web/static/components.jsx", "web/static/chat_markdown.js", "web/static/chat_details.js",
-         "web/static/chat_documents.jsx", "web/static/chat.jsx"]
+         "web/static/chat_documents.jsx", "web/static/chat_lookups.jsx", "web/static/chat.jsx"]
 TOKEN = "a" * 32
 
 

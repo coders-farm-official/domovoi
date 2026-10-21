@@ -22,6 +22,7 @@ internal fun ConversationSummary.toChatRow(): ChatRow = ChatRow(
     updatedMs = updated,
     messages = messages,
     archived = archived,
+    usedInternet = usedInternet,
 )
 
 /** Whether the phone can write a reply now: its model is on the phone;

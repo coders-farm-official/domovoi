@@ -67,6 +67,35 @@ Not declared, and why:
 | Crash logs, diagnostics | Kept on the phone (`diagnostics/ProblemStore.kt`); the user may copy one. No crash-reporting SDK (`OpenSourceLicencesTest` fails the build if one appears). |
 | Model and voice downloads | The request goes to Hugging Face with no user data; the files come down. Google counts data your app *sends*: none. |
 
+## Lookups in phone chats (W1, 2026-10-21): declare before v1
+
+A phone chat can look things up after the person allows it on the chat's
+card (or turns on "Always allow internet", off by default):
+`assistant/lookup/LookupClients.kt`. Away from home the app itself sends
+the search words to **Wikipedia** (en.wikipedia.org) or to the person's
+own search (their SearXNG address, or **Brave Search** with their own
+key), and fetches a page the person names. At home it sends them to the
+household's own server, which falls under "the judgement call" above.
+
+Declared conservatively (owner: update the Play Console form at v1, and
+`PRIVACY_POLICY.md` with it):
+
+| Data type | Collected | Shared | Optional? | Processed ephemerally? | Purposes | Code |
+|---|---|---|---|---|---|---|
+| **App activity → In-app search history** (the words of a lookup) | **Yes** (the app sends them to Wikipedia, or the person's own search) | **No** (a transfer the user starts and expects) | **Optional** (asked each time unless the person allows more) | **Unclear: declare No** (the receiving service may log it) | **App functionality** | `WikipediaLookup.search`, `OwnSearchLookup.search` |
+| **Web browsing → Web browsing history** (the address of a page the person names) | **Yes** | **No** | **Optional** | **Declare No** | **App functionality** | `PageReader.read` |
+
+* Encrypted in transit: Wikipedia, Brave and named pages are **HTTPS
+  only** (`PageReader` refuses `http://`; redirects are followed only to
+  https). A person's own SearXNG may be plain HTTP on their LAN, and a home
+  server on plain HTTP can't be answered "encrypted" for that path either:
+  keep the form's encryption answer about what the app sends to third
+  parties, and say so in the privacy policy.
+* Nothing goes to Coders Farm. No account. The person's own key is kept
+  sealed in the Android keystore (`OwnSearchStore.kt`).
+* The no-network test (`NoNetworkTest`) allows only this package's
+  clients; `PhoneLookupsTest` proves nothing is sent before the allow.
+
 ## Security practices (shown on the listing)
 
 - Data is encrypted in transit: **Yes** (as above).

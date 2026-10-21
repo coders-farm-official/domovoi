@@ -345,6 +345,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.help_desk.source import register_core_source
 
     register_core_source()
+    # Wikipedia and Wikidata (through the search helper) and the open web:
+    # the lookups that ask before they go online (domovoi/lookup_web.py).
+    from domovoi.lookup_web import register_core_sources
+
+    register_core_sources()
 
     # Pin the version label to the code this process actually imported,
     # before anything can pull underneath us. See git_version.capture_boot_state.
@@ -1043,6 +1048,153 @@ async def phone_voice_turn(
         )
     except phone_voice.PhoneTurnRefused as e:
         return JSONResponse(status_code=e.status, content={"detail": e.detail, "code": e.code})
+
+
+# ─── Lookups (assistant plan part 5, W1; domovoi/lookup_web.py) ──────────
+
+
+class _LookupBody(BaseModel):
+    # Search words, or the https address of a page the person named. One
+    # of the two.
+    query: str | None = Field(None, max_length=300)
+    url: str | None = Field(None, max_length=2000)
+    # False: this server's own sources only (its manual, an offline
+    # library): no question needed, and it works with internet off. True:
+    # the person allowed the internet for this lookup.
+    internet: bool = True
+    limit: int = Field(3, ge=1, le=3)
+
+
+@app.post(
+    "/v1/phone/lookup",
+    # Device tier without the pre-setup grace, like the phone's voice turn:
+    # the household token or an admin Bearer, 501 before an admin exists.
+    # It sends the words (or fetches the page) on the household's behalf.
+    dependencies=[Depends(admin_auth_mod.require_device_after_setup)],
+)
+async def phone_lookup(body: _LookupBody, request: Request) -> Any:
+    """Look something up for a phone chat (or the dashboard's chat, which
+    calls this too): at most 3 results, each ``{title, url, site,
+    snippet, extract, source, source_name, source_class, licence}``, plus
+    ``internet_used`` and a plain ``notice`` when the household's own
+    search failed and Wikipedia answered instead.
+
+    ``query`` searches the sources in the core's order (this server's own
+    first, then Wikipedia and Wikidata through its search helper, then the
+    open web or the household's own search); with ``internet`` false only
+    this server's own sources are asked. ``url`` reads that page (HTTPS
+    only, no cookies, no JavaScript, 2 MB at most, its main text).
+
+    The household's internet answer "never" refuses anything that would
+    leave the house with the standard refusal (409, ``X-Domovoi-Refusal:
+    internet-off``); a local-only search still answers. The AI switch
+    doesn't apply: nothing here asks a model. 429 past 30 lookups a minute
+    for everyone together or 10 for one caller (a local-only search isn't
+    counted); 422 for a page that isn't HTTPS or can't be read
+    (``{detail, code}``)."""
+    from domovoi import egress, lookup_web
+
+    query = " ".join((body.query or "").split())
+    url = (body.url or "").strip()
+    if bool(query) == bool(url):
+        raise HTTPException(status_code=422, detail="send query or url (one of them)")
+    needs_internet = bool(url) or body.internet
+    if needs_internet and egress.internet_turned_off():
+        raise egress.http_exception("a lookup")
+    # Paced only when something would leave the house: for the house and for
+    # each caller (a local-only search costs nobody's minute).
+    key = lookup_web.caller_key(request.headers, request.client.host if request.client else None)
+    if needs_internet and not lookup_web.PACE.allow(key=key):
+        return JSONResponse(status_code=429, content={"detail": "Too many lookups this minute. Try again shortly.",
+                                                      "code": "too_many"})
+    try:
+        if url:
+            outcome = await lookup_web.read_page(url, query=query)
+        else:
+            outcome = await lookup_web.run_lookup(query, internet=body.internet, limit=body.limit)
+    except egress.InternetTurnedOff:
+        raise egress.http_exception("a lookup")
+    except lookup_web.LookupRefused as e:
+        return JSONResponse(status_code=422, content={"detail": str(e), "code": e.code})
+    out = outcome.as_dict()
+    out["destination"] = lookup_web.destination("page" if url else "search", url or None, own_host=False)
+    return out
+
+
+@app.get("/v1/lookup/sources", dependencies=[Depends(admin_auth_mod.require_device_read)])
+async def lookup_sources() -> dict[str, Any]:
+    """The lookup sources in the order they are asked (Settings → Chat & AI
+    → Search, and the chat): ``{sources: [{slug, registered_as, name,
+    lookup_class, needs_permission, core}], order, always_allow,
+    own_search, destination, internet}``. No key, no address."""
+    from domovoi import egress, lookup, lookup_web
+
+    order = lookup_web.household_order()
+    return {
+        "sources": lookup.describe_sources(household_order=order),
+        "order": order,
+        "always_allow": bool(settings.lookup_always_allow),
+        "own_search": lookup_web.own_search(),
+        "destination": lookup_web.destination("search", own_host=False),
+        "internet": egress.policy() or "",
+    }
+
+
+class _SearchTestBody(BaseModel):
+    kind: Literal["brave", "searxng"]
+    # A key or address typed but not saved yet; absent tests the saved one.
+    key: str | None = None
+    url: str | None = None
+
+
+@app.post(
+    "/v1/admin/config/search-test",
+    # The security tier, like the AcoustID test: it sends the household's
+    # key (or one an admin pasted) out of the house.
+    dependencies=[Depends(require_admin_security)],
+)
+async def admin_search_test(body: _SearchTestBody) -> dict[str, Any]:
+    """Settings → Chat & AI → Search → "Use your own search" → Test: one
+    search of a fixed word with the typed key or address, else the saved
+    one. ``{result: works|refused|unreachable|error, detail}``; 409 under
+    internet "never"; 422 with nothing to test. The key is never echoed,
+    logged or stored here."""
+    from domovoi import egress, lookup_web
+    from domovoi.config_schema import FIELD_BY_NAME, coerce_and_validate
+
+    if egress.internet_turned_off():
+        raise egress.http_exception("the search test")
+    if body.kind == "brave":
+        typed = (body.key or "").strip()
+        if len(typed) > 256:
+            raise HTTPException(status_code=422, detail="that is longer than a Brave Search key")
+        if typed:
+            try:
+                key = str(coerce_and_validate(FIELD_BY_NAME["lookup_brave_key"], typed))
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+        else:
+            key = str(settings.lookup_brave_key or "").strip()
+        if not key:
+            raise HTTPException(status_code=422, detail="no Brave Search key to test: paste one, or save one first")
+        try:
+            return await lookup_web.test_own_search("brave", key=key)
+        except egress.InternetTurnedOff:
+            raise egress.http_exception("the search test")
+    typed_url = (body.url or "").strip()
+    if typed_url:
+        try:
+            url = str(coerce_and_validate(FIELD_BY_NAME["lookup_own_searxng_url"], typed_url))
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    else:
+        url = str(settings.lookup_own_searxng_url or "").strip()
+    if not url:
+        raise HTTPException(status_code=422, detail="no SearXNG address to test: type one, or save one first")
+    try:
+        return await lookup_web.test_own_search("searxng", url=url)
+    except egress.InternetTurnedOff:
+        raise egress.http_exception("the search test")
 
 
 # Said once per process: an unbound challenge means a satellite still on

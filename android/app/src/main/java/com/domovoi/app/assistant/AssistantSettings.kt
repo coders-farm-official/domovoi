@@ -27,6 +27,10 @@ interface AssistantSettings {
     /** Read typed questions' replies aloud too. Off (plan decision 7):
      *  replies to spoken questions are spoken, typed ones stay silent. */
     var speakTyped: Boolean
+
+    /** "Always allow internet" for phone chats' lookups (part 5, W1). Off
+     *  (owner decision 2026-10-20): each lookup asks first. */
+    var alwaysAllowInternet: Boolean
 }
 
 /** In memory only: for tests. */
@@ -37,6 +41,7 @@ class MemoryAssistantSettings(
     override var downloadStartedAt: Long? = null,
     override var lastDownloadMs: Long? = null,
     override var speakTyped: Boolean = false,
+    override var alwaysAllowInternet: Boolean = false,
 ) : AssistantSettings
 
 /** The app's: SharedPreferences `assistant`. */
@@ -67,7 +72,12 @@ class PhoneAssistantSettings(context: Context) : AssistantSettings {
         get() = prefs.getBoolean(K_SPEAK_TYPED, false)
         set(value) = prefs.edit().putBoolean(K_SPEAK_TYPED, value).apply()
 
+    override var alwaysAllowInternet: Boolean
+        get() = prefs.getBoolean(K_ALWAYS_INTERNET, false)
+        set(value) = prefs.edit().putBoolean(K_ALWAYS_INTERNET, value).apply()
+
     private companion object {
+        const val K_ALWAYS_INTERNET = "always_allow_internet"
         const val K_SPEAK_TYPED = "speak_typed_replies"
         const val K_BACKEND = "backend"
         const val K_MOBILE = "allow_mobile_data"
