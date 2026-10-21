@@ -96,6 +96,7 @@ from domovoi.clients import ollama as ollama_client
 from domovoi.config import settings as core_settings
 from domovoi.profile_context import build_profile_prefix
 from domovoi.voice_identifier import speaker_is_confident
+from web.backend.api import chat_doc_jobs as _jobs
 from web.backend.api import chat_documents as _docs
 from web.backend.api.devices import valid_device_id
 from web.backend.db import session_scope
@@ -238,6 +239,8 @@ async def delete_thread(thread_id: int) -> dict[str, Any]:
             )
         ).scalars().all()
         doc_tokens = {d.get("token") for d in await _docs.thread_documents(thread_id, s)}
+        # Its long-document jobs stop first (their rows go with the thread).
+        await _jobs.cancel_thread(thread_id)
         r = await s.execute(text("DELETE FROM chat_threads WHERE id = :id"), {"id": thread_id})
         if r.rowcount == 0:
             raise HTTPException(status_code=404, detail="thread not found")
@@ -497,7 +500,15 @@ async def list_messages(thread_id: int) -> dict[str, Any]:
                 {"id": thread_id},
             )
         ).mappings().all()
-    return {"messages": [_msg_dict(r) for r in rows]}
+    # Long-document jobs (chat_doc_jobs.py): one running shows its progress;
+    # a stopped one can carry on. One this process lost (a restart) carries
+    # on from its next part now that the chat is open again.
+    try:
+        jobs = await _jobs.thread_jobs(thread_id)
+    except Exception as e:  # noqa: BLE001 — the messages still show
+        log.warning("chat: the jobs of thread %s are unreadable: %s", thread_id, type(e).__name__)
+        jobs = []
+    return {"messages": [_msg_dict(r) for r in rows], "jobs": jobs}
 
 
 class SendBody(BaseModel):
@@ -798,6 +809,14 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         plan = await _docs.plan_reply(thread_id, body.content, documents, previous)
         if plan is not None and not override:
             model_role = "documents"
+    if plan is not None and plan.long:
+        # A summary of documents longer than one pass: read in parts by a
+        # job that carries on if the page goes, with progress, stop and the
+        # reply written when it ends (chat_doc_jobs.py, documents plan D2).
+        _docs._require_ai()
+        docs = [{"token": d.get("token"), "name": d.get("name"), "parts": d.get("parts") or []} for d in plan.docs]
+        job = await _jobs.start_thread_job(thread_id, user_row_id, plan.question, docs, model=override or None)
+        return _jobs.stream_thread_job(job)
 
     refusal: tuple[str, str] | None = None
     if model_role == "vision":
@@ -870,8 +889,8 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
             code, error = refusal
             log.info("chat refused up front (thread %s, model %r): %s", thread_id, model, code)
         elif plan is not None and plan.immediate is not None:
-            # Said by the app, with no model asked: nothing found, an
-            # attachment with no question, a summary too long for one pass.
+            # Said by the app, with no model asked: nothing found, or an
+            # attachment with no question.
             first_token_ms = 0.0
             chunks.append(plan.immediate)
             doc = plan.doc_json()
@@ -1212,3 +1231,5 @@ async def chat_models() -> dict[str, Any]:
 
 # Documents in chats (chat_documents.py): their routes ride on this router.
 router.include_router(_docs.router)
+# Long documents' map/reduce jobs (chat_doc_jobs.py), and a phone's private ones.
+router.include_router(_jobs.router)

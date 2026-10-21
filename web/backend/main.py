@@ -224,6 +224,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as e:  # noqa: BLE001 — a media dir must not stop boot
         log.warning("media-library dir boot hook raised: %s", e)
 
+    # Long-document jobs (web/backend/api/chat_doc_jobs.py): an upload a
+    # phone's private job left behind when the process stopped goes now.
+    from web.backend.api import chat_doc_jobs
+
+    chat_doc_jobs.boot()
+
     broadcaster = StateBroadcaster()
     poll_loop = StatePollLoop(broadcaster, interval_sec=_POLL_INTERVAL)
     listen_task = ListenTask(poll_loop)
@@ -267,6 +273,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await chat_doc_jobs.shutdown()
         await listen_task.stop()
         await poll_loop.stop()
         # Uninstall the import guard on shutdown. Irrelevant for a real

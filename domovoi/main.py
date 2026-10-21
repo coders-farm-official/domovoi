@@ -40,6 +40,7 @@ from sqlalchemy import text  # noqa: E402
 from domovoi import admin_auth as admin_auth_mod  # noqa: E402
 from domovoi import git_version  # noqa: E402
 from domovoi import self_restart  # noqa: E402
+from domovoi import voice_activity  # noqa: E402
 from domovoi import server_identity  # noqa: E402
 from domovoi.container_guard import freeze as container_freeze  # noqa: E402
 from domovoi.admin_auth import (  # noqa: E402
@@ -935,6 +936,17 @@ from domovoi.plugins_runtime.installer import plugins_admin_router  # noqa: E402
 app.include_router(plugins_admin_router)
 
 
+@app.get("/v1/voice/activity", dependencies=[Depends(require_device)])
+async def get_voice_activity() -> dict[str, Any]:
+    """Whether a voice turn is being answered now (domovoi/voice_activity.py):
+    ``{"busy", "turns", "oldest_ms", "since_last_ms"}``. The web process's
+    document jobs ask between their parts and wait while ``busy``, so a
+    question in a room waits at most for the one part already being read.
+    Device tier, like the turns themselves: it says only that someone is
+    talking to Domovoi, never who or what."""
+    return voice_activity.snapshot()
+
+
 @app.post(
     "/v1/intent",
     # Device tier: a turn here runs handlers as any room (it can play
@@ -951,8 +963,11 @@ async def post_intent(intent: Intent):
         online=probe.online,
         bot_name=settings.bot_name,
     )
-    async with session_scope() as s:
-        response = await route(intent, ctx, s)
+    # A voice turn in progress for its routing (voice_activity.py): a
+    # home-server document job waits between its parts while it runs.
+    async with voice_activity.turn("intent"):
+        async with session_scope() as s:
+            response = await route(intent, ctx, s)
 
     if not intent.synthesize:
         return response

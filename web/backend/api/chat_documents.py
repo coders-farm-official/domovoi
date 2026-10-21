@@ -490,7 +490,7 @@ class DocPlan:
     """How a message in a thread with documents is answered."""
     mode: str
     #: The reply when no model is asked ("I couldn't find that ...", an
-    #: attachment with no question, a summary too long for one pass).
+    #: attachment with no question).
     immediate: str | None = None
     #: The user turn for the model (passages and question), when one is.
     user: str = ""
@@ -501,6 +501,9 @@ class DocPlan:
     given: list[qa.Given] = field(default_factory=list)
     notes: list[dict[str, str]] = field(default_factory=list)
     found: bool = True
+    #: A summary of documents longer than one pass: read in parts by a job
+    #: (chat_doc_jobs.py, D2), not one model call.
+    long: bool = False
 
     def doc_json(self, checked: qa.Checked | None = None) -> dict[str, Any]:
         sources = []
@@ -564,9 +567,8 @@ def _plan(docs: list[dict[str, Any]], question: str, new_docs: list[dict[str, An
     if mode == "summary":
         given = qa.retrieve(loaded, q, mode="summary")
         if not given:
-            words = sum(int(d.get("words") or 0) for d in loaded)
-            return DocPlan(mode="summary", immediate=qa.summary_too_long_text(names, words), names=names,
-                           docs=loaded, found=False)
+            # Longer than one pass: read in parts, then combined (D2).
+            return DocPlan(mode="summary", question=q, names=names, docs=loaded, long=True)
     else:
         given = qa.retrieve(loaded, q, previous)
         if not given:
