@@ -646,13 +646,16 @@ const PrintingJobsList = ({ jobs, onCancel, showPrinter = false }) => {
 const PrintingRecentJobs = ({ printerId, fire, label = 'recent jobs', extra = null, reloadKey = 0 }) => {
   const [open, setOpen] = React.useState(false);
   const [jobs, setJobs] = React.useState(null);
+  const [scanLog, setScanLog] = React.useState([]);
   const load = React.useCallback(async () => {
     try {
       const q = printerId != null ? `printer_id=${encodeURIComponent(printerId)}&limit=20` : 'limit=20';
       const r = await apiGet(`/api/print/jobs?${q}`, { quiet: true });
       setJobs((r && r.jobs) || []);
+      setScanLog((r && r.scans) || []);
     } catch (e) {
       setJobs([]);
+      setScanLog([]);
       const m = printingErrorText(e);
       if (m) fire(m);
     }
@@ -675,9 +678,26 @@ const PrintingRecentJobs = ({ printerId, fire, label = 'recent jobs', extra = nu
         {extra}
       </div>
       {open && <div style={{ marginTop: 6 }}><PrintingJobsList jobs={jobs} onCancel={cancel} showPrinter={printerId == null}/></div>}
+      {open && scanLog.length > 0 && <PrintingScanLog scans={scanLog}/>}
     </div>
   );
 };
+
+/* Scans in the household's job log (the same 90 days). */
+const PrintingScanLog = ({ scans }) => (
+  <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+    {scans.map((s) => (
+      <div key={s.id} style={{ fontSize: 12, color: 'var(--fg-muted)', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <span>scan</span>
+        <span>· {s.state}</span>
+        <span>· {s.pages} page{s.pages === 1 ? '' : 's'}</span>
+        {s.name && <span style={{ color: 'var(--fg)' }}>· {s.name}</span>}
+        {s.who && <span>· {s.who}</span>}
+        {s.error && <span style={{ color: 'var(--warn-ink, var(--warn))' }}>· {s.error}</span>}
+      </div>
+    ))}
+  </div>
+);
 
 const PrinterSupplies = ({ printer }) => {
   if (!printer.supplies_reported) return <PrintingMuted>this printer doesn't report ink levels</PrintingMuted>;

@@ -1126,9 +1126,10 @@ const FilesPage = () => {
         actions={<>
           <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }}
                  onChange={(e) => onUpload(e.target.files)}/>
-          {/* Scan (printers.jsx): only with a saved scanner; a finished
-              scan lands in Documents, so the folder is read again. */}
-          {isDocuments && window.PrintingScanButton && (
+          {/* Scan (printers.jsx): only with a saved scanner, and only where
+              this device may write to Documents (a scan writes there); a
+              finished scan lands in Documents, so the folder is read again. */}
+          {isDocuments && canUpload && window.PrintingScanButton && (
             <window.PrintingScanButton fire={fire} onDone={() => refresh()}/>
           )}
           {isDocuments && <NewMenu disabled={!canUpload} onPick={onCreate}/>}

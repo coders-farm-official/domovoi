@@ -267,7 +267,8 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
     }
     var printEntry by remember { mutableStateOf<FileEntry?>(null) }
     var scanning by remember { mutableStateOf(false) }
-    val canScanHere = printers?.hasScanner == true && selectedId == DOCUMENTS_LIBRARY_ID
+    // A scan WRITES into Documents: not offered where this device may not write.
+    val canScanHere = printers?.hasScanner == true && selectedId == DOCUMENTS_LIBRARY_ID && canWrite
 
     fun askSendHome(e: FileEntry) {
         if (uploader == null || uploader.gate()) sendHomeEntry = e

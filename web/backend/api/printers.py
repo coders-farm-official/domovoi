@@ -348,16 +348,18 @@ async def scan_get(scan_id: str, request: Request):
 @router.post("/api/scan/jobs/{scan_id}/next", dependencies=DEVICE)
 async def scan_next(scan_id: str, request: Request):
     await _documents_write_allowed(request)
+    ident, _name, _source = await _caller(request)
     status, out = await post_admin(f"/v1/scan/jobs/{_scan_id(scan_id)}/next", {}, timeout=300.0,
-                                   headers=_headers(request))
+                                   headers=_headers(request, ident))
     return bridge_response(status, out)
 
 
 @router.post("/api/scan/jobs/{scan_id}/finish", dependencies=DEVICE)
 async def scan_finish(scan_id: str, request: Request):
     await _documents_write_allowed(request)
+    ident, _name, _source = await _caller(request)
     status, out = await post_admin(f"/v1/scan/jobs/{_scan_id(scan_id)}/finish", {}, timeout=120.0,
-                                   headers=_headers(request))
+                                   headers=_headers(request, ident))
     if status == 200:
         _documents_changed()
     return bridge_response(status, out)
