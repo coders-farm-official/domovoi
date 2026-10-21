@@ -350,7 +350,8 @@ internal fun ChatHome(
         // Until the person scrolls it, the list stays at its top.
         val firstKey = shown.firstOrNull()?.let { "${it.place.key}:${it.id}" }
         LaunchedEffect(firstKey, showArchived, searching) {
-            if (!listTouched) listState.scrollToItem(0)
+            val away = listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0
+            if (!listTouched && away) listState.scrollToItem(0)
         }
         LaunchedEffect(listState) {
             snapshotFlow { listState.isScrollInProgress }.collect { if (it) listTouched = true }
