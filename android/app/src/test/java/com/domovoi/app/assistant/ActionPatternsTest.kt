@@ -14,8 +14,8 @@ class ActionPatternsTest {
     private val afternoon = ZonedDateTime.of(2026, 10, 21, 15, 42, 0, 0, la)
     private val earlyMorning = ZonedDateTime.of(2026, 10, 21, 5, 10, 0, 0, la)
 
-    private fun act(text: String, now: ZonedDateTime = afternoon, rooms: List<String> = emptyList()): PhoneAction? =
-        (ActionPatterns.match(text, now, rooms) as? ActionAsk.Do)?.action
+    private fun act(text: String, now: ZonedDateTime = afternoon): PhoneAction? =
+        (ActionPatterns.match(text, now) as? ActionAsk.Do)?.action
 
     private fun kind(text: String) = act(text)?.kind
 
@@ -170,8 +170,11 @@ class ActionPatternsTest {
             "play music everywhere", "set a server timer for 5 minutes", "cast this to the office", "announce dinner is ready",
             "stop the music in all rooms",
         ).forEach { assertEquals(it, ActionAsk.House, ActionPatterns.match(it, afternoon)) }
-        // The household's own room names count too.
-        assertEquals(ActionAsk.House, ActionPatterns.match("play jazz in the den of doom", afternoon, listOf("Den of Doom")))
+        // House timers too (owner, 2026-10-21: phone chats are phone-only).
+        listOf("cancel the kitchen timer", "stop the office alarm", "how long is left on the kitchen timer",
+            "delete the garage timer").forEach { assertEquals(it, ActionAsk.House, ActionPatterns.match(it, afternoon)) }
+        // ...not the phone's own playback sleep timer.
+        assertEquals(ActionKind.CANCEL_SLEEP, kind("cancel the sleep timer"))
         // ...but a time or a duration isn't a room.
         assertEquals(ActionKind.SLEEP, kind("stop the music in an hour"))
         assertEquals(ActionKind.SET_ALARM, kind("set an alarm for 7 in the morning"))

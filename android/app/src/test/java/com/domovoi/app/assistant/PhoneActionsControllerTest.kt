@@ -147,7 +147,7 @@ class PhoneActionsControllerTest {
     private fun AssistantController.ask(text: String): StoredMessage {
         val before = state.value.conversation.messages.size
         send(text)
-        until("the reply to $text") { !state.value.replying && state.value.conversation.messages.size >= before + 2 }
+        until("the reply to $text", 20_000) { !state.value.replying && state.value.conversation.messages.size >= before + 2 }
         return state.value.conversation.messages.last()
     }
 
@@ -264,15 +264,14 @@ class PhoneActionsControllerTest {
         val a = c.ask("wake me at 7")
         assertEquals("This phone has no clock app that can set alarms.", a.text)
         assertNull(a.card)
-        // Showing timers falls back to what the phone itself knows.
-        assertEquals(sayNow(PhoneQuestion.TIMERS), c.ask("show my timers").text)
+        // Showing timers says so, and never reads the house's timers.
+        assertEquals("This phone has no clock app that can show its timers.", c.ask("show my timers").text)
         assertTrue(host.sent.isEmpty())
         assertTrue(engines.isEmpty())
     }
 
     private fun inputs() = PhoneAnswerInputs(ClockStyle(la, Locale.US, false).at(nowMs), ClockStyle(la, Locale.US, false), phone, llm.name, LlmBackend.CPU)
 
-    private fun sayNow(q: PhoneQuestion) = kotlinx.coroutines.runBlocking { PhoneQuestions.say(q, inputs()) }
 
     @Test fun showTheClockAppsTimersAtOnce() {
         val c = controller()
@@ -363,7 +362,9 @@ class PhoneActionsControllerTest {
         player.casting = "kitchen"
         phone.serverSet = true
         val c = controller()
-        assertEquals("That's playing in the kitchen. I can't control rooms from a phone chat yet; use the player, or a home server chat.", c.ask("pause").text)
+        val r = c.ask("pause")
+        assertEquals("That's a house thing — ask in a home-server chat.", r.text)
+        assertFalse("the room is never named", r.text.contains("kitchen"))
         assertTrue(player.calls.isEmpty())
     }
 
@@ -417,10 +418,33 @@ class PhoneActionsControllerTest {
         phone.serverSet = true
         val c = controller()
         val r = c.ask("play jazz in the kitchen")
-        assertEquals("I can't do things in the house's rooms or on the home server from a phone chat yet; a home server chat can.", r.text)
+        assertEquals("That's a house thing — ask in a home-server chat.", r.text)
         assertNull(r.card)
+        assertEquals(ActionTexts.HOUSE, c.ask("cancel the kitchen timer").text)
+        assertEquals(ActionTexts.HOUSE, c.ask("set a timer for 10 minutes in the kitchen").text)
         assertTrue(player.calls.isEmpty())
         assertTrue(engines.isEmpty())
+    }
+
+    /** Owner, 2026-10-21: phone chats are phone-only. Whatever the phone
+     *  context still holds about the house, no action reads its timers or
+     *  names its rooms. */
+    @Test fun phoneActionsNeverReadHouseTimersOrNameRooms() {
+        phone.timers = listOf(PhoneTimer("pizza", reminder = false, triggerAtMs = nowMs + 600_000, room = "larkspur"))
+        phone.facts = PromptFacts(rooms = listOf("larkspur", "copper den"), server = ServerLink.CONNECTED)
+        phone.serverSet = true
+        host.clockIntents = emptySet()
+        playing("Glass Harbor")
+        val c = controller()
+        val said = listOf("show my timers", "show my alarms", "cancel the pizza timer", "play jazz in the larkspur",
+            "set a timer for 5 minutes", "pause", "undo").map { c.ask(it).text }
+        said.forEach { t ->
+            listOf("pizza", "larkspur", "copper den").forEach { assertFalse("\"$t\" names $it", t.contains(it, ignoreCase = true)) }
+        }
+        player.casting = "larkspur"
+        val r = c.ask("next")
+        assertEquals(ActionTexts.HOUSE, r.text)
+        assertFalse(r.text.contains("larkspur"))
     }
 
     // ── The model's tools ───────────────────────────────────────────────

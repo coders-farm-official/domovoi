@@ -256,10 +256,9 @@ object ActionTexts {
         ClockIntent.SHOW_ALARMS -> "This phone has no clock app that can show its alarms."
     }
 
-    /** House actions, not this round (plan part 2), in one sentence. */
-    fun house(serverKnown: Boolean): String =
-        "I can't do things in the house's rooms or on the home server from a phone chat yet" +
-            if (serverKnown) "; a home server chat can." else "."
+    /** House actions (rooms, house timers, the home server): one line,
+     *  owner's wording (2026-10-21). Phone chats are phone-only. */
+    const val HOUSE = "That's a house thing — ask in a home-server chat."
 
     const val NOTHING_TO_UNDO = "There's nothing to undo."
     const val NOTHING_PLAYING = "Nothing is playing on this phone."
@@ -268,11 +267,6 @@ object ActionTexts {
     const val NO_VIDEO_PERMISSION = "I can't see this phone's videos without the videos permission; open Videos on this phone once to allow it."
     const val NO_BOOKS = "No audiobooks are saved on this phone."
     const val TIMER_TOO_LONG = "Timers in the Clock app go up to 24 hours."
-
-    /** Playing in a room this phone cast to: that's the house's. */
-    fun casting(room: String, serverKnown: Boolean): String =
-        "That's playing in the $room. I can't control rooms from a phone chat yet; use the player" +
-            (if (serverKnown) ", or a home server chat." else ".")
 
     const val UNDO_LINE = "undone"
 }

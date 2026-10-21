@@ -199,8 +199,11 @@ object ActionPatterns {
     private val houseAll = Regex("^$HOUSE_VERB\\b.*\\b(?:everywhere|in every room|in all (?:the )?rooms|on all (?:the )?speakers|through(?:out)? the house|in the whole house|all over the house|around the house)\\b.*$")
     private val houseServer = Regex("^(?:set (?:a |an )?(?:server|house|household|home) (?:timer|alarm|reminder)(?: .*)?|set (?:a |an )?(?:timer|alarm|reminder) on the (?:home )?server|(?:cast|send|move) (?:this|it|the music|the song|that) (?:to|into) .+|announce .+)$")
 
-    /** Rooms people name; a household's own rooms (the cached names) are
-     *  added by [match]. */
+    /** "cancel the kitchen timer": a house timer, never the phone's. */
+    private val houseTimer = Regex("^(?:cancel|stop|delete|remove|pause|turn off|check|end|dismiss|how long is left on|how much time is left on|what's left on|whats left on) (?:the |my )?(?<room>[a-z]+(?: [a-z]+)?) (?:timer|timers|alarm|reminder)s?$")
+
+    /** Rooms people name. Never the household's own room names: a phone
+     *  chat doesn't read the server's (owner, 2026-10-21). */
     private val ROOM_WORDS = setOf(
         "kitchen", "living room", "living", "lounge", "bedroom", "master bedroom", "kids room", "kid's room", "nursery",
         "office", "study", "garage", "basement", "attic", "bathroom", "den", "dining room", "dining", "hallway", "hall",
@@ -215,22 +218,25 @@ object ActionPatterns {
      * no am or pm. [rooms]: the household's room names as this phone last
      * saw them.
      */
-    fun match(text: String, now: ZonedDateTime, rooms: List<String> = emptyList()): ActionAsk? {
+    fun match(text: String, now: ZonedDateTime): ActionAsk? {
         if (text.length > MAX_CHARS) return null
         val t = norm(text)
         if (t.isEmpty()) return null
         if (undo.matches(t)) return ActionAsk.Undo
-        if (isHouse(t, rooms)) return ActionAsk.House
+        if (isHouse(t)) return ActionAsk.House
         return action(t, now)?.let { ActionAsk.Do(it) }
     }
 
-    private fun isHouse(t: String, rooms: List<String>): Boolean {
+    private fun isHouse(t: String): Boolean {
         if (houseServer.matches(t) || houseAll.matches(t)) return true
+        houseTimer.matchEntire(t)?.let { m ->
+            val w = m.groups["room"]!!.value
+            if (w in ROOM_WORDS || w.removeSuffix(" room") in ROOM_WORDS) return true
+        }
         val m = houseRoom.matchEntire(t) ?: return false
         val room = m.groups["room"]!!.value
         if (parseDurationSeconds(room) != null || room in NOT_ROOMS) return false
-        val known = ROOM_WORDS + rooms.map { it.lowercase().trim() }
-        return room in known || room.removeSuffix(" room") in known
+        return room in ROOM_WORDS || room.removeSuffix(" room") in ROOM_WORDS
     }
 
     private val NOT_ROOMS = setOf("morning", "afternoon", "evening", "night", "background", "car")

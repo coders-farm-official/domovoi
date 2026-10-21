@@ -1004,9 +1004,10 @@ class AssistantController(
         }
         val outcome = out ?: run {
             val now = runCatching { clockStyle().at(clock()) }.getOrNull() ?: return null
-            val rooms = runCatching { phone.facts().rooms }.getOrDefault(emptyList())
-            when (val ask = ActionPatterns.match(question.text, now, rooms) ?: return null) {
-                ActionAsk.House -> ActionOutcome(ActionTexts.house(phone.serverKnown()), FAST_ACTION_HOUSE)
+            // Phone chats are phone-only (owner, 2026-10-21): the house's
+            // rooms and timers are never read, named or acted on here.
+            when (val ask = ActionPatterns.match(question.text, now) ?: return null) {
+                ActionAsk.House -> ActionOutcome(ActionTexts.HOUSE, FAST_ACTION_HOUSE)
                 ActionAsk.Undo -> undoNow(asked.id)
                 is ActionAsk.Do -> try {
                     actionLock.withLock { runAction(ask.action, question.text) }
@@ -1023,9 +1024,10 @@ class AssistantController(
         } ?: asked
         onDelta(outcome.spoken)
         val reply = phoneMessage(outcome.text, outcome.fastPath, outcome.card).copy(firstTextMs = (nanos() - sent) / 1_000_000)
-        val done = finishReply(base, reply)
-        outcome.undo?.let { before -> undoEntry = UndoEntry(done.id, done.messages.lastIndex, before, clock()) }
-        return done
+        // The Undo is in place before the reply shows: an "undo" right after
+        // must find this action's, never the one before.
+        outcome.undo?.let { before -> undoEntry = UndoEntry(base.id, base.messages.size, before, clock()) }
+        return finishReply(base, reply)
     }
 
     private fun StoredConversation.withCard(index: Int, card: PhoneCard): StoredConversation =
@@ -1052,10 +1054,9 @@ class AssistantController(
                     val opened = actions.clock(ClockRequest(intent, skipUi = false))
                     ActionOutcome(if (opened) "Opening your ${if (timers) "timers" else "alarms"} in the Clock app." else ActionTexts.CLOCK_FAILED.substringBefore(" Nothing"), fp)
                 } else {
-                    // No Clock app takes it: what the phone itself knows.
-                    val q = if (timers) PhoneQuestion.TIMERS else PhoneQuestion.NEXT_ALARM
-                    val read = (withContext(io) { PhoneQuestions.answer(q, inputs()) } as? PhoneAnswer.Said)?.text
-                    ActionOutcome(read ?: ActionTexts.noClock(intent), fp)
+                    // No Clock app takes it: said so. Never the house's
+                    // timers (phone chats are phone-only).
+                    ActionOutcome(ActionTexts.noClock(intent), fp)
                 }
             }
             ActionKind.PLAY_VIDEO -> {
@@ -1081,7 +1082,8 @@ class AssistantController(
     /** The player's actions: done at once, with Undo. */
     private suspend fun playback(a: PhoneAction, fp: String): ActionOutcome {
         val player = actions.player ?: return ActionOutcome(ActionTexts.NO_PLAYER, fp)
-        player.castingTo()?.let { return ActionOutcome(ActionTexts.casting(it, phone.serverKnown()), fp) }
+        // Casting to a room: that's the house's, and the room isn't named.
+        if (player.castingTo() != null) return ActionOutcome(ActionTexts.HOUSE, FAST_ACTION_HOUSE)
         val before = player.snapshot()
         fun said(text: String) = ActionOutcome(text, fp)
         val text: String = when (a.kind) {
@@ -1127,6 +1129,9 @@ class AssistantController(
                 val q = a.query.orEmpty()
                 val found = findSongs(q) ?: return said(ActionTexts.NO_MUSIC_PERMISSION)
                 if (found.isEmpty()) {
+                    // "play jazz in the larkspur": nothing on the phone has
+                    // that name, so it's a room the patterns don't know.
+                    if (Regex(" (?:in|on) (?:the|my|our) [a-z' ]{2,40}$").containsMatchIn(q)) return ActionOutcome(ActionTexts.HOUSE, FAST_ACTION_HOUSE)
                     return said(if (q.isEmpty()) "There's no music saved on this phone." else "I can't find any music matching \"$q\" on this phone.")
                 }
                 val items = if (a.shuffle) found.shuffled(random) else found
