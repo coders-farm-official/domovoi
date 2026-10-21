@@ -30,6 +30,13 @@ data class CatalogModel(
      *  nothing may ship with (its licence does not allow it). */
     val timingOnly: Boolean = false,
     val note: String? = null,
+    /** The model may be offered a phone chat's read tools (PhoneTools).
+     *  Off for Gemma 4 E2B: on the owner's Fold (N0, 2026-10-21) it called
+     *  a tool for 26.7% of near-miss phrases ("why does my battery drain so
+     *  fast?") and the descriptions cost +1.6 s to a fresh conversation's
+     *  first word, so on E2B the phone's facts come from the fast paths
+     *  only. Meant for E4B once it is in the catalog and measured. */
+    val readTools: Boolean = false,
 ) {
     val totalBytes: Long get() = files.sumOf { it.size }
 }
@@ -65,6 +72,8 @@ object ModelCatalog {
         ),
         license = "Apache-2.0",
         licenseUrl = "https://huggingface.co/google/gemma-4-E2B-it",
+        // Fast paths only (see CatalogModel.readTools).
+        readTools = false,
     )
 
     private const val TINY_REV = "d1e6c30921780b8508d04b492dfb3ce8a51605d4"

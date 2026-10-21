@@ -453,14 +453,18 @@ exactly what it sends, and the facts and tool results are not in it.
   permission, the phone's own calendar, where am I (the last fix Android
   has, as coordinates: no address lookup) and the Wi-Fi network's name.
   The weather says plainly that a phone chat doesn't use the internet.
+- **Library fast paths** (`LibraryQuestions`): "do I have songs by…",
+  "do I have a video called…", "where did I leave off in…", "which
+  chapter am I on", "how much memory does this phone have".
 - **Read tools** for the model (`assistant/PhoneTools.kt`), in LiteRT-LM's
   manual mode (the app runs each call; constrained decoding; on the CPU
-  only): `find_music`, `find_video` (with the media permission local Music
-  and Videos ask for), `find_book` (audiobooks saved on the phone, with the
-  chapter and place), `list_timers`, `phone_status`. They only read.
-  Offering them adds about 500 prompt tokens to a new conversation (N0
-  measured +4.3 s to the first word on the emulator's CPU); a kept
-  conversation doesn't pay it again.
+  only): `find_music`, `find_video`, `find_book`, `list_timers`,
+  `phone_status`. They only read. **Offered only to a model whose catalog
+  entry sets `readTools`, which Gemma 4 E2B doesn't**: on the owner's Fold
+  (N0, 2026-10-21) E2B called a tool for 26.7% of near-miss phrases ("why
+  does my battery drain so fast?") and the descriptions cost +1.6 s to a
+  fresh conversation's first word, so on E2B the facts come from the fast
+  paths only. Meant for E4B once it is in the catalog and measured.
 - **Hand-offs** (`assistant/HandOffs.kt`, `HandOffLauncher.kt`): call or
   text (the dialer, `ACTION_DIAL`, or Messages with the number filled in;
   the person comes from the contacts with that permission, else the

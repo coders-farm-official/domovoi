@@ -116,7 +116,9 @@ What the policy asks and what the app does:
 - **Prevent restricted content:** the model's own safety tuning, a fixed
   system prompt (`assistant/Persona.kt`) asking for short spoken answers, a
   4,096-token limit on prompt plus reply (`LiteRtLlmEngine.DEFAULT_MAX_TOKENS`), and
-  since N1 only read-only tools the app runs itself (finding a song, video
+  since N1 at most read-only tools the app runs itself, and none for the
+  shipped model (Gemma 4 E2B answers phone questions from the app's own
+  patterns) (finding a song, video
   or saved book, the timers, the phone's status: `assistant/PhoneTools.kt`);
   the model can't change anything, reach files or contacts, or the network
   (`NoNetworkTest`). Calls, texts and the other hand-offs are the app's own

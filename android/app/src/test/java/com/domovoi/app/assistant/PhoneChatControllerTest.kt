@@ -39,10 +39,12 @@ class PhoneChatControllerTest {
     private val phone = FakePhone()
     @Volatile private var script: suspend (ModelTurn, (String) -> Unit) -> Unit = { _, emit -> emit("Hello there.") }
 
-    private val llm = CatalogModel(
+    /** A model allowed the read tools (as E4B is meant to be); E2B isn't. */
+    @Volatile private var llm = CatalogModel(
         "test-llm", "Test LLM (instruction-tuned)", ModelKind.LLM,
         listOf(ModelFile("model.litertlm", "https://example.org/model.litertlm", 100, "0".repeat(64))),
         "Apache-2.0", "https://example.org/license",
+        readTools = true,
     )
 
     @After fun tearDown() {
@@ -139,11 +141,41 @@ class PhoneChatControllerTest {
             emit("You have ${r["count"]} song by Velvet Kites.")
         }
         val c = controller()
-        val a = c.ask("Do I have any songs by Velvet Kites?")
+        val a = c.ask("Anything by Velvet Kites for a road trip?")
         assertEquals("You have 1 song by Velvet Kites.", a.text)
         assertEquals(listOf(PhoneTools.FIND_MUSIC), a.tools)
         assertEquals(listOf("music:velvet"), phone.library.queries)
         assertNull(a.fastPath)
+    }
+
+    /** The Fold's N0 run (2026-10-21): E2B called a tool for 26.7% of
+     *  near-miss phrases, so a model without the catalog's readTools flag
+     *  (E2B) is never offered them: its facts come from the fast paths. */
+    @Test fun aModelWithoutTheToolsFlagIsOfferedNoTools() {
+        llm = llm.copy(readTools = false)
+        val c = controller()
+        c.ask("Why does my phone battery drain so fast?")
+        val turn = engines.single().turns.single()
+        assertNull(turn.tools)
+        assertEquals("the facts are still told", listOf(ContextLine.CLOCK), turn.context.map { it.kind })
+    }
+
+    @Test fun e2bIsFastPathsOnly() {
+        assertFalse(ModelCatalog.gemma4E2b.readTools)
+        assertFalse(ModelCatalog.chatModel.readTools)
+        assertTrue(ModelCatalog.all.none { it.kind == ModelKind.LLM && it.readTools && it.id == ModelCatalog.gemma4E2b.id })
+    }
+
+    @Test fun libraryAndMemoryQuestionsAreFastPathsToo() {
+        phone.library.videos = listOf(FoundItem("glacier-trip.mp4", durationSec = 30.0))
+        phone.library.music = listOf(FoundItem("Glass Harbor", "Velvet Kites"))
+        val c = controller()
+        val v = c.ask("Do I have a video called glacier trip on this phone?")
+        assertEquals("On this phone: \"glacier-trip.mp4\" (0:30).", v.text)
+        assertEquals("library_video", v.fastPath)
+        assertEquals("On this phone: \"Glass Harbor\" by Velvet Kites.", c.ask("do I have any songs by velvet kites").text)
+        assertEquals("This phone has 8 GB of memory.", c.ask("How much memory does this phone have?").text)
+        assertTrue(engines.isEmpty())
     }
 
     @Test fun onTheGpuNoToolsAreOffered() {

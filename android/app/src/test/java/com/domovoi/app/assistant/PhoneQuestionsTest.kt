@@ -231,6 +231,42 @@ class PhoneQuestionsTest {
         assertEquals(null, PhoneQuestion.WEATHER.permission)
     }
 
+    // ── The library and memory (fast paths since the Fold's N0 results) ─
+
+    @Test fun libraryQuestions() {
+        assertEquals(LibraryAsk(LibraryKind.MUSIC, "velvet kites"), LibraryQuestions.match("Do I have any songs by Velvet Kites?"))
+        assertEquals(LibraryAsk(LibraryKind.MUSIC, ""), LibraryQuestions.match("what music do I have on this phone"))
+        assertEquals(LibraryAsk(LibraryKind.VIDEO, "glacier trip"), LibraryQuestions.match("Do I have a video called glacier trip on this phone?"))
+        assertEquals(LibraryAsk(LibraryKind.BOOK, "dune"), LibraryQuestions.match("where did I leave off in Dune"))
+        assertEquals(LibraryAsk(LibraryKind.BOOK, ""), LibraryQuestions.match("which chapter am I on"))
+        listOf("what music is good for studying", "do I have time for a nap", "find me a recipe", "is there a book about bees you recommend")
+            .forEach { assertNull(it, LibraryQuestions.match(it)) }
+        assertEquals(PhoneQuestion.MEMORY, PhoneQuestions.match("How much memory does this phone have?"))
+        assertEquals(PhoneQuestion.MEMORY, PhoneQuestions.match("how much RAM do I have"))
+        assertEquals("This phone has 8 GB of memory.", say(PhoneQuestion.MEMORY, FakePhone()))
+    }
+
+    @Test fun libraryAnswers() {
+        val lib = FakeLibrary(
+            music = listOf(FoundItem("Glass Harbor", "Velvet Kites")),
+            videos = listOf(FoundItem("glacier-trip.mp4", durationSec = 30.0)),
+            books = listOf(FoundItem("Dune", "Frank Herbert", chapter = "Chapter 3", positionSec = 3725.0)),
+        )
+        assertEquals("On this phone: \"glacier-trip.mp4\" (0:30).", LibraryQuestions.answer(LibraryAsk(LibraryKind.VIDEO, "glacier trip"), lib))
+        assertEquals("\"Dune\" by Frank Herbert: you're at 1:02:05, in Chapter 3.", LibraryQuestions.answer(LibraryAsk(LibraryKind.BOOK, "dune"), lib))
+        assertEquals("I can't find any music matching \"jazz\" on this phone.", LibraryQuestions.answer(LibraryAsk(LibraryKind.MUSIC, "jazz"), lib))
+        lib.musicAllowed = false
+        assertTrue(LibraryQuestions.answer(LibraryAsk(LibraryKind.MUSIC, ""), lib).startsWith("I can't see this phone's music"))
+    }
+
+    /** The near misses that made E2B's tools a 26.7% false-action rate on
+     *  the Fold: none is a fast path either. */
+    @Test fun theFoldsNearMissesStayWithTheModel() {
+        listOf("Why does my phone battery drain so fast?", "My alarm didn't go off this morning.", "I paused my gym membership.",
+            "How long should I boil an egg?", "What's ten minutes in seconds?", "I'm bored.")
+            .forEach { assertNull(it, PhoneQuestions.match(it)); assertNull(it, LibraryQuestions.match(it)) }
+    }
+
     @Test fun timesAreSaidRelativeToToday() {
         val i = inputs(FakePhone())
         assertEquals("at 6:00 PM today", PhoneQuestions.whenSaid(now.withHour(18).withMinute(0).toInstant().toEpochMilli(), i))

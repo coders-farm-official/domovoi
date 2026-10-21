@@ -15,6 +15,7 @@ enum class PhoneQuestion {
     DO_NOT_DISTURB,
     TIMERS,
     PHONE_MODEL,
+    MEMORY,
     ANDROID_VERSION,
     WHICH_MODEL,
 
@@ -86,7 +87,8 @@ object PhoneQuestions {
 
     private val FORMS: List<Pair<PhoneQuestion, String>> = listOf(
         PhoneQuestion.NOW_PLAYING to "what is playing|what song is (?:this|playing|on)|what is this song|what song is it|" +
-            "what am i listening to|who sings this|who is singing|what music is playing|what is this track|what track is this|" +
+            "what am i listening to|what is this song called|what is the name of this song|"+
+            "what band is this|who is this (?:song|track) by|who sings this|who is singing|what music is playing|what is this track|what track is this|" +
             "what is on the player|whats playing",
         PhoneQuestion.CHARGING to "is (?:my |the |this )?(?:phone|battery) charging|is it charging|am i charging|" +
             "is (?:my |the )?(?:phone|battery) (?:plugged in|on the charger)",
@@ -108,8 +110,11 @@ object PhoneQuestions {
             "is (?:my |the )?phone (?:on|in) do not disturb|is do not disturb off|is (?:my |the )?phone on silent|" +
             "is (?:my |the )?phone (?:silenced|muted)",
         PhoneQuestion.TIMERS to "what timers do i have|do i have any timers(?: running| set)?|what timers are (?:running|set|on)|" +
-            "how (?:much time|long) is left on (?:my|the) timers?|(?:any|my) timers|list (?:my |the )?timers|" +
+            "how (?:much time|long) is left on (?:my|the) timers?|how (?:much time|long) is left on (?:my |the )?[a-z]+(?: [a-z]+)? timer|"+
+            "when (?:is|does) (?:my|the) (?:[a-z]+ )?timer (?:done|going off|go off|finish|end)|(?:any|my) timers|list (?:my |the )?timers|" +
             "what reminders do i have|do i have any reminders|what are my timers|show (?:me )?my timers",
+        PhoneQuestion.MEMORY to "how much (?:memory|ram) (?:does (?:this|my|the) phone have|do i have|is there|is in (?:this|my) phone|have i got)|" +
+            "how much (?:memory|ram)|what is (?:my|the|this phones) (?:memory|ram)",
         PhoneQuestion.PHONE_MODEL to "what phone is this|which phone is this|what phone (?:do i have|am i using|is this)|" +
             "what (?:model|kind of phone|type of phone|make of phone) is this(?: phone)?|what model is (?:my|this) phone|what is this phone",
         PhoneQuestion.ANDROID_VERSION to "(?:what|which) (?:version of )?android(?: version)?(?: is this| am i (?:on|running|using)| do i have| does (?:it|this phone) (?:run|have)| is (?:it|this phone) (?:on|running))?|" +
@@ -218,6 +223,8 @@ object PhoneQuestions {
             PhoneQuestion.PHONE_MODEL -> r.device()?.let { d ->
                 "This is ${phoneName(d)} on Android ${d.android}, with ${DeviceTiers.marketedGb(d.totalRamBytes)} GB of memory."
             } ?: "I can't read which phone this is."
+            PhoneQuestion.MEMORY -> r.device()?.let { d -> "This phone has ${DeviceTiers.marketedGb(d.totalRamBytes)} GB of memory." }
+                ?: "I can't read this phone's memory."
             PhoneQuestion.ANDROID_VERSION -> r.device()?.let { d -> "This phone runs Android ${d.android}." }
                 ?: "I can't read the Android version."
             PhoneQuestion.WHICH_MODEL -> "I'm Domovoi, running ${inputs.modelName.substringBefore(" (")} on this phone's ${inputs.backend.name}, with no internet."
@@ -388,4 +395,108 @@ object PhoneQuestions {
     private const val MAX_TIMERS = 5
     private const val MAX_EVENTS = 5
     private const val NEXT_EVENT_DAYS = 7L
+}
+
+/** What's saved on the phone that a library question searches. */
+enum class LibraryKind { MUSIC, VIDEO, BOOK }
+
+/** "do I have songs by Velvet Kites": [kind], and [query] (empty: all). */
+data class LibraryAsk(val kind: LibraryKind, val query: String)
+
+/**
+ * The library questions as fast paths (N1, after the Fold's N0 results:
+ * E2B called a read tool for 26.7% of near-miss phrases, so on E2B the
+ * phone's music, videos and saved books are found by these patterns, with
+ * no model). Narrow like the others: the whole question must be one of
+ * these forms.
+ */
+object LibraryQuestions {
+    private const val MAX_CHARS = 120
+    private const val LEAD = "(?:(?:hey|ok|okay|so|please|domovoi) )*(?:(?:can|could) you (?:please )?(?:tell me |check )?(?:if |whether )?)?"
+    private const val END = "(?: (?:on (?:my|this|the) phone|saved|downloaded|here|please))*"
+    private const val SONGS = "(?:songs|music|tracks|anything)"
+
+    private val forms: List<Pair<LibraryKind, Regex>> = listOf(
+        LibraryKind.MUSIC to "do i have (?:any )?$SONGS by (?<q>.+?)",
+        LibraryKind.MUSIC to "do i have (?:the |a )?(?:song|track|album) (?:called |named )?(?<q>.+?)",
+        LibraryKind.MUSIC to "what $SONGS (?:by (?<q>.+?) )?do i have",
+        LibraryKind.MUSIC to "what music is there",
+        LibraryKind.MUSIC to "(?:find|search for) (?:the |my )?(?:song|songs|music|track|album) (?:called |named |by )?(?<q>.+?)",
+        LibraryKind.VIDEO to "do i have (?:a |any )?videos? (?:called|named|of|about|from) (?<q>.+?)",
+        LibraryKind.VIDEO to "what videos (?:do i have|are there)",
+        LibraryKind.VIDEO to "(?:find|search for) (?:the |a |my )?video (?:called |named |of )?(?<q>.+?)",
+        LibraryKind.BOOK to "do i have (?:the |an |a )?(?:audio ?book|book) (?:called |named )?(?<q>.+?)",
+        LibraryKind.BOOK to "what (?:audio ?books|books) (?:do i have|are there)",
+        LibraryKind.BOOK to "where (?:am i|did i (?:leave off|stop)) in (?:my |the )?(?:audio ?book|book)",
+        LibraryKind.BOOK to "where (?:am i|did i (?:leave off|stop)) in (?<q>.+?)",
+        LibraryKind.BOOK to "(?:which|what) chapter am i (?:on|at)(?: in (?<q>.+?))?",
+    ).map { (k, core) -> k to Regex("^$LEAD(?:$core)$END$") }
+
+    fun match(text: String): LibraryAsk? {
+        if (text.length > MAX_CHARS) return null
+        val said = PhoneQuestions.norm(text)
+        if (said.isEmpty()) return null
+        for ((kind, re) in forms) {
+            val m = re.matchEntire(said) ?: continue
+            val q = runCatching { m.groups["q"]?.value }.getOrNull().orEmpty().trim()
+                .removePrefix("the ").removeSuffix(" audiobook").removeSuffix(" book")
+            return LibraryAsk(kind, q)
+        }
+        return null
+    }
+
+    /** The reply, from [library] now. */
+    fun answer(ask: LibraryAsk, library: PhoneLibrary): String {
+        val q = ask.query
+        val quoted = if (q.isEmpty()) "" else " matching \"$q\""
+        return when (ask.kind) {
+            LibraryKind.MUSIC -> {
+                if (!library.canFindMusic()) return "I can't see this phone's music without the music and audio permission; open Music on this phone once to allow it."
+                val found = search(q) { library.findMusic(it, LIMIT * 4) }
+                if (found.isEmpty()) "I can't find any music$quoted on this phone." else "On this phone: " + list(found) { i ->
+                    "\"${i.title}\"" + (i.by?.let { " by $it" } ?: "")
+                } + "."
+            }
+            LibraryKind.VIDEO -> {
+                if (!library.canFindVideos()) return "I can't see this phone's videos without the videos permission; open Videos on this phone once to allow it."
+                val found = search(q) { library.findVideos(it, LIMIT * 4) }
+                if (found.isEmpty()) "I can't find any video$quoted on this phone." else "On this phone: " + list(found) { i ->
+                    "\"${i.title}\"" + (i.durationSec?.let { " (${PhoneFacts.clock(it)})" } ?: "")
+                } + "."
+            }
+            LibraryKind.BOOK -> {
+                if (!library.canFindBooks()) return "No audiobooks are saved on this phone."
+                val found = search(q) { library.findBooks(it, LIMIT * 4) }
+                if (found.isEmpty()) "I can't find a saved audiobook$quoted on this phone." else list(found) { i ->
+                    "\"${i.title}\"" + (i.by?.let { " by $it" } ?: "") + when {
+                        i.positionSec != null && i.chapter != null -> ": you're at ${PhoneFacts.clock(i.positionSec)}, in ${i.chapter}"
+                        i.positionSec != null -> ": you're at ${PhoneFacts.clock(i.positionSec)}"
+                        else -> ", not started"
+                    }
+                } + "."
+            }
+        }
+    }
+
+    /** [find] for [q]; when nothing has it as written ("glacier trip"
+     *  against "glacier-trip.mp4"), its longest word, kept to the items
+     *  that have every word, whatever separates them. */
+    internal fun search(q: String, find: (String) -> List<FoundItem>): List<FoundItem> {
+        val exact = find(q)
+        val words = words(q)
+        if (exact.isNotEmpty() || words.size < 2) return exact.take(LIMIT + 1)
+        return find(words.maxBy { it.length }).filter { item ->
+            val have = words(listOfNotNull(item.title, item.by, item.album).joinToString(" "))
+            words.all { it in have }
+        }.take(LIMIT + 1)
+    }
+
+    private fun words(s: String): List<String> = s.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }
+
+    private fun list(found: List<FoundItem>, say: (FoundItem) -> String): String {
+        val shown = found.take(LIMIT).map(say)
+        return shown.joinToString("; ") + if (found.size > LIMIT) "; and more" else ""
+    }
+
+    private const val LIMIT = 5
 }

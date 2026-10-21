@@ -806,10 +806,13 @@ class AssistantController(
     private fun factsLine(): String? = runCatching { PhoneFacts.line(phone.facts()) }
         .onFailure { Log.w(TAG, "the phone facts could not be read", it) }.getOrNull()
 
-    /** The read tools for a turn on [backend]: on the CPU only (a GPU field
-     *  report mangles numbers in tool arguments, plan part 2). */
+    /** The read tools for a turn on [backend]: only for a model whose
+     *  catalog entry allows them ([CatalogModel.readTools]: not E2B, whose
+     *  false calls on near-miss phrases were too many on the Fold), and on
+     *  the CPU only (a GPU field report mangles numbers in tool arguments,
+     *  plan part 2). */
     private fun readTools(backend: LlmBackend): ReadTools? {
-        if (backend != LlmBackend.CPU) return null
+        if (!chatModel.readTools || backend != LlmBackend.CPU) return null
         val names = runCatching { PhoneTools.offered(phone.library) }.getOrNull() ?: return null
         return ReadTools(names, names.map { PhoneTools.spec(it) }) { name, args ->
             withContext(io) {
@@ -846,6 +849,9 @@ class AssistantController(
                 is PhoneAnswer.Said -> phoneMessage(a.text, q.name.lowercase())
                 is PhoneAnswer.Ask -> permissionCard(a.permission, text, q.name.lowercase())
             }
+        }
+        LibraryQuestions.match(text)?.let { ask ->
+            return phoneMessage(withContext(io) { LibraryQuestions.answer(ask, phone.library) }, "library_" + ask.kind.name.lowercase())
         }
         val lastReply = conversation.messages.lastOrNull { !it.fromUser && it.text.isNotBlank() && it.error == null }?.text
         val style = clockStyle()
