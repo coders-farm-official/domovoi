@@ -636,8 +636,20 @@ reply; a name you give it stays.
 ### The assistant *(Preview)*
 
 A Domovoi that runs on the phone itself: type or talk, in airplane mode
-too. It knows the time and date, and it answers questions. It can't set
-timers, play music or look things up.
+too. It knows the time and date, and it answers questions. It also knows
+the phone: what's playing, the battery, free space, Wi-Fi or mobile data,
+your next alarm, Do Not Disturb, which phone and Android this is, and
+which songs, videos and saved books are on it. It can't set timers, play
+music or look things up online. House things (rooms, house timers, the
+household calendar) are in your home server chats.
+
+"Text Sam", "call Mom", "email Alex", "directions to the station", "add
+lunch tomorrow at noon to my calendar", "open a link" and "share this"
+show a card first; a tap opens the app that does it, and you finish
+there. Your calendar, where you are and calling people by name each ask
+for permission the first time, with the reason; say no and it simply
+says it can't, and never asks again. Everything is read on the phone and
+never sent anywhere; a phone chat never asks your home server.
 
 **How to:** **Chat** → **new chat** → **on this phone** → **Set up the
 assistant on this phone** →

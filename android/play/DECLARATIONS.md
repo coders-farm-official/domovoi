@@ -21,10 +21,11 @@ Checked and **not** a problem:
 
 | Item | Finding |
 |---|---|
-| `QUERY_ALL_PACKAGES` | Not declared (merged release manifest checked). The one `<queries>` entry is the text-to-speech service intent. |
+| `QUERY_ALL_PACKAGES` | Not declared (merged release manifest checked). The `<queries>` entries are the text-to-speech service intent and, since N1, the phone chat's hand-offs (dial, SMS and mail `SENDTO`, `geo:`, calendar `INSERT`, https `VIEW`, text `SEND`, the contact picker): intent-scoped visibility, which needs no declaration. |
 | `REQUEST_INSTALL_PACKAGES` | Not declared. The app never installs APKs; the household server hands the APK to the browser. |
-| Location (fine, coarse, background) | None declared. Wi-Fi names are read only where Android allows without it. |
-| `SYSTEM_ALERT_WINDOW`, `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, accessibility, SMS, call log, contacts | None. Room mode only opens the system's battery settings for the person. |
+| Location (fine, coarse, background) | **Fine and coarse since N1 (2026-10-21), foreground only**, asked in a phone chat the first time someone asks "where am I" or the Wi-Fi network's name, after the app's one-line reason; optional. No background location (`ACCESS_BACKGROUND_LOCATION` is not declared), so no location declaration form applies *(unverified that none exists for foreground-only; none was found)*. Room mode still reads Wi-Fi names only where Android allows without it. |
+| Contacts, calendar (read) | **Since N1, optional**: `READ_CONTACTS` to call or text someone by name from a phone chat (the contact picker works without it), `READ_CALENDAR` to read the phone's own calendar. Neither is a restricted permission with a declaration form *(unverified)*; both are read on the phone only and never sent (Data safety: not collected). Owner, at v1: check the Play Console's "Sensitive app permissions" page lists nothing for them. |
+| `SYSTEM_ALERT_WINDOW`, `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, accessibility, SMS, call log, notification access, usage stats | None (owner rule for the phone assistant: never texts, the call log, notifications, screen-time or accessibility). Room mode only opens the system's battery settings for the person. |
 | `CAMERA` | Only for scanning room mode's room code, asked when "Scan" is pressed, `uses-feature` not required; frames are decoded on the phone and dropped. No declaration exists for camera. |
 | `RECORD_AUDIO` | Asked at the first mic tap with the app's own reason first (`MicPermission.kt`), and by room mode after its explainer. Prominent disclosure: room mode's explainer screen, read to the end before "Start room mode". |
 | `RECEIVE_BOOT_COMPLETED` | Re-arms timer alarms, and room mode posts "tap to resume". No microphone or media service is started from boot (Android 15 forbids it; `RoomLockRules`). |
@@ -114,9 +115,14 @@ What the policy asks and what the app does:
   residual risk and the one-line HTTPS switch.
 - **Prevent restricted content:** the model's own safety tuning, a fixed
   system prompt (`assistant/Persona.kt`) asking for short spoken answers, a
-  4,096-token limit on prompt plus reply (`LiteRtLlmEngine.DEFAULT_MAX_TOKENS`), and no
-  tools: the model can't reach files, media, contacts or the network
-  (`NoNetworkTest`).
+  4,096-token limit on prompt plus reply (`LiteRtLlmEngine.DEFAULT_MAX_TOKENS`), and
+  since N1 at most read-only tools the app runs itself, and none for the
+  shipped model (Gemma 4 E2B answers phone questions from the app's own
+  patterns) (finding a song, video
+  or saved book, the timers, the phone's status: `assistant/PhoneTools.kt`);
+  the model can't change anything, reach files or contacts, or the network
+  (`NoNetworkTest`). Calls, texts and the other hand-offs are the app's own
+  patterns, shown as a card the person taps, never the model's.
 
 ## 5. Photo and video permissions declaration (App content → Sensitive app permissions)
 

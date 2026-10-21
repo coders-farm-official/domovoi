@@ -425,8 +425,67 @@ says so beside the download (`PreviewLabel`, `ui/components/Kit.kt`).
 Domovoi can answer **on the phone itself**, with no server and, once its
 model is downloaded, no internet: a language model (Gemma 4 E2B, run by
 LiteRT-LM) on the phone's CPU, by text or by push-to-talk voice. The
-model sees the system prompt and the conversation and nothing else: no
-files, media, contacts, location or any other app data, and no tools.
+model sees the system prompt, the conversation, the phone's clock and a
+few phone facts, and what its read-only tools return; nothing else.
+
+**What a phone chat knows** (N1, 2026-10-21). Each place answers from its own world: a phone chat reads the phone, never
+the home server (`NoNetworkTest.aPhoneChatNeverReachesTheServer`: the
+phone chat's classes name no server client). All of it is read on the
+phone when asked and goes nowhere but the model's context and the saved
+conversation (app-private, outside backups); "report this reply" shows
+exactly what it sends, and the facts and tool results are not in it.
+
+- **Prompt facts** (`assistant/PhoneFacts.kt`, under about 60 tokens,
+  told like the clock: a kept conversation hears a line again only when it
+  changed): what's playing (on this phone, or on a room speaker it cast
+  to, never named), the playback sleep timer, whether the home server is
+  connected, the listener's first name (`data/HouseholdNames.kt`). No room
+  names and no house timers: phone chats answer about the phone only
+  (owner, 2026-10-21); asked about rooms or house timers they say those
+  are in the home server chats. The persona says to
+  use them only when asked, never to mention them otherwise. The position
+  is left out on purpose (it changes every second).
+- **Fast paths** (`assistant/PhoneQuestions.kt`, instant, no model, like
+  the clock's): what's playing; battery and charging; free space; Wi-Fi or
+  mobile data; the next alarm (`AlarmManager.getNextAlarmClock`); Do Not
+  Disturb (and the ringer, for "on silent");
+  which phone and Android; which model is answering; the connected
+  Bluetooth headphones (Android's audio outputs, no permission); and, with
+  permission, the phone's own calendar, where am I (the last fix Android
+  has, as coordinates: no address lookup) and the Wi-Fi network's name.
+  The weather says plainly that a phone chat doesn't use the internet.
+- **Library fast paths** (`LibraryQuestions`): "do I have songs by…",
+  "do I have a video called…", "where did I leave off in…", "which
+  chapter am I on", "how much memory does this phone have".
+- **Read tools** for the model (`assistant/PhoneTools.kt`), in LiteRT-LM's
+  manual mode (the app runs each call; constrained decoding; on the CPU
+  only): `find_music`, `find_video`, `find_book`,
+  `phone_status`. They only read. **Offered only to a model whose catalog
+  entry sets `readTools`, which Gemma 4 E2B doesn't**: on the owner's Fold
+  (N0, 2026-10-21) E2B called a tool for 26.7% of near-miss phrases ("why
+  does my battery drain so fast?") and the descriptions cost +1.6 s to a
+  fresh conversation's first word, so on E2B the facts come from the fast
+  paths only. Meant for E4B once it is in the catalog and measured.
+- **Hand-offs** (`assistant/HandOffs.kt`, `HandOffLauncher.kt`): call or
+  text (the dialer, `ACTION_DIAL`, or Messages with the number filled in;
+  the person comes from the contacts with that permission, else the
+  contact picker), an email draft, directions in the maps app, a calendar
+  event in the calendar app's own editor (`ACTION_INSERT`), a web link
+  (https only), the share sheet with the last reply. Each is a card first
+  ("Text Sam?") and launches only on a tap; one no app takes is never
+  offered (`resolveActivity`, with the manifest's `<queries>`). Timers and
+  alarms through the Clock app are N2's, asked first the same way.
+- **Permissions, asked on first use, always optional**: approximate
+  location (where am I), precise location (only for the Wi-Fi name, with
+  its own reason), contacts (calling or texting by name), the
+  calendar (reading it). The chat's card gives the one-line reason, then
+  Android's dialog; "not now" or a refusal is kept
+  (`AssistantSettings.declinedPermissions`) and the feature says it can't,
+  pointing to Android's settings, without asking again. Never: texts, the
+  call log, notifications, usage stats, accessibility.
+- **The gate** (debug builds): `N1GateReceiver` runs the 20 scripted and
+  30 general questions through a phone chat with pinned facts and writes
+  `files/n1-gate.txt` (its comment has the adb lines).
 
 **Where it is: in Chat** (One Chat, 2026-10-21; there is no separate
 Assistant tab any more). Chat has one history list and one conversation

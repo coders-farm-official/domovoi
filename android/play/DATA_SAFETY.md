@@ -63,7 +63,10 @@ Not declared, and why:
 | Photos, videos, music, files | Read on the phone in local mode (`data/LocalMedia.kt`, `ui/screens/files/PhoneFileSource.kt`); uploaded only to the user's own server when the user picks "upload". |
 | Camera | QR frames decoded on the phone and dropped (`roommode/RoomScanner.kt`). |
 | Device or other IDs | The app's own random device id goes only to the user's server (`data/Prefs.kt`). No advertising ID, no Android ID use for tracking. |
-| Location | No location permission is requested (`AndroidManifest.xml`); the Wi-Fi network name is read only where Android allows without it. |
+| Location | Since N1 (2026-10-21) the app may ask for **approximate** location only when a phone chat is asked "where am I", and for **precise** location only when it is asked the Wi-Fi network's name (which Android shows only with it), each with its reason first, always optional. The last fix Android already has is read on the phone and shown as coordinates; it is never looked up online, never read in the background, never sent anywhere (`assistant/AndroidPhoneReader.kt`; `NoNetworkTest` pins that the phone chat's code names no network or server client). Processed on the device only, so not collected. |
+| Contacts | Asked for (optional) only to call or text someone by name from a phone chat; the name and number are read on the phone to fill in the dialer or Messages, which the person then uses themselves. Without it the system contact picker hands over only the row picked. Never sent anywhere: not collected. |
+| Calendar events | Asked for (optional) only when a phone chat is asked what's on the calendar; read on the phone into that conversation (app-private, outside backups), never sent anywhere: not collected. New events go through the calendar app's own editor (`ACTION_INSERT`), which the person saves themselves. |
+| Phone facts in a phone chat (battery, storage, network type, next alarm, Do Not Disturb, now playing, device model, connected headphones, the phone's music/video/book titles) | Read on the phone when asked and put only in the conversation on the phone (`assistant/PhoneQuestions.kt`, `PhoneTools.kt`). Not collected. **Such replies can't be reported** ("report this reply" is not offered on them, and `ReplyReport.draft` refuses them), so none of this, the location, contacts or calendar included, can leave the phone in a report; the model's own prompt facts never include location, contacts or calendar. |
 | Crash logs, diagnostics | Kept on the phone (`diagnostics/ProblemStore.kt`); the user may copy one. No crash-reporting SDK (`OpenSourceLicencesTest` fails the build if one appears). |
 | Model and voice downloads | The request goes to Hugging Face with no user data; the files come down. Google counts data your app *sends*: none. |
 
@@ -95,6 +98,17 @@ Declared conservatively (owner: update the Play Console form at v1, and
   sealed in the Android keystore (`OwnSearchStore.kt`).
 * The no-network test (`NoNetworkTest`) allows only this package's
   clients; `PhoneLookupsTest` proves nothing is sent before the allow.
+
+## Owner note for v1 (N1, 2026-10-21)
+
+The manifest now declares `ACCESS_COARSE_LOCATION`, `ACCESS_FINE_LOCATION`,
+`READ_CONTACTS` and `READ_CALENDAR`. Under Google's definitions nothing
+above changes (all processed on the phone, nothing transmitted), so the
+form's answers stay as drafted; the cautious reading is the same. **At
+v1, re-open the Data safety form in the Play Console** and check that it
+still says what this file says, since Play compares the form with the
+permissions in the uploaded bundle. `PRIVACY_POLICY.md` has a section for
+these ("What the on-device assistant reads on the phone").
 
 ## Security practices (shown on the listing)
 

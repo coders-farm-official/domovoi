@@ -68,6 +68,34 @@ Room mode can scan the room code your dashboard shows. The camera is asked
 for only when you press "Scan", the picture is read on the phone and never
 stored or sent, and you can paste the code instead.
 
+## What the on-device assistant reads on the phone
+
+A chat "on this phone" can answer questions about the phone itself, read
+on the phone at the moment you ask and never sent anywhere (not to your
+Domovoi server, not to us): what is playing, the battery, free space,
+whether you are on Wi-Fi or mobile data, your next alarm, Do Not Disturb,
+the phone's model and
+Android version, connected headphones, and the music, videos and saved
+audiobooks on the phone. What it reads goes only into that conversation,
+which stays in the app's private storage.
+
+Three things need your permission, asked the first time you ask for them,
+with the reason, and always optional:
+
+- **Approximate location**, for "where am I" (the last location Android
+  already has, shown as coordinates; never looked up online, never in the
+  background). **Precise location** is asked for separately and only to
+  read the Wi-Fi network's name, which Android shows to no other app.
+- **Contacts**, to call or text someone by name. Without it, you choose the
+  person in your contacts app each time.
+- **Calendar**, to read what is on this phone's calendar.
+
+Say no and the assistant says it can't do that, and doesn't ask again;
+you can change it in Android's settings for the app. Calls, texts, emails,
+directions, calendar events, links and sharing open the app that does
+them, after you tap; you finish there. The app never reads your texts, call
+log or notifications.
+
 ## Photos, music, videos and files on the phone
 
 When no server is connected, the app can play the music and videos on the

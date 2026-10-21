@@ -1,10 +1,9 @@
 package com.domovoi.app.assistant
 
+import com.domovoi.app.data.AtomicFiles
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import kotlin.random.Random
@@ -109,6 +108,11 @@ data class ReplyReport(
         /** The source of a reply the phone's clock gave (no model wrote it). */
         const val CLOCK = "the phone's clock"
 
+        /** How a reply read from the phone itself (PhoneQuestions, a
+         *  hand-off card) is named in its details; such a reply is never
+         *  reported ([draft]). */
+        const val PHONE = "the phone itself"
+
         /** [place] of a reply written on this phone... */
         const val PLACE_PHONE = "phone"
 
@@ -136,6 +140,9 @@ data class ReplyReport(
         ): ReplyReport? {
             val reply = conversation.messages.getOrNull(index) ?: return null
             if (reply.fromUser || reply.text.isBlank()) return null
+            // Read from the phone, not written by a model (and possibly
+            // where it is, its calendar or contacts): never reported.
+            if (reply.fastPath != null) return null
             val asked = conversation.messages.subList(0, index).lastOrNull { it.fromUser }
             return ReplyReport(
                 id = ReplyReportStore.newId(now),
@@ -216,7 +223,7 @@ class ReplyReportStore(val dir: File) {
         val target = file(report.id)
         val tmp = File(dir, "${report.id}.json.tmp")
         tmp.writeText(json.encodeToString(ReplyReport.serializer(), report))
-        Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        AtomicFiles.replace(tmp, target)
     }
 
     fun delete(id: String): Boolean = !isValidId(id) || file(id).let { !it.exists() || it.delete() }

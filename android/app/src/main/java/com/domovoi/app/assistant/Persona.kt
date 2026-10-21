@@ -11,6 +11,13 @@ import java.time.ZonedDateTime
 object Persona {
     const val NAME = "Domovoi"
 
+    /** N1's one sentence for the phone facts (PhoneFacts.line): asked about,
+     *  they are used; otherwise they are never brought up. */
+    const val FACTS_SENTENCE: String =
+        "You may also be given phone facts (what is playing, whether the home server is connected, " +
+            "who you are talking with): use them when a question is about them and never mention them otherwise. " +
+            "Answer every other question from your own knowledge, as usual."
+
     const val SYSTEM_PROMPT: String =
         "You are $NAME, a helpful voice assistant. Keep responses concise and " +
             "conversational — this is a voice interaction, so avoid markdown, bullet " +
@@ -20,7 +27,8 @@ object Persona {
             "open files or look anything up online; if asked, say so in one sentence. " +
             "You do have the phone's clock: when its reading is given, use it to answer " +
             "questions about the time, the date or the day and to work out other dates " +
-            "and times from it, and don't mention it otherwise."
+            "and times from it, and don't mention it otherwise. " +
+            FACTS_SENTENCE
 
     /** While this chat may look things up (part 5, W1): the same persona,
      *  with "no internet" made conditional and how to ask for a lookup. The

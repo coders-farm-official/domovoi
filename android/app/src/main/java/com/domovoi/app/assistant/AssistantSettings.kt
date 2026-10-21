@@ -35,6 +35,10 @@ interface AssistantSettings {
     /** The engine's measured speeds, per backend (PhoneDocJobs.addRow):
      *  what a long document's time estimate comes from. */
     var speedRows: String
+
+    /** The phone-chat permissions (PhonePermission names) the person turned
+     *  down: the chat says it can't and never asks again. */
+    var declinedPermissions: Set<String>
 }
 
 /** In memory only: for tests. */
@@ -47,6 +51,7 @@ class MemoryAssistantSettings(
     override var speakTyped: Boolean = false,
     override var alwaysAllowInternet: Boolean = false,
     override var speedRows: String = "",
+    override var declinedPermissions: Set<String> = emptySet(),
 ) : AssistantSettings
 
 /** The app's: SharedPreferences `assistant`. */
@@ -85,9 +90,14 @@ class PhoneAssistantSettings(context: Context) : AssistantSettings {
         get() = prefs.getString(K_SPEEDS, null).orEmpty()
         set(value) = prefs.edit().putString(K_SPEEDS, value).apply()
 
+    override var declinedPermissions: Set<String>
+        get() = prefs.getStringSet(K_DECLINED, null)?.toSet().orEmpty()
+        set(value) = prefs.edit().putStringSet(K_DECLINED, value.toSet()).apply()
+
     private companion object {
         const val K_ALWAYS_INTERNET = "always_allow_internet"
         const val K_SPEEDS = "measured_speeds"
+        const val K_DECLINED = "declined_permissions"
         const val K_SPEAK_TYPED = "speak_typed_replies"
         const val K_BACKEND = "backend"
         const val K_MOBILE = "allow_mobile_data"
