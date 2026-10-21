@@ -318,6 +318,7 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
             attachDocument = actions.attachDocument, askServer = actions.askServer,
             askingServer = actions.askingServer, dropPending = actions.dropPending,
             closeDocProblem = actions.closeDocProblem, docFile = actions.docFile,
+            attachPhoto = actions.attachPhoto, dropPhoto = actions.dropPhoto,
         ),
         chrome,
     )
