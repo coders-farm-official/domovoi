@@ -205,7 +205,9 @@ def _kind_for(name: str, is_dir: bool) -> str:
 
 
 # ─── Reindex trigger (the only web→core hop) ─────────────────────────────────
-async def _trigger_reindex(reindex_kind: Optional[str], request: Request) -> bool:
+async def _trigger_reindex(
+    reindex_kind: Optional[str], request: Request, *, removed: tuple = ()
+) -> bool:
     """Fire the post-write reindex for an indexed library. music proxies the
     core admin endpoint (credentials forwarded); audiobooks runs the in-process
     indexer, then asks the core for an MPD rescan when it added a book;
@@ -222,7 +224,10 @@ async def _trigger_reindex(reindex_kind: Optional[str], request: Request) -> boo
         try:
             from web.backend.api.audiobooks import index_and_tell_players
 
-            await index_and_tell_players(request)
+            # ``removed``: a delete's paths, pruned from the book list even
+            # when the folder is left empty (the indexer keeps the list of an
+            # empty folder otherwise, as an unmounted share looks the same).
+            await index_and_tell_players(request, removed=removed)
             return True
         except Exception as e:  # noqa: BLE001
             log.warning("files: audiobook reindex failed: %s", e)
@@ -271,6 +276,9 @@ class UploadResponse(BaseModel):
     saved: list[str]
     skipped: list[str]
     reindex_triggered: bool
+    # ``create_dir=true`` made the destination folder (False when it was
+    # already there, or wasn't asked for).
+    created_dir: bool = False
 
 
 class DeleteRequest(BaseModel):
@@ -834,18 +842,31 @@ async def upload(
     path: str = Form(""),
     device_id: str = Form(..., min_length=3, max_length=64),
     files: list[UploadFile] = File(...),
+    create_dir: bool = Form(False),
 ) -> UploadResponse:
     """Upload files into the currently-browsed directory. Open (daily tier);
     ``403`` when the calling device is blocked. Rejected unless the library is
     editable. Each name is sanitized to a bare basename, deduped, and the
-    deduped target re-containment-checked before write."""
+    deduped target re-containment-checked before write.
+
+    ``create_dir=true`` makes the destination ``path`` first — ONE level:
+    its parent must exist; the new name is checked like a file name (no
+    ``..``, control bytes, a Windows device name, a secret-shaped or
+    trailing-dot name) and the folder re-checked inside the library root.
+    A folder already there is fine. How the app adds a per-chapter folder
+    as one audiobook: the folder, its files, then the usual reindex. A
+    folder made here that ends up with nothing saved in it is removed."""
     await _assert_can_write(device_id)
     lib = await _resolve_library(library_id)
     await _assert_admin_for(lib, request)
     if not lib.editable:
         raise HTTPException(status_code=403, detail="library is not editable")
     root = lib.root_path
-    dest = safe_join(root, path)
+    created_dir = False
+    if create_dir:
+        dest, created_dir = _make_upload_folder(root, path)
+    else:
+        dest = safe_join(root, path)
     if not dest.exists() or not dest.is_dir():
         raise HTTPException(status_code=404, detail="destination directory not found")
 
@@ -882,6 +903,11 @@ async def upload(
         saved.append(cand.name)
 
     if not saved:
+        if created_dir:
+            try:
+                dest.rmdir()  # only if still empty: never someone else's files
+            except OSError:
+                pass
         raise HTTPException(
             status_code=400,
             detail="no files saved" + (f"; {skipped}" if skipped else ""),
@@ -891,7 +917,83 @@ async def upload(
     reindex_triggered = False
     if lib.reindex_kind in INDEXED_KINDS:
         reindex_triggered = await _trigger_reindex(lib.reindex_kind, request)
-    return UploadResponse(saved=saved, skipped=skipped, reindex_triggered=reindex_triggered)
+    return UploadResponse(saved=saved, skipped=skipped, reindex_triggered=reindex_triggered,
+                          created_dir=created_dir)
+
+
+# Windows device names: a file or folder so named, with any extension,
+# opens a device rather than a folder on a Windows server (and can't be
+# deleted from Explorer) — refused for a new folder on every host, so a
+# library stays portable between them.
+_WINDOWS_DEVICE_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+     *(f"COM{i}" for i in range(10)), *(f"LPT{i}" for i in range(10)),
+     "COM¹", "COM²", "COM³", "LPT¹", "LPT²", "LPT³"}
+)
+
+
+def new_folder_name_problem(name: str) -> str | None:
+    """Why ``name`` can't be a new folder's name, or None. Stricter than
+    the platform needs, on purpose: the same answer on a Linux and a
+    Windows server."""
+    if not name or not name.strip():
+        return "empty folder name"
+    if "/" in name or "\\" in name:
+        return "a folder name can't hold a path separator"
+    if name in (".", "..") or not name.strip("."):
+        return "not a folder name"
+    if name != name.strip() or name.endswith("."):
+        return "a folder name can't start or end with a space, or end with a dot"
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in name):
+        return "control characters are not allowed in a folder name"
+    if any(ch in name for ch in '<>:"|?*'):
+        return "a folder name can't hold < > : \" | ? or *"
+    if name.split(".", 1)[0].rstrip(" ").upper() in _WINDOWS_DEVICE_NAMES:
+        return "that name is reserved on Windows"
+    if is_sensitive_name(name):
+        return "that name is reserved"
+    return None
+
+
+def _make_upload_folder(root: Path, path: str) -> tuple[Path, bool]:
+    """``create_dir=true``: make ``path`` (one new level under an existing
+    folder) inside ``root`` and return it, with whether it was made now.
+
+    The parent and the whole path go through :func:`safe_join` exactly like
+    a plain upload's destination (containment, symlinks resolved, ``..``
+    and drive paths refused); the new name through
+    :func:`new_folder_name_problem`; the folder is re-checked inside the
+    root once made (a link raced into its place). A folder already there is
+    returned as it is."""
+    norm = (path or "").replace("\\", "/").strip("/")
+    if not norm.strip():
+        raise HTTPException(status_code=400, detail="create_dir needs a folder name in path")
+    parent_rel, _, name = norm.rpartition("/")
+    problem = new_folder_name_problem(name)
+    if problem is not None:
+        raise HTTPException(status_code=400, detail=f"{name!r}: {problem}")
+    parent = safe_join(root, parent_rel)
+    if not parent.is_dir():
+        raise HTTPException(status_code=404, detail="destination's parent folder not found")
+    # The whole path as a plain upload's destination would be: a link in
+    # the new name's place may point anywhere INSIDE the root, never out.
+    safe_join(root, norm)
+    created = False
+    try:
+        (parent / name).mkdir()
+        created = True
+    except FileExistsError:
+        pass
+    except OSError as e:
+        raise HTTPException(status_code=400, detail=f"couldn't make the folder: {e}")
+    made = (parent / name).resolve(strict=False)
+    try:
+        made.relative_to(root)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="path escapes library root")
+    if not made.is_dir():
+        raise HTTPException(status_code=409, detail="a file of that name is in the way")
+    return made, created
 
 
 # ─── POST /delete ────────────────────────────────────────────────────────────
@@ -909,6 +1011,7 @@ async def delete(request: Request, req: DeleteRequest) -> DeleteResponse:
     root = lib.root_path
 
     deleted: list[str] = []
+    removed_paths: list[str] = []
     failed: list[str] = []
     for rel in req.paths:
         if not rel or not rel.strip():
@@ -926,6 +1029,7 @@ async def delete(request: Request, req: DeleteRequest) -> DeleteResponse:
             if target.is_symlink() or target.is_file():
                 target.unlink()
                 deleted.append(target.relative_to(root).as_posix())
+                removed_paths.append(str(target))
             elif target.is_dir():
                 if not req.recursive:
                     failed.append(f"{rel}: is a directory (recursive not set)")
@@ -934,6 +1038,7 @@ async def delete(request: Request, req: DeleteRequest) -> DeleteResponse:
                 _confined_rmtree(target, root, budget)
                 target.rmdir()
                 deleted.append(target.relative_to(root).as_posix())
+                removed_paths.append(str(target))
             else:
                 failed.append(f"{rel}: not found")
         except HTTPException:
@@ -945,7 +1050,9 @@ async def delete(request: Request, req: DeleteRequest) -> DeleteResponse:
         listing_cache.invalidate(lib.id)
     reindex_triggered = False
     if deleted and lib.reindex_kind in INDEXED_KINDS:
-        reindex_triggered = await _trigger_reindex(lib.reindex_kind, request)
+        reindex_triggered = await _trigger_reindex(
+            lib.reindex_kind, request, removed=tuple(removed_paths)
+        )
     return DeleteResponse(deleted=deleted, failed=failed, reindex_triggered=reindex_triggered)
 
 

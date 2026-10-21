@@ -277,10 +277,14 @@ const SpokenAudio = (() => {
     if (!u) return null;
     try { return await apiGet(u.get); } catch { return null; }
   };
+  // `positionSec` is the place in the ITEM; a folder book's file items
+  // carry their start in the book (meta.offsetSec), and the server keeps
+  // one place per book.
   const savePosition = async (item, positionSec, speed) => {
     const u = posUrl(item);
     if (!u) return;
-    const body = { device_id: clientId(), position_sec: Math.round(positionSec) };
+    const offset = (item.meta && item.meta.offsetSec) || 0;
+    const body = { device_id: clientId(), position_sec: Math.round(offset + positionSec) };
     const pid = getPerson();
     if (pid != null) body.person_id = pid;
     if (speed != null) body.speed = speed;
@@ -321,13 +325,42 @@ const itemFromBook = (book) => ({
   artist: book.author || '',
   album: book.narrator || '',
   src: absMedia(`/api/audiobooks/${book.id}/audio`),
-  coverUrl: absMedia(book.artwork) || null,
+  coverUrl: absMedia(book.cover_url || book.artwork) || null,
   durationSec: book.duration_sec ?? null,
   seekable: true,
   cacheable: true,
   chapters: book.chapters || null,
   meta: { itemType: 'audiobook' },
 });
+
+/* The queue items an audiobook plays as: a per-chapter FOLDER book is one
+ * item per file (the audio route serves it file by file, `?file=`), in
+ * order, each knowing where it starts in the book (meta.offsetSec) so the
+ * book keeps ONE resume position; a single-file book is itemFromBook.
+ * Before 2026-10-20 a folder book was one item with no `?file=` and the
+ * server refused it (400): it never played. */
+const itemsFromBook = (book) => {
+  const files = book && book.is_folder && Array.isArray(book.files)
+    ? book.files.filter((f) => f && f.file) : [];
+  if (!files.length) return [itemFromBook(book)];
+  const tag = Math.random().toString(36).slice(2, 7);
+  return files.map((f, i) => ({
+    uid: `book-${book.id}-${i}-${tag}`,
+    kind: 'audiobook',
+    itemId: book.id,
+    trackId: null,
+    title: f.title || f.file,
+    artist: book.author || '',
+    album: book.title || '',
+    src: absMedia(`/api/audiobooks/${book.id}/audio?file=${encodeURIComponent(f.file)}`),
+    coverUrl: absMedia(book.cover_url || book.artwork) || null,
+    durationSec: f.duration_sec ?? null,
+    seekable: true,
+    cacheable: true,
+    chapters: null,
+    meta: { itemType: 'audiobook', offsetSec: f.start_sec || 0 },
+  }));
+};
 
 /* ═══════════════════════════════════════════════════════════════════════
  * Playback context + provider.
@@ -399,7 +432,7 @@ const PlaybackContext = React.createContext({
   listenerPersonId: null, setListenerPersonId: _noop,
   spoken: SpokenAudio,
   playSpoken: _noop, jumpToChapter: _noop,
-  itemFromEpisode: (x) => x, itemFromBook: (x) => x,
+  itemFromEpisode: (x) => x, itemFromBook: (x) => x, itemsFromBook: (x) => [x],
   playItems: _noop, enqueue: _noop, playNext: _noop,
   removeAt: _noop, moveItem: _noop, clearQueue: _noop, jumpTo: _noop,
   toggle: _noop, play: _noop, pause: _noop, stop: _noop,
@@ -818,14 +851,21 @@ const PlaybackProvider = ({ children }) => {
    * passes it here; we set the queue, seek on load, and apply the remembered
    * playbackRate. A room can't play spoken audio, so while casting this
    * ends the cast like playItems — it used to play here while the room
-   * played on. */
-  const playSpoken = React.useCallback((item, { resumeSec = 0, speed = 1 } = {}) => {
+   * played on. A folder book comes as its list of file items
+   * (itemsFromBook): `resumeSec` is the place in the BOOK, so it starts in
+   * the file that holds it, that far into the file. */
+  const playSpoken = React.useCallback((itemOrItems, { resumeSec = 0, speed = 1 } = {}) => {
+    const items = (Array.isArray(itemOrItems) ? itemOrItems : [itemOrItems]).filter(Boolean);
+    if (!items.length) return;
+    const offsetOf = (it) => (it.meta && it.meta.offsetSec) || 0;
+    let at = 0;
+    items.forEach((it, i) => { if (resumeSec >= offsetOf(it)) at = i; });
     playHereGenRef.current += 1;
     leaveRoom();
-    setQueue([item]);
-    setIndex(0);
+    setQueue(items);
+    setIndex(at);
     if (speed && speed !== playbackRate) setPlaybackRateState(Math.max(0.5, Math.min(3, speed)));
-    loadAndPlay(item, { resumeSec });
+    loadAndPlay(items[at], { resumeSec: Math.max(0, resumeSec - offsetOf(items[at])) });
   }, [loadAndPlay, leaveRoom, playbackRate]);
 
   const enqueue = React.useCallback((items) => {
@@ -1317,7 +1357,7 @@ const PlaybackProvider = ({ children }) => {
     playSpoken, jumpToChapter, spoken: SpokenAudio,
     listenerPersonId, setListenerPersonId,
     // Helper builders exposed so pages don't re-import them.
-    itemFromTrack, itemFromSource, itemFromEpisode, itemFromBook,
+    itemFromTrack, itemFromSource, itemFromEpisode, itemFromBook, itemsFromBook,
   };
 
   return (
@@ -1896,7 +1936,7 @@ const _castRow = (active, big = false) => ({
 /* expose to other Babel scripts */
 Object.assign(window, {
   PlaybackProvider, MiniPlayer, PlaybackContext, usePlayback,
-  itemFromTrack, itemFromSource, itemFromEpisode, itemFromBook,
+  itemFromTrack, itemFromSource, itemFromEpisode, itemFromBook, itemsFromBook,
   resolveSourceStreamUrl,
   playerUrls, OfflineCache, SpokenAudio,
   CoverTile, EQ_BANDS, EQ_LABELS, EQ_MIN_DB, EQ_MAX_DB,

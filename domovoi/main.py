@@ -720,6 +720,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     WORKERS.add_worker(WakeWordTrainer(), owner="core")
     WORKERS.add_worker(PodcastFeedPoller(), owner="core")
     WORKERS.add_worker(AudiobookIndexer(), owner="core")
+    # The place in the book of a room playing one, every 30 s
+    # (domovoi/workers/room_book_positions.py).
+    from domovoi.workers.room_book_positions import RoomBookPositions
+
+    WORKERS.add_worker(RoomBookPositions(), owner="core")
     # Opt-in command recordings: 14-day retention, the disk cap, and the
     # sweep of rooms no longer opted in (domovoi/command_captures.py).
     WORKERS.add_worker(CommandCapturePruner(), owner="core")

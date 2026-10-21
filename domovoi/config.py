@@ -1182,6 +1182,12 @@ class Settings(BaseSettings):
     # the interactive cases.
     audiobook_indexer_enabled: bool = True
     audiobook_indexer_interval_sec: float = 300.0
+    # How often a room that is PLAYING an audiobook has its place in the
+    # book saved (domovoi/workers/room_book_positions.py). Before
+    # 2026-10-20 a room's place was saved only when a voice command moved
+    # it, so "resume my book" there, and the app's "Continue from the
+    # kitchen", went back to where it last started.
+    room_book_positions_interval_sec: float = 30.0
 
     # ─── Documents suite (Documents / Spreadsheets / Drawings) ─────────
     # Root of user document storage. Mirrors music_dir: a single FLAT dir
