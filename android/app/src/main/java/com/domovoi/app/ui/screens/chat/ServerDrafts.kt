@@ -69,6 +69,10 @@ internal class ServerDraftDoc(private val app: AppContainer, private val id: Lon
                 source = v.s("source") ?: "first",
                 instruction = v.s("instruction"),
                 saved = saved,
+                basedOn = v["based_on"]?.takeIf { it !is JsonNull }?.jsonPrimitive?.intOrNull,
+                // "edited by you" only on the install that made the edit.
+                editedOn = if (v.s("device_id") == app.prefs.deviceId) null
+                else v.s("device_name") ?: v.s("device_id") ?: "another device",
             )
         }
         DraftView(d.s("title").orEmpty(), d.s("kind") ?: "letter", d.s("format") ?: "docx", versions).also { cache = it }
@@ -82,6 +86,7 @@ internal class ServerDraftDoc(private val app: AppContainer, private val id: Lon
             val r = app.api.post("/api/chat/drafts/$id/versions", buildJsonObject {
                 put("text", text)
                 put("base_version", base)
+                put("device_id", app.prefs.deviceId)
             }).jsonObject
             r["version"]?.jsonObject?.get("version")?.jsonPrimitive?.intOrNull ?: base
         } catch (e: ApiException) {
@@ -127,6 +132,7 @@ internal fun ServerDraftCard(
     canPrint: Boolean,
     onOpen: () -> Unit,
     onPrint: () -> Unit,
+    onRevise: ((String) -> Unit)? = null,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val toast = com.domovoi.app.LocalToast.current
@@ -156,6 +162,7 @@ internal fun ServerDraftCard(
             }
         },
         onPrint = onPrint,
+        onRevise = onRevise,
     )
 }
 

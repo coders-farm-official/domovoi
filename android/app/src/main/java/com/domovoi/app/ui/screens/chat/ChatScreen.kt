@@ -298,6 +298,8 @@ private suspend fun sendStreaming(
     /** "Try again" (`POST .../retry`): no body, a new reply to the last
      *  question in place of the last reply. */
     retry: Boolean = false,
+    /** A draft card's Revise box: the message revises this draft. */
+    reviseDraft: Long? = null,
 ) = withContext(Dispatchers.IO) {
     val body = (if (retry) buildJsonObject {} else buildJsonObject {
         put("content", content)
@@ -311,6 +313,7 @@ private suspend fun sendStreaming(
         if (documents.isNotEmpty()) {
             put("documents", buildJsonArray { documents.forEach { d -> add(buildJsonObject { put("token", d.token) }) } })
         }
+        if (reviseDraft != null) put("revise_draft", reviseDraft)
     }).toString().toRequestBody("application/json".toMediaType())
     val path = if (retry) "/api/chat/threads/$threadId/retry" else "/api/chat/threads/$threadId/messages"
     val req = Request.Builder()
@@ -659,14 +662,18 @@ internal fun ConversationPane(
         )
     }
 
-    fun send() {
-        val content = draft.trim()
-        if ((content.isBlank() && docAttachments.isEmpty()) || sending || docUploading != null) return
-        val images = attachments.toList()
-        val docs = docAttachments.toList()
-        draft = ""
-        attachments.clear()
-        docAttachments.clear()
+    /** [revise]: (draft, text) from a draft card's Revise box; else the
+     *  message box's words and attachments. */
+    fun send(revise: Pair<Long, String>? = null) {
+        val content = revise?.second?.trim() ?: draft.trim()
+        if ((content.isBlank() && (revise != null || docAttachments.isEmpty())) || sending || docUploading != null) return
+        val images = if (revise != null) emptyList() else attachments.toList()
+        val docs = if (revise != null) emptyList() else docAttachments.toList()
+        if (revise == null) {
+            draft = ""
+            attachments.clear()
+            docAttachments.clear()
+        }
         sending = true
         following = true
         frame.onSent()
@@ -693,6 +700,7 @@ internal fun ConversationPane(
                         if (model != null) live.model = model
                     },
                     onDone = { row -> live.finishWith(row) },
+                    reviseDraft = revise?.first,
                 )
             }.onFailure { live.error = failureText("send", it) }
             // Refused for want of the vision model: re-read what's installed,
@@ -806,6 +814,7 @@ internal fun ConversationPane(
                                     canPrint = draftPrinters?.hasPrinter == true,
                                     onOpen = { canvas = ref.id; canvasVersion = ref.version; canvasKey++ },
                                     onPrint = { printDraft = ref.id to ref.version },
+                                    onRevise = { text -> send(ref.id to text) },
                                 )
                             }
                         },

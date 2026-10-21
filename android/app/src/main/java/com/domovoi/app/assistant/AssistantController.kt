@@ -701,6 +701,19 @@ class AssistantController(
 
     // ── Conversation ────────────────────────────────────────────────────
 
+    /** The draft the next sent message revises (the card's Revise box). */
+    @Volatile private var reviseNext: String? = null
+
+    /** The draft card's Revise box: [text] is a revision of draft
+     *  [draftId], whatever it says (the chat's own box revises only when the
+     *  words clearly mean the draft). */
+    fun reviseDraft(draftId: String, text: String) {
+        if (text.isBlank() || _state.value.replying) return
+        reviseNext = draftId
+        send(text)
+        if (!_state.value.replying) reviseNext = null
+    }
+
     /** Sends [text] and streams the reply into the conversation. */
     fun send(text: String) {
         val said = text.trim()
@@ -1333,10 +1346,21 @@ class AssistantController(
      * Spoken, only that line is said, never the draft.
      */
     private suspend fun draftReply(asked: StoredConversation, onDelta: (String) -> Unit): StoredConversation? {
+        val forced = reviseNext.also { reviseNext = null }
         val store = drafts ?: return null
         val last = asked.messages.lastOrNull()?.takeIf { it.fromUser } ?: return null
         val question = last.text.trim()
         if (question.isEmpty() || last.documents.isNotEmpty()) return null
+        if (forced != null) {
+            val picked = withContext(io) {
+                runCatching { store.load(asked.id, forced)?.let { d -> store.body(asked.id, d.id, d.latest)?.let { d to it } } }.getOrNull()
+            }
+            if (picked != null) return writeDraft(asked, picked, null, question, onDelta)
+        }
+        // Edit-only words ("shorter") revise only right after the reply
+        // that wrote the draft; naming it or "make it more formal" any time.
+        val before = asked.messages.getOrNull(asked.messages.size - 2)
+        val afterDraft = before != null && !before.fromUser && before.draft?.action in setOf("create", "revise")
         val latest = withContext(io) { runCatching { store.latest(asked.id) }.getOrNull() }
         if (latest != null) {
             val (d, _) = latest
@@ -1347,7 +1371,7 @@ class AssistantController(
                 val ref = DraftRef(d.id, v, d.kind, d.title, d.template, 0, "print")
                 return finishReply(asked, StoredMessage(Speaker.DOMOVOI, text, clock(), draft = ref))
             }
-            if (DraftPhrases.revisionRequest(question)) return writeDraft(asked, latest, null, question, onDelta)
+            if (DraftPhrases.revisionRequest(question, afterDraft)) return writeDraft(asked, latest, null, question, onDelta)
         }
         val ask = DraftPhrases.draftRequest(question) ?: return null
         return writeDraft(asked, null, ask, question, onDelta)
@@ -1406,7 +1430,8 @@ class AssistantController(
         } catch (e: Throwable) {
             return finishReply(asked, live().copy(text = "", error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
         }
-        val body = outputs.map { DraftPrompts.clean(it) }.filter { it.isNotEmpty() }.joinToString("\n\n").take(MAX_DRAFT_CHARS)
+        val body = DraftBlocks.xmlSafe(
+            outputs.map { DraftPrompts.clean(it) }.filter { it.isNotEmpty() }.joinToString("\n\n").take(MAX_DRAFT_CHARS))
         if (DraftBlocks.parse(body).isEmpty()) {
             return finishReply(asked, live().copy(text = "", error = "The model wrote no draft. Try again, or ask it another way.",
                 firstTextMs = firstMs))
@@ -1420,9 +1445,17 @@ class AssistantController(
                 Triple(d, "First draft of your ${k.label.lowercase()}: $words words.",
                     DraftRef(d.id, 1, d.kind, d.title, d.template, words, "create"))
             } else {
-                val d = store.addVersion(asked.id, base.first.id, body, question, "model", now) ?: base.first
+                val from = base.first.latest
+                val d = store.addVersion(asked.id, base.first.id, body, question, "model", now, base = from) ?: base.first
                 val change = DraftDiff.changeLine(base.second, body)
-                var l = "Version ${d.latest}: $change."
+                // A hand edit came in while this was written: both are kept.
+                val newer = d.latest - 1
+                var l = if (newer > from) {
+                    "Version ${d.latest}, based on version $from: $change. Version $newer came in while this was " +
+                        "written and isn't in it; both are in the version picker."
+                } else {
+                    "Version ${d.latest}: $change."
+                }
                 if (passes.size > 1) {
                     l += " Revised section by section (${passes.size} parts), so the style can drift a little between them."
                 }
@@ -1452,9 +1485,12 @@ class AssistantController(
         withContext(io) {
             val store = drafts ?: return@withContext null
             val d = store.load(conversation, draftId) ?: return@withContext null
-            if (d.latest != baseVersion) return@withContext null
-            if (store.body(conversation, draftId, d.latest) == text) return@withContext d
-            store.addVersion(conversation, draftId, text, null, "person", clock())
+            if (d.latest == baseVersion && store.body(conversation, draftId, d.latest) == text) return@withContext d
+            try {
+                store.addVersion(conversation, draftId, text, null, "person", clock(), base = baseVersion)
+            } catch (_: PhoneDraftStore.StaleVersion) {
+                null
+            }
         }
 
     /**

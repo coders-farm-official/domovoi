@@ -65,6 +65,7 @@ class AssistantControllerTest {
         unloadAfterMs: Long = 60_000,
         titleDelayMs: Long = 0,
         helpIndex: HelpIndex? = null,
+        drafts: com.domovoi.app.assistant.drafts.PhoneDraftStore? = null,
     ): AssistantController = AssistantController(
         memory = PhoneMemory((memoryGib * (1L shl 30)).toLong(), lowRamDevice = false),
         store = store,
@@ -80,6 +81,7 @@ class AssistantControllerTest {
         clock = { nowMs ?: System.currentTimeMillis() },
         clockStyle = { style },
         helpIndex = { helpIndex },
+        drafts = drafts,
     ).also { c -> scope.launch { c.messages.collect { said += it } } }
 
     private fun install(m: CatalogModel = llm) {
@@ -248,6 +250,37 @@ class AssistantControllerTest {
             engines.single().replies.last(),
         )
         assertEquals(Persona.SYSTEM_PROMPT, engines.single().systems.last())
+    }
+
+    /** Review round 1: only a message that clearly means the draft revises
+     *  it; "shorter" alone only right after the draft's reply; the card's
+     *  Revise box revises whatever it says. */
+    @Test fun onlyAMessageThatMeansTheDraftRevisesIt() {
+        install()
+        val drafts = com.domovoi.app.assistant.drafts.PhoneDraftStore(File(root, "drafts"))
+        val c = controller(drafts = drafts)
+        until("installed") { c.ui().installed }
+        c.screenShown()
+        until("loaded") { c.ui().engine is EngineState.Ready }
+        fun turn(n: Int, script: String, send: () -> Unit) {
+            engines.single().script = listOf(script)
+            send()
+            until("reply $n") { !c.ui().replying && c.ui().conversation.messages.size == n }
+        }
+        val letter = "Dear Ms. Lee,\n\nI am applying for the warehouse job.\n\nSam Lee"
+        turn(2, letter) { c.send("write a cover letter for Acme") }
+        val id = c.ui().conversation.messages.last().draft!!.id
+        val conv = c.ui().conversation.id
+        turn(4, "Sure.") { c.send("turn on the kitchen lights") }
+        assertNull(c.ui().conversation.messages.last().draft)
+        turn(6, "Fine.") { c.send("more formal") }   // not right after the draft's reply
+        assertNull(c.ui().conversation.messages.last().draft)
+        assertEquals(1, drafts.load(conv, id)!!.latest)
+        turn(8, letter.replace("I am", "I would like to be considered as")) { c.reviseDraft(id, "less stiff in the middle") }
+        assertEquals("revise", c.ui().conversation.messages.last().draft!!.action)
+        turn(10, "Dear Ms. Lee,\n\nI am applying.\n\nSam Lee") { c.send("shorter") }   // right after it
+        assertEquals(3, drafts.load(conv, id)!!.latest)
+        assertEquals(listOf(null, "less stiff in the middle", "shorter"), drafts.load(conv, id)!!.versions.map { it.instruction })
     }
 
     @Test fun theGpuIsOptInAndAFailedLoadSaysSo() {

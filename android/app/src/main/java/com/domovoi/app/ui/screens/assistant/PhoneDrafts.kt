@@ -133,6 +133,7 @@ internal class PhoneDraftDoc(
             DraftVersionView(
                 v.version, body, display, changes, v.source, v.instruction,
                 v.saved.map { s -> "${placeName(s.place)}${s.name} · ${s.check}" },
+                basedOn = v.basedOn,
             )
         }
         DraftView(d.title, d.kind, DraftKinds.defaultFormat(d.kind), views)
@@ -224,5 +225,6 @@ internal fun PhoneDraftCard(
             }
         },
         onPrint = { actions.printDraft(ref.id, ref.version) },
+        onRevise = actions.reviseDraft?.let { r -> { text: String -> r(ref.id, text) } },
     )
 }

@@ -119,6 +119,8 @@ internal class AssistantActions(
     val draftDoc: ((String) -> com.domovoi.app.ui.screens.chat.DraftDoc)? = null,
     /** Prints a draft's version with Android's print dialog. */
     val printDraft: (String, Int) -> Unit = { _, _ -> },
+    /** A draft card's Revise box: (draft id, what to change). */
+    val reviseDraft: ((String, String) -> Unit)? = null,
 )
 
 /** The phone chat's part of Chat's conversation frame: the way back to the
@@ -344,7 +346,7 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
             attachDocument = actions.attachDocument, askServer = actions.askServer,
             askingServer = actions.askingServer, dropPending = actions.dropPending,
             closeDocProblem = actions.closeDocProblem, docFile = actions.docFile,
-            draftDoc = draftDoc, printDraft = printDraft,
+            draftDoc = draftDoc, printDraft = printDraft, reviseDraft = assistant::reviseDraft,
         ),
         chrome,
     )

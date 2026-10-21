@@ -46,6 +46,9 @@ data class PhoneDraftVersion(
     val author: String = "model",
     val at: Long = 0,
     val saved: List<SavedDraftFile> = emptyList(),
+    /** The version a model revision was written from; a newer one may have
+     *  come in while it was written (it is kept, and the reply says so). */
+    val basedOn: Int? = null,
 ) {
     val source: String get() = if (author == "person") "edited" else if (instruction.isNullOrBlank()) "first" else "revision"
 }
@@ -111,30 +114,44 @@ class PhoneDraftStore(val root: File) {
         return d to body
     }
 
-    fun create(conversation: String, kind: String, template: String, title: String, body: String, now: Long): PhoneDraft {
+    /** A hand edit whose base is no longer the latest version. */
+    class StaleVersion(val latest: Int) : IllegalStateException("a newer version came in: v$latest")
+
+    fun create(conversation: String, kind: String, template: String, title: String, body: String, now: Long): PhoneDraft = synchronized(LOCK) {
         val id = "dr-$now-${Random.nextInt(0, 1 shl 30).toString(36)}"
         val d = PhoneDraft(id, conversation, kind, template, title.take(200), now, now,
             listOf(PhoneDraftVersion(1, null, "model", now)))
         write(File(dir(conversation, id), "v1.md"), body)
         write(File(dir(conversation, id), "draft.json"), json.encodeToString(PhoneDraft.serializer(), d))
-        return d
+        d
     }
 
-    /** A new version of draft [id]; null when the draft is gone. */
-    fun addVersion(conversation: String, id: String, body: String, instruction: String?, author: String, now: Long): PhoneDraft? {
+    /**
+     * A new version of draft [id]; null when the draft is gone. Numbered
+     * under one lock (review round 1: two writers at once never share a
+     * number or lose one). [base]: the version it was made from; a hand
+     * edit ([author] "person") from an older one throws [StaleVersion],
+     * a model revision is kept and records it as [PhoneDraftVersion.basedOn].
+     */
+    fun addVersion(
+        conversation: String, id: String, body: String, instruction: String?, author: String, now: Long,
+        base: Int? = null,
+    ): PhoneDraft? = synchronized(LOCK) {
         val d = load(conversation, id) ?: return null
+        if (author == "person" && base != null && base != d.latest) throw StaleVersion(d.latest)
         val v = d.latest + 1
-        write(File(dir(conversation, id), "v$v.md"), body)
-        val next = d.copy(updated = now, versions = d.versions + PhoneDraftVersion(v, instruction?.take(500), author, now))
+        write(File(dir(conversation, id), "v$v.md"), DraftBlocks.xmlSafe(body))
+        val made = PhoneDraftVersion(v, instruction?.take(500), author, now, basedOn = base.takeIf { author == "model" })
+        val next = d.copy(updated = now, versions = d.versions + made)
         write(File(dir(conversation, id), "draft.json"), json.encodeToString(PhoneDraft.serializer(), next))
-        return next
+        next
     }
 
-    fun recordSave(conversation: String, id: String, version: Int, saved: SavedDraftFile): PhoneDraft? {
+    fun recordSave(conversation: String, id: String, version: Int, saved: SavedDraftFile): PhoneDraft? = synchronized(LOCK) {
         val d = load(conversation, id) ?: return null
         val next = d.copy(versions = d.versions.map { if (it.version == version) it.copy(saved = it.saved + saved) else it })
         write(File(dir(conversation, id), "draft.json"), json.encodeToString(PhoneDraft.serializer(), next))
-        return next
+        next
     }
 
     fun delete(conversation: String): Boolean = !SAFE.matches(conversation) || convDir(conversation).deleteRecursively()
@@ -143,6 +160,10 @@ class PhoneDraftStore(val root: File) {
 
     companion object {
         private val SAFE = Regex("^[A-Za-z0-9-]{1,80}$")
+
+        /** Every store's writes, one at a time (one store per app, but a
+         *  test may make two on one folder). */
+        private val LOCK = Any()
     }
 }
 

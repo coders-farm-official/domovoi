@@ -39,13 +39,43 @@ object DraftPhrases {
             "grandmother|grandfather|mom|mum|dad|aunt|uncle)\\b",
     )
     private val NOT_A_DOCUMENT = Regex("\\b(?:email|e-mail|text message|text|song|poem|story|essay|newsletter|post|tweet)\\b")
-    private val REVISE = Regex(
-        "^(?:make (?:it|this|that|the [a-z]+(?: [a-z]+)?) |shorter\\b|longer\\b|shorten\\b|lengthen\\b|expand\\b|" +
-            "tighten\\b|simplify\\b|condense\\b|trim\\b|cut\\b|remove\\b|delete\\b|drop\\b|add\\b|include\\b|mention\\b|put\\b|" +
-            "insert\\b|change\\b|replace\\b|swap\\b|use\\b|reword\\b|rephrase\\b|rewrite\\b|redo\\b|fix\\b|correct\\b|" +
-            "tone (?:it )?(?:down|up)\\b|more\\b|less\\b|too\\b|sound\\b|say\\b|move\\b|switch\\b|start with\\b|end with\\b|" +
-            "open with\\b|don't\\b|do not\\b|no need\\b|instead\\b|turn\\b|keep it\\b|try again\\b|another version\\b|" +
-            "(?:it|that|this)(?:'s| is) (?:too|a bit|a little|not)\\b|(?:sign|address) it\\b)",
+    /** An editing verb, at the start of the message. */
+    private const val EDIT_VERB = "(?:make|shorten|lengthen|rewrite|reword|rephrase|redo|revise|edit|tighten|simplify|condense|" +
+        "trim|expand|polish|proofread|fix|change|update|add|remove|delete|cut|drop|mention|include|insert|" +
+        "put|use|replace|swap|move|sign|address|tone|start|end|open|close|say|keep|turn|give|write)"
+
+    /** The draft, named. */
+    private const val DRAFT_NOUN = "(?:the|my|this|that|your|our) (?:draft|letter|cover letter|resume|cv|document)"
+    private val NAMES_DRAFT = Regex(
+        "^" + EDIT_VERB + "\\b.*\\b" + DRAFT_NOUN + "\\b" +
+            "|^" + DRAFT_NOUN + " (?:is|was|sounds|reads|seems|feels)\\b" +
+            "|^(?:shorten|lengthen|rewrite|reword|rephrase|redo|revise|edit|tighten|simplify|condense|" +
+            "trim|polish|proofread) " + DRAFT_NOUN + "\\b",
+    )
+
+    /** How a draft can sound ("make it louder" is the music's, never the letter's). */
+    private const val STYLE = "(?:formal|informal|casual|friendly|friendlier|professional|polite|concise|detailed|direct|" +
+        "confident|enthusiastic|personal|specific|warm|warmer|upbeat|serious|simple|simpler|clear|clearer|" +
+        "short|shorter|long|longer|brief|briefer|tight|tighter|persuasive|positive|firm|firmer|gentle|gentler|" +
+        "modern|plain|punchy|human)"
+
+    /** "it"/"this" as the object of an editing verb. */
+    private val EDITS_IT = Regex(
+        "^(?:(?:shorten|lengthen|rewrite|reword|rephrase|redo|revise|edit|tighten|simplify|" +
+            "condense|trim|polish|proofread) (?:it|this)\\b" +
+            "|make (?:it|this) (?:a bit |a little |much |even )?(?:(?:more|less|sound) )?" + STYLE + "\\b" +
+            "|tone (?:it|this) (?:down|up)\\b|sign (?:it|this) |address (?:it|this) to )",
+    )
+
+    /** An edit-only instruction: the whole message, right after the draft turn. */
+    private val EDIT_ONLY = Regex(
+        "^(?:(?:a bit |a little |much |even )?(?:shorter|longer|simpler|clearer|friendlier|warmer|nicer|tighter)" +
+            "|(?:a bit |a little |much |even )?(?:more|less) " + STYLE + "(?: and (?:more|less) " + STYLE + ")?" +
+            "|(?:too|way too|a bit too) (?:long|short|formal|casual|stiff|wordy|blunt)" +
+            "|(?:it|that|this)(?:'s| is) (?:too|a bit|a little|way too|not) [a-z ]+" +
+            "|tone it (?:down|up)|(?:shorten|tighten|simplify|condense|polish|proofread|reword|rephrase|rewrite|redo)" +
+            "(?: it)?|(?:fix|check) the (?:typos|spelling|grammar)|try again|another version|one more version" +
+            "|mention [a-z0-9 ,.'-]+|sign it [a-z ,.'-]+|address it to [a-z ,.'-]+)$",
     )
     private val PRINT = Regex(
         "^print(?: (?:it|this|that|out|it out|this out|that out|a copy|me a copy|" +
@@ -119,9 +149,19 @@ object DraftPhrases {
         return tail
     }
 
-    fun revisionRequest(text: String): Boolean {
+    /**
+     * Whether [text] asks to change the chat's draft: it names the draft,
+     * or edits "it"/"this", or, when [afterDraft] (the message before it was
+     * the reply that wrote or revised the draft), the whole message is an
+     * edit-only instruction. Anything else is an ordinary message (review
+     * round 1: better to miss a revision than to take over a request; the
+     * card's Revise box revises whatever it says).
+     */
+    fun revisionRequest(text: String, afterDraft: Boolean = false): Boolean {
         val s = normalize(text)
-        return s.isNotEmpty() && REVISE.find(s) != null
+        if (s.isEmpty()) return false
+        if (NAMES_DRAFT.find(s) != null || EDITS_IT.find(s) != null) return true
+        return afterDraft && EDIT_ONLY.find(s) != null
     }
 
     fun printRequest(text: String): Boolean = PRINT.find(normalize(text)) != null

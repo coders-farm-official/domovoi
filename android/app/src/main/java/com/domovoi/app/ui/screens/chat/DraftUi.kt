@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -40,6 +42,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
@@ -59,6 +62,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -102,6 +106,11 @@ internal data class DraftVersionView(
     val instruction: String?,
     /** The files saved from it, one line each. */
     val saved: List<String> = emptyList(),
+    /** A revision written from an older version than the one before it. */
+    val basedOn: Int? = null,
+    /** A hand edit made on another device: its name ("edited on Sam's
+     *  laptop"); null: made here ("edited by you"). */
+    val editedOn: String? = null,
 )
 
 internal data class DraftView(val title: String, val kind: String, val format: String, val versions: List<DraftVersionView>)
@@ -147,9 +156,10 @@ internal const val CANVAS_FIRST = "first draft"
 
 internal fun sourceLabel(v: DraftVersionView?): String = when {
     v == null -> ""
-    v.source == "edited" -> CANVAS_EDITED
+    v.source == "edited" -> v.editedOn?.let { "edited on $it" } ?: CANVAS_EDITED
     v.source == "first" -> CANVAS_FIRST
-    else -> "“${v.instruction ?: "revised"}”"
+    else -> "“${v.instruction ?: "revised"}”" +
+        (v.basedOn?.takeIf { it != v.version - 1 }?.let { " · based on v$it" } ?: "")
 }
 
 /** Changes are on for a version newer than the newest one seen here. */
@@ -208,6 +218,8 @@ internal fun DraftCard(
     onSave: () -> Unit,
     onShare: () -> Unit,
     onPrint: () -> Unit,
+    /** The Revise box: its text revises this draft, whatever it says. */
+    onRevise: ((String) -> Unit)? = null,
 ) {
     val isPrint = card.action == "print"
     Column(
@@ -244,6 +256,26 @@ internal fun DraftCard(
                 OutlinedButton(onClick = onSave) { Text("save") }
                 OutlinedButton(onClick = onShare) { Text("share") }
                 if (canPrint) OutlinedButton(onClick = onPrint) { Text("print") }
+            }
+        }
+        if (!isPrint && onRevise != null) {
+            var ask by remember(card.id) { mutableStateOf("") }
+            fun go() {
+                val t = ask.trim()
+                if (t.isNotEmpty()) {
+                    onRevise(t)
+                    ask = ""
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedTextField(
+                    value = ask, onValueChange = { ask = it.take(500) }, singleLine = true,
+                    placeholder = { Text("change this draft…") },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { go() }),
+                    modifier = Modifier.weight(1f).semantics { contentDescription = "revise ${card.title}" },
+                )
+                OutlinedButton(onClick = { go() }, enabled = ask.isNotBlank()) { Text("revise") }
             }
         }
     }

@@ -32,10 +32,32 @@ object DraftBlocks {
         return pyStrip(SPACES.replace(s, " "))
     }
 
+    private fun xmlOk(c: Int): Boolean = c == 0x9 || c == 0xA || c == 0xD || c in 0x20..0xD7FF ||
+        c in 0xE000..0xFFFD || c in 0x10000..0x10FFFF
+
+    /** [text] without the characters XML 1.0 can't hold (control characters,
+     *  U+FFFE/U+FFFF, lone surrogates): the server's `xml_safe`, one rule,
+     *  applied on every edit and again when a file is made. */
+    fun xmlSafe(text: String): String {
+        val out = StringBuilder(text.length)
+        var i = 0
+        while (i < text.length) {
+            val ch = text[i]
+            if (Character.isHighSurrogate(ch) && i + 1 < text.length && Character.isLowSurrogate(text[i + 1])) {
+                out.append(ch).append(text[i + 1])
+                i += 2
+                continue
+            }
+            if (!Character.isSurrogate(ch) && xmlOk(ch.code)) out.append(ch)
+            i++
+        }
+        return out.toString()
+    }
+
     fun parse(markdown: String): List<DraftBlock> {
         val out = mutableListOf<DraftBlock>()
         var para: DraftBlock? = null
-        for (raw in markdown.replace("\r\n", "\n").replace("\r", "\n").split("\n")) {
+        for (raw in xmlSafe(markdown).replace("\r\n", "\n").replace("\r", "\n").split("\n")) {
             val line = raw.trimEnd()
             if (FENCE.containsMatchIn(line) && FENCE.find(line)!!.range.first == 0 || RULE.matches(line)) {
                 para = null

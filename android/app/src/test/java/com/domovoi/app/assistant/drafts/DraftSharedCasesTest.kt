@@ -138,11 +138,20 @@ class DraftSharedCasesTest {
                 assertEquals(text, DraftAsk(w["kind"]!!.s(), w["template"]!!.s(), w["topic"]!!.s()), ask)
             }
             assertEquals(text, o["revise"]!!.jsonPrimitive.boolean, DraftPhrases.revisionRequest(text))
+            assertEquals("$text (after the draft)", o["revise_after"]!!.jsonPrimitive.boolean,
+                DraftPhrases.revisionRequest(text, afterDraft = true))
             assertEquals(text, o["print"]!!.jsonPrimitive.boolean, DraftPhrases.printRequest(text))
         }
         for (c in cases["titles"]!!.jsonArray) {
             val i = c.jsonObject["in"]!!.jsonArray
             assertEquals(c.jsonObject["out"]!!.s(), DraftPhrases.titleFor(i[0].s(), i[1].s()))
+        }
+    }
+
+    /** Review round 1: one rule for XML-illegal characters, both sides. */
+    @Test fun xmlSafe() {
+        for (c in cases["xml_safe"]!!.jsonArray) {
+            assertEquals(c.jsonObject["out"]!!.s(), DraftBlocks.xmlSafe(c.jsonObject["in"]!!.s()))
         }
     }
 

@@ -90,5 +90,40 @@ class PhoneDraftStoreTest {
         assertEquals("edited by you", sourceLabel(DraftVersionView(4, "", "", null, "edited", null)))
         assertEquals("“shorter”", sourceLabel(DraftVersionView(2, "", "", null, "revision", "shorter")))
         assertEquals("Jordan Avery\nToledo, OH\nSummary", firstLinesOf("# Jordan Avery\nToledo, OH\n\n## Summary\nWorks."))
+        // Review round 1: who made a hand edit, and a revision from an older version.
+        assertEquals("edited on Sam's laptop",
+            sourceLabel(DraftVersionView(4, "", "", null, "edited", null, editedOn = "Sam's laptop")))
+        assertEquals("“shorter” · based on v1",
+            sourceLabel(DraftVersionView(3, "", "", null, "revision", "shorter", basedOn = 1)))
+        assertEquals("“shorter”", sourceLabel(DraftVersionView(2, "", "", null, "revision", "shorter", basedOn = 1)))
+    }
+
+    /** Review round 1 (race.json, phone side): writers at once each get
+     *  their own number and nothing is lost; a hand edit from an old
+     *  version is refused; a revision from one is kept with its base. */
+    @Test fun versionsAtOnceAreNumberedUnderOneLock() {
+        val s = PhoneDraftStore(tmp.newFolder("drafts"))
+        val d = s.create(conv, "letter", "letter-block", "Letter", "Dear Sam,\n\nHi.", 1000)
+        val threads = (1..8).map { i ->
+            Thread { s.addVersion(conv, d.id, "Dear Sam,\n\nHi $i.", "change $i", "model", 2000L + i, base = 1) }
+        }
+        threads.forEach { it.start() }
+        threads.forEach { it.join() }
+        val after = s.load(conv, d.id)!!
+        assertEquals((1..9).toList(), after.versions.map { it.version })
+        assertEquals((1..8).map { "Dear Sam,\n\nHi $it." }.toSet(), (2..9).map { s.body(conv, d.id, it) }.toSet())
+        assertTrue(after.versions.drop(1).all { it.basedOn == 1 })
+        val stale = runCatching { s.addVersion(conv, d.id, "mine", null, "person", 3000, base = 1) }.exceptionOrNull()
+        assertTrue(stale is PhoneDraftStore.StaleVersion)
+        assertEquals(9, s.load(conv, d.id)!!.latest)
+        assertNotNull(s.addVersion(conv, d.id, "mine", null, "person", 3000, base = 9))
+        assertNull(s.load(conv, d.id)!!.versions.last().basedOn)
+    }
+
+    @Test fun xmlIllegalCharactersNeverReachAVersion() {
+        val s = PhoneDraftStore(tmp.newFolder("drafts"))
+        val d = s.create(conv, "letter", "letter-block", "Letter", "Dear Sam,\n\nHi.", 1000)
+        s.addVersion(conv, d.id, "Salary \u0001 expected \uFFFE here.", null, "person", 2000, base = 1)
+        assertEquals("Salary  expected  here.", s.body(conv, d.id, 2))
     }
 }
