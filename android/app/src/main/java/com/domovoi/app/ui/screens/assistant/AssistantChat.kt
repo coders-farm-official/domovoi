@@ -222,6 +222,7 @@ private fun ChatPane(
                                             onPrimary = { actions.cardPrimary(index, card) },
                                             onSecondary = { actions.cardSecondary(index, card) },
                                             enabled = !ui.replying,
+                                            atMs = m.at,
                                         )
                                     }
                                 },
@@ -243,6 +244,15 @@ private fun ChatPane(
             )
         }
         openSource?.let { SourceSheet(it, onClose = { openSource = null }) }
+        // A video the chat was asked to play (N2): the app's own player,
+        // over the chat, until it is closed.
+        ui.playingVideo?.let { v ->
+            com.domovoi.app.ui.screens.videos.VideoFeedPlayer(
+                videos = listOf(com.domovoi.app.ui.screens.videos.FeedVideo(v.key, v.title, v.uri, sizeBytes = v.sizeBytes, shareable = true)),
+                startIndex = 0,
+                onClose = { actions.closeVideo() },
+            )
+        }
         if (offerSpeechFiles) SpeechFilesDialog(ui, actions) { offerSpeechFiles = false }
         Row(
             Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 10.dp),

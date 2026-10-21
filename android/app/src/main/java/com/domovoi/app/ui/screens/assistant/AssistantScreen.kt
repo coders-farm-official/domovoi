@@ -126,6 +126,8 @@ internal class AssistantActions(
     val closeDocProblem: () -> Unit = {},
     /** The phone's own copy of a document of the conversation on screen, by id. */
     val docFile: (String) -> java.io.File? = { null },
+    /** The video a phone chat played (N2) was closed. */
+    val closeVideo: () -> Unit = {},
 )
 
 /** The phone chat's part of Chat's conversation frame: the way back to the
@@ -327,6 +329,7 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
             askingServer = actions.askingServer, dropPending = actions.dropPending,
             closeDocProblem = actions.closeDocProblem, docFile = actions.docFile,
             cardPrimary = cards.primary, cardSecondary = cards.secondary,
+            closeVideo = assistant::videoClosed,
         ),
         chrome,
     )
@@ -371,6 +374,8 @@ private fun rememberCardActions(assistant: AssistantController, conversationId: 
                         waiting = index to card
                         askPermission.launch(AppPhoneContext.androidPermissions(p).toTypedArray())
                     }
+                    CardKind.ACTION -> assistant.actionConfirmed(conversationId, index)
+                    CardKind.UNDO -> assistant.undoTapped(conversationId, index)
                     CardKind.HANDOFF -> card.handOff?.let { h ->
                         if (h.needsContact) {
                             if (!HandOffLauncher.canPickContact(context)) {
@@ -389,6 +394,8 @@ private fun rememberCardActions(assistant: AssistantController, conversationId: 
                 when (card.kind) {
                     CardKind.PERMISSION -> assistant.permissionDecided(conversationId, index, granted = false)
                     CardKind.HANDOFF -> assistant.handOffTapped(conversationId, index, done = false)
+                    CardKind.ACTION -> assistant.actionDeclined(conversationId, index)
+                    CardKind.UNDO -> Unit
                 }
             },
         )

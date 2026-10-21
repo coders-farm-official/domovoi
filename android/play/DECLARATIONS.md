@@ -21,7 +21,8 @@ Checked and **not** a problem:
 
 | Item | Finding |
 |---|---|
-| `QUERY_ALL_PACKAGES` | Not declared (merged release manifest checked). The `<queries>` entries are the text-to-speech service intent and, since N1, the phone chat's hand-offs (dial, SMS and mail `SENDTO`, `geo:`, calendar `INSERT`, https `VIEW`, text `SEND`, the contact picker): intent-scoped visibility, which needs no declaration. |
+| `QUERY_ALL_PACKAGES` | Not declared (merged release manifest checked). The `<queries>` entries are the text-to-speech service intent and, since N1, the phone chat's hand-offs (dial, SMS and mail `SENDTO`, `geo:`, calendar `INSERT`, https `VIEW`, text `SEND`, the contact picker), and since N2 the Clock app's `SET_TIMER`, `SET_ALARM`, `SHOW_TIMERS` and `SHOW_ALARMS`: intent-scoped visibility, which needs no declaration. |
+| `com.android.alarm.permission.SET_ALARM` | **Since N2 (2026-10-21).** A normal (install-time) permission, which Android requires to send `AlarmClock.ACTION_SET_TIMER` / `ACTION_SET_ALARM` to the Clock app. The Clock app sets the timer or alarm; the app itself schedules nothing new, so it needs no exact-alarm grant and no declaration *(none exists for a normal permission)*. Each timer and alarm is asked first in the chat. |
 | `REQUEST_INSTALL_PACKAGES` | Not declared. The app never installs APKs; the household server hands the APK to the browser. |
 | Location (fine, coarse, background) | **Fine and coarse since N1 (2026-10-21), foreground only**, asked in a phone chat the first time someone asks "where am I" or the Wi-Fi network's name, after the app's one-line reason; optional. No background location (`ACCESS_BACKGROUND_LOCATION` is not declared), so no location declaration form applies *(unverified that none exists for foreground-only; none was found)*. Room mode still reads Wi-Fi names only where Android allows without it. |
 | Contacts, calendar (read) | **Since N1, optional**: `READ_CONTACTS` to call or text someone by name from a phone chat (the contact picker works without it), `READ_CALENDAR` to read the phone's own calendar. Neither is a restricted permission with a declaration form *(unverified)*; both are read on the phone only and never sent (Data safety: not collected). Owner, at v1: check the Play Console's "Sensitive app permissions" page lists nothing for them. |
@@ -122,7 +123,11 @@ What the policy asks and what the app does:
   or saved book, the timers, the phone's status: `assistant/PhoneTools.kt`);
   the model can't change anything, reach files or contacts, or the network
   (`NoNetworkTest`). Calls, texts and the other hand-offs are the app's own
-  patterns, shown as a card the person taps, never the model's.
+  patterns, shown as a card the person taps, never the model's. Since N2
+  the phone's actions (Clock timers and alarms, the player, saved books and
+  videos) are also the app's own patterns (`assistant/PhoneActions.kt`),
+  never a model tool call for the shipped model; timers, alarms and videos
+  are asked first, playback can be undone.
 
 ## 5. Photo and video permissions declaration (App content → Sensitive app permissions)
 

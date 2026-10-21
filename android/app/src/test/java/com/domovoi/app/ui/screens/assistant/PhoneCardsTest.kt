@@ -1,6 +1,8 @@
 package com.domovoi.app.ui.screens.assistant
 
+import com.domovoi.app.assistant.ActionKind
 import com.domovoi.app.assistant.CardKind
+import com.domovoi.app.assistant.PhoneAction
 import com.domovoi.app.assistant.CardState
 import com.domovoi.app.assistant.HandOff
 import com.domovoi.app.assistant.HandOffKind
@@ -31,5 +33,25 @@ class PhoneCardsTest {
     @Test fun aCardFromANewerAppIsLeftOut() {
         assertNull(cardFace(PhoneCard(CardKind.PERMISSION, permission = "HEALTH")))
         assertNull(cardFace(PhoneCard(CardKind.HANDOFF)))
+    }
+
+    @Test fun anActionCardAsksThenSaysWhatHappened() {
+        val timer = PhoneCard(CardKind.ACTION, action = PhoneAction(ActionKind.SET_TIMER, seconds = 600), title = "Timer: 10 minutes")
+        assertEquals(CardFace("Timer: 10 minutes", "set timer", "cancel", null), cardFace(timer))
+        assertEquals("set in the Clock app", cardFace(timer.copy(state = CardState.DONE))!!.doneLine)
+        assertEquals("cancelled", cardFace(timer.copy(state = CardState.DISMISSED))!!.doneLine)
+        assertEquals("asked again below", cardFace(timer.copy(state = CardState.REPLACED))!!.doneLine)
+        assertEquals("the Clock app didn't take it", cardFace(timer.copy(state = CardState.FAILED))!!.doneLine)
+        val video = PhoneCard(CardKind.ACTION, action = PhoneAction(ActionKind.PLAY_VIDEO, query = "trip"), title = "Video: trip.mp4")
+        assertEquals("play", cardFace(video)!!.primary)
+        // A kind from a newer app is never shown, so never run.
+        assertNull(cardFace(PhoneCard(CardKind.ACTION, action = PhoneAction(ActionKind.OTHER))))
+        assertNull(cardFace(PhoneCard(CardKind.ACTION)))
+    }
+
+    @Test fun anUndoCardIsOneButtonThenUndone() {
+        val undo = PhoneCard(CardKind.UNDO, action = PhoneAction(ActionKind.PAUSE), title = "Paused.")
+        assertEquals(CardFace("", "undo", "", null), cardFace(undo))
+        assertEquals("undone", cardFace(undo.copy(state = CardState.DONE))!!.doneLine)
     }
 }

@@ -78,6 +78,10 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <!-- A phone chat's timers and alarms go to the Clock app
+         (AlarmClock.ACTION_SET_TIMER / ACTION_SET_ALARM), which requires
+         this normal, install-time permission. The app sets nothing itself. -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
 
     <queries>
         <intent>
@@ -118,6 +122,21 @@
         <intent>
             <action android:name="android.intent.action.PICK" />
             <data android:mimeType="vnd.android.cursor.dir/phone_v2" />
+        </intent>
+        <!-- A phone chat's actions (N2, assistant/AppActionHost.kt): timers
+             and alarms in the Clock app, each offered only when some app
+             takes it. -->
+        <intent>
+            <action android:name="android.intent.action.SET_TIMER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SET_ALARM" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SHOW_TIMERS" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SHOW_ALARMS" />
         </intent>
     </queries>
 
