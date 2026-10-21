@@ -4,6 +4,24 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-21 — A repair by Setup no longer trips the container guard
+
+* **"The music player image was replaced outside Domovoi" after running
+  Setup again.** A repair (or any re-run of `provision.sh`) rebuilt the
+  music player image with a new ID and told the guard nothing, so it
+  opened a tamper incident and paused plugin installs, updates, satellite
+  upgrades and media preparation. Now the installer keeps the image unless
+  it is missing or `Dockerfile.mpd` changed since the installer built it,
+  and every build it makes leaves a root-owned record the guard accepts
+  (`/var/lib/domovoi-provision/mpd-image.json`); after such a build the
+  rooms' players restart on the new image, as after an update. An image
+  built by hand is still reported. **If the incident is open on your box
+  now:** take this update, then on the Containers page (admin) press
+  **rebuild the music player image** (new; not offered while internet
+  access is turned off), which builds it as the core does, makes it the
+  image the guard expects and restarts every room's player on it (what is
+  playing stops; playlists and queues stay), then **clear after review**.
+
 ## 2026-10-20 — 1.0.0-rc3: audiobooks on the phone, and everything since rc2
 
 Version 1.0.0rc3 (the app 1.0.0-rc3, versionCode 26102001; the Windows

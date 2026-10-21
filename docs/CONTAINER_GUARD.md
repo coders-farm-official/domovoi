@@ -101,10 +101,27 @@ builds `domovoi-mpd:latest` it records the image ID
 the tag itself — to that ID on every check. The first time the guard sees
 an image (the first boot with the guard), it adopts it. When the core
 starts and finds the tag on a different image than the one recorded, it
-reads the update unit's record (`UPDATE_RESULT_FILE`,
-`/var/lib/domovoi-update/last-result.json`, written by root):
+looks for a record of a rebuild Domovoi made itself, first the installer's,
+then the update unit's:
 
-* the record says its run rebuilt the music player (`mpd_changed`) and
+* **Domovoi's installer** (`scripts/linux/provision.sh`: the Windows
+  Setup, a repair included, or a Linux install) recorded building exactly
+  that image after the recorded one was recorded: the new image is
+  adopted quietly ("rebuilt by Domovoi's installer"). The record is
+  `/var/lib/domovoi-provision/mpd-image.json` (`by`, `image_id`, `tag`,
+  `dockerfile_sha256`, `built_at`), and it counts only while the file and
+  its directory are root's alone (root-owned, writable by nobody else, not
+  a link). It is not a setting: `domovoi/.env` belongs to the service
+  user. The installer builds the image only when the tag names none, or
+  when it built the image the tag names and `Dockerfile.mpd` changed
+  since; after a build that moved the tag it removes the rooms' players
+  still on the old image and restarts a running core, which recreates
+  them on the new one (as an update does). While the core runs between
+  that build and the restart, the tag check is held, and the rooms are
+  still compared to the image they run;
+* the update unit's record (`UPDATE_RESULT_FILE`,
+  `/var/lib/domovoi-update/last-result.json`, written by root) says its
+  run rebuilt the music player (`mpd_changed`) and
   either **finished** after the recorded image was recorded, or is **the
   run under way that started this core** (status `running`, and its
   `to_sha` is the code now running — or its `from_sha`, for a rollback):
@@ -115,8 +132,18 @@ reads the update unit's record (`UPDATE_RESULT_FILE`,
   adopted unverified" on the Containers page, and the reason in
   `container_guard_baselines.source`;
 * anything else — a host without the update unit (nothing but the core
-  builds the image there), or a readable record that doesn't vouch for a
-  rebuild: reported as tampering (T1).
+  builds the image there), a readable update record that doesn't vouch for
+  a rebuild, or an installer record that names another image (a
+  `docker build` by hand after the installer's) or an older build:
+  reported as tampering (T1).
+
+Until 2026-10-21 the installer rebuilt the image on every re-run of its
+images step (a repair by Setup after any change to the compose file) and
+recorded nothing, so a repair followed by an update that didn't touch the
+music player opened "The music player image was replaced outside
+Domovoi". A rebuild that misses Docker's build cache gets a new image ID
+even from an unchanged `Dockerfile.mpd`: the base image is pinned by
+digest, but the apt layer is not reproducible.
 
 The unverified case opens no hole the guard claimed to close: the record
 sits in a root-owned directory, so only root can remove or spoil it, and
@@ -379,7 +406,12 @@ Domovoi expected and what it found. Then, on the Domovoi server:
    can't be removed while a container uses it, and a room left running
    keeps the old image), then `docker rmi domovoi-mpd:latest`, then
    restart the core: it rebuilds the image, records it, and recreates each
-   room's player from its data volume. Or, if you mean to keep the image,
+   room's player from its data volume. The Containers page does all of
+   that in one step: **rebuild the music player image** (admin, shown
+   unless internet access is turned off, since the build downloads
+   Debian's packages) builds it as the core does, makes it the image the
+   guard expects, and restarts every room's player on it; what a room is
+   playing stops, playlists and queues stay. Or, if you mean to keep the image,
    clear the incident with a note saying so. If you didn't change it,
    treat the box as compromised: the container's image came from
    somewhere you didn't choose.
