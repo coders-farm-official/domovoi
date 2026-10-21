@@ -36,7 +36,9 @@ the PDFs Chat writes.
 * **Same text from the server and the phone.** Both make a template's PDF
   from the same template files and fonts with the same line breaking, so
   the text is identical; NFKC is applied before drawing (the fonts have no
-  ff/ffi/ffl ligature glyphs) and every line break keeps its space.
+  ff/ffi/ffl ligature glyphs), and each line is drawn as its own text
+  line, so the words either side of a line break never run together when
+  the text is read back.
 * **With AI chat and questions turned off,** nothing new is drafted, but
   drafts already written can still be opened, edited, saved and printed
   (the dashboard's Chat page lists them).
