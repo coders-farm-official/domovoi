@@ -98,12 +98,25 @@ that:
    are installed either way, so you can turn AI on later in the dashboard,
    **Settings > Models**, which downloads the models then. The download
    sizes on the pages after this one follow the answer.
-   `DomovoiSetup.exe /ai=no` starts the page at No (the answer also rides
-   along when Setup carries on after a restart). Yes is passed as
-   `--ai-models`, so a later Setup's Yes is heard over an earlier No; a
-   pinned `provision.sh` from before the question gets no option for Yes
-   (it always downloads the models) and can't do No, which the job step
-   then refuses with a message rather than starting it.
+   **Run again on an install** (a repair or an upgrade), the page starts at
+   the answer the home has now, never at a Yes that would download the
+   models into a home that turned AI off: the household's own
+   `AI_FEATURES` (what **Settings > Models** saved in `domovoi/.env`),
+   which `DomovoiHost` reads for Setup while Domovoi is running, else the
+   answer Setup recorded last time. A Yes that comes from that record
+   alone and is left as it is (a `DomovoiHost` from an older Setup can't
+   read the file) is passed as neither option, so `provision.sh` keeps
+   what `domovoi/.env` says; any other answer is passed as `--ai-models`
+   or `--no-ai-models`, so a later Setup's Yes is heard over an earlier
+   No. The last page and Setup's install record say what `provision.sh`
+   reported (`"ai"` in its final line), not what was clicked.
+   `DomovoiSetup.exe /ai=no` (or `/ai=yes`) starts the page there, over
+   the saved answer (the answer also rides along when Setup carries on
+   after a restart). The page appears only when the pinned
+   `provision.sh` takes the answer (`ProvisionAiChoice` in `pins.iss`,
+   which `windows\build.ps1 -Pin` sets from the script): a build pinned
+   to one from before the question asks nothing, installs the AI models
+   as before, and refuses `/ai=no` at once, before it changes anything.
 3. **Lists every change it will make** (the table below) before it makes
    any.
 4. **Asks whether this PC will have internet after setup** (Yes, always /
@@ -127,7 +140,7 @@ that:
    pin the same way, it still installs the pinned commit's code, and every
    file it reads from that checkout must exist at the pinned commit (the
    installer's tests check both). The commit, its `provision.sh` pin, the
-   channel and the dashboard's tab addresses move together:
+   channel, the dashboard's tab addresses and the AI question move together:
    `windows\build.ps1 -Pin` sets all of them from one commit
    ([Building it](#building-it)).
 7. **Turns on Virtual Machine Platform** and installs WSL 2.7.14 only if
@@ -189,7 +202,8 @@ that:
    page also says where the AI models run, from what Setup found: the
    chat and voice-command models on the NVIDIA cards it lists (or on the
    processor when there is none), speech recognition always on the
-   processor; with AI chat and questions left out, it says so and where to
+   processor; with AI chat and questions left out (as `provision.sh`
+   reported it), it says so and where to
    turn them on (**Settings > Models**). Domovoi's icon appears beside the clock for the account that
    ran Setup, and starts at every account's sign-in from then on
    ([The tray icon](#the-tray-icon)).
@@ -635,7 +649,9 @@ commit SHA that is in this clone and on `origin/main`'s history, and
 rewrites `pins.iss` in one go: `DomovoiCommit`, `DomovoiChannel` (`stable`
 unless `-Channel main`; `stable` needs a commit a `v*` tag names),
 `ProvisionSha256` (that commit's `provision.sh`, its exact bytes),
-`ProvisionBundled` off, and `DashboardTabRoutes`. Commit the changed
+`ProvisionBundled` off, `DashboardTabRoutes`, and `ProvisionAiChoice`
+(on when that `provision.sh` takes `--ai-models` / `--no-ai-models`: only
+then does Setup ask "Include AI chat and questions?"). Commit the changed
 `pins.iss` after the tag: the tag is the commit households run.
 
 The exes are C# for .NET Framework 4.8.1, built with the compiler that
