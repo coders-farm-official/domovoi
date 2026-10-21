@@ -12555,7 +12555,7 @@
           "chat"
         ],
         "summary": "Send Message",
-        "description": "Persist the user turn, stream the assistant reply as SSE, persist the\nassistant turn at stream end. Events:\n\n  ``event: delta``  data: {\"text\": \"...\"}\n  ``event: done``   data: {<the persisted assistant message row>}\n  ``event: error``  data: {\"detail\": \"...\", \"code\": \"...\", \"model\": \"...\"}\n                    (also persisted on the row: ``error``, ``stats.error_code``)\n\nA message with pictures whose vision model isn't installed \u2014 or none\nis set \u2014 gets its answer up front: the user turn is kept, the reply is\nthe refusal (``vision_model_missing``) and Ollama is never asked. When\nOllama can't be asked whether the model is there, the send goes ahead\nand a failure is reported as it happens.",
+        "description": "Persist the user turn, stream the assistant reply as SSE, persist the\nassistant turn at stream end. Events:\n\n  ``event: delta``  data: {\"text\": \"...\"}\n  ``event: done``   data: {<the persisted assistant message row>}\n  ``event: error``  data: {\"detail\": \"...\", \"code\": \"...\", \"model\": \"...\"}\n                    (also persisted on the row: ``error``, ``stats.error_code``)\n\nA message with pictures whose vision model isn't installed \u2014 or none\nis set \u2014 gets its answer up front: the user turn is kept, the reply is\nthe refusal (``vision_model_missing``) and Ollama is never asked. When\nOllama can't be asked whether the model is there, the send goes ahead\nand a failure is reported as it happens.\n\nHelp (``web/backend/api/help.py``, part 9): in a thread titled \"Help: \u2026\",\nor for a question about Domovoi whose answer its help holds, the model\nis given the help desk's instruction and the passages found instead of\nthe chat persona, and the reply ends with the sections it came from\n(written here, not by the model; ``stats.help``). A help thread whose\nquestion the help doesn't cover is answered \"The manual doesn't cover\nthat.\" with no model asked. A screenshot in a help turn is read by the\nvision model first (which page, what error), and that reading is\nsearched too.",
         "operationId": "send_message_api_chat_threads__thread_id__messages_post",
         "parameters": [
           {
@@ -12761,6 +12761,237 @@
                   "additionalProperties": true,
                   "type": "object",
                   "title": "Response Chat Models Api Chat Models Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/help/search": {
+      "get": {
+        "tags": [
+          "help"
+        ],
+        "summary": "Search",
+        "description": "The help's passages for ``q``. OPEN (the manual is): nothing here is\nlive state. ``covered`` is false when nothing answers the question.",
+        "operationId": "search_api_help_search_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 500,
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 10,
+              "minimum": 1,
+              "default": 5,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Search Api Help Search Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/help/facts": {
+      "get": {
+        "tags": [
+          "help"
+        ],
+        "summary": "Facts",
+        "operationId": "facts_api_help_facts_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Facts Api Help Facts Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/help/checks": {
+      "get": {
+        "tags": [
+          "help"
+        ],
+        "summary": "Checks",
+        "operationId": "checks_api_help_checks_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Checks Api Help Checks Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/help/report": {
+      "post": {
+        "tags": [
+          "help"
+        ],
+        "summary": "Report",
+        "description": "The \"Report a problem\" summary, for the person to read, then copy or\nsave. Built on request, returned, never stored or sent.",
+        "operationId": "report_api_help_report_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Report Api Help Report Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/help/deliveries": {
+      "get": {
+        "tags": [
+          "help"
+        ],
+        "summary": "Deliveries",
+        "description": "Help steps sent by voice (V033): newest first, or after ``since_id``\noldest first. The app reads its owner's on start and after a\n``help_deliveries.changed`` event.",
+        "operationId": "deliveries_api_help_deliveries_get",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Person Id"
+            }
+          },
+          {
+            "name": "since_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Deliveries Api Help Deliveries Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -15349,6 +15580,18 @@
               }
             ],
             "title": "User Agent"
+          },
+          "owner_person_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Person Id"
           }
         },
         "type": "object",
@@ -18806,6 +19049,23 @@
         ],
         "title": "RecentlyPlayed",
         "description": "One row of a room's play history (media_plays). ``source`` is an\nopen enum \u2014 library, playlist, plus whatever provider plugins\nrecord. ``in_library`` is true when an external play already has a\nmatching library_tracks row (by ``source``/``source_id``); the\ndrawer offers \"+ add\" only when ``can_add`` (an external play with\nenough metadata to queue a generic acquisition, and not already in\nthe library)."
+      },
+      "ReportBody": {
+        "properties": {
+          "what_happened": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "What Happened",
+            "default": ""
+          },
+          "include_room_names": {
+            "type": "boolean",
+            "title": "Include Room Names",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "ReportBody"
       },
       "RoomBody": {
         "properties": {

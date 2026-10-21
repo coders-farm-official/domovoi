@@ -466,6 +466,23 @@ const ChatPageMain = () => {
   }, [threadId]);
   useRetryAfterCredential(messagesRefusal, reloadMessages);
 
+  // A chat the help panel started ("ask Domovoi", help.jsx): open it with
+  // the question typed in, for the person to send (or change) themselves.
+  React.useEffect(() => {
+    const takeHelp = () => {
+      const h = window.DomovoiHelpHandoff && window.DomovoiHelpHandoff.take();
+      if (!h) return;
+      setThreadId(h.threadId);
+      loadMessages(h.threadId);
+      setDraft(h.draft || '');
+      refreshThreads();
+      if (inputRef.current) inputRef.current.focus();
+    };
+    takeHelp();
+    window.addEventListener('domovoi-help-handoff', takeHelp);
+    return () => window.removeEventListener('domovoi-help-handoff', takeHelp);
+  }, []);
+
   // Narrow, the list and the conversation take turns (useChatNarrow), so
   // opening a chat puts the list away; the panel button brings it back.
   const hideRailOnPhone = () => {
@@ -587,6 +604,17 @@ const ChatPageMain = () => {
     setSending(false);
   };
 
+  // A screenshot pasted into the box attaches like the paperclip's
+  // pictures (help: "paste or attach a screenshot").
+  const onPaste = (e) => {
+    const files = Array.from((e.clipboardData && e.clipboardData.files) || [])
+      .filter((f) => /^image\//.test(f.type));
+    if (!files.length) return;
+    e.preventDefault();
+    if (visionMissing) { setPictureNote(true); refreshModels(); return; }
+    attach(files);
+  };
+
   const onKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   };
@@ -616,7 +644,7 @@ const ChatPageMain = () => {
   const textarea = (
     <textarea ref={inputRef} className="chat-input" value={draft}
               onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={onKeyDown} rows={narrow ? 1 : 2} aria-label="message"
+              onKeyDown={onKeyDown} onPaste={onPaste} rows={narrow ? 1 : 2} aria-label="message"
               placeholder={narrow ? 'message the domovoi…'
                 : 'message the domovoi… (Enter to send, Shift+Enter for a new line)'}/>
   );

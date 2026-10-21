@@ -104,6 +104,7 @@
   <script type="text/babel" data-presets="react" src="news.jsx"></script>
   <script type="text/babel" data-presets="react" src="manual.jsx"></script>
   <script type="text/babel" data-presets="react" src="containers.jsx"></script>
+  <script type="text/babel" data-presets="react" src="help.jsx"></script>
   <!-- Home is the default page. Loaded LAST of the core pages so every
        helper another page puts on window (satellites.jsx, calendar.jsx,
        manual.jsx) already exists when it evaluates. -->
@@ -430,6 +431,8 @@
               )}
             </main>
             <AuthModalHost/>
+            {/* Help (help.jsx): the "?" and "ask Domovoi about this" panel. */}
+            {window.HelpHost && <window.HelpHost/>}
             {/* A timer or reminder went off somewhere in the house: a card
                 that stays until dismissed (components.jsx). */}
             <TimerFireAlerts/>
