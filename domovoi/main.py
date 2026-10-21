@@ -1535,6 +1535,142 @@ async def admin_satellite_windows_fetch() -> dict[str, Any]:
     return {"started": started, **(await asyncio.to_thread(satellite_windows.status, lock))}
 
 
+# ─── The Windows satellite Setup and its setup codes (2026-10-21) ─────────
+# DomovoiSatelliteSetup.exe (windows/installer/DomovoiSatelliteSetup.iss) is
+# the double-click front end of install-windows.ps1. The dashboard's "make
+# the code" asks for a setup code naming the room's enrolment payload; the
+# Setup trades it here for that payload and the bundle's digest, exactly
+# what the PowerShell command quotes (domovoi/satellite_setup.py: a code is
+# not a credential, and it expires). The Setup file itself comes from the
+# project's GitHub release, on an admin's word, and is handed out here.
+
+
+class _SetupCodeBody(BaseModel):
+    payload: str = Field(..., min_length=1, max_length=1024)
+
+
+def _setup_code_answer(made: dict[str, Any]) -> dict[str, Any]:
+    from domovoi import satellite_setup
+
+    code = made["code"]
+    return {
+        "code": code,
+        "code_display": satellite_setup.display_code(code),
+        "expires_at": made["expires_at"],
+        "server": satellite_setup.server_text(made["core"]),
+        "file_name": satellite_setup.download_name(code, made["core"]),
+        "download_path": satellite_setup.DOWNLOAD_PATH + code,
+        "short_path": satellite_setup.SHORT_PATH + satellite_setup.display_code(code),
+    }
+
+
+@app.post("/v1/admin/satellite-setup/codes", dependencies=[Depends(require_admin_mutation)])
+async def admin_satellite_setup_code(body: _SetupCodeBody) -> dict[str, Any]:
+    """A setup code for one room's enrolment payload, live for 24 hours (the
+    same code again while it lives). 422 for a payload the devices would
+    refuse."""
+    from domovoi import satellite_setup
+
+    try:
+        made = satellite_setup.make_code(body.payload)
+    except satellite_setup.SetupCodeError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from None
+    return _setup_code_answer(made)
+
+
+@app.get("/v1/satellite-setup/codes/{code}")
+async def satellite_setup_code(code: str) -> dict[str, Any]:
+    """What the Setup gets for a live code: the room's enrolment payload
+    and the satellite bundle's SHA-256, as the PowerShell command carries
+    them, plus the parts it shows (room, fingerprint). Public on the LAN
+    like the bundle: nothing in it is a secret. 404 for an unknown or
+    expired code; 423 while the container guard's freeze is on."""
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
+    from domovoi import satellite_bundle, satellite_setup
+    from satellite import enrolment
+
+    payload = satellite_setup.lookup(code)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="that setup code is not known here: it has expired "
+                            "(after 24 hours, or when the server restarted) or was mistyped")
+    parsed = enrolment.parse(payload)
+    bundle = await asyncio.to_thread(
+        satellite_bundle.current, SATELLITE_CODE_DIR, _is_allowed_satellite_code
+    )
+    return {
+        "format": 1,
+        "payload": payload,
+        "core": parsed.core,
+        "room": parsed.room,
+        "room_id": parsed.room_id,
+        "fingerprint": parsed.fp,
+        "bundle_sha256": bundle.sha256,
+        "bundle_size": len(bundle.data),
+        "bundle_path": "/v1/satellite-code/bundle.tar.gz",
+        "expires_at": satellite_setup.expires_at(code),
+    }
+
+
+async def _satellite_setup_download(code: str) -> FileResponse:
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
+    from domovoi import satellite_setup
+    from satellite import enrolment
+
+    payload = satellite_setup.lookup(code)
+    if payload is None:
+        return FastAPIResponse(
+            status_code=404, media_type="text/plain; charset=utf-8",
+            content="This Domovoi setup link has expired (codes last 24 hours) or was mistyped.\n"
+                    "Make a new code on the dashboard: Settings > Satellites > add a spare device.\n")
+    path = await asyncio.to_thread(satellite_setup.cached_file)
+    if path is None:
+        return FastAPIResponse(
+            status_code=404, media_type="text/plain; charset=utf-8",
+            content="This Domovoi server doesn't hold the Windows Setup yet.\n"
+                    "On the dashboard, Settings > Satellites > add a spare device: press\n"
+                    "\"get the Windows Setup\", then open this link again.\n")
+    name = satellite_setup.download_name(satellite_setup.normalize_code(code), enrolment.parse(payload).core)
+    return FileResponse(path, media_type="application/vnd.microsoft.portable-executable", filename=name,
+                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
+
+
+@app.get("/v1/satellite-setup/download/{code}")
+async def satellite_setup_download(code: str) -> FileResponse:
+    """The Windows satellite Setup, named so it carries this code and the
+    server (``DomovoiSatelliteSetup_<code>_<host>_<port>.exe``): the Setup
+    reads them back and nobody types them. 404 with a plain sentence for an
+    expired code or a server that doesn't hold the Setup yet."""
+    return await _satellite_setup_download(code)
+
+
+@app.get("/win/{code}", include_in_schema=False)
+async def satellite_setup_short(code: str) -> FileResponse:
+    """The same download, at an address short enough to type into the
+    laptop's browser (``http://192.168.1.20:6370/win/K7M4-QX2P``)."""
+    return await _satellite_setup_download(code)
+
+
+@app.get("/v1/admin/satellite-setup", dependencies=[Depends(require_admin_read)])
+async def admin_satellite_setup() -> dict[str, Any]:
+    """Whether this server holds the Windows satellite Setup, from which
+    release, and the fetch's state."""
+    from domovoi import satellite_setup
+
+    return await asyncio.to_thread(satellite_setup.status)
+
+
+@app.post("/v1/admin/satellite-setup/fetch", dependencies=[Depends(require_admin_mutation)])
+async def admin_satellite_setup_fetch() -> dict[str, Any]:
+    """Start fetching the Setup from the project's GitHub release (held to
+    that release's SHA256SUMS). Answers at once; poll the status. Refused
+    under internet access "never" (the job says so)."""
+    await container_freeze.require_unfrozen("satellite_channel")
+    from domovoi import satellite_setup
+
+    started = satellite_setup.start_fetch()
+    return {"started": started, **(await asyncio.to_thread(satellite_setup.status))}
+
+
 # ─── The Android app, from this server (spare devices, 2026-10-15) ────────
 # A phone scans the dashboard's QR code and lands on GET /join here: a small
 # page (domovoi/join_page/) that offers the Domovoi app from this server's
