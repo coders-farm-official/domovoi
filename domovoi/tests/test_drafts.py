@@ -80,6 +80,7 @@ def test_phrases(case):
     got = None if ask is None else {"kind": ask.kind, "template": ask.template, "topic": ask.topic}
     assert got == case["draft"]
     assert phrases.revision_request(case["in"]) == case["revise"]
+    assert phrases.revision_request(case["in"], after_draft=True) == case["revise_after"]
     assert phrases.print_request(case["in"]) == case["print"]
     assert phrases.normalize(case["in"]) == case["normalized"]
 
@@ -112,6 +113,12 @@ def test_layout(case):
 def test_wrap(case):
     f = metrics.font(case["font"])
     assert layout.wrap(layout.prepare(case["text"], f), f, case["size"], case["room"]) == case["out"]
+
+
+def test_xml_illegal_characters_one_rule():
+    for c in CASES["xml_safe"]:
+        assert blocks.xml_safe(c["in"]) == c["out"]
+    assert blocks.parse("A \x01 B") == blocks.parse("A  B")
 
 
 def test_prepare_and_diff_and_clean_cases():

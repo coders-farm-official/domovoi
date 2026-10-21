@@ -33,6 +33,19 @@ class Block:
     lines: list[str] = field(default_factory=list)
 
 
+def xml_safe(text: str) -> str:
+    """``text`` without the characters XML 1.0 can't hold (controls other
+    than tab, line feed and carriage return; lone surrogates; U+FFFE and
+    U+FFFF), which a .docx can't carry: taken out of a hand edit, a model's
+    reply and every render alike. The phone's ``DraftBlocks.xmlSafe`` is the
+    same rule (shared_cases.json)."""
+    return "".join(ch for ch in (text or "") if _xml_ok(ord(ch)))
+
+
+def _xml_ok(c: int) -> bool:
+    return (c in (0x9, 0xA, 0xD) or 0x20 <= c <= 0xD7FF or 0xE000 <= c <= 0xFFFD or 0x10000 <= c <= 0x10FFFF)
+
+
 def inline(text: str) -> str:
     """``text`` without markdown's inline marks, its spaces collapsed."""
     s = _LINK.sub(r"\1", text)
@@ -47,7 +60,7 @@ def inline(text: str) -> str:
 def parse(markdown: str) -> list[Block]:
     out: list[Block] = []
     para: Block | None = None
-    for raw in (markdown or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+    for raw in xml_safe(markdown).replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         line = raw.rstrip()
         if _FENCE.match(line) or _RULE.match(line):
             para = None

@@ -351,3 +351,167 @@ def test_drafts_go_with_their_thread(model):
         tid, (one, *_), _e = _three_versions(c, model)
         assert c.delete(f"/api/chat/threads/{tid}").status_code == 200
         assert c.get(f"/api/chat/drafts/{one['draft']['id']}").status_code == 404
+
+
+# ─── Review round 1 (2026-10-21) ─────────────────────────────────────────
+#: Messages in a chat with a draft that are NOT about the draft: they route
+#: as ordinary messages, the draft untouched (review finding 2).
+NOT_REVISIONS = [
+    "turn on the kitchen lights", "add milk to my shopping list", "put on some jazz",
+    "use the oven timer for ten minutes", "say hello to grandma", "more coffee please", "fix the wifi",
+    "change the thermostat to 70", "remove the dentist appointment tomorrow",
+    "move my dentist appointment to Friday", "make it louder",
+]
+
+
+@requires_db
+@pytest.mark.parametrize("phrase", NOT_REVISIONS)
+def test_an_unrelated_message_never_rewrites_the_draft(model, phrase):
+    with _client() as c:
+        tid = _thread(c)
+        model.replies = [LETTER, "Sure."]
+        one, _ = _send(c, tid, "write a cover letter for Acme")
+        done, _ = _send(c, tid, phrase)
+        assert done.get("draft") is None and done["content"] == "Sure."
+        assert [v["version"] for v in c.get(f"/api/chat/drafts/{one['draft']['id']}").json()["versions"]] == [1]
+    assert model.calls[-1]["messages"][0]["content"] != prompts.REVISE_RULES
+
+
+@requires_db
+def test_real_revisions_still_revise_and_edit_only_words_need_the_draft_turn_just_before(model):
+    with _client() as c:
+        tid = _thread(c)
+        model.replies = [LETTER, SHORTER, "A cover letter is a letter.", FORMAL, "Fine.", "Fine."]
+        _send(c, tid, "write a cover letter for Acme")
+        two, _ = _send(c, tid, "shorter")                     # right after the draft turn
+        assert two["draft"]["version"] == 2
+        chat, _ = _send(c, tid, "what is a cover letter?")
+        assert chat.get("draft") is None
+        three, _ = _send(c, tid, "make the letter more formal")  # names the draft: any time
+        assert three["draft"]["version"] == 3
+        _send(c, tid, "what is a cover letter?")
+        later, _ = _send(c, tid, "more formal")               # edit-only, not right after a draft
+        assert later.get("draft") is None
+
+
+@requires_db
+def test_the_cards_revise_box_revises_whatever_it_says(model):
+    with _client() as c:
+        tid = _thread(c)
+        model.replies = [LETTER, SHORTER]
+        one, _ = _send(c, tid, "write a cover letter for Acme")
+        r = c.post(f"/api/chat/threads/{tid}/messages",
+                   json={"content": "less stiff in the second paragraph", "revise_draft": one["draft"]["id"]})
+        done = next(d for ev, d in _sse(r.text) if ev == "done")
+        assert done["draft"]["version"] == 2 and done["draft"]["action"] == "revise"
+        other = _thread(c)
+        bad = c.post(f"/api/chat/threads/{other}/messages", json={"content": "x", "revise_draft": one["draft"]["id"]})
+        assert bad.status_code == 404
+
+
+async def _new_draft(body: str = LETTER):
+    from sqlalchemy import text as sql
+
+    from web.backend.db import session_scope
+
+    async with session_scope() as s:
+        tid = (await s.execute(sql("INSERT INTO chat_threads (title) VALUES ('race') RETURNING id"))).scalar_one()
+        await s.commit()
+    t = drafts_api.guided_turn(tid, "cover_letter", "letter-block", "Cover letter", "write a cover letter")
+    await t.finish(body)
+    return tid, t.draft_id
+
+
+def _revise(tid, did, base, q):
+    return drafts_api.DraftTurn(action="revise", thread_id=tid, kind="cover_letter", template="letter-block",
+                                title="Cover letter", request=q, draft_id=did, base=base,
+                                passes=[[{"role": "system", "content": ""}]])
+
+
+async def _all_versions(did):
+    from web.backend.db import session_scope
+
+    async with session_scope() as s:
+        return await drafts_api._versions(s, did)
+
+
+@requires_db
+async def test_two_revisions_finishing_at_once_both_keep_their_versions():
+    import asyncio
+
+    tid, did = await _new_draft()
+    _, base = await drafts_api.latest_draft(tid)
+    a, b = _revise(tid, did, base, "shorter"), _revise(tid, did, base, "more formal")
+    res = await asyncio.gather(a.finish(SHORTER), b.finish(FORMAL), return_exceptions=True)
+    assert not [r for r in res if isinstance(r, Exception)], res
+    vs = await _all_versions(did)
+    assert [v["version"] for v in vs] == [1, 2, 3]
+    assert sorted(v["based_on"] for v in vs[1:]) == [1, 1]
+    assert any("came in while this was written" in r[0] for r in res)
+
+
+@requires_db
+async def test_a_hand_edit_during_a_revision_is_kept_and_the_reply_says_so():
+    tid, did = await _new_draft()
+    _, base = await drafts_api.latest_draft(tid)
+    rev = _revise(tid, did, base, "shorter")
+    edit = await drafts_api.edit_draft(did, drafts_api.EditBody(text=LETTER + "\nMY HAND EDIT.\n", base_version=1))
+    assert edit["version"]["version"] == 2
+    line, card = await rev.finish(SHORTER)
+    vs = await _all_versions(did)
+    assert [(v["version"], v["author"]) for v in vs] == [(1, "model"), (2, "person"), (3, "model")]
+    assert "MY HAND EDIT" in vs[1]["body"] and vs[2]["based_on"] == 1
+    assert card["based_on"] == 1 and card["newer"] == 2
+    assert "Version 2 came in" in line and "version picker" in line
+
+
+@requires_db
+async def test_two_hand_edits_at_once_give_one_version_and_one_409():
+    import asyncio
+
+    tid, did = await _new_draft()
+    res = await asyncio.gather(
+        drafts_api.edit_draft(did, drafts_api.EditBody(text=LETTER + "\none\n", base_version=1)),
+        drafts_api.edit_draft(did, drafts_api.EditBody(text=LETTER + "\ntwo\n", base_version=1)),
+        return_exceptions=True)
+    assert not [r for r in res if isinstance(r, Exception)], res
+    statuses = sorted(getattr(r, "status_code", 200) for r in res)
+    assert statuses == [200, 409]
+    conflict = next(r for r in res if getattr(r, "status_code", 200) == 409)
+    assert json.loads(conflict.body)["code"] == "stale_version"
+
+
+@requires_db
+def test_xml_illegal_characters_are_stripped_and_the_docx_saves(model, documents_dir):
+    with _client() as c:
+        tid = _thread(c)
+        model.replies = [LETTER]
+        one, _ = _send(c, tid, "write a cover letter for Acme")
+        did = one["draft"]["id"]
+        r = c.post(f"/api/chat/drafts/{did}/versions",
+                   json={"text": "Dear Sam,\n\nSalary \u0001 expected \ufffe here.\n", "base_version": 1})
+        assert r.status_code == 200
+        body = r.json()["version"]["body"]
+        assert "\u0001" not in body and "\ufffe" not in body and "Salary  expected  here." in body
+        s = c.post(f"/api/chat/drafts/{did}/save", json={"format": "docx"})
+        assert s.status_code == 200 and s.json()["check"]["ok"]
+    # and at render, for text that reached the database another way
+    from domovoi.drafts import docx_file, templates as tpl
+
+    assert docx_file.render("Dear Sam,\n\nA \u0002 B \ufffe C\n", tpl.get("letter-personal"))
+
+
+@requires_db
+def test_each_version_records_the_device_that_made_it(model):
+    with _client() as c:
+        tid = _thread(c)
+        model.replies = [LETTER]
+        r = c.post(f"/api/chat/threads/{tid}/messages",
+                   json={"content": "write a cover letter for Acme", "device_id": "browser-aaaa"})
+        did = next(d for ev, d in _sse(r.text) if ev == "done")["draft"]["id"]
+        e = c.post(f"/api/chat/drafts/{did}/versions",
+                   json={"text": "Dear Sam,\n\nHi.", "base_version": 1, "device_id": "android-bbbb"})
+        assert e.status_code == 200
+        vs = c.get(f"/api/chat/drafts/{did}").json()["versions"]
+        assert [v["device_id"] for v in vs] == ["browser-aaaa", "android-bbbb"]
+        assert "device_name" in vs[1]

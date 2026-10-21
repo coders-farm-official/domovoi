@@ -564,6 +564,28 @@
    ]
   }
  ],
+ "xml_safe": [
+  {
+   "in": "Salary \u0001 expected",
+   "out": "Salary  expected"
+  },
+  {
+   "in": "A\u0000B\tC\nD\rE",
+   "out": "AB\tC\nD\rE"
+  },
+  {
+   "in": "no￾ and￿ here",
+   "out": "no and here"
+  },
+  {
+   "in": "keep é — 😀 ok",
+   "out": "keep é — 😀 ok"
+  },
+  {
+   "in": "\u000b\f\u001f stays? no: 7f is fine",
+   "out": " stays? no: 7f is fine"
+  }
+ ],
  "plain_text": [
   {
    "in": "# Jordan Avery\nToledo, OH · 555-0142 · jordan.avery@example.com\n\n## Summary\nWarehouse lead with six years of experience running receiving and shipping teams. Known for safe, steady work and for training new staff; coffee-fuelled, efficient and calm when the trucks are late.\n\n## Work Experience\n**Warehouse Lead, Lakeshore Supply — 2021 to 2024**\n- Led a team of eight associates across two shifts, cutting late shipments by a third over two years.\n- Trained new hires on forklift safety and the scanner system.\n- Kept the inventory count within half a percent at every quarterly audit.\n\n**Associate, Lakeshore Supply — 2018 to 2021**\n- Received, checked and shelved about 200 cartons a day.\n\n## Education\n**Toledo Technical College — Certificate in Logistics, 2018**\n\n## Skills\nForklift (certified), inventory systems, scheduling, first aid\n",
@@ -2033,6 +2055,7 @@
     "topic": "for the warehouse lead job at Acme Logistics"
    },
    "revise": false,
+   "revise_after": false,
    "print": false
   },
   {
@@ -2044,6 +2067,7 @@
     "topic": "to my landlord about the broken heater"
    },
    "revise": false,
+   "revise_after": false,
    "print": false
   },
   {
@@ -2055,6 +2079,7 @@
     "topic": ""
    },
    "revise": false,
+   "revise_after": false,
    "print": false
   },
   {
@@ -2066,6 +2091,7 @@
     "topic": "for Beta Corp"
    },
    "revise": false,
+   "revise_after": false,
    "print": false
   },
   {
@@ -2077,6 +2103,7 @@
     "topic": "to my neighbour"
    },
    "revise": false,
+   "revise_after": false,
    "print": false
   },
   {
@@ -2088,6 +2115,7 @@
     "topic": ""
    },
    "revise": false,
+   "revise_after": false,
    "print": false
   },
   {
@@ -2099,6 +2127,7 @@
     "topic": "to the phone company about my bill"
    },
    "revise": false,
+   "revise_after": false,
    "print": false
   },
   {
@@ -2110,6 +2139,7 @@
     "topic": ""
    },
    "revise": false,
+   "revise_after": false,
    "print": false
   },
   {
@@ -2117,6 +2147,7 @@
    "normalized": "how do i write a cover letter",
    "draft": null,
    "revise": false,
+   "revise_after": false,
    "print": false
   },
   {
@@ -2124,6 +2155,7 @@
    "normalized": "what should a resume include",
    "draft": null,
    "revise": false,
+   "revise_after": false,
    "print": false
   },
   {
@@ -2131,6 +2163,7 @@
    "normalized": "write an email to my boss",
    "draft": null,
    "revise": false,
+   "revise_after": false,
    "print": false
   },
   {
@@ -2138,6 +2171,7 @@
    "normalized": "write a poem about letters",
    "draft": null,
    "revise": false,
+   "revise_after": false,
    "print": false
   },
   {
@@ -2145,13 +2179,15 @@
    "normalized": "i got a letter from the bank",
    "draft": null,
    "revise": false,
+   "revise_after": false,
    "print": false
   },
   {
    "in": "Shorter",
    "normalized": "shorter",
    "draft": null,
-   "revise": true,
+   "revise": false,
+   "revise_after": true,
    "print": false
   },
   {
@@ -2159,6 +2195,7 @@
    "normalized": "make it more formal",
    "draft": null,
    "revise": true,
+   "revise_after": true,
    "print": false
   },
   {
@@ -2166,34 +2203,39 @@
    "normalized": "make the letter shorter, please",
    "draft": null,
    "revise": true,
+   "revise_after": true,
    "print": false
   },
   {
    "in": "It’s too long",
    "normalized": "it's too long",
    "draft": null,
-   "revise": true,
+   "revise": false,
+   "revise_after": true,
    "print": false
   },
   {
    "in": "mention my forklift licence",
    "normalized": "mention my forklift licence",
    "draft": null,
-   "revise": true,
+   "revise": false,
+   "revise_after": true,
    "print": false
   },
   {
    "in": "add that I can start on Monday",
    "normalized": "add that i can start on monday",
    "draft": null,
-   "revise": true,
+   "revise": false,
+   "revise_after": false,
    "print": false
   },
   {
    "in": "Can you rewrite the opening?",
    "normalized": "rewrite the opening",
    "draft": null,
-   "revise": true,
+   "revise": false,
+   "revise_after": false,
    "print": false
   },
   {
@@ -2201,6 +2243,7 @@
    "normalized": "what does ats mean",
    "draft": null,
    "revise": false,
+   "revise_after": false,
    "print": false
   },
   {
@@ -2208,6 +2251,7 @@
    "normalized": "thanks",
    "draft": null,
    "revise": false,
+   "revise_after": false,
    "print": false
   },
   {
@@ -2215,6 +2259,7 @@
    "normalized": "print it",
    "draft": null,
    "revise": false,
+   "revise_after": false,
    "print": true
   },
   {
@@ -2222,6 +2267,7 @@
    "normalized": "print the letter",
    "draft": null,
    "revise": false,
+   "revise_after": false,
    "print": true
   },
   {
@@ -2229,6 +2275,7 @@
    "normalized": "print a copy",
    "draft": null,
    "revise": false,
+   "revise_after": false,
    "print": true
   },
   {
@@ -2236,6 +2283,7 @@
    "normalized": "print my cover letter",
    "draft": null,
    "revise": false,
+   "revise_after": false,
    "print": true
   },
   {
@@ -2243,6 +2291,195 @@
    "normalized": "print two copies of the lease",
    "draft": null,
    "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "turn on the kitchen lights",
+   "normalized": "turn on the kitchen lights",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "add milk to my shopping list",
+   "normalized": "add milk to my shopping list",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "put on some jazz",
+   "normalized": "put on some jazz",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "use the oven timer for ten minutes",
+   "normalized": "use the oven timer for ten minutes",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "say hello to grandma",
+   "normalized": "say hello to grandma",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "more coffee please",
+   "normalized": "more coffee please",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "fix the wifi",
+   "normalized": "fix the wifi",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "change the thermostat to 70",
+   "normalized": "change the thermostat to 70",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "remove the dentist appointment tomorrow",
+   "normalized": "remove the dentist appointment tomorrow",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "move my dentist appointment to Friday",
+   "normalized": "move my dentist appointment to friday",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "make it louder",
+   "normalized": "make it louder",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "more bass",
+   "normalized": "more bass",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "turn it up",
+   "normalized": "turn it up",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "add my forklift licence to the resume",
+   "normalized": "add my forklift licence to the resume",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "the cover letter is too long",
+   "normalized": "the cover letter is too long",
+   "draft": {
+    "kind": "cover_letter",
+    "template": "letter-block",
+    "topic": "is too long"
+   },
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "rewrite it",
+   "normalized": "rewrite it",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "shorten this",
+   "normalized": "shorten this",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "tone it down",
+   "normalized": "tone it down",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "a bit shorter",
+   "normalized": "a bit shorter",
+   "draft": null,
+   "revise": false,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "less formal and more friendly",
+   "normalized": "less formal and more friendly",
+   "draft": null,
+   "revise": false,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "fix the typos",
+   "normalized": "fix the typos",
+   "draft": null,
+   "revise": false,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "sign it Jordan Avery",
+   "normalized": "sign it jordan avery",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "address it to Ms. Lee",
+   "normalized": "address it to ms. lee",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
    "print": false
   }
  ],

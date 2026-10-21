@@ -141,6 +141,15 @@ PHRASES = [
     "please print a copy",
     "print my cover letter",
     "print two copies of the lease",
+    # Review round 1: not about the draft, after it or not (they must route as usual).
+    "turn on the kitchen lights", "add milk to my shopping list", "put on some jazz",
+    "use the oven timer for ten minutes", "say hello to grandma", "more coffee please", "fix the wifi",
+    "change the thermostat to 70", "remove the dentist appointment tomorrow",
+    "move my dentist appointment to Friday", "make it louder", "more bass", "turn it up",
+    # ...and real revisions: naming the draft, "it" edited, and edit-only words.
+    "add my forklift licence to the resume", "the cover letter is too long", "rewrite it", "shorten this",
+    "tone it down", "a bit shorter", "less formal and more friendly", "fix the typos",
+    "sign it Jordan Avery", "address it to Ms. Lee",
 ]
 
 DIFFS = [
@@ -196,6 +205,10 @@ def main() -> int:
         RESUME, LETTER, "# Name ##\n\n* star bullet\n+ plus bullet\n• dot bullet\n\n---\n\n```\ncode line\n```",
         "**Bold** start but more\n**all bold**\n__also bold__\nA [link](https://example.com) and `code` "
         "and *it* and snake_case_word and 2*3*4.", "\n\n  \n", "### Third level\nplain \\*escaped\\* text")]
+    cases["xml_safe"] = [{"in": t, "out": blocks.xml_safe(t)} for t in (
+        "Salary \x01 expected", "A\x00B\tC\nD\rE",
+        "no\ufffe and\uffff here", "keep \u00e9 \u2014 \U0001f600 ok",
+        "\x0b\x0c\x1f\x7f stays? no: 7f is fine")]
     cases["plain_text"] = [{"in": md, "out": blocks.plain_text(blocks.parse(md)), "words": blocks.word_count(md)}
                            for md in (RESUME, PERSONAL)]
     cases["layout"] = []
@@ -215,7 +228,9 @@ def main() -> int:
         cases["phrases"].append({"in": t, "normalized": phrases.normalize(t),
                                  "draft": None if ask is None else {"kind": ask.kind, "template": ask.template,
                                                                      "topic": ask.topic},
-                                 "revise": phrases.revision_request(t), "print": phrases.print_request(t)})
+                                 "revise": phrases.revision_request(t),
+                                 "revise_after": phrases.revision_request(t, after_draft=True),
+                                 "print": phrases.print_request(t)})
     cases["titles"] = [{"in": [k, t], "out": phrases.title_for(k, t)} for k, t in (
         ("Cover letter", "for the warehouse lead job at Acme Logistics"), ("Resume", ""), ("Letter", "to my landlord"))]
     cases["clean"] = [{"in": t, "out": prompts.clean(t)} for t in CLEANS]

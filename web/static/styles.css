@@ -1721,6 +1721,9 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .chat-draft-line { font-size: 12px; color: var(--fg); }
 .chat-draft-note { font-size: 11px; color: var(--fg-muted); align-self: center; }
 .chat-draft-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.chat-draft-revise { display: flex; gap: 6px; align-items: center; }
+.chat-draft-revise input { flex: 1; min-width: 0; font: inherit; font-size: 12px; height: 30px; padding: 0 8px; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--card); color: var(--fg); }
+.chat-page.narrow .chat-draft-revise input { height: 44px; font-size: 16px; }
 .chat-canvas { display: flex; flex-direction: column; gap: 8px; min-height: 0; min-width: 0; flex: 1; background: var(--card); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--inner-highlight); padding: 10px 12px; }
 .chat-canvas.wide { flex: 0 0 clamp(360px, 40%, 560px); }
 .chat-canvas-head { display: flex; align-items: center; gap: 8px; min-width: 0; }

@@ -55,6 +55,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from domovoi.admin_auth import require_device, require_device_read
 from domovoi.clients import ollama as ollama_client
@@ -122,16 +123,21 @@ async def _draft(s: Any, draft_id: int) -> dict[str, Any] | None:
     return _draft_row(r) if r else None
 
 
+_VERSION_COLS = ("v.version, v.body, v.instruction, v.author, v.model, v.saved, v.based_on, v.device_id, "
+                 "v.person_id, v.created_at, dv.name AS device_name")
+_VERSION_FROM = "chat_draft_versions v LEFT JOIN devices dv ON dv.device_id = v.device_id"
+
+
 async def _versions(s: Any, draft_id: int) -> list[dict[str, Any]]:
     rows = (await s.execute(text(
-        "SELECT version, body, instruction, author, model, saved, created_at FROM chat_draft_versions "
-        "WHERE draft_id = :id ORDER BY version"), {"id": draft_id})).mappings().all()
+        f"SELECT {_VERSION_COLS} FROM {_VERSION_FROM} WHERE v.draft_id = :id ORDER BY v.version"),
+        {"id": draft_id})).mappings().all()
     return [_version_row(r) for r in rows]
 
 
 async def _version(s: Any, draft_id: int, version: int | None) -> dict[str, Any] | None:
-    q = ("SELECT version, body, instruction, author, model, saved, created_at FROM chat_draft_versions "
-         "WHERE draft_id = :id " + ("AND version = :v" if version else "ORDER BY version DESC LIMIT 1"))
+    q = (f"SELECT {_VERSION_COLS} FROM {_VERSION_FROM} "
+         "WHERE v.draft_id = :id " + ("AND v.version = :v" if version else "ORDER BY v.version DESC LIMIT 1"))
     r = (await s.execute(text(q), {"id": draft_id, "v": version})).mappings().first()
     return _version_row(r) if r else None
 
@@ -184,13 +190,17 @@ class DraftTurn:
     #: The section split of a long version (revise in parts).
     sections: list[str] = field(default_factory=list)
     model: str = ""
+    #: The device that asked (kept on the version).
+    device_id: str | None = None
     #: What each pass wrote (stream).
     outputs: list[str] = field(default_factory=list)
 
-    def card(self, version: int, words: int, change: str = "") -> dict[str, Any]:
+    def card(self, version: int, words: int, change: str = "", based_on: int | None = None,
+             newer: int | None = None) -> dict[str, Any]:
         return {"id": self.draft_id, "version": version, "kind": self.kind, "title": self.title,
                 "template": self.template, "words": words, "action": self.action, "change": change,
-                "parts": len(self.passes) if len(self.passes) > 1 else None}
+                "parts": len(self.passes) if len(self.passes) > 1 else None,
+                "based_on": based_on, "newer": newer}
 
     def immediate_card(self) -> dict[str, Any]:
         b = self.base or {}
@@ -218,27 +228,46 @@ class DraftTurn:
             body = "\n\n".join(p for p in (prompts.clean(o) for o in self.outputs) if p)
         else:
             body = prompts.clean(content)
+        body = blocks.xml_safe(body)[:MAX_BODY_CHARS]
         if not blocks.parse(body):
             raise ValueError("empty draft")
-        body = body[:MAX_BODY_CHARS]
-        async with session_scope() as s:
-            if self.action == "create":
-                self.draft_id = (await s.execute(text(
-                    "INSERT INTO chat_drafts (thread_id, kind, template, title) VALUES (:t, :k, :tp, :ti) "
-                    "RETURNING id"),
-                    {"t": self.thread_id, "k": self.kind, "tp": self.template, "ti": self.title[:200]})).scalar_one()
-                version = 1
-            else:
-                version = int((await s.execute(text(
-                    "SELECT COALESCE(MAX(version), 0) + 1 FROM chat_draft_versions WHERE draft_id = :d"),
-                    {"d": self.draft_id})).scalar_one())
-                await s.execute(text("UPDATE chat_drafts SET updated_at = now() WHERE id = :d"), {"d": self.draft_id})
-            await s.execute(text(
-                "INSERT INTO chat_draft_versions (draft_id, version, body, instruction, author, model) "
-                "VALUES (:d, :v, :b, :i, 'model', :m)"),
-                {"d": self.draft_id, "v": version, "b": body,
-                 "i": self.request[:500] if self.action == "revise" else None, "m": self.model or None})
-            await s.commit()
+        based_on = int((self.base or {}).get("version") or 0) or None if self.action == "revise" else None
+        newer: int | None = None
+        for attempt in range(3):
+            try:
+                async with session_scope() as s:
+                    if self.action == "create" and self.draft_id is None:
+                        self.draft_id = (await s.execute(text(
+                            "INSERT INTO chat_drafts (thread_id, kind, template, title) VALUES (:t, :k, :tp, :ti) "
+                            "RETURNING id"),
+                            {"t": self.thread_id, "k": self.kind, "tp": self.template,
+                             "ti": self.title[:200]})).scalar_one()
+                    else:
+                        # One writer at a time per draft (review round 1: two
+                        # replies, or a reply and a hand edit, landing at once).
+                        if (await s.execute(text("SELECT id FROM chat_drafts WHERE id = :d FOR UPDATE"),
+                                            {"d": self.draft_id})).first() is None:
+                            raise ValueError("draft gone")
+                    latest = int((await s.execute(text(
+                        "SELECT COALESCE(MAX(version), 0) FROM chat_draft_versions WHERE draft_id = :d"),
+                        {"d": self.draft_id})).scalar_one())
+                    version = latest + 1
+                    newer = latest if based_on is not None and latest > based_on else None
+                    await s.execute(text("UPDATE chat_drafts SET updated_at = now() WHERE id = :d"),
+                                    {"d": self.draft_id})
+                    await s.execute(text(
+                        "INSERT INTO chat_draft_versions "
+                        "(draft_id, version, body, instruction, author, model, based_on, device_id) "
+                        "VALUES (:d, :v, :b, :i, 'model', :m, :bo, :dev)"),
+                        {"d": self.draft_id, "v": version, "b": body,
+                         "i": self.request[:500] if self.action == "revise" else None, "m": self.model or None,
+                         "bo": based_on, "dev": self.device_id})
+                    await s.commit()
+                break
+            except IntegrityError:
+                # The same number taken meanwhile: the next one.
+                if attempt == 2:
+                    raise
         words = blocks.word_count(body)
         k = kinds.get(self.kind)
         if self.action == "create":
@@ -247,10 +276,13 @@ class DraftTurn:
         else:
             change = diff.change_line((self.base or {}).get("body") or "", body)
             line = f"Version {version}: {change}."
+            if newer is not None:
+                line = (f"Version {version}, based on version {based_on}: {change}. Version {newer} came in "
+                        f"while this was written and isn't in it; both are in the version picker.")
             if len(self.passes) > 1:
                 line += (f" Revised section by section ({len(self.passes)} parts), so the style can drift a "
                          "little between them.")
-        return line, self.card(version, words, change)
+        return line, self.card(version, words, change, based_on=based_on, newer=newer)
 
 
 def heads_up(turn: DraftTurn) -> None:
@@ -308,13 +340,44 @@ def _revise_passes(body: str, instruction: str) -> list[list[dict[str, str]]]:
     return out
 
 
-async def plan_turn(thread_id: int, question: str) -> DraftTurn | None:
+async def _after_draft(thread_id: int) -> bool:
+    """The thread's last reply wrote or revised a draft (an edit-only
+    instruction like "shorter" then means that draft)."""
+    async with session_scope() as s:
+        row = (await s.execute(text(
+            "SELECT draft FROM chat_messages WHERE thread_id = :t AND role = 'assistant' ORDER BY id DESC LIMIT 1"),
+            {"t": thread_id})).first()
+    d = _json(row[0]) if row is not None else None
+    return isinstance(d, dict) and d.get("action") in ("create", "revise")
+
+
+async def draft_in_thread(thread_id: int, draft_id: int) -> bool:
+    async with session_scope() as s:
+        return (await s.execute(text("SELECT 1 FROM chat_drafts WHERE id = :d AND thread_id = :t"),
+                                {"d": draft_id, "t": thread_id})).first() is not None
+
+
+async def plan_turn(thread_id: int, question: str, revise_draft: int | None = None,
+                    device_id: str | None = None) -> DraftTurn | None:
     """How ``question`` in ``thread_id`` is a draft turn, or None: "print
-    it" and revisions need a draft in the thread; a draft request starts a
-    new one."""
+    it" and revisions need a draft in the thread, and a revision must
+    clearly mean it (:func:`domovoi.drafts.phrases.revision_request`); a
+    draft request starts a new one. ``revise_draft``: the card's Revise box
+    (the message is a revision of that draft, whatever it says)."""
     q = (question or "").strip()
     if not q:
         return None
+    if revise_draft is not None:
+        async with session_scope() as s:
+            d = await _draft(s, revise_draft)
+            v = await _version(s, revise_draft, None) if d else None
+        if d is None or v is None or d["thread_id"] != thread_id:
+            return None
+        turn = DraftTurn(action="revise", thread_id=thread_id, kind=d["kind"], template=d["template"],
+                         title=d["title"], request=q, draft_id=d["id"], base=v, device_id=device_id,
+                         passes=_revise_passes(v["body"], q))
+        heads_up(turn)
+        return turn
     latest = await latest_draft(thread_id)
     if latest is not None:
         d, v = latest
@@ -323,16 +386,18 @@ async def plan_turn(thread_id: int, question: str) -> DraftTurn | None:
                              title=d["title"], request=q, draft_id=d["id"], base=v,
                              immediate=(f"Ready to print “{d['title']}”, version {v['version']}. "
                                         "Check the preview, then press Print."))
-        if phrases.revision_request(q):
+        if phrases.revision_request(q, after_draft=await _after_draft(thread_id)):
             turn = DraftTurn(action="revise", thread_id=thread_id, kind=d["kind"], template=d["template"],
-                             title=d["title"], request=q, draft_id=d["id"], base=v,
+                             title=d["title"], request=q, draft_id=d["id"], base=v, device_id=device_id,
                              passes=_revise_passes(v["body"], q))
             heads_up(turn)
             return turn
     ask = phrases.draft_request(q)
     if ask is None:
         return None
-    return guided_turn(thread_id, ask.kind, ask.template, phrases.title_for(kinds.get(ask.kind).label, ask.topic), q)
+    turn = guided_turn(thread_id, ask.kind, ask.template, phrases.title_for(kinds.get(ask.kind).label, ask.topic), q)
+    turn.device_id = device_id
+    return turn
 
 
 def guided_turn(thread_id: int, kind: str, template: str, title: str, request: str,
@@ -408,36 +473,60 @@ class EditBody(BaseModel):
     #: The version the edit started from: a newer one written meanwhile is
     #: a 409, not a silent overwrite.
     base_version: int = Field(..., ge=1)
+    #: The device editing (kept on the version: "edited by you" there,
+    #: "edited on <device>" anywhere else).
+    device_id: Optional[str] = Field(None, min_length=3, max_length=64)
+
+
+def _stale(latest: int) -> Any:
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(status_code=409, content={
+        "detail": f"version {latest} was written meanwhile", "code": "stale_version", "latest": latest})
 
 
 @router.post("/drafts/{draft_id}/versions", dependencies=DEVICE,
              responses={409: {"description": '{"detail", "code": "stale_version", "latest": n}'}})
-async def edit_draft(draft_id: int, body: EditBody) -> Any:
-    """A hand edit: saved as the next version, "edited by you"."""
-    if not blocks.parse(body.text):
+async def edit_draft(draft_id: int, body: EditBody, request: Request = None) -> Any:  # type: ignore[assignment]
+    """A hand edit: saved as the next version, "edited by you" on the device
+    that made it. Characters XML can't hold are taken out first. Two edits
+    from the same version at once: one is saved, the other is a 409
+    ``stale_version`` (the draft's row is locked while the version is
+    written)."""
+    text_ = blocks.xml_safe(body.text)
+    if not blocks.parse(text_):
         raise HTTPException(status_code=422, detail="a draft needs some words")
-    async with session_scope() as s:
-        d = await _draft(s, draft_id)
-        if d is None:
-            raise HTTPException(status_code=404, detail="draft not found")
-        latest = await _version(s, draft_id, None)
-        if latest is not None and latest["version"] != body.base_version:
-            from fastapi.responses import JSONResponse
+    from web.backend.api.devices import valid_device_id
 
-            return JSONResponse(status_code=409, content={
-                "detail": f"version {latest['version']} was written meanwhile", "code": "stale_version",
-                "latest": latest["version"]})
-        if latest is not None and latest["body"] == body.text:
-            return {"version": latest, "unchanged": True}
-        version = (latest["version"] if latest else 0) + 1
-        await s.execute(text(
-            "INSERT INTO chat_draft_versions (draft_id, version, body, instruction, author) "
-            "VALUES (:d, :v, :b, NULL, 'person')"), {"d": draft_id, "v": version, "b": body.text})
-        await s.execute(text("UPDATE chat_drafts SET updated_at = now() WHERE id = :d"), {"d": draft_id})
-        await _notify(s, "draft-edited")
-        await s.commit()
-        v = await _version(s, draft_id, version)
-    v["change"] = diff.change_line(latest["body"] if latest else "", body.text)
+    device = valid_device_id(body.device_id)
+    if device is None and request is not None:
+        from web.backend.api.files import caller_device_id
+
+        device = valid_device_id(caller_device_id(request))
+    try:
+        async with session_scope() as s:
+            if (await s.execute(text("SELECT id FROM chat_drafts WHERE id = :d FOR UPDATE"),
+                                {"d": draft_id})).first() is None:
+                raise HTTPException(status_code=404, detail="draft not found")
+            latest = await _version(s, draft_id, None)
+            if latest is not None and latest["version"] != body.base_version:
+                return _stale(latest["version"])
+            if latest is not None and latest["body"] == text_:
+                return {"version": latest, "unchanged": True}
+            version = (latest["version"] if latest else 0) + 1
+            await s.execute(text(
+                "INSERT INTO chat_draft_versions (draft_id, version, body, instruction, author, device_id) "
+                "VALUES (:d, :v, :b, NULL, 'person', :dev)"),
+                {"d": draft_id, "v": version, "b": text_, "dev": device})
+            await s.execute(text("UPDATE chat_drafts SET updated_at = now() WHERE id = :d"), {"d": draft_id})
+            await _notify(s, "draft-edited")
+            await s.commit()
+            v = await _version(s, draft_id, version)
+    except IntegrityError:
+        async with session_scope() as s:
+            latest = await _version(s, draft_id, None)
+        return _stale(latest["version"] if latest else body.base_version)
+    v["change"] = diff.change_line(latest["body"] if latest else "", text_)
     return {"version": v}
 
 

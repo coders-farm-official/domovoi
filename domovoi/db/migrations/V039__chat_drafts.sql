@@ -13,8 +13,13 @@
 --                         instruction that produced it ("shorter"; NULL for
 --                         a first draft or a hand edit), who wrote it
 --                         (author 'model' | 'person': "edited by you"), the
---                         model, and the files saved from it
---                         (saved: [{format, rel_path, check, at}]).
+--                         model, the files saved from it
+--                         (saved: [{format, rel_path, check, at}]), the
+--                         version a model revision started from (based_on:
+--                         a hand edit may land while it is written, and
+--                         both are kept), and the device (and person, when
+--                         known) that made it, so "edited by you" is said
+--                         only on that device.
 --   chat_messages.draft   on the assistant row that made a version (or
 --                         offers to print one): {id, version, kind, title,
 --                         template, words, action}. NULL on every other row.
@@ -45,6 +50,9 @@ CREATE TABLE IF NOT EXISTS chat_draft_versions (
     author       TEXT NOT NULL DEFAULT 'model',
     model        TEXT,
     saved        JSONB,
+    based_on     INTEGER,
+    device_id    TEXT,
+    person_id    BIGINT,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (draft_id, version)
 );

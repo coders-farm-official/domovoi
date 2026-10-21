@@ -624,6 +624,9 @@ class SendBody(BaseModel):
     model: Optional[str] = Field(None, max_length=200)
     # The sending install (the device tier's usual id), for the details view.
     device_id: Optional[str] = Field(None, max_length=64)
+    # A draft card's Revise box (chat_drafts.py): the message is a revision
+    # of this draft, whatever it says.
+    revise_draft: Optional[int] = Field(None, ge=1)
 
 
 def _upload_path(token: str) -> Path | None:
@@ -942,6 +945,8 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
         raise HTTPException(status_code=422, detail="a message needs some words, or a document attached")
     # Well-formed or nothing, as every other route that reads a device id.
     device_id = valid_device_id(body.device_id)
+    if body.revise_draft is not None and not await _drafts.draft_in_thread(thread_id, body.revise_draft):
+        raise HTTPException(status_code=404, detail="draft not found in this chat")
 
     async with session_scope() as s:
         thread = (
@@ -986,7 +991,7 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
     return await _answer(
         thread_id, thread.person_id, has_images=bool(images), override=body.model,
         question=body.content, thread_title=thread.title, request=request,
-        documents=documents, user_row_id=user_row_id,
+        documents=documents, user_row_id=user_row_id, revise_draft=body.revise_draft, device_id=device_id,
     )
 
 
@@ -1094,6 +1099,8 @@ async def _answer(
     request: Request | None = None,
     documents: list[dict[str, Any]] | None = None,
     user_row_id: int | None = None,
+    revise_draft: int | None = None,
+    device_id: str | None = None,
 ) -> StreamingResponse:
     """The SSE reply to the thread's last question (:func:`send_message`,
     and :func:`retry_reply` with ``replace_id``: the reply it replaces,
@@ -1115,7 +1122,7 @@ async def _answer(
     # ("shorter"), or "print it". Ahead of the documents' find-then-answer.
     dturn: Any = None
     if not has_images and replace_id is None and not documents:
-        dturn = await _drafts.plan_turn(thread_id, question)
+        dturn = await _drafts.plan_turn(thread_id, question, revise_draft=revise_draft, device_id=device_id)
         if dturn is not None:
             model_role = "draft"
     if not has_images and replace_id is None and dturn is None:

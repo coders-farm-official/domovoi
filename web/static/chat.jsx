@@ -366,7 +366,8 @@ const ChatMessage = ({ m, threadId, onCopy, admin, draftHooks = null }) => {
               // A draft (chat_drafts.jsx): the card, not the text.
               <window.ChatDrafts.DraftCard m={m} latest={draftHooks.latest[m.draft.id] || null}
                                           onOpen={draftHooks.open} onSave={draftHooks.save}
-                                          onPrint={draftHooks.print} canPrint={draftHooks.canPrint}/>
+                                          onPrint={draftHooks.print} canPrint={draftHooks.canPrint}
+                                          onRevise={draftHooks.revise}/>
             ) : (
               <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(m.content || '') }}/>
             )}
@@ -615,6 +616,7 @@ const ChatPageMain = () => {
     latest: draftLatest,
     canPrint: !!printing.hasPrinter,
     open: (id, version) => { setCanvas({ id, version }); setCanvasKey((k) => k + 1); },
+    revise: (id, text) => send({ draftId: id, text }),
     print: (id, version) => setPrintDraft({ id, version,
       title: ((draftLatest[id] || {}).title) || 'draft' }),
     save: async (id, version) => {
@@ -748,9 +750,11 @@ const ChatPageMain = () => {
     }
   };
 
-  const send = async () => {
-    const content = draft.trim();
-    const docs = docAttachments;
+  // `revise`: {draftId, text} from a draft card's Revise box (that text is
+  // a revision of that draft, whatever it says); else the composer's.
+  const send = async (revise = null) => {
+    const content = revise ? revise.text : draft.trim();
+    const docs = revise ? [] : docAttachments;
     if ((!content && docs.length === 0) || sending || docBusy) return;
     let id = threadId;
     if (id == null) {
@@ -760,10 +764,12 @@ const ChatPageMain = () => {
         setThreadId(id);
       } catch { fire('could not create chat'); return; }
     }
-    const images = attachments;
-    setDraft('');
-    setAttachments([]);
-    setDocAttachments([]);
+    const images = revise ? [] : attachments;
+    if (!revise) {
+      setDraft('');
+      setAttachments([]);
+      setDocAttachments([]);
+    }
     setSending(true);
     setMessages((cur) => [
       ...cur,
@@ -775,6 +781,7 @@ const ChatPageMain = () => {
       // device_id: which install sent it, for the message's details (V017).
       const body = { content, images, documents: docs.map((d) => ({ token: d.token })),
                      device_id: DeviceIdentity.id() };
+      if (revise) body.revise_draft = revise.draftId;
       const { done, errorDetail, errorCode, errorModel } = await chatSendStream(id, body, (delta) => {
         setMessages((cur) => cur.map((m) =>
           m.id === 'pending' ? { ...m, content: m.content + delta } : m));
@@ -857,7 +864,7 @@ const ChatPageMain = () => {
                 onClick={pickPictures}/>
   );
   const sendButton = (
-    <Button variant="primary" icon="send" className="btn btn-primary chat-send" onClick={send}
+    <Button variant="primary" icon="send" className="btn btn-primary chat-send" onClick={() => send()}
             disabled={sending || docBusy > 0 || (!draft.trim() && docAttachments.length === 0)}
             aria-label={sending ? 'thinking…' : 'send'}
             title={narrow ? (sending ? 'thinking…' : 'send') : undefined}>

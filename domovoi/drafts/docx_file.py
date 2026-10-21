@@ -66,7 +66,7 @@ def render(markdown: str, template: Template, *, title: str = "") -> bytes:
     heading = template.styles["heading"]
     _font(doc.styles["Heading 2"], template.docx_font, heading.size, True)
     _font(doc.styles["List Bullet"], template.docx_font, template.styles["bullet"].size, False)
-    doc.core_properties.title = title or ""
+    doc.core_properties.title = blocks_mod.xml_safe(title or "")
     doc.core_properties.author = ""
     doc.core_properties.comments = ""
 

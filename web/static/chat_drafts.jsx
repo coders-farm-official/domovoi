@@ -36,7 +36,8 @@ const ChatDrafts = (() => {
     get: (id) => apiGet(`/api/chat/drafts/${id}`),
     thread: (tid) => apiGet(`/api/chat/threads/${tid}/drafts`, { quiet: true }),
     all: () => apiGet('/api/chat/drafts'),
-    edit: (id, text, base) => apiPost(`/api/chat/drafts/${id}/versions`, { text, base_version: base }),
+    edit: (id, text, base) => apiPost(`/api/chat/drafts/${id}/versions`, {
+      text, base_version: base, device_id: (typeof DeviceIdentity !== 'undefined' ? DeviceIdentity.id() : null) }),
     save: (id, version, format) => apiPost(`/api/chat/drafts/${id}/save`, {
       version, format, device_id: (typeof DeviceIdentity !== 'undefined' ? DeviceIdentity.id() : null) }),
     exportUrl: (id, version, format) => withDeviceToken(
@@ -76,11 +77,19 @@ const ChatDrafts = (() => {
     return ok;
   };
 
+  /* What made a version: "first draft", the instruction ("shorter"), and
+   * for a hand edit "edited by you" on the device that made it, "edited on
+   * <device>" anywhere else. A revision written while a newer version came
+   * in says which version it was based on. */
   const sourceLabel = (v) => {
     if (!v) return '';
-    if (v.source === 'edited') return 'edited by you';
+    if (v.source === 'edited') {
+      const mine = typeof DeviceIdentity !== 'undefined' && v.device_id && v.device_id === DeviceIdentity.id();
+      return mine ? 'edited by you' : `edited on ${v.device_name || v.device_id || 'another device'}`;
+    }
     if (v.source === 'first') return 'first draft';
-    return `“${v.instruction || 'revised'}”`;
+    const based = v.based_on && v.based_on !== v.version - 1 ? ` · based on v${v.based_on}` : '';
+    return `“${v.instruction || 'revised'}”${based}`;
   };
 
   const saveErrorText = (e) => {
@@ -108,8 +117,9 @@ const ChatDrafts = (() => {
   };
 
   /* The draft card on the reply that made a version, or asked to print. */
-  const DraftCard = ({ m, latest, onOpen, onSave, onPrint, canPrint }) => {
+  const DraftCard = ({ m, latest, onOpen, onSave, onPrint, canPrint, onRevise = null }) => {
     const d = m.draft || {};
+    const [ask, setAsk] = React.useState('');
     const isPrint = d.action === 'print';
     const newer = latest && latest.version > d.version ? latest.version : null;
     const lines = latest && latest.version === d.version ? latest.first_lines : null;
@@ -139,6 +149,18 @@ const ChatDrafts = (() => {
             <Button icon="printer" onClick={() => onPrint(d.id, d.version)}>print</Button>
           )}
         </div>
+        {!isPrint && onRevise && (
+          // The Revise box: whatever is typed here changes this draft
+          // (the chat's own box only does when the words clearly mean it).
+          <form className="chat-draft-revise" onSubmit={(e) => {
+            e.preventDefault();
+            if (ask.trim()) { onRevise(d.id, ask.trim()); setAsk(''); }
+          }}>
+            <input type="text" value={ask} maxLength={500} aria-label={`revise ${d.title}`}
+                   placeholder="change this draft…" onChange={(e) => setAsk(e.target.value)}/>
+            <Button icon="wand-sparkles" type="submit" disabled={!ask.trim()}>revise</Button>
+          </form>
+        )}
       </div>
     );
   };
