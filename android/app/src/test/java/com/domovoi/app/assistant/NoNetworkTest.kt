@@ -107,6 +107,29 @@ class NoNetworkTest {
         assertEquals(emptyList<String>(), offenders)
     }
 
+    /**
+     * Photo turns (N3): the picture is read by the model on the phone and
+     * kept in memory only. The classes that carry it (the encoder probe and
+     * its memory, the pending photo, the photo rules, the exit-reason
+     * reader, and the engine and controller that run it) name no network
+     * class and no server client, and the photo's UI half lives outside
+     * ui/screens/assistant, which is the package forbidden android.net.Uri.
+     */
+    @Test fun aPhotoTurnTouchesNoNetworkAndNoServer() {
+        val classes = classesIn("com/domovoi/app/assistant", AssistantBench::class.java)
+        val photo = classes.filter { (name, _) ->
+            listOf("PhoneVision", "VisionCheck", "VisionProbe", "VisionMemory", "MemoryVisionMemory", "PendingPhoto", "PhonePhotos",
+                "ExitKind", "ExitReasons", "AndroidExitReasons", "LiteRtLlmEngine", "AssistantController").any { name.startsWith(it) }
+        }
+        assertTrue("found ${photo.size}", photo.size > 8)
+        assertTrue("the photo classes are among them", photo.any { it.first.startsWith("PendingPhoto") } && photo.any { it.first.startsWith("AndroidExitReasons") })
+        val forbidden = networking + listOf("com/domovoi/app/net/ApiClient", "com/domovoi/app/net/StateBus", "com/domovoi/app/net/ServerAction")
+        val offenders = photo.mapNotNull { (name, bytes) ->
+            utf8Constants(bytes).filter { s -> forbidden.any { s.contains(it) } }.takeIf { it.isNotEmpty() }?.let { "$name: $it" }
+        }
+        assertEquals(emptyList<String>(), offenders)
+    }
+
     @Test fun theDownloaderIsWhereTheHttpClientIs() {
         val downloader = classesIn("com/domovoi/app/assistant", AssistantBench::class.java)
             .filter { it.first.startsWith("ModelDownloader") }

@@ -331,6 +331,25 @@ class PhonePicturesControllerTest {
         assertEquals(1, engines.single().photos.size)
     }
 
+    /** N1's fast paths must not catch a photo turn (batch 23): "what's my
+     *  battery" with a photo goes to the model with its photo, so does an
+     *  action ("set a timer") and a plain phone question. */
+    @Test fun aPhotoWithAPhoneFastPathPhraseStillGoesToTheModel() {
+        install()
+        val c = controller()
+        ready(c)
+        for ((n, phrase) in listOf("what's my battery", "set a timer for 2 minutes", "how much space is left").withIndex()) {
+            c.attachPhoto(photo())
+            c.send(phrase)
+            until("answered $phrase") { !c.ui().replying && c.ui().conversation.messages.size == 2 * (n + 1) }
+            val a = c.ui().conversation.messages.last()
+            assertNull("$phrase: no fast path", a.fastPath)
+            assertNull("$phrase: no card", a.card)
+            assertEquals("$phrase: the photo reached the model", n + 1, engines.single().photos.size)
+        }
+        assertTrue("no text reply ran", engines.single().replies.isEmpty())
+    }
+
     @Test fun aPhotoWithoutTheEncoderSaysSoAndIsStillWiped() {
         install()
         // Passed before, refused this run (memory, a driver update).
