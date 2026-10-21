@@ -15,10 +15,11 @@ the core's Postgres), tiered the dashboard's usual way
   (what it watches, what Docker showed, what it holds and why).
 
 The actions are the core's (it is the only writer): acknowledge a
-failure, clear a tamper incident after review, run a check now. Each is
-``require_admin_mutation`` at both hops, except the clear: it lifts the
-freeze, so it is ``require_admin_security`` at both (no pre-setup grace,
-delta review N5).
+failure, clear a tamper incident after review, run a check now, rebuild
+the music player image. Each is ``require_admin_mutation`` at both hops,
+except the clear and the rebuild: the clear lifts the freeze and the
+rebuild decides which image the guard trusts, so they are
+``require_admin_security`` at both (no pre-setup grace, delta review N5).
 """
 
 from __future__ import annotations
@@ -110,6 +111,20 @@ async def containers_check(request: Request):
     return bridge_response(
         *await post_admin(
             "/v1/admin/containers/check", {}, headers=auth_forward_headers(request), timeout=90.0,
+        )
+    )
+
+
+@router.post("/mpd-image/rebuild", dependencies=[Depends(require_admin_security)])
+async def containers_mpd_rebuild(request: Request):
+    """Rebuild the music player image now (admin): the core builds it the
+    way it does when it is missing, makes it the image the guard expects,
+    and moves every room's player onto it. The security tier at both hops:
+    it decides which image the guard trusts."""
+    return bridge_response(
+        *await post_admin(
+            "/v1/admin/containers/mpd-image/rebuild", {},
+            headers=auth_forward_headers(request), timeout=720.0,
         )
     )
 

@@ -133,7 +133,46 @@ const CtrIncident = ({ inc, admin, onChanged, fire }) => {
   );
 };
 
-const CtrStatus = ({ status, onCheck, checking }) => {
+// "Rebuild the music player image": the core builds it again from its own
+// recipe, the guard takes it as the image it expects, and every room's
+// player is recreated on it (the way an update does). Shown only where it
+// can run (status.mpd_rebuild); a tampering incident stays for the admin.
+const CtrMpdRebuild = ({ rebuild, onRebuild, rebuilding }) => {
+  const [asking, setAsking] = React.useState(false);
+  if (!rebuild) return null;
+  if (!rebuild.available) {
+    return <div className="ctr-hint ctr-pad">music player image: can't be rebuilt from here · {rebuild.why}</div>;
+  }
+  if (!asking) {
+    return (
+      <div className="ctr-incident-actions ctr-pad">
+        <Button disabled={rebuilding} onClick={() => setAsking(true)}>
+          {rebuilding ? 'rebuilding the music player image…' : 'rebuild the music player image'}
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div className="ctr-clear ctr-pad">
+      <div className="ctr-hint">
+        Builds the music player image again on this box from Domovoi's own recipe (it downloads
+        Debian's packages, a minute or so) and makes it the image the guard expects. Then every
+        room's music player restarts on it, the way an update does: what is playing stops, and
+        playlists and queues are kept. A tampering incident about the image stays open until you
+        clear it.
+      </div>
+      <div className="ctr-incident-actions">
+        <Button variant="primary" disabled={rebuilding}
+                onClick={async () => { await onRebuild(); setAsking(false); }}>
+          {rebuilding ? 'rebuilding…' : 'rebuild'}
+        </Button>
+        <Button disabled={rebuilding} onClick={() => setAsking(false)}>cancel</Button>
+      </div>
+    </div>
+  );
+};
+
+const CtrStatus = ({ status, onCheck, checking, onRebuild, rebuilding }) => {
   const g = status && status.guard;
   if (!g) return null;
   const watched = Array.isArray(g.watched) ? g.watched : [];
@@ -183,6 +222,7 @@ const CtrStatus = ({ status, onCheck, checking }) => {
         </div>
       )}
       {g.mpd_image && <div className="ctr-hint ctr-pad">music player image at this start: {g.mpd_image}</div>}
+      <CtrMpdRebuild rebuild={status.mpd_rebuild} onRebuild={onRebuild} rebuilding={rebuilding}/>
       {(g.unwatched_plugins || []).length > 0 && (
         <div className="ctr-hint ctr-pad">
           plugins that run containers without declaring them, so they aren't watched: {g.unwatched_plugins.join(', ')}
@@ -201,6 +241,7 @@ const ContainersPage = () => {
   const [fire, toastNode] = useToast();
   const [status, setStatus] = React.useState(null);
   const [checking, setChecking] = React.useState(false);
+  const [rebuilding, setRebuilding] = React.useState(false);
 
   const loadStatus = React.useCallback(async () => {
     if (!admin) { setStatus(null); return; }
@@ -223,6 +264,24 @@ const ContainersPage = () => {
       reportMutationFailure(fire, 'check', e);
     } finally {
       setChecking(false);
+    }
+  };
+
+  const rebuildMpd = async () => {
+    setRebuilding(true);
+    try {
+      const r = await apiPost('/api/containers/mpd-image/rebuild', {});
+      const failed = ((r && r.rooms) || []).filter((x) => x.error);
+      if (failed.length) {
+        fire(`music player image rebuilt, but not every room restarted on it: ${failed.map((x) => `${x.room} (${x.error})`).join('; ')}`, { stay: true });
+      } else {
+        fire('music player image rebuilt; every room restarted on it');
+      }
+      await refresh();
+    } catch (e) {
+      reportMutationFailure(fire, 'rebuild', e);
+    } finally {
+      setRebuilding(false);
     }
   };
 
@@ -277,7 +336,8 @@ const ContainersPage = () => {
           ))}
         </Card>
       )}
-      {admin && <CtrStatus status={status} onCheck={checkNow} checking={checking}/>}
+      {admin && <CtrStatus status={status} onCheck={checkNow} checking={checking}
+                           onRebuild={rebuildMpd} rebuilding={rebuilding}/>}
       {toastNode}
     </div>
   );
