@@ -758,6 +758,60 @@ between **month**, **week** and **day**.
 
 {{calendar-voice}}
 
+### Printers and scanners
+
+Domovoi prints to and scans from **network printers**: ones on your
+Wi-Fi or plugged into your router that work with **AirPrint**, **IPP
+Everywhere** or **Mopria**. That's almost every network printer from the
+last ten years; if your phone can print to it with no app, Domovoi can
+too. USB printers, and older printers that need a driver from the maker,
+don't work. Scanning needs a printer whose scanner works over AirPrint
+too (often called AirScan or eSCL).
+
+**How to**
+
+- [Settings → Printers and scanners](#settings/printers) shows the
+  printers Domovoi can see. Press **Add** on yours, name it, then
+  **Test page**. Not listed? Press **Look again**, or type its address
+  under **Add by address** (on the printer's own screen or settings page).
+- One printer is the house's **Default**. A room can have its own default
+  (**Default in rooms**): voice from that room prints there.
+- **Two-sided** and **Colour** follow the printer's own settings unless
+  you switch them per printer.
+- **Print** sits on files in [Files](#files) and Documents when a printer
+  is set up: PDFs, pictures, text and markdown files, and spreadsheets
+  (printed as a plain table). You pick the pages, copies, two-sided,
+  colour and paper, and see a preview first.
+- Word and OpenDocument files don't print here: save them as PDF in Word
+  or Docs first, then print the PDF.
+- **Scan** sits at the top of Documents when a scanner is set up. Scans
+  are saved as one PDF in **Documents → Scans**, named by date.
+- Removing or renaming a printer needs the admin password *(admin)*.
+
+**Try saying**
+
+- "print my cover letter" (it tells you the pages and asks first)
+- "how much ink is left"
+- "is the printer out of paper"
+- "set up the printer"
+- "scan this to Documents"
+- "stop printing"
+
+**If something's wrong**
+
+- **Out of paper, jammed, cover open:** the printer's row says so in plain
+  words, and a voice print that fails is said once in the room that asked.
+  Fix it at the printer; the job carries on.
+- **"Level not reported":** some printers don't share their ink or toner
+  levels. Check the printer's own screen.
+- **"Isn't answering":** the printer is off or asleep, or moved to a
+  different network. Press **Look again**.
+- **"Security certificate changed":** usually a printer update or reset.
+  An admin checks it and presses **Trust the new certificate**.
+- Each job is limited to 100 pages and 20 copies, and the house to 500
+  sheets a day; an admin can change the limits. The list of recent jobs
+  is kept 90 days, and an admin can clear it.
+
 ---
 
 ## People and privacy

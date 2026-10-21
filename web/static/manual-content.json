@@ -169,6 +169,13 @@
     "tab": "satellites"
    }
   },
+  "settings/printers": {
+   "dashboard": "#settings/printers",
+   "app": {
+    "screen": "Settings",
+    "tab": "printers"
+   }
+  },
   "settings/greetings": {
    "dashboard": "#settings/greetings",
    "app": {
@@ -501,7 +508,8 @@
     "chat",
     "files",
     "documents",
-    "calendar"
+    "calendar",
+    "printers"
    ]
   },
   {
@@ -2656,6 +2664,129 @@
        "text": "do I have anything on Friday",
        "handler": "calendar",
        "path": "fast"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "printers",
+   "topic": "chat-files-calendar",
+   "title": "Printers and scanners",
+   "subtitle": "print and scan, by voice too",
+   "keywords": [
+    "print",
+    "printer",
+    "scan",
+    "scanner",
+    "ink",
+    "toner",
+    "paper",
+    "airprint",
+    "mopria",
+    "test page"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "Domovoi prints to and scans from **network printers**: ones on your Wi-Fi or plugged into your router that work with **AirPrint**, **IPP Everywhere** or **Mopria**. That's almost every network printer from the last ten years; if your phone can print to it with no app, Domovoi can too. USB printers, and older printers that need a driver from the maker, don't work. Scanning needs a printer whose scanner works over AirPrint too (often called AirScan or eSCL)."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "[Settings → Printers and scanners](route:settings/printers) shows the printers Domovoi can see. Press **Add** on yours, name it, then **Test page**. Not listed? Press **Look again**, or type its address under **Add by address** (on the printer's own screen or settings page)."
+      },
+      {
+       "text": "One printer is the house's **Default**. A room can have its own default (**Default in rooms**): voice from that room prints there."
+      },
+      {
+       "text": "**Two-sided** and **Colour** follow the printer's own settings unless you switch them per printer."
+      },
+      {
+       "text": "**Print** sits on files in [Files](route:files) and Documents when a printer is set up: PDFs, pictures, text and markdown files, and spreadsheets (printed as a plain table). You pick the pages, copies, two-sided, colour and paper, and see a preview first."
+      },
+      {
+       "text": "Word and OpenDocument files don't print here: save them as PDF in Word or Docs first, then print the PDF."
+      },
+      {
+       "text": "**Scan** sits at the top of Documents when a scanner is set up. Scans are saved as one PDF in **Documents → Scans**, named by date."
+      },
+      {
+       "text": "Removing or renaming a printer needs the admin password {admin}."
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "print my cover letter",
+       "handler": "printing",
+       "path": "fast",
+       "note": "it tells you the pages and asks first"
+      },
+      {
+       "text": "how much ink is left",
+       "handler": "printing",
+       "path": "fast"
+      },
+      {
+       "text": "is the printer out of paper",
+       "handler": "printing",
+       "path": "fast"
+      },
+      {
+       "text": "set up the printer",
+       "handler": "printing",
+       "path": "fast"
+      },
+      {
+       "text": "scan this to Documents",
+       "handler": "printing",
+       "path": "fast"
+      },
+      {
+       "text": "stop printing",
+       "handler": "printing",
+       "path": "fast"
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "wrong",
+     "text": "If something's wrong"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "**Out of paper, jammed, cover open:** the printer's row says so in plain words, and a voice print that fails is said once in the room that asked. Fix it at the printer; the job carries on."
+      },
+      {
+       "text": "**\"Level not reported\":** some printers don't share their ink or toner levels. Check the printer's own screen."
+      },
+      {
+       "text": "**\"Isn't answering\":** the printer is off or asleep, or moved to a different network. Press **Look again**."
+      },
+      {
+       "text": "**\"Security certificate changed\":** usually a printer update or reset. An admin checks it and presses **Trust the new certificate**."
+      },
+      {
+       "text": "Each job is limited to 100 pages and 20 copies, and the house to 500 sheets a day; an admin can change the limits. The list of recent jobs is kept 90 days, and an admin can clear it."
       }
      ]
     }

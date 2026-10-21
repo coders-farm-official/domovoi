@@ -348,6 +348,20 @@ Replaced so far:
 `domovoi/tests/test_dependency_licences.py` fails if a replaced package
 comes back as an import in shipped code, a requirement or a lock pin.
 
+Printing and scanning (`domovoi/printing/`, 2026-10-21) is Domovoi's own
+IPP, PWG Raster/URF, mDNS and eSCL code, plus two permissive libraries,
+each checked from its licence files: **pypdfium2** (Apache-2.0 or
+BSD-3-Clause; its wheel bundles PDFium, BSD-style, and PDFium's own
+libraries: FreeType under the FreeType licence, libjpeg-turbo (IJG and
+BSD), libpng, zlib, Little CMS (MIT), OpenJPEG (BSD), ICU (Unicode
+licence), Abseil (Apache-2.0)) and **ReportLab** (BSD). The FreeType
+licence asks for this credit: *Portions of this software are copyright ©
+The FreeType Project (www.freetype.org). All rights reserved.* Not used,
+on purpose: pycups and pkipplib (GPL), python-zeroconf and Avahi (LGPL),
+Ghostscript and MuPDF (AGPL), img2pdf (LGPL), cups-filters (needs Poppler
+or Ghostscript), sane-airscan and AirSane (GPL). ippeveprinter (CUPS,
+Apache-2.0) runs only in the printing test harness, never shipped.
+
 Installed without their declared dependencies (`requirements-no-deps.in`,
 since 2026-10-15): faster-whisper, which declares PyAV (`av`, FFmpeg's
 LGPL libraries inside) though Domovoi hands it arrays and never a file,

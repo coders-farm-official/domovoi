@@ -273,6 +273,7 @@ map (from `domovoi/handlers/__init__.py`):
 | 200 | `dropin` | Immediately before intercom |
 | 210 | `intercom` | Before voice_notes ("tell the kitchen X") |
 | 220 | `chat_mode` | |
+| 222 | `printing` | "Print …", "scan this", ink and paper, "set up the printer"; anchored at the verb, after `chat_mode` and before `voice_notes`; "scan for new music" stays music's |
 | 230 | `voice_notes` | |
 | 240 | `memory` | |
 | 250 | `homelab` | |
@@ -331,8 +332,8 @@ Core's own workers live in `domovoi/workers/`: the timer watcher, library
 indexer + enricher, playback-state sweeper, media-plays pruner, news fetcher,
 podcast feed poller, audiobook indexer, memory extractor, wake-word trainer,
 document lock sweeper, the MusicBrainz alias fetch, the three lyrics
-workers (`lyrics_scan`, `lyrics_fetch`, `lyrics_index` — §6 "Lyrics"), and
-the container guard (`container_guard`, `domovoi/container_guard/`): every
+workers (`lyrics_scan`, `lyrics_fetch`, `lyrics_index` — §6 "Lyrics"), the
+three printing workers (§6 "Printing and scanning"), and the container guard (`container_guard`, `domovoi/container_guard/`): every
 30 s it compares the Docker containers the core expects — the compose
 stack, each room's music player, every plugin's declared containers —
 against what Docker reports, records failures and signs of tampering in
@@ -752,6 +753,34 @@ garage, stop the music").
   a play is "one room at a time".
 * **The tool.** The `music` tool's optional `room` argument takes the same
   place for phrasings no fast path reads.
+
+### Printing and scanning (`domovoi/printing/`, `handlers/printing.py`)
+
+Network printers (IPP Everywhere, AirPrint, Mopria) and eSCL scanners, with
+no drivers and no CUPS. The core owns it, because voice needs it; the web
+proxies its routes (`/v1/printers`, `/v1/print`, `/v1/scan` →
+`web/backend/api/printers.py`), resolving Files and Documents paths itself.
+
+| Module | What it is |
+|---|---|
+| `ipp.py` | Our IPP/2.0 codec: every value tag incl. collections (`media-col`), `rangeOfInteger` and `resolution`; a strict, capped decoder |
+| `http11.py` | A small HTTP/1.1 client: the vetted address only, `Content-Length` bodies, the TLS certificate pin checked before anything is sent |
+| `client.py` | The IPP operations: Get-Printer-Attributes, Validate-Job, Create-Job + Send-Document (Print-Job fallback), Get-Job-Attributes, Cancel-Job, Identify-Printer |
+| `lan_target.py` | The LAN-only check every address passes (the home subnet only; docs/SECURITY_PRIVACY.md) |
+| `mdns.py`, `discovery.py` | A one-shot mDNS look (group mode, then legacy unicast), saved printers followed by UUID, the /24 sweep on "Look again", typed addresses |
+| `capabilities.py`, `options.py` | What a printer can do, its status in plain words and its supplies (`printer-supply`, else `marker-*`); options resolved against it, paper by country, the format to send (PDF, else PWG Raster, else URF) |
+| `raster.py` | PWG Raster and URF encoders, back sides per `sheet-back`, and an independent strict reader |
+| `render.py`, `render_worker.py`, `templates.py` | Page drawing in a short-lived worker process with a time limit: pypdfium2 for PDFs, ReportLab for the test page, text, tables, pictures and scan PDFs (DeviceRGB only) |
+| `jobs.py`, `store.py` | Preview, limits, send, follow, cancel, the job log (V033) and spoken failures |
+| `escl.py`, `scans.py` | The eSCL client and scan sessions into `Documents/Scans/`; `register_reader` is the seam the documents work fills for "what does this letter say?" |
+| `routes.py` | The tiers: device read, device, admin |
+
+The `printing` handler (band 222) owns "print …", "scan this", the ink and
+paper questions and "set up the printer"; every voice print confirms first.
+Three core workers (`workers/printing.py`): printer status every 10
+minutes, jobs in flight every 15 seconds, and the 90-day job log plus
+forgotten scan sessions.
+
 
 ---
 

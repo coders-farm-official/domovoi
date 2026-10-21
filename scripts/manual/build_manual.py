@@ -52,6 +52,7 @@ ROUTES: dict[str, dict] = {
     "settings/about": {"dashboard": "#settings/about", "app": {"screen": "Settings", "tab": "about"}},
     "settings/phone-bar": {"dashboard": "#settings/phone-bar", "app": {"screen": "Settings", "tab": "phonebar"}},
     "settings/satellites": {"dashboard": "#settings/satellites", "app": {"screen": "Settings", "tab": "satellites"}},
+    "settings/printers": {"dashboard": "#settings/printers", "app": {"screen": "Settings", "tab": "printers"}},
     "settings/greetings": {"dashboard": "#settings/greetings", "app": {"dashboard": True}},
     "settings/voices": {"dashboard": "#settings/voices", "app": {"dashboard": True}},
     "settings/wake-words": {"dashboard": "#settings/wake-words", "app": {"dashboard": True}},
@@ -135,6 +136,7 @@ PIECES: dict[str, tuple] = {
     "Files and photos": ("files", "every library, one place", ["files", "upload", "photos", "pictures", "move", "delete", "usb drive"], {}),
     "Documents, sheets and drawings": ("documents", "write and edit on the server", ["document", "spreadsheet", "sheet", "drawing", "text file", "markdown", "xlsx"], {}),
     "Calendar": ("calendar", "the household's events", ["calendar", "event", "appointment", "what's on"], {}),
+    "Printers and scanners": ("printers", "print and scan, by voice too", ["print", "printer", "scan", "scanner", "ink", "toner", "paper", "airprint", "mopria", "test page"], {}),
     # People and privacy
     "People and voices": ("people", "Domovoi learns who's talking", ["people", "voice id", "who am i", "my name is", "forget me", "profile"], {}),
     "Guests, household and admin": ("guests", "who can change what", ["admin", "password", "guest", "sign in", "setup code", "household token", "paired"], {}),
@@ -245,6 +247,12 @@ PHRASES: dict[str, tuple] = {
     "who am I": ("voice_profile", "fast", {}),
     "forget me": ("voice_profile", "fast", {}),
     "never save my voice": ("voice_profile", "fast", {}),
+    "print my cover letter": ("printing", "fast", {}),
+    "how much ink is left": ("printing", "fast", {}),
+    "is the printer out of paper": ("printing", "fast", {}),
+    "set up the printer": ("printing", "fast", {}),
+    "scan this to Documents": ("printing", "fast", {}),
+    "stop printing": ("printing", "fast", {}),
 }
 
 # The wake word: what {wake} and [live slot: wake-word] say. One place, so

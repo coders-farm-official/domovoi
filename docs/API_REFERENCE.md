@@ -556,6 +556,43 @@ None of them creates a room. The routes that name a room (`play-track`, `play-tr
 | `POST /v1/admin/library/reindex` (**Admin**) | — | Background: sweep the music dir into `library_tracks`, then make every per-room MPD rescan. Returns `{"queued": true}` immediately. |
 | `POST /v1/admin/library/enrich` (**Admin**) | — | Background: metadata enrichment pass (rate-limited; can take minutes). `{"queued": true}`. When nothing can run: `{"queued": false, "reason": "disabled" \| "offline" \| "no_provider"}` (`no_provider`: no AcoustID key and no Shazam add-on). `409` under `never` (§1.6). |
 
+### 2.9 Printers, printing and scanning
+
+Network printers only (IPP Everywhere, AirPrint, Mopria) and eSCL
+(AirScan) scanners: no USB, no Windows spooler (`domovoi/printing/`).
+**Device read** (household token, admin Bearer or the dashboard cookie):
+the lists, status and the job log. **Device** (`X-Device-Token` or an admin
+Bearer): look, add, defaults, test page, preview, print, cancel, scan.
+**Admin (Bearer)**: rename, remove, trust a changed certificate, change the
+limits, clear the job log. A guest gets `401` on all of them. The web
+proxies each one (§3.23); the two print routes take a Files reference
+there. Every address passes the LAN-only check
+(`domovoi/printing/lan_target.py`; docs/SECURITY_PRIVACY.md, "Printers and
+scanners").
+
+| Method & path | Request | Response / purpose |
+|---|---|---|
+| `GET /v1/printers?refresh=` (**Device read**) | — | `{printers:[PrinterRow], has_printer, has_scanner, default_printer_id, rooms:[{id,label}], printable:{exts, pdf_first_exts, pdf_first_message}, limits, discovery}`. `refresh=true` re-reads the status of rows older than ~50 s (Settings sends it every minute while open; a worker otherwise polls every 10 minutes). A PrinterRow: `id, name, make_and_model, location, address, uri, added_via, can_print, can_scan, color, duplex, is_default, rooms, two_sided_default, color_default, defaults{sides,color,media}, choices{sides,color,media[{id,label}],copies_max}, status{state, tone, words, message, checked_at}, supplies[{name, level, color, kind, low}], supplies_reported, admin_url, needs_attention, identify, scan{sources,color,resolutions}, active_job`. Printer-supplied strings are data (capped, control characters stripped). |
+| `POST /v1/printers/discover` (**Device**) | `{look_again: bool}` | One mDNS look (group mode, then legacy unicast, 3 s). `look_again: true` also sweeps the home /24 for IPP on 631 (and eSCL on 80/443 of what answered), at most once a minute, never in the background, and only when mDNS found nothing new. `{found:[{key, make_and_model, location, address, prints, scans, color, duplex, via, already_added}], diagnostics:{ran_at, found, by_multicast, by_unicast, by_sweep, typed, sweep: "ran"\|"rate_limited"\|"not_needed"\|"skipped", sweep_retry_sec, errors}}`. A `key` is good for ten minutes. |
+| `POST /v1/printers` (**Device**) | `{key}` or `{address}`, optional `name`, `room_id` | Add one: a `key` from the last look, or a typed address (an IP, `printer.local`, or an `ipp://` / `ipps://` / `http://…/eSCL` URL). Saved only after the device answers like one (an IPP `printer-uuid`, or eSCL capabilities XML); a printer that also scans is one row. `201` PrinterRow. `400` not on the home network, or not its usual port (an admin's typed full URL may use any port); `409` nothing answered like a printer, or already added. |
+| `PATCH /v1/printers/{id}` (**Device**) | `{is_default?, rooms?, two_sided_default?, color_default?}` | Household defaults (`null` follows the printer). PrinterRow. |
+| `POST /v1/printers/{id}/rename` (**Admin**) | `{name}` | PrinterRow. |
+| `DELETE /v1/printers/{id}` (**Admin**) | — | `{removed}`. Its jobs stay in the log. |
+| `POST /v1/printers/{id}/trust-certificate` (**Admin**) | — | Pin the certificate it now presents (IPPS, or eSCL over https). `409` when it hasn't changed. |
+| `POST /v1/printers/{id}/refresh` (**Device**) | — | Re-read the status now. PrinterRow. |
+| `POST /v1/printers/{id}/identify` (**Device**) | — | Identify-Printer (flash or sound, as the printer supports). `{ok}`. |
+| `POST /v1/printers/{id}/test-page` (**Device**) | `{who?, source?}` | Print Domovoi's test page. JobRow. |
+| `POST /v1/print/preview` (**Device**) | multipart `file` + `meta` (JSON: `filename, title, printer_id?, options{pages, copies, sides, color, media}`) | `{printer_id, printer_name, title, kind, pages_total, pages, copies, sheets, options, summary, thumbs:[{page, src}], notes, adjustments, over_limit, choices}`. `415` a Word/ODT file (`detail` says to save it as PDF) or anything that doesn't print; `409` no printer; `422` a document that can't be drawn. |
+| `POST /v1/print/jobs` (**Device**) | as preview, plus `who?, source?, library_id?, path?` in `meta` | `202` JobRow `{id, printer_id, printer_name, title, pages, copies, sheets, options, state: queued\|printing\|done\|failed\|canceled, pages_done, progress, error, who, source, created_at, finished_at, can_cancel}`. `413` over a per-job limit, `429` over the hourly or daily limit (each with the sentence to show). |
+| `GET /v1/print/jobs?printer_id=&limit=` (**Device read**) | — | `{jobs:[JobRow]}`, newest first; kept 90 days. |
+| `GET /v1/print/jobs/{id}` (**Device read**) | — | JobRow, refreshed from the printer while the job is in flight. |
+| `POST /v1/print/jobs/{id}/cancel` (**Device**) | — | Cancel-Job at the printer. JobRow. |
+| `DELETE /v1/print/jobs` (**Admin**) | — | Clear the print and scan log. `{cleared}`. |
+| `GET /v1/print/limits` (**Device read**), `PUT` (**Admin**) | `{max_pages_per_job, max_copies, max_sheets_per_job, max_jobs_per_hour_per_device, max_sheets_per_day, max_scan_pages}` (any subset) | The limits (defaults 100, 20, 200, 20, 500, 50) plus `history_days` (90, fixed). |
+| `POST /v1/scan/jobs` (**Device**) | `{printer_id?, source: auto\|platen\|adf\|adf_duplex, color: color\|grey, resolution: 300, who?, origin?}` | Scan the glass (one page) or the whole feeder (`auto`: the feeder when it's loaded), then wait. `201` ScanRow `{id, printer_id, scanner_name, state: scanning\|waiting\|saving\|done\|failed\|canceled, source_used, pages, thumbs, can_scan_more, name, library_id, path, incomplete, error, readable}`. `409` no scanner, busy, or the feeder jammed or empty. One scan at a time per scanner. |
+| `GET /v1/scan/jobs/{id}` (**Device read**) | — | ScanRow. |
+| `POST /v1/scan/jobs/{id}/next`, `/finish`, `/cancel` (**Device**) | — | Another glass page; save all pages as one PDF in `Documents/Scans/` ("Scan 2026-10-21 15.40.pdf"); or drop them. A session left waiting is saved after 10 minutes. `readable` is the seam for "what does this letter say?": false until the documents work registers a reader. |
+
 ---
 
 ## 3. Web API (`:6369`)
@@ -1748,6 +1785,20 @@ the only layer there is. A browser still running a PRE-2026-09-25 worker
 takes one extra reload on that one upgrade — the code deciding what to
 serve on the first one is already in the browser, and no server change can
 reach it.
+
+### 3.23 Printers, printing and scanning
+
+`web/backend/api/printers.py` proxies the core's §2.9 routes under
+`/api/printers`, `/api/print` and `/api/scan`, forwarding the caller's
+credentials, with the same tiers checked here first. Every write needs
+`X-Requested-With`. The differences:
+
+| Method & path | Request | Response / purpose |
+|---|---|---|
+| `POST /api/print/preview` (**Device**) | `{library_id, path, printer_id?, options}` | The file is named the way the Files tab and Documents know it (`core:documents` and its path for a document). The web resolves it with the Files containment (`safe_join`) and the secret-name filter (`404` for `.env`, `.ssh/…`), refuses files over 100 MB (`413`), and sends the bytes to `POST /v1/print/preview`. |
+| `POST /api/print/jobs` (**Device**) | as preview | The same, to `POST /v1/print/jobs`, labelled with the calling device's name (Settings → Devices) and `source` `app` or `dashboard`. `202` JobRow. |
+| `POST /api/scan/jobs`, `/api/scan/jobs/{id}/next`, `/finish` (**Device**) | as §2.9 | A scan writes into Documents, so the Documents write policy applies first (the per-device block, `403`). `finish` drops the Documents listing cache, so the new PDF shows at once. Scan ids are 32 hex characters (`404` otherwise). |
+| everything else | | One to one with §2.9: `GET /api/printers`, `POST /api/printers/discover`, `POST /api/printers`, `PATCH /api/printers/{id}`, `POST /api/printers/{id}/rename` (**Admin**), `DELETE /api/printers/{id}` (**Admin**), `POST /api/printers/{id}/trust-certificate` (**Admin**), `/refresh`, `/identify`, `/test-page`, `GET /api/print/jobs` and `/api/print/jobs/{id}`, `POST /api/print/jobs/{id}/cancel`, `DELETE /api/print/jobs` (**Admin**), `GET` and `PUT /api/print/limits`, `GET /api/scan/jobs/{id}`, `POST /api/scan/jobs/{id}/cancel`. |
 
 ---
 
