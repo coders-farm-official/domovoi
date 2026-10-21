@@ -712,7 +712,7 @@ garage, stop the music").
   room id in `satellites`, `mpd_rooms` or `satellite_pairings`, plus the
   rooms connected now (room-mode phones and laptop satellites included;
   the chat mic's `phone-…` ids never). A place matches a room's id or its
-  label from Settings → Satellites, with "the", case, spaces/underscores,
+  label from Settings → Rooms, with "the", case, spaces/underscores,
   a plural or possessive "s" and word order forgiven — nothing fuzzier.
   Every split of the words is tried, the longest place first; a place
   that is no room and doesn't sound like one ("the boys in the band",

@@ -4,6 +4,26 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-21 — Settings in groups, with search and one Health page
+
+Dashboard and app. Nothing to run; old bookmarks keep working.
+
+* **Settings is five groups** — Rooms & devices, Voice, Chat & AI,
+  Privacy, System — with a search box at the top ("wake", "voice
+  history", "token"). Plain names: Satellites is **Rooms**, Devices is
+  **Phones & browsers**, Phone bar is **App layout**, Recordings is
+  **Voice history**, Configuration is **Advanced** (folded until you open
+  it), and the version and updates moved to **About & updates**.
+  `#settings/configuration[/setup]`, `#settings/satellites`,
+  `#settings/devices`, `#settings/phone-bar`, `#settings/recordings`,
+  `#satellites` and `#containers` rewrite to the new addresses in place.
+* **Settings → System → Health** shows every check, green or not: the
+  server, updates, rooms, plugins, internet and containers. Home's "needs
+  attention" rows are the problems among the same checks and open their
+  part of Health. The container guard's page is part of Health (open
+  incidents at the top; the watched list and the music player image's
+  rebuild under "behind the scenes"); the banner's "details" lands there.
+
 ## 2026-10-21 — AI chat and questions are optional
 
 Core, dashboard, installers and app. Nothing to run: an existing install
@@ -108,7 +128,7 @@ back), and the bundle carries it for Play.
 ## 2026-10-21 — Windows satellites: a Setup to double-click
 
 A spare Windows laptop or PC becomes a room with `DomovoiSatelliteSetup.exe`
-instead of a PowerShell command. **Settings → Satellites → add a spare
+instead of a PowerShell command. **Settings → Rooms → add a spare
 device → make the code**: when the server holds the Setup, the Windows
 column shows a setup code (24 hours, not a password) and **Download the
 Windows Setup**, whose file name carries the code and the server, so
@@ -132,7 +152,6 @@ Setup checks that the server answering is the one the code was made on
   beside `DomovoiSetup.exe` and lists it in `SHA256SUMS`;
   `windows\build.ps1` builds both.
 
-||||||| 0d9555a1
 ## 2026-10-20 — 1.0.0-rc3: audiobooks on the phone, and everything since rc2
 
 Version 1.0.0rc3 (the app 1.0.0-rc3, versionCode 26102001; the Windows

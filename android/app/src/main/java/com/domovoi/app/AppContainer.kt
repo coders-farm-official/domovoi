@@ -173,7 +173,7 @@ class AppContainer(context: Context) {
         )
     }
 
-    /** The on-device assistant's benchmark (Settings → About → developer
+    /** The on-device assistant's benchmark (Settings → About & updates → developer
      *  options; M0 of the phone assistant). Built on first use. Its only
      *  network use is the
      *  model download the user starts, on a copy of the app's client WITHOUT
@@ -200,7 +200,7 @@ class AppContainer(context: Context) {
     }
     val assistant: AssistantController by assistantLazy
 
-    /** The phone's own voice (Settings → Voice): Domovoi's Piper voice
+    /** The phone's own voice (Settings → Voices): Domovoi's Piper voice
      *  through the Kotlin phonemizer once downloaded, the server's "say it
      *  like" list from `GET /api/voice` (cached per server), Android's
      *  TextToSpeech until then. Built on first use. */

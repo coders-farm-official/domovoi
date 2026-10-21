@@ -158,7 +158,7 @@ class Prefs(
     private val _phoneFolders = MutableStateFlow<List<PhoneFolder>>(emptyList())
     val phoneFolders: StateFlow<List<PhoneFolder>> = _phoneFolders
 
-    /** This phone's bottom-bar tabs as picked in Settings → Phone bar, as
+    /** This phone's bottom-bar tabs as picked in Settings → App layout, as
      *  ui/shell/PhoneBar.kt encodes them; null = never picked (the
      *  default). The web keeps the same choice in localStorage. */
     private val _phoneBar = MutableStateFlow<String?>(null)
@@ -175,7 +175,7 @@ class Prefs(
     private val _chatServerShareSeen = MutableStateFlow(false)
     val chatServerShareSeen: StateFlow<Boolean> = _chatServerShareSeen
 
-    /** The phone's voice (Settings → Voice): "server" (the default: the
+    /** The phone's voice (Settings → Voices): "server" (the default: the
      *  server's voice) or a voice id (voice/PhoneVoice.kt). */
     private val _voiceChoice = MutableStateFlow("server")
     val voiceChoice: StateFlow<String> = _voiceChoice

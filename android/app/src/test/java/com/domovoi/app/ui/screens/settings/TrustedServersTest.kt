@@ -6,7 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Trust is visible and revocable: Settings → Connection lists every server
+ * Trust is visible and revocable: Settings → Phones & browsers lists every server
  * the phone trusts (and the one it is on), and a switch forgets trust that
  * belongs to nothing — so an address trusted once can never be reused
  * silently (security round 3, P2-at-01).

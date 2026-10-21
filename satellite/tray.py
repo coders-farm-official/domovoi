@@ -116,8 +116,8 @@ def tooltip(st: dict[str, Any] | None, code: str | None = None) -> tuple[str, st
     title = f"Domovoi · {room_name(st)}"
     state = icon_state(st)
     if state == "awaiting":
-        text = (f"Waiting for approval, code {code}. Approve it in Settings → Satellites."
-                if code else "Waiting for approval in Settings → Satellites.")
+        text = (f"Waiting for approval, code {code}. Approve it in Settings → Rooms."
+                if code else "Waiting for approval in Settings → Rooms.")
     elif state == "offline":
         text = connection_text(st)
     elif state == "muted":
@@ -237,7 +237,7 @@ class NotePlanner:
                 notes.append(Note(
                     "approval",
                     f"{room_name(st)}: waiting for approval, code {code}",
-                    f"Approve it in Settings → Satellites on the Domovoi dashboard, "
+                    f"Approve it in Settings → Rooms on the Domovoi dashboard, "
                     f"with the code {code}.",
                     actions=[("dashboard", "Open dashboard")],
                     persistent=True,

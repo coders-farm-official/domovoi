@@ -361,28 +361,33 @@ const announceInternetChange = (access) => {
 /* ── Addresses: a hash route per page, and per tab ───────────────────
  *
  * #<page> opens a page on its default tab, as it always has. Since
- * 2026-10-12 a tab has an address too, #<page>/<tab>: #settings/configuration,
+ * 2026-10-12 a tab has an address too, #<page>/<tab>: #settings/advanced,
  * #music/queue, #calendar/week. Clicking a tab writes its address as a new
  * history entry (Back goes to the tab before), opening an address selects
  * its tab, and a tab the page doesn't have opens the page's default tab
  * (the address is corrected to #<page>). A tab is named by its `slug` (the
- * words in the address) or its `id` (the name in the code); the id is
- * rewritten to the slug in place.
+ * words in the address), its `id` (the name in the code) or one of its
+ * `aliases` (the words it had before a rename: Settings' regroup of
+ * 2026-10-21 renamed configuration → advanced, satellites → rooms, …);
+ * an id or an alias is rewritten to the slug in place, markers kept.
  *
  * A segment after the tab is a marker for that tab. The ones there are:
- * #settings/configuration/setup (SETUP_ROUTE), which the Windows installer's
- * "Open Domovoi" opens. Configuration always shows the first-run admin
- * setup on an unclaimed box; the marker only adds a short "already set up"
- * note on a claimed one. And #settings/configuration/acoustid-key
- * (ACOUSTID_KEY_ROUTE): Configuration scrolls to the AcoustID key field
- * and puts the cursor in it — where "song recognition needs a free
- * AcoustID key" (Music, Settings → Internet) sends people. Addresses are
- * hash segments only: no query strings, no key=value pairs.
+ * #settings/advanced/setup (SETUP_ROUTE; the Windows installer's "Open
+ * Domovoi" opens its old spelling, #settings/configuration/setup, which
+ * lands here). Advanced always shows the first-run admin setup on an
+ * unclaimed box; the marker only adds a short "already set up" note on a
+ * claimed one. #settings/advanced/acoustid-key (ACOUSTID_KEY_ROUTE):
+ * Advanced scrolls to the AcoustID key field and puts the cursor in it —
+ * where "song recognition needs a free AcoustID key" (Music, Settings →
+ * Internet) sends people; any other setting's name does the same (the
+ * settings search). And #settings/health/<part> scrolls Health to that
+ * part (server, updates, rooms, plugins, internet, containers). Addresses
+ * are hash segments only: no query strings, no key=value pairs.
  *
  * The shell (index.html) shows the page named by the first segment; the
  * page's tabs follow the rest through useRouteTab. */
-const SETUP_ROUTE = 'settings/configuration/setup';
-const ACOUSTID_KEY_ROUTE = 'settings/configuration/acoustid-key';
+const SETUP_ROUTE = 'settings/advanced/setup';
+const ACOUSTID_KEY_ROUTE = 'settings/advanced/acoustid-key';
 
 // '#Settings/configuration/' → ['settings', 'configuration']
 const routeParts = (route) => {
@@ -399,11 +404,13 @@ const currentRoute = () => {
   try { return String((window.location && window.location.hash) || '').replace(/^#/, ''); } catch { return ''; }
 };
 
-/* Pages that became a Settings tab, by their old route → the tab. Since
- * 2026-10-11 Satellites lives in Settings; the old #satellites (a
- * bookmark, a link in the docs, Home's room cards and problem rows, which
- * keep it because it also works in a new tab) still lands there. */
-const SETTINGS_TAB_ROUTES = { satellites: 'satellites' };
+/* Pages that became a part of Settings, by their old route → where they
+ * are now (the segments after #settings). Since 2026-10-11 Satellites
+ * lives in Settings, Rooms since 2026-10-21; the old #satellites (a
+ * bookmark, a link in the docs) still lands there. The container guard's
+ * page (#containers: a phone's notification, an old bookmark) is part of
+ * Settings → System → Health since 2026-10-21. */
+const SETTINGS_TAB_ROUTES = { satellites: ['rooms'], containers: ['health', 'containers'] };
 
 /* The route an address means, tidied: no '#', no empty segments, lower
  * case; an old route of a Settings tab (#satellites, and anything after
@@ -411,11 +418,11 @@ const SETTINGS_TAB_ROUTES = { satellites: 'satellites' };
 const resolveRoute = (route) => {
   const parts = routeParts(route);
   const tab = parts.length ? SETTINGS_TAB_ROUTES[parts[0]] : null;
-  return (tab ? ['settings', tab, ...parts.slice(1)] : parts).join('/');
+  return (tab ? ['settings', ...tab, ...parts.slice(1)] : parts).join('/');
 };
 
 /* The route the shell shows for `route` (resolveRoute). When that is not
- * what the address bar says (an old #satellites), the address is replaced,
+ * what the address bar says (an old #settings/rooms), the address is replaced,
  * not pushed, so Back doesn't bounce off the old one. */
 const settingsTabRoute = (route) => {
   const to = resolveRoute(route);
@@ -438,7 +445,8 @@ const tabSlug = (tabs, id) => {
 const readRouteTab = (route, page, tabs, fallback) => {
   const parts = routeParts(resolveRoute(route));
   if (parts[0] !== page || parts.length < 2) return { tab: fallback, rest: [], fix: null };
-  const hit = (tabs || []).find((t) => (t.slug || t.id) === parts[1] || t.id === parts[1]);
+  const hit = (tabs || []).find((t) => (t.slug || t.id) === parts[1] || t.id === parts[1])
+    || (tabs || []).find((t) => (t.aliases || []).includes(parts[1]));
   if (!hit) return { tab: fallback, rest: [], fix: page };
   const slug = hit.slug || hit.id;
   const fix = slug === parts[1] ? null : [page, slug, ...parts.slice(2)].join('/');
@@ -997,7 +1005,7 @@ const followServerRestart = async ({ core, fire, live = () => true, onSettled = 
   return false;
 };
 
-/* For a card that offers a restart (Settings → Version, the Plugins page's
+/* For a card that offers a restart (Settings → About & updates, the Plugins page's
  * restart card): while the server says one is under way that the card is
  * not waiting on itself, follow it (followServerRestart) and return what
  * runs (underwayRuns); null otherwise. The card offers nothing that would
@@ -1032,7 +1040,7 @@ const useServerRestartFollow = ({ core, fire, onSettled, busy = false, enabled =
 
 /* Bounce domovoi-core + domovoi-web — or, with domovoi-update.service
  * installed, start it — and wait until the server is back with nothing
- * left to restart. Settings → Version ("Restart to apply changes", and
+ * left to restart. Settings → About & updates ("Restart to apply changes", and
  * "Restart Domovoi" whenever nothing is waiting) and the Plugins page
  * ("restart to finish the upgrade") all press this one, so they can't
  * drift into different restarts.
@@ -1043,7 +1051,7 @@ const useServerRestartFollow = ({ core, fire, onSettled, busy = false, enabled =
  *             restart done some other way, and the first answer after the
  *             press would then look like this restart already done.
  *   question  the confirm's first line; the default is the pulled-code one
- *   plain     a restart with nothing waiting to load (Settings → Version's
+ *   plain     a restart with nothing waiting to load (About & updates'
  *             "Restart Domovoi", after editing domovoi/.env by hand, say):
  *             the confirm says what a restart interrupts rather than what
  *             applying code does, and with the update unit its plain
@@ -1331,8 +1339,8 @@ const RestartByHandHint = ({ version, style }) => {
  * each read counts toward it. Shown only where it works (the read says
  * `capable`); otherwise the reason and the command to run by hand, or that
  * the core is starting. Nothing at all for a viewer without the admin
- * sign-in, or while the core's loop answers. Settings → Version, the
- * Satellites page and Home's "isn't answering" row use it. */
+ * sign-in, or while the core's loop answers. Settings → About & updates, Settings →
+ * Rooms and Home's "isn't answering" row use it. */
 const CORE_BACK_WAIT_MS = 4 * 60 * 1000;
 const CORE_BACK_POLL_MS = 2000;
 const CORE_STATUS_POLL_MS = 5000;
@@ -1488,13 +1496,13 @@ const NavItem = ({ icon, label, badge, active, onClick }) => (
  *
  * The phone strip (760px and below) is this device's phone bar
  * (PHONE_BAR_DEFAULT, home · music · videos · chat, unless someone here
- * picked others in Settings → Phone bar); everything else is one tap away on
+ * picked others in Settings → App layout); everything else is one tap away on
  * Home's "everything" grid. The desktop sidebar shows every item EXCEPT
  * home: there the brand row is the link to it (`brandLink`).
  *
- * Satellites is not here: since 2026-10-11 it is a Settings tab
- * (Settings → Satellites), and the old #satellites still lands on it
- * (SETTINGS_TAB_ROUTES below). */
+ * Satellites is not here: since 2026-10-11 it is part of Settings
+ * (Settings → Rooms since 2026-10-21), and the old #satellites still lands
+ * on it (SETTINGS_TAB_ROUTES below). */
 const CORE_NAV_ITEMS = [
   { route: 'home',       icon: 'house',       label: 'Home',       order: 1, brandLink: true },
   { route: 'chat',       icon: 'message-square', label: 'Chat',    order: 8 },
@@ -1511,7 +1519,7 @@ const CORE_NAV_ITEMS = [
   { route: 'plugins',    icon: 'blocks',      label: 'Plugins',    order: 95 },
 ];
 
-/* Pages a shared screen (an admin marks the device in Settings → Devices;
+/* Pages a shared screen (an admin marks the device in Settings → Phones & browsers;
  * the kitchen tablet) leaves off EVERY launcher — the sidebar, the phone
  * strip and Home's "everything" grid, through navItemsFor below, so the
  * three can't drift apart. One person's things: the household's names and
@@ -1652,7 +1660,7 @@ const navItemsFor = (manifest, { shared = false, ai = aiFeaturesOn() } = {}) =>
 /* ---- the phone bar ----------------------------------------------------
  * The tabs along the bottom of a phone-width screen (760px and below).
  * home · music · videos · chat unless someone on THIS device picked others
- * in Settings → Phone bar: Home always first, at most five, at
+ * in Settings → App layout: Home always first, at most five, at
  * least two, any page a launcher may show (navItemsFor — so plugin pages
  * too, and on a shared screen never the personal ones, whatever was saved).
  * Kept in this browser's localStorage: a per-device convenience, so a
@@ -1979,7 +1987,7 @@ const Sidebar = ({ route, setRoute, counts, manifest, badges: given }) => {
           takes keyboard focus, Enter, and a middle-click into a new tab;
           the hash router follows the hashchange. (No version here: the
           "/ 1.0" this row used to carry was never the running version —
-          the Version section of Settings → Configuration reads the real
+          Settings → About & updates reads the real
           one.) */}
       <a href="#home" className="brand-row" title="home" aria-label="domovoi home">
         <DomovoiGlyph size={22} className="glyph"/>
@@ -2163,7 +2171,7 @@ const _groupBy = (list) => {
 
 /* ---- Topbar ------------------------------------------------- */
 const Topbar = ({ route, setRoute, theme, setTheme }) => {
-  const labels = { home: 'Home', chat: 'Chat', music: 'Music', podcasts: 'Podcasts', audiobooks: 'Audiobooks', videos: 'Videos', news: 'News', people: 'People', satellites: 'Satellites', calendar: 'Calendar', plugins: 'Plugins', settings: 'Settings', files: 'Files', manual: 'User Manual', containers: 'Containers' };
+  const labels = { home: 'Home', chat: 'Chat', music: 'Music', podcasts: 'Podcasts', audiobooks: 'Audiobooks', videos: 'Videos', news: 'News', people: 'People', calendar: 'Calendar', plugins: 'Plugins', settings: 'Settings', files: 'Files', manual: 'User Manual' };
   // Plugin routes take their crumb label from the manifest.
   if (!labels[route]) {
     const manifest = window.DomovoiPluginManifest || { plugins: [] };
@@ -2625,7 +2633,7 @@ const LoginModal = ({ onClose }) => {
           {restarting && !err && (
             <div className="hint login-restarting">
               The Domovoi server is restarting. Sign in once it’s back —
-              Settings → Configuration → Version says when.
+              Settings → About & updates says when.
             </div>
           )}
           {signingOut ? (
@@ -2670,7 +2678,7 @@ const LoginModal = ({ onClose }) => {
 // What the pair prompt says when the server did not take a pasted token
 // (Auth.checkAndPair, 2026-10-17: an old custom token used to be stored
 // unchecked, and every page then failed).
-const PAIR_REFUSED_TEXT = "that token doesn't match this server — copy it from Settings → Devices → "
+const PAIR_REFUSED_TEXT = "that token doesn't match this server — copy it from Settings → Phones & browsers → "
   + "Household token on this server's dashboard, or sign in as an admin instead";
 const PAIR_UNCHECKED_TEXT = "couldn't check it with the server — try again";
 const pairWaitText = (ms) => `too many tries — wait ${tokenWaitClock(ms)} before the next one`;
@@ -2755,7 +2763,7 @@ const PairModal = ({ onClose }) => {
           {waitLeft > 0 && <div className="err">{pairWaitText(waitLeft)}</div>}
           <div className="hint">
             An admin finds the token on their dashboard under
-            <strong> Settings → Devices → Household token</strong>. It is also
+            <strong> Settings → Phones & browsers → Household token</strong>. It is also
             in the file <code>~/.domovoi/device-token.txt</code> on the
             Domovoi server.
           </div>
@@ -2930,7 +2938,7 @@ const WriteBlockedNotice = ({ reason, children }) => {
       {/* The live region is the SENTENCE, not the strip: a screen
           reader announcing a lock glyph helps nobody. */}
       <span role="alert">
-        {reason}. An admin lifts the block in Settings → Devices.{children}
+        {reason}. An admin lifts the block in Settings → Phones & browsers.{children}
       </span>
     </div>
   );
@@ -3338,7 +3346,7 @@ const TimerFireAlerts = () => {
  * admin's attention"). Live through `containers.changed` on the state
  * socket; re-read every 30 s while the socket is down (an unpaired
  * browser's socket is refused for good) and on every credential change.
- * The banner, Home's problems row and the Containers page all read it. */
+ * The banner, Home's problems row and Settings → Health all read it. */
 const CONTAINER_GUARD_POLL_MS = 30 * 1000;
 const CONTAINER_GUARD_EVENT = 'containers.changed';
 const CONTAINER_GUARD_GUEST_TEXT = "Something needs an admin's attention.";
@@ -3441,7 +3449,7 @@ const containerGuardBanner = (s, { shared = false } = {}) => {
  * anything is open: red for tampering and a required container's
  * failure, amber for an optional one's. An admin may acknowledge the
  * failures it shows (hidden until something new happens); a tamper
- * incident is cleared on the Containers page, after review. */
+ * incident is cleared on Settings → Health, after review. */
 const ContainerGuardBanner = () => {
   const s = useContainerGuard();
   const shared = useSharedScreen();
@@ -3491,7 +3499,7 @@ const ContainerGuardBanner = () => {
         <StatusDot tone={red ? 'err' : 'warn'} live/>
         <span className="guard-banner-text">{b.text}</span>
         <span className="guard-banner-actions">
-          <a className="guard-banner-link mono" href="#containers">details</a>
+          <a className="guard-banner-link mono" href="#settings/health/containers">details</a>
           {admin && onlyFailures && (
             <button type="button" className="btn btn-ghost guard-banner-ack mono" disabled={busy}
                     onClick={acknowledge}>{busy ? 'acknowledging…' : 'acknowledge'}</button>
@@ -3570,7 +3578,7 @@ Object.assign(window, {
   SHARED_SCREEN_HIDDEN, useSharedScreen,
   PHONE_BAR_DEFAULT, PHONE_BAR_MAX, PHONE_BAR_MIN, PhoneBarStore, usePhoneBar, phoneBarRoutes, phoneBarEdit,
   SETTINGS_TAB_ROUTES, settingsTabRoute, resolveRoute, routeParts, routePage, currentRoute,
-  readRouteTab, useRouteTab, tabSlug, settingsTabHref, openSettingsTab, SETUP_ROUTE,
+  readRouteTab, useRouteTab, tabSlug, settingsTabHref, openSettingsTab, SETUP_ROUTE, ACOUSTID_KEY_ROUTE,
   SetupCodeWhere, useHostKind,
   relTime, fmtDur, webHref, LoginModal, PairModal, AuthModalHost,
   satCan, satBoardLabel, SAT_BOARD_LABELS,

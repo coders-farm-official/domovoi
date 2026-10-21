@@ -25,7 +25,7 @@ object RoomSessionRules {
     )
 
     const val REJECTED_TEXT =
-        "Another device is this room on the server. On the dashboard, open the room under Settings → Satellites and " +
+        "Another device is this room on the server. On the dashboard, open the room under Settings → Rooms and " +
             "reset its pairing, or hold Exit to leave room mode and forget this room."
     const val CONFLICT_TEXT =
         "Another device is already waiting for approval as this room. Reject it on the dashboard, or wait three " +

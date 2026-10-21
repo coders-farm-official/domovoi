@@ -11,7 +11,7 @@ the dashboard quoted.
 This module is the core's half, like the Pi wheel cache
 (domovoi/satellite_media/fetchers.py):
 
-* :func:`fetch` — an admin asks (Settings → Satellites → Add a spare device
+* :func:`fetch` — an admin asks (Settings → Rooms → Add a spare device
   → Windows → "get the Windows files"), and every file the lock names is
   downloaded from python.org / PyPI through the outbound gate
   (domovoi/net_safety.py: public addresses only, redirects vetted) into

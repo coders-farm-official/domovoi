@@ -198,7 +198,7 @@ models as a Pi; it fetches the base models from the core's signed
 
 Spare-device satellites (S1, 2026-10-13). A Linux laptop or a phone in
 room mode is told which core it belongs to by an **enrolment payload**, a
-URI the dashboard shows under Settings → Satellites → **Add a spare
+URI the dashboard shows under Settings → Rooms → **Add a spare
 device** (admin only): inside a one-line Linux install command, and as a QR
 code for a phone.
 

@@ -71,7 +71,7 @@ class RoutesTest {
 
     @Test fun theContainersScreenIsOnNoLauncher() {
         // Reached from the banner and from an incident's notification only,
-        // like the web's #containers, which is not in the nav.
+        // like the web's #settings/health/containers, which is not in the nav.
         assertEquals(setOf(Route.Containers, Route.Satellites), LauncherlessRoutes)
         assertFalse(Route.Containers in DefaultPhoneBar)
         assertFalse(Route.Containers in EverythingRoutes)
@@ -82,10 +82,13 @@ class RoutesTest {
     }
 
     @Test fun satellitesIsASettingsTabOnNoLauncher() {
-        // The web's Settings → Satellites (2026-10-11): the route is how a
+        // The web's Settings → Rooms (2026-10-11): the route is how a
         // link names it, and the shell opens Settings on that tab.
-        assertEquals("satellites", settingsTabFor(Route.Satellites))
-        Route.entries.filter { it != Route.Satellites }.forEach { assertNull(it.name, settingsTabFor(it)) }
+        assertEquals("rooms", settingsTabFor(Route.Satellites))
+        // The container guard's details are part of Settings → Health (2026-10-21).
+        assertEquals("health", settingsTabFor(Route.Containers))
+        Route.entries.filter { it != Route.Satellites && it != Route.Containers }
+            .forEach { assertNull(it.name, settingsTabFor(it)) }
         assertFalse(Route.Satellites in WorkspaceRoutes)
         assertFalse(Route.Satellites in EverythingRoutes)
         assertFalse(Route.Satellites in DefaultPhoneBar)

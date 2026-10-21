@@ -55,20 +55,20 @@ every room. Your voice never leaves your home network.
 
 **Getting set up** (a checklist; each line ticks itself when it's done)
 
-1. **Claim the admin account** *(admin)*: [Settings → Configuration](#settings/configuration),
+1. **Claim the admin account** *(admin)*: [Settings → Advanced](#settings/advanced),
    **set up admin**. Type the 8-word setup code and choose a password.
    Where the code is: the Windows installer shows it on its last page; on
    Linux it is in a file on the server. [More detail](README.md#2-claim-the-admin-account)
 2. **Answer the internet question**: Yes, Sometimes or No. You can change
    it later in [Settings → Internet](#settings/internet).
-3. **Add your first room**: [Settings → Satellites](#settings/satellites).
+3. **Add your first room**: [Settings → Rooms](#settings/rooms).
    See [A Raspberry Pi room](#node:pi-room).
 4. **Say the wake word** in that room: {wake}, then "what time is it?"
 5. **Introduce yourself** in that room: "my name is …", then "yes".
 6. **Add your music**: [Music](#music), **Upload**, or copy files into the
    server's music folder.
-7. **Put the app on your phones**: [Settings → Devices → Get the Domovoi
-   app](#settings/devices).
+7. **Put the app on your phones**: [Settings → Phones & browsers → Get the Domovoi
+   app](#settings/phones-and-browsers).
 
 ---
 
@@ -192,7 +192,7 @@ A graphics card is optional everywhere. [More detail](docs/WINDOWS_HOST.md#which
 - "what reminders do I have"
 
 **Also:** your timers show on [Home](#home) and in each room's **Timers**
-tab ([Settings → Satellites](#settings/satellites)).
+tab ([Settings → Rooms](#settings/rooms)).
 
 **App:** if Home's timers card says "Timers may ring a few minutes late on
 this phone", tap **allow alarms**.
@@ -275,7 +275,7 @@ room.
 
 **If something's wrong:** drop-ins need a room with an echo-cancelling
 microphone (the XVF3800 board, or most phones in room mode). A room may be
-set to ask before it answers: [Settings → Configuration](#settings/configuration),
+set to ask before it answers: [Settings → Advanced](#settings/advanced),
 **Drop-in** *(admin)*.
 
 [More detail](docs/FAQ.md#can-i-drop-in-on-a-room-from-my-phone)
@@ -296,7 +296,7 @@ voices](#node:people)).
 - "forget that I parked on level 3"
 
 **Also:** notes show in each room's **Notes** tab ([Settings →
-Satellites](#settings/satellites)). Memories show on [People](#people),
+Rooms](#settings/rooms)). Memories show on [People](#people),
 under each person's **Memory** tab.
 
 [More detail](docs/FAQ.md#does-it-support-multiple-people)
@@ -342,7 +342,7 @@ over the greeting aren't heard.
 [live slot: rooms]
 
 Each room is one listening device: a Raspberry Pi, a spare laptop or a
-phone. [Settings → Satellites](#settings/satellites) lists them. Each card
+phone. [Settings → Rooms](#settings/rooms) lists them. Each card
 shows:
 
 - online or offline;
@@ -364,7 +364,7 @@ played**, **Notes**, **Timers**, **Logs**, and **Settings** (the gear).
 - A room moved to new hardware: **Reset pairing**, then approve the new
   device.
 
-**App:** [Settings → Satellites](#settings/satellites) shows the same rooms.
+**App:** [Settings → Rooms](#settings/rooms) shows the same rooms.
 
 **If something's wrong**
 
@@ -386,7 +386,7 @@ About the price of a smart speaker. [Parts list](docs/SATELLITE_HARDWARE.md)
 
 1. Put Raspberry Pi OS Lite (64-bit) on a microSD card, and put the card
    in the server's card reader.
-2. [Settings → Satellites](#settings/satellites) → **prepare satellite
+2. [Settings → Rooms](#settings/rooms) → **prepare satellite
    media** → **wi-fi setup portal** → **Prepare**. On the Windows install,
    which can't see SD cards, **download overlay zip** and unzip it onto
    the card.
@@ -406,7 +406,7 @@ plugged in, with sleep turned off. Not the computer that runs Domovoi.
 
 **How to** *(admin)*
 
-1. [Settings → Satellites](#settings/satellites) → **add a spare device**.
+1. [Settings → Rooms](#settings/rooms) → **add a spare device**.
    Type the room's name, press **make the code**.
 2. **Linux:** press **copy the command** and run it on that computer,
    signed in as the account it should use.
@@ -437,7 +437,7 @@ announcements.
 
 **How to**
 
-1. *(admin, once)* [Settings → Satellites](#settings/satellites) →
+1. *(admin, once)* [Settings → Rooms](#settings/rooms) →
    **prepare satellite media** → **Refresh caches**. This gives phones the
    wake word.
 2. *(admin)* **add a spare device**, name the room, **make the code**. A QR
@@ -450,7 +450,7 @@ announcements.
 5. Approve the six-digit code on the dashboard.
 
 **App:** a phone that already has the app can do this from [Settings →
-Satellites](#settings/satellites) → **Use this device as a room**, or
+Rooms](#settings/rooms) → **Use this device as a room**, or
 from the **Domovoi Room** icon.
 
 To leave, hold **exit room mode**, unlock, then choose **Keep this room**
@@ -491,7 +491,7 @@ listens.
 
 **Train your own wake word** *(admin)*
 
-- Where: [Settings → Wake Words](#settings/wake-words). The admin turns
+- Where: [Settings → Wake words](#settings/wake-words). The admin turns
   training on once, with **Turn on wake-word training**.
 - What it needs: a server with 24 GB of memory, about 22 GB of downloads
   and about 32 GB of disk. A word takes about 20 minutes to train with an
@@ -520,7 +520,7 @@ Three voices, all on the server: **Kristin** (default), **Norman** and
 - A word said wrong? **Say it like**: type the word and how it sounds, the
   stressed part in capitals (Siobhan = shiv-AWN). Press play to hear it
   first.
-- **App:** how *this phone* speaks: [Settings → Voice](#app/voice): "Same
+- **App:** how *this phone* speaks: [Settings → Voices](#app/voice): "Same
   as the server" or one of the three (about 64 MB, downloaded once).
 
 **Try saying**
@@ -542,8 +542,8 @@ included. It comes from your own server; no store is needed.
 
 **How to**
 
-1. On the dashboard, [Settings → Devices → Get the Domovoi
-   app](#settings/devices) shows a QR code. If it says the app isn't on
+1. On the dashboard, [Settings → Phones & browsers → Get the Domovoi
+   app](#settings/phones-and-browsers) shows a QR code. If it says the app isn't on
    the server yet, ask whoever set up Domovoi to press **Download the app
    to this server**.
 2. Scan the code with the phone's camera and install. Android asks you to
@@ -552,10 +552,10 @@ included. It comes from your own server; no store is needed.
    your Wi-Fi), and press **trust this server**. Can't see it? Use **add
    manually** with the dashboard's address.
 4. **pair this phone**: type the household token. An admin finds it in
-   [Settings → Devices → Household token](#settings/devices).
+   [Settings → Phones & browsers → Household token](#settings/phones-and-browsers).
 
 **App:** switch or forget a server from the server name at the top, or in
-[Settings → Connection](#app/connection).
+[Settings → Phones & browsers](#app/connection).
 
 **If something's wrong:** "App not installed" means a 32-bit phone; take
 the 32-bit app from the same page. [More detail](docs/ANDROID_COMPATIBILITY.md)
@@ -623,16 +623,17 @@ app is locked.
 
 ### App settings and updates
 
-- [Settings → Phone bar](#settings/phone-bar): pick 2 to 5 tabs for the
+- [Settings → App layout](#settings/app-layout): pick 2 to 5 tabs for the
   bottom of the screen. Home always comes first.
-- [Settings → Voice](#app/voice): how this phone speaks.
-- [Settings → Server settings](#app/server-settings) → **Open the
-  dashboard**: everything else.
+- [Settings → Voices](#app/voice): how this phone speaks.
+- The app's Settings has the dashboard's groups and names. What only the
+  dashboard can change (greetings, wake words, models, Advanced, …) says
+  so there, with **Open on the dashboard**.
 - **Updates:** when your server has a newer app, Home shows "Domovoi … is
   available from your server". Tap **get the update**. [Settings →
-  About](#settings/about) → **App updates** says which version you have. A
+  About & updates](#settings/about) → **App updates** says which version you have. A
   Google Play install updates itself.
-- [Settings → About](#settings/about) → **Privacy** says what the app
+- [Settings → About & updates](#settings/about) → **Privacy** says what the app
   keeps.
 
 [More detail](docs/PRIVACY_POLICY.md)
@@ -833,10 +834,10 @@ one on [People](#people).
 
 **How to** *(admin)*
 
-- Sign in: [Settings → Configuration](#settings/configuration) → **sign
+- Sign in: [Settings → Advanced](#settings/advanced) → **sign
   in**. A reload in that browser keeps you signed in for 60 minutes after
   you signed in; **sign out** ends it at once. Change the minutes in
-  [Settings → Configuration](#settings/configuration) → **Security** →
+  [Settings → Advanced](#settings/advanced) → **Security** →
   **Stay signed in after a reload**.
 - Turn guest music control off: same place, **Guests can change the
   music in a playing room**.
@@ -849,7 +850,7 @@ on the server itself. Ask whoever set up Domovoi.
 
 ### Devices and house rules
 
-[Settings → Devices](#settings/devices):
+[Settings → Phones & browsers](#settings/phones-and-browsers):
 
 - **This device**: give this browser or phone a name. It's what queues
   show as "added by".
@@ -878,10 +879,11 @@ each room's **Conversations** tab.
 - "never save my voice": Domovoi stops learning it.
 - Delete a chat: the bin icon in [Chat](#chat).
 - *(admin)* turn recordings off in a room's **Overview** (**Stop and
-  delete**).
+  delete**); the commands kept so far are in [Settings → Voice
+  history](#settings/voice-history).
 
 An admin can change play history, news and timer history in [Settings →
-Configuration](#settings/configuration). [More detail](docs/SECURITY_PRIVACY.md#data-at-rest)
+Advanced](#settings/advanced). [More detail](docs/SECURITY_PRIVACY.md#data-at-rest)
 
 ### Internet: yes, sometimes, no
 
@@ -905,7 +907,7 @@ what you need before choosing No.
 
 ### Updates
 
-[Settings → Configuration](#settings/configuration) → **Version** shows
+[Settings → About & updates](#settings/about) shows
 the release you run.
 
 **How to** *(admin)*
@@ -925,13 +927,13 @@ After an update, reload any open dashboard once.
 ### Restarting
 
 Some settings apply only after a restart: [Settings →
-Configuration](#settings/configuration) → **Version** → **Restart
+About & updates](#settings/about) → **Restart
 Domovoi** *(admin)*.
 
 **If every room is offline but the dashboard opens**, the server's core
 has stopped answering. It restarts itself within about a minute. If it
 doesn't, an admin presses **Restart the core** (on [Home](#home),
-[Settings → Satellites](#settings/satellites) or **Version**). The app
+[Settings → Rooms](#settings/rooms) or [Settings → Health](#settings/health)). The app
 says the core isn't answering, and reconnects by itself.
 
 [More detail](docs/TROUBLESHOOTING.md#everything-offline-dashboard-up)
@@ -1011,7 +1013,7 @@ adjusted in one place. Each "### name" replaces the {{name}} line above.
   spoken "what can you do"). Their phrases are marked pending in PHRASES
   (build_manual.py) until that work lands.
 - voice-history-*, forget-me-phrase: wf/voice-history's "Keep voice
-  history" setting (People → Voice history, and Settings → Configuration
+  history" setting (People → Voice history, and Settings → Advanced
   → Privacy; 30 days, 90 days, 1 year or Forever, 90 by default), "Delete
   all voice history", and "forget me" / forget person deleting that
   person's own turns. Labels as that branch has them (f31ed01e).
@@ -1087,7 +1089,7 @@ change events here: by voice it only reads.
 - *(admin)* [People](#people) → **Voice history** → **Keep voice
   history**: 30 days, 90 days (the default), 1 year or Forever. Older
   turns are deleted every day. It's also in [Settings →
-  Configuration](#settings/configuration) → **Privacy**.
+  Advanced](#settings/advanced) → **Privacy**.
 - *(admin)* **Delete all voice history**, on the same page, deletes it all
   at once. People, voice samples, memories, notes, timers and chats stay.
 - *(admin)* **forget person** on [People](#people) does what "forget me"

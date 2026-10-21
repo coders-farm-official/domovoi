@@ -491,7 +491,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                     Text(
                         (data?.blockedReason ?: "this device isn't allowed to change files") +
                             ". You can browse and download, but not upload, move or import. " +
-                            "An admin lifts the block in the dashboard under Settings → Devices.",
+                            "An admin lifts the block in the dashboard under Settings → Phones & browsers.",
                         style = MaterialTheme.typography.bodySmall,
                         color = Domovoi.colors.fgMuted,
                     )

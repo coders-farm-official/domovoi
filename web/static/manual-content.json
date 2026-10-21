@@ -156,24 +156,25 @@
     "tab": "about"
    }
   },
-  "settings/phone-bar": {
-   "dashboard": "#settings/phone-bar",
+  "settings/app-layout": {
+   "dashboard": "#settings/app-layout",
    "app": {
     "screen": "Settings",
-    "tab": "phonebar"
+    "tab": "app-layout"
    }
   },
-  "settings/satellites": {
-   "dashboard": "#settings/satellites",
+  "settings/rooms": {
+   "dashboard": "#settings/rooms",
    "app": {
     "screen": "Settings",
-    "tab": "satellites"
+    "tab": "rooms"
    }
   },
   "settings/greetings": {
    "dashboard": "#settings/greetings",
    "app": {
-    "dashboard": true
+    "screen": "Settings",
+    "tab": "greetings"
    }
   },
   "settings/voices": {
@@ -185,11 +186,12 @@
   "settings/wake-words": {
    "dashboard": "#settings/wake-words",
    "app": {
-    "dashboard": true
+    "screen": "Settings",
+    "tab": "wake-words"
    }
   },
-  "settings/devices": {
-   "dashboard": "#settings/devices",
+  "settings/phones-and-browsers": {
+   "dashboard": "#settings/phones-and-browsers",
    "app": {
     "dashboard": true
    }
@@ -197,40 +199,50 @@
   "settings/models": {
    "dashboard": "#settings/models",
    "app": {
-    "dashboard": true
+    "screen": "Settings",
+    "tab": "models"
    }
   },
   "settings/internet": {
    "dashboard": "#settings/internet",
    "app": {
-    "dashboard": true
+    "screen": "Settings",
+    "tab": "internet"
    }
   },
-  "settings/configuration": {
-   "dashboard": "#settings/configuration",
+  "settings/voice-history": {
+   "dashboard": "#settings/voice-history",
    "app": {
-    "dashboard": true
+    "screen": "Settings",
+    "tab": "voice-history"
+   }
+  },
+  "settings/health": {
+   "dashboard": "#settings/health",
+   "app": {
+    "screen": "Settings",
+    "tab": "health"
+   }
+  },
+  "settings/advanced": {
+   "dashboard": "#settings/advanced",
+   "app": {
+    "screen": "Settings",
+    "tab": "advanced"
    }
   },
   "app/connection": {
    "dashboard": null,
    "app": {
     "screen": "Settings",
-    "tab": "connection"
+    "tab": "phones-and-browsers"
    }
   },
   "app/voice": {
    "dashboard": null,
    "app": {
     "screen": "Settings",
-    "tab": "voice"
-   }
-  },
-  "app/server-settings": {
-   "dashboard": null,
-   "app": {
-    "screen": "Settings",
-    "tab": "server"
+    "tab": "voices"
    }
   }
  },
@@ -320,7 +332,7 @@
     "platforms": [
      "dashboard"
     ],
-    "text": "**Claim the admin account** {admin}: [Settings → Configuration](route:settings/configuration), **set up admin**. Type the 8-word setup code and choose a password. Where the code is: the Windows installer shows it on its last page; on Linux it is in a file on the server. [More detail](doc:README.md#2-claim-the-admin-account)"
+    "text": "**Claim the admin account** {admin}: [Settings → Advanced](route:settings/advanced), **set up admin**. Type the 8-word setup code and choose a password. Where the code is: the Windows installer shows it on its last page; on Linux it is in a file on the server. [More detail](doc:README.md#2-claim-the-admin-account)"
    },
    {
     "id": "internet",
@@ -337,7 +349,7 @@
      "dashboard",
      "app"
     ],
-    "text": "**Add your first room**: [Settings → Satellites](route:settings/satellites). See [A Raspberry Pi room](node:pi-room)."
+    "text": "**Add your first room**: [Settings → Rooms](route:settings/rooms). See [A Raspberry Pi room](node:pi-room)."
    },
    {
     "id": "wake-word",
@@ -372,9 +384,9 @@
     "platforms": [
      "dashboard"
     ],
-    "app_text": "**Pair this phone**: [Settings → Connection](route:app/connection) → **Household token**.",
+    "app_text": "**Pair this phone**: [Settings → Phones & browsers](route:app/connection) → **Household token**.",
     "app_done_when": "this_phone_paired",
-    "text": "**Put the app on your phones**: [Settings → Devices → Get the Domovoi app](route:settings/devices)."
+    "text": "**Put the app on your phones**: [Settings → Phones & browsers → Get the Domovoi app](route:settings/phones-and-browsers)."
    }
   ]
  },
@@ -903,7 +915,7 @@
     },
     {
      "type": "p",
-     "text": "Your timers show on [Home](route:home) and in each room's **Timers** tab ([Settings → Satellites](route:settings/satellites))."
+     "text": "Your timers show on [Home](route:home) and in each room's **Timers** tab ([Settings → Rooms](route:settings/rooms))."
     },
     {
      "type": "p",
@@ -1229,7 +1241,7 @@
     },
     {
      "type": "p",
-     "text": "Drop-ins need a room with an echo-cancelling microphone (the XVF3800 board, or most phones in room mode). A room may be set to ask before it answers: [Settings → Configuration](route:settings/configuration), **Drop-in** {admin}."
+     "text": "Drop-ins need a room with an echo-cancelling microphone (the XVF3800 board, or most phones in room mode). A room may be set to ask before it answers: [Settings → Advanced](route:settings/advanced), **Drop-in** {admin}."
     }
    ],
    "more": {
@@ -1306,7 +1318,7 @@
     },
     {
      "type": "p",
-     "text": "Notes show in each room's **Notes** tab ([Settings → Satellites](route:settings/satellites)). Memories show on [People](route:people), under each person's **Memory** tab."
+     "text": "Notes show in each room's **Notes** tab ([Settings → Rooms](route:settings/rooms)). Memories show on [People](route:people), under each person's **Memory** tab."
     }
    ],
    "more": {
@@ -1449,7 +1461,7 @@
     },
     {
      "type": "p",
-     "text": "Each room is one listening device: a Raspberry Pi, a spare laptop or a phone. [Settings → Satellites](route:settings/satellites) lists them. Each card shows:"
+     "text": "Each room is one listening device: a Raspberry Pi, a spare laptop or a phone. [Settings → Rooms](route:settings/rooms) lists them. Each card shows:"
     },
     {
      "type": "list",
@@ -1497,7 +1509,7 @@
     },
     {
      "type": "p",
-     "text": "[Settings → Satellites](route:settings/satellites) shows the same rooms.",
+     "text": "[Settings → Rooms](route:settings/rooms) shows the same rooms.",
      "only": "app"
     },
     {
@@ -1560,7 +1572,7 @@
        "text": "Put Raspberry Pi OS Lite (64-bit) on a microSD card, and put the card in the server's card reader."
       },
       {
-       "text": "[Settings → Satellites](route:settings/satellites) → **prepare satellite media** → **wi-fi setup portal** → **Prepare**. On the Windows install, which can't see SD cards, **download overlay zip** and unzip it onto the card."
+       "text": "[Settings → Rooms](route:settings/rooms) → **prepare satellite media** → **wi-fi setup portal** → **Prepare**. On the Windows install, which can't see SD cards, **download overlay zip** and unzip it onto the card."
       },
       {
        "text": "Start the Pi with the card. It makes its own Wi-Fi network, `Domovoi-Setup-<id>`. Join it from your phone, pick your home Wi-Fi and name the room."
@@ -1615,7 +1627,7 @@
      "ordered": true,
      "items": [
       {
-       "text": "[Settings → Satellites](route:settings/satellites) → **add a spare device**. Type the room's name, press **make the code**."
+       "text": "[Settings → Rooms](route:settings/rooms) → **add a spare device**. Type the room's name, press **make the code**."
       },
       {
        "text": "**Linux:** press **copy the command** and run it on that computer, signed in as the account it should use."
@@ -1678,7 +1690,7 @@
      "ordered": true,
      "items": [
       {
-       "text": "{admin} once: [Settings → Satellites](route:settings/satellites) → **prepare satellite media** → **Refresh caches**. This gives phones the wake word."
+       "text": "{admin} once: [Settings → Rooms](route:settings/rooms) → **prepare satellite media** → **Refresh caches**. This gives phones the wake word."
       },
       {
        "text": "{admin} **add a spare device**, name the room, **make the code**. A QR code appears."
@@ -1696,7 +1708,7 @@
     },
     {
      "type": "p",
-     "text": "A phone that already has the app can do this from [Settings → Satellites](route:settings/satellites) → **Use this device as a room**, or from the **Domovoi Room** icon.",
+     "text": "A phone that already has the app can do this from [Settings → Rooms](route:settings/rooms) → **Use this device as a room**, or from the **Domovoi Room** icon.",
      "only": "app"
     },
     {
@@ -1813,7 +1825,7 @@
      "ordered": false,
      "items": [
       {
-       "text": "Where: [Settings → Wake Words](route:settings/wake-words). The admin turns training on once, with **Turn on wake-word training**."
+       "text": "Where: [Settings → Wake words](route:settings/wake-words). The admin turns training on once, with **Turn on wake-word training**."
       },
       {
        "text": "What it needs: a server with 24 GB of memory, about 22 GB of downloads and about 32 GB of disk. A word takes about 20 minutes to train with an NVIDIA graphics card, and over an hour on the processor."
@@ -1885,7 +1897,7 @@
        "text": "A word said wrong? **Say it like**: type the word and how it sounds, the stressed part in capitals (Siobhan = shiv-AWN). Press play to hear it first."
       },
       {
-       "text": "How *this phone* speaks: [Settings → Voice](route:app/voice): \"Same as the server\" or one of the three (about 64 MB, downloaded once).",
+       "text": "How *this phone* speaks: [Settings → Voices](route:app/voice): \"Same as the server\" or one of the three (about 64 MB, downloaded once).",
        "only": "app"
       }
      ]
@@ -1951,7 +1963,7 @@
      "ordered": true,
      "items": [
       {
-       "text": "On the dashboard, [Settings → Devices → Get the Domovoi app](route:settings/devices) shows a QR code. If it says the app isn't on the server yet, ask whoever set up Domovoi to press **Download the app to this server**."
+       "text": "On the dashboard, [Settings → Phones & browsers → Get the Domovoi app](route:settings/phones-and-browsers) shows a QR code. If it says the app isn't on the server yet, ask whoever set up Domovoi to press **Download the app to this server**."
       },
       {
        "text": "Scan the code with the phone's camera and install. Android asks you to allow installs from your browser once."
@@ -1960,13 +1972,13 @@
        "text": "Open Domovoi. Tap **connect** at the top, pick your server (it scans your Wi-Fi), and press **trust this server**. Can't see it? Use **add manually** with the dashboard's address."
       },
       {
-       "text": "**pair this phone**: type the household token. An admin finds it in [Settings → Devices → Household token](route:settings/devices)."
+       "text": "**pair this phone**: type the household token. An admin finds it in [Settings → Phones & browsers → Household token](route:settings/phones-and-browsers)."
       }
      ]
     },
     {
      "type": "p",
-     "text": "Switch or forget a server from the server name at the top, or in [Settings → Connection](route:app/connection).",
+     "text": "Switch or forget a server from the server name at the top, or in [Settings → Phones & browsers](route:app/connection).",
      "only": "app"
     },
     {
@@ -2145,19 +2157,19 @@
      "ordered": false,
      "items": [
       {
-       "text": "[Settings → Phone bar](route:settings/phone-bar): pick 2 to 5 tabs for the bottom of the screen. Home always comes first."
+       "text": "[Settings → App layout](route:settings/app-layout): pick 2 to 5 tabs for the bottom of the screen. Home always comes first."
       },
       {
-       "text": "[Settings → Voice](route:app/voice): how this phone speaks."
+       "text": "[Settings → Voices](route:app/voice): how this phone speaks."
       },
       {
-       "text": "[Settings → Server settings](route:app/server-settings) → **Open the dashboard**: everything else."
+       "text": "The app's Settings has the dashboard's groups and names. What only the dashboard can change (greetings, wake words, models, Advanced, …) says so there, with **Open on the dashboard**."
       },
       {
-       "text": "**Updates:** when your server has a newer app, Home shows \"Domovoi … is available from your server\". Tap **get the update**. [Settings → About](route:settings/about) → **App updates** says which version you have. A Google Play install updates itself."
+       "text": "**Updates:** when your server has a newer app, Home shows \"Domovoi … is available from your server\". Tap **get the update**. [Settings → About & updates](route:settings/about) → **App updates** says which version you have. A Google Play install updates itself."
       },
       {
-       "text": "[Settings → About](route:settings/about) → **Privacy** says what the app keeps."
+       "text": "[Settings → About & updates](route:settings/about) → **Privacy** says what the app keeps."
       }
      ]
     }
@@ -2818,7 +2830,7 @@
      "ordered": false,
      "items": [
       {
-       "text": "Sign in: [Settings → Configuration](route:settings/configuration) → **sign in**. A reload in that browser keeps you signed in for 60 minutes after you signed in; **sign out** ends it at once. Change the minutes in [Settings → Configuration](route:settings/configuration) → **Security** → **Stay signed in after a reload**."
+       "text": "Sign in: [Settings → Advanced](route:settings/advanced) → **sign in**. A reload in that browser keeps you signed in for 60 minutes after you signed in; **sign out** ends it at once. Change the minutes in [Settings → Advanced](route:settings/advanced) → **Security** → **Stay signed in after a reload**."
       },
       {
        "text": "Turn guest music control off: same place, **Guests can change the music in a playing room**."
@@ -2859,7 +2871,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "[Settings → Devices](route:settings/devices):"
+     "text": "[Settings → Phones & browsers](route:settings/phones-and-browsers):"
     },
     {
      "type": "list",
@@ -2964,7 +2976,7 @@
        "text": "\"forget me\", in your own voice: deletes your profile, voice samples, memories and everything you said to Domovoi."
       },
       {
-       "text": "{admin} [People](route:people) → **Voice history** → **Keep voice history**: 30 days, 90 days (the default), 1 year or Forever. Older turns are deleted every day. It's also in [Settings → Configuration](route:settings/configuration) → **Privacy**."
+       "text": "{admin} [People](route:people) → **Voice history** → **Keep voice history**: 30 days, 90 days (the default), 1 year or Forever. Older turns are deleted every day. It's also in [Settings → Advanced](route:settings/advanced) → **Privacy**."
       },
       {
        "text": "{admin} **Delete all voice history**, on the same page, deletes it all at once. People, voice samples, memories, notes, timers and chats stay."
@@ -2979,13 +2991,13 @@
        "text": "Delete a chat: the bin icon in [Chat](route:chat)."
       },
       {
-       "text": "{admin} turn recordings off in a room's **Overview** (**Stop and delete**)."
+       "text": "{admin} turn recordings off in a room's **Overview** (**Stop and delete**); the commands kept so far are in [Settings → Voice history](route:settings/voice-history)."
       }
      ]
     },
     {
      "type": "p",
-     "text": "An admin can change play history, news and timer history in [Settings → Configuration](route:settings/configuration)."
+     "text": "An admin can change play history, news and timer history in [Settings → Advanced](route:settings/advanced)."
     }
    ],
    "more": {
@@ -3057,7 +3069,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "[Settings → Configuration](route:settings/configuration) → **Version** shows the release you run."
+     "text": "[Settings → About & updates](route:settings/about) shows the release you run."
     },
     {
      "type": "label",
@@ -3110,11 +3122,11 @@
    "blocks": [
     {
      "type": "p",
-     "text": "Some settings apply only after a restart: [Settings → Configuration](route:settings/configuration) → **Version** → **Restart Domovoi** {admin}."
+     "text": "Some settings apply only after a restart: [Settings → About & updates](route:settings/about) → **Restart Domovoi** {admin}."
     },
     {
      "type": "p",
-     "text": "**If every room is offline but the dashboard opens**, the server's core has stopped answering. It restarts itself within about a minute. If it doesn't, an admin presses **Restart the core** (on [Home](route:home), [Settings → Satellites](route:settings/satellites) or **Version**). The app says the core isn't answering, and reconnects by itself."
+     "text": "**If every room is offline but the dashboard opens**, the server's core has stopped answering. It restarts itself within about a minute. If it doesn't, an admin presses **Restart the core** (on [Home](route:home), [Settings → Rooms](route:settings/rooms) or [Settings → Health](route:settings/health)). The app says the core isn't answering, and reconnects by itself."
     }
    ],
    "more": {

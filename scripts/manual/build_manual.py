@@ -34,7 +34,7 @@ SCHEMA = "domovoi-manual/2"
 # app: a screen (the Route enum, android/.../ui/shell/Routes.kt) and an
 # optional Settings tab key (SettingsTab, SettingsScreen.kt), or
 # {"dashboard": True}: the app opens the dashboard in the browser at the
-# same route (the app has no admin session; Settings → Server settings).
+# same route (the app has no admin session).
 ROUTES: dict[str, dict] = {
     "home": {"dashboard": "#home", "app": {"screen": "Home"}},
     "chat": {"dashboard": "#chat", "app": {"screen": "Chat"}},
@@ -49,20 +49,24 @@ ROUTES: dict[str, dict] = {
     "calendar": {"dashboard": "#calendar", "app": {"screen": "Calendar"}},
     "files": {"dashboard": "#files", "app": {"screen": "Files"}},
     "plugins": {"dashboard": "#plugins", "app": {"dashboard": True}},
+    # Settings' sections (web settings.jsx SETTINGS_SECTIONS, the app's
+    # SettingsSection in SettingsScreen.kt): the app shows each one; the ones
+    # only the dashboard can change say so there and open it.
     "settings/about": {"dashboard": "#settings/about", "app": {"screen": "Settings", "tab": "about"}},
-    "settings/phone-bar": {"dashboard": "#settings/phone-bar", "app": {"screen": "Settings", "tab": "phonebar"}},
-    "settings/satellites": {"dashboard": "#settings/satellites", "app": {"screen": "Settings", "tab": "satellites"}},
-    "settings/greetings": {"dashboard": "#settings/greetings", "app": {"dashboard": True}},
+    "settings/app-layout": {"dashboard": "#settings/app-layout", "app": {"screen": "Settings", "tab": "app-layout"}},
+    "settings/rooms": {"dashboard": "#settings/rooms", "app": {"screen": "Settings", "tab": "rooms"}},
+    "settings/greetings": {"dashboard": "#settings/greetings", "app": {"screen": "Settings", "tab": "greetings"}},
     "settings/voices": {"dashboard": "#settings/voices", "app": {"dashboard": True}},
-    "settings/wake-words": {"dashboard": "#settings/wake-words", "app": {"dashboard": True}},
-    "settings/devices": {"dashboard": "#settings/devices", "app": {"dashboard": True}},
-    "settings/models": {"dashboard": "#settings/models", "app": {"dashboard": True}},
-    "settings/internet": {"dashboard": "#settings/internet", "app": {"dashboard": True}},
-    "settings/configuration": {"dashboard": "#settings/configuration", "app": {"dashboard": True}},
+    "settings/wake-words": {"dashboard": "#settings/wake-words", "app": {"screen": "Settings", "tab": "wake-words"}},
+    "settings/phones-and-browsers": {"dashboard": "#settings/phones-and-browsers", "app": {"dashboard": True}},
+    "settings/models": {"dashboard": "#settings/models", "app": {"screen": "Settings", "tab": "models"}},
+    "settings/internet": {"dashboard": "#settings/internet", "app": {"screen": "Settings", "tab": "internet"}},
+    "settings/voice-history": {"dashboard": "#settings/voice-history", "app": {"screen": "Settings", "tab": "voice-history"}},
+    "settings/health": {"dashboard": "#settings/health", "app": {"screen": "Settings", "tab": "health"}},
+    "settings/advanced": {"dashboard": "#settings/advanced", "app": {"screen": "Settings", "tab": "advanced"}},
     # the app's own: plain text on the dashboard
-    "app/connection": {"dashboard": None, "app": {"screen": "Settings", "tab": "connection"}},
-    "app/voice": {"dashboard": None, "app": {"screen": "Settings", "tab": "voice"}},
-    "app/server-settings": {"dashboard": None, "app": {"screen": "Settings", "tab": "server"}},
+    "app/connection": {"dashboard": None, "app": {"screen": "Settings", "tab": "phones-and-browsers"}},
+    "app/voice": {"dashboard": None, "app": {"screen": "Settings", "tab": "voices"}},
 }
 
 # ── the map ───────────────────────────────────────────────────────────────
@@ -160,7 +164,7 @@ CHECKLIST: list[dict] = [
     {"id": "introduce", "done_when": "people", "platforms": ["dashboard", "app"]},
     {"id": "music", "done_when": "music", "platforms": ["dashboard", "app"]},
     {"id": "app", "done_when": "phone_app", "platforms": ["dashboard"],
-     "app_text": "**Pair this phone**: [Settings → Connection](#app/connection) → **Household token**.",
+     "app_text": "**Pair this phone**: [Settings → Phones & browsers](#app/connection) → **Household token**.",
      "app_done_when": "this_phone_paired"},
 ]
 

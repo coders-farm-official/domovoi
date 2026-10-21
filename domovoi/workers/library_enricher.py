@@ -453,7 +453,7 @@ async def _enrich_via_acoustid(file_path: Path) -> Lookup:
     )
 
 
-# ─── "Test the key" (Settings → Configuration) ───────────────────────────
+# ─── "Test the key" (Settings → Advanced) ───────────────────────────
 
 # A Chromaprint fingerprint (fpcalc 1.6.0, its default algorithm) of 30 s of a
 # generated chord progression with a little noise — nobody's recording.

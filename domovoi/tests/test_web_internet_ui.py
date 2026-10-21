@@ -222,7 +222,7 @@ SCENARIOS["panel_signed_out"] = {
 
 SCENARIOS["settings_deep_link"] = {
     "files": [COMPONENTS, SETTINGS],
-    "component": "(window.__tabs = SETTINGS_TABS, window.__open = openSettingsTab, SettingsPage)",
+    "component": "(window.__open = openSettingsTab, SettingsPage)",
     "setup": _setup("", hash="#settings/internet"),
     "api": {"GET /api/config/internet": doc(""), "GET /api/greetings": []},
     "script": r"""
@@ -235,7 +235,7 @@ SCENARIOS["settings_deep_link"] = {
       await w.__settle(h);
       const second = { onInternet: !!h.find({ text: 'Will this Domovoi have internet?' }),
                        hash: w.location.hash, stored: w.__ss.get('domovoi.settings.tab') || null };
-      return { first, second, tabs: w.__tabs.map((t) => t.id) };
+      return { first, second, privacy: w.SETTINGS_GROUPS.find((g) => g.id === 'privacy').sections };
     """,
 }
 
@@ -302,7 +302,10 @@ CONFIG_SCRIPT = r"""
 
 for answer in ("never", "always", ""):
     SCENARIOS[f"config_{answer or 'unset'}"] = {
-        "files": [COMPONENTS, SETTINGS], "component": "ConfigPanel", "setup": _setup(answer),
+        # Advanced, and About & updates, where the update check moved (2026-10-21).
+        "files": [COMPONENTS, SETTINGS], "setup": _setup(answer),
+        "component": ("(function AdvancedAndAbout() { return React.createElement(React.Fragment, null,"
+                      " React.createElement(ConfigPanel), React.createElement(VersionSection)); })"),
         "api": {"GET /api/config/editable": _config_fields(answer),
                 "GET /api/config": {"web_version": "w", "internet_access": answer},
                 "GET /api/config/version": VERSION},
@@ -626,9 +629,9 @@ def test_settings_opens_on_the_tab_it_was_sent_to(driven) -> None:
     assert o["second"]["onInternet"] is False                       # switched while on screen
     assert o["second"]["hash"] == "settings/greetings"              # the tab's address
     assert o["second"]["stored"] is None                            # nothing rides storage
-    tabs = o["tabs"]
-    assert "internet" in tabs and tabs.index("internet") == tabs.index("config") - 1
-    # A tab Settings doesn't have: the default tab, and the address says so.
+    # Internet is in Privacy, beside Voice history (regroup, 2026-10-21).
+    assert o["privacy"] == ["internet", "voice-history"]
+    # A section Settings doesn't have: the list of groups, and the address says so.
     assert driven["settings_default_tab"] == {"onInternet": False, "hash": "#settings"}
 
 
@@ -652,7 +655,7 @@ def test_configuration_greys_what_needs_the_internet_under_never(driven) -> None
     assert o["line"] == ["Internet: No, keep everything in the house · change it in Settings → Internet"]
     assert "Will this box use the internet?" not in o["labels"]                  # one line, not a field
     assert o["follows"] == 1
-    assert o["check"] == {"disabled": True, "title": NEEDS}                      # Version: check greyed
+    assert o["check"] == {"disabled": True, "title": NEEDS}                      # About & updates: check greyed
     assert o["calls"] == []                     # greyed from the reads the page makes anyway
 
 
@@ -790,7 +793,7 @@ def test_home_asks_an_admin_while_the_answer_is_unset(home_driven) -> None:
     assert len(rows) == 1
     assert rows[0]["text"] == "tell Domovoi whether this box has internet"   # lower case, like its siblings
     # The Internet tab's own address: a plain link opens it.
-    assert rows[0]["href"] == "#settings/internet"
+    assert rows[0]["href"] == "#settings/health/internet"     # its part of Health
     assert o["onClick"] == "undefined"
 
 

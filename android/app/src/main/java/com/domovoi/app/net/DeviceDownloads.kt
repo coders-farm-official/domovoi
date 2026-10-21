@@ -89,7 +89,7 @@ object DeviceDownloads {
     suspend fun planWithToken(api: ApiClient, path: String): Plan {
         val open = plan(api, path)
         if (open.refusal != null) return open
-        if (api.deviceToken.isNullOrBlank()) return Plan(open.url, null, "pair this phone first (Settings → Connection)")
+        if (api.deviceToken.isNullOrBlank()) return Plan(open.url, null, "pair this phone first (Settings → Phones & browsers)")
         val parsed = open.url.toHttpUrlOrNull() ?: return open
         return try {
             Plan(open.url, api.tokenForDownload(parsed), null)

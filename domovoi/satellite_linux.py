@@ -14,7 +14,7 @@ the installer reads it with bash alone.
 This module is the core's half, like the Windows runtime's
 (domovoi/satellite_windows.py):
 
-* :func:`fetch` — an admin asks (Settings → Satellites → Add a spare device
+* :func:`fetch` — an admin asks (Settings → Rooms → Add a spare device
   → "get the Linux Python"), and every file the lock names is downloaded
   from the project's GitHub releases through the outbound gate
   (domovoi/net_safety.py: public addresses only, every redirect vetted) into

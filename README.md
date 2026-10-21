@@ -108,7 +108,7 @@ We build Domovoi in public. Here's where it stands.
   ("wake me up at 7" is the next 7 o'clock), "what can you do", and
   what's on your calendar each have their own handler.
 - **Updates from the dashboard,** on a release channel. Settings →
-  Configuration → Version names the release the server runs (`1.0.0-rc3 +
+  About & updates names the release the server runs (`1.0.0-rc3 +
   14 (abc1234)` between releases) and pulls and applies updates, rolling
   back by itself when the new code doesn't come up healthy. Root only
   ever runs a verified copy of the commit, never the files in the checkout
@@ -144,7 +144,7 @@ We build Domovoi in public. Here's where it stands.
   for an hour. Its **user manual** (in the app too) has a map of everything
   Domovoi does, what to say for each, and a getting-set-up checklist that
   ticks itself; a new house's Home page points into it. Song recognition
-  takes its AcoustID key in Settings → Configuration, with a button to
+  takes its AcoustID key in Settings → Advanced, with a button to
   test it. When a server no longer accepts the household token a browser
   or phone holds (a reinstall, a new token), the dashboard and the app say
   so and how to pair again, instead of failing page by page, and a page
@@ -453,7 +453,7 @@ On first boot the core service writes an 8-word **setup code** to
 as) and prints it to its console when it runs in a terminal. Run as a
 service, it never prints the code, so it stays out of the journal: read
 the file. Open the dashboard at
-`http://<server>:6369`, go to **Settings → Configuration → Admin → "set up
+`http://<server>:6369`, go to **Settings → Advanced → Admin → "set up
 admin"**, enter the setup code, and choose an admin password. (The same
 prompt also appears automatically the first time you attempt any
 admin-gated action.) The code is valid for 24 hours (restart the core for a
@@ -485,7 +485,7 @@ six-digit approval code, and you type that code into **Settings →
 Satellites** on the dashboard (as admin) to make it a room. Three routes:
 
 - **A Raspberry Pi.** Flash stock Raspberry Pi OS Lite (64-bit), put the
-  card in the server, and use **Settings → Satellites → prepare satellite
+  card in the server, and use **Settings → Rooms → prepare satellite
   media** (on the Windows installer, which can't see SD cards, download the
   zip and unzip it onto the card). On its first boot the Pi raises its own
   setup Wi-Fi (`Domovoi-Setup-<id>`): join it from a phone, pick your home
@@ -493,7 +493,7 @@ Satellites** on the dashboard (as admin) to make it a room. Three routes:
   Hardware list, the two mic boards, and the by-hand route (installing the
   satellite client and pointing it at `ws://<server>:6370` yourself) are in
   the [Satellite hardware guide](docs/SATELLITE_HARDWARE.md).
-- **A spare Linux or Windows laptop or PC** (preview). **Settings → Satellites → add
+- **A spare Linux or Windows laptop or PC** (preview). **Settings → Rooms → add
   a spare device**: type the room's name, press **make the code**, and run
   the one-line command it shows on that computer (an older Linux, or
   Fedora, openSUSE or Arch, gets the satellite's own Python). The computer

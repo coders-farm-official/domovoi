@@ -212,21 +212,25 @@ SCENARIOS: dict[str, dict] = {
     "deep_link": {
         "files": [COMPONENTS, SETTINGS],
         "component": "(window.ACOUSTID_KEY_ROUTE = ACOUSTID_KEY_ROUTE, window.readRouteTab = readRouteTab, SettingsPage)",
+        # The address Music and Settings → Internet link to; the old
+        # spelling (#settings/configuration/acoustid-key) lands here too.
         "setup": _setup("#settings/configuration/acoustid-key"),
         "api": {"GET /api/config/editable": _editable(is_set=False)},
         "script": _READ + r"""
           const on = (label) => {
-            const b = h.findAll({ type: 'button' }).find((e) => w.__deep(e) === label);
-            return b ? String((b.props.style || {}).borderBottom || '').includes('var(--brand)') : null;
+            const b = h.findAll({ type: 'a' }).find((e) => w.__deep(e) === label
+              && String(e.props.className || '').includes('settings-nav-item'));
+            return b ? String(b.props.className).split(' ').includes('on') : null;
           };
           h.render(); await w.__settle(h);
           const lit = String((block().props.style || {}).background);
           const dom = JSON.parse(JSON.stringify(w.__dom));
           // Rendering again (a poll, a save) doesn't scroll again.
           h.rerender(); await w.__settle(h);
-          return { config: on('Configuration'), hash: w.location.hash, lit, dom,
+          return { config: on('Advanced'), hash: w.location.hash, lit, dom,
                    again: w.__dom.scrolled.length, route: w.ACOUSTID_KEY_ROUTE,
-                   read: w.readRouteTab('#settings/configuration/acoustid-key', 'settings', [{ id: 'config', slug: 'configuration' }], 'greetings') };
+                   read: w.readRouteTab('#settings/configuration/acoustid-key', 'settings',
+                                        [{ id: 'advanced', aliases: ['configuration'] }], 'index') };
         """,
     },
     "plain_config_does_not_scroll": {
@@ -235,7 +239,8 @@ SCENARIOS: dict[str, dict] = {
         "api": {"GET /api/config/editable": _editable(is_set=False)},
         "script": _READ + r"""
           h.render(); await w.__settle(h);
-          return { dom: w.__dom, lit: String((block().props.style || {}).background) };
+          const b = block();
+          return { dom: w.__dom, lit: b ? String((b.props.style || {}).background) : null };
         """,
     },
     "internet_row_links_to_the_field": {
@@ -314,7 +319,7 @@ def driven(tmp_path_factory) -> dict:
     return out
 
 
-KEY_ROUTE = "settings/configuration/acoustid-key"
+KEY_ROUTE = "settings/advanced/acoustid-key"
 WHICH_KEY = "https://acoustid.org/new-application"
 
 
@@ -401,8 +406,9 @@ def test_under_no_there_is_no_test_button_but_a_way_to_settings_internet(driven)
 def test_the_address_opens_the_field(driven) -> None:
     o = driven["deep_link"]
     assert o["route"] == KEY_ROUTE
-    assert o["read"] == {"tab": "config", "rest": ["acoustid-key"], "fix": None}
-    assert o["config"] is True and o["hash"] == "#settings/configuration/acoustid-key"
+    assert o["read"] == {"tab": "advanced", "rest": ["acoustid-key"], "fix": "settings/advanced/acoustid-key"}
+    # The old spelling is rewritten in place, and Advanced unfolds for it.
+    assert o["config"] is True and o["hash"] == "#settings/advanced/acoustid-key"
     assert o["dom"]["asked"] == ['[data-config-field="acoustid_api_key"]']
     assert o["dom"]["scrolled"] == [{"block": "center"}]
     assert o["dom"]["focused"] == 1
@@ -413,7 +419,8 @@ def test_the_address_opens_the_field(driven) -> None:
 def test_plain_configuration_neither_scrolls_nor_lights_up(driven) -> None:
     o = driven["plain_config_does_not_scroll"]
     assert o["dom"] == {"asked": [], "scrolled": [], "focused": 0}
-    assert o["lit"] == "transparent"
+    # Settings → Advanced opens folded: the field isn't even on the page.
+    assert o["lit"] is None
 
 
 def test_settings_internet_song_recognition_row_links_to_the_field(driven) -> None:

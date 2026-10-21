@@ -61,7 +61,7 @@ async def choose(db: Any, app: Any, room_id: str, name: str) -> None:
             log.warning("room voice: could not tell %s its clips changed: %s", room_id, e)
 
 
-# ─── the dashboard's picker (Settings → Satellites, a room's drawer) ──────
+# ─── the dashboard's picker (Settings → Rooms, a room's drawer) ──────
 
 
 class VoiceChangeRefused(Exception):

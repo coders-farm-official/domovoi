@@ -49,7 +49,7 @@ internal fun identityChangedText(address: String, canTrustAgain: Boolean): Strin
         append("If you're away from home, don't.")
     } else {
         append("If you replaced the server, forget it (the X next to it in the server list, or under ")
-        append("Settings → Connection → Trusted servers), then trust and pair it again.")
+        append("Settings → Phones & browsers → Trusted servers), then trust and pair it again.")
     }
 }
 
@@ -57,7 +57,7 @@ internal fun identityChangedText(address: String, canTrustAgain: Boolean): Strin
 internal fun trustAgainText(pinned: String, now: String): String =
     "This phone trusted:\n$pinned\n\nIt now proves:\n$now\n\n" +
         "Say yes only if you reinstalled Domovoi or moved it to a new machine at this address. " +
-        "The new identity should match Settings → About on its dashboard. On someone else's " +
+        "The new identity should match Settings → About & updates on its dashboard. On someone else's " +
         "network, say no: nothing has been sent to it. Yes forgets this phone's old household " +
         "token; you then pair it with the token from that dashboard."
 

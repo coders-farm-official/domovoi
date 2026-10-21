@@ -320,7 +320,7 @@ def test_the_pair_modal_offers_a_sign_in_and_only_one_modal_is_ever_shown(modals
 
 def test_the_pair_modal_says_where_the_token_lives(modals):
     texts = modals["the_pair_modal_offers_the_sign_in"]["start"]["texts"]
-    assert any("Settings → Devices → Household token" in t for t in texts)
+    assert any("Settings → Phones & browsers → Household token" in t for t in texts)
     assert any("~/.domovoi/device-token.txt" in t for t in texts)
 
 

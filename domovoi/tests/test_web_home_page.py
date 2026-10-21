@@ -52,7 +52,7 @@ HARNESS = Path(__file__).with_name("jsx_interact_harness.js")
 
 FILES = [
     "web/static/auth.js", "web/static/data.js", "web/static/components.jsx",
-    "web/static/satellites.jsx", "web/static/calendar.jsx", "web/static/home.jsx",
+    "web/static/satellites.jsx", "web/static/calendar.jsx", "web/static/health.jsx", "web/static/home.jsx",
 ]
 COMPONENT = ("(window.__Auth = Auth, window.__DI = DeviceIdentity,"
              " window.__rows = HomeAttentionRows, HomePage)")
@@ -1335,7 +1335,7 @@ def test_an_empty_house_gets_the_first_run_hint(driven) -> None:
     assert "“what time is it”" in snap["text"]     # Start here's first phrase
     assert "start here" in snap["text"] and "#manual" in snap["links"]
     assert "no rooms yet" in snap["text"]
-    assert "add a satellite" in snap["text"] and "#satellites" in snap["links"]
+    assert "add a satellite" in snap["text"] and "#settings/rooms" in snap["links"]
     assert "nothing on today" in snap["quiet"]
     assert snap["timers"] == [] and "timers" not in snap["text"]
     assert "“set a timer for 10 minutes”" in driven["first_run_manual_down"]["text"]

@@ -166,8 +166,8 @@ def _core_pages() -> set[str]:
 
 def _settings_slugs() -> set[str]:
     src = (STATIC / "settings.jsx").read_text(encoding="utf-8")
-    block = re.search(r"const SETTINGS_TABS = \[(.*?)\];", src, re.S).group(1)
-    return {slug or tid for tid, slug in re.findall(r"\{ id: '([\w-]+)'(?:, slug: '([\w-]+)')?", block)}
+    block = re.search(r"const SETTINGS_SECTIONS = \[(.*?)\n\];", src, re.S).group(1)
+    return set(re.findall(r"\{ id: '([\w-]+)'", block))
 
 
 def _music_tabs() -> set[str]:
@@ -184,14 +184,14 @@ def _app_screens() -> set[str]:
 
 def _app_settings_tabs() -> set[str]:
     src = (ANDROID / "ui" / "screens" / "settings" / "SettingsScreen.kt").read_text(encoding="utf-8")
-    block = re.search(r"enum class SettingsTab\(.*?\) \{(.*?)\n\}", src, re.S).group(1)
+    block = re.search(r"enum class SettingsSection\(.*?\) \{(.*?)\n\}", src, re.S).group(1)
     return set(re.findall(r"^\s+\w+\(\"([\w-]+)\",", block, re.M))
 
 
 def test_every_dashboard_route_exists() -> None:
     pages, slugs, music = _core_pages(), _settings_slugs(), _music_tabs()
     assert "manual" in pages
-    assert {"about", "voices", "wake-words", "configuration"} <= slugs  # the parse found them
+    assert {"about", "voices", "wake-words", "advanced", "health"} <= slugs  # the parse found them
     for rid, r in DOC["routes"].items():
         if r["dashboard"] is None:
             assert rid.startswith("app/"), f"{rid}: only the app's own routes may lack a dashboard page"
@@ -208,7 +208,7 @@ def test_every_dashboard_route_exists() -> None:
 
 def test_every_app_route_exists() -> None:
     screens, tabs = _app_screens(), _app_settings_tabs()
-    assert {"Home", "Settings", "Manual"} <= screens and {"about", "satellites"} <= tabs
+    assert {"Home", "Settings", "Manual"} <= screens and {"about", "rooms", "health"} <= tabs
     for rid, r in DOC["routes"].items():
         app = r["app"]
         if app.get("dashboard"):
@@ -224,11 +224,11 @@ def test_every_settings_tab_a_link_names_is_one_the_dashboard_has() -> None:
     that tab's label in settings.jsx (the app's own Settings tabs for app/
     routes)."""
     src = (STATIC / "settings.jsx").read_text(encoding="utf-8")
-    block = re.search(r"const SETTINGS_TABS = \[(.*?)\];", src, re.S).group(1)
-    label_of = {(slug or tid): label for tid, slug, label in re.findall(
-        r"\{ id: '([\w-]+)'(?:, slug: '([\w-]+)')?, label: '([^']+)'", block)}
+    block = re.search(r"const SETTINGS_SECTIONS = \[(.*?)\n\];", src, re.S).group(1)
+    label_of = dict(re.findall(r"\{ id: '([\w-]+)', label: '([^']+)'", block))
     app_src = (ANDROID / "ui" / "screens" / "settings" / "SettingsScreen.kt").read_text(encoding="utf-8")
-    app_label = dict(re.findall(r"^\s+\w+\(\"([\w-]+)\", \"([^\"]+)\"", app_src, re.M))
+    app_block = re.search(r"enum class SettingsSection\(.*?\) \{(.*?)\n\}", app_src, re.S).group(1)
+    app_label = dict(re.findall(r"^\s+\w+\(\"([\w-]+)\", \"([^\"]+)\"", app_block, re.M))
     for label, rid in re.findall(r"\[Settings → ([^\]→]+?)(?: →[^\]]*)?\]\(route:([a-z0-9/-]+)\)", _all_text()):
         r = DOC["routes"][rid]
         if rid.startswith("settings/"):

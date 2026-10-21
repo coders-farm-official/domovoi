@@ -48,7 +48,7 @@ screen "Setting up this computer as the room \"$ROOM\"." "" \
 	"Checking the files on this computer..."
 if ! echo "$BUNDLE_SHA  $LIB/satellite.tar.gz" | sha256sum -c --quiet - >>"$LOG" 2>&1; then
 	screen "The satellite files on this computer are damaged." "" \
-		"Make a new stick in the dashboard (Settings -> Satellites)" \
+		"Make a new stick in the dashboard (Settings -> Rooms)" \
 		"and start again."
 	echo "$(stamp) bundle digest mismatch" >>"$LOG"
 	exit 1

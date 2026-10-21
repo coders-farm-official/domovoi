@@ -703,8 +703,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     # docstring); "Turn on wake-word training" writes it.
     FieldSpec(
         "wake_word_trainer_enabled", "Wake-word training", "Wake words",
-        "Train the wake words recorded in Settings → Wake Words. Turn it on "
-        "with Settings → Wake Words → \"Turn on wake-word training\", which "
+        "Train the wake words recorded in Settings → Wake words. Turn it on "
+        "with Settings → Wake words → \"Turn on wake-word training\", which "
         "builds the trainer and downloads its training data first; switched "
         "on here without that, every training fails with \"image not "
         "found\". Off: no new training starts (one already running "
@@ -1010,7 +1010,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "guest can't clear a queue or stop a room, can't remove the song "
         "that's playing, and can't see or change a room that isn't playing. "
         "Device blocks still apply, a guest's changes are rate-limited, and "
-        "you can ban a guest in Settings → Devices. Off = only paired "
+        "you can ban a guest in Settings → Phones & browsers. Off = only paired "
         "devices and the admin can see or change a room's queue or its "
         "playback. Applies immediately.",
         "bool", tier="hot",
@@ -1032,7 +1032,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     FieldSpec(
         "satellite_adoption_enabled", "USB satellite adoption", "Security",
         "Scan the Domovoi server's USB ports for unprovisioned satellites "
-        "(the plug-in-and-adopt flow in Settings → Satellites). Turn off to "
+        "(the plug-in-and-adopt flow in Settings → Rooms). Turn off to "
         "stop scanning removable drives entirely.",
         "bool", tier="hot",
     ),
@@ -1046,7 +1046,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     ),
     FieldSpec(
         "usb_stick_wifi", "USB sticks may use Wi-Fi (not tested yet)", "Security",
-        "Old computers (Settings → Satellites → add a spare device → USB "
+        "Old computers (Settings → Rooms → add a spare device → USB "
         "stick): let a stick made from now on set the computer up over "
         "Wi-Fi, with Debian's own network and password questions. OFF (the "
         "default) = the stick needs a network cable and says so before "

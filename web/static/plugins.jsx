@@ -500,7 +500,7 @@ const PHASE_LABEL = { load: 'failed to load in your browser', render: 'crashed w
  * registered, loaded at the next restart. GET /api/config/version lists
  * what is waiting (the core's staged upgrades, plus any plugin the web
  * process still runs an older copy of); the button is the same restart
- * as Settings → Version. While the server says a restart is already under
+ * as Settings → About & updates. While the server says a restart is already under
  * way (restart_in_progress: pressed before a reload, in another tab, or
  * from Settings), the button is greyed and the card follows that one. */
 const PluginRestartCard = ({ version, pending, fire, onSettled }) => {
@@ -561,7 +561,7 @@ const PluginUpgradeControls = ({ p, onUpgradeZip, onUpgradeUrl, internetOff = fa
   if (p.bundled) {
     return (
       <div className="meta">
-        bundled with Domovoi — it updates with the Domovoi server (Settings → Version),
+        bundled with Domovoi — it updates with the Domovoi server (Settings → About & updates),
         not from a zip or GitHub
       </div>
     );

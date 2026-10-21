@@ -577,9 +577,9 @@ internal fun speechSummary(ui: AssistantUi): String {
         else -> "Talking needs the speech files (${fmtBytes(ui.voiceBytes)}), downloaded once."
     }
     val speaks = ui.voiceName?.let {
-        if (it.startsWith("this phone")) " Speaks with $it; Domovoi's own voice is downloaded in Settings → Voice."
-        else " Speaks with $it, the voice picked in Settings → Voice."
-    } ?: " Speaks with the voice picked in Settings → Voice once it is downloaded, else the phone's own."
+        if (it.startsWith("this phone")) " Speaks with $it; Domovoi's own voice is downloaded in Settings → Voices."
+        else " Speaks with $it, the voice picked in Settings → Voices."
+    } ?: " Speaks with the voice picked in Settings → Voices once it is downloaded, else the phone's own."
     return listens + speaks
 }
 

@@ -7,7 +7,7 @@ import androidx.compose.runtime.compositionLocalOf
  * the web's useSharedScreen / DeviceIdentity.sharedScreen
  * (web/static/components.jsx, web/static/data.js).
  *
- * An admin marks a device in the dashboard's Settings → Devices, and every
+ * An admin marks a device in the dashboard's Settings → Phones & browsers, and every
  * device row the server returns carries `shared_screen` — this install's
  * own registration included ([registerDevice]). While it is true, Home
  * masks what a passer-by should not read (calendar titles become "busy",

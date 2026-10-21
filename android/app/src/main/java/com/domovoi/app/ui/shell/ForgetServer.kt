@@ -30,7 +30,7 @@ import com.domovoi.app.ui.theme.Domovoi
 
 /**
  * Forgetting the server the app is connected to — from the server list
- * or from Settings → Connection → Trusted servers, the two places that
+ * or from Settings → Phones & browsers → Trusted servers, the two places that
  * list it. Until 2026-10-08 neither could: after a legitimate identity
  * change (a reinstalled core, new hardware at the same address) every
  * token-bearing request was refused for good and the shell's own advice,

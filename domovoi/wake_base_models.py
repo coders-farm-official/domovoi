@@ -24,7 +24,7 @@ file the dashboard's cache refresh did not verify, an unpinned name, a
 symlink or anything that is not an ``.onnx`` never leaves the box. The phone
 checks every body against the signed list and against its own copy of the
 pins before ONNX Runtime parses it. An empty list means the cache was never
-filled: the dashboard's Settings → Satellites → prepare satellite media →
+filled: the dashboard's Settings → Rooms → prepare satellite media →
 **Refresh caches** fills it (one download, needs the internet).
 """
 

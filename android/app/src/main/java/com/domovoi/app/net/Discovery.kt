@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * fingerprint it advertises there (`identity.public_key` /
  * `identity.fingerprint`, `SHA256:…`), unproven at this point — shown in
  * the trust dialog so a person can compare it with the dashboard's
- * Settings → About, PINNED when the person says yes to that dialog, and
+ * Settings → About & updates, PINNED when the person says yes to that dialog, and
  * proven with a signed challenge against that pin the first time the app
  * talks to the server (net/IdentityGate.kt). Null for an older backend or
  * a block whose key and fingerprint do not agree.

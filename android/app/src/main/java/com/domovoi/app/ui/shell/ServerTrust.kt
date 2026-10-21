@@ -11,7 +11,7 @@ data class PendingServer(
     val name: String?,
     /** The identity it advertised on `/api/health` (key and `SHA256:…`
      *  fingerprint), unproven — shown so a person can compare it with the
-     *  dashboard's Settings → About, and PINNED when the person confirms,
+     *  dashboard's Settings → About & updates, and PINNED when the person confirms,
      *  so the first proof has to match it (security round 3 review,
      *  A6-03: the first pin is the trust decision, not whoever answers
      *  first on some network). */

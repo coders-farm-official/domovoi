@@ -187,7 +187,8 @@ that:
    words. The code works for 24 hours (a restart of the service writes a
    fresh one). **Open Domovoi** copies the code too, then opens
    `http://localhost:6369/?installed=<commit>-<build time>#settings/configuration/setup`:
-   Settings > Configuration, where the **first-run admin setup** opens by
+   Settings > Advanced (Configuration before 2026-10-21; the old address
+   still lands there), where the **first-run admin setup** opens by
    itself on a box nobody has claimed yet (if it doesn't, **set up admin**
    in the Admin box opens it). Paste the code into **setup code**, choose
    an admin password of at least 10 characters, type it again in
@@ -336,7 +337,7 @@ card's files as a zip and the icon's card helper puts them on the card:
 1. Flash a microSD card with **Raspberry Pi OS Lite (64-bit)** in
    Raspberry Pi Imager. When Imager offers to apply OS customisation
    settings, choose **No**.
-2. In the dashboard, **Settings > Satellites > prepare satellite media**:
+2. In the dashboard, **Settings > Rooms > prepare satellite media**:
    pick the board and the microphone, **Prepare**, then **download for the
    card helper**. Keep the setup network password it shows on screen.
 3. **Prepare a satellite card...** in the icon's menu. It picks the newest
@@ -348,7 +349,7 @@ card's files as a zip and the icon's card helper puts them on the card:
    disk or the Windows drive), asks for the setup network password, writes
    the card, reads everything back to check it, and offers **Eject**.
 4. Put the card in the Pi and switch it on. Join its setup Wi-Fi from your
-   phone, then approve it in **Settings > Satellites**.
+   phone, then approve it in **Settings > Rooms**.
 
 It writes exactly what a server that can see the card writes
 (`domovoi/satellite_media/overlay.py`, checked byte for byte by the tests):
@@ -413,7 +414,7 @@ address. Do the same on a Linux server; it is not specific to Windows.
 
 ## Training wake words
 
-**Settings > Wake Words** trains a wake word of your own ("Hey Domovoi")
+**Settings > Wake words** trains a wake word of your own ("Hey Domovoi")
 on this PC, inside the distro, once an admin turns training on there. The
 steps, what it costs and the licence of what it makes are in
 [`scripts/wake_word/README.md`](../scripts/wake_word/README.md). What this
@@ -457,7 +458,7 @@ PC needs for it:
   a 16 GB card, so the trainer takes the least busy card, away from the one
   holding the chat model.
 
-Then, as the admin: **Settings > Wake Words > Turn on wake-word training**,
+Then, as the admin: **Settings > Wake words > Turn on wake-word training**,
 confirm, and wait (about 13 minutes on a fast line: the trainer's build,
 then the training data download; you can leave the page). Create a wake word, record at
 least 15 clips on a satellite (hundreds for an XVF3800), press **Train**,
@@ -524,7 +525,7 @@ you share them.
 - **Setup stopped partway:** run Setup again; it carries on, and
   `provision.sh` resumes where it stopped. Or uninstall, which undoes a
   half-finished setup too.
-- **Pull says `index.lock`: File exists** (Settings → Version, on a
+- **Pull says `index.lock`: File exists** (Settings → About & updates, on a
   build from before the fix below): an earlier update was cut off (a
   Windows restart or shutdown in the middle of one, say) and git left its
   lock behind. Nobody has a shell in the distro, so run a newer Setup over
@@ -562,7 +563,7 @@ you share them.
   app can't reach Domovoi, the dashboard says the server isn't
   answering): the core inside the distro has frozen. It notices by itself
   and restarts within a minute or so; if it hasn't, an admin gets
-  **Restart the core** on Settings → Configuration → Version, the Satellites page and Home
+  **Restart the core** on Settings → About & updates, Settings → Rooms and Home
   ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#everything-offline-dashboard-up)).
   The distro runs the same units and the same loop watchdog as a Linux
   server ([LINUX_HOST.md, The loop watchdog](LINUX_HOST.md#the-loop-watchdog)):
@@ -571,7 +572,7 @@ you share them.
   survives a restart of the PC. A distro installed before 2026-10-15 gets
   the journal setting, and `Restart=on-failure` if its core unit had no
   restart policy at all, from the
-  next update run (Settings → Configuration → Version, **Restart Domovoi**); the
+  next update run (Settings → About & updates, **Restart Domovoi**); the
   `Type=notify` unit itself comes with the next run of Setup. By hand, from
   an administrator PowerShell, `Restart-Service DomovoiHost` stops
   Domovoi's Linux system and starts it again, core included (the distro
@@ -603,7 +604,7 @@ handed to `provision.sh` as `--track-branch`; the channels are described in
 [LINUX_HOST.md, Release channels](LINUX_HOST.md#release-channels)):
 
 - **`stable`**, on a release build: Domovoi's releases only. Settings →
-  Configuration → Version says when a newer release is out; nothing
+  About & updates says when a newer release is out; nothing
   updates until an admin pulls it there.
 - **`main`**, on a build pinned to a commit that is not a release: every
   change, as it lands.

@@ -540,7 +540,7 @@ def test_the_pair_modal_names_where_an_admin_finds_the_token():
     src = (STATIC / "components.jsx").read_text(encoding="utf-8")
     modal = src[src.index("const PairModal"):src.index("const AuthModalHost")]
     assert "pair this browser" in modal
-    assert "Settings → Devices → Household token" in modal
+    assert "Settings → Phones & browsers → Household token" in modal
     host = src[src.index("const AuthModalHost"):src.index("/* expose to other Babel scripts */")]
     assert "Auth.pairModalOpen" in host and "PairModal" in host
 

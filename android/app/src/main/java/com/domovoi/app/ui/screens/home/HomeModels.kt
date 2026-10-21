@@ -1,9 +1,5 @@
 package com.domovoi.app.ui.screens.home
 
-import com.domovoi.app.alerts.BannerTone
-import com.domovoi.app.alerts.IncidentState
-import com.domovoi.app.alerts.IncidentTier
-import com.domovoi.app.alerts.shellBanner
 import com.domovoi.app.net.Capabilities
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.parseInstant
@@ -12,10 +8,7 @@ import com.domovoi.app.ui.shell.PhoneBar
 import com.domovoi.app.ui.shell.Route
 import com.domovoi.app.ui.shell.visibleOn
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.JsonPrimitive
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -550,6 +543,8 @@ internal fun statusLine(rooms: List<HomeRoom>?, coreDown: Boolean, active: List<
 internal sealed interface HomeTarget {
     data class Screen(val route: Route) : HomeTarget
     data class Dashboard(val hash: String) : HomeTarget
+    /** A section of the app's Settings, by its key (SettingsSection). */
+    data class Settings(val tab: String) : HomeTarget
 }
 
 /** Deep link into the connected server's dashboard ("<server>/#plugins");
@@ -568,145 +563,6 @@ internal data class AttentionRow(
     /** When it happened (ISO), shown relative — "offline · 2h ago". */
     val at: String? = null,
 )
-
-private fun JsonElement?.truthy(): Boolean = when (this) {
-    null, JsonNull -> false
-    is JsonPrimitive -> if (isString) content.isNotEmpty() else content != "false" && content != "0"
-    else -> true
-}
-
-private fun JsonElement?.nonEmptyList(): Boolean = (this as? JsonArray)?.isNotEmpty() == true
-
-/**
- * Every problem this app can name, ranked err → warn (web HomeAttentionRows,
- * the 'open' rules). The app has no admin session, so the admin-only rows
- * (approvals, adoption, updates, disk) and the claim row are never built:
- * their reads are never made. When the core or the database is down that
- * is the only story — every rule that reads through them would just repeat
- * it, so they wait. Home never fixes anything itself; each row leads to the
- * page that does.
- */
-internal fun attentionRows(
-    health: HomeHealth?,
-    rooms: List<HomeRoom>?,
-    plugins: HomePlugins?,
-    acq: HomeAcquisitions?,
-    guard: IncidentState? = null,
-): List<AttentionRow> {
-    val rows = mutableListOf<AttentionRow>()
-    // The container guard: the same incidents the shell's banner shows, as
-    // one row leading to the Containers screen (web HomeGuardRow). A phone
-    // that only reads the open summary says only that an admin is needed.
-    guard?.let { guardRow(it) }?.let { rows += it }
-    val dbDown = health?.db_reachable == false
-    val coreDown = health?.domovoi_reachable == false
-    if (dbDown) {
-        rows += AttentionRow("db", Tone.Err, "the database isn't answering · nothing new can be saved",
-            HomeTarget.Screen(Route.Settings))
-    }
-    if (coreDown) {
-        rows += AttentionRow("core", Tone.Err, "the Domovoi server isn't answering · rooms show the last known state",
-            HomeTarget.Screen(Route.Satellites))
-    }
-    if (!dbDown && !coreDown) {
-        when (health?.stt) {
-            "unavailable" -> rows += AttentionRow("stt", Tone.Err,
-                "speech recognition is off · the rooms can't understand anyone", HomeTarget.Screen(Route.Settings))
-            "fallback" -> rows += AttentionRow("stt", Tone.Warn,
-                "speech recognition is on its slower fallback model", HomeTarget.Screen(Route.Settings))
-        }
-
-        val list = rooms.orEmpty()
-        val sats = HomeTarget.Screen(Route.Satellites)
-        val offline = list.filter { it.status == "offline" }
-        if (offline.size == 1) {
-            rows += AttentionRow("offline", Tone.Warn,
-                "${offline[0].room_id} is offline · it can't hear anyone right now", sats,
-                at = offline[0].last_connected_at)
-        } else if (offline.size > 1) {
-            rows += AttentionRow("offline", Tone.Warn, "${offline.size} rooms offline", sats)
-        }
-        val waiting = list.filter { it.status == "waiting" }
-        if (waiting.isNotEmpty()) {
-            rows += AttentionRow("waiting", Tone.Warn,
-                if (waiting.size == 1) "${waiting[0].room_id} was set up but hasn't connected yet"
-                else "${waiting.size} rooms were set up but haven't connected yet", sats)
-        }
-        val dead = list.filter { kioskDead(it) }
-        if (dead.isNotEmpty()) {
-            rows += AttentionRow("kiosk", Tone.Warn,
-                if (dead.size == 1) "the ${dead[0].room_id} screen stopped showing anything"
-                else "${dead.size} screens stopped showing anything", sats)
-        }
-
-        // Plugins, as the server sees them (the web page adds errors only
-        // its own browser saw; this app loads no plugin scripts).
-        val bad = LinkedHashMap<String, Pair<String, Tone>>()
-        plugins?.plugins.orEmpty().forEach { p ->
-            if (p.status == "uninstalled") return@forEach
-            val enabled = p.enabled != false
-            val name = p.name?.takeIf { it.isNotEmpty() } ?: p.slug
-            val broken = p.status == "load_error" ||
-                (enabled && (p.web_load_error.truthy() || p.page_errors.nonEmptyList()))
-            if (broken) bad[p.slug] = name to Tone.Err
-            else if (enabled && p.status == "degraded") bad[p.slug] = name to Tone.Warn
-        }
-        val dash = HomeTarget.Dashboard("#plugins")
-        if (bad.size == 1) {
-            val (name, tone) = bad.values.first()
-            rows += AttentionRow("plugins", tone,
-                if (tone == Tone.Err) "the $name plugin failed to load" else "the $name plugin is degraded", dash)
-        } else if (bad.size > 1) {
-            rows += AttentionRow("plugins",
-                if (bad.values.any { it.second == Tone.Err }) Tone.Err else Tone.Warn,
-                "${bad.size} plugins have problems", dash)
-        }
-
-        // A media request is waiting and no provider plugin can fill it.
-        // Never the request's own text.
-        if (acq != null && acq.core_reachable) {
-            val stuck = acq.acquisitions.count { a ->
-                a.status == "pending" &&
-                    (if (a.kind == "url") acq.can_fulfill_url == false else acq.can_fulfill_query == false)
-            }
-            if (stuck > 0) {
-                rows += AttentionRow("acq", Tone.Warn,
-                    if (stuck == 1) "a media request is waiting · no provider plugin can fill it"
-                    else "$stuck media requests are waiting · no provider plugin can fill them",
-                    HomeTarget.Screen(Route.Music))
-            }
-        }
-    }
-    // err before warn; otherwise the order they were found in (stable sort).
-    return rows.sortedBy { if (it.tone == Tone.Err) 0 else 1 }
-}
-
-/**
- * The container guard's problem row, or null (web home.jsx HomeGuardRow):
- * one tampering incident or more reads "signs of tampering in a Domovoi
- * container · risky changes are paused"; several failures, "N Domovoi
- * containers need attention"; one, its own words. Red for tampering and a
- * required container's failure, amber for an optional one's.
- */
-internal fun guardRow(state: IncidentState): AttentionRow? {
-    val banner = shellBanner(state, shared = false)
-    if (!banner.show) return null
-    val tone = if (banner.tone == BannerTone.WARN) Tone.Warn else Tone.Err
-    val text = when {
-        state.tier != IncidentTier.HOUSEHOLD -> "something needs an admin's attention"
-        banner.tone == BannerTone.TAMPER -> "signs of tampering in a Domovoi container · risky changes are paused"
-        else -> {
-            val ids = state.payload?.banner?.incidentIds.orEmpty()
-            if (ids.size > 1) "${ids.size} Domovoi containers need attention"
-            else {
-                val only = state.incidents.firstOrNull { it.id == ids.firstOrNull() }
-                val words = (only?.summary ?: "a Domovoi container needs attention").trimEnd('.')
-                words.replaceFirstChar { it.lowercase() }
-            }
-        }
-    }
-    return AttentionRow("containers", tone, text, HomeTarget.Screen(Route.Containers))
-}
 
 /** What the "needs attention" card shows. */
 internal sealed interface AttentionView {

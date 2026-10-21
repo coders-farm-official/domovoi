@@ -674,7 +674,7 @@ private fun StopAllButton(count: Int, busy: Boolean, onConfirm: () -> Unit) {
 }
 
 /**
- * One room. The left part leads to Settings → Satellites (Route.Satellites,
+ * One room. The left part leads to Settings → Rooms (Route.Satellites,
  * which the shell opens as that tab); the transport buttons sit
  * apart on the right edge, in thumb reach, while something is playing or
  * paused. A quiet room has none: starting something in a room belongs to
@@ -1014,7 +1014,7 @@ internal fun HomeFirstRun(phrase: String, onManual: () -> Unit) {
  * Every screen that is not on this phone's bar — the plugin screens this
  * server allows included, with their badges — plus Settings and the
  * manual. The phone's "more" menu, and the way to the bar's editor
- * ([onEditBar]: Settings → Phone bar); a shared screen leaves the personal
+ * ([onEditBar]: Settings → App layout); a shared screen leaves the personal
  * ones off, like every other launcher.
  */
 @Composable
