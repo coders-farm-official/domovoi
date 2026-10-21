@@ -289,7 +289,7 @@ def status_of(attrs: dict[str, list[Any]] | None, name: str, *, offline: bool = 
         supply = None
         if state.startswith(("low on", "out of")) and state not in ("out of paper", "low on paper"):
             hit = [s for s in supplies if (s["level"] is not None and s["level"] <= 10) or s["low"]]
-            supply = hit[0]["name"].lower() if hit else None
+            supply = supply_words(hit[0]) if hit else None
         sentence = _sentence(state, name, supply)
         if sentence and sentence not in words:
             words.append(sentence)
@@ -300,7 +300,7 @@ def status_of(attrs: dict[str, list[Any]] | None, name: str, *, offline: bool = 
         if low:
             kind = "toner" if low[0]["kind"] == "toner" else "ink"
             best = ("low on " + kind, "warn", 1)
-            words.append(_sentence(best[0], name, low[0]["name"].lower()))
+            words.append(_sentence(best[0], name, supply_words(low[0])))
     if best is not None:
         state, tone = best[0], best[1]
     elif pstate == 4:
@@ -320,6 +320,28 @@ def status_of(attrs: dict[str, list[Any]] | None, name: str, *, offline: bool = 
     }
 
 
+_SPOKEN_COLOURS = ("photo black", "matte black", "light cyan", "light magenta",
+                   "black", "cyan", "magenta", "yellow")
+_SWATCH_COLOURS = {"#000000": "black", "#00ffff": "cyan", "#ff00ff": "magenta", "#ffff00": "yellow"}
+
+
+def spoken_colour(supply: dict[str, Any]) -> str | None:
+    """Our own word for a supply's colour, or None. What a printer calls its
+    supplies is never spoken as it is (owner rule): only these words."""
+    name = str(supply.get("name") or "").lower()
+    for word in _SPOKEN_COLOURS:
+        if word in name:
+            return word
+    return _SWATCH_COLOURS.get(str(supply.get("color") or "").lower())
+
+
+def supply_words(supply: dict[str, Any]) -> str:
+    """ "yellow toner", "black ink", or just "toner" / "ink"."""
+    noun = "toner" if supply.get("kind") == "toner" else "ink"
+    colour = spoken_colour(supply)
+    return "%s %s" % (colour, noun) if colour else noun
+
+
 def spoken_supplies(name: str, supplies: list[dict[str, Any]]) -> str:
     """ "The office printer: black about 60 percent, and colour is low:
     yellow is at 10 percent." """
@@ -329,7 +351,7 @@ def spoken_supplies(name: str, supplies: list[dict[str, Any]]) -> str:
     parts = []
     lows = []
     for s in supplies:
-        label = s["name"].lower().replace(" toner", "").replace(" ink", "")
+        label = spoken_colour(s) or ("toner" if s["kind"] == "toner" else "ink")
         if s["level"] is None:
             continue
         if s["low"]:

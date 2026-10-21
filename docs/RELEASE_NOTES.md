@@ -37,7 +37,8 @@ printers that need a maker's driver are not supported, on any host.
 What an operator should know:
 
 * The update applies migration **V033** (printers, the job log, the
-  limits) by itself.
+  limits) by itself. For whoever merges: V033 must land before
+  `wf/chat-history`'s migration (renumber that one if it was cut as V033).
 * Two new dependencies, both permissive: **pypdfium2** and **ReportLab**
   (in both locks). A Linux server installed from the lock picks them up on
   its next update.

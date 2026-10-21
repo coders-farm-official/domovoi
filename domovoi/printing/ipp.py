@@ -16,7 +16,8 @@ a device on the LAN, not something we trust:
 * strings cut at :data:`MAX_STRING` bytes (1,023) with control characters
   stripped (a printer-state-message cannot carry a terminal escape or a
   line break into a log, a page or speech);
-* collections nested at most :data:`MAX_DEPTH` deep;
+* collections nested at most :data:`MAX_DEPTH` deep, at most
+  :data:`MAX_GROUPS` attribute groups, delimiters counted toward the cap;
 * any length that runs past the end of the message is an error, never a
   silent truncation.
 
@@ -141,6 +142,9 @@ MAX_VALUES_PER_ATTRIBUTE = 2000
 MAX_TOTAL_VALUES = 20000
 MAX_STRING = 1023
 MAX_DEPTH = 8
+# A real answer has a handful of groups (operation, printer or job, maybe
+# unsupported; Get-Jobs one per job, and we ask for a few).
+MAX_GROUPS = 64
 
 
 class IppDecodeError(ValueError):
@@ -352,6 +356,11 @@ def decode(data: bytes) -> Message:
         if tag < 0x10:
             if stack:
                 raise IppDecodeError("group tag inside a collection")
+            # Delimiters count too: a megabyte of bare group tags is not an
+            # answer (review, 2026-10-21).
+            total += 1
+            if len(groups) >= MAX_GROUPS or total > MAX_TOTAL_VALUES:
+                raise IppDecodeError("too many attribute groups")
             current = {}
             groups.append((tag, current))
             last_name = None

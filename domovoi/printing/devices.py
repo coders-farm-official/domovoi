@@ -57,7 +57,8 @@ def ipp_printer(row: dict[str, Any]) -> Printer:
     if row.get("cert_seen_sha256"):
         raise DeviceError(CERT_MESSAGE.format(the=The(row["name"])))
     try:
-        lan_target.check_address(row["ipp_address"], int(row["ipp_port"]), host=row.get("host"))
+        lan_target.check_address(row["ipp_address"], int(row["ipp_port"]), host=row.get("host"),
+                                 operator_ok=bool(row.get("operator_allowed")))
     except lan_target.NotOnLan as e:
         raise DeviceError("%s's address isn't on the home network any more. %s" % (The(row["name"]), e.reason)) from e
     return Printer(
@@ -73,7 +74,8 @@ def escl_client(row: dict[str, Any]) -> escl.EsclClient:
     if row.get("cert_seen_sha256"):
         raise DeviceError(CERT_MESSAGE.format(the=The(row["name"])))
     try:
-        lan_target.check_address(row["escl_address"], int(row["escl_port"]), host=row.get("host"))
+        lan_target.check_address(row["escl_address"], int(row["escl_port"]), host=row.get("host"),
+                                 operator_ok=bool(row.get("operator_allowed")))
     except lan_target.NotOnLan as e:
         raise DeviceError("%s's address isn't on the home network any more. %s" % (The(row["name"]), e.reason)) from e
     ep = http11.Endpoint(
@@ -118,6 +120,7 @@ async def probe_escl(target: lan_target.Target, *, timeout: float = 8.0) -> tupl
 async def add_device(
     *, ipp_target: lan_target.Target | None, escl_target: lan_target.Target | None,
     name: str | None, room_id: str | None, room_label: str | None, added_via: str,
+    operator_allowed: bool = False,
 ) -> dict[str, Any]:
     """Probe what's there, then save ONE row (both badges for an MFP)."""
     attrs = None
@@ -150,7 +153,7 @@ async def add_device(
     values: dict[str, Any] = {
         "name": final_name, "uuid": uuid or None, "make_and_model": model[:120],
         "location": (caps.get("location") or "")[:120], "host": host[:253],
-        "capabilities": caps, "added_via": added_via,
+        "capabilities": caps, "added_via": added_via, "operator_allowed": bool(operator_allowed),
     }
     if ipp_target is not None:
         values.update(ipp_scheme=ipp_target.scheme, ipp_address=ipp_target.address,
@@ -269,6 +272,9 @@ def printer_json(row: dict[str, Any], *, limits: dict[str, int], active_job: dic
         st.update(state="needs attention", tone="err")
         if needs not in st["words"]:
             st["words"].insert(0, needs)
+    moved = _recent_move(row)
+    if moved and moved not in st["words"]:
+        st["words"].append(moved)
     return {
         "id": row["id"],
         "name": row["name"],
@@ -296,7 +302,24 @@ def printer_json(row: dict[str, Any], *, limits: dict[str, int], active_job: dic
         "identify": 0x003C in (caps.get("operations") or []),
         "scan": scan,
         "active_job": active_job,
+        "moved": moved,
     }
+
+
+MOVED_SHOWN_DAYS = 7
+
+
+def _recent_move(row: dict[str, Any]) -> str | None:
+    """ "The office printer moved to 192.168.1.60." for a week after a
+    verified move (discovery._follow_uuid)."""
+    note, at = row.get("moved_note"), row.get("moved_at")
+    if not note or at is None:
+        return None
+    import datetime as dt
+
+    if dt.datetime.now(dt.timezone.utc) - at > dt.timedelta(days=MOVED_SHOWN_DAYS):
+        return None
+    return str(note)[:200]
 
 
 def _own_page(url: str | None, row: dict[str, Any]) -> str | None:

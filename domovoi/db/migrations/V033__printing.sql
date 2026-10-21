@@ -15,7 +15,11 @@
 -- mDNS TXT hints. cert_sha256 is the IPPS (and eSCL over https)
 -- certificate pin taken when the printer was added; cert_seen_sha256 a
 -- different certificate seen since, which stops printing to it until an
--- admin trusts it.
+-- admin trusts it. operator_allowed marks a device an admin typed that
+-- only the operator's OUTBOUND_ALLOW_HOSTS lets through (a test printer on
+-- loopback); nothing discovered is ever stored that way. moved_note says,
+-- in Settings, that a printer was found at a new address (after the new
+-- address proved it is the same printer).
 --
 -- printer_room_defaults: the printer a room prints to by default.
 --
@@ -57,6 +61,9 @@ CREATE TABLE IF NOT EXISTS printers (
     two_sided_default   BOOLEAN,
     color_default       BOOLEAN,
     added_via           TEXT         NOT NULL DEFAULT 'typed',
+    operator_allowed    BOOLEAN      NOT NULL DEFAULT false,
+    moved_note          TEXT,
+    moved_at            TIMESTAMPTZ,
     created_at          TIMESTAMPTZ  NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ  NOT NULL DEFAULT now(),
     CONSTRAINT printers_does_something CHECK (ipp_address IS NOT NULL OR escl_address IS NOT NULL)

@@ -51,6 +51,7 @@ PRINTER_PICK = "core.printer_pick"
 SCAN_READY = "core.scan_ready"
 SCAN_MORE = "core.scan_more"
 SCAN_READ = "core.scan_read"
+PRINT_TEST = "core.print_test"
 
 _NUM = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
         "eight": 8, "nine": 9, "ten": 10}
@@ -141,7 +142,7 @@ class PrintingHandler(Handler):
     display = HandlerDisplay(label="Printing", tone="device")
     requires_network = "no"
     confirmation_kinds = (PRINT_CONFIRM, PRINT_PICK, PRINT_PRINTER, PRINTER_ADD, PRINTER_PICK,
-                          SCAN_READY, SCAN_MORE, SCAN_READ)
+                          SCAN_READY, SCAN_MORE, SCAN_READ, PRINT_TEST)
     choice_kinds = (PRINT_PICK, PRINT_PRINTER, PRINTER_PICK, SCAN_MORE)
     example_phrases = (
         "print my cover letter",
@@ -260,7 +261,7 @@ class PrintingHandler(Handler):
         return await self._scan(ctx, session)
 
     async def _test_page_from_match(self, m, ctx, session):
-        from domovoi.printing import devices, jobs
+        from domovoi.printing import devices
 
         try:
             row = await devices.pick_printer(None, ctx.satellite_room_id)
@@ -269,10 +270,13 @@ class PrintingHandler(Handler):
         except devices.DeviceError as e:
             return self._reply(ctx, _said(self._no_printer_text(str(e))))
         try:
-            await jobs.test_page(row["id"], self._who(ctx))
-        except jobs.PrintRefused as e:
+            devices.ipp_printer(row)
+        except devices.DeviceError as e:
             return self._reply(ctx, _said(str(e)))
-        return self._reply(ctx, _said("Printing a test page on %s." % devices.the(row["name"])))
+        # Every voice print confirms first, a test page too (owner rule).
+        return await self._ask(ctx, session, PRINT_TEST,
+                               _said("Print a test page on %s?" % devices.the(row["name"])),
+                               {"printer_id": row["id"]})
 
     async def _print_from_match(self, m, ctx, session):
         what = (m.group("what") or "").strip()
@@ -467,7 +471,8 @@ class PrintingHandler(Handler):
         if len(fresh) == 1:
             f = fresh[0]
             return await self._ask(ctx, session, PRINTER_ADD,
-                                   _said("I found %s. Add it?" % _a(f["make_and_model"])),
+                                   _said("I found %s. Add it and print a test page?"
+                                         % _a(f["make_and_model"])),
                                    {"key": f["key"], "model": f["make_and_model"]})
         names = [f["make_and_model"] for f in fresh[:3]]
         return await self._ask(
@@ -579,6 +584,16 @@ class PrintingHandler(Handler):
 
     async def handle_confirmation(self, kind: str, data: dict, affirmative: bool, ctx: Context,
                                   session: AsyncSession) -> Response:
+        if kind == PRINT_TEST:
+            if not affirmative:
+                return self._reply(ctx, "OK, no test page.")
+            from domovoi.printing import jobs
+
+            try:
+                await jobs.test_page(int(data.get("printer_id") or 0), self._who(ctx))
+            except jobs.PrintRefused as e:
+                return self._reply(ctx, _said(str(e)))
+            return self._reply(ctx, "Printing a test page.")
         if kind == PRINT_CONFIRM:
             return await self._submit(data, ctx) if affirmative else self._reply(ctx, "OK, not printing.")
         if kind == PRINTER_ADD:

@@ -44,6 +44,45 @@ ADMIN = [Depends(require_admin_mutation)]
 
 MAX_UPLOAD = jobs.MAX_INPUT_BYTES
 
+# Previews draw pages (a worker process each) and a look sends mDNS (and
+# maybe a sweep): both are budgeted per source address.
+PREVIEW_LIMITER = admin_auth.SlidingWindowLimiter(max_per_window=30, window_sec=60.0)
+DISCOVER_LIMITER = admin_auth.SlidingWindowLimiter(max_per_window=6, window_sec=60.0)
+
+
+def _budget(limiter: "admin_auth.SlidingWindowLimiter", request: Request, what: str) -> None:
+    if not limiter.allow(admin_auth.request_source(request)):
+        raise HTTPException(status_code=429, detail="Too many %s from here just now. Try again in a minute." % what,
+                            headers={"Retry-After": "60"})
+
+
+async def _assert_documents_writable(request: Request) -> None:
+    """A scan WRITES into Documents, so Settings, Devices' per-device file
+    block applies here too (the web door checks it as well; this is the
+    core's own check, for any caller that reaches the core directly).
+    The device is whatever the request names (X-Domovoi-Device-Id, which the
+    web forwards, or X-Device-Id); a voice turn names none."""
+    from sqlalchemy import text
+
+    from domovoi.db.session import session_scope
+
+    ids = sorted({(request.headers.get(h) or "").strip()[:64] for h in ("x-domovoi-device-id", "x-device-id")}
+                 - {""})
+    if not ids:
+        return
+    async with session_scope() as s:
+        names = [r[0] for r in (await s.execute(
+            text("SELECT name FROM devices WHERE device_id = ANY(:ids)"), {"ids": ids})).all() if r[0]]
+        hit = (await s.execute(text(
+            "SELECT device_name, device_id FROM files_device_blocks "
+            "WHERE (device_id IS NOT NULL AND device_id = ANY(:ids)) "
+            "OR (device_name IS NOT NULL AND device_name = ANY(:names)) ORDER BY id LIMIT 1"),
+            {"ids": ids, "names": names or [""]})).first()
+    if hit is not None:
+        who = hit[0] or hit[1] or "This device"
+        raise HTTPException(status_code=403,
+                            detail="%s isn't allowed to change files, so it can't scan to Documents." % who)
+
 
 def _who(request: Request, label: str | None, source: str | None) -> jobs.Who:
     # The hourly limit is counted per source address (the web forwards the
@@ -120,7 +159,8 @@ class DiscoverBody(BaseModel):
 
 
 @router.post("/v1/printers/discover", dependencies=DEVICE)
-async def discover(body: DiscoverBody) -> dict[str, Any]:
+async def discover(request: Request, body: DiscoverBody) -> dict[str, Any]:
+    _budget(DISCOVER_LIMITER, request, "looks for printers")
     return await discovery.look(look_again=body.look_again)
 
 
@@ -311,7 +351,8 @@ def _meta(raw: str) -> dict[str, Any]:
 
 
 @router.post("/v1/print/preview", dependencies=DEVICE)
-async def print_preview(file: UploadFile = File(...), meta: str = Form("{}")) -> dict[str, Any]:
+async def print_preview(request: Request, file: UploadFile = File(...), meta: str = Form("{}")) -> dict[str, Any]:
+    _budget(PREVIEW_LIMITER, request, "print previews")
     m = _meta(meta)
     src = await _spool(file)
     try:
@@ -341,7 +382,9 @@ async def print_submit(request: Request, file: UploadFile = File(...), meta: str
 
 @router.get("/v1/print/jobs", dependencies=READ)
 async def list_jobs(printer_id: int | None = Query(None), limit: int = Query(20, ge=1, le=200)) -> dict[str, Any]:
-    return {"jobs": [jobs.job_json(j) for j in await store.list_jobs(printer_id=printer_id, limit=limit)]}
+    """The household's job log: print jobs, and scans (``scans``)."""
+    return {"jobs": [jobs.job_json(j) for j in await store.list_jobs(printer_id=printer_id, limit=limit)],
+            "scans": [scans.scan_log_json(r) for r in await store.list_scans(printer_id=printer_id, limit=limit)]}
 
 
 @router.get("/v1/print/jobs/{job_id}", dependencies=READ)
@@ -406,6 +449,7 @@ class ScanBody(BaseModel):
 
 @router.post("/v1/scan/jobs", dependencies=DEVICE, status_code=201)
 async def scan_start(request: Request, body: ScanBody) -> dict[str, Any]:
+    await _assert_documents_writable(request)
     who = _who(request, body.who, body.origin)
     try:
         s = await scans.start(body.printer_id, source=body.source, color=body.color, resolution=body.resolution,
@@ -424,7 +468,8 @@ async def scan_get(scan_id: str) -> dict[str, Any]:
 
 
 @router.post("/v1/scan/jobs/{scan_id}/next", dependencies=DEVICE)
-async def scan_next(scan_id: str) -> dict[str, Any]:
+async def scan_next(request: Request, scan_id: str) -> dict[str, Any]:
+    await _assert_documents_writable(request)
     try:
         return (await scans.more(_scan_id(scan_id))).json()
     except scans.ScanRefused as e:
@@ -432,7 +477,8 @@ async def scan_next(scan_id: str) -> dict[str, Any]:
 
 
 @router.post("/v1/scan/jobs/{scan_id}/finish", dependencies=DEVICE)
-async def scan_finish(scan_id: str) -> dict[str, Any]:
+async def scan_finish(request: Request, scan_id: str) -> dict[str, Any]:
+    await _assert_documents_writable(request)
     try:
         return (await scans.finish(_scan_id(scan_id))).json()
     except scans.ScanRefused as e:

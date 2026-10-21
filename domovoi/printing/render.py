@@ -6,8 +6,10 @@ hangs or crashes it costs one job, not the core (plan part 1). The work
 directory holds the input copy and every output and is removed by the
 caller (:class:`Workdir`).
 
-At most :data:`MAX_PARALLEL` drawings run at once, so a burst of previews
-can't eat the server's memory (a 600 dpi colour page is ~100 MB raw).
+At most :data:`MAX_PARALLEL` drawings run at once (sized for the box), so
+a burst of previews can't eat the server's memory (a 600 dpi colour page is
+~100 MB raw); each worker is memory- and CPU-capped and checks a pixel
+budget before drawing (:mod:`domovoi.printing.limits`).
 """
 
 from __future__ import annotations
@@ -24,9 +26,13 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
+from domovoi.printing import limits
+
 PREPARE_TIMEOUT_SEC = 90.0
 OUTPUT_TIMEOUT_SEC = 900.0
-MAX_PARALLEL = 2
+# Sized for the box: one drawing at a time on a small one, two otherwise
+# (each worker is also memory-capped: limits.worker_memory_bytes).
+MAX_PARALLEL = limits.worker_slots()
 _gate = asyncio.Semaphore(MAX_PARALLEL)
 
 
@@ -55,6 +61,7 @@ class Workdir:
 
 
 async def run(workdir: Workdir, request: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+    request = dict(request, memory_bytes=limits.worker_memory_bytes(), cpu_seconds=int(timeout))
     (workdir.path / "request.json").write_text(json.dumps(request), encoding="utf-8")
     (workdir.path / "result.json").unlink(missing_ok=True)
     env = dict(os.environ)

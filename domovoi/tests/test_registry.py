@@ -223,7 +223,7 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
         "voice": {"core.voice_download"},
         "printing": {
             "core.print_confirm", "core.print_pick", "core.print_printer", "core.printer_add",
-            "core.printer_pick", "core.scan_ready", "core.scan_more", "core.scan_read",
+            "core.printer_pick", "core.scan_ready", "core.scan_more", "core.scan_read", "core.print_test",
         },
     }
     for name, kinds in expected.items():

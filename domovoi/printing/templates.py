@@ -357,14 +357,15 @@ def image_document(out: Path, image_path: Path, *, paper: tuple[int, int]) -> No
 # ─── Scans ───────────────────────────────────────────────────────────────
 
 
-def scans_pdf(jpegs: Iterable[bytes], *, page_size: tuple[float, float], title: str) -> bytes:
-    """One PDF page per scanner JPEG, the JPEG bytes embedded verbatim."""
+def scans_pdf(jpegs: Iterable[bytes], *, page_size: tuple[float, float], title: str, sink=None) -> bytes:
+    """One PDF page per scanner JPEG, the JPEG bytes embedded verbatim.
+    Written to ``sink`` (a binary file) when given, else returned."""
     from reportlab.lib.utils import ImageReader
 
     old = rl_config.useA85
     rl_config.useA85 = 0
     try:
-        buf = io.BytesIO()
+        buf = sink if sink is not None else io.BytesIO()
         c = canvas.Canvas(buf, pagesize=page_size)
         c.setTitle(title[:120])
         c.setAuthor("Domovoi")
@@ -380,6 +381,6 @@ def scans_pdf(jpegs: Iterable[bytes], *, page_size: tuple[float, float], title: 
             c.drawImage(reader, 0, 0, pw, ph)
             c.showPage()
         c.save()
-        return buf.getvalue()
+        return b"" if sink is not None else buf.getvalue()
     finally:
         rl_config.useA85 = old

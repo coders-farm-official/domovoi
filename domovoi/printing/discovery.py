@@ -33,8 +33,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from domovoi.printing import capabilities as caps_mod
-from domovoi.printing import devices, http11, lan_target, mdns, store
-from domovoi.printing.client import IppError
+from domovoi.printing import devices, escl, http11, ipp, lan_target, mdns, store
+from domovoi.printing.client import IppClient, IppError, Printer
 
 log = logging.getLogger(__name__)
 
@@ -206,22 +206,92 @@ async def sweep() -> list[Found]:
     return out
 
 
+async def _answers_as(printer: Printer, uuid: str) -> bool:
+    """Whether the IPP printer at ``printer`` says it is ``uuid`` (and, for
+    IPPS with a pin, presents the pinned certificate: a different one
+    raises before anything is sent)."""
+    attrs = await IppClient(printer, timeout=4.0).get_printer_attributes(["printer-uuid"])
+    said = str(ipp.first(attrs, "printer-uuid", "") or "").lower().removeprefix("urn:uuid:")
+    return bool(uuid) and said == uuid
+
+
+async def _scanner_answers_as(endpoint: http11.Endpoint, path: str, uuid: str) -> bool:
+    resp = await http11.request(endpoint, "GET", path.rstrip("/") + "/ScannerCapabilities",
+                                max_bytes=escl.MAX_XML, timeout=4.0)
+    if resp.status != 200:
+        return False
+    return bool(uuid) and escl.parse_capabilities(resp.body).uuid == uuid
+
+
 async def _follow_uuid(found_list: list[Found]) -> None:
-    """A saved printer seen at a new address: update its row."""
+    """A saved printer announced at a new address. Announcing a UUID proves
+    nothing (any LAN host can say it), so the row moves only when:
+
+    * the old address no longer answers as that printer, and
+    * the new address (already through the LAN check, without the
+      operator's allowlist) answers Get-Printer-Attributes / eSCL
+      capabilities with the same UUID, over the same scheme, with the pinned
+      certificate when the printer has one.
+
+    Rows an admin added through the operator's allowlist never move. The
+    move is noted for Settings ("The office printer moved to …")."""
     rows = await store.list_printers()
     by_uuid = {r["uuid"]: r for r in rows if r.get("uuid")}
     for f in found_list:
         row = by_uuid.get(f.uuid) if f.uuid else None
-        if row is None:
+        if row is None or row.get("operator_allowed"):
             continue
         changes: dict[str, Any] = {}
         if f.ipp is not None and row.get("ipp_address") and row["ipp_address"] != f.ipp.address:
-            changes.update(ipp_address=f.ipp.address, ipp_port=f.ipp.port)
+            if await _ipp_moved(row, f.ipp):
+                changes.update(ipp_address=f.ipp.address, ipp_port=f.ipp.port)
         if f.escl is not None and row.get("escl_address") and row["escl_address"] != f.escl.address:
-            changes.update(escl_address=f.escl.address, escl_port=f.escl.port)
+            if await _escl_moved(row, f.escl):
+                changes.update(escl_address=f.escl.address, escl_port=f.escl.port)
         if changes:
-            log.info("printing: %s moved to %s", row["name"], f.address)
+            new_addr = changes.get("ipp_address") or changes.get("escl_address")
+            if row.get("host") in (row.get("ipp_address"), row.get("escl_address")):
+                changes["host"] = new_addr
+            changes["moved_note"] = "%s moved to %s." % (devices.The(row["name"]), new_addr)
+            log.info("printing: %s moved to %s (it proved who it is there)", row["name"], new_addr)
             await store.update_printer(row["id"], changes | {"misses": 0})
+            await store.mark_moved(row["id"])
+
+
+async def _ipp_moved(row: dict[str, Any], new: lan_target.Target) -> bool:
+    tls = row.get("ipp_scheme") == "ipps"
+    if tls and not new.tls:
+        return False                       # never step down from IPPS
+    try:
+        if await _answers_as(devices.ipp_printer(row), row["uuid"]):
+            return False                   # still there: keep it
+    except (devices.DeviceError, IppError, http11.HttpError, ValueError):
+        pass                               # the old address is gone
+    candidate = Printer(address=new.address, port=new.port, path=row.get("ipp_path") or new.path,
+                        host=new.address, tls=tls, cert_sha256=row.get("cert_sha256"))
+    try:
+        return await _answers_as(candidate, row["uuid"])
+    except (IppError, http11.HttpError, ValueError):
+        return False
+
+
+async def _escl_moved(row: dict[str, Any], new: lan_target.Target) -> bool:
+    tls = row.get("escl_scheme") == "https"
+    if tls and not new.tls:
+        return False
+    path = row.get("escl_path") or "/eSCL"
+    try:
+        old = devices.escl_client(row)
+        if await _scanner_answers_as(old.endpoint, path, row["uuid"]):
+            return False
+    except (devices.DeviceError, escl.EsclError, http11.HttpError, ValueError):
+        pass
+    ep = http11.Endpoint(address=new.address, port=new.port, tls=tls, host=new.address,
+                         cert_sha256=row.get("escl_cert_sha256"))
+    try:
+        return await _scanner_answers_as(ep, path, row["uuid"])
+    except (escl.EsclError, http11.HttpError, ValueError):
+        return False
 
 
 async def look(*, look_again: bool) -> dict[str, Any]:
@@ -305,12 +375,13 @@ async def add_typed(text: str, *, name: str | None, room_id: str | None, room_la
     if t.full_url:
         scheme = t.scheme or "ipp"
         port = t.port or {"ipp": 631, "ipps": 443, "http": 80, "https": 443}[scheme]
-        target = lan_target.vet(scheme, t.host, port, t.path or "/", allow_any_port=admin)
+        target = lan_target.vet(scheme, t.host, port, t.path or "/", allow_any_port=admin, operator_ok=admin)
+        operator = admin and lan_target.needs_operator(target)
         if scheme in ("ipp", "ipps"):
             return await devices.add_device(ipp_target=target, escl_target=None, name=name, room_id=room_id,
-                                            room_label=room_label, added_via="typed")
+                                            room_label=room_label, added_via="typed", operator_allowed=operator)
         return await devices.add_device(ipp_target=None, escl_target=target, name=name, room_id=room_id,
-                                        room_label=room_label, added_via="typed")
+                                        room_label=room_label, added_via="typed", operator_allowed=operator)
     # An address alone: IPP on 631 (or the port given), then IPPS on 443,
     # and eSCL on 80/443 of the same host. One row for whatever answers.
     ipp_target = escl_target = None
@@ -318,7 +389,7 @@ async def add_typed(text: str, *, name: str | None, room_id: str | None, room_la
     for port in ports:
         scheme = "ipps" if port == 443 else "ipp"
         try:
-            cand = lan_target.vet(scheme, t.host, port, "/ipp/print", allow_any_port=admin)
+            cand = lan_target.vet(scheme, t.host, port, "/ipp/print", allow_any_port=admin, operator_ok=admin)
             await devices.probe_ipp(cand, timeout=5.0)
         except (devices.DeviceError, IppError, http11.HttpError):
             continue
@@ -328,7 +399,7 @@ async def add_typed(text: str, *, name: str | None, room_id: str | None, room_la
         if t.port and t.port != port and ipp_target is not None:
             continue
         try:
-            cand = lan_target.vet(scheme, t.host, port, "/eSCL", allow_any_port=admin)
+            cand = lan_target.vet(scheme, t.host, port, "/eSCL", allow_any_port=admin, operator_ok=admin)
             await devices.probe_escl(cand, timeout=4.0)
         except (devices.DeviceError, http11.HttpError):
             continue
@@ -336,5 +407,6 @@ async def add_typed(text: str, *, name: str | None, room_id: str | None, room_la
         break
     if ipp_target is None and escl_target is None:
         raise devices.DeviceError("Nothing at that address answered like a printer or a scanner.")
+    operator = admin and any(lan_target.needs_operator(t_) for t_ in (ipp_target, escl_target) if t_ is not None)
     return await devices.add_device(ipp_target=ipp_target, escl_target=escl_target, name=name, room_id=room_id,
-                                    room_label=room_label, added_via="typed")
+                                    room_label=room_label, added_via="typed", operator_allowed=operator)

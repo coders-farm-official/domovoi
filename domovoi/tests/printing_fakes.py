@@ -82,8 +82,8 @@ class FakeIppPrinter:
     _server: Any = None
     _next_job: int = 100
 
-    async def start(self) -> "FakeIppPrinter":
-        self._server = await asyncio.start_server(self._client, "127.0.0.1", 0, ssl=self.ssl_context)
+    async def start(self, host: str = "127.0.0.1") -> "FakeIppPrinter":
+        self._server = await asyncio.start_server(self._client, host, 0, ssl=self.ssl_context)
         self.port = self._server.sockets[0].getsockname()[1]
         return self
 
@@ -385,3 +385,61 @@ class FakeScanner:
     def close(self) -> None:
         self.server.shutdown()
         self.server.server_close()
+
+
+# ─── A pretend home network on loopback ──────────────────────────────────
+
+
+_REAL_LAN: dict = {}
+
+
+def _snapshot_real_lan() -> None:
+    from domovoi.printing import lan_target
+
+    if not _REAL_LAN:
+        _REAL_LAN.update({k: getattr(lan_target, k) for k in (
+            "_REFUSED_V4", "_PRIVATE_V4", "home_networks", "own_addresses", "server_lan_ipv4",
+            "IPP_PORTS", "ESCL_PORTS")})
+
+
+def real_lan(monkeypatch, home: str = "192.168.1.0/24", me: str = "192.168.1.20") -> None:
+    """Undo :func:`fake_lan` for one test: loopback is refused again, and
+    the home network is ``home`` with the server at ``me``."""
+    import ipaddress
+
+    from domovoi.printing import lan_target
+
+    _snapshot_real_lan()
+    for k in ("_REFUSED_V4", "_PRIVATE_V4", "IPP_PORTS", "ESCL_PORTS"):
+        monkeypatch.setattr(lan_target, k, _REAL_LAN[k])
+    monkeypatch.setattr(lan_target, "home_networks", lambda: [ipaddress.IPv4Network(home)])
+    monkeypatch.setattr(lan_target, "own_addresses", lambda: {me})
+    monkeypatch.setattr(lan_target, "server_lan_ipv4", lambda: me)
+
+
+def fake_lan(monkeypatch):
+    """Make 127.0.0.0/24 the "home network" for one test, so the fakes on
+    127.0.0.x pass the LAN check the way a real printer on 192.168.1.x
+    would (no operator allowlist involved), and the server itself is
+    127.0.0.250. Returns ``open_port(port)``: the fakes listen on random
+    ports, which the usual-ports rule would refuse."""
+    import ipaddress
+
+    from domovoi.printing import lan_target
+
+    _snapshot_real_lan()
+    loop = ipaddress.IPv4Network("127.0.0.0/8")
+    monkeypatch.setattr(lan_target, "_REFUSED_V4", tuple(n for n in lan_target._REFUSED_V4 if n != loop))
+    monkeypatch.setattr(lan_target, "_PRIVATE_V4", lan_target._PRIVATE_V4 + (loop,))
+    monkeypatch.setattr(lan_target, "home_networks", lambda: [ipaddress.IPv4Network("127.0.0.0/24")])
+    monkeypatch.setattr(lan_target, "own_addresses", lambda: {"127.0.0.250"})
+    monkeypatch.setattr(lan_target, "server_lan_ipv4", lambda: "127.0.0.250")
+    ipp_ports, escl_ports = set(lan_target.IPP_PORTS), set(lan_target.ESCL_PORTS)
+    monkeypatch.setattr(lan_target, "IPP_PORTS", ipp_ports)
+    monkeypatch.setattr(lan_target, "ESCL_PORTS", escl_ports)
+
+    def open_port(port: int) -> None:
+        ipp_ports.add(port)
+        escl_ports.add(port)
+
+    return open_port

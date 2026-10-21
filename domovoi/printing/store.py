@@ -34,7 +34,7 @@ _PRINTER_COLS = (
     "id, name, uuid, make_and_model, location, host, ipp_scheme, ipp_address, ipp_port, ipp_path, "
     "escl_scheme, escl_address, escl_port, escl_path, cert_sha256, escl_cert_sha256, cert_seen_sha256, "
     "capabilities, scan_capabilities, status, status_at, misses, is_default, two_sided_default, "
-    "color_default, added_via, created_at, updated_at"
+    "color_default, added_via, operator_allowed, moved_note, moved_at, created_at, updated_at"
 )
 
 
@@ -120,6 +120,11 @@ async def set_status(printer_id: int, status: dict[str, Any], *, misses: int) ->
             text("UPDATE printers SET status = CAST(:st AS JSONB), status_at = now(), misses = :m WHERE id = :id"),
             {"st": json.dumps(status), "m": misses, "id": printer_id},
         )
+
+
+async def mark_moved(printer_id: int) -> None:
+    async with session_scope() as s:
+        await s.execute(text("UPDATE printers SET moved_at = now() WHERE id = :id"), {"id": printer_id})
 
 
 async def set_default(printer_id: int, on: bool) -> None:
@@ -307,6 +312,18 @@ async def upsert_scan(values: dict[str, Any]) -> None:
         ", ".join(cols), ", ".join(":" + c for c in cols), updates)
     async with session_scope() as s:
         await s.execute(text(sql), values)
+
+
+async def list_scans(*, printer_id: int | None = None, limit: int = 20) -> list[dict[str, Any]]:
+    where = "WHERE printer_id = :pid" if printer_id is not None else ""
+    async with session_scope() as s:
+        rows = (await s.execute(
+            text("SELECT id, printer_id, scanner_name, state, source_used, pages, name, path, incomplete, "
+                 f"error, who, source, room_id, created_at, finished_at FROM scan_jobs {where} "
+                 "ORDER BY created_at DESC LIMIT :lim"),
+            {"pid": printer_id, "lim": max(1, min(limit, 200))},
+        )).all()
+    return [_row(r) for r in rows]
 
 
 def iso(dt: datetime | None) -> str | None:

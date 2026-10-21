@@ -33,6 +33,7 @@ from typing import Any
 
 MAX_PAGES = 2000
 THUMB_WIDTH = 150
+THUMB_HEIGHT = 200
 MAX_THUMBS = 12
 MAX_TABLE_ROWS = 5000
 MAX_TABLE_COLS = 100
@@ -144,12 +145,24 @@ def prepare(req: dict[str, Any], d: Path) -> dict[str, Any]:
         if total > MAX_PAGES:
             raise Refused("That document has more pages than Domovoi will print (%d)." % MAX_PAGES)
         pages = [p for p in select_pages(req.get("pages"), total)]
+        from domovoi.printing import limits
+
+        # Every page's size, before anything is drawn (reading a size is
+        # cheap; a 2 x 14,400 pt "page" is refused here, not rendered).
+        for n in pages:
+            w_pt, h_pt = doc.get_page_size(n - 1)
+            odd = limits.check_page_size(w_pt, h_pt)
+            if odd:
+                raise Refused(odd)
         thumbs = []
         gray = bool(req.get("gray"))
         for n in pages[:MAX_THUMBS] if req.get("thumbs", True) else []:
             page = doc[n - 1]
-            w, _h = page.get_size()
-            bm = page.render(scale=THUMB_WIDTH / max(w, 1), grayscale=gray, fill_color=(255, 255, 255, 255))
+            w, h = page.get_size()
+            # Fit the box both ways: a tall thin page must not become a
+            # 150 x 1,080,000 px thumbnail.
+            scale = min(THUMB_WIDTH / max(w, 1), THUMB_HEIGHT / max(h, 1))
+            bm = page.render(scale=scale, grayscale=gray, fill_color=(255, 255, 255, 255))
             img = bm.to_pil()
             img = img.convert("L" if gray else "RGB")
             buf = io.BytesIO()
@@ -257,6 +270,11 @@ def output(req: dict[str, Any], d: Path) -> dict[str, Any]:
         dpi = int(req["dpi"])
         paper = tuple(req["paper"])
         paper_px = (round(paper[0] * dpi / 72.0), round(paper[1] * dpi / 72.0))
+        from domovoi.printing import limits
+
+        too_big = limits.check_sheet_pixels(*paper_px)
+        if too_big:
+            raise Refused(too_big)
         gray = bool(req.get("gray"))
         seq = []
         for _ in range(repeat):
@@ -291,7 +309,21 @@ def output(req: dict[str, Any], d: Path) -> dict[str, Any]:
 def main(argv: list[str]) -> int:
     d = Path(argv[1])
     req = json.loads((d / "request.json").read_text(encoding="utf-8"))
+    from domovoi.printing import limits
+
     try:
+        limits.apply(int(req.get("memory_bytes") or limits.worker_memory_bytes()),
+                     int(req.get("cpu_seconds") or 300))
+    except limits.LimitError as e:
+        (d / "result.json").write_text(json.dumps(
+            {"ok": False, "error": "That document couldn't be drawn for printing.", "detail": str(e)}),
+            encoding="utf-8")
+        return 0
+    try:
+        from PIL import Image
+
+        # Pictures and scanner pages past this are refused, not decoded.
+        Image.MAX_IMAGE_PIXELS = limits.MAX_SHEET_PIXELS
         if req["action"] == "prepare":
             result = prepare(req, d)
         elif req["action"] == "output":
@@ -300,6 +332,8 @@ def main(argv: list[str]) -> int:
             result = {"ok": False, "error": "unknown action"}
     except Refused as e:
         result = {"ok": False, "error": str(e)}
+    except MemoryError:
+        result = {"ok": False, "error": "That document needs more memory to draw than Domovoi allows."}
     except Exception as e:  # noqa: BLE001 — a bad document is a failed job
         result = {"ok": False, "error": "That document couldn't be drawn for printing.", "detail": repr(e)[:300]}
     (d / "result.json").write_text(json.dumps(result), encoding="utf-8")

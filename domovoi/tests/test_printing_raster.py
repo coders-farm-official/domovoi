@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import io
 import random
+import struct
 
 import pytest
 
@@ -194,3 +195,93 @@ def test_scan_pdf_embeds_the_scanner_jpegs_byte_for_byte():
     assert pdf.count(b"/DCTDecode") >= 1
     assert jpeg in pdf
     assert b"ASCII85" not in pdf
+
+
+# ─── Resource limits in the drawing worker (review round 1) ──────────────
+
+
+def _tiny_pdf(w: float, h: float) -> bytes:
+    box = ("%s %s" % (w, h)).encode()
+    head = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
+    return head + b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 " + box + b"]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n"
+
+
+def test_an_absurd_page_is_refused_before_drawing():
+    """Proof: a 2 x 14,400 pt page made a 150 x 1,080,000 px thumbnail and
+    a 1.8 GB worker."""
+    import time
+
+    from domovoi.printing import render
+
+    async def go():
+        with render.Workdir() as w:
+            w.input().write_bytes(_tiny_pdf(2, 14400))
+            t0 = time.monotonic()
+            with pytest.raises(render.RenderFailed, match="size Domovoi won't print"):
+                await render.prepare(w, kind="pdf", paper=[612, 792], title="t")
+            return time.monotonic() - t0
+
+    assert asyncio.run(go()) < 15
+
+
+def test_a_huge_sheet_is_refused_before_drawing():
+    """Proof: custom_x_60x60in reached the worker and drew a 3.2 GB sheet.
+    The options refuse it (test_printing_network); the worker refuses it
+    again from the pixel budget, before drawing anything."""
+    import time
+
+    from domovoi.printing import render
+
+    async def go():
+        with render.Workdir() as w:
+            (w.path / "doc.pdf").write_bytes(_tiny_pdf(612, 792))
+            t0 = time.monotonic()
+            with pytest.raises(render.RenderFailed, match="too big"):
+                await render.output(w, format="pwg", dpi=300, paper=[4320, 4320], gray=False)
+            return time.monotonic() - t0
+
+    assert asyncio.run(go()) < 15
+
+
+def test_thumbnails_fit_the_box_both_ways():
+    import base64
+
+    from domovoi.printing import render
+
+    async def go():
+        with render.Workdir() as w:
+            w.input().write_bytes(_tiny_pdf(144, 1440))
+            return await render.prepare(w, kind="pdf", paper=[612, 792], title="t")
+
+    r = asyncio.run(go())
+    png = base64.b64decode(r["thumbs"][0]["src"].split(",", 1)[1])
+    width, height = struct.unpack("!II", png[16:24])
+    assert width <= 150 and height <= 200
+
+
+def test_the_worker_memory_cap_holds():
+    """The cap applies to the worker process itself (RLIMIT_AS on Linux, a
+    job object on Windows): past it an allocation fails."""
+    import subprocess
+    import sys
+
+    code = ("from domovoi.printing import limits\n"
+            "limits.apply(300 * 1024 * 1024, 30)\n"
+            "try:\n"
+            "    b = bytearray(700 * 1024 * 1024)\n"
+            "    print('allocated')\n"
+            "except MemoryError:\n"
+            "    print('capped')\n")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+    assert "capped" in out.stdout or out.returncode != 0, (out.stdout, out.stderr)
+    assert "allocated" not in out.stdout
+
+
+def test_workers_are_sized_for_the_box(monkeypatch):
+    from domovoi.printing import limits
+
+    monkeypatch.setattr(limits, "_total_memory", lambda: 4 * 1024 ** 3)
+    assert limits.worker_slots() == 1
+    assert limits.worker_memory_bytes() <= 4 * 1024 ** 3 // 3
+    monkeypatch.setattr(limits, "_total_memory", lambda: 32 * 1024 ** 3)
+    assert limits.worker_memory_bytes() == 2 * 1024 ** 3

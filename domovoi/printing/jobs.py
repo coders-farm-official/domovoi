@@ -54,6 +54,9 @@ WATCH_FAST_FOR_SEC = 600.0
 ANNOUNCE_WITHIN_SEC = 600.0
 
 _tasks: set[asyncio.Task] = set()
+# One process admits print jobs; this makes "check the limits, insert the
+# row" a single step (the core runs one event loop).
+_admit_lock = asyncio.Lock()
 
 
 class PrintRefused(Exception):
@@ -252,15 +255,18 @@ async def submit(
             raise PrintRefused(str(e), 422) from e
         pages = prep["pages"]
         sheets = options.sheets_for(len(pages), r.copies, r.sides)
-        await check_limits(pages=len(pages), copies=r.copies, sheets=sheets, device_key=who.device_key,
-                           source=who.source)
-        job_id = await store.insert_job({
-            "printer_id": row["id"], "printer_name": row["name"], "title": title[:200],
-            "library_id": library_id, "path": (path or "")[:1000] or None, "pages": len(pages),
-            "copies": r.copies, "sheets": sheets, "options": r.as_json(), "state": "queued",
-            "who": who.label[:120], "device_key": who.device_key[:120], "source": who.source,
-            "room_id": who.room_id, "speaker": who.speaker,
-        })
+        # The limit check and the job row are one step: two jobs arriving
+        # together can't both pass a check that only one of them fits.
+        async with _admit_lock:
+            await check_limits(pages=len(pages), copies=r.copies, sheets=sheets, device_key=who.device_key,
+                               source=who.source)
+            job_id = await store.insert_job({
+                "printer_id": row["id"], "printer_name": row["name"], "title": title[:200],
+                "library_id": library_id, "path": (path or "")[:1000] or None, "pages": len(pages),
+                "copies": r.copies, "sheets": sheets, "options": r.as_json(), "state": "queued",
+                "who": who.label[:120], "device_key": who.device_key[:120], "source": who.source,
+                "room_id": who.room_id, "speaker": who.speaker,
+            })
     except BaseException:
         w.cleanup()
         raise

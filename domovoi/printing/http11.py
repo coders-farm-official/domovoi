@@ -173,6 +173,10 @@ async def request(
         raise HttpError("timed out") from e
     except (ConnectionError, ssl.SSLError, OSError) as e:
         raise HttpError("connection dropped (%s)" % type(e).__name__) from e
+    except (ValueError, asyncio.LimitOverrunError, asyncio.IncompleteReadError) as e:
+        # A line past the stream's limit (asyncio raises ValueError), a
+        # length that makes no sense: a malformed answer, never a crash.
+        raise HttpError("the device's answer didn't make sense (%s)" % type(e).__name__) from e
     finally:
         writer.close()
         try:
@@ -268,17 +272,17 @@ async def _read_chunked(reader: asyncio.StreamReader, max_bytes: int) -> bytes:
         size_line = await reader.readline()
         if not size_line:
             raise HttpError("chunked answer cut short")
-        try:
-            size = int(size_line.split(b";", 1)[0].strip(), 16)
-        except ValueError as e:
-            raise HttpError("bad chunk size") from e
+        digits = size_line.split(b";", 1)[0].strip()
+        if not digits or len(digits) > 16 or any(c not in b"0123456789abcdefABCDEF" for c in digits):
+            raise HttpError("bad chunk size")
+        size = int(digits, 16)
         if size == 0:
-            # trailers
-            while True:
+            # trailers (a few at most)
+            for _ in range(64):
                 line = await reader.readline()
                 if not line or line in (b"\r\n", b"\n"):
-                    break
-            return bytes(data)
+                    return bytes(data)
+            raise HttpError("too many trailer lines")
         if len(data) + size > max_bytes:
             raise TooLarge("answer over the %d cap" % max_bytes)
         try:

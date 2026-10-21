@@ -220,8 +220,7 @@ def resolve(
         adjustments.append("This printer prints in black and white only.")
         mode = "monochrome"
     media = wanted.get("media") or d["media"]
-    if not caps_mod.media_points(media):
-        raise OptionError("That paper size isn't known.")
+    check_media(caps, media, default=d["media"])
     try:
         copies = int(wanted.get("copies") or 1)
     except (TypeError, ValueError) as e:
@@ -238,6 +237,41 @@ def resolve(
     fmt, dpi = pick_format(caps)
     return Resolved(sides=sides, color=mode, media=media, copies=copies, pages_spec=pages_spec,
                     format=fmt, dpi=dpi, adjustments=adjustments)
+
+
+# The largest sheet Domovoi draws for, whatever a printer claims: 13 x 19 in
+# (Super B) plus a little, and a 30 in banner at most on the long side.
+MAX_SHORT_POINTS = 72 * 13.5
+MAX_LONG_POINTS = 72 * 30
+MIN_SIDE_POINTS = 72 * 2
+
+
+def _custom_range(caps: dict[str, Any]) -> tuple[tuple[int, int], tuple[int, int]] | None:
+    lo = hi = None
+    for m in caps.get("media_supported") or []:
+        if m.startswith("custom_min_"):
+            lo = caps_mod.media_points(m)
+        elif m.startswith("custom_max_"):
+            hi = caps_mod.media_points(m)
+    return (lo, hi) if lo and hi else None
+
+
+def check_media(caps: dict[str, Any], media: str, *, default: str) -> None:
+    """A paper size must be one this printer takes (ready or supported, or
+    its own default), or a custom size inside the printer's own
+    custom_min/custom_max range, and never past the sane maximum."""
+    size = caps_mod.media_points(media)
+    if not size or media.startswith(("custom_min_", "custom_max_")):
+        raise OptionError("That paper size isn't known.")
+    listed = set(caps.get("media_ready") or []) | set(caps.get("media_supported") or []) | {default}
+    if media not in listed:
+        rng = _custom_range(caps)
+        if not (media.startswith("custom_") and rng
+                and rng[0][0] <= size[0] <= rng[1][0] and rng[0][1] <= size[1] <= rng[1][1]):
+            raise OptionError("That paper size isn't one this printer takes.")
+    short, long_ = min(size), max(size)
+    if short < MIN_SIDE_POINTS or short > MAX_SHORT_POINTS or long_ > MAX_LONG_POINTS:
+        raise OptionError("That paper size is too big (or too small) for Domovoi to print.")
 
 
 def sheets_for(pages: int, copies: int, sides: str) -> int:

@@ -23,9 +23,9 @@ Privacy: we never fetch anyone else's job (``ScannerStatus`` can list
 them) and never act on a push-scan ``DestinationUri``.
 
 XML from a scanner is data: at most :data:`MAX_XML` bytes, and any document
-with a DOCTYPE or an ENTITY is refused before parsing (no entity expansion,
-no external entities) — the standard library parser then has nothing
-dangerous left to do. Standard library only.
+with a DOCTYPE, an entity or a notation is refused by the parser itself
+(expat handlers that raise, as defusedxml does; no new dependency), in
+any encoding, before anything is expanded. Standard library only.
 """
 
 from __future__ import annotations
@@ -53,16 +53,48 @@ class EsclError(Exception):
         self.http_status = http_status
 
 
+class _Refused(Exception):
+    pass
+
+
+def _refuse(*_args) -> None:
+    raise _Refused()
+
+
 def parse_xml(data: bytes) -> ET.Element:
+    """Parse a scanner's XML, refusing any DOCTYPE, entity declaration or
+    external entity, whatever the encoding: the refusal is in the parser
+    (expat handlers), not a byte search a UTF-16 document walks past."""
     if len(data) > MAX_XML:
         raise EsclError("the scanner's answer was too large")
-    head = data[:4096].lower()
-    if b"<!doctype" in data.lower() or b"<!entity" in head or b"<!entity" in data.lower():
-        raise EsclError("the scanner's answer had a DOCTYPE; refused")
+    from xml.parsers import expat
+
+    builder = ET.TreeBuilder()
+    parser = expat.ParserCreate(namespace_separator="}")
+
+    def tag(name: str) -> str:
+        return "{" + name if "}" in name else name
+
+    parser.StartElementHandler = lambda name, attrs: builder.start(tag(name), attrs)
+    parser.EndElementHandler = lambda name: builder.end(tag(name))
+    parser.CharacterDataHandler = builder.data
+    parser.buffer_text = True
+    parser.StartDoctypeDeclHandler = _refuse
+    parser.EntityDeclHandler = _refuse
+    parser.UnparsedEntityDeclHandler = _refuse
+    parser.ExternalEntityRefHandler = _refuse
+    parser.NotationDeclHandler = _refuse
+    parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
     try:
-        return ET.fromstring(data)
-    except ET.ParseError as e:
+        parser.Parse(data, True)
+        root = builder.close()
+    except _Refused as e:
+        raise EsclError("the scanner's answer had a DOCTYPE or entities; refused") from e
+    except (expat.ExpatError, ValueError, AssertionError) as e:
         raise EsclError("the scanner's answer didn't make sense") from e
+    if root is None:
+        raise EsclError("the scanner's answer didn't make sense")
+    return root
 
 
 def _local(tag: str) -> str:

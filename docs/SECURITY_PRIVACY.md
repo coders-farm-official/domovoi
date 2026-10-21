@@ -1122,6 +1122,9 @@ What an entry does and does not buy:
 - It relaxes the address rules and nothing else. `http`/`https` only
   still holds, every redirect hop is still checked against the same list,
   and the byte caps still apply.
+- For printers and scanners it counts only for an address an admin types
+  in Settings; a printer announced on the network or found by the sweep
+  never uses it ("Printers and scanners", below).
 
 `OUTBOUND_ALLOW_HOSTS` is **server configuration**: it is read from the
 environment or `.env` and is deliberately absent from the dashboard's
@@ -1847,10 +1850,21 @@ parts:
   "add a printer" can't be used to probe a router's admin page and keep a
   record of it;
 - the one escape hatch is the existing operator setting
-  `OUTBOUND_ALLOW_HOSTS`: an entry naming an exact `host:port` lets that
-  endpoint through. The functional-test harness uses it to reach a test
-  printer on loopback. An entry without a port doesn't count here, and the
-  setting ships empty.
+  `OUTBOUND_ALLOW_HOSTS`, and only for an address an **admin typed**: an
+  entry naming an exact `host:port` lets that address be added (the row
+  remembers it was let in that way). Anything announced by mDNS, found by
+  the sweep or typed by a household device is held to the home-network
+  rules whatever the setting says, so loopback stays refused for them
+  (owner rule, 2026-10-21). The functional-test harness uses it to reach a
+  test printer on loopback. An entry without a port doesn't count, and
+  the setting ships empty;
+- a saved printer seen at a new address (a new DHCP lease) moves only
+  after the new address proves it is the same printer: it answers with the
+  same `printer-uuid` (or eSCL UUID), over the same scheme, with the pinned
+  certificate when the printer has one, and only once the old address no
+  longer answers as it. Announcing a UUID proves nothing. Settings says
+  when a printer moved ("The office printer moved to …"). A row the admin
+  added through the operator setting never moves.
 
 **The internet switch.** Printing and scanning are LAN only and work under
 `INTERNET_ACCESS=never`. A printer's own web page (`printer-more-info`) is
@@ -1887,9 +1901,14 @@ colour is used only when it is exactly `#rrggbb`. Nothing a printer says
 reaches a model prompt.
 
 **Drawing pages.** PDFs, pictures, text and spreadsheets are drawn (with
-PDFium through pypdfium2, and ReportLab) in a short-lived worker process
-with a time limit, at most two at a time. A bad document costs one job, not
-the core.
+PDFium through pypdfium2, and ReportLab) in a short-lived worker process: a
+wall-clock time limit, a memory cap (`RLIMIT_AS` on Linux, a job object on
+Windows; 2 GiB or a third of the machine's memory), a CPU-time cap, and a
+pixel budget checked before anything is drawn (a page over 60 in or
+stranger than 1:25, a sheet over 90 M pixels, is refused). One worker at a
+time on a small box, two otherwise. Paper sizes must be ones the printer
+takes (a custom size inside its own range), never past 13.5 × 30 in. A bad
+document costs one job, not the core.
 
 **The job log** (`print_jobs`, `scan_jobs`, V033): who (the device's name,
 or the room for voice), the document's title and path, pages, copies,
@@ -1899,8 +1918,13 @@ options, when, which printer and the result. Titles can be personal
 
 **Scans** are written by the core into `Documents/Scans/` under a name it
 makes ("Scan 2026-10-21 15.40.pdf"), inside the Documents folder (a
-`Scans` link that leads elsewhere is refused). The web door applies the
-Documents write policy first (Settings → Devices' per-device block). We
+`Scans` link that leads elsewhere is refused). Settings → Devices'
+per-device file block applies on both doors: the web's, and the core's own
+`/v1/scan` routes (for the device the request names); the dashboard and the
+app don't offer Scan where the device can't write. Pages are spooled to a
+private temporary folder, not held in memory, and a page that isn't a
+JPEG of a sane size (truncated, or a decompression bomb by its header) ends
+the scan with a plain message. We
 never fetch another person's scan job, and never act on a scanner's
 "push scan" destination.
 

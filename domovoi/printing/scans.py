@@ -30,6 +30,8 @@ import datetime as dt
 import io
 import logging
 import os
+import shutil
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -75,7 +77,8 @@ class Session:
     who: str
     origin: str            # dashboard | app | voice
     room_id: str | None
-    pages: list[bytes] = field(default_factory=list)
+    pages: list[Path] = field(default_factory=list)      # scanner JPEGs, spooled to disk
+    spool: Path | None = None
     thumbs: list[dict[str, Any]] = field(default_factory=list)
     state: str = "scanning"
     source_used: str | None = None
@@ -98,6 +101,19 @@ class Session:
 
 
 _sessions: dict[str, Session] = {}
+
+
+def scan_log_json(row: dict[str, Any]) -> dict[str, Any]:
+    """A scan_jobs row for the household's job log."""
+    from domovoi.printing import store
+
+    return {
+        "id": row["id"], "printer_id": row.get("printer_id"), "scanner_name": row.get("scanner_name") or "",
+        "state": row.get("state"), "pages": row.get("pages") or 0, "name": row.get("name"),
+        "library_id": "core:documents", "path": row.get("path"), "incomplete": bool(row.get("incomplete")),
+        "error": row.get("error"), "who": row.get("who") or "", "source": row.get("source") or "",
+        "created_at": store.iso(row.get("created_at")), "finished_at": store.iso(row.get("finished_at")),
+    }
 
 
 def get(session_id: str) -> Session:
@@ -212,8 +228,14 @@ async def _pass(s: Session, *, first: bool) -> None:
                     break
                 if not page.startswith(b"\xff\xd8"):
                     raise ScanRefused("The scanner sent a page Domovoi can't read.")
-                s.pages.append(page)
-                s.thumbs.append(await asyncio.to_thread(_thumb, page, len(s.pages)))
+                try:
+                    thumb = await asyncio.to_thread(_thumb, page, len(s.pages) + 1)
+                except Exception as e:  # noqa: BLE001 — truncated, a bomb, not a JPEG
+                    log.info("printing: refused a scanner page: %s", e)
+                    raise ScanRefused("The scanner sent a page Domovoi can't read.") from e
+                s.pages.append(await asyncio.to_thread(_spool_page, s, page))
+                s.thumbs.append(thumb)
+                del page
                 got += 1
                 if src == "platen":
                     break
@@ -235,6 +257,9 @@ async def _pass(s: Session, *, first: bool) -> None:
         _broke(s, msg)
     except http11.HttpError:
         _broke(s, "The scanner stopped answering.")
+    except Exception as e:  # noqa: BLE001 — whatever it was, the session ends, never stuck "scanning"
+        log.warning("printing: scan %s broke: %r", s.id, e)
+        _broke(s, "Something went wrong talking to the scanner.")
     s.touched = time.monotonic()
     await _persist(s)
 
@@ -248,12 +273,34 @@ def _broke(s: Session, message: str) -> None:
     else:
         s.state = "failed"
         s.error = message[:-1] + "; nothing was saved." if message.endswith("stopped answering.") else message
+        _drop_spool(s)
+
+
+def _spool_page(s: Session, data: bytes) -> Path:
+    if s.spool is None:
+        s.spool = Path(tempfile.mkdtemp(prefix="domovoi-scan-"))
+    p = s.spool / ("page-%03d.jpg" % (len(s.pages) + 1))
+    p.write_bytes(data)
+    return p
+
+
+def _drop_spool(s: Session) -> None:
+    if s.spool is not None:
+        shutil.rmtree(s.spool, ignore_errors=True)
+        s.spool = None
+
+
+# A scanner page is at most a 600 dpi Super B sheet; a bigger "page" is a
+# decompression bomb and is refused from its header, before decoding.
+MAX_SCAN_PIXELS = 90_000_000
 
 
 def _thumb(jpeg: bytes, n: int) -> dict[str, Any]:
     from PIL import Image
 
     with Image.open(io.BytesIO(jpeg)) as im:
+        if im.format != "JPEG" or im.width * im.height > MAX_SCAN_PIXELS:
+            raise ValueError("not a JPEG page of a sane size")
         im.draft("RGB", (300, 400))
         im = im.convert("RGB")
         im.thumbnail((150, 200))
@@ -284,7 +331,7 @@ async def finish(session_id: str) -> Session:
         s.state = "saving"
         try:
             rel = await asyncio.to_thread(_save, s)
-        except OSError as e:
+        except Exception as e:  # noqa: BLE001 — a disk or a folder problem; keep the pages
             log.warning("printing: saving scan %s failed: %s", s.id, e)
             s.state = "waiting"
             s.error = "The scan couldn't be saved to Documents."
@@ -295,6 +342,7 @@ async def finish(session_id: str) -> Session:
         s.touched = time.monotonic()
         await _persist(s, finished=True)
         log.info("printing: saved a %d-page scan to Documents/%s", len(s.pages), rel)
+        _drop_spool(s)
     return s
 
 
@@ -302,6 +350,7 @@ async def cancel(session_id: str) -> Session:
     s = get(session_id)
     s.pages.clear()
     s.thumbs.clear()
+    _drop_spool(s)
     s.state = "canceled"
     await _persist(s, finished=True)
     return s
@@ -333,7 +382,6 @@ def _save(s: Session) -> str:
     sc = s.printer.get("scan_capabilities") or {}
     _w, _h, page = _region(_caps_for(s.printer, s.source_used or "platen") or sc)
     title = "Scan"
-    pdf = templates.scans_pdf(s.pages, page_size=page, title=title)
     now = household_time.now()
     base = scan_name(now, s.incomplete)
     target = real_folder / base
@@ -345,7 +393,8 @@ def _save(s: Session) -> str:
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o644)
     try:
         with os.fdopen(fd, "wb") as f:
-            f.write(pdf)
+            # Page by page from the spool, straight into the file.
+            templates.scans_pdf((p.read_bytes() for p in s.pages), page_size=page, title=title, sink=f)
         os.replace(tmp, target)
     except BaseException:
         try:

@@ -37,9 +37,12 @@ an admin typed the full URL.
 The one escape hatch is the existing operator setting
 ``OUTBOUND_ALLOW_HOSTS`` (empty by default, :mod:`domovoi.net_safety`):
 an entry naming an exact ``host:port`` lets that endpoint through even
-though it sits in a refused range. The functional-test harness uses it to
-reach an ``ippeveprinter`` on loopback; a real install's ``.env`` never
-has it. An entry without a port does NOT count here.
+though it sits in a refused range, and ONLY for an address an admin typed
+(``operator_ok``; the saved row keeps ``operator_allowed``). An address
+discovered by mDNS or the sweep, or typed by a household device, never
+uses it. The functional-test harness uses it to reach an ``ippeveprinter``
+on loopback; a real install's ``.env`` never has it. An entry without a
+port does NOT count.
 """
 
 from __future__ import annotations
@@ -170,10 +173,21 @@ def home_networks() -> list[ipaddress.IPv4Network]:
 
 
 def own_addresses() -> set[str]:
+    """Every IPv4 address this server holds, on every interface (the LAN
+    one, Docker bridges, a VPN), plus what its host name resolves to."""
     out: set[str] = set()
     ip = server_lan_ipv4()
     if ip:
         out.add(ip)
+    try:
+        import psutil
+
+        for addrs in psutil.net_if_addrs().values():
+            for a in addrs:
+                if a.family == socket.AF_INET and a.address:
+                    out.add(a.address)
+    except Exception:  # noqa: BLE001 — psutil missing or refused: the rest still counts
+        pass
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
             out.add(info[4][0])
@@ -189,9 +203,15 @@ def _allowlisted(host: str, port: int) -> bool:
     return False
 
 
-def check_address(address: str, port: int, *, host: str | None = None) -> None:
-    """Raise :class:`NotOnLan` unless ``address`` may be dialled."""
-    if _allowlisted(host or address, port) or _allowlisted(address, port):
+def check_address(address: str, port: int, *, host: str | None = None, operator_ok: bool = False) -> None:
+    """Raise :class:`NotOnLan` unless ``address`` may be dialled.
+
+    ``operator_ok`` lets the operator's ``OUTBOUND_ALLOW_HOSTS`` exact
+    ``host:port`` entries through. Only an address an ADMIN typed (and the
+    row saved from it) passes it: anything discovered, swept or typed by a
+    household device is held to the home-network rules, loopback refused
+    (owner rule Q20)."""
+    if operator_ok and (_allowlisted(host or address, port) or _allowlisted(address, port)):
         return
     try:
         ip = ipaddress.ip_address(address)
@@ -215,6 +235,15 @@ def check_address(address: str, port: int, *, host: str | None = None) -> None:
         raise NotOnLan("That's this server's own address, not a printer.")
 
 
+def needs_operator(target: "Target") -> bool:
+    """Whether ``target`` passed only through the operator's allowlist."""
+    try:
+        check_address(target.address, target.port, host=target.host)
+    except NotOnLan:
+        return True
+    return False
+
+
 def is_lan_name(host: str) -> bool:
     h = host.strip().lower().rstrip(".")
     if not h or len(h) > 253:
@@ -226,17 +255,17 @@ def is_lan_name(host: str) -> bool:
     return "." not in h or h.endswith(LAN_SUFFIXES)
 
 
-def resolve(host: str, port: int) -> str:
+def resolve(host: str, port: int, *, operator_ok: bool = False) -> str:
     """The one address to dial for ``host``: an IP literal as written, or
     the single lookup of a LAN name, every answer of which must pass."""
     literal = net_safety.parse_ip_literal(host.strip().strip("[]"))
     if literal is not None:
         if literal.version == 6 and literal.ipv4_mapped is not None:
             literal = literal.ipv4_mapped
-        check_address(str(literal), port, host=host)
+        check_address(str(literal), port, host=host, operator_ok=operator_ok)
         return str(literal)
     if not is_lan_name(host):
-        if _allowlisted(host, port):
+        if operator_ok and _allowlisted(host, port):
             pass
         else:
             raise NotOnLan("That name isn't on your home network. Use the printer's address, like 192.168.1.50.")
@@ -245,7 +274,7 @@ def resolve(host: str, port: int) -> str:
     if not v4:
         raise NotOnLan("Couldn't find %s on your network. Try its address instead." % host[:80])
     for a in v4:
-        check_address(a, port, host=host)
+        check_address(a, port, host=host, operator_ok=operator_ok)
     return v4[0]
 
 
@@ -309,14 +338,16 @@ def parse_typed(text: str) -> TypedAddress:
 
 
 def vet(
-    scheme: str, host: str, port: int, path: str, *, allow_any_port: bool = False
+    scheme: str, host: str, port: int, path: str, *, allow_any_port: bool = False, operator_ok: bool = False,
 ) -> Target:
-    """A :class:`Target` for this URL, or :class:`NotOnLan`."""
+    """A :class:`Target` for this URL, or :class:`NotOnLan`. Discovery and
+    household devices pass neither flag; an admin's typed full URL passes
+    both (``allow_any_port``, ``operator_ok``)."""
     kind = "ipp" if scheme in ("ipp", "ipps") else "escl"
     allowed = IPP_PORTS if kind == "ipp" else ESCL_PORTS
-    if not allow_any_port and port not in allowed and not _allowlisted(host, port):
+    if not allow_any_port and port not in allowed and not (operator_ok and _allowlisted(host, port)):
         raise NotOnLan(
             "Domovoi only talks to printers on their usual ports. An admin can type the full address."
         )
-    address = resolve(host, port)
+    address = resolve(host, port, operator_ok=operator_ok)
     return Target(scheme=scheme, host=host, address=address, port=port, path=path)
