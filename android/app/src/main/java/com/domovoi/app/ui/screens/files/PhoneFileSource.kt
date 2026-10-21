@@ -38,6 +38,11 @@ import java.util.concurrent.ConcurrentHashMap
 /** Files' id for the phone's "Chat documents" library (saved drafts). */
 internal const val CHAT_DOCS_ID = "phone:chatdocs"
 
+/** Whether Files offers upload, move and "add folder" in [libraryId]: never
+ *  in Chat documents, which holds only the drafts chats save (it refuses
+ *  both; a control that can't do what it says isn't shown). Delete stays. */
+internal fun libraryTakesFiles(libraryId: String?): Boolean = libraryId != CHAT_DOCS_ID
+
 /** The text editor's read bound, the server's `_TEXT_MAX_BYTES`. */
 internal const val TEXT_MAX_BYTES = 2 * 1024 * 1024
 
