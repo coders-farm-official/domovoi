@@ -80,6 +80,13 @@ internal class AssistantActions(
     val talk: () -> Unit = {},
     val downloadVoice: () -> Unit = {},
     val setSpeakTyped: (Boolean) -> Unit = {},
+    /** Lookups (part 5, W1): the card's answer for the message at an index,
+     *  the chip, "Always allow internet", and "Use your own search". */
+    val decideLookup: (Int, String) -> Unit = { _, _ -> },
+    val setChatInternet: (Boolean) -> Unit = {},
+    val setAlwaysAllowInternet: (Boolean) -> Unit = {},
+    val setOwnSearch: (com.domovoi.app.assistant.lookup.OwnSearch?) -> Unit = {},
+    val testOwnSearch: suspend (com.domovoi.app.assistant.lookup.OwnSearch?) -> String = { "" },
     /** "report this reply": the report for the reply at an index of a
      *  conversation, before the person's note; null when it is not one. */
     val draftReport: (StoredConversation, Int) -> ReplyReport? = { c, i ->
@@ -422,6 +429,9 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
             newConversation = actions.newConversation, open = actions.open, delete = actions.delete,
             clearAll = actions.clearAll, talk = actions.talk, downloadVoice = actions.downloadVoice,
             setSpeakTyped = actions.setSpeakTyped, draftReport = actions.draftReport, saveReport = actions.saveReport,
+            decideLookup = actions.decideLookup, setChatInternet = actions.setChatInternet,
+            setAlwaysAllowInternet = actions.setAlwaysAllowInternet, setOwnSearch = actions.setOwnSearch,
+            testOwnSearch = actions.testOwnSearch,
             reportSinks = actions.reportSinks, deliverReport = actions.deliverReport,
             deleteReport = actions.deleteReport, clearReports = actions.clearReports,
             retry = assistant::retry,
@@ -506,6 +516,11 @@ private fun actionsFor(
     },
     downloadVoice = a::downloadVoice,
     setSpeakTyped = a::setSpeakTyped,
+    decideLookup = a::decideLookup,
+    setChatInternet = a::setChatInternet,
+    setAlwaysAllowInternet = a::setAlwaysAllowInternet,
+    setOwnSearch = a::setOwnSearch,
+    testOwnSearch = { a.testOwnSearch(it) },
     draftReport = a::draftReport,
     saveReport = { a.saveReport(it) },
     reportSinks = sinks,

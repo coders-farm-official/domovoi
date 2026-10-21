@@ -146,7 +146,25 @@ We build Domovoi in public. Here's where it stands.
   answer names the pages or sections it came from, a press shows the
   passage, and when the document doesn't say, the answer is "I couldn't
   find that". Files → Documents has "Ask about this document". Scanned
-  pages (pictures of text) are not read yet.
+  pages (pictures of text) are not read yet. **"Summarize" works on long
+  documents** too: Domovoi reads them in parts and combines the notes, with
+  "reading part 3 of 8 · about 1 min left" and a **stop** that keeps what
+  was read (**carry on** reads the rest). On the home server the job goes on
+  if you leave the page, and after a restart it asks before reading more;
+  on a phone it runs while Chat is open and picks up where it left off.
+  Every point in the summary cites a page the parts' notes cited.
+- **Chat can look things up, with your permission.** Say "look up …",
+  "what does this page say: https://…", or ask something Domovoi doesn't
+  know. It searches its own manual and an offline library (Kiwix) first;
+  before anything goes online a card shows the exact words and where they
+  go: **Allow once**, **Allow in this chat** or **Not now**. Wikipedia and
+  Wikidata come first (through the local search helper, or directly), or
+  your own SearXNG or Brave Search key (Settings → Chat & AI → Search). The
+  sources under an answer are listed by Domovoi, not the model, and a page's
+  text can't make it do anything. A home that answered "No" to the internet
+  question refuses every lookup that would leave the house, and "Always
+  allow internet" starts off. A phone away from home looks up Wikipedia
+  directly.
 - **Everyday voice answers locally:** an alarm or reminder at a clock time
   ("wake me up at 7" is the next 7 o'clock), "what can you do", and
   what's on your calendar each have their own handler.
@@ -301,7 +319,8 @@ they have been tried on fewer devices than the rest, aren't yet held to
    since rc3 is in the [release notes](docs/RELEASE_NOTES.md): printing and
    scanning, AI chat and questions as an option, Settings in groups with
    one Health page, One Chat in the app, chat history and titles, the help
-   desk, asking a chat about a document, the Windows satellite Setup, a smaller (R8-shrunk) release
+   desk, asking a chat about a document and summarizing long ones, looking
+   things up from chat with your permission, the Windows satellite Setup, a smaller (R8-shrunk) release
    build of the app, tablet and sideways-phone screens that clear the
    clock and cutouts, and a repair by Setup that no longer trips the
    container guard.

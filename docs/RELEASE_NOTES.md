@@ -59,9 +59,46 @@ dependencies.
   {off, skip}`. An older app ignores both and gets the card's sentence as
   the reply's text.
 
+## 2026-10-21 — Looking things up, with your permission
+
+Core, dashboard, app and the Kiwix plugin (1.2.6). **Run Flyway** (V037:
+`chat_threads.internet_allowed` and `used_internet`). The search helper is
+recreated by the next update (`DOMOVOI_SEARXNG_SETTINGS_REV`), so its new
+settings take effect; a box updated by hand needs
+`docker compose up -d searxng` once.
+
+* **Chat can look things up.** Ask "look up …", "what does this page say:
+  https://…", or a question the model doesn't know. Before anything leaves
+  the house, a card shows the exact words and where they go: **Allow
+  once**, **Allow in this chat** or **Not now**. Domovoi's manual and an
+  offline library (Kiwix) are searched first, with no card.
+* **"Always allow internet"** (Settings → Chat & AI → Search, and the
+  phone's model settings) starts **off**. A chip in each chat's header says
+  whether that chat may go online; chats that did carry a globe.
+* **Sources are listed by Domovoi, not the model:** titles and sites, with
+  "CC BY-SA 4.0 · summarised" on Wikipedia's. A page's text can't make
+  Domovoi do anything: it is fenced as data and the answer has no tools.
+* **Wikipedia and Wikidata first.** The search helper turns on its
+  Wikipedia (summaries and full-text search) and Wikidata engines and ranks
+  them first; when the helper doesn't answer, Wikipedia is asked directly.
+* **Use your own search:** your own SearXNG address, or a Brave Search key
+  (kept like the AcoustID key: never shown again; Brave charges after a
+  free monthly credit and sells AI answers separately). A failing one says
+  so and Wikipedia answers. The phone can keep its own, in its keystore.
+* **Phones away from home** look things up on Wikipedia directly, and read
+  a page you name themselves (HTTPS only, no cookies, 2 MB). At home they
+  ask the home server, and a server set to stay off the internet is
+  respected.
+* **Internet "never"** refuses every lookup that would leave the house
+  (409), and the chat says so; the manual and the offline library still
+  answer.
+* **Plugins (SDK 1.8):** a lookup source may say its text's `licence`, and
+  needs no `[capabilities]` line. Kiwix 1.2.6 registers its library as a
+  local source.
+
 ## 2026-10-21 — Summaries of long documents in Chat
 
-Core and dashboard update with one migration, **V037** (a `chat_doc_jobs`
+Core and dashboard update with one migration, **V038** (a `chat_doc_jobs`
 table; Flyway applies it on update). No new dependencies.
 
 * **"Summarize" works on long documents.** A document longer than one

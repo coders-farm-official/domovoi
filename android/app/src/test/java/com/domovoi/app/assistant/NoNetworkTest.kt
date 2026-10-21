@@ -54,6 +54,22 @@ class NoNetworkTest {
         assertEquals(emptyList<Pair<String, String>>(), androidNet)
     }
 
+    /** The one allowed path the plan adds (part 5, W1): the lookup clients,
+     *  used only after the person's allow (PhoneLookupsTest counts the
+     *  calls). The rules, the page reader's text extraction and the
+     *  keystore's box touch no network. */
+    @Test fun inTheLookupPackageOnlyTheClientsTouchTheNetwork() {
+        val classes = classesIn("com/domovoi/app/assistant/lookup", com.domovoi.app.assistant.lookup.LookupRules::class.java)
+        assertTrue("no classes found", classes.size > 5)
+        val clients = setOf("LookupClientsKt", "WikipediaLookup", "PageReader", "HomeLookup", "OwnSearchLookup", "TooLarge", "PublicDns", "OwnSearchError")
+        val offenders = classes.filterNot { (name, _) -> clients.any { name == it || name.startsWith(it + "$") } }
+            .mapNotNull { (name, bytes) ->
+                val refs = utf8Constants(bytes).filter { s -> networking.any { s.contains(it) } }
+                refs.takeIf { it.isNotEmpty() }?.let { "$name: $it" }
+            }
+        assertEquals(emptyList<String>(), offenders)
+    }
+
     @Test fun theDownloaderIsWhereTheHttpClientIs() {
         val downloader = classesIn("com/domovoi/app/assistant", AssistantBench::class.java)
             .filter { it.first.startsWith("ModelDownloader") }

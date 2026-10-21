@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.AlertDialog
@@ -601,6 +602,11 @@ internal fun ChatRowCard(row: ChatRow, chip: String, onOpen: () -> Unit, onActio
                         color = Domovoi.colors.fg,
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
+                    // Looked things up online (part 5, W1): an icon, not an emoji.
+                    if (row.usedInternet) {
+                        Icon(Icons.Outlined.Public, contentDescription = "used the internet",
+                            tint = Domovoi.colors.fgMuted, modifier = Modifier.size(13.dp))
+                    }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     PlaceChip(row.place, chip)

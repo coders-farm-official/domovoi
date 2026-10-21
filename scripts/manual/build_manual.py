@@ -68,6 +68,7 @@ ROUTES: dict[str, dict] = {
     "settings/models": {"dashboard": "#settings/models", "app": {"screen": "Settings", "tab": "models"}},
     "settings/chat": {"dashboard": "#settings/chat", "app": {"screen": "Settings", "tab": "chat"}},
     "settings/internet": {"dashboard": "#settings/internet", "app": {"screen": "Settings", "tab": "internet"}},
+    "settings/search": {"dashboard": "#settings/search", "app": {"dashboard": True}},
     "settings/voice-history": {"dashboard": "#settings/voice-history", "app": {"screen": "Settings", "tab": "voice-history"}},
     "settings/health": {"dashboard": "#settings/health", "app": {"screen": "Settings", "tab": "health"}},
     "settings/advanced": {"dashboard": "#settings/advanced", "app": {"screen": "Settings", "tab": "advanced"}},

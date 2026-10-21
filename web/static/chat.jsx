@@ -21,6 +21,11 @@
  * runs shows it from the message list's `jobs`, polled until it ends; a
  * stopped summary offers "carry on".
  *
+ * Lookups (chat_lookups.jsx, ChatLookups): a reply that would look
+ * something up online arrives as a permission card (Allow once / Allow
+ * in this chat / Not now); the header's chip says whether this chat may go
+ * online, and the list marks chats that did with a globe.
+ *
  * Design notes: the cat glyph marks assistant-attributed lines (one of its
  * three sanctioned homes); user bubbles sit right-aligned on the card
  * surface; assistant text renders as Markdown (chat_markdown.js: the
@@ -40,15 +45,13 @@ const CHAT_AI_OFF_TEXT = 'AI chat is turned off on your home server';
  * onDelta(text) per chunk and resolving with the final done payload. A
  * long document's job (chat_doc_jobs.py) sends `job` and `progress`
  * events first: onJob(view) for each. */
-const chatSendStream = async (threadId, body, onDelta, onStatus, onJob, path) => {
+const chatSendStream = async (threadId, body, onDelta, onStatus, onJob, opts = {}) => {
   // Streams the reply, so it needs the Response itself rather than parsed
   // JSON — apiFetchRaw, not apiFetch. Going through the helper is what
   // gets an unpaired browser the "pair this browser" prompt and one
   // replay of the message, instead of a red bubble it can do nothing
   // about; a bare fetch() sends the same headers and none of that.
-  // path: another route that streams a reply the same way (the pick on a
-  // heads-up card, POST .../heads-up).
-  const r = await apiFetchRaw(path || `/api/chat/threads/${threadId}/messages`, {
+  const r = await apiFetchRaw(opts.path || `/api/chat/threads/${threadId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -59,13 +62,11 @@ const chatSendStream = async (threadId, body, onDelta, onStatus, onJob, path) =>
   if (r.status === 409 && r.headers && r.headers.get && r.headers.get('X-Domovoi-Refusal') === 'ai-off') {
     throw new Error(CHAT_AI_OFF_TEXT);
   }
-  // A refusal with a sentence (a heads-up card answered already, a newer
-  // message after it): say it, don't read it as a stream.
-  if (r.status >= 400 && r.headers && r.headers.get
-      && String(r.headers.get('content-type') || '').includes('application/json')) {
-    let detail = '';
-    try { detail = (await r.json()).detail || ''; } catch { /* no body */ }
-    throw new Error(detail || `${r.status} ${r.statusText}`);
+  // A refusal before any reply (a lookup card already answered): its words.
+  if (!r.ok) {
+    let detail = null;
+    try { detail = (await r.json()).detail; } catch { /* not JSON */ }
+    throw new Error(typeof detail === 'string' ? detail : `${r.status} ${r.statusText}`);
   }
   if (!r.body) throw new Error(`${r.status} ${r.statusText}`);
   const reader = r.body.getReader();
@@ -96,6 +97,8 @@ const chatSendStream = async (threadId, body, onDelta, onStatus, onJob, path) =>
       // A document turn: the reply is being checked against the document
       // and arrives whole, checked (chat_documents.py).
       else if (event === 'status') { if (onStatus) onStatus(payload.state || ''); }
+      // A lookup answer that became the honest line: the text as kept.
+      else if (event === 'replace') { if (opts.onReplace) opts.onReplace(payload.text || ''); }
       else if (event === 'job' || event === 'progress') { if (onJob) onJob(payload); }
       else if (event === 'done') done = payload;
       else if (event === 'error') {
@@ -167,7 +170,7 @@ const ChatThreadRow = ({ t, active, onSelect, onDelete, onRename, onArchive }) =
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: active ? 600 : 500, overflow: 'hidden',
                       textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {t.title || 'new chat'}
+          {t.title || 'new chat'}{' '}<ChatLookups.Mark t={t}/>
         </div>
         <div style={{ fontSize: 11, color: active ? 'var(--fg-muted)' : 'var(--fg-faint)', overflow: 'hidden',
                       textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -302,7 +305,7 @@ const ChatDetailsDialog = ({ m, threadId, onCopy, onClose }) => {
 // A touch held this long opens the menu (iOS fires no contextmenu event).
 const CHAT_LONG_PRESS_MS = 500;
 
-const ChatMessage = ({ m, threadId, onCopy, admin, stoppedJob, onCarryOn, onHeadsUp, busy }) => {
+const ChatMessage = ({ m, threadId, onCopy, admin, onLookup, onHeadsUp, busy, stoppedJob, onCarryOn }) => {
   const isUser = m.role === 'user';
   const [menuAt, setMenuAt] = React.useState(null);
   const [details, setDetails] = React.useState(false);
@@ -384,9 +387,9 @@ const ChatMessage = ({ m, threadId, onCopy, admin, stoppedJob, onCarryOn, onHead
               // (documents plan D3): its own sentence and buttons.
               <ChatDocs.HeadsUpCard card={headsUp} busy={busy}
                                     onPick={onHeadsUp ? (option) => onHeadsUp(m, option) : null}/>
-            ) : (
-              <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(m.content || '') }}/>
-            )}
+            ) : m.stats && m.stats.lookup_card
+              ? <ChatLookups.Card m={m} busy={busy} onDecide={onLookup}/>
+              : <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(m.content || '') }}/>}
             {m.pending && m.status === 'checking' && !m.content && (
               <span className="mono chat-doc-checking">reading the passages and checking the answer…</span>
             )}
@@ -743,6 +746,45 @@ const ChatPageMain = () => {
     }
   };
 
+  const [internetInfo] = ChatLookups.useInternet();
+  const setChatInternet = async (allowed) => {
+    try {
+      await apiPatch(`/api/chat/threads/${threadId}`, { internet_allowed: allowed });
+      fire(allowed ? 'this chat may look things up' : 'this chat asks first again');
+      refreshThreads();
+    } catch { fire('could not change it'); }
+  };
+
+  // The answer to a permission card: the card shows it at once, and the
+  // reply streams as a send does.
+  const decideLookup = async (m, decision) => {
+    if (sending || threadId == null) return;
+    setSending(true);
+    setMessages((cur) => [
+      ...cur.map((x) => (x.id === m.id ? ChatLookups.decided(x, decision) : x)),
+      { id: 'pending', role: 'assistant', content: '', pending: true },
+    ]);
+    try {
+      const { done, errorDetail, errorCode, errorModel } = await chatSendStream(
+        threadId, { decision, device_id: DeviceIdentity.id() },
+        (delta) => setMessages((cur) => cur.map((x) => (x.id === 'pending' ? { ...x, content: x.content + delta } : x))),
+        null, null,
+        { path: `/api/chat/threads/${threadId}/lookups/${m.id}`,
+          onReplace: (text) => setMessages((cur) => cur.map((x) => (x.id === 'pending' ? { ...x, content: text } : x))) },
+      );
+      setMessages((cur) => cur.map((x) =>
+        x.id === 'pending'
+          ? (done || { ...x, pending: false, error: errorDetail, error_code: errorCode, model: errorModel })
+          : x));
+      refreshThreads();
+    } catch (e) {
+      setMessages((cur) => cur.filter((x) => x.id !== 'pending'));
+      fire(String(e.message || e));
+      loadMessages(threadId);
+    }
+    setSending(false);
+  };
+
   const send = async () => {
     const content = draft.trim();
     const docs = docAttachments;
@@ -780,7 +822,7 @@ const ChatPageMain = () => {
       }, (job) => {
         // A long document read in parts: the reply's place shows how far.
         setMessages((cur) => cur.map((m) => (m.id === 'pending' ? { ...m, job } : m)));
-      });
+      }, { onReplace: (text) => setMessages((cur) => cur.map((m) => (m.id === 'pending' ? { ...m, content: text } : m))) });
       setMessages((cur) => cur.map((m) =>
         m.id === 'pending'
           ? (done || { ...m, pending: false, error: errorDetail, error_code: errorCode,
@@ -830,7 +872,7 @@ const ChatPageMain = () => {
         setMessages((cur) => cur.map((m) => (m.id === 'pending' ? { ...m, status: state } : m)));
       }, (job) => {
         setMessages((cur) => cur.map((m) => (m.id === 'pending' ? { ...m, job } : m)));
-      }, `/api/chat/threads/${id}/heads-up`);
+      }, { path: `/api/chat/threads/${id}/heads-up` });
       setMessages((cur) => cur.map((m) => (m.id === 'pending'
         ? (done || { ...m, pending: false, error: errorDetail, error_code: errorCode, model: errorModel || m.model })
         : m)));
@@ -961,6 +1003,8 @@ const ChatPageMain = () => {
           <div className="chat-head-title">
             {(threads.find((t) => t.id === threadId) || {}).title || 'new chat'}
           </div>
+          <ChatLookups.Chip info={internetInfo} thread={threads.find((t) => t.id === threadId)}
+                            onToggle={setChatInternet}/>
           {modelsInfo && (
             <span className="mono chat-head-model">{modelsInfo.default_model}</span>
           )}
@@ -977,7 +1021,7 @@ const ChatPageMain = () => {
                      : null}/>
           ) : messages.map((m) => (
             <ChatMessage key={m.id} m={m} threadId={threadId} onCopy={copyMessage} admin={admin}
-                         onHeadsUp={pickHeadsUp} busy={sending}
+                         onLookup={decideLookup} onHeadsUp={pickHeadsUp} busy={sending}
                          stoppedJob={m.doc && m.doc.job && carryOnAt[m.doc.job.id] === m.id
                            ? stoppedJobs.find((j) => j.id === m.doc.job.id) : null}
                          onCarryOn={carryOn}/>

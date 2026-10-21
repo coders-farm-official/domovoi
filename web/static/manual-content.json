@@ -224,6 +224,12 @@
     "tab": "internet"
    }
   },
+  "settings/search": {
+   "dashboard": "#settings/search",
+   "app": {
+    "dashboard": true
+   }
+  },
   "settings/voice-history": {
    "dashboard": "#settings/voice-history",
    "app": {
@@ -2637,6 +2643,10 @@
     },
     {
      "type": "p",
+     "text": "**Look things up:** say \"look up …\", \"what does this page say: https://…\", or ask something Domovoi doesn't know. It searches its own manual and your offline library first, without asking. Before anything goes online it shows a card with the exact words and where they go: **Allow once**, **Allow in this chat** or **Not now**. The chip at the top of a chat says whether it may go online; chats that did show a globe. The answer lists what it read (Wikipedia's with \"CC BY-SA 4.0\"), and says \"I couldn't find that\" when what it read doesn't say. [Settings → Search](route:settings/search) {admin} has **Always allow internet** (off to start), the order of the sources, and **Use your own search** (your own SearXNG, or a Brave Search key)."
+    },
+    {
+     "type": "p",
      "text": "**Summarize a long document:** ask for a summary and Domovoi reads it in parts, then combines them. The reply's place shows \"reading part 3 of 8 · about 1 min left\" (the time comes from how fast your server has been) with **stop**. Stop keeps what was read (\"Summary of pages 1-9 (stopped)\"), and **carry on** reads the rest. You can leave the page: the summary is there when you come back. A question asked by voice while it reads goes next, after the part being read (a few seconds on a GPU, up to about a minute on a server without one). Each point cites a page; a part Domovoi couldn't cite anything from is named under the summary. After a server restart the chat asks \"carry on?\" before it reads any more. One summary reads at a time per chat, and two in the house."
     },
     {
@@ -2667,6 +2677,12 @@
       },
       {
        "text": "\"pictures of text (scanned)\": scanned pages aren't searched yet."
+      },
+      {
+       "text": "\"set to stay off the internet\": your home's internet answer is No ([Settings → Internet](route:settings/internet)); only the manual and the offline library are searched."
+      },
+      {
+       "text": "\"Brave Search refused your key\": check the key in [Settings → Search](route:settings/search); the answer came from Wikipedia meanwhile."
       },
       {
        "text": "\"Points that span parts may be missed\": a long summary is made part by part. Ask about the specific thing to have it found wherever it is."

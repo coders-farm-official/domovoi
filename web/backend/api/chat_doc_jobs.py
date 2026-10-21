@@ -8,7 +8,7 @@ and stop:
 
 * **A home-server chat's job** starts from a summary request in a thread
   with long documents (``chat.send_message``). Its row in
-  ``chat_doc_jobs`` (V037) keeps each part's notes as it finishes. The
+  ``chat_doc_jobs`` (V038) keeps each part's notes as it finishes. The
   send's SSE stream relays the progress (``event: job``, then ``event:
   progress`` per change), and the job writes the assistant message itself
   when it ends, so a person who leaves the page loses nothing: the job

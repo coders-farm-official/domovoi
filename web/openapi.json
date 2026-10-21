@@ -6823,6 +6823,46 @@
         }
       }
     },
+    "/api/config/search-test": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Search Key Test",
+        "description": "Settings \u2192 Chat & AI \u2192 Search \u2192 \"Use your own search\" \u2192 Test: proxy\nof the core's ``POST /v1/admin/config/search-test`` \u2192\n``{result: works|refused|unreachable|error, detail}``; 409 when the\ninternet answer is No (nothing sent), 422 with nothing to test. The\nkey is never echoed or logged.",
+        "operationId": "search_key_test_api_config_search_test_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/config/internet": {
       "get": {
         "tags": [
@@ -13690,6 +13730,158 @@
         }
       }
     },
+    "/api/chat/internet": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Chat Internet",
+        "description": "What the conversation header's chip reads: the household's internet\nanswer (``never`` turns lookups off) and its \"Always allow internet\".",
+        "operationId": "chat_internet_api_chat_internet_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Chat Internet Api Chat Internet Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/lookup": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Phone Lookup",
+        "description": "A phone chat's lookup at home: forwarded with the caller's own\ncredentials to the core's ``POST /v1/phone/lookup`` (at most 3\nresults; 409 internet-off under \"never\" for anything that would leave;\nthe core's tier and pace apply). The phone's chats never land here as\nrows: nothing is stored. The AI switch doesn't apply.",
+        "operationId": "phone_lookup_api_chat_lookup_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PhoneLookupBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/lookup-sources": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Chat Lookup Sources",
+        "description": "Settings \u2192 Chat & AI \u2192 Search: the core's lookup sources in the order\nthey are asked (``GET /v1/lookup/sources``, with the caller's own\ncredentials). 502 when the core doesn't answer.",
+        "operationId": "chat_lookup_sources_api_chat_lookup_sources_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Chat Lookup Sources Api Chat Lookup Sources Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/threads/{thread_id}/lookups/{message_id}": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Decide Lookup",
+        "description": "The person's answer to a permission card (``stats.lookup_card`` on\nassistant row ``message_id``): ``once`` / ``chat`` look it up and\nanswer from what was found (``chat`` also allows this chat's later\nlookups); ``no`` answers without looking. Streamed like a send\n(``delta`` / ``replace`` / ``done`` / ``error``). A card is answered\nonce: 409 for a card already answered, 404 for no such card.",
+        "operationId": "decide_lookup_api_chat_threads__thread_id__lookups__message_id__post",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "title": "Message Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LookupDecision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/chat/threads/{thread_id}/voice": {
       "post": {
         "tags": [
@@ -18759,6 +18951,36 @@
         ],
         "title": "LoginRequest"
       },
+      "LookupDecision": {
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "once",
+              "chat",
+              "no"
+            ],
+            "title": "Decision"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "decision"
+        ],
+        "title": "LookupDecision"
+      },
       "LyricLine": {
         "properties": {
           "t": {
@@ -20109,6 +20331,48 @@
           "name"
         ],
         "title": "PersonRename"
+      },
+      "PhoneLookupBody": {
+        "properties": {
+          "query": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "internet": {
+            "type": "boolean",
+            "title": "Internet",
+            "default": true
+          },
+          "limit": {
+            "type": "integer",
+            "maximum": 3.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "default": 3
+          }
+        },
+        "type": "object",
+        "title": "PhoneLookupBody"
       },
       "PlayPlaylistRequest": {
         "properties": {
@@ -21866,6 +22130,42 @@
         "type": "object",
         "title": "ScanBody"
       },
+      "SearchTestRequest": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "pattern": "^(brave|searxng)$",
+            "title": "Kind"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "SearchTestRequest"
+      },
       "SendBody": {
         "properties": {
           "content": {
@@ -22254,6 +22554,17 @@
               }
             ],
             "title": "Archived"
+          },
+          "internet_allowed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Internet Allowed"
           }
         },
         "type": "object",

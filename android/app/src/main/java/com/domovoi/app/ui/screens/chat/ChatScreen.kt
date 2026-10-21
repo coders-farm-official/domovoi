@@ -1,5 +1,6 @@
 package com.domovoi.app.ui.screens.chat
 
+import androidx.compose.foundation.clickable
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -134,6 +135,10 @@ internal data class ThreadRow(
     val title_by_user: Boolean = false,
     /** A search hit (`?q=`): the words around the match in a message. */
     val match_snippet: String? = null,
+    /** "Allow in this chat" is on (V037): lookups go without asking. */
+    val internet_allowed: Boolean = false,
+    /** A lookup in it went online (V037): the list's globe. */
+    val used_internet: Boolean = false,
 )
 
 @Serializable
@@ -301,6 +306,8 @@ private suspend fun sendStreaming(
     /** "Try again" (`POST .../retry`): no body, a new reply to the last
      *  question in place of the last reply. */
     retry: Boolean = false,
+    /** The answer to a lookup card (`POST .../lookups/<message id>`). */
+    decision: Pair<Long, String>? = null,
     /** A pick on a heads-up card (documents plan D3): (card row id, option),
      *  streamed from `POST .../heads-up`. */
     headsUpPick: Pair<Long, String>? = null,
@@ -310,6 +317,9 @@ private suspend fun sendStreaming(
         put("message_id", headsUpPick.first)
         put("option", headsUpPick.second)
         put("heads_up", headsUpBody(prefs))
+    } else if (decision != null) buildJsonObject {
+        put("decision", decision.second)
+        put("device_id", app.prefs.deviceId)
     } else if (retry) buildJsonObject {} else buildJsonObject {
         // This phone's heads-up switch and silenced kinds (the server's
         // rules decide when a card shows).
@@ -328,6 +338,7 @@ private suspend fun sendStreaming(
     }).toString().toRequestBody("application/json".toMediaType())
     val path = when {
         headsUpPick != null -> "/api/chat/threads/$threadId/heads-up"
+        decision != null -> "/api/chat/threads/$threadId/lookups/${decision.first}"
         retry -> "/api/chat/threads/$threadId/retry"
         else -> "/api/chat/threads/$threadId/messages"
     }
@@ -361,6 +372,9 @@ private suspend fun sendStreaming(
                             "delta" -> payload["text"]?.jsonPrimitive?.content?.let {
                                 withContext(Dispatchers.Main) { onDelta(it) }
                             }
+                            // A lookup answer that became the honest line: the
+                            // done row carries the kept text (finishWith).
+                            "replace" -> Unit
                             "error" -> payload["detail"]?.jsonPrimitive?.content?.let { detail ->
                                 val code = payload["code"]?.jsonPrimitive?.contentOrNull
                                 val model = payload["model"]?.jsonPrimitive?.contentOrNull
@@ -840,6 +854,43 @@ internal fun ConversationPane(
         }
     }
 
+    // The answer to a lookup card (part 5, W1): the card shows it at once,
+    // the reply streams in, and the thread is read back after.
+    fun decideLookup(m: LiveMessage, decision: String) {
+        val target = current ?: return
+        val id = m.id ?: return
+        if (sending) return
+        sending = true
+        following = true
+        val state = when (decision) { "once" -> "allowed_once"; "chat" -> "allowed_chat"; else -> "declined" }
+        m.stats = m.stats?.let { s -> s.copy(lookup_card = s.lookup_card?.copy(state = state)) }
+        val live = LiveMessage("assistant", "", pending = true)
+        live.sentAtMs = System.currentTimeMillis()
+        transcript.add(live)
+        scope.launch {
+            runCatching {
+                sendStreaming(
+                    app, target.id, "", emptyList(), emptyList(),
+                    onDelta = {
+                        if (live.firstWordsAtMs == null) live.firstWordsAtMs = System.currentTimeMillis()
+                        live.content += it
+                    },
+                    onError = { detail, code, model ->
+                        live.error = detail
+                        live.errorCode = code
+                        if (model != null) live.model = model
+                    },
+                    onDone = { row -> live.finishWith(row) },
+                    decision = id to decision,
+                )
+            }.onFailure { live.error = failureText("look it up", it) }
+            live.pending = false
+            sending = false
+            if (decision == "chat") current = target.copy(internet_allowed = true)
+            loadMessages(target.id)
+        }
+    }
+
     // A chat started from the list's "Message Domovoi…" box: its first
     // message goes out as the chat opens.
     LaunchedEffect(Unit) {
@@ -872,6 +923,18 @@ internal fun ConversationPane(
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         ChatPaneGutter()
         ThreadTitleRow(title, frame, shareChat)
+        open?.let { t ->
+            ServerInternetChip(t, onToggle = { allowed ->
+                scope.launch {
+                    runCatching {
+                        app.api.patch("/api/chat/threads/${t.id}", kotlinx.serialization.json.buildJsonObject {
+                            put("internet_allowed", allowed)
+                        })
+                    }.onSuccess { current = t.copy(internet_allowed = allowed) }
+                        .onFailure { toast(failureText("change it", it)) }
+                }
+            })
+        }
 
         Box(Modifier.weight(1f).fillMaxWidth().then(rememberFitStretch(listState))) {
             LazyColumn(
@@ -884,6 +947,13 @@ internal fun ConversationPane(
                 val carryAt = stopped.associate { j -> j.id to transcript.indexOfLast { it.doc?.job?.id == j.id } }
                 itemsIndexed(transcript) { i, m ->
                     if (i == windowAt) WindowDivider()
+                    // A lookup's permission card: the exact words, where they
+                    // go, and the three answers (part 5, W1).
+                    val card = m.stats?.lookup_card
+                    if (card != null && m.role != "user") {
+                        com.domovoi.app.ui.screens.assistant.LookupCardView(card, enabled = !sending) { d -> decideLookup(m, d) }
+                        return@itemsIndexed
+                    }
                     // The draft is made at the tap, from the transcript then.
                     val stoppedJob = m.doc?.job?.id?.let { id -> stopped.firstOrNull { it.id == id && carryAt[id] == i } }
                     MessageBubble(
@@ -1133,6 +1203,42 @@ private fun ThreadTitleRow(title: String, frame: ChatFrame, onShare: (() -> Unit
     ChatHeader(title, frame.chip, ChatPlaceKind.Server, frame.onBack, actions = onShare?.let { share ->
         { ShareChatButton(share) }
     })
+}
+
+/** The conversation header's internet chip for a home-server chat: the
+ *  household's answer (never / always allow) from `GET /api/chat/internet`
+ *  and this thread's "Allow in this chat". */
+@Composable
+private fun ServerInternetChip(thread: ThreadRow, onToggle: (Boolean) -> Unit) {
+    val app = LocalApp.current
+    var info by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
+    LaunchedEffect(thread.id) {
+        info = runCatching {
+            val o = app.api.get("/api/chat/internet").jsonObject
+            (o["internet"]?.jsonPrimitive?.contentOrNull.orEmpty()) to
+                (o["always_allow"]?.jsonPrimitive?.contentOrNull == "true")
+        }.getOrNull()
+    }
+    val (policy, always) = info ?: return
+    val (label, on) = serverInternetChip(policy, always, thread.internet_allowed)
+    val fixed = policy == "never" || always
+    Row(
+        Modifier.padding(bottom = 4.dp)
+            .border(1.dp, if (on) Domovoi.colors.brand else Domovoi.colors.border, RoundedCornerShape(999.dp))
+            .clickable(enabled = !fixed) { onToggle(!thread.internet_allowed) }
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = if (on) Domovoi.colors.fg else Domovoi.colors.fgMuted)
+    }
+}
+
+/** The server chat chip's words: (label, on). */
+internal fun serverInternetChip(policy: String, alwaysAllow: Boolean, chatAllowed: Boolean): Pair<String, Boolean> = when {
+    policy == "never" -> "internet off" to false
+    alwaysAllow -> "internet always on" to true
+    chatAllowed -> "internet on for this chat" to true
+    else -> "internet off" to false
 }
 
 /** A message as the share text reads it. */
