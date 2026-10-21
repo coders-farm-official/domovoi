@@ -22,7 +22,7 @@ object DraftAts {
     /** Said when this phone has no PDF text API to read the file back. */
     const val NO_PDF_API = "saved · this phone can't read PDF text back to check it (that needs Android 15)"
 
-    private val WORD = Regex("(?U)\\S+")
+    private val WORD = DraftSpace.WORDS
     private val BULLETS = setOf("•", "-", "*", "·")
 
     fun words(text: String): List<String> =

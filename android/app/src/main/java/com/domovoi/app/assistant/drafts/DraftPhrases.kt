@@ -52,7 +52,7 @@ object DraftPhrases {
             "(?:the|my) (?:draft|letter|resume|cv|cover letter|document)))?$",
     )
     private val TOPIC_LEAD = Regex("^(?:,|that|which|please)\\s*", RegexOption.IGNORE_CASE)
-    private val SPACES = Regex("(?U)\\s+")
+    private val SPACES = DraftSpace.RUNS
 
     private fun pyRstrip(s: String, chars: String): String = s.trimEnd { it in chars }
 

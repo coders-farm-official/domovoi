@@ -4,7 +4,17 @@ embedded, with ToUnicode maps, so the text layer is real and searchable).
 
 Single column by construction: lines are drawn top to bottom, left to
 right, which is the order a text extractor (and an applicant tracking
-system) reads them in. ReportLab can't tag a PDF (that is its paid
+system) reads them in. Each line is its own text line on its own baseline,
+so every reader breaks the line there and the words either side of a wrap
+never run together ("if I" never reads "ifI").
+
+A wrapped line's kept space (:mod:`.layout`) is not drawn at the line's
+end: Android's PDF writer (Skia) writes no glyph for a space at all (the
+2026-10-21 emulator check: none of a letter's 105 spaces were in the
+phone's PDF; the reader puts them back from the gaps between words, but
+not at a line's end). Drawing it here would make the server's text differ
+from the phone's by those spaces; leaving it off makes the two identical,
+and the line break is what keeps the words apart. ReportLab can't tag a PDF (that is its paid
 version), which is why .docx is offered beside it and is the default for
 resumes and cover letters. The phone's twin is ``DraftPdf.kt``.
 """
@@ -48,7 +58,7 @@ def render(markdown: str, template: Template, *, title: str = "") -> bytes:
             c.setFont(_font(ln.font), ln.size / s)
             if ln.marker:
                 c.drawString(ln.marker_x / s, h - ln.y / s, ln.marker + " ")
-            c.drawString(ln.x / s, h - ln.y / s, ln.text)
+            c.drawString(ln.x / s, h - ln.y / s, ln.text.rstrip(" "))
         c.showPage()
     c.save()
     return buf.getvalue()

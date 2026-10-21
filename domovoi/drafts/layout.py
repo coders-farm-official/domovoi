@@ -15,10 +15,11 @@ The rules, kept simple enough to hold identically in Kotlin:
   when ``units × size ≤ room × units_per_em``, every quantity in
   hundredths of a point. No renderer measures anything.
 * **An explicit space at every wrap.** A wrapped line keeps the space it
-  was broken at as its last character, so a text extractor reads "if I"
-  across the break, never "ifI" (the D0 round trip lost exactly that
-  space). A word longer than the line is cut between letters, with no
-  space.
+  was broken at as its last character (the D0 round trip read "if I" as
+  "ifI" across a wrap), so the laid-out text and the .docx keep it; a
+  word longer than the line is cut between letters, with no space. In a
+  PDF each line is drawn as its own text line, which readers always break
+  on; the trailing space itself isn't drawn (:mod:`.pdf_file` says why).
 * **Pages.** Letter size, the template's margins; a line that would cross
   the bottom margin starts a new page; a title, heading or bold line is
   kept with the line after it; space before a block is dropped at the top

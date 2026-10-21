@@ -81,5 +81,5 @@ object DraftBlocks {
     internal fun pyStrip(s: String): String = s.trim { it.isWhitespace() }
 
     /** Python's `str.split()` (runs of whitespace, no empty pieces). */
-    internal fun pySplit(s: String): List<String> = s.split(Regex("(?U)\\s+")).filter { it.isNotEmpty() }
+    internal fun pySplit(s: String): List<String> = s.split(DraftSpace.RUNS).filter { it.isNotEmpty() }
 }

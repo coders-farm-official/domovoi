@@ -70,7 +70,10 @@ object DraftPdf {
                     paint.typeface = assets.typeface(ln.font)
                     paint.textSize = ln.size / s
                     if (ln.marker.isNotEmpty()) canvas.drawText(ln.marker + " ", ln.markerX / s, ln.y / s, paint)
-                    canvas.drawText(ln.text, ln.x / s, ln.y / s, paint)
+                    // Skia writes no glyph for a space (the reader restores the
+                    // ones between words from the gaps), so a wrap's kept space
+                    // is left off here and on the server alike (pdf_file.py).
+                    canvas.drawText(ln.text.trimEnd(' '), ln.x / s, ln.y / s, paint)
                 }
                 doc.finishPage(page)
             }

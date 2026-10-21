@@ -287,7 +287,10 @@ internal fun DraftCanvas(
                 sel = pick
                 showChanges = changesOnFor(pick, DraftSeen.get(context, doc.key))
             }
-            .onFailure { error = "couldn't read the draft: ${it.message ?: "error"}" }
+            .onFailure {
+                android.util.Log.w("DraftCanvas", "couldn't read ${doc.key}", it)
+                error = "couldn't read the draft: ${it.message ?: it.javaClass.simpleName}"
+            }
     }
     LaunchedEffect(doc.key, reloadKey) {
         editing = null

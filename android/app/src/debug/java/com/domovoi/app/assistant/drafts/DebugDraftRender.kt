@@ -36,7 +36,13 @@ class DebugDraftRender : BroadcastReceiver() {
                         continue
                     }
                     val bytes = DraftPdf.render(assets, f.readText(), template)
-                    File(outDir, f.name.removeSuffix(".md") + ".pdf").writeBytes(bytes)
+                    val pdf = File(outDir, f.name.removeSuffix(".md") + ".pdf")
+                    pdf.writeBytes(bytes)
+                    // What the phone's own PDF text API reads back (the ATS check's reader).
+                    com.domovoi.app.assistant.docs.PhonePdfText.readerOrNull()?.let { r ->
+                        val text = r.read(pdf, 50).joinToString("\u000c") { pg -> pg.blocks.joinToString("\n") { it.text } }
+                        File(outDir, f.name.removeSuffix(".md") + ".txt").writeText(text)
+                    }
                     Log.i(TAG, "rendered ${f.name} (${bytes.size} bytes)")
                 }
             } catch (e: Exception) {

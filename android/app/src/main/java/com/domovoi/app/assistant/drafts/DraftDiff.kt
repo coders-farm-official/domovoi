@@ -8,8 +8,8 @@ package com.domovoi.app.assistant.drafts
  */
 object DraftDiff {
     const val MAX_TOKENS = 40000
-    // (?U): whitespace as Python's \s reads it (Unicode), not ASCII only.
-    private val TOKEN = Regex("(?U)\\S+|\\s+")
+    // Whitespace as Python's \s reads it (DraftSpace).
+    private val TOKEN = DraftSpace.TOKENS
 
     /** The draft as plain text, as the changes view shows it. */
     fun displayText(markdown: String): String {

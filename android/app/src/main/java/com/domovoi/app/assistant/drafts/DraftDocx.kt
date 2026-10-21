@@ -20,7 +20,7 @@ object DraftDocx {
     private const val W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
     private fun clean(text: String): String =
-        Normalizer.normalize(text, Normalizer.Form.NFKC).split(Regex("(?U)\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+        Normalizer.normalize(text, Normalizer.Form.NFKC).split(DraftSpace.RUNS).filter { it.isNotEmpty() }.joinToString(" ")
 
     private fun esc(s: String) = MiniXml.escape(s)
 

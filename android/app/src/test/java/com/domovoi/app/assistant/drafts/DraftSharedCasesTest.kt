@@ -209,6 +209,15 @@ class DraftSharedCasesTest {
         }
     }
 
+    /** Android's ICU regex refuses the `(?U)` flag the JVM takes (found on the
+     *  emulator: DraftDiff failed to load), so no draft pattern may use it. */
+    @Test fun noPatternUsesAFlagAndroidRefuses() {
+        val dir = File(repo, "android/app/src/main/java/com/domovoi/app/assistant/drafts")
+        val offenders = dir.listFiles().orEmpty().filter { it.readText().contains("Regex(\"(?U)") }.map { it.name }
+        assertEquals(emptyList<String>(), offenders)
+        assertEquals(listOf("a", "b"), DraftBlocks.pySplit("a  b"))
+    }
+
     @Test fun aLongVersionIsRevisedInParts() {
         val body = "# Name\n\n" + (0 until 4).joinToString("\n\n") { "## Section $it\n" + "Steady, careful work. ".repeat(20) }
         val passes = DraftRevise.passes(body, "shorter", limit = 300)
