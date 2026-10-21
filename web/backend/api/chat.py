@@ -93,6 +93,8 @@ from sqlalchemy import text
 from domovoi import ai_features, executors, image_safety
 from domovoi.admin_auth import require_device, require_device_read
 from domovoi.clients import ollama as ollama_client
+from domovoi.help_desk import answer as help_answer
+from domovoi.help_desk import delivery as help_delivery
 from domovoi.config import settings as core_settings
 from domovoi.profile_context import build_profile_prefix
 from domovoi.voice_identifier import speaker_is_confident
@@ -711,8 +713,63 @@ async def _thread_profile(person_id: int | None) -> str | None:
         return None
 
 
+# What the vision model is asked about a screenshot in a help turn, before
+# the help is searched: the page and the words on it, nothing else.
+SCREENSHOT_DESCRIBE_PROMPT = (
+    "Describe this screenshot of the Domovoi dashboard or app in at most three short lines: "
+    "which page or screen it shows (its title), and any error, warning or message text on it, "
+    "copied exactly. If you can't read something, say so. Nothing else."
+)
+
+
+async def _describe_screenshot(history: list[dict[str, Any]], model: str) -> str:
+    """The vision model's short reading of the pictures in the newest
+    message ("" when there are none, or it fails: the text is searched
+    alone then)."""
+    last = history[-1] if history else {}
+    if not last.get("images"):
+        return ""
+    messages = [
+        {"role": "system", "content": SCREENSHOT_DESCRIBE_PROMPT},
+        {"role": "user", "content": "What does this screenshot show?", "images": last["images"]},
+    ]
+    out: list[str] = []
+    try:
+        async for delta in ollama_client.chat_stream(
+            messages, model=model, think=False, num_predict=160,
+            num_ctx=core_settings.ollama_vision_num_ctx or None,
+        ):
+            out.append(delta)
+    except Exception as e:  # noqa: BLE001 — the answer then reads the picture itself
+        log.warning("chat help: the screenshot could not be read first: %s: %s", type(e).__name__, str(e)[:200])
+        return ""
+    return "".join(out)[:600]
+
+
+async def _help_turn(
+    content: str, *, thread_title: str | None, request: Request | None,
+    history: list[dict[str, Any]], vision_call: bool, model: str,
+):
+    """The help turn for this message, or None. Never fails the send: a
+    help that can't be read leaves the chat answering as it always has."""
+    from web.backend.api import help as help_api
+
+    help_thread = (thread_title or "").startswith(help_delivery.TITLE_PREFIX)
+    try:
+        if not help_thread and not help_answer.looks_like_help(content):
+            return None
+        extra = await _describe_screenshot(history, model) if vision_call else ""
+        return await help_api.help_turn_for(
+            content, help_thread=help_thread, admin=await help_api.caller_is_admin(request),
+            has_screenshot=vision_call, extra_query=extra,
+        )
+    except Exception as e:  # noqa: BLE001
+        log.warning("chat help: the help could not be read: %s: %s", type(e).__name__, str(e)[:200])
+        return None
+
+
 @router.post("/threads/{thread_id}/messages", dependencies=SEND)
-async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
+async def send_message(thread_id: int, body: SendBody, request: Request) -> StreamingResponse:
     """Persist the user turn, stream the assistant reply as SSE, persist the
     assistant turn at stream end. Events:
 
@@ -726,6 +783,16 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
     the refusal (``vision_model_missing``) and Ollama is never asked. When
     Ollama can't be asked whether the model is there, the send goes ahead
     and a failure is reported as it happens.
+
+    Help (``web/backend/api/help.py``, part 9): in a thread titled "Help: …",
+    or for a question about Domovoi whose answer its help holds, the model
+    is given the help desk's instruction and the passages found instead of
+    the chat persona, and the reply ends with the sections it came from
+    (written here, not by the model; ``stats.help``). A help thread whose
+    question the help doesn't cover is answered "The manual doesn't cover
+    that." with no model asked. A screenshot in a help turn is read by the
+    vision model first (which page, what error), and that reading is
+    searched too.
     """
     images = [
         {"token": i.get("token", ""), "name": str(i.get("name", ""))[:200]}
@@ -743,7 +810,7 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
 
     async with session_scope() as s:
         thread = (
-            await s.execute(text("SELECT person_id FROM chat_threads WHERE id = :id"), {"id": thread_id})
+            await s.execute(text("SELECT person_id, title FROM chat_threads WHERE id = :id"), {"id": thread_id})
         ).first()
         if thread is None:
             raise HTTPException(status_code=404, detail="thread not found")
@@ -809,6 +876,22 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
             profile, pictures=vision_call, model_system=model_system,
         ),
     }
+    # A help turn: the help desk's instruction and its material instead.
+    help_turn = None
+    fixed_reply: str | None = None
+    if refusal is None and not override:
+        help_turn = await _help_turn(
+            body.content, thread_title=thread.title, request=request, history=history,
+            vision_call=vision_call, model=model,
+        )
+        if help_turn is not None:
+            system = {
+                "role": "system",
+                "content": help_answer.system_prompt(help_turn, bot=core_settings.bot_name, pictures=vision_call)
+                + (("\n\n" + model_system.strip()) if model_system and model_system.strip() else ""),
+            }
+            if not help_turn.covered:
+                fixed_reply = help_answer.not_covered_answer(help_turn)
     num_ctx = (core_settings.ollama_vision_num_ctx if vision_call else 0) or core_settings.ollama_num_ctx
     stream_knobs: dict[str, Any] = (
         {"think": False, "num_ctx": core_settings.ollama_vision_num_ctx} if vision_call else {}
@@ -831,6 +914,10 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         if refusal is not None:
             code, error = refusal
             log.info("chat refused up front (thread %s, model %r): %s", thread_id, model, code)
+        elif fixed_reply is not None:
+            # Help that found nothing: the honest line, no model asked.
+            chunks.append(fixed_reply)
+            yield f"event: delta\ndata: {json.dumps({'text': fixed_reply})}\n\n"
         else:
             try:
                 async for delta in ollama_client.chat_stream(
@@ -857,6 +944,14 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
                 )
 
         content = "".join(chunks)
+        if help_turn is not None and fixed_reply is None and content and error is None:
+            # Links no passage gave lose their target; the sources the
+            # code knows it gave go under the reply. The done row carries
+            # the result; the footer streams too.
+            final = help_answer.finish(help_turn, content)
+            if final.startswith(content) and len(final) > len(content):
+                yield f"event: delta\ndata: {json.dumps({'text': final[len(content):]})}\n\n"
+            content = final
         if not content and error is None:
             code, error = _plain(ERR_EMPTY, model, model_role)
         if refusal is not None:
@@ -874,6 +969,12 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
             )
         if code is not None:
             stats["error_code"] = code
+        if help_turn is not None:
+            stats["help"] = {
+                "covered": help_turn.covered,
+                "sources": [src.as_dict() for src in help_turn.sources],
+                "model_asked": fixed_reply is None,
+            }
         async with session_scope() as s:
             row = (
                 await s.execute(

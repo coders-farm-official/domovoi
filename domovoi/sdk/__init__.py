@@ -33,7 +33,11 @@ from __future__ import annotations
 # 1.7.0: added core_config.ai_features (the household's AI switch, live);
 #        sdk.http refuses a request that runs or fetches a model on this
 #        box's Ollama while it is off (ai_features.AITurnedOff).
-API_VERSION = "1.7.0"
+# 1.8.0: added lookup sources (domovoi.lookup: LookupSource with search /
+#        fetch and a class of local, api or web; ctx.add_lookup_source;
+#        the core orders them by class) and the manifest's optional
+#        [plugin] help file, indexed by Domovoi's help desk.
+API_VERSION = "1.8.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,
@@ -47,6 +51,12 @@ from domovoi.handlers.base import (  # noqa: E402,F401
 )
 from domovoi import net_safety  # noqa: E402,F401
 from domovoi import egress  # noqa: E402,F401
+from domovoi.lookup import (  # noqa: E402,F401
+    LOOKUP_SOURCE,
+    LookupDocument,
+    LookupHit,
+    LookupSource,
+)
 from domovoi.models import Context, Intent, Response  # noqa: E402,F401
 from domovoi.sdk.assets import AssetAPI, CannedSound  # noqa: E402,F401
 from domovoi.sdk.containers import (  # noqa: E402,F401
@@ -102,6 +112,10 @@ __all__ = [
     "Intent",
     "LibraryAPI",
     "LibraryTrack",
+    "LOOKUP_SOURCE",
+    "LookupDocument",
+    "LookupHit",
+    "LookupSource",
     "MediaCandidate",
     "NowPlayingView",
     "net_safety",

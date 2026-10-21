@@ -82,6 +82,13 @@ class DeviceRegistration(BaseModel):
     name: str | None = Field(default=None, max_length=_MAX_NAME)
     platform: str | None = Field(default=None, max_length=32)
     user_agent: str | None = Field(default=None, max_length=400)
+    # "This phone belongs to" (V033): the person (people.id) the app's
+    # Settings → Connection names, so voice help can send steps to the
+    # asker's own phones. Only applied when SENT (null clears it; leaving it
+    # out keeps it): a browser, or an app from before, never touches it. An
+    # id no person has is stored as nobody. Self-asserted like the rest of
+    # the row: it decides where help steps go, nothing more.
+    owner_person_id: int | None = Field(default=None, ge=1)
 
 
 class DeviceRename(BaseModel):
@@ -220,6 +227,29 @@ async def _has_shared_screen(s: Any) -> bool:
     return _HAS_SHARED_SCREEN
 
 
+_HAS_OWNER = False
+
+
+async def _has_owner(s: Any) -> bool:
+    """Whether V033's ``owner_person_id`` is there (cached once it is)."""
+    global _HAS_OWNER
+    if not _HAS_OWNER:
+        row = (
+            await s.execute(
+                text(
+                    """
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'devices'
+                      AND column_name = 'owner_person_id'
+                    """
+                )
+            )
+        ).first()
+        _HAS_OWNER = row is not None
+    return _HAS_OWNER
+
+
 async def _columns(s: Any) -> str:
     """The select / RETURNING list for a :class:`Device`, ``shared_screen``
     last — read as FALSE until V014 is applied."""
@@ -262,6 +292,14 @@ async def register_device(payload: DeviceRegistration, response: Response) -> De
             },
         )
         result = row.first()
+        if "owner_person_id" in payload.model_fields_set and await _has_owner(s):
+            await s.execute(
+                text(
+                    "UPDATE devices SET owner_person_id = (SELECT id FROM people WHERE id = :o) "
+                    "WHERE device_id = :id"
+                ),
+                {"o": payload.owner_person_id, "id": ident},
+            )
     if result is None:  # pragma: no cover — RETURNING always yields on upsert
         raise HTTPException(status_code=500, detail="upsert returned no row")
     # From here the browser carries its own name on every request, including
