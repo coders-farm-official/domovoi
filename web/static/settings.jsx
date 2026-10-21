@@ -4419,7 +4419,7 @@ const SettingsSearch = ({ groups }) => {
     <div className="settings-search" role="search">
       <Icon name="search" size={15} className="settings-search-icon"/>
       <input type="search" className="settings-search-input" value={q}
-             placeholder="search settings · wake, printer, voice history…"
+             placeholder="search settings · wake, voice history…"
              aria-label="search settings" autoComplete="off"
              onFocus={askFields}
              onChange={(e) => { setQ(e.target.value); setAt(0); askFields(); }}
@@ -4525,7 +4525,7 @@ const SettingsPage = () => {
                     <span className="settings-nav-group-label">{g.label}</span>
                     <span className="settings-nav-group-list">{g.sections.map((s) => s.label).join(' · ')}</span>
                   </span>
-                  <Icon name="chevron-right" size={16} className="settings-nav-chev"/>
+                  <span className="settings-nav-chev"><Icon name="chevron-right" size={16}/></span>
                 </>
               ))}
               <div className="settings-nav-items">
@@ -4534,7 +4534,7 @@ const SettingsPage = () => {
                     {navLink(s.id, `settings-nav-item${s === section ? ' on' : ''}`, (
                       <>
                         <span>{s.label}</span>
-                        <Icon name="chevron-right" size={16} className="settings-nav-chev"/>
+                        <span className="settings-nav-chev"><Icon name="chevron-right" size={16}/></span>
                       </>
                     ))}
                   </React.Fragment>
