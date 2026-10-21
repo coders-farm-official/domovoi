@@ -100,6 +100,13 @@ const ChatDrafts = (() => {
     </div>
   );
 
+  /* Saves a version's file on this device (the server names it). */
+  const download = (id, version, format) => {
+    const url = api.exportUrl(id, version, format);
+    if (typeof deviceDownload === 'function') deviceDownload(url);
+    else window.open(url, '_blank', 'noopener');
+  };
+
   /* The draft card on the reply that made a version, or asked to print. */
   const DraftCard = ({ m, latest, onOpen, onSave, onPrint, canPrint }) => {
     const d = m.draft || {};
@@ -125,10 +132,8 @@ const ChatDrafts = (() => {
           <Button icon="panel-right-open" onClick={() => onOpen(d.id, d.version)}>open</Button>
           {!isPrint && <Button icon="save" onClick={() => onSave(d.id, d.version)}>save</Button>}
           {!isPrint && (
-            <a className="btn" href={api.exportUrl(d.id, d.version, d.kind === 'letter' ? 'pdf' : 'docx')}
-               download title="download this version">
-              <Icon name="download" size={14}/> download
-            </a>
+            <Button icon="download" title="download this version"
+                    onClick={() => download(d.id, d.version, d.kind === 'letter' ? 'pdf' : 'docx')}>download</Button>
           )}
           {!isPrint && canPrint && (
             <Button icon="printer" onClick={() => onPrint(d.id, d.version)}>print</Button>
@@ -141,7 +146,7 @@ const ChatDrafts = (() => {
   /* The document panel. `reloadKey` changes when the chat wrote a version
    * of this draft: the panel reads it again and shows the newest. */
   const Canvas = ({ draftId, version: wantVersion, reloadKey, wide, onClose, onPrint, canPrint, fire,
-                    readOnly = false }) => {
+                    readOnly = false, onVersion = null }) => {
     const [data, setData] = React.useState(null);
     const [error, setError] = React.useState(null);
     const [sel, setSel] = React.useState(null);
@@ -165,7 +170,9 @@ const ChatDrafts = (() => {
       }
     };
     React.useEffect(() => { setEditing(null); setSaved(null); load(wantVersion); }, [draftId, reloadKey]);
-    React.useEffect(() => { if (sel) markSeen(draftId, sel); }, [draftId, sel]);
+    // The version on screen, remembered here and by the page (a panel that
+    // moves between beside and in place opens where it was).
+    React.useEffect(() => { if (sel) { markSeen(draftId, sel); if (onVersion) onVersion(sel); } }, [draftId, sel]);
     React.useEffect(() => {
       const key = (e) => { if (e.key === 'Escape' && !editing) onClose(); };
       document.addEventListener('keydown', key);
@@ -267,8 +274,8 @@ const ChatDrafts = (() => {
                 save {FORMAT_LABEL[fmt]}
               </Button>
               <Button icon="save" disabled={busy} onClick={() => save(other)}>save {FORMAT_LABEL[other]}</Button>
-              <a className="btn" href={v ? api.exportUrl(draftId, v.version, fmt) : '#'} download
-                 title="download this version"><Icon name="download" size={14}/> download</a>
+              <Button icon="download" disabled={!v} title="download this version"
+                      onClick={() => download(draftId, v.version, fmt)}>download</Button>
               {canPrint && (
                 <Button icon="printer" disabled={!v} onClick={() => onPrint(draftId, v.version)}>print</Button>
               )}

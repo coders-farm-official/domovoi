@@ -530,6 +530,9 @@ const ChatPageMain = () => {
   const [canvasKey, setCanvasKey] = React.useState(0);
   const [draftLatest, setDraftLatest] = React.useState({});
   const [printDraft, setPrintDraft] = React.useState(null); // {id, version, title}
+  const keepCanvasVersion = React.useCallback((v) => {
+    setCanvas((c) => (c && c.version !== v ? { ...c, version: v } : c));
+  }, []);
   // Narrow: the list or the conversation, and a chat page opens on the
   // conversation (the "ask anything" state and the composer) with the
   // list one press away. Wide: the list beside it, as before.
@@ -929,7 +932,7 @@ const ChatPageMain = () => {
         {canvas && Drafts && !wideCanvas && (
           <Drafts.Canvas draftId={canvas.id} version={canvas.version} reloadKey={canvasKey} wide={false}
                          fire={fire} canPrint={!!printing.hasPrinter} onClose={() => setCanvas(null)}
-                         onPrint={draftHooks.print}/>
+                         onPrint={draftHooks.print} onVersion={keepCanvasVersion}/>
         )}
         <div ref={scrollRef} className="chat-thread" onScroll={onThreadScroll}
              style={canvas && Drafts && !wideCanvas ? { display: 'none' } : undefined}>
@@ -997,7 +1000,7 @@ const ChatPageMain = () => {
       {canvas && Drafts && wideCanvas && (
         <Drafts.Canvas draftId={canvas.id} version={canvas.version} reloadKey={canvasKey} wide
                        fire={fire} canPrint={!!printing.hasPrinter} onClose={() => setCanvas(null)}
-                       onPrint={draftHooks.print}/>
+                       onPrint={draftHooks.print} onVersion={keepCanvasVersion}/>
       )}
       {printDraft && typeof PrintDialog === 'function' && (
         <PrintDialog name={printDraft.title} fire={fire}
