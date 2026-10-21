@@ -6,7 +6,7 @@ a way that would otherwise get reported as a bug.
 
 ## 2026-10-21 — Ask about a document in Chat
 
-Core and dashboard update with one migration, **V035** (two columns on
+Core and dashboard update with one migration, **V036** (two columns on
 `chat_messages`; Flyway applies it on update), and a new dependency,
 `pypdfium2` (Apache-2.0 or BSD-3-Clause; reads a PDF's text).
 

@@ -1527,7 +1527,7 @@ token as `?device_token=`. The model picker (`/models`) stays **Open**. Every
 write — creating, renaming or deleting a thread, sending a message, staging an
 upload — is **Device** tier.
 
-**Documents** (documents plan D1, `web/backend/api/chat_documents.py`, V035).
+**Documents** (documents plan D1, `web/backend/api/chat_documents.py`, V036).
 A PDF, Word (.docx), OpenDocument (.odt), Excel (.xlsx), CSV, text or
 markdown file staged with `POST /api/chat/documents` is kept under
 `~/.domovoi/chat_uploads/documents/<token><ext>`, read once in a short-lived

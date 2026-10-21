@@ -1,4 +1,4 @@
--- V035 — documents in Chat: attachments and checked sources (2026-10-21).
+-- V036 — documents in Chat: attachments and checked sources (2026-10-21).
 --
 -- Documents plan D1 ("read and ask"): a home-server chat takes a PDF,
 -- Word, OpenDocument, Excel, CSV, text or markdown file. The file and the
@@ -20,9 +20,9 @@
 --              the notes under the reply ("I couldn't find that ...").
 --
 -- Both NULL on every other row. IF NOT EXISTS, so a lane patched by hand
--- migrates cleanly. (V033 is the printing branch's and V034 chat
--- history's, in flight at the time of writing; the numbers are in order
--- once all three land.)
+-- migrates cleanly. (V033 is the printing branch's, V034 chat history's
+-- and V035 the help desk's, in flight at the time of writing; the numbers
+-- are in order once all four land.)
 
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS documents JSONB;
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS doc JSONB;
