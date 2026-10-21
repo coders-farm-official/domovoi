@@ -19,6 +19,8 @@ enum class PhoneQuestion {
 
     /** The house's rooms, satellites and devices: the home server's. */
     HOUSE,
+    /** The household's calendar: the home server's, never this phone's. */
+    HOUSE_CALENDAR,
     PHONE_MODEL,
     MEMORY,
     ANDROID_VERSION,
@@ -121,6 +123,9 @@ object PhoneQuestions {
         // Before TIMERS: "the sleep timer" is playback's, not a timer's.
         PhoneQuestion.SLEEP_TIMER to "how (?:much time|long) is left on (?:the |my )?sleep timer|when does (?:the |my )?sleep timer (?:end|stop|finish)|" +
             "is (?:a |the |my )?sleep timer (?:set|on|running)|(?:the |my )?sleep timer|when will the music stop",
+        // "the house calendar" is the household's, not this phone's (before the phone's own).
+        PhoneQuestion.HOUSE_CALENDAR to "(?:what is on|what do we have on|what is happening on|show|read|check) (?:me |us )?(?:the |our )?(?:house|household|family|home) calendar|" +
+            "(?:the |our )?(?:house|household|family|home) calendar|what is on (?:the |our )?(?:house|household|family|home) calendar today",
         PhoneQuestion.HOUSE to "(?:what|which) rooms (?:are there|do i have|are in (?:my|the) (?:house|home)|does (?:my|the) (?:house|home) have)|" +
             "what rooms are in my house|(?:list|name) (?:my |the )?rooms|how many rooms (?:are there|do i have)|" +
             "(?:what|which) (?:satellites|speakers|rooms) are (?:online|connected|playing)|what is playing in the [a-z]+(?: [a-z]+)?|" +
@@ -253,6 +258,7 @@ object PhoneQuestions {
             // app's aren't visible to apps.
             PhoneQuestion.TIMERS -> "I can't see timers in this phone's Clock app. $HOUSE_TIMERS"
             PhoneQuestion.HOUSE -> HOUSE_THINGS
+            PhoneQuestion.HOUSE_CALENDAR -> HOUSEHOLD_CALENDAR
             PhoneQuestion.PHONE_MODEL -> r.device()?.let { d ->
                 "This is ${phoneName(d)} on Android ${d.android}, with ${DeviceTiers.marketedGb(d.totalRamBytes)} GB of memory."
             } ?: "I can't read which phone this is."

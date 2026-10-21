@@ -139,6 +139,14 @@ class PhoneQuestionsTest {
         assertEquals("I can't see timers in this phone's Clock app. House timers are in your home server chats.", said)
     }
 
+    @Test fun theHouseCalendarIsTheHomeServersNotThePhones() {
+        listOf("What's on the house calendar?", "what is on the household calendar", "show the family calendar", "the house calendar")
+            .forEach { assertEquals(it, PhoneQuestion.HOUSE_CALENDAR, PhoneQuestions.match(it)) }
+        assertEquals("The household calendar is in your home server chats.", say(PhoneQuestion.HOUSE_CALENDAR, FakePhone()))
+        // The phone's own calendar questions are unchanged.
+        assertEquals(PhoneQuestion.CALENDAR_TODAY, PhoneQuestions.match("what's on my calendar"))
+    }
+
     @Test fun houseQuestionsPointToHomeServerChats() {
         listOf("What rooms are in my house?", "which rooms do I have", "list the rooms", "is the kitchen online", "what's playing in the kitchen")
             .forEach { assertEquals(it, PhoneQuestion.HOUSE, PhoneQuestions.match(it)) }
