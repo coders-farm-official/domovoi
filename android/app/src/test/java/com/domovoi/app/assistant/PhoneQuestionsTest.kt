@@ -37,7 +37,8 @@ class PhoneQuestionsTest {
         PhoneQuestion.NETWORK to listOf("Am I on Wi-Fi or mobile data?", "am i on wifi", "Am I on mobile data", "am I online", "do I have internet"),
         PhoneQuestion.NEXT_ALARM to listOf("When's my next alarm?", "what time is my alarm set for", "do I have an alarm set", "is an alarm set"),
         PhoneQuestion.DO_NOT_DISTURB to listOf("Is Do Not Disturb on?", "is DND on", "am I on do not disturb", "is my phone on silent"),
-        PhoneQuestion.TIMERS to listOf("What timers do I have?", "do I have any timers running", "how much time is left on my timer", "what reminders do I have"),
+        PhoneQuestion.SLEEP_TIMER to listOf("How long is left on the sleep timer?", "is a sleep timer set", "when will the music stop"),
+        PhoneQuestion.TIMERS to listOf("how long is left on the pasta timer", "What timers do I have?", "do I have any timers running", "how much time is left on my timer", "what reminders do I have"),
         PhoneQuestion.PHONE_MODEL to listOf("What phone is this?", "which phone is this", "what model is this phone"),
         PhoneQuestion.ANDROID_VERSION to listOf("Which Android is this?", "what version of Android am I running", "what android version is this"),
         PhoneQuestion.WHICH_MODEL to listOf("Which model are you?", "what model are you", "what AI are you", "are you on the GPU"),
@@ -146,6 +147,13 @@ class PhoneQuestionsTest {
             said,
         )
         assertFalse("a private reminder's words never show", said.contains("secret"))
+    }
+
+    @Test fun theSleepTimer() {
+        val phone = FakePhone()
+        assertEquals("No sleep timer is set.", say(PhoneQuestion.SLEEP_TIMER, phone))
+        phone.facts = PromptFacts(sleepRemainingSec = 20 * 60)
+        assertEquals("The sleep timer stops playback in 20 minutes.", say(PhoneQuestion.SLEEP_TIMER, phone))
     }
 
     @Test fun headphonesNeedNoPermission() {

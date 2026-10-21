@@ -13,6 +13,7 @@ enum class PhoneQuestion {
     NETWORK,
     NEXT_ALARM,
     DO_NOT_DISTURB,
+    SLEEP_TIMER,
     TIMERS,
     PHONE_MODEL,
     MEMORY,
@@ -109,6 +110,9 @@ object PhoneQuestions {
         PhoneQuestion.DO_NOT_DISTURB to "is do not disturb (?:turned )?on|is dnd on|am i (?:on|in) do not disturb|" +
             "is (?:my |the )?phone (?:on|in) do not disturb|is do not disturb off|is (?:my |the )?phone on silent|" +
             "is (?:my |the )?phone (?:silenced|muted)",
+        // Before TIMERS: "the sleep timer" is playback's, not a timer's.
+        PhoneQuestion.SLEEP_TIMER to "how (?:much time|long) is left on (?:the |my )?sleep timer|when does (?:the |my )?sleep timer (?:end|stop|finish)|" +
+            "is (?:a |the |my )?sleep timer (?:set|on|running)|(?:the |my )?sleep timer|when will the music stop",
         PhoneQuestion.TIMERS to "what timers do i have|do i have any timers(?: running| set)?|what timers are (?:running|set|on)|" +
             "how (?:much time|long) is left on (?:my|the) timers?|how (?:much time|long) is left on (?:my |the )?[a-z]+(?: [a-z]+)? timer|"+
             "when (?:is|does) (?:my|the) (?:[a-z]+ )?timer (?:done|going off|go off|finish|end)|(?:any|my) timers|list (?:my |the )?timers|" +
@@ -180,6 +184,8 @@ object PhoneQuestions {
         val nowMs = inputs.now.toInstant().toEpochMilli()
         return when (q) {
             PhoneQuestion.NOW_PLAYING -> nowPlaying(inputs.phone.facts())
+            PhoneQuestion.SLEEP_TIMER -> inputs.phone.facts().sleepRemainingSec?.takeIf { it > 0 }
+                ?.let { "The sleep timer stops playback in ${PhoneFacts.minutes(it)}." } ?: "No sleep timer is set."
             PhoneQuestion.BATTERY -> r.battery()?.let { b ->
                 when {
                     b.full -> "The battery is full (${b.percent}%)" + if (b.charging) " and still plugged in." else "."
