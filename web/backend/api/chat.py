@@ -1789,6 +1789,18 @@ async def chat_internet() -> dict[str, Any]:
             "lookups": True}
 
 
+@router.get("/lookup-sources", dependencies=READ)
+async def chat_lookup_sources(request: Request) -> dict[str, Any]:
+    """Settings → Chat & AI → Search: the core's lookup sources in the order
+    they are asked (``GET /v1/lookup/sources``, with the caller's own
+    credentials). 502 when the core doesn't answer."""
+    try:
+        return await _core_sources(request) or {"sources": []}
+    except Exception as e:  # noqa: BLE001
+        log.warning("chat: the lookup sources could not be read: %s", type(e).__name__)
+        raise HTTPException(status_code=502, detail="Domovoi's lookup service isn't answering.")
+
+
 @router.post("/threads/{thread_id}/lookups/{message_id}", dependencies=SEND)
 async def decide_lookup(
     request: Request,
