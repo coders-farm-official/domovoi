@@ -276,9 +276,48 @@ def _broke(s: Session, message: str) -> None:
         _drop_spool(s)
 
 
+# Our own spool directory: one subfolder per scan session. Only this
+# folder is ever cleaned (clean_orphaned_spool).
+SPOOL_DIRNAME = "domovoi-scan-spool"
+# The longest a scan can live: waiting is saved after IDLE_SAVE_SEC; give
+# a scan in progress plenty more on top.
+ORPHAN_AFTER_SEC = IDLE_SAVE_SEC + 3600.0
+
+
+def spool_root() -> Path:
+    return Path(tempfile.gettempdir()) / SPOOL_DIRNAME
+
+
+def clean_orphaned_spool(now: float | None = None) -> int:
+    """At core start: remove scan spool folders left by a core that stopped
+    mid-scan, older than any scan could be. Only folders inside
+    :func:`spool_root` that look like ours; never follows a link."""
+    root = spool_root()
+    if not root.is_dir() or root.is_symlink():
+        return 0
+    now = time.time() if now is None else now
+    removed = 0
+    for child in root.iterdir():
+        try:
+            if child.is_symlink() or not child.is_dir() or not child.name.startswith("scan-"):
+                continue
+            if now - child.stat().st_mtime < ORPHAN_AFTER_SEC:
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(child, ignore_errors=True)
+        removed += 1
+    if removed:
+        log.info("printing: removed %d scan spool folder%s left by an earlier run", removed,
+                 "" if removed == 1 else "s")
+    return removed
+
+
 def _spool_page(s: Session, data: bytes) -> Path:
     if s.spool is None:
-        s.spool = Path(tempfile.mkdtemp(prefix="domovoi-scan-"))
+        root = spool_root()
+        root.mkdir(mode=0o700, exist_ok=True)
+        s.spool = Path(tempfile.mkdtemp(prefix="scan-", dir=root))
     p = s.spool / ("page-%03d.jpg" % (len(s.pages) + 1))
     p.write_bytes(data)
     return p

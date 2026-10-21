@@ -90,5 +90,11 @@ class PrintHistoryWorker(Worker):
 
 def register(workers) -> None:
     """Called once from the core's lifespan."""
+    from domovoi.printing import scans
+
+    try:
+        scans.clean_orphaned_spool()
+    except Exception as e:  # noqa: BLE001 — a tidy-up never stops the core
+        log.warning("printing: couldn't clean the scan spool: %s", e)
     for w in (PrinterStatusWorker(), PrintJobsWorker(), PrintHistoryWorker()):
         workers.add_worker(w, owner="core", settings_source=CADENCE)

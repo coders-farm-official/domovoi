@@ -60,6 +60,11 @@ async def house(_db, tmp_path, monkeypatch):  # noqa: F811
     lan = fake_lan(monkeypatch)
     discovery.reset_state()
     scans.reset_state()
+    # The route budgets are per process; earlier tests mustn't use them up.
+    from domovoi.printing import routes
+
+    routes.PREVIEW_LIMITER.reset()
+    routes.DISCOVER_LIMITER.reset()
     async with engine.begin() as conn:
         await conn.execute(text("TRUNCATE print_jobs, scan_jobs, printer_room_defaults, printers RESTART IDENTITY CASCADE"))
     await store.reset_limits()
@@ -773,3 +778,25 @@ async def test_a_paper_size_the_printer_does_not_take_is_refused(house):
                 assert r.status_code == 400, (media, r.text)
     finally:
         await fake.close()
+
+
+def test_orphaned_scan_spool_is_cleaned_at_start(tmp_path, monkeypatch):
+    """A core that stopped mid-scan left its spooled pages behind; the next
+    start removes them, and only ours, and only old ones."""
+    import os
+    import time
+
+    monkeypatch.setattr(scans.tempfile, "gettempdir", lambda: str(tmp_path))
+    root = scans.spool_root()
+    root.mkdir()
+    old, fresh, foreign = root / "scan-old", root / "scan-fresh", root / "not-ours"
+    for d in (old, fresh, foreign):
+        d.mkdir()
+        (d / "page-001.jpg").write_bytes(b"x")
+    outside = tmp_path / "scan-elsewhere"
+    outside.mkdir()
+    long_ago = time.time() - scans.ORPHAN_AFTER_SEC - 60
+    for d in (old, foreign, outside):
+        os.utime(d, (long_ago, long_ago))
+    assert scans.clean_orphaned_spool() == 1
+    assert not old.exists() and fresh.exists() and foreign.exists() and outside.exists()
