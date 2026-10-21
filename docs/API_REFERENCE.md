@@ -1556,7 +1556,7 @@ answered with a sentence saying it can't yet (map/reduce is D2). The reply
 row carries `doc: {mode: "question" | "summary" | "attached", found,
 sources: [{token, name, label, page, text, match, cited}], notes: [{code,
 text}]}` (`sources` are the passages given, best first; `cited` the ones
-the checked reply names) and `stats.model_role` `documents`. Deleting the
+the checked reply names) and `stats.model_role` `documents`. A document turn streams no model text: an `event: status` `{state: "checking"}` comes first, then the checked reply as one `delta`. The passages sit between per-prompt random markers and document text can't write a label or a marker; the check is by label only (a fact cited to a passage that was given but doesn't hold it is a known limit). A document keeps at most 4,000,000 characters of text (a note says what was read), a sheet at most 256 columns and 200,000 cells, and a staged document no message took is removed after an hour. Deleting the
 thread deletes its documents' files when no other thread refers to them.
 While the household's AI features are off (the AI-optional switch, where
 the server has it) the routes that feed a chat refuse with `409`; reading

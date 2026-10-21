@@ -18,6 +18,8 @@ Core and dashboard update with one migration, **V036** (two columns on
   at that page). When the document doesn't say, the answer is "I couldn't
   find that in the document" rather than a guess. Files → Documents (and
   the app's Files) gets "Ask about this document".
+* **Very large files:** about the first 4 million characters (roughly
+  1,000 pages) are read, and the attachment says how far it got.
 * **What it doesn't do yet:** scanned pages (pictures of text) are listed,
   not read; a summary of a long document says it can't yet (short ones
   work); old .doc and .rtf files are refused with what to save them as.

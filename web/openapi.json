@@ -12774,7 +12774,7 @@
           "chat"
         ],
         "summary": "Upload Document",
-        "description": "Stage one document for a chat message: stored, read in the worker,\nits parts cached. The answer is its metadata (``token`` for the send).",
+        "description": "Stage one document for a chat message: stored, read in the worker,\nits parts cached. The answer is its metadata (``token`` for the send).\nStaged documents never sent go after an hour (:func:`sweep_unsent`).",
         "operationId": "upload_document_api_chat_documents_post",
         "requestBody": {
           "content": {
