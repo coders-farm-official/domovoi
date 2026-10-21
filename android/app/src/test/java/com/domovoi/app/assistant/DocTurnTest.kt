@@ -107,6 +107,24 @@ class DocTurnTest {
         assertTrue(dir.listFiles()!!.any { it.name.endsWith(".parts.json") })
     }
 
+    /** With a document in the chat, a question that reads like an action or
+     *  a phone fact still goes to the document (batch 23): an attachment is
+     *  the clearest sign of intent. */
+    @Test fun withADocumentAttachedActionAndPhoneFactWordsGoToTheDocument() {
+        val c = controller()
+        c.ready()
+        c.attach("lease.docx", { lease().inputStream() })
+        c.replied(1)
+        for ((n, q) in listOf("play the first song listed", "how much space is left in this report", "what's my battery").withIndex()) {
+            c.send(q)
+            c.replied(n + 2)
+            val reply = c.ui().conversation.messages.last()
+            assertNull("$q: not a phone fast path", reply.fastPath)
+            assertNull("$q: no card", reply.card)
+            assertNotNull("$q: answered as a document turn", reply.docMode)
+        }
+    }
+
     @Test fun aQuestionIsAnsweredFromThePassagesAndItsCitationsChecked() {
         val c = controller()
         c.ready()

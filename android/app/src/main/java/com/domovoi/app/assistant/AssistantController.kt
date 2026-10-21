@@ -1050,10 +1050,13 @@ class AssistantController(
         // Any turn that isn't an action (the model's, the clock, a phone
         // question) ends the Undo, so "undo" only reaches the turn before.
         clockReply(asked, onDelta)?.let { undoEntry = null; return it }
+        // An attachment is the clearest sign of intent: with a document in
+        // the chat, "what's the total?" never reaches the actions or the
+        // phone's facts.
+        if (asked.documents.isNotEmpty()) { undoEntry = null; return docReply(asked, onDelta) }
         actionTurn(asked, onDelta)?.let { return it }
         undoEntry = null
         phoneReply(asked, onDelta)?.let { return it }
-        if (asked.documents.isNotEmpty()) return docReply(asked, onDelta)
         // A question about Domovoi: the manual on the phone (LocalHelp).
         val help = helpTurn(asked)
         if (help != null && help.passages.isEmpty()) return notCoveredReply(asked, help, onDelta)
