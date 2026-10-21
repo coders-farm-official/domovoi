@@ -57,6 +57,9 @@ GATED = {
     # offered only when the turn talks about printing, scanning or the
     # printer's supplies (handlers/printing.py)
     "printing",
+    # offered only when the turn says letter or dictate, or reads a named
+    # kind of document (handlers/documents.py)
+    "documents",
     # help_desk never: its fast path takes how-to questions about Domovoi
     # (or hands a how-to-worded command to its handler); its tool would be
     # bait for every other "how do I" question.
@@ -498,6 +501,15 @@ def test_questions_about_the_house_still_reach_the_router(utterance: str) -> Non
         ("i can't be late for the bus", "double_check", False),
         ("search for jazz", "double_check", False),
         ("google maps says it's twenty minutes", "double_check", False),
+        # documents (D7): a letter to write, dictation, or a named kind of
+        # document to read; never "read" or "letter" in passing
+        ("i'd like you to take down a letter for me", "documents", True),
+        ("could you start dictation", "documents", True),
+        ("can you read the tenancy agreement out", "documents", True),
+        ("what letter comes after b", "documents", False),
+        ("i read that somewhere", "documents", False),
+        ("read the room", "documents", False),
+        ("tell me about the history of rome", "documents", False),
     ],
 )
 def test_cue_words(utterance: str, tool: str, offered: bool) -> None:
@@ -510,7 +522,7 @@ def test_every_registered_handler_is_offered_for_a_plain_command() -> None:
     music_alias's on-request tool) in it must see every tool."""
     names = _offered(
         "double check the latest news about the 3 timers i set and their other names"
-        " on my calendar for the printer"
+        " on my calendar for the printer and write a letter"
     )
     assert set(names) == {h.name for h in HANDLERS} - NEVER_OFFERED
 

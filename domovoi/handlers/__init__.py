@@ -26,6 +26,8 @@ Condensed band map — core handlers occupy exactly the design §4.2 table:
     220 chat_mode
     222 printing         "print …", "scan this", ink and paper; after chat_mode,
                          before the Documents plan's documents (225)
+    225 documents        "read me the lease", "take a letter to the landlord";
+                         before voice_notes, whose "write …" took letters as notes
     230 voice_notes
     240 memory
     250 homelab
@@ -57,6 +59,7 @@ from domovoi.handlers.calculator import CalculatorHandler
 from domovoi.handlers.chat_mode import ChatModeHandler
 from domovoi.handlers.clock import ClockHandler
 from domovoi.handlers.dismiss import DismissHandler
+from domovoi.handlers.documents import DocumentsHandler
 from domovoi.handlers.double_check import DoubleCheckHandler
 from domovoi.handlers.dropin import DropInHandler
 from domovoi.handlers.help import HelpHandler
@@ -88,6 +91,7 @@ _CORE_HANDLERS: list[Handler] = [
     ChatModeHandler(),
     ClockHandler(),
     DismissHandler(),
+    DocumentsHandler(),
     DoubleCheckHandler(),
     DropInHandler(),
     HelpHandler(),
@@ -148,6 +152,7 @@ __all__ = [
     "ChatModeHandler",
     "ClockHandler",
     "DismissHandler",
+    "DocumentsHandler",
     "DoubleCheckHandler",
     "DropInHandler",
     "FastPath",

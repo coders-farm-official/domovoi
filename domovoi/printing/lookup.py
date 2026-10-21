@@ -10,8 +10,9 @@ that can print are offered. Bounded: 4 folders deep, 5,000 files.
 
 Matching is plain words: every word said (minus "my", "the", "document",
 …) must be in the file's name; an exact name wins outright, and the
-closest few are offered as a choice. The Documents plan's title matcher
-(chat drafts by title) replaces this when it lands.
+closest few are offered as a choice. Reading aloud (documents plan D7,
+``domovoi/voice_docs/reading.py``) finds documents the same way, over the
+kinds it can read (``exts``).
 """
 
 from __future__ import annotations
@@ -25,7 +26,8 @@ from domovoi.printing.jobs import KIND_BY_EXT
 
 MAX_DEPTH = 4
 MAX_FILES = 5000
-_STOP = {"my", "the", "a", "an", "our", "document", "file", "pdf", "please", "of", "for", "to", "copy"}
+_STOP = {"my", "the", "a", "an", "our", "document", "documents", "doc", "docs", "file", "files", "pdf", "please", "of",
+         "for", "to", "copy"}
 _WORD = re.compile(r"[a-z0-9]+")
 
 
@@ -53,8 +55,11 @@ def _words(text: str) -> list[str]:
     return [w for w in _WORD.findall(text.lower()) if w not in _STOP]
 
 
-def all_documents(root: Path | None = None) -> list[Doc]:
+def all_documents(root: Path | None = None, exts: "set[str] | frozenset[str] | None" = None) -> list[Doc]:
+    """Every document in Documents whose extension is in ``exts`` (the kinds
+    that can print, by default)."""
     root = root or documents_root()
+    wanted = KIND_BY_EXT if exts is None else exts
     try:
         real_root = root.resolve(strict=True)
     except OSError:
@@ -66,7 +71,7 @@ def all_documents(root: Path | None = None) -> list[Doc]:
         for name in filenames:
             if name.startswith(".") or _sensitive(name):
                 continue
-            if Path(name).suffix.lower() not in KIND_BY_EXT:
+            if Path(name).suffix.lower() not in wanted:
                 continue
             p = Path(dirpath) / name
             try:
@@ -79,13 +84,13 @@ def all_documents(root: Path | None = None) -> list[Doc]:
     return out
 
 
-def find(query: str, root: Path | None = None) -> list[Doc]:
+def find(query: str, root: Path | None = None, exts: "set[str] | frozenset[str] | None" = None) -> list[Doc]:
     """The best matches for ``query``: one when it's clear, several when
     it isn't, none when nothing fits."""
     want = _words(query)
     if not want:
         return []
-    docs = all_documents(root)
+    docs = all_documents(root, exts)
     exact = [d for d in docs if _words(d.title) == want]
     if exact:
         return exact[:3]

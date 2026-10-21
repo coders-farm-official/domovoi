@@ -1047,6 +1047,110 @@
       "path": "fast",
       "tags": ["action", "help-desk"],
       "note": "2026-10-21 review 2: a how-to question is answered from the manual; it started a drop-in (review 2)"
+    },
+    {
+      "utterance": "take a letter",
+      "handler": "documents",
+      "path": "fast",
+      "tags": ["action", "documents"],
+      "note": "2026-10-21 D7: dictation starts in the room"
+    },
+    {
+      "utterance": "take a letter to the landlord",
+      "handler": "documents",
+      "path": "fast",
+      "tags": ["action", "documents"],
+      "note": "2026-10-21 D7: the plan's own phrase"
+    },
+    {
+      "utterance": "write a letter to the landlord",
+      "handler": "documents",
+      "path": "fast",
+      "tags": ["action", "documents"],
+      "note": "2026-10-21 D7: the voice_notes collision; this was saved as a note reading 'a letter to the landlord'"
+    },
+    {
+      "utterance": "draft a letter to the council about the bins",
+      "handler": "documents",
+      "path": "fast",
+      "tags": ["action", "documents"],
+      "note": "2026-10-21 D7: 'draft' is a letter verb too"
+    },
+    {
+      "utterance": "write my resume",
+      "handler": "documents",
+      "path": "fast",
+      "tags": ["action", "documents"],
+      "note": "2026-10-21 D7: pointed at Chat; voice_notes took it as a note 'my resume'"
+    },
+    {
+      "utterance": "write a note to the letter carrier",
+      "handler": "voice_notes",
+      "path": "fast",
+      "tags": ["action", "documents"],
+      "note": "2026-10-21 D7 near-miss: a note that mentions a letter stays a note"
+    },
+    {
+      "utterance": "write down the letter came today",
+      "handler": "voice_notes",
+      "path": "fast",
+      "tags": ["action", "documents"],
+      "note": "2026-10-21 D7 near-miss: 'write down' is always a note"
+    },
+    {
+      "utterance": "jot down buy stamps for the letter",
+      "handler": "voice_notes",
+      "path": "fast",
+      "tags": ["action", "documents"],
+      "note": "2026-10-21 D7 near-miss: jot down stays a note"
+    },
+    {
+      "utterance": "read me the lease",
+      "handler": "documents",
+      "path": "fast",
+      "tags": ["action", "documents"],
+      "note": "2026-10-21 D7: a household document read aloud"
+    },
+    {
+      "utterance": "read me my cover letter",
+      "handler": "documents",
+      "path": "fast",
+      "tags": ["action", "documents"],
+      "note": "2026-10-21 D7: a document word makes it a document"
+    },
+    {
+      "utterance": "read me my last note",
+      "handler": "voice_notes",
+      "path": "fast",
+      "tags": ["action", "documents"],
+      "note": "2026-10-21 D7 near-miss: notes are voice_notes'"
+    },
+    {
+      "utterance": "read me the headlines",
+      "handler": "news",
+      "path": "fast",
+      "tags": ["action", "documents"],
+      "note": "2026-10-21 D7 near-miss: the news keeps its read phrases"
+    },
+    {
+      "utterance": "read the book dune",
+      "handler": "spoken_audio",
+      "path": "fast",
+      "tags": ["action", "documents"],
+      "note": "2026-10-21 D7 near-miss: a book is an audiobook"
+    },
+    {
+      "utterance": "keep reading",
+      "handler": "spoken_audio",
+      "path": "fast",
+      "tags": ["action", "documents"],
+      "note": "2026-10-21 D7 near-miss: 'keep reading' stays the audiobook's resume"
+    },
+    {
+      "utterance": "what letter comes after b",
+      "handler": null,
+      "tags": ["qa", "documents"],
+      "note": "2026-10-21 D7: the alphabet, not a letter to write; the documents tool is withheld"
     }
   ]
 }

@@ -82,7 +82,12 @@ def _strip_leading_filler(s: str) -> str:
 
 class VoiceNotesHandler(Handler):
     name = "voice_notes"
-    # band rationale: after intercom (210) — see the "tell the kitchen X" note there.
+    # band rationale: after intercom (210) — see the "tell the kitchen X" note there —
+    # and after documents (225), which owns "write / take / draft a letter …"
+    # (this capture's "write" took "write a letter to the landlord" as a note
+    # reading "a letter to the landlord" before it). "write a note to the
+    # letter carrier" and "write down …" are still notes: documents' letter
+    # pattern refuses a word like "note" or "down" before "letter".
     priority_band = 230
     display = HandlerDisplay(label="Voice Notes", tone="comms")
     example_phrases = (
