@@ -106,6 +106,19 @@ def _level(v: Any) -> int | None:
     return max(0, min(100, v))
 
 
+def _octets_text(value: str) -> str:
+    """``printer-supply`` is an octetString, which the codec hands over as
+    hex; the bytes are ``key=value;`` text. Anything that doesn't decode
+    to printable text is returned as it came."""
+    if not value or len(value) % 2 or any(c not in "0123456789abcdef" for c in value):
+        return value
+    try:
+        text = bytes.fromhex(value).decode("ascii")
+    except (ValueError, UnicodeDecodeError):
+        return value
+    return text if all(" " <= ch <= "~" for ch in text) else value
+
+
 def supplies_of(attrs: dict[str, list[Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     supply = attrs.get("printer-supply") or []
@@ -113,6 +126,7 @@ def supplies_of(attrs: dict[str, list[Any]]) -> list[dict[str, Any]]:
     for i, entry in enumerate(supply[:16]):
         if not isinstance(entry, str):
             continue
+        entry = _octets_text(entry)
         fields = {}
         for part in entry.split(";"):
             k, _, v = part.partition("=")
@@ -120,6 +134,9 @@ def supplies_of(attrs: dict[str, list[Any]]) -> list[dict[str, Any]]:
                 fields[k.strip().lower()] = v.strip()
         kind = fields.get("type", "").lower()
         if kind and not any(w in kind for w in ("toner", "ink", "marker")):
+            continue
+        # A waste tank fills up; it isn't something that runs out.
+        if "waste" in kind or fields.get("class", "").lower() == "receptaclethatisfilled":
             continue
         try:
             level = int(fields.get("level", "-2"))

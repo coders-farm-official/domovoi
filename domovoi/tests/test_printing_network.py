@@ -472,6 +472,23 @@ def test_printer_supply_is_preferred():
     assert s == [{"name": "Black Toner Cartridge", "level": 40, "color": "#000000", "kind": "toner", "low": False}]
 
 
+def test_printer_supply_from_the_wire_is_octets_and_a_waste_tank_is_left_out():
+    """printer-supply is an octetString, which the codec hands over as hex
+    (found against ippeveprinter on the throwaway, 2026-10-21: every level
+    read "not reported"). A waste tank fills up and isn't listed."""
+    entries = [
+        b"index=1;class=receptacleThatIsFilled;type=wasteToner;unit=percent;maxcapacity=100;level=25;",
+        b"index=2;class=supplyThatIsConsumed;type=toner;unit=percent;maxcapacity=100;level=75;colorantname=black;",
+    ]
+    data = ipp.encode_request(0, 1, [(ipp.PRINTER, [
+        ipp.Attr(ipp.OCTET_STRING, "printer-supply", entries),
+        ipp.Attr(ipp.TEXT, "printer-supply-description", ["Toner Waste Tank", "Black Toner"]),
+    ])])
+    attrs = ipp.decode(data).group(ipp.PRINTER)
+    assert caps_mod.supplies_of(attrs) == [
+        {"name": "Black Toner", "level": 75, "color": "#000000", "kind": "toner", "low": False}]
+
+
 @pytest.mark.parametrize("reasons,state,tone", [
     (["none"], "ready", "ok"),
     (["media-empty-error"], "out of paper", "err"),
