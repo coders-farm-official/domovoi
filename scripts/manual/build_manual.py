@@ -34,7 +34,7 @@ SCHEMA = "domovoi-manual/2"
 # app: a screen (the Route enum, android/.../ui/shell/Routes.kt) and an
 # optional Settings tab key (SettingsTab, SettingsScreen.kt), or
 # {"dashboard": True}: the app opens the dashboard in the browser at the
-# same route (the app has no admin session; Settings → Server settings).
+# same route (the app has no admin session).
 ROUTES: dict[str, dict] = {
     "home": {"dashboard": "#home", "app": {"screen": "Home"}},
     "chat": {"dashboard": "#chat", "app": {"screen": "Chat"}},
@@ -49,20 +49,25 @@ ROUTES: dict[str, dict] = {
     "calendar": {"dashboard": "#calendar", "app": {"screen": "Calendar"}},
     "files": {"dashboard": "#files", "app": {"screen": "Files"}},
     "plugins": {"dashboard": "#plugins", "app": {"dashboard": True}},
+    # Settings' sections (web settings.jsx SETTINGS_SECTIONS, the app's
+    # SettingsSection in SettingsScreen.kt): the app shows each one; the ones
+    # only the dashboard can change say so there and open it.
     "settings/about": {"dashboard": "#settings/about", "app": {"screen": "Settings", "tab": "about"}},
-    "settings/phone-bar": {"dashboard": "#settings/phone-bar", "app": {"screen": "Settings", "tab": "phonebar"}},
-    "settings/satellites": {"dashboard": "#settings/satellites", "app": {"screen": "Settings", "tab": "satellites"}},
-    "settings/greetings": {"dashboard": "#settings/greetings", "app": {"dashboard": True}},
+    "settings/app-layout": {"dashboard": "#settings/app-layout", "app": {"screen": "Settings", "tab": "app-layout"}},
+    "settings/rooms": {"dashboard": "#settings/rooms", "app": {"screen": "Settings", "tab": "rooms"}},
+    "settings/greetings": {"dashboard": "#settings/greetings", "app": {"screen": "Settings", "tab": "greetings"}},
+    "settings/printers": {"dashboard": "#settings/printers", "app": {"screen": "Settings", "tab": "printers"}},
     "settings/voices": {"dashboard": "#settings/voices", "app": {"dashboard": True}},
-    "settings/wake-words": {"dashboard": "#settings/wake-words", "app": {"dashboard": True}},
-    "settings/devices": {"dashboard": "#settings/devices", "app": {"dashboard": True}},
-    "settings/models": {"dashboard": "#settings/models", "app": {"dashboard": True}},
-    "settings/internet": {"dashboard": "#settings/internet", "app": {"dashboard": True}},
-    "settings/configuration": {"dashboard": "#settings/configuration", "app": {"dashboard": True}},
+    "settings/wake-words": {"dashboard": "#settings/wake-words", "app": {"screen": "Settings", "tab": "wake-words"}},
+    "settings/phones-and-browsers": {"dashboard": "#settings/phones-and-browsers", "app": {"dashboard": True}},
+    "settings/models": {"dashboard": "#settings/models", "app": {"screen": "Settings", "tab": "models"}},
+    "settings/internet": {"dashboard": "#settings/internet", "app": {"screen": "Settings", "tab": "internet"}},
+    "settings/voice-history": {"dashboard": "#settings/voice-history", "app": {"screen": "Settings", "tab": "voice-history"}},
+    "settings/health": {"dashboard": "#settings/health", "app": {"screen": "Settings", "tab": "health"}},
+    "settings/advanced": {"dashboard": "#settings/advanced", "app": {"screen": "Settings", "tab": "advanced"}},
     # the app's own: plain text on the dashboard
-    "app/connection": {"dashboard": None, "app": {"screen": "Settings", "tab": "connection"}},
-    "app/voice": {"dashboard": None, "app": {"screen": "Settings", "tab": "voice"}},
-    "app/server-settings": {"dashboard": None, "app": {"screen": "Settings", "tab": "server"}},
+    "app/connection": {"dashboard": None, "app": {"screen": "Settings", "tab": "phones-and-browsers"}},
+    "app/voice": {"dashboard": None, "app": {"screen": "Settings", "tab": "voices"}},
 }
 
 # ── the map ───────────────────────────────────────────────────────────────
@@ -135,6 +140,7 @@ PIECES: dict[str, tuple] = {
     "Files and photos": ("files", "every library, one place", ["files", "upload", "photos", "pictures", "move", "delete", "usb drive"], {}),
     "Documents, sheets and drawings": ("documents", "write and edit on the server", ["document", "spreadsheet", "sheet", "drawing", "text file", "markdown", "xlsx"], {}),
     "Calendar": ("calendar", "the household's events", ["calendar", "event", "appointment", "what's on"], {}),
+    "Printers and scanners": ("printers", "print and scan, by voice too", ["print", "printer", "scan", "scanner", "ink", "toner", "paper", "airprint", "mopria", "test page"], {}),
     # People and privacy
     "People and voices": ("people", "Domovoi learns who's talking", ["people", "voice id", "who am i", "my name is", "forget me", "profile"], {}),
     "Guests, household and admin": ("guests", "who can change what", ["admin", "password", "guest", "sign in", "setup code", "household token", "paired"], {}),
@@ -147,6 +153,7 @@ PIECES: dict[str, tuple] = {
     "Backups and moving": ("backups", "what to keep safe", ["backup", "restore", "move", "new computer", "reinstall"], {}),
     "Plugins": ("plugins", "add features", ["plugin", "install", "add feature", "github", "zip"], {"live": "plugins"}),
     "Models": ("models", "speech, answers, pictures", ["models", "vision", "whisper", "ollama", "speech-to-text"], {}),
+    "Asking Domovoi for help": ("help-desk", "ask it, show it, report it", ["help", "how do i", "ask domovoi", "screenshot", "report a problem", "diagnostics", "send the steps", "question mark"], {}),
     "Troubleshooting": ("troubleshooting", "the common fixes", ["problem", "not working", "help", "fix", "error", "broken"], {}),
 }
 
@@ -160,7 +167,7 @@ CHECKLIST: list[dict] = [
     {"id": "introduce", "done_when": "people", "platforms": ["dashboard", "app"]},
     {"id": "music", "done_when": "music", "platforms": ["dashboard", "app"]},
     {"id": "app", "done_when": "phone_app", "platforms": ["dashboard"],
-     "app_text": "**Pair this phone**: [Settings → Connection](#app/connection) → **Household token**.",
+     "app_text": "**Pair this phone**: [Settings → Phones & browsers](#app/connection) → **Household token**.",
      "app_done_when": "this_phone_paired"},
 ]
 
@@ -220,6 +227,14 @@ PHRASES: dict[str, tuple] = {
     "forget that I parked on level 3": ("memory", "fast", {}),
     "what can you do": ("help", "fast", {}),
     "what can I say": ("help", "fast", {}),
+    "how do I add a room": ("help_desk", "fast", {}),
+    "how's the wifi": ("wifi", "fast", {}),
+    "fix the wifi": ("wifi", "fast", {}),
+    "how's domovoi doing": ("homelab", "fast", {}),
+    "how many songs do I have": ("library", "fast", {}),
+    "what did I add this week": ("library", "fast", {}),
+    "let's chat": ("chat_mode", "fast", {}),
+    "how do I change the wake word": ("help_desk", "fast", {}),
     "say that again": ("repeat", "fast", {}),
     "never mind": ("dismiss", "fast", {}),
     "what voices are there": ("voice", "fast", {}),
@@ -245,6 +260,12 @@ PHRASES: dict[str, tuple] = {
     "who am I": ("voice_profile", "fast", {}),
     "forget me": ("voice_profile", "fast", {}),
     "never save my voice": ("voice_profile", "fast", {}),
+    "print my cover letter": ("printing", "fast", {}),
+    "how much ink is left": ("printing", "fast", {}),
+    "is the printer out of paper": ("printing", "fast", {}),
+    "set up the printer": ("printing", "fast", {}),
+    "scan this to Documents": ("printing", "fast", {}),
+    "stop printing": ("printing", "fast", {}),
 }
 
 # The wake word: what {wake} and [live slot: wake-word] say. One place, so
@@ -269,8 +290,25 @@ WAKE_WORD = {
 
 # "Everything it can do": a feature listed only while the server has it
 # switched on (GET /api/capabilities features). Chat mode answers only
-# while chat mode is enabled, which it isn't by default.
-HANDLER_NEEDS_FEATURE = {"chat_mode": "chat"}
+# while chat mode is enabled, which it isn't by default; Double-Check only
+# while the household's AI features are on (domovoi/ai_features.py: a
+# fact-check is the model reading the search results).
+HANDLER_NEEDS_FEATURE = {"chat_mode": "chat", "double_check": "ai"}
+
+# A "try saying" phrase the language models answer: one the router hands to
+# the tool model (llm) or to the Q&A model (qa), or one whose handler needs
+# a feature above. It carries "needs": the feature, and both clients leave it
+# out while GET /api/capabilities says that feature is off (features.ai
+# false: AI chat and questions are off). A "then" reply goes with its phrase.
+AI_PATHS = frozenset({"llm", "qa"})
+
+
+def phrase_needs(handler: str | None, path: str | None) -> str | None:
+    if handler in HANDLER_NEEDS_FEATURE:
+        return HANDLER_NEEDS_FEATURE[handler]
+    if path in AI_PATHS:
+        return "ai"
+    return None
 
 LABELS = {
     "start_here": "start here",
@@ -428,6 +466,9 @@ def phrase_claim(text: str) -> dict:
         raise SourceError(f'"try saying" phrase without a PHRASES entry: {text!r}')
     handler, path, extras = PHRASES[text]
     claim: dict = {"handler": handler, "path": path}
+    needs = phrase_needs(handler, path)
+    if needs:
+        claim["needs"] = needs
     for k in ("try", "plugin", "pending"):
         if extras.get(k):
             claim[k] = extras[k]
@@ -445,8 +486,12 @@ def parse_say(item: str) -> list[dict]:
         if rest == ".":
             rest = ""
         if len(quoted) == 2 and rest == "then":
-            phrases.append({"text": quoted[0], **phrase_claim(quoted[0])})
-            phrases.append({"text": quoted[1], "then": True})
+            first = {"text": quoted[0], **phrase_claim(quoted[0])}
+            phrases.append(first)
+            reply = {"text": quoted[1], "then": True}
+            if first.get("needs"):
+                reply["needs"] = first["needs"]
+            phrases.append(reply)
             continue
         if len(quoted) != 1:
             raise SourceError(f"a try-saying item must hold one phrase: {part!r}")
@@ -634,7 +679,9 @@ def build(source: Path = SOURCE) -> dict:
                        "{plugin} are pills; {wake} is the wake word (wake_word below)."),
             "blocks": ("A page's blocks, in order. p {text, only?}; list {ordered, items:[{text, only?}]}; "
                        "label {role: say|how|wrong|also|ways|checklist, text, admin?, note?}; "
-                       "say {phrases:[{text, handler, path, note?, then?, try?, plugin?, pending?}]}; "
+                       "say {phrases:[{text, handler, path, needs?, note?, then?, try?, plugin?, pending?}]} "
+                       "(needs: a GET /api/capabilities feature; the phrase is left out while that "
+                       "feature is false, e.g. ai for what the language models answer); "
                        "table {header, rows}; live {slot}; checklist (Start here only). "
                        "only: app = shown only in the app, dashboard = only on the dashboard."),
             "map": ("The centre (Domovoi) opens the centre topic (How it works); the other topics "

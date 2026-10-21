@@ -2,8 +2,8 @@
 ; version and SHA-256 for everything fetched at run time). One file, so a
 ; new pin is one edit, and the pins that belong together move together:
 ; `windows\build.ps1 -Pin <tag or SHA>` rewrites DomovoiCommit,
-; DomovoiChannel, ProvisionSha256, ProvisionBundled (off) and
-; DashboardTabRoutes from that commit in one go, and
+; DomovoiChannel, ProvisionSha256, ProvisionBundled (off),
+; DashboardTabRoutes and ProvisionAiChoice from that commit in one go, and
 ; domovoi/tests/test_windows_installer.py fails while they disagree.
 ;
 ; Linux-side pins (docker-ce, models, Whisper, Ollama, images, the Python
@@ -37,6 +37,17 @@
 ; first tab, and the steps say to click Configuration. build.ps1 -Pin sets
 ; it from the commit; domovoi/tests/test_windows_installer.py checks it.
 #define DashboardTabRoutes
+
+; Does provision.sh at that commit take --ai-models / --no-ai-models (AI
+; chat and questions optional, 2026-10-21; ProvisionScript.SupportsAiChoice
+; in windows\common\Provision.cs)? Then Setup asks "Include AI chat and
+; questions?". Without them it doesn't ask and installs everything, as it
+; did before the question: that provision.sh always pulls the AI models,
+; and a No would only fail once the account, the firewall rules and the
+; Ubuntu download were done. build.ps1 -Pin sets it from the commit's
+; provision.sh (the bundled one, with ProvisionBundled: set it by hand);
+; domovoi/tests/test_windows_installer.py checks it.
+; #define ProvisionAiChoice
 
 ; provision.sh, the one script Setup runs inside the distro (as root); it
 ; then clones the repository at DomovoiCommit and reads every other pin

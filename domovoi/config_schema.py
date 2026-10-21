@@ -239,6 +239,22 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     # Ollama swaps models per-request, so clearing the cached client
     # (reset_ollama_client) is enough — no server restart, unlike
     # Whisper (whisper_model is 'restart', loaded once at boot).
+    # The household's AI switch comes first: Settings → Models shows it as
+    # its own card (web/static/models.jsx), and with it off the model rows
+    # below have nothing to do.
+    FieldSpec(
+        "ai_features", "AI chat and questions", "Models",
+        "On: Domovoi answers questions, understands commands said in your "
+        "own words, summarises your news briefing, and the dashboard and "
+        "app have Chat. Off: nothing uses the AI models. Voice commands "
+        "still work on their usual phrases (timers, music, the clock, "
+        "intercom, notes, news headlines and more), and so do speech "
+        "recognition, the voices and the wake word; a question gets 'I'm "
+        "set up for home commands', and Chat is hidden. Turning it on needs "
+        "the AI models (Settings → Models offers to download them). "
+        "Applies immediately.",
+        "bool", tier="reapply",
+    ),
     FieldSpec(
         "ollama_model", "Q&A model", "Models",
         "The Ollama model for conversational Q&A ('tell me a joke' fallthrough). "
@@ -687,8 +703,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     # docstring); "Turn on wake-word training" writes it.
     FieldSpec(
         "wake_word_trainer_enabled", "Wake-word training", "Wake words",
-        "Train the wake words recorded in Settings → Wake Words. Turn it on "
-        "with Settings → Wake Words → \"Turn on wake-word training\", which "
+        "Train the wake words recorded in Settings → Wake words. Turn it on "
+        "with Settings → Wake words → \"Turn on wake-word training\", which "
         "builds the trainer and downloads its training data first; switched "
         "on here without that, every training fails with \"image not "
         "found\". Off: no new training starts (one already running "
@@ -994,7 +1010,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "guest can't clear a queue or stop a room, can't remove the song "
         "that's playing, and can't see or change a room that isn't playing. "
         "Device blocks still apply, a guest's changes are rate-limited, and "
-        "you can ban a guest in Settings → Devices. Off = only paired "
+        "you can ban a guest in Settings → Phones & browsers. Off = only paired "
         "devices and the admin can see or change a room's queue or its "
         "playback. Applies immediately.",
         "bool", tier="hot",
@@ -1016,7 +1032,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     FieldSpec(
         "satellite_adoption_enabled", "USB satellite adoption", "Security",
         "Scan the Domovoi server's USB ports for unprovisioned satellites "
-        "(the plug-in-and-adopt flow in Settings → Satellites). Turn off to "
+        "(the plug-in-and-adopt flow in Settings → Rooms). Turn off to "
         "stop scanning removable drives entirely.",
         "bool", tier="hot",
     ),
@@ -1030,7 +1046,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     ),
     FieldSpec(
         "usb_stick_wifi", "USB sticks may use Wi-Fi (not tested yet)", "Security",
-        "Old computers (Settings → Satellites → add a spare device → USB "
+        "Old computers (Settings → Rooms → add a spare device → USB "
         "stick): let a stick made from now on set the computer up over "
         "Wi-Fi, with Debian's own network and password questions. OFF (the "
         "default) = the stick needs a network cable and says so before "

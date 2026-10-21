@@ -12,7 +12,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Settings → About's privacy card: its summary always, the privacy policy's
+ * Settings → About & updates's privacy card: its summary always, the privacy policy's
  * link only once the owner has filled in its https address
  * (PRIVACY_POLICY_URL; owner rule: no control that cannot do what it says).
  */

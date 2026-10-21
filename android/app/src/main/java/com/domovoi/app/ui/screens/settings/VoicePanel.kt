@@ -49,7 +49,7 @@ import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.voice.PhoneVoiceChoice
 import com.domovoi.app.voice.PhoneVoiceUi
 
-/** Settings → Voice: the [VoiceCard]. */
+/** Settings → Voices: the [VoiceCard]. */
 @Composable
 internal fun VoicePanel() {
     LazyColumn(

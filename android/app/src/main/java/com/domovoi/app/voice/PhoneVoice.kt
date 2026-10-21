@@ -119,7 +119,7 @@ fun applyPronunciations(p: Phonemizer, info: VoiceInfo?): PronunciationState {
     return PronunciationState("default", p.pronunciations().size, null)
 }
 
-/** The phone's own choice ("Settings → Voice"). */
+/** The phone's own choice ("Settings → Voices"). */
 object PhoneVoiceChoice {
     /** Speak with whatever voice the server speaks with (the default). */
     const val SAME_AS_SERVER = "server"
@@ -152,7 +152,7 @@ object PhoneVoiceChoice {
     }
 }
 
-/** What Settings → Voice shows. */
+/** What Settings → Voices shows. */
 data class PhoneVoiceUi(
     val choice: String = PhoneVoiceChoice.SAME_AS_SERVER,
     /** The server's voice (from it, or cached from it); null when unknown. */

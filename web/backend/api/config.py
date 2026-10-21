@@ -55,7 +55,7 @@ _VERSION_GIT_TIMEOUT_SEC = 90.0
 def home_problems_visibility() -> str:
     """The live HOME_PROBLEMS_VISIBILITY.
 
-    The setting is edited through the core (Settings → Configuration, tier
+    The setting is edited through the core (Settings → Advanced, tier
     ``hot``), which mutates the CORE process's settings; this process's copy
     is whatever ``.env`` said when it booted. So the value comes from the
     core's admin snapshot the poll loop refreshes every 1.5 s, and falls back
@@ -166,7 +166,7 @@ class AcoustidTestRequest(BaseModel):
     dependencies=[Depends(require_admin_security)],
 )
 async def acoustid_key_test(body: AcoustidTestRequest, request: Request):
-    """Settings → Configuration's "test the key": one AcoustID lookup with
+    """Settings → Advanced's "test the key": one AcoustID lookup with
     the typed key, else the saved one. Proxy of the core's
     ``POST /v1/admin/config/acoustid-test`` →
     ``{result: works|refused|unreachable|unavailable, detail,
@@ -315,7 +315,7 @@ async def check_version(request: Request):
 )
 async def restart_version(request: Request):
     """Bounce the Domovoi services so pulled code actually loads, or just
-    restart them (Settings → Version's "Restart Domovoi"); where
+    restart them (Settings → About & updates's "Restart Domovoi"); where
     domovoi-update.service is installed, start it instead: sync, migrate,
     restart, roll back on failure, and with nothing new to apply only the
     restart and its health check.
@@ -397,7 +397,7 @@ class VersionChannelRequest(BaseModel):
     dependencies=[Depends(require_admin_security)],
 )
 async def switch_version_channel(body: VersionChannelRequest, request: Request):
-    """Settings → Version's channel: follow ``stable`` (releases only) or
+    """Settings → About & updates's channel: follow ``stable`` (releases only) or
     ``main`` (every change) from now on. HEAD never moves; the check and
     the pull then compare with, and move to, that branch. Proxy of the
     core's ``POST /v1/admin/version/channel`` →

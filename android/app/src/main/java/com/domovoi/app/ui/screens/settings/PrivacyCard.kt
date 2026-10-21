@@ -15,7 +15,7 @@ import com.domovoi.app.ui.components.webLinkOrNull
 import com.domovoi.app.ui.theme.Domovoi
 
 /**
- * The privacy policy's web address, linked from Settings → About (Google
+ * The privacy policy's web address, linked from Settings → About & updates (Google
  * Play wants it in the app as well as on the store listing).
  *
  * docs/PRIVACY_POLICY.md as GitHub shows it on main (Kamron's choice,
@@ -62,7 +62,7 @@ internal fun privacyPoints(assistant: Boolean): List<String> = listOfNotNull(
  *  (64-bit installs, [AssistantSupport]). */
 internal val PRIVACY_POINTS: List<String> get() = privacyPoints(AssistantSupport.available)
 
-/** Settings → About (and the local shell's settings): privacy, and the policy. */
+/** Settings → About & updates (and the local shell's settings): privacy, and the policy. */
 @Composable
 internal fun PrivacyCard() {
     val context = LocalContext.current

@@ -52,7 +52,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi import doc_extract
+from domovoi import ai_features, doc_extract
 from domovoi.admin_auth import require_device, require_device_read
 from domovoi.doc_extract import runner
 from domovoi.doc_qa import answer as qa
@@ -83,30 +83,15 @@ _META_KEYS = ("token", "name", "kind", "pages", "words", "parts", "scanned_pages
 
 # ─── The household's AI switch ──────────────────────────────────────────
 def ai_turned_off() -> bool:
-    """The household's "AI features" switch (domovoi/ai_features.py, the
-    AI-optional branch) is off. Before that module is on this server there
-    is no switch, so AI is on."""
-    try:
-        from domovoi import ai_features  # type: ignore[attr-defined]
-    except ImportError:
-        return False
-    try:
-        return bool(ai_features.turned_off())
-    except Exception:  # noqa: BLE001 — a switch that can't be read is on, as the module itself decides
-        return False
+    """The household's "AI features" switch (domovoi/ai_features.py) is off."""
+    return ai_features.turned_off()
 
 
 def _require_ai() -> None:
     """A document for a chat, while AI features are off: refused before
     anything is stored, as a message or a picture is (409 ai-off)."""
     if ai_turned_off():
-        try:
-            from domovoi import ai_features  # type: ignore[attr-defined]
-
-            raise ai_features.http_exception("chat")
-        except (ImportError, AttributeError):
-            raise HTTPException(status_code=409, detail={
-                "code": "ai-off", "detail": "AI chat and questions are turned off on this Domovoi."})
+        raise ai_features.http_exception("chat")
 
 
 DEVICE = [Depends(require_device)]

@@ -247,7 +247,7 @@ const _isDeviceTokenRefusal = (status, text) => (
 
 /* ── A device an admin BLOCKED, told apart from a missing credential ──
  *
- * An admin can block one device in Settings → Devices; the server then
+ * An admin can block one device in Settings → Phones & browsers; the server then
  * refuses that device's writes 403, with the block's own reason as the
  * body. 403 is also what "sign in" looks like, so the retry below used
  * to open the admin-password modal over the editor and replay the save.
@@ -635,6 +635,8 @@ const _sendWithAuthRetry = async (send, { method, body, raw, quiet, noPrompt } =
     }
     const err = new Error(`${r.status} ${r.statusText}: ${text.slice(0, 200)}`);
     err.status = r.status;   // callers branch on auth failures
+    // X-Domovoi-Refusal (ai-off, internet-off): the code help explains.
+    try { err.refusal = (r.headers && r.headers.get('X-Domovoi-Refusal')) || null; } catch { err.refusal = null; }
     // Lets a caller say "cancelled" instead of "failed": the operator
     // dismissed the sign-in (or the pairing), they did not hit a broken
     // endpoint.
@@ -758,6 +760,20 @@ const apiErrorText = (e, max = 160) => {
   return clipSentence(text, max);
 };
 
+/* The code a refused request carries, for "ask Domovoi about this"
+ * (help.jsx; every code has a help entry, domovoi/help_desk/error_codes.py):
+ * the plugin installer's {detail: {error: {code}}}, a coded {detail, code}
+ * or {detail: {code}}, else the X-Domovoi-Refusal header. null for none. */
+const apiErrorCode = (e) => {
+  const body = e && e.detail;
+  const nested = body && body.detail;
+  const code = (nested && typeof nested === 'object' && nested.error && nested.error.code)
+    || (nested && typeof nested === 'object' && nested.code)
+    || (body && typeof body === 'object' && typeof body.code === 'string' && body.code)
+    || (e && e.refusal);
+  return typeof code === 'string' && /^[a-z0-9_-]{2,60}$/.test(code) ? code : null;
+};
+
 /* The reason an admin's per-device block refused this write, or null.
  * A caller that holds the operator's unsent work renders it beside the
  * button rather than in a toast — the block is not transient and the
@@ -799,7 +815,7 @@ const mutationErrorText = (e, verb = 'Save', { kept = true } = {}) => {
   const blocked = deviceBlockReason(e);
   if (blocked) {
     return `${verb} refused — ${blocked}. An admin lifts the block in `
-      + `Settings → Devices.${kept ? ' Your changes are still here.' : ''}`;
+      + `Settings → Phones & browsers.${kept ? ' Your changes are still here.' : ''}`;
   }
   if (e && e.authCancelled) {
     const what = e.deviceTokenRequired ? 'this browser is not paired' : 'not signed in';
@@ -824,7 +840,8 @@ const mutationErrorText = (e, verb = 'Save', { kept = true } = {}) => {
  * same rule for a plugin page that may meet an older dashboard. */
 const reportMutationFailure = (fire, verb, e, { kept = false } = {}) => {
   const msg = mutationErrorText(e, verb, { kept });
-  if (msg) fire(msg);
+  // "ask Domovoi about this" on the toast, with the error's code (help.jsx).
+  if (msg) fire(msg, { help: { code: apiErrorCode(e) } });
   return msg;
 };
 
@@ -1035,7 +1052,7 @@ const useRetryAfterCredential = (refusal, retry) => {
  * Most reads are allowed or refused, and the retry in the hooks below
  * recovers a refused one once a credential arrives. A few are allowed
  * EITHER way and answer differently by who asks:
- *   * Settings → Configuration (and the Models tab's active models, read
+ *   * Settings → Advanced (and the Models tab's active models, read
  *     from the same registry): the advanced section and the unmasked
  *     secrets come back only for a live admin Bearer. The cookie a
  *     reload keeps is view-only (CORE-6).
@@ -1611,7 +1628,7 @@ const DeviceIdentity = (() => {
   };
 
   /* Shared screen (V014). An admin marks a device — the kitchen tablet —
-   * as a shared screen in Settings → Devices, and every device row the
+   * as a shared screen in Settings → Phones & browsers, and every device row the
    * server returns carries `shared_screen`, this device's own registration
    * included. The last answer is echoed to localStorage so a reload paints
    * the shared view at once instead of flashing personal content while

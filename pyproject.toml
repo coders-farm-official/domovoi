@@ -68,6 +68,14 @@ dependencies = [
     # WebP cache in S–XL buckets. Pure-wheel on Windows; the endpoint
     # degrades to 204/no-thumbs if it were somehow absent.
     "pillow>=10.4",
+    # Printing (domovoi/printing/): pypdfium2 (Apache-2.0 or BSD-3-Clause;
+    # its PDFium is BSD-style, the FreeType inside it under the FreeType
+    # licence, credited in docs/LICENSES.md) draws pages for printers that
+    # don't take PDF, the print previews and the page counts; ReportLab
+    # (BSD) draws the test page, text/markdown and table printouts and the
+    # scan PDFs. Binary wheels for every platform incl. cp314 / pure Python.
+    "pypdfium2>=5.14",
+    "reportlab>=5.0",
     # Direct dependency for the chat-stream helper (clients/ollama.py) and
     # other httpx call sites (was already transitive via the ollama client).
     "httpx>=0.27",

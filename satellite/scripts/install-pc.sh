@@ -2,7 +2,7 @@
 # Make this spare Linux laptop or mini PC a Domovoi room satellite.
 #
 # Spare-device satellites (S1, 2026-10-13). Run by the one-line command the
-# dashboard shows under Settings -> Satellites -> "Add a spare device",
+# dashboard shows under Settings -> Rooms -> "Add a spare device",
 # which has already checked this bundle's SHA-256 before running it:
 #
 #   bash install-pc.sh [options] 'domovoi-room:1?core=...&fp=...&room=...'
@@ -679,7 +679,7 @@ stage_pinned_python() {  # step 0: the pinned file, checked, unpacked in a priva
     say "  from the Domovoi server"
   else
     fetch_to "$PIN_URL" "$f" 5
-    pinned_ok "$f" || die "neither the Domovoi server nor GitHub gave the pinned Python $PIN_VERSION, so nothing was installed. In the dashboard: Settings -> Satellites -> Add a spare device -> get the Linux Python (or connect this computer to the internet), then run the command again" 1
+    pinned_ok "$f" || die "neither the Domovoi server nor GitHub gave the pinned Python $PIN_VERSION, so nothing was installed. In the dashboard: Settings -> Rooms -> Add a spare device -> get the Linux Python (or connect this computer to the internet), then run the command again" 1
     say "  from GitHub (python-build-standalone)"
   fi
   /usr/bin/mkdir "$PYSTAGE/x"
@@ -889,7 +889,7 @@ uninstall() {
   $SUDO /usr/bin/rmdir "$ROOT_LIB" 2>/dev/null || true
   forget_sudo
   say "Done. In the dashboard, retire the room too once it shows offline"
-  say "(Settings -> Satellites -> the room -> Retire room): that frees its name and removes its music player."
+  say "(Settings -> Rooms -> the room -> Retire room): that frees its name and removes its music player."
 }
 
 if [ "$UNINSTALL" = 1 ]; then
@@ -903,7 +903,7 @@ case $SRC/ in
   "$SAT_HOME_HEADLESS"/*) die "run the installer from the dashboard's command, not from the satellite's own copy of it" 2 ;;
 esac
 
-[ -n "$PAYLOAD" ] || die "give the enrolment payload ('domovoi-room:1?...') from the dashboard: Settings -> Satellites -> Add a spare device" 2
+[ -n "$PAYLOAD" ] || die "give the enrolment payload ('domovoi-room:1?...') from the dashboard: Settings -> Rooms -> Add a spare device" 2
 trap '[ -z "$PYSTAGE" ] || /usr/bin/rm -rf "$PYSTAGE"' EXIT
 
 # ─── 0. the system, and which Python ─────────────────────────────────────
@@ -1306,7 +1306,7 @@ if [ "$STARTED" = 1 ] && [ "$WAIT_SEC" -gt 0 ]; then
   SHOW_CODE=""
   if [ -t 1 ]; then
     SHOW_CODE=--show-code
-    say "Now approve it: in the dashboard, Settings -> Satellites, type the code shown below."
+    say "Now approve it: in the dashboard, Settings -> Rooms, type the code shown below."
   fi
   if as_sat /usr/bin/sh -c "cd '$PREFIX' && '$VENV/bin/python' -m satellite.pc_install wait --socket '$CONFIG_DIR/control.sock' --timeout '$WAIT_SEC' $SHOW_CODE"; then
     exit 0

@@ -62,8 +62,8 @@ class HomeModelsTest {
         )
         assertEquals(listOf("db", "core"), rows.map { it.key })
         assertTrue(rows.all { it.tone == Tone.Err })
-        assertEquals(HomeTarget.Screen(Route.Settings), rows[0].target)
-        assertEquals(HomeTarget.Screen(Route.Satellites), rows[1].target)
+        assertEquals(HEALTH_TARGET, rows[0].target)
+        assertEquals(HEALTH_TARGET, rows[1].target)
         assertEquals("the Domovoi server isn't answering · rooms show the last known state", rows[1].text)
     }
 
@@ -110,7 +110,7 @@ class HomeModelsTest {
         assertEquals("the Radio plugin failed to load", failed.text)
         assertEquals(Tone.Err, failed.tone)
         // The plugin list lives on the dashboard, not in the app.
-        assertEquals(HomeTarget.Dashboard("#plugins"), failed.target)
+        assertEquals(HEALTH_TARGET, failed.target)
         assertEquals(
             "the sleep plugin is degraded",
             rows(HomePlugin("sleep", status = "degraded")).single().text,
@@ -141,7 +141,7 @@ class HomeModelsTest {
         )
         val row = attentionRows(ok, emptyList(), null, acq).single()
         assertEquals("a media request is waiting · no provider plugin can fill it", row.text)
-        assertEquals(HomeTarget.Screen(Route.Music), row.target)
+        assertEquals(HEALTH_TARGET, row.target)
         assertEquals(
             "2 media requests are waiting · no provider plugin can fill them",
             attentionRows(ok, emptyList(), null, acq.copy(can_fulfill_url = false)).single().text,

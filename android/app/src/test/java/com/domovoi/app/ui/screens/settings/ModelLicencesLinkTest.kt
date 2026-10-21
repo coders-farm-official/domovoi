@@ -11,7 +11,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Settings → About's open-source licences: the link to docs/LICENSES.md,
+ * Settings → About & updates's open-source licences: the link to docs/LICENSES.md,
  * the licences of what a Domovoi server downloads (owner decision 7,
  * 2026-10-16: hey_jarvis and the Llama model ship, stated in that table).
  */

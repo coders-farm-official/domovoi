@@ -26,7 +26,7 @@
  *
  * Never on Home: transcripts, voice notes, memories, people's names, chat
  * titles, Wi-Fi names. A shared screen (an admin marks the device in
- * Settings → Devices) also hides calendar titles, reminder text and the
+ * Settings → Phones & browsers) also hides calendar titles, reminder text and the
  * problem rows (one neutral line at most), and the personal pages drop off
  * every launcher (components.jsx SHARED_SCREEN_HIDDEN). That is
  * presentational, not a boundary: everything it hides is an open read, a
@@ -51,8 +51,6 @@ const HOME_FOCUS_GAP_MS = 15 * 1000;       // focus + visibilitychange arrive to
 const HOME_DONE_MS = 60 * 1000;            // "done · kitchen" lingers this long
 const HOME_ROOM_DEBOUNCE_MS = 300;         // every /api/satellites read opens an MPD connection per room
 const HOME_STOP_ALL_ARM_MS = 4000;
-const HOME_DISK_WARN = 90;
-const HOME_DISK_ERR = 95;
 const HOME_PHONE_ROWS = 3;                 // attention rows and today rows a phone shows
 const HOME_TODAY_ROWS = 6;                 // ...and a desktop
 const HOME_PHONE_TIMERS = 2;               // timers a phone shows, so the rooms start above the fold
@@ -146,23 +144,8 @@ const HomeHooks = (() => {
   /* Who is looking. `isAdmin` also covers a cookie session that survived a
    * reload (status.authenticated — isLoggedIn() alone misses it) and the
    * pre-setup grace, where every read, the admin ones included, is open. */
-  const whoIsLooking = () => {
-    let st = null; let loggedIn = false; let paired = false;
-    try {
-      if (typeof Auth !== 'undefined') {
-        st = Auth.status || null;
-        loggedIn = !!(Auth.isLoggedIn && Auth.isLoggedIn());
-        paired = !!(Auth.isPaired && Auth.isPaired());
-      }
-    } catch { /* auth.js absent */ }
-    const unclaimed = !!st && st.setup_complete === false;
-    return {
-      known: !!st,
-      unclaimed,
-      paired,
-      isAdmin: loggedIn || !!(st && st.authenticated) || unclaimed,
-    };
-  };
+  // (health.jsx healthViewer: Health asks the same question.)
+  const whoIsLooking = () => healthViewer();
 
   const useViewer = () => {
     const [, force] = React.useReducer((n) => n + 1, 0);
@@ -328,212 +311,25 @@ const HomeHooks = (() => {
 
 /* ---- needs attention: the rules ----------------------------------- */
 
-/* Every problem Home can name, ranked err → warn. `scope` says who may
- * see it: 'setup' (the claim row — everyone, since anyone on the network
- * can change settings until the box is claimed), 'open' (explains what a
- * person notices) or 'admin' (only an admin can act; those reads are
- * never even made for anyone else). When the core or the database is
- * down that is the only story: every rule that reads through them would
- * just repeat it, so they wait. Home never fixes anything itself — each
- * row links to the page that does (#satellites is Settings → Satellites:
- * the shell opens that tab, components.jsx settingsTabRoute). */
-const HomeAttentionRows = ({ viewer, health, rooms, plugins, pluginErrors, acq,
-                             approvals, pending, version, hardware, config, guard }) => {
-  const rows = [];
-  const add = (r) => rows.push(r);
-  // The container guard (docs/CONTAINER_GUARD.md): the same open
-  // incidents the banner on every page shows, as one row. Words follow
-  // the reader's tier: a browser with no household credential gets only
-  // "something needs an admin's attention".
-  const guardRow = HomeGuardRow(guard);
-  if (guardRow) add(guardRow);
-  if (viewer.unclaimed) {
-    add({ key: 'claim', tone: 'err', scope: 'setup', claim: true,
-          text: "this box isn't claimed yet · anyone on the network can change settings" });
-  }
-  const dbDown = !!health && health.db_reachable === false;
-  const coreDown = !!health && health.domovoi_reachable === false;
-  if (dbDown) {
-    add({ key: 'db', tone: 'err', scope: 'open', href: '#settings',
-          text: "the database isn't answering · nothing new can be saved" });
-  }
-  if (coreDown) {
-    // An admin gets the restart on the row itself (CoreRestart: it
-    // renders nothing for anyone else, or while the core's loop runs); the
-    // row still links to Satellites. A core that runs but can't serve (its
-    // /v1/alive answers) is told apart: restarting it won't help.
-    const sick = health.core_alive === true;
-    add({ key: 'core', tone: 'err', scope: 'open', href: '#satellites', coreDown: !sick,
-          text: sick
-            ? "the Domovoi server is running but can't answer · most likely its database"
-            : "the Domovoi server isn't answering · rooms show the last known state" });
-  }
+/* Every problem Home can name, ranked err → warn: the problems among
+ * Health's checks (health.jsx healthChecks — ONE set of checks for both
+ * pages, since 2026-10-21). Each row links to its part of Settings →
+ * Health, which links on to the page that fixes it; Home never fixes
+ * anything itself. `scope` says who may see a row (health.jsx). */
+const HomeAttentionRows = (inputs) => healthProblems(healthChecks(inputs));
 
-  if (!dbDown && !coreDown) {
-    const stt = health && health.stt;
-    if (stt === 'unavailable') {
-      add({ key: 'stt', tone: 'err', scope: 'open', href: '#settings/models',
-            text: "speech recognition is off · the rooms can't understand anyone" });
-    } else if (stt === 'fallback') {
-      add({ key: 'stt', tone: 'warn', scope: 'open', href: '#settings/models',
-            text: 'speech recognition is on its slower fallback model' });
-    }
-
-    const list = Array.isArray(rooms) ? rooms : [];
-    const offline = list.filter((s) => s.status === 'offline');
-    if (offline.length === 1) {
-      add({ key: 'offline', tone: 'warn', scope: 'open', href: '#satellites',
-            at: offline[0].last_connected_at,
-            text: `${offline[0].room_id} is offline · it can't hear anyone right now` });
-    } else if (offline.length > 1) {
-      add({ key: 'offline', tone: 'warn', scope: 'open', href: '#satellites',
-            text: `${offline.length} rooms offline` });
-    }
-    const waiting = list.filter((s) => s.status === 'waiting');
-    if (waiting.length) {
-      add({ key: 'waiting', tone: 'warn', scope: 'open', href: '#satellites',
-            text: waiting.length === 1
-              ? `${waiting[0].room_id} was set up but hasn't connected yet`
-              : `${waiting.length} rooms were set up but haven't connected yet` });
-    }
-    const dead = list.filter((s) => s.sat_type === 'video' && s.status === 'online'
-      && s.display && s.display.kiosk_alive === false);
-    if (dead.length) {
-      add({ key: 'kiosk', tone: 'warn', scope: 'open', href: '#satellites',
-            text: dead.length === 1
-              ? `the ${dead[0].room_id} screen stopped showing anything`
-              : `${dead.length} screens stopped showing anything` });
-    }
-
-    // Plugins: the server's view (GET /api/plugins, open so that errors
-    // show for everyone) plus what only this browser saw — a page script
-    // that failed to load or threw while rendering.
-    const bad = new Map();   // slug → {name, tone}
-    ((plugins && plugins.plugins) || []).forEach((p) => {
-      if (p.status === 'uninstalled') return;
-      const broken = p.status === 'load_error' || (p.enabled !== false
-        && (!!p.web_load_error || (p.page_errors || []).length > 0));
-      if (broken) bad.set(p.slug, { name: p.name || p.slug, tone: 'err' });
-      else if (p.enabled !== false && p.status === 'degraded') bad.set(p.slug, { name: p.name || p.slug, tone: 'warn' });
-    });
-    Object.keys(pluginErrors || {}).forEach((slug) => {
-      if ((pluginErrors[slug] || []).length) {
-        const known = ((plugins && plugins.plugins) || []).find((p) => p.slug === slug);
-        bad.set(slug, { name: (known && known.name) || slug, tone: 'err' });
-      }
-    });
-    if (bad.size === 1) {
-      const [only] = [...bad.values()];
-      add({ key: 'plugins', tone: only.tone, scope: 'open', href: '#plugins',
-            text: only.tone === 'err' ? `the ${only.name} plugin failed to load`
-              : `the ${only.name} plugin is degraded` });
-    } else if (bad.size > 1) {
-      add({ key: 'plugins', tone: [...bad.values()].some((b) => b.tone === 'err') ? 'err' : 'warn',
-            scope: 'open', href: '#plugins', text: `${bad.size} plugins have problems` });
-    }
-
-    // A media request is waiting and no provider plugin can fill it
-    // (docs/FAQ.md). Never the request's own text.
-    if (acq && acq.core_reachable) {
-      const stuck = (acq.acquisitions || []).filter((a) => a.status === 'pending'
-        && (a.kind === 'url' ? acq.can_fulfill_url === false : acq.can_fulfill_query === false));
-      if (stuck.length) {
-        add({ key: 'acq', tone: 'warn', scope: 'open', href: '#music',
-              text: stuck.length === 1
-                ? 'a media request is waiting · no provider plugin can fill it'
-                : `${stuck.length} media requests are waiting · no provider plugin can fill them` });
-      }
-    }
-
-    // Admin-only. These arrays/objects are null for anyone else: the
-    // reads behind them were never made.
-    if (Array.isArray(approvals) && approvals.length) {
-      add({ key: 'approvals', tone: 'warn', scope: 'admin', href: '#satellites',
-            text: approvals.length === 1
-              ? `${approvals[0].room_id} is waiting for approval`
-              : `${approvals.length} satellites are waiting for approval` });
-    }
-    if (Array.isArray(pending) && pending.length) {
-      add({ key: 'adopt', tone: 'warn', scope: 'admin', href: '#satellites',
-            text: pending.length === 1
-              ? 'a satellite is plugged in and ready to adopt'
-              : `${pending.length} satellites are plugged in and ready to adopt` });
-    }
-    if (version) {
-      const last = version.last_update;
-      const st = last && last.status;
-      if (st === 'failed' || st === 'rollback_failed') {
-        add({ key: 'update', tone: 'err', scope: 'admin', href: '#settings/configuration', at: last.finished_at,
-              text: 'the last update failed' });
-      } else if (st === 'rolled_back' || (version.bad_sha && st !== 'ok')) {
-        add({ key: 'update', tone: 'warn', scope: 'admin', href: '#settings/configuration', at: last && last.finished_at,
-              text: 'the last update was rolled back' });
-      }
-      const restartWaiting = pendingRestart(version);
-      if (restartWaiting.code) {
-        add({ key: 'restart', tone: 'warn', scope: 'admin', href: '#settings/configuration',
-              text: "a restart is pending · the pulled code isn't running yet" });
-      } else if (restartWaiting.plugins.length) {
-        add({ key: 'restart', tone: 'warn', scope: 'admin', href: '#plugins',
-              text: restartWaiting.plugins.length === 1
-                ? `a restart is pending · the ${restartWaiting.plugins[0].slug} upgrade isn't running yet`
-                : `a restart is pending · ${restartWaiting.plugins.length} plugin upgrades aren't running yet` });
-      }
-    }
-    // Nobody has said whether this box has internet (INTERNET_ACCESS):
-    // until an admin answers, it behaves as it always has. '' is the
-    // unanswered answer; a server from before the question sends nothing.
-    if (config && config.internet_access === '') {
-      add({ key: 'internet', tone: 'warn', scope: 'admin', href: '#settings/internet',
-            text: 'tell Domovoi whether this box has internet' });
-    }
-    const disk = hardware && hardware.disk;
-    if (disk && typeof disk.percent === 'number' && disk.percent >= HOME_DISK_WARN) {
-      // The core measures $HOME, so it is the home disk, not "the" disk.
-      add({ key: 'disk', tone: disk.percent >= HOME_DISK_ERR ? 'err' : 'warn', scope: 'admin',
-            href: '#settings/models', text: `home disk is ${Math.round(disk.percent)}% full` });
-    }
-  }
-
-  const rank = { err: 0, warn: 1 };
-  return rows
-    .map((r, i) => ({ ...r, i }))
-    .sort((a, b) => (rank[a.tone] - rank[b.tone]) || (a.i - b.i));
-};
-
-/* The container guard's row: none, or one row linking to #containers. */
-const HomeGuardRow = (guard) => {
-  const b = (typeof containerGuardBanner === 'function') ? containerGuardBanner(guard) : null;
-  if (!b || !b.show) return null;
-  const tone = b.tone === 'warn' ? 'warn' : 'err';
-  let text = "something needs an admin's attention";
-  if (guard.tier === 'household') {
-    if (b.tone === 'tamper') {
-      text = 'signs of tampering in a Domovoi container · risky changes are paused';
-    } else if (b.ids.length > 1) {
-      text = `${b.ids.length} Domovoi containers need attention`;
-    } else {
-      const only = (guard.data.incidents || []).find((i) => i.id === b.ids[0]);
-      const summary = String((only && only.summary) || 'a Domovoi container needs attention').replace(/\.$/, '');
-      text = summary.charAt(0).toLowerCase() + summary.slice(1);
-    }
-  }
-  return { key: 'containers', tone, scope: 'open', href: '#containers', text };
-};
-
-/* Who sees which of those rows (HOME_PROBLEMS_VISIBILITY, admin-set):
+/* Who sees which of those rows (HOME_PROBLEMS_VISIBILITY, admin-set; the
+ * rule is health.jsx healthAudience, Health's too):
  *   everyone  household members see the rows they can notice, an admin all
  *   summary   household members see one neutral line
  *   admins    household members see nothing
  * A shared screen shows the neutral line at most, whatever the setting —
  * even with an admin signed in on it. */
 const HomeAttentionView = ({ rows, viewer, visibility, shared }) => {
-  const own = viewer.isAdmin ? rows : rows.filter((r) => r.scope !== 'admin');
-  const summary = own.length ? { mode: 'summary', count: own.length } : { mode: 'none' };
-  if (shared) return (viewer.isAdmin || visibility !== 'admins') ? summary : { mode: 'none' };
-  if (viewer.isAdmin) return { mode: 'rows', rows };
-  if (visibility === 'admins') return { mode: 'none' };
-  if (visibility === 'summary') return summary;
+  const audience = healthAudience({ viewer, visibility, shared });
+  const own = audience === 'all' ? rows : rows.filter((r) => r.scope !== 'admin');
+  if (audience === 'summary') return own.length ? { mode: 'summary', count: own.length } : { mode: 'none' };
+  if (audience === 'none') return { mode: 'none' };
   return { mode: 'rows', rows: own };
 };
 
@@ -633,6 +429,7 @@ const HomeAttention = ({ view, viewer, shared, checking, failed, refused, checke
       quiet = (
         <div className="home-att-quiet">
           nothing needs you · checked {relTime(new Date(checkedAt || Date.now()).toISOString())}
+          {' · '}<a href="#settings/health" className="home-link">every check</a>
         </div>
       );
     }
@@ -677,14 +474,14 @@ const HomeAttention = ({ view, viewer, shared, checking, failed, refused, checke
               <div key={r.key} className={`${cls} home-att-claim`} data-key={r.key}>
                 {body}
                 <span className="home-att-acts">
-                  <a href={r.href} className="home-link">satellites</a>
+                  <a href={r.href} className="home-link">health</a>
                   <CoreRestart/>
                 </span>
               </div>
             );
           }
-          // A row's href may be a Settings tab's own address
-          // (#settings/configuration): a plain link opens it.
+          // A row's href is its part of Settings → Health
+          // (#settings/health/rooms): a plain link opens it.
           return (
             <a key={r.key} className={cls} data-key={r.key} href={r.href}>
               {body}
@@ -784,7 +581,7 @@ const HomeRoomRank = (s) => {
  * has a song: a STOPPED room's player keeps the last song loaded, and the
  * now-playing read still names it (state "stop", song set), which made a
  * room nobody was listening to look like it was playing that song at 0:00
- * here while Music and Settings → Satellites said nothing (2026-10-11).
+ * here while Music and Settings → Rooms said nothing (2026-10-11).
  * A stopped room is quiet, as everywhere else. */
 const HomeRoomSong = (s) => {
   const np = s && s.now_playing;
@@ -794,7 +591,7 @@ const HomeRoomSong = (s) => {
 
 /* One room. Not SatCard: that is a single <button>, and a button can't
  * hold the transport buttons. The left part is a link to Settings →
- * Satellites (#satellites, which opens that tab); the buttons sit apart on
+ * Satellites (#settings/rooms, which opens that tab); the buttons sit apart on
  * the right edge, in thumb reach on a phone, while something is playing or
  * paused. A quiet room has none: starting something in a room belongs to
  * the Music page, which picks the room and the track together. */
@@ -885,7 +682,7 @@ const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct }) =>
 
   return (
     <div className={`home-room${online && !stale ? '' : ' dim'}`} data-room={s.room_id}>
-      <a className="home-room-main" href="#satellites" title={`${s.room_id} in Settings → Satellites`}>
+      <a className="home-room-main" href="#settings/rooms" title={`${s.room_id} in Settings → Rooms`}>
         <div className="home-room-top">
           <StatusDot tone={online ? 'ok' : s.status === 'waiting' ? 'warn' : 'idle'} live={online && !stale}/>
           <span className="home-room-name">{s.room_id}</span>
@@ -948,7 +745,7 @@ const HomeRooms = ({ rooms, answered, failed, dbDown, stale, fetchedAt, timerLef
     content = (
       <Card>
         <Empty glyph="sleeping" title="no rooms yet"
-               action={<a href="#satellites" className="home-link">add a satellite</a>}/>
+               action={<a href="#settings/rooms" className="home-link">add a satellite</a>}/>
       </Card>
     );
   } else {
@@ -1163,7 +960,7 @@ const HomeFirstRun = ({ manual }) => (
 /* Every page that is not on this phone's bar (components.jsx
  * phoneBarRoutes) — plugin pages included, with their badges — plus
  * Settings and the manual. The phone's "more" menu, and the way to the
- * bar's editor (Settings → Phone bar). `counts` and `badges` are
+ * bar's editor (Settings → App layout). `counts` and `badges` are
  * App's one useSidebarCounts and usePluginBadges results, handed down
  * rather than fetched again (a grid rendered without `badges` polls for
  * itself). A shared screen leaves the same pages off as the sidebar and the
@@ -1174,11 +971,12 @@ const HomeEverything = ({ counts, badges: given, shared }) => {
   const own = usePluginBadges(given ? null : manifest);
   const badges = given || own;
   const c = counts || {};
-  const items = navItemsFor(manifest, { shared });
+  const ai = useAiFeatures();
+  const items = navItemsFor(manifest, { shared, ai });
   const onBar = new Set(phoneBarRoutes(items, usePhoneBar()));
   const tiles = items.filter((it) => !onBar.has(it.route)).concat(HOME_EXTRA_TILES);
   const edit = (
-    <a href="#settings/phone-bar" className="home-link home-bar-edit">
+    <a href="#settings/app-layout" className="home-link home-bar-edit">
       edit the bar
     </a>
   );

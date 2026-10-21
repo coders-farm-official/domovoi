@@ -15,7 +15,7 @@ import com.domovoi.app.ui.components.PreviewLabel
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.theme.Domovoi
 
-/** Settings → Satellites: "Use this device as a room" — opens room mode's
+/** Settings → Rooms: "Use this device as a room" — opens room mode's
  *  explainer (roommode/RoomSetupActivity.kt) in its own task. */
 @Composable
 fun RoomModeEntryCard() {

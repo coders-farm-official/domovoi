@@ -24,7 +24,7 @@ value it finds there is only compared, never followed.
      its settings (.domovoi) unless -Purge; -Purge removes only the
      satellite's own files there. A link is removed, never followed.
 
-Then retire the room in the dashboard (Settings > Satellites > the room >
+Then retire the room in the dashboard (Settings > Rooms > the room >
 Retire room) once it shows offline.
 #>
 [CmdletBinding()]
@@ -220,5 +220,5 @@ if ($Purge) {
 }
 
 Say 'Done. In the dashboard, retire the room once it shows offline'
-Say '(Settings > Satellites > the room > Retire room): that frees its name and removes its music player.'
+Say '(Settings > Rooms > the room > Retire room): that frees its name and removes its music player.'
 Done 0

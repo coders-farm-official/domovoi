@@ -37,6 +37,7 @@ from web.backend.api import calendar as calendar_api
 from web.backend.api import captures as captures_api
 from web.backend.api import capabilities as capabilities_api
 from web.backend.api import chat as chat_api
+from web.backend.api import help as help_api
 from web.backend.api import config as config_api
 from web.backend.api import containers as containers_api
 from web.backend.api import denylist as denylist_api
@@ -44,6 +45,7 @@ from web.backend.api import devices as devices_api
 from web.backend.api import audiobooks as audiobooks_api
 from web.backend.api import documents as documents_api
 from web.backend.api import files as files_api
+from web.backend.api import printers as printers_api
 from web.backend.api import files_security
 from web.backend.api import greetings as greetings_api
 from web.backend.api import images as images_api
@@ -407,11 +409,14 @@ app.include_router(captures_api.router)
 app.include_router(documents_api.router)
 app.include_router(files_api.router)
 app.include_router(files_api.blocks_router)
+# Printers, printing and scanning: proxies to the core's /v1/printers, /v1/print, /v1/scan.
+app.include_router(printers_api.router)
 app.include_router(podcasts_api.router)
 app.include_router(audiobooks_api.router)
 app.include_router(videos_api.router)
 app.include_router(images_api.router)
 app.include_router(chat_api.router)
+app.include_router(help_api.router)
 app.include_router(models_api.router)
 app.include_router(news_api.router)
 app.include_router(stats_api.router)

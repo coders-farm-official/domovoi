@@ -159,6 +159,18 @@ class PluginContext:
         CAPABILITIES.register(name, impl, slug=self.slug)
         self.capabilities.append(name)
 
+    def add_lookup_source(self, source: object) -> None:
+        """Register a lookup source (SDK 1.8, :mod:`domovoi.lookup`):
+        ``search(query)`` / ``fetch(id)`` and a ``lookup_class`` of local,
+        api or web. The core orders sources by class, never by anything the
+        source says about itself; one plugin registers one source."""
+        from domovoi import lookup
+
+        if lookup.LOOKUP_SOURCE in self.capabilities:
+            raise ValueError("a plugin registers one lookup source")
+        lookup.register(source, slug=self.slug, core=False)
+        self.capabilities.append(lookup.LOOKUP_SOURCE)
+
     # ── config ──────────────────────────────────────────────────────────────
 
     def add_config(self, model: type, fields: list[FieldSpec]) -> None:

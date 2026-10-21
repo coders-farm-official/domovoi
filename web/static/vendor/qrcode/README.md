@@ -1,6 +1,6 @@
 # QR Code Generator for JavaScript (vendored, pinned 1.4.4)
 
-Settings → Satellites → **Add a spare device** draws the enrolment payload
+Settings → Rooms → **Add a spare device** draws the enrolment payload
 (`domovoi-room:1?…`, see `docs/uml/satellite-protocol.md`) as a QR code for
 a phone to scan. `qrcode.js` here is that library, served from this box like
 every other vendored script, so the dashboard makes no external request. It

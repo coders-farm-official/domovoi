@@ -47,7 +47,7 @@ data class BenchUi(
 )
 
 /**
- * The M0 benchmark behind Settings → About: downloads the models, loads the
+ * The M0 benchmark behind Settings → About & updates: downloads the models, loads the
  * engines, runs the measured tests and keeps the results. A process-wide
  * singleton (AppContainer), so a run survives the card leaving the screen
  * (the shell swapping to local media when the server drops, for instance).

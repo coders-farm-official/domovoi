@@ -406,7 +406,7 @@ const AlsoCalledSection = ({ track, fire }) => {
 const AlsoCalledFetchLine = (f) => {
   const n = (x) => Number(x || 0).toLocaleString('en-US');
   if (!f || f.enabled === null || f.enabled === undefined) return 'MusicBrainz lookup: status unknown';
-  if (f.enabled === false || f.state === 'off') return 'MusicBrainz lookup: off — Settings → Configuration → Library';
+  if (f.enabled === false || f.state === 'off') return 'MusicBrainz lookup: off — Settings → Advanced → Library';
   if (f.state === 'offline') return 'MusicBrainz lookup: paused — offline';
   if (f.state === 'rate_limited') return 'MusicBrainz lookup: paused — MusicBrainz asked to slow down';
   if (f.state === 'error') return `MusicBrainz lookup: error${f.last_error ? ` — ${f.last_error}` : ''}`;
@@ -1067,10 +1067,10 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
 
   // Admin only: ban the guest that queued this entry, from every room's
   // queue and transport (by the id it sent and its address; household
-  // policy, not a lock — Settings → Devices lists and lifts bans).
+  // policy, not a lock — Settings → Phones & browsers lists and lifts bans).
   const banGuest = async (item) => {
     if (!window.confirm('Ban the guest that added this? They can no longer change '
-      + 'the music in any room, as a guest, until you lift it in Settings → Devices.')) return;
+      + 'the music in any room, as a guest, until you lift it in Settings → Phones & browsers.')) return;
     try {
       await apiPost('/api/music/guest-bans', {
         device_id: item.guest_device_id || null,
@@ -2147,13 +2147,13 @@ const MusicPage = () => {
         running: 'already identifying songs',
       };
       // The missing key has a home in the dashboard: say so with a way there
-      // (Settings → Configuration, the AcoustID key field).
+      // (Settings → Advanced, the AcoustID key field).
       if (r && r.queued === false && r.reason === 'no_provider') {
         fire(notQueued.no_provider, {
           stay: true, key: 'enrich-no-provider',
           actions: [{
             label: 'add the AcoustID key',
-            title: 'Settings → Configuration → AcoustID key',
+            title: 'Settings → Advanced → AcoustID key',
             onClick: () => { try { window.location.hash = ACOUSTID_KEY_ROUTE; } catch { /* no location */ } },
           }],
         });

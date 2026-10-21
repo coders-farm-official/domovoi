@@ -310,7 +310,7 @@ def test_an_older_server_shows_no_section(driven) -> None:
 
 
 @pytest.mark.parametrize(("scenario", "line"), [
-    ("stats_off", "MusicBrainz lookup: off — Settings → Configuration → Library"),
+    ("stats_off", "MusicBrainz lookup: off — Settings → Advanced → Library"),
     ("stats_running", "MusicBrainz lookup: checking — 1,204 of 2,319 artists"),
     ("stats_offline", "MusicBrainz lookup: paused — offline"),
     ("stats_done", "MusicBrainz lookup: done"),

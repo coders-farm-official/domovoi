@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 /**
  * Developer options: the tools for measuring the app on this phone, kept out
  * of ordinary households' way (owner, 2026-10-16: design for ordinary
- * households, no confusing controls). Under them, in Settings → About and
+ * households, no confusing controls). Under them, in Settings → About & updates and
  * the no-server settings (ui/screens/settings/DeveloperOptionsSection.kt):
  * the on-device assistant benchmark; in the assistant, a reply's timings in
  * its long-press menu and the last stop's timing in the model settings

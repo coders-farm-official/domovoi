@@ -71,7 +71,7 @@ internal val OPEN_SOURCE_PARTS: List<OpenSourcePart> = listOf(
         "Piper voices Norman, Kristin and Linda (LJ Speech)", "public domain", "brycebeattie.com/files/tts",
         "By Bryce Beattie, trained from scratch on public-domain recordings (LibriVox; the LJ Speech " +
             "dataset) and released into the public domain; distributed through rhasspy/piper-voices (MIT). " +
-            "Downloaded, one at a time, from Settings → Voice.",
+            "Downloaded, one at a time, from Settings → Voices.",
     ),
     OpenSourcePart("ONNX Runtime 1.28.0", "MIT", "github.com/microsoft/onnxruntime", "Copyright (c) Microsoft Corporation."),
     OpenSourcePart(
@@ -148,7 +148,7 @@ internal fun openSourceParts(assistant: Boolean): List<OpenSourcePart> =
     }
 
 /**
- * Settings → About: the open-source licences. The main parts first (what
+ * Settings → About & updates: the open-source licences. The main parts first (what
  * the app is built from and what it downloads, each with its licence and
  * notices), then every library in this build, from its dependency graph
  * ([OpenSourceLicences], `licences/maven.json`), grouped by who makes it,

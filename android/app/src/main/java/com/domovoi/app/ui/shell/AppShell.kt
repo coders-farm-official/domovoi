@@ -1,6 +1,5 @@
 package com.domovoi.app.ui.shell
 
-import com.domovoi.app.ui.screens.chat.CHAT_ROUTE
 import android.os.SystemClock
 import android.util.Log
 import androidx.activity.compose.BackHandler
@@ -70,6 +69,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.window.core.layout.WindowWidthSizeClass
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
+import com.domovoi.app.alerts.CHAT_ROUTE
 import com.domovoi.app.alerts.CONTAINERS_ROUTE
 import com.domovoi.app.alerts.IncidentAlerts
 import com.domovoi.app.data.ServerCredentials
@@ -350,7 +350,11 @@ private fun ShellContent(trouble: TokenTrouble?) {
     // even while the live connection is down (canRegister).
     val shellServerUrl by app.prefs.serverUrl.collectAsState()
     val paired = !deviceToken.isNullOrBlank()
-    LaunchedEffect(connected, shellServerUrl, deviceToken) {
+    // ...and when "This phone belongs to" changes: the register carries it,
+    // so voice help knows whose phone this is (net/DeviceRegistry.kt).
+    val shellOwners by app.prefs.owners.collectAsState()
+    val shellOwner = ServerCredentials.ownerFor(shellOwners, shellServerUrl)
+    LaunchedEffect(connected, shellServerUrl, deviceToken, shellOwner) {
         if (shellServerUrl.isNotBlank() && canRegister(connected, paired)) registerDevice(app)
     }
     // ...and again every couple of minutes while the app is on screen, and
@@ -386,7 +390,8 @@ private fun ShellContent(trouble: TokenTrouble?) {
     val sharedAnswers by app.prefs.sharedScreens.collectAsState()
     val shared = isSharedScreen(ServerCredentials.sharedAnswerFor(sharedAnswers, shellServerUrl), paired)
     // If the active route lost its capability (plugin uninstalled,
-    // different server), fall back home rather than rendering a stub.
+    // different server, Chat with the server's AI features turned off),
+    // fall back home rather than rendering a stub.
     LaunchedEffect(caps, route) {
         if (!route.visibleWith(caps)) {
             backStack.clear()
@@ -768,7 +773,7 @@ private fun OfflineShell(choice: ServerChoice, verdict: IdentityVerdict?) {
 
 // ---------------------------------------------------------------------------
 // Compact: bottom bar (this phone's phone bar, PhoneBar.kt: home, music,
-// videos, chat unless picked otherwise in Settings → Phone bar), mini player
+// videos, chat unless picked otherwise in Settings → App layout), mini player
 // docked above it. Everything else is on Home's "everything" grid, and while
 // one of those screens is open the home tab is the one lit, as on the web
 // strip (and as the More tab was).
@@ -825,7 +830,7 @@ private fun RailShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCo
     // No Scaffold here, so the shrink is on the root: imePadding() ends the
     // whole shell — rail included — at the top of the keyboard.
     Row(Modifier.fillMaxSize().imePadding()) {
-        NavigationRail(containerColor = Domovoi.colors.card) {
+        NavigationRail(containerColor = Domovoi.colors.card, windowInsets = drawerSheetInsets) {
             // The top-left glyph is the way home, as the brand is everywhere.
             Box(
                 Modifier
@@ -847,7 +852,7 @@ private fun RailShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCo
                 }
             }
         }
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.weight(1f).windowInsetsPadding(shellContentInsets)) {
             TopChrome { Topbar(route, navigate) }
             ContainerGuardBanner(route, navigate)
             Box(Modifier.weight(1f)) { ScreenRouter(route, navigate, counts) }
@@ -866,7 +871,7 @@ private fun DrawerShell(route: Route, navigate: (Route) -> Unit, counts: Sidebar
     // As RailShell: no Scaffold, so the root carries the keyboard inset.
     Row(Modifier.fillMaxSize().imePadding()) {
         Surface(color = Domovoi.colors.card, modifier = Modifier.width(232.dp).fillMaxSize()) {
-            Column(Modifier.padding(12.dp).verticalScroll(rememberScrollState())) {
+            Column(Modifier.windowInsetsPadding(drawerSheetInsets).padding(12.dp).verticalScroll(rememberScrollState())) {
                 // The brand row is the way home, as on the web desktop, so
                 // the workspace list below leaves Home out.
                 Row(
@@ -904,7 +909,7 @@ private fun DrawerShell(route: Route, navigate: (Route) -> Unit, counts: Sidebar
                 SidebarItem(Route.Manual, route == Route.Manual, counts) { navigate(Route.Manual) }
             }
         }
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.weight(1f).windowInsetsPadding(shellContentInsets)) {
             TopChrome { Topbar(route, navigate) }
             ContainerGuardBanner(route, navigate)
             Box(Modifier.weight(1f)) { ScreenRouter(route, navigate, counts) }

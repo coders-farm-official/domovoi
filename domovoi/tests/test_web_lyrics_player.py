@@ -644,7 +644,7 @@ def test_every_jobs_line(driven) -> None:
         "(no permission to write in the music folder)",
     ]
     assert d["reading"] == ["lyrics · 3,100 of 5,232 songs · 2,500 timed", "reading your files — 5,200 of 5,232"]
-    assert d["off"] == "LRCLIB: off — Settings → Configuration → Library"
+    assert d["off"] == "LRCLIB: off — Settings → Advanced → Library"
     assert d["internet_off"] == "LRCLIB: off — this Domovoi stays off the internet (Settings → Internet)"
     assert d["offline"] == "LRCLIB: paused — offline"
     assert d["rate_limited"] == "LRCLIB: paused — LRCLIB asked to slow down"
@@ -677,7 +677,7 @@ def test_every_jobs_line(driven) -> None:
     assert d["lrc_plain"] == ".lrc files: 1 saved"
     assert d["lrc_one"] == ".lrc files: 5 saved · 1 song already had one · 2 couldn't be saved"
     assert d["pending"][-1] == "making lyrics searchable — 1,234 to go"
-    assert d["search_off"] == "finding songs by their words: off — Settings → Configuration → Library"
+    assert d["search_off"] == "finding songs by their words: off — Settings → Advanced → Library"
     assert d["search_unknown"] == 4                        # only an explicit false says "off"
     assert d["one_song"] == "lyrics · 1 of 1 song · 0 timed"
     assert d["nothing"] == []

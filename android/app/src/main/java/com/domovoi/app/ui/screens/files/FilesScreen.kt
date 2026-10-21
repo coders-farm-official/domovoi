@@ -6,7 +6,7 @@ import com.domovoi.app.assistant.DeviceTier
 import com.domovoi.app.assistant.docs.DocExtract
 import com.domovoi.app.net.LocalCapabilities
 import com.domovoi.app.net.LocalSharedScreen
-import com.domovoi.app.ui.screens.chat.CHAT_ROUTE
+import com.domovoi.app.alerts.CHAT_ROUTE
 import com.domovoi.app.ui.screens.chat.ChatOpenRequest
 import com.domovoi.app.ui.screens.chat.chatFromDocument
 import com.domovoi.app.ui.screens.chat.docFailureText
@@ -42,6 +42,14 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.Print
+import androidx.compose.foundation.layout.widthIn
+import com.domovoi.app.ui.screens.printing.PrintIo
+import com.domovoi.app.ui.screens.printing.PrintOffer
+import com.domovoi.app.ui.screens.printing.PrintSheet
+import com.domovoi.app.ui.screens.printing.ScanSheet
+import com.domovoi.app.ui.screens.printing.printOffer
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Podcasts
@@ -259,6 +267,18 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
     var sendHomeEntry by remember { mutableStateOf<FileEntry?>(null) }
     var confirmForget by remember { mutableStateOf<FileLibrary?>(null) }
     var busy by remember { mutableStateOf<String?>(null) } // uploading | deleting | importing | sending
+
+    // Printing and scanning through the home server: server files only. A
+    // phone file keeps Android's own print path; nothing here touches it.
+    val printers = if (source.onPhone || !serverUsable) {
+        null
+    } else {
+        rememberApi("printers-for-files", source) { PrintIo(it.api).printers() }.data
+    }
+    var printEntry by remember { mutableStateOf<FileEntry?>(null) }
+    var scanning by remember { mutableStateOf(false) }
+    // A scan WRITES into Documents: not offered where this device may not write.
+    val canScanHere = printers?.hasScanner == true && selectedId == DOCUMENTS_LIBRARY_ID && canWrite
 
     // "Ask about this document" (documents plan, D1): a phone file starts a
     // phone chat with it attached, a file in the household's Documents a
@@ -485,12 +505,17 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                             }
                         }
                         OutlinedButton(onClick = { folderPicker.launch(null) }) { Text("add folder") }
-                    } else if (canWrite) {
-                        OutlinedButton(
-                            onClick = { filePicker.launch("*/*") },
-                            enabled = busy == null,
-                        ) {
-                            Text(if (busy == "uploading") "uploading…" else "upload")
+                    } else {
+                        if (canScanHere) {
+                            OutlinedButton(onClick = { scanning = true }) { Text("scan") }
+                        }
+                        if (canWrite) {
+                            OutlinedButton(
+                                onClick = { filePicker.launch("*/*") },
+                                enabled = busy == null,
+                            ) {
+                                Text(if (busy == "uploading") "uploading…" else "upload")
+                            }
                         }
                     }
                 },
@@ -539,7 +564,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                     Text(
                         (data?.blockedReason ?: "this device isn't allowed to change files") +
                             ". You can browse and download, but not upload, move or import. " +
-                            "An admin lifts the block in the dashboard under Settings → Devices.",
+                            "An admin lifts the block in the dashboard under Settings → Phones & browsers.",
                         style = MaterialTheme.typography.bodySmall,
                         color = Domovoi.colors.fgMuted,
                     )
@@ -641,6 +666,8 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                                 // gets a destination picker instead (FilesMoveSheet).
                                 onMove = if (canWrite) ({ moveEntry = e }) else null,
                                 onDelete = if (editable) ({ confirmDelete = e }) else null,
+                                print = printOffer(e.name, e.isDir, printers),
+                                onPrint = { printEntry = e },
                             )
                         }
                         item(key = "files-footer") {
@@ -745,6 +772,34 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
             },
             onDismiss = { sendHomeEntry = null },
             asUpload = uploader != null,
+        )
+    }
+
+    val printList = printers
+    printEntry?.let { e ->
+        if (printList != null && selectedId != null) {
+            PrintSheet(
+                libraryId = selectedId ?: "",
+                path = e.rel,
+                fileName = e.name,
+                printers = printList,
+                onDismiss = { printEntry = null },
+            )
+        }
+    }
+    if (scanning && printList != null) {
+        ScanSheet(
+            printers = printList,
+            onOpen = { s ->
+                val rel = s.path ?: return@ScanSheet
+                val name = s.name ?: rel.substringAfterLast('/')
+                scanning = false
+                if (!source.openFile(ctx, s.libraryId ?: DOCUMENTS_LIBRARY_ID, FileEntry(name = name, rel = rel, kind = fileKind(name, false)))) {
+                    toast("no app on this phone opens \"$name\"")
+                }
+            },
+            onSaved = { pager.reload() },
+            onDismiss = { scanning = false },
         )
     }
 }
@@ -870,6 +925,9 @@ private fun FileRow(
     onDelete: (() -> Unit)?,
     /** Set in "your device" mode: [onSendHome] is shown as the Upload button, in this state. */
     upload: UploadButtonState? = null,
+    /** The server's Print for this file: a menu item, a "save as PDF first" line, or nothing. */
+    print: PrintOffer = PrintOffer.None,
+    onPrint: () -> Unit = {},
     /** "Ask about this document": a chat with it attached. */
     onAsk: (() -> Unit)? = null,
 ) {
@@ -946,6 +1004,30 @@ private fun FileRow(
             onDelete?.let {
                 IconButton(onClick = it) {
                     Icon(Icons.Outlined.Delete, "delete", tint = Domovoi.colors.fgMuted)
+                }
+            }
+            if (print != PrintOffer.None) {
+                var menu by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { menu = true }) {
+                        Icon(Icons.Filled.MoreVert, "more for ${entry.name}", tint = Domovoi.colors.fgMuted)
+                    }
+                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        when (print) {
+                            PrintOffer.Print -> DropdownMenuItem(
+                                leadingIcon = { Icon(Icons.Outlined.Print, null, tint = Domovoi.colors.fgMuted) },
+                                text = { Text("Print") },
+                                onClick = { menu = false; onPrint() },
+                            )
+                            is PrintOffer.PdfFirst -> Text(
+                                print.message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Domovoi.colors.fgMuted,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp).widthIn(max = 280.dp),
+                            )
+                            PrintOffer.None -> Unit
+                        }
+                    }
                 }
             }
         }

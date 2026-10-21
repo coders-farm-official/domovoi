@@ -66,7 +66,7 @@ import com.domovoi.app.ui.components.fmtBytes
 import com.domovoi.app.ui.theme.Domovoi
 
 /**
- * Settings > About > developer options > the on-device assistant benchmark
+ * Settings > About & updates > developer options > the on-device assistant benchmark
  * (M0 of the phone assistant): download the models, run the measured tests,
  * copy the results. A developer's tool, so it shows only with developer
  * options on (ui/screens/settings/DeveloperOptionsSection.kt). No route or
@@ -331,7 +331,7 @@ fun AssistantBenchmarkCard() {
  *  assistant: the 64-bit app would. */
 internal fun assistantIn64BitAppOnly(): Boolean = !AssistantSupport.available && AssistantSupport.thirtyTwoBitAppOn64BitPhone
 
-/** Settings → About (and the no-server settings) on a 64-bit phone running
+/** Settings → About & updates (and the no-server settings) on a 64-bit phone running
  *  the 32-bit app: which app has the assistant. A note, no controls, for
  *  everyone; nothing on any other install. */
 @Composable

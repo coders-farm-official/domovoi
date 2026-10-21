@@ -34,6 +34,10 @@ val DomovoiJson = Json {
     isLenient = true
 }
 
+/** The header a Domovoi server names a deliberate refusal in (the core's
+ *  ai_features.py / egress.py REFUSAL_HEADER): see [ApiException.refusal]. */
+const val REFUSAL_HEADER = "X-Domovoi-Refusal"
+
 class ApiException(
     val status: Int,
     message: String,
@@ -43,6 +47,10 @@ class ApiException(
     /** The response body (its first 4,096 characters; the message keeps
      *  200); empty when there was none. */
     val body: String = "",
+    /** The server's `X-Domovoi-Refusal` header, when it sent one: why it
+     *  refused in a word ("ai-off": the household's AI features are off;
+     *  "internet-off"). Null for any other error. */
+    val refusal: String? = null,
 ) : IOException(message) {
     /**
      * The part of the house the server says failed, from `failed` in a JSON
@@ -311,7 +319,7 @@ class ApiClient(
                     if (pairing && trackPairing) _pairingRequired.value = true
                     throw ApiException(
                         resp.code, "${resp.code} ${resp.message}: ${text.take(200)}", pairing,
-                        body = text.take(4096),
+                        body = text.take(4096), refusal = resp.header(REFUSAL_HEADER),
                     )
                 }
                 if (trackPairing && _pairingRequired.value) _pairingRequired.value = false

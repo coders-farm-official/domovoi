@@ -165,7 +165,7 @@ class Tty(io.StringIO):
 def test_the_code_goes_to_a_terminal_and_nowhere_else():
     tty, pipe = Tty(True), Tty(False)
     assert pc_engine.show_code_on_tty("482913", "Study", stream=tty) is True
-    assert "482913" in tty.getvalue() and "Settings → Satellites" in tty.getvalue()
+    assert "482913" in tty.getvalue() and "Settings → Rooms" in tty.getvalue()
     assert pc_engine.show_code_on_tty("482913", "Study", stream=pipe) is False
     assert pipe.getvalue() == ""
 

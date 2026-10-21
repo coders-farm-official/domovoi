@@ -23,7 +23,7 @@ the ledger flips:
 | | On Windows | On Linux |
 |---|---|---|
 | **CUDA DLL preloading** | `domovoi/bootstrap.py` preloads cuBLAS/cuDNN by hand because the Windows loader ignores `add_dll_directory()` for dependent DLLs. The plugin loader asserts it ran. | The whole module is `if sys.platform != "win32": return ()`. Dead code. It's the single biggest piece of Windows-specific engineering in the repo, and you skip it. |
-| **Wake-word training** | openWakeWord's training pipeline (piper-sample-generator) is Linux-only, so it runs in a Linux container under Docker Desktop. | On the server itself, in a container on its own Docker Engine, switched on from the dashboard (Settings → Wake Words); an NVIDIA GPU gets its container runtime from the install and the update unit. See [Wake-word training](#wake-word-training). |
+| **Wake-word training** | openWakeWord's training pipeline (piper-sample-generator) is Linux-only, so it runs in a Linux container under Docker Desktop. | On the server itself, in a container on its own Docker Engine, switched on from the dashboard (Settings → Wake words); an NVIDIA GPU gets its container runtime from the install and the update unit. See [Wake-word training](#wake-word-training). |
 | **External binaries** (`ffmpeg`, `fpcalc`/Chromaprint, `mpg123`) | Download, unzip, put on PATH by hand. | `apt install`. |
 | **`faster-whisper` and `resemblyzer` install** | `pip install --no-deps -r requirements-no-deps.in`: without the dependencies they declare (PyAV, librosa, webrtcvad), which Domovoi doesn't use. | The same, from the hash-pinned `requirements-linux-py314-no-deps.lock`. |
 | **Docker** | Docker Desktop — a whole application, its own RAM overhead, its own licensing question. | Native Docker Engine. The core drives containers through the `docker` CLI (`mpd_provisioner.py`), so nothing else changes. |
@@ -246,7 +246,8 @@ you're not using that.)
 On a fresh Ubuntu 26.04 box, `scripts/linux/provision.sh` runs this
 section, [Make it an appliance](#make-it-an-appliance) and the
 [update unit](#one-time-upgrade-for-existing-installs) for you,
-unattended. It is the same script the Windows installer runs inside its
+unattended (run from a terminal, it asks one question first: whether to
+include AI chat, below). It is the same script the Windows installer runs inside its
 WSL distro. Read it, or ask it what it would do, before it changes
 anything:
 
@@ -275,7 +276,24 @@ Whisper model, the Piper voice and the room image. The models include the
 vision model that reads pictures in chat (`qwen3-vl:2b-instruct-q4_K_M` on
 both tiers, about 1.9 GB more to download); `--no-vision-model` leaves it
 out, and chat then says it isn't installed until an admin installs it from
-Settings → Models. What it checks:
+Settings → Models.
+
+**AI chat and questions are optional.** Run from a terminal, the script
+asks first: *Include AI chat and questions? It downloads about 6.4 GB of
+AI models (about 9.1 GB on a box with 24 GB of memory or more).* Enter
+or `y` includes them, `n` leaves them out. `--ai-models` and
+`--no-ai-models` give the answer on the command line instead; with
+neither, and no terminal to ask at (the Windows installer, a script), the
+answer is yes. Voice commands, music, timers and everything else work
+either way: speech recognition (Whisper), the voices and the wake word
+are installed as usual, and only the AI models are left out. The answer
+goes into `domovoi/.env` as `AI_FEATURES=true` or `false`. Ollama itself
+is installed either way, so AI can be turned on later on the dashboard
+(Settings → Models), which downloads the models then. A later run of the
+script doesn't ask again: it keeps the answer `domovoi/.env` holds (yours,
+if you changed it in Settings since). An answer changed in Settings also
+stays over `--ai-models` or `--no-ai-models`, with a warning, and the AI
+models are downloaded only when it is on. What it checks:
 
 - **Against a pin, stopping on a mismatch:** every Python package (the
   lock's hashes), the Ollama release pinned under [By hand](#by-hand)
@@ -338,7 +356,7 @@ restarted that didn't change. A re-run never undoes your own settings: in
 the script last wrote there, and it warns about each one it leaves alone.
 A media folder it mounted before that is missing now (an unplugged drive)
 is a warning, not a failure. `--help` lists the options (`--media`,
-`--tier`, `--skip-models`, ...) and the exit codes.
+`--tier`, `--no-ai-models`, `--skip-models`, ...) and the exit codes.
 
 The steps below are the same install by hand, without the pre-downloads.
 Follow them instead if you prefer, or to see what a step changed.
@@ -352,7 +370,7 @@ sudo apt update && sudo apt install -y python3 python3-venv python3-dev build-es
 ```
 
 `xorriso` is what the core runs to make an old computer's room stick
-(Settings → Satellites → add a spare device → old computer; a GPL program
+(Settings → Rooms → add a spare device → old computer; a GPL program
 run on its own, never bundled with Domovoi). `libchromaprint-tools`
 provides `fpcalc` for library enrichment, and
 `python3-dev` + `build-essential` are what let the sdist-only pins
@@ -593,7 +611,7 @@ says what each answer switches; on Linux it comes down to this:
   keeps it in step after every update; Docker brings it back after a
   reboot. Then do [what stays yours](INTERNET.md#if-your-domovoi-will-have-internet):
   your town for local news, an AcoustID **application** key for song
-  recognition (Settings → Configuration → Library → **AcoustID key**, or
+  recognition (Settings → Advanced → Library → **AcoustID key**, or
   `domovoi/.env`), your radio market.
 - **No.** While the box is still online, work through
   [Before you disconnect](INTERNET.md#before-you-disconnect): the Whisper
@@ -798,7 +816,7 @@ ReadWritePaths=/data/music
 domovoi-core` scores the exposure (the units this page listed before
 scored 9.0 "UNSAFE" each; the shipped ones score about 3.5 for the web and
 1.8 for `domovoi-db`, and the core, which keeps only the file-system part,
-scores higher than both), Settings → Version still offers
+scores higher than both), Settings → About & updates still offers
 **Restart Domovoi** (its `sudo -n -l` probe runs inside the sandbox), a
 satellite turn answers, and a room's music starts (the core runs
 `docker`). The quick check for the sudo path on its own, as root:
@@ -844,7 +862,7 @@ the thread can't run either (C code holding the interpreter), Python's
 faulthandler dumps every stack and exits (status 1) 30 s after the stall
 time; what it writes goes to `~/.domovoi/logs/core-faulthandler.log`, and
 the next start moves it into `core-watchdog.log` and repeats it in the
-journal. Settings → Version shows the last such restart (**last freeze**,
+journal. Settings → About & updates shows the last such restart (**last freeze**,
 when and why). `LOOP_WATCHDOG_ENABLED=false` turns the checks off (the
 core then never ends itself; under the shipped unit it still says it is
 ready and keeps systemd's watchdog fed).
@@ -887,7 +905,7 @@ To decide `Restart=` yourself, put it in the unit or in a drop-in that
 sorts after `50-domovoi-restart.conf`.
 
 **The dashboard's Restart the core.** When the core doesn't answer, an
-admin gets **Restart the core** on Settings → Version, on the Satellites
+admin gets **Restart the core** on Settings → About & updates, on the Satellites
 page and on Home's "isn't answering" row. It ends only a core that is
 truly stuck, never one that is busy, slow or missing its database:
 
@@ -1063,7 +1081,7 @@ anyone searches ([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#what-leaves-your-netw
 ## Wake-word training
 
 Training a wake word of your own runs on the server, in a container on its
-Docker Engine, once an admin turns it on: **Settings → Wake Words → Turn on
+Docker Engine, once an admin turns it on: **Settings → Wake words → Turn on
 wake-word training**. That builds the trainer image (12.4 GB), downloads its
 training data (17.9 GB, into the Docker volume `domovoi_oww_cache`) and
 switches training on, with no shell and no restart: about 22 GB downloaded,
@@ -1673,7 +1691,7 @@ One version for the whole project, one tag per release (`v1.0.0`,
 
 The channel is the branch the checkout tracks, so the check, **Pull the
 latest**, the rolled-back `bad_sha` and the update unit's pin all work as
-before. Settings → Configuration → Version shows:
+before. Settings → About & updates shows:
 
 - the release label of the code that runs: `1.0.0` on a release, `1.0.0 +
   14 (abc1234)` past one (`git describe --tags --match "v[0-9]*"`);
@@ -1791,7 +1809,7 @@ A package that does not match its hash fails the update, and it rolls
 back. If a later update can't use the lock at all (the venv moved to a
 newer Python, the lock was renamed, `DOMOVOI_DEPS_LOCK` was emptied), it
 does not stop: it resolves from the index as before, but its `sync-deps`
-step is a `warn`, the journal says WARNING, and Settings → Version shows
+step is a `warn`, the journal says WARNING, and Settings → About & updates shows
 **lock not applied: <reason>** under the last update until the next run.
 Re-seed and commit a lock for the new Python to go back to hash-checked
 installs. A lock change is a dependency change, so under the **No**
@@ -1973,7 +1991,7 @@ so the two halves always look at one file), `DOMOVOI_REVOKED_SIGNERS`,
 signer, key, enforced, allowed_signers, detail}`: `status` is `verified`,
 `unsigned`, `unverified` (signed, but not by a listed key, or no file to
 check against) or `unknown`; `signer` and `key` name a verified
-signature's principal and fingerprint. The Settings → Version card shows
+signature's principal and fingerprint. The Settings → About & updates card shows
 it as a badge beside the version: **signed**, **unsigned** or **signature
 not verified**, red when enforcement would refuse an update and amber when
 signing just isn't set up. `POST /v1/admin/version/pull` answers with the

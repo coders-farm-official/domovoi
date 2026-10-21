@@ -49,7 +49,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi import egress, net_safety, whisper_cache
+from domovoi import ai_features, egress, net_safety, whisper_cache
 from domovoi.admin_auth import require_admin_mutation
 from domovoi.clients import ollama as ollama_client
 from domovoi.config import settings as core_settings
@@ -493,6 +493,110 @@ async def cancel_pull(job_id: int) -> dict[str, Any]:
         await s.execute(text("SELECT pg_notify('model_jobs_changed', 'cancelled')"))
         await s.commit()
     return {"cancelled": job_id}
+
+
+# ─── The household's AI switch ──────────────────────────────────────────────
+# Settings → Models' "AI chat and questions" card (domovoi/ai_features.py).
+# The switch itself is the core's ``ai_features`` setting, written through
+# the same config path as every other setting; these two routes add what
+# the card needs around it: the live answer (read from .env like the core
+# reads it, not this process's stale settings copy), the download sizes,
+# and "turn it on and download the models" as one press.
+
+# The roles whose models the AI features need (not speech-to-text).
+_AI_ROLES = ("qa", "tool", "vision")
+
+
+@router.get("/ai")
+async def get_ai_features(request: Request) -> dict[str, Any]:
+    """The AI switch for the Models page and the shell. Open (the answer is
+    in ``/api/capabilities`` too). ``models``: the qa / tool / vision role
+    models with ``installed`` (None when Ollama or the config couldn't be
+    asked) and ``download_gb`` (None for a model whose size the repo
+    doesn't record); ``missing_gb``: what turning AI on would download,
+    None when part of it is unknown."""
+    status, payload = await get_admin("/v1/admin/config", headers=auth_forward_headers(request))
+    by_name = (
+        {f["name"]: f for f in payload.get("fields", [])}
+        if status == 200 and isinstance(payload, dict) else {}
+    )
+    tags = await ollama_client.tags_or_none()
+    models: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for role in _AI_ROLES:
+        field_name = ROLE_TO_FIELD[role]
+        spec = by_name.get(field_name)
+        model = (spec or {}).get("value") if spec is not None else getattr(core_settings, field_name, None)
+        model = str(model or "").strip()
+        if not model:
+            continue
+        key = model.lower()
+        installed = ollama_client.model_installed(model, tags) if tags is not None else None
+        models.append(
+            {
+                "role": role,
+                "model": model,
+                "installed": installed,
+                "download_gb": ai_features.MODEL_DOWNLOAD_GB.get(model),
+                # The same model in two roles downloads once.
+                "duplicate": key in seen,
+            }
+        )
+        seen.add(key)
+    missing = [m for m in models if m["installed"] is not True and not m["duplicate"]]
+    missing_gb: float | None = 0.0
+    for m in missing:
+        if m["download_gb"] is None or m["installed"] is None:
+            missing_gb = None
+            break
+        missing_gb = round((missing_gb or 0.0) + float(m["download_gb"]), 1)
+    return {
+        "enabled": ai_features.enabled(),
+        "locked": ai_features.locked(),
+        "ollama_reachable": tags is not None,
+        "models": models,
+        "missing": [m["model"] for m in missing],
+        "missing_gb": missing_gb,
+        "internet_off": egress.internet_turned_off(),
+    }
+
+
+class AiFeaturesBody(BaseModel):
+    enabled: bool
+    # With enabled: start downloading the role models Ollama doesn't have.
+    install: bool = False
+
+
+@router.post("/ai", dependencies=[Depends(require_admin_mutation)])
+async def set_ai_features(body: AiFeaturesBody, request: Request):
+    """Turn the household's AI features on or off (admin). Writes
+    ``ai_features`` through the core's config path (validate, persist to
+    .env, apply live). With ``enabled`` and ``install``, then starts a pull
+    for each role model Ollama doesn't have, exactly as Install does — the
+    progress is the page's "Installs in progress" card. A pull that can't
+    start (the internet answered never, Ollama down) is listed in
+    ``pull_errors``; the switch stays as saved."""
+    status, payload = await post_admin(
+        "/v1/admin/config",
+        {"changes": {"ai_features": body.enabled}},
+        headers=auth_forward_headers(request),
+    )
+    if status != 200 or not isinstance(payload, dict):
+        return bridge_response(status, payload)
+    out: dict[str, Any] = {**payload, "pulls": [], "pull_errors": {}}
+    if "ai_features" in (payload.get("rejected") or {}):
+        return out
+    if body.enabled and body.install:
+        state = await get_ai_features(request)
+        for model in state["missing"]:
+            try:
+                res = await start_pull(PullBody(model=model))
+                out["pulls"].append(res["job"])
+            except HTTPException as e:
+                out["pull_errors"][model] = str(e.detail)
+            except Exception as e:  # noqa: BLE001 — one model's failure is reported, not raised
+                out["pull_errors"][model] = str(e)
+    return out
 
 
 # ─── Pull task ───────────────────────────────────────────────────────────────

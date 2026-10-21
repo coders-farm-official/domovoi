@@ -254,6 +254,8 @@ namespace Domovoi.Windows.Helper
             int gb = (int)Math.Round(bytes / (1024.0 * 1024 * 1024));
             o.Kv("ram_gb", Inv.S(gb));
             o.Kv("wsl_memory_gb", Inv.S(WslConfig.MemoryCapGb(bytes)));
+            // What the AI models download on this PC, for Setup's AI page.
+            o.Kv("ai_models_gb", AiModels.DownloadGb(WslConfig.MemoryCapGb(bytes)));
             if (gb < MinRamGb) o.Kv("fatal", "Domovoi needs at least " + Inv.S(MinRamGb) + " GB of memory; this PC has " + Inv.S(gb) + " GB.");
         }
 

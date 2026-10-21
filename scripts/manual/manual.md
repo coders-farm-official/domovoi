@@ -55,20 +55,20 @@ every room. Your voice never leaves your home network.
 
 **Getting set up** (a checklist; each line ticks itself when it's done)
 
-1. **Claim the admin account** *(admin)*: [Settings → Configuration](#settings/configuration),
+1. **Claim the admin account** *(admin)*: [Settings → Advanced](#settings/advanced),
    **set up admin**. Type the 8-word setup code and choose a password.
    Where the code is: the Windows installer shows it on its last page; on
    Linux it is in a file on the server. [More detail](README.md#2-claim-the-admin-account)
 2. **Answer the internet question**: Yes, Sometimes or No. You can change
    it later in [Settings → Internet](#settings/internet).
-3. **Add your first room**: [Settings → Satellites](#settings/satellites).
+3. **Add your first room**: [Settings → Rooms](#settings/rooms).
    See [A Raspberry Pi room](#node:pi-room).
 4. **Say the wake word** in that room: {wake}, then "what time is it?"
 5. **Introduce yourself** in that room: "my name is …", then "yes".
 6. **Add your music**: [Music](#music), **Upload**, or copy files into the
    server's music folder.
-7. **Put the app on your phones**: [Settings → Devices → Get the Domovoi
-   app](#settings/devices).
+7. **Put the app on your phones**: [Settings → Phones & browsers → Get the Domovoi
+   app](#settings/phones-and-browsers).
 
 ---
 
@@ -111,6 +111,15 @@ Qwen2.5 14B for routing.
 An NVIDIA graphics card makes them faster: Ollama uses it by itself, on
 Linux and on Windows. An admin can change models in [Settings →
 Models](#settings/models). [More detail](docs/CPU_HOST.md)
+
+**AI chat and questions are optional.** The installers ask whether to
+include them, and an admin can turn them off or on at any time under **AI
+chat and questions** in [Settings → Models](#settings/models). Off, no
+routing, answer or vision model is used: voice commands still work on
+their usual phrases, and so do speech recognition, the voices and the wake
+word. A question then gets "I'm set up for home commands", and Chat is
+hidden. Turning them on shows the download size first, then downloads the
+models.
 
 ### Speaks
 
@@ -183,7 +192,7 @@ A graphics card is optional everywhere. [More detail](docs/WINDOWS_HOST.md#which
 - "what reminders do I have"
 
 **Also:** your timers show on [Home](#home) and in each room's **Timers**
-tab ([Settings → Satellites](#settings/satellites)).
+tab ([Settings → Rooms](#settings/rooms)).
 
 **App:** if Home's timers card says "Timers may ring a few minutes late on
 this phone", tap **allow alarms**.
@@ -213,6 +222,12 @@ household allows the internet.
 
 - "I'm set to stay off the internet": your household chose No in
   [Settings → Internet](#settings/internet).
+- "I'm set up for home commands" or "I can't look that up with AI turned
+  off": AI chat and questions are off for your home. Commands still work;
+  an admin can turn AI on in [Settings → Models](#settings/models).
+- "My question-answering model isn't installed yet": AI is on but its
+  model hasn't been downloaded. An admin can download it in [Settings →
+  Models](#settings/models).
 - "My search helper isn't running": ask whoever set up Domovoi.
 - An answer sounds wrong? Say "are you sure?".
 
@@ -260,7 +275,7 @@ room.
 
 **If something's wrong:** drop-ins need a room with an echo-cancelling
 microphone (the XVF3800 board, or most phones in room mode). A room may be
-set to ask before it answers: [Settings → Configuration](#settings/configuration),
+set to ask before it answers: [Settings → Advanced](#settings/advanced),
 **Drop-in** *(admin)*.
 
 [More detail](docs/FAQ.md#can-i-drop-in-on-a-room-from-my-phone)
@@ -281,7 +296,7 @@ voices](#node:people)).
 - "forget that I parked on level 3"
 
 **Also:** notes show in each room's **Notes** tab ([Settings →
-Satellites](#settings/satellites)). Memories show on [People](#people),
+Rooms](#settings/rooms)). Memories show on [People](#people),
 under each person's **Memory** tab.
 
 [More detail](docs/FAQ.md#does-it-support-multiple-people)
@@ -327,7 +342,7 @@ over the greeting aren't heard.
 [live slot: rooms]
 
 Each room is one listening device: a Raspberry Pi, a spare laptop or a
-phone. [Settings → Satellites](#settings/satellites) lists them. Each card
+phone. [Settings → Rooms](#settings/rooms) lists them. Each card
 shows:
 
 - online or offline;
@@ -349,7 +364,12 @@ played**, **Notes**, **Timers**, **Logs**, and **Settings** (the gear).
 - A room moved to new hardware: **Reset pairing**, then approve the new
   device.
 
-**App:** [Settings → Satellites](#settings/satellites) shows the same rooms.
+**App:** [Settings → Rooms](#settings/rooms) shows the same rooms.
+
+**Try saying** (in the room itself)
+
+- "how's the wifi"
+- "fix the wifi"
 
 **If something's wrong**
 
@@ -371,7 +391,7 @@ About the price of a smart speaker. [Parts list](docs/SATELLITE_HARDWARE.md)
 
 1. Put Raspberry Pi OS Lite (64-bit) on a microSD card, and put the card
    in the server's card reader.
-2. [Settings → Satellites](#settings/satellites) → **prepare satellite
+2. [Settings → Rooms](#settings/rooms) → **prepare satellite
    media** → **wi-fi setup portal** → **Prepare**. On the Windows install,
    which can't see SD cards, **download overlay zip** and unzip it onto
    the card.
@@ -391,17 +411,28 @@ plugged in, with sleep turned off. Not the computer that runs Domovoi.
 
 **How to** *(admin)*
 
-1. [Settings → Satellites](#settings/satellites) → **add a spare device**.
+1. [Settings → Rooms](#settings/rooms) → **add a spare device**.
    Type the room's name, press **make the code**.
-2. Press **copy the command** (Linux) or **copy the Windows command**, and
-   run it on that computer, signed in as the account it should use.
-3. The computer shows a six-digit code. Approve it under **waiting for
+2. **Linux:** press **copy the command** and run it on that computer,
+   signed in as the account it should use.
+3. **Windows:** on that PC, signed in as the account it should use, press
+   **Download the Windows Setup** (or type the short address the card
+   shows into its browser) and open the file. The setup code is in its
+   name, so there is nothing to type. If the card shows only a command,
+   paste that into PowerShell on the PC instead (a Linux server may offer
+   **get the Windows Setup** first).
+4. Windows says **"Windows protected your PC"**: click **More info**, then
+   **Run anyway**. Domovoi isn't signed by Microsoft yet; the file comes
+   from your own server.
+5. The computer shows a six-digit code. Approve it under **waiting for
    approval**.
 
-A tray icon shows when the microphone is live, and mutes it.
+A tray icon shows when the microphone is live, and mutes it. The
+PowerShell command is still there for Windows, under **advanced**.
 
 **If something's wrong:** a processor from before about 2009 is refused.
-Windows may warn about the unsigned satellite. [More detail](docs/SPARE_DEVICE_SATELLITES.md)
+A setup code lasts 24 hours: make a new one if Setup says it's unknown.
+[More detail](docs/SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)
 
 ### An old phone or tablet as a room *(Preview)*
 
@@ -411,7 +442,7 @@ announcements.
 
 **How to**
 
-1. *(admin, once)* [Settings → Satellites](#settings/satellites) →
+1. *(admin, once)* [Settings → Rooms](#settings/rooms) →
    **prepare satellite media** → **Refresh caches**. This gives phones the
    wake word.
 2. *(admin)* **add a spare device**, name the room, **make the code**. A QR
@@ -424,7 +455,7 @@ announcements.
 5. Approve the six-digit code on the dashboard.
 
 **App:** a phone that already has the app can do this from [Settings →
-Satellites](#settings/satellites) → **Use this device as a room**, or
+Rooms](#settings/rooms) → **Use this device as a room**, or
 from the **Domovoi Room** icon.
 
 To leave, hold **exit room mode**, unlock, then choose **Keep this room**
@@ -465,7 +496,7 @@ listens.
 
 **Train your own wake word** *(admin)*
 
-- Where: [Settings → Wake Words](#settings/wake-words). The admin turns
+- Where: [Settings → Wake words](#settings/wake-words). The admin turns
   training on once, with **Turn on wake-word training**.
 - What it needs: a server with 24 GB of memory, about 22 GB of downloads
   and about 32 GB of disk. A word takes about 20 minutes to train with an
@@ -494,7 +525,7 @@ Three voices, all on the server: **Kristin** (default), **Norman** and
 - A word said wrong? **Say it like**: type the word and how it sounds, the
   stressed part in capitals (Siobhan = shiv-AWN). Press play to hear it
   first.
-- **App:** how *this phone* speaks: [Settings → Voice](#app/voice): "Same
+- **App:** how *this phone* speaks: [Settings → Voices](#app/voice): "Same
   as the server" or one of the three (about 64 MB, downloaded once).
 
 **Try saying**
@@ -516,8 +547,8 @@ included. It comes from your own server; no store is needed.
 
 **How to**
 
-1. On the dashboard, [Settings → Devices → Get the Domovoi
-   app](#settings/devices) shows a QR code. If it says the app isn't on
+1. On the dashboard, [Settings → Phones & browsers → Get the Domovoi
+   app](#settings/phones-and-browsers) shows a QR code. If it says the app isn't on
    the server yet, ask whoever set up Domovoi to press **Download the app
    to this server**.
 2. Scan the code with the phone's camera and install. Android asks you to
@@ -526,10 +557,10 @@ included. It comes from your own server; no store is needed.
    your Wi-Fi), and press **trust this server**. Can't see it? Use **add
    manually** with the dashboard's address.
 4. **pair this phone**: type the household token. An admin finds it in
-   [Settings → Devices → Household token](#settings/devices).
+   [Settings → Phones & browsers → Household token](#settings/phones-and-browsers).
 
 **App:** switch or forget a server from the server name at the top, or in
-[Settings → Connection](#app/connection).
+[Settings → Phones & browsers](#app/connection).
 
 **If something's wrong:** "App not installed" means a 32-bit phone; take
 the 32-bit app from the same page. [More detail](docs/ANDROID_COMPATIBILITY.md)
@@ -559,8 +590,21 @@ the 32-bit app from the same page. [More detail](docs/ANDROID_COMPATIBILITY.md)
 phone** (the assistant, below). Each chat shows where it runs, and a new
 one starts where you chatted last.
 
+Chat opens on your chats, pinned ones first, then the most recent; type
+in **Message Domovoi…** at the bottom to start a new one. A chat is named
+by its first words, then Domovoi gives it a short title after the first
+reply; a name you give it stays.
+
 **How to**
 
+- Long-press a chat (or its **chat actions** button) to **rename**, **pin** (pins stay on
+  this phone), **archive**, **share** or **delete** it; swipe to archive.
+  Archived chats are under **archived** at the end of the list.
+- **search chats** finds words in titles and messages, in both kinds of
+  chat.
+- Long-press a reply to **copy**, **share** or **try again**.
+- A line saying **earlier messages are beyond what Domovoi can keep in
+  mind** marks where the model stops seeing the older part of a long chat.
 - Tap **talk** to speak a message: **hold to talk**, release to send,
   slide away to cancel. Up to 30 seconds.
 - "my name is …" in the chat mic teaches Domovoi your voice from this
@@ -600,7 +644,8 @@ assistant on this phone** →
 unless you **allow mobile data**.
 
 It needs a 64-bit phone with 8 GB of memory or more. To report a bad
-reply, long-press it. Its chats stay on the phone, marked **on this
+reply, long-press it. **Export all phone chats** (in a phone chat, the
+model settings button) saves them as Markdown and JSON where you pick. Its chats stay on the phone, marked **on this
 phone**; away from home they are the only ones Chat lists. They never mix
 with your home server's chats.
 
@@ -614,16 +659,17 @@ app is locked.
 
 ### App settings and updates
 
-- [Settings → Phone bar](#settings/phone-bar): pick 2 to 5 tabs for the
+- [Settings → App layout](#settings/app-layout): pick 2 to 5 tabs for the
   bottom of the screen. Home always comes first.
-- [Settings → Voice](#app/voice): how this phone speaks.
-- [Settings → Server settings](#app/server-settings) → **Open the
-  dashboard**: everything else.
+- [Settings → Voices](#app/voice): how this phone speaks.
+- The app's Settings has the dashboard's groups and names. What only the
+  dashboard can change (greetings, wake words, models, Advanced, …) says
+  so there, with **Open on the dashboard**.
 - **Updates:** when your server has a newer app, Home shows "Domovoi … is
   available from your server". Tap **get the update**. [Settings →
-  About](#settings/about) → **App updates** says which version you have. A
+  About & updates](#settings/about) → **App updates** says which version you have. A
   Google Play install updates itself.
-- [Settings → About](#settings/about) → **Privacy** says what the app
+- [Settings → About & updates](#settings/about) → **Privacy** says what the app
   keeps.
 
 [More detail](docs/PRIVACY_POLICY.md)
@@ -647,6 +693,11 @@ Your music library, on the server, played in any room or in the browser.
   up** and **move down** on each song.
 - Playlists and favorites: [Music → Playlists](#music/playlists).
 - Each queued song says which device added it.
+
+**Try saying**
+
+- "how many songs do I have"
+- "what did I add this week"
 
 **Also:** guests on your Wi-Fi can change the queue of a room that's
 playing. See [Guests, household, admin](#node:guests).
@@ -734,7 +785,9 @@ name.
 Type to Domovoi. Answers come from the models on your server.
 
 **How to:** [Chat](#chat) → **new chat**. Press the paperclip to add up to
-4 pictures (PNG, JPEG, GIF, WebP or BMP, 20 MB each).
+4 pictures (PNG, JPEG, GIF, WebP or BMP, 20 MB each). Beside each chat in
+the list: rename, archive and delete; **search chats** above the list, and
+**archived** at its end.
 
 **Ask about a document:** the paperclip also takes a PDF, Word (.docx),
 OpenDocument (.odt), Excel (.xlsx), CSV, text or markdown file, up to
@@ -758,12 +811,20 @@ HEIC photos. See [Chat and the chat mic](#node:phone-chat).
 
 - "Pictures need the vision model": ask whoever set up Domovoi to install
   it in [Settings → Models](#settings/models).
+- Chat isn't there, or says "chat is off": AI chat and questions are off
+  for your home. An admin can turn them on in [Settings →
+  Models](#settings/models).
 - A HEIC phone photo is refused on the dashboard: send it from the app,
   which converts it.
 - An old .doc or .rtf file: save it as .docx or PDF, then attach it again.
 - "pictures of text (scanned)": scanned pages aren't searched yet.
 - "Points that span parts may be missed": a long summary is made part by
   part. Ask about the specific thing to have it found wherever it is.
+
+**Also:** voice chat mode, a spoken conversation in a room, is an early
+experiment and off unless whoever set up Domovoi turned it on.
+
+**Try saying:** "let's chat" (in a room, while voice chat mode is on)
 
 [More detail](docs/FAQ.md#can-i-send-pictures-in-chat)
 
@@ -798,6 +859,60 @@ The household's events. [Calendar](#calendar) → **new event**; switch
 between **month**, **week** and **day**.
 
 {{calendar-voice}}
+
+### Printers and scanners
+
+Domovoi prints to and scans from **network printers**: ones on your
+Wi-Fi or plugged into your router that work with **AirPrint**, **IPP
+Everywhere** or **Mopria**. That's almost every network printer from the
+last ten years; if your phone can print to it with no app, Domovoi can
+too. USB printers, and older printers that need a driver from the maker,
+don't work. Scanning needs a printer whose scanner works over AirPrint
+too (often called AirScan or eSCL).
+
+**How to**
+
+- [Settings → Printers & scanners](#settings/printers) shows the
+  printers Domovoi can see. Press **Add** on yours, name it, then
+  **Test page**. Not listed? Press **Look again**, or type its address
+  under **Add by address** (on the printer's own screen or settings page).
+- One printer is the house's **Default**. A room can have its own default
+  (**Default in rooms**): voice from that room prints there.
+- **Two-sided** and **Colour** follow the printer's own settings unless
+  you switch them per printer.
+- **Print** sits on files in [Files](#files) and Documents when a printer
+  is set up: PDFs, pictures, text and markdown files, and spreadsheets
+  (printed as a plain table). You pick the pages, copies, two-sided,
+  colour and paper, and see a preview first.
+- Word and OpenDocument files don't print here: save them as PDF in Word
+  or Docs first, then print the PDF.
+- **Scan** sits at the top of Documents when a scanner is set up. Scans
+  are saved as one PDF in **Documents → Scans**, named by date.
+- Removing or renaming a printer needs the admin password *(admin)*.
+
+**Try saying**
+
+- "print my cover letter" (it tells you the pages and asks first)
+- "how much ink is left"
+- "is the printer out of paper"
+- "set up the printer"
+- "scan this to Documents"
+- "stop printing"
+
+**If something's wrong**
+
+- **Out of paper, jammed, cover open:** the printer's row says so in plain
+  words, and a voice print that fails is said once in the room that asked.
+  Fix it at the printer; the job carries on.
+- **"Level not reported":** some printers don't share their ink or toner
+  levels. Check the printer's own screen.
+- **"Isn't answering":** the printer is off or asleep, or moved to a
+  different network. Press **Look again**.
+- **"Security certificate changed":** usually a printer update or reset.
+  An admin checks it and presses **Trust the new certificate**.
+- Each job is limited to 100 pages and 20 copies, and the house to 500
+  sheets a day; an admin can change the limits. The list of recent jobs
+  is kept 90 days, and an admin can clear it.
 
 ---
 
@@ -840,10 +955,10 @@ one on [People](#people).
 
 **How to** *(admin)*
 
-- Sign in: [Settings → Configuration](#settings/configuration) → **sign
+- Sign in: [Settings → Advanced](#settings/advanced) → **sign
   in**. A reload in that browser keeps you signed in for 60 minutes after
   you signed in; **sign out** ends it at once. Change the minutes in
-  [Settings → Configuration](#settings/configuration) → **Security** →
+  [Settings → Advanced](#settings/advanced) → **Security** →
   **Stay signed in after a reload**.
 - Turn guest music control off: same place, **Guests can change the
   music in a playing room**.
@@ -856,7 +971,7 @@ on the server itself. Ask whoever set up Domovoi.
 
 ### Devices and house rules
 
-[Settings → Devices](#settings/devices):
+[Settings → Phones & browsers](#settings/phones-and-browsers):
 
 - **This device**: give this browser or phone a name. It's what queues
   show as "added by".
@@ -885,10 +1000,15 @@ each room's **Conversations** tab.
 - "never save my voice": Domovoi stops learning it.
 - Delete a chat: the bin icon in [Chat](#chat).
 - *(admin)* turn recordings off in a room's **Overview** (**Stop and
-  delete**).
+  delete**); the commands kept so far are in [Settings → Voice
+  history](#settings/voice-history).
+- *(admin)* listen to a room's command recordings, mark whether each one
+  ended at the right moment, and delete them: [Settings → Voice
+  history](#settings/voice-history). A room keeps them only while an admin
+  has turned them on for it.
 
 An admin can change play history, news and timer history in [Settings →
-Configuration](#settings/configuration). [More detail](docs/SECURITY_PRIVACY.md#data-at-rest)
+Advanced](#settings/advanced). [More detail](docs/SECURITY_PRIVACY.md#data-at-rest)
 
 ### Internet: yes, sometimes, no
 
@@ -912,7 +1032,7 @@ what you need before choosing No.
 
 ### Updates
 
-[Settings → Configuration](#settings/configuration) → **Version** shows
+[Settings → About & updates](#settings/about) shows
 the release you run.
 
 **How to** *(admin)*
@@ -932,14 +1052,17 @@ After an update, reload any open dashboard once.
 ### Restarting
 
 Some settings apply only after a restart: [Settings →
-Configuration](#settings/configuration) → **Version** → **Restart
+About & updates](#settings/about) → **Restart
 Domovoi** *(admin)*.
 
 **If every room is offline but the dashboard opens**, the server's core
 has stopped answering. It restarts itself within about a minute. If it
 doesn't, an admin presses **Restart the core** (on [Home](#home),
-[Settings → Satellites](#settings/satellites) or **Version**). The app
+[Settings → Rooms](#settings/rooms) or [Settings → Health](#settings/health)). The app
 says the core isn't answering, and reconnects by itself.
+
+**Try saying:** "how's domovoi doing" (how the server is: its processor,
+memory and disk)
 
 [More detail](docs/TROUBLESHOOTING.md#everything-offline-dashboard-up)
 
@@ -983,7 +1106,57 @@ publishers you trust.
 *(admin)* **Install** or **Switch** one. With an NVIDIA card, Qwen2.5-VL
 7B reads pictures faster.
 
+*(admin)* **AI chat and questions** at the top turns the AI models off or
+on for the whole home. Off keeps speech-to-text and hides the rest of the
+model rows. On says how much it will download (about 6.4 GB, or 9.1 GB on
+a server with 24 GB of memory or more) before it starts.
+
 [More detail](docs/CPU_HOST.md#the-short-version)
+
+### Asking Domovoi for help
+
+Domovoi answers questions about itself: from this manual, its FAQ and
+troubleshooting guide, and the help of the plugins you installed. It
+answers only from what it finds. When nothing covers the question, it
+says "The manual doesn't cover that." rather than guessing.
+
+**How to**
+
+- **Dashboard:** press **?** at the top of any page. Search the help, or
+  press **ask Domovoi** to start a chat called "Help: …".
+- **Dashboard:** an error message has **ask Domovoi about this**: the help
+  opens with the error's code and the page you were on.
+- In a chat, ask "how do I …?" or "why is the kitchen offline?". Domovoi
+  also reads what its own checks show: rooms that are offline and why,
+  plugins, its containers, and the last update (its details only for an
+  admin).
+- **Something on your screen?** Paste or attach a screenshot in a chat on
+  the home server. The vision model reads it on your server; it never
+  leaves your home.
+- **App:** a chat on this phone answers from the app's own copy of the
+  manual, offline. It can't read screenshots yet: use a home-server chat
+  for those.
+
+**Try saying**
+
+- "how do I add a room"
+- "how do I change the wake word"
+
+After the short answer, Domovoi asks "Want me to send the steps to your
+phone?" Say yes, and they arrive as a chat called "Help: …" on the phones
+marked as yours ([Settings → Phones & browsers](#app/connection), **This phone
+belongs to**, in the app). If Domovoi doesn't know your voice, it asks who
+to send them to. It never sends them to every phone.
+
+**If something's wrong**
+
+- **AI chat and questions are off**: help still searches the manual and
+  the docs, with no model, and screenshots can't be read. See
+  [Models](#node:models).
+- **Help can't solve it**: **report a problem**, in the **?** panel, builds
+  a summary of your Domovoi with no passwords, codes, addresses or names.
+  Read it, then copy or save it and post it yourself, on GitHub
+  Discussions or Discord. Nothing is sent for you.
 
 ### Troubleshooting
 
@@ -995,6 +1168,7 @@ publishers you trust.
 - **A word is said wrong**: [Say it like](#node:voice).
 - **Chat says pictures need the vision model**: [Models](#node:models).
 - **Something is greyed with "needs internet"**: [Internet](#node:internet).
+- **Not sure where to look**: ask Domovoi: [Asking Domovoi for help](#node:help-desk).
 - **App: can't find the server**: same Wi-Fi as the server? **add
   manually** with the dashboard's address.
 
@@ -1013,7 +1187,7 @@ adjusted in one place. Each "### name" replaces the {{name}} line above.
   spoken "what can you do"). Their phrases are marked pending in PHRASES
   (build_manual.py) until that work lands.
 - voice-history-*, forget-me-phrase: wf/voice-history's "Keep voice
-  history" setting (People → Voice history, and Settings → Configuration
+  history" setting (People → Voice history, and Settings → Advanced
   → Privacy; 30 days, 90 days, 1 year or Forever, 90 by default), "Delete
   all voice history", and "forget me" / forget person deleting that
   person's own turns. Labels as that branch has them (f31ed01e).
@@ -1089,7 +1263,7 @@ change events here: by voice it only reads.
 - *(admin)* [People](#people) → **Voice history** → **Keep voice
   history**: 30 days, 90 days (the default), 1 year or Forever. Older
   turns are deleted every day. It's also in [Settings →
-  Configuration](#settings/configuration) → **Privacy**.
+  Advanced](#settings/advanced) → **Privacy**.
 - *(admin)* **Delete all voice history**, on the same page, deletes it all
   at once. People, voice samples, memories, notes, timers and chats stay.
 - *(admin)* **forget person** on [People](#people) does what "forget me"

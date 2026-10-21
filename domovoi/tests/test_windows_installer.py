@@ -274,6 +274,8 @@ def test_the_pin_tool_pins_a_release_tag(tmp_path):
     blob = _git_bytes("cat-file", "blob", f"{rc1}:scripts/linux/provision.sh")
     assert f'#define ProvisionSha256 "{hashlib.sha256(blob).hexdigest()}"' in text
     assert "\n; #define ProvisionBundled\n" in text and "\n#define DashboardTabRoutes\n" in text
+    # rc1's provision.sh always pulls the AI models: no AI question.
+    assert "\n; #define ProvisionAiChoice\n" in text
     assert b"\r" not in copy.read_bytes()
 
 
@@ -367,6 +369,100 @@ def test_the_tab_routes_pin_matches_the_pinned_commit():
     assert _tab_routes_pinned() == has_routes, (
         f"pins.iss DashboardTabRoutes is {'on' if _tab_routes_pinned() else 'off'}, but the dashboard at "
         f"{commit[:7]} {'has' if has_routes else 'does not have'} the tab addresses")
+
+
+def _ai_choice_pinned() -> bool:
+    return bool(re.search(r"^#define ProvisionAiChoice\s*$", PINS.read_text(encoding="ascii"), re.M))
+
+
+def _takes_ai_choice(script: str) -> bool:
+    # ProvisionScript.SupportsAiChoice and build.ps1 -Pin look for the same.
+    return "\n  --ai-models " in script and "\n  --no-ai-models " in script
+
+
+def test_the_ai_question_pin_matches_the_script_setup_runs():
+    """Review round 1 (2026-10-21), the pins trap: a provision.sh without
+    --no-ai-models (606829c) would take a No only to fail after the
+    account, the firewall rules and the Ubuntu download. Setup asks the
+    question only when the script it runs takes the answer."""
+    if _provision_bundled():
+        script = (REPO_ROOT / "scripts" / "linux" / "provision.sh").read_bytes()
+    else:
+        commit = _pins()["DomovoiCommit"]
+        script = _git_bytes("cat-file", "blob", f"{commit}:scripts/linux/provision.sh")
+        if script is None:
+            pytest.skip(f"commit {commit[:7]} is not in this clone")
+    has = _takes_ai_choice(script.decode("utf-8"))
+    assert _ai_choice_pinned() == has, (
+        f"pins.iss ProvisionAiChoice is {'on' if _ai_choice_pinned() else 'off'}, but the provision.sh Setup runs "
+        f"{'takes' if has else 'does not take'} --ai-models / --no-ai-models")
+
+
+def test_the_ai_question_lives_behind_the_pin():
+    """Without ProvisionAiChoice: no page, Yes, and no AI line in the ready
+    memo (Setup as it was before the question); /ai=no is refused at once."""
+    s = SCRIPT.read_text(encoding="ascii")
+    assert s.count("CreateAiPage(") == 2  # the procedure and its one call
+    assert "#ifdef ProvisionAiChoice\n  CreateAiPage(PreflightPage.ID);\n  ConsentPage := CreateOutputMsgMemoPage(AiPage.ID," in s
+    assert "#else\n  ConsentPage := CreateOutputMsgMemoPage(PreflightPage.ID," in s
+    body = s[s.index("function AiAnswer: String;"):]
+    body = body[: body.index("\nend;")]
+    assert "#ifdef ProvisionAiChoice\n  if RadioAiNo.Checked then" in body and "#else\n  Result := 'yes';\n#endif" in body
+    saved = s[s.index("procedure ReadSavedAi;"):]
+    saved = saved[: saved.index("\nend;")]
+    assert saved.index("#ifdef ProvisionAiChoice") < saved.index("'saved-ai'") < saved.index("#endif")
+    start = s[s.index("function InitializeSetup: Boolean;"):]
+    start = start[: start.index("\nend;")]
+    assert "#ifndef ProvisionAiChoice" in start and "/ai=no can''t be done" in start
+    # Every other use of the page's controls is inside the procedures above
+    # or under the define (ISCC compiles both ways: test_setup_compiles_*).
+    assert "#ifdef ProvisionAiChoice\n  if CurPageID = AiPage.ID then" in s
+
+
+def test_a_rerun_starts_at_the_saved_answer_and_records_the_result():
+    """Review round 1 (2026-10-21): on a re-run the saved answer wins (the
+    helper's saved-ai, after the preflight; /ai= over it); prepare gets keep
+    for an untouched Yes from the record alone; the last page and the
+    record follow what provision.sh reported."""
+    s = SCRIPT.read_text(encoding="ascii")
+    pre = s[s.index("function RunPreflight: Boolean;"):]
+    pre = pre[: pre.index("\nend;")]
+    assert "PreflightDone := True;\n  ReadSavedAi;" in pre
+    saved = s[s.index("procedure ReadSavedAi;"):]
+    saved = saved[: saved.index("\nend;")]
+    assert "if ExpandConstant('{param:ai|}') <> '' then\n    Exit;" in saved
+    assert "if AiSavedDefault = 'no' then\n    RadioAiNo.Checked := True" in saved
+    assert "' --ai ' + AiPrepareArg + '" in s and "' /ai=' + AiPrepareArg +" in s
+    assert "' --ai ' + AiAnswer" not in s
+    assert "AiReported := KvValue(Lines, 'ai');" in s and "RunHelper(AppHelper, 'record-ai'," in s
+    models = s[s.index("function ModelsText("):]
+    models = models[: models.index("\nend;")]
+    assert "if AiOutcome = 'no' then" in models and "AiAnswer" not in models
+
+
+ISCC = [
+    Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Inno Setup 6" / "ISCC.exe",
+    Path(os.environ.get("ProgramFiles(x86)", "")) / "Inno Setup 6" / "ISCC.exe",
+]
+
+
+def _iscc() -> Path | None:
+    return next((p for p in ISCC if p.is_file()), None)
+
+
+@pytest.mark.skipif(sys.platform != "win32" or _iscc() is None, reason="needs Inno Setup 6's ISCC.exe")
+@pytest.mark.parametrize("ai_choice", [False, True], ids=["without-ProvisionAiChoice", "with-ProvisionAiChoice"])
+def test_setup_compiles_with_and_without_the_ai_question(tmp_path, ai_choice):
+    if not all((WIN / "build" / "bin" / n).is_file() for n in ("DomovoiHost.exe", "DomovoiSetupHelper.exe", "DomovoiTray.exe")):
+        pytest.skip("run windows\\build.ps1 first (ISCC packs its exes)")
+    args = [str(_iscc()), "/Q", f"/O{tmp_path}", "/FDomovoiSetup"]
+    if ai_choice and not _ai_choice_pinned():
+        args.append("/DProvisionAiChoice")
+    if not ai_choice and _ai_choice_pinned():
+        pytest.skip("pins.iss defines ProvisionAiChoice; ISCC can't undefine it from the command line")
+    proc = subprocess.run([*args, str(SCRIPT)], capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 0, proc.stdout[-4000:] + proc.stderr[-4000:]
+    assert (tmp_path / "DomovoiSetup.exe").is_file()
 
 
 def _finish_section() -> str:
@@ -628,3 +724,8 @@ def test_build_and_unit_tests():
     proc = subprocess.run(args, capture_output=True, text=True, timeout=900)
     assert proc.returncode == 0, proc.stdout[-6000:] + proc.stderr[-3000:]
     assert re.search(r"^\d+ passed, 0 failed$", proc.stdout, re.M), proc.stdout[-3000:]
+    if any(p.is_file() for p in iscc):
+        # Both Setups: the server's and the satellite's (2026-10-21).
+        for name in ("DomovoiSetup.exe", "DomovoiSatelliteSetup.exe"):
+            assert re.search(r"^built .*\\" + re.escape(name) + r" \(\d+ bytes, sha256 [0-9a-f]{64}\)$",
+                             proc.stdout, re.M), name

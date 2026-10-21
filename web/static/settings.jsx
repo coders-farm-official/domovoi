@@ -695,10 +695,10 @@ const VoicesPanel = () => {
  * the window is a reloaded tab "view only" (adminReloadState, components.jsx).
  *
  * On an unclaimed box, arriving here (the tab, or its address
- * #settings/configuration) opens the first-run admin setup by itself, once
+ * #settings/advanced) opens the first-run admin setup by itself, once
  * per arrival, as soon as a fresh status read says the box is unclaimed:
  * the setup code field has the focus, so a new owner pastes and goes.
- * `setupAsked` is the installer's address, #settings/configuration/setup
+ * `setupAsked` is the installer's address, #settings/advanced/setup
  * (SETUP_ROUTE): on a box already claimed before it arrived it says so in
  * one line, and nothing opens. After a claim made here the marker leaves
  * the address (replaced in place), so a reload doesn't call the box
@@ -734,7 +734,7 @@ const AdminSection = ({ setupAsked = false }) => {
     if (!claimedHere || !setupAsked) return;
     try {
       if (routeParts(currentRoute()).join('/') === SETUP_ROUTE) {
-        window.history.replaceState(null, '', '#settings/configuration');
+        window.history.replaceState(null, '', '#settings/advanced');
       }
     } catch { /* the marker stays; it only adds a note on the next visit */ }
   }, [claimedHere, setupAsked]);
@@ -1342,7 +1342,7 @@ const configLoadMessage = (error) => {
  * typed in the box, else the saved one — and only when the household's
  * internet answer lets song recognition go out: under No there is no
  * button, just a line pointing at Settings → Internet (no dead controls).
- * #settings/configuration/acoustid-key (ACOUSTID_KEY_ROUTE) lands here:
+ * #settings/advanced/acoustid-key (ACOUSTID_KEY_ROUTE) lands here:
  * `marked` lights the block up for a moment.
  *
  *   POST /api/config/acoustid-test · { key? } → { result, detail, fingerprints }
@@ -1434,7 +1434,7 @@ const AcoustidKeyField = ({ f, value, onChange, internetOff, marked }) => {
   );
 };
 
-const ConfigPanel = ({ setupAsked = false, mark = null }) => {
+const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) => {
   // What comes back depends on WHO asks (CORE-6): the advanced section
   // and the unmasked secrets only for a live admin Bearer, the common
   // section with secrets masked for the cookie a reload keeps. So this
@@ -1490,15 +1490,23 @@ const ConfigPanel = ({ setupAsked = false, mark = null }) => {
     return (row && row.label) || CONFIG_RESTART_WORDS[name] || name;
   };
 
-  // #settings/configuration/<marker>: scroll to that field and put the
-  // cursor in it, once per arrival, as soon as it is on the page.
-  const markField = (mark && CONFIG_FIELD_MARKS[mark]) || null;
+  // #settings/advanced/<marker>: scroll to that field and put the cursor
+  // in it, once per arrival, as soon as it is on the page. A marker is a
+  // CONFIG_FIELD_MARKS word or a field's own name (the settings search).
+  const markField = (mark && (CONFIG_FIELD_MARKS[mark]
+    || (fields.some((x) => x.name === mark) ? mark : null))) || null;
+  // Settings → Advanced opens folded (startFolded): the settings show on a
+  // press, or by themselves for a marker that names one of them.
+  const [folded, setFolded] = React.useState(!!startFolded);
+  React.useEffect(() => { if (markField) setFolded(false); }, [markField]);
   const [marked, setMarked] = React.useState(null);
   const markDone = React.useRef(null);
   React.useEffect(() => {
     if (!markField) { markDone.current = null; return; }
-    if (markDone.current === markField || !fields.some((x) => x.name === markField)) return;
+    if (markDone.current === markField || folded || !fields.some((x) => x.name === markField)) return;
     markDone.current = markField;
+    const adv = fields.find((x) => x.name === markField);
+    if (adv && adv.section === 'advanced') setAdvOpen(true);
     setMarked(markField);
     const raf = window.requestAnimationFrame || ((fn) => setTimeout(fn, 0));
     raf(() => {
@@ -1510,7 +1518,7 @@ const ConfigPanel = ({ setupAsked = false, mark = null }) => {
         if (input) input.focus({ preventScroll: true });
       } catch { /* the field is still there; only the scroll is missing */ }
     });
-  }, [markField, fields]);
+  }, [markField, fields, folded]);
   React.useEffect(() => {
     if (!marked) return undefined;
     const t = setTimeout(() => setMarked(null), 2400);
@@ -1581,10 +1589,17 @@ const ConfigPanel = ({ setupAsked = false, mark = null }) => {
 
   return (
     <React.Fragment>
-    <AdminSection setupAsked={setupAsked}/>
-    <VersionSection/>
+    <div data-settings-mark="admin"><AdminSection setupAsked={setupAsked}/></div>
     <Card title="Domovoi configuration"
-          sub="Live-editable settings. Some changes apply instantly; those marked “restart” need a Domovoi server restart.">
+          sub="Live-editable settings. Some changes apply instantly; those marked “restart” need a Domovoi server restart."
+          action={folded && (
+            <Button icon="chevron-down" onClick={() => setFolded(false)}>show the settings</Button>
+          )}>
+      {folded ? (
+        <div className="config-folded" style={{ padding: '4px 16px 14px', fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+          Most homes never need these. The everyday settings are in the other sections; search finds any of these too.
+        </div>
+      ) : (
       <div style={{ padding: '4px 14px 14px' }}>
         {loading && fields.length === 0
           ? <div style={{ padding: 30, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading settings…</div>
@@ -1681,6 +1696,7 @@ const ConfigPanel = ({ setupAsked = false, mark = null }) => {
         </div>
         )}
       </div>
+      )}
     </Card>
     </React.Fragment>
   );
@@ -2868,7 +2884,7 @@ const WakeWordsPanel = () => {
  * one-liners, plus a primary link into the User Manual (the interactive
  * "how domovoi works" topology page, route "#manual"). It leads the tabs as
  * the friendly intro; Configuration stays intentionally last. Pure frontend —
- * no data fetch. Version / build identifiers live under Configuration → Version.
+ * no data fetch. Version / build identifiers live under About & updates.
  */
 
 const ServerFingerprint = () => {
@@ -2896,7 +2912,7 @@ const ServerFingerprint = () => {
 // server downloads, with its licence (domovoi/tests/test_licences_doc.py).
 const LICENCES_DOC_URL = 'https://github.com/coders-farm-official/domovoi/blob/main/docs/LICENSES.md';
 
-const AboutPanel = () => (
+const AboutCard = () => (
   <Card title="About Domovoi"
         sub="The local-first home voice assistant that runs entirely on your own hardware.">
     <div style={{ padding: '6px 16px 16px', display: 'flex', flexDirection: 'column', gap: 10,
@@ -2924,11 +2940,8 @@ const AboutPanel = () => (
         on: <a href={LICENCES_DOC_URL} target="_blank" rel="noopener noreferrer"
                style={{ color: 'var(--brand-ink)' }}>licences of what Domovoi downloads</a>.
       </div>
-      <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
-        Build / version identifiers live under Configuration → Version.
-      </div>
       <ServerFingerprint/>
-      <div style={{ marginTop: 4 }}>
+      <div style={{ marginTop: 4 }} data-settings-mark="manual">
         <Button variant="primary" icon="book-open"
                 onClick={() => { window.location.hash = 'manual'; }}>
           Open the user manual
@@ -2937,6 +2950,36 @@ const AboutPanel = () => (
     </div>
   </Card>
 );
+
+/* About & updates (Settings → System): what Domovoi is, then the version
+ * it runs and its updates (VersionSection, Configuration's until
+ * 2026-10-21). The version answers a paired device or an admin; anyone
+ * else is told how to see it instead of being asked to pair on arrival. */
+const AboutPanel = () => {
+  const [, force] = React.useReducer((n) => n + 1, 0);
+  React.useEffect(() => {
+    try { return Auth.subscribe(force); } catch { return undefined; }
+  }, []);
+  let household = false;
+  try {
+    const st = Auth.status;
+    household = !!(Auth.isPaired() || Auth.isLoggedIn() || (st && (st.authenticated || st.setup_complete === false)));
+  } catch { household = false; }
+  return (
+    <>
+      <AboutCard/>
+      <div data-settings-mark="updates">
+        {household ? <VersionSection/> : (
+          <Card title="Version and updates" padded>
+            <div style={{ fontSize: 13, color: 'var(--fg-muted)' }}>
+              Pair this browser or sign in as the admin to see the version Domovoi runs and its updates.
+            </div>
+          </Card>
+        )}
+      </div>
+    </>
+  );
+};
 
 /* ---- Devices + queue access -------------------------------------- */
 /*
@@ -3286,7 +3329,7 @@ const GuestAccessCard = ({ fire }) => {
           by its address for as long as the network gives it the same one. It
           isn’t a defence against someone determined: the household device
           token is the real key. Paired devices and admins are never affected.
-          To turn guest access off altogether, use Configuration → Security.
+          To turn guest access off altogether, use Settings → Advanced → Security.
         </span>
       </div>
 
@@ -3772,7 +3815,7 @@ const HouseholdTokenCard = ({ fire }) => {
 /* This device's phone bar: the tabs along the bottom when this browser is
  * phone-width (components.jsx PhoneBarStore / phoneBarRoutes). Kept in
  * this browser only, so it needs no sign-in and touches nothing on the
- * server — which is why it is a tab of its own (Settings → Phone bar)
+ * server — which is why it is a tab of its own (Settings → App layout)
  * rather than a card under Devices, whose other cards ask an admin to
  * sign in. Home's "everything" grid links here. Offers what a launcher
  * may show on this screen (navItemsFor): plugin pages too, and on a shared
@@ -3780,7 +3823,8 @@ const HouseholdTokenCard = ({ fire }) => {
 const PhoneBarCard = ({ fire }) => {
   const shared = useSharedScreen();
   const manifest = window.DomovoiPluginManifest || { plugins: [] };
-  const items = navItemsFor(manifest, { shared });
+  const ai = useAiFeatures();
+  const items = navItemsFor(manifest, { shared, ai });
   const saved = usePhoneBar();
   const bar = phoneBarRoutes(items, saved);
   const byRoute = {};
@@ -3858,7 +3902,7 @@ const PhoneBarCard = ({ fire }) => {
   );
 };
 
-// Settings → Phone bar.
+// Settings → App layout.
 const PhoneBarPanel = () => {
   const [fire, toastNode] = useToast();
   return <><PhoneBarCard fire={fire}/>{toastNode}</>;
@@ -3928,12 +3972,12 @@ const DevicesPanel = () => {
   const deviceList = useApiList('/api/devices');
   return (
     <>
-      <ThisDeviceCard fire={fire} onRenamed={deviceList.refresh}/>
-      <GetTheAppCard/>
-      <HouseholdTokenCard fire={fire}/>
-      <QueueAccessCard fire={fire} deviceList={deviceList}/>
-      <GuestAccessCard fire={fire}/>
-      <FilesAccessCard fire={fire} deviceList={deviceList}/>
+      <div data-settings-mark="this-device"><ThisDeviceCard fire={fire} onRenamed={deviceList.refresh}/></div>
+      <div data-settings-mark="get-the-app"><GetTheAppCard/></div>
+      <div data-settings-mark="household-token"><HouseholdTokenCard fire={fire}/></div>
+      <div data-settings-mark="queue-access"><QueueAccessCard fire={fire} deviceList={deviceList}/></div>
+      <div data-settings-mark="guest-access"><GuestAccessCard fire={fire}/></div>
+      <div data-settings-mark="files-access"><FilesAccessCard fire={fire} deviceList={deviceList}/></div>
       {toastNode}
     </>
   );
@@ -3942,7 +3986,7 @@ const DevicesPanel = () => {
 /* ============================================================ */
 /* Recordings — opt-in command recordings, reviewed by an admin */
 /* ============================================================ */
-/* Rooms an admin opted in (Settings → Satellites, the room's drawer →
+/* Rooms an admin opted in (Settings → Rooms, the room's drawer →
  * command recordings) keep each wake-word or follow-up command, audio
  * plus transcript, for tuning when Domovoi stops listening. Here an admin
  * plays them back, says whether the capture ended at the right moment,
@@ -4057,7 +4101,7 @@ const CapturesPanel = () => {
     <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>{text}</div>
   );
   const sub = 'What opted-in rooms said to Domovoi, kept to tune when it stops listening. '
-    + 'Turn a room on or off in its drawer under Settings → Satellites.';
+    + 'Turn a room on or off in its drawer under Settings → Rooms.';
 
   if (!admin) {
     return <Card title="Command recordings" sub={sub}>{note('Admins only. Sign in to review recordings.')}</Card>;
@@ -4137,7 +4181,7 @@ const CapturesPanel = () => {
         </div>
         {shown.length === 0 ? (
           <Empty title={all.length ? 'nothing matches' : 'nothing recorded yet'}
-                 sub={all.length ? undefined : 'turn recording on for a room in its drawer, under Settings → Satellites'}/>
+                 sub={all.length ? undefined : 'turn recording on for a room in its drawer, under Settings → Rooms'}/>
         ) : shown.map((c) => (
           <CaptureRow key={c.id} c={c} labels={labels} playing={playing === c.id}
                       busy={busy === c.id} onPlay={play} onLabel={setLabel}
@@ -4157,64 +4201,363 @@ const CapturesPanel = () => {
 /* Settings shell                                               */
 /* ============================================================ */
 
-// Each tab's address is #settings/<slug> (the id where there is no slug;
-// the id opens the tab too). useRouteTab, components.jsx. The slugs are
-// public: bookmarks, the docs and the Windows installer's "Open Domovoi"
-// (#settings/configuration/setup) use them, so a slug is never renamed.
-const SETTINGS_TABS = [
-  { id: 'about', label: 'About' },            // informational intro / manual link
-  { id: 'greetings', label: 'Greetings' },
-  { id: 'voices', label: 'Voices' },
-  { id: 'wakewords', slug: 'wake-words', label: 'Wake Words' },
-  { id: 'recordings', label: 'Recordings' },  // opt-in command recordings (admins)
-  { id: 'devices', label: 'Devices' },        // device names + queue / files access
-  { id: 'phonebar', slug: 'phone-bar', label: 'Phone bar' },  // this browser's phone tabs (no sign-in: kept in the browser)
-  { id: 'satellites', label: 'Satellites' },  // the rooms' Pis (was a nav route, #satellites still opens it)
-  { id: 'models', label: 'Models' },          // model-management hub (was a nav route)
-  { id: 'internet', label: 'Internet' },      // the INTERNET_ACCESS answer (its one home)
-  { id: 'config', slug: 'configuration', label: 'Configuration' },   // last tab, by request
+/* Settings in groups, with a search box at the top (owner design,
+ * 2026-10-21). A desktop shows the groups and their sections in a column
+ * on the left and the section on the right; a phone shows the groups,
+ * then a group's sections, then the section (styles.css, the 760px block:
+ * the page's data-level says which).
+ *
+ * Every section's address is #settings/<id>, every group's
+ * #settings/<group id> (a phone's list of that group's sections; a
+ * desktop shows its first section). A bare #settings is the list of
+ * groups on a phone and About & updates on a desktop. A section's
+ * `aliases` are the words it had before the regroup, so a bookmark, a
+ * doc and the Windows installer's "Open Domovoi"
+ * (#settings/advanced/setup) still land on it; the address is
+ * rewritten in place (useRouteTab, components.jsx). An id is never
+ * renamed: a rename adds an alias.
+ *
+ * A section marked `optional` shows only once a page script registers
+ * its panel in window.DomovoiSettingsSections ({ <id>: { Panel } }):
+ * Health (health.jsx) does; Printers & scanners, Search and Chat are the
+ * slots kept for what is being built (none of them shows a promise
+ * before it can do something). */
+const SETTINGS_GROUPS = [
+  { id: 'rooms-and-devices', label: 'Rooms & devices', icon: 'house',
+    sections: ['rooms', 'phones-and-browsers', 'printers', 'app-layout'] },
+  { id: 'voice', label: 'Voice', icon: 'audio-lines', sections: ['wake-words', 'voices', 'greetings'] },
+  { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat'] },
+  { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history'] },
+  { id: 'system', label: 'System', icon: 'server', sections: ['about', 'health', 'advanced'] },
 ];
-// A bare #settings opens About: what Domovoi is, and the way to the manual.
-const SETTINGS_DEFAULT_TAB = 'about';
 
-const SETTINGS_SUB = {
-  about: 'What Domovoi is — and a link to the user manual.',
-  greetings: 'Lines a satellite says when it hears the wake word, before it listens.',
-  voices: 'Domovoi’s voice, how it says words, and the voice registry — each satellite speaks in one.',
-  wakewords: 'Train + manage custom wake words; record clips on a satellite.',
-  recordings: 'Commands kept from opted-in rooms to tune when Domovoi stops listening — admins only.',
-  devices: 'Name this device, the household token, shared screens, and who may edit a room’s play queue.',
-  phonebar: 'The tabs along the bottom of this browser at phone width — kept in this browser only.',
-  satellites: 'The Pi in each room: status, approvals and adoption, announcements, and each room’s drawer.',
-  models: "What's active in each role, install more, and the host hardware readout.",
-  internet: 'Will this Domovoi have internet? It sets the defaults of the online extras.',
-  config: 'Editable domovoi configuration.',
+const SETTINGS_SECTIONS = [
+  { id: 'rooms', label: 'Rooms', aliases: ['satellites'],
+    sub: 'Each room’s satellite: status, approvals and adoption, announcements, and each room’s drawer.',
+    words: 'satellite satellites pi speaker microphone mic approve approval adopt announce announcement drawer wifi wi-fi upgrade screen kiosk intercom' },
+  { id: 'phones-and-browsers', label: 'Phones & browsers', aliases: ['devices'],
+    sub: 'Name this device, get the app, the household token, guests, and who may edit a room’s play queue.',
+    words: 'device devices phone phones browser browsers name rename household token pair pairing guest guests queue files shared screen tablet app android' },
+  { id: 'printers', label: 'Printers & scanners', optional: true,
+    sub: 'Printers and scanners on your network.',
+    words: 'printer printers print printing scanner scanners scan scanning ink toner paper' },
+  { id: 'app-layout', label: 'App layout', aliases: ['phone-bar', 'phonebar'],
+    sub: 'The tabs along the bottom of this browser at phone width — kept in this browser only.',
+    words: 'phone bar tabs bottom bar layout menu navigation' },
+  { id: 'wake-words', label: 'Wake words', aliases: ['wakewords'],
+    sub: 'The words that wake Domovoi: train your own, record clips on a satellite.',
+    words: 'wake word words hey hello train training clips record' },
+  { id: 'voices', label: 'Voices',
+    sub: 'Domovoi’s voice, how it says words, and the voices each room can speak in.',
+    words: 'voice voices speak speaking tts piper pronounce pronunciation say accent' },
+  { id: 'greetings', label: 'Greetings',
+    sub: 'What a room says when it hears the wake word, before it listens.',
+    words: 'greeting greetings hello reply chime funny' },
+  { id: 'models', label: 'Models',
+    sub: 'AI chat and questions, and the models behind speech and answers: what is active, install more.',
+    words: 'model models ai chat questions answer llm ollama whisper speech recognition stt hardware gpu download vision' },
+  { id: 'search', label: 'Search', optional: true,
+    sub: 'Where Domovoi looks things up, and your own key.',
+    words: 'search lookup web sources key' },
+  { id: 'chat', label: 'Chat', optional: true,
+    sub: 'How chat behaves.',
+    words: 'chat conversation' },
+  { id: 'internet', label: 'Internet',
+    sub: 'Will this Domovoi have internet? It sets the defaults of the online extras.',
+    words: 'internet online offline network web connection search helper' },
+  { id: 'voice-history', label: 'Voice history', aliases: ['recordings'],
+    sub: 'Commands kept from the rooms you opted in, to tune when Domovoi stops listening — admins only.',
+    words: 'voice history recordings recording captures commands kept audio transcript privacy delete' },
+  { id: 'about', label: 'About & updates',
+    sub: 'What Domovoi is, the version it runs, and its updates.',
+    words: 'about version update updates upgrade check pull restart channel stable main release manual licence licences license fingerprint' },
+  { id: 'health', label: 'Health', optional: true,
+    sub: 'Every check on this Domovoi, green or not: the server, updates, rooms, plugins, internet and containers.',
+    words: 'health status problems problem check checks containers container guard incident incidents tamper disk database server attention' },
+  { id: 'advanced', label: 'Advanced', aliases: ['configuration', 'config'],
+    sub: 'The admin account, and every setting of the Domovoi server — for when you know what you are changing.',
+    words: 'advanced configuration config settings admin password sign in setup claim database port ports path acoustid' },
+];
+
+// Cards inside a section the search can jump to (#settings/<section>/<mark>
+// scrolls to the [data-settings-mark] element).
+const SETTINGS_SEARCH_ITEMS = [
+  { label: 'This device’s name', section: 'phones-and-browsers', mark: 'this-device', words: 'rename device name' },
+  { label: 'Get the Domovoi app', section: 'phones-and-browsers', mark: 'get-the-app', words: 'android app download install qr' },
+  { label: 'Household token', section: 'phones-and-browsers', mark: 'household-token', words: 'token pair pairing credential' },
+  { label: 'Who may edit a room’s queue', section: 'phones-and-browsers', mark: 'queue-access', words: 'queue access block' },
+  { label: 'Guest access', section: 'phones-and-browsers', mark: 'guest-access', words: 'guest guests visitor' },
+  { label: 'Files access', section: 'phones-and-browsers', mark: 'files-access', words: 'files documents' },
+  { label: 'Updates', section: 'about', mark: 'updates', words: 'update check pull restart version channel' },
+  { label: 'User manual', section: 'about', mark: 'manual', words: 'manual help guide' },
+  { label: 'Admin account', section: 'advanced', mark: 'admin', words: 'admin password sign in sign out claim setup' },
+  { label: 'Containers', section: 'health', mark: 'containers', words: 'container containers guard incident tamper music player image rebuild' },
+];
+
+// A bare #settings: the phone's list of groups; a desktop shows About.
+const SETTINGS_INDEX = 'index';
+const SETTINGS_DESKTOP_DEFAULT = 'about';
+
+/* Panels registered by other page scripts: { <section id>: { Panel } }. */
+const settingsExtraSections = () => {
+  try { return window.DomovoiSettingsSections || {}; } catch { return {}; }
+};
+
+const settingsPanel = (id, marks) => {
+  const mark = marks[0] || null;
+  switch (id) {
+    case 'rooms': return <SatellitesPanel/>;
+    case 'phones-and-browsers': return <DevicesPanel/>;
+    case 'app-layout': return <PhoneBarPanel/>;
+    case 'wake-words': return <WakeWordsPanel/>;
+    case 'voices': return <VoicesPanel/>;
+    case 'greetings': return <GreetingsPanel/>;
+    case 'models': return <ModelsPanel/>;
+    case 'internet': return <InternetPanel/>;
+    case 'voice-history': return <CapturesPanel/>;
+    case 'about': return <AboutPanel/>;
+    case 'advanced': return <ConfigPanel setupAsked={mark === 'setup'} mark={mark} startFolded/>;
+    default: {
+      const reg = settingsExtraSections()[id];
+      const Panel = reg && (reg.Panel || reg);
+      return typeof Panel === 'function' ? <Panel marks={marks}/> : null;
+    }
+  }
+};
+
+/* The groups and sections this page shows: an optional section only once
+ * its panel is registered, a group only with a section in it. */
+const settingsLayout = () => {
+  const extras = settingsExtraSections();
+  const sections = SETTINGS_SECTIONS.filter((s) => !s.optional || extras[s.id]);
+  const groups = SETTINGS_GROUPS
+    .map((g) => ({ ...g, sections: g.sections.map((id) => sections.find((s) => s.id === id)).filter(Boolean) }))
+    .filter((g) => g.sections.length);
+  return { sections, groups };
+};
+
+/* ---- search ---- */
+
+const settingsWords = (text) => String(text || '').toLowerCase()
+  .replace(/[’']/g, '').split(/[^a-z0-9-]+/).filter(Boolean);
+
+/* What the search can find: every section (its name, group, old names
+ * and words), the cards in SETTINGS_SEARCH_ITEMS, and each of Advanced's
+ * settings once that list has been read. */
+const settingsSearchIndex = (groups, fields) => {
+  const out = [];
+  groups.forEach((g) => g.sections.forEach((s) => {
+    out.push({ key: s.id, label: s.label, where: g.label, route: `settings/${s.id}`,
+               words: `${s.words || ''} ${(s.aliases || []).join(' ')} ${g.label}` });
+  }));
+  const shown = new Map();
+  groups.forEach((g) => g.sections.forEach((s) => shown.set(s.id, `${g.label} › ${s.label}`)));
+  SETTINGS_SEARCH_ITEMS.forEach((it) => {
+    if (!shown.has(it.section)) return;
+    out.push({ key: `${it.section}/${it.mark}`, label: it.label, where: shown.get(it.section),
+               route: `settings/${it.section}/${it.mark}`, words: it.words });
+  });
+  if (shown.has('advanced')) {
+    (fields || []).forEach((f) => {
+      if (!f || !f.name || !f.label || f.group === 'Internet') return;
+      out.push({ key: `advanced/${f.name}`, label: f.label, where: shown.get('advanced'),
+                 route: `settings/advanced/${f.name}`, words: `${f.name.replace(/_/g, ' ')} ${f.group || ''}` });
+    });
+  }
+  return out;
+};
+
+/* The best matches for `query`: every word typed must start a word of
+ * the entry; its own name beats its group and its keywords. */
+const settingsSearch = (index, query, limit = 8) => {
+  const q = settingsWords(query);
+  if (!q.length) return [];
+  const phrase = q.join(' ');
+  const scored = [];
+  index.forEach((e, i) => {
+    const label = settingsWords(e.label);
+    const all = label.concat(settingsWords(e.where), settingsWords(e.words));
+    if (!q.every((w) => all.some((x) => x.startsWith(w)))) return;
+    const name = label.join(' ');
+    let score = 1;
+    if (name === phrase) score = 5;
+    else if (name.startsWith(phrase)) score = 4;
+    else if (q.every((w) => label.some((x) => x.startsWith(w)))) score = 3;
+    scored.push({ e, score, i });
+  });
+  return scored.sort((a, b) => (b.score - a.score) || (a.i - b.i)).slice(0, limit).map((x) => x.e);
+};
+
+const SettingsSearch = ({ groups }) => {
+  const [q, setQ] = React.useState('');
+  const [at, setAt] = React.useState(0);
+  // Advanced's settings join the index the first time someone searches
+  // (quiet: a browser that may not read them simply finds fewer).
+  const [fields, setFields] = React.useState(null);
+  const asked = React.useRef(false);
+  const askFields = () => {
+    if (asked.current) return;
+    asked.current = true;
+    apiGet('/api/config/editable', { quiet: true })
+      .then((r) => setFields((r && r.fields) || []))
+      .catch(() => setFields([]));
+  };
+  const index = React.useMemo(() => settingsSearchIndex(groups, fields), [groups, fields]);
+  const hits = settingsSearch(index, q);
+  const go = (hit) => {
+    if (!hit) return;
+    setQ(''); setAt(0);
+    try { window.location.hash = hit.route; } catch { /* no location */ }
+  };
+  const onKey = (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setAt((n) => Math.min(n + 1, Math.max(hits.length - 1, 0))); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setAt((n) => Math.max(n - 1, 0)); }
+    else if (e.key === 'Enter') { e.preventDefault(); go(hits[Math.min(at, hits.length - 1)]); }
+    else if (e.key === 'Escape') { setQ(''); setAt(0); }
+  };
+  return (
+    <div className="settings-search" role="search">
+      <Icon name="search" size={15} className="settings-search-icon"/>
+      <input type="search" className="settings-search-input" value={q}
+             placeholder="search settings · wake, voice history…"
+             aria-label="search settings" autoComplete="off"
+             onFocus={askFields}
+             onChange={(e) => { setQ(e.target.value); setAt(0); askFields(); }}
+             onKeyDown={onKey}/>
+      {q.trim() !== '' && (
+        <div className="settings-search-results" role="listbox">
+          {hits.length === 0 && <div className="settings-search-none">nothing matches “{q.trim()}”</div>}
+          {hits.map((h, i) => (
+            <a key={h.key} href={`#${h.route}`} role="option" aria-selected={i === at}
+               className={`settings-search-hit${i === at ? ' on' : ''}`}
+               onClick={(e) => { e.preventDefault(); go(h); }}>
+              <span className="settings-search-label">{h.label}</span>
+              <span className="settings-search-where">{h.where}</span>
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ---- the page ---- */
+
+// A phone width (the shell's 760px), or null where nobody can tell.
+const useSettingsPhone = () => {
+  const mq = React.useMemo(() => {
+    try { return window.matchMedia ? window.matchMedia('(max-width: 760px)') : null; } catch { return null; }
+  }, []);
+  const [phone, setPhone] = React.useState(() => (mq ? !!mq.matches : null));
+  React.useEffect(() => {
+    if (!mq) return undefined;
+    const on = () => setPhone(!!mq.matches);
+    try { mq.addEventListener('change', on); } catch { return undefined; }
+    return () => { try { mq.removeEventListener('change', on); } catch { /* gone */ } };
+  }, [mq]);
+  return phone;
 };
 
 const SettingsPage = () => {
-  // The tab is the address's (#settings/<tab>): clicking one writes it, a
-  // link to one (the Configuration tab's "Settings → Internet", a "needs
-  // internet" note, Home's rows) opens it, also while this page is on
-  // screen, and Back goes to the tab before.
-  const [tab, setTab, marks] = useRouteTab('settings', SETTINGS_TABS, SETTINGS_DEFAULT_TAB);
+  const phone = useSettingsPhone();
+  const { sections, groups } = settingsLayout();
+  // Groups have addresses too (a phone's list of its sections).
+  const routes = React.useMemo(() => [...sections, ...groups.map((g) => ({ id: g.id }))], [sections, groups]);
+  // The section is the address's (#settings/<section>): a click writes it,
+  // a link to one (Home's rows, a "needs internet" note) opens it, also
+  // while this page is on screen, and Back goes to the one before.
+  const [at, setAt, marks] = useRouteTab('settings', routes, SETTINGS_INDEX);
+  const group = groups.find((g) => g.id === at) || null;
+  const level = at === SETTINGS_INDEX ? 'index' : group ? 'group' : 'section';
+  const section = sections.find((s) => s.id === at)
+    || (group && group.sections[0])
+    || sections.find((s) => s.id === SETTINGS_DESKTOP_DEFAULT) || sections[0];
+  const home = groups.find((g) => g.sections.includes(section)) || groups[0];
+  const openGroup = group || (level === 'section' ? home : null);
+
+  // A card a search result named (#settings/<section>/<mark>): on screen,
+  // once per arrival. Advanced and Health place their own.
+  const mark = level === 'section' ? (marks[0] || null) : null;
+  const markDone = React.useRef(null);
+  React.useEffect(() => {
+    const key = mark && `${section.id}/${mark}`;
+    if (!key) { markDone.current = null; return undefined; }
+    if (markDone.current === key || section.id === 'advanced' || section.id === 'health') return undefined;
+    let tries = 0;
+    let t = null;
+    const look = () => {
+      let el = null;
+      try { el = document.querySelector(`[data-settings-mark="${mark}"]`); } catch { el = null; }
+      if (el) {
+        markDone.current = key;
+        try { el.scrollIntoView({ block: 'start' }); } catch { /* still on the page */ }
+        try {
+          el.classList.add('settings-marked');
+          t = setTimeout(() => { try { el.classList.remove('settings-marked'); } catch { /* gone */ } }, 2400);
+        } catch { /* no classList */ }
+      } else if (tries++ < 20) t = setTimeout(look, 150);
+    };
+    look();
+    return () => { if (t) clearTimeout(t); };
+  }, [mark, section.id]);
+
+  const navLink = (id, cls, children) => (
+    <a href={`#settings/${id}`} className={cls}
+       onClick={(e) => { e.preventDefault(); setAt(id); }}>
+      {children}
+    </a>
+  );
 
   return (
-    <div className="page">
-      <PageHeader title="Settings" sub={SETTINGS_SUB[tab]}/>
-      <Tabs tabs={SETTINGS_TABS} value={tab} onChange={setTab}/>
-      {tab === 'about' && <AboutPanel/>}
-      {tab === 'greetings' && <GreetingsPanel/>}
-      {tab === 'voices' && <VoicesPanel/>}
-      {tab === 'wakewords' && <WakeWordsPanel/>}
-      {tab === 'recordings' && <CapturesPanel/>}
-      {tab === 'devices' && <DevicesPanel/>}
-      {tab === 'phonebar' && <PhoneBarPanel/>}
-      {tab === 'satellites' && <SatellitesPanel/>}
-      {tab === 'models' && <ModelsPanel/>}
-      {tab === 'internet' && <InternetPanel/>}
-      {tab === 'config' && <ConfigPanel setupAsked={marks[0] === 'setup'} mark={marks[0] || null}/>}
+    <div className="page settings-page" data-level={level}>
+      <PageHeader title="Settings" sub="Everything Domovoi does, in groups. Search to jump straight to a setting."/>
+      <SettingsSearch groups={groups}/>
+      <div className="settings-shell">
+        <nav className="settings-nav" aria-label="settings">
+          {level === 'group' && navLink(SETTINGS_INDEX, 'settings-back settings-phone-only',
+            <><Icon name="chevron-left" size={16}/>all settings</>)}
+          {groups.map((g) => (
+            <div key={g.id} className={`settings-nav-group${openGroup === g ? ' open' : ''}`} data-group={g.id}>
+              {navLink(g.id, 'settings-nav-group-head', (
+                <>
+                  <Icon name={g.icon} size={16}/>
+                  <span className="settings-nav-group-name">
+                    <span className="settings-nav-group-label">{g.label}</span>
+                    <span className="settings-nav-group-list">{g.sections.map((s) => s.label).join(' · ')}</span>
+                  </span>
+                  <span className="settings-nav-chev"><Icon name="chevron-right" size={16}/></span>
+                </>
+              ))}
+              <div className="settings-nav-items">
+                {g.sections.map((s) => (
+                  <React.Fragment key={s.id}>
+                    {navLink(s.id, `settings-nav-item${s === section ? ' on' : ''}`, (
+                      <>
+                        <span>{s.label}</span>
+                        <span className="settings-nav-chev"><Icon name="chevron-right" size={16}/></span>
+                      </>
+                    ))}
+                  </React.Fragment>
+                ))}
+              </div>
+            </div>
+          ))}
+        </nav>
+        <div className="settings-content" data-section={section.id}>
+          {navLink(home.id, 'settings-back settings-phone-only',
+            <><Icon name="chevron-left" size={16}/>{home.label}</>)}
+          <div className="settings-section-head">
+            <h2 className="settings-section-title">{section.label}</h2>
+            {section.sub && <div className="settings-section-sub">{section.sub}</div>}
+          </div>
+          {/* A phone's list of groups or sections hides the section (CSS):
+              it isn't even mounted, so it reads nothing. */}
+          {!(phone && level !== 'section') && settingsPanel(section.id, level === 'section' ? marks : [])}
+        </div>
+      </div>
     </div>
   );
 };
 
 window.SettingsPage = SettingsPage;
+Object.assign(window, { SETTINGS_GROUPS, SETTINGS_SECTIONS, settingsSearch, settingsSearchIndex, settingsLayout });

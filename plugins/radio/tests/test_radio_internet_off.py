@@ -320,12 +320,12 @@ def test_web_routes_refuse_under_never(web_client, monkeypatch) -> None:
 # ─── manifest ────────────────────────────────────────────────────────────
 
 
-def test_manifest_is_1_3_x_and_needs_sdk_1_4() -> None:
+def test_manifest_is_1_x_and_needs_sdk_1_4() -> None:
     import tomllib
 
     manifest = tomllib.loads((PLUGIN_DIR / "domovoi-plugin.toml").read_text(encoding="utf-8"))
     major, minor, _patch = (int(p) for p in manifest["plugin"]["version"].split("."))
-    assert (major, minor) == (1, 3)
+    assert major == 1 and minor >= 3  # 1.4.0 added the radio help (SDK 1.8 help file)
     assert manifest["plugin"]["domovoi_api"] == ">=1.4,<2.0"
 
 

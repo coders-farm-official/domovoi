@@ -207,7 +207,7 @@ class AppUpdateTest {
         val state = AppUpdate.decide(install(), offer(join = null)) as UpdateState.Available
         assertNull(state.link)
         assertNull(noticeFor(state, onOpen = {}, onDismiss = {})!!.onGet)
-        assertTrue(AppUpdate.noticeText(state)!!.contains("Settings → Devices"))
+        assertTrue(AppUpdate.noticeText(state)!!.contains("Settings → Phones & browsers"))
     }
 
     // ── the join page link ──────────────────────────────────────────────

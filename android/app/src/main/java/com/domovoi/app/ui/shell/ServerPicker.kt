@@ -134,7 +134,7 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
     }
 
     fun addManual() {
-        // One rule with Settings → Connection (net/ServerAddress.kt): default
+        // One rule with Settings → Phones & browsers (net/ServerAddress.kt): default
         // scheme and port, and a plain-http address outside the home network
         // is refused up front with the reason, rather than "couldn't reach"
         // after the policy refuses it.
@@ -327,7 +327,7 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
 /**
  * "Is this your Domovoi?" — the address first, because that is what a person
  * can check against the box, and the identity it advertises, which is what
- * the dashboard's Settings → About shows. Nothing has been saved at this
+ * the dashboard's Settings → About & updates shows. Nothing has been saved at this
  * point; cancelling leaves the app connected to whatever it was connected to.
  */
 @Composable
@@ -373,7 +373,7 @@ private fun TrustServerDialog(
                         )
                         if (server.fingerprint != null) {
                             append(
-                                " The identity above should match Settings → About on the dashboard; " +
+                                " The identity above should match Settings → About & updates on the dashboard; " +
                                     "trusting pins it, and the household token goes out only after the " +
                                     "server proves it holds that key.",
                             )

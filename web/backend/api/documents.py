@@ -74,7 +74,7 @@ rather than assumed:
   secret-shaped-name filter is the shared
   :func:`web.backend.api.files_security.is_sensitive_name`. Both are
   CALLED, not copied — a copy drifts, and the drift is what let a device
-  blocked in Settings → Devices keep writing here.
+  blocked in Settings → Phones & browsers keep writing here.
 """
 
 from __future__ import annotations

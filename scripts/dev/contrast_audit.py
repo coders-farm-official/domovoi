@@ -185,6 +185,14 @@ def audit_context(browser, args, theme: str, vp: str, out: Path, only) -> list[d
                         break
                     time.sleep(SETTLE)
                     results.append(audit_view(page, args, folder, f"{route}~{label}", theme, vp))
+            # Settings has no tab strip since its regroup (2026-10-21): each
+            # section has its own address, and a phone's lists of groups.
+            if route == "settings":
+                where = page.evaluate("() => window.settingsLayout ? [...window.settingsLayout().groups"
+                                      ".map((g) => g.id), ...window.settingsLayout().sections.map((s) => s.id)] : []")
+                for sec in where:
+                    go(page, f"settings/{sec}")
+                    results.append(audit_view(page, args, folder, f"settings~{sec}", theme, vp))
         for name, route, js in DIALOGS:
             if only and name not in only:
                 continue

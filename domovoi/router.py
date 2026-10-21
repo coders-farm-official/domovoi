@@ -10,9 +10,9 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from domovoi import registered_values
+from domovoi import ai_features, registered_values
 from domovoi.clients.mpd import MPDNotProvisioned
-from domovoi.clients.ollama import QAWithUncertainty, get_ollama_client
+from domovoi.clients.ollama import QAWithUncertainty, SearchSubject, get_ollama_client
 from domovoi.config import settings
 from domovoi.confirmations import (
     CORE_KIND_PREFIX,
@@ -84,17 +84,33 @@ _ONLINE_CHECK_OFFER = "Want me to check that online?"
 # room isn't silent through the load (~54 s on an all-CPU host).
 _COLD_START_TEXT = "Just a moment, I'm waking up my language model."
 
+# Said when the question-answering model isn't installed at all (never
+# downloaded — an install that said no to AI and was switched on later
+# without the download — or deleted in Settings). Not "waking up", which
+# would be untrue, and not the outage line: Ollama is fine, the model isn't
+# there, and the words say where to get it.
+_QA_MODEL_MISSING_TEXT = (
+    "My question-answering model isn't installed yet — an admin can add it "
+    "in Settings, Models. Timers, music and the clock still work."
+)
+
 
 async def _ready_for(client, ctx: Context, role: str):
     """The Ollama client to use for the ``role`` ("tool" or "qa") model on
-    this turn. When that model isn't loaded, this is a cold start, not an
-    outage: say so in the room (``ctx.speak_interim``, once per turn, if
+    this turn, or None when that model isn't installed at all.
+
+    When the model isn't loaded, this is a cold start, not an outage: say
+    so in the room (``ctx.speak_interim``, once per turn, if
     ``ollama_cold_start_notice``), and hand back the client's cold-start
     twin, whose read timeout covers a model load — the ordinary timeout
     could otherwise end a slow load in "my language model isn't
-    answering". Clients without the cold-start API (the stub, test fakes)
-    are returned as they are; so is every client when Ollama can't be
-    asked what's loaded, which is not a cold start."""
+    answering". Before saying so it asks whether the model is there at all
+    (``missing_models``, Ollama's ``/api/tags``): a model that was never
+    downloaded can't be woken, so nothing is said and None comes back — the
+    caller skips the call, or says that the model isn't installed. Clients
+    without the cold-start API (the stub, test fakes) are returned as they
+    are; so is every client when Ollama can't be asked what's loaded, which
+    is not a cold start."""
     check = getattr(client, "cold_models", None)
     if check is None:
         return client
@@ -105,6 +121,20 @@ async def _ready_for(client, ctx: Context, role: str):
         return client
     if not cold:
         return client
+    missing_check = getattr(client, "missing_models", None)
+    if missing_check is not None:
+        try:
+            missing = await missing_check(role)
+        except Exception as e:  # noqa: BLE001
+            log.debug("missing-model check failed: %s", e)
+            missing = None
+        if missing:
+            log.warning(
+                "room=%s: the %s model %s isn't installed in Ollama — not "
+                "waking it (Settings → Models installs it)",
+                ctx.room_id, role, ", ".join(missing),
+            )
+            return None
     log.info(
         "cold start in room=%s: %s not loaded in Ollama — loading it for this turn",
         ctx.room_id, ", ".join(cold),
@@ -208,6 +238,32 @@ def first_fast_path(
             if m:
                 return handler, fp, m
     return None
+
+
+# "Is there a way to set a timer for ten minutes" is a request worded as a
+# question: the command after the preamble is the turn when a fast path
+# takes it (and that fast path is not the help's). "How do I …" is NOT
+# stripped: that one is a question, and help_desk answers it from the
+# manual. Applied wherever the fast paths are chosen (route, plan_route,
+# goes_to_the_tool_model), so planning and routing always agree, and the
+# command then meets every gate the router applies to it.
+_REQUEST_PREAMBLE_RE = re.compile(
+    r"^is there (?:a|any) way (?:to|that i can|i can|you can)\s+(?:please\s+)?(?P<cmd>.+)$"
+)
+
+
+def strip_request_preamble(transcript: str, handlers: Iterable[Handler] | None = None) -> str:
+    """``transcript`` (normalized, filler-stripped) without a leading "is
+    there a way to" when what follows is a fast-path command (of
+    ``handlers``, the live registry by default); else as is."""
+    m = _REQUEST_PREAMBLE_RE.match(transcript)
+    if not m:
+        return transcript
+    cmd = strip_leading_filler(m.group("cmd"))
+    hit = first_fast_path(cmd, handlers)
+    if hit is None or hit[0].name in ("help", "help_desk"):
+        return transcript
+    return cmd
 
 
 def dispatchable_confirmation(
@@ -327,7 +383,7 @@ def plan_route(raw_transcript: str, *, pending: Any = None) -> RoutePlan | None:
                 path="confirmation", handler=target[0], transcript=transcript,
                 kind=target[1],
             )
-    transcript = strip_leading_filler(transcript)
+    transcript = strip_request_preamble(strip_leading_filler(transcript))
     hit = first_fast_path(transcript)
     if hit is None:
         return None
@@ -351,7 +407,7 @@ def goes_to_the_tool_model(raw_transcript: str) -> bool:
         return False
     if _parse_yes_no(transcript) is not None:
         return False
-    transcript = strip_leading_filler(transcript)
+    transcript = strip_request_preamble(strip_leading_filler(transcript))
     if first_fast_path(transcript) is not None:
         return False
     return not answers_without_tools(transcript)
@@ -739,7 +795,7 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # tool-call and QA fallback paths below intentionally use
     # `intent.transcript` (raw) so the LLM sees the user's natural
     # phrasing, not the stripped version.
-    transcript = strip_leading_filler(transcript)
+    transcript = strip_request_preamble(strip_leading_filler(transcript))
 
     # 1. Fast paths (with offline gate), over the band-sorted registry.
     #
@@ -799,6 +855,37 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
         # path had matched.
         log.info("fast path %s declined %r; routing on", handler.name, said(transcript))
 
+    # AI features off (Settings → Models, domovoi/ai_features.py): no
+    # language model is asked anything — not the tool router, not the
+    # volatile gate's subject extraction, not Q&A. Whatever no fast path
+    # took gets a fixed line, in the voice's own words, that says what
+    # this home is set up for. Not an outage line: nothing is broken.
+    if ai_features.turned_off():
+        category = categorize_question(transcript)
+        response = Response(
+            text=(
+                ai_features.OFF_LOOKUP_LINE
+                if category is not None and category in VOLATILE_CATEGORIES
+                else ai_features.OFF_LINE
+            ),
+            session_id=session_id,
+            matched_handler=None,
+            matched_path="qa",
+            online=ctx.online,
+            expect_followup=False,
+        )
+        await _persist_turn(
+            session=session,
+            session_id=session_id,
+            intent=intent,
+            ctx=ctx,
+            response=response,
+            matched_handler=None,
+            matched_path="qa",
+            latency_ms=_elapsed_ms(),
+        )
+        return response
+
     # 2. LLM tool-call fallback (the stub client returns None) — except for
     # a plain question about the world or a request for a joke or a story,
     # which no tool is for: those go straight to the Q&A model below. The
@@ -807,8 +894,12 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     tool_call = None
     if not answers_without_tools(transcript):
         tool_schemas = offered_tool_schemas(transcript)
-        ollama_client = await _ready_for(ollama_client, ctx, "tool")
-        tool_call = await ollama_client.route(intent.transcript, tool_schemas)
+        tool_client = await _ready_for(ollama_client, ctx, "tool")
+        # None: the router model isn't installed — the Q&A model below
+        # answers instead, with no "waking up" first.
+        if tool_client is not None:
+            ollama_client = tool_client
+            tool_call = await ollama_client.route(intent.transcript, tool_schemas)
     if tool_call is not None:
         handler = HANDLER_BY_NAME.get(tool_call.get("handler", ""))
         if handler is not None and not any(
@@ -916,10 +1007,15 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # auto-search short-circuit so an opted-in speaker still auto-searches.
     if category is not None and category in VOLATILE_CATEGORIES:
         if ctx.online:
-            ollama_client = await _ready_for(ollama_client, ctx, "qa")
-            subj = await ollama_client.extract_search_subject(
-                intent.transcript, history=history,
-            )
+            qa_client = await _ready_for(ollama_client, ctx, "qa")
+            if qa_client is None:
+                # No model to name the subject: the category's own phrase.
+                subj = SearchSubject(subject="", refined_query=intent.transcript)
+            else:
+                ollama_client = qa_client
+                subj = await ollama_client.extract_search_subject(
+                    intent.transcript, history=history,
+                )
             phrase = (subj.subject or "").strip() or _VOLATILE_SUBJECT_FALLBACK.get(
                 category, "that"
             )
@@ -1023,7 +1119,28 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # asked — the client's own flag or an answer that says in so many
     # words that it may be out of date. Suppressed offline because we
     # can't actually run the search.
-    ollama_client = await _ready_for(ollama_client, ctx, "qa")
+    qa_client = await _ready_for(ollama_client, ctx, "qa")
+    if qa_client is None:
+        response = Response(
+            text=_QA_MODEL_MISSING_TEXT,
+            session_id=session_id,
+            matched_handler=None,
+            matched_path="error",
+            online=ctx.online,
+            expect_followup=False,
+        )
+        await _persist_turn(
+            session=session,
+            session_id=session_id,
+            intent=intent,
+            ctx=ctx,
+            response=response,
+            matched_handler=None,
+            matched_path="error",
+            latency_ms=_elapsed_ms(),
+        )
+        return response
+    ollama_client = qa_client
     finish_qa = functools.partial(
         _finish_qa, session_id=session_id, intent=intent, ctx=ctx, category=category,
     )

@@ -68,12 +68,12 @@ def zip_readme(ap: dict | None, *, windows_host: bool) -> str:
         readme += [
             "3. Create domovoi/ap.json (below), then boot the device. It",
             "   raises its own Wi-Fi setup network: set it up from a phone,",
-            "   then approve it in the dashboard's Settings -> Satellites.",
+            "   then approve it in the dashboard's Settings -> Rooms.",
         ]
     else:
         readme += [
             "3. Boot the device, then plug it into the Domovoi server's USB",
-            "   port and adopt it from the dashboard's Settings -> Satellites.",
+            "   port and adopt it from the dashboard's Settings -> Rooms.",
         ]
     readme += [
         "",
@@ -139,7 +139,7 @@ def _windows_readme(ap: dict | None) -> str:
             "   Notepad doesn't call it ap.json.txt.",
             "7. Eject the card, put it in the Pi and switch it on. It raises its",
             "   own Wi-Fi setup network: set it up from a phone, then approve it",
-            "   in the dashboard's Settings -> Satellites.",
+            "   in the dashboard's Settings -> Rooms.",
             "",
             "Without ap.json the satellite never raises its setup network.",
         ]
@@ -147,7 +147,7 @@ def _windows_readme(ap: dict | None) -> str:
         readme += [
             "6. Eject the card, put it in the Pi and switch it on,",
             "   then plug it into the Domovoi server's USB port and adopt it",
-            "   from the dashboard's Settings -> Satellites.",
+            "   from the dashboard's Settings -> Rooms.",
         ]
     readme += [
         "",

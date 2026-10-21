@@ -24,13 +24,16 @@ HARNESSES = {
     "apply-update": TESTS_DIR / "test-apply-update.sh",
     "provision": TESTS_DIR / "test-provision.sh",
     "install-update-unit": TESTS_DIR / "test-install-update-unit.sh",
+    "printing": TESTS_DIR / "test-printing.sh",
 }
 RUNNER = REPO_ROOT / "scripts" / "dev" / "run-linux-harness.sh"
 DOCKERFILE = REPO_ROOT / "scripts" / "dev" / "linux-harness.Dockerfile"
+# The printing harness's image: the same base and snapshot plus ippeveprinter.
+PRINTING_DOCKERFILE = REPO_ROOT / "scripts" / "dev" / "printing-harness.Dockerfile"
 
 
 def test_files_are_lf_only():
-    for path in (CASE_FILTER, RUNNER, DOCKERFILE):
+    for path in (CASE_FILTER, RUNNER, DOCKERFILE, PRINTING_DOCKERFILE, HARNESSES["printing"]):
         assert b"\r" not in path.read_bytes(), f"{path.name} has CR line endings"
 
 
@@ -176,9 +179,10 @@ def test_runner_help():
         assert word in proc.stdout
 
 
-def test_the_image_is_pinned():
+@pytest.mark.parametrize("dockerfile", [DOCKERFILE, PRINTING_DOCKERFILE], ids=["base", "printing"])
+def test_the_image_is_pinned(dockerfile):
     """Base by digest, packages from a fixed snapshot, each at a version."""
-    text = DOCKERFILE.read_text(encoding="utf-8")
+    text = dockerfile.read_text(encoding="utf-8")
     base = re.search(r"^ARG BASE=(\S+)$", text, re.M)
     assert base and re.fullmatch(r"ubuntu:26\.04@sha256:[0-9a-f]{64}", base.group(1))
     assert re.search(r"^ARG SNAPSHOT=\d{8}T\d{6}Z$", text, re.M)

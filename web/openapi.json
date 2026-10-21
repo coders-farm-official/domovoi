@@ -2992,7 +2992,7 @@
           "devices"
         ],
         "summary": "Android App For Household Phones",
-        "description": "Settings \u2192 Devices \u2192 \"get the Domovoi app\": the server's join page\nwithout a room code (``join_url``, ``<core>/join``, for the card's QR\ncode and link) and what that page will offer, from the core's public\n``GET /v1/android-app`` (``release`` null before the first release;\n``ready`` once the server holds a checked copy of every APK).\n\nOpen, like the page it points at: a phone that has not joined the\nhousehold yet opens it. ``join_url`` is null with ``join_problem``\nwhen this server's address is not one a phone on the home network can\nreach (a box that found no LAN address).",
+        "description": "Settings \u2192 Phones & browsers \u2192 \"get the Domovoi app\": the server's join page\nwithout a room code (``join_url``, ``<core>/join``, for the card's QR\ncode and link) and what that page will offer, from the core's public\n``GET /v1/android-app`` (``release`` null before the first release;\n``ready`` once the server holds a checked copy of every APK).\n\nOpen, like the page it points at: a phone that has not joined the\nhousehold yet opens it. ``join_url`` is null with ``join_problem``\nwhen this server's address is not one a phone on the home network can\nreach (a box that found no LAN address).",
         "operationId": "android_app_for_household_phones_api_devices_android_app_get",
         "responses": {
           "200": {
@@ -4379,6 +4379,26 @@
         }
       }
     },
+    "/api/containers/mpd-image/rebuild": {
+      "post": {
+        "tags": [
+          "containers"
+        ],
+        "summary": "Containers Mpd Rebuild",
+        "description": "Rebuild the music player image now (admin): the core builds it the\nway it does when it is missing, makes it the image the guard expects,\nand moves every room's player onto it. The security tier at both hops:\nit decides which image the guard trusts.",
+        "operationId": "containers_mpd_rebuild_api_containers_mpd_image_rebuild_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/containers/incidents/{incident_id}/acknowledge": {
       "post": {
         "tags": [
@@ -4728,6 +4748,46 @@
         "summary": "Windows Runtime Fetch",
         "description": "Start fetching the Windows satellite's runtime onto the core.",
         "operationId": "windows_runtime_fetch_api_satellites_windows_runtime_fetch_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/windows-setup": {
+      "get": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Windows Setup Status",
+        "description": "Whether the core holds ``DomovoiSatelliteSetup.exe`` (``ready``,\n``size``, ``release``, ``internet_off``, ``fetch``).",
+        "operationId": "windows_setup_status_api_satellites_windows_setup_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/windows-setup/fetch": {
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Windows Setup Fetch",
+        "description": "Start fetching the Windows satellite Setup onto the core.",
+        "operationId": "windows_setup_fetch_api_satellites_windows_setup_fetch_post",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -6729,7 +6789,7 @@
           "config"
         ],
         "summary": "Acoustid Key Test",
-        "description": "Settings \u2192 Configuration's \"test the key\": one AcoustID lookup with\nthe typed key, else the saved one. Proxy of the core's\n``POST /v1/admin/config/acoustid-test`` \u2192\n``{result: works|refused|unreachable|unavailable, detail,\nfingerprints}``; 409 when the internet answer is No (nothing sent),\n422 with no key to test. The key is never echoed or logged.",
+        "description": "Settings \u2192 Advanced's \"test the key\": one AcoustID lookup with\nthe typed key, else the saved one. Proxy of the core's\n``POST /v1/admin/config/acoustid-test`` \u2192\n``{result: works|refused|unreachable|unavailable, detail,\nfingerprints}``; 409 when the internet answer is No (nothing sent),\n422 with no key to test. The key is never echoed or logged.",
         "operationId": "acoustid_key_test_api_config_acoustid_test_post",
         "requestBody": {
           "content": {
@@ -6869,7 +6929,7 @@
           "config"
         ],
         "summary": "Restart Version",
-        "description": "Bounce the Domovoi services so pulled code actually loads, or just\nrestart them (Settings \u2192 Version's \"Restart Domovoi\"); where\ndomovoi-update.service is installed, start it instead: sync, migrate,\nrestart, roll back on failure, and with nothing new to apply only the\nrestart and its health check.\n\nAdmin-gated at both hops. The response comes back before the restart\nfires, so a client that then sees the connection drop should treat that\nas the restart succeeding, not as an error. Hosts without the sudoers\ngrant return ``ok: false`` with the reason instead, and so does a press\nwhile a restart or update is already under way (``in_progress: true``):\nthe client follows that one rather than reporting a failure.",
+        "description": "Bounce the Domovoi services so pulled code actually loads, or just\nrestart them (Settings \u2192 About & updates's \"Restart Domovoi\"); where\ndomovoi-update.service is installed, start it instead: sync, migrate,\nrestart, roll back on failure, and with nothing new to apply only the\nrestart and its health check.\n\nAdmin-gated at both hops. The response comes back before the restart\nfires, so a client that then sees the connection drop should treat that\nas the restart succeeding, not as an error. Hosts without the sudoers\ngrant return ``ok: false`` with the reason instead, and so does a press\nwhile a restart or update is already under way (``in_progress: true``):\nthe client follows that one rather than reporting a failure.",
         "operationId": "restart_version_api_config_version_restart_post",
         "responses": {
           "200": {
@@ -6947,7 +7007,7 @@
           "config"
         ],
         "summary": "Switch Version Channel",
-        "description": "Settings \u2192 Version's channel: follow ``stable`` (releases only) or\n``main`` (every change) from now on. HEAD never moves; the check and\nthe pull then compare with, and move to, that branch. Proxy of the\ncore's ``POST /v1/admin/version/channel`` \u2192\n``{ok, changed, channel, error}``.",
+        "description": "Settings \u2192 About & updates's channel: follow ``stable`` (releases only) or\n``main`` (every change) from now on. HEAD never moves; the check and\nthe pull then compare with, and move to, that branch. Proxy of the\ncore's ``POST /v1/admin/version/channel`` \u2192\n``{ok, changed, channel, error}``.",
         "operationId": "switch_version_channel_api_config_version_channel_post",
         "requestBody": {
           "content": {
@@ -10318,6 +10378,908 @@
         }
       }
     },
+    "/api/printers": {
+      "get": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "List Printers",
+        "operationId": "list_printers_api_printers_get",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Refresh"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Add Printer",
+        "operationId": "add_printer_api_printers_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/printers/discover": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Discover",
+        "operationId": "discover_api_printers_discover_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscoverBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/printers/{printer_id}": {
+      "patch": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Patch Printer",
+        "operationId": "patch_printer_api_printers__printer_id__patch",
+        "parameters": [
+          {
+            "name": "printer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Printer Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Remove Printer",
+        "operationId": "remove_printer_api_printers__printer_id__delete",
+        "parameters": [
+          {
+            "name": "printer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Printer Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/printers/{printer_id}/rename": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Rename Printer",
+        "operationId": "rename_printer_api_printers__printer_id__rename_post",
+        "parameters": [
+          {
+            "name": "printer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Printer Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/printers/{printer_id}/trust-certificate": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Trust Certificate",
+        "operationId": "trust_certificate_api_printers__printer_id__trust_certificate_post",
+        "parameters": [
+          {
+            "name": "printer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Printer Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/printers/{printer_id}/refresh": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Refresh Printer",
+        "operationId": "refresh_printer_api_printers__printer_id__refresh_post",
+        "parameters": [
+          {
+            "name": "printer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Printer Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/printers/{printer_id}/identify": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Identify Printer",
+        "operationId": "identify_printer_api_printers__printer_id__identify_post",
+        "parameters": [
+          {
+            "name": "printer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Printer Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/printers/{printer_id}/test-page": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Test Page",
+        "operationId": "test_page_api_printers__printer_id__test_page_post",
+        "parameters": [
+          {
+            "name": "printer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Printer Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/print/preview": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Print Preview",
+        "operationId": "print_preview_api_print_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrintBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/print/jobs": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Print Submit",
+        "operationId": "print_submit_api_print_jobs_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrintBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "List Jobs",
+        "operationId": "list_jobs_api_print_jobs_get",
+        "parameters": [
+          {
+            "name": "printer_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Printer Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Clear Jobs",
+        "operationId": "clear_jobs_api_print_jobs_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/print/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Get Job",
+        "operationId": "get_job_api_print_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/print/jobs/{job_id}/cancel": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Cancel Job",
+        "operationId": "cancel_job_api_print_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/print/limits": {
+      "get": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Get Limits",
+        "operationId": "get_limits_api_print_limits_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Put Limits",
+        "operationId": "put_limits_api_print_limits_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LimitsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scan/jobs": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Start",
+        "operationId": "scan_start_api_scan_jobs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scan/jobs/{scan_id}": {
+      "get": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Get",
+        "operationId": "scan_get_api_scan_jobs__scan_id__get",
+        "parameters": [
+          {
+            "name": "scan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scan Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scan/jobs/{scan_id}/next": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Next",
+        "operationId": "scan_next_api_scan_jobs__scan_id__next_post",
+        "parameters": [
+          {
+            "name": "scan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scan Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scan/jobs/{scan_id}/finish": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Finish",
+        "operationId": "scan_finish_api_scan_jobs__scan_id__finish_post",
+        "parameters": [
+          {
+            "name": "scan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scan Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scan/jobs/{scan_id}/cancel": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Cancel",
+        "operationId": "scan_cancel_api_scan_jobs__scan_id__cancel_post",
+        "parameters": [
+          {
+            "name": "scan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scan Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/podcasts/subscriptions": {
       "get": {
         "tags": [
@@ -12337,10 +13299,37 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "boolean",
-              "default": false,
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "true: the archived threads; false: the others. Without a search the default is false; a search (`q`) looks in both unless this says which.",
               "title": "Archived"
-            }
+            },
+            "description": "true: the archived threads; false: the others. Without a search the default is false; a search (`q`) looks in both unless this says which."
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Search: threads whose title or any message contains this (case ignored), newest first, at most 100, each with `match_snippet` (the words around the first match in a message).",
+              "title": "Q"
+            },
+            "description": "Search: threads whose title or any message contains this (case ignored), newest first, at most 100, each with `match_snippet` (the words around the first match in a message)."
           }
         ],
         "responses": {
@@ -12416,6 +13405,7 @@
           "chat"
         ],
         "summary": "Patch Thread",
+        "description": "Rename and/or archive a thread. A title set here is the person's\n(``title_by_user``): the model's title job never writes over it. A\nblank title is refused (400).",
         "operationId": "patch_thread_api_chat_threads__thread_id__patch",
         "parameters": [
           {
@@ -12555,7 +13545,7 @@
           "chat"
         ],
         "summary": "Send Message",
-        "description": "Persist the user turn, stream the assistant reply as SSE, persist the\nassistant turn at stream end. Events:\n\n  ``event: delta``  data: {\"text\": \"...\"}\n  ``event: done``   data: {<the persisted assistant message row>}\n  ``event: error``  data: {\"detail\": \"...\", \"code\": \"...\", \"model\": \"...\"}\n                    (also persisted on the row: ``error``, ``stats.error_code``)\n\nA message with pictures whose vision model isn't installed \u2014 or none\nis set \u2014 gets its answer up front: the user turn is kept, the reply is\nthe refusal (``vision_model_missing``) and Ollama is never asked. When\nOllama can't be asked whether the model is there, the send goes ahead\nand a failure is reported as it happens.",
+        "description": "Persist the user turn, stream the assistant reply as SSE, persist the\nassistant turn at stream end. Events:\n\n  ``event: delta``  data: {\"text\": \"...\"}\n  ``event: done``   data: {<the persisted assistant message row>}\n  ``event: error``  data: {\"detail\": \"...\", \"code\": \"...\", \"model\": \"...\"}\n                    (also persisted on the row: ``error``, ``stats.error_code``)\n\nA message with pictures whose vision model isn't installed \u2014 or none\nis set \u2014 gets its answer up front: the user turn is kept, the reply is\nthe refusal (``vision_model_missing``) and Ollama is never asked. When\nOllama can't be asked whether the model is there, the send goes ahead\nand a failure is reported as it happens.\n\nThe thread's first message titles it with its first five words\n(``domovoi/chat_titles.py``); once a reply has finished, the chat model\nwrites a better title in the background (:func:`_write_title`), unless\na person has named the thread. A title being written when the next\nmessage arrives is stopped, and written after that reply instead.\n\nHelp (``web/backend/api/help.py``, part 9): in a thread titled \"Help: \u2026\",\nor for a question about Domovoi whose answer its help holds, the model\nis given the help desk's instruction and the passages found instead of\nthe chat persona, and the reply ends with the sections it came from\n(written here, not by the model; ``stats.help``). A help thread whose\nquestion the help doesn't cover is answered \"The manual doesn't cover\nthat.\" with no model asked. A screenshot in a help turn is read by the\nvision model first (which page, what error), and that reading is\nsearched too.",
         "operationId": "send_message_api_chat_threads__thread_id__messages_post",
         "parameters": [
           {
@@ -12586,6 +13576,50 @@
                 "schema": {}
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/threads/{thread_id}/retry": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Retry Reply",
+        "description": "\"Try again\": a new reply to the thread's last question, in place of\nthe reply it got. Streams as ``POST .../messages`` does; the old row is\ndeleted and the new one written in one transaction once the new reply\nis complete (the ``done`` event says which with ``replaces``: the old\nrow's id). A retry that fails writes nothing: the thread stays as it\nwas, the stream ends with the ``error`` event and a ``done`` carrying\nthe reply that was kept (``kept: true``), and it can be tried again.\n\nOnly the chat model's reply to a typed message can be tried again\n(:func:`reply_retryable`): 409 ``not_retryable`` for a spoken turn's\nreply (the core may have set a timer with it) or another writer's, 409\n``nothing_to_retry`` when the thread doesn't end with a reply to a\nquestion, 409 ``already_retried`` when another try again is replacing\nit. The model doesn't see the reply being replaced.",
+        "operationId": "retry_reply_api_chat_threads__thread_id__retry_post",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "409": {
+            "description": "{\"detail\": \"...\", \"code\": \"...\"}: `nothing_to_retry` (the thread doesn't end with a reply to a question), `not_retryable` (a spoken turn's or another writer's reply, not the chat model's), `already_retried` (another try again on this reply is running, or has replaced it)"
           },
           "422": {
             "description": "Validation Error",
@@ -13326,6 +14360,237 @@
         }
       }
     },
+    "/api/help/search": {
+      "get": {
+        "tags": [
+          "help"
+        ],
+        "summary": "Search",
+        "description": "The help's passages for ``q``. OPEN (the manual is): nothing here is\nlive state. ``covered`` is false when nothing answers the question.",
+        "operationId": "search_api_help_search_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 500,
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 10,
+              "minimum": 1,
+              "default": 5,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Search Api Help Search Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/help/facts": {
+      "get": {
+        "tags": [
+          "help"
+        ],
+        "summary": "Facts",
+        "operationId": "facts_api_help_facts_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Facts Api Help Facts Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/help/checks": {
+      "get": {
+        "tags": [
+          "help"
+        ],
+        "summary": "Checks",
+        "operationId": "checks_api_help_checks_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Checks Api Help Checks Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/help/report": {
+      "post": {
+        "tags": [
+          "help"
+        ],
+        "summary": "Report",
+        "description": "The \"Report a problem\" summary, for the person to read, then copy or\nsave. Built on request, returned, never stored or sent.",
+        "operationId": "report_api_help_report_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Report Api Help Report Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/help/deliveries": {
+      "get": {
+        "tags": [
+          "help"
+        ],
+        "summary": "Deliveries",
+        "description": "Help steps sent by voice (V035): newest first, or after ``since_id``\noldest first. The app reads its owner's on start and after a\n``help_deliveries.changed`` event.",
+        "operationId": "deliveries_api_help_deliveries_get",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Person Id"
+            }
+          },
+          {
+            "name": "since_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Deliveries Api Help Deliveries Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/models/catalog": {
       "get": {
         "tags": [
@@ -13592,6 +14857,68 @@
                   "additionalProperties": true,
                   "title": "Response Cancel Pull Api Models Pull  Job Id  Cancel Post"
                 }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/models/ai": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Get Ai Features",
+        "description": "The AI switch for the Models page and the shell. Open (the answer is\nin ``/api/capabilities`` too). ``models``: the qa / tool / vision role\nmodels with ``installed`` (None when Ollama or the config couldn't be\nasked) and ``download_gb`` (None for a model whose size the repo\ndoesn't record); ``missing_gb``: what turning AI on would download,\nNone when part of it is unknown.",
+        "operationId": "get_ai_features_api_models_ai_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Ai Features Api Models Ai Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Set Ai Features",
+        "description": "Turn the household's AI features on or off (admin). Writes\n``ai_features`` through the core's config path (validate, persist to\n.env, apply live). With ``enabled`` and ``install``, then starts a pull\nfor each role model Ollama doesn't have, exactly as Install does \u2014 the\nprogress is the page's \"Installs in progress\" card. A pull that can't\nstart (the internet answered never, Ollama down) is listed in\n``pull_errors``; the switch stays as saved.",
+        "operationId": "set_ai_features_api_models_ai_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiFeaturesBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -14319,6 +15646,60 @@
         "type": "object",
         "title": "AcoustidTestRequest"
       },
+      "AddBody": {
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "address": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "room_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Id"
+          }
+        },
+        "type": "object",
+        "title": "AddBody"
+      },
       "AddByQueryRequest": {
         "properties": {
           "room_id": {
@@ -14498,6 +15879,24 @@
         ],
         "title": "AdoptRequest",
         "description": "Adopt a pending satellite: name it, hand it Wi-Fi, pick its mic\nprofile. The PSK transits to the device on the gadget volume exactly\nonce and is never logged (docs/SECURITY_PRIVACY.md)."
+      },
+      "AiFeaturesBody": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "install": {
+            "type": "boolean",
+            "title": "Install",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "AiFeaturesBody"
       },
       "AliasFetchStatus": {
         "properties": {
@@ -15875,6 +17274,18 @@
               }
             ],
             "title": "User Agent"
+          },
+          "owner_person_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Person Id"
           }
         },
         "type": "object",
@@ -15923,6 +17334,17 @@
           "token"
         ],
         "title": "DeviceTokenRequest"
+      },
+      "DiscoverBody": {
+        "properties": {
+          "look_again": {
+            "type": "boolean",
+            "title": "Look Again",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "DiscoverBody"
       },
       "DisplayRequest": {
         "properties": {
@@ -17108,6 +18530,101 @@
         ],
         "title": "LibraryUploadResult"
       },
+      "LimitsBody": {
+        "properties": {
+          "max_pages_per_job": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Pages Per Job"
+          },
+          "max_copies": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 999.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Copies"
+          },
+          "max_sheets_per_job": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 5000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Sheets Per Job"
+          },
+          "max_jobs_per_hour_per_device": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Jobs Per Hour Per Device"
+          },
+          "max_sheets_per_day": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 20000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Sheets Per Day"
+          },
+          "max_scan_pages": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 500.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Scan Pages"
+          },
+          "history_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "History Days"
+          }
+        },
+        "type": "object",
+        "title": "LimitsBody"
+      },
       "LoginRequest": {
         "properties": {
           "password": {
@@ -18230,6 +19747,60 @@
         ],
         "title": "PasswordChangeRequest"
       },
+      "PatchBody": {
+        "properties": {
+          "is_default": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Default"
+          },
+          "rooms": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rooms"
+          },
+          "two_sided_default": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Two Sided Default"
+          },
+          "color_default": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color Default"
+          }
+        },
+        "type": "object",
+        "title": "PatchBody"
+      },
       "PendingSatellite": {
         "properties": {
           "pending_id": {
@@ -18867,6 +20438,43 @@
         ],
         "title": "PreviewBody"
       },
+      "PrintBody": {
+        "properties": {
+          "library_id": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Library Id"
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Path"
+          },
+          "printer_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Printer Id"
+          },
+          "options": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Options"
+          }
+        },
+        "type": "object",
+        "required": [
+          "library_id",
+          "path"
+        ],
+        "title": "PrintBody"
+      },
       "PronunciationBody": {
         "properties": {
           "word": {
@@ -19347,6 +20955,38 @@
         ],
         "title": "RecentlyPlayed",
         "description": "One row of a room's play history (media_plays). ``source`` is an\nopen enum \u2014 library, playlist, plus whatever provider plugins\nrecord. ``in_library`` is true when an external play already has a\nmatching library_tracks row (by ``source``/``source_id``); the\ndrawer offers \"+ add\" only when ``can_add`` (an external play with\nenough metadata to queue a generic acquisition, and not already in\nthe library)."
+      },
+      "RenameBody": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "RenameBody"
+      },
+      "ReportBody": {
+        "properties": {
+          "what_happened": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "What Happened",
+            "default": ""
+          },
+          "include_room_names": {
+            "type": "boolean",
+            "title": "Include Room Names",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "ReportBody"
       },
       "RoomBody": {
         "properties": {
@@ -20083,6 +21723,42 @@
         "title": "SatelliteUpgrade",
         "description": "A code upgrade the Domovoi server asked this satellite for, from the\nrequest until a while after it ended (domovoi/satellite_upgrades.py).\n``state``: ``running`` (asked, not back yet: the Upgrade button stays\nlocked), ``done`` (back on ``expected_sha``), ``rolled_back`` (back on\nanother version, ``back_sha``: the new code did not stay up) or\n``no_news`` (never came back with an answer by ``deadline_at``; a sync\nthat fails before the restart leaves the satellite on its old code\nwithout a word, and its log says why). Kept a plain str so a new state\nnever breaks deserialization."
       },
+      "ScanBody": {
+        "properties": {
+          "printer_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Printer Id"
+          },
+          "source": {
+            "type": "string",
+            "maxLength": 20,
+            "title": "Source",
+            "default": "auto"
+          },
+          "color": {
+            "type": "string",
+            "maxLength": 10,
+            "title": "Color",
+            "default": "color"
+          },
+          "resolution": {
+            "type": "integer",
+            "maximum": 1200.0,
+            "minimum": 75.0,
+            "title": "Resolution",
+            "default": 300
+          }
+        },
+        "type": "object",
+        "title": "ScanBody"
+      },
       "SendBody": {
         "properties": {
           "content": {
@@ -20356,7 +22032,7 @@
           "room"
         ],
         "title": "SpareDeviceEnrolRequest",
-        "description": "Settings \u2192 Satellites \u2192 Add a spare device: the room the laptop or\nphone will be, and optionally the core address it should dial when the\none this server finds for itself is not the one the LAN reaches (a\nsecond network card). The answer is the enrolment payload, the Linux\ninstall command and what the QR code carries."
+        "description": "Settings \u2192 Rooms \u2192 Add a spare device: the room the laptop or\nphone will be, and optionally the core address it should dial when the\none this server finds for itself is not the one the LAN reaches (a\nsecond network card). The answer is the enrolment payload, the Linux\ninstall command and what the QR code carries."
       },
       "SubscribeRequest": {
         "properties": {

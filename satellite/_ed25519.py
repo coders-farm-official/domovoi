@@ -144,16 +144,48 @@ def sign(seed: bytes, message: bytes) -> bytes:
     return encoded_r + int.to_bytes(s, 32, "little")
 
 
+_IDENTITY_ENCODED = bytes([1]) + bytes(31)
+
+
+def _small_order(point: tuple[int, int, int, int]) -> bool:
+    """Whether eight times ``point`` is the identity: the identity itself
+    and the other points of order 2, 4 or 8."""
+    for _ in range(3):
+        point = _add(point, point)
+    return _encode_point(point) == _IDENTITY_ENCODED
+
+
+def small_order_part(public: bytes, signature: bytes) -> bool:
+    """Whether the key, or the signature's R, is a point of small order.
+    With such a key a signature can hold for any message (the identity key
+    with R the identity and S = 0 verifies everything), so a verifier
+    refuses it whatever does the arithmetic: :func:`verify` here, and the
+    identity layers before they hand off to ``cryptography`` (review of
+    wf/win-sat-installer, round 2; the Windows satellite Setup's verifier
+    refuses the same, and domovoi/tests/fixtures/
+    ed25519-setup-vectors.json holds both to it)."""
+    if len(public) != KEY_SIZE or len(signature) != SIGNATURE_SIZE:
+        return False
+    for encoded in (public, signature[:32]):
+        point = _decode_point(encoded)
+        if point is not None and _small_order(point):
+            return True
+    return False
+
+
 def verify(public: bytes, message: bytes, signature: bytes) -> bool:
     """Whether ``signature`` is this key's signature over ``message``.
 
-    Never raises: a malformed key, a malformed signature and a wrong
-    signature are all the same answer to the caller — no."""
+    Never raises: a malformed key, a malformed signature, a key or R of
+    small order (:func:`small_order_part`) and a wrong signature are all
+    the same answer to the caller — no."""
     if len(public) != KEY_SIZE or len(signature) != SIGNATURE_SIZE:
         return False
     point_a = _decode_point(public)
     point_r = _decode_point(signature[:32])
     if point_a is None or point_r is None:
+        return False
+    if _small_order(point_a) or _small_order(point_r):
         return False
     s = int.from_bytes(signature[32:], "little")
     if s >= L:

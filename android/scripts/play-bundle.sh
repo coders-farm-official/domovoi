@@ -131,6 +131,13 @@ if [ "$build" = 1 ]; then
 fi
 [ -f "$unsigned" ] || die "no $unsigned: build first (drop --skip-build)"
 
+# The release build is minified (android/app/build.gradle.kts): the bundle
+# must carry its R8 mapping, which Play uses to turn crash reports back into
+# class and method names.
+map_entry="BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map"
+"$jdk_bin/jar" tf "$unsigned" | tr -d '\r' | grep -qx "$map_entry" \
+  || die "$unsigned carries no R8 mapping ($map_entry): is the release build still minified?"
+
 # ─── sign ────────────────────────────────────────────────────────────────
 if [ -z "$keystore" ]; then
   default="$HOME/domovoi-release.jks"
@@ -195,12 +202,18 @@ fi
 sha="$(sha256 "$signed")"
 printf '%s  %s\n' "$sha" "$name" > "$signed.sha256"
 size="$(wc -c < "$signed" | tr -d ' ')"
+# The same mapping beside the bundle, for the release's records (Play has
+# its own copy from the bundle).
+mapping="android/app/build/outputs/mapping/release/mapping.txt"
+kept_map="$out_dir/domovoi-$version_name-$version_code-mapping.txt"
+if [ -f "$mapping" ]; then cp "$mapping" "$kept_map"; else kept_map="(none: the build left no mapping.txt)"; fi
 
 say "done."
 echo "  bundle:      $signed ($((size / 1048576)) MB)"
 echo "  SHA-256:     $sha"
 echo "  certificate: $cert (SHA-256 of the signing certificate)"
 echo "  version:     $version_name ($version_code), commit $commit"
+echo "  R8 mapping:  in the bundle (Play reads it), and $kept_map"
 echo
 echo "  Next: Play Console -> Test and release -> Testing -> Internal testing -> Create new release, upload the .aab"
 echo "  (android/play/PUBLISH-CHECKLIST.md; the first upload needs App signing set up first)."

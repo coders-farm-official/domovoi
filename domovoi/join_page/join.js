@@ -150,7 +150,7 @@
     var ready32 = main32 && main32.ready;
     if (!ready64 && !ready32) {
       stateLine('The app isn’t on this server yet. Ask whoever runs Domovoi to press “Download the app ' +
-        'to this server” on the dashboard (Settings → Devices), then reload this page.' + already, true);
+        'to this server” on the dashboard (Settings → Phones & browsers), then reload this page.' + already, true);
       return;
     }
     show('install-state', false);

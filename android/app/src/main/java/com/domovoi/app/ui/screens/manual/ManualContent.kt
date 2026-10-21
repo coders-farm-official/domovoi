@@ -1,6 +1,9 @@
 package com.domovoi.app.ui.screens.manual
 
+import com.domovoi.app.net.Capabilities
 import com.domovoi.app.net.DomovoiJson
+import com.domovoi.app.ui.shell.Route
+import com.domovoi.app.ui.shell.visibleWith
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
@@ -162,7 +165,16 @@ internal data class ManualPhrase(
     val then: Boolean = false,
     val plugin: String? = null,
     val pending: String? = null,
+    /** A GET /api/capabilities feature the phrase needs ("ai": the language
+     *  models answer it); left out while the server reports it false. */
+    val needs: String? = null,
 )
+
+/** The phrases of a "say" block this server answers: one whose [ManualPhrase.needs]
+ *  feature is reported false (features.ai false: AI chat and questions are
+ *  off) is left out, with its "then" reply; an unknown feature shows it. */
+internal fun shownPhrases(phrases: List<ManualPhrase>, features: Map<String, Boolean>): List<ManualPhrase> =
+    phrases.filter { p -> p.needs == null || features[p.needs] != false }
 
 /** Shown in the app: everything but the dashboard-only lines. */
 internal fun shownInApp(only: String?): Boolean = only == null || only == "app"
@@ -368,3 +380,15 @@ internal fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive
 /** The features "Everything it can do" lists: those the server has on. */
 internal fun listedHandlers(doc: ManualDoc, names: List<String>, features: Map<String, Boolean>): List<String> =
     names.filter { n -> doc.handlerNeedsFeature[n]?.let { features[it] == true } ?: true }
+
+/** Whether a manual link to [route] opens something here. A link to an app
+ *  screen this server doesn't offer (a plugin's that isn't installed; Chat
+ *  with the server's AI features off) reads as plain text, never as a link
+ *  that lands back on Home. A route with no app screen opens only if it
+ *  opens the dashboard. */
+internal fun manualRouteOpens(route: ManualRoute, caps: Capabilities): Boolean {
+    if (route.app.dashboard) return true
+    val name = route.app.screen ?: return false
+    val screen = Route.entries.firstOrNull { it.name == name } ?: return true
+    return screen.visibleWith(caps)
+}

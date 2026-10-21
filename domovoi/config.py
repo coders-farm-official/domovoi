@@ -427,6 +427,14 @@ class Settings(BaseSettings):
     # satellite when a voice turn needs a model that isn't loaded, rather
     # than leaving the room silent through the load.
     ollama_cold_start_notice: bool = True
+    # The household's "AI features" switch (Settings → Models; both
+    # installers ask "Include AI chat and questions?"). Off: nothing asks
+    # a language model — no questions, no Chat, no news summary, no
+    # warm-up — while voice commands keep running on their fixed phrases,
+    # with speech recognition, the voices and the wake word as they are.
+    # Both processes read the live answer through domovoi/ai_features.py
+    # (environment, then .env); this is the value the core read at boot.
+    ai_features: bool = True
     searxng_url: str = "http://localhost:6888"
 
     connectivity_probe_target: str = "1.1.1.1:443"
@@ -497,13 +505,13 @@ class Settings(BaseSettings):
     # remove from it and reorder it, and pause / resume / skip / go back —
     # no clear or stop route, never remove the song playing now, never touch
     # an idle room, never start a room's player, and not at all once an
-    # admin bans that guest (Settings -> Devices). The per-device queue
+    # admin bans that guest (Settings -> Phones & browsers). The per-device queue
     # blocks still apply, and a guest's actions are throttled per address.
     # On by default, the owner's call. Off = a room's queue and transport
     # answer to the household device token or an admin only, as they did
     # from the October security round. Read per request by the core
     # (domovoi/guest_queue.py); the web hop reads the live value from the
-    # core's snapshot. Editable live in Settings -> Configuration
+    # core's snapshot. Editable live in Settings -> Advanced
     # (Security).
     guest_queue_editing: bool = True
 
@@ -517,7 +525,7 @@ class Settings(BaseSettings):
     # always did. 0 = every reload is view only (the behaviour before this
     # setting). 0..1440 (a day); anything else in .env reads as 0, closed,
     # and the log says so. Read by the web process, live, through the
-    # core's snapshot. Editable in Settings -> Configuration (Security).
+    # core's snapshot. Editable in Settings -> Advanced (Security).
     admin_reload_window_min: int = ADMIN_RELOAD_WINDOW_DEFAULT_MIN
 
     @field_validator("admin_reload_window_min", mode="before")
@@ -890,7 +898,7 @@ class Settings(BaseSettings):
     wake_clips_dir: str = str(Path.home() / ".domovoi" / "wake_clips")
     # Wake-word TRAINER gate. Off by default: training needs a ~12 GB Docker
     # image and ~18 GB of training data, so nobody pays for it unless they
-    # ask. Settings → Wake Words → "Turn on wake-word training" builds the
+    # ask. Settings → Wake words → "Turn on wake-word training" builds the
     # image, downloads the data and then switches this and
     # wake_word_train_command on (domovoi/wake_trainer_setup.py). openWakeWord
     # training is Linux-only (piper-sample-generator), so the trainer never
@@ -925,7 +933,7 @@ class Settings(BaseSettings):
     # a queued row is marked failed with a runbook pointer. See
     # scripts/wake_word/README.md for the operator-supplied command. The
     # dashboard's "Turn on wake-word training" writes the repo's own wrapper
-    # here. Deliberately NOT editable in Settings → Configuration: whatever
+    # here. Deliberately NOT editable in Settings → Advanced: whatever
     # it names runs as the service user (domovoi/config_schema.py).
     wake_word_train_command: str = ""
     # How long one training run may take, in seconds, before the worker
@@ -1254,7 +1262,7 @@ class Settings(BaseSettings):
     # the rooms' short-term conversations (sessions idle that long; older
     # exchanges in a room still talking) and the satellites' logs kept on
     # this server. "Keep voice history" on People → Voice history and in
-    # Settings → Configuration (Privacy); a save prunes at once.
+    # Settings → Advanced (Privacy); a save prunes at once.
     # Never fatal and never shorter than asked: see the validator.
     voice_history_keep: str = VOICE_HISTORY_KEEP_DEFAULT
     # How often the pruner looks (workers/voice_history_pruner.py): it

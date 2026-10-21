@@ -36,7 +36,13 @@ from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
 from domovoi.handlers.base import Handler, as_fast_path
 from domovoi.handlers.shared.tool_gate import answers_without_tools
 from domovoi.models import Context, Intent
-from domovoi.router import _GATES_KEEP_BAND_PLACE, _LEADING_FILLER_RE, offered_tool_schemas, route
+from domovoi.router import (
+    _GATES_KEEP_BAND_PLACE,
+    _LEADING_FILLER_RE,
+    offered_tool_schemas,
+    route,
+    strip_request_preamble,
+)
 from domovoi.tests.conftest import requires_db
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -48,15 +54,23 @@ GATED = {
     # offered only when the calendar is named; help never (its fast path is
     # the whole question, and its tool would be bait for real questions)
     "calendar", "help",
+    # offered only when the turn talks about printing, scanning or the
+    # printer's supplies (handlers/printing.py)
+    "printing",
+    # help_desk never: its fast path takes how-to questions about Domovoi
+    # (or hands a how-to-worded command to its handler); its tool would be
+    # bait for every other "how do I" question.
+    "help_desk",
 }
 # Never offered to the routing model.
-NEVER_OFFERED = {"help"}
+NEVER_OFFERED = {"help", "help_desk"}
 
 
 def _normalize(utterance: str) -> str:
     """Exactly what router.route() hands the fast paths and the gate."""
     t = utterance.lower().strip().rstrip(".,!?")
-    return _LEADING_FILLER_RE.sub("", t)
+    # "is there a way to <command>" is the command (router.strip_request_preamble).
+    return strip_request_preamble(_LEADING_FILLER_RE.sub("", t))
 
 
 def _fast_path_winner(normalized: str) -> str | None:
@@ -496,7 +510,7 @@ def test_every_registered_handler_is_offered_for_a_plain_command() -> None:
     music_alias's on-request tool) in it must see every tool."""
     names = _offered(
         "double check the latest news about the 3 timers i set and their other names"
-        " on my calendar"
+        " on my calendar for the printer"
     )
     assert set(names) == {h.name for h in HANDLERS} - NEVER_OFFERED
 

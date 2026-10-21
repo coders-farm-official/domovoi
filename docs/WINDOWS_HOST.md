@@ -40,7 +40,7 @@ doesn't do that yet).
 | Processor | Firmware virtualization on (Intel VT-x / AMD-V) | AVX2 is checked and only warned about. |
 | Disk | 40 GB free on the system drive | An SSD is strongly recommended; Setup warns on a spinning disk. Wake-word training, if you turn it on, takes about 32 GB more. |
 | GPU | Optional | Ollama uses an NVIDIA GPU that WSL passes through; without one it runs on the CPU. Wake-word training uses it too, through the NVIDIA Container Toolkit Setup adds to the distro. Whisper always runs on the CPU. |
-| Internet | Needed during setup (about 10.5-13.5 GB, most of it the AI models) | Afterwards Domovoi works with or without it, as you answer in Setup. |
+| Internet | Needed during setup (about 10.5-13.5 GB, most of it the AI models; about 4.5 GB if you leave out AI chat and questions) | Afterwards Domovoi works with or without it, as you answer in Setup. |
 | Docker Desktop, Ollama for Windows, your own WSL distros | Fine alongside | Setup checks the ports Domovoi needs, not which programs you run. A program holding one of them gets a pop-up naming it, with Retry and Cancel. |
 | Smart App Control | Must be off | It blocks unsigned programs, and this build is unsigned. See [Unsigned](#unsigned). |
 
@@ -87,13 +87,43 @@ that:
    `C:\Program Files\Domovoi`, or the `DomovoiRemoveProfile` task), Setup
    asks you to restart first: Windows deletes those by path, and would take
    a new install's files of the same name with them.
-2. **Lists every change it will make** (the table below) before it makes
+2. **Asks "Include AI chat and questions?"** Yes is picked to begin with:
+   Domovoi then answers questions and chats, and Setup downloads about
+   6.4 GB of AI models (about 9.1 GB on a PC with about 32 GB of memory or
+   more, which gets the standard models; the page shows the one for this
+   PC). No leaves the AI models out (`provision.sh --no-ai-models`, which
+   writes `AI_FEATURES=false`), and the whole download is about 4.5 GB.
+   Voice commands, music, timers and everything else work either way;
+   speech recognition, Domovoi's voices, the wake word and Ollama itself
+   are installed either way, so you can turn AI on later in the dashboard,
+   **Settings > Models**, which downloads the models then. The download
+   sizes on the pages after this one follow the answer.
+   **Run again on an install** (a repair or an upgrade), the page starts at
+   the answer the home has now, never at a Yes that would download the
+   models into a home that turned AI off: the household's own
+   `AI_FEATURES` (what **Settings > Models** saved in `domovoi/.env`),
+   which `DomovoiHost` reads for Setup while Domovoi is running, else the
+   answer Setup recorded last time. A Yes that comes from that record
+   alone and is left as it is (a `DomovoiHost` from an older Setup can't
+   read the file) is passed as neither option, so `provision.sh` keeps
+   what `domovoi/.env` says; any other answer is passed as `--ai-models`
+   or `--no-ai-models`, so a later Setup's Yes is heard over an earlier
+   No. The last page and Setup's install record say what `provision.sh`
+   reported (`"ai"` in its final line), not what was clicked.
+   `DomovoiSetup.exe /ai=no` (or `/ai=yes`) starts the page there, over
+   the saved answer (the answer also rides along when Setup carries on
+   after a restart). The page appears only when the pinned
+   `provision.sh` takes the answer (`ProvisionAiChoice` in `pins.iss`,
+   which `windows\build.ps1 -Pin` sets from the script): a build pinned
+   to one from before the question asks nothing, installs the AI models
+   as before, and refuses `/ai=no` at once, before it changes anything.
+3. **Lists every change it will make** (the table below) before it makes
    any.
-3. **Asks whether this PC will have internet after setup** (Yes, always /
+4. **Asks whether this PC will have internet after setup** (Yes, always /
    Sometimes / No; nothing is preselected). The answer goes to
    `provision.sh --internet`; see [INTERNET.md](INTERNET.md). You can
    change it later in **Settings > Internet**.
-4. **Asks for the media folder** (default `C:\Users\Public\Domovoi`), the
+5. **Asks for the media folder** (default `C:\Users\Public\Domovoi`), the
    Windows folder you open in Explorer and copy music, pictures, videos,
    documents and audiobooks into. It must be a folder of your own on a
    drive of this PC: Windows, Program Files, ProgramData, the Users folder,
@@ -101,7 +131,7 @@ that:
    its AppData isn't), anything holding one of those, and links (junctions)
    are refused, because Domovoi's account and its Linux system can write
    there.
-5. **Downloads** Ubuntu 26.04.1's official WSL image, and `provision.sh`
+6. **Downloads** Ubuntu 26.04.1's official WSL image, and `provision.sh`
    from the pinned commit (GitHub's raw file at `DomovoiCommit`; a release
    build pins its release tag's commit), each checked against a pinned
    SHA-256 (`windows/installer/pins.iss`). A build whose `provision.sh` is
@@ -110,20 +140,20 @@ that:
    pin the same way, it still installs the pinned commit's code, and every
    file it reads from that checkout must exist at the pinned commit (the
    installer's tests check both). The commit, its `provision.sh` pin, the
-   channel and the dashboard's tab addresses move together:
+   channel, the dashboard's tab addresses and the AI question move together:
    `windows\build.ps1 -Pin` sets all of them from one commit
    ([Building it](#building-it)).
-6. **Turns on Virtual Machine Platform** and installs WSL 2.7.14 only if
+7. **Turns on Virtual Machine Platform** and installs WSL 2.7.14 only if
    they are missing. If Windows needs a restart, Setup asks, and starts
    again by itself after you sign in.
-7. **Makes the hidden account and the service**, sets the folders' access,
+8. **Makes the hidden account and the service**, sets the folders' access,
    adds the firewall rules, and hands the rest to the service:
    `DomovoiHost`, running as the hidden account, writes that account's
    `.wslconfig`, imports the distro, switches the distro's interop with
    Windows off (and restarts it) before anything else runs in it, and runs
    `provision.sh` inside it as root. Setup's progress bar follows
    `provision.sh`'s progress lines (about 20-40 minutes, most of it the AI
-   models); **Stop Setup** stops waiting, and after four hours Setup asks
+   models, less without them); **Stop Setup** stops waiting, and after four hours Setup asks
    whether to keep waiting. When `provision.sh` asks for a restart of the
    distro, the service does it and runs the script once more to confirm.
    If you stop Setup and don't remove what it did, the service is set to
@@ -152,12 +182,13 @@ that:
    there would run as administrator too). Every line is filtered on the
    way: passwords, tokens and setup codes are blanked as far as Setup can
    recognise them.
-8. **Shows your setup code** once, with a **Copy** button, **Open
+9. **Shows your setup code** once, with a **Copy** button, **Open
    Domovoi**, and the steps to the admin account in the dashboard's own
    words. The code works for 24 hours (a restart of the service writes a
    fresh one). **Open Domovoi** copies the code too, then opens
    `http://localhost:6369/?installed=<commit>-<build time>#settings/configuration/setup`:
-   Settings > Configuration, where the **first-run admin setup** opens by
+   Settings > Advanced (Configuration before 2026-10-21; the old address
+   still lands there), where the **first-run admin setup** opens by
    itself on a box nobody has claimed yet (if it doesn't, **set up admin**
    in the Admin box opens it). Paste the code into **setup code**, choose
    an admin password of at least 10 characters, type it again in
@@ -172,7 +203,9 @@ that:
    page also says where the AI models run, from what Setup found: the
    chat and voice-command models on the NVIDIA cards it lists (or on the
    processor when there is none), speech recognition always on the
-   processor. Domovoi's icon appears beside the clock for the account that
+   processor; with AI chat and questions left out (as `provision.sh`
+   reported it), it says so and where to
+   turn them on (**Settings > Models**). Domovoi's icon appears beside the clock for the account that
    ran Setup, and starts at every account's sign-in from then on
    ([The tray icon](#the-tray-icon)).
 
@@ -304,7 +337,7 @@ card's files as a zip and the icon's card helper puts them on the card:
 1. Flash a microSD card with **Raspberry Pi OS Lite (64-bit)** in
    Raspberry Pi Imager. When Imager offers to apply OS customisation
    settings, choose **No**.
-2. In the dashboard, **Settings > Satellites > prepare satellite media**:
+2. In the dashboard, **Settings > Rooms > prepare satellite media**:
    pick the board and the microphone, **Prepare**, then **download for the
    card helper**. Keep the setup network password it shows on screen.
 3. **Prepare a satellite card...** in the icon's menu. It picks the newest
@@ -316,7 +349,7 @@ card's files as a zip and the icon's card helper puts them on the card:
    disk or the Windows drive), asks for the setup network password, writes
    the card, reads everything back to check it, and offers **Eject**.
 4. Put the card in the Pi and switch it on. Join its setup Wi-Fi from your
-   phone, then approve it in **Settings > Satellites**.
+   phone, then approve it in **Settings > Rooms**.
 
 It writes exactly what a server that can see the card writes
 (`domovoi/satellite_media/overlay.py`, checked byte for byte by the tests):
@@ -381,7 +414,7 @@ address. Do the same on a Linux server; it is not specific to Windows.
 
 ## Training wake words
 
-**Settings > Wake Words** trains a wake word of your own ("Hey Domovoi")
+**Settings > Wake words** trains a wake word of your own ("Hey Domovoi")
 on this PC, inside the distro, once an admin turns training on there. The
 steps, what it costs and the licence of what it makes are in
 [`scripts/wake_word/README.md`](../scripts/wake_word/README.md). What this
@@ -425,7 +458,7 @@ PC needs for it:
   a 16 GB card, so the trainer takes the least busy card, away from the one
   holding the chat model.
 
-Then, as the admin: **Settings > Wake Words > Turn on wake-word training**,
+Then, as the admin: **Settings > Wake words > Turn on wake-word training**,
 confirm, and wait (about 13 minutes on a fast line: the trainer's build,
 then the training data download; you can leave the page). Create a wake word, record at
 least 15 clips on a satellite (hundreds for an XVF3800), press **Train**,
@@ -492,7 +525,7 @@ you share them.
 - **Setup stopped partway:** run Setup again; it carries on, and
   `provision.sh` resumes where it stopped. Or uninstall, which undoes a
   half-finished setup too.
-- **Pull says `index.lock`: File exists** (Settings → Version, on a
+- **Pull says `index.lock`: File exists** (Settings → About & updates, on a
   build from before the fix below): an earlier update was cut off (a
   Windows restart or shutdown in the middle of one, say) and git left its
   lock behind. Nobody has a shell in the distro, so run a newer Setup over
@@ -530,7 +563,7 @@ you share them.
   app can't reach Domovoi, the dashboard says the server isn't
   answering): the core inside the distro has frozen. It notices by itself
   and restarts within a minute or so; if it hasn't, an admin gets
-  **Restart the core** on Settings → Configuration → Version, the Satellites page and Home
+  **Restart the core** on Settings → About & updates, Settings → Rooms and Home
   ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#everything-offline-dashboard-up)).
   The distro runs the same units and the same loop watchdog as a Linux
   server ([LINUX_HOST.md, The loop watchdog](LINUX_HOST.md#the-loop-watchdog)):
@@ -539,7 +572,7 @@ you share them.
   survives a restart of the PC. A distro installed before 2026-10-15 gets
   the journal setting, and `Restart=on-failure` if its core unit had no
   restart policy at all, from the
-  next update run (Settings → Configuration → Version, **Restart Domovoi**); the
+  next update run (Settings → About & updates, **Restart Domovoi**); the
   `Type=notify` unit itself comes with the next run of Setup. By hand, from
   an administrator PowerShell, `Restart-Service DomovoiHost` stops
   Domovoi's Linux system and starts it again, core included (the distro
@@ -571,7 +604,7 @@ handed to `provision.sh` as `--track-branch`; the channels are described in
 [LINUX_HOST.md, Release channels](LINUX_HOST.md#release-channels)):
 
 - **`stable`**, on a release build: Domovoi's releases only. Settings →
-  Configuration → Version says when a newer release is out; nothing
+  About & updates says when a newer release is out; nothing
   updates until an admin pulls it there.
 - **`main`**, on a build pinned to a commit that is not a release: every
   change, as it lands.
@@ -606,7 +639,7 @@ that has it, a fresh install's first update does the same.
 From a Windows PowerShell 5.1 prompt in the repository:
 
 ```powershell
-.\windows\build.ps1                  # exes (DomovoiTray.exe too), unit tests, then DomovoiSetup.exe
+.\windows\build.ps1                  # exes (DomovoiTray.exe too), unit tests, then DomovoiSetup.exe and DomovoiSatelliteSetup.exe
 .\windows\build.ps1 -SkipInstaller   # exes and unit tests only
 .\windows\build.ps1 -Pin v1.0.0      # move the pins to a release tag's commit, then build
 .\windows\build.ps1 -Pin <sha> -Channel main -PinOnly   # a test pin, nothing built
@@ -617,7 +650,9 @@ commit SHA that is in this clone and on `origin/main`'s history, and
 rewrites `pins.iss` in one go: `DomovoiCommit`, `DomovoiChannel` (`stable`
 unless `-Channel main`; `stable` needs a commit a `v*` tag names),
 `ProvisionSha256` (that commit's `provision.sh`, its exact bytes),
-`ProvisionBundled` off, and `DashboardTabRoutes`. Commit the changed
+`ProvisionBundled` off, `DashboardTabRoutes`, and `ProvisionAiChoice`
+(on when that `provision.sh` takes `--ai-models` / `--no-ai-models`: only
+then does Setup ask "Include AI chat and questions?"). Commit the changed
 `pins.iss` after the tag: the tag is the commit households run.
 
 The exes are C# for .NET Framework 4.8.1, built with the compiler that
@@ -629,6 +664,7 @@ the installer needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)
 | Path | What |
 |---|---|
 | `windows/installer/DomovoiSetup.iss` | The wizard (Inno Setup Pascal script); the UI only. |
+| `windows/installer/DomovoiSatelliteSetup.iss`, `satellite-setup.ps1` | The Windows *satellite* Setup (2026-10-21): a per-user wizard in front of `satellite/scripts/install-windows.ps1` for a spare PC that becomes a room; its worker trades the dashboard's setup code for the enrolment payload, held to the server's identity key ([SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)). Built first: `DomovoiSetup.exe` carries it, and DomovoiHost places it in the core's cache at every start (`windows/common/SatelliteSetup.cs`), so this server hands it out offline. Tested by `domovoi/tests/test_windows_satellite_setup.py`. |
 | `windows/installer/pins.iss` | The commit and every pinned download (URL and SHA-256). |
 | `windows/installer/art/` | Domovoi's icon (16-256 px) and the wizard's pictures at every size Inno Setup uses, made from `docs/assets/domovoi-icon.png` by `make_art.py` (Pillow 12.3.0 from `requirements.txt` in a private venv; `--check` compares them pixel for pixel). Don't edit them by hand: change the source or the script and run it again. |
 | `windows/helper/` | `DomovoiSetupHelper.exe`: every change to the PC, one verb per call, run elevated from `C:\Program Files\Domovoi`. |
@@ -638,7 +674,8 @@ the installer needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)
 | `windows/tests/` | The unit tests, compiled with `common/`, `helper/`, `host/` and `tray/`. They run Firewall's cleanup script against stand-in cmdlets, the helper's folder code on throwaway junctions under `%TEMP%`, and the card helper on folders that mimic a flashed card, against `card-goldens.json` (the server's own `config.txt`/`cmdline.txt` edits, made and kept current by `domovoi/tests/test_windows_card_parity.py`); nothing else on the PC is touched. |
 
 `build.ps1 -Sign` is the place code signing goes back in; while signing is
-on hold it refuses, and every build is unsigned.
+on hold it refuses, and every build is unsigned. `DomovoiSatelliteSetup.iss`
+holds the matching hook (`SignTool=domovoi` under `#ifdef SignSetup`).
 
 `pytest domovoi/tests/test_windows_installer.py` runs the build and the
 unit tests on Windows, and the file checks everywhere.

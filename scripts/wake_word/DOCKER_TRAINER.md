@@ -301,7 +301,7 @@ run the container by hand, add `--shm-size=2g` yourself.
 **How they reach the wrapper.** The wrapper reads them from its process
 environment, and the core's trainer worker builds that environment: the
 core's own, plus every `WAKE_TRAINER_*` line in `domovoi/.env`, plus the
-values of the settings in **Settings → Configuration → Wake words**
+values of the settings in **Settings → Advanced → Wake words**
 (samples, steps, recorded share, CPUs, memory; 0 means the default here),
 plus `WAKE_TRAINER_DEADLINE_SEC`, `WAKE_TRAINER_REQUIRE_GPU` and `WAKE_PRONUNCIATIONS`. A variable in
 the core's process environment wins over the `.env` line. So a `.env` line
@@ -326,7 +326,7 @@ cores, where generating the 12,000 synthetic clips takes about an hour
 first run adds the dataset download (5.6 min at ~90 MB/s) unless the
 dashboard's setup already warmed it. Synthetic generation grows linearly
 with `WAKE_TRAINER_N_SAMPLES`, so 20k+ samples need a longer **Training
-time limit** (Settings → Configuration → Wake words) than the GPU's
+time limit** (Settings → Advanced → Wake words) than the GPU's
 automatic 3600 s. Generation is resumable (the run dir keeps its clips), so
 a run cut off by the limit continues where it stopped on the next Train.
 Recording **more real positive clips** than the minimum also helps
@@ -353,7 +353,7 @@ image, in `domovoi/.env`:
 WAKE_WORD_TRAINER_ENABLED=true
 WAKE_WORD_TRAIN_COMMAND=python "C:\path\to\domovoi\scripts\wake_word\train_wake_word.py" --clips "{clips_dir}" --phrase "{phrase}" --slug "{slug}" --out "{out}"
 ```
-Turning `WAKE_WORD_TRAINER_ENABLED` on in Settings → Configuration starts the
+Turning `WAKE_WORD_TRAINER_ENABLED` on in Settings → Advanced starts the
 trainer without a restart; a hand edit of `.env` needs one.
 Notes:
 - **Every placeholder is double-quoted.** The worker tokenizes with
@@ -368,7 +368,7 @@ Notes:
 - On Linux/Mac hosts use forward-slash paths and `python3` if that's what's on
   PATH:
   `WAKE_WORD_TRAIN_COMMAND=python3 "/srv/domovoi/scripts/wake_word/train_wake_word.py" --clips "{clips_dir}" --phrase "{phrase}" --slug "{slug}" --out "{out}"`
-- **Time limit:** **Training time limit** in Settings → Configuration → Wake
+- **Time limit:** **Training time limit** in Settings → Advanced → Wake
   words (`WAKE_WORD_TRAIN_TIMEOUT_SEC`). 0, the default, sizes it to the
   server: 3600 s when the dashboard's setup found a GPU, otherwise twice the
   CPU estimate and at least 7200 s (7200 s for a trainer set up by hand,
@@ -482,7 +482,7 @@ set is the one the features were computed from (patch 8 above). The copies
 of the word's recorded clips a run puts in `positive_train/real_*.wav` are
 removed at the end of the run, however it ends (above); deleting the wake
 word in the dashboard removes its folder too. **Turn off and free the
-space** (Settings → Wake Words) removes the whole volume, the image and
+space** (Settings → Wake words) removes the whole volume, the image and
 Docker's build cache, after showing their size.
 
 The dashboard's setup warms it. By hand (the first Train otherwise spends
@@ -570,7 +570,7 @@ card. Details: [docs/WINDOWS_HOST.md](../../docs/WINDOWS_HOST.md#training-wake-w
   torch/CUDA build mismatch in the image, not passthrough.
 - **`train command timed out after Ns and was stopped`**, or **`exited 124`**
   with "stopped after N s: the training time limit ... ran out" — the run
-  took longer than **Training time limit** (Settings → Configuration → Wake
+  took longer than **Training time limit** (Settings → Advanced → Wake
   words). Raise it, or lower **Synthetic clips per wake word**. The container
   was removed either way. The synthetic clips generated so far stay in the
   cache volume, so the next run for the same word continues from them.

@@ -8,7 +8,7 @@ import org.junit.Test
 
 /**
  * Which voice the chat mic's reply is heard in (Kamron's test, 2026-10-12:
- * Settings → Voice on Kristin, downloaded, and the reply still came in
+ * Settings → Voices on Kristin, downloaded, and the reply still came in
  * the server's Norman). The phone's own pick, downloaded: spoken on the
  * phone from the reply text, and the server is asked for no audio.
  * "Same as the server", or a pick not downloaded: the server's audio.

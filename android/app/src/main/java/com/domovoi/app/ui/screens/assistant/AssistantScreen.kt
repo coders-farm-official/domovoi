@@ -55,6 +55,7 @@ import com.domovoi.app.ui.screens.chat.ChatFrame
 import com.domovoi.app.ui.screens.chat.ChatHeader
 import com.domovoi.app.ui.screens.chat.ChatPlaceKind
 import com.domovoi.app.ui.screens.chat.NEW_CHAT
+import com.domovoi.app.ui.screens.chat.rememberExportPhoneChats
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -92,6 +93,14 @@ internal class AssistantActions(
     val deliverReport: (ReportSink, ReplyReport) -> Unit = { _, _ -> },
     val deleteReport: (String) -> Unit = {},
     val clearReports: () -> Unit = {},
+    /** "Try again": the last reply goes, the last question is answered again. */
+    val retry: () -> Unit = {},
+    /** One message's words to the share sheet. */
+    val shareMessage: (String) -> Unit = {},
+    /** The whole chat on screen to the share sheet, as text. */
+    val shareChat: () -> Unit = {},
+    /** "Export all phone chats": Markdown plus JSON, to a file the person picks. */
+    val exportAll: () -> Unit = {},
     /** The paperclip: attach a document (its name, and how to read it);
      *  null where phone chats take no documents. */
     /** Attach (name, opener, the typed question). */
@@ -243,6 +252,28 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
     }
     val reportScope = rememberCoroutineScope()
     val chrome = PhoneChatChrome(onBack = frame.onBack, chip = frame.chip, picker = frame.picker)
+    // "Export all phone chats": the person picks where the zip goes.
+    val exportAll = rememberExportPhoneChats(assistant)
+    val share = { subject: String, text: String -> if (!shareText(context, subject, text)) toast("no app on this phone can share it") }
+    val shareChat = {
+        reportScope.launch {
+            val c = assistant.state.value.conversation
+            assistant.transcript(c.id)?.let { share(c.title, it) }
+        }
+        Unit
+    }
+    // A chat started from the list's "Message Domovoi…" box: its first
+    // message goes out once this view has its conversation and the model
+    // is on the phone.
+    var firstSent by remember { mutableStateOf(frame.firstMessage.isNullOrBlank()) }
+    val reached = target.reached(ui.conversation.id)
+    LaunchedEffect(reached, ui.installed) {
+        if (!firstSent && reached && ui.installed) {
+            firstSent = true
+            frame.firstMessage?.let { assistant.send(it) }
+            frame.onSent()
+        }
+    }
     if (!target.reached(ui.conversation.id)) {
         Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
             ChatHeader(NEW_CHAT, chrome.chip, ChatPlaceKind.Phone, chrome.onBack, Modifier.padding(top = 8.dp))
@@ -361,7 +392,28 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
         { reportScope.launch { runCatching { com.domovoi.app.ui.screens.chat.stopServerJob(app, id) } } }
     }
     val actions = actionsFor(assistant, download, talk, sinks, reportScope, used, askServer, asking) { toast(it) }
-    AssistantContent(ui, actions.copyWith(serverOffer = offerS, useServer = useServer, stopServer = stopServer), chrome)
+    AssistantContent(
+        ui,
+        AssistantActions(
+            download = actions.download, pauseDownload = actions.pauseDownload, cancelDownload = actions.cancelDownload,
+            setAllowMobileData = actions.setAllowMobileData, deleteModel = actions.deleteModel,
+            setBackend = actions.setBackend, retryLoad = actions.retryLoad, send = actions.send, stop = actions.stop,
+            newConversation = actions.newConversation, open = actions.open, delete = actions.delete,
+            clearAll = actions.clearAll, talk = actions.talk, downloadVoice = actions.downloadVoice,
+            setSpeakTyped = actions.setSpeakTyped, draftReport = actions.draftReport, saveReport = actions.saveReport,
+            reportSinks = actions.reportSinks, deliverReport = actions.deliverReport,
+            deleteReport = actions.deleteReport, clearReports = actions.clearReports,
+            retry = assistant::retry,
+            shareMessage = { share("Domovoi", it) },
+            shareChat = shareChat,
+            exportAll = exportAll,
+            attachDocument = actions.attachDocument, askServer = actions.askServer,
+            askingServer = actions.askingServer, dropPending = actions.dropPending,
+            closeDocProblem = actions.closeDocProblem, docFile = actions.docFile,
+            carryOn = actions.carryOn, serverOffer = offerS, useServer = useServer, stopServer = stopServer,
+        ),
+        chrome,
+    )
 }
 
 /** Which conversation a phone chat's view waits for the controller to show. */
@@ -453,14 +505,6 @@ private fun actionsFor(
     closeDocProblem = a::closeDocProblem,
     docFile = { id -> a.docFile(id) },
     carryOn = a::carryOnJob,
-)
-
-/** [this] with the home-server pieces the screen works out set. */
-internal fun AssistantActions.copyWith(serverOffer: Double?, useServer: (() -> Unit)?, stopServer: (() -> Unit)?) = AssistantActions(
-    download, pauseDownload, cancelDownload, setAllowMobileData, deleteModel, setBackend, retryLoad, send, stop,
-    newConversation, open, delete, clearAll, talk, downloadVoice, setSpeakTyped, draftReport, saveReport, reportSinks,
-    deliverReport, deleteReport, clearReports, attachDocument, askServer, askingServer, dropPending, closeDocProblem,
-    docFile, carryOn, serverOffer, useServer, stopServer,
 )
 
 /** The screen for [ui], with no controller behind it (the tests render it). */

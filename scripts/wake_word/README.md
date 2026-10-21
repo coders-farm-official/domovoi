@@ -13,7 +13,7 @@ Training runs openWakeWord's recipe in a Linux container on the server:
 Docker Engine on a Linux server and inside the Windows install's WSL
 distro, Docker Desktop on a development PC. It needs a 12 GB image and
 18 GB of training data, so it is off until an admin asks for it:
-**Settings → Wake Words → Wake-word training → Turn on wake-word training**.
+**Settings → Wake words → Wake-word training → Turn on wake-word training**.
 
 Before it starts, the card says what training needs and what this server
 has:
@@ -97,7 +97,7 @@ On a Linux server or the Windows install, an update that changes
 
 ## 2. Train a wake word
 
-1. **Create a wake word** (Settings → Wake Words): a name and the phrase,
+1. **Create a wake word** (Settings → Wake words): a name and the phrase,
    e.g. "Hey Domovoi".
 2. **Record clips on a satellite**, through the board that satellite
    listens with. Training needs at least 15 selected clips. For an
@@ -133,7 +133,7 @@ are kept and reused.
 
 ## 3. Settings
 
-**Settings → Configuration → Wake words** (the advanced section, admin).
+**Settings → Advanced → Wake words** (the advanced section, admin).
 Each one applies to the next training; none needs a restart.
 
 | Setting (`.env` key) | Default | What it does |
@@ -255,7 +255,7 @@ training data with permissive licences throughout.
   satellite's own board (HAT or XVF3800) and train again.
 - **Score the recorded clips** against the trained model:
   `python scripts/wake_word/score_clips.py <slug>` from the repo root, or
-  the score button on the word's row in Settings → Wake Words.
+  the score button on the word's row in Settings → Wake words.
 
 More: [docs/TROUBLESHOOTING.md, Wake-word training](../../docs/TROUBLESHOOTING.md#wake-word-training).
 
@@ -288,7 +288,7 @@ argument either way; the quotes keep the template itself splitting the
 same way on every platform. `python` must be the core's own interpreter
 (the command runs with no shell, on the core's PATH). The time limit is
 the setting above, and the `WAKE_TRAINER_*` knobs reach the wrapper from
-`domovoi/.env` or Settings → Configuration. Build the image first
+`domovoi/.env` or Settings → Advanced. Build the image first
 ([DOCKER_TRAINER.md](DOCKER_TRAINER.md#build-or-pull)), or the first
 training fails with "image not found".
 

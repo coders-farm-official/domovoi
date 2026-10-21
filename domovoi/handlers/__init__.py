@@ -9,6 +9,7 @@ Condensed band map — core handlers occupy exactly the design §4.2 table:
 
     100 dismiss          brush-offs win before anything acts
     105 help             "what can you do" / "help": whole closed questions
+    106 help_desk        "how do I …" about Domovoi, from its own help; declines otherwise
     110 voice_profile    "i'm Sarah" before any greedy capture
     120 wifi             "fix the wifi" wins over any future "fix"
     130 voice            device-control cluster near top
@@ -23,6 +24,8 @@ Condensed band map — core handlers occupy exactly the design §4.2 table:
     200 dropin           immediately before intercom
     210 intercom         before voice_notes ("tell the kitchen X")
     220 chat_mode
+    222 printing         "print …", "scan this", ink and paper; after chat_mode,
+                         before the Documents plan's documents (225)
     230 voice_notes
     240 memory
     250 homelab
@@ -57,6 +60,7 @@ from domovoi.handlers.dismiss import DismissHandler
 from domovoi.handlers.double_check import DoubleCheckHandler
 from domovoi.handlers.dropin import DropInHandler
 from domovoi.handlers.help import HelpHandler
+from domovoi.handlers.help_desk import HelpDeskHandler
 from domovoi.handlers.homelab import HomelabHandler
 from domovoi.handlers.household_calendar import CalendarHandler
 from domovoi.handlers.intercom import IntercomHandler
@@ -66,6 +70,7 @@ from domovoi.handlers.music import MusicHandler
 from domovoi.handlers.music_alias import MusicAliasHandler
 from domovoi.handlers.news import NewsHandler
 from domovoi.handlers.playlist import PlaylistHandler
+from domovoi.handlers.printing import PrintingHandler
 from domovoi.handlers.reminder import ReminderHandler
 from domovoi.handlers.repeat import RepeatHandler
 from domovoi.handlers.spoken_audio import SpokenAudioHandler
@@ -86,6 +91,7 @@ _CORE_HANDLERS: list[Handler] = [
     DoubleCheckHandler(),
     DropInHandler(),
     HelpHandler(),
+    HelpDeskHandler(),
     HomelabHandler(),
     IntercomHandler(),
     LibraryHandler(),
@@ -94,6 +100,7 @@ _CORE_HANDLERS: list[Handler] = [
     MusicAliasHandler(),
     NewsHandler(),
     PlaylistHandler(),
+    PrintingHandler(),
     ReminderHandler(),
     RepeatHandler(),
     SpokenAudioHandler(),
@@ -149,6 +156,7 @@ __all__ = [
     "HANDLERS",
     "HANDLER_BY_NAME",
     "HelpHandler",
+    "HelpDeskHandler",
     "HomelabHandler",
     "IntercomHandler",
     "LibraryHandler",
@@ -157,6 +165,7 @@ __all__ = [
     "MusicHandler",
     "NewsHandler",
     "PlaylistHandler",
+    "PrintingHandler",
     "register_handler",
     "ReminderHandler",
     "RepeatHandler",

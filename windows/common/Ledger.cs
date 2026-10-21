@@ -20,6 +20,16 @@ namespace Domovoi.Windows
     public sealed class Ledger
     {
         public string Internet;
+        // "Include AI chat and questions?": true unless the household said
+        // No (a record from before the question has none: Yes, as then).
+        // Once Domovoi is up, what provision.sh reported ("ai" in its final
+        // line), not what was clicked (Steps.RecordAi).
+        public bool IncludeAi = true;
+        // This run's Yes came from this record alone, untouched (Setup
+        // could not read the household's own value): provision.sh is given
+        // neither option and keeps what domovoi/.env says
+        // (ProvisionOptions.KeepAi).
+        public bool AiKeep;
         public string MediaRoot;
         public string Commit;
         public string AccountSid;
@@ -50,6 +60,8 @@ namespace Domovoi.Windows
             var d = new Dictionary<string, object>();
             d["v"] = 1;
             d["internet"] = Internet;
+            d["include_ai"] = IncludeAi;
+            d["ai_keep"] = AiKeep;
             d["media_root"] = MediaRoot;
             d["commit"] = Commit;
             d["account_sid"] = AccountSid;
@@ -83,6 +95,8 @@ namespace Domovoi.Windows
             if (Json.Int(d, "v") != 1) throw new FormatException("install.json: unknown version");
             var l = new Ledger();
             l.Internet = Json.Str(d, "internet");
+            l.IncludeAi = Json.Bool(d, "include_ai") ?? true;
+            l.AiKeep = Json.Bool(d, "ai_keep") ?? false;
             l.MediaRoot = Json.Str(d, "media_root");
             l.Commit = Json.Str(d, "commit");
             l.AccountSid = Json.Str(d, "account_sid");

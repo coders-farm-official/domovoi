@@ -128,6 +128,10 @@ def _backend() -> str:
 def verify(public: bytes, message: bytes, signature: bytes) -> bool:
     """Whether ``signature`` is ``public``'s signature over ``message``.
     Never raises: everything wrong is the same answer."""
+    from satellite import _ed25519 as _pure
+
+    if _pure.small_order_part(public, signature):
+        return False   # a key or R of small order proves nothing, whichever backend
     if _backend() == "cryptography":
         from cryptography.hazmat.primitives.asymmetric import ed25519
 

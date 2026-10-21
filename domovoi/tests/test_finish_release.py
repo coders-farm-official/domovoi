@@ -435,6 +435,50 @@ def test_a_setup_handed_in_brings_its_tray_from_beside_it_or_none(tmp_path, monk
         w.run("--no-publish", "--tray", str(tmp_path / "missing.exe"))
 
 
+@requires_git
+def test_the_satellite_setup_the_build_makes_is_attached_beside_the_setup(tmp_path, monkeypatch):
+    """DomovoiSatelliteSetup.exe (windows/build, beside DomovoiSetup.exe;
+    2026-10-21): in SHA256SUMS, uploaded before the sums, named in the
+    notes with what SmartScreen says. Servers fetch it by this name."""
+    from domovoi import satellite_setup
+
+    assert fr.SATELLITE_SETUP_ASSET == satellite_setup.SETUP_ASSET
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+
+    def build_with_satellite(src: Path, tag: str, repo: Path) -> Path:
+        exe = w.pin_build(src, tag, repo)
+        _write(src, "windows/build/DomovoiSatelliteSetup.exe", b"MZ satellite " + tag.encode())
+        return exe
+
+    assert w.run_built(builder=build_with_satellite) == 0
+    sat_sha = hashlib.sha256(b"MZ satellite " + w.tag.encode()).hexdigest()
+    sums = (w.stage / "SHA256SUMS").read_text(encoding="ascii").splitlines()
+    assert sums[-1] == f"{sat_sha}  DomovoiSatelliteSetup.exe"
+    (upload,) = w.calls("upload")
+    names = [Path(a).name for a in upload[3:]]
+    assert names.index("DomovoiSetup.exe") < names.index("DomovoiSatelliteSetup.exe") < names.index("SHA256SUMS")
+    assert w.load()["files"]["DomovoiSatelliteSetup.exe"] == sat_sha
+    notes = w.state["releases"][w.tag]["body"]
+    assert "| DomovoiSatelliteSetup.exe |" in notes and sat_sha in notes
+    assert "Windows protected your PC" in notes and "Run anyway" in notes
+    # SHA256SUMS in the format the server reads it.
+    assert satellite_setup.parse_sums(chr(10).join(sums)) == sat_sha
+
+
+@requires_git
+def test_a_setup_handed_in_brings_its_satellite_setup_from_beside_it_or_none(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch)
+    assert w.run("--no-publish") == 0
+    assert not (w.stage / "DomovoiSatelliteSetup.exe").exists()
+    assert any("predates the satellite Setup" in s for s in w.said)
+    (w.setup.parent / "DomovoiSatelliteSetup.exe").write_bytes(b"MZ sat")
+    assert w.run("--no-publish") == 0
+    last = (w.stage / "SHA256SUMS").read_text(encoding="ascii").splitlines()[-1]
+    assert last == hashlib.sha256(b"MZ sat").hexdigest() + "  DomovoiSatelliteSetup.exe"
+    with pytest.raises(fr.Refused, match="no satellite Setup at"):
+        w.run("--no-publish", "--satellite-setup", str(tmp_path / "missing.exe"))
+
+
 def test_the_setup_is_built_from_the_tag_alone_and_pinned_to_it(tmp_path, monkeypatch):
     """Review R3: commits after the tag never reach the Setup. It is built in
     a clean worktree of the tag's commit, where build.ps1 -Pin moves the pins

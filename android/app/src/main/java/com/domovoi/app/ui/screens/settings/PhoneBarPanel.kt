@@ -44,8 +44,8 @@ import com.domovoi.app.ui.shell.visibleOn
 import com.domovoi.app.ui.theme.Domovoi
 
 /**
- * Settings → Phone bar: which screens sit in this phone's bottom bar, left
- * to right (ui/shell/PhoneBar.kt; the web's Settings → Phone bar). Home
+ * Settings → App layout: which screens sit in this phone's bottom bar, left
+ * to right (ui/shell/PhoneBar.kt; the web's Settings → App layout). Home
  * is always first; two to five tabs; everything else stays on
  * Home's "everything" grid, which links here. Kept on this phone only
  * (Prefs), so it needs no server and no sign-in. A shared screen never
@@ -100,7 +100,9 @@ internal fun PhoneBarPanel() {
                         enabled = saved != null,
                         onClick = {
                             app.prefs.setPhoneBar(null)
-                            toast("phone bar back to home · music · videos · chat")
+                            // What the default is here: no chat while the
+                            // server's AI features are off, none on a shared screen.
+                            toast("phone bar back to " + PhoneBar.routes(null, caps, shared).joinToString(" · ") { it.label.lowercase() })
                         },
                     ) {
                         Icon(Icons.Filled.Restore, contentDescription = null, modifier = Modifier.size(16.dp))

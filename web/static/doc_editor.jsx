@@ -162,6 +162,10 @@ const DocEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null }) => 
           {preview ? 'Edit' : 'Preview'}
         </Button>
         <Button icon="file-down" title="export as .docx" onClick={onExport}>Export</Button>
+        {window.PrintFileButton && (
+          <window.PrintFileButton libraryId="core:documents" path={rel_path} name={rel_path}
+                                  title={dirty ? 'prints the last saved version' : 'print'}/>
+        )}
         {state.status === 'ready' && (
           <Button variant="primary" icon="save" disabled={saving || !dirty || !!blocked}
                   title={blocked || undefined} onClick={onSave}>

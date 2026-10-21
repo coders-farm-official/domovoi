@@ -436,6 +436,108 @@ async def ensure_image() -> None:
     await _note_image_for_guard(built=True)
 
 
+def rebuild_unavailable() -> str | None:
+    """Why the admin's "rebuild the music player image" can't run here, in
+    plain words, or None when it can. The build pulls Debian's base image
+    and runs apt, so not with internet access turned off."""
+    if not settings.mpd_image_tag:
+        return "no music player image is configured (MPD_IMAGE_TAG)"
+    if egress.internet_turned_off():
+        return "internet access is turned off, and the build downloads Debian's packages"
+    return None
+
+
+_REBUILD_LOCK: asyncio.Lock | None = None
+
+
+class RebuildBusy(RuntimeError):
+    """A rebuild is already running."""
+
+
+async def _container_image(name: str) -> str | None:
+    """The image ID container ``name`` runs, or None (gone, docker unhappy)."""
+    rc, out, _ = await _run_docker("inspect", "-f", "{{.Image}}", name, timeout=10.0)
+    return (out.strip() or None) if rc == 0 else None
+
+
+async def rebuild_image() -> dict:
+    """The admin's "rebuild the music player image now" (Containers page).
+
+    Builds the image exactly as the core does when it is missing
+    (:func:`_build_image`), records it as the container guard's baseline
+    (``built=True``: the image Domovoi built), then puts every room's
+    player on it the way an update does: each room container on another
+    image is removed and created again from its ``mpd_rooms`` row, with the
+    same data volume (playlists and queue survive; what a room is playing
+    stops). Every room, and the tag, is held for the guard from before the
+    build until the last room is done (and the usual minute after): once
+    the baseline moves, a room still waiting its turn runs the old image,
+    which the guard would otherwise call a different image. A room that
+    could not be moved is named in the answer. A tamper incident about the
+    image stays open: clearing it is the admin's call. Raises
+    :class:`RebuildBusy` when one is running or an update or restart is
+    under way, RuntimeError when it can't run here or the build fails."""
+    global _REBUILD_LOCK
+    why = rebuild_unavailable()
+    if why:
+        raise RuntimeError(why)
+    from domovoi import self_restart
+
+    if await asyncio.to_thread(self_restart.underway):
+        raise RebuildBusy(
+            "an update or restart is under way; rebuild the music player image once it has finished"
+        )
+    # No await between this check and taking the lock below: two clicks at
+    # once give one rebuild and one "already being rebuilt".
+    if _REBUILD_LOCK is None:
+        _REBUILD_LOCK = asyncio.Lock()
+    if _REBUILD_LOCK.locked():
+        raise RebuildBusy("the music player image is already being rebuilt")
+    from contextlib import ExitStack
+
+    from domovoi.container_guard import holds
+    from domovoi.container_guard.engine import note_mpd_image
+    from domovoi.db.session import session_scope
+
+    async with _REBUILD_LOCK:
+        tag = settings.mpd_image_tag
+        async with session_scope() as s:
+            rows = (await s.execute(text(
+                "SELECT room_id, control_port, http_port, container_name "
+                "FROM mpd_rooms ORDER BY created_at"
+            ))).all()
+        rooms: list[dict] = []
+        with ExitStack() as stack:
+            stack.enter_context(holds.holding(
+                "mpd-image", "the music player image is being rebuilt", settle_sec=60.0))
+            for room_id, *_ in rows:
+                stack.enter_context(_room_hold(room_id, "restarting on the rebuilt image"))
+            await _build_image(tag)
+            image_id = await _image_id(tag)
+            if not image_id:
+                raise RuntimeError(f"the build finished but {tag} names no image")
+            baseline = await note_mpd_image(image_id, built=True)
+            log.warning("music player image rebuilt by the admin: %s (%s)", image_id[:19], baseline)
+            for room_id, ctrl, http, container in rows:
+                entry = {"room": room_id, "recreated": False, "error": None}
+                try:
+                    running = await _container_image(container)
+                    if running is not None and running != image_id:
+                        rc, _, err = await _run_docker("rm", "-f", container, timeout=30.0)
+                        if rc != 0:
+                            raise RuntimeError(f"docker rm -f {container}: {err.strip()[:200]}")
+                        entry["recreated"] = True
+                    await _ensure_container(
+                        name=container, image=tag, control_port=int(ctrl), http_port=int(http),
+                        music_dir=settings.music_dir, volume_name=_volume_name(room_id),
+                    )
+                except Exception as e:  # noqa: BLE001 — the other rooms still move
+                    log.warning("music player for room=%s not moved to the rebuilt image: %s", room_id, e)
+                    entry["error"] = str(e)[:300]
+                rooms.append(entry)
+    return {"image_id": image_id, "baseline": baseline, "rooms": rooms}
+
+
 async def warm_known_rooms() -> int:
     """Restart every previously-provisioned MPD container at startup.
 

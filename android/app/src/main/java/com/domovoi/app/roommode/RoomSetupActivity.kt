@@ -62,7 +62,7 @@ import com.domovoi.app.ui.theme.ThemeMode
 
 /**
  * The way into room mode — from the "Domovoi Room" launcher icon (works on
- * a phone never paired with the household), from Settings → Satellites →
+ * a phone never paired with the household), from Settings → Rooms →
  * "Use this device as a room", and from a `domovoi-room:` link a camera app
  * hands over. Three steps, all on this screen:
  *
@@ -322,7 +322,7 @@ private fun RoomCode(initialPayload: String?, onDone: (Enrolment) -> Unit, onCan
         Text("The room code", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold,
             modifier = Modifier.semantics { heading() })
         Text(
-            "On the dashboard, open Settings → Satellites and add a spare device: it shows a room code. Scan it, or copy it " +
+            "On the dashboard, open Settings → Rooms and add a spare device: it shows a room code. Scan it, or copy it " +
                 "and paste it here.",
             style = MaterialTheme.typography.bodyLarge,
         )
@@ -358,7 +358,7 @@ private fun RoomCode(initialPayload: String?, onDone: (Enrolment) -> Unit, onCan
             val shown = name ?: e.roomLabel
             Text("Server: ${e.coreUrl.removePrefix("http://").removePrefix("https://")}", style = MaterialTheme.typography.bodyLarge)
             Text("Server key: ${e.fingerprint.take(20)}…", style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fgMuted)
-            Text("Compare it with the dashboard's Settings → About.", style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
+            Text("Compare it with the dashboard's Settings → About & updates.", style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
             OutlinedTextField(
                 value = shown,
                 onValueChange = { name = it.take(RoomEnrolment.MAX_ROOM_NAME_LEN + 8) },

@@ -375,10 +375,41 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 | `publisher` | Shown on the install preview. Bundled radio declares `"Coders Farm"`. |
 | `license` | SPDX-style string. |
 | `description` | One or two sentences — shown on the install preview. |
-| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.6.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
+| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.8.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
 | `homepage` | Optional URL. |
+| `help` | Optional (SDK 1.8): a short Markdown help file inside the plugin, e.g. `"HELP.md"`. Domovoi's help desk indexes it with the manual (see [your plugin's help file](#your-plugins-help-file-sdk-18)). Optional for third-party plugins; **required for Coders Farm's own**. |
 | `accent` | Optional. Your dashboard page's colour, `"#rrggbb"` (or `"#rgb"`): its primary buttons, links, selection washes and the frame the dashboard draws around it. Checked for contrast at load; see [the frame and your accent](#the-frame-and-your-accent). Without it the page gets the neutral plugin slate. |
 | `accent_dark` | Optional, used only beside `accent`: the dark theme's colour, when the shade the dashboard derives from `accent` isn't the one you want. Same rules. |
+
+#### Your plugin's help file (SDK 1.8)
+
+Chat and voice answer questions about Domovoi from Domovoi's own help: the
+user manual, the FAQ, the troubleshooting guide and the help files of the
+plugins that are installed and enabled. Name yours in `[plugin]`:
+
+```toml
+[plugin]
+help = "HELP.md"
+```
+
+* **What to write.** Short, plain answers to what a household asks: what the
+  plugin does, how to do the two or three common things, why something might
+  not work. One `##` (or `###`) heading per question ("## How do I add a
+  printer?"): each heading is one passage, and the heading is what an answer
+  names ("From the Printing plugin → How do I add a printer?"). A file with
+  no headings is one passage named after the plugin. Name only buttons and
+  pages your plugin really has: help answers ONLY from what it finds, so a
+  missing answer reads "the manual doesn't cover that", never a guess.
+* **Rules** (`domovoi plugin pack`, install and load all check them): a
+  relative path inside the plugin, ending in `.md`, UTF-8, at most 32 KB.
+* **Who reads it.** The help index, in both processes, for an enabled plugin
+  (`status` ok or degraded); a reply's sources link to your first
+  `[[web.pages]]` route, else `#plugins`. A core before 1.8 ignores the key,
+  so adding it doesn't need a higher `domovoi_api`.
+* **Coders Farm's own plugins must have one** (the bundled radio plugin's is
+  [`plugins/radio/HELP.md`](../plugins/radio/HELP.md);
+  `domovoi/tests/test_help_desk_coverage.py` checks every plugin in this
+  repository). For third-party plugins it is optional, and recommended.
 
 ### `[entry_points]`
 
@@ -830,6 +861,8 @@ capability-gated screen never appears for a server nobody confirmed.
 * Migration filenames must match `V###__name.sql` and form a **gapless**
   sequence from `V001`.
 * The declared lockfile must exist with hashes (see above).
+* A declared `help` file must exist inside the plugin, be UTF-8 and at most
+  32 KB (SDK 1.8).
 
 ---
 
@@ -847,12 +880,16 @@ from domovoi.sdk import (
 
 `PluginSDK` instances are **injected** — your `register(ctx)` receives a
 `PluginContext` whose `ctx.sdk` is your facade. You never construct one.
-`domovoi.sdk.API_VERSION` (currently `"1.6.0"` — 1.3 added
+`domovoi.sdk.API_VERSION` (currently `"1.8.0"` — 1.3 added
 `device_endpoint`; 1.4 added `egress`, the internet-access gate, and
 `connectivity.policy` / `.reason` / `.internet_allowed`, and made
 `sdk.http` refuse non-local requests when the answer is `never`; 1.5 added
 the `[[containers]]` table and `ctx.add_container` /
-`ContainerExpectation`, §4.18; 1.6 added `sdk.playback.dispatch`, §4.5) is
+`ContainerExpectation`, §4.18; 1.6 added `sdk.playback.dispatch`, §4.5;
+1.7 added `sdk.core_config.ai_features` and made `sdk.http` refuse a model
+request to this box's Ollama while the household's AI features are off,
+§4.14; 1.8 added lookup sources, `ctx.add_lookup_source`, §4.19, and the
+manifest's optional `help` file) is
 the semver your `domovoi_api` range is checked against. Ask for `">=1.4"`
 if you use the 1.4 names; for 1.5's, either ask for `">=1.5"` or call
 `ctx.add_container` only `if hasattr(ctx, "add_container")` so an older
@@ -877,6 +914,7 @@ what makes disable/uninstall a clean teardown:
 | `ctx.add_canned_sounds(sounds)` | Shortcut for `sdk.assets.add_canned_sounds`. |
 | `ctx.add_context_provider(key, fn)` | Contribute a key to the per-turn Context extras (keys are exclusive across plugins). |
 | `ctx.add_container(id, resolve=None)` | SDK 1.5: tell the container guard how to see one of your `[[containers]]` right now (§4.18). |
+| `ctx.add_lookup_source(source)` | SDK 1.8: register a lookup source (`search(query)` / `fetch(id)` and a class of local, api or web) that answers lookups from Chat, voice and the phone (§4.19). One per plugin. |
 
 `register` may be sync or async. Do **not** import heavy libraries at module
 import time — there's a 10-second import budget, and initializing CUDA during
@@ -1279,7 +1317,9 @@ variables shadow the file**.
 `sdk.core_config` is a read-only whitelist of core facts: `bot_name`,
 `music_dir`, `podcasts_dir`, `audiobooks_dir`, `mpd_host`,
 `mpd_port_base_control`, `mpd_port_base_http`, `mpd_http_base`, `use_stubs`,
-`log_level`. Anything else raises — and it's read-only. `mpd_http_base`
+`log_level`, and since SDK 1.7 `ai_features` (the household's AI switch,
+live: false means nothing may ask a language model). Anything else raises
+— and it's read-only. `mpd_http_base`
 reads back as a usable URL prefix (`http://<host>`) even when the setting
 is `auto`, which the core resolves to its current LAN address.
 
@@ -1306,6 +1346,18 @@ is `auto`, which the core resolves to its current LAN address.
   only handles `httpx.HTTPError` / `httpx.TransportError` treats it as
   "the network is unavailable" (which it is) rather than letting a
   `ValueError` escape as a 500.
+  **It honours the household's AI switch** (SDK 1.7): while AI chat and
+  questions are off (Settings → Models, `AI_FEATURES=false`), every request
+  to this box's Ollama (any host on port 11434, or the core's `OLLAMA_URL`)
+  raises `ai_features.AITurnedOffConnectError` (an `AITurnedOff` and an
+  `httpx.ConnectError`) before anything is sent, except its read-only
+  listings `/api/tags`, `/api/ps` and `/api/version`: the native API and
+  the OpenAI-compatible `/v1/chat/completions`, `/v1/completions`,
+  `/v1/embeddings` alike. Every other host stays open. Treat it like Ollama being down: skip the
+  step (a summary, a generated answer) and keep what works without it.
+  Better still, read `sdk.core_config.ai_features` first and don't offer
+  the step at all. A plugin that calls Ollama through its own client is
+  outside this check — read the flag yourself.
 * `egress` (`from domovoi.sdk import egress`; `domovoi.webkit.egress` in
   `web.py`; SDK 1.4) — the one place the internet answer
   (`INTERNET_ACCESS`: `always` \| `sometimes` \| `never`, `""` while
@@ -1498,7 +1550,9 @@ Runs in the separate dashboard process. Your `web.py` receives a
   calls the same tier.
   Relative paths resolve to `/v1/plugins/<slug>/...`.
 * `ctx.http(**kwargs)` — UA-preset httpx client factory. Like `sdk.http`, it
-  refuses non-local requests when the server is answered `never` (SDK 1.4).
+  refuses non-local requests when the server is answered `never` (SDK 1.4),
+  and a model request to this box's Ollama while AI features are off
+  (SDK 1.7).
 * `domovoi.webkit.egress` — the internet-answer gate (see
   [§4.14](#414-sounds-http-state-logging)); a web route that would reach the
   internet raises `egress.http_exception("what")` first under `never`.
@@ -1587,7 +1641,7 @@ the new manifest while your old code still runs the old container). A
 `pulling` (else `image`) isn't on the host yet — a long pull — up to 6
 hours in all. A resolver that raises holds them for
 30 minutes (and is logged); after that the container shows as "not
-watched · resolver failing" on the Containers page and only its
+watched · resolver failing" on Settings → Health and only its
 repository and settings are checked, until the resolver answers again.
 
 A disabled plugin's containers are known but not expected (stopping a
@@ -1595,6 +1649,52 @@ server on disable is your call; the bundled ones leave it running); one
 that runs must still run your declared repository. The
 three Coders Farm Docker plugins (Jellyfin, RomM, Kiwix, 1.1.0 and later)
 are worked examples: each has a `guard.py`.
+
+### 4.19 Lookup sources — `ctx.add_lookup_source` (SDK 1.8)
+
+A lookup source is somewhere an answer's passages can come from: an offline
+library on the server (Kiwix), a public API (Wikipedia), the open web.
+Domovoi's own help (the manual, FAQ and troubleshooting guide,
+`domovoi/help_desk`) is the first one, registered by the core. A source has
+two async calls and says which class it is:
+
+```python
+from domovoi.sdk import LookupDocument, LookupHit
+
+class KiwixSource:
+    slug = "kiwix"                        # stable id
+    name = "your offline library"         # what a reply's sources line says
+    lookup_class = "local"                # "local" | "api" | "web"
+
+    async def search(self, query: str, *, limit: int = 3) -> list[LookupHit]:
+        # titles and short snippets, best first
+        return [LookupHit(id="A/Bread", title="Bread", snippet="Bread is…", url="#kiwix/A/Bread")]
+
+    async def fetch(self, id: str) -> LookupDocument | None:
+        # the passage's whole text, or None
+        return LookupDocument(id=id, title="Bread", text="…")
+
+def register(ctx):
+    ctx.add_lookup_source(KiwixSource())
+```
+
+* **The core sets the order, by class:** local, then api, then web; within
+  a class, by registration slug. Nothing on your object changes that (a
+  `priority` attribute is ignored), and an unknown class is refused at
+  registration (`domovoi.lookup.validate_source`).
+* **Local sources skip the internet question.** They never leave the box,
+  so they work under internet "never" and show no permission card; their
+  answers are still listed under the reply. An api or web source is asked
+  only after the person allows it, and your `search` must go through
+  `sdk.http` (which honours the internet answer) like any other request.
+* **What you return is data, never instructions.** Whoever hands it to a
+  model marks it so; don't put prompts in it.
+* **Fail quietly.** A source that raises, takes longer than 8 seconds or
+  returns something other than `LookupHit`s is skipped with a log line;
+  the other sources still answer. Titles are cut to 200 characters and
+  snippets to 600; at most 10 hits are read.
+* One source per plugin; it is torn down with the rest of your
+  registrations on disable.
 
 ## 5. Worked example — the bundled radio plugin
 
@@ -1991,7 +2091,7 @@ The runtime forces most of this, but know the shapes:
   written, but it loads at the next restart of the Domovoi services. Confirm
   answers `restart_required: true`; `GET /v1/admin/version` and
   `GET /v1/plugins` list the upgrade as pending, and the dashboard's Plugins
-  page and Settings → Version offer the restart (the same one that loads
+  page and Settings → About & updates offer the restart (the same one that loads
   pulled code — it bounces core and web). Until then the plugin is not
   loaded in the core. A plugin whose code the server never imported (its
   import failed at boot, say) is hot-loaded as before.

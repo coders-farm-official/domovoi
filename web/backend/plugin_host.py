@@ -41,7 +41,7 @@ the ``plugins_changed`` NOTIFY channel. New plugins mount live;
 process (same corollary as design §3.4). The host remembers the version
 it mounted (:meth:`PluginHost.stale_mounts`), and ``GET
 /api/config/version`` lists a plugin whose registry row has moved past it
-next to the core's own staged upgrades, so Settings → Version and the
+next to the core's own staged upgrades, so Settings → About & updates and the
 Plugins page offer the restart that loads it.
 """
 
@@ -79,7 +79,7 @@ CORE_NAV: dict[str, int] = {
     "videos": 15,
     "news": 18,
     "people": 20,
-    # No sidebar row since 2026-10-11 (a Settings tab; #satellites opens it),
+    # No sidebar row since 2026-10-11 (a Settings tab; #settings/rooms opens it),
     # like settings below: the published order stays, so a plugin that
     # slotted itself against it sorts as before.
     "satellites": 30,
@@ -175,6 +175,22 @@ _WEB_BACKEND_CORE_IMPORTS = (
     # ...and, once it has ended a frozen core, the note the Version card
     # shows (core-watchdog-last.json), written the core's own way.
     "domovoi.loop_watchdog",
+    # The household's AI switch: Capabilities, Chat and the Models page
+    # read it, and every plugin http() client carries its request hook.
+    "domovoi.ai_features",
+    # Domovoi's help desk (part 9): /api/help and Chat's help turns read
+    # the help index, the facts, the troubleshooting summaries and the
+    # report through these; error_codes is imported lazily by the index.
+    "domovoi.lookup",
+    "domovoi.help_desk.index",
+    "domovoi.help_desk.error_codes",
+    "domovoi.help_desk.source",
+    "domovoi.help_desk.redact",
+    "domovoi.help_desk.troubleshoot",
+    "domovoi.help_desk.facts",
+    "domovoi.help_desk.answer",
+    "domovoi.help_desk.diagnostics",
+    "domovoi.help_desk.delivery",
 )
 
 
@@ -334,15 +350,20 @@ class WebPluginContext:
         with the internet-answer hook (``egress.async_request_hook``)
         first in ``event_hooks["request"]``: under INTERNET_ACCESS=never a
         request to a host that is not on this network raises
-        ``egress.InternetTurnedOff`` before anything is sent."""
-        from domovoi import egress
+        ``egress.InternetTurnedOff`` before anything is sent; and while the
+        household's AI features are off, a request that runs a model on
+        this box's Ollama raises ``ai_features.AITurnedOff``
+        (``domovoi/ai_features.py``)."""
+        from domovoi import ai_features, egress
 
         headers = kwargs.pop("headers", {}) or {}
         headers.setdefault(
             "User-Agent",
             "domovoi (+github.com/coders-farm-official/domovoi)",
         )
-        return egress.async_client(headers=headers, **kwargs)
+        return egress.async_client(
+            headers=headers, **ai_features.with_request_hook(kwargs)
+        )
 
     def add_router(self, router: APIRouter) -> None:
         self.routers.append(router)

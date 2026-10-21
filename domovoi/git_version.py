@@ -275,7 +275,7 @@ async def version_state() -> dict:
         "checkout_version": checkout_label,
         # The branch of origin the check and the pull follow ("stable",
         # "main", another, or None), read from the checkout's config with
-        # no fetch; `channels` the ones Settings → Version offers, and
+        # no fetch; `channels` the ones Settings → About & updates offers, and
         # `channel_pin` the branches root's update unit allows
         # (DOMOVOI_UPSTREAM_BRANCH), None when it allows any.
         "channel": track["channel"],
@@ -519,7 +519,7 @@ def _upstream_target() -> tuple[str | None, str | None]:
         return None, (
             f"this checkout follows {followed}, but the update unit only follows "
             f"{', '.join('origin/' + b for b in pin)} (DOMOVOI_UPSTREAM_BRANCH in "
-            f"{UPDATE_DEFAULTS_FILE}); switch the channel in Settings > Version"
+            f"{UPDATE_DEFAULTS_FILE}); switch the channel in Settings > About & updates"
         )
     return f"refs/remotes/origin/{branch}", None
 

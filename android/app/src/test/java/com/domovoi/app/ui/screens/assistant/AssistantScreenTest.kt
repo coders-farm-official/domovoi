@@ -264,9 +264,9 @@ class AssistantScreenTest {
     @Test fun theModelPanelSaysWhatListensAndSpeaks() {
         val ready = ui(setup = ModelSetup.Installed).copy(voiceName = "Kristin")
         assertTrue(speechSummary(ready).contains("Listens with Moonshine"))
-        assertTrue(speechSummary(ready).contains("Speaks with Kristin, the voice picked in Settings → Voice."))
+        assertTrue(speechSummary(ready).contains("Speaks with Kristin, the voice picked in Settings → Voices."))
         val fallback = ready.copy(voiceName = "this phone's own text-to-speech voice")
-        assertTrue(speechSummary(fallback).contains("Domovoi's own voice is downloaded in Settings → Voice"))
+        assertTrue(speechSummary(fallback).contains("Domovoi's own voice is downloaded in Settings → Voices"))
         val missing = ui(setup = ModelSetup.Installed, voiceSetup = ModelSetup.Missing(0))
         assertTrue(speechSummary(missing).startsWith("Talking needs the speech files (43.9 MB)"))
         assertEquals("listening" to "ask your question", voiceLine(VoicePhase.Listening, false))

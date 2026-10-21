@@ -79,10 +79,11 @@ def test_the_windows_setup_says_the_same_version() -> None:
     numbers (a pre-release has no place there)."""
     semver = _semver(_pyproject_version())
     numeric = re.match(r"\d+\.\d+\.\d+", semver).group(0) + ".0"
-    iss = "windows/installer/DomovoiSetup.iss"
-    assert _one(iss, r'^#define AppVersion "([^"]+)"$') == semver
-    assert _one(iss, r"^VersionInfoVersion=(\S+)$") == numeric
-    assert _one(iss, r"^VersionInfoProductTextVersion=(\S+)$") == "{#AppVersion}"
+    # The server's Setup, and the satellite's (2026-10-21).
+    for iss in ("windows/installer/DomovoiSetup.iss", "windows/installer/DomovoiSatelliteSetup.iss"):
+        assert _one(iss, r'^#define AppVersion "([^"]+)"$') == semver
+        assert _one(iss, r"^VersionInfoVersion=(\S+)$") == numeric
+        assert _one(iss, r"^VersionInfoProductTextVersion=(\S+)$") == "{#AppVersion}"
     asm = "windows/common/AssemblyInfo.cs"
     assert _one(asm, r'^\[assembly: AssemblyInformationalVersion\("([^"]+)"\)\]$') == semver
     assert _one(asm, r'^\[assembly: AssemblyVersion\("([^"]+)"\)\]$') == numeric

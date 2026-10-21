@@ -13,6 +13,8 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -127,6 +129,11 @@ internal data class ThreadRow(
     val updated_at: String? = null,
     val message_count: Int = 0,
     val last_snippet: String? = null,
+    val archived: Boolean = false,
+    /** A person named it (V034): the model's title never replaces it. */
+    val title_by_user: Boolean = false,
+    /** A search hit (`?q=`): the words around the match in a message. */
+    val match_snippet: String? = null,
 )
 
 @Serializable
@@ -155,6 +162,10 @@ internal data class MessageRow(
     val speaker_confidence: Double? = null,
     /** The match was clear enough to draw the speaker marker at full strength. */
     val speaker_confident: Boolean = false,
+    /** "Try again" may replace this reply (the chat model's own reply to
+     *  a typed message, V034); false for a spoken turn's or the help
+     *  desk's, and from a server that has no try again. */
+    val retryable: Boolean = false,
     /** Documents attached with a user row (documents plan, D1). */
     val documents: List<ServerDocument>? = null,
     /** How a reply answered about the chat's documents: sources and notes. */
@@ -162,7 +173,7 @@ internal data class MessageRow(
 )
 
 @Serializable
-private data class MessageList(
+internal data class MessageList(
     val messages: List<MessageRow> = emptyList(),
     /** Long-document jobs (documents plan D2): running ones show their
      *  progress, a stopped one lets its reply carry on. */
@@ -208,6 +219,7 @@ internal fun LiveMessage.finishWith(row: MessageRow) {
     row.error?.let { error = it }
     row.stats?.error_code?.let { errorCode = it }
     doc = row.doc
+    retryable = row.retryable
     if (row.error == null) content = row.content
 }
 
@@ -228,6 +240,7 @@ internal class LiveMessage(
     speakerPersonId: Long? = null,
     speakerName: String? = null,
     speakerConfident: Boolean = false,
+    retryable: Boolean = false,
     /** Documents attached with a user message. */
     val documents: List<ServerDocument> = emptyList(),
     doc: ServerDocReply? = null,
@@ -250,6 +263,7 @@ internal class LiveMessage(
     var speakerPersonId by mutableStateOf(speakerPersonId)
     var speakerName by mutableStateOf(speakerName)
     var speakerConfident by mutableStateOf(speakerConfident)
+    var retryable by mutableStateOf(retryable)
     /** Measured on this phone while a reply streams (details dialog only). */
     var sentAtMs: Long? = null
     var firstWordsAtMs: Long? = null
@@ -284,8 +298,11 @@ private suspend fun sendStreaming(
     onDone: (MessageRow) -> Unit = {},
     /** A long document's job (documents plan D2): its `job` and `progress` views. */
     onJob: (ServerJobView) -> Unit = {},
+    /** "Try again" (`POST .../retry`): no body, a new reply to the last
+     *  question in place of the last reply. */
+    retry: Boolean = false,
 ) = withContext(Dispatchers.IO) {
-    val body = buildJsonObject {
+    val body = (if (retry) buildJsonObject {} else buildJsonObject {
         put("content", content)
         // Which install sent it, for the message's details (V017).
         put("device_id", app.prefs.deviceId)
@@ -297,9 +314,10 @@ private suspend fun sendStreaming(
         if (documents.isNotEmpty()) {
             put("documents", buildJsonArray { documents.forEach { d -> add(buildJsonObject { put("token", d.token) }) } })
         }
-    }.toString().toRequestBody("application/json".toMediaType())
+    }).toString().toRequestBody("application/json".toMediaType())
+    val path = if (retry) "/api/chat/threads/$threadId/retry" else "/api/chat/threads/$threadId/messages"
     val req = Request.Builder()
-        .url(app.api.absolute("/api/chat/threads/$threadId/messages"))
+        .url(app.api.absolute(path))
         // SSE, so it builds its own call instead of using ApiClient.raw()
         // — and sends the same preflight-forcing header (WEB-6).
         .header("X-Requested-With", "DomovoiApp")
@@ -307,7 +325,10 @@ private suspend fun sendStreaming(
         .build()
     app.api.http.newCall(req).execute().use { resp ->
         if (!resp.isSuccessful) {
-            onError("${resp.code} ${resp.message}", null, null)
+            // Plain words for the household's AI features being off (a 409
+            // ai-off), not "409 Conflict" or an empty reply.
+            val line = sendFailureLine(resp.code, resp.message, resp.header(com.domovoi.app.net.REFUSAL_HEADER), resp.body?.string())
+            withContext(Dispatchers.Main) { onError(line, null, null) }
             return@use
         }
         val source = resp.body?.source() ?: return@use
@@ -360,7 +381,14 @@ private suspend fun sendStreaming(
  * empty thread in the household's list. [onCreated] hears of the thread made.
  */
 @Composable
-internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (ThreadRow) -> Unit = {}) {
+internal fun ConversationPane(
+    thread: ThreadRow?,
+    frame: ChatFrame,
+    /** The thread's title as the list has it now (the model's title comes
+     *  after the first reply); null: not known there yet. */
+    titleOf: (Long?) -> String? = { null },
+    onCreated: (ThreadRow) -> Unit = {},
+) {
     val app = LocalApp.current
     val toast = LocalToast.current
     val context = LocalContext.current
@@ -423,14 +451,14 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
     // server's replies too): the report sheet, over the conversation.
     var reporting by remember { mutableStateOf<ReplyReport?>(null) }
 
-    // A thread opened from the list: its messages. A new chat has none.
     // The thread's long-document jobs (documents plan D2).
     val jobs = remember { mutableStateListOf<ServerJobView>() }
     var reloads by remember { mutableStateOf(0) }
-    LaunchedEffect(thread?.id, reloads) {
-        if (thread == null) return@LaunchedEffect
+    // A thread's messages, read from the server (opening it, and after
+    // "try again"), with its jobs.
+    suspend fun loadMessages(threadId: Long) {
         runCatching {
-            app.api.get("/api/chat/threads/${thread.id}/messages").decode<MessageList>()
+            app.api.get("/api/chat/threads/$threadId/messages").decode<MessageList>()
         }.onSuccess { list ->
             val rows = list.messages
             jobs.clear()
@@ -451,12 +479,17 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
                         speakerPersonId = it.speaker_person_id,
                         speakerName = it.speaker_name,
                         speakerConfident = it.speaker_confident,
+                        retryable = it.retryable,
                         documents = it.documents.orEmpty(),
                         doc = it.doc,
                     ),
                 )
             }
         }
+    }
+    // A thread opened from the list: its messages. A new chat has none.
+    LaunchedEffect(thread?.id, reloads) {
+        if (thread != null) loadMessages(thread.id)
     }
     // Keep the newest message pinned to the bottom. Two triggers, because the
     // list loses its anchor for two different reasons:
@@ -695,6 +728,57 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
         }
     }
 
+    // "Try again": the last reply makes way for a new one to the same
+    // question; the server swaps them once the new one is written, and the
+    // thread is read back after (a failed retry writes nothing there, so the
+    // old reply comes back, and why is said).
+    fun retry() {
+        val target = current ?: return
+        if (sending || !canRetry(transcript)) return
+        sending = true
+        following = true
+        val old = transcript.removeAt(transcript.lastIndex)
+        val live = LiveMessage("assistant", "", pending = true)
+        live.sentAtMs = System.currentTimeMillis()
+        transcript.add(live)
+        scope.launch {
+            runCatching {
+                sendStreaming(
+                    app, target.id, "", emptyList(), emptyList(),
+                    onDelta = {
+                        if (live.firstWordsAtMs == null) live.firstWordsAtMs = System.currentTimeMillis()
+                        live.content += it
+                    },
+                    onError = { detail, code, model ->
+                        live.error = detail
+                        live.errorCode = code
+                        if (model != null) live.model = model
+                    },
+                    retry = true,
+                )
+            }.onFailure {
+                // Nothing reached the server: the old reply is still the one.
+                transcript.remove(live)
+                transcript.add(old)
+                toast(failureText("try again", it))
+            }
+            live.pending = false
+            sending = false
+            live.error?.let { toast("couldn't try again: $it") }
+            loadMessages(target.id)
+        }
+    }
+
+    // A chat started from the list's "Message Domovoi…" box: its first
+    // message goes out as the chat opens.
+    LaunchedEffect(Unit) {
+        val first = frame.firstMessage?.trim().orEmpty()
+        if (first.isNotEmpty() && thread == null && transcript.isEmpty()) {
+            draft = first
+            send()
+        }
+    }
+
     val open = current
     if (voiceOpen && open != null) {
         VoiceView(open.id, transcript, onClose = { voiceOpen = false })
@@ -705,10 +789,18 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
         return
     }
     val threadId = open?.id ?: 0L
+    val title = titleOf(open?.id) ?: open?.title ?: transcript.firstOrNull { it.role == "user" }
+        ?.let { com.domovoi.app.assistant.ChatTitles.firstWords(it.content) } ?: NEW_CHAT
+    // Where the newest reply's view of the thread began, when it didn't
+    // see all of it: the quiet divider goes above that message.
+    val windowAt = windowDividerIndex(transcript.map { it.id }, transcript.lastOrNull { it.role != "user" && it.stats != null }?.stats?.window_from_id)
+    val shareChat: (() -> Unit)? = if (transcript.isEmpty() || sending) null else {
+        { shareText(context, title, serverChatText(title, transcript.map { it.asRow() })) }
+    }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         ChatPaneGutter()
-        ThreadTitleRow(open?.title ?: NEW_CHAT, frame)
+        ThreadTitleRow(title, frame, shareChat)
 
         Box(Modifier.weight(1f).fillMaxWidth().then(rememberFitStretch(listState))) {
             LazyColumn(
@@ -720,10 +812,12 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
                 val stopped = jobs.filter { it.state == "stopped" || it.state == "failed" }
                 val carryAt = stopped.associate { j -> j.id to transcript.indexOfLast { it.doc?.job?.id == j.id } }
                 itemsIndexed(transcript) { i, m ->
+                    if (i == windowAt) WindowDivider()
                     // The draft is made at the tap, from the transcript then.
                     val stoppedJob = m.doc?.job?.id?.let { id -> stopped.firstOrNull { it.id == id && carryAt[id] == i } }
                     MessageBubble(
-                        m, threadId, onReport = if (canReport(m)) ({ reporting = reportableAt(i) }) else null,
+                        m, threadId,
+                        onReport = if (canReport(m)) ({ reporting = reportableAt(i) }) else null,
                         onSource = { openSource = it },
                         carryOnLeft = stoppedJob?.let { it.parts - it.read }.takeIf { !sending },
                         onCarryOn = {
@@ -735,6 +829,7 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
                                 }
                             }
                         },
+                        onRetry = if (i == transcript.lastIndex && !sending && canRetry(transcript)) ({ retry() }) else null,
                     )
                 }
                 // A job this screen didn't start, while it runs.
@@ -944,10 +1039,24 @@ private fun rememberFitStretch(listState: LazyListState): Modifier {
  * than invalidating the pane, composer and caret included.
  */
 @Composable
-private fun ThreadTitleRow(title: String, frame: ChatFrame) {
+private fun ThreadTitleRow(title: String, frame: ChatFrame, onShare: (() -> Unit)?) {
     if (keyboardCrowdsTheWindow()) return
-    // Chat's header in every place (ChatHome.kt): back, the title, the chip.
-    ChatHeader(title, frame.chip, ChatPlaceKind.Server, frame.onBack)
+    // Chat's header in every place (ChatHome.kt): back, the title, the chip,
+    // and sharing the whole chat as text.
+    ChatHeader(title, frame.chip, ChatPlaceKind.Server, frame.onBack, actions = onShare?.let { share ->
+        { ShareChatButton(share) }
+    })
+}
+
+/** A message as the share text reads it. */
+private fun LiveMessage.asRow() = MessageRow(role = role, content = content, error = error, speaker_name = speakerName)
+
+/** "Try again" is offered on the last message when it is a finished reply
+ *  to a question. */
+internal fun canRetry(transcript: List<LiveMessage>): Boolean {
+    val last = transcript.lastOrNull() ?: return false
+    val before = transcript.getOrNull(transcript.size - 2) ?: return false
+    return last.role != "user" && !last.pending && before.role == "user" && last.retryable
 }
 
 /**
@@ -1010,6 +1119,7 @@ internal fun MessageBubble(
     m: LiveMessage,
     threadId: Long,
     onReport: (() -> Unit)? = null,
+    onRetry: (() -> Unit)? = null,
     onSource: (SourceView) -> Unit = {},
     /** A stopped summary's parts still to read: "carry on" shows (null: no). */
     carryOnLeft: Int? = null,
@@ -1117,6 +1227,19 @@ internal fun MessageBubble(
                     enabled = m.content.isNotEmpty(),
                     onClick = { menu = false; copy() },
                 )
+                DropdownMenuItem(
+                    text = { Text(ACTION_SHARE) },
+                    leadingIcon = { Icon(Icons.Outlined.Share, contentDescription = null) },
+                    enabled = m.content.isNotEmpty(),
+                    onClick = { menu = false; shareText(context, "Domovoi", m.content) },
+                )
+                if (onRetry != null) {
+                    DropdownMenuItem(
+                        text = { Text(ACTION_TRY_AGAIN) },
+                        leadingIcon = { Icon(Icons.Outlined.Refresh, contentDescription = null) },
+                        onClick = { menu = false; onRetry() },
+                    )
+                }
                 DropdownMenuItem(
                     text = { Text("details") },
                     leadingIcon = { Icon(Icons.Outlined.Info, contentDescription = null) },

@@ -1,7 +1,7 @@
 {
   "about": [
     "The spare-device enrolment payload (S1, 2026-10-13): what the dashboard's",
-    "Settings -> Satellites -> 'Add a spare device' shows in its install command and",
+    "Settings -> Rooms -> 'Add a spare device' shows in its install command and",
     "its QR code. Read by satellite/tests/test_enrolment.py (satellite/enrolment.py)",
     "and the Android room mode's Kotlin parser tests. Fingerprints are placeholders.",
     "Documented in docs/uml/satellite-protocol.md, 'Enrolling a spare device'.",

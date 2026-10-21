@@ -31,7 +31,7 @@ import java.io.File
  * The log stays in app storage (excluded from backup and device transfer
  * like everything else, see res/xml/data_extraction_rules.xml). Nothing is
  * uploaded and nothing is shown on the lock screen; the owner reads, copies
- * or shares it from Settings > About.
+ * or shares it from Settings > About & updates.
  */
 object Diagnostics {
     private var store: ProblemStore? = null

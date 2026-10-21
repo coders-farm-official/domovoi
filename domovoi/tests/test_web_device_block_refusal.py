@@ -1,6 +1,6 @@
 """A device an admin BLOCKED must not be asked for the admin password.
 
-An admin blocks one tablet in Settings → Devices. The server then refuses
+An admin blocks one tablet in Settings → Phones & browsers. The server then refuses
 that device's writes ``403`` with the block's own reason as the body
 (``web/backend/api/files.py`` ``_assert_can_write`` / ``_blocked_message``).
 ``403`` is also what "sign in" looks like, so ``data.js``'s generic auth
@@ -505,7 +505,7 @@ def test_the_refusal_says_who_can_lift_it(editor):
     the next move is to find an admin, so the sentence says so."""
     alert = " ".join(editor["refused_at_save"]["alerts"])
     assert "admin" in alert.lower(), alert
-    assert "Settings" in alert and "Devices" in alert, alert
+    assert "Settings" in alert and "Phones & browsers" in alert, alert
 
 
 def test_the_typing_survives_the_refusal(editor):

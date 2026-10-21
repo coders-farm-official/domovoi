@@ -6,6 +6,7 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.domovoi.app.net.ReportUpload
+import com.domovoi.app.alerts.HelpAlerts
 import com.domovoi.app.alerts.IncidentAlerts
 import com.domovoi.app.assistant.AssistantBench
 import com.domovoi.app.assistant.AssistantController
@@ -134,6 +135,18 @@ class AppContainer(context: Context) {
      *  navigates there and clears it. */
     val pendingRoute = MutableStateFlow<String?>(null)
 
+    /** Help steps sent by voice to this phone's owner: one notification
+     *  each (alerts/HelpAlerts.kt). Started by DomovoiApplication. */
+    val helpAlerts = HelpAlerts(context, api, bus, prefs)
+
+    /** The home-server chat a help notification's tap asked for (thread
+     *  id, title); Chat opens it and clears it. */
+    val pendingChatThread = MutableStateFlow<Pair<Long, String>?>(null)
+
+    /** A new phone chat asked for (Settings → About, "Ask Domovoi for
+     *  help" with no home-server chat to start); Chat opens one and clears it. */
+    val pendingPhoneChat = MutableStateFlow(false)
+
     /** A chat something asked Chat to open ("Ask about this document" in
      *  Files): Chat opens it and clears it. */
     val pendingChat = MutableStateFlow<com.domovoi.app.ui.screens.chat.ChatOpenRequest?>(null)
@@ -177,7 +190,7 @@ class AppContainer(context: Context) {
         )
     }
 
-    /** The on-device assistant's benchmark (Settings → About → developer
+    /** The on-device assistant's benchmark (Settings → About & updates → developer
      *  options; M0 of the phone assistant). Built on first use. Its only
      *  network use is the
      *  model download the user starts, on a copy of the app's client WITHOUT
@@ -204,7 +217,7 @@ class AppContainer(context: Context) {
     }
     val assistant: AssistantController by assistantLazy
 
-    /** The phone's own voice (Settings → Voice): Domovoi's Piper voice
+    /** The phone's own voice (Settings → Voices): Domovoi's Piper voice
      *  through the Kotlin phonemizer once downloaded, the server's "say it
      *  like" list from `GET /api/voice` (cached per server), Android's
      *  TextToSpeech until then. Built on first use. */

@@ -239,12 +239,25 @@ def _register_core_reapply_hooks() -> None:
     ):
         reapply.on_reapply(field, schedule_llm_warmup)
     reapply.on_reapply("log_level", _reapply_log_level)
+    # The AI switch (domovoi/ai_features.py): settings takes the value the
+    # save left in .env, where both processes read it (a failed write
+    # leaves it as it was), then turning it on loads the models ahead of
+    # the first question; turning it off needs nothing — every caller asks
+    # ai_features before it asks a model.
+    from domovoi import ai_features as _ai
+
+    def _reapply_ai_features() -> None:
+        settings.ai_features = _ai.enabled()
+        if settings.ai_features:
+            schedule_llm_warmup()
+
+    reapply.on_reapply("ai_features", _reapply_ai_features)
     # Saving fastlane_mode loads (shadow) or drops (off) the fast lane's
     # model on the spot (domovoi/fast_lane.py).
     from domovoi import fast_lane
 
     reapply.on_reapply("fastlane_mode", fast_lane.apply_mode)
-    # Switching wake-word training on in Settings → Configuration starts its
+    # Switching wake-word training on in Settings → Advanced starts its
     # worker now (it isn't started at boot while the setting is off); off
     # is read by the worker's own tick.
     def _start_wake_trainer() -> None:
@@ -327,6 +340,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi import image_safety
 
     image_safety.configure_pillow()
+
+    # Domovoi's own help (the manual, FAQ, troubleshooting) as the first
+    # lookup source (domovoi/lookup.py, SDK 1.8): local, always on.
+    from domovoi.help_desk.source import register_core_source
+
+    register_core_source()
 
     # Pin the version label to the code this process actually imported,
     # before anything can pull underneath us. See git_version.capture_boot_state.
@@ -686,7 +705,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   timer_watcher → playback_state_sweeper → media_plays_pruner →
     #   memory_extractor → lyrics_index → news_fetcher → wake_word_trainer →
     #   podcast_feed_poller → audiobook_indexer → room_book_positions →
-    #   command_capture_pruner → guests_seen_pruner → voice_history_pruner → container_guard →
+    #   command_capture_pruner → guests_seen_pruner → printer_status → print_jobs →
+    #   print_history → voice_history_pruner → container_guard →
     #   library_alias_fetch → lyrics_scan → lyrics_fetch.
     #
     # Per-worker rationale lives on each class (workers/*.py); the radio
@@ -734,6 +754,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.workers.guests_seen_pruner import GuestsSeenPruner
 
     WORKERS.add_worker(GuestsSeenPruner(), owner="core")
+    # Printers and scanners (V033): printer status, jobs in flight, and the
+    # 90-day job log (domovoi/workers/printing.py).
+    from domovoi.workers import printing as printing_workers
+
+    printing_workers.register(WORKERS)
     # Keep voice history (owner, 2026-10-17): once a day, what people said
     # longer ago than the setting goes; also finishes an open "Delete all
     # voice history" (domovoi/workers/voice_history_pruner.py).
@@ -934,6 +959,12 @@ app.add_middleware(BodyLimitMiddleware)
 from domovoi.plugins_runtime.installer import plugins_admin_router  # noqa: E402
 
 app.include_router(plugins_admin_router)
+
+# Printers, printing and scanning (domovoi/printing/routes.py): device-read,
+# device and admin tiers on their own routes.
+from domovoi.printing.routes import router as printing_router  # noqa: E402
+
+app.include_router(printing_router)
 
 
 @app.get("/v1/voice/activity", dependencies=[Depends(require_device)])
@@ -1437,7 +1468,7 @@ async def satellite_code_manifest_signed() -> dict[str, Any]:
 @app.get("/v1/satellite-code/bundle.tar.gz")
 async def satellite_code_bundle() -> FastAPIResponse:
     """The satellite tree as one deterministic ``.tar.gz`` — what a spare
-    computer's install command downloads (Settings → Satellites → Add a
+    computer's install command downloads (Settings → Rooms → Add a
     spare device). The same files as the manifest above, under
     ``satellite/``. The command runs it only after matching its SHA-256
     against the digest the dashboard quoted
@@ -1548,6 +1579,156 @@ async def admin_satellite_windows_fetch() -> dict[str, Any]:
     lock = _windows_lock()
     started = satellite_windows.start_fetch(lock)
     return {"started": started, **(await asyncio.to_thread(satellite_windows.status, lock))}
+
+
+# ─── The Windows satellite Setup and its setup codes (2026-10-21) ─────────
+# DomovoiSatelliteSetup.exe (windows/installer/DomovoiSatelliteSetup.iss) is
+# the double-click front end of install-windows.ps1. The dashboard's "make
+# the code" asks for a setup code naming the room's enrolment payload; the
+# Setup trades it here for that payload and the bundle's digest, exactly
+# what the PowerShell command quotes (domovoi/satellite_setup.py: a code is
+# not a credential, and it expires). The Setup file itself comes from the
+# project's GitHub release, on an admin's word, and is handed out here.
+
+
+class _SetupCodeBody(BaseModel):
+    payload: str = Field(..., min_length=1, max_length=1024)
+
+
+def _setup_code_answer(made: dict[str, Any]) -> dict[str, Any]:
+    from domovoi import satellite_setup
+
+    code = made["code"]
+    return {
+        "code": code,
+        "code_display": satellite_setup.display_code(code),
+        "expires_at": made["expires_at"],
+        "server": satellite_setup.server_text(made["core"]),
+        "file_name": satellite_setup.download_name(code, made["core"]),
+        "download_path": satellite_setup.DOWNLOAD_PATH + code,
+        "short_path": satellite_setup.SHORT_PATH + satellite_setup.display_code(code),
+    }
+
+
+@app.post("/v1/admin/satellite-setup/codes", dependencies=[Depends(require_admin_mutation)])
+async def admin_satellite_setup_code(body: _SetupCodeBody) -> dict[str, Any]:
+    """A setup code for one room's enrolment payload, live for 24 hours (the
+    same code again while it lives). 422 for a payload the devices would
+    refuse."""
+    from domovoi import satellite_setup
+
+    try:
+        made = satellite_setup.make_code(body.payload)
+    except satellite_setup.SetupCodeError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from None
+    return _setup_code_answer(made)
+
+
+@app.get("/v1/satellite-setup/codes/{code}")
+async def satellite_setup_code(code: str, challenge: str | None = None) -> dict[str, Any]:
+    """What the Setup gets for a live code: the room's enrolment payload
+    and the satellite bundle's SHA-256, as the PowerShell command carries
+    them, plus the parts it shows (room, fingerprint). With ``challenge``
+    (16 random bytes in hex, the Setup's), signed by this server's
+    identity key (``public_key``, ``signature``: domovoi/satellite_setup.py
+    setup_message), which is what the Setup holds the answer to. Public on
+    the LAN like the bundle: nothing in it is a secret. 404 for an unknown
+    or expired code, 422 for a malformed challenge; 423 while the container
+    guard's freeze is on."""
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
+    from domovoi import satellite_bundle, satellite_setup
+    from satellite import enrolment
+
+    if challenge is not None and not satellite_setup.valid_challenge(challenge):
+        raise HTTPException(status_code=422, detail="the challenge must be 32 lower-case hex digits")
+    payload = satellite_setup.lookup(code)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="that setup code is not known here: it has expired "
+                            "(after 24 hours, or when the server restarted) or was mistyped")
+    parsed = enrolment.parse(payload)
+    bundle = await asyncio.to_thread(
+        satellite_bundle.current, SATELLITE_CODE_DIR, _is_allowed_satellite_code
+    )
+    answer = {
+        "format": 1,
+        "code": satellite_setup.normalize_code(code),
+        "payload": payload,
+        "core": parsed.core,
+        "room": parsed.room,
+        "room_id": parsed.room_id,
+        "fingerprint": parsed.fp,
+        "bundle_sha256": bundle.sha256,
+        "bundle_size": len(bundle.data),
+        "bundle_path": "/v1/satellite-code/bundle.tar.gz",
+        "expires_at": satellite_setup.expires_at(code),
+    }
+    if challenge is not None:
+        identity = server_identity.load_or_create()
+        message = satellite_setup.setup_message(challenge, answer["code"], payload, bundle.sha256)
+        answer.update(challenge=challenge, algorithm=server_identity.ALGORITHM,
+                      public_key=identity.public_key_b64,
+                      signature=server_identity.b64(identity.sign(message)))
+    return answer
+
+
+async def _satellite_setup_download(code: str) -> FileResponse:
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
+    from domovoi import satellite_setup
+    from satellite import enrolment
+
+    payload = satellite_setup.lookup(code)
+    if payload is None:
+        return FastAPIResponse(
+            status_code=404, media_type="text/plain; charset=utf-8",
+            content="This Domovoi setup link has expired (codes last 24 hours) or was mistyped.\n"
+                    "Make a new code on the dashboard: Settings > Satellites > add a spare device.\n")
+    path = await asyncio.to_thread(satellite_setup.cached_file)
+    if path is None:
+        return FastAPIResponse(
+            status_code=404, media_type="text/plain; charset=utf-8",
+            content="This Domovoi server doesn't hold the Windows Setup yet.\n"
+                    "On the dashboard, Settings > Satellites > add a spare device: press\n"
+                    "\"get the Windows Setup\", then open this link again.\n")
+    name = satellite_setup.download_name(satellite_setup.normalize_code(code), enrolment.parse(payload).core)
+    return FileResponse(path, media_type="application/vnd.microsoft.portable-executable", filename=name,
+                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
+
+
+@app.get("/v1/satellite-setup/download/{code}")
+async def satellite_setup_download(code: str) -> FileResponse:
+    """The Windows satellite Setup, named so it carries this code and the
+    server (``DomovoiSatelliteSetup_<code>_<host>_<port>.exe``): the Setup
+    reads them back and nobody types them. 404 with a plain sentence for an
+    expired code or a server that doesn't hold the Setup yet."""
+    return await _satellite_setup_download(code)
+
+
+@app.get("/win/{code}", include_in_schema=False)
+async def satellite_setup_short(code: str) -> FileResponse:
+    """The same download, at an address short enough to type into the
+    laptop's browser (``http://192.168.1.20:6370/win/K7M4-QX2P``)."""
+    return await _satellite_setup_download(code)
+
+
+@app.get("/v1/admin/satellite-setup", dependencies=[Depends(require_admin_read)])
+async def admin_satellite_setup() -> dict[str, Any]:
+    """Whether this server holds the Windows satellite Setup, from which
+    release, and the fetch's state."""
+    from domovoi import satellite_setup
+
+    return await asyncio.to_thread(satellite_setup.status)
+
+
+@app.post("/v1/admin/satellite-setup/fetch", dependencies=[Depends(require_admin_mutation)])
+async def admin_satellite_setup_fetch() -> dict[str, Any]:
+    """Start fetching the Setup from the project's GitHub release (held to
+    that release's SHA256SUMS). Answers at once; poll the status. Refused
+    under internet access "never" (the job says so)."""
+    await container_freeze.require_unfrozen("satellite_channel")
+    from domovoi import satellite_setup
+
+    started = satellite_setup.start_fetch()
+    return {"started": started, **(await asyncio.to_thread(satellite_setup.status))}
 
 
 # ─── The Android app, from this server (spare devices, 2026-10-15) ────────
@@ -1763,7 +1944,7 @@ async def admin_satellite_linux_fetch() -> dict[str, Any]:
 
 
 # ─── Old computers: the room stick (2026-10-16) ───────────────────────────
-# Settings → Satellites → add a spare device → Old computer (USB stick). An
+# Settings → Rooms → add a spare device → Old computer (USB stick). An
 # admin's "Prepare the stick" downloads Debian's netinst the first time
 # (pinned in domovoi/usb_stick/debian-image.json) and re-packs it with the
 # room's code, the satellite bundle and our installer answers
@@ -2734,13 +2915,48 @@ async def admin_containers() -> dict[str, Any]:
     from domovoi.container_guard import engine as cg_engine
     from domovoi.container_guard import views as cg_views
 
+    from domovoi import mpd_provisioner
+
     rows, readable = await _guard_incidents()
+    why = mpd_provisioner.rebuild_unavailable()
     return {
         "guard": cg_engine.get_guard().status,
         "incidents_readable": readable,
         "freeze_operations": sorted(container_freeze.OPERATIONS),
+        # Whether Settings → Health offers "rebuild the music player
+        # image" (POST /v1/admin/containers/mpd-image/rebuild), and why not.
+        "mpd_rebuild": {"available": why is None, "why": why},
         **cg_views.household_payload(rows, admin=True),
     }
+
+
+@app.post(
+    "/v1/admin/containers/mpd-image/rebuild",
+    # Security tier, like the clear: it makes the guard trust a new music
+    # player image (the baseline), so no pre-setup grace.
+    dependencies=[Depends(require_admin_security)],
+)
+async def admin_containers_mpd_rebuild() -> dict[str, Any]:
+    """Rebuild the music player image now, exactly as the core builds it
+    when it is missing, make it the image the guard expects, and move every
+    room's player onto it (recreated with its data volume, as an update
+    does). 409 while one is running or an update or restart is under way;
+    503 when it can't run here (internet access turned off, no image
+    configured) or the build failed. A tamper incident stays open until the
+    admin clears it."""
+    from domovoi import mpd_provisioner
+
+    log.warning("container guard: the admin asked for a music player image rebuild")
+    try:
+        result = await mpd_provisioner.rebuild_image()
+    except mpd_provisioner.RebuildBusy as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001 — docker, the build, the egress gate
+        log.warning("music player image rebuild failed: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)[:500]) from e
+    from domovoi.container_guard import engine as cg_engine
+
+    return {**result, "guard": await cg_engine.get_guard().check(force=True)}
 
 
 @app.post(
@@ -3297,7 +3513,7 @@ async def admin_wake_score(body: _AdminWakeScoreBody) -> dict[str, Any]:
         raise HTTPException(status_code=501, detail=str(e)) from e
 
 
-# ─── Wake-word training: Settings → Wake Words → "Turn on" ────────────────
+# ─── Wake-word training: Settings → Wake words → "Turn on" ────────────────
 
 
 @app.get(
@@ -5669,7 +5885,7 @@ async def admin_update_config(body: _AdminConfigUpdateBody) -> dict[str, Any]:
     follow the answer again; the response lists them in ``followed``."""
     import time
 
-    from domovoi import internet_profile
+    from domovoi import ai_features, internet_profile
     from domovoi import reapply as reapply_registry
     from domovoi.config_env_writer import write_env_values
     from domovoi.config_schema import FIELD_BY_NAME, coerce_and_validate
@@ -5724,6 +5940,9 @@ async def admin_update_config(body: _AdminConfigUpdateBody) -> dict[str, Any]:
                 continue
             if name == "internet_access" and internet_profile.answer_locked():
                 rejected[name] = internet_profile.ANSWER_LOCKED
+                continue
+            if name == "ai_features" and ai_features.locked():
+                rejected[name] = ai_features.ANSWER_LOCKED
                 continue
             try:
                 coerced = coerce_and_validate(spec, raw)
@@ -5851,7 +6070,7 @@ class _AcoustidTestBody(BaseModel):
     dependencies=[Depends(require_admin_security)],
 )
 async def admin_acoustid_test(body: _AcoustidTestBody | None = None) -> dict[str, Any]:
-    """Settings → Configuration → "test the key": one AcoustID lookup with
+    """Settings → Advanced → "test the key": one AcoustID lookup with
     the key — the one in ``key``, else the saved ``ACOUSTID_API_KEY`` — of
     a fixed fingerprint (``library_enricher.check_acoustid_key``).
 

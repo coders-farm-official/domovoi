@@ -37,9 +37,16 @@ every check has passed):
    installs, attached on its own too for Windows installs from before the
    tray (it runs from anywhere and registers itself); with ``--setup``, from
    ``--tray FILE`` or ``bin/DomovoiTray.exe`` beside the Setup. A tag whose
-   build makes none (before the tray) is released without it.
+   build makes none (before the tray) is released without it. The same
+   build makes ``DomovoiSatelliteSetup.exe`` (``windows/build``, beside the
+   Setup; 2026-10-21), the double-click Setup that makes a spare Windows
+   PC a room, attached beside ``DomovoiSetup.exe``: Domovoi servers fetch
+   it from the release (checked against its ``SHA256SUMS``) and hand it to
+   the household's PCs. With ``--setup``, from ``--satellite-setup FILE``
+   or the one beside the Setup. A tag whose build makes none is released
+   without it.
 3. One ``SHA256SUMS`` (LF line endings) for every asset: the APKs (from
-   the manifest), the Setup and the tray.
+   the manifest), the Setup, the tray and the satellite Setup.
 4. The release notes: ``docs/release/v<version>.md`` at the tag if there is
    one, otherwise a summary of the ``docs/RELEASE_NOTES.md`` entries added
    since the previous tag (a release candidate counts from the tag before
@@ -47,7 +54,7 @@ every check has passed):
    file at the tag. Then the files, their SHA-256, the commit the tag is,
    how the Setup was built, the app's signing certificate. Kept under
    20 KB, and never over GitHub's 125,000-character cap.
-5. Upload the Setup, the tray and ``SHA256SUMS`` (``--clobber``, so a second run
+5. Upload the Setup, the tray, the satellite Setup and ``SHA256SUMS`` (``--clobber``, so a second run
    replaces them), set the title and the notes, and keep a pre-release one
    (only one GitHub already marks so: every release is a full one by
    default, release candidates included, owner decision 2026-10-15) or
@@ -94,6 +101,10 @@ REPO_URL = "https://github.com/" + REPO_SLUG
 SETUP_ASSET = "DomovoiSetup.exe"
 #: The tray icon (windows/tray), built beside the Setup in windows/build/bin.
 TRAY_ASSET = "DomovoiTray.exe"
+#: The Windows satellite Setup (windows/installer/DomovoiSatelliteSetup.iss),
+#: built beside the Setup in windows/build. Its name is the one Domovoi
+#: servers fetch (domovoi/satellite_setup.py SETUP_ASSET).
+SATELLITE_SETUP_ASSET = "DomovoiSatelliteSetup.exe"
 SUMS_ASSET = "SHA256SUMS"
 #: GitHub refuses a release body over this many characters.
 BODY_LIMIT = 125_000
@@ -271,6 +282,7 @@ class Release:
     notes: str = ""          # the summary part, from docs/release or RELEASE_NOTES.md
     candidate_of: str | None = None   # X.Y.Z, when the version has a suffix
     tray_sha256: str | None = None    # DomovoiTray.exe, when the tag's build makes one
+    satellite_setup_sha256: str | None = None  # DomovoiSatelliteSetup.exe, likewise
 
 
 def _who(abi: str) -> str:
@@ -293,6 +305,9 @@ def body(rel: Release) -> str:
     files.append(f"| {SETUP_ASSET} | the Windows installer (preview, not code-signed) | `{rel.setup_sha256}` |")
     if rel.tray_sha256:
         files.append(f"| {TRAY_ASSET} | the Windows tray icon, for an install from before it (Setup installs it) | `{rel.tray_sha256}` |")
+    if rel.satellite_setup_sha256:
+        files.append(f"| {SATELLITE_SETUP_ASSET} | makes a spare Windows PC a room (preview, not code-signed) | "
+                     f"`{rel.satellite_setup_sha256}` |")
     if rel.setup_built:
         how = (f"It was built from the tag's own files by `windows/build.ps1 -Pin {rel.tag}`, which sets its pins "
                "(`windows/installer/pins.iss`) to that commit; nothing else differs from the tag.")
@@ -318,6 +333,12 @@ def body(rel: Release) -> str:
         "once an admin presses \"Download the app to this server\" there.",
         f"- **Windows (preview):** `{SETUP_ASSET}` puts the server on a Windows 11 PC.",
     ]
+    if rel.satellite_setup_sha256:
+        install.append(f"- **A spare Windows PC as a room (preview):** `{SATELLITE_SETUP_ASSET}`, from your own "
+                       "server's dashboard (Settings, Satellites, add a spare device) or from here. It is not "
+                       "code-signed, so Windows SmartScreen says \"Windows protected your PC\": More info, then "
+                       f"Run anyway ([docs/SPARE_DEVICE_SATELLITES.md]({REPO_URL}/blob/{rel.tag}/docs/"
+                       "SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)).")
     if rel.tray_sha256:
         install.append(f"- **A Windows install from before the tray icon:** run `{TRAY_ASSET}` once, from any folder: "
                        "Domovoi's icon appears beside the clock and starts at every sign-in from then on "
@@ -332,6 +353,8 @@ def sums_text(rel: Release) -> str:
     lines.append(f"{rel.setup_sha256}  {SETUP_ASSET}")
     if rel.tray_sha256:
         lines.append(f"{rel.tray_sha256}  {TRAY_ASSET}")
+    if rel.satellite_setup_sha256:
+        lines.append(f"{rel.satellite_setup_sha256}  {SATELLITE_SETUP_ASSET}")
     return "\n".join(lines) + "\n"
 
 
@@ -527,7 +550,7 @@ def _digest(asset: dict[str, Any]) -> str | None:
 
 def _check_published_apks(release: dict[str, Any], apks: list[dict[str, Any]]) -> None:
     assets = {a["name"]: a for a in release.get("assets") or []}
-    allowed = {e["file"] for e in apks} | {SETUP_ASSET, TRAY_ASSET, SUMS_ASSET}
+    allowed = {e["file"] for e in apks} | {SETUP_ASSET, TRAY_ASSET, SATELLITE_SETUP_ASSET, SUMS_ASSET}
     unknown = sorted(set(assets) - allowed)
     if unknown:
         die(f"the release has files finish-release doesn't know: {', '.join(unknown)} "
@@ -620,6 +643,8 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
     ap.add_argument("--no-publish", action="store_true", help="check, build and write everything; change nothing on GitHub")
     ap.add_argument("--setup", help="a DomovoiSetup.exe built by windows/build.ps1 -Pin <tag> from the tag, instead of building it")
     ap.add_argument("--tray", help="with --setup: the DomovoiTray.exe of that build (default: bin/DomovoiTray.exe beside the Setup)")
+    ap.add_argument("--satellite-setup", help="with --setup: the DomovoiSatelliteSetup.exe of that build "
+                    "(default: the one beside the Setup)")
     ap.add_argument("--since", help="the tag the notes' summary counts from (default: the previous one)")
     args = ap.parse_args(argv)
 
@@ -726,8 +751,11 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
     stage.mkdir(parents=True)
     staged_setup = stage / SETUP_ASSET
     staged_tray = stage / TRAY_ASSET
+    staged_sat = stage / SATELLITE_SETUP_ASSET
     if args.tray and not args.setup:
         die("--tray goes with --setup")
+    if args.satellite_setup and not args.setup:
+        die("--satellite-setup goes with --setup")
     if args.setup:
         setup = Path(args.setup).resolve()
         if not setup.is_file():
@@ -740,6 +768,12 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
         if tray.is_file():
             say(f"using {tray} (the tray of that build)")
             shutil.copyfile(tray, staged_tray)
+        sat = Path(args.satellite_setup).resolve() if args.satellite_setup else setup.parent / SATELLITE_SETUP_ASSET
+        if args.satellite_setup and not sat.is_file():
+            die(f"no satellite Setup at {args.satellite_setup}")
+        if sat.is_file():
+            say(f"using {sat} (the satellite Setup of that build)")
+            shutil.copyfile(sat, staged_sat)
     else:
         src = repo / "windows" / "build" / "release" / f"{tag}-source"
         if src.exists():
@@ -756,6 +790,10 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
             built_tray = exe.parent / "bin" / TRAY_ASSET
             if built_tray.is_file():
                 shutil.copyfile(built_tray, staged_tray)
+            # And its satellite Setup, beside it (a tag from before it has none).
+            built_sat = exe.parent / SATELLITE_SETUP_ASSET
+            if built_sat.is_file():
+                shutil.copyfile(built_sat, staged_sat)
         finally:
             if not t.git_ok("worktree", "remove", "--force", str(src)):
                 say(f"warning: couldn't remove the build worktree {src}: git worktree remove --force it later")
@@ -768,6 +806,7 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
     info = Release(tag=tag, version=version, prerelease=prerelease, tag_commit=tag_commit, cert=cert, apks=apks,
                    setup_sha256=sha256_file(staged_setup), setup_built=not args.setup, previous_tag=since,
                    tray_sha256=sha256_file(staged_tray) if staged_tray.is_file() else None,
+                   satellite_setup_sha256=sha256_file(staged_sat) if staged_sat.is_file() else None,
                    candidate_of=m.group(1) if by_name else None)
     if hand is not None:
         info.notes = hand.decode("utf-8")
@@ -792,7 +831,12 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
     say(f"staged in {stage}: {SETUP_ASSET} ({staged_setup.stat().st_size} bytes), {tray_note}{SUMS_ASSET}, NOTES.md ({len(text)} characters)")
     if not info.tray_sha256:
         say(f"no {TRAY_ASSET}: this tag's build makes none (it predates the tray icon)")
-    uploads = [staged_setup, *([staged_tray] if info.tray_sha256 else []), stage / SUMS_ASSET]
+    if info.satellite_setup_sha256:
+        say(f"and {SATELLITE_SETUP_ASSET} ({staged_sat.stat().st_size} bytes)")
+    else:
+        say(f"no {SATELLITE_SETUP_ASSET}: this tag's build makes none (it predates the satellite Setup)")
+    uploads = [staged_setup, *([staged_tray] if info.tray_sha256 else []),
+               *([staged_sat] if info.satellite_setup_sha256 else []), stage / SUMS_ASSET]
 
     stable_push = f"{tag_commit}:refs/heads/stable"
     if not publish:

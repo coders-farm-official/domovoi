@@ -226,6 +226,12 @@ TABLES_TO_TRUNCATE = [
     # Satellite inventory rows (V003) — adoption/type metadata written by
     # tests, never reference data.
     "satellites",
+    # Printers and scanners (V033) and their job log. print_limits is a
+    # seeded single row; the printing tests reset it themselves.
+    "print_jobs",
+    "scan_jobs",
+    "printer_room_defaults",
+    "printers",
 ]
 
 

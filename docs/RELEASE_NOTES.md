@@ -73,6 +73,216 @@ Core and dashboard update with one migration, **V036** (two columns on
   memory; zip bombs, XML entity tricks and files that aren't what their
   name says are refused with a sentence saying why.
 
+## 2026-10-21 — Domovoi as its own help desk
+
+Core, dashboard and app. **Run Flyway** (V035: `devices.owner_person_id`,
+`help_deliveries`); without it help still answers, and voice help says no
+phone is marked as yours.
+
+* **Ask Domovoi about Domovoi.** Chat and voice answer questions about
+  Domovoi itself from its own help: the user manual, `docs/FAQ.md`,
+  `docs/TROUBLESHOOTING.md`, a help entry for every dashboard error code
+  and the help files of installed plugins. Answers come only from what is
+  found, name the section and link to it; when nothing covers the
+  question the answer is "The manual doesn't cover that." and no model is
+  asked. Live facts (version, rooms, the internet and AI answers, plugins
+  and their versions) come from the server, exact, and "why is the kitchen
+  offline?" / "why did the update fail?" read the system's own records:
+  Home's attention checks, the rooms' health and self-checks, the update
+  record, the container guard. Redacted: no addresses, tokens or codes;
+  update details only for an admin.
+* **On the dashboard:** a **?** in the top bar of every page opens help
+  for that page (a search of the help, then **ask Domovoi**, which starts
+  a chat titled "Help: <page>"), and error messages have **ask Domovoi
+  about this**, prefilled with the error's code. Chat takes a pasted
+  screenshot as well as an attached one; in a help chat the vision model
+  reads it on the server. **report a problem** builds a redacted summary
+  to copy or save and post yourself; nothing is sent.
+* **With AI features off** help is a plain search of the manual and the
+  docs, and no screenshot is read.
+* **Voice "how do I…"** ("how do I add a room?") gives a short answer from
+  the manual, then asks "Want me to send the steps to your phone?". Yes
+  sends them to the asker only: the phones marked "This phone belongs to"
+  them (the app's Settings → Connection), as a chat "Help: …" and a
+  notification. A voice Domovoi doesn't know is asked "Who should I send it
+  to?"; no answer sends nothing. It never sends to every phone. A how-to
+  question the help doesn't hold ("how do I make pancakes") is answered
+  as before.
+* **App:** it tells the server whose phone it is when it registers, posts
+  the help notification for its owner, and a chat on the phone answers
+  Domovoi questions from the app's own copy of the manual, offline.
+* **Plugins (SDK 1.8.0):** lookup sources (`domovoi.lookup`:
+  `search(query)` / `fetch(id)` and a class of local, api or web;
+  `ctx.add_lookup_source`; the core orders them by class, and local ones
+  need no permission), and an optional `[plugin] help = "HELP.md"`, indexed
+  with the manual (required for Coders Farm's own plugins; a core before
+  1.8 ignores it). The bundled radio plugin has one (radio 1.4.0).
+* **API:** `GET /api/help/search` (open), `GET /api/help/facts`, `GET
+  /api/help/checks`, `GET /api/help/deliveries` (device read), `POST
+  /api/help/report` (device); `owner_person_id` on `POST
+  /api/devices/register`; the `help_deliveries` socket channel; a help
+  chat reply's `stats.help`.
+
+## 2026-10-21 — Chat history and titles
+
+* **Chats name themselves, and can be renamed, pinned, archived, searched.**
+  A chat is titled by its first five words at once; after the first reply
+  the model writes a short title in the background (the phone's model for
+  phone chats, the server's chat model for home-server chats), never over a
+  name someone gave it, and never while the household's AI features are
+  off. The app's Chat opens on its history (pinned first, then by last use)
+  with "Message Domovoi…" at the bottom; a long press renames, pins (kept
+  on this phone), archives, shares or deletes, and a swipe archives. Search
+  finds both kinds of chat; copy and share are on every reply, and "try
+  again" on the last reply to a typed question; a quiet line marks where older messages fall out of what the model
+  can see; "export all phone chats" (the phone model's settings) saves
+  Markdown plus JSON where you pick. The dashboard's chat gets search,
+  rename and the archived list. The update applies migration **V034**
+  (chat titles) by itself; threads from before keep their titles.
+
+## 2026-10-21 — Printing and scanning
+
+Domovoi prints to network printers and scans from network scanners, with
+no drivers: printers that work with **AirPrint, IPP Everywhere or
+Mopria** (almost every network printer from the last ten years), and
+scanners that work over AirPrint (eSCL, "AirScan"). USB printers and
+printers that need a maker's driver are not supported, on any host.
+
+* **Settings → Rooms & devices → Printers & scanners** (dashboard and app): the printers
+  Domovoi finds on the network, **Add**, **Add by address**, a **Test
+  page**, the house's default printer and a default per room, two-sided
+  and colour per printer, live status (paper, jams, covers) and ink or
+  toner levels where the printer reports them, recent jobs, and the limits.
+  Renaming and removing a printer need the admin. The page also shows how
+  the last look found printers ("by multicast", "by unicast", "by sweep"):
+  on the Windows install that line says whether multicast works from its
+  distro.
+* **Print** on PDFs, pictures, text and markdown files and spreadsheets
+  (printed as a plain table) in Files and Documents, with a preview, pages,
+  copies, two-sided, colour and paper. Word and OpenDocument files say
+  "save it as PDF first" instead. Phone-local files still print through
+  Android's own print dialog.
+* **Scan** in Documents: from the glass or the feeder, several pages into
+  one PDF in **Documents → Scans**.
+* **By voice:** "print my cover letter" (it says the pages and asks
+  first), "how much ink is left", "is the printer out of paper", "set up
+  the printer", "scan this to Documents" (it asks whether the page is on
+  the glass), "stop printing". A voice print that fails is said once in
+  the room that asked.
+
+What an operator should know:
+
+* The update applies migration **V033** (printers, the job log, the
+  limits) by itself.
+* Two new dependencies, both permissive: **pypdfium2** and **ReportLab**
+  (in both locks). A Linux server installed from the lock picks them up on
+  its next update.
+* The job log keeps who printed what (titles included) for 90 days; the
+  admin can clear it. Default limits: 100 pages and 20 copies per job, 500
+  sheets a day for the house.
+* Discovery binds UDP 5353 beside any other mDNS responder and joins the
+  mDNS group for 3 seconds when someone looks; it never answers. No
+  firewall rule was added on Windows. The /24 sweep runs only on "Look
+  again", at most once a minute.
+
+## 2026-10-21 — Settings in groups, with search and one Health page
+
+Dashboard and app. Nothing to run; old bookmarks keep working.
+
+* **Settings is five groups** — Rooms & devices, Voice, Chat & AI,
+  Privacy, System — with a search box at the top ("wake", "voice
+  history", "token"). Plain names: Satellites is **Rooms**, Devices is
+  **Phones & browsers**, Phone bar is **App layout**, Recordings is
+  **Voice history**, Configuration is **Advanced** (folded until you open
+  it), and the version and updates moved to **About & updates**.
+  `#settings/configuration[/setup]`, `#settings/satellites`,
+  `#settings/devices`, `#settings/phone-bar`, `#settings/recordings`,
+  `#satellites` and `#containers` rewrite to the new addresses in place.
+* **Settings → System → Health** shows every check, green or not: the
+  server, updates, rooms, plugins, internet and containers. Home's "needs
+  attention" rows are the problems among the same checks and open their
+  part of Health. The container guard's page is part of Health (open
+  incidents at the top; the watched list and the music player image's
+  rebuild under "behind the scenes"); the banner's "details" lands there.
+
+## 2026-10-21 — AI chat and questions are optional
+
+Core, dashboard, installers and app. Nothing to run: an existing install
+keeps AI on, exactly as before.
+
+* **A household switch.** Settings → Chat & AI → Models → **AI chat and questions**
+  (admin; `AI_FEATURES` in `domovoi/.env`, default on). Off, nothing asks a
+  language model: voice commands keep working on their usual phrases, and
+  speech recognition, the voices and the wake word stay. A question gets
+  "I can't answer that one — I'm set up for home commands. Say 'what can
+  you do' to hear them." Chat is hidden on the dashboard, and the app keeps
+  only this phone's own chats where it can run its model
+  (`features.ai` in `GET /api/capabilities`; a server without the key has
+  AI), and a send gets 409 `X-Domovoi-Refusal: ai-off`. The news briefing
+  summary, memory suggestions, the warm-up, "are you sure?" and voice chat
+  mode stop too. Turning it on shows the download size, then downloads the
+  models (`POST /api/models/ai`, progress on the page).
+* **Both installers ask "Include AI chat and questions?"** (default Yes,
+  with the size: about 6.4 GB, or 9.1 GB on a box with 24 GB of memory or
+  more). No skips the chat, router and vision models, keeps Whisper and
+  the wake word, and writes `AI_FEATURES=false`; Ollama itself is still
+  installed, so turning AI on later needs no reinstall.
+  `provision.sh --no-ai-models` / `--ai-models` (no flag: asks on a
+  terminal, else Yes); Windows Setup has a page for it and `/ai=no`, shown
+  once the release build re-pins to a `provision.sh` with the options.
+* **No more "waking up my language model" for a model that was never
+  downloaded.** The router model is skipped, and a question hears that the
+  question-answering model isn't installed and where to add it.
+* **Plugins (SDK 1.7.0):** `sdk.core_config.ai_features` is the switch,
+  live; with it off, `sdk.http` (and the web host's `http()`) refuses every
+  request to this box's Ollama but its read-only listings (`/api/tags`,
+  `/api/ps`, `/api/version`), the OpenAI-compatible `/v1/...` paths
+  included, with `ai_features.AITurnedOffConnectError` (also an
+  `httpx.ConnectError`).
+* **Kiwix 1.2.5** (its own release): with AI off, a voice lookup still
+  answers at once from the article's opening sentences, offline, and skips
+  the spoken summary follow-up, as if "Spoken summaries" were off; the
+  Library tab shows the lookup as "extract only". Kiwix 1.2.4 and older,
+  on a core with AI off, promise a summary that never comes: update the
+  plugin.
+* **Installers, on a re-run:** the household's saved answer wins.
+  `provision.sh` pulls the AI models only when `domovoi/.env` has AI on
+  after its env step (an `--ai-models` over a household "off" keeps it off
+  and pulls nothing), and its result's `"ai"` is that answer. Windows Setup
+  starts its page at the home's current answer, and shows the page only
+  when its pinned `provision.sh` has the options (`ProvisionAiChoice` in
+  `pins.iss`, set by `build.ps1 -Pin`).
+
+## 2026-10-21 — A repair by Setup no longer trips the container guard
+
+* **"The music player image was replaced outside Domovoi" after running
+  Setup again.** A repair (or any re-run of `provision.sh`) rebuilt the
+  music player image with a new ID and told the guard nothing, so it
+  opened a tamper incident and paused plugin installs, updates, satellite
+  upgrades and media preparation. Now the installer keeps the image unless
+  it is missing or `Dockerfile.mpd` changed since the installer built it,
+  and every build it makes leaves a root-owned record the guard accepts
+  (`/var/lib/domovoi-provision/mpd-image.json`); after such a build the
+  rooms' players restart on the new image, as after an update. An image
+  built by hand is still reported. **If the incident is open on your box
+  now** (it pauses updates too, so it goes first): on the Containers page
+  (admin), **clear after review** the incident about the music player
+  image, then take this update, then press **rebuild the music player
+  image** (new; not offered while internet access is turned off), which
+  builds it as the core does, makes it the image the guard expects and
+  restarts every room's player on it (what is playing stops; playlists and
+  queues stay). Without the rebuild the guard keeps expecting the old
+  image, and a room created on the new one would be reported.
+
+## 2026-10-21 — Android: the tablet sidebar clears the status bar
+
+* On a tablet, or a phone turned sideways, the side menu's "domovoi /
+  android" header no longer sits under the clock, and the menu stays clear
+  of a camera cutout or a side navigation bar, as does the narrower icon
+  rail on a small phone. The rest of the screen (the
+  top bar's theme switch included) also clears a cutout or navigation bar
+  on its far edge. Nothing to do: update the app.
+
 ## 2026-10-21 — One Chat in the app
 
 * **The app's Assistant tab is now part of Chat.** Chat has one list for
@@ -85,6 +295,44 @@ Core and dashboard update with one migration, **V036** (two columns on
   phone bar that had the Assistant tab gets Chat in its place by itself.
   Home-server replies can be reported too ("report this reply"). Nothing
   changes on the server or the dashboard.
+
+## 2026-10-21 — The Android app's release build is shrunk by R8
+
+The release APKs and the Play bundle are now built with R8 (code
+shrinking, optimisation and renaming, and unused resources dropped), as
+Google Play asks: about 15.7 MB smaller per APK (arm64-v8a 80.4 → 64.6 MB,
+armeabi-v7a 48.9 → 33.1 MB). Nothing changes for a household. For the
+maintainer: a crash's stack trace from a release build now has short
+renamed names; `android/scripts/release.ps1` and `play-bundle.ps1` keep that
+build's `mapping.txt` beside the signed files (R8's `retrace` turns a trace
+back), and the bundle carries it for Play.
+
+## 2026-10-21 — Windows satellites: a Setup to double-click
+
+A spare Windows laptop or PC becomes a room with `DomovoiSatelliteSetup.exe`
+instead of a PowerShell command. **Settings → Rooms → add a spare
+device → make the code**: when the server holds the Setup, the Windows
+column shows a setup code (24 hours, not a password) and **Download the
+Windows Setup**, whose file name carries the code and the server, so
+nothing is typed; the PowerShell command moves under "advanced". The
+Setup checks that the server answering is the one the code was made on
+(a signature by its identity key) before it downloads anything.
+
+* **A Windows server** gets the Setup with its own: the next
+  `DomovoiSetup.exe` carries it and puts it in place, offline.
+* **A Linux server** downloads it once from Domovoi's GitHub release, on
+  an admin's press of **get the Windows Setup** (offered only when a
+  release carries it: the first is the release after 1.0.0-rc3). Until
+  then the card shows the PowerShell command first, as before.
+* **It is not code-signed yet.** Windows SmartScreen says "Windows
+  protected your PC": **More info → Run anyway**. The dashboard and
+  docs/SPARE_DEVICE_SATELLITES.md say so step by step; the limit is in
+  docs/SECURITY_PRIVACY.md.
+* Setup codes live in the core's memory: a code made before a server
+  restart no longer works (make a new one).
+* **Releases:** `finish-release` attaches `DomovoiSatelliteSetup.exe`
+  beside `DomovoiSetup.exe` and lists it in `SHA256SUMS`;
+  `windows\build.ps1` builds both.
 
 ## 2026-10-20 — 1.0.0-rc3: audiobooks on the phone, and everything since rc2
 

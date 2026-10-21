@@ -101,10 +101,30 @@ builds `domovoi-mpd:latest` it records the image ID
 the tag itself — to that ID on every check. The first time the guard sees
 an image (the first boot with the guard), it adopts it. When the core
 starts and finds the tag on a different image than the one recorded, it
-reads the update unit's record (`UPDATE_RESULT_FILE`,
-`/var/lib/domovoi-update/last-result.json`, written by root):
+looks for a record of a rebuild Domovoi made itself, first the installer's,
+then the update unit's:
 
-* the record says its run rebuilt the music player (`mpd_changed`) and
+* **Domovoi's installer** (`scripts/linux/provision.sh`: the Windows
+  Setup, a repair included, or a Linux install) recorded building exactly
+  that image after the recorded one was recorded: the new image is
+  adopted quietly ("rebuilt by Domovoi's installer"). The record is
+  `/var/lib/domovoi-provision/mpd-image.json` (`by`, `image_id`, `tag`,
+  `dockerfile_sha256`, `built_at`), and it counts only while the file and
+  its directory are root's alone (root-owned, writable by nobody else, not
+  a link). It is not a setting: `domovoi/.env` belongs to the service
+  user. The installer builds the image only when the tag names none, or
+  when it built the image the tag names and `Dockerfile.mpd` changed
+  since; after a build that moved the tag it removes the rooms' players
+  still on the old image and restarts a running core, which recreates
+  them on the new one (as an update does). While the core runs between
+  that build and the restart, the tag check is held. The rooms' players
+  are gone by then (the installer removed them) and are still expected
+  on the old, recorded image: a missing one counts as a failure only after
+  its two-minute grace, and the restart recreates them on the new image
+  first;
+* the update unit's record (`UPDATE_RESULT_FILE`,
+  `/var/lib/domovoi-update/last-result.json`, written by root) says its
+  run rebuilt the music player (`mpd_changed`) and
   either **finished** after the recorded image was recorded, or is **the
   run under way that started this core** (status `running`, and its
   `to_sha` is the code now running — or its `from_sha`, for a rollback):
@@ -112,11 +132,21 @@ reads the update unit's record (`UPDATE_RESULT_FILE`,
 * the update unit is installed but its record is **missing or can't be
   read**: the new image is adopted **unverified** — no incident, a
   warning in the log, the line "music player image at this start: …
-  adopted unverified" on the Containers page, and the reason in
+  adopted unverified" on Settings → Health, and the reason in
   `container_guard_baselines.source`;
 * anything else — a host without the update unit (nothing but the core
-  builds the image there), or a readable record that doesn't vouch for a
-  rebuild: reported as tampering (T1).
+  builds the image there), a readable update record that doesn't vouch for
+  a rebuild, or an installer record that names another image (a
+  `docker build` by hand after the installer's) or an older build:
+  reported as tampering (T1).
+
+Until 2026-10-21 the installer rebuilt the image on every re-run of its
+images step (a repair by Setup after any change to the compose file) and
+recorded nothing, so a repair followed by an update that didn't touch the
+music player opened "The music player image was replaced outside
+Domovoi". A rebuild that misses Docker's build cache gets a new image ID
+even from an unchanged `Dockerfile.mpd`: the base image is pinned by
+digest, but the apt layer is not reproducible.
 
 The unverified case opens no hole the guard claimed to close: the record
 sits in a root-owned directory, so only root can remove or spoil it, and
@@ -145,7 +175,7 @@ container. A plugin that says it is **busy** (recreating its container) is
 believed for 30 minutes, and past that only while the image it is moving
 to is still being pulled (not on the host yet), up to 6 hours in all. A plugin whose resolver **keeps
 raising** holds its containers for 30 minutes; after that they are shown
-as "not watched · resolver failing" on the Containers page and only their
+as "not watched · resolver failing" on Settings → Health and only their
 repository and settings are checked, until the resolver answers again.
 
 A plugin that pins its image by digest gets the digest check. A plugin
@@ -166,7 +196,7 @@ the Plugins page says "containers not watched".
 * Containers of other projects on the same Docker host.
 * Containers that merely look like Domovoi's (`domovoi-…`) but that
   nothing claims — a test harness's, an old plugin's, a retired service's.
-  The guard lists them on the Containers page as "unrecognized" and never
+  The guard lists them on Settings → Health as "unrecognized" and never
   opens an incident for them: on a shared or development host there are
   always some, and an alarm that always rings is no alarm.
 * Anything at all while `CONTAINER_GUARD_ENABLED=false`.
@@ -181,7 +211,7 @@ Failures:
 * **F1 daemon** — Docker doesn't answer (`docker ps` fails or times out)
   while something is expected to run. One incident, not one per container;
   while Docker is away no other rule runs. Not raised when the `docker`
-  command isn't installed at all (the Containers page says so).
+  command isn't installed at all (Settings → Health says so).
 * **F2 missing** — an expected container doesn't exist.
 * **F3 stopped** — it exists but isn't running (exited, created, dead,
   paused), with its exit code.
@@ -341,7 +371,7 @@ host Postgres with the music players in Docker, say).
   links to the details. An admin can acknowledge the failures it shows
   from the banner itself. A browser with no household credential, and a
   shared screen, see only "Something needs an admin's attention."
-* **The Containers page** (`#containers`): what the freeze holds, the open
+* **The Containers page** (`#settings/health/containers`): what the freeze holds, the open
   incidents and the last day's resolved ones — open first, at most 50 rows
   in all; for an admin also what was expected and found, acknowledge,
   clear-after-review, and the guard's last check — what it watches, what
@@ -349,7 +379,7 @@ host Postgres with the music players in Docker, say).
   watched, and "check now". A browser with no household credential and a
   shared screen (an admin signed in on it included) get only the guest
   line, as on the banner.
-* **Home's problems row**, linking to the Containers page.
+* **Home's problems row**, linking to Settings → Health.
 * **Android**: a notification on every paired phone when an incident
   opens — one per incident, on its own "Container problems" channel,
   taken back when the incident resolves or is cleared — the same banner in
@@ -367,7 +397,7 @@ event on the dashboard's state socket.
 
 ## Reviewing and clearing a tamper incident
 
-Open the Containers page, signed in as the admin. Each incident shows what
+Open Settings → Health, signed in as the admin. Each incident shows what
 Domovoi expected and what it found. Then, on the Domovoi server:
 
 1. **A different image.** `docker inspect <container>` shows the image it
@@ -379,7 +409,17 @@ Domovoi expected and what it found. Then, on the Domovoi server:
    can't be removed while a container uses it, and a room left running
    keeps the old image), then `docker rmi domovoi-mpd:latest`, then
    restart the core: it rebuilds the image, records it, and recreates each
-   room's player from its data volume. Or, if you mean to keep the image,
+   room's player from its data volume. The Containers page does all of
+   that in one step: **rebuild the music player image** (admin, shown
+   unless internet access is turned off, since the build downloads
+   Debian's packages; refused while an update or restart is under way)
+   builds it as the core does, makes it the image the guard expects, and
+   restarts every room's player on it; what a room is playing stops,
+   playlists and queues stay. Every room is held for the guard until the
+   last one is done. The incident stays open until you clear it, and
+   while it is open the freeze also blocks updates: if an update should
+   come first, clear the incident, update, then rebuild (so the image the
+   guard expects is the one the rooms run). Or, if you mean to keep the image,
    clear the incident with a note saying so. If you didn't change it,
    treat the box as compromised: the container's image came from
    somewhere you didn't choose.

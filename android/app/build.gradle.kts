@@ -92,8 +92,23 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 shrinks, optimises and renames the code, and drops the
+            // resources nothing uses (Google Play checks a release is
+            // optimised). What must keep its name (JNI, reflection) is in
+            // proguard-rules.pro. Each build writes
+            // app/build/outputs/mapping/release/mapping.txt, what turns a
+            // release's stack traces back into names: the App Bundle carries
+            // it for Play, and release.ps1 / play-bundle.ps1 keep a copy
+            // beside the signed files.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // No ndk.debugSymbolLevel: every native library arrives built and
+            // stripped (the AARs', and native/sherpa-onnx's), with no symbols
+            // beyond the dynamic ones Play reads from the libraries
+            // themselves, and extracting even those needs the NDK, which this
+            // build otherwise never uses. Play's "no debug symbols" note on a
+            // bundle is advice, not a requirement.
         }
     }
     compileOptions {
@@ -231,6 +246,33 @@ abstract class VoiceAssetsTask : DefaultTask() {
         sherpaLicense.get().asFile.copyTo(File(notices, "LICENSE"), overwrite = true)
         sherpaLicenses.get().asFile.copyRecursively(notices, overwrite = true)
     }
+}
+
+/**
+ * The user manual (web/static/manual-content.json, the dashboard's own
+ * file) into the assets as `manual/manual-content.json`: a phone chat's
+ * help desk answers questions about Domovoi from it, offline and without
+ * asking a server (assistant/LocalHelp.kt). The Manual screen still reads
+ * the connected server's copy, so it matches that server's version.
+ */
+abstract class ManualAssetsTask : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val manual: RegularFileProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun copy() {
+        val out = outputDir.get().asFile
+        out.deleteRecursively()
+        manual.get().asFile.copyTo(File(out, "manual/manual-content.json"), overwrite = true)
+    }
+}
+
+val manualAssets = tasks.register<ManualAssetsTask>("manualAssets") {
+    manual.set(rootProject.layout.projectDirectory.file("../web/static/manual-content.json"))
 }
 
 val voiceAssets = tasks.register<VoiceAssetsTask>("voiceAssets") {
@@ -518,6 +560,7 @@ fun pomChains(coords: Collection<String>): Map<String, List<String>> {
 androidComponents {
     onVariants { variant ->
         variant.sources.assets?.addGeneratedSourceDirectory(voiceAssets, VoiceAssetsTask::outputDir)
+        variant.sources.assets?.addGeneratedSourceDirectory(manualAssets, ManualAssetsTask::outputDir)
         val openSource = tasks.register<OpenSourceTask>("${variant.name}OpenSource") {
             val resolved = variant.runtimeConfiguration.incoming.artifactView { lenient(false) }.artifacts.resolvedArtifacts
             artifacts.set(resolved.map { set ->
@@ -537,6 +580,16 @@ androidComponents {
         }
         tasks.matching { it.name == "assemble$cap" }.configureEach { dependsOn(alignment) }
     }
+}
+
+// The Compose compiler plugin adds Compose's group-key mapping to R8's
+// mapping.txt in a minified build, with a tool it downloads for that
+// (org.jetbrains.kotlin:compose-group-mapping). The mapping serves
+// Compose's composition stack traces, which Compose 1.10 brought; this app's
+// Compose (BOM 2024.12.01, Compose 1.7) has none, so the tool stays out of
+// the build and out of gradle/verification-metadata.xml.
+composeCompiler {
+    includeComposeMappingFile.set(false)
 }
 
 // Kotlin 2.4 makes the old `android { kotlinOptions { jvmTarget } }` block an

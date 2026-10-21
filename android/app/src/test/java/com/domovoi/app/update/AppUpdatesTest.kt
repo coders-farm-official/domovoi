@@ -64,7 +64,7 @@ class AppUpdatesTest {
         server.enqueue(ok(webAnswer.replace("26110101", "26110201")))
         assertEquals(26110201L, AppUpdates.offer(api, base, now = { clock })!!.release!!.versionCode)
         assertEquals(2, server.requestCount)
-        // Settings → About asks afresh.
+        // Settings → About & updates asks afresh.
         server.enqueue(ok(webAnswer))
         AppUpdates.offer(api, base, maxAgeMs = 0, now = { clock })
         assertEquals(3, server.requestCount)

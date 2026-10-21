@@ -1,7 +1,39 @@
 package com.domovoi.app.ui.screens.chat
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.outlined.Archive
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.text.style.TextAlign
+import com.domovoi.app.data.ServerCredentials
+import com.domovoi.app.ui.components.shareText
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -14,9 +46,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -97,9 +130,15 @@ fun ChatScreen(away: Boolean = false, awayLine: String? = null) {
     // The household note stays on the chip for this whole visit, so it is
     // still there while the first home-server message is being written.
     val serverShareSeen = remember { app.prefs.chatServerShareSeen.value }
+    // A help notification's tap: its home-server thread (alerts/HelpNotifier.kt).
+    val pendingThread by app.pendingChatThread.collectAsState()
+    val pendingPhone by app.pendingPhoneChat.collectAsState()
     val unsupported = assistant?.state?.value?.memory
         ?.takeIf { phoneEngine && !facts.phoneCapable }
         ?.let { unsupportedText(it.marketedGb, it.lowRamDevice) }
+    val pins by app.prefs.chatPins.collectAsState()
+    val serverUrl by app.prefs.serverUrl.collectAsState()
+    val context = LocalContext.current
     val request by app.pendingChat.collectAsState()
     ChatHome(
         request = request,
@@ -107,6 +146,10 @@ fun ChatScreen(away: Boolean = false, awayLine: String? = null) {
         places = places,
         startable = startable,
         lastUsed = ChatPlaceKind.of(lastUsed),
+        pins = pins,
+        server = ServerCredentials.normalize(serverUrl),
+        onPin = app.prefs::setChatPinned,
+        onShare = { title, text -> shareText(context, title, text) },
         serverShareSeen = serverShareSeen,
         awayLine = awayLine?.takeIf { away },
         subtitle = chatSubtitle(startable),
@@ -115,6 +158,10 @@ fun ChatScreen(away: Boolean = false, awayLine: String? = null) {
             app.prefs.setChatPlace(kind.key)
             if (kind == ChatPlaceKind.Server) app.prefs.setChatServerShareSeen()
         },
+        openThread = pendingThread?.let { (id, title) -> id.toString() to title },
+        onThreadOpened = { app.pendingChatThread.value = null },
+        openNewPhone = pendingPhone,
+        onNewPhoneOpened = { app.pendingPhoneChat.value = false },
     )
 }
 
@@ -136,15 +183,39 @@ internal fun emptyHint(startable: List<ChatPlaceKind>, unsupported: String?): St
 }
 
 /** The chat open in Chat's conversation view: [row] null is a new chat in
- *  [place]; [visit] tells two openings of the same chat apart. */
-private data class OpenChat(val place: ChatPlaceKind, val row: ChatRow?, val visit: Int)
+ *  [place]; [visit] tells two openings of the same chat apart; [first]: a
+ *  message from the list's "Message Domovoi…" box, sent as it opens. */
+private data class OpenChat(val place: ChatPlaceKind, val row: ChatRow?, val visit: Int, val first: String? = null)
+
+/** Chat's text fields (search, "Message Domovoi…"): (value, onChange,
+ *  placeholder, modifier). A local so the JVM tests, which have no Android
+ *  resources for Material's text field, can put a plain one in. */
+internal val LocalChatField = staticCompositionLocalOf<@Composable (String, (String) -> Unit, String, Modifier) -> Unit> {
+    { value, onChange, placeholder, modifier ->
+        OutlinedTextField(
+            value = value,
+            onValueChange = onChange,
+            placeholder = { Text(placeholder) },
+            modifier = modifier,
+            singleLine = placeholder == SEARCH_HINT,
+            maxLines = 4,
+        )
+    }
+}
+
+/** How long typing pauses before a search runs. */
+private const val SEARCH_DEBOUNCE_MS = 250L
 
 /**
  * Chat with no Android behind it (the tests compose it with fake places):
- * the history list of every place's chats, newest first, each with its
- * chip; "new chat" opens a conversation in [defaultPlace]; a conversation
- * with nothing said yet carries the place picker ([startable]: the places
- * that work right now).
+ * the history list of every place's chats, pinned first and then by last
+ * use, each with its chip, a search across them, the "archived" view at
+ * the end, and the "Message Domovoi…" box pinned at the bottom, which
+ * starts a new chat in [defaultPlace] (its picker moves it while nothing is
+ * said; [startable]: the places that work right now). With no chats at all,
+ * a new chat opens at once (assistant plan part 7). Each chat's long-press
+ * menu (and its "more" button) renames, pins ([pins], [onPin]: this
+ * phone's own), archives, shares and deletes it; a swipe archives it.
  */
 @Composable
 internal fun ChatHome(
@@ -156,11 +227,36 @@ internal fun ChatHome(
     subtitle: String,
     emptyHint: String?,
     onUsed: (ChatPlaceKind) -> Unit,
+    pins: Set<String> = emptySet(),
+    server: String = "",
+    onPin: (String, Boolean) -> Unit = { _, _ -> },
+    onShare: (String, String) -> Unit = { _, _ -> },
+    /** A home-server thread to open now (id, title): help steps' tap. */
+    openThread: Pair<String, String>? = null,
+    onThreadOpened: () -> Unit = {},
+    /** A new phone chat to open now: "Ask Domovoi for help" away from home. */
+    openNewPhone: Boolean = false,
+    onNewPhoneOpened: () -> Unit = {},
     request: ChatOpenRequest? = null,
     onRequestTaken: () -> Unit = {},
 ) {
     var open by remember { mutableStateOf<OpenChat?>(null) }
     var visits by remember { mutableIntStateOf(0) }
+    val serverListed = places.any { it.kind == ChatPlaceKind.Server }
+    LaunchedEffect(openThread, serverListed) {
+        val (id, title) = openThread ?: return@LaunchedEffect
+        // Until the home server's chats are listed (its capabilities still
+        // loading at a cold start, or away from home) the ask waits.
+        if (!serverListed) return@LaunchedEffect
+        open = OpenChat(ChatPlaceKind.Server, ChatRow(ChatPlaceKind.Server, id, title, null, 0L, 0), ++visits)
+        onThreadOpened()
+    }
+    val phoneStartable = ChatPlaceKind.Phone in startable
+    LaunchedEffect(openNewPhone, phoneStartable) {
+        if (!openNewPhone || !phoneStartable) return@LaunchedEffect
+        open = OpenChat(ChatPlaceKind.Phone, null, ++visits)
+        onNewPhoneOpened()
+    }
     // A chat asked for from outside (Files' "Ask about this document"):
     // opened here once its place is listed.
     LaunchedEffect(request, places.map { it.kind }) {
@@ -171,7 +267,57 @@ internal fun ChatHome(
         onRequestTaken()
     }
     var deleteTarget by remember { mutableStateOf<ChatRow?>(null) }
+    var renameTarget by remember { mutableStateOf<ChatRow?>(null) }
+    var showArchived by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    var hits by remember { mutableStateOf<List<ChatRow>?>(null) }
+    var searchFailed by remember { mutableStateOf(false) }
+    var draft by remember { mutableStateOf("") }
+    var autoOpened by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    var listTouched by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val chip = { kind: ChatPlaceKind -> placeChip(kind, serverShareSeen) }
+    val serverReady = places.firstOrNull { it.kind == ChatPlaceKind.Server }?.ready
+    val fallbackPlace = defaultPlace(startable, lastUsed, serverReady)
+    var boxPlace by remember { mutableStateOf<ChatPlaceKind?>(null) }
+    val newPlace = boxPlace?.takeIf { it in startable } ?: fallbackPlace
+
+    val all = withPins(places.flatMap { it.chats }, pins, server)
+    val rows = orderChats(all)
+    val archived = archivedChats(all)
+
+    // No chats at all, once every place has said so: a new chat opens at
+    // once, as it did before there was a list (once per visit to Chat).
+    val allLoaded = places.all { it.loaded }
+    LaunchedEffect(allLoaded, all.isEmpty(), fallbackPlace) {
+        if (!autoOpened && allLoaded && all.isEmpty() && open == null && fallbackPlace != null) {
+            autoOpened = true
+            open = OpenChat(fallbackPlace, null, ++visits)
+        }
+    }
+    // A search across every place, after a short pause in the typing.
+    LaunchedEffect(query) {
+        val q = query.trim()
+        if (q.isEmpty()) {
+            hits = null
+            return@LaunchedEffect
+        }
+        delay(SEARCH_DEBOUNCE_MS)
+        var failed = false
+        val found = places.flatMap { p ->
+            try {
+                p.search(q)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failed = true
+                emptyList()
+            }
+        }
+        searchFailed = failed
+        hits = withPins(found, pins, server).sortedByDescending { it.updatedMs }
+    }
 
     val current = open
     val place = current?.let { o -> places.firstOrNull { it.kind == o.place } }
@@ -192,48 +338,130 @@ internal fun ChatHome(
                     chip = chip(current.place),
                     onBack = close,
                     picker = if (current.row == null && startable.isNotEmpty()) {
-                        { PlacePicker(startable, current.place, chip) { k -> open = current.copy(place = k) } }
+                        { PlacePicker(startable, current.place, chip) { k -> open = current.copy(place = k, first = null) } }
                     } else {
                         null
                     },
                     onSent = { onUsed(current.place) },
+                    firstMessage = current.first,
                 ),
             )
         }
         return
     }
 
-    val rows = mergeChats(places.map { it.chats })
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
+    if (showArchived) BackHandler { showArchived = false }
+    val searching = query.isNotBlank()
+    val openRow = { row: ChatRow -> open = OpenChat(row.place, row, ++visits) }
+    val act = { row: ChatRow, action: String ->
+        val owner = places.firstOrNull { it.kind == row.place }
+        when (action) {
+            ACTION_RENAME -> renameTarget = row
+            ACTION_PIN, ACTION_UNPIN -> onPin(pinKey(row, server), action == ACTION_PIN)
+            ACTION_ARCHIVE -> owner?.setArchived(row, true)
+            ACTION_UNARCHIVE -> owner?.setArchived(row, false)
+            ACTION_SHARE -> scope.launch { owner?.shareText(row)?.let { onShare(row.title, it) } }
+            ACTION_DELETE -> deleteTarget = row
+        }
+        Unit
+    }
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        Spacer(Modifier.height(16.dp))
         PageHeader(
             "Chat", subtitle,
             actions = if (startable.isEmpty()) null else {
                 {
                     Button(onClick = {
-                        val kind = defaultPlace(startable, lastUsed, places.firstOrNull { it.kind == ChatPlaceKind.Server }?.ready)
-                        if (kind != null) open = OpenChat(kind, null, ++visits)
+                        if (newPlace != null) open = OpenChat(newPlace, null, ++visits)
                     }) { Text("new chat") }
                 }
             },
         )
         Spacer(Modifier.height(12.dp))
+        if (all.isNotEmpty() || searching) {
+            LocalChatField.current(query, { query = it }, SEARCH_HINT, Modifier.fillMaxWidth())
+            Spacer(Modifier.height(8.dp))
+        }
         awayLine?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
             Spacer(Modifier.height(8.dp))
         }
-        if (rows.isEmpty()) {
-            EmptyState("no chats yet", emptyHint)
-        } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(rows, key = { "${it.place.key}:${it.id}" }) { row ->
-                    ChatRowCard(
-                        row, chip(row.place),
-                        onOpen = { open = OpenChat(row.place, row, ++visits) },
-                        onDelete = { deleteTarget = row },
-                    )
+        if (showArchived && !searching) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { showArchived = false }) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "back to chats", tint = Domovoi.colors.fg)
+                }
+                Text("archived", style = MaterialTheme.typography.titleSmall, color = Domovoi.colors.fg,
+                    modifier = Modifier.semantics { heading() })
+            }
+        }
+        val shown = when {
+            searching -> hits.orEmpty()
+            showArchived -> archived
+            else -> rows
+        }
+        // The places' lists arrive at different moments; a chat landing above
+        // the first one shown would leave the list scrolled part-way into it.
+        // Until the person scrolls it, the list stays at its top.
+        val firstKey = shown.firstOrNull()?.let { "${it.place.key}:${it.id}" }
+        LaunchedEffect(firstKey, showArchived, searching) {
+            val away = listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0
+            if (!listTouched && away) listState.scrollToItem(0)
+        }
+        LaunchedEffect(listState) {
+            snapshotFlow { listState.isScrollInProgress }.collect { if (it) listTouched = true }
+        }
+        if (searching && searchFailed && shown.isNotEmpty()) {
+            Text("$SEARCH_FAILED everywhere: some chats may be missing", style = MaterialTheme.typography.bodySmall,
+                color = Domovoi.colors.fgMuted)
+            Spacer(Modifier.height(6.dp))
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            when {
+                searching && hits == null -> Unit
+                shown.isEmpty() -> EmptyState(
+                    when {
+                        searching && searchFailed -> SEARCH_FAILED
+                        searching -> "no chats match"
+                        showArchived -> "no archived chats"
+                        else -> "no chats yet"
+                    },
+                    if (searching || showArchived) null else emptyHint,
+                )
+                else -> LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxSize()) {
+                    items(shown, key = { "${it.place.key}:${it.id}" }) { row ->
+                        SwipeToArchive(row, onArchive = { act(row, if (row.archived) ACTION_UNARCHIVE else ACTION_ARCHIVE) }) {
+                            ChatRowCard(
+                                row, chip(row.place),
+                                onOpen = { openRow(row) },
+                                onAction = { a -> act(row, a) },
+                            )
+                        }
+                    }
+                    // The archived view sits at the end of the list.
+                    if (!searching && !showArchived && archived.isNotEmpty()) {
+                        item(key = "archived") {
+                            ArchivedEntry(archived.size) { showArchived = true }
+                        }
+                    }
                 }
             }
         }
+        // "Message Domovoi…", pinned at the bottom: a new chat is one tap
+        // or keystroke away. Its first message opens the chat and goes out.
+        if (newPlace != null && !showArchived && !searching) {
+            // The short chips here: the long household note would wrap the
+            // picker onto a second line under a list that needs the room.
+            if (startable.size > 1) PlacePicker(startable, newPlace, { placeChip(it, true) }) { boxPlace = it }
+            NewChatBox(draft, { draft = it }) {
+                val text = draft.trim()
+                if (text.isNotEmpty()) {
+                    draft = ""
+                    open = OpenChat(newPlace, null, ++visits, first = text)
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
     }
     deleteTarget?.let { row ->
         val owner = places.firstOrNull { it.kind == row.place }
@@ -243,26 +471,137 @@ internal fun ChatHome(
                 body = owner.deleteText(row),
                 confirmLabel = "delete",
                 destructive = true,
-                onConfirm = { owner.delete(row) },
+                onConfirm = {
+                    owner.delete(row)
+                    onPin(pinKey(row, server), false)
+                },
                 onDismiss = { deleteTarget = null },
+            )
+        }
+    }
+    renameTarget?.let { row ->
+        RenameDialog(row.title, onDismiss = { renameTarget = null }) { name ->
+            places.firstOrNull { it.kind == row.place }?.rename(row, name)
+            renameTarget = null
+        }
+    }
+}
+
+/** The list's "Message Domovoi…" box: type, then send. */
+@Composable
+private fun NewChatBox(draft: String, onChange: (String) -> Unit, onSend: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 6.dp),
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        LocalChatField.current(draft, onChange, COMPOSER_HINT, Modifier.weight(1f))
+        IconButton(onClick = onSend, enabled = draft.isNotBlank()) {
+            Icon(
+                Icons.AutoMirrored.Filled.Send, contentDescription = "send",
+                tint = if (draft.isNotBlank()) Domovoi.colors.brand else Domovoi.colors.fgFaint,
             )
         }
     }
 }
 
-/** One chat in the list: its title, where it runs, when, and its last words
- *  where the place keeps them. */
+/** The last row of the list: the archived chats, and how many. */
 @Composable
-internal fun ChatRowCard(row: ChatRow, chip: String, onOpen: () -> Unit, onDelete: () -> Unit) {
-    DomovoiCard(Modifier.fillMaxWidth().clickable(onClickLabel = "open", onClick = onOpen)) {
+private fun ArchivedEntry(count: Int, onOpen: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClickLabel = "open", onClick = onOpen).padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(Icons.Outlined.Archive, contentDescription = null, tint = Domovoi.colors.fgMuted)
+        Text(archivedLabel(count), style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fgMuted)
+    }
+}
+
+/** "archived · 3". */
+internal fun archivedLabel(count: Int): String = "archived · $count"
+
+/** A chat that swipes away to the archive (or back out of it). The swipe
+ *  is a shortcut: the long-press menu does the same. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SwipeToArchive(row: ChatRow, onArchive: () -> Unit, content: @Composable () -> Unit) {
+    val state = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            if (value != SwipeToDismissBoxValue.Settled) onArchive()
+            false
+        },
+    )
+    SwipeToDismissBox(
+        state = state,
+        backgroundContent = {
+            Row(
+                Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = if (state.dismissDirection == SwipeToDismissBoxValue.StartToEnd) Arrangement.Start else Arrangement.End,
+            ) {
+                Icon(Icons.Outlined.Archive, contentDescription = null, tint = Domovoi.colors.fgMuted)
+                Spacer(Modifier.size(6.dp))
+                Text(if (row.archived) "move back" else ACTION_ARCHIVE, style = MaterialTheme.typography.labelMedium,
+                    color = Domovoi.colors.fgMuted)
+            }
+        },
+        content = { content() },
+    )
+}
+
+/** Renaming a chat: its title to edit; a blank name can't be saved. */
+@Composable
+private fun RenameDialog(title: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var name by remember { mutableStateOf(title.removeSuffix("…")) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Domovoi.colors.raised,
+        title = { Text("rename chat") },
+        text = { LocalChatField.current(name, { name = it.take(200) }, "name", Modifier.fillMaxWidth()) },
+        confirmButton = {
+            TextButton(onClick = { onSave(name.trim()) }, enabled = name.isNotBlank()) {
+                Text("save", color = if (name.isNotBlank()) Domovoi.colors.brand else Domovoi.colors.fgFaint)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("cancel", color = Domovoi.colors.fgMuted) } },
+    )
+}
+
+/** One chat in the list: its title, where it runs, when, its last words
+ *  (or a search's match) where the place keeps them, and its actions
+ *  ([rowActions]) on a long press or the "more" button. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun ChatRowCard(row: ChatRow, chip: String, onOpen: () -> Unit, onAction: (String) -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    DomovoiCard(
+        Modifier.fillMaxWidth()
+            .combinedClickable(
+                onClickLabel = "open",
+                onLongClickLabel = "chat actions",
+                onClick = onOpen,
+                // The long press's own haptic tick is combinedClickable's.
+                onLongClick = { menu = true },
+            )
+            .semantics {
+                customActions = rowActions(row).map { a -> CustomAccessibilityAction(a) { onAction(a); true } }
+            },
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(
-                    row.title,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = Domovoi.colors.fg,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (row.pinned) {
+                        Icon(Icons.Outlined.PushPin, contentDescription = "pinned", tint = Domovoi.colors.fgMuted,
+                            modifier = Modifier.size(14.dp))
+                    }
+                    Text(
+                        row.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = Domovoi.colors.fg,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     PlaceChip(row.place, chip)
                     if (row.updatedMs > 0) {
@@ -272,24 +611,73 @@ internal fun ChatRowCard(row: ChatRow, chip: String, onOpen: () -> Unit, onDelet
                             color = Domovoi.colors.fgMuted,
                         )
                     }
+                    if (row.archived) {
+                        Text("archived", style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgMuted)
+                    }
                 }
                 // A reply that failed leaves the server's snippet blank: no
                 // empty line under the chip.
-                row.snippet?.takeIf { it.isNotBlank() }?.let {
+                (row.match ?: row.snippet)?.takeIf { it.isNotBlank() }?.let {
                     Text(
                         it,
                         style = MaterialTheme.typography.bodySmall,
                         color = Domovoi.colors.fgFaint,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        maxLines = if (row.match != null) 2 else 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Outlined.DeleteOutline, contentDescription = "delete", tint = Domovoi.colors.fgMuted)
+            Box {
+                IconButton(onClick = { menu = true }) {
+                    Icon(Icons.Outlined.MoreVert, contentDescription = "chat actions", tint = Domovoi.colors.fgMuted)
+                }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = Domovoi.colors.raised) {
+                    rowActions(row).forEach { a ->
+                        DropdownMenuItem(
+                            text = { Text(a, color = if (a == ACTION_DELETE) Domovoi.colors.err else Color.Unspecified) },
+                            onClick = { menu = false; onAction(a) },
+                        )
+                    }
+                }
             }
         }
     }
 }
+
+/** The quiet divider above the first message the model still sees
+ *  ([WINDOW_NOTE]). */
+@Composable
+internal fun WindowDivider() {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp).semantics(mergeDescendants = true) {},
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        HorizontalDivider(Modifier.weight(1f), color = Domovoi.colors.border)
+        Text(WINDOW_NOTE, style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgSubtle,
+            textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 260.dp))
+        HorizontalDivider(Modifier.weight(1f), color = Domovoi.colors.border)
+    }
+}
+
+/** Where the window divider goes: the index of the message with [fromId]
+ *  in [ids] (the transcript's ids, null for one not saved yet); null when
+ *  there is none, or it is the first message (nothing earlier fell out). */
+internal fun windowDividerIndex(ids: List<Long?>, fromId: Long?): Int? {
+    fromId ?: return null
+    val at = ids.indexOf(fromId)
+    return at.takeIf { it > 0 }
+}
+
+/** The header's "share this chat" button (the share sheet, as text). */
+@Composable
+internal fun ShareChatButton(onShare: () -> Unit) {
+    IconButton(onClick = onShare) {
+        Icon(Icons.Outlined.Share, contentDescription = "share chat", tint = Domovoi.colors.fgMuted)
+    }
+}
+
+/** "try again", in a reply's long-press menu. */
+internal const val ACTION_TRY_AGAIN = "try again"
 
 /** Where a chat runs, as a chip: the phone's in the brand tone, the home
  *  server's neutral. */

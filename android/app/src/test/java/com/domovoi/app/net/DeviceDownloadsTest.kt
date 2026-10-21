@@ -95,7 +95,7 @@ class DeviceDownloadsTest {
         token = null
         val unpaired = DeviceDownloads.planWithToken(api, "/api/videos/stream?library_id=films&path=a.mkv&download=1")
         assertNull(unpaired.token)
-        assertEquals("pair this phone first (Settings → Connection)", unpaired.refusal)
+        assertEquals("pair this phone first (Settings → Phones & browsers)", unpaired.refusal)
         assertEquals(0, gate.asked)
     }
 

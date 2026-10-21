@@ -47,7 +47,7 @@ object RoomStatusText {
                 "This room was removed on the dashboard (or its pairing reset). Approve it again with the code below, " +
                     "or hold Exit to leave room mode and forget this room."
             } else {
-                "Waiting for approval. On the dashboard, open Settings → Satellites and approve this room with the code below."
+                "Waiting for approval. On the dashboard, open Settings → Rooms and approve this room with the code below."
             }
             is RoomEngine.Link.Rejected -> l.reason
             is RoomEngine.Link.Conflict -> l.reason

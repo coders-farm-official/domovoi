@@ -106,9 +106,11 @@ class ChatModeHandler(Handler):
         # Offered only while chat mode is on (CHAT_MODE_ENABLED, off by
         # default): the manual, Home and "what can you do" never suggest a
         # phrase that answers "chat mode is off".
+        from domovoi import ai_features
         from domovoi.config import settings
 
-        return ("let's have a chat",) if getattr(settings, "chat_mode_enabled", False) else ()
+        on = getattr(settings, "chat_mode_enabled", False) and ai_features.enabled()
+        return ("let's have a chat",) if on else ()
 
     tool_schema = {
         "name": "chat_mode",
@@ -177,6 +179,16 @@ class ChatModeHandler(Handler):
         # ``app.state.active_sessions`` maps room_id → the connected Pi's
         # StreamSession. The session-id check stays folded in, because with no
         # session there's nowhere to persist the flag for the next turn.
+        from domovoi import ai_features
+
+        if ai_features.turned_off():
+            # A conversation is the language model talking (Letta on the
+            # local Ollama); with AI features off there is none to have.
+            return Response(
+                text="Chat mode needs the AI features, and they're turned off.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
         app = ctx.app
         live_rooms = (
             getattr(getattr(app, "state", None), "active_sessions", None) or {}

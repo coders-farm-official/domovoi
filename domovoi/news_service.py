@@ -25,6 +25,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi.clients import news_feeds
+from domovoi import ai_features
 from domovoi.clients.ollama import get_ollama_client
 from domovoi.config import settings
 
@@ -521,7 +522,10 @@ async def favorite_item(session: AsyncSession, item_id: int, favorited: bool = T
 async def summarize_person_briefing(session: AsyncSession, person_id: int) -> str | None:
     """Condense a person's recent unread items into a short spoken digest via
     the local Ollama and upsert ``news_briefings``. Returns the briefing text,
-    or None when there's nothing to summarize."""
+    or None when there's nothing to summarize — or when AI features are
+    off (domovoi/ai_features.py): the headlines are still read as they are."""
+    if ai_features.turned_off():
+        return None
     rows = (
         await session.execute(
             text(
