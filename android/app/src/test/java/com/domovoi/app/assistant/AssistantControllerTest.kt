@@ -87,11 +87,15 @@ class AssistantControllerTest {
         store.markInstalled(m)
     }
 
+    /** Polls [ok] (often a read of the saved file) every 25 ms: each read
+     *  holds the file open, and on Windows a save can't replace it then
+     *  (data/AtomicFiles.kt retries; a 5 ms poll kept it busy). A timeout
+     *  says what the controller said, a failed save among it. */
     private fun until(what: String, timeoutMs: Long = 5_000, ok: () -> Boolean) {
         val end = System.currentTimeMillis() + timeoutMs
         while (!ok()) {
-            if (System.currentTimeMillis() > end) fail("timed out waiting for: $what")
-            Thread.sleep(5)
+            if (System.currentTimeMillis() > end) fail("timed out waiting for: $what; said: $said")
+            Thread.sleep(25)
         }
     }
 
