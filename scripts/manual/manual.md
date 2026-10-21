@@ -554,7 +554,10 @@ the 32-bit app from the same page. [More detail](docs/ANDROID_COMPATIBILITY.md)
 
 ### Chat and the chat mic
 
-**Chat** talks to your Domovoi server (see [Chat](#node:chat)).
+**Chat** holds your chats with Domovoi: those **on home server** (see
+[Chat](#node:chat)), shared with the household, and those **on this
+phone** (the assistant, below). Each chat shows where it runs, and a new
+one starts where you chatted last.
 
 **How to**
 
@@ -574,13 +577,15 @@ A Domovoi that runs on the phone itself: type or talk, in airplane mode
 too. It knows the time and date, and it answers questions. It can't set
 timers, play music or look things up.
 
-**How to:** **Assistant** → **Set up the assistant on this phone** →
+**How to:** **Chat** → **new chat** → **on this phone** → **Set up the
+assistant on this phone** →
 **download** (the button shows the size, about 2.6 GB). It waits for Wi-Fi
 unless you **allow mobile data**.
 
 It needs a 64-bit phone with 8 GB of memory or more. To report a bad
-reply, long-press it. Its chats stay on the phone. It is separate from
-**Chat**, which talks to your server.
+reply, long-press it. Its chats stay on the phone, marked **on this
+phone**; away from home they are the only ones Chat lists. They never mix
+with your home server's chats.
 
 [More detail](android/README.md#on-device-assistant)
 

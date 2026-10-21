@@ -4,6 +4,19 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-21 — One Chat in the app
+
+* **The app's Assistant tab is now part of Chat.** Chat has one list for
+  the chats on the home server (shared with the household) and the ones on
+  this phone, each marked `on home server` or `on this phone`. A new chat
+  starts where this phone chatted last (the first time: the home server
+  when it has a chat model installed), and until something is said a
+  picker moves it to the other place. Away from home Chat lists the
+  phone's chats only and says `home server chats show when you're home`. A
+  phone bar that had the Assistant tab gets Chat in its place by itself.
+  Home-server replies can be reported too ("report this reply"). Nothing
+  changes on the server or the dashboard.
+
 ## 2026-10-20 — 1.0.0-rc3: audiobooks on the phone, and everything since rc2
 
 Version 1.0.0rc3 (the app 1.0.0-rc3, versionCode 26102001; the Windows

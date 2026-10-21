@@ -2019,7 +2019,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "**Chat** holds your chats with Domovoi: those **on home server** (see [Chat](node:chat)), shared with the household, and those **on this phone** (see the assistant). Each chat shows where it runs, and a new one starts where you chatted last."
+     "text": "**Chat** holds your chats with Domovoi: those **on home server** (see [Chat](node:chat)), shared with the household, and those **on this phone** (the assistant, below). Each chat shows where it runs, and a new one starts where you chatted last."
     },
     {
      "type": "label",
