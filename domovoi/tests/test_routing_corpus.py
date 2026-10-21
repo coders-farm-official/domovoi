@@ -36,7 +36,13 @@ from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
 from domovoi.handlers.base import Handler, as_fast_path
 from domovoi.handlers.shared.tool_gate import answers_without_tools
 from domovoi.models import Context, Intent
-from domovoi.router import _GATES_KEEP_BAND_PLACE, _LEADING_FILLER_RE, offered_tool_schemas, route
+from domovoi.router import (
+    _GATES_KEEP_BAND_PLACE,
+    _LEADING_FILLER_RE,
+    offered_tool_schemas,
+    route,
+    strip_request_preamble,
+)
 from domovoi.tests.conftest import requires_db
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -60,17 +66,14 @@ NEVER_OFFERED = {"help", "help_desk"}
 def _normalize(utterance: str) -> str:
     """Exactly what router.route() hands the fast paths and the gate."""
     t = utterance.lower().strip().rstrip(".,!?")
-    return _LEADING_FILLER_RE.sub("", t)
+    # "is there a way to <command>" is the command (router.strip_request_preamble).
+    return strip_request_preamble(_LEADING_FILLER_RE.sub("", t))
 
 
 def _fast_path_winner(normalized: str) -> str | None:
     for h in HANDLERS:
         for entry in h.fast_paths:
             if as_fast_path(entry).pattern.match(normalized):
-                # help_desk runs a command worded as a how-to through the
-                # command's own handler ("is there a way to set a timer…").
-                if h.name == "help_desk":
-                    return h.delegate_target(normalized) or h.name
                 return h.name
     return None
 

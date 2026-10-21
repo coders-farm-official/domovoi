@@ -36,6 +36,10 @@ from typing import Any, Iterable, Iterator
 #: Known values shorter than this are not matched (they'd hit ordinary words).
 KNOWN_MIN_LEN = 3
 
+# Values that are also everyday words here (a dev database's password is
+# "domovoi"): scrubbing them would scrub the product's own name.
+_NEVER_SCRUB = frozenset({"domovoi", "domo", "admin", "localhost", "postgres", "password", "changeme"})
+
 _KNOWN: ContextVar[tuple[str, ...]] = ContextVar("help_known_values", default=())
 
 
@@ -45,7 +49,7 @@ def prepare_known(values: Iterable[Any]) -> tuple[str, ...]:
     seen: dict[str, str] = {}
     for v in values:
         s = " ".join(str(v or "").split())
-        if len(s) >= KNOWN_MIN_LEN and s.lower() not in seen:
+        if len(s) >= KNOWN_MIN_LEN and s.lower() not in seen and s.lower() not in _NEVER_SCRUB:
             seen[s.lower()] = s
     return tuple(sorted(seen.values(), key=len, reverse=True))
 

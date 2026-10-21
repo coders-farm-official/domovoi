@@ -245,7 +245,7 @@ async def run_ollama(
     from domovoi.handlers import HANDLERS
     from domovoi.handlers.base import as_fast_path
     from domovoi.handlers.shared.tool_gate import answers_without_tools
-    from domovoi.router import _LEADING_FILLER_RE, offered_tool_schemas
+    from domovoi.router import _LEADING_FILLER_RE, strip_request_preamble, offered_tool_schemas
 
     tool_model = model or settings.ollama_tool_model
     client = RealOllamaClient(
@@ -256,10 +256,6 @@ async def run_ollama(
         for h in HANDLERS:
             for entry in h.fast_paths:
                 if as_fast_path(entry).pattern.match(normalized):
-                    # help_desk runs a command worded as a how-to through the
-                    # command's own handler ("is there a way to set a timer…").
-                    if h.name == "help_desk":
-                        return h.delegate_target(normalized) or h.name
                     return h.name
         return None
 
@@ -268,7 +264,7 @@ async def run_ollama(
         # Mirror router.route(): lowercase, strip terminal punctuation,
         # strip leading filler, then fast paths before the LLM.
         normalized = case.utterance.lower().strip().rstrip(".,!?")
-        normalized = _LEADING_FILLER_RE.sub("", normalized)
+        normalized = strip_request_preamble(_LEADING_FILLER_RE.sub("", normalized))
         t0 = time.monotonic()
         winner = fast_path_winner(normalized)
         declined = winner is not None and winner == case.declined_by

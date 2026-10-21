@@ -91,6 +91,22 @@ _ANCHOR_RE = re.compile(
 )
 
 
+# A question about someone else's device or service ("…on my phone", "…for
+# gmail"): not Domovoi's, whatever command words it holds.
+_ELSEWHERE_RE = re.compile(
+    r"\b(?:on|in|for|with|from) my (?:phone|iphone|android|ipad|tablet|computer|laptop|pc|mac|tv|router|car|"
+    r"watch|fridge)\b|\b(?:gmail|outlook|netflix|spotify|google home|alexa|siri|iphone|icloud|whatsapp|"
+    r"facebook|instagram|youtube music|apple music)\b",
+    re.I,
+)
+
+
+def elsewhere(question: str) -> bool:
+    """About another device or service, and not naming Domovoi."""
+    q = question or ""
+    return bool(_ELSEWHERE_RE.search(q)) and not _ANCHOR_RE.search(q)
+
+
 def is_about_domovoi(question: str, index: Any, *, anchors: Any = ()) -> bool:
     """Whether ``question`` is about Domovoi itself, not merely worded
     like one ("how can I restart my router", "how do I train a model"): it
@@ -99,6 +115,8 @@ def is_about_domovoi(question: str, index: Any, *, anchors: Any = ()) -> bool:
     not enough). Plugin help never counts here."""
     if _ANCHOR_RE.search(question or ""):
         return True
+    if elsewhere(question):
+        return False
     q = (question or "").lower().replace("_", " ")
     # This household's own names: its rooms ("why is the kitchen offline").
     if any(a and re.search(r"\b" + re.escape(str(a).lower().replace("_", " ")) + r"\b", q) for a in anchors):

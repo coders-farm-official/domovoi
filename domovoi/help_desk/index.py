@@ -136,6 +136,8 @@ class Passage:
     piece: str | None = None
     #: Plugin pages and plugin help: the plugin's slug.
     plugin: str | None = None
+    #: The handlers this passage's "try saying" phrases reach (manual pages).
+    handlers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -249,11 +251,15 @@ def manual_passages(doc: dict, *, installed_plugins: set[str] | None = None) -> 
             continue
         section = f"{topic.get('title', 'Manual')} → {piece['title']}"
         kws = tuple(piece.get("keywords") or ()) + (piece.get("subtitle") or "",)
+        said = [(f"“{plain_inline(ph.get('text', ''), wake)}”", ph.get("handler"))
+                for b in piece.get("blocks") or [] if b.get("type") == "say"
+                for ph in b.get("phrases") or [] if ph.get("handler")]
         for i, chunk in enumerate(_chunks(lines)):
+            reached = tuple(dict.fromkeys(h for quoted, h in said if quoted in chunk))
             out.append(Passage(
                 id=f"manual:{piece['id']}:{i}", title=piece["title"], text=chunk,
                 kind=KIND_MANUAL, section=section, link=f"#manual/{piece['id']}",
-                keywords=kws, piece=piece["id"], plugin=plugin,
+                keywords=kws, piece=piece["id"], plugin=plugin, handlers=reached,
             ))
     return out
 
@@ -474,6 +480,13 @@ class HelpIndex:
         if p.kind == KIND_PLUGIN:
             return HelpIndex.PLUGIN_WEIGHT
         return 1.0
+
+    def for_handler(self, name: str) -> list[Passage]:
+        """The manual pages whose "try saying" phrases reach ``name``, the
+        page that is about it first (Start here, which samples everything,
+        last)."""
+        found = [p for p in self.passages if p.kind == KIND_MANUAL and name in p.handlers]
+        return sorted(found, key=lambda p: (p.piece == "start", -sum(1 for h in p.handlers if h == name)))
 
     def search(self, query: str, *, limit: int = 3, kinds: tuple[str, ...] | None = None) -> list[Hit]:
         q = list(dict.fromkeys(tokens(query)))

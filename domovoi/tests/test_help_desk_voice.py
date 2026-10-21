@@ -309,3 +309,20 @@ async def test_a_help_chat_keeps_its_title_and_its_steps_are_the_helps(voice) ->
         kept = (await voice.db.execute(text(
             "SELECT t.title_generated FROM chat_threads t JOIN help_deliveries d ON d.thread_id = t.id"))).scalar_one()
         assert kept is True
+
+
+@requires_db
+@pytest.mark.parametrize(
+    "said",
+    ["how do I fix the wifi", "how do I stop the music", "how do I cancel the timer",
+     "how do I drop in on the office", "how can I play my playlist"],
+)
+@pytest.mark.asyncio
+async def test_a_how_to_about_a_command_is_answered_never_carried_out(voice, said) -> None:
+    """Review 2: these ran the action (reconnected the Wi-Fi, stopped the
+    music…). A how-to question is answered from the manual page that
+    teaches the command."""
+    r = await voice(said)
+    assert (r.matched_handler, r.matched_path) == ("help_desk", "fast"), (said, r.matched_handler, r.text)
+    assert r.text.startswith("From the manual's "), r.text
+    assert "reconnecting" not in r.text and r.text != "Stopped."

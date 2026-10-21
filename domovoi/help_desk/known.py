@@ -13,7 +13,12 @@ network is scrubbed at once), and never kept or returned anywhere:
 * this server's host name, and the host and domain of every configured URL
   (``settings``: Ollama, SearXNG, Letta, the database, the advertised core
   address…, and ``DOMOVOI_URL``);
-* people's names (whole, and each part of three letters or more).
+* people's names (whole, and each part of three letters or more);
+* every secret setting (``config_schema.SECRET_SETTING_NAMES``: the
+  AcoustID key, the Letta token, the database URL's password…, and any
+  setting whose name says key, token, secret or password), and every plugin
+  setting marked ``kind="secret"`` (the core's plugin config registry) or
+  named like one in a plugin's ``~/.domovoi/plugins/<slug>.env``.
 
 Room names are not here: the household sees them everywhere already; the
 problem report replaces them itself unless the person keeps them.
@@ -24,7 +29,9 @@ from __future__ import annotations
 import logging
 import os
 import platform
+import re
 import socket
+from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlsplit
 
@@ -38,18 +45,23 @@ def _url_values(url: str) -> list[str]:
         parts = urlsplit(url)
     except ValueError:
         return []
+    out: list[str] = []
+    # Credentials in a URL are secret wherever it points.
+    try:
+        if parts.password:
+            out.append(parts.password)
+    except ValueError:
+        pass
     host = parts.hostname or ""
     if not host or host in ("localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal"):
-        return []
-    out = [host]
+        return out
+    out.append(host)
     labels = host.split(".")
     if len(labels) >= 2 and not host.replace(".", "").isdigit():
         out.append(".".join(labels[-2:]))   # the domain
         out.append(labels[0])               # the bare host
-    if parts.username:
+    if parts.username and parts.username not in ("domovoi",):
         out.append(parts.username)
-    if parts.password:
-        out.append(parts.password)
     return out
 
 
@@ -73,6 +85,64 @@ def config_values(settings: Any = None) -> list[str]:
         urls += [v for v in dumped.values() if isinstance(v, str) and "://" in v]
     for u in urls:
         out += _url_values(u)
+    # The secret settings are configured values too (core and plugins').
+    out += secret_values(settings)
+    return out
+
+
+_SECRETISH = re.compile(r"(?i)(?:^|_)(?:api_?key|key|token|secret|password|passwd|pass|psk|credentials?)$")
+
+
+def secret_values(settings: Any = None) -> list[str]:
+    """The values of every secret setting, core and plugins'."""
+    out: list[str] = []
+    if settings is None:
+        try:
+            from domovoi.config import settings as settings  # noqa: PLW0127
+        except Exception:  # noqa: BLE001
+            settings = None
+    try:
+        from domovoi.config_schema import SECRET_SETTING_NAMES
+    except Exception:  # noqa: BLE001
+        SECRET_SETTING_NAMES = frozenset()  # noqa: N806
+    if settings is not None:
+        try:
+            dumped = settings.model_dump()
+        except Exception:  # noqa: BLE001
+            dumped = {}
+        for name, value in dumped.items():
+            if not isinstance(value, str) or not value.strip():
+                continue
+            if name in SECRET_SETTING_NAMES or _SECRETISH.search(name):
+                out.append(value)
+                if "://" in value:
+                    out += _url_values(value)
+    # Plugins: fields marked secret where the registry lives (the core) …
+    try:
+        from domovoi.plugins_runtime.config_bridge import PLUGIN_CONFIG
+
+        for cfg in list(getattr(PLUGIN_CONFIG, "_configs", {}).values()):
+            for spec in cfg.fieldspecs:
+                if spec.kind == "secret":
+                    v = getattr(cfg.instance, spec.name, None)
+                    if isinstance(v, str) and v.strip():
+                        out.append(v)
+    except Exception as e:  # noqa: BLE001
+        log.debug("help known values: plugin config unreadable: %s", e)
+    # … and, in either process, the plugins' own settings files.
+    try:
+        for f in (Path.home() / ".domovoi" / "plugins").glob("*.env"):
+            for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+                key, sep, value = line.partition("=")
+                value = value.strip().strip("'\"")
+                if sep and value and _SECRETISH.search(key.strip()):
+                    out.append(value)
+    except OSError:
+        pass
+    # Secrets handed to this process in its environment.
+    for key, value in os.environ.items():
+        if value and _SECRETISH.search(key) and len(value) >= 6:
+            out.append(value)
     return out
 
 

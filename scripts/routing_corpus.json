@@ -891,9 +891,10 @@
     },
     {
       "utterance": "how can I play my playlist",
-      "handler": "playlist",
+      "handler": "help_desk",
+      "path": "fast",
       "tags": ["action", "help-desk"],
-      "note": "2026-10-21 review: poach case"
+      "note": "2026-10-21 review 2: a question about a command is answered from the manual, not carried out"
     },
     {
       "utterance": "how can I restart my router",
@@ -929,6 +930,34 @@
       "declined_by": "help_desk",
       "tags": ["qa", "help-desk"],
       "note": "2026-10-21 review: 'model' alone isn't Domovoi"
+    },
+    {
+      "utterance": "how do I fix the wifi",
+      "handler": "help_desk",
+      "path": "fast",
+      "tags": ["action", "help-desk"],
+      "note": "2026-10-21 review 2: a how-to question is answered from the manual; OK, reconnecting now. (review 2) was the wifi handler acting"
+    },
+    {
+      "utterance": "how do I stop the music",
+      "handler": "help_desk",
+      "path": "fast",
+      "tags": ["action", "help-desk"],
+      "note": "2026-10-21 review 2: a how-to question is answered from the manual; it stopped the music (review 2)"
+    },
+    {
+      "utterance": "how do I cancel the timer",
+      "handler": "help_desk",
+      "path": "fast",
+      "tags": ["action", "help-desk"],
+      "note": "2026-10-21 review 2: a how-to question is answered from the manual; it cancelled a timer (review 2)"
+    },
+    {
+      "utterance": "how do I drop in on the office",
+      "handler": "help_desk",
+      "path": "fast",
+      "tags": ["action", "help-desk"],
+      "note": "2026-10-21 review 2: a how-to question is answered from the manual; it started a drop-in (review 2)"
     }
   ]
 }

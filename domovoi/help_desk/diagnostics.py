@@ -116,7 +116,13 @@ def build(
     text = "\n".join(lines)
     # The whole text once more, line by line, so nothing slips through a
     # field that was not redacted on its own (a plugin's name, a status).
+    # The lines this function wrote itself (the heading, the note, the
+    # version, the host kind…) are left as written; everything else, once
+    # more, line by line.
+    own = {f"## {HEADER}", f"_{NOTE}_", f"- Host: {host or host_kind()}",
+           f"- Domovoi version: {facts.version or 'unknown'}"}
     return "\n".join(
-        (ln[: len(ln) - len(ln.lstrip())] + redact(ln.strip(), limit=0)) if ln.strip() else ln
+        ln if (not ln.strip() or ln in own)
+        else ln[: len(ln) - len(ln.lstrip())] + redact(ln.strip(), limit=0)
         for ln in text.splitlines()
     ) + "\n"

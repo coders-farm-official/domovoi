@@ -26,17 +26,23 @@ FAQ, the troubleshooting guide, plugins' help files —
 **Not poaching, not poached.** The fast path is "how do/can/should I …",
 "how to …", "where do I find/change/set/turn …", "is there a way to …".
 
-* A request in how-to clothes is the action's: when what follows "is there
-  a way to" / "how do I" is itself a command another handler's fast path
-  takes ("set a timer for ten minutes", "play some music", "play the
-  radio"), that handler runs it (:meth:`HelpDeskHandler._delegate`), as if
-  the person had said the command; "where do I …" is never delegated.
+* "How do I …" is a QUESTION, and it is answered from the manual, never
+  carried out: "how do I stop the music" says how, it doesn't stop it.
+  When what follows is one of Domovoi's own commands ("how do I fix the
+  wifi", "how do I drop in on the office", "how can I play my playlist"),
+  the answer is the manual page that teaches that command (the page whose
+  "try saying" phrases reach the same handler, ``HelpIndex.for_handler``).
+* "Is there a way to <command>" is a request: the router strips that
+  preamble before choosing a fast path (``router.strip_request_preamble``),
+  so the command's own handler gets the turn with every gate the router
+  applies, and ``plan_route`` agrees. This handler never runs another's.
 * Otherwise it DECLINES (returns None, and the turn routes on as before:
   the tool model, then the answer model) unless the question is about
   Domovoi itself (:func:`domovoi.help_desk.answer.is_about_domovoi`: it
   names something only Domovoi has, or a core help page's title and search
-  words hold all of it — "how can I restart my router" and "how do I fix my
-  phone screen" are not) AND the help index holds a confident page.
+  words hold all of it — "how can I restart my router", "how do I fix my
+  phone screen" and "how do I set an alarm on my phone" are not) AND the
+  help index holds a confident page.
 
 **Sending is limited** (:mod:`domovoi.help_desk.delivery`): a few sends
 an hour per person (and so per phone) and per asking session, and the same
@@ -93,20 +99,39 @@ NO_PHONE_TEXT = (
 
 def looks_like_domovoi(question: str, index: Any = None) -> bool:
     """A how-to question this handler answers: worded about something of
-    Domovoi's, not a command in how-to clothes (that one is its handler's),
-    and about Domovoi itself (``answer.is_about_domovoi``)."""
+    Domovoi's, and about Domovoi itself (``answer.is_about_domovoi``), or
+    asking how to use one of Domovoi's own commands."""
     q = question or ""
-    if not _DOMOVOI_WORDS.search(q):
-        return False
-    from domovoi.handlers import HANDLER_BY_NAME
-
-    me = HANDLER_BY_NAME.get("help_desk")
-    if me is not None and me.delegate_target(q):
-        return False
-    from domovoi.help_desk.answer import is_about_domovoi
+    from domovoi.help_desk.answer import elsewhere, is_about_domovoi
     from domovoi.help_desk.index import get_index
 
+    if command_handler(q) is not None:
+        return not elsewhere(q)
+    if not _DOMOVOI_WORDS.search(q):
+        return False
     return is_about_domovoi(q, index if index is not None else get_index())
+
+
+# The command a "how do I …" question asks about: what follows the prefix.
+_HOWTO_CMD_RE = re.compile(
+    r"^(?:(?:hey |ok |okay )?(?:domovoi|domo)[, ]+)?"
+    r"(?:how (?:do|can|should|would) (?:i|we)|how to)\s+(?:please\s+)?(?P<cmd>.+)$"
+)
+
+
+def command_handler(question: str) -> Any:
+    """The handler whose fast path takes the command a "how do I …"
+    question asks about ("how do I fix the wifi": wifi), or None. Pattern
+    only: nothing runs."""
+    from domovoi.router import first_fast_path, strip_leading_filler
+
+    m = _HOWTO_CMD_RE.match((question or "").strip())
+    if not m:
+        return None
+    hit = first_fast_path(strip_leading_filler(m.group("cmd").strip()))
+    if hit is None or hit[0].name in ("help", "help_desk"):
+        return None
+    return hit[0]
 
 
 def _index_for(rows: list[dict[str, Any]]):
@@ -132,13 +157,6 @@ def steps_text(question: str, passages: list[Any]) -> str:
         parts.append(f"**{p.section}**\n\n{p.text}{link}")
     return "\n\n".join(parts)
 
-
-# What a request in how-to clothes asks for: the command after the prefix.
-_REQUEST_RE = re.compile(
-    r"^(?:(?:hey |ok |okay )?(?:domovoi|domo)[, ]+)?"
-    r"(?:how (?:do|can|should|would) (?:i|we)|how to|is there a way to|what's the way to|"
-    r"what is the way to)\s+(?:please\s+)?(?P<cmd>.+)$"
-)
 
 _DECLINE_RE = re.compile(
     r"^(?:no|nope|nah|nobody|no one|noone|none|never mind|nevermind|cancel|forget it|don't|do not|"
@@ -210,78 +228,29 @@ class HelpDeskHandler(Handler):
         return Response(text=text, session_id=ctx.session_id, matched_handler=self.name,
                         expect_followup=followup, data=data or {})
 
-    async def _delegate(self, question: str, ctx: Context, session: AsyncSession) -> Response | None:
-        """Run the command inside a how-to-worded request through the
-        handler whose fast path takes it; None when there is none (or it
-        declines)."""
-        from domovoi.handlers import HANDLERS
-        from domovoi.handlers.base import as_fast_path
-
-        m = _REQUEST_RE.match(question)
-        if not m:
-            return None
-        cmd = m.group("cmd").strip()
-        for h in HANDLERS:
-            if h.name in (self.name, "help"):
-                continue
-            if getattr(h, "satellite_only", False) and ctx.from_phone:
-                continue
-            if h.requires_network == "yes" and not ctx.online:
-                continue
-            for entry in h.fast_paths:
-                fp = as_fast_path(entry)
-                hit = fp.pattern.match(cmd)
-                if not hit:
-                    continue
-                resp = await fp.method(h, hit, ctx, session)
-                if resp is not None:
-                    resp.matched_handler = h.name
-                    resp.data = {**(resp.data or {}), "delegated_to": h.name}
-                    return resp
-        return None
-
-    def takes_command(self, question: str) -> bool:
-        """Whether a request in how-to clothes holds another handler's
-        command (the pattern only)."""
-        return self.delegate_target(question) is not None
-
-    def delegate_target(self, question: str) -> str | None:
-        """The handler whose fast path takes the command inside a
-        how-to-worded request, by pattern (the routing corpus and the eval
-        see the turn as that handler's)."""
-        from domovoi.handlers import HANDLERS
-        from domovoi.handlers.base import as_fast_path
-
-        m = _REQUEST_RE.match(question or "")
-        if not m:
-            return None
-        cmd = m.group("cmd").strip()
-        for h in HANDLERS:
-            if h.name in (self.name, "help"):
-                continue
-            if any(as_fast_path(e).pattern.match(cmd) for e in h.fast_paths):
-                return h.name
-        return None
-
     async def _answer(self, question: str, ctx: Context, session: AsyncSession) -> Response | None:
-        from domovoi.help_desk.answer import is_about_domovoi, spoken_answer
+        from domovoi.help_desk.answer import elsewhere, is_about_domovoi, spoken_answer
+        from domovoi.help_desk.index import Hit
 
         question = (question or "").strip()
         if not question:
             return None
-        acted = await self._delegate(question, ctx, session)
-        if acted is not None:
-            return acted
-        if self.takes_command(question):
-            # The command's own handler declined it: route it on as before.
-            return None
-        if not looks_like_domovoi(question):
-            return None
         try:
             index = await _index(session)
-            if not is_about_domovoi(question, index):
-                return None
-            hits = [h for h in index.search(question, limit=3) if h.confident()]
+            cmd = command_handler(question)
+            if cmd is not None:
+                # "How do I <a command of Domovoi's>": the page that teaches
+                # that command, never the command itself.
+                if elsewhere(question):
+                    return None
+                pages = index.for_handler(cmd.name)
+                hits = [Hit(p, 99.0, 1.0, (), 1.0) for p in pages[:2]]
+                if not hits:
+                    hits = [h for h in index.search(question, limit=3) if h.confident()]
+            else:
+                if not looks_like_domovoi(question) or not is_about_domovoi(question, index):
+                    return None
+                hits = [h for h in index.search(question, limit=3) if h.confident()]
         except Exception as e:  # noqa: BLE001 — no help index: route the turn on
             log.warning("help desk: the index failed: %s", e)
             return None

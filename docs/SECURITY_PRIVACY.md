@@ -1594,6 +1594,15 @@ What the install flow *does* do (verified in
   code is in-process, unsandboxed Python running as the application's
   database user anyway. The boundary against malice is the publisher you
   trust.
+- **The lookup-source rules hold against honest plugins, not hostile ones.**
+  The core decides a lookup source's class at registration and puts its
+  own sources first (`domovoi/lookup.py`): a plugin's "local" claim counts
+  only for an allowlisted plugin, and a later change to the claim changes
+  nothing. Those rules bind a plugin that registers through
+  `ctx.add_lookup_source`. Plugin code runs in the core's own process, so a
+  hostile plugin could build a `RegisteredSource(core=True)` itself and
+  register it directly, or patch the module; nothing in-process can stop
+  that. Same boundary as above: install plugins from publishers you trust.
 - **Plugin HTTP routes are admin-gated by default in both processes.** A
   plugin's routers on the core (`/v1/plugins/<slug>/…`) and on the web
   dashboard (`/api/plugins/<slug>/…`) sit behind the same rule

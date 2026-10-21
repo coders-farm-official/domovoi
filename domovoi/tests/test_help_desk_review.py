@@ -15,6 +15,7 @@ registration, core first within a class, fetch() capped.
 from __future__ import annotations
 
 import asyncio
+import pathlib
 from datetime import datetime, timezone
 
 import pytest
@@ -206,16 +207,22 @@ def test_a_question_about_domovoi_is(q) -> None:
 
 
 @pytest.mark.parametrize(
-    "said",
-    ["is there a way to set a timer for ten minutes", "is there a way to play some music",
-     "is there a way to play music in the kitchen", "how do I play the radio", "how can I play my playlist"],
+    ("said", "handler"),
+    [("is there a way to set a timer for ten minutes", "timer"), ("is there a way to play some music", "music"),
+     ("is there a way to play music in the kitchen", "music"),
+     # Questions, not requests: answered from the manual (round 2).
+     ("how do I fix the wifi", "help_desk"), ("how do I stop the music", "help_desk"),
+     ("how do I cancel the timer", "help_desk"), ("how do I drop in on the office", "help_desk"),
+     ("how can I play my playlist", "help_desk")],
 )
-def test_a_command_in_how_to_clothes_is_the_commands(said) -> None:
-    from domovoi.handlers import HANDLER_BY_NAME
-    from domovoi.router import normalize_transcript, strip_leading_filler
+def test_plan_route_names_the_handler_route_acts_with(said, handler) -> None:
+    """"Is there a way to <command>" is the command's turn, decided where
+    the router picks fast paths, so plan_route() (early commit, the replay)
+    and route() agree; "how do I …" stays help_desk's."""
+    from domovoi.router import plan_route
 
-    t = strip_leading_filler(normalize_transcript(said))
-    assert HANDLER_BY_NAME["help_desk"].takes_command(t), said
+    plan = plan_route(said)
+    assert plan is not None and plan.handler.name == handler, (said, plan and plan.handler.name)
 
 
 # ── lookup hardening ─────────────────────────────────────────────────────
@@ -268,3 +275,38 @@ def test_the_class_is_fixed_at_registration_and_fetch_is_capped() -> None:
     assert len(doc.text) == lookup.FETCH_MAX_CHARS
     hits = asyncio.run(lookup.search_sources("q", registry=reg))
     assert len(hits[0][1][0].snippet) == lookup.SNIPPET_MAX
+
+
+# ── round 2: secrets, and the report's own lines ─────────────────────────
+
+
+def test_every_secret_setting_and_plugin_secret_is_a_known_value(tmp_path, monkeypatch) -> None:
+    from domovoi.help_desk.known import secret_values
+
+    class S:
+        def model_dump(self):
+            return {"acoustid_api_key": "AcoustKey-77abc", "letta_token": "LettaTok-99",
+                    "database_url": "postgresql+asyncpg://domovoi:DbPass-42@127.0.0.1:6432/domovoi",
+                    "searxng_url": "http://localhost:6888", "bot_name": "Domovoi"}
+
+    monkeypatch.setattr(pathlib.Path, "home", classmethod(lambda cls: tmp_path))
+    (tmp_path / ".domovoi" / "plugins").mkdir(parents=True)
+    (tmp_path / ".domovoi" / "plugins" / "jellyfin.env").write_text(
+        "JELLYFIN_API_KEY=JfKey-123456\nJELLYFIN_URL=http://media.lan\n", encoding="utf-8")
+    got = secret_values(S())
+    for secret in ("AcoustKey-77abc", "LettaTok-99", "DbPass-42", "JfKey-123456"):
+        assert secret in got, secret
+    assert "Domovoi" not in got and "http://media.lan" not in got
+    with known_values(["domovoi", *got]):                      # the dev database's password
+        assert redact("Domovoi couldn't reach Ollama") == "Domovoi couldn't reach Ollama"
+    with known_values(got):
+        assert "JfKey-123456" not in redact("plugin said key JfKey-123456 refused")
+        assert "AcoustKey" not in redact("lookup AcoustKey-77abc rejected")
+
+
+def test_the_report_keeps_its_own_lines() -> None:
+    st = _state()
+    lf = facts.build(version="1.0.0", internet="always", ai_on=True, rooms=st.rooms, plugins=st.plugins)
+    report = diagnostics.build(lf, [], now=NOW, host="Linux")
+    assert "- Host: Linux" in report and f"_{diagnostics.NOTE}_" in report
+    assert "[redacted]" not in report and "[quoted]" not in report
