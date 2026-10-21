@@ -101,7 +101,7 @@ var
   CodeLabel, HintLabel: TNewStaticText;
 
   Resolved: Boolean;
-  Room, Core, Fingerprint, ServerUrl: String;
+  Room, Core, Fingerprint, ServerUrl, SetupCode: String;
   ApprovalCode: String;
   Approved: Boolean;
   Lines: TArrayOfString;
@@ -215,6 +215,15 @@ begin
     LoadStringsFromFile(ResultFile, Res);
 end;
 
+{ K7M4QX2P9TRA as the dashboard shows it: K7M4-QX2P-9TRA. }
+function Dashed(const Code: String): String;
+begin
+  if Length(Code) = 12 then
+    Result := Copy(Code, 1, 4) + '-' + Copy(Code, 5, 4) + '-' + Copy(Code, 9, 4)
+  else
+    Result := Code;
+end;
+
 function TargetArgs: String;
 begin
   Result := '-Server "' + Clean(CodePage.Values[0]) + '" -Code "' + Clean(CodePage.Values[1]) + '"';
@@ -251,6 +260,7 @@ begin
   Core := KvValue(Res, 'core');
   Fingerprint := KvValue(Res, 'fingerprint');
   ServerUrl := KvValue(Res, 'server');
+  SetupCode := KvValue(Res, 'code');
   Resolved := True;
   Result := True;
 end;
@@ -532,7 +542,7 @@ begin
   begin
     WizardForm.PageDescriptionLabel.Caption := 'This PC becomes the room "' + Room + '".';
     RoomText.Caption := 'Domovoi server: ' + Core + ', which proved it is the one the code was made on.' + #13#10 +
-      'Setup code: ' + Clean(CodePage.Values[1]) + ' (check it is the one on the dashboard)' + #13#10 +
+      'Setup code: ' + Dashed(SetupCode) + ' (check it is the one on the dashboard)' + #13#10 +
       'Its fingerprint: ' + Fingerprint;
     RoomText.AdjustHeight;
   end

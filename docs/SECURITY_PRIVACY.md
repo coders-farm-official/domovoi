@@ -2564,9 +2564,14 @@ command. It is only a wizard in front of the same install
   `install-windows.ps1` then proves the fingerprint again before anything
   is written. So a rogue host on the LAN, a renamed download pointing at
   it, or something on the path of the plain-HTTP talk can't make the Setup
-  run its code: it can't sign as your server, and finding another payload
-  with the same code (one with its own fingerprint in it) is a 2^60
-  search, against a code that lives 24 hours. Every request goes direct,
+  run its code: it can't sign as your server. What protects the code
+  itself is the work of finding another payload with the same code (one
+  with its own fingerprint in it): an offline 2^60 second-preimage search.
+  A room's code is fixed (the same payload always has the same code, and
+  the payload is public: an address, the fingerprint, the room's name), so
+  the 24 hours don't bound it; the search does, at roughly $10,000 to
+  $20,000 of rented GPU time per room (2026 prices). A household worried
+  about that can rename the room, which gives it a new code. Every request goes direct,
   never through the system proxy (no WPAD detour), and follows no
   redirect.
 * **What it still trusts.** The code itself, as it reaches the PC. Typed

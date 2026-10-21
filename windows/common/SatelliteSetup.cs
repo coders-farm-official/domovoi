@@ -40,10 +40,25 @@ namespace Domovoi.Windows
                 + "\", \"fetched_at\": " + Inv.S(unixTime) + "}";
         }
 
-        // Prints the SHA-256 of the copy already placed, if any.
+        // Prints the SHA-256 of the copy already placed, if any, then its
+        // record: IsPlaced reads both.
         public static string CheckScript()
         {
-            return "sha256sum " + CacheDir + "/" + FileName + " 2>/dev/null || true";
+            return "sha256sum " + CacheDir + "/" + FileName + " 2>/dev/null; echo; cat " + CacheDir
+                + "/setup.json 2>/dev/null; true";
+        }
+
+        // Whether CheckScript's output shows this very file AND a record
+        // naming it (its SHA-256, its size, bundled): anything else, the file
+        // or the record missing, changed or not ours, places both again.
+        public static bool IsPlaced(string checkOutput, string sha256, long size)
+        {
+            if (checkOutput == null || !Sha256.IsHex(sha256)) return false;
+            if (!checkOutput.StartsWith(sha256 + " ", StringComparison.Ordinal)) return false;
+            string compact = checkOutput.Replace(" ", "").Replace("\t", "").Replace("\r", "").Replace("\n", "");
+            return compact.Contains("\"sha256\":\"" + sha256 + "\"")
+                && compact.Contains("\"size\":" + Inv.S(size) + ",")
+                && compact.Contains("\"release\":\"" + Release + "\"");
         }
 
         // Run as the service user with the file on stdin: write it beside

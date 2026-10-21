@@ -290,7 +290,7 @@ namespace Domovoi.Windows.Host
                 using (var h = System.Security.Cryptography.SHA256.Create()) sha = Sha256.Hex(h.ComputeHash(exe));
                 var user = new[] { "-d", Paths.DistroName, "-u", SatelliteSetupPlacement.ServiceUser, "--cd", "/", "--exec", "/bin/sh", "-c" };
                 WslResult have = Wsl.Run(Concat(user, SatelliteSetupPlacement.CheckScript()), 60000, null, 4096);
-                if (have.ExitCode == 0 && have.Stdout.StartsWith(sha, StringComparison.Ordinal)) return;
+                if (have.ExitCode == 0 && SatelliteSetupPlacement.IsPlaced(have.Stdout, sha, exe.Length)) return;
                 long now = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
                 WslResult r = Wsl.Run(Concat(user, SatelliteSetupPlacement.PlaceScript(sha, exe.Length, now)), 120000, exe, 4096);
                 if (r.ExitCode == 0 && r.Stdout.StartsWith(sha, StringComparison.Ordinal))

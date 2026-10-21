@@ -271,11 +271,23 @@ namespace DomovoiSatelliteSetup
             return new[] { x, y, BigInteger.One, Mod(x * y) };
         }
 
+        // A point of small order (the identity among them): eight times it
+        // is the identity. With such a key, or such an R, a signature can
+        // hold for any message, so neither is accepted (review round 2).
+        static bool SmallOrder(BigInteger[] p)
+        {
+            byte[] e = Encode(Mult(p, 8));
+            if (e[0] != 1) return false;
+            for (int i = 1; i < 32; i++) if (e[i] != 0) return false;
+            return true;
+        }
+
         public static bool Verify(byte[] pub, byte[] message, byte[] sig)
         {
             if (pub == null || sig == null || message == null || pub.Length != 32 || sig.Length != 64) return false;
             BigInteger[] a = Decode(pub, 0), r = Decode(sig, 0);
             if (a == null || r == null) return false;
+            if (SmallOrder(a) || SmallOrder(r)) return false;
             BigInteger s = FromLittle(sig, 32, 32);
             if (s >= L) return false;
             byte[] h;
@@ -487,9 +499,15 @@ $proven = Resolve-Code $base $setupCode
 $doc = $proven.doc
 $Result['server'] = $base
 $Result['code'] = $setupCode
-$Result['room'] = Get-Field $doc 'room'
-$Result['room_id'] = Get-Field $doc 'room_id'
-$Result['core'] = Get-Field $doc 'core'
+# What the wizard shows comes from the payload the code and the signature
+# hold (review round 2), never from the answer's other, unsigned fields.
+function Get-PayloadField([string]$Payload, [string]$Key) {
+    $m = [regex]::Match($Payload, '[?&]' + $Key + '=([^&#]*)')
+    if (-not $m.Success) { return '' }
+    try { return [Uri]::UnescapeDataString($m.Groups[1].Value) } catch { return '' }
+}
+$Result['room'] = Get-PayloadField $proven.payload 'room'
+$Result['core'] = Get-PayloadField $proven.payload 'core'
 # The fingerprint the server just proved (the one inside the code's payload).
 $Result['fingerprint'] = $proven.fp
 if ($Resolve) {

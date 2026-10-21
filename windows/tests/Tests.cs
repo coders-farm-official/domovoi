@@ -1529,7 +1529,20 @@ static partial class Tests
             True(s.IndexOf("mv -f " + d + "/.DomovoiSatelliteSetup.exe.placing " + d + "/DomovoiSatelliteSetup.exe") > 0, "moved in");
             True(s.IndexOf("/DomovoiSatelliteSetup.exe;") < s.IndexOf("/setup.json;"), "the file before its record");
             True(s.EndsWith("sha256sum " + d + "/DomovoiSatelliteSetup.exe"), "checked");
-            Eq("sha256sum " + d + "/DomovoiSatelliteSetup.exe 2>/dev/null || true", SatelliteSetupPlacement.CheckScript(), "check");
+            Eq("sha256sum " + d + "/DomovoiSatelliteSetup.exe 2>/dev/null; echo; cat " + d + "/setup.json 2>/dev/null; true",
+               SatelliteSetupPlacement.CheckScript(), "check");
+        });
+        Run("satellite setup: placed only when the file and its record both match", delegate
+        {
+            string file = sha + "  /home/domovoi/.domovoi/satellite_media/cache/satellite_setup/DomovoiSatelliteSetup.exe\n\n";
+            string rec = SatelliteSetupPlacement.Record(sha, 5, 6);
+            True(SatelliteSetupPlacement.IsPlaced(file + rec, sha, 5), "both match");
+            True(!SatelliteSetupPlacement.IsPlaced(file, sha, 5), "the record missing");
+            True(!SatelliteSetupPlacement.IsPlaced("\n" + rec, sha, 5), "the file missing");
+            True(!SatelliteSetupPlacement.IsPlaced(file + SatelliteSetupPlacement.Record(new string('b', 64), 5, 6), sha, 5), "the record names another file");
+            True(!SatelliteSetupPlacement.IsPlaced(file + rec, sha, 7), "another size");
+            True(!SatelliteSetupPlacement.IsPlaced(file + rec.Replace("bundled", "v9.9.9"), sha, 5), "fetched, not bundled");
+            True(!SatelliteSetupPlacement.IsPlaced(new string('b', 64) + file.Substring(64) + rec, sha, 5), "another file");
         });
         Run("satellite setup: none beside the host is none", delegate
         {

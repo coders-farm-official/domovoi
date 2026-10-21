@@ -392,6 +392,81 @@ def test_the_worker_s_ed25519_and_code_agree_with_python(tmp_path):
     assert lines == {"good": "True", "bad": "False", "fp": server_identity.fingerprint_for(pub), "code": CODE}, r.stdout + r.stderr
 
 
+VECTORS = REPO / "domovoi" / "tests" / "fixtures" / "ed25519-setup-vectors.json"
+
+
+@windows_only
+def test_the_worker_s_ed25519_against_the_vector_suite(tmp_path):
+    """Review round 2's 53 vectors: RFC 8032, openssl-signed keys, and the
+    negatives (flipped bits, non-canonical S, malformed sizes and points,
+    small-order keys and R). One PowerShell run checks them all."""
+    cases = json.loads(VECTORS.read_text(encoding="utf-8"))["vectors"]
+    assert len(cases) >= 53 and sum(1 for c in cases if c.get("small_order")) >= 2
+    worker = WORKER.read_text(encoding="ascii")
+    src = worker[worker.index("$ProofSource = @'"):worker.index("function Get-Answer")]
+    script = tmp_path / "vectors.ps1"
+    script.write_text(src + (
+        "Use-Proof\n"
+        "function B([string]$h) { $b = New-Object byte[] ($h.Length / 2); "
+        "for ($i = 0; $i -lt $b.Length; $i++) { $b[$i] = [Convert]::ToByte($h.Substring(2 * $i, 2), 16) }; ,$b }\n"
+        f"foreach ($c in (Get-Content -Raw -LiteralPath '{VECTORS}' | ConvertFrom-Json).vectors) {{\n"
+        "  'V ' + [int][DomovoiSatelliteSetup.Ed25519]::Verify((B $c.pub), (B $c.msg), (B $c.sig))\n"
+        "}\n"), encoding="ascii")
+    r = _ps(["-File", str(script)], timeout=600)
+    got = [line[2:] == "1" for line in r.stdout.splitlines() if line.startswith("V ")]
+    assert len(got) == len(cases), r.stdout[-2000:] + r.stderr[-2000:]
+    wrong = [c["name"] for c, g in zip(cases, got) if g != c["expect"]]
+    assert wrong == []
+
+
+def test_the_python_twin_agrees_except_where_the_worker_is_stricter():
+    """satellite/_ed25519.py on the same vectors: the same verdict, but for
+    the small-order key it still accepts (the worker refuses it)."""
+    cases = json.loads(VECTORS.read_text(encoding="utf-8"))["vectors"]
+    for c in cases:
+        got = _ed25519.verify(bytes.fromhex(c["pub"]), bytes.fromhex(c["msg"]), bytes.fromhex(c["sig"]))
+        assert got == c["python_twin"], c["name"]
+        if not c.get("small_order"):
+            assert got == c["expect"], c["name"]
+
+
+@windows_only
+def test_what_the_wizard_shows_comes_from_the_signed_payload(tmp_path, server):
+    """Review round 2: a host in front of the real server relabels the
+    answer's plain fields (room, core). The wizard's room and server are
+    read from the payload the code and the signature hold, so the relabel
+    shows nowhere."""
+    import urllib.request
+
+    class Front(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):  # noqa: N802
+            with urllib.request.urlopen(server.url + self.path) as r:
+                body = r.read()
+            if self.path.startswith("/v1/satellite-setup/codes/"):
+                d = json.loads(body)
+                d.update(room="Front Door", core="http://192.168.1.99:6370", fingerprint="SHA256:" + "A" * 43)
+                body = json.dumps(d).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    front = ThreadingHTTPServer(("127.0.0.1", 0), Front)
+    threading.Thread(target=front.serve_forever, daemon=True).start()
+    try:
+        status, got, out = _worker(tmp_path, "-Resolve", "-Server", f"http://127.0.0.1:{front.server_address[1]}",
+                                   "-Code", server.GOOD)
+    finally:
+        front.shutdown()
+    assert status == 0, out
+    assert (got["room"], got["core"], got["fingerprint"]) == ("Küche", "http://192.168.1.20:6370", FP)
+    assert got["code"] == CODE
+
+
 # ─── the Setup itself, when Inno Setup is here ────────────────────────────
 
 def _iscc() -> Path | None:
