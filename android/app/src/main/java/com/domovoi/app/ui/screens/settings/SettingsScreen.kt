@@ -61,6 +61,7 @@ import com.domovoi.app.ui.components.PageHeader
 import com.domovoi.app.ui.screens.assistant.AssistantIn64BitAppNote
 import com.domovoi.app.ui.screens.assistant.assistantIn64BitAppOnly
 import com.domovoi.app.ui.screens.containers.HealthPanel
+import com.domovoi.app.ui.screens.printing.PrintersPanel
 import com.domovoi.app.ui.screens.satellites.SatellitesScreen
 import com.domovoi.app.ui.shell.LocalSettingsTabRequest
 import com.domovoi.app.ui.shell.Route
@@ -112,6 +113,9 @@ internal enum class SettingsSection(
     PhonesAndBrowsers("phones-and-browsers", "Phones & browsers", SettingsGroup.RoomsAndDevices,
         "Which server this phone talks to, and who's listening. The household's other phones and browsers are on the dashboard.",
         "connection server pair pairing household token phone device identity trust", listOf("connection")),
+    Printers("printers", "Printers & scanners", SettingsGroup.RoomsAndDevices,
+        "The printers and scanners your home server prints and scans with.",
+        "printer printers print printing scanner scanners scan scanning ink toner paper"),
     AppLayout("app-layout", "App layout", SettingsGroup.RoomsAndDevices,
         "The tabs along the bottom of this phone, left to right.",
         "phone bar tabs bottom bar layout", listOf("phonebar")),
@@ -245,6 +249,7 @@ fun SettingsScreen(navigate: (Route) -> Unit) {
                 when (place.section) {
                     SettingsSection.Rooms -> SatellitesScreen(embedded = true)
                     SettingsSection.PhonesAndBrowsers -> ConnectionPanel()
+                    SettingsSection.Printers -> PrintersPanel()
                     SettingsSection.AppLayout -> PhoneBarPanel()
                     SettingsSection.Voices -> VoicePanel()
                     SettingsSection.About -> AboutPanel(navigate)

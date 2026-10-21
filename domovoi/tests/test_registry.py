@@ -38,6 +38,7 @@ CORE_BANDS = {
     "dropin": 200,
     "intercom": 210,
     "chat_mode": 220,
+    "printing": 222,
     "voice_notes": 230,
     "memory": 240,
     "homelab": 250,
@@ -199,6 +200,7 @@ def test_choice_kinds_are_confirmation_kinds_with_a_reply_handler() -> None:
         "music": {"core.music_choice"},
         "music_alias": {"core.alias_target"},
         "voice_profile": {"core.phone_voice_add", "core.room_voice_add", "core.forget_me"},
+        "printing": {"core.print_pick", "core.print_printer", "core.printer_pick", "core.scan_more"},
     }
 
 
@@ -219,6 +221,10 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
         "dropin": {"core.dropin_invite"},
         "music_alias": {"core.alias_replace", "core.alias_target"},
         "voice": {"core.voice_download"},
+        "printing": {
+            "core.print_confirm", "core.print_pick", "core.print_printer", "core.printer_add",
+            "core.printer_pick", "core.scan_ready", "core.scan_more", "core.scan_read", "core.print_test",
+        },
     }
     for name, kinds in expected.items():
         assert set(HANDLER_BY_NAME[name].confirmation_kinds) == kinds

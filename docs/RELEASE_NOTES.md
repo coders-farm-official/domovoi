@@ -4,6 +4,52 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-21 — Printing and scanning
+
+Domovoi prints to network printers and scans from network scanners, with
+no drivers: printers that work with **AirPrint, IPP Everywhere or
+Mopria** (almost every network printer from the last ten years), and
+scanners that work over AirPrint (eSCL, "AirScan"). USB printers and
+printers that need a maker's driver are not supported, on any host.
+
+* **Settings → Rooms & devices → Printers & scanners** (dashboard and app): the printers
+  Domovoi finds on the network, **Add**, **Add by address**, a **Test
+  page**, the house's default printer and a default per room, two-sided
+  and colour per printer, live status (paper, jams, covers) and ink or
+  toner levels where the printer reports them, recent jobs, and the limits.
+  Renaming and removing a printer need the admin. The page also shows how
+  the last look found printers ("by multicast", "by unicast", "by sweep"):
+  on the Windows install that line says whether multicast works from its
+  distro.
+* **Print** on PDFs, pictures, text and markdown files and spreadsheets
+  (printed as a plain table) in Files and Documents, with a preview, pages,
+  copies, two-sided, colour and paper. Word and OpenDocument files say
+  "save it as PDF first" instead. Phone-local files still print through
+  Android's own print dialog.
+* **Scan** in Documents: from the glass or the feeder, several pages into
+  one PDF in **Documents → Scans**.
+* **By voice:** "print my cover letter" (it says the pages and asks
+  first), "how much ink is left", "is the printer out of paper", "set up
+  the printer", "scan this to Documents" (it asks whether the page is on
+  the glass), "stop printing". A voice print that fails is said once in
+  the room that asked.
+
+What an operator should know:
+
+* The update applies migration **V033** (printers, the job log, the
+  limits) by itself. For whoever merges: V033 must land before
+  `wf/chat-history`'s migration (renumber that one if it was cut as V033).
+* Two new dependencies, both permissive: **pypdfium2** and **ReportLab**
+  (in both locks). A Linux server installed from the lock picks them up on
+  its next update.
+* The job log keeps who printed what (titles included) for 90 days; the
+  admin can clear it. Default limits: 100 pages and 20 copies per job, 500
+  sheets a day for the house.
+* Discovery binds UDP 5353 beside any other mDNS responder and joins the
+  mDNS group for 3 seconds when someone looks; it never answers. No
+  firewall rule was added on Windows. The /24 sweep runs only on "Look
+  again", at most once a minute.
+
 ## 2026-10-21 — Settings in groups, with search and one Health page
 
 Dashboard and app. Nothing to run; old bookmarks keep working.

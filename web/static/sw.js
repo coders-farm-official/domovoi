@@ -84,6 +84,8 @@ const SHELL_ASSETS = [
   '/calendar.jsx',
   '/plugins.jsx',
   '/settings.jsx',
+  // Settings → Printers and scanners renders its panel.
+  '/printers.jsx',
   // Home is the default page (the manifest's start_url), so an offline
   // launch of the installed app needs it more than any other page.
   '/home.jsx',

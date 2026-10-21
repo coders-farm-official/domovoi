@@ -1122,6 +1122,9 @@ What an entry does and does not buy:
 - It relaxes the address rules and nothing else. `http`/`https` only
   still holds, every redirect hop is still checked against the same list,
   and the byte caps still apply.
+- For printers and scanners it counts only for an address an admin types
+  in Settings; a printer announced on the network or found by the sweep
+  never uses it ("Printers and scanners", below).
 
 `OUTBOUND_ALLOW_HOSTS` is **server configuration**: it is read from the
 environment or `.env` and is deliberately absent from the dashboard's
@@ -1802,6 +1805,134 @@ admin reviews them (docs/CONTAINER_GUARD.md). Migration V024
 | **Who sees what** | Anyone (no credential): only "Something needs an admin's attention." and its colour, over the open `GET /api/containers/summary` — never a container, an image or what failed; a shared screen shows the same. The household tier: what failed in plain words, when, and whether it is acknowledged or cleared (the banner, Home, Settings → Health, Android notifications, the `containers` realtime event). Admins: also the expected and found image references, digests and IDs, settings and exit codes, and who acknowledged or cleared what. |
 | **Who acts** | Acknowledging a failure and clearing a tamper incident are admin mutations (Bearer), recorded with the admin's source address and an optional note. A household device can do neither, nor can the Android app (it holds no admin credential). |
 | **What it stores** | Container names, image references and IDs, exit codes and timestamps — nothing about a person. Resolved incidents are kept 90 days, then pruned; open incidents and cleared findings still accepted are kept until they end. |
+
+## Printers and scanners
+
+Domovoi prints to network printers (IPP Everywhere, AirPrint, Mopria) and
+scans from eSCL (AirScan) scanners on the home network, with its own code
+(`domovoi/printing/`): no drivers, no CUPS, no USB, no Windows spooler.
+
+**Who may do what.**
+
+| Action | Tier |
+|---|---|
+| The printer list, status, ink, the job log, the limits | device read (`require_device_read`) |
+| Look for printers (mDNS; the /24 sweep on "Look again"), add one, set the default and room defaults, test page, identify, preview, print, cancel, scan | device (`require_device`); a satellite's turn is its room's device |
+| Rename, remove, trust a changed certificate, change the limits, clear the job log | admin (`require_admin_mutation`) |
+| Guests (no credential) | nothing |
+
+Every mutation on the web door also needs `X-Requested-With`.
+
+**Every address must be on the home network** (`lan_target.py`).
+`net_safety` refuses private addresses because it guards internet fetches;
+printing needs the opposite, so it has its own check, built from the same
+parts:
+
+- allowed: an IPv4 address inside the server's own home subnet: on Linux,
+  the subnets routed out of the interface that holds the default route
+  (`/proc/net/route`), which leaves Docker's bridge networks (where
+  Postgres, SearxNG and MPD live) out by construction; elsewhere, the /24
+  around the server's LAN address;
+- refused: public addresses, loopback, the server's own addresses, the
+  subnet's network and broadcast addresses, link-local (169.254/16, cloud
+  metadata included), CGNAT, multicast, private ranges that aren't the home
+  subnet, and IPv6 (a v1 limit: printers also answer on IPv4);
+- names: an IP literal in any spelling (`127.1` and `0x7f000001` are judged
+  as the address they denote), or a LAN name (`printer.local`, a single
+  label). A dotted public name is refused before it is looked up. A name is
+  resolved once, every address it gives must pass, and the connection goes
+  to the vetted address, never to the name again (no DNS rebinding). Each
+  later connection checks the stored address again;
+- ports: IPP on 631 and 443; eSCL on 80, 443, 8080, 8081, 8082, 9090 and
+  9095. Any other port only when an admin typed the full URL;
+- a typed address is saved only after it answers like a printer (an IPP
+  answer with a `printer-uuid`) or a scanner (eSCL capabilities XML), so
+  "add a printer" can't be used to probe a router's admin page and keep a
+  record of it;
+- the one escape hatch is the existing operator setting
+  `OUTBOUND_ALLOW_HOSTS`, and only for an address an **admin typed**: an
+  entry naming an exact `host:port` lets that address be added (the row
+  remembers it was let in that way). Anything announced by mDNS, found by
+  the sweep or typed by a household device is held to the home-network
+  rules whatever the setting says, so loopback stays refused for them
+  (owner rule, 2026-10-21). The functional-test harness uses it to reach a
+  test printer on loopback. An entry without a port doesn't count, and
+  the setting ships empty;
+- a saved printer seen at a new address (a new DHCP lease) moves only
+  after the new address proves it is the same printer: it answers with the
+  same `printer-uuid` (or eSCL UUID), over the same scheme, with the pinned
+  certificate when the printer has one, and only once the old address no
+  longer answers as it. Announcing a UUID proves nothing. Settings says
+  when a printer moved ("The office printer moved to …"). A row the admin
+  added through the operator setting never moves.
+
+**The internet switch.** Printing and scanning are LAN only and work under
+`INTERNET_ACCESS=never`. A printer's own web page (`printer-more-info`) is
+shown as a link for the person's browser, only when it points at the
+printer itself, and never fetched by the server.
+
+**Discovery.** One 3-second mDNS look when Settings → Printers opens, on
+"Look again", and for "set up the printer". It binds UDP 5353 with
+`SO_REUSEADDR` beside any other responder and joins 224.0.0.251 on the LAN
+interface, and also sends a legacy-unicast query from an ephemeral port.
+It never answers anyone. On the Windows install, WSL's own Hyper-V rule
+already lets multicast answers in, so no firewall rule was added. The /24
+sweep (TCP 631, then one IPP question; eSCL on 80/443 of what answered)
+runs only when someone presses "Look again" or says it, at most once a
+minute, never in the background.
+
+**Certificates.** Printers' TLS certificates are self-signed, so IPPS and
+eSCL-over-https pin the certificate's SHA-256 when the device is added and
+compare it on every connection, after the handshake and before anything is
+sent. A different certificate stops printing to that device ("the
+printer's security certificate changed"); only an admin can trust the new
+one, because a changed certificate is what someone in the middle would
+cause, and firmware updates and factory resets cause it too. Plain IPP
+stays allowed for printers without TLS, as every phone and PC does on a
+home network.
+
+**Printer data is data.** Answers are capped (IPP: 1 MB per answer, 2,000
+values per attribute, 1,023 bytes per string, collections 8 deep; eSCL
+XML: 256 KB, and any document with a DOCTYPE or an ENTITY is refused before
+parsing). Control characters are stripped and everything is shown escaped.
+Voice only ever says the printer's given name and sentences Domovoi chose,
+through `speech_sanitize`, never the printer's own status message. A swatch
+colour is used only when it is exactly `#rrggbb`. Nothing a printer says
+reaches a model prompt.
+
+**Drawing pages.** PDFs, pictures, text and spreadsheets are drawn (with
+PDFium through pypdfium2, and ReportLab) in a short-lived worker process: a
+wall-clock time limit, a memory cap (`RLIMIT_AS` on Linux, a job object on
+Windows; 2 GiB or a third of the machine's memory), a CPU-time cap, and a
+pixel budget checked before anything is drawn (a page over 60 in or
+stranger than 1:25, a sheet over 90 M pixels, is refused). One worker at a
+time on a small box, two otherwise. Paper sizes must be ones the printer
+takes (a custom size inside its own range), never past 13.5 × 30 in. A bad
+document costs one job, not the core.
+
+**The job log** (`print_jobs`, `scan_jobs`, V033): who (the device's name,
+or the room for voice), the document's title and path, pages, copies,
+options, when, which printer and the result. Titles can be personal
+("Letter to the doctor"), so it is a household read only, kept 90 days
+(pruned by the core) and an admin can clear it.
+
+**Scans** are written by the core into `Documents/Scans/` under a name it
+makes ("Scan 2026-10-21 15.40.pdf"), inside the Documents folder (a
+`Scans` link that leads elsewhere is refused). Settings → Devices'
+per-device file block applies on both doors: the web's, and the core's own
+`/v1/scan` routes (for the device the request names); the dashboard and the
+app don't offer Scan where the device can't write. Pages are spooled to a
+private temporary folder, not held in memory, and a page that isn't a
+JPEG of a sane size (truncated, or a decompression bomb by its header) ends
+the scan with a plain message. We
+never fetch another person's scan job, and never act on a scanner's
+"push scan" destination.
+
+**Limits** an admin can change: 100 pages and 20 copies per job, 200
+sheets per job, 20 jobs an hour per device (counted per address, since a
+device's self-asserted id could change per job), 500 sheets a day for the
+household, 50 pages per scan, one scan at a time per scanner. Every voice
+print is confirmed first.
 
 ## What leaves your network — and how to turn each thing off
 

@@ -253,6 +253,10 @@ UPLOAD_LIMITS: tuple[tuple[str, int], ...] = (
     # caps an APK at 200 MiB; the route at the release's largest file).
     ("/v1/admin/android-app/upload", 210 * 1024 * 1024),
     ("/api/satellites/android-app/upload", 210 * 1024 * 1024),
+    # A document on its way to a printer: the web door reads the file
+    # (at most 100 MB, web/backend/api/printers.py) and posts it here.
+    ("/v1/print/preview", 101 * 1024 * 1024),
+    ("/v1/print/jobs", 101 * 1024 * 1024),
 )
 
 
