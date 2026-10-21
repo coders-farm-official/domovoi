@@ -1,0 +1,487 @@
+{
+  "schema": "domovoi-weak-spots/1",
+  "about": "Where Domovoi's chat answers are measured to be weak, by task kind and where the model runs. The heads-up rules (domovoi/doc_qa/headsup.py, the app's DocHeadsUp.kt) read it to decide when to warn, and scripts/manual/build_manual.py writes the manual's \"What Domovoi is good and not so good at\" from it. The cells marked eval are written by the E-HEADSUP run; the others come from the benches named in each cell.",
+  "updated": "2026-10-21",
+  "bar": 0.7,
+  "good": 0.85,
+  "tested_languages": [
+    "en",
+    "es"
+  ],
+  "thresholds": {
+    "one_pass_chars": 4800,
+    "long_wait_s": 180,
+    "home_server_wait_s": 60,
+    "blur_variance": 120.0
+  },
+  "options": {
+    "sections": "section by section",
+    "home_server": "use home server",
+    "try_anyway": "try anyway",
+    "calculate": "calculate exactly",
+    "go_ahead": "go ahead",
+    "choose_another": "choose another",
+    "send_anyway": "send anyway"
+  },
+  "never_label": "don't warn me about this again",
+  "kinds": {
+    "rewrite": {
+      "title": "Rewriting a whole document",
+      "card": "{doc} is {size}. Domovoi sees about {seen} of it in one reply, so it can't rewrite, translate or proofread the whole thing at once: the rest would be left out.",
+      "options": [
+        "sections",
+        "try_anyway"
+      ],
+      "note": null,
+      "after": "Domovoi saw only the passages below, so the rest of the document isn't in this answer.",
+      "instead": "Ask for one part at a time (\"rewrite the second paragraph\")."
+    },
+    "compare": {
+      "title": "Comparing parts of a long document",
+      "card": "Questions that compare parts of a long document are where Domovoi misses most: it answers from the {k} passages that match your words best, and both parts may not be among them.",
+      "options": [
+        "try_anyway"
+      ],
+      "note": null,
+      "after": "This answer comes only from the passages below; other parts of the document weren't read for it.",
+      "instead": "Ask about each part on its own, then compare the two answers."
+    },
+    "calc": {
+      "title": "Exact sums, averages and dates",
+      "card": "Domovoi isn't reliable at arithmetic, and its answers are checked for their pages, not their sums. It can pick out the numbers and let the app work it out.",
+      "card_no_calculator": "Domovoi isn't reliable at arithmetic, and its answers are checked for their pages, not their sums. Check the result yourself.",
+      "options": [
+        "calculate",
+        "try_anyway"
+      ],
+      "note": "Domovoi's arithmetic isn't checked. Check any total or date in this answer yourself.",
+      "after": null,
+      "instead": "Use calculate exactly: the model lists the numbers with their pages and the app adds them up."
+    },
+    "long": {
+      "title": "Long documents",
+      "card": "{doc} is {size}. Domovoi reads it in {parts} parts here, {time}, and points that span parts can be missed.",
+      "home_server_line": "Your home server would take {home_time}.",
+      "options": [
+        "go_ahead",
+        "home_server"
+      ],
+      "note": null,
+      "after": null,
+      "instead": "Ask about the specific thing you need: it is found in seconds, wherever it is."
+    },
+    "scanned": {
+      "title": "Scanned pages",
+      "card": "{scanned} of {doc} {are_pictures} of text. Domovoi can't read pictures of text in a chat yet, so its answer comes from the other pages.",
+      "options": [
+        "go_ahead"
+      ],
+      "note": "{scanned} {are_pictures} of text and {were_not} read for this answer.",
+      "after": null,
+      "instead": "Save the document from its original program as a PDF with text, or type the part you need."
+    },
+    "language": {
+      "title": "Languages other than English and Spanish",
+      "card": "Domovoi has been tested in English and Spanish. {doc} looks like {language}, which isn't tested yet, so answers may be weaker.",
+      "options": [
+        "try_anyway"
+      ],
+      "note": null,
+      "after": null,
+      "instead": "Check the answer against the passages it names."
+    },
+    "blurry": {
+      "title": "Blurry photos",
+      "card": "This photo looks blurry, so some words may be guessed.",
+      "options": [
+        "choose_another",
+        "send_anyway"
+      ],
+      "note": null,
+      "after": null,
+      "instead": "Take the photo again in good light, holding the phone flat over the page."
+    },
+    "handwriting": {
+      "title": "Handwriting",
+      "card": "Handwriting is hard for Domovoi; expect mistakes.",
+      "options": [
+        "try_anyway"
+      ],
+      "note": null,
+      "after": null,
+      "instead": "Type the part you need, or check every name, date and number."
+    }
+  },
+  "cells": [
+    {
+      "kind": "lookup",
+      "where": "both",
+      "band": "one_passage",
+      "verdict": "good",
+      "pass": 0.977,
+      "n": 43,
+      "measure": "questions one passage answers whose passage was among those Domovoi read",
+      "source": "eval",
+      "eval": "E-HEADSUP (retrieval)",
+      "date": "2026-10-21",
+      "device": "the app's own search, on our test documents",
+      "manual": "Questions one passage of a document answers: the passage it needs was among those Domovoi read in {pct} of our test questions. How well the model then answers is not measured on a phone yet."
+    },
+    {
+      "kind": "lookup",
+      "where": "both",
+      "band": "unanswerable",
+      "verdict": "good",
+      "pass": 1.0,
+      "n": 12,
+      "measure": "questions the document doesn't answer that got \"I couldn't find that\" when nothing matched",
+      "source": "eval",
+      "eval": "E-HEADSUP (retrieval)",
+      "date": "2026-10-21",
+      "device": "the app's own search, on our test documents",
+      "manual": "When nothing in the document matches your words, Domovoi says \"I couldn't find that in the document\" without asking the model."
+    },
+    {
+      "kind": "citations",
+      "where": "both",
+      "band": "labels",
+      "verdict": "okay",
+      "pass": null,
+      "n": null,
+      "measure": "what the app's check covers",
+      "source": "design",
+      "eval": "documents plan D1",
+      "date": "2026-10-21",
+      "device": "phone and home server",
+      "manual": "Sources and pages: the app keeps only citations of passages it gave the model, and checks quotes word for word. It does not check that the passage says what the sentence claims, so open the source when it matters."
+    },
+    {
+      "kind": "rewrite",
+      "where": "both",
+      "band": "fits",
+      "verdict": "okay",
+      "pass": null,
+      "n": null,
+      "measure": "the document fits in one reply",
+      "source": "design",
+      "eval": "documents plan D1",
+      "date": "2026-10-21",
+      "device": "phone and home server",
+      "manual": "Rewriting a short document (up to about 4,800 characters, two pages): it fits in one reply. Writing quality is not measured yet."
+    },
+    {
+      "kind": "rewrite",
+      "where": "both",
+      "band": "over_one_pass",
+      "verdict": "not_reliable",
+      "pass": 0.0,
+      "n": 11,
+      "measure": "longer documents whose whole text the model saw in one reply",
+      "source": "eval",
+      "eval": "E-HEADSUP (retrieval)",
+      "date": "2026-10-21",
+      "device": "the app's own search, on our test documents",
+      "manual": "Rewriting, translating or proofreading a longer document: the model sees at most about 4,800 characters of it in one reply, so a whole-document rewrite leaves most of it out."
+    },
+    {
+      "kind": "compare",
+      "where": "both",
+      "band": "short",
+      "verdict": "okay",
+      "pass": null,
+      "n": null,
+      "measure": "the whole document fits in the passages read",
+      "source": "design",
+      "eval": "documents plan D1",
+      "date": "2026-10-21",
+      "device": "phone and home server",
+      "manual": "Comparing parts of a short document: all of it fits in what Domovoi reads for one question."
+    },
+    {
+      "kind": "compare",
+      "where": "both",
+      "band": "long",
+      "verdict": "good",
+      "pass": 0.933,
+      "n": 15,
+      "measure": "comparisons in long documents where both parts were among the passages read",
+      "source": "eval",
+      "eval": "E-HEADSUP (retrieval)",
+      "date": "2026-10-21",
+      "device": "the app's own search, on our test documents",
+      "manual": "Comparing far-apart parts of a long document: both parts were among the passages Domovoi read in {pct} of our test questions."
+    },
+    {
+      "kind": "calc",
+      "where": "both",
+      "band": "lookup",
+      "verdict": "okay",
+      "pass": null,
+      "n": null,
+      "measure": "a total or average the document itself states",
+      "source": "design",
+      "eval": "documents plan D1",
+      "date": "2026-10-21",
+      "device": "phone and home server",
+      "manual": "A total or average the document states (a spreadsheet's column totals are worked out by Domovoi when it reads the file) is quoted, not calculated."
+    },
+    {
+      "kind": "calc",
+      "where": "both",
+      "band": "combine",
+      "verdict": "not_measured",
+      "pass": null,
+      "n": null,
+      "measure": "arithmetic by the model",
+      "source": "design",
+      "eval": "documents plan D3",
+      "date": "2026-10-21",
+      "device": "phone and home server",
+      "manual": "Adding up, averaging or counting days between numbers spread over a document: the model's arithmetic isn't checked. With calculate exactly, the model only lists the numbers with their pages, the app checks each one is on its page and does the sum."
+    },
+    {
+      "kind": "long",
+      "where": "phone",
+      "band": "cpu",
+      "verdict": "slow",
+      "pass": null,
+      "n": null,
+      "measure": "one part of a long document, read on the phone's CPU (about 2,000 and 6,000 tokens)",
+      "seconds": [
+        24,
+        69
+      ],
+      "source": "bench",
+      "eval": "D0 bench",
+      "date": "2026-10-21",
+      "device": "Galaxy Z Fold (Gemma 4 E2B)",
+      "manual": "Long documents on a phone's CPU: one part took 24 s at about 2,000 tokens and 69 s at about 6,000, so a 30-page summary takes a few minutes. The heads-up comes when a summary will take over {long_wait} here, or when your home server would be faster."
+    },
+    {
+      "kind": "long",
+      "where": "phone",
+      "band": "gpu",
+      "verdict": "okay",
+      "pass": null,
+      "n": null,
+      "measure": "one part of a long document, read on the phone's GPU (about 2,000 and 6,000 tokens)",
+      "seconds": [
+        7.1,
+        13
+      ],
+      "source": "bench",
+      "eval": "D0 bench",
+      "date": "2026-10-21",
+      "device": "Galaxy Z Fold (Gemma 4 E2B)",
+      "manual": "Long documents on a phone's GPU: one part took 7.1 s at about 2,000 tokens and 13 s at about 6,000."
+    },
+    {
+      "kind": "long",
+      "where": "server",
+      "band": "gpu",
+      "verdict": "good",
+      "pass": null,
+      "n": null,
+      "measure": "a 30-page summary on a home server with a GPU",
+      "seconds": [
+        10,
+        15
+      ],
+      "source": "bench",
+      "eval": "D0 bench",
+      "date": "2026-10-21",
+      "device": "home server, RTX 4070 Ti SUPER (llama3.2:3b)",
+      "manual": "Long documents on a home server with a GPU: a 30-page summary in about 10-15 s."
+    },
+    {
+      "kind": "long",
+      "where": "server",
+      "band": "cpu",
+      "verdict": "slow",
+      "pass": null,
+      "n": null,
+      "measure": "a 30-page summary on a home server without a GPU",
+      "seconds": [
+        420
+      ],
+      "source": "bench",
+      "eval": "D0 bench",
+      "date": "2026-10-21",
+      "device": "home server, 8 CPU cores, shared (llama3.2:3b)",
+      "manual": "Long documents on a home server without a GPU: about 7 minutes for 30 pages, slower than a phone's GPU. The heads-up comes when a summary will take over {long_wait}."
+    },
+    {
+      "kind": "scanned",
+      "where": "both",
+      "band": "pictures_of_text",
+      "verdict": "not_reliable",
+      "pass": 0.0,
+      "n": 3,
+      "measure": "scanned pages read in a chat (they are found, 3 of 3, but not read yet)",
+      "source": "bench",
+      "eval": "E-EXTRACT (D0)",
+      "date": "2026-10-21",
+      "device": "phone and home server",
+      "manual": "Scanned pages (pictures of text) are found when a document is read, but chats don't read them yet. An answer says under it which pages it skipped, and a summary gets a heads-up first."
+    },
+    {
+      "kind": "language",
+      "where": "both",
+      "band": "tested",
+      "verdict": "good",
+      "pass": 0.98,
+      "n": 49,
+      "measure": "English and Spanish questions whose passage was among those read",
+      "source": "eval",
+      "eval": "E-HEADSUP (retrieval)",
+      "date": "2026-10-21",
+      "device": "the app's own search, on our test documents",
+      "manual": "English and Spanish: tested ({pct} of our questions found their passage)."
+    },
+    {
+      "kind": "language",
+      "where": "both",
+      "band": "untested",
+      "verdict": "not_measured",
+      "pass": null,
+      "n": null,
+      "measure": "other languages",
+      "source": "eval",
+      "eval": "E-HEADSUP",
+      "date": "2026-10-21",
+      "device": "phone and home server",
+      "manual": "Other languages: not tested yet. A document that clearly looks like one gets a heads-up first."
+    },
+    {
+      "kind": "blurry",
+      "where": "both",
+      "band": "blurry",
+      "verdict": "not_measured",
+      "pass": null,
+      "n": null,
+      "measure": "pictures blurrier than the scan the vision model read word for word",
+      "source": "eval",
+      "eval": "E-HEADSUP (blur)",
+      "date": "2026-10-21",
+      "device": "home server",
+      "manual": "Blurry photos in home-server chats: a photo blurrier than our test scan (which the home server's vision model read word for word) gets a heads-up before it is sent. How much a blurry photo gets wrong is not measured yet."
+    },
+    {
+      "kind": "handwriting",
+      "where": "both",
+      "band": "handwritten",
+      "verdict": "not_measured",
+      "pass": null,
+      "n": null,
+      "measure": "handwritten letters",
+      "source": "design",
+      "eval": "documents plan D6",
+      "date": "2026-10-21",
+      "device": "phone and home server",
+      "manual": "Handwriting: not tested yet. Expect mistakes, and check names, dates and numbers. There is no heads-up for it yet: telling handwriting from print needs a step that isn't built."
+    },
+    {
+      "kind": "actions",
+      "where": "phone",
+      "band": "model",
+      "verdict": "not_reliable",
+      "pass": 0.714,
+      "n": 35,
+      "measure": "near-miss phrases that did NOT set off an action when the phone's model chose actions (10 of 35 did)",
+      "source": "bench",
+      "eval": "N0 bench (S-TOOLS)",
+      "date": "2026-10-21",
+      "device": "Galaxy Z Fold (Gemma 4 E2B)",
+      "manual": "Doing things by asking the phone's model (timers, music): it set off the wrong action on 10 of 35 near-miss phrases (\"how long should I boil an egg?\" set a timer), so the phone uses fixed phrases for actions instead, which made no false actions."
+    },
+    {
+      "kind": "pictures",
+      "where": "phone",
+      "band": "cpu",
+      "verdict": "not_reliable",
+      "pass": null,
+      "n": 4,
+      "measure": "a picture read on the phone's CPU: 6.8 s to the first word and a 2.76 GB peak, over the 2.5 GB limit",
+      "seconds": [
+        6.8
+      ],
+      "source": "bench",
+      "eval": "N0 bench (S-PIC)",
+      "date": "2026-10-21",
+      "device": "Galaxy Z Fold (Gemma 4 E2B)",
+      "manual": "Pictures on a phone's CPU: too slow and too big (6.8 s, 2.76 GB). On the phone's GPU: 2.5 s, 4 of 4 useful. Phone chats don't take pictures yet; when they do, it will be where the GPU can read them."
+    },
+    {
+      "kind": "speed",
+      "where": "phone",
+      "band": "cpu",
+      "verdict": "okay",
+      "pass": null,
+      "n": null,
+      "measure": "writing speed on the phone's CPU",
+      "tokens_per_s": 20.9,
+      "source": "bench",
+      "eval": "N0 bench",
+      "date": "2026-10-21",
+      "device": "Galaxy Z Fold (Gemma 4 E2B)",
+      "manual": "Writing speed on a phone's CPU: about 21 word-pieces a second, so a two-page rewrite takes about a minute."
+    },
+    {
+      "kind": "speed",
+      "where": "server",
+      "band": "gpu",
+      "verdict": "good",
+      "pass": null,
+      "n": null,
+      "measure": "writing speed on a home server with a GPU",
+      "tokens_per_s": 161,
+      "source": "bench",
+      "eval": "D0 bench",
+      "date": "2026-10-21",
+      "device": "home server, RTX 4070 Ti SUPER (llama3.2:3b)",
+      "manual": "Writing speed on a home server with a GPU: about 160 word-pieces a second."
+    }
+  ],
+  "manual": {
+    "intro": "Domovoi decides when to give you a heads-up from these measured results, never from the model's own opinion of itself. A heads-up comes before a task measured below {bar} or never measured; each one shows once per chat, and [Settings → Chat](#settings/chat) turns them off on a device.",
+    "verdicts": {
+      "good": "good",
+      "okay": "okay",
+      "not_reliable": "not reliable",
+      "not_measured": "not tested yet",
+      "slow": "slow"
+    },
+    "titles": {
+      "lookup": "Questions about a document",
+      "citations": "Sources and pages",
+      "rewrite": "Rewriting a whole document",
+      "compare": "Comparing parts of a long document",
+      "calc": "Exact sums, averages and dates",
+      "long": "Long documents",
+      "scanned": "Scanned pages",
+      "language": "Languages",
+      "blurry": "Blurry photos",
+      "handwriting": "Handwriting",
+      "actions": "Doing things from the phone's chat",
+      "pictures": "Pictures on the phone",
+      "speed": "Writing speed"
+    },
+    "order": [
+      "lookup",
+      "citations",
+      "rewrite",
+      "compare",
+      "calc",
+      "long",
+      "scanned",
+      "language",
+      "blurry",
+      "handwriting",
+      "actions",
+      "pictures",
+      "speed"
+    ],
+    "heads_up": "Domovoi gives a heads-up first.",
+    "instead": "Instead: {instead}"
+  }
+}

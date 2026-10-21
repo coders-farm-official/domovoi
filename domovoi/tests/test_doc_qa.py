@@ -209,4 +209,3 @@ def test_map_chunks_group_parts_to_about_3500_tokens():
     parts = [{"text": "x" * 6000} for _ in range(5)]
     assert longdoc.map_chunks(parts) == [[0, 1], [2, 3], [4]]
     assert longdoc.map_chunks([{"text": "y" * 50000}]) == [[0]]
-    assert longdoc.heads_up("question", [], "anything") is None

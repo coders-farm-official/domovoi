@@ -27,9 +27,9 @@ parts, then combined (plan part 4):
 Pure functions with no I/O. The Kotlin twin is ``DocLong.kt``; both are
 held to ``longdoc_cases.json`` beside this file.
 
-**The heads-up (D3)** plugs in at :func:`heads_up`: asked before a reply
-is written, and before a long job starts (``kind="long_summary"``, with
-the job's chunk count and estimate in ``facts``). It returns no card yet.
+**The heads-up (D3)** is :mod:`domovoi.doc_qa.headsup`: asked before a
+reply is written, and before a long job starts (mode ``long_summary``, with
+the job's part count and estimate in its facts).
 """
 
 from __future__ import annotations
@@ -579,17 +579,6 @@ def eta_seconds(done: Sequence[tuple[int, float]], remaining_chars: Sequence[int
         return secs / chars * sum(remaining_chars) + per_part
     if speed is not None:
         return estimate_seconds(list(remaining_chars), speed)
-    return None
-
-
-# ─── The heads-up seam (D3) ──────────────────────────────────────────────
-def heads_up(kind: str, docs: Sequence[dict[str, Any]], question: str,
-             facts: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """The heads-up card for this request, or None. D3 fills this in from
-    the measured weak-spots table; D1 and D2 show none. ``kind`` is the
-    reply's mode ("question", "summary") or "long_summary" before a
-    map/reduce job starts, with ``facts`` = {"parts", "estimate_s",
-    "chars"}."""
     return None
 
 

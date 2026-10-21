@@ -154,8 +154,7 @@ def test_the_estimate_matches_the_d0_cpu_numbers():
     assert 5 * 60 < est < 10 * 60
 
 
-def test_the_heads_up_seam_shows_nothing_yet():
-    assert longdoc.heads_up("long_summary", [], "summarize", {"parts": 8}) is None
+def test_one_pass_is_less_than_one_map_step():
     assert qa.SINGLE_PASS_CHARS < longdoc.MAP_CHUNK_TOKENS * longdoc.CHARS_PER_TOKEN
 
 
