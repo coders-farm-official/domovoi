@@ -46,6 +46,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
@@ -229,6 +231,8 @@ internal fun ChatHome(
     var hits by remember { mutableStateOf<List<ChatRow>?>(null) }
     var draft by remember { mutableStateOf("") }
     var autoOpened by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    var listTouched by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val chip = { kind: ChatPlaceKind -> placeChip(kind, serverShareSeen) }
     val serverReady = places.firstOrNull { it.kind == ChatPlaceKind.Server }?.ready
@@ -341,6 +345,16 @@ internal fun ChatHome(
             showArchived -> archived
             else -> rows
         }
+        // The places' lists arrive at different moments; a chat landing above
+        // the first one shown would leave the list scrolled part-way into it.
+        // Until the person scrolls it, the list stays at its top.
+        val firstKey = shown.firstOrNull()?.let { "${it.place.key}:${it.id}" }
+        LaunchedEffect(firstKey, showArchived, searching) {
+            if (!listTouched) listState.scrollToItem(0)
+        }
+        LaunchedEffect(listState) {
+            snapshotFlow { listState.isScrollInProgress }.collect { if (it) listTouched = true }
+        }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when {
                 searching && hits == null -> Unit
@@ -352,7 +366,7 @@ internal fun ChatHome(
                     },
                     if (searching || showArchived) null else emptyHint,
                 )
-                else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxSize()) {
+                else -> LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxSize()) {
                     items(shown, key = { "${it.place.key}:${it.id}" }) { row ->
                         SwipeToArchive(row, onArchive = { act(row, if (row.archived) ACTION_UNARCHIVE else ACTION_ARCHIVE) }) {
                             ChatRowCard(
@@ -374,7 +388,9 @@ internal fun ChatHome(
         // "Message Domovoi…", pinned at the bottom: a new chat is one tap
         // or keystroke away. Its first message opens the chat and goes out.
         if (newPlace != null && !showArchived && !searching) {
-            if (startable.size > 1) PlacePicker(startable, newPlace, chip) { boxPlace = it }
+            // The short chips here: the long household note would wrap the
+            // picker onto a second line under a list that needs the room.
+            if (startable.size > 1) PlacePicker(startable, newPlace, { placeChip(it, true) }) { boxPlace = it }
             NewChatBox(draft, { draft = it }) {
                 val text = draft.trim()
                 if (text.isNotEmpty()) {
