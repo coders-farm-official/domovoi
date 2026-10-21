@@ -264,6 +264,7 @@ def build() -> dict:
         "blur": [{"grey": g, "variance": (None if h.blur_variance(g) == float("inf") else round(h.blur_variance(g), 6))}
                  for g in BLURS],
         "calc": [],
+        "calc_rules": {op: calc.build_prompt("q", [], [], op, nonce="0")["rules"] for op in ("sum", "days")},
     }
     for name, req_name, kw in DECIDES:
         found = h.findings(_request(by_name[req_name]), table_for(by_name[req_name]))

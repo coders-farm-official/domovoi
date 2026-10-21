@@ -254,11 +254,18 @@ abstract class VoiceAssetsTask : DefaultTask() {
  * help desk answers questions about Domovoi from it, offline and without
  * asking a server (assistant/LocalHelp.kt). The Manual screen still reads
  * the connected server's copy, so it matches that server's version.
+ * With it, the chat's weak-spots table (domovoi/doc_qa/chat-weak-spots.json)
+ * as `docs/chat-weak-spots.json`: the phone's heads-up rules read the same
+ * measured table the server's do (assistant/docs/DocHeadsUp.kt).
  */
 abstract class ManualAssetsTask : DefaultTask() {
     @get:InputFile
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val manual: RegularFileProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val weakSpots: RegularFileProperty
 
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
@@ -268,11 +275,13 @@ abstract class ManualAssetsTask : DefaultTask() {
         val out = outputDir.get().asFile
         out.deleteRecursively()
         manual.get().asFile.copyTo(File(out, "manual/manual-content.json"), overwrite = true)
+        weakSpots.get().asFile.copyTo(File(out, "docs/chat-weak-spots.json"), overwrite = true)
     }
 }
 
 val manualAssets = tasks.register<ManualAssetsTask>("manualAssets") {
     manual.set(rootProject.layout.projectDirectory.file("../web/static/manual-content.json"))
+    weakSpots.set(rootProject.layout.projectDirectory.file("../domovoi/doc_qa/chat-weak-spots.json"))
 }
 
 val voiceAssets = tasks.register<VoiceAssetsTask>("voiceAssets") {

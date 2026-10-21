@@ -122,6 +122,12 @@ internal class AssistantActions(
     val useServer: (() -> Unit)? = null,
     /** Stop a job handed to the home server (what it read is kept). */
     val stopServer: (() -> Unit)? = null,
+    /** A pick on the heads-up card ending the chat (documents plan D3). */
+    val pickHeadsUp: (String) -> Unit = {},
+    /** "don't warn me about this again" for a kind, on this phone. */
+    val neverWarn: (String) -> Unit = {},
+    /** The kinds this phone silenced (the card says so instead of the link). */
+    val headsUpSkip: Set<String> = emptySet(),
 )
 
 /** The phone chat's part of Chat's conversation frame: the way back to the
@@ -159,6 +165,7 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
     val toast = LocalToast.current
     val context = LocalContext.current
     val ui by assistant.state.collectAsState()
+    val headsUpPrefs by assistant.headsUpPrefs.collectAsState()
     // The controller's one-line news is toasted by ChatScreen, which is
     // always around this view (and around the list, where a delete happens).
 
@@ -425,6 +432,7 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
             askingServer = actions.askingServer, dropPending = actions.dropPending,
             closeDocProblem = actions.closeDocProblem, docFile = actions.docFile,
             carryOn = actions.carryOn, serverOffer = offerS, useServer = useServer, stopServer = stopServer,
+            pickHeadsUp = actions.pickHeadsUp, neverWarn = actions.neverWarn, headsUpSkip = headsUpPrefs.skip,
         ),
         chrome,
     )
@@ -519,6 +527,8 @@ private fun actionsFor(
     closeDocProblem = a::closeDocProblem,
     docFile = { id -> a.docFile(id) },
     carryOn = a::carryOnJob,
+    pickHeadsUp = a::pickHeadsUp,
+    neverWarn = a::neverWarn,
 )
 
 /** The screen for [ui], with no controller behind it (the tests render it). */

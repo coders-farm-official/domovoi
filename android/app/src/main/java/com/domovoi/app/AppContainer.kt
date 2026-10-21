@@ -213,9 +213,17 @@ class AppContainer(context: Context) {
             // The phone's own voice for spoken replies (Settings -> Voice),
             // opened without asking any server.
             phoneVoice = { phoneVoice.openOnPhone() },
+            headsUp = headsUp,
         )
     }
     val assistant: AssistantController by assistantLazy
+
+    /** This phone's answers to the heads-up before shaky results (documents
+     *  plan D3; Settings → Chat): kept here, used by its own chats and sent
+     *  with every message in its home-server chats. */
+    val headsUp: com.domovoi.app.assistant.docs.HeadsUpStore by lazy {
+        com.domovoi.app.assistant.docs.HeadsUpStore.forApp(context)
+    }
 
     /** The phone's own voice (Settings → Voices): Domovoi's Piper voice
      *  through the Kotlin phonemizer once downloaded, the server's "say it

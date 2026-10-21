@@ -3,6 +3,7 @@ package com.domovoi.app.assistant
 import com.domovoi.app.assistant.docs.DocNote
 import com.domovoi.app.assistant.docs.DocSource
 import com.domovoi.app.assistant.docs.StoredDocument
+import com.domovoi.app.assistant.docs.StoredHeadsUp
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -62,6 +63,9 @@ data class StoredMessage(
     /** A summary written by a long-document job ([PhoneDocJob.id]): a
      *  stopped one offers "carry on" while the job is kept. */
     val jobId: String? = null,
+    /** A heads-up card (documents plan D3): the reply until an option is
+     *  picked, with the pick once made. */
+    val headsUp: StoredHeadsUp? = null,
 ) {
     val fromUser: Boolean get() = from == Speaker.USER
 }

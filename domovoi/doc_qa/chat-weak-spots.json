@@ -139,7 +139,7 @@
       "eval": "E-HEADSUP (retrieval)",
       "date": "2026-10-21",
       "device": "the app's own search, on our test documents",
-      "manual": "When nothing in the document matches your words, Domovoi says \"I couldn't find that in the document\" without asking the model."
+      "manual": "When nothing in the document matches your words, Domovoi answers \"I couldn't find that in the document\" without asking the model."
     },
     {
       "kind": "citations",
@@ -153,7 +153,7 @@
       "eval": "documents plan D1",
       "date": "2026-10-21",
       "device": "phone and home server",
-      "manual": "Sources and pages: the app keeps only citations of passages it gave the model, and checks quotes word for word. It does not check that the passage says what the sentence claims, so open the source when it matters."
+      "manual": "Sources and pages: the app keeps only citations of passages it gave the model, and checks quotes word for word. It does not check that the passage backs up the sentence, so open the source when it matters."
     },
     {
       "kind": "rewrite",
@@ -322,7 +322,7 @@
       "eval": "E-EXTRACT (D0)",
       "date": "2026-10-21",
       "device": "phone and home server",
-      "manual": "Scanned pages (pictures of text) are found when a document is read, but chats don't read them yet. An answer says under it which pages it skipped, and a summary gets a heads-up first."
+      "manual": "Scanned pages (pictures of text) are found when a document is read, but chats don't read them yet. An answer names under it the pages it skipped, and a summary gets a heads-up first."
     },
     {
       "kind": "language",

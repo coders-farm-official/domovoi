@@ -225,6 +225,11 @@ private fun ChatPane(
                                 onSource = { openSource = it },
                                 carryOnLeft = if (index == carryAt && !ui.replying && job != null) job.total - job.read else null,
                                 onCarryOn = actions.carryOn,
+                                // A card answers only while it ends the chat.
+                                onHeadsUp = if (i == 0 && !ui.replying) actions.pickHeadsUp else null,
+                                onNeverWarn = actions.neverWarn,
+                                headsUpSkip = actions.headsUpSkip,
+                                busy = ui.replying,
                             )
                         }
                     }
@@ -403,6 +408,11 @@ private fun MessageBubble(
     /** A stopped summary's parts still to read: "carry on" shows (null: no). */
     carryOnLeft: Int? = null,
     onCarryOn: () -> Unit = {},
+    /** A heads-up card's pick (null: it doesn't answer, not the last message). */
+    onHeadsUp: ((String) -> Unit)? = null,
+    onNeverWarn: (String) -> Unit = {},
+    headsUpSkip: Set<String> = emptySet(),
+    busy: Boolean = false,
 ) {
     val toast = LocalToast.current
     val clipboard = LocalClipboardManager.current
@@ -457,6 +467,12 @@ private fun MessageBubble(
                             Text("spoken", style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgFaint,
                                 modifier = Modifier.padding(top = 2.dp))
                         }
+                    } else if (m.headsUp != null) {
+                        // A heads-up card is the reply until an option is picked (D3).
+                        com.domovoi.app.ui.screens.chat.HeadsUpCard(
+                            com.domovoi.app.ui.screens.chat.headsUpView(m.headsUp), silenced = m.headsUp.kind in headsUpSkip,
+                            busy = busy, onPick = onHeadsUp, onNever = { onNeverWarn(m.headsUp.kind) },
+                        )
                     } else if (m.text.isNotEmpty() || writing) {
                         MarkdownText(m.text, trailing = if (writing) " ▍" else "")
                     }

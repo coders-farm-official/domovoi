@@ -23,7 +23,7 @@ class SettingsModelsTest {
             listOf(
                 listOf("Rooms", "Phones & browsers", "Printers & scanners", "App layout"),
                 listOf("Wake words", "Voices", "Greetings"),
-                listOf("Models"),
+                listOf("Models", "Chat"),
                 listOf("Internet", "Voice history"),
                 listOf("About & updates", "Health", "Advanced"),
             ),

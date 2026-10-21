@@ -14,7 +14,15 @@ import com.domovoi.app.assistant.docs.ChatDocStore
 import com.domovoi.app.assistant.docs.DocCancel
 import com.domovoi.app.assistant.docs.DocExtract
 import com.domovoi.app.assistant.docs.DocExtraction
+import com.domovoi.app.assistant.docs.DocCalc
 import com.domovoi.app.assistant.docs.DocHeadsUp
+import com.domovoi.app.assistant.docs.HeadsUpCard
+import com.domovoi.app.assistant.docs.HeadsUpDoc
+import com.domovoi.app.assistant.docs.HeadsUpFacts
+import com.domovoi.app.assistant.docs.HeadsUpPrefs
+import com.domovoi.app.assistant.docs.HeadsUpRequest
+import com.domovoi.app.assistant.docs.HeadsUpStore
+import com.domovoi.app.assistant.docs.WeakSpots
 import com.domovoi.app.assistant.docs.DocLong
 import com.domovoi.app.assistant.docs.DocSource
 import com.domovoi.app.assistant.docs.DocNote
@@ -243,7 +251,21 @@ class AssistantController(
      *  and released after (Fold bench 2026-10-21: 7.5 s, about 2 GB); null:
      *  jobs run on the chat's own engine. */
     private val newJobEngine: (() -> LlmEngine)? = null,
+    /** This phone's heads-up switch and the kinds it silenced (documents
+     *  plan D3); the same store the app's home-server chats send from. */
+    private val headsUp: HeadsUpStore = HeadsUpStore.memory(),
+    /** The measured weak-spots table the heads-up reads (the app's assets);
+     *  null: no cards (tests of everything else). */
+    private val weakSpots: () -> WeakSpots? = { null },
 ) {
+    private val table: WeakSpots? by lazy { runCatching { weakSpots() }.getOrNull() }
+
+    /** This phone's heads-up answers, for Settings → Chat and the cards. */
+    val headsUpPrefs: StateFlow<HeadsUpPrefs> get() = headsUp.state
+    fun setHeadsUpOff(off: Boolean) = headsUp.setOff(off)
+    fun neverWarn(kind: String) = headsUp.neverWarn(kind)
+    fun warnAgain(kind: String) = headsUp.warnAgain(kind)
+
     private val _state = MutableStateFlow(
         AssistantUi(
             memory = memory,
@@ -1328,8 +1350,14 @@ class AssistantController(
      * that matches, or a summary of a document longer than one pass (D2:
      * map/reduce), Domovoi answers itself, with no model call.
      */
-    private suspend fun docReply(asked: StoredConversation, onDelta: (String) -> Unit): StoredConversation {
-        val last = asked.messages.lastOrNull()
+    private suspend fun docReply(
+        asked: StoredConversation,
+        onDelta: (String) -> Unit,
+        chosen: Pair<String, String>? = null,
+    ): StoredConversation {
+        // A pick on a card answers the question before the card.
+        val lastIndex = if (chosen != null) asked.messages.indexOfLast { it.fromUser } else asked.messages.lastIndex
+        val last = asked.messages.getOrNull(lastIndex)
         val question = last?.takeIf { it.fromUser }?.text?.trim().orEmpty()
         val names = asked.documents.map { it.name }
         fun own(text: String, mode: String, notes: List<DocNote> = emptyList()): StoredMessage {
@@ -1343,17 +1371,45 @@ class AssistantController(
             return finishReply(asked, own(text, "attached"))
         }
         val qaDocs = asked.documents.map { docParts(asked.id, it) }
-        val previous = asked.messages.dropLast(1).lastOrNull { it.fromUser && it.text.isNotBlank() }?.text
+        val previous = asked.messages.take(maxOf(0, lastIndex)).lastOrNull { it.fromUser && it.text.isNotBlank() }?.text
         val mode = DocQa.chooseMode(question)
-        DocHeadsUp.check(mode, qaDocs, question) // D3: the heads-up card; none in D1
+        // The honest heads-up (documents plan D3): the measured weak spots
+        // decide, never the model. Once a chat a kind; this phone's switch
+        // and silenced kinds; a spoken turn gets the notes, not a card (a
+        // card would need a spoken yes or no).
+        val t = table
+        val prefs = headsUp.prefs
+        val shown = asked.messages.mapNotNull { it.headsUp?.kind }.toSet()
+        val off = prefs.off || last?.spoken == true
+        val huDocs = asked.documents.zip(qaDocs).map { (d, q) -> HeadsUpDoc.of(d.name, q.parts, d.pages, d.words, d.scannedPages) }
+        fun decide(found: List<HeadsUpCard>) = DocHeadsUp.decide(found, shown, prefs.skip, off, chosen)
+        suspend fun cardReply(card: HeadsUpCard): StoredConversation = finishReply(
+            asked, StoredMessage(Speaker.DOMOVOI, card.text, clock(), docMode = "heads_up", headsUp = t!!.stored(card)),
+        )
         if (mode == "summary" && !DocQa.fitsOnePass(qaDocs, DocQa.PHONE_SINGLE_PASS_CHARS)) {
-            // Longer than one pass: read in parts, then combined (D2).
+            // Longer than one pass: read in parts, then combined (D2), after
+            // its heads-up when it will take a long while here.
+            t?.let { decide(DocHeadsUp.findings(HeadsUpRequest("long_summary", question, "phone", huDocs, facts = longFacts(qaDocs)), it)) }
+                ?.card?.let { return cardReply(it) }
             return startDocJob(asked, question, onDelta)
         }
-        val given = DocQa.retrieve(qaDocs, question, previous, mode = mode, singlePass = DocQa.PHONE_SINGLE_PASS_CHARS)
+        var given = DocQa.retrieve(qaDocs, question, previous, mode = mode, singlePass = DocQa.PHONE_SINGLE_PASS_CHARS)
+        // "Try anyway" on a whole-document rewrite whose words match
+        // nothing: as much of the document as one reply sees, from the start.
+        if (given.isEmpty() && chosen?.first == "rewrite") given = openingPassages(qaDocs)
         if (given.isEmpty()) {
-            return finishReply(asked, own(DocQa.NOT_FOUND, mode, listOf(DocNote("not_found", DocQa.noteNotFound(names)))))
+            val d = t?.let { decide(DocHeadsUp.whenNothingFound(DocHeadsUp.findings(
+                HeadsUpRequest("question", question, "phone", huDocs, can = PHONE_CAN), it))) }
+            d?.card?.let { return cardReply(it) }
+            val extra = d?.notes.orEmpty().filter { it.code == "heads_up_scanned" || it.code == "heads_up_calc" }
+            return finishReply(asked, own(DocQa.NOT_FOUND, mode, listOf(DocNote("not_found", DocQa.noteNotFound(names))) + extra))
         }
+        val found = t?.let { DocHeadsUp.findings(HeadsUpRequest(mode, question, "phone", huDocs,
+            given.map { it.cite to it.passage.shown() }, can = PHONE_CAN), it) }.orEmpty()
+        val decision = decide(found)
+        decision.card?.let { return cardReply(it) }
+        val calcOp = found.firstOrNull { it.kind == "calc" }?.op
+            ?.takeIf { chosen == ("calc" to "calculate") && it in DocHeadsUp.CALCULATOR_OPS }
         val backend = settings.backend
         val llm = try {
             ensureEngine()
@@ -1365,7 +1421,8 @@ class AssistantController(
             val why = (_state.value.engine as? EngineState.Failed)?.reason ?: "the model did not load"
             return finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), error = "The model could not start: $why"))
         }
-        val prompt = DocQa.buildPrompt(question, given, names, mode = mode, previous = previous)
+        val prompt = if (calcOp != null) DocCalc.buildPrompt(question, given, names, calcOp)
+        else DocQa.buildPrompt(question, given, names, mode = mode, previous = previous)
         val system = Persona.SYSTEM_PROMPT + "\n\n" + prompt.rules
         val sent = nanos()
         var firstMs: Long? = null
@@ -1388,7 +1445,8 @@ class AssistantController(
             _state.update { it.copy(checking = false) }
             return finishReply(asked, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
         }
-        val checked = DocQa.checkReply(text.toString(), given, question, names)
+        val checked = if (calcOp != null) DocCalc.finish(text.toString(), given, question, names, calcOp)
+        else DocQa.checkReply(text.toString(), given, question, names)
         _state.update { it.copy(checking = false) }
         // Only the checked reply is shown, and spoken in a voice turn.
         onDelta(checked.content)
@@ -1398,11 +1456,59 @@ class AssistantController(
             live().copy(
                 text = checked.content,
                 sources = checked.sources.map { src -> src.copy(page = qaDocs.getOrNull(src.doc)?.parts?.getOrNull(src.part)?.page) },
-                notes = checked.notes,
+                notes = checked.notes + decision.notes,
                 firstTextMs = firstMs,
                 tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 },
             ),
         )
+    }
+
+    /**
+     * A pick on the heads-up card that ends the conversation on screen
+     * (documents plan D3): the card keeps it, and the question before it is
+     * answered that way ("calculate exactly": the model lists the numbers
+     * and the app adds them up; "try anyway" / "go ahead": as it would
+     * have been, with the note that says what it means).
+     */
+    fun pickHeadsUp(option: String) {
+        val ui = _state.value
+        if (ui.replying || voice?.active == true || !ui.installed) return
+        val c = ui.conversation
+        val last = c.messages.lastOrNull() ?: return
+        val card = last.headsUp ?: return
+        if (card.chosen != null || card.options.none { it.firstOrNull() == option }) return
+        val picked = c.copy(messages = c.messages.dropLast(1) + last.copy(headsUp = card.copy(chosen = option)))
+        _state.update { it.copy(conversation = picked, replying = true, thinking = true) }
+        replyJob = scope.launch {
+            pauseTitle()
+            withContext(NonCancellable) { save(picked) }
+            docReply(picked, {}, card.kind to option)
+        }
+    }
+
+    /** The first passages of [docs], in order, within one question's reading. */
+    private fun openingPassages(docs: List<QaDoc>): List<com.domovoi.app.assistant.docs.Given> {
+        val out = ArrayList<com.domovoi.app.assistant.docs.Given>()
+        var used = 0
+        for (p in DocQa.docPassages(docs)) {
+            val size = p.shown().length
+            if (out.isNotEmpty() && used + size > DocQa.RETRIEVE_CHARS) break
+            val cite = if (docs.size > 1) "${docs[p.doc].name.ifEmpty { "document" }}, ${p.label}" else p.label
+            out += com.domovoi.app.assistant.docs.Given(p, cite, 0.0)
+            used += size
+        }
+        return out
+    }
+
+    /** A long summary's parts and estimate, before its job starts: on the
+     *  GPU's bigger parts once this phone has measured its GPU (the job
+     *  tries it first), else the CPU's, so the estimate is never the
+     *  hopeful one. */
+    private fun longFacts(qaDocs: List<QaDoc>): HeadsUpFacts {
+        val gpu = newJobEngine != null && PhoneDocJobs.speed(settings.speedRows, LlmBackend.GPU) != null
+        val backend = if (gpu) LlmBackend.GPU else settings.backend
+        val chunks = DocLong.planChunks(qaDocs, if (gpu) DocLong.PHONE_GPU_MAP_CHUNK_TOKENS else DocLong.PHONE_MAP_CHUNK_TOKENS)
+        return HeadsUpFacts(parts = chunks.size, estimateS = DocLong.estimateSeconds(chunks.map { it.chars }, measuredSpeed(backend)))
     }
 
     // ── Long documents: map/reduce in parts (documents plan, D2) ────────
@@ -1494,7 +1600,6 @@ class AssistantController(
         val backend = if (gpu) LlmBackend.GPU else settings.backend
         val chunks = DocLong.planChunks(qaDocs, if (gpu) DocLong.PHONE_GPU_MAP_CHUNK_TOKENS else DocLong.PHONE_MAP_CHUNK_TOKENS)
         val estimate = DocLong.estimateSeconds(chunks.map { it.chars }, measuredSpeed(backend))
-        DocHeadsUp.check("long_summary", qaDocs, question) // D3: the heads-up card; none in D2
         val job = PhoneDocJob(
             id = PhoneDocJobs.newId(clock()), question = question, docIds = asked.documents.map { it.id },
             chunks = chunks, notes = List(chunks.size) { null }, estimateMs = estimate?.let { (it * 1000).toLong() },
@@ -1847,9 +1952,18 @@ class AssistantController(
 
         private const val TAG = "Assistant"
 
+        /** What works in a phone chat: "calculate exactly". (The home server
+         *  is offered on a long summary's progress card, measured, D2.) */
+        private val PHONE_CAN = setOf("calculate")
+
         /** The app's assistant, built by AppContainer. [phoneVoice]: the
          *  phone's own Domovoi voice, opened without asking a server. */
-        fun forApp(context: Context, beforeLoad: () -> Unit, phoneVoice: suspend () -> PhoneSpeech?): AssistantController {
+        fun forApp(
+            context: Context,
+            beforeLoad: () -> Unit,
+            phoneVoice: suspend () -> PhoneSpeech?,
+            headsUp: HeadsUpStore = HeadsUpStore.forApp(context),
+        ): AssistantController {
             val app = context.applicationContext
             val store = ModelStore.forApp(app)
             return AssistantController(
@@ -1875,6 +1989,8 @@ class AssistantController(
                 docs = ChatDocStore(File(app.filesDir, "chat-docs/attachments")),
                 pdfText = { PhonePdfText.readerOrNull() },
                 newJobEngine = { LiteRtLlmEngine(File(app.cacheDir, "litertlm"), maxTokens = DOC_JOB_MAX_TOKENS) },
+                headsUp = headsUp,
+                weakSpots = { app.assets.open(WeakSpots.ASSET).bufferedReader().use { WeakSpots.parse(it.readText()) } },
             ).also { it.attach(app) }
         }
 
@@ -1946,6 +2062,8 @@ fun modelTurns(messages: List<StoredMessage>): List<IndexedTurn> {
  *  null otherwise. */
 fun retryBase(c: StoredConversation): StoredConversation? {
     val last = c.messages.lastOrNull() ?: return null
+    // A heads-up card is answered by its options, not tried again.
+    if (last.headsUp != null) return null
     if (last.fromUser || c.messages.size < 2 || !c.messages[c.messages.size - 2].fromUser) return null
     return c.copy(messages = c.messages.dropLast(1))
 }
