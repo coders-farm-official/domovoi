@@ -40,10 +40,11 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
+import com.domovoi.app.LocalToast
+import com.domovoi.app.assistant.AssistantSupport
 import com.domovoi.app.assistant.DeviceTier
 import com.domovoi.app.net.LocalCapabilities
 import com.domovoi.app.net.LocalSharedScreen
-import com.domovoi.app.net.serverChatOn
 import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.EmptyState
@@ -54,7 +55,6 @@ import com.domovoi.app.ui.components.relTime
 import com.domovoi.app.ui.screens.assistant.rememberPhoneChatPlace
 import com.domovoi.app.ui.screens.assistant.unsupportedText
 import com.domovoi.app.ui.shell.keyboardCrowdsTheWindow
-import com.domovoi.app.ui.shell.onDeviceAssistant
 import com.domovoi.app.ui.theme.Domovoi
 import java.time.Instant
 
@@ -70,14 +70,20 @@ fun ChatScreen(away: Boolean = false, awayLine: String? = null) {
     val app = LocalApp.current
     val caps = LocalCapabilities.current
     val shared = LocalSharedScreen.current
-    val phoneEngine = onDeviceAssistant()
+    val phoneEngine = AssistantSupport.available
     // The controller is built only where the phone place can exist: never
     // on a 32-bit install, nor on a shared screen.
     val assistant = if (phoneEngine && !shared) app.assistant else null
     val phoneTier = if (assistant != null) assistant.state.collectAsState().value.tier else null
+    // The phone's one-line news (a delete that failed, say), wherever Chat
+    // is showing: the list as much as a phone chat.
+    if (assistant != null) {
+        val toast = LocalToast.current
+        LaunchedEffect(assistant) { assistant.messages.collect { toast(it) } }
+    }
     val facts = PlaceFacts(
         away = away,
-        serverChatOn = caps.serverChatOn(),
+        serverChatOn = caps.aiEnabled,
         phoneEngine = phoneEngine,
         phoneCapable = phoneTier != DeviceTier.Unsupported,
         shared = shared,
@@ -100,7 +106,7 @@ fun ChatScreen(away: Boolean = false, awayLine: String? = null) {
         lastUsed = ChatPlaceKind.of(lastUsed),
         serverShareSeen = serverShareSeen,
         awayLine = awayLine?.takeIf { away },
-        subtitle = chatSubtitle(places.map { it.kind }),
+        subtitle = chatSubtitle(startable),
         emptyHint = emptyHint(startable, unsupported),
         onUsed = { kind ->
             app.prefs.setChatPlace(kind.key)
@@ -109,12 +115,14 @@ fun ChatScreen(away: Boolean = false, awayLine: String? = null) {
     )
 }
 
-/** The list's subtitle, by the places it lists. */
-internal fun chatSubtitle(listed: List<ChatPlaceKind>): String = when {
-    ChatPlaceKind.Server in listed && ChatPlaceKind.Phone in listed ->
+/** The list's subtitle, by the places a chat can start in now ([startable]):
+ *  never a place that can't. */
+internal fun chatSubtitle(startable: List<ChatPlaceKind>): String = when {
+    ChatPlaceKind.Server in startable && ChatPlaceKind.Phone in startable ->
         "text chat with Domovoi — on this phone, or on your home server"
-    ChatPlaceKind.Phone in listed -> "text chat with Domovoi on this phone — no server, no internet"
-    else -> "text chat with Domovoi — runs on your own hardware"
+    ChatPlaceKind.Phone in startable -> "text chat with Domovoi on this phone — no server, no internet"
+    ChatPlaceKind.Server in startable -> "text chat with Domovoi — runs on your own hardware"
+    else -> "text chat with Domovoi"
 }
 
 /** The empty list's hint: how to start, or why nothing can start here. */

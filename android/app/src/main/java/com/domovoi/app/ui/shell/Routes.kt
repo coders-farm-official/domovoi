@@ -22,7 +22,6 @@ import com.domovoi.app.assistant.AssistantSupport
 import com.domovoi.app.net.CAP_IMAGEGEN
 import com.domovoi.app.net.CAP_STATIONS
 import com.domovoi.app.net.Capabilities
-import com.domovoi.app.net.serverChatOn
 
 /**
  * Route table — mirrors the web hash router's routes. Home is where the
@@ -78,18 +77,27 @@ fun Route.requiredCapability(): String? = when (this) {
     else -> null
 }
 
-/** Whether this install has the on-device assistant's engine (a 64-bit
- *  phone and APK, [AssistantSupport]): Chat's "on this phone" place; a hook
+/** Whether this phone can start a chat on itself: the on-device engine (a
+ *  64-bit phone and APK) and the memory for its model
+ *  ([AssistantSupport.phoneCanChat]): Chat's "on this phone" place; a hook
  *  so tests can say either. */
-internal var onDeviceAssistant: () -> Boolean = { AssistantSupport.available }
+internal var onDeviceAssistant: () -> Boolean = { AssistantSupport.phoneCanChat }
 
-/** True when the server's capability manifest allows this route. Chat
- *  needs one place to chat in: the home server, unless it says its AI is
- *  off ([serverChatOn]), or this phone, where the install has the engine
- *  ([onDeviceAssistant]). */
+/**
+ * Whether Chat is offered: at least one place can start a chat. The home
+ * server can while its AI features are on ([Capabilities.aiEnabled]; the
+ * server is in reach wherever this is asked with its manifest); this phone
+ * can where [phoneCanChat]. The AI switch governs the home-server place
+ * only: with it off, Chat stays for this phone's own chats.
+ */
+fun chatAvailable(caps: Capabilities, phoneCanChat: Boolean = onDeviceAssistant()): Boolean =
+    caps.aiEnabled || phoneCanChat
+
+/** True when the server's capability manifest allows this route; Chat
+ *  needs one place that can start a chat ([chatAvailable]). */
 fun Route.visibleWith(caps: Capabilities): Boolean =
     (requiredCapability()?.let { caps.has(it) } ?: true) &&
-        (this != Route.Chat || caps.serverChatOn() || onDeviceAssistant())
+        (this != Route.Chat || chatAvailable(caps))
 
 /**
  * Pages a shared screen (an admin marks the device in the dashboard's

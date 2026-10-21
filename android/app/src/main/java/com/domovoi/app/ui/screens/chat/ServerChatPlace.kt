@@ -26,7 +26,7 @@ internal fun ThreadRow.toChatRow(): ChatRow = ChatRow(
  * and deleted as the old thread list did, and [ConversationPane] (the REST
  * and SSE send, the server's voice view and photos) for a conversation.
  * Only offered while the server is in reach and allows chat
- * ([com.domovoi.app.net.serverChatOn]); the phone keeps no copy of these
+ * ([com.domovoi.app.net.Capabilities.aiEnabled]); the phone keeps no copy of these
  * threads.
  */
 @Composable
