@@ -244,6 +244,20 @@ object LookupRules {
         }
     }
 
+    private val FOOTER_LINE = Regex(
+        """(?im)^[ \t>*_]*(?:sources?|references?|citations?|cited|verified by)[ \t*_]*:.*$|^[ \t]*(?:-{3,}|_{3,}|\*{3,})[ \t]*$""",
+    )
+    private val CITATION = Regex("""\[\d{1,2}\]|\((?:source|sources|according to)[:\s][^)]{0,200}\)""", RegexOption.IGNORE_CASE)
+
+    /** A reply without any sources line, rule or citation the model wrote
+     *  (a page can talk it into a forged one): the only sources line a
+     *  person reads is this code's. */
+    fun stripModelSources(text: String): String {
+        var out = FOOTER_LINE.replace(text, "")
+        out = CITATION.replace(out, "").replace(Regex("""[ \t]+([.,;:!?])"""), "$1")
+        return out.replace(Regex("""\n{3,}"""), "\n\n").trim()
+    }
+
     fun couldntFind(reply: String): Boolean {
         val low = reply.lowercase()
         return COULDNT_FIND.lowercase().trimEnd('.') in low || "couldn't find that" in low
@@ -272,7 +286,7 @@ object LookupRules {
     /** The model's reply as the person reads it. */
     fun finish(reply: String, sources: List<SourceLine>, notice: String? = null): String {
         val allowed = sources.mapNotNull { it.url }.toSet()
-        var text = stripUnknownLinks(reply.trim(), allowed)
+        var text = stripUnknownLinks(stripModelSources(reply), allowed)
         if (couldntFind(text) || parseProposal(text) != null || ANYWHERE.containsMatchIn(text)) text = COULDNT_FIND
         if (notice != null) text += "\n\n*${md(notice)}*"
         return text + footer(sources)

@@ -61,7 +61,7 @@ class NoNetworkTest {
     @Test fun inTheLookupPackageOnlyTheClientsTouchTheNetwork() {
         val classes = classesIn("com/domovoi/app/assistant/lookup", com.domovoi.app.assistant.lookup.LookupRules::class.java)
         assertTrue("no classes found", classes.size > 5)
-        val clients = setOf("LookupClientsKt", "WikipediaLookup", "PageReader", "HomeLookup", "OwnSearchLookup", "TooLarge")
+        val clients = setOf("LookupClientsKt", "WikipediaLookup", "PageReader", "HomeLookup", "OwnSearchLookup", "TooLarge", "PublicDns", "OwnSearchError")
         val offenders = classes.filterNot { (name, _) -> clients.any { name == it || name.startsWith(it + "$") } }
             .mapNotNull { (name, bytes) ->
                 val refs = utf8Constants(bytes).filter { s -> networking.any { s.contains(it) } }

@@ -186,7 +186,9 @@ internal fun LookupSettingsCard(ui: AssistantUi, actions: AssistantActions) {
                     OwnSearch.BRAVE -> key.trim().takeIf { it.isNotEmpty() }?.let { OwnSearch(OwnSearch.BRAVE, key = it) }
                     else -> null
                 }
-                if (choice.isNotEmpty() && own == null && !(choice == OwnSearch.BRAVE && ui.ownSearchKind == OwnSearch.BRAVE)) {
+                if (own?.kind == OwnSearch.BRAVE && !com.domovoi.app.assistant.lookup.BRAVE_KEY.matches(own.key)) {
+                    result = "That isn't a Brave Search key (letters, digits, - and _ only). Paste it again."
+                } else if (choice.isNotEmpty() && own == null && !(choice == OwnSearch.BRAVE && ui.ownSearchKind == OwnSearch.BRAVE)) {
                     result = if (choice == OwnSearch.BRAVE) "Paste your Brave Search key first." else "Type an address starting with http:// or https://."
                 } else if (own != null || choice.isEmpty()) {
                     actions.setOwnSearch(own)

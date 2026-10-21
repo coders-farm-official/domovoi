@@ -224,6 +224,53 @@ class PhoneLookupsTest {
         assertFalse(c.state.value.toString().contains("BSA-secret"))
     }
 
+    @Test fun atHomeTheCardNamesTheServersOwnDestination() {
+        home = FakeBackend("default").apply {
+            homeStatus = com.domovoi.app.assistant.lookup.HomeStatus("always", "your home server's search: Wikipedia and Wikidata first, then Brave Search, with your key")
+        }
+        val c = controller().apply { ready() }
+        c.ask("look up red panda")
+        assertTrue(c.last().lookupCard!!.destination.endsWith("then Brave Search, with your key"))
+    }
+
+    @Test fun atHomeUnderNeverThereIsNoCardJustTheHonestLine() {
+        home = FakeBackend("default").apply { homeStatus = com.domovoi.app.assistant.lookup.HomeStatus("never", null) }
+        val c = controller().apply { ready() }
+        c.ask("look up red panda")
+        assertNull(c.last().lookupCard)
+        assertEquals(LookupRules.HOME_NEVER, c.last().text)
+        assertEquals(listOf(false), home!!.calls.map { it.second })
+        assertEquals(0, wiki.calls.size)
+    }
+
+    @Test fun aYesAnswersTheCardAndANoDeclinesIt() {
+        wiki.results = listOf(LookupResult("Red panda", null, "en.wikipedia.org", "", "The red panda eats bamboo.", "Wikipedia", "api"))
+        val c = controller().apply { ready() }
+        c.ask("look up red panda")
+        engine.queue += listOf("Bamboo.")
+        c.ask("yes")
+        assertEquals(1, wiki.calls.size)
+        assertTrue(c.last().text.startsWith("Bamboo."))
+        assertEquals("allowed_once", c.state.value.conversation.messages.first { it.lookupCard != null }.lookupCard!!.state)
+        c.ask("look up red panda habitat")
+        c.ask("no thanks")
+        assertEquals(NOT_LOOKED_UP, c.last().text)
+        assertEquals(1, wiki.calls.size)
+        assertEquals(null, yesOrNo("tell me more about red pandas please"))
+    }
+
+    @Test fun aSpokenLookupHearsTheCardsQuestionAndTheRefusals() {
+        val heard = CopyOnWriteArrayList<String>()
+        home = FakeBackend("default").apply { homeStatus = com.domovoi.app.assistant.lookup.HomeStatus("never", null) }
+        val c = controller().apply { ready() }
+        c.speakForTest("look up red panda") { heard += it }
+        assertEquals(listOf(LookupRules.HOME_NEVER), heard)
+        home = null
+        heard.clear()
+        c.speakForTest("look up red panda") { heard += it }
+        assertTrue(heard.single().endsWith("Say yes or no."))
+    }
+
     @Test fun theLookupPersonaDropsOnlyTheNoInternetSentence() {
         assertTrue(Persona.SYSTEM_PROMPT.contains("no internet"))
         assertFalse(Persona.SYSTEM_PROMPT_LOOKUPS.contains("no internet"))
@@ -233,6 +280,8 @@ class PhoneLookupsTest {
 }
 
 class FakeBackend(override val destination: String) : LookupBackend {
+    @Volatile var homeStatus: com.domovoi.app.assistant.lookup.HomeStatus? = null
+    override suspend fun status() = homeStatus
     val calls = CopyOnWriteArrayList<Pair<String, Boolean>>()
     @Volatile var results: List<LookupResult> = emptyList()
     @Volatile var localResults: List<LookupResult> = emptyList()

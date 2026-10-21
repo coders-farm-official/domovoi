@@ -37,7 +37,7 @@ const SEARCH_CLASS_WORDS = {
 const SEARCH_BRAVE_TERMS = [
   'Brave charges for each search from prepaid credit, after a free amount each month; it asks for a card.',
   'Brave sells AI answers separately (its “Answers” plan) and points chatbots to its LLM Context service. Domovoi uses the plain web search: check Brave’s terms cover how you use it.',
-  'Its terms don’t let you share your key or keep a store of results. Domovoi keeps neither: the key stays on this server and goes only to Brave.',
+  'Its terms don’t let you share your key or keep a store of results. Your key stays on this server and goes only to Brave. A chat does keep what it answered, with the titles and links of what it read, until you delete the chat: Domovoi keeps no store of Brave’s results beyond that.',
 ];
 
 const SearchSettingsPanel = () => {

@@ -1072,7 +1072,7 @@ class _LookupBody(BaseModel):
     # It sends the words (or fetches the page) on the household's behalf.
     dependencies=[Depends(admin_auth_mod.require_device_after_setup)],
 )
-async def phone_lookup(body: _LookupBody) -> Any:
+async def phone_lookup(body: _LookupBody, request: Request) -> Any:
     """Look something up for a phone chat (or the dashboard's chat, which
     calls this too): at most 3 results, each ``{title, url, site,
     snippet, extract, source, source_name, source_class, licence}``, plus
@@ -1089,7 +1089,8 @@ async def phone_lookup(body: _LookupBody) -> Any:
     leave the house with the standard refusal (409, ``X-Domovoi-Refusal:
     internet-off``); a local-only search still answers. The AI switch
     doesn't apply: nothing here asks a model. 429 past 30 lookups a minute
-    (everyone together); 422 for a page that isn't HTTPS or can't be read
+    for everyone together or 10 for one caller (a local-only search isn't
+    counted); 422 for a page that isn't HTTPS or can't be read
     (``{detail, code}``)."""
     from domovoi import egress, lookup_web
 
@@ -1100,7 +1101,10 @@ async def phone_lookup(body: _LookupBody) -> Any:
     needs_internet = bool(url) or body.internet
     if needs_internet and egress.internet_turned_off():
         raise egress.http_exception("a lookup")
-    if not lookup_web.PACE.allow():
+    # Paced only when something would leave the house: for the house and for
+    # each caller (a local-only search costs nobody's minute).
+    key = lookup_web.caller_key(request.headers, request.client.host if request.client else None)
+    if needs_internet and not lookup_web.PACE.allow(key=key):
         return JSONResponse(status_code=429, content={"detail": "Too many lookups this minute. Try again shortly.",
                                                       "code": "too_many"})
     try:
@@ -1113,7 +1117,7 @@ async def phone_lookup(body: _LookupBody) -> Any:
     except lookup_web.LookupRefused as e:
         return JSONResponse(status_code=422, content={"detail": str(e), "code": e.code})
     out = outcome.as_dict()
-    out["destination"] = lookup_web.destination("page" if url else "search", url or None)
+    out["destination"] = lookup_web.destination("page" if url else "search", url or None, own_host=False)
     return out
 
 
@@ -1131,7 +1135,7 @@ async def lookup_sources() -> dict[str, Any]:
         "order": order,
         "always_allow": bool(settings.lookup_always_allow),
         "own_search": lookup_web.own_search(),
-        "destination": lookup_web.destination("search"),
+        "destination": lookup_web.destination("search", own_host=False),
         "internet": egress.policy() or "",
     }
 

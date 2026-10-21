@@ -48,6 +48,10 @@ interface LookupBackend {
     /** Where a search goes, in the card's words. */
     val destination: String
 
+    /** The home server's own answer: its internet answer and where its
+     *  searches go; null for a backend that isn't a home server. */
+    suspend fun status(): HomeStatus? = null
+
     suspend fun search(query: String, internet: Boolean = true): LookupOutcome
 
     suspend fun read(url: String): LookupOutcome
@@ -65,6 +69,17 @@ data class LookupOutcome(
     val error: String? = null,
 )
 
+/** The home server's internet answer ("never" refuses) and where its
+ *  searches go (its own words, no address of the household's SearXNG). */
+data class HomeStatus(val internet: String, val destination: String?)
+
+/** The person's own Brave key, as its service accepts one (the server's
+ *  pattern): anything else is refused before it is sent, never echoed. */
+val BRAVE_KEY = Regex("^[A-Za-z0-9_\\-]{1,128}$")
+
+/** A failure of the person's own search, in words that never hold the key. */
+class OwnSearchError(message: String) : IOException(message)
+
 const val PROJECT_URL = "https://github.com/coders-farm-official/domovoi"
 
 /** Wikipedia asks every client to name itself and how to reach its maker
@@ -75,8 +90,36 @@ fun appAgent(version: String) = "DomovoiApp/${version.ifBlank { "dev" }} ($PROJE
 /** A page fetch a person asked for, not a crawler. */
 fun userAgent(version: String) = "DomovoiApp-User/${version.ifBlank { "dev" }} ($PROJECT_URL)"
 
-/** A client with no household token, no cookies and no https→http hop. */
-fun plainClient(): OkHttpClient = OkHttpClient.Builder()
+/** Names that resolve only to public addresses (the server's net_safety
+ *  rule): a page, Wikipedia or Brave is never a machine on this network. */
+object PublicDns : okhttp3.Dns {
+    override fun lookup(hostname: String): List<java.net.InetAddress> {
+        val all = okhttp3.Dns.SYSTEM.lookup(hostname)
+        if (all.isEmpty() || all.any { !isPublic(it) }) throw java.net.UnknownHostException("not a public address")
+        return all
+    }
+
+    fun isPublic(a: java.net.InetAddress): Boolean {
+        if (a.isLoopbackAddress || a.isSiteLocalAddress || a.isLinkLocalAddress || a.isAnyLocalAddress ||
+            a.isMulticastAddress) return false
+        val b = a.address
+        if (b.size == 4) {
+            val x = b[0].toInt() and 0xff
+            val y = b[1].toInt() and 0xff
+            if (x == 0 || x >= 224 || (x == 100 && y in 64..127) || (x == 169 && y == 254) || (x == 198 && y in 18..19)) return false
+        } else if (b.size == 16) {
+            val x = b[0].toInt() and 0xff
+            if ((x and 0xfe) == 0xfc) return false            // fc00::/7, unique local
+        }
+        return true
+    }
+}
+
+/** A client with no household token, no cookies and no https→http hop.
+ *  [publicOnly]: only public addresses (everything but the person's own
+ *  SearXNG, which may be on their network). */
+fun plainClient(publicOnly: Boolean = true): OkHttpClient = OkHttpClient.Builder()
+    .apply { if (publicOnly) dns(PublicDns) }
     .cookieJar(CookieJar.NO_COOKIES)
     .followRedirects(false)
     .followSslRedirects(false)
@@ -106,11 +149,19 @@ internal suspend fun fetch(
     http: OkHttpClient, url: String, agent: String, max: Long, headers: Map<String, String> = emptyMap(),
 ): Triple<Int, String, String?> = withContext(Dispatchers.IO) {
     var current = url
+    var hop = 0
     // Redirects are followed here, at most 3, and only to https (or, for a
     // plain-http start such as a LAN SearXNG, to the same scheme and host).
+    // The caller's own headers (a Brave key) go on the first request only.
     repeat(MAX_HOPS + 1) {
-        val req = Request.Builder().url(current).header("User-Agent", agent)
-            .apply { headers.forEach { (k, v) -> header(k, v) } }.build()
+        val req = try {
+            Request.Builder().url(current).header("User-Agent", agent)
+                .apply { if (hop == 0) headers.forEach { (k, v) -> header(k, v) } }.build()
+        } catch (e: IllegalArgumentException) {
+            // OkHttp's text would quote the header's value (a key).
+            throw IOException("not a request that can be sent")
+        }
+        hop++
         val next: String? = http.newCall(req).execute().use { resp ->
             if (resp.code in 300..399) {
                 val loc = resp.header("Location")?.let { req.url.resolve(it) }
@@ -217,7 +268,19 @@ class PageReader(private val http: OkHttpClient, private val version: String) {
 class HomeLookup(
     private val post: suspend (path: String, body: String) -> Triple<Int, String, String?>,
     override val destination: String = "your home server's search: Wikipedia and Wikidata first, then the web",
+    /** GET on the home server: (status, body). */
+    private val get: suspend (path: String) -> Pair<Int, String> = { 404 to "" },
 ) : LookupBackend {
+    /** `GET /api/chat/lookup-sources`: the server's internet answer and its
+     *  own words for where a search goes (the same the web chat's card
+     *  shows: its helper, Brave with the household's key, its SearXNG). */
+    override suspend fun status(): HomeStatus? {
+        val (code, text) = try { get("/api/chat/lookup-sources") } catch (e: IOException) { return null }
+        if (code >= 400) return null
+        val o = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return null
+        return HomeStatus(o.s("internet").orEmpty(), o.s("destination"))
+    }
+
     override suspend fun search(query: String, internet: Boolean): LookupOutcome =
         call("""{"query":${JsonPrimitive(query)},"internet":$internet}""", internet)
 
@@ -254,6 +317,8 @@ class OwnSearchLookup(
     private val own: OwnSearch,
     private val wikipedia: LookupBackend = WikipediaLookup(http, version),
     private val braveBase: String = "https://api.search.brave.com",
+    /** The client for the person's own SearXNG, which may be on their LAN. */
+    private val lanHttp: OkHttpClient = http,
 ) : LookupBackend {
     override val destination: String = when (own.kind) {
         OwnSearch.BRAVE -> "Wikipedia, then Brave Search with your key"
@@ -265,22 +330,27 @@ class OwnSearchLookup(
         val wiki = wikipedia.search(query, true)
         val web = runCatching { ownResults(query) }
         val extra = web.getOrNull().orEmpty().filterNot { r -> wiki.results.any { it.url == r.url } }
-        val notice = web.exceptionOrNull()?.let { "${it.message ?: "Your own search didn't work"}, so this came from Wikipedia." }
+        // Only this code's own words reach a notice: never an exception's
+        // text, which can quote a request (and the key in it).
+        val notice = web.exceptionOrNull()?.let { e ->
+            "${(e as? OwnSearchError)?.message ?: "Your own search didn't work"}, so this came from Wikipedia."
+        }
         return LookupOutcome((wiki.results + extra).take(3), internetUsed = true, notice = notice)
     }
 
     private suspend fun ownResults(query: String): List<LookupResult> {
         val q = URLEncoder.encode(query, "UTF-8")
         return if (own.kind == OwnSearch.BRAVE) {
+            if (!BRAVE_KEY.matches(own.key)) throw OwnSearchError("Your Brave key has characters a key doesn't; paste it again")
             val (status, body, _) = try {
                 fetch(http, "$braveBase/res/v1/web/search?q=$q&count=3", appAgent(version), API_MAX_BYTES,
                     mapOf("X-Subscription-Token" to own.key, "Accept" to "application/json"))
-            } catch (e: IOException) { throw IOException("Brave Search didn't answer") }
+            } catch (e: IOException) { throw OwnSearchError("Brave Search didn't answer") }
             when (status) {
-                401, 403 -> throw IOException("Brave Search refused your key")
-                429 -> throw IOException("Brave Search says your key is over its limit")
+                401, 403 -> throw OwnSearchError("Brave Search refused your key")
+                429 -> throw OwnSearchError("Brave Search says your key is over its limit")
             }
-            if (status >= 400) throw IOException("Brave Search answered with an error ($status)")
+            if (status >= 400) throw OwnSearchError("Brave Search answered with an error ($status)")
             val web = runCatching { json.parseToJsonElement(body).jsonObject["web"]?.jsonObject?.get("results")?.jsonArray }
                 .getOrNull().orEmpty()
             web.mapNotNull { it as? JsonObject }.mapNotNull { r ->
@@ -289,10 +359,10 @@ class OwnSearchLookup(
             }
         } else {
             val (status, body, _) = try {
-                fetch(http, "${own.url.trimEnd('/')}/search?q=$q&format=json", appAgent(version), API_MAX_BYTES)
-            } catch (e: IOException) { throw IOException("Your SearXNG didn't answer") }
-            if (status == 403) throw IOException("Your SearXNG refused the search (is its JSON output on?)")
-            if (status >= 400) throw IOException("Your SearXNG answered with an error ($status)")
+                fetch(lanHttp, "${own.url.trimEnd('/')}/search?q=$q&format=json", appAgent(version), API_MAX_BYTES)
+            } catch (e: IOException) { throw OwnSearchError("Your SearXNG didn't answer") }
+            if (status == 403) throw OwnSearchError("Your SearXNG refused the search (is its JSON output on?)")
+            if (status >= 400) throw OwnSearchError("Your SearXNG answered with an error ($status)")
             val items = runCatching { json.parseToJsonElement(body).jsonObject["results"]?.jsonArray }.getOrNull().orEmpty()
             items.mapNotNull { it as? JsonObject }.mapNotNull { r ->
                 val url = r.s("url") ?: return@mapNotNull null
@@ -304,7 +374,7 @@ class OwnSearchLookup(
     /** The settings' Test button: one search of a fixed word. */
     suspend fun test(): String = runCatching { ownResults("Wikipedia") }.fold(
         { "It works: ${it.size} result(s) for a test search." },
-        { "${it.message ?: "It didn't work"}." },
+        { "${(it as? OwnSearchError)?.message ?: "It didn't work"}." },
     )
 
     override suspend fun read(url: String): LookupOutcome = PageReader(http, version).read(url)

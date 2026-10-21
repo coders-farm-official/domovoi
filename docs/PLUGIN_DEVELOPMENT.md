@@ -914,7 +914,7 @@ what makes disable/uninstall a clean teardown:
 | `ctx.add_canned_sounds(sounds)` | Shortcut for `sdk.assets.add_canned_sounds`. |
 | `ctx.add_context_provider(key, fn)` | Contribute a key to the per-turn Context extras (keys are exclusive across plugins). |
 | `ctx.add_container(id, resolve=None)` | SDK 1.5: tell the container guard how to see one of your `[[containers]]` right now (§4.18). |
-| `ctx.add_lookup_source(source)` | SDK 1.8: register a lookup source (`search(query)` / `fetch(id)` and a class of local, api or web) that answers lookups from Chat, voice and the phone (§4.19). One per plugin. |
+| `ctx.add_lookup_source(source)` | SDK 1.8: register a lookup source (`search(query)` / `fetch(id)` and a class of local, api or web) that answers lookups from Chat and the phone app (voice "double check" still asks the search helper directly) (§4.19). One per plugin. |
 
 `register` may be sync or async. Do **not** import heavy libraries at module
 import time — there's a 10-second import budget, and initializing CUDA during

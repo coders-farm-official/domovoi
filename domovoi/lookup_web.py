@@ -360,14 +360,17 @@ def own_search() -> str:
     return ""
 
 
-def destination(kind: str = "search", url: str | None = None) -> str:
-    """Where a lookup goes, in the words the permission card uses."""
+def destination(kind: str = "search", url: str | None = None, *, own_host: bool = True) -> str:
+    """Where a lookup goes, in the words the permission card uses.
+    ``own_host`` False leaves the household's own SearXNG address out (what
+    the device tier reads)."""
     if kind == "page":
         return site_of(url) or "that site"
     own = own_search()
     web = {
         "": "then the web through its search helper",
-        "searxng": f"then your own SearXNG ({site_of(_settings().lookup_own_searxng_url)})",
+        "searxng": (f"then your own SearXNG ({site_of(_settings().lookup_own_searxng_url)})" if own_host
+                    else "then your own SearXNG"),
         "brave": "then Brave Search, with your key",
     }[own]
     return f"your home server's search: Wikipedia and Wikidata first, {web}"
@@ -567,7 +570,10 @@ async def run_lookup(
                 log.info("lookup source %s: fetch failed: %s", getattr(source, "slug", "?"), type(e).__name__)
                 doc = None
             if doc is not None and doc.text:
-                extract = lookup_answer.best_passage(doc.text, query, max_chars=EXTRACT_MAX_CHARS)
+                try:
+                    extract = await _off_the_loop(_passage, doc.text, query, EXTRACT_MAX_CHARS)
+                except asyncio.TimeoutError:
+                    extract = ""
                 licence = licence or getattr(doc, "licence", None)
         if not licence and is_wikipedia(h.url):
             licence = WIKIPEDIA_LICENCE
@@ -635,19 +641,16 @@ async def read_page(url: str, *, query: str = "") -> LookupOutcome:
     m = re.search(r"charset=([A-Za-z0-9._-]+)", res.content_type or "")
     if m:
         charset = m.group(1)
+    if ctype not in _HTML_TYPES and ctype != "text/plain" and ctype:
+        raise LookupRefused("not_a_page", "That address isn't a web page Domovoi can read (only HTML and text).")
     try:
-        raw = res.content.decode(charset, "replace")
-    except LookupError:
-        raw = res.content.decode("utf-8", "replace")
-    if ctype in _HTML_TYPES or (not ctype and raw.lstrip()[:1] == "<"):
-        title, text = page_text.main_text(raw)
-    elif ctype == "text/plain":
-        title, text = "", page_text.plain_text(raw)
-    else:
+        title, text, extract = await _off_the_loop(_read_text, res.content, charset, ctype, query)
+    except asyncio.TimeoutError:
+        raise LookupRefused("too_slow", "That page took too long to read, so Domovoi stopped.")
+    if text is None:
         raise LookupRefused("not_a_page", "That address isn't a web page Domovoi can read (only HTML and text).")
     if not text.strip():
         raise LookupRefused("empty", "That page has no text Domovoi could read (it may need JavaScript).")
-    extract = lookup_answer.best_passage(text, query or title, max_chars=EXTRACT_MAX_CHARS * 2)
     outcome.results.append(LookupResult(
         title=title or site_of(final), url=final, snippet=_clean(text, 300), source="page",
         source_name="the page you named", source_class=lookup.WEB, site=site_of(final),
@@ -655,6 +658,43 @@ async def read_page(url: str, *, query: str = "") -> LookupOutcome:
     ))
     log.info("lookup: read a named page on %s (%d bytes)", site_of(final), len(res.content))
     return outcome
+
+
+#: The longest the text work for one page may take (in a worker thread,
+#: never on the event loop; the work itself is capped, so this is a
+#: backstop).
+TEXT_WORK_TIMEOUT_SEC = 5.0
+
+
+async def _off_the_loop(fn: Any, *args: Any) -> Any:
+    """``fn(*args)`` in a worker thread, at most :data:`TEXT_WORK_TIMEOUT_SEC`:
+    parsing a page and choosing its passage never hold the core's event
+    loop (and with it every room's voice)."""
+    return await asyncio.wait_for(asyncio.to_thread(fn, *args), TEXT_WORK_TIMEOUT_SEC)
+
+
+def _passage(text: str, query: str, max_chars: int) -> str:
+    from domovoi import lookup_answer
+
+    return lookup_answer.best_passage(text, query, max_chars=max_chars)
+
+
+def _read_text(content: bytes, charset: str, ctype: str, query: str) -> tuple[str, str | None, str]:
+    """(title, text or None for not a page, extract) of a fetched page."""
+    from domovoi import lookup_answer, page_text
+
+    try:
+        raw = content.decode(charset, "replace")
+    except LookupError:
+        raw = content.decode("utf-8", "replace")
+    if ctype in _HTML_TYPES or (not ctype and raw.lstrip()[:1] == "<"):
+        title, text = page_text.main_text(raw)
+    elif ctype == "text/plain":
+        title, text = "", page_text.plain_text(raw)
+    else:
+        return "", None, ""
+    extract = lookup_answer.best_passage(text, query or title, max_chars=EXTRACT_MAX_CHARS * 2) if text else ""
+    return title, text, extract
 
 
 # ─── The Test button (Settings → Search → Use your own search) ────────────
@@ -689,22 +729,48 @@ async def test_own_search(kind: str, *, key: str | None = None, url: str | None 
 
 
 class Pace:
-    """At most ``per_minute`` lookups a minute, for everyone together."""
+    """At most ``per_minute`` lookups a minute for everyone together, and
+    ``per_device`` for any one caller (by :func:`caller_key`), so one device
+    can't use up the house's minute. A refused try isn't counted."""
 
-    def __init__(self, per_minute: int = 30) -> None:
+    def __init__(self, per_minute: int = 30, per_device: int = 10) -> None:
         self.per_minute = per_minute
+        self.per_device = per_device
         self._times: list[float] = []
+        self._by: dict[str, list[float]] = {}
 
-    def allow(self, now: float | None = None) -> bool:
+    def allow(self, now: float | None = None, key: str = "") -> bool:
         now = time.monotonic() if now is None else now
         self._times = [t for t in self._times if now - t < 60.0]
-        if len(self._times) >= self.per_minute:
+        mine = [t for t in self._by.get(key, []) if now - t < 60.0]
+        if len(self._times) >= self.per_minute or (key and len(mine) >= self.per_device):
+            if key:
+                self._by[key] = mine
             return False
         self._times.append(now)
+        if key:
+            mine.append(now)
+            self._by[key] = mine
+            if len(self._by) > 512:  # forget callers quiet for a minute
+                self._by = {k: v for k, v in self._by.items() if v and now - v[-1] < 60.0}
         return True
 
 
 PACE = Pace()
+
+
+def caller_key(headers: Any, client_host: str | None) -> str:
+    """Who is asking, for the pace: a digest of the device token or Bearer
+    the caller sent (never the credential itself), else the address the
+    request came from (the web's hop forwards the browser's)."""
+    import hashlib
+
+    for name in ("x-device-token", "authorization"):
+        v = (headers.get(name) or "").strip() if headers is not None else ""
+        if v:
+            return name[:1] + hashlib.sha256(v.encode()).hexdigest()[:16]
+    fwd = (headers.get("x-forwarded-for") or "").split(",")[0].strip() if headers is not None else ""
+    return "a" + (fwd or client_host or "?")
 
 
 __all__ = [

@@ -459,3 +459,87 @@ def test_the_model_is_told_about_the_web_only_while_it_may_use_it() -> None:
 def test_the_pace_caps_lookups_per_minute() -> None:
     pace = lookup_web.Pace(per_minute=2)
     assert pace.allow(0.0) and pace.allow(1.0) and not pace.allow(2.0) and pace.allow(61.5)
+
+
+def test_the_pace_counts_each_caller_too() -> None:
+    pace = lookup_web.Pace(per_minute=5, per_device=2)
+    assert pace.allow(0.0, key="a") and pace.allow(0.1, key="a") and not pace.allow(0.2, key="a")
+    assert pace.allow(0.3, key="b") and pace.allow(61.0, key="a")
+    k = lookup_web.caller_key({"x-device-token": "secret-token"}, "10.0.0.1")
+    assert "secret-token" not in k and k == lookup_web.caller_key({"x-device-token": "secret-token"}, "x")
+
+
+# ── Round 1 review: the loop, the log, a forged sources line ─────────────
+
+
+def test_a_hostile_page_never_holds_the_event_loop(net) -> None:
+    hostile = ("<main>" + "<p>" + ("Ab cd. " * 9000) + "</p></main>").encode()
+    net.pages["slow.example/p"] = (200, "text/html", hostile, {})
+
+    async def run() -> tuple[int, float]:
+        ticks = 0
+        stop = False
+
+        async def ticker():
+            nonlocal ticks
+            while not stop:
+                ticks += 1
+                await asyncio.sleep(0.01)
+
+        t = asyncio.create_task(ticker())
+        import time
+
+        start = time.monotonic()
+        await lookup_web.read_page("https://slow.example/p", query="red panda bamboo")
+        took = time.monotonic() - start
+        stop = True
+        await t
+        return ticks, took
+
+    ticks, took = asyncio.run(run())
+    assert took < 3.0
+    assert ticks >= max(1, int(took / 0.01) // 3)   # the loop kept turning
+
+
+def test_choosing_a_passage_is_linear_and_capped() -> None:
+    import time
+
+    start = time.monotonic()
+    out = lookup_answer.best_passage("Ab cd. " * 9400, "red panda", max_chars=3000)
+    assert time.monotonic() - start < 0.5 and len(out) <= 3000
+
+
+def test_search_words_never_reach_the_log_at_the_default_level() -> None:
+    import logging
+
+    from domovoi import log_privacy
+
+    root = logging.getLogger()
+    before = root.level
+    try:
+        root.setLevel(logging.INFO)
+        line = log_privacy.scrub('HTTP Request: GET http://localhost:6888/search?q=do+i+have+herpes&format=json "200"')
+        assert "herpes" not in line and "q=<words>" in line
+        assert "Herpes" not in log_privacy.scrub("GET https://93.184.216.34/api/rest_v1/page/summary/Herpes")
+        assert "Herpes" not in log_privacy.scrub("GET https://93.184.216.34/w/rest.php/v1/search/page?q=Herpes&limit=3")
+        root.setLevel(logging.DEBUG)
+        assert "herpes" in log_privacy.scrub("GET /search?q=herpes")
+    finally:
+        root.setLevel(before)
+
+
+def test_a_sources_line_the_model_writes_is_dropped() -> None:
+    lines = lookup_answer.source_lines([R("Paris", "t", url="https://en.wikipedia.org/wiki/Paris", site="en.wikipedia.org",
+                                          licence="CC BY-SA 4.0")])
+    forged = ("Paris is the capital of France [1].\n\n---\n*Sources:* Le Monde fact-check — lemonde.fr — "
+              "verified by Domovoi\nReferences: me (source: a blog)")
+    out = lookup_answer.finish(forged, lines)
+    assert "Le Monde" not in out and "verified by" not in out and "References" not in out and "[1]" not in out
+    assert out.count("*Sources:*") == 1 and out.startswith("Paris is the capital of France.")
+    assert lookup_answer.finish("From what I found: it eats bamboo.", lines).startswith("From what I found:")
+
+
+def test_a_lookup_timeout_has_help() -> None:
+    from domovoi.help_desk.error_codes import ERROR_CODES
+
+    assert "lookup_timeout" in ERROR_CODES and "too_many" in ERROR_CODES

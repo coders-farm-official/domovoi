@@ -227,12 +227,52 @@ async def test_the_route_reads_a_named_https_page_only(db_session, world) -> Non
 
 @requires_db
 @pytest.mark.asyncio
-async def test_the_route_is_paced(db_session, world, monkeypatch) -> None:
-    monkeypatch.setattr(lookup_web, "PACE", lookup_web.Pace(per_minute=1))
+async def test_the_route_is_paced_per_device_and_for_the_house(db_session, world, monkeypatch) -> None:
+    monkeypatch.setattr(lookup_web, "PACE", lookup_web.Pace(per_minute=3, per_device=2))
+    a, b = {"X-Device-Token": "phone-a"}, {"X-Device-Token": "phone-b"}
     async with _core() as c:
-        first = await c.post("/v1/phone/lookup", json={"query": "panda", "internet": False})
-        second = await c.post("/v1/phone/lookup", json={"query": "panda", "internet": False})
-    assert first.status_code == 200 and second.status_code == 429 and second.json()["code"] == "too_many"
+        got = [(await c.post("/v1/phone/lookup", json={"query": "panda"}, headers=a)).status_code for _ in range(3)]
+        other = await c.post("/v1/phone/lookup", json={"query": "panda"}, headers=b)
+        house = await c.post("/v1/phone/lookup", json={"query": "panda"}, headers=b)
+        local = await c.post("/v1/phone/lookup", json={"query": "panda", "internet": False}, headers=a)
+    assert got == [200, 200, 429]            # one device can't use the house's minute
+    assert other.status_code == 200           # another device still can
+    assert house.status_code == 429 and house.json()["code"] == "too_many"
+    assert local.status_code == 200           # the house's own sources aren't paced
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_sources_list_names_no_searxng_host(db_session, world, monkeypatch) -> None:
+    from domovoi.config import settings
+
+    monkeypatch.setattr(settings, "lookup_own_search", "searxng")
+    monkeypatch.setattr(settings, "lookup_own_searxng_url", "http://192.168.1.20:8888")
+    async with _core() as c:
+        body = (await c.get("/v1/lookup/sources")).json()
+        found = (await c.post("/v1/phone/lookup", json={"query": "x", "internet": False})).json()
+    assert "192.168.1.20" not in json.dumps(body) and "192.168.1.20" not in json.dumps(found)
+    assert "your own SearXNG" in body["destination"]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_page_the_model_proposes_on_a_new_site_asks_even_in_an_allowed_chat(db_session, world, model) -> None:
+    world.net.pages["zoo.example/rp"] = (200, "text/html", b"<main><p>Red pandas eat bamboo.</p></main>", {})
+    world.net.pages["evil.example/x"] = (200, "text/html", b"<main><p>Hello.</p></main>", {})
+    async with _web() as web:
+        tid = await _thread(web)
+        await web.patch(f"/api/chat/threads/{tid}", json={"internet_allowed": True})
+        # The model wants a site nobody typed or allowed: a card, nothing sent.
+        model.replies = [["READ_PAGE: https://evil.example/x\n"]]
+        events = await _send(web, tid, "tell me something")
+        assert [d for e, d in events if e == "lookup_permission"][0]["destination"] == "evil.example"
+        assert world.net.sent == []
+        # A site the person typed needs no new card.
+        model.replies = [["READ_PAGE: https://zoo.example/rp\n"], ["They eat bamboo."]]
+        events = await _send(web, tid, "what is on zoo.example? see https://zoo.example/")
+        assert "lookup_permission" not in [e for e, _ in events]
+        assert [r.headers.get("host") for r in world.net.sent] == ["zoo.example"]
 
 
 @pytest.mark.asyncio

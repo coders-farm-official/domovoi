@@ -229,10 +229,11 @@ class AppContainer(context: Context) {
         val version = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }
             .getOrNull().orEmpty()
         val http = com.domovoi.app.assistant.lookup.plainClient()
+        val lanHttp = com.domovoi.app.assistant.lookup.plainClient(publicOnly = false)
         val own = com.domovoi.app.assistant.lookup.PhoneOwnSearchStore(context)
         val away = {
             val o = own.own
-            if (o != null) com.domovoi.app.assistant.lookup.OwnSearchLookup(http, version, o)
+            if (o != null) com.domovoi.app.assistant.lookup.OwnSearchLookup(http, version, o, lanHttp = lanHttp)
             else com.domovoi.app.assistant.lookup.WikipediaLookup(http, version)
         }
         val home = com.domovoi.app.assistant.lookup.HomeLookup(post = { path, body ->
@@ -241,12 +242,18 @@ class AppContainer(context: Context) {
             } catch (e: com.domovoi.app.net.ApiException) {
                 Triple(e.status, e.body, e.refusal)
             }
+        }, get = { path ->
+            try {
+                200 to api.raw("GET", path)
+            } catch (e: com.domovoi.app.net.ApiException) {
+                e.status to e.body
+            }
         })
         return com.domovoi.app.assistant.PhoneLookups(
             own = own,
             away = away,
             plan = { com.domovoi.app.assistant.LookupPlan(if (api.answers()) home else null, away()) },
-            test = { o -> com.domovoi.app.assistant.lookup.OwnSearchLookup(http, version, o).test() },
+            test = { o -> com.domovoi.app.assistant.lookup.OwnSearchLookup(http, version, o, lanHttp = lanHttp).test() },
         )
     }
 

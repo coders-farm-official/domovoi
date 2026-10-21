@@ -1334,6 +1334,7 @@ async def _answer(
             async for event in _lookup_turn(
                 request, thread_id=thread_id, question=question, proposal=proposal,
                 model=model, history=history, thread_allowed=thread_allowed,
+                from_model=lookup_answer.fast_path(question) is None,
             ):
                 yield event
             schedule_title_job(thread_id)
@@ -1615,6 +1616,7 @@ def _destination(proposal: lookup_answer.Proposal, sources_payload: dict[str, An
 async def _lookup_turn(
     request: Request | None, *, thread_id: int, question: str, proposal: lookup_answer.Proposal,
     model: str, history: list[dict[str, Any]], thread_allowed: bool, decided: bool = False,
+    from_model: bool = False,
 ) -> AsyncIterator[str]:
     """What a proposal becomes: an answer from this server's own sources
     (no question asked), the permission card, or, with the person's allow
@@ -1622,6 +1624,12 @@ async def _lookup_turn(
     the internet sources found. Under internet "never" nothing leaves."""
     internet_on = not egress.internet_turned_off()
     allowed = decided or thread_allowed or always_allow()
+    if allowed and not decided and from_model and proposal.kind == "page":
+        # A page the MODEL wants to read: a chat's (or the house's) allow
+        # covers the sites already allowed in it and the ones the person
+        # typed, not a new site a page or an answer suggested.
+        if _site_of(proposal.query) not in await _allowed_sites(thread_id):
+            allowed = False
     if proposal.kind == "search" and not (allowed and internet_on):
         try:
             local = await _core_lookup(request, proposal, internet=False)
@@ -1673,6 +1681,49 @@ async def _lookup_turn(
         return
     async for ev in _answer_from(thread_id, question, proposal, found, model, history):
         yield ev
+
+
+_URL_IN_TEXT_RE = re.compile(r"https?://[^\s<>\"')\]]+", re.I)
+
+
+def _site_of(url: str) -> str:
+    from urllib.parse import urlsplit
+
+    try:
+        host = (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return ""
+    return host[4:] if host.startswith("www.") else host
+
+
+async def _allowed_sites(thread_id: int) -> set[str]:
+    """The sites a model-proposed page may be read from without a new
+    card: those the people in this chat typed, and those a card allowed."""
+    async with session_scope() as s:
+        rows = (
+            await s.execute(
+                text(
+                    "SELECT role, content, stats FROM chat_messages WHERE thread_id = :t "
+                    "AND (role = 'user' OR COALESCE(stats ? 'lookup_card', false)) ORDER BY id DESC LIMIT 200"
+                ),
+                {"t": thread_id},
+            )
+        ).all()
+    out: set[str] = set()
+    for role, content, stats in rows:
+        if role == "user":
+            out |= {_site_of(u) for u in _URL_IN_TEXT_RE.findall(content or "")}
+            continue
+        if isinstance(stats, str):
+            try:
+                stats = json.loads(stats)
+            except ValueError:
+                continue
+        card = (stats or {}).get("lookup_card") or {}
+        if card.get("kind") == "page" and str(card.get("state", "")).startswith("allowed"):
+            out.add(_site_of(str(card.get("query") or "")))
+    out.discard("")
+    return out
 
 
 async def _core_sources(request: Request | None) -> dict[str, Any]:

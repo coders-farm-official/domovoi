@@ -598,6 +598,10 @@ class AssistantController(
      *  null goes back to Wikipedia. */
     fun setOwnSearch(own: OwnSearch?) {
         val store = lookups?.own ?: return
+        if (own?.kind == OwnSearch.BRAVE && !com.domovoi.app.assistant.lookup.BRAVE_KEY.matches(own.key)) {
+            say("that isn't a Brave Search key (letters, digits, - and _ only): paste it again")
+            return
+        }
         store.own = own
         _state.update { it.copy(ownSearchKind = own?.kind, ownSearchUrl = own?.url.orEmpty()) }
         say(if (own == null) "lookups away from home use Wikipedia" else "your own search is saved on this phone")
@@ -799,6 +803,12 @@ class AssistantController(
         return { timing -> fileTiming(done, timing) }
     }
 
+    /** A spoken turn without the mic, for the tests: [onDelta] hears what
+     *  the voice would read aloud. */
+    internal fun speakForTest(transcript: String, onDelta: (String) -> Unit) {
+        kotlinx.coroutines.runBlocking { answerSpoken(transcript, onDelta) }
+    }
+
     /** Writes a spoken turn's timing onto its reply (the long-press details)
      *  and logs it, for the gate's numbers. */
     private fun fileTiming(done: StoredConversation, timing: VoiceTiming) {
@@ -841,6 +851,21 @@ class AssistantController(
         // Lookups (part 5, W1): offered on a plain question, never on a help,
         // document or retried turn. "look up …" needs no model to say so.
         val offered = lookups != null && help == null && retryingFrom == null
+        cardAnswer(asked)?.let { (index, decision) ->
+            val card = asked.messages[index].lookupCard!!
+            val marked = asked.copy(
+                messages = asked.messages.toMutableList().also { m ->
+                    m[index] = m[index].copy(lookupCard = card.copy(state = if (decision == "once") "allowed_once" else "declined"))
+                },
+            )
+            val original = asked.messages.take(index).lastOrNull { it.fromUser }?.text.orEmpty()
+            return if (decision == "once") {
+                lookupReply(marked, Proposal(card.kind, card.query), onDelta, decided = true, question = original)
+            } else {
+                onDelta(NOT_LOOKED_UP)
+                finishReply(marked, StoredMessage(Speaker.DOMOVOI, NOT_LOOKED_UP, clock()))
+            }
+        }
         if (offered) {
             asked.messages.lastOrNull()?.takeIf { it.fromUser }?.let { q ->
                 LookupRules.fastPath(q.text)?.let { return lookupReply(asked, it, onDelta) }
@@ -967,6 +992,11 @@ class AssistantController(
 
     // ── Lookups (assistant plan part 5, W1) ─────────────────────────────
 
+    /** The card's question as a spoken turn says it. */
+    private fun spokenCard(p: Proposal, destination: String): String =
+        if (p.kind == Proposal.PAGE) "May I read that page on $destination? Say yes or no."
+        else "May I look up ${p.query} online, through $destination? Say yes or no."
+
     /** The card's question, as it is kept on the card message. */
     private fun cardText(p: Proposal, destination: String): String =
         if (p.kind == Proposal.PAGE) "May I read this page? ${p.query} → $destination"
@@ -980,27 +1010,48 @@ class AssistantController(
      * lookup, then the answer from what came back. A home server set to
      * "never" is respected: the phone doesn't go around it.
      */
+    /** The card a yes or no just answered: (its index, "once" / "no"), when
+     *  the message before this one is a pending card and this one says yes
+     *  or no (spoken or typed). */
+    private fun cardAnswer(asked: StoredConversation): Pair<Int, String>? {
+        val said = asked.messages.lastOrNull()?.takeIf { it.fromUser }?.text ?: return null
+        val index = asked.messages.lastIndex - 1
+        val card = asked.messages.getOrNull(index)?.lookupCard ?: return null
+        if (card.state != LookupCard.PENDING) return null
+        return yesOrNo(said)?.let { index to if (it) "once" else "no" }
+    }
+
     private suspend fun lookupReply(
         asked: StoredConversation, proposal: Proposal, onDelta: (String) -> Unit, decided: Boolean = false,
+        question: String? = null,
     ): StoredConversation {
         val l = lookups ?: return finishReply(asked, StoredMessage(Speaker.DOMOVOI, LookupRules.NOTHING_FOUND, clock()))
         val plan = try { l.plan() } catch (e: CancellationException) { throw e } catch (e: Exception) {
             LookupPlan(null, l.away())
         }
         val allowed = decided || settings.alwaysAllowInternet || asked.withMetaOf(_state.value.conversation).internetAllowed
-        val question = asked.messages.lastOrNull { it.fromUser }?.text.orEmpty()
+        val question = question ?: asked.messages.lastOrNull { it.fromUser }?.text.orEmpty()
         val home = plan.home
         if (proposal.kind == Proposal.SEARCH && home != null && !allowed) {
             val local = home.search(proposal.query, internet = false)
             if (local.results.isNotEmpty()) return lookupAnswer(asked, question, proposal, local, onDelta)
         }
+        // At home: the home server's own answer about where a search goes
+        // (its search helper, Brave with the household's key, its SearXNG),
+        // and under its "never" no card at all, the honest line instead.
+        val status = if (home != null && !allowed) home.status() else null
+        if (status?.internet == "never") {
+            return lookupFixed(asked, proposal, LookupRules.HOME_NEVER, LookupOutcome(internetOff = true), onDelta = onDelta)
+        }
         if (!allowed) {
             val dest = if (proposal.kind == Proposal.PAGE) com.domovoi.app.assistant.lookup.siteOf(proposal.query)
-                .ifEmpty { "that site" } else (home ?: plan.away).destination
+                .ifEmpty { "that site" } else status?.destination ?: (home ?: plan.away).destination
             val card = StoredMessage(
                 Speaker.DOMOVOI, cardText(proposal, dest), clock(),
                 lookupCard = LookupCard(proposal.kind, proposal.query, dest),
             )
+            // A spoken turn hears the question, and a "yes" or "no" answers it.
+            onDelta(spokenCard(proposal, dest))
             return finishReply(asked, card)
         }
         var out: LookupOutcome = if (home != null) {
@@ -1008,7 +1059,7 @@ class AssistantController(
         } else {
             LookupOutcome(error = "away")
         }
-        if (out.internetOff) return lookupFixed(asked, proposal, LookupRules.HOME_NEVER, out)
+        if (out.internetOff) return lookupFixed(asked, proposal, LookupRules.HOME_NEVER, out, onDelta = onDelta)
         if (home == null || (out.error != null && !out.internetUsed && out.results.isEmpty())) {
             // Away from home (or the home server didn't answer): Wikipedia,
             // or the person's own search.
@@ -1018,7 +1069,7 @@ class AssistantController(
         out.error?.let { why ->
             if (out.results.isEmpty()) {
                 val said = if (proposal.kind == Proposal.PAGE) why else "I couldn't look that up just now: $why."
-                return lookupFixed(asked, proposal, said, out)
+                return lookupFixed(asked, proposal, said, out, onDelta = onDelta)
             }
         }
         return lookupAnswer(asked, question, proposal, out, onDelta)
@@ -1812,6 +1863,23 @@ data class HistoryWindow(
     companion object {
         const val HIGH_CHARS = 9_000
         const val LOW_CHARS = 4_500
+    }
+}
+
+/** What a "no" to a card answers. */
+internal const val NOT_LOOKED_UP = "OK, I won't look that up."
+
+private val YES = Regex("^(?:yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|please do|allow|allow once)\\b", RegexOption.IGNORE_CASE)
+private val NO = Regex("^(?:no|nope|nah|not now|don't|do not|never mind|cancel|stop)\\b", RegexOption.IGNORE_CASE)
+
+/** A short yes or no (true / false), or null for anything else. */
+internal fun yesOrNo(text: String): Boolean? {
+    val t = text.trim().trim('.', '!', ',').trim()
+    if (t.split(Regex("\\s+")).size > 4) return null
+    return when {
+        NO.containsMatchIn(t) -> false
+        YES.containsMatchIn(t) -> true
+        else -> null
     }
 }
 

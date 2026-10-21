@@ -101,32 +101,49 @@ def overlap(question: str, text: str) -> float:
 _SENT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 
 
+#: The most text and sentences a passage is chosen from: past these a page
+#: is cut first, so the choice is linear and short whatever a page holds
+#: (round-1 review: a hostile 64 KB page held the event loop for seconds).
+PASSAGE_SOURCE_CHARS = 64 * 1024
+PASSAGE_MAX_SENTENCES = 600
+
+
 def best_passage(text: str, question: str, *, max_chars: int = PASSAGE_CHARS) -> str:
     """The part of ``text`` (at most ``max_chars``) nearest ``question``:
     a run of whole sentences, the window holding most of its words, the
-    text's opening on a tie (where an article says what its subject is)."""
-    text = (text or "").strip()
+    text's opening on a tie (where an article says what its subject is).
+    Linear in the sentences: each is read once, and the window slides."""
+    text = (text or "").strip()[:PASSAGE_SOURCE_CHARS]
     if len(text) <= max_chars:
         return text
-    sents = [s.strip() for s in _SENT_RE.split(text) if s.strip()]
+    sents = [s.strip()[:max_chars] for s in _SENT_RE.split(text) if s.strip()][:PASSAGE_MAX_SENTENCES]
     if not sents:
         return text[:max_chars]
     q = {_stem(w) for w in _terms(question)}
+    hits = [{_stem(w) for w in _terms(s)} & q for s in sents]
+    counts: dict[str, int] = {}
     best = (-1.0, 0, 0)
+    j = 0
+    size = 0
     for i in range(len(sents)):
-        size = 0
-        words: set[str] = set()
-        j = i
+        if j < i:
+            j, size = i, 0
+            counts.clear()
         while j < len(sents) and size + len(sents[j]) + 1 <= max_chars:
             size += len(sents[j]) + 1
-            words |= {_stem(w) for w in _terms(sents[j])}
+            for w in hits[j]:
+                counts[w] = counts.get(w, 0) + 1
             j += 1
-        if j == i:
-            continue
-        score = (len(q & words) / len(q)) if q else 0.0
-        score -= i * 1e-4  # earlier wins a tie
-        if score > best[0]:
-            best = (score, i, j)
+        if j > i:
+            score = (len(counts) / len(q)) if q else 0.0
+            score -= i * 1e-4  # earlier wins a tie
+            if score > best[0]:
+                best = (score, i, j)
+            size -= len(sents[i]) + 1
+            for w in hits[i]:
+                counts[w] -= 1
+                if not counts[w]:
+                    del counts[w]
     _, i, j = best
     if j <= i:
         return text[:max_chars]
@@ -429,6 +446,22 @@ def strip_unknown_links(text: str, allowed: set[str]) -> str:
 _PROPOSAL_ANYWHERE = re.compile(r"(?im)^\W*(?:look[_ ]?up|read[_ ]?page)\s*[:(]")
 
 
+_FOOTER_LINE_RE = re.compile(
+    r"(?im)^[ \t>*_]*(?:sources?|references?|citations?|cited|verified by)[ \t*_]*:.*$"
+    r"|^[ \t]*(?:-{3,}|_{3,}|\*{3,})[ \t]*$"
+)
+_CITATION_RE = re.compile(r"\[\d{1,2}\]|\((?:source|sources|according to)[:\s][^)]{0,200}\)", re.I)
+
+
+def strip_model_sources(text: str) -> str:
+    """A reply without any sources line, rule or citation the model wrote
+    (a page can talk it into a forged "Sources: … verified by Domovoi"):
+    the only sources line a person reads is the code's."""
+    out = _FOOTER_LINE_RE.sub("", text or "")
+    out = re.sub(r"[ \t]+([.,;:!?])", r"\1", _CITATION_RE.sub("", out))
+    return re.sub(r"\n{3,}", "\n\n", out).strip()
+
+
 def couldnt_find(reply: str) -> bool:
     low = (reply or "").lower()
     return COULDNT_FIND.lower().rstrip(".") in low or "couldn't find that" in low
@@ -438,7 +471,7 @@ def finish(reply: str, lines: list[SourceLine], *, notice: str | None = None) ->
     """The model's reply as the person reads it: unknown links undone, the
     honest line kept whole, the notice (a failed key) and the sources."""
     allowed = {s.url for s in lines if s.url}
-    text = strip_unknown_links((reply or "").strip(), allowed)
+    text = strip_unknown_links(strip_model_sources(reply), allowed)
     # An answer is never read as a request: a reply that is a lookup line
     # (a page talked the model into it) becomes the honest line instead
     # of a tool call the person would see as text.
