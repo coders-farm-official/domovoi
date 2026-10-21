@@ -169,8 +169,9 @@ const HelpReport = ({ onBack }) => {
 const HelpPanel = ({ opts, onClose }) => {
   const ai = useAiFeatures();
   const page = opts.page || helpPageName();
-  const initial = opts.query || [opts.code, opts.message].filter(Boolean).join(' ')
-    || (page && page !== 'Home' ? page : '');
+  const initial = opts.query || [opts.code, opts.message].filter(Boolean).join(' ');
+  // With nothing typed, the help shown is this page's (its name searched).
+  const pageQuery = page && page !== 'Home' ? page : '';
   const [q, setQ] = React.useState(initial);
   const [res, setRes] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
@@ -181,7 +182,7 @@ const HelpPanel = ({ opts, onClose }) => {
 
   React.useEffect(() => { if (inputRef.current) inputRef.current.focus(); }, []);
   React.useEffect(() => {
-    const query = q.trim();
+    const query = q.trim() || pageQuery;
     if (!query) { setRes(null); return undefined; }
     let gone = false;
     setBusy(true);
@@ -195,7 +196,7 @@ const HelpPanel = ({ opts, onClose }) => {
       if (!gone) setBusy(false);
     }, 250);
     return () => { gone = true; clearTimeout(t); };
-  }, [q]);
+  }, [q, pageQuery]);
   React.useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('keydown', onKey);

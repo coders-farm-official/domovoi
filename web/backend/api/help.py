@@ -200,9 +200,14 @@ async def help_turn_for(question: str, *, help_thread: bool, admin: bool,
         return None
     plugins = await _plugins()
     index = index_for(plugins)
-    rooms = await _rooms()
-    facts_text = help_facts.render(await gather_facts(rooms, plugins))
-    found = troubleshoot.findings(await gather_state(rooms, plugins), admin=admin)
+    # Live state only when the question is about it: reading it asks the
+    # core, and a plain how-to shouldn't wait on that.
+    want_facts = help_answer.wants_facts(question)
+    want_checks = help_answer.wants_troubleshoot(question) or help_answer.wants_troubleshoot(extra_query)
+    rooms = await _rooms() if (want_facts or want_checks) else []
+    facts_text = help_facts.render(await gather_facts(rooms, plugins)) if want_facts else None
+    found = (troubleshoot.findings(await gather_state(rooms, plugins), admin=admin)
+             if want_checks else None)
     turn = help_answer.plan(question, index, facts_text=facts_text, findings=found,
                             has_screenshot=has_screenshot, extra_query=extra_query)
     if not help_thread and not turn.hits:

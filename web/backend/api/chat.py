@@ -985,7 +985,7 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
                         RETURNING {cols}, NULL::text AS device_name, NULL::text AS speaker_name
                         """.format(cols=_MSG_COLUMNS)
                     ),
-                    {"t": thread_id, "c": content, "m": model, "e": error, "st": json.dumps(stats)},
+                    {"t": thread_id, "c": content, "m": None if fixed_reply is not None else model, "e": error, "st": json.dumps(stats)},
                 )
             ).mappings().first()
             await s.execute(
