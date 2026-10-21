@@ -90,11 +90,28 @@ fun Route.requiredCapability(): String? = when (this) {
  *  phone and APK, [AssistantSupport]); a hook so tests can say either. */
 internal var onDeviceAssistant: () -> Boolean = { AssistantSupport.available }
 
+/** Routes that talk to the server's chat models: hidden while the
+ *  household has its AI features turned off ([Capabilities.aiEnabled]).
+ *  Chat only (its chat mic lives on the Chat screen). Not the on-device
+ *  [Route.Assistant], which runs a model on the phone and is opt-in. */
+val AiRoutes: Set<Route> = setOf(Route.Chat)
+
 /** True when the server's capability manifest allows this route (and, for
- *  the on-device assistant, when this install has it). */
+ *  the on-device assistant, when this install has it). Chat needs the
+ *  server's AI features on ([AiRoutes]). */
 fun Route.visibleWith(caps: Capabilities): Boolean =
     (requiredCapability()?.let { caps.has(it) } ?: true) &&
+        (this !in AiRoutes || caps.aiEnabled) &&
         (this != Route.Assistant || onDeviceAssistant())
+
+/** Why a route a link reached is not shown here, for its placeholder:
+ *  the title and the line under it. */
+fun Route.unavailableNote(caps: Capabilities): Pair<String, String> =
+    if (this in AiRoutes && !caps.aiEnabled) {
+        "${label.lowercase()} is turned off" to "this server has its AI features turned off"
+    } else {
+        "${label.lowercase()} isn't available" to "the plugin providing this screen isn't installed on this server"
+    }
 
 /**
  * Pages a shared screen (an admin marks the device in the dashboard's

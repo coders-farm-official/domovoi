@@ -852,6 +852,7 @@ private fun Phrase(text: String) {
 private fun ManualText(text: String, links: ManualLinks, color: Color = Domovoi.colors.fg, small: Boolean = false) {
     val c = Domovoi.colors
     val doc = links.doc
+    val caps = LocalCapabilities.current
     val annotated: AnnotatedString =
         buildAnnotatedString {
             parseInline(text).forEach { s ->
@@ -873,8 +874,9 @@ private fun ManualText(text: String, links: ManualLinks, color: Color = Domovoi.
                     }
                     is Span.Link -> {
                         val route = if (s.kind == "route") doc.routes[s.target] else null
-                        // An app-own route the app can't open (none today) reads as plain text.
-                        if (route != null && route.app.screen == null && !route.app.dashboard) {
+                        // A route the app can't open here (no app screen, or one this
+                        // server doesn't offer: Chat with AI off) reads as plain text.
+                        if (route != null && !manualRouteOpens(route, caps)) {
                             append(s.text)
                         } else {
                             withLink(

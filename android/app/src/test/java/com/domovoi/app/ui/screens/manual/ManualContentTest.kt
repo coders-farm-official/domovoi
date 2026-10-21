@@ -1,6 +1,8 @@
 package com.domovoi.app.ui.screens.manual
 
 import com.domovoi.app.net.ApiClient
+import com.domovoi.app.net.Capabilities
+import com.domovoi.app.net.FEATURE_AI
 import com.domovoi.app.ui.screens.settings.SettingsTab
 import com.domovoi.app.ui.shell.Route
 import kotlinx.coroutines.runBlocking
@@ -57,6 +59,22 @@ class ManualContentTest {
                 r.app.tab?.let { assertTrue("$id: tab $it", r.app.screen == "Settings" && it in tabs) }
             }
         }
+    }
+
+    /** The manual's link to Chat reads as plain text while the server's AI
+     *  features are off (no link that bounces back to Home); on, or on an
+     *  older server that has no switch, it is a link. */
+    @Test fun aLinkToChatIsPlainTextWithTheServersAiOff() {
+        val chat = doc.routes["chat"]!!
+        val aiOff = Capabilities(features = mapOf(FEATURE_AI to false))
+        assertFalse(manualRouteOpens(chat, aiOff))
+        assertTrue(manualRouteOpens(chat, Capabilities.EMPTY))
+        assertTrue(manualRouteOpens(chat, Capabilities(features = mapOf(FEATURE_AI to true))))
+        assertTrue(manualRouteOpens(doc.routes["music"]!!, aiOff))
+        // The dashboard opens whatever the app shows; no screen and no
+        // dashboard opens nothing.
+        assertTrue(manualRouteOpens(ManualRoute(dashboard = "#x", app = ManualAppRoute(dashboard = true)), aiOff))
+        assertFalse(manualRouteOpens(ManualRoute(), Capabilities.EMPTY))
     }
 
     @Test fun inlineMarkupBecomesSpans() {

@@ -4,6 +4,7 @@ import com.domovoi.app.net.CAP_IMAGEGEN
 import com.domovoi.app.net.CAP_STATIONS
 import com.domovoi.app.net.Capabilities
 import com.domovoi.app.net.CapabilityPlugin
+import com.domovoi.app.net.FEATURE_AI
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -36,6 +37,64 @@ class RoutesTest {
         assertTrue(Route.Stations.visibleWith(caps(CAP_STATIONS)))
         assertFalse(Route.Images.visibleWith(caps(CAP_STATIONS)))
         assertTrue(Route.Images.visibleWith(caps(CAP_STATIONS, CAP_IMAGEGEN)))
+    }
+
+    private val aiOff = Capabilities(features = mapOf(FEATURE_AI to false))
+    private val aiOn = Capabilities(features = mapOf(FEATURE_AI to true))
+
+    /** The household's AI features off: the server's Chat can't answer, so
+     *  no launcher offers it. Absent (older server, failed manifest read)
+     *  and true keep it. */
+    @Test fun chatFollowsTheServersAiSwitch() {
+        assertEquals(setOf(Route.Chat), AiRoutes)
+        assertTrue(Route.Chat.visibleWith(Capabilities.EMPTY))
+        assertTrue(Route.Chat.visibleWith(aiOn))
+        assertFalse(Route.Chat.visibleWith(aiOff))
+        assertFalse(Route.Chat.visibleOn(aiOff, shared = false))
+        // features.chat is the voice chat mode, not this switch.
+        assertTrue(Route.Chat.visibleWith(Capabilities(features = mapOf("chat" to false))))
+        // Every other screen stays, plugin gates still apply on top.
+        Route.entries.filter { it != Route.Chat && it != Route.Assistant }.forEach {
+            assertEquals(it.name, it.visibleWith(Capabilities.EMPTY), it.visibleWith(aiOff))
+        }
+        val radioAiOff = Capabilities(
+            plugins = listOf(CapabilityPlugin(slug = "p", androidCapabilities = listOf(CAP_STATIONS))),
+            features = mapOf(FEATURE_AI to false),
+        )
+        assertTrue(Route.Stations.visibleWith(radioAiOff))
+        assertFalse(Route.Chat.visibleWith(radioAiOff))
+        // Off every launcher: the drawer/rail list, Home's grid, the bar.
+        assertFalse(Route.Chat in WorkspaceRoutes.filter { it.visibleOn(aiOff, shared = false) })
+        assertFalse(Route.Chat in everythingTiles(aiOff, shared = false))
+        assertFalse(Route.Chat in everythingTiles(aiOff, shared = false, bar = listOf(Route.Home, Route.Music)))
+        assertTrue(Route.Chat in everythingTiles(aiOn, shared = false, bar = listOf(Route.Home, Route.Music)))
+        assertEquals(listOf(Route.Home, Route.Music, Route.Videos), PhoneBar.routes(null, aiOff, shared = false))
+        // Home, where the shell lands when the open route stops existing, stays.
+        assertTrue(StartRoute.visibleWith(aiOff))
+    }
+
+    /** The on-device assistant runs on the phone: the server's switch
+     *  doesn't touch it. */
+    @Test fun theAssistantIgnoresTheServersAiSwitch() {
+        onDeviceAssistant = { true }
+        assertTrue(Route.Assistant.visibleWith(aiOff))
+        assertTrue(Route.Assistant in everythingTiles(aiOff, shared = false))
+        assertTrue(Route.Assistant in localTabs())
+        assertEquals(
+            listOf(Route.Home, Route.Assistant, Route.Music),
+            PhoneBar.routes(listOf(Route.Home, Route.Chat, Route.Assistant, Route.Music), aiOff, shared = false),
+        )
+        onDeviceAssistant = { false }
+        assertFalse(Route.Assistant.visibleWith(aiOn))
+    }
+
+    @Test fun aHiddenChatsPlaceholderSaysWhy() {
+        assertEquals(
+            "chat is turned off" to "this server has its AI features turned off",
+            Route.Chat.unavailableNote(aiOff),
+        )
+        assertEquals("stations isn't available", Route.Stations.unavailableNote(aiOff).first)
+        assertEquals("chat isn't available", Route.Chat.unavailableNote(Capabilities.EMPTY).first)
     }
 
     @Test fun appOpensOnHome() {
