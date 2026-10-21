@@ -104,6 +104,28 @@ We build Domovoi in public. Here's where it stands.
   "Forget me" (after a yes) and forgetting a person on the People page
   delete what that person said too
   ([voice history](docs/SECURITY_PRIVACY.md#voice-history-whats-kept-for-how-long)).
+- **AI chat and questions are optional.** Settings → Chat & AI → Models
+  has a household switch: off, nothing asks a language model, voice
+  commands keep working on their usual phrases, and speech recognition, the
+  voices and the wake word stay (chat is hidden on the dashboard, and the
+  app keeps only the chats on the phone itself). Both installers ask once
+  whether to include it, with the download size. A server installed
+  before stays as it was, with AI on.
+- **Settings in five groups, with search and one Health page.** Rooms &
+  devices, Voice, Chat & AI, Privacy and System, with a search box
+  ("wake", "token"); the app's Settings uses the same groups and names, and
+  old bookmarks still land. System → Health lists every check, green or
+  not (server, updates, rooms, plugins, internet, containers), and Home's
+  "needs attention" rows open their part of it.
+- **Printing and scanning on network printers,** with no drivers: any
+  printer or scanner that works with AirPrint, IPP Everywhere or Mopria
+  (eSCL, "AirScan", for scanning). Settings → Rooms & devices → Printers &
+  scanners finds them, adds one by name or address and prints a test page;
+  Print sits on PDFs, pictures, text, markdown and spreadsheets in Files
+  and Documents, Scan (several pages into one PDF) in Documents → Scans,
+  and you can say "print my cover letter", "how much ink is left" or
+  "scan this to Documents". USB printers and printers that need a maker's
+  driver are not supported ([security](docs/SECURITY_PRIVACY.md#printers-and-scanners)).
 - **Everyday voice answers locally:** an alarm or reminder at a clock time
   ("wake me up at 7" is the next 7 o'clock), "what can you do", and
   what's on your calendar each have their own handler.
@@ -136,8 +158,8 @@ We build Domovoi in public. Here's where it stands.
   a server, the app or the wake-word trainer downloads is listed with its
   licence in [docs/LICENSES.md](docs/LICENSES.md); two defaults aren't
   permissive, the `hey_jarvis` wake word (non-commercial) and the answer
-  model `llama3.2:3b` (the Llama 3.2 Community License). Settings → About
-  links to it, on the dashboard and in the app.
+  model `llama3.2:3b` (the Llama 3.2 Community License). Settings →
+  About & updates links to it, on the dashboard and in the app.
 - **The web dashboard** manages all of it, from plugins to training your own
   wake word on the server (about 20 minutes on an NVIDIA GPU, longer on the
   CPU). After you sign in as admin, reloading the page keeps you signed in
@@ -234,7 +256,7 @@ they have been tried on fewer devices than the rest, aren't yet held to
   is downloaded. A phone room changes its voice like any room ("switch to
   Kristin's voice"); the server keeps the choice for it. An admin can also
   pick any room's voice in its drawer on the dashboard (Settings →
-  Satellites).
+  Rooms).
 - **A USB stick that turns an old PC into a room.** The dashboard prepares
   the stick, and an old 64-bit PC, laptop or Intel Mac installs Debian and
   the satellite from it after you type ERASE on it; a network cable for the
@@ -255,8 +277,9 @@ they have been tried on fewer devices than the rest, aren't yet held to
    once that build has run with no freeze and no satellite dropping out,
    and the hardware checks on real phones and spare computers are done.
    `stable` then points at it, and new installs follow it. What went in
-   since rc3 is in the [release notes](docs/RELEASE_NOTES.md): One Chat in
-   the app, the Windows satellite Setup, a smaller (R8-shrunk) release
+   since rc3 is in the [release notes](docs/RELEASE_NOTES.md): printing and
+   scanning, AI chat and questions as an option, Settings in groups with
+   one Health page, One Chat in the app, the Windows satellite Setup, a smaller (R8-shrunk) release
    build of the app, tablet and sideways-phone screens that clear the
    clock and cutouts, and a repair by Setup that no longer trips the
    container guard.
@@ -332,7 +355,7 @@ datacenter. Domovoi gives you that on your own Wi-Fi:
 | A PC that stays on, ideally with an **NVIDIA GPU** | With one, Whisper speech-to-text runs on CUDA. No NVIDIA GPU? It still runs, on the CPU — see [Running without an NVIDIA GPU](docs/CPU_HOST.md). The steps below are written Windows-first; on Linux see [Running the server on Linux](docs/LINUX_HOST.md). |
 | **Python 3.11+** | The core service and dashboard run natively (they need GPU access, so they're not containerized). |
 | **Docker** (Docker Desktop on Windows, Docker Engine on Linux) | Runs Postgres, database migrations, the web-search helper, and per-room audio (MPD) containers. |
-| **[Ollama](https://ollama.com)** | Local language models. Domovoi uses two: a small conversational model (`llama3.2:3b`) and a tool-routing model (`qwen2.5:14b`) — pull both (on a CPU-only server, `qwen2.5:7b` in place of the 14B). Pictures in chat use a third, small vision model (`qwen3-vl:2b-instruct-q4_K_M`), which an admin can add later from **Settings → Models**. |
+| **[Ollama](https://ollama.com)** | Local language models. Domovoi uses two: a small conversational model (`llama3.2:3b`) and a tool-routing model (`qwen2.5:14b`) — pull both (on a CPU-only server, `qwen2.5:7b` in place of the 14B). Pictures in chat use a third, small vision model (`qwen3-vl:2b-instruct-q4_K_M`), which an admin can add later from **Settings → Chat & AI → Models**. Both installers ask whether to include the AI chat and questions (the models above) at all; "No" keeps speech recognition, the voices and the wake word, and the household can turn it on later. |
 | **Git** | To clone the repo. |
 | **Internet, while you install** | Packages, Docker images and the models all download during setup. After that it's your choice — see [Will your Domovoi have internet?](#will-your-domovoi-have-internet) below. |
 | **~20 GB free disk** | For the software and all default models — **plus** room for your own media library. See [Disk footprint](#disk-footprint) below. |
@@ -463,7 +486,7 @@ pairing changes answer 501 — finish setup first.
 
 Once you have signed in, reloading the dashboard (or opening it in another
 tab of the same browser) keeps you signed in for an hour; **Settings →
-Configuration → Security → Stay signed in after a reload** changes the
+Advanced → Security → Stay signed in after a reload** changes the
 minutes, and **sign out** ends it at once.
 
 Day-to-day features work without logging in — the admin password gates the
@@ -482,7 +505,7 @@ Domovoi will have internet ([above](#will-your-domovoi-have-internet)).
 
 However a room starts, it ends the same way: the device shows or says a
 six-digit approval code, and you type that code into **Settings →
-Satellites** on the dashboard (as admin) to make it a room. Three routes:
+Rooms** on the dashboard (as admin) to make it a room. Three routes:
 
 - **A Raspberry Pi.** Flash stock Raspberry Pi OS Lite (64-bit), put the
   card in the server, and use **Settings → Rooms → prepare satellite
@@ -631,6 +654,7 @@ Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
 | Library, playlists, podcasts, audiobooks, news | voice control | voice control | ✅ full management | ✅ dashboard parity |
 | Videos | — | — | ✅ | ✅ |
 | Text chat with Domovoi, pictures included | — | — | ✅ | ✅ |
+| Print and scan with network printers | voice: "print my cover letter", "scan this to Documents" | — | ✅ Settings, Files, Documents | ✅ Settings, Files (on the home server's files) |
 | An assistant that answers with no server | — | — | — | ✅ preview: 64-bit phones with 8 GB or more |
 | Save music, podcasts & audiobooks to your device | — | — | ✅ browser download | ✅ music & podcasts via DownloadManager; audiobooks into the app, played offline |
 | Calendar, documents, people & voice profiles | voice where it makes sense | voice where it makes sense | ✅ | ✅ |
@@ -675,8 +699,9 @@ The differences are deliberate:
   plugin and a Stations screen appears; remove it and the screen goes away.
   Server administration (greetings, voices, wake words, models,
   configuration) stays on the dashboard: the app's Settings keeps what
-  belongs to the phone (Connection, Phone bar, Voice, Satellites, About),
-  and its Server settings tab opens the dashboard.
+  belongs to the phone (Rooms, Phones & browsers, Printers & scanners, App
+  layout, Voices, About & updates, Health), and the sections only the
+  dashboard changes open the dashboard.
   From a satellite's page it can also **drop into that room** — your phone
   joins the room's live two-way audio bridge directly, so you can talk to
   whoever's there from anywhere on the network. Its **Chat** lists the

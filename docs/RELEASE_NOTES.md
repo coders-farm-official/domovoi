@@ -75,7 +75,7 @@ Dashboard and app. Nothing to run; old bookmarks keep working.
 Core, dashboard, installers and app. Nothing to run: an existing install
 keeps AI on, exactly as before.
 
-* **A household switch.** Settings → Models → **AI chat and questions**
+* **A household switch.** Settings → Chat & AI → Models → **AI chat and questions**
   (admin; `AI_FEATURES` in `domovoi/.env`, default on). Off, nothing asks a
   language model: voice commands keep working on their usual phrases, and
   speech recognition, the voices and the wake word stay. A question gets
