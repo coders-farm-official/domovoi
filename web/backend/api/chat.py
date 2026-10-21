@@ -61,6 +61,16 @@ identification heard (``speaker_person_id`` / ``speaker_confidence``).
 Every row read out says its ``source``; a voice row adds the speaker's
 name and whether the match was clear (``speaker_confident``).
 
+History and titles (V034, assistant plan part 7): a thread is titled
+with the first five words of its first message, then, once a reply has
+finished, by the chat model in the background (:func:`_write_title`); a
+name a person gave it (``PATCH`` with a title: ``title_by_user``) is never
+written over. ``GET /threads?q=`` searches titles and messages;
+``archived`` moves a thread to the archived list and back; ``POST
+.../retry`` ("try again") answers the last question again in place of
+its reply. A reply that didn't see the whole thread says where its view
+began (``stats.window_from_id``), for the app's window divider.
+
 Message details (V017): an assistant row keeps ``stats`` — Ollama's token
 counts and durations for the reply, the server's own first-token and wall
 times, how much of the thread was sent as context and which model setting
@@ -72,6 +82,7 @@ when it is a well-formed id (``devices.valid_device_id``) — and reads join
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextlib
 import io
@@ -85,12 +96,12 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Path as PathParam, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Path as PathParam, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi import executors, image_safety
+from domovoi import chat_titles, executors, image_safety
 from domovoi.admin_auth import require_device, require_device_read
 from domovoi.clients import ollama as ollama_client
 from domovoi.config import settings as core_settings
@@ -151,45 +162,115 @@ class ThreadPatch(BaseModel):
     archived: Optional[bool] = None
 
 
+# The longest search a client may send, and the most threads it returns.
+_SEARCH_MAX_CHARS = 200
+_SEARCH_LIMIT = 100
+# Characters of a matching message shown around the match.
+_MATCH_CONTEXT = 40
+
+
+def _like_pattern(q: str) -> str:
+    """``q`` as an ILIKE pattern that matches it anywhere, literally: its
+    own ``%``, ``_`` and backslash are escaped (with ``ESCAPE``)."""
+    return "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+# The ILIKE escape character, as SQL (a backslash in a string literal).
+_LIKE_ESCAPE = "ESCAPE '\\'"
+
+
+def match_snippet(content: str | None, q: str) -> str | None:
+    """The words around the first place ``q`` appears in ``content`` (case
+    ignored), with "…" where it was cut; None when it isn't there."""
+    if not content or not q:
+        return None
+    flat = " ".join(content.split())
+    at = flat.lower().find(q.lower())
+    if at < 0:
+        return None
+    start = max(0, at - _MATCH_CONTEXT)
+    end = min(len(flat), at + len(q) + _MATCH_CONTEXT)
+    return ("…" if start > 0 else "") + flat[start:end].strip() + ("…" if end < len(flat) else "")
+
+
 @router.get("/threads", dependencies=READ)
-async def list_threads(archived: bool = False) -> dict[str, Any]:
+async def list_threads(
+    archived: Optional[bool] = Query(
+        None,
+        description="true: the archived threads; false: the others. Without a search the default is false; "
+                    "a search (`q`) looks in both unless this says which.",
+    ),
+    q: Optional[str] = Query(
+        None, max_length=_SEARCH_MAX_CHARS,
+        description="Search: threads whose title or any message contains this (case ignored), newest first, "
+                    "at most 100, each with `match_snippet` (the words around the first match in a message).",
+    ),
+) -> dict[str, Any]:
+    query = (q or "").strip()
+    where: list[str] = []
+    params: dict[str, Any] = {}
+    if archived is not None or not query:
+        where.append("t.archived = :arch")
+        params["arch"] = bool(archived)
+    match_col = "NULL::text AS match_content"
+    limit = ""
+    if query:
+        params["pat"] = _like_pattern(query)
+        where.append(
+            f"(t.title ILIKE :pat {_LIKE_ESCAPE} OR EXISTS (SELECT 1 FROM chat_messages mm "
+            f"WHERE mm.thread_id = t.id AND mm.content ILIKE :pat {_LIKE_ESCAPE}))"
+        )
+        match_col = (
+            "(SELECT content FROM chat_messages mm WHERE mm.thread_id = t.id "
+            f"AND mm.content ILIKE :pat {_LIKE_ESCAPE} ORDER BY mm.id DESC LIMIT 1) AS match_content"
+        )
+        limit = f"LIMIT {_SEARCH_LIMIT}"
     async with session_scope() as s:
         rows = (
             await s.execute(
                 text(
-                    """
-                    SELECT t.id, t.title, t.archived, t.created_at, t.updated_at,
+                    f"""
+                    SELECT t.id, t.title, t.archived, t.title_by_user, t.created_at, t.updated_at,
                            COUNT(m.id) AS message_count,
                            (SELECT LEFT(content, 120) FROM chat_messages
-                             WHERE thread_id = t.id ORDER BY id DESC LIMIT 1) AS last_snippet
+                             WHERE thread_id = t.id ORDER BY id DESC LIMIT 1) AS last_snippet,
+                           {match_col}
                       FROM chat_threads t
                       LEFT JOIN chat_messages m ON m.thread_id = t.id
-                     WHERE t.archived = :arch
+                     WHERE {' AND '.join(where)}
                      GROUP BY t.id
                      ORDER BY t.updated_at DESC
+                     {limit}
                     """
                 ),
-                {"arch": archived},
+                params,
             )
         ).mappings().all()
-    return {"threads": [dict(r) | {
-        "created_at": r["created_at"].isoformat(),
-        "updated_at": r["updated_at"].isoformat(),
-    } for r in rows]}
+    out = []
+    for r in rows:
+        d = dict(r)
+        match = d.pop("match_content", None)
+        d |= {"created_at": r["created_at"].isoformat(), "updated_at": r["updated_at"].isoformat()}
+        if query:
+            d["match_snippet"] = match_snippet(match, query)
+        out.append(d)
+    return {"threads": out}
 
 
 @router.post("/threads", dependencies=DEVICE)
 async def create_thread(body: ThreadCreate) -> dict[str, Any]:
+    title = (body.title or "").strip() or None
     async with session_scope() as s:
         row = (
             await s.execute(
                 text(
                     """
-                    INSERT INTO chat_threads (title) VALUES (:t)
-                    RETURNING id, title, archived, created_at, updated_at
+                    INSERT INTO chat_threads (title, title_by_user) VALUES (:t, :by)
+                    RETURNING id, title, archived, title_by_user, created_at, updated_at
                     """
                 ),
-                {"t": body.title},
+                # A thread made with a name was named by whoever made it.
+                {"t": title, "by": title is not None},
             )
         ).mappings().first()
         await _notify_chat(s, "thread-created")
@@ -204,10 +285,17 @@ async def create_thread(body: ThreadCreate) -> dict[str, Any]:
 
 @router.patch("/threads/{thread_id}", dependencies=DEVICE)
 async def patch_thread(thread_id: int, body: ThreadPatch) -> dict[str, Any]:
+    """Rename and/or archive a thread. A title set here is the person's
+    (``title_by_user``): the model's title job never writes over it. A
+    blank title is refused (400)."""
     sets, params = [], {"id": thread_id}
     if body.title is not None:
+        title = body.title.strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="a title can't be empty")
         sets.append("title = :t")
-        params["t"] = body.title
+        sets.append("title_by_user = true")
+        params["t"] = title
     if body.archived is not None:
         sets.append("archived = :a")
         params["a"] = body.archived
@@ -222,6 +310,9 @@ async def patch_thread(thread_id: int, body: ThreadPatch) -> dict[str, Any]:
             raise HTTPException(status_code=404, detail="thread not found")
         await _notify_chat(s, "thread-patched")
         await s.commit()
+    if body.title is not None:
+        # A model title still being written would only be thrown away.
+        cancel_title_job(thread_id)
     return {"ok": True}
 
 
@@ -615,6 +706,7 @@ def _fit_history(
 
 async def _history_for_model(
     thread_id: int, with_images: bool = True, budget: int | None = None,
+    *, exclude_id: int | None = None, window: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """The last N persisted turns in Ollama chat shape, images inlined as
     base64 (vision context survives across turns within the window), each
@@ -629,24 +721,33 @@ async def _history_for_model(
     ``budget`` (tokens) cuts the turns to fit (:func:`_fit_history`): the
     vision call's window, less the system message and room for the reply.
     Ollama would otherwise drop the oldest part of an overlong prompt
-    itself, mid-message, or a picture's tokens with it."""
+    itself, mid-message, or a picture's tokens with it.
+
+    ``exclude_id``: a message left out (the reply "try again" replaces).
+    ``window``, when given, is told ``from_id``: the oldest message sent,
+    where the model's view of the thread begins (the app's "earlier
+    messages are beyond what Domovoi can keep in mind" divider)."""
     async with session_scope() as s:
         rows = (
             await s.execute(
                 text(
                     """
-                    SELECT role, content, images FROM chat_messages
+                    SELECT id, role, content, images FROM chat_messages
                      WHERE thread_id = :id AND error IS NULL
+                       AND id <> COALESCE(CAST(:skip AS BIGINT), -1)
                      ORDER BY id DESC LIMIT :lim
                     """
                 ),
-                {"id": thread_id, "lim": _HISTORY_LIMIT},
+                {"id": thread_id, "lim": _HISTORY_LIMIT, "skip": exclude_id},
             )
         ).all()
     fitted = _fit_history(
-        [(role, content, images if with_images else None) for role, content, images in rows],
+        [(role, content, images if with_images else None) for _id, role, content, images in rows],
         budget,
     )
+    if window is not None and fitted:
+        # _fit_history keeps the newest len(fitted) rows, in order.
+        window["from_id"] = rows[len(fitted) - 1][0]
     out: list[dict[str, Any]] = []
     for role, content, images in fitted:
         msg: dict[str, Any] = {"role": role, "content": content}
@@ -713,20 +814,22 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
     the refusal (``vision_model_missing``) and Ollama is never asked. When
     Ollama can't be asked whether the model is there, the send goes ahead
     and a failure is reported as it happens.
+
+    The thread's first message titles it with its first five words
+    (``domovoi/chat_titles.py``); once a reply has finished, the chat model
+    writes a better title in the background (:func:`_write_title`), unless
+    a person has named the thread. A title being written when the next
+    message arrives is stopped, and written after that reply instead.
     """
     images = [
         {"token": i.get("token", ""), "name": str(i.get("name", ""))[:200]}
         for i in body.images
         if _upload_path(i.get("token", "")) is not None
     ]
-    has_images = bool(images)
-    override = (body.model or "").strip()
-    model = override or (
-        core_settings.ollama_vision_model if has_images else core_settings.ollama_model
-    )
-    model_role = "override" if override else ("vision" if has_images else "chat")
     # Well-formed or nothing, as every other route that reads a device id.
     device_id = valid_device_id(body.device_id)
+    # The model's attention is the reply's now (the title waits for it).
+    cancel_title_job(thread_id)
 
     async with session_scope() as s:
         thread = (
@@ -744,20 +847,85 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
             {"t": thread_id, "c": body.content,
              "imgs": json.dumps(images) if images else None, "dev": device_id},
         )
-        # First user message titles the thread (cheap heuristic, editable).
+        # The first user message titles the thread: its first five words.
         await s.execute(
             text(
                 """
                 UPDATE chat_threads
                    SET updated_at = now(),
-                       title = COALESCE(title, LEFT(:c, 60))
+                       title = COALESCE(title, :c)
                  WHERE id = :t
                 """
             ),
-            {"t": thread_id, "c": body.content.strip().splitlines()[0]},
+            {"t": thread_id, "c": chat_titles.first_words_title(body.content)},
         )
         await _notify_chat(s, "message")
         await s.commit()
+
+    return await _answer(thread_id, thread.person_id, has_images=bool(images), override=body.model)
+
+
+@router.post(
+    "/threads/{thread_id}/retry",
+    dependencies=DEVICE,
+    responses={409: {"description": '{"detail": "...", "code": "nothing_to_retry"}: the thread doesn\'t end '
+                                    "with a reply to a question"}},
+)
+async def retry_reply(thread_id: int) -> StreamingResponse:
+    """"Try again": a new reply to the thread's last question, in place of
+    the reply it got. Streams as ``POST .../messages`` does; the new row
+    replaces the old one only once it is written (the ``done`` event says
+    which with ``replaces``: the old row's id), so a retry that fails
+    leaves the old reply where it was, with the failure as the new row.
+    The thread must end with a reply to a typed or spoken question (409
+    otherwise). The model doesn't see the reply being replaced."""
+    _refuse_with_ai_off()
+    cancel_title_job(thread_id)
+    async with session_scope() as s:
+        thread = (
+            await s.execute(text("SELECT person_id FROM chat_threads WHERE id = :id"), {"id": thread_id})
+        ).first()
+        if thread is None:
+            raise HTTPException(status_code=404, detail="thread not found")
+        last = (
+            await s.execute(
+                text(
+                    """
+                    SELECT id, role, images FROM chat_messages
+                     WHERE thread_id = :id ORDER BY id DESC LIMIT 2
+                    """
+                ),
+                {"id": thread_id},
+            )
+        ).all()
+    if len(last) < 2 or last[0].role != "assistant" or last[1].role != "user":
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "there is no reply to try again", "code": "nothing_to_retry"},
+        )
+    asked_images = [
+        i for i in (last[1].images or []) if _upload_path((i or {}).get("token", "")) is not None
+    ]
+    return await _answer(thread_id, thread.person_id, has_images=bool(asked_images), replace_id=last[0].id)
+
+
+async def _answer(
+    thread_id: int,
+    person_id: int | None,
+    *,
+    has_images: bool,
+    override: str | None = None,
+    replace_id: int | None = None,
+) -> StreamingResponse:
+    """The SSE reply to the thread's last question (:func:`send_message`,
+    and :func:`retry_reply` with ``replace_id``: the reply it replaces,
+    left out of what the model sees and deleted once the new one is
+    written)."""
+    override = (override or "").strip()
+    model = override or (
+        core_settings.ollama_vision_model if has_images else core_settings.ollama_model
+    )
+    model_role = "override" if override else ("vision" if has_images else "chat")
 
     refusal: tuple[str, str] | None = None
     if model_role == "vision":
@@ -774,17 +942,20 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
     # (at its longest: with the pictures paragraph) and room for the reply.
     with_images = model_role != "chat"
     history: list[dict[str, Any]] = []
+    window: dict[str, Any] = {}
     profile = model_system = None
     if refusal is None:
-        profile = await _thread_profile(thread.person_id)
+        profile = await _thread_profile(person_id)
         if with_images:
             model_system = await ollama_client.model_system_or_none(model)
         budget = None
-        window = (core_settings.ollama_vision_num_ctx or core_settings.ollama_num_ctx) if with_images else 0
-        if window:
+        ctx = (core_settings.ollama_vision_num_ctx or core_settings.ollama_num_ctx) if with_images else 0
+        if ctx:
             longest = ollama_client.chat_system_prompt(profile, pictures=True, model_system=model_system)
-            budget = max(0, window - _text_tokens(longest) - _reply_room())
-        history = await _history_for_model(thread_id, with_images=with_images, budget=budget)
+            budget = max(0, ctx - _text_tokens(longest) - _reply_room())
+        history = await _history_for_model(
+            thread_id, with_images=with_images, budget=budget, exclude_id=replace_id, window=window,
+        )
     # A call that carries pictures: no reasoning before the answer (only
     # the answer is streamed, so the reader would wait in silence), and the
     # vision context window, which four pictures need.
@@ -803,8 +974,14 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
     async with session_scope() as s:
         in_thread = (
             await s.execute(
-                text("SELECT COUNT(*) FROM chat_messages WHERE thread_id = :id AND error IS NULL"),
-                {"id": thread_id},
+                text(
+                    """
+                    SELECT COUNT(*) FROM chat_messages
+                     WHERE thread_id = :id AND error IS NULL
+                       AND id <> COALESCE(CAST(:skip AS BIGINT), -1)
+                    """
+                ),
+                {"id": thread_id, "skip": replace_id},
             )
         ).scalar_one()
 
@@ -859,8 +1036,14 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
                 model_role=model_role,
                 num_ctx=num_ctx,
             )
+            # Where the model's view of the thread began, when it didn't
+            # see all of it (the app's window divider).
+            if window.get("from_id") is not None and len(history) < int(in_thread):
+                stats["window_from_id"] = window["from_id"]
         if code is not None:
             stats["error_code"] = code
+        # A failed retry keeps the reply it was to replace.
+        replaced = replace_id if (replace_id is not None and error is None) else None
         async with session_scope() as s:
             row = (
                 await s.execute(
@@ -874,6 +1057,11 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
                     {"t": thread_id, "c": content, "m": model, "e": error, "st": json.dumps(stats)},
                 )
             ).mappings().first()
+            if replaced is not None:
+                await s.execute(
+                    text("DELETE FROM chat_messages WHERE id = :id AND thread_id = :t AND role = 'assistant'"),
+                    {"id": replaced, "t": thread_id},
+                )
             await s.execute(
                 text("UPDATE chat_threads SET updated_at = now() WHERE id = :t"),
                 {"t": thread_id},
@@ -883,13 +1071,173 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         if error is not None:
             payload = {"detail": error, "code": code, "model": model}
             yield f"event: error\ndata: {json.dumps(payload)}\n\n"
-        yield f"event: done\ndata: {json.dumps(_msg_dict(row))}\n\n"
+        done = _msg_dict(row)
+        if replaced is not None:
+            done["replaces"] = replaced
+        yield f"event: done\ndata: {json.dumps(done)}\n\n"
+        if error is None:
+            schedule_title_job(thread_id)
 
     return StreamingResponse(
         sse(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ─── Titles written by the model ────────────────────────────────────────────
+# After a reply has finished, a thread with no generated title (and no name
+# a person gave it) gets one from the chat model, in the background: the
+# reply is already on its way, so nothing waits for this. One job per
+# thread; the next message to the thread stops it (the model's time is the
+# reply's), and the reply after that starts it again. Titles stay as the
+# first five words when the household's AI features are off, in stub runs
+# (AUTO_TITLES), or when the model has failed twice for the thread.
+
+#: None: on, except in stub runs (USE_STUBS, every test run). Tests of the
+#: job set it to True and replace :func:`_model_title`.
+AUTO_TITLES: bool | None = None
+#: How long after a reply the job waits before asking the model, so a
+#: quick follow-up message doesn't have to stop it.
+TITLE_DELAY_SEC = 1.5
+_TITLE_FAILURES_MAX = 2
+_title_jobs: dict[int, asyncio.Task[None]] = {}
+_title_failures: dict[int, int] = {}
+
+
+def _ai_turned_off() -> bool:
+    """The household's AI features switch (``domovoi.ai_features``, from
+    the AI-optional work), where this server has one; off means no model
+    is asked for anything, titles included."""
+    try:
+        from domovoi import ai_features  # type: ignore[attr-defined]
+    except ImportError:
+        return False
+    try:
+        return bool(ai_features.turned_off())
+    except Exception:  # noqa: BLE001 — unknown: the send's own gate decides
+        return False
+
+
+def _refuse_with_ai_off() -> None:
+    """The AI-off refusal for a route that asks the model (the retry),
+    where this server has the switch."""
+    if not _ai_turned_off():
+        return
+    from domovoi import ai_features  # type: ignore[attr-defined]
+
+    raise ai_features.http_exception("chat")
+
+
+def _auto_titles_on() -> bool:
+    on = (not core_settings.use_stubs) if AUTO_TITLES is None else AUTO_TITLES
+    return on and not _ai_turned_off()
+
+
+def cancel_title_job(thread_id: int) -> None:
+    """Stops the title being written for ``thread_id``, if one is."""
+    task = _title_jobs.pop(thread_id, None)
+    if task is not None and not task.done():
+        task.cancel()
+
+
+def schedule_title_job(thread_id: int) -> None:
+    """Starts the title job for ``thread_id`` (it checks for itself whether
+    the thread still needs one)."""
+    if not _auto_titles_on() or _title_failures.get(thread_id, 0) >= _TITLE_FAILURES_MAX:
+        return
+    cancel_title_job(thread_id)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    task = loop.create_task(_write_title(thread_id), name=f"chat-title-{thread_id}")
+    _title_jobs[thread_id] = task
+
+    def _forget(t: asyncio.Task[None]) -> None:
+        if _title_jobs.get(thread_id) is t:
+            del _title_jobs[thread_id]
+
+    task.add_done_callback(_forget)
+
+
+async def _model_title(question: str, answer: str) -> str | None:
+    """What the chat model writes as the title of a chat that began with
+    ``question`` and ``answer`` (a seam: the tests answer for it)."""
+    model = (core_settings.ollama_model or "").strip()
+    if not model:
+        return None
+    messages = [
+        {"role": "system", "content": chat_titles.TITLE_SYSTEM},
+        {"role": "user", "content": chat_titles.title_prompt(question, answer)},
+    ]
+    out: list[str] = []
+    async for delta in ollama_client.chat_stream(
+        messages, model=model, think=False, num_predict=chat_titles.TITLE_MAX_TOKENS,
+    ):
+        out.append(delta)
+    return "".join(out)
+
+
+async def _write_title(thread_id: int) -> None:
+    """The title job: the thread's first question and first good answer,
+    to the model, and its title onto the thread, unless a person has named
+    the thread in the meantime (checked again as the title is written)."""
+    await asyncio.sleep(TITLE_DELAY_SEC)
+    async with session_scope() as s:
+        flags = (
+            await s.execute(
+                text("SELECT title_by_user, title_generated FROM chat_threads WHERE id = :id"),
+                {"id": thread_id},
+            )
+        ).first()
+        if flags is None or flags.title_by_user or flags.title_generated:
+            return
+        first = (
+            await s.execute(
+                text(
+                    """
+                    SELECT role, content FROM chat_messages
+                     WHERE thread_id = :id AND error IS NULL
+                     ORDER BY id LIMIT 12
+                    """
+                ),
+                {"id": thread_id},
+            )
+        ).all()
+    # The first question, and the first good answer after it.
+    q_at = next((i for i, m in enumerate(first) if m.role == "user"), None)
+    a_at = None if q_at is None else next(
+        (i for i, m in enumerate(first) if i > q_at and m.role == "assistant"), None,
+    )
+    if a_at is None:
+        return
+    try:
+        raw = await _model_title(first[q_at].content, first[a_at].content)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:  # noqa: BLE001 — the first words stay
+        _title_failures[thread_id] = _title_failures.get(thread_id, 0) + 1
+        log.warning("chat: no title from the model for thread %s: %s: %s",
+                    thread_id, type(e).__name__, str(e)[:200])
+        return
+    title = chat_titles.clean_model_title(raw)
+    if title is None:
+        _title_failures[thread_id] = _title_failures.get(thread_id, 0) + 1
+        return
+    async with session_scope() as s:
+        r = await s.execute(
+            text(
+                """
+                UPDATE chat_threads SET title = :t, title_generated = true
+                 WHERE id = :id AND NOT title_by_user AND NOT title_generated
+                """
+            ),
+            {"t": title, "id": thread_id},
+        )
+        if r.rowcount:
+            await _notify_chat(s, "thread-titled")
+        await s.commit()
 
 
 # ─── Voice turns (the app's chat mic) ───────────────────────────────────────
@@ -932,6 +1280,7 @@ async def send_voice(
     on a declared Content-Length and on a streamed overrun alike), which
     leaves room for the longest recording (30 s, 960 kB) and its form."""
     data = await audio.read(_VOICE_MAX_BYTES + 1)
+    cancel_title_job(thread_id)
     if len(data) > _VOICE_MAX_BYTES:
         raise HTTPException(status_code=413, detail="a voice turn is at most 30 seconds")
     form = {"phone_id": phone_id, "thread_id": str(thread_id)}
@@ -964,6 +1313,10 @@ async def send_voice(
         payload = r.json()
     except ValueError:
         payload = {"detail": r.text[:500]}
+    if r.status_code == 200:
+        # The core wrote the turn and titled a new thread with its first
+        # words; the model's title follows here, as after a typed reply.
+        schedule_title_job(thread_id)
     return JSONResponse(status_code=r.status_code, content=payload)
 
 

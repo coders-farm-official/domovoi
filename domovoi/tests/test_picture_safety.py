@@ -169,7 +169,8 @@ async def test_the_models_pictures_are_decoded_in_the_pictures_pool(uploads, mon
 
     class _Rows:
         def all(self):
-            return [("user", "what is this?", [{"token": TOKEN}, {"token": big}])]
+            # (id, role, content, images), as _history_for_model selects them.
+            return [(1, "user", "what is this?", [{"token": TOKEN}, {"token": big}])]
 
     class _Session:
         async def execute(self, *a, **kw):

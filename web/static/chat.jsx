@@ -117,28 +117,48 @@ const ChatPictureNote = ({ model, admin, onClose }) => (
 
 /* ─── Thread list rail ──────────────────────────────────────────────────── */
 
-const ChatThreadRow = ({ t, active, onSelect, onDelete }) => (
-  <div onClick={() => onSelect(t)}
-       style={{ padding: '9px 12px', borderRadius: 'var(--r-sm)', cursor: 'pointer',
-                background: active ? 'var(--brand-soft)' : 'transparent',
-                display: 'flex', alignItems: 'center', gap: 8 }}>
-    <div style={{ flex: 1, minWidth: 0 }}>
-      <div style={{ fontSize: 13, fontWeight: active ? 600 : 500, overflow: 'hidden',
-                    textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {t.title || 'new chat'}
+/* One chat in the rail: its title (the first words, then the model's, or
+ * the name someone gave it), its last words (or, in a search, the words
+ * around the match), and rename / archive / delete — the same actions as
+ * the app's history list (assistant plan part 7). */
+const ChatThreadRow = ({ t, active, onSelect, onDelete, onRename, onArchive }) => {
+  const stop = (fn) => (e) => { e.stopPropagation(); fn(t); };
+  const snippet = t.match_snippet || t.last_snippet || 'no messages yet';
+  return (
+    <div onClick={() => onSelect(t)}
+         style={{ padding: '9px 12px', borderRadius: 'var(--r-sm)', cursor: 'pointer',
+                  background: active ? 'var(--brand-soft)' : 'transparent',
+                  display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: active ? 600 : 500, overflow: 'hidden',
+                      textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {t.title || 'new chat'}
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--fg-faint)', overflow: 'hidden',
+                      textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {t.archived ? 'archived · ' : ''}{snippet}
+        </div>
       </div>
-      <div style={{ fontSize: 11, color: 'var(--fg-faint)', overflow: 'hidden',
-                    textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {t.last_snippet || 'no messages yet'}
-      </div>
+      <span className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)', flexShrink: 0 }}>
+        {liveRelTime(t.updated_at)}
+      </span>
+      <IconButton name="pencil" title="rename chat" aria-label="rename chat" onClick={stop(onRename)}/>
+      <IconButton name={t.archived ? 'archive-restore' : 'archive'}
+                  title={t.archived ? 'move back to chats' : 'archive chat'}
+                  aria-label={t.archived ? 'move back to chats' : 'archive chat'}
+                  onClick={stop(onArchive)}/>
+      <IconButton name="trash-2" title="delete chat" aria-label="delete chat" onClick={stop(onDelete)}/>
     </div>
-    <span className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)', flexShrink: 0 }}>
-      {liveRelTime(t.updated_at)}
-    </span>
-    <IconButton name="trash-2" title="delete chat"
-                onClick={(e) => { e.stopPropagation(); onDelete(t); }}/>
-  </div>
-);
+  );
+};
+
+/* What the rail lists: a search across every chat (archived ones too),
+ * the archived chats, or the chats. */
+const chatRailPath = (q, archived) => {
+  const query = (q || '').trim();
+  if (query) return `/api/chat/threads?q=${encodeURIComponent(query)}`;
+  return archived ? '/api/chat/threads?archived=true' : '/api/chat/threads';
+};
 
 /* ─── Messages ──────────────────────────────────────────────────────────── */
 
@@ -399,6 +419,14 @@ const ChatPage = () => {
   const copyMessage = async (text) => fire((await chatCopyText(text || '')) ? 'copied' : 'copy failed');
   const { items: threads, error: threadsError, refresh: refreshThreads } =
     useApiList('/api/chat/threads', { pickItems: (x) => x.threads, eventTypes: ['chat.changed'] });
+  // The rail: the chats, the archived ones, or a search across them all.
+  const [railQuery, setRailQuery] = React.useState('');
+  const [showArchived, setShowArchived] = React.useState(false);
+  const railQ = useDebouncedValue(railQuery, 250);
+  const railPath = chatRailPath(railQ, showArchived);
+  const railList = useApiList(railPath, { pickItems: (x) => x.threads, eventTypes: ['chat.changed'] });
+  const railItems = railPath === '/api/chat/threads' ? threads : railList.items;
+  const refreshAll = () => { refreshThreads(); railList.refresh(); };
   const { data: modelsInfo, refresh: refreshModels } = useApiObject('/api/chat/models');
   const admin = useAdminSignedIn();
   // Pictures can't be read here (the vision model isn't installed): the
@@ -502,13 +530,35 @@ const ChatPage = () => {
     } catch { fire('could not create chat'); }
   };
 
+  // The household's chats: a delete is for everyone (the app says the same).
   const deleteThread = async (t) => {
-    if (!window.confirm(`Delete "${t.title || 'new chat'}"? This can't be undone.`)) return;
+    if (!window.confirm(`Delete "${t.title || 'new chat'}"? Deletes it for everyone in the house. `
+      + "This can't be undone.")) return;
     try {
       await apiDelete(`/api/chat/threads/${t.id}`);
       if (t.id === threadId) { setThreadId(null); setMessages([]); }
-      refreshThreads();
+      refreshAll();
     } catch { fire('delete failed'); }
+  };
+
+  // A name set here is the person's: the model's title never replaces it.
+  const renameThread = async (t) => {
+    const name = window.prompt('rename chat', t.title || '');
+    if (name == null) return;
+    const title = name.trim();
+    if (!title || title === t.title) return;
+    try {
+      await apiPatch(`/api/chat/threads/${t.id}`, { title });
+      refreshAll();
+    } catch { fire('rename failed'); }
+  };
+
+  const archiveThread = async (t) => {
+    try {
+      await apiPatch(`/api/chat/threads/${t.id}`, { archived: !t.archived });
+      fire(t.archived ? 'moved back to chats' : 'archived');
+      refreshAll();
+    } catch { fire(t.archived ? 'could not move it back' : 'archive failed'); }
   };
 
   const attach = async (files) => {
@@ -633,17 +683,36 @@ const ChatPage = () => {
           )}
           <Button variant="primary" icon="plus" className="btn btn-primary chat-new"
                   onClick={newThread}>new chat</Button>
+          <div className="chat-rail-search">
+            <input type="search" value={railQuery} onChange={(e) => setRailQuery(e.target.value)}
+                   placeholder="search chats…" aria-label="search chats" maxLength={200}/>
+            <span className="chat-rail-search-icon"><Icon name="search" size={13}/></span>
+          </div>
+          {showArchived && !railQ.trim() && (
+            <div className="chat-rail-head">
+              <IconButton name="arrow-left" title="back to chats" aria-label="back to chats"
+                          onClick={() => setShowArchived(false)}/>
+              <span style={{ flex: 1 }}>archived</span>
+            </div>
+          )}
           <div className="chat-rail-list">
-            {threads.length === 0
+            {railItems.length === 0
               ? <div style={{ fontSize: 12, color: 'var(--fg-faint)', padding: 8 }}>
                   {threadsError && threadsError.deviceTokenRequired
                     ? 'paired devices only — pair this browser, or sign in, to read the chats'
-                    : 'no chats yet'}
+                    : railQ.trim() ? 'no chats match'
+                    : showArchived ? 'no archived chats' : 'no chats yet'}
                 </div>
-              : threads.map((t) => (
+              : railItems.map((t) => (
                   <ChatThreadRow key={t.id} t={t} active={t.id === threadId}
-                                 onSelect={selectThread} onDelete={deleteThread}/>
+                                 onSelect={selectThread} onDelete={deleteThread}
+                                 onRename={renameThread} onArchive={archiveThread}/>
                 ))}
+            {!showArchived && !railQ.trim() && (
+              <button type="button" className="chat-rail-archived" onClick={() => setShowArchived(true)}>
+                <Icon name="archive" size={13}/> archived
+              </button>
+            )}
           </div>
         </div>
       )}

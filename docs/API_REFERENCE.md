@@ -1520,6 +1520,16 @@ the vision window is what is kept for the reply). A reply stopped there
 stream and in the kept row alike; it is not an error. Mutations fire the
 `chat.changed` WS event.
 
+Titles (V034): a thread's first message, typed or spoken, titles it with its
+first five words ("…" when there were more). Once a reply has finished, the
+chat model (`ollama_model`) writes a title of at most five words in the
+background, once per thread; the reply never waits for it, and the next
+message to the thread stops it (it runs again after that reply). It never
+writes over a name a person set (`PATCH` with a `title`: the thread's
+`title_by_user`), and doesn't run while the household's AI features are off;
+a title the model can't give (an error, nothing usable) leaves the first
+words. Threads from before V034 keep the titles they had.
+
 Reads are **Device read** — the thread list (titles and snippets are message
 text), a thread's transcript and the images sent into it are the household's
 conversation, for paired devices only; an image's `<img src>` carries the
@@ -1529,12 +1539,13 @@ upload — is **Device** tier.
 
 | Method & path | Request | Purpose |
 |---|---|---|
-| `GET /api/chat/threads` | `?archived=` | Thread list, newest first, with message counts + last snippet. |
-| `POST /api/chat/threads` | `ThreadCreate` | New thread (first user message titles it). |
-| `PATCH /api/chat/threads/{id}` | `ThreadPatch` | Rename / archive. |
+| `GET /api/chat/threads` | `?archived=`, `?q=` | Thread list, newest first, with message counts, last snippet, `archived` and `title_by_user`. Without `q` it lists the threads that aren't archived (`archived=true`: the archived ones). `q` (at most 200 characters) searches: the threads whose title or any message contains it, case ignored and literally (`%` and `_` are characters), archived ones too unless `archived` says which, at most 100, each with `match_snippet` (the words around the first match in a message, or `null` when only the title matched). |
+| `POST /api/chat/threads` | `ThreadCreate` | New thread. A title given here counts as the person's (`title_by_user`); without one, the first message titles it. |
+| `PATCH /api/chat/threads/{id}` | `ThreadPatch` | Rename (`title`, which becomes the person's: the model's title job never writes over it; a blank one is `400`) and/or archive (`archived`). |
 | `DELETE /api/chat/threads/{id}` | — | Delete thread + messages; unreferenced upload files (and the model's copies of them) are removed. |
 | `GET /api/chat/threads/{id}/messages` | — | Full transcript. Each message: `id, role, content, images, model, error, created_at`, plus `stats` (replies) and `device_id` / `device_name` (the sender's install, name looked up at read time), and `source` (`typed`, or `voice` for both rows of a turn spoken into the app's chat mic). A voice user row also carries `speaker_person_id`, `speaker_name` (looked up at read time; null once the person is forgotten), `speaker_confidence` (the voice match score) and `speaker_confident` (the score clears the bar voice identification learns from; the app draws a softer marker below it). |
 | `POST /api/chat/threads/{id}/messages` | `SendBody` | Persist the user turn and stream the reply as **SSE** (`delta` events per chunk, one final `done` with the persisted row, `error` `{detail, code, model}` when there is no reply or it broke off — see the codes below). `SendBody.device_id` (optional) records the sending install; self-asserted, and kept only when it is a well-formed device id (anything else is stored as none). |
+| `POST /api/chat/threads/{id}/retry` | — | "Try again": a new reply to the thread's last question, streamed as **SSE** like a send, in place of the reply it got. The model doesn't see the reply being replaced; the new row replaces it only once written, and the `done` event says so with `replaces` (the old row's id). A retry that fails keeps the old reply, with the failure as the new row. `409` (`nothing_to_retry`) when the thread doesn't end with a reply to a question; `404` unknown thread. |
 | `POST /api/chat/threads/{id}/voice` | multipart `audio`, `phone_id`, `player?`, `speak?` | A push-to-talk turn from the app's chat mic, answered into this thread: forwarded with the caller's credentials to the core's `POST /v1/phone/voice` (§2.1), whose answer or refusal comes back as it was given. `413` over 30 s of audio, `502` (`core_unreachable`) when the core isn't answering, `504` (`core_timeout`) after 180 s. |
 | `POST /api/chat/uploads` | multipart `file` | Stage an image (20 MB cap) → `{token, name}`. It must really be a JPEG, PNG, GIF, WebP or BMP (`415` otherwise, whatever its name) of at most 40 megapixels (`413`), read from its header. A refusal is `{detail, code, ...}`: `detail` is a plain sentence to show, `code` a stable one to word it by — `415 unsupported_format` with `format` naming what the bytes are when they show a camera format (`"HEIC"`, `"HEIF"`, `"AVIF"`, `"JPEG XL"`, `"TIFF"`; read from the magic bytes, nothing decoded) or `null`; `413 too_many_pixels` with `max_megapixels`; `413 file_too_large` with `max_mb`. (A body past the transport cap gets the body guard's bare `413` with no `code`.) The Android app converts what the server can't read (HEIC and the like, or a photo over the limits) to a JPEG of at most 2560 px on its long edge before it uploads, and the dashboard words the refusal (a HEIC photo: send it from the app, or save it as a JPEG). |
 | `GET /api/chat/uploads/{token}` | — | Serve a chat image inline. |
@@ -1551,7 +1562,10 @@ fell out of what it saw); `num_ctx` (the context window the call asked
 for: `ollama_vision_num_ctx` when it carried pictures); `model_role`
 (`chat`, `vision` when images were attached, `override` when the request
 named a model, `voice` for a spoken turn's reply); and
-`error_code` when the reply has an `error`. A spoken turn's reply keeps
+`error_code` when the reply has an `error`; `window_from_id` when the model
+didn't see the whole thread: the id of the oldest message it was sent, where
+the app draws its quiet "earlier messages are beyond what Domovoi can keep in
+mind" divider. A spoken turn's reply keeps
 `matched_handler`, `matched_path` and its stage times instead of Ollama's:
 `audio_ms` (the recording), `stt_ms`, `stt_window_s`, `identify_ms`,
 `route_ms`, `tts_ms`, `wall_ms`; its one error code is `turn_failed` (the
