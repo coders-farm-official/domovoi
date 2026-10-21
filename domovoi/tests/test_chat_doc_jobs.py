@@ -149,6 +149,7 @@ def dirs(tmp_path, monkeypatch):
     jobs_api._JOBS.clear()
     jobs_api._private_stats.clear()
     jobs_api._starting.clear()
+    jobs_api._reserved.clear()
     yield tmp_path
     jobs_api._JOBS.clear()
     jobs_api._starting.clear()
@@ -723,16 +724,20 @@ def test_private_jobs_refuse_what_chat_can_t_read_and_too_many_at_once(model, di
         for i in range(jobs_api.MAX_RUNNING + 3):
             jobs_api._JOBS[f"{i:032x}"] = type("J", (), {"private": True, "created": time.time(), "task": None,
                                                         "state": "done", "listeners": set(),
-                                                        "last_seen": time.time(), "thread_id": None})()
+                                                        "last_seen": time.time(), "ended_at": time.time(),
+                                                        "thread_id": None})()
         assert jobs_api.running_count() == 0
         class _Busy:
             def done(self):
                 return False
+
+            def cancel(self):
+                pass
         for i in range(jobs_api.MAX_RUNNING):
             jobs_api._JOBS[f"{i + 100:032x}"] = type("J", (), {"private": True, "created": time.time(),
                                                               "task": _Busy(), "state": "running",
                                                               "listeners": {1}, "last_seen": time.time(),
-                                                              "thread_id": None})()
+                                                              "ended_at": None, "thread_id": None})()
         r = c.post("/api/chat/doc-jobs", files={"file": ("x.pdf", io.BytesIO(_pdf(2)), "application/pdf")})
         assert r.status_code == 429
         jobs_api._JOBS.clear()
@@ -774,21 +779,31 @@ def test_an_expired_private_job_is_refused_and_forgotten_even_with_no_new_job(mo
 
 
 @requires_db
-def test_a_private_job_nobody_watches_goes_after_ten_minutes(model):
+def test_an_unwatched_private_job_reads_on_and_goes_ten_minutes_after_it_ends(model):
+    """Review round 2: the phone dropped mid-read; the job reads on to its
+    end (not cancelled), and only a FINISHED job nobody watches goes after
+    ten minutes."""
     model.hold.set()
     with _client() as c:
         bg = Bg(lambda: c.post("/api/chat/doc-jobs", files={"file": ("lease.pdf", io.BytesIO(_pdf()),
                                                                      "application/pdf")}, data={"question": "summarize"}))
         job = _the_job()
         _wait(lambda: model.calls)
-        # The phone dropped: no listener; ten minutes pass.
+        # The phone dropped: no listener; ten minutes pass mid-read.
         job.listeners.clear()
         job.last_seen = time.time() - jobs_api.UNATTACHED_TTL_SEC - 1
-        assert jobs_api.sweep() >= 1
-        assert job.id not in jobs_api._JOBS
-        _wait(lambda: job.task.done())
+        jobs_api.sweep()
+        assert job.id in jobs_api._JOBS and not job.task.done()
         model.hold.clear()
         bg.join()
+        _wait(lambda: job.state == "done")
+        assert job.result["content"]
+        jobs_api.sweep()
+        assert job.id in jobs_api._JOBS            # just finished: kept for the phone
+        job.listeners.clear()
+        job.last_seen = job.ended_at = time.time() - jobs_api.UNATTACHED_TTL_SEC - 1
+        assert jobs_api.sweep() >= 1
+        assert job.id not in jobs_api._JOBS
 
 
 @pytest.mark.asyncio
@@ -876,3 +891,58 @@ def test_a_summary_keeps_only_what_the_parts_cited(model, monkeypatch):
     assert {"code": "nothing_cited",
             "text": "Domovoi found nothing it could cite in pages 5-8, so it isn't in this summary."} \
         in done["doc"]["notes"]
+
+
+# ─── Review round 2 ─────────────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_a_queued_read_has_no_temporary_folder_until_its_turn(monkeypatch, tmp_path):
+    """The sweep can't take the folder of a read still waiting its turn:
+    it doesn't exist until the read starts."""
+    import tempfile
+
+    from domovoi.doc_extract import runner
+
+    tmp = tmp_path / "tmp"
+    tmp.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp))
+    doc = tmp_path / "notes.txt"
+    doc.write_text("Plant beans in May.", encoding="utf-8")
+    gate = runner._semaphore()
+    for _ in range(runner.MAX_PARALLEL):
+        await gate.acquire()
+    task = asyncio.create_task(runner.extract(doc, "txt"))
+    await asyncio.sleep(0.3)
+    assert not task.done() and not [p for p in tmp.iterdir() if p.name.startswith("domovoi-docread-")]
+    for _ in range(runner.MAX_PARALLEL):
+        gate.release()
+    result = await asyncio.wait_for(task, 60)
+    assert result["parts"] and not list(tmp.iterdir())
+
+
+@requires_db
+def test_two_phone_uploads_at_once_cannot_both_pass_the_house_cap(model, monkeypatch):
+    """Review round 2: one job reading; two uploads arrive together (their
+    reads overlap): one gets the last place, the other 429."""
+    async def slow(path, kind, **kw):
+        await asyncio.sleep(0.6)
+        return {"parts": [{"label": "p. 1", "page": 1, "text": "Rent is due on the first. " * 40}]}
+
+    monkeypatch.setattr(jobs_api.runner, "extract", slow)
+
+    class _Busy:
+        def done(self):
+            return False
+
+    model.hold.set()
+    with _client() as c:
+        jobs_api._JOBS["e" * 32] = type("J", (), {"private": True, "created": time.time(), "task": _Busy(),
+                                                  "state": "running", "listeners": {1}, "last_seen": time.time(),
+                                                  "ended_at": None, "thread_id": None})()
+        send = lambda: c.post("/api/chat/doc-jobs", files={"file": ("a.txt", io.BytesIO(b"x" * 10), "text/plain")})
+        a, b = Bg(send), Bg(send)
+        time.sleep(0.2)
+        model.hold.clear()
+        codes = sorted([a.join(30).status_code, b.join(30).status_code])
+        jobs_api._JOBS.pop("e" * 32, None)
+    assert codes == [200, 429]
+    assert not jobs_api._reserved

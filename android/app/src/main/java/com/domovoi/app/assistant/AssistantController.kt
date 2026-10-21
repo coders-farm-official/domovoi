@@ -1757,6 +1757,13 @@ class AssistantController(
         scope.launch { updateJob(conversation) { it.copy(serverJob = serverId, state = PhoneDocJob.STATE_SERVER) } }
     }
 
+    /** The home server's job id for [conversation]'s job as it stands now
+     *  (read at the moment it is needed, never from a captured screen state:
+     *  review round 2); null when there is none. */
+    fun serverJobOf(conversation: String): String? =
+        _state.value.conversation.takeIf { it.id == conversation }?.job?.serverJob
+            ?: conversations.load(conversation)?.job?.serverJob
+
     /** The home server's progress line, for the card. */
     fun serverProgress(conversation: String, line: String, read: Int, parts: Int, etaS: Double?) {
         _state.update { s ->

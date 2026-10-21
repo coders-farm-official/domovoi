@@ -208,9 +208,11 @@ class Job:
         self.ended = asyncio.Event()
         #: What the parts read covered, kept when a private job's text goes.
         self.covers: str | None = None
-        #: When a client last watched or asked for it (private jobs expire
-        #: UNATTACHED_TTL_SEC after this with nobody watching).
+        #: When a client last watched or asked for it (a finished private
+        #: job expires UNATTACHED_TTL_SEC after this, or after it ended,
+        #: with nobody watching).
         self.last_seen = time.time()
+        self.ended_at: float | None = None
 
     # The parts read so far (their notes are kept, empty or not).
     @property
@@ -551,6 +553,7 @@ async def _run(job: Job) -> None:
     finally:
         job.part_started = None
         job.waiting = False
+        job.ended_at = time.time()
         job.ended.set()
         job.publish()
         if not job.private and job.state not in LIVE:
@@ -677,9 +680,16 @@ def live_thread_job(thread_id: int) -> "Job | None":
 
 
 def running_count() -> int:
-    """Jobs reading now in the house (home-server chats' and phones')."""
+    """Jobs reading now in the house (home-server chats' and phones'),
+    those being started and phones' uploads holding a place."""
     return sum(1 for j in _JOBS.values() if j.state in LIVE and j.task is not None and not j.task.done()) \
-        + len(_starting)
+        + len(_starting) + len(_reserved)
+
+
+#: Phones' private jobs holding a place while their upload is read (review
+#: round 2): taken in the same step as the cap check, with no await
+#: between, so two uploads at once can't both pass a cap of 2.
+_reserved: set[str] = set()
 
 
 #: Threads whose job is being started (before it is in _JOBS).
@@ -823,10 +833,18 @@ def _stream(gen: AsyncIterator[str]) -> StreamingResponse:
 
 # ─── Private jobs (a phone's "Use home server") ─────────────────────────
 def _expired(job: Job, now: float) -> bool:
-    """A private job past its 24 hours, or one no phone has watched for
-    :data:`UNATTACHED_TTL_SEC`."""
-    return job.private and (now - job.created > PRIVATE_TTL_SEC
-                            or (not job.listeners and now - job.last_seen > UNATTACHED_TTL_SEC))
+    """A private job past its 24 hours, or a FINISHED one no phone has
+    watched for :data:`UNATTACHED_TTL_SEC` (review round 2: a job still
+    reading goes on to its end, then this applies, timed from then)."""
+    if not job.private:
+        return False
+    if now - job.created > PRIVATE_TTL_SEC:
+        return True
+    running = job.state in LIVE and job.task is not None and not job.task.done()
+    if running:
+        return False
+    since = max(job.last_seen, job.ended_at or 0.0)
+    return not job.listeners and now - since > UNATTACHED_TTL_SEC
 
 
 def _drop(job: Job) -> None:
@@ -949,14 +967,24 @@ async def start_private_job(file: UploadFile = File(...), question: str = Form("
     only, and the job is forgotten when the phone deletes it
     (``DELETE /doc-jobs/{id}``), after 24 hours, or at a restart."""
     sweep()
+    job_id = uuid.uuid4().hex
+    # Checked and held in one step: the event loop runs nothing else
+    # between these two lines.
     if running_count() >= MAX_RUNNING:
         return _docs._refused(429, "busy", "The home server is already reading two long documents. "
                               "Try again in a few minutes.")
+    _reserved.add(job_id)
+    try:
+        return await _start_private(job_id, file, question)
+    finally:
+        _reserved.discard(job_id)
+
+
+async def _start_private(job_id: str, file: UploadFile, question: str) -> Any:
     name = _docs._clean_name(file.filename, "")
     kind, refusal = _docs._kind_or_refusal(name)
     if refusal is not None:
         return refusal
-    job_id = uuid.uuid4().hex
     work = JOBS_DIR / job_id
     _reading.add(job_id)
     work.mkdir(parents=True, exist_ok=True)
