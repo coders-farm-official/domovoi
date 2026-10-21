@@ -1822,7 +1822,7 @@ and from the system's own state (`domovoi/help_desk`, `/api/help`).
   steps only to the phones marked "This phone belongs to <person>" for the
   recognised speaker, or for the person named when asked; never to every
   phone. The app now tells the server that mark (`devices.owner_person_id`,
-  V033), self-asserted like the rest of the device row: it decides where
+  V035), self-asserted like the rest of the device row: it decides where
   help steps are offered, nothing more. The steps are a home-server chat
   (household-shared, like every server chat); the delivery row holds only
   the person, the chat and its title.

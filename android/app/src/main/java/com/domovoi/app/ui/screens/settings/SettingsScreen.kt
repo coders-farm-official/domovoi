@@ -269,6 +269,7 @@ private fun AboutPanel(navigate: (Route) -> Unit) {
                 }
             }
         }
+        item { AskForHelpCard(navigate) }
         item { AboutAppUpdateCard() }
         item { ProblemReportsCard() }
         if (assistantIn64BitAppOnly()) item { AssistantIn64BitAppNote() }

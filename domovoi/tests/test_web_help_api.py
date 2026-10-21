@@ -171,8 +171,6 @@ def test_why_is_the_kitchen_offline_reads_the_records(quiet_state, stub_stream) 
 @requires_db
 def test_the_phone_says_whose_it_is_on_register() -> None:
     with _client() as c:
-        with TestClient(app) as _:
-            pass
         import asyncio
 
         from web.backend.db import session_scope

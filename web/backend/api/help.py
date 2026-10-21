@@ -17,7 +17,7 @@
   redacted summary the person reviews, then copies or saves. Nothing is
   sent anywhere and nothing is kept.
 * ``GET /api/help/deliveries`` — household READ: help steps sent by voice
-  to a person's phones (V033), for the app's catch-up read.
+  to a person's phones (V035), for the app's catch-up read.
 
 Chat answers help questions through the same pieces
 (``web/backend/api/chat.py``, :func:`help_turn_for`): a thread titled
@@ -274,13 +274,13 @@ async def report(body: ReportBody, request: Request) -> dict[str, Any]:
 @router.get("/deliveries", dependencies=READ)
 async def deliveries(person_id: int | None = Query(None, ge=1), since_id: int | None = Query(None, ge=0),
                      limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
-    """Help steps sent by voice (V033): newest first, or after ``since_id``
+    """Help steps sent by voice (V035): newest first, or after ``since_id``
     oldest first. The app reads its owner's on start and after a
     ``help_deliveries.changed`` event."""
     try:
         async with session_scope() as s:
             rows = await delivery.recent(s, person_id=person_id, since_id=since_id, limit=limit)
-    except Exception as e:  # noqa: BLE001 — V033 missing: nothing was ever sent
+    except Exception as e:  # noqa: BLE001 — V035 missing: nothing was ever sent
         log.info("help: deliveries unreadable: %s", e)
         rows = []
     return {"deliveries": rows}

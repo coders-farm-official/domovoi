@@ -44,7 +44,7 @@ Channels emitted (core; enabled plugins add their own via manifest
   plain words, the banner every page shows and whether the freeze is on
   (V024, docs/CONTAINER_GUARD.md); fires on every incident write
 * ``help_deliveries`` — help steps sent by voice to a person's phones in
-  the last hour (V033: ``{id, person_id, thread_id, title, created_at}``,
+  the last hour (V035: ``{id, person_id, thread_id, title, created_at}``,
   newest first, at most 20); fires when one is sent. A phone posts a
   notification for a row whose person is its owner ("This phone belongs
   to"); every other phone ignores it. The titles are those of chats every
@@ -193,7 +193,7 @@ NOTIFY_CHANNEL_TO_REALTIME: dict[str, str] = {
     # `containers.changed` event (the household view: plain words, no
     # image references — an admin reads those over HTTP).
     "container_incidents_changed": "containers",
-    # Help steps sent by voice to a person's phones (V033,
+    # Help steps sent by voice to a person's phones (V035,
     # domovoi/help_desk/delivery.py). The app's notification rides the
     # resulting `help_deliveries.changed` event.
     "help_deliveries_changed": "help_deliveries",
@@ -969,7 +969,7 @@ HELP_DELIVERIES_PUSH_MAX = 20
 
 async def _snapshot_help_deliveries() -> list[dict[str, Any]]:
     """Help steps sent by voice in the last hour, newest first
-    (``help_deliveries.changed``). ``[]`` when V033 is missing."""
+    (``help_deliveries.changed``). ``[]`` when V035 is missing."""
     try:
         async with session_scope() as s:
             rows = (
@@ -981,7 +981,7 @@ async def _snapshot_help_deliveries() -> list[dict[str, Any]]:
                     {"w": HELP_DELIVERIES_PUSH_WINDOW_SEC, "n": HELP_DELIVERIES_PUSH_MAX},
                 )
             ).mappings().all()
-    except Exception:  # noqa: BLE001 — table missing (run Flyway, V033)
+    except Exception:  # noqa: BLE001 — table missing (run Flyway, V035)
         return []
     return [
         {"id": int(r["id"]), "person_id": int(r["person_id"]), "thread_id": int(r["thread_id"]),
@@ -1022,7 +1022,7 @@ StatePollLoop._CHANNEL_HELPERS = {
     # The container guard's open and recent incidents, the banner and the
     # freeze state (web/backend/api/containers.py: the household view).
     "containers": _snapshot_containers,
-    # Help steps sent by voice to a person's phones (V033).
+    # Help steps sent by voice to a person's phones (V035).
     "help_deliveries": _snapshot_help_deliveries,
     # The filesystem libraries (Videos, Pictures, Documents, any Files
     # library): their change counts (listing_cache), pushed as

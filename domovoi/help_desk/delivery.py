@@ -4,7 +4,7 @@ Owner decisions (2026-10-21), all enforced here and in the voice handler
 (``domovoi/handlers/help_desk.py``):
 
 * **the asker only.** The steps go to the phones marked "This phone
-  belongs to <person>" (``devices.owner_person_id``, V033) for the person
+  belongs to <person>" (``devices.owner_person_id``, V035) for the person
   voice identification recognised, or the person they named when asked
   "Who should I send it to?". :func:`phones_of` is that list; nothing here
   can address "every phone";
@@ -12,7 +12,7 @@ Owner decisions (2026-10-21), all enforced here and in the voice handler
   points to the app's Settings → Connection → "This phone belongs to";
 * **the steps open as a home-server chat titled "Help: …"**, which is
   household-shared like every server chat, so they stay findable; the
-  phone's notification opens it (``help_deliveries``, V033, NOTIFY
+  phone's notification opens it (``help_deliveries``, V035, NOTIFY
   ``help_deliveries_changed`` → the live socket's
   ``help_deliveries.changed``);
 * the limit: delivery needs the app to reach the server, so in practice
@@ -88,8 +88,8 @@ async def phones_of(session: AsyncSession, person_id: int) -> list[Phone]:
             ),
             {"p": person_id},
         )).all()
-    except Exception as e:  # noqa: BLE001 — V033 missing: nobody has a phone yet
-        log.warning("help delivery: devices.owner_person_id unreadable (run Flyway, V033): %s", e)
+    except Exception as e:  # noqa: BLE001 — V035 missing: nobody has a phone yet
+        log.warning("help delivery: devices.owner_person_id unreadable (run Flyway, V035): %s", e)
         await session.rollback()
         return []
     return [Phone(r[0], r[1]) for r in rows]

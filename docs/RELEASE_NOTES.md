@@ -6,7 +6,7 @@ a way that would otherwise get reported as a bug.
 
 ## 2026-10-21 — Domovoi as its own help desk
 
-Core, dashboard and app. **Run Flyway** (V033: `devices.owner_person_id`,
+Core, dashboard and app. **Run Flyway** (V035: `devices.owner_person_id`,
 `help_deliveries`); without it help still answers, and voice help says no
 phone is marked as yours.
 
@@ -47,7 +47,7 @@ phone is marked as yours.
   `ctx.add_lookup_source`; the core orders them by class, and local ones
   need no permission), and an optional `[plugin] help = "HELP.md"`, indexed
   with the manual (required for Coders Farm's own plugins; a core before
-  1.8 ignores it). The bundled radio plugin has one.
+  1.8 ignores it). The bundled radio plugin has one (radio 1.4.0).
 * **API:** `GET /api/help/search` (open), `GET /api/help/facts`, `GET
   /api/help/checks`, `GET /api/help/deliveries` (device read), `POST
   /api/help/report` (device); `owner_person_id` on `POST

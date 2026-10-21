@@ -143,6 +143,10 @@ class AppContainer(context: Context) {
      *  id, title); Chat opens it and clears it. */
     val pendingChatThread = MutableStateFlow<Pair<Long, String>?>(null)
 
+    /** A new phone chat asked for (Settings → About, "Ask Domovoi for
+     *  help" with no home-server chat to start); Chat opens one and clears it. */
+    val pendingPhoneChat = MutableStateFlow(false)
+
     /** Phone files on their way to the server ("Your device" → upload),
      *  by row; they run in [scope], so leaving the page doesn't stop one. */
     val uploads = PhoneUploads()

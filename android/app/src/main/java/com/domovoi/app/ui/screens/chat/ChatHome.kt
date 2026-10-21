@@ -99,6 +99,7 @@ fun ChatScreen(away: Boolean = false, awayLine: String? = null) {
     val serverShareSeen = remember { app.prefs.chatServerShareSeen.value }
     // A help notification's tap: its home-server thread (alerts/HelpNotifier.kt).
     val pendingThread by app.pendingChatThread.collectAsState()
+    val pendingPhone by app.pendingPhoneChat.collectAsState()
     val unsupported = assistant?.state?.value?.memory
         ?.takeIf { phoneEngine && !facts.phoneCapable }
         ?.let { unsupportedText(it.marketedGb, it.lowRamDevice) }
@@ -116,6 +117,8 @@ fun ChatScreen(away: Boolean = false, awayLine: String? = null) {
         },
         openThread = pendingThread?.let { (id, title) -> id.toString() to title },
         onThreadOpened = { app.pendingChatThread.value = null },
+        openNewPhone = pendingPhone,
+        onNewPhoneOpened = { app.pendingPhoneChat.value = false },
     )
 }
 
@@ -160,6 +163,9 @@ internal fun ChatHome(
     /** A home-server thread to open now (id, title): help steps' tap. */
     openThread: Pair<String, String>? = null,
     onThreadOpened: () -> Unit = {},
+    /** A new phone chat to open now: "Ask Domovoi for help" away from home. */
+    openNewPhone: Boolean = false,
+    onNewPhoneOpened: () -> Unit = {},
 ) {
     var open by remember { mutableStateOf<OpenChat?>(null) }
     var visits by remember { mutableIntStateOf(0) }
@@ -171,6 +177,12 @@ internal fun ChatHome(
         if (!serverListed) return@LaunchedEffect
         open = OpenChat(ChatPlaceKind.Server, ChatRow(ChatPlaceKind.Server, id, title, null, 0L, 0), ++visits)
         onThreadOpened()
+    }
+    val phoneStartable = ChatPlaceKind.Phone in startable
+    LaunchedEffect(openNewPhone, phoneStartable) {
+        if (!openNewPhone || !phoneStartable) return@LaunchedEffect
+        open = OpenChat(ChatPlaceKind.Phone, null, ++visits)
+        onNewPhoneOpened()
     }
     var deleteTarget by remember { mutableStateOf<ChatRow?>(null) }
     val chip = { kind: ChatPlaceKind -> placeChip(kind, serverShareSeen) }

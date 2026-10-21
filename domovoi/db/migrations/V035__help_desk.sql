@@ -1,4 +1,4 @@
--- V033 — The help desk: whose phone this is, and steps sent to it.
+-- V035 — The help desk: whose phone this is, and steps sent to it.
 --
 -- Voice "how do I…" (part 9 of the assistant plan, owner decisions
 -- 2026-10-21) gives a short spoken answer, then offers "Want me to send

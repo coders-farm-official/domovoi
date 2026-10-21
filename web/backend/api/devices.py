@@ -82,7 +82,7 @@ class DeviceRegistration(BaseModel):
     name: str | None = Field(default=None, max_length=_MAX_NAME)
     platform: str | None = Field(default=None, max_length=32)
     user_agent: str | None = Field(default=None, max_length=400)
-    # "This phone belongs to" (V033): the person (people.id) the app's
+    # "This phone belongs to" (V035): the person (people.id) the app's
     # Settings → Connection names, so voice help can send steps to the
     # asker's own phones. Only applied when SENT (null clears it; leaving it
     # out keeps it): a browser, or an app from before, never touches it. An
@@ -231,7 +231,7 @@ _HAS_OWNER = False
 
 
 async def _has_owner(s: Any) -> bool:
-    """Whether V033's ``owner_person_id`` is there (cached once it is)."""
+    """Whether V035's ``owner_person_id`` is there (cached once it is)."""
     global _HAS_OWNER
     if not _HAS_OWNER:
         row = (

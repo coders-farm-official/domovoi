@@ -102,6 +102,22 @@ fun listedPlaces(f: PlaceFacts): List<ChatPlaceKind> = listOfNotNull(
     ChatPlaceKind.Phone.takeIf { f.phoneEngine && !f.shared },
 )
 
+/** The title of the help chat Settings → About starts on the home server:
+ *  the server answers a thread titled "Help: …" from Domovoi's help only. */
+const val HELP_APP_TITLE = "Help: App"
+
+/** Where "Ask Domovoi for help" goes. */
+enum class HelpEntry { ServerChat, PhoneChat, Manual }
+
+/** A home-server help chat when one can start ([startable], the place
+ *  picker's rule), else a phone chat (the manual on the phone answers
+ *  there), else the Manual screen. */
+fun helpEntry(startable: List<ChatPlaceKind>): HelpEntry = when {
+    ChatPlaceKind.Server in startable -> HelpEntry.ServerChat
+    ChatPlaceKind.Phone in startable -> HelpEntry.PhoneChat
+    else -> HelpEntry.Manual
+}
+
 /** The places a new chat can start in right now (the picker's choices):
  *  the listed ones, less the phone when it can't run the model. */
 fun startablePlaces(f: PlaceFacts): List<ChatPlaceKind> =
