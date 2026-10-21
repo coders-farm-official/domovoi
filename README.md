@@ -126,6 +126,27 @@ We build Domovoi in public. Here's where it stands.
   and you can say "print my cover letter", "how much ink is left" or
   "scan this to Documents". USB printers and printers that need a maker's
   driver are not supported ([security](docs/SECURITY_PRIVACY.md#printers-and-scanners)).
+- **Chats keep a history.** Each chat names itself (its first five words
+  at once, then a short title the model writes), and can be renamed,
+  archived and searched on the dashboard and in the app; in the app Chat
+  opens on that history (pin, share, swipe to archive, "try again" on the
+  last reply), covering the chats on the phone and on the home server.
+- **Domovoi is its own help desk.** Ask in chat or by voice how to do
+  something ("how do I add a room?") and it answers from its own manual,
+  FAQ, troubleshooting guide and installed plugins' help, naming the
+  section, or says the manual doesn't cover it. The dashboard has a **?** on
+  every page, "ask Domovoi about this" on an error, and **Report a problem**,
+  which builds a redacted summary for you to post yourself (nothing is
+  sent); the app has "Ask Domovoi for help" in Settings → About & updates.
+  By voice it can send the steps to the asker's own phone. With AI features
+  off, help is a plain search of the manual.
+- **Ask a chat about a document.** The paperclip in chat takes a PDF, Word,
+  OpenDocument, Excel, CSV, text or markdown file, in a home-server chat and
+  in a chat on the phone (read on the phone, which keeps it there); the
+  answer names the pages or sections it came from, a press shows the
+  passage, and when the document doesn't say, the answer is "I couldn't
+  find that". Files → Documents has "Ask about this document". Scanned
+  pages (pictures of text) are not read yet.
 - **Everyday voice answers locally:** an alarm or reminder at a clock time
   ("wake me up at 7" is the next 7 o'clock), "what can you do", and
   what's on your calendar each have their own handler.
@@ -279,7 +300,8 @@ they have been tried on fewer devices than the rest, aren't yet held to
    `stable` then points at it, and new installs follow it. What went in
    since rc3 is in the [release notes](docs/RELEASE_NOTES.md): printing and
    scanning, AI chat and questions as an option, Settings in groups with
-   one Health page, One Chat in the app, the Windows satellite Setup, a smaller (R8-shrunk) release
+   one Health page, One Chat in the app, chat history and titles, the help
+   desk, asking a chat about a document, the Windows satellite Setup, a smaller (R8-shrunk) release
    build of the app, tablet and sideways-phone screens that clear the
    clock and cutouts, and a repair by Setup that no longer trips the
    container guard.

@@ -1659,7 +1659,7 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .chat-speaker { display: flex; align-items: center; gap: 4px; margin-top: -1px; padding-right: 8px; max-width: 100%; white-space: nowrap; font-size: 10px; color: var(--fg-muted); }
 .chat-speaker.soft { opacity: 0.55; color: var(--fg-faint); }
 .chat-speaker .ava { width: 14px; height: 14px; font-size: 8px; border: 0; }
-.chat-more { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: none; border-radius: var(--r-sm); background: transparent; color: var(--fg-faint); cursor: pointer; opacity: 0.55; }
+.chat-more { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: none; border-radius: var(--r-sm); background: transparent; color: var(--fg-muted); cursor: pointer; }
 .chat-more:hover, .chat-more:focus-visible { opacity: 1; background: var(--sunken); color: var(--fg); }
 .chat-menu { position: fixed; z-index: 95; min-width: 150px; padding: 4px; background: var(--raised); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-md), var(--inner-highlight); }
 .chat-menu-item { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px; padding: 0 10px; font: inherit; font-size: 13px; color: var(--fg); background: transparent; border: none; border-radius: var(--r-sm); cursor: pointer; text-align: left; }

@@ -165,12 +165,12 @@ const ChatThreadRow = ({ t, active, onSelect, onDelete, onRename, onArchive }) =
                       textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {t.title || 'new chat'}{' '}<ChatLookups.Mark t={t}/>
         </div>
-        <div style={{ fontSize: 11, color: 'var(--fg-faint)', overflow: 'hidden',
+        <div style={{ fontSize: 11, color: active ? 'var(--fg-muted)' : 'var(--fg-faint)', overflow: 'hidden',
                       textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {t.archived ? 'archived · ' : ''}{snippet}
         </div>
       </div>
-      <span className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)', flexShrink: 0 }}>
+      <span className="mono" style={{ fontSize: 10, color: active ? 'var(--fg-muted)' : 'var(--fg-faint)', flexShrink: 0 }}>
         {liveRelTime(t.updated_at)}
       </span>
       <IconButton name="pencil" title="rename chat" aria-label="rename chat" onClick={stop(onRename)}/>

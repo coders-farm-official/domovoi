@@ -29,13 +29,15 @@ def _manual_text() -> str:
 
 def test_every_settings_page_has_help() -> None:
     src = (REPO / "web/static/settings.jsx").read_text(encoding="utf-8")
-    block = re.search(r"const SETTINGS_TABS = \[(.*?)\];", src, re.S).group(1)
-    tabs = re.findall(r"\{ id: '([\w-]+)'(?:, slug: '([\w-]+)')?, label: '([^']+)'", block)
+    block = re.search(r"const SETTINGS_SECTIONS = \[(.*?)\n\];", src, re.S).group(1)
+    tabs = re.findall(r"\{ id: '([\w-]+)', label: '([^']+)'(, optional: true)?", block)
     assert len(tabs) >= 10
     linked = set(re.findall(r"route:(settings/[a-z0-9-]+)", _manual_text()))
     missing = []
-    for tid, slug, label in tabs:
-        route = f"settings/{slug or tid}"
+    for tid, label, optional in tabs:
+        route = f"settings/{tid}"
+        if optional and route not in DOC["routes"]:
+            continue  # shown only once a plugin's page registers it: that plugin's help covers it
         if route not in DOC["routes"] or route not in linked:
             missing.append(f"{label} ({route})")
     assert not missing, f"Settings pages with no help in the manual: {missing}"
