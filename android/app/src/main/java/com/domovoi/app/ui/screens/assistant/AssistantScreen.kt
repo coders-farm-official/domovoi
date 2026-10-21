@@ -105,6 +105,14 @@ internal class AssistantActions(
     val closeDocProblem: () -> Unit = {},
     /** The phone's own copy of a document of the conversation on screen, by id. */
     val docFile: (String) -> java.io.File? = { null },
+    /** "carry on" a stopped long-document summary (documents plan D2). */
+    val carryOn: () -> Unit = {},
+    /** The home-server offer: its time, seconds, when the home server's
+     *  measured speed beats this phone's (null: no offer), and taking it. */
+    val serverOffer: Double? = null,
+    val useServer: (() -> Unit)? = null,
+    /** Stop a job handed to the home server (what it read is kept). */
+    val stopServer: (() -> Unit)? = null,
 )
 
 /** The phone chat's part of Chat's conversation frame: the way back to the
@@ -263,7 +271,97 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
         } else {
             null
         }
-    AssistantContent(ui, actionsFor(assistant, download, talk, sinks, reportScope, used, askServer, asking) { toast(it) }, chrome)
+    // A long document read in parts (documents plan D2): the card's time
+    // left ticks down while a part is read.
+    androidx.compose.runtime.LaunchedEffect(ui.docJob?.id, ui.docJob?.state) {
+        while (ui.docJob?.state == "reading" || ui.docJob?.state == "reducing") {
+            kotlinx.coroutines.delay(2_000)
+            assistant.tickJob()
+        }
+    }
+    // "Use home server" (plan part 4): offered only when the home server's
+    // MEASURED speed, plus sending the file, beats this phone's time left,
+    // with AI features on there; the phone always works on its own.
+    val serverOk = choice is com.domovoi.app.ui.shell.ServerChoice.Available && !choice.needsPairing
+    val job = ui.docJob
+    var offerS by remember { mutableStateOf<Double?>(null) }
+    androidx.compose.runtime.LaunchedEffect(serverOk, job?.id, job?.read, job?.state) {
+        offerS = null
+        if (!serverOk || job == null || job.state != "reading" || !job.single) return@LaunchedEffect
+        val bytes = assistant.handOverBytes() ?: return@LaunchedEffect
+        val phone = assistant.phoneEtaS() ?: return@LaunchedEffect
+        val speed = runCatching { com.domovoi.app.ui.screens.chat.fetchDocSpeed(app, job.remainingChars) }.getOrNull()
+            ?: return@LaunchedEffect
+        offerS = com.domovoi.app.assistant.PhoneDocJobs.offer(phone, speed.estimate_s, bytes, speed.ai)
+    }
+    // A job with the home server: its stream while Chat is open, picked up
+    // again when Chat comes back (the server keeps the summary for the
+    // phone until it is taken, then deletes it).
+    var streaming by remember { mutableStateOf(false) }
+    val serverJob = ui.conversation.job?.takeIf { it.state == com.domovoi.app.assistant.PhoneDocJob.STATE_SERVER }
+    fun onServerView(conversation: String, event: String, v: com.domovoi.app.ui.screens.chat.ServerJobView) {
+        when {
+            event == "job" -> assistant.serverJobStarted(conversation, v.id)
+            v.live -> assistant.serverProgress(conversation, v.line, v.read, v.parts, v.eta_s)
+            v.result != null -> {
+                val r = v.result
+                assistant.serverFinished(conversation, r.content, com.domovoi.app.ui.screens.chat.phoneSourcesOf(r.doc),
+                    r.doc?.notes.orEmpty(), stopped = v.state == "stopped")
+                reportScope.launch { com.domovoi.app.ui.screens.chat.deleteServerJob(app, v.id) }
+            }
+            v.error != null -> assistant.serverFailed(conversation, v.error.detail.ifBlank { "the home server couldn't read it" })
+        }
+    }
+    androidx.compose.runtime.LaunchedEffect(serverJob?.serverJob, serverJob?.id, serverOk) {
+        val sj = serverJob ?: return@LaunchedEffect
+        if (streaming) return@LaunchedEffect
+        val conv = ui.conversation.id
+        val id = sj.serverJob
+        if (id == null || !serverOk) {
+            assistant.serverFailed(conv, "the home server isn't reading it any more; reading on this phone")
+            return@LaunchedEffect
+        }
+        val last = try {
+            com.domovoi.app.ui.screens.chat.followServerJob(app, id) { ev, v -> onServerView(conv, ev, v) }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            null
+        }
+        // The stream ended with no summary (the server restarted, lost it):
+        // this phone reads on from its own notes.
+        if (last == null || (last.result == null && last.error == null)) {
+            assistant.serverFailed(conv, "the home server no longer has it; reading on this phone")
+        }
+    }
+    val useServer: (() -> Unit)? = offerS?.let {
+        {
+            reportScope.launch {
+                // Before the hand-over: the pick-up effect must not take the
+                // job (no server id yet) for one this phone lost.
+                streaming = true
+                val h = assistant.handOverToServer()
+                if (h == null) {
+                    streaming = false
+                    return@launch
+                }
+                try {
+                    com.domovoi.app.ui.screens.chat.runPrivateJob(app, h.file, h.name, h.question) { ev, v -> onServerView(h.conversation, ev, v) }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    assistant.serverFailed(h.conversation, com.domovoi.app.ui.screens.chat.docFailureText("the home server", e) + "; reading on this phone")
+                } finally {
+                    streaming = false
+                }
+            }
+        }
+    }
+    val stopServer: (() -> Unit)? = serverJob?.serverJob?.let { id ->
+        { reportScope.launch { runCatching { com.domovoi.app.ui.screens.chat.stopServerJob(app, id) } } }
+    }
+    val actions = actionsFor(assistant, download, talk, sinks, reportScope, used, askServer, asking) { toast(it) }
+    AssistantContent(ui, actions.copyWith(serverOffer = offerS, useServer = useServer, stopServer = stopServer), chrome)
 }
 
 /** Which conversation a phone chat's view waits for the controller to show. */
@@ -354,6 +452,15 @@ private fun actionsFor(
     dropPending = a::dropPending,
     closeDocProblem = a::closeDocProblem,
     docFile = { id -> a.docFile(id) },
+    carryOn = a::carryOnJob,
+)
+
+/** [this] with the home-server pieces the screen works out set. */
+internal fun AssistantActions.copyWith(serverOffer: Double?, useServer: (() -> Unit)?, stopServer: (() -> Unit)?) = AssistantActions(
+    download, pauseDownload, cancelDownload, setAllowMobileData, deleteModel, setBackend, retryLoad, send, stop,
+    newConversation, open, delete, clearAll, talk, downloadVoice, setSpeakTyped, draftReport, saveReport, reportSinks,
+    deliverReport, deleteReport, clearReports, attachDocument, askServer, askingServer, dropPending, closeDocProblem,
+    docFile, carryOn, serverOffer, useServer, stopServer,
 )
 
 /** The screen for [ui], with no controller behind it (the tests render it). */

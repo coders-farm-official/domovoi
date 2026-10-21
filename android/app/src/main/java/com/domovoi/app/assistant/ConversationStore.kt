@@ -59,6 +59,9 @@ data class StoredMessage(
     /** ...the notes under it ("couldn't find", "uncited", a quote that
      *  doesn't match). */
     val notes: List<DocNote> = emptyList(),
+    /** A summary written by a long-document job ([PhoneDocJob.id]): a
+     *  stopped one offers "carry on" while the job is kept. */
+    val jobId: String? = null,
 ) {
     val fromUser: Boolean get() = from == Speaker.USER
 }
@@ -71,6 +74,9 @@ data class StoredConversation(
     val messages: List<StoredMessage> = emptyList(),
     /** Documents attached in this conversation (kept in [ChatDocStore]). */
     val documents: List<StoredDocument> = emptyList(),
+    /** A long document being summarized in parts (documents plan D2): its
+     *  notes so far, so it carries on after the app was away. */
+    val job: PhoneDocJob? = null,
 ) {
     /** The first thing the user asked, cut short: the history list's title;
      *  "About lease.pdf" for a document attached with no question yet. */

@@ -11,6 +11,11 @@ import com.domovoi.app.ui.screens.chat.ReplyDocs
 import com.domovoi.app.ui.screens.chat.SourceSheet
 import com.domovoi.app.ui.screens.chat.SourceView
 import com.domovoi.app.ui.screens.chat.DocAttachButton
+import com.domovoi.app.ui.screens.chat.CarryOnButton
+import com.domovoi.app.ui.screens.chat.DocJobCard
+import com.domovoi.app.assistant.PhoneDocJob
+import com.domovoi.app.assistant.PhoneDocJobs
+import com.domovoi.app.assistant.docs.DocLong
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -193,6 +198,9 @@ private fun ChatPane(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     val reversed = messages.asReversed()
+                    // A stopped long-document summary: its newest reply offers "carry on".
+                    val job = ui.conversation.job?.takeIf { it.state == PhoneDocJob.STATE_STOPPED }
+                    val carryAt = job?.let { j -> messages.indexOfLast { !it.fromUser && it.jobId == j.id } } ?: -1
                     itemsIndexed(reversed) { i, m ->
                         val writing = i == 0 && ui.replying && !m.fromUser
                         val index = messages.size - 1 - i
@@ -203,6 +211,8 @@ private fun ChatPane(
                             conversation = ui.conversation,
                             docFile = actions.docFile,
                             onSource = { openSource = it },
+                            carryOnLeft = if (index == carryAt && !ui.replying && job != null) job.total - job.read else null,
+                            onCarryOn = actions.carryOn,
                         )
                     }
                 }
@@ -212,6 +222,22 @@ private fun ChatPane(
         if (messages.isEmpty() && ui.voicePhase == VoicePhase.Idle && !ui.replying) chrome.picker?.invoke()
         if (ui.voicePhase != VoicePhase.Idle) VoiceLine(ui) else EngineLine(ui, actions, onModel)
         ui.reading?.let { ReadingLine(it) }
+        // A long document read in parts (documents plan D2).
+        ui.docJob?.takeIf { it.state in JOB_CARD_STATES }?.let { j ->
+            DocJobCard(
+                line = j.line,
+                read = j.read,
+                parts = j.parts,
+                onStop = when (j.state) {
+                    "server" -> actions.stopServer
+                    "paused" -> null
+                    else -> actions.stop
+                },
+                offer = actions.serverOffer?.takeIf { j.state == "reading" }?.let { DocLong.offerLine(it) },
+                offerNote = j.names.firstOrNull()?.let { PhoneDocJobs.handOverText(it) },
+                onOffer = actions.useServer,
+            )
+        }
         ui.docProblem?.let { DocProblemNote(it, onClose = actions.closeDocProblem) }
         ui.pendingPdf?.let { p ->
             PendingPdfCard(
@@ -358,6 +384,9 @@ private fun MessageBubble(
     conversation: StoredConversation? = null,
     docFile: (String) -> java.io.File? = { null },
     onSource: (SourceView) -> Unit = {},
+    /** A stopped summary's parts still to read: "carry on" shows (null: no). */
+    carryOnLeft: Int? = null,
+    onCarryOn: () -> Unit = {},
 ) {
     val toast = LocalToast.current
     val clipboard = LocalClipboardManager.current
@@ -420,6 +449,7 @@ private fun MessageBubble(
                     }
                     if (!isUser && !writing) {
                         ReplyDocs(m.notes.map { it.text }, phoneSources(m, conversation, docFile), onSource)
+                        carryOnLeft?.let { left -> CarryOnButton(left, onCarryOn) }
                     }
                 }
             }
@@ -458,6 +488,9 @@ internal fun phoneSources(m: StoredMessage, conversation: StoredConversation?, d
 internal const val PHONE_EMPTY_HINT =
     "Type, or tap the mic and speak. Answers come from a model running on this phone, with no server and no " +
         "internet, and this chat stays on this phone."
+
+/** The job states the progress card shows. */
+internal val JOB_CARD_STATES = setOf("reading", "reducing", "paused", "server")
 
 internal const val ACTION_COPY = "copy"
 internal const val ACTION_REPORT = "report this reply"
