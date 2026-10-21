@@ -223,6 +223,10 @@ class AssistantController(
     private val pdfText: () -> PdfTextReader? = { null },
     /** The longest a document may take to read before Chat gives up on it. */
     private val docReadTimeoutMs: Long = DOC_READ_TIMEOUT_MS,
+    /** An 8K engine for long-document jobs, loaded on the GPU for the job
+     *  and released after (Fold bench 2026-10-21: 7.5 s, about 2 GB); null:
+     *  jobs run on the chat's own engine. */
+    private val newJobEngine: (() -> LlmEngine)? = null,
 ) {
     private val _state = MutableStateFlow(
         AssistantUi(
@@ -1207,14 +1211,58 @@ class AssistantController(
         runCatching { settings.speedRows = PhoneDocJobs.addRow(settings.speedRows, backend, row) }
     }
 
-    private fun measuredSpeed(): com.domovoi.app.assistant.docs.DocSpeed? = PhoneDocJobs.speed(settings.speedRows, settings.backend)
+    /** This phone's measured speed on [backend], or the Fold's bench until
+     *  it has measured any ([DocLong.benchSpeed]). */
+    private fun measuredSpeed(backend: LlmBackend): com.domovoi.app.assistant.docs.DocSpeed =
+        PhoneDocJobs.speed(settings.speedRows, backend) ?: DocLong.benchSpeed(backend == LlmBackend.GPU)
+
+    private fun PhoneDocJob.engineBackend(): LlmBackend = if (backend == "GPU") LlmBackend.GPU else settings.backend
+
+    @Volatile private var jobEngine: LlmEngine? = null
+    @Volatile private var jobEngineBackend: LlmBackend? = null
+
+    /**
+     * The document job's engine: [newJobEngine] on the GPU (the chat's
+     * engine is closed first, for the memory). [cpuFallback]: a job whose
+     * parts were sized for the 8K GPU engine loads it on the CPU when the
+     * GPU won't load now (slower, but its parts fit). Null: none loads.
+     */
+    private suspend fun openJobEngine(cpuFallback: Boolean): Pair<LlmEngine, LlmBackend>? {
+        val make = newJobEngine ?: return null
+        jobEngine?.let { e -> if (e.isLoaded) return e to (jobEngineBackend ?: LlmBackend.GPU) }
+        closeEngine()
+        runCatching { beforeLoad() }
+        val file = store.fileFor(chatModel, chatModel.files.single())
+        for (b in if (cpuFallback) listOf(LlmBackend.GPU, LlmBackend.CPU) else listOf(LlmBackend.GPU)) {
+            val e = make()
+            try {
+                withContext(io) { e.load(file, b) }
+                jobEngine = e
+                jobEngineBackend = b
+                return e to b
+            } catch (c: CancellationException) {
+                runCatching { e.close() }
+                throw c
+            } catch (t: Throwable) {
+                runCatching { e.close() }
+                Log.i(TAG, "the document job's engine did not load on the ${b.label}: ${plainReason(t)}")
+            }
+        }
+        return null
+    }
+
+    private fun releaseJobEngine() {
+        jobEngine?.let { e -> runCatching { e.close() } }
+        jobEngine = null
+        jobEngineBackend = null
+    }
 
     private suspend fun jobDocs(c: StoredConversation, job: PhoneDocJob): List<QaDoc>? =
         job.docIds.map { id -> c.documents.firstOrNull { it.id == id }?.let { docParts(c.id, it) } ?: return null }
 
     private fun showJob(c: StoredConversation, job: PhoneDocJob, names: List<String>, state: String) {
         val eta = if (state == "reading" || state == "reducing") {
-            PhoneDocJobs.eta(job, measuredSpeed(), partStartedMs, clock(), state == "reducing")
+            PhoneDocJobs.eta(job, measuredSpeed(job.engineBackend()), partStartedMs, clock(), state == "reducing")
         } else {
             null
         }
@@ -1225,13 +1273,19 @@ class AssistantController(
     /** A summary job for the conversation's documents: planned, saved, run. */
     private suspend fun startDocJob(asked: StoredConversation, question: String, onDelta: (String) -> Unit): StoredConversation {
         val qaDocs = asked.documents.map { docParts(asked.id, it) }
-        val chunks = DocLong.planChunks(qaDocs, DocLong.PHONE_MAP_CHUNK_TOKENS)
-        val estimate = DocLong.estimateSeconds(chunks.map { it.chars }, measuredSpeed())
+        // On the GPU when it loads (Fold bench: a 4K-token part in about 13 s
+        // there, against about a minute on the CPU), in bigger parts for its
+        // 8K window; otherwise the chat's CPU engine, with its honest, longer
+        // estimate.
+        val gpu = openJobEngine(cpuFallback = false)?.second == LlmBackend.GPU
+        val backend = if (gpu) LlmBackend.GPU else settings.backend
+        val chunks = DocLong.planChunks(qaDocs, if (gpu) DocLong.PHONE_GPU_MAP_CHUNK_TOKENS else DocLong.PHONE_MAP_CHUNK_TOKENS)
+        val estimate = DocLong.estimateSeconds(chunks.map { it.chars }, measuredSpeed(backend))
         DocHeadsUp.check("long_summary", qaDocs, question) // D3: the heads-up card; none in D2
         val job = PhoneDocJob(
             id = PhoneDocJobs.newId(clock()), question = question, docIds = asked.documents.map { it.id },
             chunks = chunks, notes = List(chunks.size) { null }, estimateMs = estimate?.let { (it * 1000).toLong() },
-            started = clock(),
+            started = clock(), backend = if (gpu) "GPU" else "CPU",
         )
         val withJob = asked.copy(job = job)
         withContext(NonCancellable) { save(withJob) }
@@ -1283,11 +1337,13 @@ class AssistantController(
             return finishReply(gone, StoredMessage(Speaker.DOMOVOI, "", clock(), error = "The document is no longer on this phone."))
         }
         val names = qaDocs.map { it.name }
-        val backend = settings.backend
+        var backend = settings.backend
         jobStopping = false
         jobHandOver = false
         try {
-            val llm = ensureEngine() ?: run {
+            val onJobEngine = if (job.backend == "GPU") openJobEngine(cpuFallback = true) else null
+            if (onJobEngine != null) backend = onJobEngine.second
+            val llm = onJobEngine?.first ?: ensureEngine() ?: run {
                 val why = (_state.value.engine as? EngineState.Failed)?.reason ?: "the model did not load"
                 return finishReply(conv, StoredMessage(Speaker.DOMOVOI, "", clock(), error = "The model could not start: $why"))
             }
@@ -1366,6 +1422,8 @@ class AssistantController(
         } finally {
             jobStopping = false
             jobHandOver = false
+            // The GPU job engine's 2 GB go back as soon as the job does.
+            releaseJobEngine()
         }
     }
 
@@ -1507,7 +1565,7 @@ class AssistantController(
         val v = ui.docJob ?: return
         val job = ui.conversation.job ?: return
         if (v.state != "reading" && v.state != "reducing") return
-        val eta = PhoneDocJobs.eta(job, measuredSpeed(), partStartedMs, clock(), v.state == "reducing")
+        val eta = PhoneDocJobs.eta(job, measuredSpeed(job.engineBackend()), partStartedMs, clock(), v.state == "reducing")
         val line = com.domovoi.app.assistant.docs.DocLong.progressLine(v.state, v.part, v.parts, eta)
         _state.update { it.copy(docJob = v.copy(etaS = eta, line = line)) }
     }
@@ -1516,7 +1574,7 @@ class AssistantController(
      *  compares the server's with it); null until something was measured. */
     fun phoneEtaS(): Double? {
         val job = _state.value.conversation.job ?: return null
-        return PhoneDocJobs.eta(job, measuredSpeed(), partStartedMs, clock(), false)
+        return PhoneDocJobs.eta(job, measuredSpeed(job.engineBackend()), partStartedMs, clock(), false)
     }
 
     /** The bytes "use home server" would send (the job's one document). */
@@ -1531,6 +1589,9 @@ class AssistantController(
     companion object {
         /** A document taking longer than this to read is given up on. */
         const val DOC_READ_TIMEOUT_MS = 90_000L
+
+        /** The window of the engine a long-document job loads on the GPU. */
+        const val DOC_JOB_MAX_TOKENS = 8192
 
         /** Unload the model this long after the assistant leaves the screen. */
         const val UNLOAD_AFTER_MS = 5 * 60 * 1000L
@@ -1565,6 +1626,7 @@ class AssistantController(
                 clockStyle = { ClockStyle.system(android.text.format.DateFormat.is24HourFormat(app)) },
                 docs = ChatDocStore(File(app.filesDir, "chat-docs/attachments")),
                 pdfText = { PhonePdfText.readerOrNull() },
+                newJobEngine = { LiteRtLlmEngine(File(app.cacheDir, "litertlm"), maxTokens = DOC_JOB_MAX_TOKENS) },
             ).also { it.attach(app) }
         }
 

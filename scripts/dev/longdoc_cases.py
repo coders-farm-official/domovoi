@@ -133,10 +133,12 @@ def build() -> dict:
     out["clean_note"] = [
         {"reply": r, "out": longdoc.clean_note(r, given)} for r in
         ["- Rent is $1,200 [p. 1]\n- A pool [p. 99]", "The passages don't mention anything useful.", "",
-         "- Deposit [page 2] and pets (p. 3)"]
+         "- Deposit [page 2] and pets (p. 3)",
+         "Hello. I am Domovoi, here are the notes.\n- Rent is due on the first [p. 1]\n**Notes**"]
     ]
     out["constants"] = {
         "MAP_CHUNK_TOKENS": longdoc.MAP_CHUNK_TOKENS, "PHONE_MAP_CHUNK_TOKENS": longdoc.PHONE_MAP_CHUNK_TOKENS,
+        "PHONE_GPU_MAP_CHUNK_TOKENS": longdoc.PHONE_GPU_MAP_CHUNK_TOKENS,
         "CHARS_PER_TOKEN": longdoc.CHARS_PER_TOKEN, "OVERHEAD_TOKENS": longdoc.OVERHEAD_TOKENS,
         "MAP_OUT_TOKENS": longdoc.MAP_OUT_TOKENS, "REDUCE_OUT_TOKENS": longdoc.REDUCE_OUT_TOKENS,
         "LONG_PROMPT_TOKENS": longdoc.LONG_PROMPT_TOKENS,

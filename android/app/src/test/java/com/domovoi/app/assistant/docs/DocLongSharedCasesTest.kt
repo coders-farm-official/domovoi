@@ -60,6 +60,7 @@ class DocLongSharedCasesTest {
         val c = cases["constants"]!!.jsonObject
         assertEquals(c["MAP_CHUNK_TOKENS"]!!.jsonPrimitive.int, DocLong.MAP_CHUNK_TOKENS)
         assertEquals(c["PHONE_MAP_CHUNK_TOKENS"]!!.jsonPrimitive.int, DocLong.PHONE_MAP_CHUNK_TOKENS)
+        assertEquals(c["PHONE_GPU_MAP_CHUNK_TOKENS"]!!.jsonPrimitive.int, DocLong.PHONE_GPU_MAP_CHUNK_TOKENS)
         assertEquals(c["CHARS_PER_TOKEN"]!!.jsonPrimitive.double, DocLong.CHARS_PER_TOKEN, 0.0)
         assertEquals(c["OVERHEAD_TOKENS"]!!.jsonPrimitive.int, DocLong.OVERHEAD_TOKENS)
         assertEquals(c["MAP_OUT_TOKENS"]!!.jsonPrimitive.int, DocLong.MAP_OUT_TOKENS)

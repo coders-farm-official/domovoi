@@ -11,7 +11,10 @@ table; Flyway applies it on update). No new dependencies.
 
 * **"Summarize" works on long documents.** A document longer than one
   pass is read in parts (about 14,000 characters each on the server,
-  10,000 on a phone), then the parts' notes are combined into the summary.
+  9,000 on a phone's CPU), then the parts' notes are combined into the summary.
+  On a phone the job loads the model on the GPU when it can (an 8K window,
+  19,000-character parts, about 2 GB released when the job ends); where the
+  GPU won't load it runs on the CPU, with a longer estimate.
   The reply says "Read in 8 parts. Points that span parts may be missed."
   and cites only real pages.
 * **Progress, with stop.** While it reads, the reply's place says

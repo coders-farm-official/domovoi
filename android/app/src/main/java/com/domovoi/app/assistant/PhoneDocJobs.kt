@@ -46,6 +46,9 @@ data class PhoneDocJob(
     val steps: Int = 0,
     /** The home server's private job reading it, once handed over. */
     val serverJob: String? = null,
+    /** Where its parts were sized to run: "GPU" (an 8K engine loaded for
+     *  the job) or "CPU" (the chat's 4K engine). */
+    val backend: String = "CPU",
 ) {
     val read: Int get() = notes.count { it != null }
     val total: Int get() = chunks.size

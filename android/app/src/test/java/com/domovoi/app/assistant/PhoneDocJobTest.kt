@@ -59,7 +59,8 @@ class PhoneDocJobTest {
         "Apache-2.0", "https://example.org/license",
     )
 
-    /** 12 pages of about 1,900 characters: 3 parts on the phone (10,000 a part). */
+    /** 12 pages of about 1,900 characters: 3 parts on the phone's CPU
+     *  (9,000 a part), 2 on its GPU (19,000). */
     private val pdf = PdfTextReader { _, _ ->
         (1..12).map { n ->
             val text = WORDS[n] + " rules. " +
@@ -74,7 +75,7 @@ class PhoneDocJobTest {
         root.deleteRecursively()
     }
 
-    private fun controller(): AssistantController {
+    private fun controller(jobEngine: (() -> LlmEngine)? = null): AssistantController {
         llm.files.forEach { f -> store.fileFor(llm, f).apply { parentFile!!.mkdirs(); writeBytes(ByteArray(f.size.toInt())) } }
         store.markInstalled(llm)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default).also { scopes += it }
@@ -82,6 +83,7 @@ class PhoneDocJobTest {
             memory = PhoneMemory((7.6 * (1L shl 30)).toLong(), lowRamDevice = false),
             store = store, conversations = conversations, jobs = FakeJobs(), settings = settings,
             newEngine = { engine }, scope = scope, models = listOf(llm), docs = docs, pdfText = { pdf },
+            newJobEngine = jobEngine,
         )
     }
 
@@ -112,7 +114,7 @@ class PhoneDocJobTest {
         assertEquals(listOf("map", "map", "map", "reduce"), engine.kinds())
         // Each part saw only its own pages, as data in the marked block.
         val first = engine.users[0]
-        assertTrue(first.contains("<<<PASSAGES") && first.contains("[p. 1]") && first.contains("[p. 5]") && !first.contains("[p. 6]"))
+        assertTrue(first.contains("<<<PASSAGES") && first.contains("[p. 1]") && first.contains("[p. 4]") && !first.contains("[p. 5]"))
         assertTrue(engine.systems[0].endsWith(DocLong.MAP_RULES))
         // The reduce read the checked notes: the made-up page is gone.
         assertFalse(engine.users[3].contains("p. 99"))
@@ -200,7 +202,7 @@ class PhoneDocJobTest {
         c.stop()
         until("stopped") { c.replies().isNotEmpty() && !c.ui().replying }
         val stopped = c.replies().last()
-        assertTrue(stopped.text, stopped.text.startsWith("**Summary of pages 1-5 (stopped)**"))
+        assertTrue(stopped.text, stopped.text.startsWith("**Summary of pages 1-4 (stopped)**"))
         assertTrue(stopped.text.contains("[p. 1]") && !stopped.text.contains("p. 99"))
         assertTrue(stopped.notes.any { it.code == "stopped" && it.text.contains("part 1 of 3") })
         val job = c.ui().conversation.job!!
@@ -216,29 +218,61 @@ class PhoneDocJobTest {
         assertFalse(c.replies().last().text.contains("stopped"))
     }
 
-    @Test fun theEstimateComesFromMeasuredSpeeds() {
-        // Nothing measured: no time shown until a part has been read.
+    @Test fun theEstimateComesFromTheBenchThenFromThisPhonesOwnSpeeds() {
+        // Nothing measured on this phone yet: the Fold's bench (CPU) gives
+        // the first estimate, honest and long.
         val c = controller()
         c.ready()
         c.screenShown()
         engine.holdFrom(0)
         c.summarize()
         until("part 1 held") { engine.calls() >= 1 && c.ui().docJob != null }
-        assertNull(c.ui().docJob!!.etaS)
-        assertEquals("reading part 1 of 3", c.ui().docJob!!.line)
-        assertNull(c.ui().conversation.job!!.estimateMs)
+        val first = c.ui().conversation.job!!
+        val bench = DocLong.estimateSeconds(first.chunks.map { it.chars }, DocLong.benchSpeed(gpu = false))!!
+        assertEquals((bench * 1000).toLong(), first.estimateMs)
+        assertTrue(c.ui().docJob!!.line, c.ui().docJob!!.line.contains("left"))
         engine.releaseAll()
         until("done") { c.replies().isNotEmpty() && !c.ui().replying }
-        // Measured now: the next job starts with an estimate.
+        // Measured now (the engine says 250 tok/s reading, 20 writing): the
+        // next job's estimate is this phone's own.
         engine.calls.clear()
         engine.holdFrom(0)
         c.newConversation()
         until("new") { c.ui().conversation.messages.isEmpty() }
         c.summarize()
         until("part 1 held again") { engine.calls() >= 1 && c.ui().docJob != null }
-        assertNotNull(c.ui().conversation.job!!.estimateMs)
-        assertTrue(c.ui().docJob!!.line, c.ui().docJob!!.line.contains("left"))
+        val second = c.ui().conversation.job!!
+        val own = DocLong.estimateSeconds(second.chunks.map { it.chars }, PhoneDocJobs.speed(settings.speedRows, LlmBackend.CPU))!!
+        assertEquals((own * 1000).toLong(), second.estimateMs)
+        assertTrue(own < bench)
         engine.releaseAll()
+    }
+
+    @Test fun aJobRunsOnTheGpuWhenItLoadsInBiggerPartsAndReleasesIt() {
+        val gpu = JobEngine()
+        val c = controller { gpu }
+        c.ready()
+        c.screenShown()
+        c.summarize()
+        until("the summary") { c.replies().isNotEmpty() && !c.ui().replying }
+        assertEquals(listOf(LlmBackend.GPU), gpu.loads)
+        // Two parts in the 8K window (19,000 characters each), not three.
+        assertEquals(listOf("map", "map", "reduce"), gpu.kinds())
+        assertTrue(engine.kinds().isEmpty())
+        assertTrue(gpu.closes >= 1 && !gpu.isLoaded)
+        assertNotNull(PhoneDocJobs.speed(settings.speedRows, LlmBackend.GPU))
+        assertEquals("summary", c.replies().last().docMode)
+    }
+
+    @Test fun aGpuThatWontLoadLeavesTheJobOnTheCpu() {
+        val gpu = JobEngine().also { it.failOn = LlmBackend.GPU }
+        val c = controller { gpu }
+        c.ready()
+        c.screenShown()
+        c.summarize()
+        until("the summary") { c.replies().isNotEmpty() && !c.ui().replying }
+        assertEquals(listOf("map", "map", "map", "reduce"), engine.kinds())
+        assertTrue(gpu.kinds().isEmpty())
     }
 
     @Test fun aJobHandedToTheHomeServerComesBackAsItsSummary() {
@@ -334,6 +368,9 @@ class JobEngine : LlmEngine {
     private val gates = ConcurrentHashMap<Int, CompletableDeferred<Unit>>()
     @Volatile private var holdFrom = Int.MAX_VALUE
     @Volatile override var isLoaded = false
+    val loads = CopyOnWriteArrayList<LlmBackend>()
+    @Volatile var failOn: LlmBackend? = null
+    @Volatile var closes = 0
 
     fun holdFrom(index: Int) {
         holdFrom = calls.size + index
@@ -350,6 +387,8 @@ class JobEngine : LlmEngine {
     fun kinds(): List<String> = calls.toList()
 
     override suspend fun load(model: File, backend: LlmBackend) {
+        if (backend == failOn) throw IllegalStateException("no OpenCL here")
+        loads += backend
         isLoaded = true
     }
 
@@ -380,6 +419,7 @@ class JobEngine : LlmEngine {
     override fun lastStats(): LlmStats = LlmStats(0.5, 2500, 60, 250.0, 20.0)
 
     override fun close() {
+        closes++
         isLoaded = false
     }
 }
