@@ -11,6 +11,10 @@ import com.domovoi.app.ui.screens.chat.ReplyDocs
 import com.domovoi.app.ui.screens.chat.SourceSheet
 import com.domovoi.app.ui.screens.chat.SourceView
 import com.domovoi.app.ui.screens.chat.DocAttachButton
+import com.domovoi.app.ui.screens.chat.PendingPhotoCard
+import com.domovoi.app.ui.screens.chat.PhonePhotoButtons
+import com.domovoi.app.assistant.photoButtonsShown
+import com.domovoi.app.assistant.PhonePhotos
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -166,6 +170,8 @@ private fun ChatPane(
     var draft by rememberSaveable { mutableStateOf("") }
     var offerSpeechFiles by remember { mutableStateOf(false) }
     var openSource by remember { mutableStateOf<SourceView?>(null) }
+    // Why the last photo couldn't be used, until closed (N3).
+    var photoProblem by remember { mutableStateOf<String?>(null) }
     val messages = ui.conversation.messages
     // The paperclip: a document for this phone chat (documents plan, D1),
     // copied into the app's storage and read on the phone. What's typed
@@ -226,6 +232,8 @@ private fun ChatPane(
         if (ui.voicePhase != VoicePhase.Idle) VoiceLine(ui) else EngineLine(ui, actions, onModel)
         ui.reading?.let { ReadingLine(it) }
         ui.docProblem?.let { DocProblemNote(it, onClose = actions.closeDocProblem) }
+        photoProblem?.let { DocProblemNote(it, onClose = { photoProblem = null }) }
+        ui.pendingPhoto?.let { p -> PendingPhotoCard(p, onRemove = actions.dropPhoto) }
         ui.pendingPdf?.let { p ->
             PendingPdfCard(
                 p.name, PDF_NO_API, canAskServer = actions.askServer != null, busy = actions.askingServer,
@@ -245,6 +253,19 @@ private fun ChatPane(
                 }
             }
             LocalComposerField.current(draft, { draft = it }, Modifier.weight(1f))
+            // The camera and the gallery, beside the mic: only where the
+            // phone's model looks at photos on its GPU (PhoneVision.kt).
+            val takePhoto = actions.attachPhoto
+            if (takePhoto != null && photoButtonsShown(ui)) {
+                PhonePhotoButtons(
+                    onPhoto = { p ->
+                        photoProblem = null
+                        takePhoto(p)
+                    },
+                    onProblem = { photoProblem = it },
+                    onToast = { toast(it) },
+                )
+            }
             if (ui.voicePhase != VoicePhase.Idle) {
                 // One button for the turn: while it listens and has heard
                 // you, it sends what you said; otherwise it stops it all.
@@ -257,7 +278,7 @@ private fun ChatPane(
                 IconButton(onClick = actions.stop) {
                     Icon(Icons.Filled.Stop, contentDescription = "stop", tint = Domovoi.colors.brand)
                 }
-            } else if (draft.isBlank()) {
+            } else if (draft.isBlank() && ui.pendingPhoto == null) {
                 // Nothing typed: the mic.
                 IconButton(onClick = {
                     when (val v = ui.voiceSetup) {
@@ -270,7 +291,9 @@ private fun ChatPane(
                     Icon(Icons.Filled.Mic, contentDescription = "talk", tint = Domovoi.colors.brand)
                 }
             } else {
-                val canSend = draft.isNotBlank()
+                // Words, or a photo waiting (it goes with "What's in this
+                // photo?" when nothing is typed).
+                val canSend = draft.isNotBlank() || ui.pendingPhoto != null
                 IconButton(onClick = {
                     actions.send(draft)
                     draft = ""
@@ -421,6 +444,11 @@ private fun MessageBubble(
                     .padding(horizontal = if (isUser) 12.dp else 0.dp, vertical = if (isUser) 8.dp else 2.dp),
             ) {
                 Column {
+                    // The photo's marker: the photo itself is never kept (N3).
+                    if (isUser && m.photo) {
+                        Text(PHOTO_MARKER, style = MaterialTheme.typography.labelMedium, color = Domovoi.colors.fgMuted,
+                            modifier = Modifier.padding(bottom = if (m.text.isNotBlank()) 2.dp else 0.dp))
+                    }
                     if (isUser && m.text.isNotBlank()) {
                         Text(m.text, style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fg)
                         if (m.spoken) {
@@ -492,6 +520,9 @@ internal const val PHONE_EMPTY_HINT =
         "internet, and this chat stays on this phone."
 
 internal const val ACTION_COPY = "copy"
+
+/** What a photo question shows where the photo was: the photo isn't kept. */
+internal const val PHOTO_MARKER = "photo (not kept)"
 internal const val ACTION_REPORT = "report this reply"
 
 /** What a screen reader hears after a message's words: who said it. */
@@ -531,6 +562,8 @@ internal fun replyDetails(m: StoredMessage): String? {
         // The clock's answer: no model wrote it, so no model numbers.
         m.tokensPerS?.takeUnless { m.fromClock }?.let { String.format(Locale.US, "%.1f tokens/s", it) },
         if (m.fromClock) ReplyReport.CLOCK else m.backend,
+        m.vision?.let { "photo on $it" },
+        m.peakMb?.let { "peak $it MB" },
         m.stopMs?.let { "silenced $it ms after stop" },
     )
     return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")

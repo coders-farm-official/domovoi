@@ -124,6 +124,13 @@ data class AssistantUi(
     val pendingPdf: PendingDocument? = null,
     /** Why the last attachment wasn't taken, in words, until closed. */
     val docProblem: String? = null,
+    /** The chat model takes photos (N3: Gemma 4 E2B carries its encoder). */
+    val modelTakesImages: Boolean = false,
+    /** Whether the photo encoder works on this phone's GPU ([VisionCheck]):
+     *  the camera and gallery buttons show only once it [VisionProbe.PASSED]. */
+    val vision: VisionProbe = VisionProbe.UNKNOWN,
+    /** The photo waiting for its question (one per question), in memory. */
+    val pendingPhoto: PendingPhoto? = null,
 ) {
     val installed: Boolean get() = setup == ModelSetup.Installed
 
@@ -233,6 +240,18 @@ class AssistantController(
     private val pdfText: () -> PdfTextReader? = { null },
     /** The longest a document may take to read before Chat gives up on it. */
     private val docReadTimeoutMs: Long = DOC_READ_TIMEOUT_MS,
+    /** Where the GPU-vision probe's answer is kept between runs (N3). */
+    private val visionMemory: VisionMemory = MemoryVisionMemory(),
+    /** Where the photo encoder runs: the GPU (the bench's rule); a debug
+     *  build can say otherwise (DebugVision). */
+    private val visionBackend: () -> LlmBackend = { LlmBackend.GPU },
+    /** The app build the probe's answer belongs to (versionName and code). */
+    private val appBuild: String = appVersion,
+    /** The longest the probe may take before it counts as a failure. */
+    private val probeTimeoutMs: Long = PROBE_TIMEOUT_MS,
+    /** The app's resident memory now, KB (/proc/self/status VmRSS); null
+     *  when it can't be read. Sampled while a photo is answered. */
+    private val residentKb: () -> Long? = { null },
 ) {
     private val _state = MutableStateFlow(
         AssistantUi(
@@ -244,6 +263,7 @@ class AssistantController(
             lastDownloadMs = settings.lastDownloadMs,
             voiceBytes = models.filter { it.kind != ModelKind.LLM }.sumOf { it.totalBytes },
             speakTyped = settings.speakTyped,
+            modelTakesImages = models.first { it.kind == ModelKind.LLM }.takesImages,
         ),
     )
     val state: StateFlow<AssistantUi> = _state
@@ -270,6 +290,9 @@ class AssistantController(
     private val changeLock = Mutex()
     private var loadJob: Job? = null
     private var unloadTimer: Job? = null
+    /** The photo encoder failed to load this run though it passed before
+     *  (memory, a driver update): no photos until the app starts again. */
+    @Volatile private var visionDown = false
     @Volatile private var screensShowing = 0
 
     /** Bytes of each model on disk, read on [io]; progress fills in the
@@ -311,6 +334,9 @@ class AssistantController(
                 readDisk()
                 readHistory()
                 readReports()
+                // A probe the last run never finished (it died in the GPU
+                // driver) reads as failed here, before anything loads.
+                readVision(atStart = true)
             }
             if (screensShowing > 0) prepare()
             jobs.job.collect { onJob(it) }
@@ -541,6 +567,7 @@ class AssistantController(
         if (backend == settings.backend) return
         settings.backend = backend
         _state.update { it.copy(backend = backend) }
+        readVision()
         scope.launch {
             stopReply()
             closeEngine()
@@ -597,27 +624,101 @@ class AssistantController(
         runCatching { beforeLoad() }
         _state.update { it.copy(engine = EngineState.Loading(wanted)) }
         val file = store.fileFor(chatModel, chatModel.files.single())
-        val created = newEngine()
         val started = nanos()
+        // Photos (N3): the encoder loads with the model on [visionBackend]
+        // unless it has failed there; the first time it is tried once, with
+        // a test picture ([VisionCheck]), and the answer is kept.
+        val check = if (chatModel.takesImages) visionCheck() else null
+        val before = check?.state()
+        val tryVision = check != null && before != VisionProbe.FAILED && !visionDown
+        if (tryVision && before == VisionProbe.UNKNOWN) check!!.trying()
+        var created = newEngine()
         try {
-            withContext(io) {
-                check(store.isInstalled(chatModel)) { "the model is not on the phone" }
-                created.load(file, wanted)
+            var withVision = tryVision
+            try {
+                withContext(io) {
+                    check(store.isInstalled(chatModel)) { "the model is not on the phone" }
+                    created.load(file, wanted, if (tryVision) visionBackend() else null)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                if (!tryVision || !store.isInstalled(chatModel)) throw e
+                // Not with the encoder: the text model alone.
+                Log.w(TAG, "the photo encoder didn't load: ${plainReason(e)}")
+                visionFailed(check!!, before)
+                runCatching { created.close() }
+                withVision = false
+                created = newEngine()
+                withContext(io) { created.load(file, wanted, null) }
+            }
+            if (withVision && before == VisionProbe.UNKNOWN) {
+                val ok = try {
+                    withTimeoutOrNull(probeTimeoutMs) {
+                        created.probeVision()
+                        true
+                    } ?: false
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    Log.w(TAG, "the photo encoder failed its test picture: ${plainReason(e)}")
+                    false
+                }
+                if (ok) {
+                    check!!.passed()
+                } else {
+                    visionFailed(check!!, before)
+                    // The encoder may have left the runtime in a bad way:
+                    // the text model alone, fresh.
+                    runCatching { created.close() }
+                    created = newEngine()
+                    withContext(io) { created.load(file, wanted, null) }
+                }
             }
         } catch (e: CancellationException) {
             runCatching { created.close() }
+            // A load stopped part-way is no verdict on the encoder.
+            if (tryVision && before == VisionProbe.UNKNOWN && check!!.unfinished()) check.forget()
+            readVision()
             _state.update { it.copy(engine = EngineState.Unloaded) }
             throw e
         } catch (e: Throwable) {
             runCatching { created.close() }
+            if (tryVision && before == VisionProbe.UNKNOWN && check!!.unfinished()) check.forget()
+            readVision()
             _state.update { it.copy(engine = EngineState.Failed(wanted, plainReason(e))) }
             return@withLock null
         }
+        readVision()
         val ms = (nanos() - started) / 1_000_000
         engine = created
         engineBackend = wanted
         _state.update { it.copy(engine = EngineState.Ready(wanted, ms)) }
         created
+    }
+
+    /** The probe's memory for this model, app build and backends. */
+    private fun visionCheck(): VisionCheck =
+        VisionCheck(visionMemory, visionKey(chatModel, appBuild, settings.backend, visionBackend()))
+
+    /** The encoder failed: remembered when this was its first try, else for
+     *  this run only (it passed before: memory, a driver update). */
+    private fun visionFailed(check: VisionCheck, before: VisionProbe?) {
+        if (before == VisionProbe.UNKNOWN) check.failed() else visionDown = true
+    }
+
+    /** [AssistantUi.vision] from the probe's memory; a waiting photo goes
+     *  when photos stop being offered. [atStart]: the first read of a run,
+     *  where a try the last run left unfinished becomes a failure. */
+    private fun readVision(atStart: Boolean = false) {
+        if (!chatModel.takesImages) return
+        val check = visionCheck()
+        val v = when {
+            visionDown -> VisionProbe.FAILED
+            atStart -> check.state()
+            else -> check.stateNow()
+        }
+        _state.update { it.copy(vision = v, pendingPhoto = if (v == VisionProbe.PASSED) it.pendingPhoto else null) }
     }
 
     private suspend fun closeEngine() {
@@ -688,22 +789,44 @@ class AssistantController(
 
     // ── Conversation ────────────────────────────────────────────────────
 
-    /** Sends [text] and streams the reply into the conversation. */
+    /** Sends [text] (with the waiting photo, if there is one) and streams
+     *  the reply into the conversation. */
     fun send(text: String) {
         val said = text.trim()
         val ui = _state.value
-        if (said.isEmpty() || ui.replying || !ui.installed || voice?.active == true) return
+        val photo = ui.pendingPhoto
+        if ((said.isEmpty() && photo == null) || ui.replying || !ui.installed || voice?.active == true) return
         val now = clock()
         val asked = ui.conversation.let {
-            it.copy(updated = now, messages = it.messages + StoredMessage(Speaker.USER, said, now))
+            it.copy(updated = now, messages = it.messages + StoredMessage(Speaker.USER, said, now, photo = photo != null))
         }
-        _state.update { it.copy(conversation = asked, replying = true, thinking = true) }
+        // The photo leaves the screen's state now; only this turn holds it.
+        _state.update { it.copy(conversation = asked, replying = true, thinking = true, pendingPhoto = null) }
         val v = voice
         if (settings.speakTyped && v != null && ui.voiceReady) {
-            v.answerAloud { onDelta -> reply(asked, onDelta) }
+            v.answerAloud { onDelta -> reply(asked, onDelta, photo) }
         } else {
-            replyJob = scope.launch { reply(asked) }
+            replyJob = scope.launch { reply(asked, photo = photo) }
         }
+    }
+
+    // ── Photos (N3) ─────────────────────────────────────────────────────
+
+    /** Whether a photo can be added now ([photoButtonsShown]). */
+    fun canTakePhoto(ui: AssistantUi = _state.value): Boolean = photoButtonsShown(ui) && voice?.active != true
+
+    /** [photo] waits for its question. One per question: refused (false)
+     *  while another waits, a reply is written, or photos aren't offered.
+     *  Held in memory only. */
+    fun attachPhoto(photo: PendingPhoto): Boolean {
+        if (!canTakePhoto()) return false
+        _state.update { it.copy(pendingPhoto = photo) }
+        return true
+    }
+
+    /** The waiting photo goes, unsent. */
+    fun dropPhoto() {
+        _state.update { it.copy(pendingPhoto = null) }
     }
 
     // ── Voice ───────────────────────────────────────────────────────────
@@ -765,7 +888,11 @@ class AssistantController(
         }
     }
 
-    private suspend fun reply(question: StoredConversation, onDelta: (String) -> Unit = {}): StoredConversation {
+    private suspend fun reply(
+        question: StoredConversation,
+        onDelta: (String) -> Unit = {},
+        photo: PendingPhoto? = null,
+    ): StoredConversation {
         // The model's time is the reply's: a title being written stops (it
         // runs again once this reply is done), and whatever it wrote, or a
         // rename meanwhile, is kept.
@@ -774,6 +901,9 @@ class AssistantController(
         // A retry's question is already on disk with the reply it may
         // replace: that copy stays until the new reply is finished.
         if (retryingFrom == null) save(asked)
+        // A photo question goes to the model with its photo: no fast path
+        // answers "what time is it on this sign?".
+        if (photo != null) return photoReply(asked, photo, onDelta)
         clockReply(asked, onDelta)?.let { return it }
         if (asked.documents.isNotEmpty()) return docReply(asked, onDelta)
         // A question about Domovoi: the manual on the phone (LocalHelp).
@@ -827,6 +957,82 @@ class AssistantController(
             throw e
         } catch (e: Throwable) {
             return finishReply(viewed, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
+        }
+    }
+
+    /**
+     * A photo and its question (N3): the model on the phone looks at the
+     * photo, in a turn of its own (LlmEngine.replyToPhoto: the system
+     * prompt, the clock, the photo, the question). The photo's bytes live
+     * only in [photo] and are wiped when the reply ends, however it ends;
+     * the conversation keeps the "photo" marker on the question. The app's
+     * peak memory over the reply is written on it (developer details).
+     */
+    private suspend fun photoReply(asked: StoredConversation, photo: PendingPhoto, onDelta: (String) -> Unit): StoredConversation {
+        try {
+            val backend = settings.backend
+            val llm = try {
+                ensureEngine()
+            } catch (e: CancellationException) {
+                finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), stopped = true))
+                throw e
+            }
+            if (llm == null) {
+                val why = (_state.value.engine as? EngineState.Failed)?.reason ?: "the model did not load"
+                return finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), error = "The model could not start: $why"))
+            }
+            if (!llm.seesPhotos) {
+                return finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), error = PHOTO_UNAVAILABLE))
+            }
+            val question = PhonePhotos.question(asked.messages.last().text)
+            val sent = nanos()
+            var firstMs: Long? = null
+            val text = StringBuilder()
+            val peak = java.util.concurrent.atomic.AtomicLong(-1)
+            fun sample() {
+                residentKb()?.let { kb -> peak.accumulateAndGet(kb) { a, b -> maxOf(a, b) } }
+            }
+            fun peakKb(): Long? = peak.get().takeIf { it >= 0 }
+            fun live(): StoredMessage = StoredMessage(
+                Speaker.DOMOVOI, text.toString(), clock(), backend = backend.label,
+                vision = visionBackend().label, peakMb = peakKb()?.let { (it / 1024).toInt() },
+            )
+            _state.update { it.copy(conversation = asked.withMetaOf(it.conversation).copy(messages = asked.messages + live())) }
+            val sampler = scope.launch(io) {
+                while (true) {
+                    sample()
+                    delay(MEMORY_SAMPLE_MS)
+                }
+            }
+            try {
+                llm.replyToPhoto(PhonePhotos.systemPrompt(Persona.SYSTEM_PROMPT), photo.jpeg, question, clockLine()).collect { delta ->
+                    if (firstMs == null && delta.isNotBlank()) firstMs = (nanos() - sent) / 1_000_000
+                    text.append(delta)
+                    onDelta(delta)
+                    _state.update { ui ->
+                        ui.copy(
+                            thinking = text.isBlank(),
+                            conversation = asked.withMetaOf(ui.conversation).copy(messages = asked.messages + live()),
+                        )
+                    }
+                }
+                sampler.cancelAndJoin()
+                sample()
+                val stats = llm.lastStats()
+                Log.i(TAG, "photo turn: first word $firstMs ms, peak ${peakKb()?.div(1024)} MB, " +
+                    "${photo.width}x${photo.height} (${photo.source}) prepared in ${photo.prepMs} ms")
+                return finishReply(asked, live().copy(firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }))
+            } catch (e: CancellationException) {
+                sampler.cancel()
+                finishReply(asked, live().copy(stopped = true, firstTextMs = firstMs, stopMs = voice?.lastStopMs))
+                throw e
+            } catch (e: Throwable) {
+                sampler.cancel()
+                return finishReply(asked, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
+            }
+        } finally {
+            // Nothing of the photo outlives its reply.
+            photo.jpeg.fill(0)
         }
     }
 
@@ -921,7 +1127,7 @@ class AssistantController(
         scope.launch {
             stopReply()
             settings.currentConversation = null
-            _state.update { it.copy(conversation = conversations.create(clock())) }
+            _state.update { it.copy(conversation = conversations.create(clock()), pendingPhoto = null) }
         }
     }
 
@@ -934,7 +1140,7 @@ class AssistantController(
                 return@launch
             }
             settings.currentConversation = loaded.id
-            _state.update { it.copy(conversation = loaded) }
+            _state.update { it.copy(conversation = loaded, pendingPhoto = it.pendingPhoto.takeIf { _ -> it.conversation.id == loaded.id }) }
         }
     }
 
@@ -1386,6 +1592,13 @@ class AssistantController(
         /** A document taking longer than this to read is given up on. */
         const val DOC_READ_TIMEOUT_MS = 90_000L
 
+        /** The GPU-vision probe's limit: past it, the encoder counts as failed. */
+        const val PROBE_TIMEOUT_MS = 60_000L
+        private const val MEMORY_SAMPLE_MS = 150L
+
+        /** A photo question when the model came up without its encoder. */
+        const val PHOTO_UNAVAILABLE = "This phone can't look at photos right now. Try again after reopening the app."
+
         /** Unload the model this long after the assistant leaves the screen. */
         const val UNLOAD_AFTER_MS = 5 * 60 * 1000L
         const val TITLE_DELAY_MS = 1_500L
@@ -1424,8 +1637,18 @@ class AssistantController(
                 helpIndex = BundledManual(app)::index,
                 docs = ChatDocStore(File(app.filesDir, "chat-docs/attachments")),
                 pdfText = { PhonePdfText.readerOrNull() },
+                visionMemory = PhoneVisionMemory(app),
+                visionBackend = { DebugVision.backend(app) ?: LlmBackend.GPU },
+                appBuild = appBuild(app),
+                residentKb = { runCatching { parseProcStatus(File("/proc/self/status").readText()).second }.getOrNull() },
             ).also { it.attach(app) }
         }
+
+        /** "1.0.0 (42)": the probe tries again on every new build. */
+        private fun appBuild(app: Context): String = runCatching {
+            val info = app.packageManager.getPackageInfo(app.packageName, 0)
+            "${info.versionName} (${androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(info)})"
+        }.getOrDefault("unknown")
 
         private fun gb(bytes: Long) = String.format(Locale.US, "%.2f GB", bytes / 1073741824.0)
     }
@@ -1480,7 +1703,10 @@ fun modelTurns(messages: List<StoredMessage>): List<IndexedTurn> {
         if (m.fromUser) {
             // An unanswered question before this one: drop it.
             if (lastFromUser()) out.removeAt(out.lastIndex)
-            if (m.text.isNotBlank()) out += IndexedTurn(i, ChatTurn(fromUser = true, text = m.text))
+            // A photo question: the marker stands for the photo, which is
+            // never kept (N3), so later turns know one was there.
+            val said = if (m.photo) PhonePhotos.historyText(m.text) else m.text
+            if (said.isNotBlank()) out += IndexedTurn(i, ChatTurn(fromUser = true, text = said))
         } else if (m.text.isNotBlank()) {
             if (lastFromUser()) out += IndexedTurn(i, ChatTurn(fromUser = false, text = m.text))
         } else if (lastFromUser()) {
@@ -1496,6 +1722,8 @@ fun modelTurns(messages: List<StoredMessage>): List<IndexedTurn> {
 fun retryBase(c: StoredConversation): StoredConversation? {
     val last = c.messages.lastOrNull() ?: return null
     if (last.fromUser || c.messages.size < 2 || !c.messages[c.messages.size - 2].fromUser) return null
+    // A photo question can't be asked again: its photo is gone (N3).
+    if (c.messages[c.messages.size - 2].photo) return null
     return c.copy(messages = c.messages.dropLast(1))
 }
 

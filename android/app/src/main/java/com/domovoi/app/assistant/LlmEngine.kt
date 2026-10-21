@@ -1,6 +1,7 @@
 package com.domovoi.app.assistant
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import java.io.File
 
 /** Where the model runs. GPU needs the vendor's OpenCL driver (the manifest's
@@ -23,13 +24,37 @@ data class LlmStats(
  * A language model running on the phone. By design it has no tool, file or
  * media parameters: the model sees the system prompt, the phone's clock and
  * the conversation, nothing else, so there is no path from it to the user's
- * data.
+ * data. The one exception is a photo the person picked or took for a
+ * question ([replyToPhoto], N3): the app hands over its JPEG bytes, in
+ * memory, and the engine keeps nothing of it after the reply.
  */
 interface LlmEngine : AutoCloseable {
     val isLoaded: Boolean
 
     /** Loads [model] on [backend]. Slow (seconds): call off the main thread. */
     suspend fun load(model: File, backend: LlmBackend)
+
+    /** Loads [model] with its photo encoder on [vision] too (N3); null: text
+     *  only. An engine that takes no photos loads the text model and leaves
+     *  [seesPhotos] false. */
+    suspend fun load(model: File, backend: LlmBackend, vision: LlmBackend?) = load(model, backend)
+
+    /** The loaded model was given its photo encoder ([load] with a vision
+     *  backend). Whether the encoder works is [probeVision]'s question. */
+    val seesPhotos: Boolean get() = false
+
+    /** Runs the photo encoder once on a small test picture; throws when it
+     *  can't (the phone's GPU driver refuses it, for one). */
+    suspend fun probeVision(): Unit = throw UnsupportedOperationException("this engine takes no photos")
+
+    /** The reply to one photo ([jpeg], a JPEG made on the phone) and its
+     *  [question], in a conversation of its own: the system prompt, the
+     *  clock ([now]), the photo and the question, nothing earlier (a photo
+     *  turn's first word shouldn't wait for the model to re-read a long
+     *  chat). Nothing of the photo is kept once it ends: the next turn
+     *  starts a fresh conversation from the text history. */
+    fun replyToPhoto(system: String, jpeg: ByteArray, question: String, now: String? = null): Flow<String> =
+        flow { throw UnsupportedOperationException("this engine takes no photos") }
 
     /** The reply to the last turn of [history] (which must be the user's),
      *  as text deltas in order. Cancelling collection stops the model.

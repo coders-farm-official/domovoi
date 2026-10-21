@@ -59,6 +59,13 @@ data class StoredMessage(
     /** ...the notes under it ("couldn't find", "uncited", a quote that
      *  doesn't match). */
     val notes: List<DocNote> = emptyList(),
+    /** A question asked with a photo (N3). Only this mark is kept: the
+     *  photo itself never is, on the phone or anywhere else. */
+    val photo: Boolean = false,
+    /** A photo reply: where the photo encoder ran ("gpu"). */
+    val vision: String? = null,
+    /** ...and the app's peak resident memory while it was written, MB. */
+    val peakMb: Int? = null,
 ) {
     val fromUser: Boolean get() = from == Speaker.USER
 }

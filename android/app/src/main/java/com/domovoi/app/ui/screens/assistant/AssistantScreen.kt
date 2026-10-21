@@ -112,6 +112,11 @@ internal class AssistantActions(
     val askingServer: Boolean = false,
     val dropPending: () -> Unit = {},
     val closeDocProblem: () -> Unit = {},
+    /** A photo for the next question (N3); null where phone chats take no
+     *  photos (the buttons also need the GPU probe to have passed). */
+    val attachPhoto: ((com.domovoi.app.assistant.PendingPhoto) -> Unit)? = null,
+    /** The waiting photo goes, unsent. */
+    val dropPhoto: () -> Unit = {},
     /** The phone's own copy of a document of the conversation on screen, by id. */
     val docFile: (String) -> java.io.File? = { null },
 )
@@ -405,6 +410,10 @@ private fun actionsFor(
     askingServer = askingServer,
     dropPending = a::dropPending,
     closeDocProblem = a::closeDocProblem,
+    attachPhoto = { photo ->
+        if (!a.attachPhoto(photo)) toast("one photo per question: send or remove the one waiting first")
+    },
+    dropPhoto = a::dropPhoto,
     docFile = { id -> a.docFile(id) },
 )
 
