@@ -246,7 +246,8 @@ you're not using that.)
 On a fresh Ubuntu 26.04 box, `scripts/linux/provision.sh` runs this
 section, [Make it an appliance](#make-it-an-appliance) and the
 [update unit](#one-time-upgrade-for-existing-installs) for you,
-unattended. It is the same script the Windows installer runs inside its
+unattended (run from a terminal, it asks one question first: whether to
+include AI chat, below). It is the same script the Windows installer runs inside its
 WSL distro. Read it, or ask it what it would do, before it changes
 anything:
 
@@ -275,7 +276,22 @@ Whisper model, the Piper voice and the room image. The models include the
 vision model that reads pictures in chat (`qwen3-vl:2b-instruct-q4_K_M` on
 both tiers, about 1.9 GB more to download); `--no-vision-model` leaves it
 out, and chat then says it isn't installed until an admin installs it from
-Settings → Models. What it checks:
+Settings → Models.
+
+**AI chat and questions are optional.** Run from a terminal, the script
+asks first: *Include AI chat and questions? It downloads about 6.4 GB of
+AI models (about 9.1 GB on a box with 24 GB of memory or more).* Enter
+or `y` includes them, `n` leaves them out. `--ai-models` and
+`--no-ai-models` give the answer on the command line instead; with
+neither, and no terminal to ask at (the Windows installer, a script), the
+answer is yes. Voice commands, music, timers and everything else work
+either way: speech recognition (Whisper), the voices and the wake word
+are installed as usual, and only the AI models are left out. The answer
+goes into `domovoi/.env` as `AI_FEATURES=true` or `false`. Ollama itself
+is installed either way, so AI can be turned on later on the dashboard
+(Settings → Models), which downloads the models then. A later run of the
+script doesn't ask again: it keeps the answer `domovoi/.env` holds (yours,
+if you changed it in Settings since). What it checks:
 
 - **Against a pin, stopping on a mismatch:** every Python package (the
   lock's hashes), the Ollama release pinned under [By hand](#by-hand)
@@ -338,7 +354,7 @@ restarted that didn't change. A re-run never undoes your own settings: in
 the script last wrote there, and it warns about each one it leaves alone.
 A media folder it mounted before that is missing now (an unplugged drive)
 is a warning, not a failure. `--help` lists the options (`--media`,
-`--tier`, `--skip-models`, ...) and the exit codes.
+`--tier`, `--no-ai-models`, `--skip-models`, ...) and the exit codes.
 
 The steps below are the same install by hand, without the pre-downloads.
 Follow them instead if you prefer, or to see what a step changed.
