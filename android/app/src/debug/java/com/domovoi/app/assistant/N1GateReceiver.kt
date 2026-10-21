@@ -17,9 +17,11 @@ import java.util.Locale
 /**
  * DEBUG BUILDS ONLY: N1's gate (design-notes plan, milestone N1), run on the
  * phone through a phone chat's real path (the fast paths, then the model
- * with the facts and the read tools), with the prompt's facts pinned so
+ * with the facts, and the read tools only for a model allowed them), with
+ * the prompt's facts pinned so
  * every question has something it could mention:
  *
+ *     adb shell am start -n com.domovoi.app/.MainActivity   # on screen: Android freezes a cached app
  *     adb shell am broadcast -a com.domovoi.app.debug.N1_GATE -n com.domovoi.app/.assistant.N1GateReceiver --es set all
  *     adb shell run-as com.domovoi.app cat files/n1-gate.txt
  *
@@ -57,6 +59,8 @@ class N1GateReceiver : BroadcastReceiver() {
             Log.i(TAG, s)
         }
         app.assistant.unload()
+        // Android freezes a backgrounded app's process: run with the app on
+        // screen (adb shell am start -n com.domovoi.app/.MainActivity first).
         val controller = AssistantController.forApp(
             ctx,
             beforeLoad = { app.assistant.unload() },
@@ -70,6 +74,11 @@ class N1GateReceiver : BroadcastReceiver() {
         )
         controller.screenShown()
         withTimeoutOrNull(60_000) { while (!controller.state.value.installed) delay(200) }
+        // Load the model before the first question (its first load writes
+        // the CPU weight cache: minutes on the emulator).
+        controller.prepare()
+        withTimeoutOrNull(900_000) { while (controller.state.value.engine !is EngineState.Ready) delay(500) }
+        line("engine: ${controller.state.value.engine}")
         val network = AndroidPhoneReader(ctx).network()
         line("N1 GATE on ${android.os.Build.MODEL}, Android ${android.os.Build.VERSION.RELEASE}; network at start: $network")
         line("pinned facts: ${PhoneFacts.line(PINNED)}")
@@ -106,14 +115,17 @@ class N1GateReceiver : BroadcastReceiver() {
     private data class Answer(val text: String, val error: String?, val how: String)
 
     private suspend fun ask(c: AssistantController, q: String): Answer {
+        // The last reply must be done first: a send during a reply is ignored.
+        withTimeoutOrNull(300_000) { while (c.state.value.replying) delay(200) }
         val before = c.state.value.conversation.id
         c.newConversation()
         withTimeoutOrNull(10_000) { while (c.state.value.conversation.id == before) delay(50) }
         val id = c.state.value.conversation.id
         c.send(q)
-        withTimeoutOrNull(240_000) {
+        val done = withTimeoutOrNull(300_000) {
             while (c.state.value.conversation.messages.size < 2 || c.state.value.replying) delay(200)
-        }
+            true
+        } == true
         val m = c.state.value.conversation.messages.getOrNull(1)
         val how = when {
             m == null -> "none"
@@ -124,7 +136,8 @@ class N1GateReceiver : BroadcastReceiver() {
         }
         c.delete(id)
         delay(300)
-        return Answer(m?.text.orEmpty(), m?.error ?: if (m == null) "no reply in 240 s" else null, how)
+        if (!done) c.stop()
+        return Answer(m?.text.orEmpty(), m?.error ?: if (!done) "no reply in 300 s" else null, how)
     }
 
     companion object {
