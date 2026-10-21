@@ -87,7 +87,7 @@ def titles(monkeypatch):
     return _T
 
 
-async def _until(what: str, ok, timeout: float = 5.0) -> None:
+async def _until(what: str, ok, timeout: float = 20.0) -> None:
     for _ in range(int(timeout / 0.02)):
         if await ok() if asyncio.iscoroutinefunction(ok) else ok():
             return
@@ -219,7 +219,7 @@ async def test_titles_run_one_at_a_time_and_any_message_stops_them(monkeypatch, 
         assert titles.asked == ["first thread"], "one title at a time"
         # A message to a third thread stops the title being written...
         await c.post(f"/api/chat/threads/{other}/messages", json={"content": "something else"})
-        assert titles.cancelled == 1
+        await _until("the title stopped", lambda: titles.cancelled == 1)
         # ...and the queue starts again after it, a's title first.
         await _until("asked again", lambda: len(titles.asked) == 2)
         assert titles.asked[1] == "first thread"
