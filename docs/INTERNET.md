@@ -105,7 +105,7 @@ which and can hand a setting back to the answer
 
 **What no answer changes:**
 
-- **Topic news every morning** (`NEWS_AUTO_FETCH`, Settings → Configuration
+- **Topic news every morning** (`NEWS_AUTO_FETCH`, Settings → Advanced
   → News) stays each household's own opt-in, off by default.
 - **Your voice never leaves the box.** Whisper always loads its model from
   the server's own disk first; a model downloads only when it isn't there
@@ -126,14 +126,14 @@ artist names from MusicBrainz, synced lyrics from LRCLIB and podcast
 downloads, and turns song recognition on as soon as it has a key. What
 stays yours to do:
 
-1. **Set your town for local news:** Settings → Configuration → News →
+1. **Set your town for local news:** Settings → Advanced → News →
    *Local news location* (`NEWS_LOCATION`). Applies at once.
 
    *Why:* the morning briefing gets a local block. Empty skips it.
 
 2. **Song recognition for badly tagged music:** create a free AcoustID
    **application** at [acoustid.org/new-application](https://acoustid.org/new-application)
-   and paste its API key into the dashboard: Settings → Configuration →
+   and paste its API key into the dashboard: Settings → Advanced →
    Library → **AcoustID key** (signed in as admin). The Music page's
    "song recognition needs a free AcoustID key" and the song-recognition
    row of Settings → Internet open that field. **test the key** asks
@@ -182,7 +182,7 @@ stays yours to do:
    *Why:* "play 97.5 FM" finds the station in your market rather than any
    97.5 in the country.
 
-4. **Fill the satellite media cache.** Settings → Satellites → *prepare satellite
+4. **Fill the satellite media cache.** Settings → Rooms → *prepare satellite
    media* → **Refresh caches** (admin sign-in; the wheel fetch can take
    minutes). The wake-word models come from pinned URLs and are checked
    against pinned digests; the server no longer needs the `openwakeword`
@@ -197,7 +197,7 @@ stays yours to do:
    [LINUX_HOST.md → Updates from the dashboard](LINUX_HOST.md#updates-from-the-dashboard).
 
    *Why:* **Pull the latest** and **Restart to apply changes** (Settings →
-   Configuration → Version) then also re-sync dependencies, run
+   About & updates) then also re-sync dependencies, run
    migrations, rebuild the music image, keep the search helper in step
    with your answer, and roll back if the result isn't healthy.
 
@@ -235,7 +235,7 @@ stays yours to do:
   three Piper voices (about 130 MB, downloaded on first use unless the
   provisioning fetched them).
 - **Topic news every morning** (`NEWS_AUTO_FETCH`).
-- **A custom wake word.** Turning training on (Settings → Wake Words)
+- **A custom wake word.** Turning training on (Settings → Wake words)
   downloads about 22 GB once: the trainer's image and its training data.
   Under No it can't be turned on, and answering No while it downloads stops
   the download. See [`scripts/wake_word/README.md`](../scripts/wake_word/README.md).
@@ -292,7 +292,7 @@ needs something it can only download is usually the day the line is down.
       Voices you upload on Settings → Voices are already on the server.
 - [ ] **The fast lane**, if you use it: `python -m domovoi.fast_lane fetch`.
 - [ ] **A custom wake word**, if you want one: turn training on in
-      Settings → Wake Words and train it now (about 22 GB, once). Under No
+      Settings → Wake words and train it now (about 22 GB, once). Under No
       training is refused, even with the data already downloaded.
 - [ ] **Install the plugins you want** (the Plugins page). Installing one
       from GitHub, and the Python packages it needs, takes the internet.
@@ -407,7 +407,7 @@ and sets `HF_HUB_OFFLINE` back, and on a Linux server with the update unit
 it masks Ubuntu's own updaters again (the first restart, under Sometimes,
 unmasked them: [LINUX_HOST.md → Internet or not](LINUX_HOST.md#internet-or-not)). To keep that window quiet, set
 `MUSIC_ALIAS_FETCH_ENABLED=false` and `LYRICS_LRCLIB_ENABLED=false`
-(Settings → Configuration) before you switch; they then stay off whatever
+(Settings → Advanced) before you switch; they then stay off whatever
 the answer says until you press **follow the answer again**.
 
 ---
@@ -477,7 +477,7 @@ satellites once they are set up, at your router as well.
   - **set in the server's environment**: change it there;
 - lists the plugins that may reach the internet on their own, and, under
   **No**, warns about a language model outside the house;
-- says when a restart is needed, the same way Settings → Configuration
+- says when a restart is needed, the same way Settings → Advanced
   does.
 
 **Installed before October 2026?** Your `domovoi/.env` was copied from an

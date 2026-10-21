@@ -1,5 +1,5 @@
 /* Satellites — per-room Pi grid + drill-in detail drawer + broadcast composer.
- * Since 2026-10-11 a Settings tab (Settings → Satellites, SatellitesPanel);
+ * Since 2026-10-11 a Settings tab (Settings → Rooms, SatellitesPanel);
  * the old #satellites opens that tab (components.jsx settingsTabRoute).
  *
  * Data sources:
@@ -688,7 +688,7 @@ const VideoControls = ({ s, fire }) => {
  * Off for every room until an admin turns it on here. While on, each
  * wake-word or follow-up command said to this satellite is kept on the
  * Domovoi server (audio + transcript) for tuning when Domovoi stops
- * listening; Settings → Recordings plays and labels them. Turning it off
+ * listening; Settings → Voice history plays and labels them. Turning it off
  * deletes what was kept, so both directions confirm first. The server's
  * security tier decides every call; the admin check here only picks
  * which controls to show. */
@@ -838,7 +838,7 @@ const SatTimerScopeControl = ({ s, fire, refresh }) => {
  * `rolled_back` (back on its old code: the new code didn't stay up) or
  * `no_news` (never came back with an answer; a sync that fails before the
  * restart leaves it online on its old code without a word). The Upgrade
- * button locks on `running` the way Settings → Version locks on
+ * button locks on `running` the way Settings → About & updates locks on
  * restart_in_progress: across a reload and in every tab, and the server
  * refuses a second request meanwhile (409).
  *
@@ -2596,8 +2596,8 @@ const SpareWindows = ({ res, fire }) => {
 };
 
 /* The Android app on this server (2026-10-15, domovoi/android_app.py), the
- * admin's side, shared by Settings → Satellites → add a spare device and
- * Settings → Devices → get the Domovoi app. The release android/release.json
+ * admin's side, shared by Settings → Rooms → add a spare device and
+ * Settings → Phones & browsers → get the Domovoi app. The release android/release.json
  * pins comes from the project's GitHub release ONLY when an admin presses
  * "Download the app to this server" (owner decision 2026-10-15: never by
  * itself), or as an APK an admin uploads (internet access off). The server
@@ -3087,10 +3087,10 @@ const SpareDeviceCard = ({ fire }) => {
   );
 };
 
-/* The satellites view. `embedded` is how Settings → Satellites shows it
+/* The satellites view. `embedded` is how Settings → Rooms shows it
  * (SatellitesPanel): under the Settings header, with the roster's counts
  * as its first line. Without it, the same view as a page of its own, which
- * the shell no longer routes to (#satellites opens the Settings tab). Every
+ * the shell no longer routes to (#settings/rooms opens the Settings tab). Every
  * read, action and auth tier is the same either way. */
 // How often the page asks whether the core answers (the web pings it).
 const SAT_HEALTH_POLL_MS = 10000;
@@ -3319,7 +3319,7 @@ const SatellitesPage = ({ embedded = false } = {}) => {
   );
 };
 
-// Settings → Satellites (settings.jsx).
+// Settings → Rooms (settings.jsx).
 const SatellitesPanel = () => <SatellitesPage embedded/>;
 
 window.SatellitesPage = SatellitesPage;

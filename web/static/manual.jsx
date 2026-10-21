@@ -304,7 +304,7 @@ const UmRooms = ({ ctx }) => {
         const np = s.now_playing && (s.now_playing.title || s.now_playing.file);
         const word = s.wake_word && ((s.wake_phrase && umTitleWords(s.wake_phrase)) || ww.names[s.wake_word] || umTitleWords(s.wake_word));
         return (
-          <a key={s.room_id} className="um-live-row" href="#settings/satellites" style={{ color: 'inherit', textDecoration: 'none' }}>
+          <a key={s.room_id} className="um-live-row" href="#settings/rooms" style={{ color: 'inherit', textDecoration: 'none' }}>
             <span className="k" style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
               <StatusDot tone={tone} live={s.status === 'online'}/>{s.room_label || s.room_id}
             </span>

@@ -157,7 +157,7 @@ permissions = "automatic"
 # the model file's stem (e.g. "hey_domovoi" for hey_domovoi.onnx).
 #
 # Easier path (Feature #5): a custom wake word can be recorded + trained +
-# pushed entirely from the dashboard's Settings > Wake Words tab — record the
+# pushed entirely from the dashboard's Settings > Wake words tab — record the
 # positive clips ON this satellite (through its own mic board), train on
 # the server, then "push to room". The push writes the model slug to the sidecar
 # ~/.domovoi/wake, which OVERRIDES the `wake_word` below at runtime (and loads

@@ -2186,7 +2186,7 @@ check_tag_record() {
 # given with --track-branch stable, the Windows installer's, follows main),
 # with a warning; the household can switch to stable from Settings >
 # Version once there is one. A --ref stable given on the command line has
-# no such fallback. The switch is the household's (Settings > Version);
+# no such fallback. The switch is the household's (Settings > About & updates);
 # nothing moves the box to stable by itself. The checkout keeps what was
 # asked for (git config domovoi.intendedChannel stable), and the Version
 # card says so once the first release is out.
@@ -2197,12 +2197,12 @@ checkout_ref() {
       ref=main
       [ "$TRACK_GIVEN" = 1 ] || track=main
       intended=stable
-      warn "$REPO_URL has no stable branch yet (no release has been published): installing main, and this box follows main; switch to stable in Settings > Version after the first release"
+      warn "$REPO_URL has no stable branch yet (no release has been published): installing main, and this box follows main; switch to stable in Settings > About & updates after the first release"
     fi
     if [ "$track" = stable ] && [ "$ref" != stable ]; then
       track=main
       intended=stable
-      warn "$REPO_URL has no stable branch yet (no release has been published): this box follows main; switch to stable in Settings > Version after the first release"
+      warn "$REPO_URL has no stable branch yet (no release has been published): this box follows main; switch to stable in Settings > About & updates after the first release"
     fi
   fi
   read -r kind name <<<"$(ref_kind "$ref")"
@@ -3861,7 +3861,7 @@ use_lock_lines() {
 channel_pin_set() { grep -q '^[[:space:]]*DOMOVOI_UPSTREAM_BRANCH[[:space:]]*=' "$UPDATE_DEFAULTS" 2>/dev/null; }
 channel_pin_lines() {
   printf '%s\n' "# Written by scripts/linux/provision.sh: updates follow one of Domovoi's" \
-    "# release channels, stable or main (Settings > Version switches between" \
+    "# release channels, stable or main (Settings > About & updates switches between" \
     "# them; docs/LINUX_HOST.md, Release channels). Any other branch is refused." \
     'DOMOVOI_UPSTREAM_BRANCH="stable main"'
 }

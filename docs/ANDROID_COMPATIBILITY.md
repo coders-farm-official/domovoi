@@ -23,7 +23,7 @@ carries only its own native libraries. A published release
 (`android/release.json`, android/README.md "Publishing a release") carries
 the two phones need, `domovoi-<version>-arm64-v8a.apk` and
 `domovoi-<version>-armeabi-v7a.apk`, and your Domovoi server's join page
-(the spare-device QR code, or Settings → Devices → get the Domovoi app)
+(the spare-device QR code, or Settings → Phones & browsers → get the Domovoi app)
 offers them as "the app" for most phones and "the 32-bit app" for older
 or cheaper ones. A browser on plain HTTP can't tell a phone's processor
 honestly, so the page puts the 64-bit one first unless the browser itself

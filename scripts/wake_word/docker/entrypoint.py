@@ -114,7 +114,7 @@ def verify_features() -> None:
         got = sha256_file(hits[0])
         if got != want:
             die(f"{name} has SHA-256 {got}, the pinned commit's is {want}: refused. "
-                f"Remove the cache volume (Settings > Wake Words > Turn off and free the "
+                f"Remove the cache volume (Settings > Wake words > Turn off and free the "
                 f"space) and turn training on again.", 4)
     VERIFIED.write_text("ok\n")
     log("training data matches its pins.")

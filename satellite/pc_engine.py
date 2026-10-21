@@ -157,7 +157,7 @@ def require_pin(cfg: Any) -> tuple[bool, str]:
     return False, (
         "this satellite has no pinned Domovoi server identity, and a spare "
         "computer never trusts the first server that answers. Enrol it again "
-        "from the dashboard (Settings → Satellites → Add a spare device), or "
+        "from the dashboard (Settings → Rooms → Add a spare device), or "
         "set [satellite] server_fingerprint to the SHA256:… shown under "
         "Settings → About."
     )
@@ -205,7 +205,7 @@ def show_code_on_tty(code: str | None, room: str, *, stream=None) -> bool:
             return False
         out.write(
             f"\n  Waiting for approval: code {code}\n"
-            f"  Type it in the dashboard, Settings → Satellites, beside \"{room}\".\n\n"
+            f"  Type it in the dashboard, Settings → Rooms, beside \"{room}\".\n\n"
         )
         out.flush()
         return True
@@ -688,7 +688,7 @@ def wait_for_approval(path: Path | str, *, timeout: float, out=None, poll: float
             if code and code != shown:
                 out.write(
                     f"\nWaiting for approval: code {code}\n"
-                    "Type it in the dashboard: Settings → Satellites.\n"
+                    "Type it in the dashboard: Settings → Rooms.\n"
                 )
                 out.flush()
                 shown = code

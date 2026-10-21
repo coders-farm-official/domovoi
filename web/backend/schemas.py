@@ -814,7 +814,7 @@ class PendingSatellite(BaseModel):
 
 
 class SpareDeviceEnrolRequest(BaseModel):
-    """Settings → Satellites → Add a spare device: the room the laptop or
+    """Settings → Rooms → Add a spare device: the room the laptop or
     phone will be, and optionally the core address it should dial when the
     one this server finds for itself is not the one the LAN reaches (a
     second network card). The answer is the enrolment payload, the Linux

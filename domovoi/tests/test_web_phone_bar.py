@@ -265,7 +265,7 @@ SCENARIOS: dict[str, dict] = {
         """,
     },
     "settings_on_satellites": {
-        "files": SAT_FILES, "component": "(window.__tabs = SETTINGS_TABS, SettingsPage)",
+        "files": SAT_FILES, "component": "SettingsPage",
         "setup": _setup(hash="#settings/satellites"),
         "api": {
             "GET /api/satellites": [{"room_id": "kitchen", "status": "online", "wifi": None,
@@ -281,7 +281,8 @@ SCENARIOS: dict[str, dict] = {
           const cards = h.findAll((e) => w.__cls(e).includes('sat-card')).length;
           const drawerBefore = h.findAll({ type: 'aside' }).length;
           await h.click((e) => w.__cls(e).includes('sat-card'));
-          return { tabs: w.__tabs.map((t) => t.id), headers, summary, cards, drawerBefore,
+          return { tabs: w.SETTINGS_GROUPS.find((g) => g.id === 'rooms-and-devices').sections,
+                   headers, summary, cards, drawerBefore,
                    drawerAfter: h.findAll({ type: 'aside' }).length, hash: w.location.hash };
         """,
     },
@@ -400,7 +401,7 @@ def test_the_grid_holds_what_the_bar_does_not(driven) -> None:
 def test_the_grid_links_to_the_bar_editor(driven) -> None:
     out = driven["grid_default"]
     # The tab's own address: a plain link, no click handler in between.
-    assert out["edit"] == {"href": "#settings/phone-bar", "text": "edit the bar", "onClick": "undefined"}
+    assert out["edit"] == {"href": "#settings/app-layout", "text": "edit the bar", "onClick": "undefined"}
 
 
 # ─── the editor ──────────────────────────────────────────────────────────
@@ -465,12 +466,13 @@ def test_the_editor_on_a_shared_screen_offers_no_personal_page(driven) -> None:
 
 
 def test_the_editor_is_a_settings_tab_of_its_own(driven) -> None:
+    # Settings → Rooms & devices → App layout (the phone bar's editor).
     tabs = driven["settings_on_satellites"]["tabs"]
-    assert tabs.index("phonebar") == tabs.index("devices") + 1
+    assert tabs == ["rooms", "phones-and-browsers", "printers", "app-layout"]
     settings = _src("settings.jsx")
     panel = settings[settings.index("const PhoneBarPanel"):]
     assert "<PhoneBarCard fire={fire}/>" in panel[:panel.index("};")]
-    assert "{tab === 'phonebar' && <PhoneBarPanel/>}" in settings
+    assert "case 'app-layout': return <PhoneBarPanel/>;" in settings
     # Not under Devices, whose other cards ask an admin to sign in.
     devices = settings[settings.index("const DevicesPanel"):]
     assert "PhoneBarCard" not in devices[:devices.index("};")]
@@ -483,12 +485,12 @@ def test_the_old_route_opens_the_settings_tab(driven) -> None:
     o = driven["alias"]
     assert o["music"] == "music"
     assert o["quiet"] == {"replaced": [], "events": 0}
-    # The tab's own address, in place of the old one (replaced, not pushed).
-    assert o["sats"] == "settings/satellites" and o["deeper"] == "settings/satellites"
-    assert o["replaced"] == ["#settings/satellites", "#settings/satellites"]
+    # The section's own address, in place of the old one (replaced, not pushed).
+    assert o["sats"] == "settings/rooms" and o["deeper"] == "settings/rooms"
+    assert o["replaced"] == ["#settings/rooms", "#settings/rooms"]
     # The address is the whole story: no session storage, no window event.
     assert o["ss"] is None and o["events"] == []
-    assert o["aliases"] == {"satellites": "satellites"}
+    assert o["aliases"] == {"satellites": ["rooms"], "containers": ["health", "containers"]}
 
 
 def test_the_shell_resolves_the_alias_on_load_on_hashchange_and_on_setroute() -> None:
@@ -504,9 +506,8 @@ def test_the_shell_resolves_the_alias_on_load_on_hashchange_and_on_setroute() ->
 
 def test_settings_opens_on_satellites_with_the_whole_view(driven) -> None:
     o = driven["settings_on_satellites"]
-    tabs = o["tabs"]
-    assert tabs.index("satellites") == tabs.index("phonebar") + 1
-    assert o["hash"] == "#settings/satellites"       # the address stays the tab's
+    assert o["tabs"][0] == "rooms"
+    assert o["hash"] == "#settings/rooms"            # the old name, rewritten in place
     assert o["summary"] == "1 online · 0 offline · 1 known"
     assert o["cards"] == 1
     # One page header (Settings), not a second "Satellites" one.
@@ -517,11 +518,13 @@ def test_settings_opens_on_satellites_with_the_whole_view(driven) -> None:
 
 def test_a_settings_page_already_on_screen_switches_to_the_tab(driven) -> None:
     o = driven["settings_switches_on_alias"]
-    assert o == {"before": False, "after": True, "hash": "#settings/satellites"}
+    assert o == {"before": False, "after": True, "hash": "#settings/rooms"}
 
 
 def test_homes_satellite_links_all_use_the_alias() -> None:
+    # Since 2026-10-21 the room cards and "add a satellite" open
+    # Settings → Rooms by its own address; the problem rows open Health.
     home = _src("home.jsx")
-    hrefs = re.findall(r"href(?:=|: )['\"]#(\w+)['\"]", home)
-    assert hrefs.count("satellites") >= 8          # problem rows, room cards, "add a satellite"
+    hrefs = re.findall(r"href(?:=|: )['\"]#([\w/-]+)['\"]", home)
+    assert hrefs.count("settings/rooms") >= 2 and "satellites" not in hrefs
     assert "on the satellites page" not in home

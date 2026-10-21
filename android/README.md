@@ -111,7 +111,7 @@ release build signed with a key you keep: the next section.
 A household gets the app from **its own Domovoi server**: the dashboard's
 "add a spare device" QR code opens `<server>:6370/join` on the phone, which
 downloads the APK from that server and opens the app as the room
-(Settings → Devices → "get the Domovoi app" is the same page without a
+(Settings → Phones & browsers → "get the Domovoi app" is the same page without a
 room). The server hands out only what `android/release.json` in its
 checkout names: per ABI the APK's file name, size and SHA-256, and the
 SHA-256 of the **release key's signing certificate**. Before it keeps or
@@ -240,7 +240,7 @@ proved, after connecting and then every six hours.
   first and words the page as an update); the phone's installer does the
   rest. When the server knows the release but holds no checked copy for
   this phone yet, the card says an admin can press **Download the app to
-  this server** (Settings → Devices) and has no button.
+  this server** (Settings → Phones & browsers) and has no button.
 - **Dismiss** hides it until a newer release; a "not on the server yet"
   card dismissed comes back once, when the file arrives. Settings → About →
   App updates always shows where things stand.
@@ -349,7 +349,7 @@ one credential the app has. The rules, all unit-tested under
   device-tier read (`GET /api/satellites`) carrying the candidate alone,
   after the identity gate admits the server and never during the server's
   wait. Taken, it is saved. Refused, it is not saved and the screen says
-  "That token doesn't match this server. Copy it from Settings → Devices →
+  "That token doesn't match this server. Copy it from Settings → Phones & browsers →
   Household token on this server's dashboard." A `429` counts the wait down
   with the button off. A `503` or no answer says "Couldn't check it with
   the server — try again" and saves nothing. Nothing retries by itself.
@@ -431,7 +431,7 @@ files, media, contacts, location or any other app data, and no tools.
 **Where it is.** The **Assistant** tab of local mode (beside Music, Videos
 and Files), so it works with no server at all and in airplane mode. With a
 server connected it is on Home's "everything" grid, in the drawer and the
-rail, and one of the screens Settings → Phone bar can put on the bottom
+rail, and one of the screens Settings → App layout can put on the bottom
 bar; it never takes Chat's place (the default bar stays home · music ·
 videos · chat). Its title always says **on this phone**, so it is not
 mistaken for Chat, which talks to the server: the two never share a
@@ -694,13 +694,13 @@ the drawer's brand row.
 
 Responsive behavior: compact widths get the web phone strip as a bottom
 bar — the phone bar, Home / Music / Videos / Chat until someone picks two
-to five others for that phone in Settings → Phone bar (Home is always
+to five others for that phone in Settings → App layout (Home is always
 first; kept in the app's Prefs, so each phone has its own; a shared screen
 never shows its personal screens there). Every other screen, Settings and
 the manual included, is a tile on Home's "everything" grid (whose "edit
 the bar" link opens that editor), and the home tab stays lit while one of
 them is open. Satellites is a tab of Settings, as on the dashboard
-(Settings → Satellites); Home's rooms and problem rows open it there.
+(Settings → Rooms); Home's rooms and problem rows open it there.
 List→detail screens stack full-screen. Medium gets a navigation rail
 (Home first);
 expanded gets the web's permanent sidebar with badge counts and
@@ -709,7 +709,7 @@ desktop's two columns once its pane is wide enough. The mini player
 docks above the navigation on every size.
 
 A **shared screen** (an admin marks the device in the dashboard's
-Settings → Devices; the kitchen tablet) is learned from this install's
+Settings → Phones & browsers; the kitchen tablet) is learned from this install's
 own device registration and remembered per server. While it is on, Home
 shows calendar times as "busy", a reminder as its room, and problems as
 one neutral line, and People, Chat, Files and News drop off every
@@ -830,7 +830,7 @@ leaves the home network). What the phone does, exactly:
 
 ## Room mode
 
-**A preview** in Domovoi 1.0, labelled on Settings → Satellites' "Use this
+**A preview** in Domovoi 1.0, labelled on Settings → Rooms' "Use this
 device as a room" card and at the top of the explainer.
 
 A spare phone or tablet as a room satellite (the person's guide:
@@ -842,7 +842,7 @@ Python. Package `roommode/` (not `satellite/`, which would sit beside
 
 | File | What |
 |---|---|
-| `RoomSetupActivity.kt` | The way in: the "Domovoi Room" launcher alias, Settings → Satellites → "Use this device as a room", a `domovoi-room:` link. The explainer (scrolled to its end), the mic and notification permissions, the room code (scanned with `RoomScanner.kt`, CameraX + ZXing, or pasted) |
+| `RoomSetupActivity.kt` | The way in: the "Domovoi Room" launcher alias, Settings → Rooms → "Use this device as a room", a `domovoi-room:` link. The explainer (scrolled to its end), the mic and notification permissions, the room code (scanned with `RoomScanner.kt`, CameraX + ZXing, or pasted) |
 | `RoomEnrolment.kt` | The room code: `domovoi-room:1?core=…&fp=…&room=…`, percent-encoded UTF-8; the room name to a room id (`^[a-z][a-z0-9_]{0,31}$`) |
 | `RoomStore.kt` | What a room phone keeps; the room key sealed under its own Keystore key; `active` (the normal app is locked) and `running` (resume after a reboot) |
 | `RoomIdentity.kt` | `verify_server`'s port (the address-bound `/v1/health` proof, before every connect) and signed file lists (`signature_v2`, freshness) |

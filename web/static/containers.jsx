@@ -1,8 +1,14 @@
-/* Containers — the container guard's details page (#containers).
+/* Containers — the container guard's details, a part of Settings →
+ * System → Health since 2026-10-21 (health.jsx; the old #containers
+ * address lands on #settings/health/containers).
  *
  * Reached from the banner every page shows while an incident is open,
- * from Home's problems row and from a phone's notification; not in the
- * nav. What it shows depends on who is looking (docs/CONTAINER_GUARD.md):
+ * from Home's problems row and from a phone's notification. Health shows
+ * the open incidents at its top (CtrOpenPart) and the rest in its
+ * Containers part (CtrContainersPart): the last day's history and, folded
+ * under "behind the scenes", what the guard watches and the music player
+ * image's rebuild. What it shows depends on who is looking
+ * (docs/CONTAINER_GUARD.md):
  *
  *   * no household credential: only that something needs an admin;
  *   * a paired device: every open incident and the last day's history in
@@ -232,7 +238,10 @@ const CtrStatus = ({ status, onCheck, checking, onRebuild, rebuilding }) => {
   );
 };
 
-const ContainersPage = () => {
+/* The guard's state for Health: ONE read (the shared store, the banner's
+ * too), the admin's status read, and the page's actions. Health renders
+ * CtrOpenPart and CtrContainersPart from the same model. */
+const useCtrModel = () => {
   const s = useContainerGuard();
   const shared = useSharedScreen();
   // A shared screen (the kitchen tablet) is a guest here whatever it holds:
@@ -289,20 +298,50 @@ const ContainersPage = () => {
   const guestView = s.loaded && (shared || s.tier === 'open');
   const attention = s.loaded && s.data && (s.tier === 'open' ? s.data.attention : !!(s.data.banner && s.data.banner.show));
   const incidents = household ? (s.data.incidents || []) : [];
-  const open = incidents.filter((i) => i.open);
-  const closed = incidents.filter((i) => !i.open);
-  const frozen = household && s.data.frozen;
+  return {
+    s, shared, admin, fire, toastNode, status, checking, rebuilding, checkNow, rebuildMpd, refresh,
+    household: !!household, guestView: !!guestView, attention: !!attention,
+    open: incidents.filter((i) => i.open),
+    closed: incidents.filter((i) => !i.open),
+    frozen: !!(household && s.data.frozen),
+  };
+};
 
+/* The top of Health while anything is open: what the freeze holds, and
+ * every open incident with its acknowledge / clear. Nothing otherwise. */
+const CtrOpenPart = ({ m }) => {
+  if (!m.household || !m.open.length) return null;
   return (
-    <div className="page ctr-page">
-      <PageHeader title="Containers" sub="what Domovoi watches on this box, and anything that went wrong"/>
-      {!s.loaded && <Empty title="reading…" sub=""/>}
-      {guestView && (
-        <Card padded>
+    <div className="ctr-open-part" data-settings-mark="incidents">
+      {m.frozen && (
+        <Card title="paused until an admin reviews" sub="everything else keeps working" padded>
+          <ul className="ctr-freeze-list">
+            {CTR_FREEZE_LIST.map((x) => <li key={x}>{x}</li>)}
+          </ul>
+        </Card>
+      )}
+      <Card title="containers that need attention" sub={`${m.open.length} open`}>
+        {m.open.map((inc) => (
+          <CtrIncident key={inc.id} inc={inc} admin={m.admin} onChanged={m.refresh} fire={m.fire}/>
+        ))}
+      </Card>
+    </div>
+  );
+};
+
+/* Health's Containers part, inside its card under the check row: the
+ * guest line for a browser that can't see more, and the last day's
+ * history. */
+const CtrContainersPart = ({ m }) => {
+  return (
+    <>
+      {!m.s.loaded && <div className="ctr-hint ctr-pad">reading…</div>}
+      {m.guestView && (
+        <div className="ctr-pad">
           <div className="ctr-guest">
-            {attention ? CONTAINER_GUARD_GUEST_TEXT : 'nothing needs attention'}
+            {m.attention ? CONTAINER_GUARD_GUEST_TEXT : 'nothing needs attention'}
           </div>
-          {shared ? (
+          {m.shared ? (
             <div className="ctr-hint">this is a shared screen · an admin sees the details on their own device</div>
           ) : (
             <>
@@ -312,35 +351,37 @@ const ContainersPage = () => {
               </div>
             </>
           )}
-        </Card>
+        </div>
       )}
-      {household && frozen && (
-        <Card title="paused until an admin reviews" sub="everything else keeps working" padded>
-          <ul className="ctr-freeze-list">
-            {CTR_FREEZE_LIST.map((x) => <li key={x}>{x}</li>)}
-          </ul>
-        </Card>
-      )}
-      {household && (
-        <Card title="open" sub={open.length ? `${open.length} open` : 'nothing open'}>
-          {open.length === 0 && <Empty title="every container Domovoi expects looks right" sub=""/>}
-          {open.map((inc) => (
-            <CtrIncident key={inc.id} inc={inc} admin={admin} onChanged={refresh} fire={fire}/>
+      {m.household && m.closed.length > 0 && (
+        <div className="ctr-history">
+          <div className="health-sub mono">last 24 hours · resolved and cleared</div>
+          {m.closed.map((inc) => (
+            <CtrIncident key={inc.id} inc={inc} admin={m.admin} onChanged={m.refresh} fire={m.fire}/>
           ))}
-        </Card>
+        </div>
       )}
-      {household && closed.length > 0 && (
-        <Card title="last 24 hours" sub="resolved and cleared">
-          {closed.map((inc) => (
-            <CtrIncident key={inc.id} inc={inc} admin={admin} onChanged={refresh} fire={fire}/>
-          ))}
-        </Card>
-      )}
-      {admin && <CtrStatus status={status} onCheck={checkNow} checking={checking}
-                           onRebuild={rebuildMpd} rebuilding={rebuilding}/>}
-      {toastNode}
+    </>
+  );
+};
+
+/* "Behind the scenes", under Health's Containers card and folded: what
+ * the guard watches, check now, and the music player image's rebuild.
+ * Admins only (the status read is theirs). */
+const CtrBehindPart = ({ m }) => {
+  const [open, setOpen] = React.useState(false);
+  if (!m.admin) return null;
+  return (
+    <div className="health-behind" data-settings-mark="behind-the-scenes">
+      <button type="button" className="health-disclose" aria-expanded={open}
+              onClick={() => setOpen((o) => !o)}>
+        <Icon name={open ? 'chevron-down' : 'chevron-right'} size={14}/>
+        behind the scenes
+      </button>
+      {open && <CtrStatus status={m.status} onCheck={m.checkNow} checking={m.checking}
+                          onRebuild={m.rebuildMpd} rebuilding={m.rebuilding}/>}
     </div>
   );
 };
 
-Object.assign(window, { ContainersPage });
+Object.assign(window, { useCtrModel, CtrOpenPart, CtrContainersPart, CtrBehindPart });

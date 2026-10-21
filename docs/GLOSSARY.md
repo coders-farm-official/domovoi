@@ -42,7 +42,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Guest** — a phone or browser holding no household credential (not paired, not signed in) on a box that has finished setup. Since 2026-10-10 a guest may change the *room queue* of a room that is playing (add, remove one at a time, reorder — no clear, and never the song playing now) and pause, resume, skip or go back there (never stop), throttled per address, until an admin bans it (a *guest ban*). `GUEST_QUEUE_EDITING` turns it off.
 
-**Guest ban** — an admin rule barring a *guest* from changing the music in every room, queue and playback alike. Matches the guest's self-asserted browser id OR its network address, and never applies to a paired device or an admin. Household policy, not a security boundary, like a *queue block*. Managed in Settings → Devices → Guests, from the guests the core recorded acting this week.
+**Guest ban** — an admin rule barring a *guest* from changing the music in every room, queue and playback alike. Matches the guest's self-asserted browser id OR its network address, and never applies to a paired device or an admin. Household policy, not a security boundary, like a *queue block*. Managed in Settings → Phones & browsers → Guests, from the guests the core recorded acting this week.
 
 **Handler** — the unit of voice functionality: a class that declares its *fast paths*, a tool schema for LLM routing, its network needs (`requires_network: no | degraded | yes`), and an offline fallback. Timers, music, intercom, news — each is a handler; plugins add more.
 
@@ -86,7 +86,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Realtime channel** — the live-update path from database to browser: a feature fires a Postgres NOTIFY on commit, the dashboard's listener maps it to a named channel (e.g. `radio.stations`) and pushes a fresh snapshot over WebSocket. Plugins declare theirs in the manifest.
 
-**Room** — the logical unit of the household, identified by the stable `room_id` in a satellite's config. Rooms are what the intercom, drop-in, music playback, and Settings → Satellites address; each room owns one satellite and one *MPD* instance.
+**Room** — the logical unit of the household, identified by the stable `room_id` in a satellite's config. Rooms are what the intercom, drop-in, music playback, and Settings → Rooms address; each room owns one satellite and one *MPD* instance.
 
 **Room queue** — the play queue a room's speaker draws from. It lives in that room's *MPD* instance, not in the database, and it is SHARED: every household client sees the same list and can add to, reorder, or clear it (a *guest* only while the room is playing, and never clear). Domovoi annotates it rather than copying it — `room_queue_items` records which *device* added each entry, keyed by MPD's songid (stable across reorders, unlike a position), which is what the "added by" tag reads. Distinct from each client's own player queue, which never leaves that device.
 

@@ -41,7 +41,7 @@ the ``plugins_changed`` NOTIFY channel. New plugins mount live;
 process (same corollary as design §3.4). The host remembers the version
 it mounted (:meth:`PluginHost.stale_mounts`), and ``GET
 /api/config/version`` lists a plugin whose registry row has moved past it
-next to the core's own staged upgrades, so Settings → Version and the
+next to the core's own staged upgrades, so Settings → About & updates and the
 Plugins page offer the restart that loads it.
 """
 
@@ -79,7 +79,7 @@ CORE_NAV: dict[str, int] = {
     "videos": 15,
     "news": 18,
     "people": 20,
-    # No sidebar row since 2026-10-11 (a Settings tab; #satellites opens it),
+    # No sidebar row since 2026-10-11 (a Settings tab; #settings/rooms opens it),
     # like settings below: the published order stays, so a plugin that
     # slotted itself against it sorts as before.
     "satellites": 30,

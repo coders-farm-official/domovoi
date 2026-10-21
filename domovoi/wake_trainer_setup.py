@@ -1,4 +1,4 @@
-"""Settings → Wake Words → "Turn on wake-word training".
+"""Settings → Wake words → "Turn on wake-word training".
 
 Training a wake word runs openWakeWord's recipe in a Linux container
 (``scripts/wake_word/train_wake_word.py`` and ``scripts/wake_word/docker/``).
@@ -551,7 +551,7 @@ async def requirements(force: bool = False) -> dict[str, Any]:
 
 
 async def status() -> dict[str, Any]:
-    """Everything Settings → Wake Words shows about training."""
+    """Everything Settings → Wake words shows about training."""
     from domovoi.workers import wake_word_trainer as wwt
 
     with _LOCK:

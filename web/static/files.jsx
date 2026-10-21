@@ -1140,7 +1140,7 @@ const FilesPage = () => {
           <span>
             {view.blocked_reason}. You can browse, open and download from this device,
             but not change anything here — no saving a document, uploading, moving or
-            importing. An admin lifts the block in Settings → Devices.
+            importing. An admin lifts the block in Settings → Phones & browsers.
           </span>
         </div>
       )}

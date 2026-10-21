@@ -4,11 +4,13 @@ Design system for **Domovoi** — a local-first home voice assistant. A domovoi 
 
 This is a tech-forward management UI you'd reach from a laptop or a phone on the same Wi-Fi as your Pi satellites. The dashboard (web backend, port `6369`) currently ships these core surfaces, plus routes that installed plugins contribute:
 
-- **Home** — the default page (`#home`): the house at a glance, and on a phone the "everything" grid behind the phone bar (home · music · videos · chat by default; each device picks its own two to five tabs in Settings → Phone bar)
+- **Home** — the default page (`#home`): the house at a glance, and on a phone the "everything" grid behind the phone bar (home · music · videos · chat by default; each device picks its own two to five tabs in Settings → App layout)
 - **Chat** — threaded text chat with the local models (vision-capable when a message carries images); the cat glyph marks assistant lines
 - **Music / Podcasts / Audiobooks / Videos / News** — library, acquisitions, now-playing across rooms, video playback with resume (image browsing lives in Files; the Images generation page comes from the Image Generation plugin)
 - **People** — recognized voices, last-heard timestamps, presence tiers
-- **Settings → Satellites** — per-room Pi status (online/offline, Wi-Fi rx/tx, version); a Settings tab, not a nav page (the old `#satellites` opens it)
+- **Settings** — five groups (Rooms & devices, Voice, Chat & AI, Privacy, System) with a search box at the top; a desktop shows the groups and their sections in a left column and the section on the right, a phone the groups, then a group's sections, then the section. Section names are plain words (Rooms, Phones & browsers, App layout, Voice history, About & updates, Health, Advanced); Advanced opens folded. Old addresses (`#settings/configuration`, `#settings/satellites`, `#satellites`, `#containers`) still land on their section
+- **Settings → Rooms** — per-room Pi status (online/offline, Wi-Fi rx/tx, version); a Settings section, not a nav page (the old `#satellites` opens it)
+- **Settings → Health** — every check on the server, green or not (server, updates, rooms, plugins, internet, containers); Home's "needs attention" list is the problems among the same checks, each linking to its part of Health
 - **Calendar** — local + synced events, timers, reminders
 - **Documents**, **Plugins**, and plugin-supplied pages (the sidebar interleaves core and plugin nav items by `nav_order`)
 
@@ -135,7 +137,7 @@ The product talks like a competent, slightly dry sysadmin who knows you personal
 
 ### Density, layout rules, fixed elements
 - Sidebar and topbar are fixed; the content scrolls inside its own pane on desktop.
-- Mobile collapses the sidebar to a bottom-tab strip: the device's phone bar (home · music · videos · chat unless that device picked two to five others in Settings → Phone bar; Home is always first, and a shared screen never shows its personal pages there); every other page is on Home's "everything" grid, whose "edit the bar" link opens the editor. The docked mini-player sits on top of the strip as one compact row (cover, title, play/pause, next, "open player", 44px targets); everything else it does — seek, volume, where it plays, the queue — is in the sheet "open player" brings up over the screen above the strip, which closes with its chevron or the back gesture. Topbar stays; its "domovoi" crumb (and the desktop brand row) links to Home.
+- Mobile collapses the sidebar to a bottom-tab strip: the device's phone bar (home · music · videos · chat unless that device picked two to five others in Settings → App layout; Home is always first, and a shared screen never shows its personal pages there); every other page is on Home's "everything" grid, whose "edit the bar" link opens the editor. The docked mini-player sits on top of the strip as one compact row (cover, title, play/pause, next, "open player", 44px targets); everything else it does — seek, volume, where it plays, the queue — is in the sheet "open player" brings up over the screen above the strip, which closes with its chevron or the back gesture. Topbar stays; its "domovoi" crumb (and the desktop brand row) links to Home.
 - The command palette (`⌘K`) is centred, 640 px wide, 14 px radius, `md` shadow.
 - No transparency or backdrop-blur on the main chrome. The only blur is on the command-palette scrim (8 px) and the mobile nav scrim.
 - Imagery: there is essentially none. If artwork appears (album art), it's in a 40 × 40 rounded-6 thumbnail with a hairline border, never bled into the layout. The only "decorative" mark in the system is the cat glyph.

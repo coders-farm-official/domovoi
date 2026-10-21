@@ -213,7 +213,7 @@
 /* (Its phone rules sit in the shell's 760px block below, beside .main's
    16px padding they follow.) */
 
-/* The Containers page (containers.jsx). */
+/* The container guard's details, in Settings → Health (containers.jsx). */
 .ctr-incident { padding: 12px 16px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
 .ctr-incident:first-child { border-top: none; }
 .ctr-incident-closed { opacity: 0.75; }
@@ -1370,7 +1370,7 @@ textarea.cal-inp { resize: vertical; min-height: 64px; line-height: 1.4; }
 }
 .home-link:hover { text-decoration: underline; }
 
-/* Links inside a sentence of help text (Settings → Configuration's AcoustID
+/* Links inside a sentence of help text (Settings → Advanced's AcoustID
    key, Settings → Internet's "needs an AcoustID key …"): amber words that
    stay in the line, not the phone's 44px .home-link target. */
 .config-acoustid a, a.internet-condition-link { color: var(--brand-ink); text-decoration: none; }
@@ -1680,7 +1680,7 @@ a.home-att-row:hover { background: var(--brand-soft); }
   .chat-details { width: 100%; border-radius: var(--r-lg) var(--r-lg) 0 0; padding-bottom: env(safe-area-inset-bottom); }
 }
 
-/* Settings → Satellites (satellites.jsx SatellitesPanel): the roster's
+/* Settings → Rooms (satellites.jsx SatellitesPanel): the roster's
    counts, where the old Satellites page had them in its header. The panel
    is one child of the Settings `.page`, so it stacks its own sections
    (approvals, the cards, Broadcast, satellite media) with the page's gap:
@@ -1702,7 +1702,7 @@ a.home-att-row:hover { background: var(--brand-soft); }
   font-size: 10.5px; font-weight: 500; letter-spacing: 0.02em; color: var(--fg-muted);
   border: 1px dashed var(--border-strong, var(--border)); border-radius: var(--r-sm); padding: 1px 6px;
 }
-/* Settings → Phone bar (settings.jsx PhoneBarCard). */
+/* Settings → App layout (settings.jsx PhoneBarCard). */
 @media (max-width: 760px) {
   .phone-bar-edit .btn-icon { width: 44px; height: 44px; }
 }
@@ -1719,4 +1719,95 @@ a.home-att-row:hover { background: var(--brand-soft); }
   .model-inst-meta { flex: 1 1 100%; flex-wrap: wrap; }
   .model-inst-meta > :last-child { margin-left: auto; }
   .model-inst-size { width: auto; }
+}
+
+/* ---- Settings (settings.jsx SettingsPage, since 2026-10-21) ----------
+   A desktop: the search box, then the groups and their sections in a
+   column on the left and the section on the right. A phone (760px): the
+   groups, then one group's sections, then the section — the page's
+   data-level ("index" | "group" | "section") says which. */
+.settings-search { position: relative; max-width: 520px; }
+.settings-search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  color: var(--fg-muted); pointer-events: none; display: inline-flex; }
+.settings-search-input { width: 100%; height: 36px; font: inherit; font-size: 14px; padding: 0 12px 0 32px;
+  border-radius: var(--r-md); border: 1px solid var(--border); background: var(--card); color: var(--fg);
+  box-shadow: var(--inner-highlight); }
+.settings-search-input::placeholder { color: var(--fg-muted); }
+.settings-search-input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-ring); }
+.settings-search-results { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px);
+  background: var(--raised); border: 1px solid var(--border); border-radius: var(--r-md);
+  box-shadow: var(--shadow-md); padding: 4px; display: flex; flex-direction: column; }
+.settings-search-hit { display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  min-height: 36px; padding: 6px 10px; border-radius: var(--r-sm); color: var(--fg); text-decoration: none; font-size: 13px; }
+.settings-search-hit.on, .settings-search-hit:hover { background: var(--brand-soft); }
+.settings-search-where { color: var(--fg-muted); font-size: 12px; text-align: right; }
+.settings-search-none { padding: 8px 10px; font-size: 13px; color: var(--fg-muted); }
+.settings-shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 28px; align-items: start; }
+.settings-nav { position: sticky; top: 0; display: flex; flex-direction: column; gap: 14px; }
+.settings-nav-group-head { display: flex; align-items: center; gap: 8px; padding: 2px 8px;
+  font-size: 12px; font-weight: 600; color: var(--fg-muted); text-decoration: none; }
+.settings-nav-group-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.settings-nav-group-list, .settings-nav-chev, .settings-phone-only { display: none; }
+.settings-nav-items { display: flex; flex-direction: column; margin-top: 4px; }
+.settings-nav-item { display: flex; align-items: center; padding: 6px 8px 6px 32px; border-radius: var(--r-sm);
+  font-size: 13px; color: var(--fg); text-decoration: none; }
+.settings-nav-item:hover { background: var(--sunken); }
+.settings-nav-item.on { background: var(--brand-soft); font-weight: 600; box-shadow: inset 2px 0 0 var(--brand); }
+.settings-content { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.settings-section-title { margin: 0; font-size: 18px; font-weight: 600; color: var(--fg); }
+.settings-section-sub { margin-top: 2px; font-size: 12px; color: var(--fg-muted); }
+.settings-marked { outline: 2px solid var(--brand); outline-offset: 4px; border-radius: var(--r-md); }
+@media (max-width: 760px) {
+  .settings-shell { display: block; }
+  .settings-phone-only { display: flex; }
+  .settings-back { align-items: center; gap: 4px; min-height: 44px; font-size: 14px;
+    color: var(--brand-ink); text-decoration: none; align-self: flex-start; }
+  .settings-search { max-width: none; }
+  .settings-search-input { height: 44px; font-size: 16px; }
+  .settings-search-hit { min-height: 44px; }
+  .settings-nav { position: static; gap: 8px; }
+  .settings-nav-chev { display: inline-flex; margin-left: auto; color: var(--fg-muted); }
+  .settings-page[data-level="section"] .settings-nav { display: none; }
+  .settings-page:not([data-level="section"]) .settings-content { display: none; }
+  /* the list of groups */
+  .settings-page[data-level="index"] .settings-nav-items { display: none; }
+  .settings-page[data-level="index"] .settings-nav-group-head { min-height: 60px; padding: 10px 14px;
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--r-md);
+    font-size: 15px; color: var(--fg); }
+  .settings-page[data-level="index"] .settings-nav-group-list { display: block; font-size: 12px; font-weight: 400;
+    color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* one group's sections */
+  .settings-page[data-level="group"] .settings-nav-group:not(.open) { display: none; }
+  .settings-page[data-level="group"] .settings-nav-group-head { padding: 4px 2px 8px; font-size: 16px;
+    color: var(--fg); pointer-events: none; }
+  .settings-page[data-level="group"] .settings-nav-group-head .settings-nav-chev { display: none; }
+  .settings-page[data-level="group"] .settings-nav-items { margin: 0; background: var(--card);
+    border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
+  .settings-page[data-level="group"] .settings-nav-item { min-height: 52px; padding: 0 14px; font-size: 15px;
+    font-weight: 400; border-radius: 0; border-top: 1px solid var(--border); background: none; box-shadow: none; }
+  .settings-page[data-level="group"] .settings-nav-items > :first-child { border-top: none; }
+}
+
+/* ---- Health (health.jsx, Settings → System → Health) ---------------- */
+.health-page { display: flex; flex-direction: column; gap: 16px; }
+.health-summary-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 14px; color: var(--fg); }
+.health-failed { color: var(--warn-ink); font-size: 12px; }
+.health-summary { font-size: 14px; margin-bottom: 4px; color: var(--fg); }
+.health-rows { display: flex; flex-direction: column; }
+.health-row { display: grid; grid-template-columns: 10px minmax(110px, 190px) minmax(0, 1fr) auto;
+  align-items: center; gap: 4px 10px; padding: 9px 16px; border-top: 1px solid var(--border); font-size: 13px; }
+.health-row:first-child { border-top: none; }
+.health-label { color: var(--fg-muted); }
+.health-text { color: var(--fg); overflow-wrap: anywhere; }
+.health-items { display: block; margin-top: 2px; font-size: 12px; color: var(--fg-muted); }
+.health-when { color: var(--fg-muted); font-size: 11px; }
+.health-fix { justify-self: end; white-space: nowrap; font-size: 12px; }
+.health-sub { padding: 10px 16px 4px; border-top: 1px solid var(--border); font-size: 11px; color: var(--fg-muted); }
+.health-behind { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.health-disclose { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 6px 0;
+  font: inherit; font-size: 13px; font-weight: 600; color: var(--fg); background: transparent; border: none; cursor: pointer; }
+@media (max-width: 760px) {
+  .health-row { grid-template-columns: 10px minmax(0, 1fr); }
+  .health-row .health-text, .health-row .health-fix { grid-column: 2; justify-self: start; }
+  .health-disclose { min-height: 44px; }
 }

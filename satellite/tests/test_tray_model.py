@@ -59,7 +59,7 @@ def test_the_tooltip_says_why_it_is_grey():
 def test_the_tooltip_carries_the_code_while_waiting():
     title, text = tray.tooltip(status(connection="awaiting_approval", mic="off"), "482913")
     assert title == "Domovoi · Kid's Room"
-    assert "482913" in text and "Settings → Satellites" in text
+    assert "482913" in text and "Settings → Rooms" in text
 
 
 def test_the_live_mic_is_said_plainly():

@@ -79,7 +79,7 @@ particular OS) exists.
 
 The ``WAKE_TRAINER_*`` names below are read from the process environment.
 The core's worker puts them there from its settings (``domovoi/.env`` or
-Settings → Configuration → Wake words), so a household never needs a shell.
+Settings → Advanced → Wake words), so a household never needs a shell.
 """
 
 from __future__ import annotations
@@ -572,7 +572,7 @@ def run_container(run_argv: list[str], deadline_sec: float | None) -> int:
         except subprocess.TimeoutExpired:
             _ignore_signals()
             log(f"stopped after {int(deadline_sec)} s: the training time limit "
-                f"(Settings > Configuration > Wake words) ran out")
+                f"(Settings > Advanced > Wake words) ran out")
             remove_training_containers("time limit")
             _reap(proc)
             return 124
@@ -683,7 +683,7 @@ def main() -> int:
         )
         if img_check.returncode != 0:
             log(f"ERROR: image {IMAGE!r} not found locally. Turn training on in "
-                f"Settings > Wake Words (it builds the image), or build it once:\n"
+                f"Settings > Wake words (it builds the image), or build it once:\n"
                 f"  docker build -t {IMAGE} scripts/wake_word/docker\n"
                 f"See scripts/wake_word/DOCKER_TRAINER.md.")
             return 3
@@ -712,7 +712,7 @@ def main() -> int:
         elif REQUIRE_GPU:
             log("ERROR: training was set up for the GPU, and Docker can't reach it now "
                 "(the GPU probe above says why). Not training on the CPU: it would take "
-                "over an hour under a time limit sized for the GPU. Settings > Wake Words "
+                "over an hour under a time limit sized for the GPU. Settings > Wake words "
                 "> Check the GPU and trainer again (Restart Domovoi first if the NVIDIA "
                 "Container Toolkit was lost), or turn training on again with the CPU.")
             return EXIT_NO_GPU

@@ -9,7 +9,7 @@ openWakeWord's *automatic* training pipeline depends on
 ``piper-sample-generator``, which is **Linux-only**. So this worker does NOT
 import openWakeWord and train inside the event loop. Instead it shells out to
 the **configured command** (``settings.wake_word_train_command``), which
-Settings → Wake Words → "Turn on wake-word training" sets to the repo's own
+Settings → Wake words → "Turn on wake-word training" sets to the repo's own
 wrapper (``scripts/wake_word/train_wake_word.py``): it runs the training in
 a Linux container, on a GPU when Docker can reach one. The command
 template's placeholders ``{clips_dir} {phrase} {slug} {out}`` are
@@ -21,7 +21,7 @@ clean exit the worker expects the model to have materialized at
 What the command gets beside its argv (environment):
 
 * the trainer's knobs from the settings (``WAKE_TRAINER_IMAGE``, samples,
-  steps, CPUs, memory, …; Settings → Configuration → Wake words) and any
+  steps, CPUs, memory, …; Settings → Advanced → Wake words) and any
   other ``WAKE_TRAINER_*`` line in ``domovoi/.env``, so none of them needs
   a shell or a systemd drop-in any more;
 * ``WAKE_TRAINER_DEADLINE_SEC``, a minute under this worker's own time
@@ -52,7 +52,7 @@ The worker is gated OFF by ``settings.wake_word_trainer_enabled`` (default
 ``False``): it is not started at boot while that is off, and a tick trains
 nothing once it has been switched off. "Turn on wake-word training" starts
 it without a restart. Even when started, an EMPTY ``wake_word_train_command``
-fails a queued row with a pointer to Settings → Wake Words rather than
+fails a queued row with a pointer to Settings → Wake words rather than
 leaving it in ``training`` forever.
 
 Lifecycle (start/stop/_run/tick) follows the standard core worker
@@ -135,7 +135,7 @@ _OUTPUT_TAIL_LINES = 400
 # Stored on a row when training can't proceed because no command is
 # configured. Surfaced verbatim on the Wake Words tab.
 _NO_COMMAND_MSG = (
-    "wake-word training is not turned on: Settings > Wake Words > "
+    "wake-word training is not turned on: Settings > Wake words > "
     "\"Turn on wake-word training\" (wake_word_train_command is empty; "
     "see scripts/wake_word/README.md)"
 )
@@ -708,7 +708,7 @@ class WakeWordTrainer(Worker):
                 wake_word_id,
                 "not trained: training was set up for the GPU, and Docker can't reach it "
                 "now; it would take over an hour on the CPU under a time limit sized for "
-                "the GPU. Settings > Wake Words > Check the GPU and trainer again "
+                "the GPU. Settings > Wake words > Check the GPU and trainer again "
                 "(Restart Domovoi first if the GPU runtime was lost), or turn training on "
                 "again with the CPU. " + error_tail(result.output, 400),
             )
@@ -732,7 +732,7 @@ class WakeWordTrainer(Worker):
             await self._mark_failed(
                 wake_word_id,
                 f"train command timed out after {timeout}s and was stopped "
-                "(Settings > Configuration > Wake words > Training time limit)",
+                "(Settings > Advanced > Wake words > Training time limit)",
             )
             log.warning("wake-word trainer: slug=%s timed out after %d s", slug, timeout)
             return 1

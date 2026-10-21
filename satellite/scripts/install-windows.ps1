@@ -5,7 +5,7 @@ user only, with no administrator rights.
 
 .DESCRIPTION
 Spare-device satellites on Windows (2026-10-13). Run by the one-line command
-the dashboard shows under Settings > Satellites > Add a spare device >
+the dashboard shows under Settings > Rooms > Add a spare device >
 Windows, which has already checked this bundle's SHA-256 before running it:
 
     powershell -NoProfile -ExecutionPolicy Bypass -File install-windows.ps1 'domovoi-room:1?core=...&fp=...&room=...'
@@ -198,7 +198,7 @@ if ($reason) {
 # --- the code from the dashboard -----------------------------------------
 
 if (-not $Payload) {
-    Fail "give the enrolment code ('domovoi-room:1?...') from the dashboard: Settings > Satellites > Add a spare device" 2
+    Fail "give the enrolment code ('domovoi-room:1?...') from the dashboard: Settings > Rooms > Add a spare device" 2
 }
 
 function Test-HomeCore([string]$Url) {

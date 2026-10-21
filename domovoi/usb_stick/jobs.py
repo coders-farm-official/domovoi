@@ -1,7 +1,7 @@
 """The core's half of the room stick: the Debian download, the build, the
 images it serves.
 
-Old computers (USB stick), 2026-10-16. Settings → Satellites → add a spare
+Old computers (USB stick), 2026-10-16. Settings → Rooms → add a spare
 device → **Old computer (USB stick)**: an admin names the room and presses
 "Prepare the stick". The core then, in one background job
 (:func:`start`):

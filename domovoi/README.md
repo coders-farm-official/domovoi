@@ -497,7 +497,7 @@ WHERE enrich_outcome = 'no_match';
    key**: the key on your AcoustID user page is a *user* key, which the
    lookup API refuses (the enricher logs "AcoustID refused the key — it
    must be an APPLICATION key" and stops the sweep). Paste it into the
-   dashboard, Settings → Configuration → Library → **AcoustID key**
+   dashboard, Settings → Advanced → Library → **AcoustID key**
    (admin; **test the key** asks AcoustID whether it takes it), or set
    `ACOUSTID_API_KEY=<the application key>` in `domovoi/.env` and
    restart. The dashboard never shows a saved key again. Without a
@@ -1000,7 +1000,7 @@ All config is env-driven via `.env` (see `.env.example`):
 | `CONNECTIVITY_PROBE_TIMEOUT_SEC` | `2` | Per-probe timeout |
 | `BOT_NAME` | `Domovoi` | Bot identity (used in responses) |
 | `LOG_LEVEL` | `INFO` | Standard library logging level |
-| `GUEST_QUEUE_EDITING` | `true` | Guests (a phone or browser with no household token) may change the queue of a room that is playing and pause / resume / skip / go back there — never clear, stop or start a room — until an admin bans them (Settings → Devices → Guests). `false` = the household token or an admin only, as before. Editable live in Settings |
+| `GUEST_QUEUE_EDITING` | `true` | Guests (a phone or browser with no household token) may change the queue of a room that is playing and pause / resume / skip / go back there — never clear, stop or start a room — until an admin bans them (Settings → Phones & browsers → Guests). `false` = the household token or an admin only, as before. Editable live in Settings |
 | `ADMIN_RELOAD_WINDOW_MIN` | `60` | Minutes after the admin password is entered that a reload of the dashboard (or a new tab in that browser) stays signed in with no password prompt — counted from the sign-in, never slid by use; only that browser's session cookie can resume it, and signing out, revoking the session or a password change ends it. Afterwards a reload is view only until you sign in again. `0` = every reload is view only. `0`–`1440`. Editable live in Settings |
 | `HOME_PROBLEMS_VISIBILITY` | `everyone` | Who sees the dashboard Home page's "needs attention" rows: `everyone` (household members see the ones that explain what they notice, an admin sees all), `summary` (one neutral line) or `admins` (only an admin). Editable live in Settings |
 | `CHAT_MODE_ENABLED` | `false` | Master gate for conversational chat mode. Off → `LettaStubClient`, Letta never contacted |

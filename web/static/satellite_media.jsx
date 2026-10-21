@@ -1,4 +1,4 @@
-/* Prepare-satellite-media card (Settings → Satellites, below Broadcast).
+/* Prepare-satellite-media card (Settings → Rooms, below Broadcast).
  * Flow (portal — the shipped path): flash stock OS, prepare here, boot the
  * device; it raises its own `Domovoi-Setup-<id>` network, the customer sets
  * it up from a phone and approves it on the dashboard. USB adoption instead
@@ -17,7 +17,7 @@
  * Windows tray icon's card helper (windows/tray, "Prepare a satellite
  * card"), which writes the zip onto the card and asks for the setup
  * network password shown here; the zip's README keeps the steps by hand.
- * The tray links here as #settings/satellites/media, which opens this
+ * The tray links here as #settings/rooms/media, which opens this
  * card. */
 
 const smInput = {
@@ -235,13 +235,14 @@ const PrepareMediaCard = ({ fire }) => {
   const [busy, setBusy] = React.useState(false);
   const [open, setOpen] = React.useState(false);
   const [creds, setCreds] = React.useState(null);
-  // The Windows tray icon's card helper links to #settings/satellites/media:
+  // The Windows tray icon's card helper links to #settings/rooms/media:
   // open this card and bring it into view.
   const cardRef = React.useRef(null);
   const linkedRef = React.useRef(false);
   React.useEffect(() => {
     const parts = routeParts(currentRoute());
-    if (parts[0] !== 'settings' || parts[1] !== 'satellites' || parts[2] !== 'media') return;
+    // Settings → Rooms since 2026-10-21; the tray's old words still land here.
+    if (parts[0] !== 'settings' || !['rooms', 'satellites'].includes(parts[1]) || parts[2] !== 'media') return;
     linkedRef.current = true;
     setOpen(true);
   }, []);

@@ -311,7 +311,7 @@ async def list_approvals(request: Request):
 
 # ─── spare devices: the enrolment payload and the install command ─────────
 #
-# Settings → Satellites → "Add a spare device" (S1, 2026-10-13). One payload,
+# Settings → Rooms → "Add a spare device" (S1, 2026-10-13). One payload,
 # `domovoi-room:1?core=…&fp=…&room=…` (satellite/enrolment.py), shown two
 # ways: inside a one-line Linux install command, and as a QR code for a
 # phone's room mode. It carries no secret — the device still has to be

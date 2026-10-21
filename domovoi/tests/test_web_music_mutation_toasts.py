@@ -344,7 +344,7 @@ def test_a_blocked_device_bulk_add_says_so_once(outcomes) -> None:
     assert o["prompts"]["ensurePair"] == 0 and o["prompts"]["ensureLogin"] == 0, o["prompts"]
     assert o["toastTexts"] == [
         "add refused — the den tablet is blocked from changing things here. "
-        "An admin lifts the block in Settings → Devices."
+        "An admin lifts the block in Settings → Phones & browsers."
     ], o["toastTexts"]
 
 

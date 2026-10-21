@@ -233,7 +233,7 @@ it when you started it in a terminal; run as a service, it never prints
 the code, so it stays out of the journal. The journal gets one line
 saying where the file is.
 
-In the dashboard: **Settings → Configuration → Admin → "set up admin"**.
+In the dashboard: **Settings → Advanced → Admin → "set up admin"**.
 Enter the code, choose a password. The code file is deleted the instant
 setup completes. The dialog then asks **Will this Domovoi have internet?**
 — answer with your Step 0 decision, or **Decide later** (the Home page
@@ -272,7 +272,7 @@ yourself. Then, before you add music or build satellites:
 - **Yes, always, or Sometimes:** do
   [the items that stay yours](INTERNET.md#if-your-domovoi-will-have-internet):
   your town for local news, an AcoustID **application** key for song
-  recognition (Settings → Configuration → Library → **AcoustID key**, or
+  recognition (Settings → Advanced → Library → **AcoustID key**, or
   `ACOUSTID_API_KEY` in `domovoi/.env` and a restart), your radio market. Tracks the server looked at before it had a key are tried
   again by themselves, so the order no longer matters.
 - **No:** work through
@@ -387,7 +387,7 @@ There are two routes.
 
 Flash stock **Raspberry Pi OS Lite (64-bit)** with any tool, no
 pre-configuration. Put the card back in the server. Dashboard →
-**Settings → Satellites → prepare satellite media**. It writes a first-boot overlay
+**Settings → Rooms → prepare satellite media**. It writes a first-boot overlay
 and an offline payload (wheels, packages, the satellite code from this
 machine, plugin payloads) to the card. The payload comes from the
 server's caches, which the server fills while it has internet (**Refresh
@@ -469,7 +469,7 @@ domovoi_url = "ws://<your-server>:6370"
 
 Use whatever name resolves reliably on your LAN. On first connection the
 core automatically provisions that room's MPD container and the room
-appears in the dashboard's Settings → Satellites.
+appears in the dashboard's Settings → Rooms.
 
 ---
 

@@ -699,7 +699,7 @@ const DenylistView = ({ count, onBack }) => (
  *                                          since when, the latest cleanup and
  *                                          delete (counts and dates only)
  *   PATCH /api/config/editable           — { changes: { voice_history_keep } }
- *                                          (admin; also Settings → Configuration
+ *                                          (admin; also Settings → Advanced
  *                                          → Privacy)
  *   POST  /api/voice-history/delete-all  — admin; runs as a job on the server,
  *                                          its progress is read back here

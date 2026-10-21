@@ -365,7 +365,7 @@ async def list_devices(limit: int = 200) -> list[Device]:
 
 @router.get("/android-app")
 async def android_app_for_household_phones() -> dict[str, Any]:
-    """Settings → Devices → "get the Domovoi app": the server's join page
+    """Settings → Phones & browsers → "get the Domovoi app": the server's join page
     without a room code (``join_url``, ``<core>/join``, for the card's QR
     code and link) and what that page will offer, from the core's public
     ``GET /v1/android-app`` (``release`` null before the first release;

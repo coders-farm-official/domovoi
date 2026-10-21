@@ -60,7 +60,7 @@ Read these core files before writing a screen:
     never `visibleWith` alone: a shared screen leaves `SharedScreenHidden`
     (People, Chat, Files, News) off the bottom bar, rail, drawer and Home's
     grid alike, as the web's SHARED_SCREEN_HIDDEN does. The bottom bar is
-    the phone's own pick (`ui/shell/PhoneBar.kt`, Settings → Phone bar),
+    the phone's own pick (`ui/shell/PhoneBar.kt`, Settings → App layout),
     filtered the same way, so a saved tab never beats that rule. A screen
     that became a Settings tab (Satellites) keeps its `Route` as the way a
     link names it: `settingsTabFor` and the shell open Settings on the tab.

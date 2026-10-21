@@ -283,7 +283,7 @@ function Publish-Release([string]$ReleaseCommit, [string]$BuiltFrom, [bool]$Exis
         $notes = @(
             "Domovoi $versionName. The Android app (versionCode $versionCode), built from $($manifest.commit); the release is tagged at $ReleaseCommit, which adds android/release.json naming these files. scripts/release/finish-release adds the Windows Setup, SHA256SUMS for every file and the release notes.",
             '',
-            'Install the app from your own Domovoi server: on the dashboard, Settings -> Satellites -> add a spare device (for a room) or Settings -> Devices -> get the Domovoi app. The server checks these files against android/release.json before it hands them out.',
+            'Install the app from your own Domovoi server: on the dashboard, Settings -> Rooms -> add a spare device (for a room) or Settings -> Phones & browsers -> get the Domovoi app. The server checks these files against android/release.json before it hands them out.',
             '',
             '| file | for | SHA-256 |',
             '|---|---|---|'

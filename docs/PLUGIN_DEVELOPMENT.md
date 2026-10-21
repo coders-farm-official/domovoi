@@ -1606,7 +1606,7 @@ the new manifest while your old code still runs the old container). A
 `pulling` (else `image`) isn't on the host yet — a long pull — up to 6
 hours in all. A resolver that raises holds them for
 30 minutes (and is logged); after that the container shows as "not
-watched · resolver failing" on the Containers page and only its
+watched · resolver failing" on Settings → Health and only its
 repository and settings are checked, until the resolver answers again.
 
 A disabled plugin's containers are known but not expected (stopping a
@@ -2010,7 +2010,7 @@ The runtime forces most of this, but know the shapes:
   written, but it loads at the next restart of the Domovoi services. Confirm
   answers `restart_required: true`; `GET /v1/admin/version` and
   `GET /v1/plugins` list the upgrade as pending, and the dashboard's Plugins
-  page and Settings → Version offer the restart (the same one that loads
+  page and Settings → About & updates offer the restart (the same one that loads
   pulled code — it bounces core and web). Until then the plugin is not
   loaded in the core. A plugin whose code the server never imported (its
   import failed at boot, say) is hot-loaded as before.

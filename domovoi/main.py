@@ -256,7 +256,7 @@ def _register_core_reapply_hooks() -> None:
     from domovoi import fast_lane
 
     reapply.on_reapply("fastlane_mode", fast_lane.apply_mode)
-    # Switching wake-word training on in Settings → Configuration starts its
+    # Switching wake-word training on in Settings → Advanced starts its
     # worker now (it isn't started at boot while the setting is off); off
     # is read by the worker's own tick.
     def _start_wake_trainer() -> None:
@@ -1435,7 +1435,7 @@ async def satellite_code_manifest_signed() -> dict[str, Any]:
 @app.get("/v1/satellite-code/bundle.tar.gz")
 async def satellite_code_bundle() -> FastAPIResponse:
     """The satellite tree as one deterministic ``.tar.gz`` — what a spare
-    computer's install command downloads (Settings → Satellites → Add a
+    computer's install command downloads (Settings → Rooms → Add a
     spare device). The same files as the manifest above, under
     ``satellite/``. The command runs it only after matching its SHA-256
     against the digest the dashboard quoted
@@ -1761,7 +1761,7 @@ async def admin_satellite_linux_fetch() -> dict[str, Any]:
 
 
 # ─── Old computers: the room stick (2026-10-16) ───────────────────────────
-# Settings → Satellites → add a spare device → Old computer (USB stick). An
+# Settings → Rooms → add a spare device → Old computer (USB stick). An
 # admin's "Prepare the stick" downloads Debian's netinst the first time
 # (pinned in domovoi/usb_stick/debian-image.json) and re-packs it with the
 # room's code, the satellite bundle and our installer answers
@@ -2740,7 +2740,7 @@ async def admin_containers() -> dict[str, Any]:
         "guard": cg_engine.get_guard().status,
         "incidents_readable": readable,
         "freeze_operations": sorted(container_freeze.OPERATIONS),
-        # Whether the Containers page offers "rebuild the music player
+        # Whether Settings → Health offers "rebuild the music player
         # image" (POST /v1/admin/containers/mpd-image/rebuild), and why not.
         "mpd_rebuild": {"available": why is None, "why": why},
         **cg_views.household_payload(rows, admin=True),
@@ -3330,7 +3330,7 @@ async def admin_wake_score(body: _AdminWakeScoreBody) -> dict[str, Any]:
         raise HTTPException(status_code=501, detail=str(e)) from e
 
 
-# ─── Wake-word training: Settings → Wake Words → "Turn on" ────────────────
+# ─── Wake-word training: Settings → Wake words → "Turn on" ────────────────
 
 
 @app.get(
@@ -5887,7 +5887,7 @@ class _AcoustidTestBody(BaseModel):
     dependencies=[Depends(require_admin_security)],
 )
 async def admin_acoustid_test(body: _AcoustidTestBody | None = None) -> dict[str, Any]:
-    """Settings → Configuration → "test the key": one AcoustID lookup with
+    """Settings → Advanced → "test the key": one AcoustID lookup with
     the key — the one in ``key``, else the saved ``ACOUSTID_API_KEY`` — of
     a fixed fingerprint (``library_enricher.check_acoustid_key``).
 

@@ -72,7 +72,7 @@ _last_live_window: int | None = None
 def reload_window_min() -> int:
     """The live ``ADMIN_RELOAD_WINDOW_MIN``, in minutes (0 = off).
 
-    Edited through the core (Settings → Configuration, tier ``hot``),
+    Edited through the core (Settings → Advanced, tier ``hot``),
     which mutates the CORE's settings; this process's copy is whatever
     ``.env`` said when it booted. So the value comes from the core's
     snapshot (refreshed every 1.5 s), clamped to 0..1440; a value that is

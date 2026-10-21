@@ -721,7 +721,7 @@ def install(args: argparse.Namespace, *, run: Callable[..., Any] = subprocess.ru
     if args.wait <= 0:
         return 0
     say("")
-    say("Now approve it: in the dashboard, Settings -> Satellites, type the code shown below.")
+    say("Now approve it: in the dashboard, Settings -> Rooms, type the code shown below.")
     from satellite import control, pc_engine
 
     # This process is the staged Python in %TEMP%; the engine runs the

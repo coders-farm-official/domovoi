@@ -222,7 +222,7 @@ for e in json.load(sys.stdin)["release"]["apks"]:
     {
       echo "Domovoi $version_name. The Android app (versionCode $version_code), built from $m_commit; the release is tagged at $release_commit, which adds android/release.json naming these files. scripts/release/finish-release adds the Windows Setup, SHA256SUMS for every file and the release notes."
       echo
-      echo "Install the app from your own Domovoi server: on the dashboard, Settings → Satellites → add a spare device (for a room) or Settings → Devices → get the Domovoi app. The server checks these files against android/release.json before it hands them out."
+      echo "Install the app from your own Domovoi server: on the dashboard, Settings → Rooms → add a spare device (for a room) or Settings → Phones & browsers → get the Domovoi app. The server checks these files against android/release.json before it hands them out."
       echo
       echo "| file | for | SHA-256 |"
       echo "|---|---|---|"
