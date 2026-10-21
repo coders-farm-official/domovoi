@@ -24,11 +24,8 @@ class AppPhoneContext(
     private val serverSet: () -> Boolean,
     /** ...and connected now. */
     private val connected: () -> Boolean,
-    /** The cached room names of the server set up (HouseholdNames). */
-    private val rooms: () -> List<String>,
     /** The cached name of the listener picked in Settings. */
     private val listener: () -> String?,
-    private val mirroredTimers: suspend (nowMs: Long) -> List<PhoneTimer>,
     private val savedBooks: () -> List<FoundItem>,
     override val reader: PhoneReader = AndroidPhoneReader(context),
 ) : PhoneContext {
@@ -45,13 +42,9 @@ class AppPhoneContext(
                 up -> ServerLink.CONNECTED
                 else -> ServerLink.NOT_CONNECTED
             },
-            // Room names only while connected (plan part 1).
-            rooms = if (up) rooms() else emptyList(),
             listener = listener(),
         )
     }
-
-    override suspend fun timers(nowMs: Long): List<PhoneTimer> = mirroredTimers(nowMs)
 
     override fun serverKnown(): Boolean = serverSet()
 
@@ -79,7 +72,9 @@ class AppPhoneContext(
     }
 
     override fun permission(p: PhonePermission): PermissionState = when {
-        androidPermissions(p).any { granted(it) } -> PermissionState.GRANTED
+        // The first is the one that matters: fine for the Wi-Fi name (coarse
+        // alone doesn't name it), coarse for "where am I".
+        granted(androidPermissions(p).first()) -> PermissionState.GRANTED
         p.name in settings.declinedPermissions -> PermissionState.DECLINED
         else -> PermissionState.ASKABLE
     }
@@ -94,11 +89,14 @@ class AppPhoneContext(
         ContextCompat.checkSelfPermission(ctx, permission) == PackageManager.PERMISSION_GRANTED
 
     companion object {
-        /** What Android's dialog asks for, per permission. Location asks for
-         *  both: the person may still choose "approximate" (the Wi-Fi name
-         *  then says it needs precise location). */
+        /** What Android's dialog asks for, per permission; the first is the
+         *  one the feature needs. */
         fun androidPermissions(p: PhonePermission): List<String> = when (p) {
-            PhonePermission.LOCATION -> listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+            // Approximate only for "where am I".
+            PhonePermission.LOCATION -> listOf(Manifest.permission.ACCESS_COARSE_LOCATION)
+            // Android 12+ asks for fine together with coarse; the person may
+            // still pick approximate, which leaves the Wi-Fi name unread.
+            PhonePermission.PRECISE_LOCATION -> listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
             PhonePermission.CONTACTS -> listOf(Manifest.permission.READ_CONTACTS)
             PhonePermission.CALENDAR -> listOf(Manifest.permission.READ_CALENDAR)
         }

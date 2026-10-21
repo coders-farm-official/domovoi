@@ -14,7 +14,7 @@ object Persona {
     /** N1's one sentence for the phone facts (PhoneFacts.line): asked about,
      *  they are used; otherwise they are never brought up. */
     const val FACTS_SENTENCE: String =
-        "You may also be given phone facts (what is playing, the home server connection, its rooms, " +
+        "You may also be given phone facts (what is playing, whether the home server is connected, " +
             "who you are talking with): use them when a question is about them and never mention them otherwise. " +
             "Answer every other question from your own knowledge, as usual."
 

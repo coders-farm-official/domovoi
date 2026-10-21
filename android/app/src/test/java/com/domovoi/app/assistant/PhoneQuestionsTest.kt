@@ -36,7 +36,7 @@ class PhoneQuestionsTest {
         PhoneQuestion.STORAGE to listOf("How much space do I have?", "how much storage is left", "Is my phone full?", "how much free space do I have left"),
         PhoneQuestion.NETWORK to listOf("Am I on Wi-Fi or mobile data?", "am i on wifi", "Am I on mobile data", "am I online", "do I have internet"),
         PhoneQuestion.NEXT_ALARM to listOf("When's my next alarm?", "what time is my alarm set for", "do I have an alarm set", "is an alarm set"),
-        PhoneQuestion.DO_NOT_DISTURB to listOf("Is Do Not Disturb on?", "is DND on", "am I on do not disturb", "is my phone on silent"),
+        PhoneQuestion.DO_NOT_DISTURB to listOf("Is Do Not Disturb on?", "is DND on", "am I on do not disturb"),
         PhoneQuestion.WHO_AM_I to listOf("What's my name?", "who am I", "do you know who I am"),
         PhoneQuestion.SLEEP_TIMER to listOf("How long is left on the sleep timer?", "is a sleep timer set", "when will the music stop"),
         PhoneQuestion.TIMERS to listOf("how long is left on the pasta timer", "What timers do I have?", "do I have any timers running", "how much time is left on my timer", "what reminders do I have"),
@@ -129,25 +129,21 @@ class PhoneQuestionsTest {
             say(PhoneQuestion.NOW_PLAYING, phone),
         )
         phone.facts = PromptFacts(NowPlayingFact("Song", null, paused = true, room = "kitchen"))
-        assertEquals("Paused: \"Song\" in the kitchen.", say(PhoneQuestion.NOW_PLAYING, phone))
+        assertEquals("Paused: \"Song\" on a room speaker this phone cast to.", say(PhoneQuestion.NOW_PLAYING, phone))
     }
 
-    @Test fun timersFromThePhonesOwnCopy() {
-        val phone = FakePhone()
-        assertTrue(say(PhoneQuestion.TIMERS, phone).startsWith("This phone has no timers or reminders from your home server."))
-        phone.timers = listOf(
-            PhoneTimer("pasta", reminder = false, triggerAtMs = nowMs + 9 * 60_000, room = "kitchen"),
-            PhoneTimer("call mom", reminder = true, triggerAtMs = now.withHour(18).withMinute(30).toInstant().toEpochMilli()),
-            PhoneTimer("secret", reminder = true, triggerAtMs = now.withHour(19).withMinute(0).toInstant().toEpochMilli(), masked = true),
-            PhoneTimer("old", reminder = false, triggerAtMs = nowMs - 1_000),
-        )
-        val said = say(PhoneQuestion.TIMERS, phone)
-        assertEquals(
-            "This phone has 3 timers and reminders from your home server: pasta, 9 minutes left (kitchen); " +
-                "a reminder, call mom, at 6:30 PM today; a private reminder at 7:00 PM today.",
-            said,
-        )
-        assertFalse("a private reminder's words never show", said.contains("secret"))
+    /** Strict (owner, 2026-10-21): a phone chat never reads the server's
+     *  timers (the mirror only rings); one honest line points home. */
+    @Test fun timersAreNeverTheHouseholds() {
+        val said = say(PhoneQuestion.TIMERS, FakePhone(serverSet = true))
+        assertEquals("I can't see timers in this phone's Clock app. House timers are in your home server chats.", said)
+    }
+
+    @Test fun houseQuestionsPointToHomeServerChats() {
+        listOf("What rooms are in my house?", "which rooms do I have", "list the rooms", "is the kitchen online", "what's playing in the kitchen")
+            .forEach { assertEquals(it, PhoneQuestion.HOUSE, PhoneQuestions.match(it)) }
+        assertEquals("Those are in your home server chats.", say(PhoneQuestion.HOUSE, FakePhone()))
+        assertNull(PhoneQuestions.match("is my phone online"))
     }
 
     @Test fun whoAmI() {
@@ -155,6 +151,28 @@ class PhoneQuestionsTest {
         assertTrue(say(PhoneQuestion.WHO_AM_I, phone).startsWith("I don't know your name."))
         phone.facts = PromptFacts(listener = "Kamron Kennedy")
         assertEquals("You're Kamron, as this phone's Settings say.", say(PhoneQuestion.WHO_AM_I, phone))
+    }
+
+    @Test fun roundOneAmbiguities() {
+        assertEquals("the AI, not the phone", PhoneQuestion.WHICH_MODEL, PhoneQuestions.match("What model is this?"))
+        assertEquals(PhoneQuestion.PHONE_MODEL, PhoneQuestions.match("what model is this phone"))
+        assertEquals(PhoneQuestion.RINGER, PhoneQuestions.match("Is my phone on silent?"))
+        assertEquals(PhoneQuestion.DO_NOT_DISTURB, PhoneQuestions.match("Is Do Not Disturb on?"))
+        val phone = FakePhone()
+        phone.reader.ringer = RingerMode.VIBRATE
+        assertEquals("Your phone is on vibrate.", say(PhoneQuestion.RINGER, phone))
+        assertEquals(null, PhoneQuestion.RINGER.permission)
+    }
+
+    /** Approximate for "where am I"; precise, asked on its own, only for
+     *  the Wi-Fi name. */
+    @Test fun locationPrecision() = runBlocking {
+        assertEquals(PhonePermission.LOCATION, PhoneQuestion.WHERE_AM_I.permission)
+        assertEquals(PhonePermission.PRECISE_LOCATION, PhoneQuestion.WIFI_NAME.permission)
+        val phone = FakePhone().also { it.permissions[PhonePermission.LOCATION] = PermissionState.GRANTED }
+        assertEquals(PhoneAnswer.Ask(PhonePermission.PRECISE_LOCATION, PhoneQuestion.WIFI_NAME), PhoneQuestions.answer(PhoneQuestion.WIFI_NAME, inputs(phone)))
+        assertTrue(PhonePermissions.reason(PhonePermission.PRECISE_LOCATION).contains("Wi-Fi"))
+        assertFalse(PhonePermissions.reason(PhonePermission.LOCATION).contains("Wi-Fi"))
     }
 
     @Test fun theSleepTimer() {
@@ -255,7 +273,8 @@ class PhoneQuestionsTest {
         assertEquals(LibraryAsk(LibraryKind.VIDEO, "glacier trip"), LibraryQuestions.match("Do I have a video called glacier trip on this phone?"))
         assertEquals(LibraryAsk(LibraryKind.BOOK, "dune"), LibraryQuestions.match("where did I leave off in Dune"))
         assertEquals(LibraryAsk(LibraryKind.BOOK, ""), LibraryQuestions.match("which chapter am I on"))
-        listOf("what music is good for studying", "do I have time for a nap", "find me a recipe", "is there a book about bees you recommend")
+        listOf("what music is good for studying", "do I have time for a nap", "find me a recipe", "is there a book about bees you recommend",
+            "Where am I in life?")
             .forEach { assertNull(it, LibraryQuestions.match(it)) }
         assertEquals(PhoneQuestion.MEMORY, PhoneQuestions.match("How much memory does this phone have?"))
         assertEquals(PhoneQuestion.MEMORY, PhoneQuestions.match("how much RAM do I have"))

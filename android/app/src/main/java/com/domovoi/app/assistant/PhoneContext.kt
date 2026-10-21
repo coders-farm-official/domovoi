@@ -20,6 +20,8 @@ data class AlarmReading(val triggerAtMs: Long)
 
 enum class DndMode { OFF, PRIORITY, ALARMS, SILENT, UNKNOWN }
 
+enum class RingerMode { NORMAL, VIBRATE, SILENT }
+
 data class DeviceReading(
     val manufacturer: String,
     val model: String,
@@ -33,17 +35,6 @@ data class LocationReading(val latitude: Double, val longitude: Double, val accu
 data class CalendarEvent(val title: String, val beginMs: Long, val endMs: Long?, val allDay: Boolean, val location: String? = null)
 
 data class ContactMatch(val name: String, val number: String?, val email: String?, val label: String? = null)
-
-/** A timer or reminder in the phone's own copy of the household's
- *  (alerts/TimerAlarmMirror.kt). [masked]: a private reminder, shown without
- *  its words. */
-data class PhoneTimer(
-    val label: String?,
-    val reminder: Boolean,
-    val triggerAtMs: Long,
-    val room: String? = null,
-    val masked: Boolean = false,
-)
 
 /** A song, video or book a read tool found on the phone. */
 data class FoundItem(
@@ -64,6 +55,7 @@ interface PhoneReader {
     fun network(): NetworkReading? = null
     fun nextAlarm(): AlarmReading? = null
     fun doNotDisturb(): DndMode? = null
+    fun ringer(): RingerMode? = null
     fun device(): DeviceReading? = null
 
     /** Location permission. */
@@ -99,8 +91,12 @@ interface PhoneLibrary {
 
 /** The optional permissions a phone chat asks for on first use. */
 enum class PhonePermission {
-    /** Where am I, the Wi-Fi network's name. */
+    /** "Where am I": approximate location only. */
     LOCATION,
+
+    /** The Wi-Fi network's name, which Android shows only with precise
+     *  location; asked for on its own, with its own reason. */
+    PRECISE_LOCATION,
 
     /** Calling and texting someone by name, without the picker. */
     CONTACTS,
@@ -131,10 +127,6 @@ interface PhoneContext {
     /** The prompt's facts, read now from the app's own state. */
     fun facts(): PromptFacts = PromptFacts.NONE
 
-    /** The phone's copy of the household's timers and reminders, soonest
-     *  first, only the ones still to come. */
-    suspend fun timers(nowMs: Long): List<PhoneTimer> = emptyList()
-
     /** A home server is set up on this phone (for the one honest line that
      *  points to home-server chats; nothing is fetched). */
     fun serverKnown(): Boolean = false
@@ -163,8 +155,10 @@ interface PhoneContext {
  *  line, why, and that it stays on the phone. */
 object PhonePermissions {
     fun reason(p: PhonePermission): String = when (p) {
-        PhonePermission.LOCATION -> "To say where you are or name the Wi-Fi network, Domovoi needs the location permission. " +
+        PhonePermission.LOCATION -> "To say where you are, Domovoi needs your approximate location. " +
             "It's read on this phone only and never sent anywhere."
+        PhonePermission.PRECISE_LOCATION -> "Android shows the Wi-Fi network's name only to apps with precise location. " +
+            "Domovoi uses it for that alone, on this phone, and never sends it anywhere."
         PhonePermission.CONTACTS -> "To call or text people by name, Domovoi needs to read your contacts. They're read on this " +
             "phone only and never sent anywhere. Without it, you choose the person from your contacts each time."
         PhonePermission.CALENDAR -> "To read this phone's calendar, Domovoi needs the calendar permission. It's read on this " +
@@ -173,7 +167,8 @@ object PhonePermissions {
 
     /** The card's title. */
     fun title(p: PhonePermission): String = when (p) {
-        PhonePermission.LOCATION -> "Allow location?"
+        PhonePermission.LOCATION -> "Allow approximate location?"
+        PhonePermission.PRECISE_LOCATION -> "Allow precise location?"
         PhonePermission.CONTACTS -> "Allow contacts?"
         PhonePermission.CALENDAR -> "Allow the calendar?"
     }

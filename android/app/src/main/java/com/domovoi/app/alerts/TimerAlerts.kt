@@ -90,12 +90,6 @@ class TimerAlerts(
 
     fun canPost(): Boolean = notifier.canPost()
 
-    /** The phone's copy of the household's timers and reminders (the
-     *  alarms the mirror armed), still to come at [nowMs], soonest first:
-     *  what a phone chat's "what timers do I have" reads. Never fetched. */
-    suspend fun mirrored(nowMs: Long): List<MirrorAlarm> =
-        store.mirror().alarms.filter { it.trigger_at_ms > nowMs }.sortedBy { it.trigger_at_ms }
-
     /** Exact alarms are allowed (always below API 31; the person's "Alarms &
      *  reminders" grant from 31, ExactAlarms). */
     fun canExact(): Boolean = ExactAlarms.allowed(ctx)

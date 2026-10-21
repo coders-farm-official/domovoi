@@ -97,6 +97,15 @@ class AndroidPhoneReader(context: Context) : PhoneReader {
         }
     }.getOrNull()
 
+    override fun ringer(): RingerMode? = runCatching {
+        when (ctx.getSystemService(AudioManager::class.java)?.ringerMode) {
+            AudioManager.RINGER_MODE_SILENT -> RingerMode.SILENT
+            AudioManager.RINGER_MODE_VIBRATE -> RingerMode.VIBRATE
+            AudioManager.RINGER_MODE_NORMAL -> RingerMode.NORMAL
+            else -> null
+        }
+    }.getOrNull()
+
     override fun device(): DeviceReading? = runCatching {
         val info = ActivityManager.MemoryInfo().also { ctx.getSystemService(ActivityManager::class.java).getMemoryInfo(it) }
         DeviceReading(Build.MANUFACTURER, Build.MODEL, Build.VERSION.RELEASE, Build.VERSION.SDK_INT, info.totalMem)

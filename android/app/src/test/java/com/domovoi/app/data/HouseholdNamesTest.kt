@@ -4,7 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-/** The cached room and listener names a phone chat's prompt reads: kept
+/** The cached listener name a phone chat's prompt reads: kept
  *  per server, never mixed between servers. */
 class HouseholdNamesTest {
     private val map = mutableMapOf<String, String>()
@@ -16,15 +16,6 @@ class HouseholdNamesTest {
     })
 
     private val home = "http://192.168.1.20:6369"
-
-    @Test fun roomsArePerServer() {
-        names.recordRooms(home, listOf("kitchen", " office ", "kitchen", ""))
-        assertEquals(listOf("kitchen", "office"), names.rooms(home))
-        assertEquals(listOf("kitchen", "office"), names.rooms("HTTP://192.168.1.20:6369/"))
-        assertEquals(emptyList<String>(), names.rooms("http://192.168.1.30:6369"))
-        names.recordRooms(home, emptyList())
-        assertEquals(emptyList<String>(), names.rooms(home))
-    }
 
     @Test fun theListenerIsNamedOnlyForTheIdSeen() {
         names.recordListener(home, "3", "Kamron Kennedy")

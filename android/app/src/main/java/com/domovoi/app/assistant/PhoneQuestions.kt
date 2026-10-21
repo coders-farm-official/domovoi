@@ -13,8 +13,12 @@ enum class PhoneQuestion {
     NETWORK,
     NEXT_ALARM,
     DO_NOT_DISTURB,
+    RINGER,
     SLEEP_TIMER,
     TIMERS,
+
+    /** The house's rooms, satellites and devices: the home server's. */
+    HOUSE,
     PHONE_MODEL,
     MEMORY,
     ANDROID_VERSION,
@@ -38,7 +42,8 @@ enum class PhoneQuestion {
     val permission: PhonePermission?
         get() = when (this) {
             CALENDAR_TODAY, CALENDAR_TOMORROW, CALENDAR_NEXT -> PhonePermission.CALENDAR
-            WHERE_AM_I, WIFI_NAME -> PhonePermission.LOCATION
+            WHERE_AM_I -> PhonePermission.LOCATION
+            WIFI_NAME -> PhonePermission.PRECISE_LOCATION
             else -> null
         }
 }
@@ -109,11 +114,17 @@ object PhoneQuestions {
             "do i have (?:an|any) alarms?(?: set)?|is (?:my |an |there an )?alarm set|what alarms do i have|when does my alarm go off|" +
             "what time does my alarm go off",
         PhoneQuestion.DO_NOT_DISTURB to "is do not disturb (?:turned )?on|is dnd on|am i (?:on|in) do not disturb|" +
-            "is (?:my |the )?phone (?:on|in) do not disturb|is do not disturb off|is (?:my |the )?phone on silent|" +
-            "is (?:my |the )?phone (?:silenced|muted)",
+            "is (?:my |the )?phone (?:on|in) do not disturb|is do not disturb off",
+        // Silent is the ringer, not Do Not Disturb.
+        PhoneQuestion.RINGER to "is (?:my |the )?phone (?:on silent|silenced|muted|on vibrate)|is (?:my |the )?ringer (?:on|off)|" +
+            "is (?:my |the )?(?:phone|ringer) on|will (?:my|the) phone ring",
         // Before TIMERS: "the sleep timer" is playback's, not a timer's.
         PhoneQuestion.SLEEP_TIMER to "how (?:much time|long) is left on (?:the |my )?sleep timer|when does (?:the |my )?sleep timer (?:end|stop|finish)|" +
             "is (?:a |the |my )?sleep timer (?:set|on|running)|(?:the |my )?sleep timer|when will the music stop",
+        PhoneQuestion.HOUSE to "(?:what|which) rooms (?:are there|do i have|are in (?:my|the) (?:house|home)|does (?:my|the) (?:house|home) have)|" +
+            "what rooms are in my house|(?:list|name) (?:my |the )?rooms|how many rooms (?:are there|do i have)|" +
+            "(?:what|which) (?:satellites|speakers|rooms) are (?:online|connected|playing)|what is playing in the [a-z]+(?: [a-z]+)?|" +
+            "is (?:the )?(?!(?:my|this|phone|it) )[a-z]+(?: [a-z]+)? (?:room |satellite )?(?:online|offline)",
         PhoneQuestion.TIMERS to "what timers do i have|do i have any timers(?: running| set)?|what timers are (?:running|set|on)|" +
             "how (?:much time|long) is left on (?:my|the) timers?|how (?:much time|long) is left on (?:my |the )?[a-z]+(?: [a-z]+)? timer|"+
             "when (?:is|does) (?:my|the) (?:[a-z]+ )?timer (?:done|going off|go off|finish|end)|(?:any|my) timers|list (?:my |the )?timers|" +
@@ -122,7 +133,7 @@ object PhoneQuestions {
         PhoneQuestion.MEMORY to "how much (?:memory|ram) (?:does (?:this|my|the) phone have|do i have|is there|is in (?:this|my) phone|have i got)|" +
             "how much (?:memory|ram)|what is (?:my|the|this phones) (?:memory|ram)",
         PhoneQuestion.PHONE_MODEL to "what phone is this|which phone is this|what phone (?:do i have|am i using|is this)|" +
-            "what (?:model|kind of phone|type of phone|make of phone) is this(?: phone)?|what model is (?:my|this) phone|what is this phone",
+            "what (?:kind of phone|type of phone|make of phone) is this(?: phone)?|what model is (?:my|this) phone|what is this phone",
         PhoneQuestion.ANDROID_VERSION to "(?:what|which) (?:version of )?android(?: version)?(?: is this| am i (?:on|running|using)| do i have| does (?:it|this phone) (?:run|have)| is (?:it|this phone) (?:on|running))?|" +
             "what android version is this|what version of android is this phone on|what os (?:is this|am i on|version is this)",
         PhoneQuestion.WHICH_MODEL to "(?:which|what) (?:language |ai )?model are you|(?:which|what) (?:language |ai )?model is (?:this|answering|running)|" +
@@ -223,6 +234,12 @@ object PhoneQuestions {
             }
             PhoneQuestion.NEXT_ALARM -> r.nextAlarm()?.let { a -> "Your next alarm is ${whenSaid(a.triggerAtMs, inputs)}." }
                 ?: "You have no alarm set in the Clock app."
+            PhoneQuestion.RINGER -> when (r.ringer()) {
+                RingerMode.SILENT -> "Your phone is on silent."
+                RingerMode.VIBRATE -> "Your phone is on vibrate."
+                RingerMode.NORMAL -> "Your ringer is on."
+                null -> "I can't read the ringer on this phone."
+            }
             PhoneQuestion.DO_NOT_DISTURB -> when (r.doNotDisturb()) {
                 DndMode.OFF -> "Do Not Disturb is off."
                 DndMode.PRIORITY -> "Do Not Disturb is on: only priority notifications come through."
@@ -231,7 +248,11 @@ object PhoneQuestions {
                 DndMode.UNKNOWN -> "Do Not Disturb is on."
                 null -> "I can't read Do Not Disturb on this phone."
             }
-            PhoneQuestion.TIMERS -> timers(inputs.phone.timers(nowMs), inputs)
+            // Strict (owner, 2026-10-21): the server's timers, mirrored here
+            // for the alarms, are never read in a phone chat, and the Clock
+            // app's aren't visible to apps.
+            PhoneQuestion.TIMERS -> "I can't see timers in this phone's Clock app. $HOUSE_TIMERS"
+            PhoneQuestion.HOUSE -> HOUSE_THINGS
             PhoneQuestion.PHONE_MODEL -> r.device()?.let { d ->
                 "This is ${phoneName(d)} on Android ${d.android}, with ${DeviceTiers.marketedGb(d.totalRamBytes)} GB of memory."
             } ?: "I can't read which phone this is."
@@ -280,11 +301,10 @@ object PhoneQuestions {
     fun cannot(p: PhonePermission, serverKnown: Boolean, q: PhoneQuestion? = null): String = when (p) {
         PhonePermission.CALENDAR -> "I can't read this phone's calendar without the calendar permission, which you can turn on " +
             "in Android's settings for Domovoi." + if (serverKnown) " $HOUSEHOLD_CALENDAR" else ""
-        PhonePermission.LOCATION -> if (q == PhoneQuestion.WIFI_NAME) {
-            "I can't read the Wi-Fi network's name without the location permission, which you can turn on in Android's settings for Domovoi."
-        } else {
+        PhonePermission.LOCATION ->
             "I can't see where the phone is without the location permission, which you can turn on in Android's settings for Domovoi."
-        }
+        PhonePermission.PRECISE_LOCATION ->
+            "I can't read the Wi-Fi network's name without precise location, which you can turn on in Android's settings for Domovoi."
         PhonePermission.CONTACTS -> "I can't look people up by name without the contacts permission; I'll open the contact picker instead."
     }
 
@@ -292,30 +312,13 @@ object PhoneQuestions {
     fun nowPlaying(f: PromptFacts): String {
         val p = f.playing ?: return "Nothing is playing."
         val what = "\"${p.title}\"" + (p.artist?.takeIf { it.isNotBlank() }?.let { " by $it" } ?: "")
-        val where = p.room?.let { " in the $it" } ?: " on this phone"
+        // Never the room's name: rooms are the home server's (owner, 2026-10-21).
+        val where = if (p.room != null) " on a room speaker this phone cast to" else " on this phone"
         val at = p.positionSec?.let { pos ->
             ", ${PhoneFacts.clock(pos)}" + (p.durationSec?.takeIf { it > 0 }?.let { " of ${PhoneFacts.clock(it)}" } ?: "")
         }.orEmpty()
         val sleep = f.sleepRemainingSec?.takeIf { it > 0 }?.let { " The sleep timer stops it in ${PhoneFacts.minutes(it)}." }.orEmpty()
         return (if (p.paused) "Paused: " else "Playing ") + what + where + at + "." + sleep
-    }
-
-    private fun timers(list: List<PhoneTimer>, inputs: PhoneAnswerInputs): String {
-        if (list.isEmpty()) return "This phone has no timers or reminders from your home server. Timers in the Clock app aren't visible to me."
-        val nowMs = inputs.now.toInstant().toEpochMilli()
-        val shown = list.take(MAX_TIMERS).map { t ->
-            when {
-                t.masked -> "a private reminder ${whenSaid(t.triggerAtMs, inputs)}"
-                t.reminder -> "a reminder" + (t.label?.takeIf { it.isNotBlank() }?.let { ", $it," } ?: "") + " ${whenSaid(t.triggerAtMs, inputs)}"
-                else -> (t.label?.takeIf { it.isNotBlank() }?.let { "$it, " } ?: "a timer, ") + left(t.triggerAtMs - nowMs) + " left" +
-                    (t.room?.takeIf { it.isNotBlank() }?.let { " (${it})" } ?: "")
-            }
-        }
-        val more = (list.size - MAX_TIMERS).takeIf { it > 0 }?.let { ", and $it more" }.orEmpty()
-        val count = if (list.size == 1) "one" else "${list.size}"
-        val noun = if (list.all { it.reminder }) "reminder" else if (list.none { it.reminder }) "timer" else "timer or reminder"
-        val plural = if (list.size == 1) noun else if (noun == "timer or reminder") "timers and reminders" else noun + "s"
-        return "This phone has $count $plural from your home server: " + shown.joinToString("; ") + more + "."
     }
 
     private fun calendar(events: List<CalendarEvent>?, inputs: PhoneAnswerInputs, day: String, rest: Boolean): String {
@@ -403,8 +406,9 @@ object PhoneQuestions {
     /** The one honest line about the other place (owner, 2026-10-21):
      *  said, never fetched. */
     const val HOUSEHOLD_CALENDAR = "The household calendar is in your home server chats."
+    const val HOUSE_TIMERS = "House timers are in your home server chats."
+    const val HOUSE_THINGS = "Those are in your home server chats."
 
-    private const val MAX_TIMERS = 5
     private const val MAX_EVENTS = 5
     private const val NEXT_EVENT_DAYS = 7L
 }
@@ -440,7 +444,8 @@ object LibraryQuestions {
         LibraryKind.BOOK to "do i have (?:the |an |a )?(?:audio ?book|book) (?:called |named )?(?<q>.+?)",
         LibraryKind.BOOK to "what (?:audio ?books|books) (?:do i have|are there)",
         LibraryKind.BOOK to "where (?:am i|did i (?:leave off|stop)) in (?:my |the )?(?:audio ?book|book)",
-        LibraryKind.BOOK to "where (?:am i|did i (?:leave off|stop)) in (?<q>.+?)",
+        // Not "where am I in …": that is as often "… life" as a title.
+        LibraryKind.BOOK to "where did i (?:leave off|stop) in (?<q>.+?)",
         LibraryKind.BOOK to "(?:which|what) chapter am i (?:on|at)(?: in (?<q>.+?))?",
     ).map { (k, core) -> k to Regex("^$LEAD(?:$core)$END$") }
 

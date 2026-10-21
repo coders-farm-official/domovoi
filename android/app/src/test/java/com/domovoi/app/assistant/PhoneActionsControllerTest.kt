@@ -426,12 +426,12 @@ class PhoneActionsControllerTest {
         assertTrue(engines.isEmpty())
     }
 
-    /** Owner, 2026-10-21: phone chats are phone-only. Whatever the phone
-     *  context still holds about the house, no action reads its timers or
-     *  names its rooms. */
+    /** Owner, 2026-10-21: phone chats are phone-only: no action reads the
+     *  house's timers or names its rooms, even a room the phone casts to. */
     @Test fun phoneActionsNeverReadHouseTimersOrNameRooms() {
-        phone.timers = listOf(PhoneTimer("pizza", reminder = false, triggerAtMs = nowMs + 600_000, room = "larkspur"))
-        phone.facts = PromptFacts(rooms = listOf("larkspur", "copper den"), server = ServerLink.CONNECTED)
+        // The phone context has no house timers or room names to give
+        // (wf/phone-facts, owner: strict); the replies name none either.
+        phone.facts = PromptFacts(server = ServerLink.CONNECTED)
         phone.serverSet = true
         host.clockIntents = emptySet()
         playing("Glass Harbor")

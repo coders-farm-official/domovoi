@@ -13,7 +13,9 @@ data class NowPlayingFact(
     val artist: String? = null,
     /** Paused rather than playing. */
     val paused: Boolean = false,
-    /** A room the phone cast to ("kitchen"); null: this phone. */
+    /** The room the phone cast to; null: this phone. Never named in a
+     *  phone chat (owner, 2026-10-21: phone chats answer about the phone
+     *  only; rooms are the home server's). */
     val room: String? = null,
     val positionSec: Double? = null,
     val durationSec: Double? = null,
@@ -36,9 +38,6 @@ data class PromptFacts(
     /** The playback sleep timer, seconds left; null when it is off. */
     val sleepRemainingSec: Int? = null,
     val server: ServerLink = ServerLink.NONE,
-    /** The household's room names, cached from the app's own reads; given
-     *  to the model only while connected. */
-    val rooms: List<String> = emptyList(),
     /** The listener picked in Settings, first name only. */
     val listener: String? = null,
 ) {
@@ -58,17 +57,15 @@ data class ContextLine(val kind: String, val text: String) {
 }
 
 object PhoneFacts {
-    /** At most this many room names go in (a big house says "and 3 more"). */
-    const val MAX_ROOMS = 4
-
     /** Longer titles and names are cut, so the line stays small. */
     private const val MAX_NAME = 40
 
     /**
      * The facts as the model reads them, or null when there is nothing to
-     * say. About 15-55 tokens: "Phone facts: playing "Glass Harbor" by
+     * say. No room names, no household data: only whether the home server
+     * is connected (owner, 2026-10-21). About 15-50 tokens: "Phone facts: playing "Glass Harbor" by
      * Velvet Kites on this phone, sleep timer 20 minutes left. Connected to
-     * the home server, rooms: kitchen, office, garage. The person talking is
+     * the home server. The person talking is
      * Kamron (say the name only if asked)." (The last clause after
      * the emulator gate: E2B once offered "a board game night with Kamron".)
      *
@@ -77,28 +74,34 @@ object PhoneFacts {
      * "what's playing" fast path says the position).
      */
     fun line(f: PromptFacts): String? {
+        // About 60 tokens at most (English runs about 4 characters a token):
+        // shorter names, then a hard cut.
+        val l = build(f, MAX_NAME) ?: return null
+        if (l.length <= MAX_CHARS) return l
+        val short = build(f, SHORT_NAME) ?: return null
+        return if (short.length <= MAX_CHARS) short else short.take(MAX_CHARS - 1).trimEnd() + "…"
+    }
+
+    /** Most characters the line may take: about 60 tokens. */
+    const val MAX_CHARS = 240
+
+    private const val SHORT_NAME = 20
+
+    private fun build(f: PromptFacts, maxName: Int): String? {
+        fun cut(s: String) = cut(s, maxName)
         val parts = mutableListOf<String>()
         f.playing?.let { p ->
             val what = buildString {
                 append(if (p.paused) "paused: " else "playing ")
                 append('"').append(cut(p.title)).append('"')
                 p.artist?.takeIf { it.isNotBlank() }?.let { append(" by ").append(cut(it)) }
-                append(if (p.room != null) " in the ${cut(p.room)}" else " on this phone")
+                append(if (p.room != null) " on a room speaker this phone cast to" else " on this phone")
             }
             val sleep = f.sleepRemainingSec?.takeIf { it > 0 }?.let { ", sleep timer ${minutes(it)} left" }.orEmpty()
             parts += what + sleep
         }
         when (f.server) {
-            ServerLink.CONNECTED -> {
-                val rooms = f.rooms.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-                parts += if (rooms.isEmpty()) {
-                    "connected to the home server"
-                } else {
-                    val shown = rooms.take(MAX_ROOMS).joinToString(", ") { cut(it) }
-                    val more = (rooms.size - MAX_ROOMS).takeIf { it > 0 }?.let { " and $it more" }.orEmpty()
-                    "connected to the home server, rooms: $shown$more"
-                }
-            }
+            ServerLink.CONNECTED -> parts += "connected to the home server"
             ServerLink.NOT_CONNECTED -> parts += "not connected to the home server"
             ServerLink.NONE -> Unit
         }
@@ -134,9 +137,9 @@ object PhoneFacts {
         else String.format(Locale.US, "%d:%02d", s / 60, s % 60)
     }
 
-    private fun cut(s: String): String {
+    private fun cut(s: String, max: Int = MAX_NAME): String {
         val t = s.trim().replace(Regex("\\s+"), " ")
-        return if (t.length > MAX_NAME) t.take(MAX_NAME).trimEnd() + "…" else t
+        return if (t.length > max) t.take(max).trimEnd() + "…" else t
     }
 }
 

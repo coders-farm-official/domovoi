@@ -630,9 +630,10 @@ reply; a name you give it stays.
 A Domovoi that runs on the phone itself: type or talk, in airplane mode
 too. It knows the time and date, and it answers questions. It also knows
 the phone: what's playing, the battery, free space, Wi-Fi or mobile data,
-your next alarm, Do Not Disturb, this phone's timers, which phone and
-Android this is, and which songs, videos and saved books are on it. It
-can't look things up online.
+your next alarm, Do Not Disturb, which phone and Android this is, and
+which songs, videos and saved books are on it. It can't look things up
+online. House things (rooms, house timers, the household calendar) are in
+your home server chats.
 
 It also does things on the phone. "Set a timer for 10 minutes", "wake me
 at 6:30" or "set an alarm for 7 every weekday" go to the phone's Clock

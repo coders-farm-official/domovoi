@@ -17,14 +17,14 @@ class PhoneToolsTest {
 
     @Test fun offeredOnlyWhenTheyCanWork() {
         val lib = FakeLibrary(musicAllowed = false, videosAllowed = false)
-        assertEquals(listOf(PhoneTools.LIST_TIMERS, PhoneTools.PHONE_STATUS), PhoneTools.offered(lib))
+        assertEquals(listOf(PhoneTools.PHONE_STATUS), PhoneTools.offered(lib))
         lib.musicAllowed = true
         lib.books = listOf(FoundItem("Dune"))
-        assertEquals(listOf(PhoneTools.FIND_MUSIC, PhoneTools.FIND_BOOK, PhoneTools.LIST_TIMERS, PhoneTools.PHONE_STATUS), PhoneTools.offered(lib))
+        assertEquals(listOf(PhoneTools.FIND_MUSIC, PhoneTools.FIND_BOOK, PhoneTools.PHONE_STATUS), PhoneTools.offered(lib))
     }
 
     @Test fun everySpecIsOneReadOnlyToolWithItsName() {
-        listOf(PhoneTools.FIND_MUSIC, PhoneTools.FIND_VIDEO, PhoneTools.FIND_BOOK, PhoneTools.LIST_TIMERS, PhoneTools.PHONE_STATUS).forEach { n ->
+        listOf(PhoneTools.FIND_MUSIC, PhoneTools.FIND_VIDEO, PhoneTools.FIND_BOOK, PhoneTools.PHONE_STATUS).forEach { n ->
             val spec = PhoneTools.spec(n)
             assertTrue(spec, spec.startsWith("{\"name\":\"$n\""))
             assertFalse(spec, Regex("\\b(play|set|delete|send|start)s? (?!anything)", RegexOption.IGNORE_CASE).containsMatchIn(spec.substringAfter("description")))
@@ -55,15 +55,11 @@ class PhoneToolsTest {
         assertEquals("1:02:05", book["listened_to"])
     }
 
-    @Test fun listTimersKeepsAPrivateReminderPrivate() {
-        val phone = FakePhone(timers = listOf(
-            PhoneTimer("pasta", false, nowMs + 600_000, "kitchen"),
-            PhoneTimer("secret plan", true, nowMs + 900_000, masked = true),
-        ))
-        val r = run(PhoneTools.LIST_TIMERS, emptyMap(), phone)
-        assertEquals(2, r["count"])
-        assertFalse(r.toString().contains("secret"))
-        assertTrue(r.toString().contains("time_left=10 minutes"))
+    /** Strict (owner, 2026-10-21): no tool reads the server's timers. */
+    @Test fun noToolReadsTheHouseholdsTimers() {
+        val phone = FakePhone()
+        assertFalse(PhoneTools.offered(phone.library).any { it.contains("timer") })
+        assertEquals(mapOf("error" to "no tool named list_timers here"), run("list_timers", emptyMap(), phone))
     }
 
     @Test fun phoneStatus() {

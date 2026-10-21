@@ -116,21 +116,21 @@ class PhoneChatControllerTest {
         assertNotNull(a.firstTextMs)
         assertEquals("which model", "I'm Domovoi, running Test LLM on this phone's CPU, with no internet.", c.ask("which model are you").text)
         assertTrue("no model was loaded for them", engines.isEmpty())
-        assertEquals(ReplyReport.PHONE, c.draftReport(c.state.value.conversation, 1)!!.model)
+        assertNull("a phone reading is never reported", c.draftReport(c.state.value.conversation, 1))
     }
 
     // ── The model: facts and read tools ─────────────────────────────────
 
     @Test fun theModelIsToldTheFactsAndOfferedTheReadTools() {
         phone.facts = PromptFacts(NowPlayingFact("Glass Harbor", "Velvet Kites"), server = ServerLink.CONNECTED,
-            rooms = listOf("kitchen"), listener = "Kamron")
+            listener = "Kamron")
         val c = controller()
         c.ask("Tell me a joke")
         val turn = engines.single().turns.single()
         assertEquals(Persona.SYSTEM_PROMPT, turn.system)
         assertEquals(listOf(ContextLine.CLOCK, ContextLine.FACTS), turn.context.map { it.kind })
         assertEquals(PhoneFacts.line(phone.facts), turn.context[1].text)
-        assertEquals(listOf(PhoneTools.FIND_MUSIC, PhoneTools.FIND_VIDEO, PhoneTools.LIST_TIMERS, PhoneTools.PHONE_STATUS), turn.tools!!.names)
+        assertEquals(listOf(PhoneTools.FIND_MUSIC, PhoneTools.FIND_VIDEO, PhoneTools.PHONE_STATUS), turn.tools!!.names)
     }
 
     @Test fun aToolCallRunsTheReadAndIsNamedOnTheReply() {
@@ -264,12 +264,17 @@ class PhoneChatControllerTest {
 
     @Test fun withContactsTheNumberIsFilledIn() {
         phone.permissions[PhonePermission.CONTACTS] = PermissionState.GRANTED
-        phone.reader.people = listOf(ContactMatch("Samantha Jones", "555 0199", null), ContactMatch("Sam Lee", "555 0123", null, "mobile"))
+        phone.reader.people = listOf(ContactMatch("Sam Lee", "555 0123", null, "mobile"), ContactMatch("Sam Lee", "555 0100", null, "home"))
         val c = controller()
         val h = c.ask("Text Sam I'm on my way").card!!.handOff!!
         assertEquals("Sam Lee", h.name)
         assertEquals("555 0123", h.number)
         assertEquals("I'm on my way", h.body)
+        // Two people it could be: the picker, never a silent first pick.
+        phone.reader.people = listOf(ContactMatch("Samantha Jones", "555 0199", null), ContactMatch("Sam Lee", "555 0123", null, "mobile"))
+        val again = c.ask("Call Sam").card!!.handOff!!
+        assertTrue(again.needsContact)
+        assertNull(again.number)
     }
 
     // ── Never blended ───────────────────────────────────────────────────
@@ -279,12 +284,17 @@ class PhoneChatControllerTest {
      *  place's chats, whatever the server is called. */
     @Test fun aPhoneChatsContextIsThePhonesOwn() {
         phone.serverSet = true
-        phone.facts = PromptFacts(server = ServerLink.NOT_CONNECTED)
+        phone.facts = PromptFacts(NowPlayingFact("Song", room = "kitchen"), server = ServerLink.NOT_CONNECTED)
         val c = controller()
+        // Strict (owner, 2026-10-21): no household timers, no room names.
+        assertEquals("I can't see timers in this phone's Clock app. House timers are in your home server chats.",
+            c.ask("What timers do I have?").text)
+        assertEquals("Those are in your home server chats.", c.ask("Which rooms do I have?").text)
+        assertFalse(c.ask("What's playing?").text.contains("kitchen"))
         c.ask("What should I cook tonight?")
         val turn = engines.single().turns.single()
         val told = turn.system + turn.context.joinToString { it.text }
-        listOf("calendar", "http", "6369", "chat history").forEach { assertFalse(it, told.contains(it, ignoreCase = true)) }
+        listOf("calendar", "http", "6369", "chat history", "kitchen").forEach { assertFalse(it, told.contains(it, ignoreCase = true)) }
         assertTrue(told, told.contains("not connected to the home server", ignoreCase = true))
     }
 }
