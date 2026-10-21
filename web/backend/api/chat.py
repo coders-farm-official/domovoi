@@ -918,6 +918,11 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
             # does the reply reach the client.
             content, doc = plan.finish(content)
             yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
+        elif plan is not None and plan.immediate is None:
+            # The model failed partway through a document answer: what it
+            # had written was never checked, so none of it is kept or sent
+            # (review round 2); the error says what happened.
+            content = ""
         if refusal is not None:
             # No reply was attempted, so there are no reply figures.
             stats: dict[str, Any] = {"model_role": model_role}

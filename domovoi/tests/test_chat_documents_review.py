@@ -338,3 +338,25 @@ def test_cells_pointing_at_one_huge_shared_string_stop_at_the_text_cap(tmp_path)
     p.write_bytes(fx._zip(files))
     r = doc_extract.extract(p, "xlsx")
     assert r["chars"] <= doc_extract.MAX_TEXT_CHARS and r["truncated"]     # was 640 MB of text
+
+
+@requires_db
+def test_a_model_that_fails_mid_answer_leaves_nothing_unchecked(monkeypatch):
+    import httpx
+
+    async def _stream(messages, model, **kw):
+        yield "The alarm code is 1234 "
+        yield "[p. 99]."
+        raise httpx.ReadError("connection dropped")
+
+    monkeypatch.setattr(chat_api.ollama_client, "chat_stream", _stream)
+    with _client() as c:
+        tok = _upload(c, "lease.pdf", fx.make_pdf([fx.text_page(p) for p in LEASE])).json()["token"]
+        tid = c.post("/api/chat/threads", json={}).json()["id"]
+        done, ev = _send(c, tid, "How much is the security deposit?", [tok])
+        streamed = "".join(d["text"] for e, d in ev if e == "delta")
+        assert "1234" not in streamed and streamed == ""
+        assert done["content"] == "" and done["error"] and done["doc"] is None
+        assert any(e == "error" for e, _ in ev)
+        kept = c.get(f"/api/chat/threads/{tid}/messages").json()["messages"][-1]
+        assert kept["content"] == "" and "1234" not in json.dumps(kept)
