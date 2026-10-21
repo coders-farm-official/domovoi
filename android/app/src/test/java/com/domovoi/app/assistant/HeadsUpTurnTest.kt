@@ -78,6 +78,9 @@ class HeadsUpTurnTest {
     private fun lease(filler: Int = 0): ByteArray = DocFixtures.docx(
         DocFixtures.p("Rent", "Heading1") + DocFixtures.p("The monthly rent is \$1,200, due on the first day.") +
             DocFixtures.p("Deposit", "Heading1") + DocFixtures.p("The security deposit is \$1,500, returned within 30 days.") +
+            // English enough for the language guess: its numbers are read 1,200.50.
+            DocFixtures.p("The tenant and the landlord sign this lease, and the tenant pays the rent on time each " +
+                "month. The landlord will keep the building in good repair and will answer any request within a week.") +
             (1..filler).joinToString("") { n ->
                 DocFixtures.p("Part $n", "Heading1") +
                     DocFixtures.p("Residents of block $n share the garden, the laundry room and the bicycle store, " +
@@ -112,7 +115,7 @@ class HeadsUpTurnTest {
         val msgs = c.ui().conversation.messages
         assertEquals("calculate", msgs[msgs.size - 2].headsUp?.chosen)
         val reply = msgs.last()
-        assertTrue(reply.text, reply.text.startsWith("**Total: \$2,700 (1,200 + 1,500 = 2,700)**"))
+        assertTrue(reply.text, reply.text.startsWith("**Total: \$2,700 (1,200 + 1,500 = 2,700), from the 2 entries I found**"))
         assertTrue(reply.notes.any { it.code == "calc_worked" })
         assertTrue(engines.single().systems.single().contains("Don't calculate anything"))
         // A kind shows once per chat: the next sum goes ahead, with the note.

@@ -150,7 +150,7 @@ class DocHeadsUpSharedCasesTest {
         for (c in cases["calc"]!!.jsonArray) {
             val o = c.jsonObject
             val g = given(o["given"]!!)
-            val checked = DocCalc.finish(o.s("reply")!!, g, "how much?", listOf("lease.pdf"), o.s("op")!!)
+            val checked = DocCalc.finish(o.s("reply")!!, g, "how much?", listOf("lease.pdf"), o.s("op")!!, null, mapOf(0 to DocCalc.Ctx(style = "dot")))
             assertEquals(o.s("reply"), o.s("content"), checked.content)
             assertEquals(o.s("reply"), o["found"]!!.jsonPrimitive.booleanOrNull, checked.found)
             assertEquals(o.s("reply"), o["cited"]!!.jsonArray.map { it.jsonPrimitive.content }, checked.cited)

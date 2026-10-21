@@ -1928,7 +1928,7 @@
     "p. 3"
    ],
    "out": {
-    "content": "The deposit is $1,500.",
+    "content": "The deposit is $1,500 [a62cf03b].",
     "found": true,
     "cited": [],
     "dropped": [],
@@ -2035,7 +2035,7 @@
     "p. 3"
    ],
    "out": {
-    "content": "The deposit is $1,500 [p. 3].",
+    "content": "<<<PASSAGES cafe0123 The deposit is $1,500 [p. 3].",
     "found": true,
     "cited": [
      "p. 3"

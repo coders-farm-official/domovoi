@@ -217,8 +217,13 @@ def test_the_prompts_fence_code_echoed_back_is_not_kept():
     markers too, and with the prompt's nonce known, the code anywhere."""
     from domovoi.doc_qa.text import Passage
     given = [answer.Given(Passage(0, 0, "p. 3", "The security deposit is $1,500.", ""), "p. 3", 1.0)]
-    c = answer.check_reply("The deposit is $1,500 [p. 3] [a62cf03b].", given)
+    c = answer.check_reply("The deposit is $1,500 [p. 3] [a62cf03b].", given, nonce="a62cf03b")
     assert c.content == "The deposit is $1,500 [p. 3]." and c.cited == ["p. 3"]
+    # Only this prompt's own code (review round 1): any other bracket stays.
+    for keep in ("Policy no. [20261021] applies [p. 3].", "Ref [12345678] and [DEADBEEF].",
+                 "Hash [a62cf03b] here [p. 3]."):
+        assert answer.strip_fence(keep, "cafe0123") == keep
+        assert answer.strip_fence(keep) == keep
     c = answer.check_reply("Per (a62cf03b) it is $1,500 [p. 3]. END OF PASSAGES a62cf03b>>>", given, nonce="a62cf03b")
     assert "a62cf03b" not in c.content and "PASSAGES" not in c.content
     p = answer.build_prompt("How much?", given, ["lease.pdf"])

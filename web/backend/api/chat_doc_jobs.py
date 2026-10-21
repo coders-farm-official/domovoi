@@ -211,6 +211,8 @@ class Job:
         #: Notes the heads-up adds under the summary (documents plan D3:
         #: scanned pages it skipped, with the card silenced).
         self.extra_notes: list[dict[str, str]] = []
+        #: The combine (or single) step's fence code, never kept in the reply.
+        self.fence_code: str | None = None
         #: When a client last watched or asked for it (a finished private
         #: job expires UNATTACHED_TTL_SEC after this, or after it ended,
         #: with nobody watching).
@@ -472,10 +474,11 @@ async def _reduce(job: Job) -> str:
             job.record(0, 0.0, st, sent)
             # A group's summary keeps only what its notes cited; where it
             # kept nothing, the notes themselves go on.
-            merged.append(longdoc.keep_supported_lines(reply, given, noted)
+            merged.append(longdoc.keep_supported_lines(reply, given, noted, p["nonce"])
                           or "\n".join(notes[i] for i in g if notes[i]))
         notes = merged
     p = longdoc.build_reduce_prompt(notes, job.names, job.question)
+    job.fence_code = p["nonce"]
     reply, st, sent = await _ask(job, p["rules"], p["user"], longdoc.REDUCE_NUM_PREDICT)
     job.record(0, 0.0, st, sent)
     return reply
@@ -491,6 +494,7 @@ async def _run(job: Job) -> None:
             # One part: the summary straight from it (no notes stage).
             given = longdoc.chunk_given(job.chunks[0], job.docs)
             prompt = qa.build_prompt(job.question or "Summarize it.", given, job.names, mode="summary")
+            job.fence_code = prompt["nonce"]
             job.state = "reducing"
             reply, st, sent = await _ask(job, prompt["rules"], prompt["user"], longdoc.REDUCE_NUM_PREDICT)
             job.record(job.chunks[0].chars, time.monotonic() - (job.part_started or job.started), st, sent)
@@ -504,7 +508,7 @@ async def _run(job: Job) -> None:
                 job.publish()
                 p = longdoc.build_map_prompt(chunk, job.docs, i, job.total, job.question)
                 reply, st, sent = await _ask(job, p["rules"], p["user"], longdoc.MAP_NUM_PREDICT)
-                job.notes[i] = longdoc.clean_note(reply, p["given"])
+                job.notes[i] = longdoc.clean_note(reply, p["given"], p["nonce"])
                 job.record(chunk.chars, time.monotonic() - (job.part_started or job.started), st, sent)
                 job.part_started = None
                 if not await _save(job):
@@ -524,7 +528,8 @@ async def _run(job: Job) -> None:
             noted = longdoc.noted_labels(notes_read, given)
         # Only lines that cite a page some part's notes cited (review round
         # 1: the combine step can't add a claim); none left, the notes.
-        content = longdoc.keep_supported_lines(reply, given, noted) or "\n".join(n for n in notes_read if n)
+        content = (longdoc.keep_supported_lines(reply, given, noted, job.fence_code)
+                   or "\n".join(n for n in notes_read if n))
         job.state = "done"
         notes = [longdoc.parts_note(job.total)] if job.total > 1 else []
         empty = None if direct else longdoc.nothing_cited_note(job.chunks, job.docs, job.notes)

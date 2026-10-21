@@ -531,7 +531,10 @@ class DocPlan:
         "Calculate exactly": the model's list, each number checked against
         its page, added up here (:func:`domovoi.doc_qa.calc.finish`)."""
         if self.calc_op:
-            checked = qa_calc.finish(content, self.given, self.question, self.names, self.calc_op, self.nonce)
+            # Each document's way of writing numbers and dates: its language
+            # and its own numbers (calc.docs_ctx); unsure is refused.
+            checked = qa_calc.finish(content, self.given, self.question, self.names, self.calc_op, self.nonce,
+                                     qa_calc.docs_ctx(self.docs))
         else:
             checked = qa.check_reply(content, self.given, self.question, self.names, self.nonce)
         return checked.content, self.doc_json(checked)

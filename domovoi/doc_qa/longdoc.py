@@ -290,7 +290,7 @@ def build_map_prompt(chunk: Chunk, docs: Sequence[dict[str, Any]], index: int, t
     names = [str(d.get("name") or "the document") for d in docs]
     ask = f"List the main points of part {index + 1} of {total}. (The person asked: {_request(question)})"
     p = qa.build_prompt(ask, given, [names[chunk.doc]] if len(docs) > 1 else names, mode="summary", nonce=nonce)
-    return {"rules": MAP_RULES, "user": p["user"], "given": given}
+    return {"rules": MAP_RULES, "user": p["user"], "given": given, "nonce": p["nonce"]}
 
 
 def _as_notes(text: str) -> str:
@@ -313,7 +313,7 @@ def build_reduce_prompt(notes: Sequence[str], names: Sequence[str], question: st
         "",
         f"Request: {_request(question)}",
     ])
-    return {"rules": REDUCE_RULES, "user": user}
+    return {"rules": REDUCE_RULES, "user": user, "nonce": n}
 
 
 def reduce_groups(notes: Sequence[str], limit_chars: int = int(MAP_CHUNK_TOKENS * CHARS_PER_TOKEN)) -> list[list[int]]:
@@ -336,7 +336,7 @@ def reduce_groups(notes: Sequence[str], limit_chars: int = int(MAP_CHUNK_TOKENS 
     return out
 
 
-def clean_note(reply: str, given: Sequence[qa.Given]) -> str:
+def clean_note(reply: str, given: Sequence[qa.Given], nonce: str | None = None) -> str:
     """A map step's reply after the app's check (:func:`answer.check_reply`,
     line by line): only the lines that cite a passage of its chunk, with
     only those labels. A line with no label is not a note (a greeting, a
@@ -348,7 +348,7 @@ def clean_note(reply: str, given: Sequence[qa.Given]) -> str:
     for line in (reply or "").splitlines():
         if not line.strip():
             continue
-        checked = qa.check_reply(line, given)
+        checked = qa.check_reply(line, given, nonce=nonce)
         if checked.found and checked.cited:
             kept.append(checked.content)
     return "\n".join(kept).strip()
@@ -367,7 +367,8 @@ def noted_labels(notes: Sequence[str], given: Sequence[qa.Given]) -> set[str]:
     return out
 
 
-def keep_supported_lines(reply: str, given: Sequence[qa.Given], noted: set[str]) -> str:
+def keep_supported_lines(reply: str, given: Sequence[qa.Given], noted: set[str],
+                         nonce: str | None = None) -> str:
     """The summary's lines that cite a page some part's notes cited, with
     only such labels (review round 1): a line with no label, a line citing
     only pages the notes never cited, and a line whose labels were made up
@@ -377,7 +378,7 @@ def keep_supported_lines(reply: str, given: Sequence[qa.Given], noted: set[str])
     for line in (reply or "").splitlines():
         if not line.strip():
             continue
-        checked = qa.check_reply(line, allowed)
+        checked = qa.check_reply(line, allowed, nonce=nonce)
         if checked.found and checked.cited:
             kept.append(checked.content)
     return "\n".join(kept).strip()

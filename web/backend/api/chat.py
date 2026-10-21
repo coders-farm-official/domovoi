@@ -781,7 +781,9 @@ async def _history_for_model(
     Ollama would otherwise drop the oldest part of an overlong prompt
     itself, mid-message, or a picture's tokens with it.
 
-    ``exclude_id``: a message left out (the reply "try again" replaces).
+    ``exclude_id``: a message left out (the reply "try again" replaces). A
+    heads-up card (``stats.model_role`` "heads_up") is never sent: it is
+    the app's words, not the conversation's.
     ``window``, when given, is told ``from_id``: the oldest message sent,
     where the model's view of the thread begins (the app's "earlier
     messages are beyond what Domovoi can keep in mind" divider)."""
@@ -793,6 +795,7 @@ async def _history_for_model(
                     SELECT id, role, content, images FROM chat_messages
                      WHERE thread_id = :id AND error IS NULL
                        AND id <> COALESCE(CAST(:skip AS BIGINT), -1)
+                       AND COALESCE(stats->>'model_role', '') <> 'heads_up'
                      ORDER BY id DESC LIMIT :lim
                     """
                 ),
@@ -1167,6 +1170,9 @@ async def answer_heads_up(thread_id: int, body: HeadsUpAnswer, request: Request)
         thread_id, thread.person_id, has_images=kind in _headsup.PICTURE_KINDS and bool(asked.images),
         question=asked.content, thread_title=thread.title,
         request=request, documents=[], user_row_id=asked.id, heads_up=prefs,
+        # The card is the app's, not the conversation: the model never sees
+        # it (review round 1), as a retry leaves out the row it replaces.
+        skip_row_id=card.id,
     )
 
 
@@ -1183,6 +1189,7 @@ async def _answer(
     documents: list[dict[str, Any]] | None = None,
     user_row_id: int | None = None,
     heads_up: Any = None,
+    skip_row_id: int | None = None,
 ) -> StreamingResponse:
     """The SSE reply to the thread's last question (:func:`send_message`,
     and :func:`retry_reply` with ``replace_id``: the reply it replaces,
@@ -1276,7 +1283,7 @@ async def _answer(
             longest = ollama_client.chat_system_prompt(profile, pictures=True, model_system=model_system)
             budget = max(0, ctx - _text_tokens(longest) - _reply_room())
         history = await _history_for_model(
-            thread_id, with_images=with_images, budget=budget, exclude_id=replace_id, window=window,
+            thread_id, with_images=with_images, budget=budget, exclude_id=replace_id if replace_id is not None else skip_row_id, window=window,
         )
     # A call that carries pictures: no reasoning before the answer (only
     # the answer is streamed, so the reader would wait in silence), and the

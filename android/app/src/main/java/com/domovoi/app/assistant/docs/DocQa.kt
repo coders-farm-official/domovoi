@@ -308,17 +308,17 @@ object DocQa {
         return best
     }
 
-    private val FENCE_RE = pyRegex("""(?i)(?:<<<\s*)?(?:END OF\s+)?PASSAGES\s+[0-9a-f]{8}(?:\s*>>>)?""")
-    private val CODE_BRACKET_RE = pyRegex("""(?i)\[\s*[0-9a-f]{8}\s*\]""")
-
-    /** A reply without the prompt's random fence code echoed into it (the
+    /** A reply without the prompt's own fence code echoed into it (the
      *  phone's model copied it as a citation, "[a62cf03b]", 2026-10-21): the
-     *  markers, a bracket holding a code of its shape, and, when the
-     *  prompt's [nonce] is known, the code anywhere (the server's `strip_fence`). */
+     *  markers with that code and the code anywhere, bracketed or not. Only
+     *  this prompt's [nonce]; any other bracket ("[20261021]") stays. No code
+     *  known: the text as it is (the server's `strip_fence`). */
     fun stripFence(text: String, nonce: String? = null): String {
-        var t = FENCE_RE.replace(text, "")
-        if (!nonce.isNullOrEmpty()) t = pyRegex("""(?i)[\[(]?\s*""" + Regex.escape(nonce) + """\s*[\])]?""").replace(t, "")
-        return CODE_BRACKET_RE.replace(t, "")
+        if (nonce.isNullOrEmpty()) return text
+        val c = Regex.escape(nonce)
+        var t = pyRegex("""(?i)(?:<<<\s*)?(?:END OF\s+)?PASSAGES\s+$c(?:\s*>>>)?""").replace(text, "")
+        t = pyRegex("""(?i)[\[(]\s*$c\s*[\])]|\b$c\b""").replace(t, "")
+        return t
     }
 
     /** The app's check of a model's [reply] to the passages [given]

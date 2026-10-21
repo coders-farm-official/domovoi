@@ -1445,7 +1445,7 @@ class AssistantController(
             _state.update { it.copy(checking = false) }
             return finishReply(asked, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
         }
-        val checked = if (calcOp != null) DocCalc.finish(text.toString(), given, question, names, calcOp, prompt.nonce)
+        val checked = if (calcOp != null) DocCalc.finish(text.toString(), given, question, names, calcOp, prompt.nonce, DocCalc.docsCtx(qaDocs))
         else DocQa.checkReply(text.toString(), given, question, names, prompt.nonce)
         _state.update { it.copy(checking = false) }
         // Only the checked reply is shown, and spoken in a voice turn.
@@ -1670,10 +1670,13 @@ class AssistantController(
                 return finishReply(conv, StoredMessage(Speaker.DOMOVOI, "", clock(), error = "The model could not start: $why"))
             }
             var reply: String
+            // The combine (or single) step's fence code, never kept in the reply.
+            var fence: String? = null
             if (job.total == 1 && job.notes.firstOrNull() == null) {
                 // One part: the summary straight from it (no notes stage).
                 val given = DocLong.chunkGiven(job.chunks[0], qaDocs)
                 val prompt = DocQa.buildPrompt(job.question, given, names, mode = "summary")
+                fence = prompt.nonce
                 partStartedMs = clock()
                 showJob(conv, job, names, "reducing")
                 val t0 = nanos()
@@ -1690,7 +1693,7 @@ class AssistantController(
                     val t0 = nanos()
                     val text = collectReply(llm, p.rules, p.user, DocLong.MAP_MAX_CHARS)
                     val ms = (nanos() - t0) / 1_000_000
-                    val note = DocLong.cleanNote(text, p.given)
+                    val note = DocLong.cleanNote(text, p.given, p.nonce)
                     job = recordStep(job, backend, llm, Persona.SYSTEM_PROMPT.length + p.rules.length + p.user.length, job.chunks[i].chars, ms)
                         .let { j -> j.copy(notes = j.notes.toMutableList().also { it[i] = note }) }
                     partStartedMs = null
@@ -1713,11 +1716,12 @@ class AssistantController(
                     if (groups.size <= 1) break
                     notes = groups.map { g ->
                         val rp = DocLong.buildReducePrompt(g.map { notes[it] }, names, job.question)
-                        DocLong.keepSupportedLines(collectReply(llm, rp.rules, rp.user, DocLong.REDUCE_MAX_CHARS), all, noted)
+                        DocLong.keepSupportedLines(collectReply(llm, rp.rules, rp.user, DocLong.REDUCE_MAX_CHARS), all, noted, rp.nonce)
                             .ifEmpty { g.map { notes[it] }.filter { it.isNotBlank() }.joinToString("\n") }
                     }
                 }
                 val rp = DocLong.buildReducePrompt(notes, names, job.question)
+                fence = rp.nonce
                 val t0 = nanos()
                 reply = collectReply(llm, rp.rules, rp.user, DocLong.REDUCE_MAX_CHARS)
                 job = recordStep(job, backend, llm, Persona.SYSTEM_PROMPT.length + rp.rules.length + rp.user.length, 0, (nanos() - t0) / 1_000_000, part = false)
@@ -1729,7 +1733,7 @@ class AssistantController(
             val direct = job.total == 1
             val noted = if (direct) DocLong.chunkGiven(job.chunks[0], qaDocs).map { DocQa.normLabel(it.cite) }.toSet()
                 else DocLong.notedLabels(job.notes, all)
-            val content = DocLong.keepSupportedLines(reply, all, noted)
+            val content = DocLong.keepSupportedLines(reply, all, noted, fence)
                 .ifEmpty { job.notes.filterNotNull().filter { it.isNotBlank() }.joinToString("\n") }
             val extra = (if (job.total > 1) listOf(DocLong.partsNote(job.total)) else emptyList()) +
                 listOfNotNull(if (direct) null else DocLong.nothingCitedNote(job.chunks, qaDocs, job.notes))

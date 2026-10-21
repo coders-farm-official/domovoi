@@ -2758,7 +2758,7 @@
        "text": "**Exact sums, averages and dates** (okay): A total or average the document states (a spreadsheet's column totals are worked out by Domovoi when it reads the file) is quoted, not calculated. *(documents plan D1, 2026-10-21, phone and home server)*"
       },
       {
-       "text": "**Exact sums, averages and dates** (not tested yet): Adding up, averaging or counting days between numbers spread over a document: the model's arithmetic isn't checked. With calculate exactly, the model only lists the numbers with their pages, the app checks each one is on its page and does the sum. Domovoi gives a heads-up first. Instead: Use calculate exactly: the model lists the numbers with their pages and the app adds them up. *(documents plan D3, 2026-10-21, phone and home server)*"
+       "text": "**Exact sums, averages and dates** (not tested yet): Adding up, averaging or counting days between numbers spread over a document: the model's arithmetic isn't checked. With calculate exactly, the model only lists the numbers with their pages; the app checks each one is on its page, reads its sign, scale and separators the way the document writes them, and does the sum from the entries it found. When a number, a unit or a date's day and month can't be read for certain, it says so and works nothing out. Domovoi gives a heads-up first. Instead: Use calculate exactly: the model lists the numbers with their pages and the app adds them up. *(documents plan D3, 2026-10-21, phone and home server)*"
       },
       {
        "text": "**Long documents** (slow): Long documents on a phone's CPU: one part took 24 s at about 2,000 tokens and 69 s at about 6,000, so a 30-page summary takes a few minutes. The heads-up comes when a summary will take over 3 minutes here, or when your home server would be faster. Instead: Ask about the specific thing you need: it is found in seconds, wherever it is. *(D0 bench, 2026-10-21, Galaxy Z Fold (Gemma 4 E2B))*"
@@ -2808,7 +2808,7 @@
     },
     {
      "type": "p",
-     "text": "A heads-up names the weakness and offers what works here: **calculate exactly** (the app adds up the numbers the model lists, each checked against its page), **go ahead** or **try anyway**. **don't warn me about this again** silences that kind on this device; [Settings → Chat](route:settings/chat) (under Chat & AI) turns them all off. With them off, the two that guard against a wrong answer you can't see coming (exact sums and scanned pages) become a one-line note under the answer instead."
+     "text": "A heads-up names the weakness and offers what works here: **calculate exactly** (the app adds up the numbers the model lists, each checked against its page, and says so plainly when it can't read one for certain), **go ahead** or **try anyway**. **don't warn me about this again** silences that kind on this device; [Settings → Chat](route:settings/chat) (under Chat & AI) turns them all off. With them off, the two that guard against a wrong answer you can't see coming (exact sums and scanned pages) become a one-line note under the answer instead."
     }
    ]
   },

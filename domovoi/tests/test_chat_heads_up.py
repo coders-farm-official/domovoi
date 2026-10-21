@@ -153,7 +153,7 @@ def test_calculate_exactly_lists_the_numbers_and_the_app_adds_them(model):
         done = _done(_pick(c, tid, card, "calculate"))
         rules = model.calls[0]["messages"][0]["content"]
         assert "Don't calculate anything" in rules and "Answer only from the passages" not in rules
-        assert done["content"].startswith("**Total: $2,700 (1,200 + 1,500 = 2,700)**")
+        assert done["content"].startswith("**Total: $2,700 (1,200 + 1,500 = 2,700), from the 2 entries I found**")
         assert "$777" not in done["content"]
         codes = [n["code"] for n in done["doc"]["notes"]]
         assert "calc_worked" in codes and "calc_dropped" in codes and "heads_up_calc" not in codes
@@ -291,6 +291,9 @@ def test_a_blurry_picture_to_read_gets_its_card(model, monkeypatch):
         done = _done(_pick(c, tid, card, "send_anyway"))
         assert done["content"].startswith("It says") and model.calls[0]["model"] == "qwen3-vl:2b"
         assert any(m.get("images") for m in model.calls[0]["messages"])
+        # The card is the app's words: the vision model never sees it (review round 1).
+        assert all(hu["text"] not in str(m.get("content") or "") for m in model.calls[0]["messages"])
+        assert [m["role"] for m in model.calls[0]["messages"]] == ["system", "user"]
         # The same picture with nothing to read in it: no card.
         tid2 = c.post("/api/chat/threads", json={}).json()["id"]
         plain = _send(c, tid2, "Is this a nice colour?", images=[up.json()["token"]])

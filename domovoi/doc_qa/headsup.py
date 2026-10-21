@@ -141,17 +141,21 @@ _COMPARE_RE = re.compile(
 )
 _PLACE_RE = re.compile(r"\b(page|p\.|pg\.?|section|part|chapter|clause|article|sheet) ?(\d+)\b")
 
-_DAYS_RE = re.compile(r"\bhow many (days|weeks|months|years)\b.*\b(between|from|until|till|since|before|after)\b"
-                      r"|\b(days|weeks|months) between\b|\bhow long (is it )?between\b")
+# Aggregation only (review round 1): the days BETWEEN two dates. "How many
+# days after move-out is it returned?" asks for a stated number: a lookup.
+_DAYS_RE = re.compile(r"\bhow many (days|weeks|months|years)\b.*\bbetween\b.+\band\b"
+                      r"|\b(days|weeks|months) between\b.+\band\b|\bhow long (is it )?between\b.+\band\b")
 _AVERAGE_RE = re.compile(r"\baverage\b|\bthe mean\b|\bmean (of|value|amount|cost|price|bill|score)\b")
-_PERCENT_RE = re.compile(r"\b(percent|percentage|per cent)\b|%")
-_DIFF_RE = re.compile(r"\bhow much (more|less|higher|lower|bigger|smaller|cheaper|dearer)\b|\bhow many more\b"
-                      r"|\bhow much did .{1,40} (go up|go down|rise|fall|increase|decrease|change)\b")
+_DIFF_RE = re.compile(r"\bhow much (more|less|higher|lower|bigger|smaller|cheaper|dearer)\b.+\bthan\b"
+                      r"|\bhow many more\b.+\bthan\b")
 _DIFF_BETWEEN_RE = re.compile(r"\bdifference (between|in)\b")
 _QUANTITY_RE = re.compile(r"\b(how much|amount|amounts|cost|costs|price|prices|fee|fees|rent|pay|paid|"
                           r"charge|charges|total|number|balance|salary|wage|wages|deposit|bill)\b|\$|€|£")
-_SUM_RE = re.compile(r"\b(total|totals|sum|add up|added up|adds up|add together|added together|altogether|"
-                     r"in all|combined|grand total|all together)\b")
+# A sum asked for, not a stated one ("the sum insured", "the total number
+# of bedrooms", "charges combined into the payment" are lookups).
+_SUM_RE = re.compile(r"\b(add up|added up|adds up|add together|added together|sum of|total of|in total|"
+                     r"altogether|grand total|combined total|all together)\b"
+                     r"|\bthe total\b(?! number)|\bthe sum\b(?! insured)")
 
 _NUMBER_RE = re.compile(r"(?<![\w.,])[-$€£]?\d{1,3}(?:,\d{3})+(?:\.\d+)?%?|(?<![\w.,])[-$€£]?\d+(?:\.\d+)?%?")
 _LOOKUP_WORDS = {
@@ -161,9 +165,12 @@ _LOOKUP_WORDS = {
 }
 
 
+# Only clear requests to read the words (review round 1): not "say",
+# "sign", "form" or "note", which a photo of anything may come with.
 _READING_RE = re.compile(
-    r"\b(read|reads|say|says|said|text|transcribe|transcription|letter|document|page|words|written|writing|"
-    r"note|receipt|label|sign|form|bill|invoice|translate|spell|spelled|handwriting|handwritten)\b")
+    r"\b(read|reads|reading|transcribe|transcription|translate|spell out|spelled out|copy out|type out)\b"
+    r"|\bwhat (does|do|did) (it|this|that|(this|that|the|my|our|your) [\w ]{1,30}) say\b|\bwhat (it|this|that) says\b"
+    r"|\bwhat'?s written\b|\bwhat is written\b|\bwhat'?s the (text|writing|wording)\b|\bwhat words\b")
 
 
 def reading_request(question: str) -> bool:
@@ -200,15 +207,14 @@ def compare_request(question: str) -> bool:
 
 
 def calc_request(question: str) -> str | None:
-    """The calculation a question asks for: ``days``, ``average``,
-    ``percent``, ``difference`` or ``sum``; None for any other question."""
+    """The aggregation a question asks for: ``days`` (between two dates),
+    ``average``, ``difference`` or ``sum``; None for any other question,
+    a lookup of a stated number included."""
     q = _q(question)
     if _DAYS_RE.search(q):
         return "days"
     if _AVERAGE_RE.search(q):
         return "average"
-    if _PERCENT_RE.search(q):
-        return "percent"
     if _DIFF_RE.search(q) or (_DIFF_BETWEEN_RE.search(q) and _QUANTITY_RE.search(q)):
         return "difference"
     if _SUM_RE.search(q):
@@ -461,8 +467,14 @@ def findings(req: Request, table: dict[str, Any] | None = None) -> list[Card]:
     # Exact calculation (a question over passages found).
     if req.mode == "question":
         op = calc_request(question)
-        nums = [n for txt in texts for n in numbers_in(txt)]
-        if op and len(set(nums)) >= 2 and not is_lookup(op, texts) and fires(t, "calc", "combine", req.where):
+        if op == "days":
+            # Two dates to count between, or nothing to offer.
+            from domovoi.doc_qa import calc as _calc
+
+            enough = sum(len(_calc.read_dates(txt)) for txt in texts) >= 2
+        else:
+            enough = len(set(n for txt in texts for n in numbers_in(txt))) >= 2
+        if op and enough and not is_lookup(op, texts) and fires(t, "calc", "combine", req.where):
             k = kinds["calc"]
             if op in CALCULATOR_OPS and "calculate" in req.can:
                 out.append(Card("calc", k["card"], _options(k["options"], req.can), note=k["note"], op=op))
@@ -470,7 +482,7 @@ def findings(req: Request, table: dict[str, Any] | None = None) -> list[Card]:
                 out.append(Card("calc", k["card_no_calculator"], ["try_anyway"], note=k["note"], op=op))
 
         # Comparing parts of a long document.
-        if (not op or op == "percent") and compare_request(question) and total_chars > one_pass:
+        if not op and compare_request(question) and total_chars > one_pass:
             places = named_places(question)
             labels = [_q(label) for label, _txt in req.given]
             found_all = bool(places) and all(any(_place_in(p, lab) for lab in labels) for p in places)

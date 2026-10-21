@@ -40,7 +40,21 @@
    "question": "What percentage of the deposit is kept for cleaning?",
    "rewrite": false,
    "compare": false,
-   "calc": "percent",
+   "calc": null,
+   "places": []
+  },
+  {
+   "question": "How many days after move-out is the deposit returned?",
+   "rewrite": false,
+   "compare": false,
+   "calc": null,
+   "places": []
+  },
+  {
+   "question": "What is the sum insured for contents?",
+   "rewrite": false,
+   "compare": false,
+   "calc": null,
    "places": []
   },
   {
@@ -302,7 +316,6 @@
    "text": "Due 2026-05-01 or 05/02/2026, otherwise 1 de junio de 2026.",
    "dates": [
     "2026-05-01",
-    "2026-05-02",
     "2026-06-01"
    ]
   },
@@ -428,7 +441,7 @@
    ]
   },
   {
-   "name": "percent never has the calculator",
+   "name": "percent is no aggregation",
    "request": {
     "mode": "question",
     "question": "What percent of the deposit is the rent?",
@@ -457,19 +470,7 @@
      }
     ]
    },
-   "cards": [
-    {
-     "kind": "calc",
-     "text": "Domovoi isn't reliable at arithmetic, and its answers are checked for their pages, not their sums. Check the result yourself.",
-     "options": [
-      "try_anyway"
-     ],
-     "note": "Domovoi's arithmetic isn't checked. Check any total or date in this answer yourself.",
-     "op": "percent",
-     "after": null,
-     "note_only": false
-    }
-   ]
+   "cards": []
   },
   {
    "name": "a stated total is a lookup",
@@ -1720,14 +1721,15 @@
      "text": "The security deposit is $1,500. Move in on March 1, 2026; inspection on April 15, 2026."
     }
    ],
-   "content": "**Total: $2,700 (1,200 + 1,500 = 2,700)**\n\n- $1,200 [p. 1] monthly rent\n- $1,500 [p. 2] security deposit",
+   "content": "**Total: $2,700 (1,200 + 1,500 = 2,700), from the 2 entries I found**\n\n- $1,200 [p. 1] monthly rent\n- $1,500 [p. 2] security deposit",
    "found": true,
    "cited": [
     "p. 1",
     "p. 2"
    ],
    "notes": [
-    "calc_worked"
+    "calc_worked",
+    "calc_only_found"
    ]
   },
   {
@@ -1743,7 +1745,7 @@
      "text": "The security deposit is $1,500. Move in on March 1, 2026; inspection on April 15, 2026."
     }
    ],
-   "content": "**Total: $2,700 (1,200 + 1,500 = 2,700)**\n\n- $1,200 [p. 1] rent\n- $1,500 [p. 2] deposit",
+   "content": "**Total: $2,700 (1,200 + 1,500 = 2,700), from the 2 entries I found**\n\n- $1,200 [p. 1] rent\n- $1,500 [p. 2] deposit",
    "found": true,
    "cited": [
     "p. 1",
@@ -1751,6 +1753,7 @@
    ],
    "notes": [
     "calc_worked",
+    "calc_only_found",
     "calc_dropped"
    ]
   },
@@ -1767,14 +1770,15 @@
      "text": "The security deposit is $1,500. Move in on March 1, 2026; inspection on April 15, 2026."
     }
    ],
-   "content": "**Average: 1,350 ((1,200 + 1,500) ÷ 2 = 1,350)**\n\n- 1,200 [p. 1] rent\n- 1,500 [p. 2] deposit",
+   "content": "**Average: $1,350.00 ((1,200 + 1,500) ÷ 2 = 1,350.00), from the 2 entries I found**\n\n- 1,200 [p. 1] rent\n- 1,500 [p. 2] deposit",
    "found": true,
    "cited": [
     "p. 1",
     "p. 2"
    ],
    "notes": [
-    "calc_worked"
+    "calc_worked",
+    "calc_only_found"
    ]
   },
   {
@@ -1797,7 +1801,8 @@
     "p. 1"
    ],
    "notes": [
-    "calc_worked"
+    "calc_worked",
+    "calc_only_found"
    ]
   },
   {

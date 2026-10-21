@@ -33,6 +33,8 @@ QUESTIONS = [
     "How many days do I have to return the keys?",
     "What is the average monthly bill?",
     "What percentage of the deposit is kept for cleaning?",
+    "How many days after move-out is the deposit returned?",
+    "What is the sum insured for contents?",
     "What's the difference between the rent in 2025 and 2026?",
     "What's the difference between plan A and plan B?",
     "How much more is the deposit than the rent?",
@@ -111,7 +113,7 @@ REQUESTS = [
                               "docs": [_doc("lease.pdf", LONG, 30, 10000, sample=TEXTS["en"])], "given": LEASE_GIVEN}),
     ("calc without calculator", {"mode": "question", "question": "What is the total of the rent and the deposit?",
                                  "where": "phone", "docs": [_doc("lease.pdf", LONG, 30, 10000)], "given": LEASE_GIVEN}),
-    ("percent never has the calculator", {"mode": "question", "question": "What percent of the deposit is the rent?",
+    ("percent is no aggregation", {"mode": "question", "question": "What percent of the deposit is the rent?",
                                           "where": "server", "can": ["calculate"],
                                           "docs": [_doc("lease.pdf", LONG, 30)], "given": LEASE_GIVEN}),
     ("a stated total is a lookup", {"mode": "question", "question": "What's the total due at signing?", "where": "server",
@@ -277,7 +279,7 @@ def build() -> dict:
                               "card": dec.card.kind if dec.card else None, "notes": dec.notes})
     for op, reply in CALCS:
         given = _given(LEASE_GIVEN)
-        checked = calc.finish(reply, given, "how much?", ["lease.pdf"], op)
+        checked = calc.finish(reply, given, "how much?", ["lease.pdf"], op, None, {0: calc.Ctx(style="dot")})
         out["calc"].append({"op": op, "reply": reply, "given": LEASE_GIVEN, "content": checked.content,
                             "found": checked.found, "cited": checked.cited,
                             "notes": [n["code"] for n in checked.notes]})

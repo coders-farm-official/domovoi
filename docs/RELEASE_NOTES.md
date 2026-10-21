@@ -30,9 +30,22 @@ dependencies.
   `domovoi/doc_qa/chat-weak-spots.json` (shipped with the server and in the
   app), cell by cell with the number, the eval, the date and the device.
   The model is never asked whether it is sure.
-* **Calculate exactly.** On an exact sum the model only lists the numbers
-  with their pages; each one is checked against its page (a number not
-  there is left out, and the reply says so), and the app adds them up.
+* **Calculate exactly.** On a sum, an average, a difference or the days
+  between two dates, the model only lists the numbers with their pages.
+  The app keeps a number only when its page shows that whole number (each
+  place once), reads its sign ("-$40", "(40.00)"), scale ("$1.2k",
+  "1.2 million") and separators the way the document's language writes
+  them ("1.200 €" in Spanish is 1,200), and adds them up to the inputs'
+  precision, "from the 3 entries I found". When a number, a mix of units
+  or a date's day and month can't be read for certain, the reply says so
+  plainly ("I can't be sure how to read 1.200 here, so I won't add it
+  up") and works nothing out. Only aggregations get this card: a lookup
+  of a stated number ("how many days after move-out…") doesn't.
+* **Known limits.** "Don't warn me" and the switch are kept per browser or
+  phone; the long-summary card follows its time thresholds (3 minutes);
+  a spoken question on the phone gets the notes, not a spoken yes or no;
+  a sum covers only the passages found for the question (the answer says
+  how many entries).
 * **It doesn't nag.** A kind shows once per chat; each card has "don't
   warn me about this again", and Settings → Chat & AI → **Chat** turns the
   heads-up off. Both are kept on each device (a browser, a phone), not for

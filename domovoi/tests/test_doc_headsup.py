@@ -105,7 +105,16 @@ def test_a_card_fires_from_the_table_not_from_the_wording_alone():
     ("How many days do I have to return the keys?", None),
     ("How much more is the deposit than the rent?", "difference"),
     ("What's the difference between plan A and plan B?", None),
-    ("What percentage of the deposit is kept?", "percent"),
+    ("What percentage of the deposit is kept?", None),      # a stated share, not an aggregation
+    # Lookups of a stated number (review round 1): no calc card.
+    ("How many days after move-out is the deposit returned?", None),
+    ("How many days before the lease ends must I give notice?", None),
+    ("How many days from delivery do I have to return it?", None),
+    ("Which charges are combined into the monthly payment?", None),
+    ("What's the total number of bedrooms?", None),
+    ("What is the sum insured for contents?", None),
+    ("In all, how many pets can I keep?", None),
+    ("How much did the rent go up?", None),
     ("When is the rent due?", None),
 ])
 def test_calculations_are_recognised_from_the_wording(q, op):
@@ -133,8 +142,12 @@ def test_only_options_that_work_here_are_offered():
     assert h.check(_req(q, can=("calculate",))).options == ["calculate", "try_anyway"]
     phone = h.check(_req(q, can=()))
     assert phone.options == ["try_anyway"] and "Check the result yourself" in phone.text
-    # No calculator for a percentage: the card says so, it offers no button.
-    assert h.check(_req("What percent of the deposit is the rent?")).options == ["try_anyway"]
+    # A percentage is no aggregation (review round 1): no calc card at all.
+    assert h.check(_req("What percent of the deposit is the rent?")) is None
+    # Days between two dates needs two dates in the passages to count from.
+    assert h.check(_req("How many days between the rent and the deposit?",
+                        given=[("p. 1", "Rent $1,200."), ("p. 2", "Deposit $1,500.")])) is None
+    assert h.check(_req("How many days between move-in and the inspection?")).kind == "calc"
     # The home server only where its offer stands (reachable, measured faster).
     facts = {"parts": 8, "estimate_s": 130.0, "home_server_s": 25.0}
     with_offer = h.check(_req("Summarize this", mode="long_summary", where="phone", can=("home_server",), facts=facts))
@@ -174,6 +187,12 @@ def test_a_blurry_picture_warns_only_when_words_are_to_be_read():
     pic = {"blur": TABLE["thresholds"]["blur_variance"] - 1}
     assert h.check(_req("What does this letter say?", mode="picture", picture=pic)).kind == "blurry"
     assert h.check(_req("Is this a nice sunset?", mode="picture", picture=pic)) is None
+    # Only clear reading requests (review round 1), not "say", "sign", "form", "note".
+    for q in ("Read this receipt", "What's written on the sign?", "Transcribe this", "What does it say?"):
+        assert h.reading_request(q), q
+    for q in ("Say something nice about this", "Is this sign pretty?", "What form is this flower?",
+              "Note how sunny it is"):
+        assert not h.reading_request(q), q
     assert h.check(_req("What does this letter say?", mode="picture", picture={"blur": 712.0})) is None
 
 
@@ -241,17 +260,21 @@ def test_never_more_than_one_card_per_kind_per_chat_over_a_scripted_chat():
 
 
 # ─── Calculate exactly ───────────────────────────────────────────────────
+#: An English document (its numbers read 1,200.50); the adversarial set is test_doc_calc.py.
+EN = {0: calc.Ctx(style="dot")}
+
 def test_calculate_exactly_adds_only_numbers_their_page_shows():
     c = calc.finish("- $1,200 [p. 1] rent\n- $1,500 [p. 2] deposit\n- $999 [p. 2] made up\n- 5 [p. 9] no page",
-                    _given(GIVEN), "total?", ["lease.pdf"], "sum")
-    assert c.content.startswith("**Total: $2,700 (1,200 + 1,500 = 2,700)**")
-    assert "$999" not in c.content and [n["code"] for n in c.notes] == ["calc_worked", "calc_dropped"]
+                    _given(GIVEN), "total?", ["lease.pdf"], "sum", ctxs=EN)
+    assert c.content.startswith("**Total: $2,700 (1,200 + 1,500 = 2,700), from the 2 entries I found**")
+    assert "$999" not in c.content
+    assert [n["code"] for n in c.notes] == ["calc_worked", "calc_only_found", "calc_dropped"]
     assert c.cited == ["p. 1", "p. 2"] and all(s["cited"] for s in c.sources)
 
 
 def test_calculate_exactly_is_decimal_not_floating_point():
     given = _given([("p. 1", "Fees of 0.10 and 0.20 apply."), ("p. 2", "A third fee is 0.005.")])
-    c = calc.finish("- 0.10 [p. 1] fee\n- 0.20 [p. 1] fee", given, "total?", ["x"], "sum")
+    c = calc.finish("- 0.10 [p. 1] fee\n- 0.20 [p. 1] fee", given, "total?", ["x"], "sum", ctxs=EN)
     assert c.content.startswith("**Total: 0.30 ")
     avg = calc.compute("average", [calc.Item("1", "p", "", value=Decimal("1")),
                                    calc.Item("2", "p", "", value=Decimal("2")),

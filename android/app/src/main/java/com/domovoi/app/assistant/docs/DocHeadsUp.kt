@@ -80,24 +80,26 @@ object DocHeadsUp {
             """|\bdifference between\b""",
     )
     private val PLACE_RE = re("""\b(page|p\.|pg\.?|section|part|chapter|clause|article|sheet) ?(\d+)\b""")
+    // Aggregation only (review round 1): the days BETWEEN two dates.
     private val DAYS_RE = re(
-        """\bhow many (days|weeks|months|years)\b.*\b(between|from|until|till|since|before|after)\b""" +
-            """|\b(days|weeks|months) between\b|\bhow long (is it )?between\b""",
+        """\bhow many (days|weeks|months|years)\b.*\bbetween\b.+\band\b""" +
+            """|\b(days|weeks|months) between\b.+\band\b|\bhow long (is it )?between\b.+\band\b""",
     )
     private val AVERAGE_RE = re("""\baverage\b|\bthe mean\b|\bmean (of|value|amount|cost|price|bill|score)\b""")
-    private val PERCENT_RE = re("""\b(percent|percentage|per cent)\b|%""")
     private val DIFF_RE = re(
-        """\bhow much (more|less|higher|lower|bigger|smaller|cheaper|dearer)\b|\bhow many more\b""" +
-            """|\bhow much did .{1,40} (go up|go down|rise|fall|increase|decrease|change)\b""",
+        """\bhow much (more|less|higher|lower|bigger|smaller|cheaper|dearer)\b.+\bthan\b""" +
+            """|\bhow many more\b.+\bthan\b""",
     )
     private val DIFF_BETWEEN_RE = re("""\bdifference (between|in)\b""")
     private val QUANTITY_RE = re(
         """\b(how much|amount|amounts|cost|costs|price|prices|fee|fees|rent|pay|paid|""" +
             """charge|charges|total|number|balance|salary|wage|wages|deposit|bill)\b|\$|€|£""",
     )
+    // A sum asked for, not a stated one ("the sum insured" is a lookup).
     private val SUM_RE = re(
-        """\b(total|totals|sum|add up|added up|adds up|add together|added together|altogether|""" +
-            """in all|combined|grand total|all together)\b""",
+        """\b(add up|added up|adds up|add together|added together|sum of|total of|in total|""" +
+            """altogether|grand total|combined total|all together)\b""" +
+            """|\bthe total\b(?! number)|\bthe sum\b(?! insured)""",
     )
     private val NUMBER_RE = re("""(?<![\w.,])[-$€£]?\d{1,3}(?:,\d{3})+(?:\.\d+)?%?|(?<![\w.,])[-$€£]?\d+(?:\.\d+)?%?""")
     private val LOOKUP_WORDS = mapOf(
@@ -105,9 +107,11 @@ object DocHeadsUp {
         "average" to "(average|mean)",
         "percent" to "(percent|percentage|per cent|%)",
     )
+    // Only clear requests to read the words (review round 1).
     private val READING_RE = re(
-        """\b(read|reads|say|says|said|text|transcribe|transcription|letter|document|page|words|written|writing|""" +
-            """note|receipt|label|sign|form|bill|invoice|translate|spell|spelled|handwriting|handwritten)\b""",
+        """\b(read|reads|reading|transcribe|transcription|translate|spell out|spelled out|copy out|type out)\b""" +
+            """|\bwhat (does|do|did) (it|this|that|(this|that|the|my|our|your) [\w ]{1,30}) say\b|\bwhat (it|this|that) says\b""" +
+            """|\bwhat'?s written\b|\bwhat is written\b|\bwhat'?s the (text|writing|wording)\b|\bwhat words\b""",
     )
 
     fun readingRequest(question: String): Boolean = READING_RE.containsMatchIn(q(question))
@@ -136,7 +140,6 @@ object DocHeadsUp {
         return when {
             DAYS_RE.containsMatchIn(s) -> "days"
             AVERAGE_RE.containsMatchIn(s) -> "average"
-            PERCENT_RE.containsMatchIn(s) -> "percent"
             DIFF_RE.containsMatchIn(s) || (DIFF_BETWEEN_RE.containsMatchIn(s) && QUANTITY_RE.containsMatchIn(s)) -> "difference"
             SUM_RE.containsMatchIn(s) -> "sum"
             else -> null
@@ -321,8 +324,10 @@ object DocHeadsUp {
         val texts = req.given.map { it.second }
         if (req.mode == "question") {
             val op = calcRequest(question)
-            val nums = texts.flatMap { numbersIn(it) }
-            if (op != null && nums.toSet().size >= 2 && !isLookup(op, texts) && t.fires("calc", "combine", req.where)) {
+            // Enough to work from: two dates to count between, or two numbers.
+            val enough = if (op == "days") texts.sumOf { DocCalc.readDates(it).size } >= 2
+            else texts.flatMap { numbersIn(it) }.toSet().size >= 2
+            if (op != null && enough && !isLookup(op, texts) && t.fires("calc", "combine", req.where)) {
                 val k = t.kind("calc")
                 out += if (op in CALCULATOR_OPS && "calculate" in req.can) {
                     HeadsUpCard("calc", k.card, options(k.options, req.can), note = k.note, op = op)
@@ -330,7 +335,7 @@ object DocHeadsUp {
                     HeadsUpCard("calc", k.cardNoCalculator ?: k.card, listOf("try_anyway"), note = k.note, op = op)
                 }
             }
-            if ((op == null || op == "percent") && compareRequest(question) && totalChars > onePass) {
+            if (op == null && compareRequest(question) && totalChars > onePass) {
                 val places = namedPlaces(question)
                 val labels = req.given.map { q(it.first) }
                 val foundAll = places.isNotEmpty() && places.all { p -> labels.any { placeIn(p, it) } }
