@@ -4740,6 +4740,46 @@
         }
       }
     },
+    "/api/satellites/windows-setup": {
+      "get": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Windows Setup Status",
+        "description": "Whether the core holds ``DomovoiSatelliteSetup.exe`` (``ready``,\n``size``, ``release``, ``internet_off``, ``fetch``).",
+        "operationId": "windows_setup_status_api_satellites_windows_setup_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/windows-setup/fetch": {
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Windows Setup Fetch",
+        "description": "Start fetching the Windows satellite Setup onto the core.",
+        "operationId": "windows_setup_fetch_api_satellites_windows_setup_fetch_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/satellites/linux-runtime": {
       "get": {
         "tags": [

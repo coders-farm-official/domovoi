@@ -4,6 +4,29 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-21 — Windows satellites: a Setup to double-click
+
+A spare Windows laptop or PC becomes a room with `DomovoiSatelliteSetup.exe`
+instead of a PowerShell command. **Settings → Satellites → add a spare
+device → make the code**: the Windows column now shows a setup code (24
+hours, not a password) and **Download the Windows Setup**, whose file name
+carries the code and the server, so nothing is typed. The PowerShell
+command is still there, under "advanced".
+
+* **Once per server, an admin presses "get the Windows Setup"**: the
+  server downloads it (a few MB) from Domovoi's GitHub release, checked
+  against the release's `SHA256SUMS`, and hands it to the house's PCs.
+  A release from before this one has no Setup to fetch.
+* **It is not code-signed yet.** Windows SmartScreen says "Windows
+  protected your PC": **More info → Run anyway**. The dashboard and
+  docs/SPARE_DEVICE_SATELLITES.md say so step by step; the limit is in
+  docs/SECURITY_PRIVACY.md.
+* Setup codes live in the core's memory: a code made before a server
+  restart no longer works (make a new one).
+* **Releases:** `finish-release` attaches `DomovoiSatelliteSetup.exe`
+  beside `DomovoiSetup.exe` and lists it in `SHA256SUMS`;
+  `windows\build.ps1` builds both.
+
 ## 2026-10-20 — 1.0.0-rc3: audiobooks on the phone, and everything since rc2
 
 Version 1.0.0rc3 (the app 1.0.0-rc3, versionCode 26102001; the Windows

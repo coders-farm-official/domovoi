@@ -393,15 +393,25 @@ plugged in, with sleep turned off. Not the computer that runs Domovoi.
 
 1. [Settings → Satellites](#settings/satellites) → **add a spare device**.
    Type the room's name, press **make the code**.
-2. Press **copy the command** (Linux) or **copy the Windows command**, and
-   run it on that computer, signed in as the account it should use.
-3. The computer shows a six-digit code. Approve it under **waiting for
+2. **Linux:** press **copy the command** and run it on that computer,
+   signed in as the account it should use.
+3. **Windows:** on that PC, signed in as the account it should use, press
+   **Download the Windows Setup** (or type the short address the card
+   shows into its browser) and open the file. The setup code is in its
+   name, so there is nothing to type. Press **get the Windows Setup** on
+   the card once first if it asks.
+4. Windows says **"Windows protected your PC"**: click **More info**, then
+   **Run anyway**. Domovoi isn't signed by Microsoft yet; the file comes
+   from your own server.
+5. The computer shows a six-digit code. Approve it under **waiting for
    approval**.
 
-A tray icon shows when the microphone is live, and mutes it.
+A tray icon shows when the microphone is live, and mutes it. The
+PowerShell command is still there for Windows, under **advanced**.
 
 **If something's wrong:** a processor from before about 2009 is refused.
-Windows may warn about the unsigned satellite. [More detail](docs/SPARE_DEVICE_SATELLITES.md)
+A setup code lasts 24 hours: make a new one if Setup says it's unknown.
+[More detail](docs/SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)
 
 ### An old phone or tablet as a room *(Preview)*
 

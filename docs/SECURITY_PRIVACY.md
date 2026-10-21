@@ -2532,6 +2532,71 @@ closes the capture stream itself (Windows' icon goes out too). The
 approval code is shown in the tray, its toast and the installer's window,
 never logged.
 
+**The double-click Setup and its setup codes (2026-10-21).** Most
+households install with `DomovoiSatelliteSetup.exe` instead of the
+command. It is only a wizard in front of the same install
+(`windows/installer/DomovoiSatelliteSetup.iss`, its worker
+`satellite-setup.ps1`), so everything above holds; what it adds:
+
+* **A setup code is not a credential.** The dashboard's "make the code"
+  (admin tier, `POST /v1/admin/satellite-setup/codes`) gives an 8-character
+  code (Crockford base 32, 40 bits) that names that room's enrolment
+  payload for **24 hours**, in the core's memory only (a restart forgets
+  every code; at most 64 live). `GET /v1/satellite-setup/codes/{code}` is
+  public on the LAN, like the bundle, and answers with the payload and the
+  bundle's SHA-256: exactly what the PowerShell command carries, and
+  nothing secret (an address, a public fingerprint, a room name). So the
+  code may sit in the Setup's file name and in the download URL
+  (`/v1/satellite-setup/download/{code}`, `/win/{code}`), where a browser's
+  history or a log can keep it: it expires, and guessing one gains
+  nothing the server's `/v1/health` doesn't already say. Joining still
+  needs the device's six-digit approval code typed into the dashboard.
+* **The same checks, in the same order.** The Setup asks the server for
+  the code, downloads the bundle from that server, runs nothing unless its
+  SHA-256 is the one the server gave for the code, and runs the bundle's
+  `install-windows.ps1`, which proves the fingerprint before anything is
+  written. As with the command, that chain is as trustworthy as the LAN
+  answer it starts from (plain HTTP): compare the fingerprint the Setup
+  shows with **Settings → About** on another device to rule out a
+  rewritten answer.
+* **Only a home-network server.** The Setup talks to an address on the
+  home network (the enrolment code's rule: a private address, or a name
+  ending in `.local`, `.home.arpa`, `.lan` or `.internal`) or to the PC
+  itself, and refuses any other, whether it came from its file name or
+  was typed: a renamed or doctored download, or a "type this server"
+  message, can't make it download and run code from the internet. It
+  follows no redirect from the server.
+* **No elevation, nothing of its own left.** It runs as the signed-in
+  account (`PrivilegesRequired=lowest`), stops if started elevated, copies
+  no file, writes no registry value and has no uninstaller of its own; its
+  worker runs from its temporary folder, which Setup deletes when it
+  closes. The satellite it installs is removed by its own uninstaller, as
+  above.
+* **Where the Setup file comes from.** Only when an admin presses **get
+  the Windows Setup**, the core downloads it from Domovoi's GitHub release
+  (the one `android/release.json` names, else the latest), through the
+  outbound gate, and keeps it only if its SHA-256 is the one that
+  release's `SHA256SUMS` lists and it is a Windows program; it serves it
+  only while its bytes are still those. Refused under
+  `INTERNET_ACCESS=never`. `scripts/release/finish-release` builds it from
+  the tag's own files and attaches it beside `DomovoiSetup.exe`.
+
+**The unsigned installer, plainly.** The Setup is **not code-signed**
+(owner decision 2026-10-21; signing is on hold), so nothing
+cryptographic ties the file to Coders Farm: what vouches for it is
+GitHub's HTTPS and the release's own `SHA256SUMS`, both on GitHub, and
+then your server, which hands the laptops the copy it checked. Someone who
+could replace a release asset and its checksum list on GitHub, or the
+file in your server's cache, could hand out a different program, and
+nothing on the laptop would notice. Windows SmartScreen says "Windows
+protected your PC" for it (an unrecognised, unsigned app): the dashboard
+and [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#2-run-the-setup)
+say to press **More info → Run anyway** for this file, from your own
+server, and only for it. Smart App Control, when on, may block it with no
+way round it. When signing comes back, the same Setup is signed
+(`windows/build.ps1 -Sign`, the `SignTool` hook in the `.iss`) and these
+warnings go away.
+
 ### Old computers: the room stick
 
 Since 2026-10-16 an old PC, laptop or Intel Mac can become a room from a
