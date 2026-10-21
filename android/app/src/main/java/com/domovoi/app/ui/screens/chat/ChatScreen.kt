@@ -170,6 +170,8 @@ internal data class MessageRow(
     val documents: List<ServerDocument>? = null,
     /** How a reply answered about the chat's documents: sources and notes. */
     val doc: ServerDocReply? = null,
+    /** A draft reply (documents plan D4): the draft card's draft and version. */
+    val draft: ServerDraftRef? = null,
 )
 
 @Serializable
@@ -214,6 +216,7 @@ internal fun LiveMessage.finishWith(row: MessageRow) {
     row.error?.let { error = it }
     row.stats?.error_code?.let { errorCode = it }
     doc = row.doc
+    draft = row.draft
     retryable = row.retryable
     if (row.error == null) content = row.content
 }
@@ -239,8 +242,11 @@ internal class LiveMessage(
     /** Documents attached with a user message. */
     val documents: List<ServerDocument> = emptyList(),
     doc: ServerDocReply? = null,
+    draft: ServerDraftRef? = null,
 ) {
     var content by mutableStateOf(content)
+    /** A draft reply's draft (documents plan D4). */
+    var draft by mutableStateOf(draft)
     /** A reply's sources and notes about the chat's documents. */
     var doc by mutableStateOf(doc)
     var error by mutableStateOf(error)
@@ -438,6 +444,17 @@ internal fun ConversationPane(
     // "report this reply" (Play's AI-generated content policy covers the
     // server's replies too): the report sheet, over the conversation.
     var reporting by remember { mutableStateOf<ReplyReport?>(null) }
+    // The draft panel (documents plan D4), and the home's printers for its
+    // Print (the server's Print sheet, as for a file in Documents).
+    var canvas by remember { mutableStateOf<Long?>(null) }
+    var canvasVersion by remember { mutableStateOf<Int?>(null) }
+    var canvasKey by remember { mutableStateOf(0) }
+    var printDraft by remember { mutableStateOf<Pair<Long, Int>?>(null) }
+    val draftPrinters = rememberApi("printers-for-drafts") {
+        com.domovoi.app.ui.screens.printing.PrintIo(it.api).printers()
+    }.data
+    val draftDocs = remember { HashMap<Long, ServerDraftDoc>() }
+    fun draftDoc(id: Long) = draftDocs.getOrPut(id) { ServerDraftDoc(app, id) }
 
     // A thread's messages, read from the server (opening it, and after
     // "try again").
@@ -464,6 +481,7 @@ internal fun ConversationPane(
                         retryable = it.retryable,
                         documents = it.documents.orEmpty(),
                         doc = it.doc,
+                        draft = it.draft,
                     ),
                 )
             }
@@ -761,7 +779,13 @@ internal fun ConversationPane(
         ChatPaneGutter()
         ThreadTitleRow(title, frame, shareChat)
 
-        Box(Modifier.weight(1f).fillMaxWidth().then(rememberFitStretch(listState))) {
+        val openDraft = canvas
+        if (openDraft != null) Box(Modifier.weight(1f).fillMaxWidth()) {
+            DraftCanvas(
+                draftDoc(openDraft), canvasVersion, canvasKey, onClose = { canvas = null },
+                onPrint = if (draftPrinters?.hasPrinter == true) ({ v -> printDraft = openDraft to v }) else null,
+            )
+        } else Box(Modifier.weight(1f).fillMaxWidth().then(rememberFitStretch(listState))) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
@@ -775,6 +799,16 @@ internal fun ConversationPane(
                         onReport = if (canReport(m)) ({ reporting = reportableAt(i) }) else null,
                         onSource = { openSource = it },
                         onRetry = if (i == transcript.lastIndex && !sending && canRetry(transcript)) ({ retry() }) else null,
+                        draftCard = m.draft?.takeIf { !m.pending }?.let { ref ->
+                            {
+                                ServerDraftCard(
+                                    ref, m.content, transcript, draftDoc(ref.id), canvasKey,
+                                    canPrint = draftPrinters?.hasPrinter == true,
+                                    onOpen = { canvas = ref.id; canvasVersion = ref.version; canvasKey++ },
+                                    onPrint = { printDraft = ref.id to ref.version },
+                                )
+                            }
+                        },
                     )
                 }
             }
@@ -828,6 +862,15 @@ internal fun ConversationPane(
             }
         }
         openSource?.let { SourceSheet(it, onClose = { openSource = null }) }
+        val printing = printDraft
+        if (printing != null && draftPrinters != null) {
+            val title = transcript.firstNotNullOfOrNull { it.draft?.takeIf { d -> d.id == printing.first } }?.title ?: "draft"
+            com.domovoi.app.ui.screens.printing.PrintSheet(
+                libraryId = "", path = "", fileName = "$title v${printing.second}",
+                printers = draftPrinters, onDismiss = { printDraft = null },
+                target = com.domovoi.app.ui.screens.printing.PrintTarget.ChatDraft(printing.first, printing.second),
+            )
+        }
         // A new chat with nothing said yet: the place can still change.
         if (open == null && transcript.isEmpty() && !sending) frame.picker?.invoke()
 
@@ -1055,6 +1098,8 @@ internal fun MessageBubble(
     onReport: (() -> Unit)? = null,
     onRetry: (() -> Unit)? = null,
     onSource: (SourceView) -> Unit = {},
+    /** A draft reply's card (documents plan D4), in place of its text. */
+    draftCard: (@Composable () -> Unit)? = null,
 ) {
     val app = LocalApp.current
     val context = LocalContext.current
@@ -1118,6 +1163,8 @@ internal fun MessageBubble(
                             style = MaterialTheme.typography.bodyMedium,
                             color = Domovoi.colors.fg,
                         )
+                    } else if (draftCard != null) {
+                        draftCard()
                     } else {
                         MarkdownText(m.content, trailing = cursor)
                         if (!m.pending) {

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What the app's FileProvider (AndroidManifest.xml) may hand out, read-only
+     and only through an intent's grant: the phone's "Chat documents" library
+     (saved drafts) and the cache folder a draft being shared is written to.
+     Nothing else in the app's storage is reachable through it. -->
+<paths>
+    <files-path name="chat_documents" path="Chat documents/" />
+    <cache-path name="drafts_share" path="drafts-share/" />
+</paths>

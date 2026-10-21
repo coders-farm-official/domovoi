@@ -167,6 +167,16 @@ private fun ChatPane(
     var offerSpeechFiles by remember { mutableStateOf(false) }
     var openSource by remember { mutableStateOf<SourceView?>(null) }
     val messages = ui.conversation.messages
+    // The draft panel (documents plan D4): which draft it shows, from which
+    // version, and a counter that makes it read the draft again.
+    var canvas by rememberSaveable(ui.conversation.id) { mutableStateOf<String?>(null) }
+    var canvasVersion by rememberSaveable(ui.conversation.id) { mutableStateOf<Int?>(null) }
+    var canvasKey by remember { mutableStateOf(0) }
+    val newestDraft = messages.lastOrNull()?.takeIf { !ui.replying }?.draft
+    androidx.compose.runtime.LaunchedEffect(newestDraft) {
+        if (newestDraft != null && newestDraft.id == canvas) canvasKey++
+    }
+    val draftScope = androidx.compose.runtime.rememberCoroutineScope()
     // The paperclip: a document for this phone chat (documents plan, D1),
     // copied into the app's storage and read on the phone. What's typed
     // goes with it as the question.
@@ -182,7 +192,13 @@ private fun ChatPane(
             }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (messages.isEmpty()) {
+            val openDoc = canvas?.let { id -> actions.draftDoc?.invoke(id) }
+            if (openDoc != null) {
+                com.domovoi.app.ui.screens.chat.DraftCanvas(
+                    openDoc, canvasVersion, canvasKey, onClose = { canvas = null },
+                    onPrint = { v -> actions.printDraft(canvas!!, v) },
+                )
+            } else if (messages.isEmpty()) {
                 Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                     EmptyState(
                         "Ask Domovoi anything",
@@ -215,6 +231,13 @@ private fun ChatPane(
                                 conversation = ui.conversation,
                                 docFile = actions.docFile,
                                 onSource = { openSource = it },
+                                draftCard = m.draft?.takeIf { actions.draftDoc != null && !writing }?.let { ref ->
+                                    {
+                                        PhoneDraftCard(ref, messages, m.text, actions, toast,
+                                            onOpen = { canvas = ref.id; canvasVersion = ref.version; canvasKey++ },
+                                            scope = draftScope)
+                                    }
+                                },
                             )
                         }
                     }
@@ -373,6 +396,8 @@ private fun MessageBubble(
     conversation: StoredConversation? = null,
     docFile: (String) -> java.io.File? = { null },
     onSource: (SourceView) -> Unit = {},
+    /** A draft reply's card (documents plan D4), in place of its text. */
+    draftCard: (@Composable () -> Unit)? = null,
 ) {
     val toast = LocalToast.current
     val clipboard = LocalClipboardManager.current
@@ -427,6 +452,8 @@ private fun MessageBubble(
                             Text("spoken", style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgFaint,
                                 modifier = Modifier.padding(top = 2.dp))
                         }
+                    } else if (draftCard != null) {
+                        draftCard()
                     } else if (m.text.isNotEmpty() || writing) {
                         MarkdownText(m.text, trailing = if (writing) " ▍" else "")
                     }

@@ -57,6 +57,8 @@ class VoicePanelTest {
                     File(RepoPhonemizer.androidDir, "native/sherpa-onnx/licenses/" + path.removePrefix("licences/sherpa-onnx/"))
                 // The texts the build copies from android/licences/ (OpenSourceTask).
                 path.startsWith("licences/texts/") -> File(RepoPhonemizer.androidDir, "licences/" + path.removePrefix("licences/texts/"))
+                // The draft fonts' licence (DraftAssetsTask copies domovoi/drafts/fonts/).
+                path.startsWith("drafts/fonts/") -> File(RepoPhonemizer.androidDir, "../domovoi/" + path)
                 else -> error("no source for $path")
             }
             assertTrue("$path: $source", source.isFile)
@@ -66,7 +68,8 @@ class VoicePanelTest {
             assertTrue("missing $it", names.contains(it))
         }
         ModelCatalog.assistant.forEach { m -> assertTrue(m.name, parts.any { it.name == m.name && it.licence == m.license }) }
-        val allowed = setOf("MIT", "Apache-2.0", "BSD-2-Clause style", "public domain")
+        // OFL-1.1: the fonts the phone's PDFs embed (owner-approved for fonts, plan Q3).
+        val allowed = setOf("MIT", "Apache-2.0", "BSD-2-Clause style", "public domain", "OFL-1.1")
         parts.forEach { assertTrue("${it.name}: ${it.licence}", it.licence in allowed) }
     }
 }

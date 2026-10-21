@@ -62,8 +62,12 @@ internal fun PrintSheet(
     fileName: String,
     printers: PrintersResponse,
     onDismiss: () -> Unit,
+    /** What to print, when it isn't the file [libraryId]/[path] (a chat
+     *  draft's version, documents plan D4). */
+    target: PrintTarget? = null,
 ) {
     val app = LocalApp.current
+    val what = target ?: PrintTarget.File(libraryId, path)
     val toast = LocalToast.current
     val io = remember(app) { PrintIo(app.api) }
     val scope = rememberCoroutineScope()
@@ -90,7 +94,7 @@ internal fun PrintSheet(
         if (job != null) return@LaunchedEffect
         delay(if (preview == null) 0 else 400)
         previewing = true
-        runAction { io.preview(libraryId, path, printerId, options) }
+        runAction { io.preview(what, printerId, options) }
             .onSuccess {
                 preview = it
                 previewError = null
@@ -225,7 +229,7 @@ internal fun PrintSheet(
                     onClick = {
                         sending = true
                         scope.launch {
-                            runAction { io.print(libraryId, path, printerId, options) }
+                            runAction { io.print(what, printerId, options) }
                                 .onSuccess { job = it }
                                 .onFailure { toast(printFailureText("print", it)) }
                             sending = false

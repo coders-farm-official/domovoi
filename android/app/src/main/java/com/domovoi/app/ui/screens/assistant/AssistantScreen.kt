@@ -114,6 +114,11 @@ internal class AssistantActions(
     val closeDocProblem: () -> Unit = {},
     /** The phone's own copy of a document of the conversation on screen, by id. */
     val docFile: (String) -> java.io.File? = { null },
+    /** A draft of the conversation on screen, by id (documents plan D4);
+     *  null where phone chats keep no drafts. */
+    val draftDoc: ((String) -> com.domovoi.app.ui.screens.chat.DraftDoc)? = null,
+    /** Prints a draft's version with Android's print dialog. */
+    val printDraft: (String, Int) -> Unit = { _, _ -> },
 )
 
 /** The phone chat's part of Chat's conversation frame: the way back to the
@@ -295,6 +300,32 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
             null
         }
     val actions = actionsFor(assistant, download, talk, sinks, reportScope, used, askServer, asking) { toast(it) }
+    // Drafts (documents plan D4): kept on this phone; saved to its "Chat
+    // documents" library, and to the home server's From Chat by "Send to
+    // home" when one is paired and in reach.
+    val homeUpload: (suspend (String, ByteArray) -> String)? =
+        if (choice is com.domovoi.app.ui.shell.ServerChoice.Available && !choice.needsPairing) {
+            { name, bytes -> com.domovoi.app.ui.screens.chat.sendDraftHome(app, name, bytes) }
+        } else {
+            null
+        }
+    val draftStore = assistant.draftStore
+    val draftDoc: ((String) -> com.domovoi.app.ui.screens.chat.DraftDoc)? = draftStore?.let { store ->
+        { id ->
+            PhoneDraftDoc(context, store, assistant.state.value.conversation.id, id,
+                { text, base -> assistant.editDraft(assistant.state.value.conversation.id, id, text, base) }, homeUpload)
+        }
+    }
+    val printDraft: (String, Int) -> Unit = { id, version ->
+        val doc = draftDoc?.invoke(id)
+        if (doc != null) {
+            reportScope.launch {
+                runCatching { doc.file(version, "pdf") }
+                    .onSuccess { (name, bytes) -> if (!PhoneDraftFiles.print(context, name, bytes)) toast("this phone can't print") }
+                    .onFailure { toast("couldn't make the PDF: ${it.message}") }
+            }
+        }
+    }
     AssistantContent(
         ui,
         AssistantActions(
@@ -313,6 +344,7 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
             attachDocument = actions.attachDocument, askServer = actions.askServer,
             askingServer = actions.askingServer, dropPending = actions.dropPending,
             closeDocProblem = actions.closeDocProblem, docFile = actions.docFile,
+            draftDoc = draftDoc, printDraft = printDraft,
         ),
         chrome,
     )

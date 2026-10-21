@@ -73,6 +73,12 @@ internal val OPEN_SOURCE_PARTS: List<OpenSourcePart> = listOf(
             "dataset) and released into the public domain; distributed through rhasspy/piper-voices (MIT). " +
             "Downloaded, one at a time, from Settings → Voices.",
     ),
+    OpenSourcePart(
+        "Liberation Sans and Liberation Serif 2.1.5", "OFL-1.1", "github.com/liberationfonts/liberation-fonts",
+        "Copyright (c) 2010 Google Corporation, (c) 2012 Red Hat, Inc. The fonts of the PDFs Chat writes " +
+            "(resumes and letters), embedded in each PDF; the same files as the server's.",
+        listOf("drafts/fonts/LICENSE-OFL.txt"),
+    ),
     OpenSourcePart("ONNX Runtime 1.28.0", "MIT", "github.com/microsoft/onnxruntime", "Copyright (c) Microsoft Corporation."),
     OpenSourcePart(
         "sherpa-onnx 1.13.8, built without text to speech", "Apache-2.0", "github.com/k2-fsa/sherpa-onnx",

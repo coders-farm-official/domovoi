@@ -39,7 +39,10 @@ class NoNetworkTest {
         val classes = classesIn("com/domovoi/app/assistant", AssistantBench::class.java) +
             classesIn("com/domovoi/app/ui/screens/assistant", Class.forName("com.domovoi.app.ui.screens.assistant.AssistantBenchmarkCardKt", false, javaClass.classLoader)) +
             // Documents in phone chats (D1): read on the phone, never sent.
-            classesIn("com/domovoi/app/assistant/docs", com.domovoi.app.assistant.docs.DocQa::class.java)
+            classesIn("com/domovoi/app/assistant/docs", com.domovoi.app.assistant.docs.DocQa::class.java) +
+            // Drafts in phone chats (D4): written and saved on the phone; only
+            // "send to home", a tap, goes to the household's own server (ui/screens/chat).
+            classesIn("com/domovoi/app/assistant/drafts", com.domovoi.app.assistant.drafts.DraftLayout::class.java)
         assertTrue("no classes found", classes.size > 10)
         val offenders = classes.filterNot { (name, _) -> name.startsWith("ModelDownloader") }
             .mapNotNull { (name, bytes) ->

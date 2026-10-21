@@ -59,6 +59,10 @@ data class StoredMessage(
     /** ...the notes under it ("couldn't find", "uncited", a quote that
      *  doesn't match). */
     val notes: List<DocNote> = emptyList(),
+    /** A draft reply (documents plan D4): the draft card's draft and the
+     *  version this turn wrote (or offered to print). [text] is the one
+     *  line of what was done, which is all the model sees of it later. */
+    val draft: com.domovoi.app.assistant.drafts.DraftRef? = null,
 ) {
     val fromUser: Boolean get() = from == Speaker.USER
 }

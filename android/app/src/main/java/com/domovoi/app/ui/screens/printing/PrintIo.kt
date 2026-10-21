@@ -66,10 +66,16 @@ internal class PrintIo(private val api: ApiClient) {
     suspend fun cancelJob(id: Long): PrintJob = api.post("/api/print/jobs/$id/cancel").decode()
 
     suspend fun preview(libraryId: String, path: String, printerId: Long?, options: PrintOptions): PrintPreview =
-        api.post("/api/print/preview", printBody(libraryId, path, printerId, options)).decode()
+        preview(PrintTarget.File(libraryId, path), printerId, options)
 
     suspend fun print(libraryId: String, path: String, printerId: Long?, options: PrintOptions): PrintJob =
-        api.post("/api/print/jobs", printBody(libraryId, path, printerId, options)).decode()
+        print(PrintTarget.File(libraryId, path), printerId, options)
+
+    suspend fun preview(target: PrintTarget, printerId: Long?, options: PrintOptions): PrintPreview =
+        api.post(target.previewPath, target.body(printerId, options)).decode()
+
+    suspend fun print(target: PrintTarget, printerId: Long?, options: PrintOptions): PrintJob =
+        api.post(target.submitPath, target.body(printerId, options)).decode()
 
     suspend fun startScan(printerId: Long?, source: String, color: String?, resolution: Int?): ScanJob =
         api.post(
@@ -92,10 +98,32 @@ internal class PrintIo(private val api: ApiClient) {
     private fun tri(v: Boolean?) = if (v == null) JsonNull else JsonPrimitive(v)
 }
 
-internal fun printBody(libraryId: String, path: String, printerId: Long?, options: PrintOptions): JsonObject =
+/** What the Print sheet prints: a file in Documents or Files, or a version
+ *  of a home-server chat's draft (documents plan D4), each through its own
+ *  routes; the options and the preview are the same. */
+internal sealed interface PrintTarget {
+    val previewPath: String
+    val submitPath: String
+    fun body(printerId: Long?, options: PrintOptions): JsonObject
+
+    data class File(val libraryId: String, val path: String) : PrintTarget {
+        override val previewPath = "/api/print/preview"
+        override val submitPath = "/api/print/jobs"
+        override fun body(printerId: Long?, options: PrintOptions) = printBody(libraryId, path, printerId, options)
+    }
+
+    data class ChatDraft(val draftId: Long, val version: Int) : PrintTarget {
+        override val previewPath = "/api/chat/drafts/$draftId/print/preview"
+        override val submitPath = "/api/chat/drafts/$draftId/print/jobs"
+        override fun body(printerId: Long?, options: PrintOptions) = printBody(null, null, printerId, options, version)
+    }
+}
+
+internal fun printBody(libraryId: String?, path: String?, printerId: Long?, options: PrintOptions, version: Int? = null): JsonObject =
     buildJsonObject {
-        put("library_id", libraryId)
-        put("path", path)
+        libraryId?.let { put("library_id", it) }
+        path?.let { put("path", it) }
+        version?.let { put("version", it) }
         put("printer_id", printerId?.let { JsonPrimitive(it) } ?: JsonNull)
         put("options", buildJsonObject {
             options.pages?.trim()?.takeIf { it.isNotEmpty() }?.let { put("pages", it) }
