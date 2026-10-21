@@ -342,8 +342,8 @@ class PrintingHandler(Handler):
             path.unlink(missing_ok=True)
         if over:
             return self._reply(ctx, _said(over))
-        text = "That's %s, %d page%s, to %s. Print it?" % (title, pages, "" if pages == 1 else "s",
-                                                           self._printer_phrase(row))
+        text = "That's %s, %s, to %s. Print it?" % (title, ", ".join(self._settings_said(pages, r, row)),
+                                                    self._printer_phrase(row))
         return await self._ask(ctx, session, PRINT_CONFIRM, _said(text),
                                {"draft": d.draft_id, "version": d.version, "printer_id": row["id"],
                                 "wanted": r.as_json(), "title": title})
@@ -425,6 +425,16 @@ class PrintingHandler(Handler):
             return self._reply(ctx, _said(str(e)))
         if over:
             return self._reply(ctx, _said(over))
+        parts = self._settings_said(pages, r, row)
+        text = "That's %s%s to %s. Print it?" % (", ".join(parts), "," if len(parts) > 1 else "",
+                                                  self._printer_phrase(row))
+        return await self._ask(ctx, session, PRINT_CONFIRM, _said(text),
+                               {"doc": doc_rel, "printer_id": row["id"], "wanted": r.as_json(), "title": title})
+
+    @staticmethod
+    def _settings_said(pages: int, r, row: dict) -> list[str]:
+        """The pages and any setting that isn't the default, said in the
+        confirmation: what is confirmed is what prints."""
         parts = ["%d page%s" % (pages, "" if pages == 1 else "s")]
         if r.copies > 1:
             parts.append("%s copies" % _number_word(r.copies))
@@ -432,10 +442,7 @@ class PrintingHandler(Handler):
             parts.append("double-sided")
         if r.color == "monochrome" and (row.get("capabilities") or {}).get("color"):
             parts.append("in black and white")
-        text = "That's %s%s to %s. Print it?" % (", ".join(parts), "," if len(parts) > 1 else "",
-                                                  self._printer_phrase(row))
-        return await self._ask(ctx, session, PRINT_CONFIRM, _said(text),
-                               {"doc": doc_rel, "printer_id": row["id"], "wanted": r.as_json(), "title": title})
+        return parts
 
     @staticmethod
     def _printer_phrase(row: dict) -> str:

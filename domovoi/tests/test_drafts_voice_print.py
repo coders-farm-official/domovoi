@@ -93,6 +93,20 @@ async def test_print_it_in_a_chat_with_a_draft_confirms_then_prints_the_latest_v
 
 
 @requires_db
+async def test_the_drafts_confirmation_says_the_copies_and_double_sided_too(phone):
+    """Review round 1: what is confirmed is what prints, settings included."""
+    fake = await FakeIppPrinter().start()
+    try:
+        await _printer(phone, fake)
+        r = await phone("print two copies of it, double-sided")
+        assert r.text == ("That's Letter to my landlord v2, 1 page, two copies, double-sided, "
+                          "to the office printer. Print it?")
+        assert (await phone("no")).text == "OK, not printing."
+    finally:
+        await fake.close()
+
+
+@requires_db
 async def test_print_it_with_no_chat_or_no_draft_still_asks_which_document(phone):
     r = await phone("print it", thread=None)
     assert r.text.startswith("Which document?")
