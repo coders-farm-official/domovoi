@@ -485,6 +485,16 @@ def test_state_reasons_in_plain_words(reasons, state, tone):
     assert (st["state"], st["tone"]) == (state, tone)
 
 
+def test_the_printer_page_link_must_point_at_the_printer():
+    from domovoi.printing.devices import _own_page
+
+    row = {"host": "printer.local", "ipp_address": "192.168.1.50"}
+    assert _own_page("http://192.168.1.50/", row) == "http://192.168.1.50/"
+    assert _own_page("https://printer.local:443/status", row) == "https://printer.local:443/status"
+    assert _own_page("http://evil.example/login", row) is None
+    assert _own_page(None, row) is None
+
+
 def test_offline_words():
     st = caps_mod.status_of(None, "office printer", offline=True)
     assert st["words"] == ["The office printer isn't answering. Is it switched on?"]

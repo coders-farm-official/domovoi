@@ -291,12 +291,28 @@ def printer_json(row: dict[str, Any], *, limits: dict[str, int], active_job: dic
         "status": st,
         "supplies": supplies,
         "supplies_reported": bool(status.get("supplies_reported", bool(supplies))),
-        "admin_url": caps.get("admin_url") or None,
+        "admin_url": _own_page(caps.get("admin_url"), row),
         "needs_attention": needs,
         "identify": 0x003C in (caps.get("operations") or []),
         "scan": scan,
         "active_job": active_job,
     }
+
+
+def _own_page(url: str | None, row: dict[str, Any]) -> str | None:
+    """The printer's own web page, shown as a link for the person's browser
+    (never fetched by the server) - only when it points at the printer
+    itself, so a printer can't hand the dashboard a link to anywhere."""
+    if not url:
+        return None
+    from urllib.parse import urlsplit
+
+    try:
+        host = (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return None
+    mine = {str(v).lower() for v in (row.get("host"), row.get("ipp_address"), row.get("escl_address")) if v}
+    return url if host in mine else None
 
 
 def _uri(row: dict[str, Any]) -> str:

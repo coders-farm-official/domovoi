@@ -46,8 +46,9 @@ MAX_UPLOAD = jobs.MAX_INPUT_BYTES
 
 
 def _who(request: Request, label: str | None, source: str | None) -> jobs.Who:
-    device = (request.headers.get("x-domovoi-device-id") or "").strip()[:64]
-    key = device or "addr:" + admin_auth.request_source(request)
+    # The hourly limit is counted per source address (the web forwards the
+    # caller's own): a self-asserted device id could be changed per job.
+    key = "addr:" + admin_auth.request_source(request)
     src = source if source in ("dashboard", "app") else "dashboard"
     name = " ".join(str(label or "").split())[:80] or ("a phone" if src == "app" else "the dashboard")
     return jobs.Who(label=name, device_key=key, source=src)

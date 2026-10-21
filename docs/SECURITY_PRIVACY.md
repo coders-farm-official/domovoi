@@ -1854,7 +1854,8 @@ parts:
 
 **The internet switch.** Printing and scanning are LAN only and work under
 `INTERNET_ACCESS=never`. A printer's own web page (`printer-more-info`) is
-shown as a link for the person's browser and never fetched by the server.
+shown as a link for the person's browser, only when it points at the
+printer itself, and never fetched by the server.
 
 **Discovery.** One 3-second mDNS look when Settings → Printers opens, on
 "Look again", and for "set up the printer". It binds UDP 5353 with
@@ -1904,7 +1905,8 @@ never fetch another person's scan job, and never act on a scanner's
 "push scan" destination.
 
 **Limits** an admin can change: 100 pages and 20 copies per job, 200
-sheets per job, 20 jobs an hour per device, 500 sheets a day for the
+sheets per job, 20 jobs an hour per device (counted per address, since a
+device's self-asserted id could change per job), 500 sheets a day for the
 household, 50 pages per scan, one scan at a time per scanner. Every voice
 print is confirmed first.
 

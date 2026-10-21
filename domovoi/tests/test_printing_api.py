@@ -121,6 +121,8 @@ async def test_add_by_address_status_ink_and_tiers(house):
                                                            "Yellow toner"]
             assert p["status"]["state"] == "low on toner" and p["status"]["tone"] == "warn"
             assert "\x1b" not in p["status"]["message"]
+            # The fake's printer-more-info names another host: no link.
+            assert p["admin_url"] is None
             assert p["choices"]["sides"] == ["one-sided", "two-sided-long-edge", "two-sided-short-edge"]
             # the same printer again is refused
             r = await c.post("/v1/printers", json={"address": "ipp://127.0.0.1:%d/ipp/print" % fake.port},
@@ -209,6 +211,27 @@ async def test_print_a_pdf_straight_through_with_options(house):
     ops = [name for name, _ in fake.requests]
     assert ops.index("Validate-Job") < ops.index("Create-Job") < ops.index("Send-Document")
     assert fake.chunked_seen == 0
+
+
+async def test_a_document_over_a_megabyte_gets_through_the_body_limit(house):
+    """The core's transport guard caps bodies at 1 MB unless a route says
+    otherwise; the print routes take up to 101 MB (the web reads 100)."""
+    from domovoi.transport_guard import body_limit_for
+
+    assert body_limit_for("/v1/print/jobs") > 100 * 1024 * 1024
+    assert body_limit_for("/v1/print/preview") > 100 * 1024 * 1024
+    fake = await FakeIppPrinter().start()
+    try:
+        async with core_client() as c:
+            await _add(c, house, fake)
+            big = _pdf(1) + b"%" + b"x" * (3 * 1024 * 1024) + b"\n"
+            r = await _upload(c, house, "Big.pdf", big)
+            assert r.status_code == 202, r.text
+            job = await _wait_job(c, house, r.json()["id"])
+    finally:
+        await fake.close()
+    assert job["state"] == "done"
+    assert [j.data for j in fake.jobs.values()] == [big]
 
 
 async def test_a_raster_only_printer_gets_pwg_with_turned_back_pages(house):
