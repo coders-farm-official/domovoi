@@ -42,25 +42,78 @@ class PhoneVisionTest {
         assertEquals("a new build tries again", VisionProbe.UNKNOWN, next.state())
     }
 
-    @Test fun aTryTheLastRunNeverFinishedIsAFailureAndIsWrittenSo() {
+    @Test fun aRealCrashWhileTheEncoderRanTurnsPhotosOff() {
         val mem = MemoryVisionMemory()
-        VisionCheck(mem, key).trying()
-        // During the run, the try is under way: not known yet, nothing written.
-        assertEquals(VisionProbe.UNKNOWN, VisionCheck(mem, key).stateNow())
-        assertTrue(VisionCheck(mem, key).unfinished())
-        // The next start: the process died in the driver.
-        assertEquals(VisionProbe.FAILED, VisionCheck(mem, key).state())
-        assertEquals("failed#$key", mem.value)
-        assertFalse(VisionCheck(mem, key).unfinished())
+        val check = VisionCheck(mem, key)
+        check.begin(now = 1_000)
+        assertTrue(check.running())
+        // The next start: Android says the run ended in a native crash.
+        var askedSince = 0L
+        val v = VisionCheck(mem, key).resolveAtStart { since -> askedSince = since; ExitKind.CRASH }
+        assertEquals(1_000L, askedSince)
+        assertEquals(VisionProbe.CRASHED, v)
+        assertEquals("crashed#$key", mem.value)
+        assertNull("the guard is settled", mem.guard)
+        assertFalse(photoButtonsShown(true, VisionProbe.CRASHED, true, false, true, false))
     }
 
-    @Test fun forgettingLeavesNothing() {
+    @Test fun aCrashAfterPhotosPassedStillTurnsThemOff() {
         val mem = MemoryVisionMemory()
-        VisionCheck(mem, key).trying()
-        VisionCheck(mem, key).forget()
-        assertNull(mem.value)
-        assertEquals(VisionProbe.UNKNOWN, VisionCheck(mem, key).state())
+        VisionCheck(mem, key).passed()
+        VisionCheck(mem, key).begin(now = 5)          // a photo turn
+        assertEquals(VisionProbe.CRASHED, VisionCheck(mem, key).resolveAtStart { ExitKind.CRASH })
     }
+
+    @Test fun aMemoryKillOrASwipeAwayIsNoVerdict() {
+        val mem = MemoryVisionMemory()
+        VisionCheck(mem, key).begin(now = 7)
+        assertEquals(VisionProbe.UNKNOWN, VisionCheck(mem, key).resolveAtStart { ExitKind.NOT_A_CRASH })
+        assertFalse("tried again later", VisionCheck(mem, key).running())
+        assertNull(mem.value)
+        // And a passed answer stays passed.
+        VisionCheck(mem, key).passed()
+        VisionCheck(mem, key).begin(now = 8)
+        assertEquals(VisionProbe.PASSED, VisionCheck(mem, key).resolveAtStart { ExitKind.NOT_A_CRASH })
+    }
+
+    @Test fun whereAndroidCantSayTheSecondUnexplainedDeathCounts() {
+        val mem = MemoryVisionMemory()
+        VisionCheck(mem, key).begin(now = 1)
+        assertEquals("first: forgiven", VisionProbe.UNKNOWN, VisionCheck(mem, key).resolveAtStart { ExitKind.UNKNOWN })
+        VisionCheck(mem, key).begin(now = 2)
+        assertEquals("second: a crash", VisionProbe.CRASHED, VisionCheck(mem, key).resolveAtStart { ExitKind.UNKNOWN })
+    }
+
+    @Test fun aRunThatEndsWellClearsTheStrikes() {
+        val mem = MemoryVisionMemory()
+        VisionCheck(mem, key).begin(now = 1)
+        VisionCheck(mem, key).resolveAtStart { ExitKind.UNKNOWN }
+        VisionCheck(mem, key).begin(now = 2)
+        VisionCheck(mem, key).end()
+        VisionCheck(mem, key).begin(now = 3)
+        assertEquals(VisionProbe.UNKNOWN, VisionCheck(mem, key).resolveAtStart { ExitKind.UNKNOWN })
+    }
+
+    @Test fun noMarkNoQuestion() {
+        val mem = MemoryVisionMemory()
+        VisionCheck(mem, key).passed()
+        assertEquals(VisionProbe.PASSED, VisionCheck(mem, key).resolveAtStart { error("not asked") })
+        // A mark from another build is dropped, not judged.
+        mem.guard = "other-key#9#0"
+        assertEquals(VisionProbe.PASSED, VisionCheck(mem, key).resolveAtStart { error("not asked") })
+        assertNull(mem.guard)
+    }
+
+    @Test fun androidsExitReasonsAreReadAsTheGuardNeeds() {
+        assertEquals(ExitKind.CRASH, exitKind(5))    // REASON_CRASH_NATIVE
+        assertEquals(ExitKind.CRASH, exitKind(4))    // REASON_CRASH
+        assertEquals(ExitKind.CRASH, exitKind(6))    // REASON_ANR
+        assertEquals(ExitKind.NOT_A_CRASH, exitKind(3))   // REASON_LOW_MEMORY
+        assertEquals(ExitKind.NOT_A_CRASH, exitKind(10))  // REASON_USER_REQUESTED
+        assertEquals(ExitKind.NOT_A_CRASH, exitKind(11))  // REASON_USER_STOPPED
+        assertEquals(ExitKind.UNKNOWN, exitKind(0))       // REASON_UNKNOWN
+    }
+
 
     @Test fun theButtonsShowOnlyWithAPassedProbeAndNothingElseGoingOn() {
         fun shown(
@@ -129,6 +182,17 @@ class PhoneVisionTest {
         )
         val text = ChatExport.text(c, java.time.ZoneOffset.UTC)
         assertTrue(text, text.contains("You: [photo] What is it?"))
+    }
+
+    @Test fun aReportKeepsThePhotoMark() {
+        val c = StoredConversation(
+            "c", messages = listOf(StoredMessage(Speaker.USER, "What is it?", photo = true), StoredMessage(Speaker.DOMOVOI, "A cat.")),
+        )
+        assertEquals("(a photo, not kept) What is it?", ReplyReport.draft(c, 1, model, "1.0", 1)!!.question)
+        val blank = c.copy(messages = listOf(StoredMessage(Speaker.USER, "", photo = true), StoredMessage(Speaker.DOMOVOI, "A cat.")))
+        assertEquals("(a photo, not kept)", ReplyReport.draft(blank, 1, model, "1.0", 1)!!.question)
+        val text = c.copy(messages = listOf(StoredMessage(Speaker.USER, "What is it?"), StoredMessage(Speaker.DOMOVOI, "A cat.")))
+        assertEquals("What is it?", ReplyReport.draft(text, 1, model, "1.0", 1)!!.question)
     }
 
     @Test fun twoPhotosAreNeverEqualByTheirBytes() {

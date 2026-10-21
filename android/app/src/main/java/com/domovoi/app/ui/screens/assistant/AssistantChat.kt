@@ -10,9 +10,10 @@ import com.domovoi.app.ui.screens.chat.ReadingLine
 import com.domovoi.app.ui.screens.chat.ReplyDocs
 import com.domovoi.app.ui.screens.chat.SourceSheet
 import com.domovoi.app.ui.screens.chat.SourceView
-import com.domovoi.app.ui.screens.chat.DocAttachButton
 import com.domovoi.app.ui.screens.chat.PendingPhotoCard
-import com.domovoi.app.ui.screens.chat.PhonePhotoButtons
+import com.domovoi.app.ui.screens.chat.PhoneAddButton
+import com.domovoi.app.ui.screens.chat.rememberDocPicker
+import com.domovoi.app.ui.screens.chat.SecureWhile
 import com.domovoi.app.assistant.photoButtonsShown
 import com.domovoi.app.assistant.PhonePhotos
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -173,10 +174,13 @@ private fun ChatPane(
     // Why the last photo couldn't be used, until closed (N3).
     var photoProblem by remember { mutableStateOf<String?>(null) }
     val messages = ui.conversation.messages
-    // The paperclip: a document for this phone chat (documents plan, D1),
+    // A document for this phone chat (documents plan, D1), under the "+":
     // copied into the app's storage and read on the phone. What's typed
     // goes with it as the question.
     val attach = actions.attachDocument
+    val docPick = if (attach != null) rememberDocPicker { name, open -> draft = attachWithDraft(attach, name, open, draft) } else null
+    // A staged photo stays out of screenshots and the recents preview.
+    SecureWhile(ui.pendingPhoto != null)
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         ChatHeader(
             if (messages.isEmpty()) NEW_CHAT else ui.conversation.title,
@@ -247,25 +251,24 @@ private fun ChatPane(
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            if (attach != null && ui.voicePhase == VoicePhase.Idle && !ui.replying) {
-                DocAttachButton(enabled = ui.reading == null) { name, open ->
-                    draft = attachWithDraft(attach, name, open, draft)
-                }
-            }
-            LocalComposerField.current(draft, { draft = it }, Modifier.weight(1f))
-            // The camera and the gallery, beside the mic: only where the
-            // phone's model looks at photos on its GPU (PhoneVision.kt).
+            // The "+": a document, and where the phone's model reads photos
+            // on its GPU (PhoneVision.kt), the camera and the gallery. The
+            // mic stays alone on the right.
             val takePhoto = actions.attachPhoto
-            if (takePhoto != null && photoButtonsShown(ui)) {
-                PhonePhotoButtons(
+            if (ui.voicePhase == VoicePhase.Idle && !ui.replying) {
+                PhoneAddButton(
+                    enabled = ui.reading == null,
+                    onDocument = docPick,
+                    photos = takePhoto != null && photoButtonsShown(ui),
                     onPhoto = { p ->
                         photoProblem = null
-                        takePhoto(p)
+                        takePhoto?.invoke(p)
                     },
                     onProblem = { photoProblem = it },
                     onToast = { toast(it) },
                 )
             }
+            LocalComposerField.current(draft, { draft = it }, Modifier.weight(1f))
             if (ui.voicePhase != VoicePhase.Idle) {
                 // One button for the turn: while it listens and has heard
                 // you, it sends what you said; otherwise it stops it all.
@@ -594,6 +597,11 @@ private fun ModelPane(ui: AssistantUi, actions: AssistantActions, onClose: () ->
             ui.lastDownloadMs?.let {
                 Text("Downloaded and checked in ${durationText(it)} (from the last start or resume).", style = MaterialTheme.typography.bodySmall,
                     color = Domovoi.colors.fgMuted)
+            }
+            // Photos turned off by the crash guard: said, not just hidden.
+            if (ui.vision == com.domovoi.app.assistant.VisionProbe.CRASHED) {
+                Text(com.domovoi.app.assistant.VISION_CRASHED_NOTE, style = MaterialTheme.typography.bodySmall,
+                    color = Domovoi.colors.fgMuted, modifier = Modifier.padding(top = 6.dp))
             }
             Spacer(Modifier.height(10.dp))
             SectionLabel("runs on")

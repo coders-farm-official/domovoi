@@ -252,6 +252,9 @@ class AssistantController(
     /** The app's resident memory now, KB (/proc/self/status VmRSS); null
      *  when it can't be read. Sampled while a photo is answered. */
     private val residentKb: () -> Long? = { null },
+    /** How the app's last run ended (the photo crash guard); Android 11+
+     *  in the app, unknown otherwise. */
+    private val exitReasons: ExitReasons = ExitReasons { ExitKind.UNKNOWN },
 ) {
     private val _state = MutableStateFlow(
         AssistantUi(
@@ -456,6 +459,7 @@ class AssistantController(
                 // again once it is back. Also the way to retry a failed one.
                 visionDown = false
                 visionMemory.write(null)
+                visionMemory.writeGuard(null)
                 readVision()
             }
             say(if (freed != null) "model deleted; ${gb(freed)} freed" else "could not delete the model")
@@ -636,9 +640,13 @@ class AssistantController(
         // unless it has failed there; the first time it is tried once, with
         // a test picture ([VisionCheck]), and the answer is kept.
         val check = if (chatModel.takesImages) visionCheck() else null
+        if (check != null) resolveVisionOnce()
         val before = check?.state()
-        val tryVision = check != null && before != VisionProbe.FAILED && !visionDown
-        if (tryVision && before == VisionProbe.UNKNOWN) check!!.trying()
+        val tryVision = check != null && (before == VisionProbe.UNKNOWN || before == VisionProbe.PASSED) && !visionDown
+        // The crash guard (VisionCheck.begin): a driver that takes the app
+        // down while the encoder loads or reads the test picture is caught
+        // at the next start.
+        if (tryVision) check!!.begin(clock())
         var created = newEngine()
         try {
             var withVision = tryVision
@@ -685,17 +693,18 @@ class AssistantController(
         } catch (e: CancellationException) {
             runCatching { created.close() }
             // A load stopped part-way is no verdict on the encoder.
-            if (tryVision && before == VisionProbe.UNKNOWN && check!!.unfinished()) check.forget()
+            if (tryVision) check!!.end()
             readVision()
             _state.update { it.copy(engine = EngineState.Unloaded) }
             throw e
         } catch (e: Throwable) {
             runCatching { created.close() }
-            if (tryVision && before == VisionProbe.UNKNOWN && check!!.unfinished()) check.forget()
+            if (tryVision) check!!.end()
             readVision()
             _state.update { it.copy(engine = EngineState.Failed(wanted, plainReason(e))) }
             return@withLock null
         }
+        if (tryVision) check!!.end()
         readVision()
         val ms = (nanos() - started) / 1_000_000
         engine = created
@@ -714,16 +723,30 @@ class AssistantController(
         if (before == VisionProbe.UNKNOWN) check.failed() else visionDown = true
     }
 
+    @Volatile private var visionResolved = false
+
+    /** Once per run, before the encoder is used: a crash-guard mark the last
+     *  run left behind is settled ([VisionCheck.resolveAtStart]); a crash
+     *  says so once. */
+    @Synchronized
+    private fun resolveVisionOnce() {
+        if (visionResolved || !chatModel.takesImages) return
+        visionResolved = true
+        val v = runCatching { visionCheck().resolveAtStart(exitReasons) }
+            .onFailure { Log.w(TAG, "the photo guard could not be read", it) }.getOrNull()
+        if (v == VisionProbe.CRASHED) say(VISION_CRASHED_NOTE)
+    }
+
     /** [AssistantUi.vision] from the probe's memory; a waiting photo goes
-     *  when photos stop being offered. [atStart]: the first read of a run,
-     *  where a try the last run left unfinished becomes a failure. */
+     *  when photos stop being offered. [atStart]: the first read of a run
+     *  (the crash guard is settled first). */
     private fun readVision(atStart: Boolean = false) {
         if (!chatModel.takesImages) return
+        if (atStart) resolveVisionOnce()
         val check = visionCheck()
-        val v = when {
-            visionDown -> VisionProbe.FAILED
-            atStart -> check.state()
-            else -> check.stateNow()
+        val v = if (visionDown) VisionProbe.FAILED else check.state().let {
+            // A first try under way isn't an answer yet.
+            if (it == VisionProbe.PASSED || !check.running()) it else VisionProbe.UNKNOWN
         }
         _state.update { it.copy(vision = v, pendingPhoto = if (v == VisionProbe.PASSED) it.pendingPhoto else null) }
     }
@@ -1011,6 +1034,9 @@ class AssistantController(
                     delay(MEMORY_SAMPLE_MS)
                 }
             }
+            // The crash guard: a driver that takes the app down while it reads
+            // this photo turns photos off at the next start (VisionCheck).
+            val guard = visionCheck().also { it.begin(clock()) }
             try {
                 llm.replyToPhoto(PhonePhotos.systemPrompt(Persona.SYSTEM_PROMPT), photo.jpeg, question, clockLine()).collect { delta ->
                     if (firstMs == null && delta.isNotBlank()) firstMs = (nanos() - sent) / 1_000_000
@@ -1024,6 +1050,7 @@ class AssistantController(
                     }
                 }
                 sampler.cancelAndJoin()
+                guard.end()
                 sample()
                 val stats = llm.lastStats()
                 Log.i(TAG, "photo turn: first word $firstMs ms, peak ${peakKb()?.div(1024)} MB, " +
@@ -1031,10 +1058,12 @@ class AssistantController(
                 return finishReply(asked, live().copy(firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }))
             } catch (e: CancellationException) {
                 sampler.cancel()
+                guard.end()
                 finishReply(asked, live().copy(stopped = true, firstTextMs = firstMs, stopMs = voice?.lastStopMs))
                 throw e
             } catch (e: Throwable) {
                 sampler.cancel()
+                guard.end()
                 return finishReply(asked, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
             }
         } finally {
@@ -1647,6 +1676,7 @@ class AssistantController(
                 visionMemory = PhoneVisionMemory(app),
                 visionBackend = { DebugVision.backend(app) ?: LlmBackend.GPU },
                 appBuild = appBuild(app),
+                exitReasons = AndroidExitReasons(app),
                 residentKb = { runCatching { parseProcStatus(File("/proc/self/status").readText()).second }.getOrNull() },
             ).also { it.attach(app) }
         }

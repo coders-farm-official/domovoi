@@ -24,6 +24,14 @@ import com.domovoi.app.testing.composeTest
 import com.domovoi.app.testing.texts
 import com.domovoi.app.testing.withHeadlessWindow
 import com.domovoi.app.ui.screens.chat.CAMERA_LABEL
+import com.domovoi.app.ui.screens.chat.ADD_LABEL
+import com.domovoi.app.ui.screens.chat.DOCUMENT_LABEL
+import com.domovoi.app.ui.screens.chat.CAMERA_REFUSED
+import com.domovoi.app.ui.screens.chat.CameraAsk
+import com.domovoi.app.ui.screens.chat.addMenuItems
+import com.domovoi.app.ui.screens.chat.cameraAsk
+import com.domovoi.app.ui.screens.chat.sourceTooBig
+import org.junit.Assert.assertNull
 import com.domovoi.app.ui.screens.chat.CAMERA_REASON
 import com.domovoi.app.ui.screens.chat.GALLERY_LABEL
 import com.domovoi.app.ui.screens.chat.phonePhotoSize
@@ -99,30 +107,34 @@ class PhonePhotoUiTest {
         return shown to labels
     }
 
-    @Test fun withGpuVisionTheCameraAndGallerySitBesideTheMic() {
+    @Test fun theAddButtonSitsLeftAndTheMicAloneOnTheRight() {
         val (_, labels) = show(ui())
-        val camera = labels.indexOf(CAMERA_LABEL)
-        val gallery = labels.indexOf(GALLERY_LABEL)
-        val mic = labels.indexOf("talk")
-        assertTrue(labels.toString(), camera >= 0 && gallery == camera + 1 && mic == gallery + 1)
+        val add = labels.indexOf(ADD_LABEL)
+        assertTrue(labels.toString(), add >= 0 && labels.last() == "talk" && add < labels.indexOf("talk"))
+        assertFalse("no separate photo buttons", CAMERA_LABEL in labels || GALLERY_LABEL in labels)
     }
 
-    @Test fun withoutGpuVisionThereAreNoPhotoButtons() {
-        for (v in listOf(VisionProbe.FAILED, VisionProbe.UNKNOWN)) {
+    @Test fun theMenuListsPhotoItemsOnlyWhereTheProbePassed() {
+        assertEquals(listOf(DOCUMENT_LABEL, CAMERA_LABEL, GALLERY_LABEL), addMenuItems(documents = true, photos = true, backCamera = true))
+        assertEquals("no greyed-out photo items", listOf(DOCUMENT_LABEL), addMenuItems(documents = true, photos = false, backCamera = true))
+        assertEquals("no back camera, no camera item", listOf(DOCUMENT_LABEL, GALLERY_LABEL), addMenuItems(true, true, false))
+        assertEquals(listOf(CAMERA_LABEL, GALLERY_LABEL), addMenuItems(documents = false, photos = true, backCamera = true))
+        assertEquals(emptyList<String>(), addMenuItems(false, false, true))
+    }
+
+    @Test fun withoutGpuVisionAndNoDocumentsThereIsNoAddButton() {
+        for (v in listOf(VisionProbe.FAILED, VisionProbe.UNKNOWN, VisionProbe.CRASHED)) {
             val (_, labels) = show(ui(vision = v))
-            assertFalse("$v: $labels", CAMERA_LABEL in labels || GALLERY_LABEL in labels)
+            assertFalse("$v: $labels", ADD_LABEL in labels)
             assertTrue("the mic stays", "talk" in labels)
         }
-        val (_, plain) = show(ui(takes = false))
-        assertFalse(plain.toString(), CAMERA_LABEL in plain)
-        // A place that takes no photos at all (no attachPhoto): none either.
         val (_, none) = show(ui(), AssistantActions())
-        assertFalse(none.toString(), CAMERA_LABEL in none)
+        assertFalse(none.toString(), ADD_LABEL in none)
     }
 
     @Test fun notWhileAReplyIsWrittenOrAVoiceTurnRuns() {
-        assertFalse(CAMERA_LABEL in show(ui(replying = true)).second)
-        assertFalse(CAMERA_LABEL in show(ui(voicePhase = VoicePhase.Listening)).second)
+        assertFalse(ADD_LABEL in show(ui(replying = true)).second)
+        assertFalse(ADD_LABEL in show(ui(voicePhase = VoicePhase.Listening)).second)
     }
 
     @Test fun aWaitingPhotoShowsItselfAndSendsWithNothingTyped() {
@@ -130,14 +142,28 @@ class PhonePhotoUiTest {
         val (shown, labels) = show(ui(pending = p))
         assertTrue(shown.toString(), pendingPhotoLine(p) in shown)
         assertEquals("photo · 1024 px · stays on this phone", pendingPhotoLine(p))
-        assertFalse("one per question", CAMERA_LABEL in labels || GALLERY_LABEL in labels)
+        assertFalse("one per question: no photo items, so no +", ADD_LABEL in labels)
         assertTrue(labels.toString(), "send" in labels && "remove the photo" in labels)
         assertFalse("send, not the mic", "talk" in labels)
     }
 
+    @Test fun afterDontAskAgainTheCameraGoesStraightToTheSettingsNote() {
+        assertNull("granted: the camera opens", cameraAsk(granted = true, askedBefore = true, canShowRationale = false))
+        assertEquals(CameraAsk.Reason, cameraAsk(granted = false, askedBefore = false, canShowRationale = false))
+        assertEquals("refused once: Android asks again", CameraAsk.Reason, cameraAsk(false, true, true))
+        assertEquals(CameraAsk.Refused, cameraAsk(granted = false, askedBefore = true, canShowRationale = false))
+        assertTrue(CAMERA_REFUSED.contains("open the app's settings"))
+    }
+
+    @Test fun aHugeHeaderIsRefusedBeforeDecoding() {
+        assertFalse(sourceTooBig(16_320, 12_240))   // 200 MP
+        assertTrue(sourceTooBig(50_000, 50_000))
+        assertFalse(sourceTooBig(0, 0))
+    }
+
     @Test fun theCameraReasonSaysWhereThePhotoGoes() {
         assertTrue(CAMERA_REASON.contains("stays on this phone"))
-        assertTrue(CAMERA_REASON.contains("isn't saved to your gallery"))
+        assertTrue(CAMERA_REASON.contains("isn't saved to your gallery") && CAMERA_REASON.contains("discarded from memory"))
     }
 
     @Test fun photosAreResizedTo1024OnTheLongEdge() {

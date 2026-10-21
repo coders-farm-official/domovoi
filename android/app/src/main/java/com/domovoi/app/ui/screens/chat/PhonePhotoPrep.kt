@@ -46,6 +46,10 @@ private val preparing = Mutex()
 internal suspend fun preparePhonePhoto(bytes: ByteArray, source: String, rotation: Int = 0): PendingPhoto = preparing.withLock {
     val started = System.nanoTime()
     val kind = sniffPicture(bytes.copyOfRange(0, min(64, bytes.size)))
+    // A picture that says it is enormous (a crafted HEIC, say) is refused
+    // from its header, before a decoder is asked for it.
+    val (sw, sh) = headerSize(bytes)
+    if (sourceTooBig(sw, sh)) throw PhotoTooBig()
     val bmp = (if (rotation.mod(360) == 0) decodeForChat(bytes, PhonePhotos.LONG_EDGE, Long.MAX_VALUE) else decodeTurned(bytes, rotation))
         ?: throw PhotoUnreadable(kind)
     try {
@@ -81,7 +85,33 @@ private fun decodeTurned(bytes: ByteArray, rotation: Int): Bitmap? {
  *  read whole into memory ([PhonePhotos.MAX_PICKED_BYTES]). */
 internal fun pickedTooBig(size: Long?): Boolean = size != null && size > PhonePhotos.MAX_PICKED_BYTES
 
-internal const val PHOTO_TOO_BIG_TEXT = "That picture is too large to open here (over 64 MB)."
+internal const val PHOTO_TOO_BIG_TEXT = "That picture is too large to open here."
+
+/** The most pixels a picture may say it has: 250 MP, past every phone
+ *  camera's full-resolution mode (200 MP). */
+internal const val MAX_SOURCE_PIXELS = 250_000_000L
+
+internal fun sourceTooBig(width: Int, height: Int): Boolean =
+    width > 0 && height > 0 && width.toLong() * height > MAX_SOURCE_PIXELS
+
+/** The picture's size from its header alone (0, 0 when unknown). */
+private fun headerSize(bytes: ByteArray): Pair<Int, Int> {
+    val (w, h) = boundsOf(bytes)
+    if (w > 0 && h > 0) return w to h
+    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.P) return 0 to 0
+    var size = 0 to 0
+    try {
+        android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(java.nio.ByteBuffer.wrap(bytes))) { _, info, _ ->
+            size = info.size.width to info.size.height
+            throw HeaderRead()
+        }
+    } catch (_: HeaderRead) {
+    } catch (_: Exception) {
+    }
+    return size
+}
+
+private class HeaderRead : RuntimeException()
 
 /** The waiting photo's line under its thumbnail. */
 internal fun pendingPhotoLine(p: PendingPhoto): String = "photo · ${max(p.width, p.height)} px · stays on this phone"

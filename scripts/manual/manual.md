@@ -612,7 +612,7 @@ reply; a name you give it stays.
 - **attach image**: up to 4 pictures. Phone photos in HEIC are turned
   into a JPEG on the phone first (Android 9 or newer), without their
   location.
-- **attach a document**: a PDF, Word, OpenDocument, Excel, CSV, text or
+- **attach a document** (in a chat on this phone, under **+**): a PDF, Word, OpenDocument, Excel, CSV, text or
   markdown file, then ask about it. In a chat **on this phone** it is read
   on the phone and stays there. The answer lists the pages it came from;
   tap one to see the passage (a PDF shows the page itself).
@@ -640,8 +640,8 @@ It needs a 64-bit phone with 8 GB of memory or more. To report a bad
 reply, long-press it.
 
 **Ask about a photo:** on phones whose graphics chip can run the model's
-photo reader, the **take a photo** and **choose a photo** buttons sit
-beside the mic. One photo per question; type a question or just send it
+photo reader, the **+** left of the message box offers **take a photo**
+and **choose a photo** (and **a document**). One photo per question; type a question or just send it
 ("what's in this photo?"). The photo is read on the phone, isn't saved to
 your gallery, and is gone once Domovoi has answered: the chat keeps only
 a **photo (not kept)** mark. The camera asks for its permission the first

@@ -28,6 +28,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material3.Button
@@ -70,24 +74,30 @@ import android.graphics.BitmapFactory
 import android.os.Build
 
 /*
- * The phone chat's camera and gallery buttons (N3), beside the mic. Shown
- * only where the phone's model can look at photos on its GPU
- * (assistant/PhoneVision.kt, photoButtonsShown); a home-server chat keeps
+ * The phone chat's "+" button (N3, review round 1): one button left of the
+ * text field that opens "a document / take a photo / choose a photo"
+ * ([addMenuItems]); the mic stays alone on the right. The photo items are
+ * listed only where the phone's model reads photos on its GPU
+ * (assistant/PhoneVision.kt, photoButtonsShown), never greyed out; the
+ * camera item only on a phone with a back camera. A home-server chat keeps
  * its own picture button, which sends to the server as before.
  *
  * - Gallery: Android's photo picker, which needs no permission.
  * - Camera: in the app (CameraX). The permission is asked on the first tap,
- *   after the app's one-line reason; the photo is held in memory and never
- *   saved, so it never reaches the gallery or another app.
+ *   after the app's one-line reason; once Android won't ask again, the tap
+ *   goes straight to "the camera is off" with the way to the settings
+ *   ([cameraAsk]). The photo is held in memory and never saved, so it never
+ *   reaches the gallery or another app.
  *
  * Either way the picture is made a 1,024-px JPEG in memory
- * (PhonePhotoPrep.kt) and handed to [onPhoto]; nothing is written.
+ * (PhonePhotoPrep.kt) and handed to [onPhoto]; the full-size bytes are
+ * dropped as soon as it is made, and nothing is written.
  */
 
 /** Why the camera, before Android's own dialog (one line, as the mic's). */
 internal const val CAMERA_REASON =
     "Domovoi uses the camera to take one photo for your question. The photo stays on this phone, isn't saved " +
-        "to your gallery, and is gone once Domovoi has answered."
+        "to your gallery, and is discarded from memory once Domovoi has answered."
 
 /** After a refusal Android won't ask about again. */
 internal const val CAMERA_REFUSED =
@@ -96,29 +106,76 @@ internal const val CAMERA_REFUSED =
 
 internal const val CAMERA_NOT_NOW = "no camera: choosing a photo from the gallery works without it"
 
+internal const val ADD_LABEL = "add"
+internal const val DOCUMENT_LABEL = "a document"
 internal const val CAMERA_LABEL = "take a photo"
 internal const val GALLERY_LABEL = "choose a photo"
 
 internal enum class CameraAsk { Reason, Refused }
 
+/** The "+" menu's items, in order: a document where the chat takes them;
+ *  the photo items only where photos are offered (the camera one only with
+ *  a back camera). Nothing is ever listed greyed out. */
+internal fun addMenuItems(documents: Boolean, photos: Boolean, backCamera: Boolean): List<String> = listOfNotNull(
+    DOCUMENT_LABEL.takeIf { documents },
+    CAMERA_LABEL.takeIf { photos && backCamera },
+    GALLERY_LABEL.takeIf { photos },
+)
+
 /**
- * The two buttons. [enabled] false greys them (a photo being prepared).
+ * What a tap on "take a photo" leads to: null opens the camera (granted);
+ * [CameraAsk.Reason] the app's reason, then Android's dialog; and once
+ * Android won't ask again (asked before, no rationale), [CameraAsk.Refused]
+ * at once, with the way to the settings, never a "continue" that does
+ * nothing.
+ */
+internal fun cameraAsk(granted: Boolean, askedBefore: Boolean, canShowRationale: Boolean): CameraAsk? = when {
+    granted -> null
+    askedBefore && !canShowRationale -> CameraAsk.Refused
+    else -> CameraAsk.Reason
+}
+
+/** The full-size picture until it is made a phone photo; then let go. */
+private class RawPhoto(var bytes: ByteArray?)
+
+/**
+ * The "+" button and its menu. [onDocument]: the chat's document picker
+ * (null where it takes none); [photos]: the photo items are offered.
  * [onPhoto] gets the prepared photo; [onProblem] a sentence when it couldn't
- * be opened.
+ * be opened. No item: no button.
  */
 @Composable
-internal fun PhonePhotoButtons(onPhoto: (PendingPhoto) -> Unit, onProblem: (String) -> Unit, onToast: (String) -> Unit) {
+internal fun PhoneAddButton(
+    enabled: Boolean,
+    onDocument: (() -> Unit)?,
+    photos: Boolean,
+    onPhoto: (PendingPhoto) -> Unit,
+    onProblem: (String) -> Unit,
+    onToast: (String) -> Unit,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
+    var menu by remember { mutableStateOf(false) }
     var camera by remember { mutableStateOf(false) }
     var ask by remember { mutableStateOf<CameraAsk?>(null) }
+    val backCamera = remember { runCatching { context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA) }.getOrDefault(true) }
+    val items = addMenuItems(onDocument != null, photos, backCamera)
+    if (items.isEmpty()) return
 
-    fun prepare(source: String, rotation: Int, read: () -> ByteArray?) {
+    fun prepare(source: String, rotation: Int, raw: RawPhoto) {
         busy = true
         scope.launch {
             val result = withContext(Dispatchers.Default) {
-                runCatching { read()?.let { preparePhonePhoto(it, source, rotation) } }
+                runCatching {
+                    val bytes = raw.bytes ?: return@runCatching null
+                    try {
+                        preparePhonePhoto(bytes, source, rotation)
+                    } finally {
+                        // The full-size picture goes now, not with the screen.
+                        raw.bytes = null
+                    }
+                }
             }
             busy = false
             result.onSuccess { p -> p?.let(onPhoto) }
@@ -127,7 +184,15 @@ internal fun PhonePhotoButtons(onPhoto: (PendingPhoto) -> Unit, onProblem: (Stri
     }
 
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri: Uri? ->
-        if (uri != null) prepare("gallery", 0) { readPicked(context, uri) }
+        if (uri != null) {
+            busy = true
+            scope.launch {
+                val raw = withContext(Dispatchers.IO) { runCatching { RawPhoto(readPicked(context, uri)) } }
+                busy = false
+                raw.onSuccess { prepare("gallery", 0, it) }
+                    .onFailure { e -> onProblem(phonePhotoProblem(e, Build.VERSION.SDK_INT)) }
+            }
+        }
     }
     val askCamera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) {
@@ -140,21 +205,47 @@ internal fun PhonePhotoButtons(onPhoto: (PendingPhoto) -> Unit, onProblem: (Stri
         }
     }
 
-    IconButton(enabled = !busy, onClick = {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            camera = true
-        } else {
-            ask = CameraAsk.Reason
+    fun takePhoto() {
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        val rationale = context.findActivity()?.let {
+            ActivityCompat.shouldShowRequestPermissionRationale(it, Manifest.permission.CAMERA)
+        } ?: false
+        when (val next = cameraAsk(granted, cameraAskedBefore(context), rationale)) {
+            null -> camera = true
+            else -> ask = next
         }
-    }) {
-        Icon(Icons.Outlined.PhotoCamera, contentDescription = CAMERA_LABEL,
-            tint = if (busy) Domovoi.colors.fgFaint else Domovoi.colors.brand)
     }
-    IconButton(enabled = !busy, onClick = {
-        pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-    }) {
-        Icon(Icons.Outlined.PhotoLibrary, contentDescription = GALLERY_LABEL,
-            tint = if (busy) Domovoi.colors.fgFaint else Domovoi.colors.brand)
+
+    Box {
+        IconButton(enabled = enabled && !busy, onClick = { menu = true }) {
+            Icon(Icons.Outlined.Add, contentDescription = ADD_LABEL,
+                tint = if (enabled && !busy) Domovoi.colors.fgMuted else Domovoi.colors.fgFaint)
+        }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            items.forEach { label ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    leadingIcon = {
+                        Icon(
+                            when (label) {
+                                DOCUMENT_LABEL -> Icons.Outlined.Description
+                                CAMERA_LABEL -> Icons.Outlined.PhotoCamera
+                                else -> Icons.Outlined.PhotoLibrary
+                            },
+                            contentDescription = null,
+                        )
+                    },
+                    onClick = {
+                        menu = false
+                        when (label) {
+                            DOCUMENT_LABEL -> onDocument?.invoke()
+                            CAMERA_LABEL -> takePhoto()
+                            else -> pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        }
+                    },
+                )
+            }
+        }
     }
 
     when (ask) {
@@ -164,6 +255,7 @@ internal fun PhonePhotoButtons(onPhoto: (PendingPhoto) -> Unit, onProblem: (Stri
             confirmLabel = "continue",
             onConfirm = {
                 ask = null
+                markCameraAsked(context)
                 askCamera.launch(Manifest.permission.CAMERA)
             },
             onDismiss = { ask = null },
@@ -183,9 +275,9 @@ internal fun PhonePhotoButtons(onPhoto: (PendingPhoto) -> Unit, onProblem: (Stri
 
     if (camera) {
         CameraCapture(
-            onPhoto = { bytes, rotation ->
+            onPhoto = { raw, rotation ->
                 camera = false
-                prepare("camera", rotation) { bytes }
+                prepare("camera", rotation, raw)
             },
             onError = { why ->
                 camera = false
@@ -195,6 +287,17 @@ internal fun PhonePhotoButtons(onPhoto: (PendingPhoto) -> Unit, onProblem: (Stri
         )
     }
 }
+
+/** Whether Android's camera dialog has been shown for a phone chat before
+ *  (with no rationale now, Android won't show it again). */
+private fun cameraAskedBefore(context: Context): Boolean =
+    context.getSharedPreferences("assistant", Context.MODE_PRIVATE).getBoolean(K_CAMERA_ASKED, false)
+
+private fun markCameraAsked(context: Context) {
+    context.getSharedPreferences("assistant", Context.MODE_PRIVATE).edit().putBoolean(K_CAMERA_ASKED, true).apply()
+}
+
+private const val K_CAMERA_ASKED = "camera_asked"
 
 internal class PhotoTooBig : RuntimeException("too big")
 
@@ -231,9 +334,9 @@ private fun readPicked(context: Context, uri: Uri): ByteArray? {
     }
 }
 
-private tailrec fun Context.findActivity(): Activity? = when (this) {
+private fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
-    is ContextWrapper -> baseContext.findActivity()
+    is ContextWrapper -> (baseContext as Context?)?.findActivity()
     else -> null
 }
 
@@ -243,7 +346,7 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
  * how far to turn it. The camera closes with the dialog.
  */
 @Composable
-private fun CameraCapture(onPhoto: (ByteArray, Int) -> Unit, onError: (String) -> Unit, onDismiss: () -> Unit) {
+private fun CameraCapture(onPhoto: (RawPhoto, Int) -> Unit, onError: (String) -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val previewView = remember { PreviewView(context).apply { implementationMode = PreviewView.ImplementationMode.COMPATIBLE } }
@@ -283,7 +386,7 @@ private fun CameraCapture(onPhoto: (ByteArray, Int) -> Unit, onError: (String) -
                             } finally {
                                 image.close()
                             }
-                            onPhoto(bytes, rotation)
+                            onPhoto(RawPhoto(bytes), rotation)
                         }
 
                         override fun onError(exception: ImageCaptureException) {
@@ -325,5 +428,17 @@ internal fun PendingPhotoCard(photo: PendingPhoto, onRemove: () -> Unit, modifie
         IconButton(onClick = onRemove) {
             Icon(Icons.Outlined.Close, contentDescription = "remove the photo", tint = Domovoi.colors.fgMuted)
         }
+    }
+}
+
+/** While [on]: the window is FLAG_SECURE (no screenshots, a blank recents
+ *  preview), so a staged photo isn't kept in the system's task snapshot. */
+@Composable
+internal fun SecureWhile(on: Boolean) {
+    val context = LocalContext.current
+    DisposableEffect(on) {
+        val window = if (on) context.findActivity()?.window else null
+        window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        onDispose { window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE) }
     }
 }

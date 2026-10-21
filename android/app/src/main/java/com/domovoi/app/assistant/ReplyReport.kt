@@ -127,6 +127,9 @@ data class ReplyReport(
          * words in it (a question, or a reply that failed before any).
          * The question is the nearest message from the person before it.
          */
+        /** How a photo question reads in a report. */
+        const val PHOTO_MARK = "(a photo, not kept)"
+
         fun draft(
             conversation: StoredConversation,
             index: Int,
@@ -140,7 +143,8 @@ data class ReplyReport(
             return ReplyReport(
                 id = ReplyReportStore.newId(now),
                 created = now,
-                question = asked?.text,
+                // A photo question keeps its mark: the photo itself is never kept.
+                question = asked?.let { if (it.photo) "$PHOTO_MARK ${it.text}".trim() else it.text },
                 spoken = asked?.spoken == true,
                 answer = reply.text,
                 answeredAt = reply.at,

@@ -7,6 +7,7 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -39,6 +40,8 @@ class PhonePicturesControllerTest {
     private val memory = MemoryVisionMemory()
     @Volatile private var build = "1.0.0 (42)"
     @Volatile private var visionOn = LlmBackend.GPU
+    @Volatile private var exit = ExitKind.UNKNOWN
+    private val said = CopyOnWriteArrayList<String>()
 
     private val llm = CatalogModel(
         "test-llm", "Test LLM", ModelKind.LLM,
@@ -65,7 +68,8 @@ class PhonePicturesControllerTest {
         appBuild = build,
         probeTimeoutMs = 2_000,
         residentKb = residentKb,
-    )
+        exitReasons = { exit },
+    ).also { c -> scope.launch { c.messages.collect { said += it } } }
 
     private fun install(m: CatalogModel = llm) {
         m.files.forEach { f -> store.fileFor(m, f).apply { parentFile!!.mkdirs(); writeBytes(ByteArray(f.size.toInt())) } }
@@ -145,7 +149,7 @@ class PhonePicturesControllerTest {
         ready(c)
         assertEquals(VisionProbe.FAILED, c.ui().vision)
         c.deleteModel()
-        until("forgotten") { memory.value == null && c.ui().vision == VisionProbe.UNKNOWN }
+        until("forgotten") { memory.value == null && memory.guard == null && c.ui().vision == VisionProbe.UNKNOWN }
     }
 
     @Test fun aTestPictureThatFailsCountsAsNoVision() {
@@ -166,16 +170,57 @@ class PhonePicturesControllerTest {
         assertEquals(VisionProbe.FAILED, c.ui().vision)
     }
 
-    @Test fun aRunThatDiedInTheDriverIsNotTriedAgain() {
+    private val gpuKey get() = visionKey(llm, build, LlmBackend.CPU, LlmBackend.GPU)
+
+    @Test fun aRunThatCrashedInTheDriverIsNotTriedAgainAndSaysWhy() {
         install()
-        // The last run wrote that it was trying, then the process died.
-        memory.value = "trying#" + visionKey(llm, build, LlmBackend.CPU, LlmBackend.GPU)
+        // The last run marked the encoder running, then Android recorded a crash.
+        memory.guard = "$gpuKey#1000#0"
+        exit = ExitKind.CRASH
         val c = controller()
         until("read") { c.ui().vision != VisionProbe.UNKNOWN }
-        assertEquals(VisionProbe.FAILED, c.ui().vision)
+        assertEquals(VisionProbe.CRASHED, c.ui().vision)
+        until("told") { VISION_CRASHED_NOTE in said }
         ready(c)
         assertEquals(listOf(LlmBackend.CPU to null), engines.single().loads)
         assertEquals(0, engines.single().probes)
+    }
+
+    @Test fun aMemoryKillDuringTheProbeTriesAgain() {
+        install()
+        memory.guard = "$gpuKey#1000#0"
+        exit = ExitKind.NOT_A_CRASH
+        val c = controller()
+        ready(c)
+        assertEquals(1, engines.single().probes)
+        assertEquals(VisionProbe.PASSED, c.ui().vision)
+        assertNull("the guard is cleared once it ends", memory.guard)
+    }
+
+    @Test fun aCrashDuringAPhotoTurnTurnsPhotosOffNextStart() {
+        install()
+        configure = { it.photoGate = true }
+        val c = controller()
+        ready(c)
+        c.attachPhoto(photo())
+        c.send("What is it?")
+        until("writing") { c.ui().conversation.messages.lastOrNull()?.text == "A cat" }
+        // Mid-turn the guard is down: this is what a crash leaves behind.
+        val left = memory.guard
+        assertTrue(left.toString(), left != null && left.startsWith("$gpuKey#"))
+        c.stop()
+        until("stopped") { !c.ui().replying }
+        assertNull("a stopped turn is no crash", memory.guard)
+
+        // As if the app had died mid-turn with a native crash.
+        memory.guard = left
+        exit = ExitKind.CRASH
+        configure = {}
+        val next = controller()
+        until("read") { next.ui().vision == VisionProbe.CRASHED }
+        ready(next)
+        assertFalse(photoButtonsShown(next.ui()))
+        assertEquals(listOf(LlmBackend.CPU to null), engines.last().loads)
     }
 
     @Test fun aNewBuildTriesAgain() {
