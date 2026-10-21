@@ -122,7 +122,7 @@ internal fun PhonePhotoButtons(onPhoto: (PendingPhoto) -> Unit, onProblem: (Stri
             }
             busy = false
             result.onSuccess { p -> p?.let(onPhoto) }
-                .onFailure { e -> onProblem(if (e is PhotoTooBig) PHOTO_TOO_BIG_TEXT else photoFailureText(e, Build.VERSION.SDK_INT)) }
+                .onFailure { e -> onProblem(phonePhotoProblem(e, Build.VERSION.SDK_INT)) }
         }
     }
 
@@ -196,7 +196,17 @@ internal fun PhonePhotoButtons(onPhoto: (PendingPhoto) -> Unit, onProblem: (Stri
     }
 }
 
-private class PhotoTooBig : RuntimeException("too big")
+internal class PhotoTooBig : RuntimeException("too big")
+
+/** Why a photo didn't reach a phone chat, in words: it never goes anywhere,
+ *  so nothing here speaks of an upload. */
+internal fun phonePhotoProblem(e: Throwable, sdk: Int): String = when (e) {
+    is PhotoTooBig -> PHOTO_TOO_BIG_TEXT
+    is PhotoUnreadable -> photoUnreadableText(e.kind, sdk)
+    else -> PHOTO_NOT_OPENED_TEXT
+}
+
+internal const val PHOTO_NOT_OPENED_TEXT = "That photo couldn't be opened on this phone."
 
 /** The picked picture's bytes, whole, refused past [PhonePhotos.MAX_PICKED_BYTES]. */
 private fun readPicked(context: Context, uri: Uri): ByteArray? {

@@ -451,6 +451,13 @@ class AssistantController(
                 readDisk()
                 if (ok) before else null
             }
+            if (freed != null) {
+                // A fresh model is a fresh try at photos (N3): the probe runs
+                // again once it is back. Also the way to retry a failed one.
+                visionDown = false
+                visionMemory.write(null)
+                readVision()
+            }
             say(if (freed != null) "model deleted; ${gb(freed)} freed" else "could not delete the model")
         }
     }

@@ -153,6 +153,16 @@ class PhonePhotoUiTest {
         assertEquals(PhotoSize(1024, 205), phonePhotoSize(16000, 3200))
     }
 
+    @Test fun aPhotoThatCantBeUsedIsSaidWithoutTalkOfAnUpload() {
+        val heic = com.domovoi.app.ui.screens.chat.phonePhotoProblem(
+            com.domovoi.app.ui.screens.chat.PhotoUnreadable(com.domovoi.app.ui.screens.chat.PictureKind.HEIC), 27)
+        assertTrue(heic, heic.contains("HEIC") && heic.contains("Android 9"))
+        val tooBig = com.domovoi.app.ui.screens.chat.phonePhotoProblem(com.domovoi.app.ui.screens.chat.PhotoTooBig(), 35)
+        assertEquals(com.domovoi.app.ui.screens.chat.PHOTO_TOO_BIG_TEXT, tooBig)
+        val other = com.domovoi.app.ui.screens.chat.phonePhotoProblem(java.io.IOException("boom"), 35)
+        assertFalse(other, other.contains("upload"))
+    }
+
     @Test fun aHugePickedFileIsRefusedBeforeItIsRead() {
         assertFalse(pickedTooBig(null))
         assertFalse(pickedTooBig(12L * 1024 * 1024))

@@ -138,6 +138,16 @@ class PhonePicturesControllerTest {
         assertEquals(listOf(LlmBackend.CPU to null), engines.last().loads)
     }
 
+    @Test fun deletingTheModelForgetsTheProbe() {
+        install()
+        configure = { it.failVisionLoad = IllegalStateException("no OpenCL") }
+        val c = controller()
+        ready(c)
+        assertEquals(VisionProbe.FAILED, c.ui().vision)
+        c.deleteModel()
+        until("forgotten") { memory.value == null && c.ui().vision == VisionProbe.UNKNOWN }
+    }
+
     @Test fun aTestPictureThatFailsCountsAsNoVision() {
         install()
         configure = { it.failProbe = IllegalStateException("encoder crashed") }
