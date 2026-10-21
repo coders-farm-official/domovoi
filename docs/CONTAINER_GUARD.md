@@ -117,8 +117,11 @@ then the update unit's:
   since; after a build that moved the tag it removes the rooms' players
   still on the old image and restarts a running core, which recreates
   them on the new one (as an update does). While the core runs between
-  that build and the restart, the tag check is held, and the rooms are
-  still compared to the image they run;
+  that build and the restart, the tag check is held. The rooms' players
+  are gone by then (the installer removed them) and are still expected
+  on the old, recorded image: a missing one counts as a failure only after
+  its two-minute grace, and the restart recreates them on the new image
+  first;
 * the update unit's record (`UPDATE_RESULT_FILE`,
   `/var/lib/domovoi-update/last-result.json`, written by root) says its
   run rebuilt the music player (`mpd_changed`) and
@@ -409,9 +412,14 @@ Domovoi expected and what it found. Then, on the Domovoi server:
    room's player from its data volume. The Containers page does all of
    that in one step: **rebuild the music player image** (admin, shown
    unless internet access is turned off, since the build downloads
-   Debian's packages) builds it as the core does, makes it the image the
-   guard expects, and restarts every room's player on it; what a room is
-   playing stops, playlists and queues stay. Or, if you mean to keep the image,
+   Debian's packages; refused while an update or restart is under way)
+   builds it as the core does, makes it the image the guard expects, and
+   restarts every room's player on it; what a room is playing stops,
+   playlists and queues stay. Every room is held for the guard until the
+   last one is done. The incident stays open until you clear it, and
+   while it is open the freeze also blocks updates: if an update should
+   come first, clear the incident, update, then rebuild (so the image the
+   guard expects is the one the rooms run). Or, if you mean to keep the image,
    clear the incident with a note saying so. If you didn't change it,
    treat the box as compromised: the container's image came from
    somewhere you didn't choose.

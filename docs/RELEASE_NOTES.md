@@ -16,11 +16,14 @@ a way that would otherwise get reported as a bug.
   (`/var/lib/domovoi-provision/mpd-image.json`); after such a build the
   rooms' players restart on the new image, as after an update. An image
   built by hand is still reported. **If the incident is open on your box
-  now:** take this update, then on the Containers page (admin) press
-  **rebuild the music player image** (new; not offered while internet
-  access is turned off), which builds it as the core does, makes it the
-  image the guard expects and restarts every room's player on it (what is
-  playing stops; playlists and queues stay), then **clear after review**.
+  now** (it pauses updates too, so it goes first): on the Containers page
+  (admin), **clear after review** the incident about the music player
+  image, then take this update, then press **rebuild the music player
+  image** (new; not offered while internet access is turned off), which
+  builds it as the core does, makes it the image the guard expects and
+  restarts every room's player on it (what is playing stops; playlists and
+  queues stay). Without the rebuild the guard keeps expecting the old
+  image, and a room created on the new one would be reported.
 
 ## 2026-10-20 — 1.0.0-rc3: audiobooks on the phone, and everything since rc2
 

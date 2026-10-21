@@ -2744,9 +2744,10 @@ async def admin_containers_mpd_rebuild() -> dict[str, Any]:
     """Rebuild the music player image now, exactly as the core builds it
     when it is missing, make it the image the guard expects, and move every
     room's player onto it (recreated with its data volume, as an update
-    does). 409 while one is running; 503 when it can't run here (internet
-    access turned off, no image configured) or the build failed. A tamper
-    incident stays open until the admin clears it."""
+    does). 409 while one is running or an update or restart is under way;
+    503 when it can't run here (internet access turned off, no image
+    configured) or the build failed. A tamper incident stays open until the
+    admin clears it."""
     from domovoi import mpd_provisioner
 
     log.warning("container guard: the admin asked for a music player image rebuild")

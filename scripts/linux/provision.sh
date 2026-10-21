@@ -3248,7 +3248,11 @@ mpd_move_rooms() {
     log "removing $n: it runs the previous music player image (the core recreates it on the new one, data volume kept)"
     as_svc docker rm -f "$n" >/dev/null || die "docker rm -f $n failed"
   done
-  if systemctl is-active --quiet domovoi-core.service; then
+  # Unless it is down: a core still starting ("activating") has read the
+  # old image already, and is restarted too.
+  local core
+  core=$(systemctl is-active domovoi-core.service 2>/dev/null || true)
+  if [ -n "$core" ] && [ "$core" != inactive ] && [ "$core" != failed ]; then
     log "restarting domovoi-core: it recreates the rooms' players on the new image and takes the image on"
     systemctl restart domovoi-core.service --no-block \
       || warn "systemctl restart domovoi-core failed; restart it to move the rooms onto the new image"

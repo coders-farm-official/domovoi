@@ -15,7 +15,7 @@ import asyncio
 import pytest
 from sqlalchemy import text
 
-from domovoi import admin_auth, egress, mpd_provisioner
+from domovoi import admin_auth, egress, mpd_provisioner, self_restart
 from domovoi.config import settings
 from domovoi.container_guard import engine as cg_engine
 from domovoi.container_guard import holds, store
@@ -34,13 +34,15 @@ from domovoi.tests.test_container_guard_engine import guard_env  # noqa: F401 (f
 OLD = "sha256:" + "0" * 64
 NEW = "sha256:" + "7" * 64
 ROOMS = (("zz_rebuild_kitchen", "domovoi-mpd-zz_rebuild_kitchen", 16650, 18050),
-         ("zz_rebuild_den", "domovoi-mpd-zz_rebuild_den", 16651, 18051))
+         ("zz_rebuild_den", "domovoi-mpd-zz_rebuild_den", 16651, 18051),
+         ("zz_rebuild_hall", "domovoi-mpd-zz_rebuild_hall", 16652, 18052))
 
 
 @pytest.fixture
 def docker(monkeypatch):
     """The tag's image, each container's image, every call."""
-    state = {"tag": OLD, "containers": {ROOMS[0][1]: OLD, ROOMS[1][1]: NEW}, "calls": [],
+    state = {"tag": OLD, "containers": {ROOMS[0][1]: OLD, ROOMS[1][1]: NEW, ROOMS[2][1]: OLD},
+             "calls": [],
              "held_during_build": None}
 
     async def run_docker(*args, timeout=60.0):
@@ -66,6 +68,7 @@ def docker(monkeypatch):
     monkeypatch.setattr(mpd_provisioner, "_run_docker", run_docker)
     monkeypatch.setattr(mpd_provisioner, "_ensure_container", ensure_container)
     monkeypatch.setattr(egress, "internet_turned_off", lambda: False)
+    monkeypatch.setattr(self_restart, "underway", lambda *a, **k: False)
     monkeypatch.setattr(mpd_provisioner, "_REBUILD_LOCK", None)
     return state
 
@@ -106,7 +109,7 @@ async def test_rebuild_builds_records_and_moves_the_rooms(guard_env, docker, roo
         assert ("rm", "-f", ROOMS[0][1]) in docker["calls"]
         assert ("rm", "-f", ROOMS[1][1]) not in docker["calls"]
         ensured = [c for c in docker["calls"] if c[0] == "ensure" and c[1].startswith("domovoi-mpd-zz_rebuild")]
-        assert {c[1] for c in ensured} == {ROOMS[0][1], ROOMS[1][1]}
+        assert {c[1] for c in ensured} == {r[1] for r in ROOMS}
         assert all(c[2] == settings.mpd_image_tag for c in ensured)
         assert docker["containers"][ROOMS[0][1]] == NEW
         # Removed before it was created again.
@@ -138,6 +141,89 @@ async def test_a_room_that_fails_does_not_stop_the_others(guard_env, docker, roo
     finally:
         cg_engine.reset_guard(None)
         holds.clear()
+
+
+@requires_db
+async def test_rooms_waiting_their_turn_are_held_so_no_incident_opens(  # noqa: F811
+    guard_env, docker, rooms, monkeypatch,
+) -> None:
+    """Review round 1: the baseline moves before the room loop; a room
+    still on the old image while the loop is on another one must not read
+    as a different image. Two real guard checks run mid-loop."""
+    from domovoi.container_guard.expected import ExpectedSet, mpd_expectations
+    from domovoi.container_guard.model import DockerView, Listed, Observed
+
+    guard, fake, clock, expected = guard_env
+    cg_engine.reset_guard(guard)
+    real = mpd_provisioner._ensure_container
+    seen: dict = {}
+
+    async def checks_mid_loop(*, name, **kw):
+        if name == ROOMS[0][1] and not seen:
+            async with session_scope() as s:
+                b = await store.get_baseline(s, cg_engine.MPD_BASELINE_KEY)
+            exp = ExpectedSet(mpd_prefix="domovoi-mpd-", mpd_tag_ref=settings.mpd_image_tag,
+                              mpd_image_id=b["value"], mpd_image_at=b["recorded_at"])
+            exp.add(mpd_expectations([(r[0], r[1]) for r in ROOMS], tag_ref=settings.mpd_image_tag,
+                                     image_id=b["value"], warm_done=True))
+            expected["set"] = exp
+            v = DockerView(ok=True)
+            for _, cname, _, _ in ROOMS[1:]:
+                o = Observed(id=(cname + "x" * 64)[:64], name=cname, status="running", running=True,
+                             image_id=docker["containers"][cname], config_image=settings.mpd_image_tag)
+                v.listed[cname] = Listed(id=o.id, name=cname)
+                v.containers[cname] = o
+            v.tag_ids[settings.mpd_image_tag] = b["value"]
+            fake.view = v
+            for _ in range(3):
+                clock.t += 30
+                await guard.check(force=True)
+            async with session_scope() as s:
+                seen["open"] = await store.open_incidents(s)
+            seen["baseline"] = b["value"]
+            seen["hall_on"] = docker["containers"][ROOMS[2][1]]
+            seen["held"] = {r[0]: holds.held(f"room:{r[0]}") for r in ROOMS}
+        await real(name=name, **kw)
+
+    monkeypatch.setattr(mpd_provisioner, "_ensure_container", checks_mid_loop)
+    try:
+        assert await cg_engine.note_mpd_image(OLD, built=False) == "adopted"
+        await mpd_provisioner.rebuild_image()
+        assert seen["baseline"] == NEW and seen["hall_on"] == OLD, "the hall waits on the old image"
+        assert all(seen["held"].values()), seen["held"]
+        assert seen["open"] == [], seen["open"]
+    finally:
+        cg_engine.reset_guard(None)
+        holds.clear()
+
+
+@requires_db
+async def test_the_holds_go_on_every_exit_path(docker, rooms, monkeypatch) -> None:
+    async def broken_build(tag):
+        raise RuntimeError("docker build failed")
+
+    holds.clear()
+    monkeypatch.setattr(mpd_provisioner, "_build_image", broken_build)
+    with pytest.raises(RuntimeError, match="docker build failed"):
+        await mpd_provisioner.rebuild_image()
+    # Released into the usual settle (a minute), not held for good.
+    from domovoi.container_guard import holds as h
+
+    active = h.active()
+    assert "mpd-image" in active and all(f"room:{r[0]}" in active for r in ROOMS)
+    import time
+
+    assert not any(h._RUNNING.get(k, [0])[0] for k in active), "no step still counted as running"
+    assert all(h._TIMED[k][0] - time.monotonic() <= 61 for k in active), "a settle, not more"
+    assert not mpd_provisioner._REBUILD_LOCK.locked()
+    holds.clear()
+
+
+async def test_refused_while_an_update_or_restart_is_under_way(docker, monkeypatch) -> None:
+    monkeypatch.setattr(self_restart, "underway", lambda *a, **k: True)
+    with pytest.raises(mpd_provisioner.RebuildBusy, match="an update or restart is under way"):
+        await mpd_provisioner.rebuild_image()
+    assert docker["calls"] == []
 
 
 async def test_not_with_internet_access_turned_off(docker, monkeypatch) -> None:
@@ -187,7 +273,9 @@ async def test_the_endpoint_answers_for_the_admin_only(_db, monkeypatch) -> None
         calls.append(1)
         return {"image_id": NEW, "baseline": "built", "rooms": []}
 
+    real_rebuild = mpd_provisioner.rebuild_image
     monkeypatch.setattr(mpd_provisioner, "rebuild_image", fake_rebuild)
+    monkeypatch.setattr(egress, "internet_turned_off", lambda: False)
     async with web_client() as w:
         token = await claim_admin(w)
     async with core_client() as c:
@@ -207,6 +295,11 @@ async def test_the_endpoint_answers_for_the_admin_only(_db, monkeypatch) -> None
         monkeypatch.setattr(mpd_provisioner, "rebuild_image", busy)
         r = await c.post("/v1/admin/containers/mpd-image/rebuild", json={}, headers=bearer(token))
         assert r.status_code == 409
+        monkeypatch.setattr(mpd_provisioner, "rebuild_image", real_rebuild)
+        monkeypatch.setattr(self_restart, "underway", lambda *a, **k: True)
+        r = await c.post("/v1/admin/containers/mpd-image/rebuild", json={}, headers=bearer(token))
+        assert r.status_code == 409 and "an update or restart is under way" in r.json()["detail"]
+        monkeypatch.setattr(self_restart, "underway", lambda *a, **k: False)
 
         async def broken():
             raise RuntimeError("docker build failed: E: Unable to locate package mpd")

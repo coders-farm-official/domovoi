@@ -1480,6 +1480,35 @@ case_missing_music_player_image_is_built_on_a_repair() {
   end_case
 }
 
+case_a_core_still_starting_is_restarted_after_a_rebuild() {
+  new_case a_core_still_starting_is_restarted_after_a_rebuild
+  run_prov "${wsl_args[@]}"
+  check "first run exit 0" eq "$RC" 0
+  live_room domovoi-mpd-kitchen "$(mpd_img)"
+  # The core is starting, not active yet (review round 1).
+  rm -f "$STATE/active/domovoi-core.service"
+  mkdir -p "$STATE/activating"; touch "$STATE/activating/domovoi-core.service"
+  rm -f "$STATE/images/domovoi-mpd_latest"
+  run_prov "${wsl_args[@]}"
+  check "built" called "docker build --progress=plain -t domovoi-mpd:latest"
+  check "the starting core restarted" called "systemctl restart domovoi-core.service --no-block"
+  end_case
+}
+
+case_a_stopped_core_is_left_stopped_after_a_rebuild() {
+  new_case a_stopped_core_is_left_stopped_after_a_rebuild
+  run_prov "${wsl_args[@]}"
+  check "first run exit 0" eq "$RC" 0
+  live_room domovoi-mpd-kitchen "$(mpd_img)"
+  rm -f "$STATE/active/domovoi-core.service"
+  rm -f "$STATE/images/domovoi-mpd_latest"
+  run_prov "${wsl_args[@]}"
+  check "built" called "docker build --progress=plain -t domovoi-mpd:latest"
+  check "not restarted by the images step" not_said "restarting domovoi-core: it recreates"
+  check "the room removed (the core recreates it when it starts)" absent "$STATE/containers/domovoi-mpd-kitchen"
+  end_case
+}
+
 case_distro_restart_clears_restart_required() {
   new_case distro_restart_clears_restart_required
   run_prov "${wsl_args[@]}"
@@ -3838,6 +3867,8 @@ CASES=(
   case_repair_rerun_keeps_an_image_built_elsewhere_unvouched
   case_changed_dockerfile_rebuilds_records_and_moves_the_rooms
   case_missing_music_player_image_is_built_on_a_repair
+  case_a_core_still_starting_is_restarted_after_a_rebuild
+  case_a_stopped_core_is_left_stopped_after_a_rebuild
   case_apt_step_installs_the_stick_tool
   case_stop_before_start
   case_stop_before_takes_a_step_inside_the_run

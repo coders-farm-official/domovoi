@@ -469,9 +469,14 @@ async def rebuild_image() -> dict:
     player on it the way an update does: each room container on another
     image is removed and created again from its ``mpd_rooms`` row, with the
     same data volume (playlists and queue survive; what a room is playing
-    stops). A tamper incident about the image stays open: clearing it is
-    the admin's call. Raises :class:`RebuildBusy` when one is running,
-    RuntimeError when it can't run here or the build fails."""
+    stops). Every room, and the tag, is held for the guard from before the
+    build until the last room is done (and the usual minute after): once
+    the baseline moves, a room still waiting its turn runs the old image,
+    which the guard would otherwise call a different image. A room that
+    could not be moved is named in the answer. A tamper incident about the
+    image stays open: clearing it is the admin's call. Raises
+    :class:`RebuildBusy` when one is running or an update or restart is
+    under way, RuntimeError when it can't run here or the build fails."""
     global _REBUILD_LOCK
     why = rebuild_unavailable()
     if why:
@@ -480,29 +485,40 @@ async def rebuild_image() -> dict:
         _REBUILD_LOCK = asyncio.Lock()
     if _REBUILD_LOCK.locked():
         raise RebuildBusy("the music player image is already being rebuilt")
+    from domovoi import self_restart
+
+    if await asyncio.to_thread(self_restart.underway):
+        raise RebuildBusy(
+            "an update or restart is under way; rebuild the music player image once it has finished"
+        )
+    from contextlib import ExitStack
+
     from domovoi.container_guard import holds
     from domovoi.container_guard.engine import note_mpd_image
     from domovoi.db.session import session_scope
 
     async with _REBUILD_LOCK:
         tag = settings.mpd_image_tag
-        with holds.holding("mpd-image", "the music player image is being rebuilt", settle_sec=60.0):
-            await _build_image(tag)
-            image_id = await _image_id(tag)
-            if not image_id:
-                raise RuntimeError(f"the build finished but {tag} names no image")
-            baseline = await note_mpd_image(image_id, built=True)
-        log.warning("music player image rebuilt by the admin: %s (%s)", image_id[:19], baseline)
         async with session_scope() as s:
             rows = (await s.execute(text(
                 "SELECT room_id, control_port, http_port, container_name "
                 "FROM mpd_rooms ORDER BY created_at"
             ))).all()
         rooms: list[dict] = []
-        for room_id, ctrl, http, container in rows:
-            entry = {"room": room_id, "recreated": False, "error": None}
-            try:
-                with _room_hold(room_id, "restarting on the rebuilt image"):
+        with ExitStack() as stack:
+            stack.enter_context(holds.holding(
+                "mpd-image", "the music player image is being rebuilt", settle_sec=60.0))
+            for room_id, *_ in rows:
+                stack.enter_context(_room_hold(room_id, "restarting on the rebuilt image"))
+            await _build_image(tag)
+            image_id = await _image_id(tag)
+            if not image_id:
+                raise RuntimeError(f"the build finished but {tag} names no image")
+            baseline = await note_mpd_image(image_id, built=True)
+            log.warning("music player image rebuilt by the admin: %s (%s)", image_id[:19], baseline)
+            for room_id, ctrl, http, container in rows:
+                entry = {"room": room_id, "recreated": False, "error": None}
+                try:
                     running = await _container_image(container)
                     if running is not None and running != image_id:
                         rc, _, err = await _run_docker("rm", "-f", container, timeout=30.0)
@@ -513,10 +529,10 @@ async def rebuild_image() -> dict:
                         name=container, image=tag, control_port=int(ctrl), http_port=int(http),
                         music_dir=settings.music_dir, volume_name=_volume_name(room_id),
                     )
-            except Exception as e:  # noqa: BLE001 — the other rooms still move
-                log.warning("music player for room=%s not moved to the rebuilt image: %s", room_id, e)
-                entry["error"] = str(e)[:300]
-            rooms.append(entry)
+                except Exception as e:  # noqa: BLE001 — the other rooms still move
+                    log.warning("music player for room=%s not moved to the rebuilt image: %s", room_id, e)
+                    entry["error"] = str(e)[:300]
+                rooms.append(entry)
     return {"image_id": image_id, "baseline": baseline, "rooms": rooms}
 
 
