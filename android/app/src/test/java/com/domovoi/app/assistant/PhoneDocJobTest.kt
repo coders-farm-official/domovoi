@@ -259,7 +259,8 @@ class PhoneDocJobTest {
         // Two parts in the 8K window (19,000 characters each), not three.
         assertEquals(listOf("map", "map", "reduce"), gpu.kinds())
         assertTrue(engine.kinds().isEmpty())
-        assertTrue(gpu.closes >= 1 && !gpu.isLoaded)
+        // Released as the job ends (its 2 GB go back).
+        until("released") { gpu.closes >= 1 && !gpu.isLoaded }
         assertNotNull(PhoneDocJobs.speed(settings.speedRows, LlmBackend.GPU))
         assertEquals("summary", c.replies().last().docMode)
     }
