@@ -159,7 +159,7 @@
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
-        android:label="domovoi"
+        android:label="${appLabel}"
         android:icon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:networkSecurityConfig="@xml/network_security_config"
@@ -193,7 +193,7 @@
             android:name=".roommode.RoomSetupActivity"
             android:exported="true"
             android:label="Domovoi Room"
-            android:taskAffinity="com.domovoi.app.room"
+            android:taskAffinity="${applicationId}.room"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:windowSoftInputMode="adjustResize">
@@ -208,7 +208,7 @@
             android:name=".roommode.RoomModeActivity"
             android:exported="false"
             android:label="Domovoi Room"
-            android:taskAffinity="com.domovoi.app.room"
+            android:taskAffinity="${applicationId}.room"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" />
         <activity-alias
