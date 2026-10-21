@@ -863,14 +863,58 @@ async def upload(
         raise HTTPException(status_code=403, detail="library is not editable")
     root = lib.root_path
     created_dir = False
+    made_id: tuple[int, int] | None = None
     if create_dir:
         dest, created_dir = _make_upload_folder(root, path)
+        if created_dir:
+            st = dest.stat()
+            made_id = (st.st_dev, st.st_ino)
     else:
         dest = safe_join(root, path)
     if not dest.exists() or not dest.is_dir():
         raise HTTPException(status_code=404, detail="destination directory not found")
 
+    # Every upload into ``dest`` is counted while it runs, from here (no
+    # await since the folder was found) to its end: the folder this request
+    # made is taken away again only when nothing was saved in it and no
+    # other upload is using it.
+    dest_key = os.path.normcase(str(dest))
+    _UPLOADS_INTO[dest_key] = _UPLOADS_INTO.get(dest_key, 0) + 1
     saved: list[str] = []
+    try:
+        return await _upload_files(request, lib, root, dest, files, saved, created_dir)
+    finally:
+        left = _UPLOADS_INTO.get(dest_key, 1) - 1
+        if left > 0:
+            _UPLOADS_INTO[dest_key] = left
+        else:
+            _UPLOADS_INTO.pop(dest_key, None)
+        if created_dir and not saved and left == 0:
+            _remove_made_folder(dest, made_id)
+
+
+# Uploads running now, by destination folder (one web process).
+_UPLOADS_INTO: dict[str, int] = {}
+
+
+def _remove_made_folder(dest: Path, made_id: tuple[int, int] | None) -> None:
+    """Take away the folder ``create_dir`` made for an upload that saved
+    nothing (refused names, an error part-way): only that very folder (the
+    same device and inode as when it was made) and only while it is empty
+    (``rmdir`` refuses anything else), so never someone else's files."""
+    try:
+        st = dest.stat()
+        if made_id is not None and (st.st_dev, st.st_ino) != made_id:
+            return
+        dest.rmdir()
+    except OSError:
+        pass
+
+
+async def _upload_files(
+    request: Request, lib: MediaLibrary, root: Path, dest: Path,
+    files: list[UploadFile], saved: list[str], created_dir: bool,
+) -> UploadResponse:
     skipped: list[str] = []
     for up in files:
         raw = up.filename or "upload"
@@ -903,11 +947,6 @@ async def upload(
         saved.append(cand.name)
 
     if not saved:
-        if created_dir:
-            try:
-                dest.rmdir()  # only if still empty: never someone else's files
-            except OSError:
-                pass
         raise HTTPException(
             status_code=400,
             detail="no files saved" + (f"; {skipped}" if skipped else ""),

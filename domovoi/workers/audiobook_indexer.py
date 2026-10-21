@@ -120,11 +120,32 @@ def find_cover_image(book: Path, is_folder: bool, root: Path) -> Path | None:
     return None
 
 
+def _library_root() -> Path:
+    return Path(settings.audiobooks_dir).expanduser().resolve(strict=False)
+
+
+def inside_library(p: Path, root: Path | None = None) -> bool:
+    """Does ``p`` resolve inside AUDIOBOOKS_DIR? A chapter file, a book file
+    or a book folder that is a link out of the library is no book: the
+    audio route refuses to serve it, so the indexer doesn't list it."""
+    try:
+        p.resolve(strict=False).relative_to(root or _library_root())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
 def chapter_files(folder: Path) -> list[Path]:
-    """A folder book's chapter files, in play order (filename order)."""
+    """A folder book's chapter files, in play order (filename order); a
+    file that links out of the library is left out (out of the folder
+    itself, for a folder that isn't in AUDIOBOOKS_DIR at all)."""
+    root = _library_root()
+    if not inside_library(folder, root):
+        root = folder.resolve(strict=False)
     return sorted(
         p for p in folder.iterdir()
         if p.is_file() and p.suffix.lower() in _CHAPTER_FILE_EXTENSIONS
+        and inside_library(p, root)
     )
 
 
@@ -378,6 +399,8 @@ def _still_a_book(file_path: str, is_folder: bool) -> bool:
     is there. A folder book: its folder is there and holds a chapter."""
     p = Path(file_path)
     try:
+        if not inside_library(p):
+            return False
         if is_folder:
             return p.is_dir() and bool(chapter_files(p))
         return p.is_file()
@@ -392,9 +415,9 @@ async def _prune(session, seen: set[str], *, walked_any: bool, removed: set[str]
     A row the walk saw (or failed on) stays. Of the rest, one whose file or
     folder is no longer a book goes — but when the walk found nothing at
     all in AUDIOBOOKS_DIR only the ones in ``removed`` (just deleted by the
-    caller) go: an empty folder is what a share that isn't mounted looks
-    like, and pruning then would lose every book's id and everyone's place
-    until it came back."""
+    caller) go: a folder with no book in it (empty, or holding only stray
+    files) is what a share that isn't mounted looks like, and pruning then
+    would lose every book's id and everyone's place until it came back."""
     rows = (await session.execute(
         text("SELECT id, file_path, is_folder FROM audiobooks")
     )).all()
@@ -413,7 +436,7 @@ async def _prune(session, seen: set[str], *, walked_any: bool, removed: set[str]
     if not gone:
         if rows and not walked_any:
             log.warning(
-                "audiobook indexer: AUDIOBOOKS_DIR is empty; keeping %d listed "
+                "audiobook indexer: no book found in AUDIOBOOKS_DIR; keeping %d listed "
                 "book(s) (a drive or share not mounted?)", len(rows),
             )
         return 0
@@ -442,11 +465,15 @@ async def index_audiobooks_dir(*, removed: Iterable[str | os.PathLike[str]] = ()
     scanned = inserted = errors = pruned = 0
     added: list[Path] = []
     seen: set[str] = set()
-    walked_any = False
+    library = root.resolve(strict=False)
     async with session_scope() as session:
         for entry in sorted(root.iterdir(), key=lambda p: p.name.lower()):
-            walked_any = True
             try:
+                if not inside_library(entry, library):
+                    # A book file or folder linked in from outside the
+                    # library: the audio route would refuse to play it.
+                    log.info("audiobook indexer: %s links out of AUDIOBOOKS_DIR; skipped", entry)
+                    continue
                 if entry.is_file() and entry.suffix.lower() in _BOOK_FILE_EXTENSIONS:
                     seen.add(_path_key(entry))
                     meta = await _resolve_book_file(entry)
@@ -469,9 +496,12 @@ async def index_audiobooks_dir(*, removed: Iterable[str | os.PathLike[str]] = ()
                 seen.add(_path_key(entry))  # a book that failed to read stays listed
                 log.warning("audiobook indexer: failed on %s: %s", entry, e)
 
+        # "The folder walked empty" means no BOOK was found: a stray
+        # desktop.ini or .DS_Store in an unmounted mount point is not a
+        # sign the share is there (2026-10-20 review).
         try:
             pruned = await _prune(
-                session, seen, walked_any=walked_any,
+                session, seen, walked_any=bool(seen),
                 removed={_path_key(Path(p).resolve(strict=False)) for p in removed}
                 | {_path_key(p) for p in removed},
             )

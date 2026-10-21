@@ -27,10 +27,18 @@ is new for books already listed.
   whole audiobooks folder looks empty (a drive or share that isn't mounted)
   nothing is taken off, so the list and everyone's place survive until it
   is back; a book deleted on the Files page or from the app still goes at
-  once.
-* **A room's place in a book is saved while it plays** (every 30 s). Before,
-  it was saved only when a voice command moved it, so "resume my book" went
-  back to where the room had last started it.
+  once. A folder with no book in it at all (only a stray `desktop.ini`, say)
+  counts as empty. A book file, folder or chapter linked in from outside
+  the audiobooks folder is not listed (it could not be played).
+* **A room's place in a book is saved while it plays** (every 30 s), in the
+  place of whoever's voice command started it there (the unidentified
+  listener's when nobody was recognised), never anyone else's. Before, it
+  was saved only when a voice command moved it, so "resume my book" went
+  back to where the room had last started it. After a core restart a room
+  is saved again from its next voice command.
+* **Reading a resume position now needs the household token**
+  (`GET /api/audiobooks/{id}/position`, device tier like saving one). The
+  dashboard and the app already send it.
 * **API** (the Android app's audiobooks work codes against it): the book
   list and `GET /api/audiobooks/{id}` add `size_bytes`, `cover_url`,
   `library_path` and `files`; new `GET /api/audiobooks/{id}/cover` (open)

@@ -557,6 +557,15 @@ class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
             now_item["uris"] = [u for u, _ in parts]
             now_item["starts"] = [s for _, s in parts]
         await self._remember(ctx, session, now_item)
+        if item_type == sa.ITEM_AUDIOBOOK and ctx.room_id:
+            # Whose place this is, for the room's 30 s position saves
+            # (domovoi/workers/room_book_positions.py): only this slot.
+            from domovoi.workers.room_book_positions import RoomBook, record_room_book
+
+            record_room_book(ctx.room_id, RoomBook(
+                item_id=int(item_id), device_id=self._device(ctx), person_id=ctx.person_id,
+                starts=dict(parts) if parts else {uri: 0},
+            ))
         # Persist a fresh position row so "resume" finds it next time.
         await sa.upsert_position(
             session, item_type=item_type, item_id=item_id,

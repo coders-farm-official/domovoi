@@ -684,8 +684,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Registration order is the canonical start order (shutdown reverses it):
     #   timer_watcher → playback_state_sweeper → media_plays_pruner →
     #   memory_extractor → lyrics_index → news_fetcher → wake_word_trainer →
-    #   podcast_feed_poller → audiobook_indexer → command_capture_pruner →
-    #   guests_seen_pruner → voice_history_pruner → container_guard →
+    #   podcast_feed_poller → audiobook_indexer → room_book_positions →
+    #   command_capture_pruner → guests_seen_pruner → voice_history_pruner → container_guard →
     #   library_alias_fetch → lyrics_scan → lyrics_fetch.
     #
     # Per-worker rationale lives on each class (workers/*.py); the radio

@@ -222,6 +222,69 @@ async def test_an_empty_folder_keeps_the_list_unless_the_books_were_just_deleted
 
 @requires_db
 @pytest.mark.asyncio
+async def test_a_folder_with_only_stray_files_prunes_nothing(db_session, books) -> None:
+    """Review 2026-10-20: a stray desktop.ini (or an empty sub-folder) in
+    an unmounted mount point counted as "the share is there" and every
+    book was pruned with every place."""
+    import shutil
+
+    _folder_book(books)
+    mw.write_mp3(books / "Emma.mp3", [mw.TIT2("Emma")])
+    await _index()
+    shutil.rmtree(books / "Dune")
+    (books / "Emma.mp3").unlink()
+    (books / "desktop.ini").write_text("[.ShellClassInfo]")
+    (books / "empty folder").mkdir()
+    assert (await _index())["pruned"] == 0
+    assert len(await _rows(db_session)) == 2
+    # One real book back: the share is there, the gone one goes.
+    mw.write_mp3(books / "Emma.mp3", [mw.TIT2("Emma")])
+    assert (await _index())["pruned"] == 1
+    assert [r["title"] for r in await _rows(db_session)] == ["Emma"]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_book_or_chapter_linked_in_from_outside_is_not_listed(db_session, books, tmp_path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    mw.write_mp3(outside / "secret.mp3", [mw.TIT2("Secret")])
+    (outside / "Other Book").mkdir()
+    mw.write_mp3(outside / "Other Book" / "01.mp3", [mw.TIT2("Other")])
+    book = books / "Dune"
+    book.mkdir()
+    mw.write_mp3(book / "02 in.mp3", [mw.TIT2("In")])
+    try:
+        os.symlink(outside / "secret.mp3", book / "01 out.mp3")
+        os.symlink(outside / "secret.mp3", books / "Linked.mp3")
+        os.symlink(outside / "Other Book", books / "Linked Folder", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("no symlinks here")
+    await _index()
+    rows = await _rows(db_session)
+    assert [r["title"] for r in rows] == ["Dune"]
+    assert [f["file"] for f in rows[0]["files"]] == ["02 in.mp3"]
+
+
+def test_a_link_out_is_outside_the_library(books, tmp_path, monkeypatch) -> None:
+    """The containment the indexer uses, without needing symlink rights:
+    a path that resolves outside AUDIOBOOKS_DIR is outside."""
+    from domovoi.workers.audiobook_indexer import inside_library
+
+    real = Path.resolve
+
+    def fake_resolve(self, strict=False):
+        if self.name == "01 out.mp3":
+            return real(tmp_path / "elsewhere" / "secret.mp3", strict=False)
+        return real(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+    assert inside_library(books / "Dune" / "02 in.mp3")
+    assert not inside_library(books / "Dune" / "01 out.mp3")
+
+
+@requires_db
+@pytest.mark.asyncio
 async def test_a_missing_folder_prunes_nothing(db_session, books, monkeypatch) -> None:
     mw.write_mp3(books / "Emma.mp3", [mw.TIT2("Emma")])
     await _index()
@@ -376,6 +439,7 @@ async def _seed_places(book_id: int) -> None:
             ("android-unnamed", 1, 120),      # a phone never named
             ("office", 2, 9000),              # another person's
             ("garage", None, 400),            # the unidentified listener's
+            ("browser-den", None, 250),       # …and on a named browser
             ("default", 1, 60),               # a turn with no room
             ("phone-abc", 1, 70),             # a phone's own voice slot
             ("den", 1, 0),                    # started, never past the start
@@ -410,7 +474,10 @@ def test_places_on_other_devices_are_this_persons_only(clean_db, books) -> None:
     ]
     assert mine[-1]["device_label"] == "den laptop"     # newest first; it is an hour old
     assert all(set(p) == {"device_label", "room", "position_sec", "updated_at"} for p in mine)
-    assert [(p["room"], p["position_sec"]) for p in anon] == [("garage", 400)]
+    # The unidentified listener's place on a named browser could be
+    # anybody's: its kind, never its name.
+    assert [(p["device_label"], p["room"], p["position_sec"]) for p in anon] == [
+        ("garage", "garage", 400), ("browser", None, 250)]
     assert [(p["room"], p["position_sec"]) for p in sam] == [("office", 9000)]
 
 
@@ -437,13 +504,13 @@ async def test_places_are_a_device_tier_read(monkeypatch, books) -> None:
 
     install_fake_db(monkeypatch, admin=True, device_token="d3v1ce-t0ken")
     async with web_client() as c:
-        none = await c.get("/api/audiobooks/1/positions", params={"device_id": "android-x"})
-        ok = await c.get("/api/audiobooks/1/positions", params={"device_id": "android-x"},
-                         headers={HEADER: "d3v1ce-t0ken"})
-        # The list, the cover and the audio stay open, as they were.
+        for path in ("/api/audiobooks/1/positions", "/api/audiobooks/1/position"):
+            none = await c.get(path, params={"device_id": "android-x", "person_id": 1})
+            ok = await c.get(path, params={"device_id": "android-x"}, headers={HEADER: "d3v1ce-t0ken"})
+            assert none.status_code == 401, path
+            assert ok.status_code == 200, path
+        # The list stays open, as it was.
         listed = await c.get("/api/audiobooks")
-    assert none.status_code == 401
-    assert ok.status_code == 200 and isinstance(ok.json(), list)
     assert listed.status_code == 200
 
 
@@ -557,6 +624,49 @@ def test_a_folder_made_for_nothing_is_taken_away_again(clean_db, books, ab_libra
 
 
 @requires_db
+def test_a_folder_another_upload_is_using_is_left_alone(clean_db, books, ab_library) -> None:
+    """Review 2026-10-20: the clean-up of a folder made for nothing must
+    not race an upload that is using it at the same time."""
+    import web.backend.api.files as files_api
+
+    key = os.path.normcase(str((books / "Dune").resolve()))
+    files_api._UPLOADS_INTO[key] = 1          # another upload into Dune, still running
+    try:
+        with _client() as c:
+            r = _upload(c, "Dune", names=(".env",))
+    finally:
+        files_api._UPLOADS_INTO.pop(key, None)
+    assert r.status_code == 400
+    assert (books / "Dune").is_dir()
+
+
+@requires_db
+def test_a_folder_made_for_an_upload_that_failed_is_taken_away(clean_db, books, ab_library, monkeypatch) -> None:
+    import web.backend.api.files as files_api
+
+    def boom(dirpath, name):
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr(files_api, "_unique_path", boom)
+    from web.backend.main import app
+
+    with TestClient(app, headers=XRW, raise_server_exceptions=False) as c:
+        r = _upload(c, "Dune")
+    assert r.status_code == 500
+    assert not (books / "Dune").exists()
+    assert files_api._UPLOADS_INTO == {}
+
+
+@requires_db
+def test_a_folder_that_was_there_is_never_taken_away(clean_db, books, ab_library) -> None:
+    (books / "Dune").mkdir()
+    with _client() as c:
+        r = _upload(c, "Dune", names=(".env",))
+    assert r.status_code == 400
+    assert (books / "Dune").is_dir()
+
+
+@requires_db
 def test_a_delete_names_what_it_removed_for_the_prune(clean_db, books, ab_library) -> None:
     from domovoi.tests.auth_testkit import install_fake_db  # noqa: F401 — pre-setup grace below
 
@@ -649,33 +759,111 @@ async def test_chapters_of_a_folder_book_are_the_rooms_queue(db_session, books) 
     assert back.text == "Arrakis." and stub._song["file"].endswith("01 Arrakis.mp3")
 
 
+@pytest.fixture
+def room_books():
+    from domovoi.workers import room_book_positions as rbp
+
+    rbp.ROOM_BOOKS.clear()
+    yield rbp
+    rbp.ROOM_BOOKS.clear()
+
+
+async def _playing(files: list[str], *, at: int = 0, sec: float = 0, play: bool = True) -> MPDStubClient:
+    client = MPDStubClient()
+    await client.prepare_files(files, start_index=at, start_sec=sec)
+    if play:
+        await client.resume()
+    return client
+
+
+DUNE_FILES = ["audiobooks/Dune/01 Arrakis.mp3", "audiobooks/Dune/02 Muad'Dib.mp3"]
+
+
 @requires_db
 @pytest.mark.asyncio
-async def test_a_playing_room_has_its_place_saved(db_session, books) -> None:
-    from domovoi.workers.room_book_positions import save_room_book_positions
-
+async def test_a_playing_room_has_its_place_saved(db_session, books, room_books) -> None:
     book_id = await _folder_book_row(db_session, books)
     mw.write_mp3(books / "Emma.mp3", [mw.TIT2("Emma")])
     await _index()
     emma_id = next(r["id"] for r in await _rows(db_session) if r["title"] == "Emma")
-    await _position(db_session, book_id, "kitchen", person=None, pos=0)
+    await db_session.execute(text("INSERT INTO people (id, name) VALUES (1, 'Alex')"))
+    await _position(db_session, book_id, "kitchen", person=1, pos=0)
     await _position(db_session, emma_id, "den", person=None, pos=0)
-
-    kitchen, den, office, idle = MPDStubClient(), MPDStubClient(), MPDStubClient(), MPDStubClient()
-    await kitchen.prepare_files(["audiobooks/Dune/01 Arrakis.mp3", "audiobooks/Dune/02 Muad'Dib.mp3"],
-                                start_index=1, start_sec=7)
-    await kitchen.resume()
-    await den.prepare_files(["audiobooks/Emma.mp3"], start_sec=42)
-    await den.resume()
-    await office.prepare_files(["audiobooks/Emma.mp3"], start_sec=99)   # nobody started it by voice
-    await office.resume()
-    await idle.prepare_files(["audiobooks/Emma.mp3"], start_sec=5)      # paused: left alone
-    n = await save_room_book_positions(
-        [("kitchen", kitchen), ("den", den), ("office", office), ("garage", idle)])
+    room_books.record_room_book("kitchen", room_books.RoomBook(
+        item_id=book_id, device_id="kitchen", person_id=1,
+        starts={DUNE_FILES[0]: 0, DUNE_FILES[1]: 10}))
+    room_books.record_room_book("den", room_books.RoomBook(
+        item_id=emma_id, device_id="den", person_id=None, starts={"audiobooks/Emma.mp3": 0}))
+    room_books.record_room_book("garage", room_books.RoomBook(
+        item_id=emma_id, device_id="garage", person_id=None, starts={"audiobooks/Emma.mp3": 0}))
+    kitchen = await _playing(DUNE_FILES, at=1, sec=7)
+    den = await _playing(["audiobooks/Emma.mp3"], sec=42)
+    office = await _playing(["audiobooks/Emma.mp3"], sec=99)          # nobody started it by voice
+    garage = await _playing(["audiobooks/Emma.mp3"], sec=5, play=False)  # paused: left alone
+    n = await room_books.save_room_book_positions(
+        [("kitchen", kitchen), ("den", den), ("office", office), ("garage", garage)])
     assert n == 2
-    places = dict((await db_session.execute(text(
-        "SELECT device_id, position_sec FROM playback_positions"))).all())
-    assert places == {"kitchen": 17, "den": 42}
+    places = {(d, p): pos for d, p, pos in (await db_session.execute(text(
+        "SELECT device_id, person_id, position_sec FROM playback_positions"))).all()}
+    assert places == {("kitchen", 1): 17, ("den", None): 42}
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_room_writes_only_the_slot_of_who_started_the_book(db_session, books, room_books) -> None:
+    """Review 2026-10-20: person 1's two-hour place in the kitchen was
+    moved to 5 s by the book playing there for someone else."""
+    mw.write_mp3(books / "Emma.mp3", [mw.TIT2("Emma")])
+    await _index()
+    emma = (await _rows(db_session))[0]["id"]
+    await db_session.execute(text("INSERT INTO people (id, name) VALUES (1, 'Alex'), (2, 'Sam')"))
+    await _position(db_session, emma, "kitchen", person=1, pos=7200)
+    await _position(db_session, emma, "kitchen", person=None, pos=0)
+    await db_session.execute(text("UPDATE playback_positions SET updated_at = now() - interval '1 day' "
+                                  "WHERE person_id = 1"))
+    await db_session.commit()
+    kitchen = await _playing(["audiobooks/Emma.mp3"], sec=5)
+    # Nobody's voice started it: nothing is written.
+    assert await room_books.save_room_book_positions([("kitchen", kitchen)]) == 0
+    # The unidentified listener started it: only the anonymous slot moves.
+    room_books.record_room_book("kitchen", room_books.RoomBook(
+        item_id=emma, device_id="kitchen", person_id=None, starts={"audiobooks/Emma.mp3": 0}))
+    assert await room_books.save_room_book_positions([("kitchen", kitchen)]) == 1
+    # Sam started it, and has no row there: nothing is made up for Sam.
+    room_books.record_room_book("kitchen", room_books.RoomBook(
+        item_id=emma, device_id="kitchen", person_id=2, starts={"audiobooks/Emma.mp3": 0}))
+    assert await room_books.save_room_book_positions([("kitchen", kitchen)]) == 0
+    rows = sorted((await db_session.execute(text(
+        "SELECT person_id, position_sec FROM playback_positions"))).all(), key=lambda r: r[0] or 0)
+    assert rows == [(None, 5), (1, 7200)]
+
+
+@pytest.mark.asyncio
+async def test_a_room_that_moved_on_is_forgotten(room_books) -> None:
+    room_books.record_room_book("kitchen", room_books.RoomBook(
+        item_id=1, device_id="kitchen", person_id=None, starts={"audiobooks/Emma.mp3": 0}))
+    music = await _playing(["Artist/Album/01 Song.mp3"], sec=3)
+    assert await room_books.save_room_book_positions([("kitchen", music)]) == 0
+    assert "kitchen" not in room_books.ROOM_BOOKS
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_voice_command_records_whose_book_plays_in_the_room(db_session, books, room_books) -> None:
+    from domovoi.handlers.spoken_audio import _PLAY_BOOK_RE
+    from domovoi.models import Context
+
+    book_id = await _folder_book_row(db_session, books)
+    await db_session.execute(text("INSERT INTO people (id, name) VALUES (1, 'Alex')"))
+    await db_session.commit()
+    mpd_module._clients = {"kitchen": MPDStubClient()}
+    h, _ = _handler_with_memory()
+    ctx = Context(session_id=uuid4(), room_id="kitchen", online=True, person_id=1)
+    await h._play_book_from_match(_PLAY_BOOK_RE.match("play the audiobook dune"), ctx, db_session)
+    await db_session.commit()
+    rb = room_books.ROOM_BOOKS["kitchen"]
+    assert (rb.item_id, rb.device_id, rb.person_id) == (book_id, "kitchen", 1)
+    assert rb.starts == {DUNE_FILES[0]: 0, DUNE_FILES[1]: 10}
 
 
 # ─── The MPD client: start in the middle of the list ─────────────────────

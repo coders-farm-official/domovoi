@@ -548,8 +548,10 @@ async def other_positions(
     kitchen), null for a phone or a browser (``device_label`` is then its
     name from the device list). Only rows for exactly this ``person_id`` —
     the unidentified listener's when it is absent, never another
-    person's — and only places past the start. What the app's "Continue
-    from the kitchen (2 h 13 m)" offers. Device tier."""
+    person's — and only places past the start. The unidentified listener
+    sees a phone's or a browser's place as ``phone`` / ``browser``, never
+    its name. What the app's "Continue from the kitchen (2 h 13 m)"
+    offers. Device tier."""
     async with session_scope() as s:
         rows = (
             await s.execute(
@@ -573,14 +575,18 @@ async def other_positions(
     for r in rows:
         dev = str(r["device_id"])
         room: Optional[str] = None
-        if r["device_name"]:
+        generic = next((name for prefix, name in _CLIENT_ID_LABELS if dev.startswith(prefix)), None)
+        if r["device_name"] and person_id is not None:
             label = str(r["device_name"])
+        elif r["device_name"] or generic is not None:
+            # The unidentified listener's place on someone's phone or
+            # browser could be anybody's: say what kind of device it is,
+            # never its name ("Sam's Pixel"). Rooms are the house's.
+            label = generic or "device"
         else:
-            label = next((name for prefix, name in _CLIENT_ID_LABELS if dev.startswith(prefix)), None)
-            if label is None:
-                if dev == "default" or is_phone_room(dev):
-                    continue
-                room = label = dev
+            if dev == "default" or is_phone_room(dev):
+                continue
+            room = label = dev
         out.append({
             "device_label": label,
             "room": room,
@@ -590,12 +596,16 @@ async def other_positions(
     return out
 
 
-@router.get("/{book_id}/position")
+@router.get("/{book_id}/position", dependencies=[Depends(require_device_read)])
 async def get_position(
     book_id: int,
     device_id: str = Query(...),
-    person_id: Optional[int] = Query(None),
+    person_id: Optional[int] = Query(None, description="the listener; none = the unidentified one's slot only"),
 ) -> dict[str, Any]:
+    """This device's place in the book for ``person_id`` (exactly that
+    slot; without one, the unidentified listener's). Device tier since
+    2026-10-20 (review): it names any person, so it is the household's
+    read, like the places on other devices."""
     async with session_scope() as s:
         pos = await sa.get_position(
             s, item_type=sa.ITEM_AUDIOBOOK, item_id=book_id,
