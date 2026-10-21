@@ -1535,6 +1535,9 @@ class AssistantController(
         val undo: PlayerSnapshot? = null,
         /** The player right after it: Undo refuses once it has moved on. */
         val undoAfter: PlayerSnapshot? = null,
+        /** Whether the action means the player to be playing (null: it
+         *  doesn't touch play or pause, e.g. a sleep timer). */
+        val undoPlays: Boolean? = null,
         /** An earlier card this turn marks: (its index, its new state). */
         val mark: Pair<Int, CardState>? = null,
         /** Not an action after all (a "play" whose words aren't in the
@@ -1552,6 +1555,11 @@ class AssistantController(
         val atMs: Long,
         /** The player right after the action (null: not read). */
         val after: PlayerSnapshot? = null,
+        /** Whether the action left the player playing, as it meant to (not
+         *  as the instant snapshot saw it: right after a skip or a restart
+         *  the player is still seeking, playing=false, and plays a moment
+         *  later). Null: play state isn't checked. */
+        val plays: Boolean? = null,
     )
 
     @Volatile private var undoEntry: UndoEntry? = null
@@ -1648,7 +1656,7 @@ class AssistantController(
         // line) ends the Undo: "undo" then can't reach back past it.
         val before = outcome.undo
         if (before != null) {
-            undoEntry = UndoEntry(base.id, base.messages.size, before, clock(), outcome.undoAfter)
+            undoEntry = UndoEntry(base.id, base.messages.size, before, clock(), outcome.undoAfter, outcome.undoPlays)
         } else if (!isUndo) {
             undoEntry = null
         }
@@ -1803,7 +1811,18 @@ class AssistantController(
             else -> return said("This version of the app can't do that.")
         }
         val after = runCatching { player.snapshot() }.getOrNull()
-        return ActionOutcome(text, fp, card = PhoneCard(CardKind.UNDO, action = a, title = text), undo = before, undoAfter = after)
+        // What the action means for play or pause: a pause stops it; a
+        // resume or a new queue plays; next, previous or a restart keep it
+        // as it was; a sleep timer leaves it alone.
+        val plays: Boolean? = when (a.kind) {
+            ActionKind.PAUSE -> false
+            ActionKind.RESUME, ActionKind.PLAY_MUSIC, ActionKind.PLAY_BOOK -> true
+            ActionKind.NEXT, ActionKind.PREVIOUS -> before.playing
+            else -> null
+        }
+        return ActionOutcome(
+            text, fp, card = PhoneCard(CardKind.UNDO, action = a, title = text), undo = before, undoAfter = after, undoPlays = plays,
+        )
     }
 
     /** Whether a bare transport word ("continue", "next one") is the
@@ -1903,7 +1922,7 @@ class AssistantController(
             val now = player.snapshot()
             // Another queue, another song, or played or paused since.
             val moved = now.queue.map { it.uid } != after.queue.map { it.uid } ||
-                (!now.empty && (now.index != after.index || now.playing != after.playing))
+                (!now.empty && (now.index != after.index || (e.plays != null && now.playing != e.plays)))
             if (moved) {
                 undoEntry = null
                 return@withLock ActionTexts.UNDO_CHANGED
