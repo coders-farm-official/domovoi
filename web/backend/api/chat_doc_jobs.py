@@ -108,6 +108,8 @@ _part_lock: asyncio.Lock | None = None
 _lock_loop: int | None = None
 #: Speeds measured by private jobs (kept in memory only: no rows).
 _private_stats: list[dict[str, Any]] = []
+#: Private jobs whose upload is being read (their folder isn't swept).
+_reading: set[str] = set()
 
 
 def _lock() -> asyncio.Lock:
@@ -191,6 +193,8 @@ class Job:
         self.task: asyncio.Task | None = None
         self.stop_requested = False
         self.ended = asyncio.Event()
+        #: What the parts read covered, kept when a private job's text goes.
+        self.covers: str | None = None
 
     # The parts read so far (their notes are kept, empty or not).
     @property
@@ -237,7 +241,7 @@ class Job:
             "private": self.private,
             "thread_id": self.thread_id,
             "question": self.question,
-            "covers": longdoc.read_phrase(self.chunks, self.docs, self.read),
+            "covers": self.covers if self.covers is not None else longdoc.read_phrase(self.chunks, self.docs, self.read),
             "elapsed_s": round(time.monotonic() - self.started, 1),
         }
         if self.result is not None:
@@ -394,6 +398,10 @@ async def _finish(job: Job, content: str, checked: qa.Checked | None, notes: lis
         if job.stats.get("prompt_tokens"):
             _private_stats.append({**job.stats, "model": job.model})
             del _private_stats[:-20]
+        # The job ended: its document's text goes now (owner decision Q6);
+        # only the summary waits for the phone.
+        job.covers = longdoc.read_phrase(job.chunks, job.docs, job.read)
+        job.docs = [{"name": d.get("name"), "token": "", "parts": []} for d in job.docs]
     else:
         msg = await _write_reply(job, content, doc, error=error, code=code)
         if msg is not None:
@@ -603,11 +611,24 @@ async def thread_jobs(thread_id: int, *, carry_on: bool = True) -> list[dict[str
         job = await _load_thread_job(row)
         if job is None:
             continue
-        if job.state == "running" and carry_on and not _docs.ai_turned_off():
-            job.fallback = await measured_speed()
-            _start(job)
-        out.append(job.view())
+        out.append((await _carry_on_if_lost(job) if carry_on else job).view())
     return out
+
+
+async def _carry_on_if_lost(job: Job) -> Job:
+    """A running job's row with no runner here (a restart): it carries on
+    from its next part, AI features on. One runner per job: a reader that
+    got here first while this one was loading has started it already."""
+    if job.state != "running" or _docs.ai_turned_off():
+        return job
+    live = _JOBS.get(job.id)
+    if live is not None and live.task is not None and not live.task.done():
+        return live
+    job.fallback = await measured_speed()
+    live = _JOBS.get(job.id)
+    if live is not None and live.task is not None and not live.task.done():
+        return live
+    return _start(job)
 
 
 async def cancel_thread(thread_id: int) -> None:
@@ -633,8 +654,11 @@ async def _job(job_id: str) -> Job:
     loaded = await _load_thread_job(row)
     if loaded is None:
         raise HTTPException(status_code=404, detail="the job's document is no longer on this Domovoi")
-    _JOBS[loaded.id] = loaded
-    return loaded
+    if loaded.state == "running":
+        return await _carry_on_if_lost(loaded)
+    if loaded.id not in _JOBS:
+        _JOBS[loaded.id] = loaded
+    return _JOBS[loaded.id]
 
 
 # ─── Streams ────────────────────────────────────────────────────────────
@@ -735,6 +759,8 @@ def sweep(now: float | None = None) -> int:
         gone += 1
     if JOBS_DIR.is_dir():
         for p in JOBS_DIR.iterdir():
+            if p.name in _reading:
+                continue
             if p.name not in _JOBS or not _JOBS[p.name].private:
                 shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
                 gone += 1
@@ -791,6 +817,7 @@ async def start_private_job(file: UploadFile = File(...), question: str = Form("
         return refusal
     job_id = uuid.uuid4().hex
     work = JOBS_DIR / job_id
+    _reading.add(job_id)
     work.mkdir(parents=True, exist_ok=True)
     try:
         dest = work / f"input{Path(name).suffix.lower()}"
@@ -804,6 +831,7 @@ async def start_private_job(file: UploadFile = File(...), question: str = Form("
             return _docs._refused(422, "unreadable", str(e))
     finally:
         shutil.rmtree(work, ignore_errors=True)
+        _reading.discard(job_id)
     docs = [{"token": "", "name": name, "parts": result.get("parts") or []}]
     chunks = longdoc.plan_chunks(docs)
     if not chunks:

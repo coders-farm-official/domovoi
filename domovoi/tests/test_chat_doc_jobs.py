@@ -570,6 +570,11 @@ def test_a_private_job_streams_its_summary_and_leaves_nothing_behind(model, dirs
             assert [s["label"] for s in res["doc"]["sources"]] == ["p. 1", "p. 5"]
             assert res["doc"]["sources"][0]["token"] == "" and "message" not in res
             assert _counts(c) == before
+            # The job ended: its document's text went with it (only the
+            # summary waits for the phone), and the view still says what
+            # it covered.
+            assert all(d["parts"] == [] for d in jobs_api._JOBS[done["id"]].docs)
+            assert done["covers"] == "the whole document"
             # The phone came back for it, then deleted it: its text goes.
             got = c.get(f"/api/chat/doc-jobs/{done['id']}").json()
             assert got["result"]["content"] == res["content"]
@@ -626,6 +631,49 @@ def test_a_restart_removes_a_private_job_s_leftover_upload(dirs):
     (left / "input.pdf").write_bytes(b"%PDF-")
     jobs_api.boot()
     assert not left.exists()
+
+
+def test_the_sweep_spares_an_upload_still_being_read(dirs):
+    """Another phone's upload, mid-read, isn't anyone's job yet: a second
+    phone's start (which sweeps) must not take it from under the reader."""
+    reading = dirs / "doc-jobs" / ("b" * 32)
+    reading.mkdir(parents=True)
+    (reading / "input.pdf").write_bytes(b"%PDF-")
+    jobs_api._reading.add("b" * 32)
+    try:
+        jobs_api.sweep()
+        assert reading.exists()
+    finally:
+        jobs_api._reading.discard("b" * 32)
+    jobs_api.sweep()
+    assert not reading.exists()
+
+
+@requires_db
+def test_two_readers_opening_a_lost_job_start_one_runner(model):
+    with _client() as c:
+        tid, tok = _thread_with_long_pdf(c)
+        model.hold.set()
+        bg = _send_bg(c, tid, tok)
+        job = _the_job()
+        _wait(lambda: model.calls)
+        c.portal.call(jobs_api.shutdown)
+        bg.join()
+        model.calls.clear()
+        model.hold.set()
+
+        async def two_at_once():
+            a, b = await asyncio.gather(jobs_api.thread_jobs(tid), jobs_api.thread_jobs(tid))
+            return a, b, [j for j in jobs_api._JOBS.values() if j.id == job.id]
+
+        a, b, live = c.portal.call(two_at_once)
+        assert a[0]["state"] == b[0]["state"] == "running" and len(live) == 1
+        _wait(lambda: model.calls)
+        time.sleep(0.2)
+        assert len(model.calls) == 1          # one runner, one part 1 in flight
+        model.hold.clear()
+        _wait(lambda: _assistant_rows(c, tid))
+    assert [x["kind"] for x in model.calls] == ["map", "map", "map", "reduce"]
 
 
 @requires_db
