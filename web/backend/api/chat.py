@@ -1789,6 +1789,40 @@ async def chat_internet() -> dict[str, Any]:
             "lookups": True}
 
 
+class PhoneLookupBody(BaseModel):
+    query: Optional[str] = Field(None, max_length=300)
+    url: Optional[str] = Field(None, max_length=2000)
+    internet: bool = True
+    limit: int = Field(3, ge=1, le=3)
+
+
+@router.post("/lookup", dependencies=DEVICE)
+async def phone_lookup(body: PhoneLookupBody, request: Request) -> JSONResponse:
+    """A phone chat's lookup at home: forwarded with the caller's own
+    credentials to the core's ``POST /v1/phone/lookup`` (at most 3
+    results; 409 internet-off under "never" for anything that would leave;
+    the core's tier and pace apply). The phone's chats never land here as
+    rows: nothing is stored. The AI switch doesn't apply."""
+    url = f"{domovoi_url().rstrip('/')}/v1/phone/lookup"
+    try:
+        async with _lookup_client() as client:
+            r = await client.post(url, json=body.model_dump(exclude_none=True), headers=auth_forward_headers(request))
+    except httpx.TimeoutException:
+        return JSONResponse(status_code=504, content={"detail": "The lookup took too long.", "code": "lookup_timeout"})
+    except Exception as e:  # noqa: BLE001
+        log.warning("phone lookup: the core is unreachable: %s", type(e).__name__)
+        return JSONResponse(status_code=502, content={"detail": "Domovoi's lookup service isn't answering.",
+                                                      "code": "core_unreachable"})
+    try:
+        payload = r.json()
+    except ValueError:
+        payload = {"detail": "the lookup didn't answer"}
+    headers = {}
+    if r.headers.get(egress.REFUSAL_HEADER):
+        headers[egress.REFUSAL_HEADER] = r.headers[egress.REFUSAL_HEADER]
+    return JSONResponse(status_code=r.status_code, content=payload, headers=headers)
+
+
 @router.get("/lookup-sources", dependencies=READ)
 async def chat_lookup_sources(request: Request) -> dict[str, Any]:
     """Settings → Chat & AI → Search: the core's lookup sources in the order

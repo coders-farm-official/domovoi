@@ -82,6 +82,8 @@ data class ChatRow(
     /** A search hit: the words around the match (null: the title matched,
      *  or this is no search). */
     val match: String? = null,
+    /** A lookup in this chat went online: the list draws a globe. */
+    val usedInternet: Boolean = false,
 )
 
 /** Both places' chats in one list, the most recently used first; on a tie

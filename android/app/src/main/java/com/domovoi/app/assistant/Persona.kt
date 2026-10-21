@@ -22,6 +22,17 @@ object Persona {
             "questions about the time, the date or the day and to work out other dates " +
             "and times from it, and don't mention it otherwise."
 
+    /** While this chat may look things up (part 5, W1): the same persona,
+     *  with "no internet" made conditional and how to ask for a lookup. The
+     *  model is told about it only then, so it never offers what it can't do. */
+    val SYSTEM_PROMPT_LOOKUPS: String =
+        SYSTEM_PROMPT.replace(
+            "You are running on this phone with no internet. You cannot set timers, play music, open files or look " +
+                "anything up online; if asked, say so in one sentence.",
+            "You are running on this phone. You cannot set timers, play music or open files; if asked, say so in " +
+                "one sentence.",
+        ) + "\n\n" + com.domovoi.app.assistant.lookup.LookupRules.TOOL_PROMPT
+
     /**
      * The phone's clock as the model is told it, read fresh for every turn:
      * "The phone's clock says it is Thursday, October 15, 2026, 3:42 PM,

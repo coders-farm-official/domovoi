@@ -1,6 +1,8 @@
 package com.domovoi.app
 
 import android.content.Context
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import android.content.pm.ApplicationInfo
 import android.os.SystemClock
 import android.util.Log
@@ -213,9 +215,40 @@ class AppContainer(context: Context) {
             // The phone's own voice for spoken replies (Settings -> Voice),
             // opened without asking any server.
             phoneVoice = { phoneVoice.openOnPhone() },
+            lookups = phoneLookups(context),
         )
     }
     val assistant: AssistantController by assistantLazy
+
+    /** Phone chats' lookups (assistant/lookup/, part 5 W1), used only after
+     *  the person's allow: at home the home server's own route (with the
+     *  household token, to the home server only); away Wikipedia, or the
+     *  person's own search sealed in the keystore. Those clients carry no
+     *  token and no cookies (plainClient). */
+    private fun phoneLookups(context: Context): com.domovoi.app.assistant.PhoneLookups {
+        val version = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }
+            .getOrNull().orEmpty()
+        val http = com.domovoi.app.assistant.lookup.plainClient()
+        val own = com.domovoi.app.assistant.lookup.PhoneOwnSearchStore(context)
+        val away = {
+            val o = own.own
+            if (o != null) com.domovoi.app.assistant.lookup.OwnSearchLookup(http, version, o)
+            else com.domovoi.app.assistant.lookup.WikipediaLookup(http, version)
+        }
+        val home = com.domovoi.app.assistant.lookup.HomeLookup(post = { path, body ->
+            try {
+                Triple(200, api.raw("POST", path, body.toRequestBody("application/json".toMediaType())), null)
+            } catch (e: com.domovoi.app.net.ApiException) {
+                Triple(e.status, e.body, e.refusal)
+            }
+        })
+        return com.domovoi.app.assistant.PhoneLookups(
+            own = own,
+            away = away,
+            plan = { com.domovoi.app.assistant.LookupPlan(if (api.answers()) home else null, away()) },
+            test = { o -> com.domovoi.app.assistant.lookup.OwnSearchLookup(http, version, o).test() },
+        )
+    }
 
     /** The phone's own voice (Settings → Voices): Domovoi's Piper voice
      *  through the Kotlin phonemizer once downloaded, the server's "say it

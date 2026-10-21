@@ -1859,6 +1859,58 @@ and from the system's own state (`domovoi/help_desk`, `/api/help`).
   (household-shared, like every server chat); the delivery row holds only
   the person, the chat and its title.
 
+## Looking things up (chat lookups)
+
+A chat may look things up (assistant plan part 5, milestone W1). Who
+decides, what goes where, and what can't happen:
+
+* **The app asks, not the model.** The model may only *propose* a lookup
+  (`LOOK_UP: <words>` or `READ_PAGE: <https address>`, or the person's own
+  "look up …"). The server then searches this box's own sources (the
+  manual, an allowlisted offline library: `domovoi.lookup.LOCAL_PLUGINS`)
+  with no question; anything that would leave the house shows the
+  permission card first, with the exact words and their destination, and
+  nothing is sent until **Allow once** or **Allow in this chat**. The
+  household's **Always allow internet** (`LOOKUP_ALWAYS_ALLOW`, off by
+  default; admin, security tier to change) skips the card. Internet
+  `never` closes it all: `POST /v1/phone/lookup` answers the standard 409
+  for anything but a local-only search.
+* **Where the words go:** the local SearXNG (which forwards them to
+  Wikipedia, Wikidata and, after them, its other engines), Wikipedia's API
+  directly when the helper doesn't answer (and for a result's summary), or
+  the household's own search. A page a person names is fetched through
+  `net_safety` (public addresses only, every redirect re-checked, 2 MB,
+  HTTPS only, no cookies, `Domovoi-User/<version>`). The lookup route is
+  device tier with no pre-setup grace and paced at 30 lookups a minute.
+  The log names the source and the count, never the words.
+* **Fetched text is data, never instructions.** It reaches the model in a
+  block fenced by a random marker made for that call (a page's own copy
+  of a marker is defused), with the rule to answer only from it; the
+  answer call carries no tools and nothing in it is read as a proposal, so
+  a page that says "LOOK_UP: …" or "set an alarm" makes nothing happen (a
+  reply that is a lookup line becomes "I couldn't find that in what I
+  looked up."). Actions still ask first.
+* **Sources are written by code:** the titles and sites actually fetched,
+  under the reply; a link the model wrote that wasn't one of them loses
+  its target.
+* **Keys:** the Brave Search key is a write-only setting
+  (`WRITE_ONLY_SETTING_NAMES`, like the AcoustID key): never read back,
+  sent only to Brave. Nothing goes to Coders Farm. The phone's own key
+  (Settings in the phone's chat) is sealed with an AES-GCM key in the
+  Android keystore.
+* **Phones:** a phone chat's lookups use the same rules. At home they go
+  to the home server's route (and a server set to `never` is respected:
+  the phone doesn't go around it); away, to Wikipedia directly
+  (`DomovoiApp/<version>`, which Wikimedia asks for) or the person's own
+  search. Those clients carry no household token and no cookies. The
+  assistant's no-network test allows exactly this package, and the
+  controller's tests count every call to prove none is made before an
+  allow.
+* **Limits:** a local source's answer comes first and stops the search
+  there, so an offline library that finds a near miss can stand in for a
+  better web answer; an external Kiwix URL on the internet is never asked
+  as a local source.
+
 ## The container guard (what it does and does not detect)
 
 Owner decision 2026-10-11: a container Domovoi expects that fails alerts
@@ -2023,6 +2075,7 @@ outbound traffic, each with its own off switch:
 | **Whisper model download** — the configured model (and its CPU fallback) from Hugging Face | Only when the model isn't on disk yet: every load tries the local cache first | Download the models while online; under `never` the core also sets `HF_HUB_OFFLINE=1` for itself. |
 | **News** — RSS feed fetches, plus SearXNG queries for feed discovery (the SearXNG container is local, but it forwards queries to public search engines) | Daily pre-fetch (default 5 a.m.) and when you ask for news | `news_enabled = false` (master switch); per-person topic fetch is separately opt-in (`news_auto_fetch`). |
 | **Web answers** — "check that online", "double-check that", the weather: search queries through the local SearXNG container to public search engines. **The container also fetches on its own every time it starts**, with no query sent: the ClearURLs rule lists (rules1/rules2.clearurls.xyz, raw.githubusercontent.com), a Wikidata SPARQL query, and the radio-browser server list | While the `searxng` container runs. It follows the internet answer: started when **Yes** or **Sometimes** is saved (and by the dev scripts and the Linux update unit), stopped on **No** and at every core start while the answer is No (an answer set by hand in `.env` is never "saved") — which is why **No** stops it rather than only refusing searches; never started at boot | Answer **No**, or stop the container (`docker stop domovoi-searxng`); `DOMOVOI_MANAGE_SEARXNG=0` (process environment) stops Domovoi starting it. Under `never` no query is sent even if it runs, but its startup fetches would be, so leave it stopped. |
+| **Chat lookups** — a chat's search words to the local SearXNG (Wikipedia, Wikidata, then its other engines), Wikipedia's own API, the household's own SearXNG or Brave Search (with its key, in `X-Subscription-Token`, to Brave only), and a page a person names (`domovoi/lookup_web.py`, [below](#looking-things-up-chat-lookups)) | Only after the person allows it on the chat's card, or in a chat set to "Allow in this chat", or with **Always allow internet** on (off by default) | Leave **Always allow internet** off and answer **Not now**. Under `never` nothing is sent: the route refuses with 409, and only the manual and an offline library answer. |
 | **Podcasts** — the subscribed feeds and the episode files they point at; each show's artwork, fetched once by the server; a show's name to Apple's iTunes search when you subscribe by voice or use Discover | Only for shows you subscribed to, when the poller runs (on for the **Yes** answer, off otherwise) or you press "poll now"; the search only when you ask | `podcast_feed_poller_enabled = false`; unsubscribe from a show to stop fetching it. The browser and the phone load artwork from the server, never from the publisher. |
 | **Library enricher** — audio fingerprints (Chromaprint → AcoustID, with the AcoustID key, over HTTPS since 2026-10-17: pyacoustid's own default is plain HTTP) and metadata lookups (MusicBrainz) to identify/clean up untagged music files. Settings → Advanced's **test the key** sends the key with one made-up fingerprint (`library_enricher.KEY_CHECK_FINGERPRINT`, never one of your files) | Background, when unenriched tracks exist; the test only when an admin presses it, never under **No** | `library_enricher_enabled = false`. Note: fingerprints of your files go out; the files themselves never do. |
 | **MusicBrainz alias lookup** — artist names from your library are searched on musicbrainz.org for the spoken names people use for them ("Tec 9" for Tech N9ne), so a spoken request finds a stylized name. The names sent are the library's artist credits, **including the "Artist" part of an untagged file named "Artist - Title"** (a home recording "Grandma Edith - Happy Birthday" would send "Grandma Edith"). Only stage names are kept: legal names, a person's names sharing a word with one, non-English and non-Latin forms and, for a person, names that don't sound like the stage name are dropped and never stored; for a band (a MusicBrainz group) its other names are kept, which may include members' or family names ("The Farriss Brothers" for INXS) (`domovoi/workers/library_alias_fetch.py`) | **Only if you opt in** — off by default. Then one search per artist (a library of a few thousand tracks takes on the order of an hour and a half the first time), one request a second through the same paced client as every other MusicBrainz call, only while the connectivity probe reports online, and afterwards only for artists added to the library | On when the internet answer is **Yes** or **Sometimes**; set `music_alias_fetch_enabled` off (Settings → Advanced → Library → "Look up other names on MusicBrainz") to keep it off anyway; switching it off stops the fetch before its next request. A fetched name can be removed from a track's "also called" list by anyone and is never fetched back. |

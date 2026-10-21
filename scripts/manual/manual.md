@@ -790,6 +790,18 @@ document doesn't say, Domovoi answers "I couldn't find that in the
 document" instead of guessing. In [Files](#files) → Documents, **Ask** on
 a file starts a chat about it.
 
+**Look things up:** say "look up …", "what does this page say:
+https://…", or ask something Domovoi doesn't know. It searches its own
+manual and your offline library first, without asking. Before anything
+goes online it shows a card with the exact words and where they go:
+**Allow once**, **Allow in this chat** or **Not now**. The chip at the top
+of a chat says whether it may go online; chats that did show a globe. The
+answer lists what it read (Wikipedia's with "CC BY-SA 4.0"), and says "I
+couldn't find that" when what it read doesn't say. [Settings →
+Search](#settings/search) *(admin)* has **Always allow internet** (off to
+start), the order of the sources, and **Use your own search** (your own
+SearXNG, or a Brave Search key).
+
 **App:** the picture button is **attach image**, and the app also takes
 HEIC photos. See [Chat and the chat mic](#node:phone-chat).
 
@@ -806,6 +818,11 @@ HEIC photos. See [Chat and the chat mic](#node:phone-chat).
 - "pictures of text (scanned)": scanned pages aren't searched yet.
 - A summary of a long document: not yet. Ask about something specific in
   it instead.
+- "set to stay off the internet": your home's internet answer is No
+  ([Settings → Internet](#settings/internet)); only the manual and the
+  offline library are searched.
+- "Brave Search refused your key": check the key in [Settings →
+  Search](#settings/search); the answer came from Wikipedia meanwhile.
 
 **Also:** voice chat mode, a spoken conversation in a room, is an early
 experiment and off unless whoever set up Domovoi turned it on.

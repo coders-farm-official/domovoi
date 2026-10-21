@@ -492,3 +492,16 @@ async def test_a_decision_needs_ai_on_and_a_real_card(db_session, world, model, 
         monkeypatch.setattr(ai_features, "turned_off", lambda: True)
         assert (await _decide(web, tid, card["id"], "once")).status_code == 409
     assert world.net.sent == []
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_apps_hop_forwards_to_the_core_and_its_refusal(db_session, world) -> None:
+    world.kiwix.hits = [lookup.LookupHit(id="A/1", title="Red panda", snippet="s")]
+    async with _web() as web:
+        ok = await web.post("/api/chat/lookup", json={"query": "red panda", "internet": False})
+        with egress.override_policy("never"):
+            off = await web.post("/api/chat/lookup", json={"query": "red panda"})
+    assert ok.status_code == 200 and ok.json()["results"][0]["source"] == "kiwix"
+    assert off.status_code == 409 and off.headers[egress.REFUSAL_HEADER] == egress.REFUSAL_VALUE
+    assert world.net.sent == []
