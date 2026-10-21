@@ -74,7 +74,7 @@ A chat "on this phone" can answer questions about the phone itself, read
 on the phone at the moment you ask and never sent anywhere (not to your
 Domovoi server, not to us): what is playing, the battery, free space,
 whether you are on Wi-Fi or mobile data, your next alarm, Do Not Disturb,
-the timers this phone keeps from your server, the phone's model and
+the phone's model and
 Android version, connected headphones, and the music, videos and saved
 audiobooks on the phone. What it reads goes only into that conversation,
 which stays in the app's private storage.

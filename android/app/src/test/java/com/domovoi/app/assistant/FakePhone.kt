@@ -50,10 +50,9 @@ class FakeLibrary(
     override fun findBooks(query: String, limit: Int) = books.filter { query.isBlank() || it.title.contains(query, true) }.take(limit).also { queries += "book:$query" }
 }
 
-/** A [PhoneContext] the test sets: facts, timers, permissions, hand-offs. */
+/** A [PhoneContext] the test sets: facts, permissions, hand-offs. */
 class FakePhone(
     var facts: PromptFacts = PromptFacts.NONE,
-    var timers: List<PhoneTimer> = emptyList(),
     var serverSet: Boolean = false,
     override val reader: FakeReader = FakeReader(),
     override val library: FakeLibrary = FakeLibrary(),
@@ -63,7 +62,6 @@ class FakePhone(
 ) : PhoneContext {
     val declinedList = CopyOnWriteArrayList<PhonePermission>()
     override fun facts() = facts
-    override suspend fun timers(nowMs: Long) = timers.filter { it.triggerAtMs > nowMs }
     override fun serverKnown() = serverSet
     override fun permission(p: PhonePermission) = permissions.getValue(p)
     override fun declined(p: PhonePermission) {

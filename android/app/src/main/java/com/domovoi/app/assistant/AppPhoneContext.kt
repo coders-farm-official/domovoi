@@ -24,11 +24,8 @@ class AppPhoneContext(
     private val serverSet: () -> Boolean,
     /** ...and connected now. */
     private val connected: () -> Boolean,
-    /** The cached room names of the server set up (HouseholdNames). */
-    private val rooms: () -> List<String>,
     /** The cached name of the listener picked in Settings. */
     private val listener: () -> String?,
-    private val mirroredTimers: suspend (nowMs: Long) -> List<PhoneTimer>,
     private val savedBooks: () -> List<FoundItem>,
     override val reader: PhoneReader = AndroidPhoneReader(context),
 ) : PhoneContext {
@@ -45,13 +42,9 @@ class AppPhoneContext(
                 up -> ServerLink.CONNECTED
                 else -> ServerLink.NOT_CONNECTED
             },
-            // Room names only while connected (plan part 1).
-            rooms = if (up) rooms() else emptyList(),
             listener = listener(),
         )
     }
-
-    override suspend fun timers(nowMs: Long): List<PhoneTimer> = mirroredTimers(nowMs)
 
     override fun serverKnown(): Boolean = serverSet()
 

@@ -123,14 +123,14 @@ class PhoneChatControllerTest {
 
     @Test fun theModelIsToldTheFactsAndOfferedTheReadTools() {
         phone.facts = PromptFacts(NowPlayingFact("Glass Harbor", "Velvet Kites"), server = ServerLink.CONNECTED,
-            rooms = listOf("kitchen"), listener = "Kamron")
+            listener = "Kamron")
         val c = controller()
         c.ask("Tell me a joke")
         val turn = engines.single().turns.single()
         assertEquals(Persona.SYSTEM_PROMPT, turn.system)
         assertEquals(listOf(ContextLine.CLOCK, ContextLine.FACTS), turn.context.map { it.kind })
         assertEquals(PhoneFacts.line(phone.facts), turn.context[1].text)
-        assertEquals(listOf(PhoneTools.FIND_MUSIC, PhoneTools.FIND_VIDEO, PhoneTools.LIST_TIMERS, PhoneTools.PHONE_STATUS), turn.tools!!.names)
+        assertEquals(listOf(PhoneTools.FIND_MUSIC, PhoneTools.FIND_VIDEO, PhoneTools.PHONE_STATUS), turn.tools!!.names)
     }
 
     @Test fun aToolCallRunsTheReadAndIsNamedOnTheReply() {
@@ -284,12 +284,17 @@ class PhoneChatControllerTest {
      *  place's chats, whatever the server is called. */
     @Test fun aPhoneChatsContextIsThePhonesOwn() {
         phone.serverSet = true
-        phone.facts = PromptFacts(server = ServerLink.NOT_CONNECTED)
+        phone.facts = PromptFacts(NowPlayingFact("Song", room = "kitchen"), server = ServerLink.NOT_CONNECTED)
         val c = controller()
+        // Strict (owner, 2026-10-21): no household timers, no room names.
+        assertEquals("I can't see timers in this phone's Clock app. House timers are in your home server chats.",
+            c.ask("What timers do I have?").text)
+        assertEquals("Those are in your home server chats.", c.ask("Which rooms do I have?").text)
+        assertFalse(c.ask("What's playing?").text.contains("kitchen"))
         c.ask("What should I cook tonight?")
         val turn = engines.single().turns.single()
         val told = turn.system + turn.context.joinToString { it.text }
-        listOf("calendar", "http", "6369", "chat history").forEach { assertFalse(it, told.contains(it, ignoreCase = true)) }
+        listOf("calendar", "http", "6369", "chat history", "kitchen").forEach { assertFalse(it, told.contains(it, ignoreCase = true)) }
         assertTrue(told, told.contains("not connected to the home server", ignoreCase = true))
     }
 }

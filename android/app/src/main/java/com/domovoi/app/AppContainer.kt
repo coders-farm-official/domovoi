@@ -15,7 +15,6 @@ import com.domovoi.app.assistant.AssistantSettings
 import com.domovoi.app.assistant.AssistantSupport
 import com.domovoi.app.assistant.ModelDownloader
 import com.domovoi.app.assistant.PhoneContext
-import com.domovoi.app.assistant.PhoneTimer
 import com.domovoi.app.data.HouseholdNames
 import com.domovoi.app.alerts.TimerAlerts
 import com.domovoi.app.data.DeveloperOptions
@@ -229,9 +228,10 @@ class AppContainer(context: Context) {
 
     /**
      * What a phone chat may read (assistant/AppPhoneContext.kt, N1): the
-     * player's state, whether the connection is up, the cached names, the
-     * timer mirror and the saved books, all as they are on the phone now.
-     * Nothing here hands it the server client.
+     * player's state, whether the connection is up, the cached listener
+     * name and the saved books, all as they are on the phone now. Never the
+     * server's rooms or its timer mirror (owner, 2026-10-21: phone chats
+     * answer about the phone only); nothing here hands it the server client.
      */
     internal fun phoneChatContext(context: Context, settings: AssistantSettings): PhoneContext = AppPhoneContext(
         context = context,
@@ -240,13 +240,7 @@ class AppContainer(context: Context) {
         sleepRemainingSec = { player.sleepRemainingSec.value },
         serverSet = { prefs.serverUrl.value.isNotBlank() },
         connected = { bus.connected.value },
-        rooms = { householdNames.rooms(prefs.serverUrl.value) },
         listener = { householdNames.listenerName(prefs.serverUrl.value, prefs.listenerPersonId.value) },
-        mirroredTimers = { now ->
-            alerts.mirrored(now).map {
-                PhoneTimer(it.label ?: it.message, it.kind == "reminder", it.trigger_at_ms, it.room_id, it.masked)
-            }
-        },
         savedBooks = { PhoneChatFacts.savedBooks(books, bookPositions) },
     )
     val assistant: AssistantController by assistantLazy

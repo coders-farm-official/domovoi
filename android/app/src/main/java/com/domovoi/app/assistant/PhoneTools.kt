@@ -16,7 +16,6 @@ object PhoneTools {
     const val FIND_MUSIC = "find_music"
     const val FIND_VIDEO = "find_video"
     const val FIND_BOOK = "find_book"
-    const val LIST_TIMERS = "list_timers"
     const val PHONE_STATUS = "phone_status"
 
     /** Results per search: the plan's "top 5". */
@@ -30,7 +29,6 @@ object PhoneTools {
         FIND_MUSIC to """{"name":"$FIND_MUSIC","description":"Search the music saved on this phone by song title, artist or album. Returns up to $LIMIT matches. It cannot play anything.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"A song, artist or album name"}},"required":["query"]}}""",
         FIND_VIDEO to """{"name":"$FIND_VIDEO","description":"Search the videos saved on this phone by name. Returns up to $LIMIT matches. It cannot play anything.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Words from the video's name"}},"required":["query"]}}""",
         FIND_BOOK to """{"name":"$FIND_BOOK","description":"Search the audiobooks saved on this phone by title or author. Returns each match with the chapter and place the listener is at. It cannot play anything.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"A title or author; empty for every saved book"}}}}""",
-        LIST_TIMERS to """{"name":"$LIST_TIMERS","description":"List the timers and reminders this phone has from the home server, with when each rings.","parameters":{"type":"object","properties":{}}}""",
         PHONE_STATUS to """{"name":"$PHONE_STATUS","description":"Read this phone's battery and charging, free storage, network (Wi-Fi or mobile data), model, Android version and memory.","parameters":{"type":"object","properties":{}}}""",
     )
 
@@ -40,7 +38,6 @@ object PhoneTools {
         if (library.canFindMusic()) add(FIND_MUSIC)
         if (library.canFindVideos()) add(FIND_VIDEO)
         if (library.canFindBooks()) add(FIND_BOOK)
-        add(LIST_TIMERS)
         add(PHONE_STATUS)
     }
 
@@ -65,7 +62,6 @@ object PhoneTools {
                 FIND_MUSIC -> found(phone.library.findMusic(query(args), LIMIT), music = true)
                 FIND_VIDEO -> found(phone.library.findVideos(query(args), LIMIT), music = false)
                 FIND_BOOK -> books(phone.library.findBooks(query(args), LIMIT))
-                LIST_TIMERS -> timers(phone.timers(nowMs), nowMs, time)
                 PHONE_STATUS -> status(phone.reader)
                 else -> mapOf("error" to "no tool named $name here")
             }
@@ -96,20 +92,6 @@ object PhoneTools {
                 i.chapter?.let { put("chapter", it) }
                 i.positionSec?.let { put("listened_to", PhoneFacts.clock(it)) }
                 i.durationSec?.let { put("length", PhoneFacts.clock(it)) }
-            }
-        },
-    )
-
-    private fun timers(list: List<PhoneTimer>, nowMs: Long, time: (Long) -> String): Map<String, Any?> = mapOf(
-        "count" to list.size,
-        "timers" to list.take(10).map { t ->
-            buildMap {
-                put("kind", if (t.reminder) "reminder" else "timer")
-                if (!t.masked) t.label?.takeIf { it.isNotBlank() }?.let { put("label", it) }
-                if (t.masked) put("private", true)
-                put("rings_at", time(t.triggerAtMs))
-                if (!t.reminder) put("time_left", PhoneQuestions.left(t.triggerAtMs - nowMs))
-                t.room?.takeIf { it.isNotBlank() }?.let { put("room", it) }
             }
         },
     )

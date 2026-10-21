@@ -151,12 +151,10 @@ class N1GateReceiver : BroadcastReceiver() {
             playing = NowPlayingFact("Glass Harbor", "Velvet Kites", positionSec = 72.0, durationSec = 238.0),
             sleepRemainingSec = 20 * 60,
             server = ServerLink.CONNECTED,
-            rooms = listOf("larkspur", "copper den", "marigold"),
             listener = "Kamron",
         )
 
-        private val MENTIONS = listOf("glass harbor", "velvet kites", "sleep timer", "kamron", "larkspur", "copper den",
-            "marigold", "home server")
+        private val MENTIONS = listOf("glass harbor", "velvet kites", "sleep timer", "kamron", "home server")
 
         /** The 20 scripted questions and what a right answer contains. */
         private val SCRIPTED: List<Pair<String, String>> = listOf(
@@ -167,7 +165,7 @@ class N1GateReceiver : BroadcastReceiver() {
             "Am I on Wi-Fi or mobile data?" to "offline|airplane|wi-fi|mobile",
             "When's my next alarm?" to "alarm",
             "Is Do Not Disturb on?" to "do not disturb",
-            "What timers do I have?" to "timer",
+            "What timers do I have?" to "home server chats",
             "What phone is this?" to "android",
             "Which Android is this?" to "android \\d+",
             "Which model are you?" to "gemma",
@@ -176,7 +174,7 @@ class N1GateReceiver : BroadcastReceiver() {
             "Which headphones are connected?" to "headphones|bluetooth|connected",
             "How long is left on the sleep timer?" to "20",
             "What's my name?" to "kamron",
-            "What rooms are in my house?" to "larkspur|copper den|marigold",
+            "What rooms are in my house?" to "home server chats",
             "Am I connected to the home server?" to "yes|connected",
             "Do I have a video called glacier trip on this phone?" to "glacier",
             "How much memory does this phone have?" to "\\d+ ?GB",

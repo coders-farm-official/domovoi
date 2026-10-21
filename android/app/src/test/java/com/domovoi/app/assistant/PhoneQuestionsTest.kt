@@ -129,25 +129,21 @@ class PhoneQuestionsTest {
             say(PhoneQuestion.NOW_PLAYING, phone),
         )
         phone.facts = PromptFacts(NowPlayingFact("Song", null, paused = true, room = "kitchen"))
-        assertEquals("Paused: \"Song\" in the kitchen.", say(PhoneQuestion.NOW_PLAYING, phone))
+        assertEquals("Paused: \"Song\" on a room speaker this phone cast to.", say(PhoneQuestion.NOW_PLAYING, phone))
     }
 
-    @Test fun timersFromThePhonesOwnCopy() {
-        val phone = FakePhone()
-        assertTrue(say(PhoneQuestion.TIMERS, phone).startsWith("This phone has no timers or reminders from your home server."))
-        phone.timers = listOf(
-            PhoneTimer("pasta", reminder = false, triggerAtMs = nowMs + 9 * 60_000, room = "kitchen"),
-            PhoneTimer("call mom", reminder = true, triggerAtMs = now.withHour(18).withMinute(30).toInstant().toEpochMilli()),
-            PhoneTimer("secret", reminder = true, triggerAtMs = now.withHour(19).withMinute(0).toInstant().toEpochMilli(), masked = true),
-            PhoneTimer("old", reminder = false, triggerAtMs = nowMs - 1_000),
-        )
-        val said = say(PhoneQuestion.TIMERS, phone)
-        assertEquals(
-            "This phone has 3 timers and reminders from your home server: pasta, 9 minutes left (kitchen); " +
-                "a reminder, call mom, at 6:30 PM today; a private reminder at 7:00 PM today.",
-            said,
-        )
-        assertFalse("a private reminder's words never show", said.contains("secret"))
+    /** Strict (owner, 2026-10-21): a phone chat never reads the server's
+     *  timers (the mirror only rings); one honest line points home. */
+    @Test fun timersAreNeverTheHouseholds() {
+        val said = say(PhoneQuestion.TIMERS, FakePhone(serverSet = true))
+        assertEquals("I can't see timers in this phone's Clock app. House timers are in your home server chats.", said)
+    }
+
+    @Test fun houseQuestionsPointToHomeServerChats() {
+        listOf("What rooms are in my house?", "which rooms do I have", "list the rooms", "is the kitchen online", "what's playing in the kitchen")
+            .forEach { assertEquals(it, PhoneQuestion.HOUSE, PhoneQuestions.match(it)) }
+        assertEquals("Those are in your home server chats.", say(PhoneQuestion.HOUSE, FakePhone()))
+        assertNull(PhoneQuestions.match("is my phone online"))
     }
 
     @Test fun whoAmI() {

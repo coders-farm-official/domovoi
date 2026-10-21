@@ -134,11 +134,6 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
     val cfg = rememberApi { HomeApi.config(it.api) }
     val health = rememberApi { HomeApi.health(it.api) }
     val sats = rememberApi { HomeApi.rooms(it.api) }
-    // The phone chat's prompt names the rooms from what this read saw
-    // (data/HouseholdNames.kt); it never asks the server itself.
-    LaunchedEffect(sats.data) {
-        sats.data?.let { list -> app.householdNames.recordRooms(app.prefs.serverUrl.value, list.map { it.room_id }) }
-    }
     val timers = rememberApi(eventTypes = TIMER_EVENTS) { HomeApi.timers(it.api) }
     val plugins = rememberApi(eventTypes = PLUGIN_EVENTS) { HomeApi.plugins(it.api) }
     val acq = rememberApi(eventTypes = ACQ_EVENTS) { HomeApi.acquisitions(it.api) }

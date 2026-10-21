@@ -36,17 +36,6 @@ data class CalendarEvent(val title: String, val beginMs: Long, val endMs: Long?,
 
 data class ContactMatch(val name: String, val number: String?, val email: String?, val label: String? = null)
 
-/** A timer or reminder in the phone's own copy of the household's
- *  (alerts/TimerAlarmMirror.kt). [masked]: a private reminder, shown without
- *  its words. */
-data class PhoneTimer(
-    val label: String?,
-    val reminder: Boolean,
-    val triggerAtMs: Long,
-    val room: String? = null,
-    val masked: Boolean = false,
-)
-
 /** A song, video or book a read tool found on the phone. */
 data class FoundItem(
     val title: String,
@@ -137,10 +126,6 @@ enum class PermissionState {
 interface PhoneContext {
     /** The prompt's facts, read now from the app's own state. */
     fun facts(): PromptFacts = PromptFacts.NONE
-
-    /** The phone's copy of the household's timers and reminders, soonest
-     *  first, only the ones still to come. */
-    suspend fun timers(nowMs: Long): List<PhoneTimer> = emptyList()
 
     /** A home server is set up on this phone (for the one honest line that
      *  points to home-server chats; nothing is fetched). */

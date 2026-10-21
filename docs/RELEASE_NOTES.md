@@ -106,12 +106,11 @@ Android app only; nothing to run on the server.
 
 * A chat **on this phone** answers about the phone at once, with no
   model: what's playing, the battery, free space, Wi-Fi or mobile data,
-  the next alarm, Do Not Disturb, the timers this phone mirrors from the
-  server, which phone and Android, which model is answering, connected
-  headphones, the songs, videos and saved audiobooks on the phone. The
-  model is told what's playing, the sleep timer, whether the home server
-  is connected, its room names (as the app last saw them) and the
-  listener's first name, and mentions none of it unless asked. (The
+  the next alarm, Do Not Disturb, which phone and Android, which model is
+  answering, connected headphones, the songs, videos and saved
+  audiobooks on the phone. The model is told what's playing, the sleep
+  timer, whether the home server is connected and the listener's first
+  name, and mentions none of it unless asked. (The
   model's own read tools stay off for Gemma 4 E2B, which called them on
   too many near-miss questions on a test phone.)
 * **Hand-offs**: "text Sam", "call Mom", "email Alex", "directions to…",
@@ -125,9 +124,11 @@ Android app only; nothing to run on the server.
   contacts (calling by name; the contact picker works without it), the
   calendar (reading the phone's own). A refusal is kept and never asked
   again. Never: texts, the call log, notifications.
-* **Each place answers from its own world**: a phone chat never asks the
-  home server (the household calendar, its timers or its rooms' state);
-  where the server would know, it says so in one line.
+* **Each place answers from its own world** (owner's strict rule): a
+  phone chat answers about the phone only. It never reads the household
+  calendar, the house timers (the copy this phone keeps only rings them)
+  or the rooms, and never names a room; asked, it says in one line that
+  those are in your home server chats.
 
 What an operator should know: the app's install screen on Google Play
 will list location, contacts and calendar; the Play Console's Data safety

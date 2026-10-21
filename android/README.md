@@ -437,17 +437,18 @@ exactly what it sends, and the facts and tool results are not in it.
 
 - **Prompt facts** (`assistant/PhoneFacts.kt`, under about 60 tokens,
   told like the clock: a kept conversation hears a line again only when it
-  changed): what's playing and where (this phone or the room it cast to),
-  the playback sleep timer, whether the home server is connected, the room
-  names while connected (cached from the app's own Home and Music reads,
-  `data/HouseholdNames.kt`), the listener's first name. The persona says to
+  changed): what's playing (on this phone, or on a room speaker it cast
+  to, never named), the playback sleep timer, whether the home server is
+  connected, the listener's first name (`data/HouseholdNames.kt`). No room
+  names and no house timers: phone chats answer about the phone only
+  (owner, 2026-10-21); asked about rooms or house timers they say those
+  are in the home server chats. The persona says to
   use them only when asked, never to mention them otherwise. The position
   is left out on purpose (it changes every second).
 - **Fast paths** (`assistant/PhoneQuestions.kt`, instant, no model, like
   the clock's): what's playing; battery and charging; free space; Wi-Fi or
   mobile data; the next alarm (`AlarmManager.getNextAlarmClock`); Do Not
-  Disturb; the timers and reminders this phone mirrors from the server
-  (`alerts/TimerAlarmMirror.kt`, a private reminder without its words);
+  Disturb (and the ringer, for "on silent");
   which phone and Android; which model is answering; the connected
   Bluetooth headphones (Android's audio outputs, no permission); and, with
   permission, the phone's own calendar, where am I (the last fix Android
@@ -458,7 +459,7 @@ exactly what it sends, and the facts and tool results are not in it.
   chapter am I on", "how much memory does this phone have".
 - **Read tools** for the model (`assistant/PhoneTools.kt`), in LiteRT-LM's
   manual mode (the app runs each call; constrained decoding; on the CPU
-  only): `find_music`, `find_video`, `find_book`, `list_timers`,
+  only): `find_music`, `find_video`, `find_book`,
   `phone_status`. They only read. **Offered only to a model whose catalog
   entry sets `readTools`, which Gemma 4 E2B doesn't**: on the owner's Fold
   (N0, 2026-10-21) E2B called a tool for 26.7% of near-miss phrases ("why

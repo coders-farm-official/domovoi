@@ -14,14 +14,13 @@ class PhoneFactsTest {
         playing = playing,
         sleepRemainingSec = 20 * 60,
         server = ServerLink.CONNECTED,
-        rooms = listOf("kitchen", "office", "garage"),
         listener = "Kamron Kennedy",
     )
 
     @Test fun theLineSaysEachFact() {
         assertEquals(
             "Phone facts: playing \"Glass Harbor\" by Velvet Kites on this phone, sleep timer 20 minutes left. " +
-                "Connected to the home server, rooms: kitchen, office, garage. The person talking is Kamron (say the name only if asked).",
+                "Connected to the home server. The person talking is Kamron (say the name only if asked).",
             PhoneFacts.line(full),
         )
     }
@@ -35,18 +34,15 @@ class PhoneFactsTest {
     @Test fun theLineStaysSmall() {
         val house = full.copy(
             playing = playing.copy(title = "Somewhere Over the Rainbow / What a Wonderful World", artist = "Israel Kamakawiwo'ole"),
-            rooms = listOf("kitchen", "living room", "office", "garage", "bedroom", "kids room", "porch", "basement"),
             listener = "Bartholomew Fitzgerald",
         )
         val line = PhoneFacts.line(house)!!
-        // About 60 tokens (4 characters a token): room names go first, the
-        // connection stays.
+        // About 60 tokens (4 characters a token).
         assertTrue("${line.length}: $line", line.length <= PhoneFacts.MAX_CHARS)
         assertTrue(line, line.contains("onnected to the home server"))
         // Even absurd names never pass the cap.
         val absurd = house.copy(
             playing = playing.copy(title = "A".repeat(500), artist = "B".repeat(500), room = "C".repeat(500)),
-            rooms = (1..50).map { "R".repeat(100) },
             listener = "Q".repeat(300),
         )
         assertTrue(PhoneFacts.line(absurd)!!.length <= PhoneFacts.MAX_CHARS)
@@ -63,10 +59,9 @@ class PhoneFactsTest {
 
     @Test fun pausedInARoomAndNotConnected() {
         val line = PhoneFacts.line(
-            PromptFacts(playing = NowPlayingFact("Song", null, paused = true, room = "kitchen"), server = ServerLink.NOT_CONNECTED,
-                rooms = listOf("kitchen")),
+            PromptFacts(playing = NowPlayingFact("Song", null, paused = true, room = "kitchen"), server = ServerLink.NOT_CONNECTED),
         )!!
-        assertEquals("Phone facts: paused: \"Song\" in the kitchen. Not connected to the home server.", line)
+        assertEquals("Phone facts: paused: \"Song\" on a room speaker this phone cast to. Not connected to the home server.", line)
     }
 
     @Test fun noServerSetUpSaysNothingAboutOne() {
@@ -117,6 +112,14 @@ class PhoneFactsTest {
         val new = withContextLines("SYS", "q", listOf(clock), emptyMap(), rebuilt = true)
         assertEquals(old.system, new.system)
         assertEquals(old.question, new.question)
+    }
+
+    /** Strict (owner, 2026-10-21): no room name reaches the prompt, not
+     *  even the one the phone cast to; only whether the server is connected. */
+    @Test fun noRoomNameReachesThePrompt() {
+        val line = PhoneFacts.line(PromptFacts(NowPlayingFact("Song", room = "kitchen"), server = ServerLink.CONNECTED))!!
+        assertFalse(line, line.contains("kitchen"))
+        assertTrue(line.contains("connected to the home server", ignoreCase = true))
     }
 
     @Test fun thePersonaSaysUseTheFactsOnlyWhenAsked() {
