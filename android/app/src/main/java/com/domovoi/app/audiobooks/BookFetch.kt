@@ -139,7 +139,9 @@ class BookFetcher(private val http: OkHttpClient, private val store: BookStore) 
             onProgress(before, total)
             for (f in missing) {
                 val path = BookModels.audioPath(meta.bookId, BookPart(f.name, f.startSec, f.durationSec, f.sizeBytes))
-                val got = fetchFile(url(path), store.fileOf(book.key, f.local), f.sizeBytes) { have ->
+                // A file the server gave no size for may be no larger than
+                // the whole book (when that is known).
+                val got = fetchFile(url(path), store.fileOf(book.key, f.local), f.sizeBytes, cap = meta.sizeBytes) { have ->
                     onProgress(before + have, total)
                 }
                 before += got
@@ -164,7 +166,14 @@ class BookFetcher(private val http: OkHttpClient, private val store: BookStore) 
     }
 
     /** One file into [target]: resume, write, rename. Returns its size. */
-    internal suspend fun fetchFile(url: String, target: File, expected: Long?, onBytes: (Long) -> Unit = {}): Long {
+    internal suspend fun fetchFile(
+        url: String,
+        target: File,
+        expected: Long?,
+        cap: Long? = null,
+        onBytes: (Long) -> Unit = {},
+    ): Long {
+        val limit = expected ?: cap?.takeIf { it > 0 }
         // Never made here: a book removed mid-download has no folder, and
         // its job must not leave a stray .part behind it.
         if (target.parentFile?.isDirectory != true) throw BookRefused(410, "the book was removed from this phone")
@@ -205,6 +214,7 @@ class BookFetcher(private val http: OkHttpClient, private val store: BookStore) 
                                     out.write(buffer, 0, n)
                                     have += n
                                     if (expected != null && have > expected) throw IOException("more bytes than the file's size")
+                                    if (limit != null && have > limit) throw BookRefused(413, "the file is larger than the book")
                                     onBytes(have)
                                 }
                             }
@@ -242,8 +252,12 @@ class BookFetcher(private val http: OkHttpClient, private val store: BookStore) 
                     "webp" in type -> ".webp"
                     else -> ".jpg"
                 }
-                val bytes = r.body?.bytes() ?: return
-                if (bytes.isEmpty() || bytes.size > MAX_COVER) return
+                val body = r.body ?: return
+                // Never more than MAX_COVER in memory: a declared length past
+                // it is not read at all, and an undeclared one stops there.
+                if (body.contentLength() > MAX_COVER) return
+                val bytes = body.byteStream().use { readCapped(it, MAX_COVER) } ?: return
+                if (bytes.isEmpty()) return
                 val name = "cover$ext"
                 File(store.dirOf(book.key), name).writeBytes(bytes)
                 val now = store.read(book.key) ?: return
@@ -253,6 +267,19 @@ class BookFetcher(private val http: OkHttpClient, private val store: BookStore) 
     }
 
     companion object {
+        /** Up to [max] bytes of [input]; null when it holds more. */
+        internal fun readCapped(input: java.io.InputStream, max: Int): ByteArray? {
+            val out = java.io.ByteArrayOutputStream()
+            val buf = ByteArray(16 * 1024)
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                if (out.size() + n > max) return null
+                out.write(buf, 0, n)
+            }
+            return out.toByteArray()
+        }
+
         /** Headroom kept free beyond the book itself. */
         const val SPACE_MARGIN: Long = 50L * 1024 * 1024
         private const val BUFFER = 128 * 1024

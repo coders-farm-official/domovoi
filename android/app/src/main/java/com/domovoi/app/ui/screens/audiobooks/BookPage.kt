@@ -37,6 +37,7 @@ import com.domovoi.app.audiobooks.BookDownloads
 import com.domovoi.app.audiobooks.BookFetcher
 import com.domovoi.app.audiobooks.BookItems
 import com.domovoi.app.audiobooks.BookModels
+import com.domovoi.app.audiobooks.IdentityAdmission
 import com.domovoi.app.audiobooks.RemoveOutcome
 import com.domovoi.app.audiobooks.SaveState
 import com.domovoi.app.audiobooks.SavedBookMeta
@@ -220,14 +221,16 @@ internal fun BookPage(
                         ChapterRow(i, ch.title, ch.startSec, current = i == at) { play(ch.startSec) }
                     }
                 }
-                if (book.library_path != null) {
+                // Only a path the phone may ask the server to delete
+                // (BookModels.safeLibraryPath); none from an older server.
+                if (BookModels.safeLibraryPath(book.library_path) != null) {
                     item(key = "remove-server") {
                         TextButton(
                             onClick = {
                                 removeError = null
                                 removeServer = true
                                 scope.launch {
-                                    removeNeedsPassword = runCatching { ServerRemove(app.api).needsPassword() }.getOrDefault(true)
+                                    removeNeedsPassword = runCatching { ServerRemove(app.api, IdentityAdmission.of(app.identity)).needsPassword() }.getOrDefault(true)
                                 }
                             },
                             modifier = Modifier.padding(top = 16.dp),
@@ -280,7 +283,7 @@ internal fun BookPage(
         )
     }
     if (removeServer && book != null) {
-        val path = book.library_path
+        val path = BookModels.safeLibraryPath(book.library_path)
         RemoveFromServerDialog(
             title = book.displayTitle,
             needsPassword = removeNeedsPassword,
@@ -291,7 +294,7 @@ internal fun BookPage(
             if (path == null) return@RemoveFromServerDialog
             removeBusy = true
             scope.launch {
-                when (val r = ServerRemove(app.api).remove(path, book.is_folder, password)) {
+                when (val r = ServerRemove(app.api, IdentityAdmission.of(app.identity)).remove(path, book.is_folder, password)) {
                     is RemoveOutcome.Removed -> {
                         removeServer = false
                         toast("removed \"${book.displayTitle}\" from the server")

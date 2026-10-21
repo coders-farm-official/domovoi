@@ -145,4 +145,14 @@ class BookModelsTest {
         assertTrue('/' !in bad && '\\' !in bad && ':' !in bad && !bad.startsWith("."))
         assertEquals("fallback", SavedBookMeta.safeLocal("...", "fallback"))
     }
+
+    @Test fun anOddFileExtensionIsNotUsed() {
+        for ((ext, want) in listOf(".m4b" to "book.m4b", ".MP3" to "book.MP3", ".flac" to "book.flac",
+            "../x" to "book.m4b", ".a/b" to "book.m4b", ".toolong" to "book.m4b", "m4b" to "book.m4b", "." to "book.m4b")) {
+            val meta = SavedBookMeta.fromServer(
+                parse("""{"id": 3, "title": "Solo", "file_ext": "$ext"}"""), ServerScope("a", null), null, 0,
+            )
+            assertEquals(ext, want, meta.files.single().local)
+        }
+    }
 }

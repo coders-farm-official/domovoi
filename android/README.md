@@ -656,7 +656,11 @@ device** lists the saved books and the space they use; the local shell
 has an Audiobooks tab once one is saved. **Add to server** uploads files
 (a book each) or a folder (one book, `create_dir=true`) into
 `core:audiobooks`; **remove from server** asks for the admin password,
-signs in for that one delete (`/api/files/delete`) and signs out.
+sends it only to a server that just proved the identity the phone pinned
+for it (`IdentityAdmission`: a verified pin, paired or not; a legacy
+server without a key is refused), signs in for that one delete
+(`/api/files/delete`) and signs out (residual: a kill in between leaves the
+session to its 30-day expiry; docs/SECURITY_PRIVACY.md).
 
 ## Layout
 

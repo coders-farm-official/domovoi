@@ -66,6 +66,8 @@ data class SavedBookMeta(
     val playerChapters: List<Chapter> get() = chapters.map { Chapter(it.title, it.startSec) }
 
     companion object {
+        /** A file extension the app will name a saved file with. */
+        private val EXT = Regex("^\\.[A-Za-z0-9]{1,5}$")
         private val UNSAFE = Regex("[\\\\/:*?\"<>|\\x00-\\x1f]+")
 
         /** A file name the app's folder can hold: no separators, no control
@@ -80,7 +82,7 @@ data class SavedBookMeta(
          *  can never collide), and the chapters to play with. */
         fun fromServer(book: ServerBook, server: ServerScope, serverName: String?, nowMs: Long): SavedBookMeta {
             val parts = BookModels.parts(book)
-            val ext = book.file_ext?.takeIf { it.startsWith(".") && it.length <= 6 } ?: ".m4b"
+            val ext = book.file_ext?.takeIf { EXT.matches(it) } ?: ".m4b"
             val files = parts.mapIndexed { i, p ->
                 val local = if (p.file == null) "book$ext" else {
                     "%03d-".format(i + 1) + safeLocal(p.file, "part${i + 1}")

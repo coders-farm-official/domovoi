@@ -36,8 +36,13 @@ works with an older server, with less: no size before saving, no cover, no
 * **Add to server**: pick audio files (a book each) or a folder (one book,
   a file per chapter) on the phone; they go to the server's Audiobooks
   library, which re-reads itself. **Remove from server** (admins): the app
-  asks for the admin password, uses it for that one delete and signs out
-  again; the password and the session are not kept.
+  asks for the admin password, sends it only to a server that just proved
+  the identity the phone pinned for it (a server without an identity key
+  is refused; use the dashboard), uses it for that one delete and signs out
+  again; the password and the session are not kept. If the app is killed
+  between the two, the session stays valid until its 30-day expiry; it is
+  listed in the dashboard's admin sessions as `phone app: remove an
+  audiobook` and can be revoked there.
 * The book grid sorts by title, author or newest.
 
 ## 2026-10-17 — Satellites: faster Wi-Fi recovery, mpg123 put back, less CPU

@@ -2,6 +2,7 @@ package com.domovoi.app.audiobooks
 
 import com.domovoi.app.net.ApiClient
 import com.domovoi.app.net.ApiException
+import com.domovoi.app.net.IdentityVerdict
 import com.domovoi.app.net.DomovoiJson
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.jsonArray
@@ -25,6 +26,11 @@ class ServerRemoveTest {
     private lateinit var server: MockWebServer
     private val seen = Collections.synchronizedList(mutableListOf<RecordedRequest>())
     @Volatile private var setupComplete = true
+    @Volatile private var loginReply: MockResponse? = null
+    @Volatile private var deleteReply: MockResponse? = null
+    /** What the identity gate says about the server; proven by default. */
+    @Volatile private var verdict: IdentityVerdict = IdentityVerdict.Verified("SHA256:test", pinnedNow = false)
+    private val admitted = Collections.synchronizedList(mutableListOf<String>())
 
     @Before fun setUp() {
         server = MockWebServer()
@@ -33,13 +39,13 @@ class ServerRemoveTest {
                 seen += request
                 return when (request.path) {
                     "/api/auth/status" -> MockResponse().setBody("""{"setup_complete": $setupComplete, "authenticated": false}""")
-                    "/api/auth/login" -> {
+                    "/api/auth/login" -> loginReply ?: run {
                         val pw = DomovoiJson.parseToJsonElement(request.body.readUtf8()).jsonObject["password"]!!.jsonPrimitive.content
                         if (pw == "right-password") MockResponse().setBody("""{"ok": true, "token": "tok-123"}""")
                         else MockResponse().setResponseCode(401).setBody("""{"detail": "wrong password"}""")
                     }
                     "/api/auth/logout" -> MockResponse().setBody("""{"ok": true, "revoked": true}""")
-                    "/api/files/delete" -> {
+                    "/api/files/delete" -> deleteReply ?: run {
                         val auth = request.getHeader("Authorization")
                         if (setupComplete && auth != "Bearer tok-123") {
                             MockResponse().setResponseCode(401).setBody("""{"detail": "admin session required"}""")
@@ -56,12 +62,19 @@ class ServerRemoveTest {
 
     @After fun tearDown() = server.shutdown()
 
+    /** An unpaired phone's client: no household token at all, so the
+     *  token's own identity gate never runs. */
     private fun api() = ApiClient({ server.url("").toString().trimEnd('/') })
+
+    private fun remover() = ServerRemove(api()) { base ->
+        admitted += base.toString()
+        IdentityAdmission.verified(verdict, base)
+    }
 
     private fun paths() = seen.map { it.path }
 
     @Test fun anAdminRemovesWithThePasswordAndIsSignedOutAgain() = runBlocking {
-        val r = ServerRemove(api())
+        val r = remover()
         assertTrue(r.needsPassword())
         assertEquals(RemoveOutcome.Removed(reindexed = true), r.remove("Dune", isFolder = true, password = "right-password"))
         assertEquals(listOf("/api/auth/status", "/api/auth/login", "/api/files/delete", "/api/auth/logout"), paths())
@@ -75,13 +88,13 @@ class ServerRemoveTest {
     }
 
     @Test fun aWrongPasswordRemovesNothing() = runBlocking {
-        val out = ServerRemove(api()).remove("Dune", isFolder = true, password = "nope")
+        val out = remover().remove("Dune", isFolder = true, password = "nope")
         assertEquals(RemoveOutcome.Refused("wrong admin password"), out)
         assertFalse("/api/files/delete" in paths())
     }
 
     @Test fun withoutAPasswordTheServerRefusesAndSaysAdminOnly() = runBlocking {
-        val out = ServerRemove(api()).remove("Dune.m4b", isFolder = false, password = null)
+        val out = remover().remove("Dune.m4b", isFolder = false, password = null)
         assertEquals(RemoveOutcome.Refused("only an admin can remove books from the server"), out)
         // No sign-in was made, so there is none to end.
         assertFalse("/api/auth/logout" in paths())
@@ -89,7 +102,7 @@ class ServerRemoveTest {
 
     @Test fun aServerBeforeAdminSetupNeedsNoPassword() = runBlocking {
         setupComplete = false
-        val r = ServerRemove(api())
+        val r = remover()
         assertFalse(r.needsPassword())
         assertEquals(RemoveOutcome.Removed(reindexed = true), r.remove("Dune.m4b", isFolder = false, password = null))
         assertNull(seen.first { it.path == "/api/files/delete" }.getHeader("Authorization"))
@@ -108,5 +121,94 @@ class ServerRemoveTest {
         assertTrue(BookUploadRules.isOldServerRefusal(old))
         assertFalse(BookUploadRules.isOldServerRefusal(ApiException(404, "x", body = """{"detail":"unknown library"}""")))
         assertFalse(BookUploadRules.isOldServerRefusal(java.io.IOException("x")))
+    }
+
+    // ---- review round 1 ------------------------------------------------------
+
+    /** BLOCKER fix: the password goes only to a server that just proved the
+     *  identity this phone pinned for it, paired or not. */
+    @Test fun thePasswordGoesOnlyToAProvenServer() = runBlocking {
+        for (v in listOf(
+            IdentityVerdict.Legacy(),
+            IdentityVerdict.Mismatch("SHA256:pinned", "SHA256:other"),
+            IdentityVerdict.Unproven("SHA256:pinned", "did not answer the challenge"),
+            IdentityVerdict.Unavailable("SHA256:pinned", "core down"),
+        )) {
+            verdict = v
+            seen.clear()
+            val out = remover().remove("Dune", isFolder = true, password = "right-password")
+            assertTrue("$v -> $out", out is RemoveOutcome.Refused)
+            assertFalse("$v sent the password", "/api/auth/login" in paths())
+            assertFalse("/api/files/delete" in paths())
+        }
+        // The gate was asked about the active server itself.
+        assertTrue(admitted.all { it.trimEnd('/') == server.url("").toString().trimEnd('/') })
+        // A legacy server is refused in words that say what to do.
+        verdict = IdentityVerdict.Legacy()
+        val legacy = remover().remove("Dune", isFolder = true, password = "right-password") as RemoveOutcome.Refused
+        assertTrue(legacy.reason, "dashboard" in legacy.reason)
+    }
+
+    @Test fun aServerWithoutAdminSetupIsStillProvenFirst() = runBlocking {
+        setupComplete = false
+        verdict = IdentityVerdict.Unproven(null, "no answer")
+        assertTrue(remover().remove("Dune.m4b", isFolder = false, password = null) is RemoveOutcome.Refused)
+        assertFalse("/api/files/delete" in paths())
+    }
+
+    @Test fun answersThatMakeNoSenseAreRefusalsNotCrashes() = runBlocking {
+        loginReply = MockResponse().setBody("not json at all")
+        assertEquals(RemoveOutcome.Refused("the server's sign-in made no sense"), remover().remove("Dune", true, "right-password"))
+        loginReply = MockResponse().setBody("""{"ok": true, "token": {"nested": 1}}""")
+        assertTrue(remover().remove("Dune", true, "right-password") is RemoveOutcome.Refused)
+        // A token that can't be a header is never sent as one.
+        loginReply = MockResponse().setBody("{\"ok\": true, \"token\": \"tok\u0001bad\"}")
+        assertEquals(RemoveOutcome.Refused("the server's sign-in made no sense"), remover().remove("Dune", true, "right-password"))
+        assertFalse("/api/files/delete" in paths())
+        loginReply = null
+        deleteReply = MockResponse().setBody("<html>proxy error</html>")
+        assertEquals(RemoveOutcome.Refused("the server's answer made no sense"), remover().remove("Dune", true, "right-password"))
+        deleteReply = MockResponse().setBody("""{"deleted": [], "failed": [{"x": 1}]}""")
+        assertTrue(remover().remove("Dune", true, "right-password") is RemoveOutcome.Refused)
+        // Every sign-in that happened was ended.
+        assertEquals(paths().count { it == "/api/auth/login" } - 3, paths().count { it == "/api/auth/logout" })
+    }
+
+    @Test fun aThrottledSignInSaysTheServersWait() = runBlocking {
+        loginReply = MockResponse().setResponseCode(429).setHeader("Retry-After", "125")
+            .setBody("""{"detail": "too many failed sign-ins from this address; try again in 125 s"}""")
+        assertEquals(
+            RemoveOutcome.Refused("too many failed sign-ins from this address; try again in 125 s"),
+            remover().remove("Dune", true, "x"),
+        )
+        loginReply = MockResponse().setResponseCode(429).setHeader("Retry-After", "125").setBody("")
+        assertEquals(RemoveOutcome.Refused("too many tries; try again in 2 m"), remover().remove("Dune", true, "x"))
+        loginReply = MockResponse().setResponseCode(429).setBody("")
+        assertEquals(RemoveOutcome.Refused("too many tries; try again later"), remover().remove("Dune", true, "x"))
+    }
+
+    @Test fun onlyARelativeLibraryPathIsEverSent() = runBlocking {
+        for (bad in listOf("", " ", "/etc", "C:/x", "c:x", "a\b", "..", "a/../b", "./a", "a//b", "a/", " a", "a")) {
+            assertNull(bad, BookModels.safeLibraryPath(bad))
+            assertTrue(remover().remove(bad, true, "right-password") is RemoveOutcome.Refused)
+        }
+        assertFalse("/api/auth/login" in paths())
+        assertNull(BookModels.safeLibraryPath(null))
+        assertEquals("Dune", BookModels.safeLibraryPath("Dune"))
+        assertEquals("Series/Dune 2.m4b", BookModels.safeLibraryPath("Series/Dune 2.m4b"))
+    }
+
+    @Test fun theAdmissionAcceptsOnlyAVerifiedPin() {
+        val base = server.url("/")
+        IdentityAdmission.verified(IdentityVerdict.Verified("SHA256:x", pinnedNow = true), base)
+        for (v in listOf(IdentityVerdict.Legacy(), IdentityVerdict.Mismatch("a", "b"), IdentityVerdict.Unproven(null, "r"),
+            IdentityVerdict.Unavailable(null, "r"))) {
+            try {
+                IdentityAdmission.verified(v, base)
+                throw AssertionError("admitted $v")
+            } catch (e: java.io.IOException) {
+                // refused
+            }
+        }
     }
 }

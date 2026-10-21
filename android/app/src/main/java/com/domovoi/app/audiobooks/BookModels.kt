@@ -124,6 +124,22 @@ object BookModels {
         else -> emptyList()
     }
 
+    /**
+     * [path] when it is one "remove from server" may send: a relative path
+     * inside the Audiobooks library — not blank, not absolute, no drive
+     * letter, no backslash, no `.` or `..` part, no control character.
+     * Null otherwise (the app then offers no remove). The server checks
+     * containment itself; this keeps the phone from asking for anything else.
+     */
+    fun safeLibraryPath(path: String?): String? {
+        val p = path ?: return null
+        if (p.isBlank() || p != p.trim()) return null
+        if (p.startsWith("/") || '\\' in p || p.any { it.code < 0x20 || it.code == 0x7F }) return null
+        if (Regex("^[A-Za-z]:").containsMatchIn(p)) return null
+        if (p.split('/').any { it.isEmpty() || it == "." || it == ".." }) return null
+        return p
+    }
+
     fun parse(json: JsonElement): ServerBook = DomovoiJson.decodeFromJsonElement(ServerBook.serializer(), json)
 
     private fun encodeQuery(s: String): String =

@@ -43,6 +43,8 @@ class BookFetchTest {
     /** Answer every request with a full 200, ignoring Range. */
     @Volatile private var ignoreRange = false
     @Volatile private var gone = false
+    /** The cover's answer, when not the default tiny JPEG. */
+    @Volatile private var coverReply: MockResponse? = null
 
     @Before fun setUp() {
         root = Files.createTempDirectory("books").toFile()
@@ -54,6 +56,7 @@ class BookFetchTest {
                 if (gone) return MockResponse().setResponseCode(404).setBody("""{"detail":"audiobook 7 not found"}""")
                 val url = request.requestUrl!!
                 if (url.encodedPath.endsWith("/cover")) {
+                    coverReply?.let { return it }
                     return MockResponse().setHeader("Content-Type", "image/jpeg").setBody(Buffer().write(byteArrayOf(1, 2, 3)))
                 }
                 val name = url.queryParameter("file") ?: return MockResponse().setResponseCode(400)
@@ -280,5 +283,36 @@ class BookFetchTest {
                 // refused
             }
         }
+    }
+
+    // ---- review round 1 ------------------------------------------------------
+
+    @Test fun aCoverPastTheCapIsNotKept() {
+        // Declared too large: not read at all.
+        coverReply = MockResponse().setHeader("Content-Type", "image/jpeg").setBody(Buffer().write(ByteArray(9 * 1024 * 1024)))
+        val b = book()
+        assertEquals(BookFetchOutcome.Done, fetch(b))
+        assertNull(store.read(b.key)!!.meta.cover)
+        assertFalse(File(store.dirOf(b.key), "cover.jpg").exists())
+    }
+
+    @Test fun aCoverWithNoLengthStopsAtTheCap() {
+        val big = java.io.ByteArrayInputStream(ByteArray(9 * 1024 * 1024))
+        assertNull(BookFetcher.readCapped(big, 8 * 1024 * 1024))
+        val small = java.io.ByteArrayInputStream(ByteArray(1000) { 7 })
+        assertEquals(1000, BookFetcher.readCapped(small, 8 * 1024 * 1024)!!.size)
+    }
+
+    /** A file the server gave no size for may not outgrow the whole book. */
+    @Test fun aSizelessFileIsCappedAtTheBooksSize() {
+        val meta = SavedBookMeta(
+            bookId = 7, title = "Dune", isFolder = true,
+            files = listOf(SavedFile("01 One.mp3", "001-01 One.mp3", 0.0, 250.0, null)),
+            sizeBytes = 50_000,
+        )
+        val b = store.create(meta) { "cap1" }
+        val out = fetch(b)
+        assertEquals(BookFetchOutcome.Failed("the file is larger than the book"), out)
+        assertFalse(store.fileOf(b.key, "001-01 One.mp3").exists())
     }
 }

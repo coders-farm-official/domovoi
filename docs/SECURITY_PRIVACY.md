@@ -1377,6 +1377,17 @@ reason, so a new route cannot quietly ship open.
   it) under a **90-day absolute cap** (a session older than that is refused
   however recently it was used). You can list and revoke sessions from the
   dashboard settings.
+- **The Android app's "remove from server"** (Audiobooks, since
+  2026-10-20) is the one place the app takes the admin password. It sends
+  it only to a server that has just proved, on the phone's current
+  network, the identity the phone pinned for it (a server with no identity
+  key is refused: use the dashboard), signs in for that one delete
+  (`POST /api/files/delete`) and signs out at once; neither the password
+  nor the session is written anywhere on the phone. **Residual:** if the
+  app is killed between the sign-in and the sign-out, that session stays
+  valid at the server until its 30-day expiry. It is listed in the
+  dashboard's sessions as `phone app: remove an audiobook` and can be
+  revoked there. `/api/auth/login` has no short-lived option to avoid it.
 - **Login is throttled** per source IP: exponential backoff starting at 1 s
   and doubling per consecutive failure, capped at 5 minutes. The attempt is
   counted **before** the password is verified, so concurrent attempts from
