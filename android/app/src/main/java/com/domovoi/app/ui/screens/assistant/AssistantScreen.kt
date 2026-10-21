@@ -41,6 +41,7 @@ import com.domovoi.app.assistant.HandOff
 import com.domovoi.app.assistant.HandOffLauncher
 import com.domovoi.app.assistant.HandOffs
 import com.domovoi.app.assistant.PhoneCard
+import com.domovoi.app.assistant.PhonePermission
 import com.domovoi.app.assistant.DeviceTier
 import com.domovoi.app.assistant.DeviceTiers
 import com.domovoi.app.assistant.LlmBackend
@@ -363,6 +364,20 @@ private fun rememberCardActions(assistant: AssistantController, conversationId: 
         }
         open(index, h.copy(name = picked.name.ifBlank { null } ?: h.who, number = number))
     }
+    // "use the picker" on the contacts card: the call or text card that
+    // follows opens the picker itself, with no second tap.
+    var pickNext by remember { mutableStateOf<Int?>(null) }
+    val shown by assistant.state.collectAsState()
+    val messages = shown.conversation.messages
+    LaunchedEffect(pickNext, messages.size) {
+        val i = pickNext ?: return@LaunchedEffect
+        val card = messages.getOrNull(i)?.card ?: return@LaunchedEffect
+        pickNext = null
+        if (card.kind == CardKind.HANDOFF && card.handOff?.needsContact == true && HandOffLauncher.canPickContact(context)) {
+            waiting = i to card
+            pickContact.launch(Unit)
+        }
+    }
     return remember(assistant, conversationId) {
         CardActions(
             primary = { index, card ->
@@ -387,7 +402,10 @@ private fun rememberCardActions(assistant: AssistantController, conversationId: 
             },
             secondary = { index, card ->
                 when (card.kind) {
-                    CardKind.PERMISSION -> assistant.permissionDecided(conversationId, index, granted = false)
+                    CardKind.PERMISSION -> {
+                        if (card.phonePermission == PhonePermission.CONTACTS) pickNext = assistant.state.value.conversation.messages.size
+                        assistant.permissionDecided(conversationId, index, granted = false)
+                    }
                     CardKind.HANDOFF -> assistant.handOffTapped(conversationId, index, done = false)
                 }
             },

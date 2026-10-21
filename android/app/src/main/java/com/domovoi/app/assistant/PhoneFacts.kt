@@ -77,6 +77,23 @@ object PhoneFacts {
      * "what's playing" fast path says the position).
      */
     fun line(f: PromptFacts): String? {
+        // About 60 tokens at most (English runs about 4 characters a token):
+        // fewer room names first, then shorter names, then a hard cut.
+        for (rooms in MAX_ROOMS downTo 0) {
+            val l = build(f, rooms, MAX_NAME) ?: return null
+            if (l.length <= MAX_CHARS) return l
+        }
+        val short = build(f, 0, SHORT_NAME) ?: return null
+        return if (short.length <= MAX_CHARS) short else short.take(MAX_CHARS - 1).trimEnd() + "…"
+    }
+
+    /** Most characters the line may take: about 60 tokens. */
+    const val MAX_CHARS = 240
+
+    private const val SHORT_NAME = 20
+
+    private fun build(f: PromptFacts, maxRooms: Int, maxName: Int): String? {
+        fun cut(s: String) = cut(s, maxName)
         val parts = mutableListOf<String>()
         f.playing?.let { p ->
             val what = buildString {
@@ -91,11 +108,11 @@ object PhoneFacts {
         when (f.server) {
             ServerLink.CONNECTED -> {
                 val rooms = f.rooms.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-                parts += if (rooms.isEmpty()) {
+                parts += if (rooms.isEmpty() || maxRooms == 0) {
                     "connected to the home server"
                 } else {
-                    val shown = rooms.take(MAX_ROOMS).joinToString(", ") { cut(it) }
-                    val more = (rooms.size - MAX_ROOMS).takeIf { it > 0 }?.let { " and $it more" }.orEmpty()
+                    val shown = rooms.take(maxRooms).joinToString(", ") { cut(it) }
+                    val more = (rooms.size - maxRooms).takeIf { it > 0 }?.let { " and $it more" }.orEmpty()
                     "connected to the home server, rooms: $shown$more"
                 }
             }
@@ -134,9 +151,9 @@ object PhoneFacts {
         else String.format(Locale.US, "%d:%02d", s / 60, s % 60)
     }
 
-    private fun cut(s: String): String {
+    private fun cut(s: String, max: Int = MAX_NAME): String {
         val t = s.trim().replace(Regex("\\s+"), " ")
-        return if (t.length > MAX_NAME) t.take(MAX_NAME).trimEnd() + "…" else t
+        return if (t.length > max) t.take(max).trimEnd() + "…" else t
     }
 }
 

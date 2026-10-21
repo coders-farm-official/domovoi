@@ -36,7 +36,7 @@ class PhoneQuestionsTest {
         PhoneQuestion.STORAGE to listOf("How much space do I have?", "how much storage is left", "Is my phone full?", "how much free space do I have left"),
         PhoneQuestion.NETWORK to listOf("Am I on Wi-Fi or mobile data?", "am i on wifi", "Am I on mobile data", "am I online", "do I have internet"),
         PhoneQuestion.NEXT_ALARM to listOf("When's my next alarm?", "what time is my alarm set for", "do I have an alarm set", "is an alarm set"),
-        PhoneQuestion.DO_NOT_DISTURB to listOf("Is Do Not Disturb on?", "is DND on", "am I on do not disturb", "is my phone on silent"),
+        PhoneQuestion.DO_NOT_DISTURB to listOf("Is Do Not Disturb on?", "is DND on", "am I on do not disturb"),
         PhoneQuestion.WHO_AM_I to listOf("What's my name?", "who am I", "do you know who I am"),
         PhoneQuestion.SLEEP_TIMER to listOf("How long is left on the sleep timer?", "is a sleep timer set", "when will the music stop"),
         PhoneQuestion.TIMERS to listOf("how long is left on the pasta timer", "What timers do I have?", "do I have any timers running", "how much time is left on my timer", "what reminders do I have"),
@@ -157,6 +157,28 @@ class PhoneQuestionsTest {
         assertEquals("You're Kamron, as this phone's Settings say.", say(PhoneQuestion.WHO_AM_I, phone))
     }
 
+    @Test fun roundOneAmbiguities() {
+        assertEquals("the AI, not the phone", PhoneQuestion.WHICH_MODEL, PhoneQuestions.match("What model is this?"))
+        assertEquals(PhoneQuestion.PHONE_MODEL, PhoneQuestions.match("what model is this phone"))
+        assertEquals(PhoneQuestion.RINGER, PhoneQuestions.match("Is my phone on silent?"))
+        assertEquals(PhoneQuestion.DO_NOT_DISTURB, PhoneQuestions.match("Is Do Not Disturb on?"))
+        val phone = FakePhone()
+        phone.reader.ringer = RingerMode.VIBRATE
+        assertEquals("Your phone is on vibrate.", say(PhoneQuestion.RINGER, phone))
+        assertEquals(null, PhoneQuestion.RINGER.permission)
+    }
+
+    /** Approximate for "where am I"; precise, asked on its own, only for
+     *  the Wi-Fi name. */
+    @Test fun locationPrecision() = runBlocking {
+        assertEquals(PhonePermission.LOCATION, PhoneQuestion.WHERE_AM_I.permission)
+        assertEquals(PhonePermission.PRECISE_LOCATION, PhoneQuestion.WIFI_NAME.permission)
+        val phone = FakePhone().also { it.permissions[PhonePermission.LOCATION] = PermissionState.GRANTED }
+        assertEquals(PhoneAnswer.Ask(PhonePermission.PRECISE_LOCATION, PhoneQuestion.WIFI_NAME), PhoneQuestions.answer(PhoneQuestion.WIFI_NAME, inputs(phone)))
+        assertTrue(PhonePermissions.reason(PhonePermission.PRECISE_LOCATION).contains("Wi-Fi"))
+        assertFalse(PhonePermissions.reason(PhonePermission.LOCATION).contains("Wi-Fi"))
+    }
+
     @Test fun theSleepTimer() {
         val phone = FakePhone()
         assertEquals("No sleep timer is set.", say(PhoneQuestion.SLEEP_TIMER, phone))
@@ -255,7 +277,8 @@ class PhoneQuestionsTest {
         assertEquals(LibraryAsk(LibraryKind.VIDEO, "glacier trip"), LibraryQuestions.match("Do I have a video called glacier trip on this phone?"))
         assertEquals(LibraryAsk(LibraryKind.BOOK, "dune"), LibraryQuestions.match("where did I leave off in Dune"))
         assertEquals(LibraryAsk(LibraryKind.BOOK, ""), LibraryQuestions.match("which chapter am I on"))
-        listOf("what music is good for studying", "do I have time for a nap", "find me a recipe", "is there a book about bees you recommend")
+        listOf("what music is good for studying", "do I have time for a nap", "find me a recipe", "is there a book about bees you recommend",
+            "Where am I in life?")
             .forEach { assertNull(it, LibraryQuestions.match(it)) }
         assertEquals(PhoneQuestion.MEMORY, PhoneQuestions.match("How much memory does this phone have?"))
         assertEquals(PhoneQuestion.MEMORY, PhoneQuestions.match("how much RAM do I have"))

@@ -27,11 +27,11 @@ object HandOffLauncher {
      *  number yet: the contact picker comes first). */
     fun intent(h: HandOff): Intent? = when (h.kind) {
         HandOffKind.CALL -> h.number?.takeIf { it.isNotBlank() }?.let { Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(it))) }
-        HandOffKind.TEXT -> h.number?.takeIf { it.isNotBlank() }?.let { n ->
-            Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:" + Uri.encode(n))).apply {
-                h.body?.let { putExtra("sms_body", it) }
-            }
-        }
+        HandOffKind.TEXT -> h.number?.takeIf { it.isNotBlank() }?.let { n -> Intent(Intent.ACTION_SENDTO, smsUri(n, h.body)).apply {
+            // Google Messages reads the words from the link only; others
+            // from the extra.
+            h.body?.let { putExtra("sms_body", it) }
+        } }
         HandOffKind.EMAIL -> Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:" + (h.email?.let { Uri.encode(it, "@") } ?: ""))).apply {
             h.subject?.let { putExtra(Intent.EXTRA_SUBJECT, it) }
             h.body?.let { putExtra(Intent.EXTRA_TEXT, it) }
@@ -49,6 +49,9 @@ object HandOffLauncher {
         }
         HandOffKind.OTHER -> null
     }
+
+    /** "smsto:5550123?body=On%20my%20way". */
+    internal fun smsUri(number: String, body: String?): Uri = Uri.parse(HandOffs.smsLink(number, body))
 
     /** A stand-in for each kind, filled enough for Android to say which apps
      *  take it. */

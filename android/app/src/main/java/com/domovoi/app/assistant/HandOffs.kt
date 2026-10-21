@@ -98,7 +98,7 @@ object HandOffs {
             "(?:(?::|,| -) (?<body>.+)| (?<body2>$BODY_START.*))?$",
     )
     private val textSaying = Regex("^${LEAD}(?:text|message) (?<who>.+?) (?:saying|that says|to say|that) (?<body>.+)$")
-    private val email = Regex("^${LEAD}(?:email|e mail|write an email to|send an email to|draft an email to|write to) (?<who>.+?)(?: (?:about|saying|regarding|re) (?<about>.+))?$SUFFIX$")
+    private val email = Regex("^${LEAD}(?:email|e mail|write an email to|send an email to|draft an email to) (?<who>.+?)(?: (?:about|saying|regarding|re) (?<about>.+))?$SUFFIX$")
     private val directions = Regex(
         // Not "how do I get to …": that is as often "… sleep" or "… level 5".
         "^${LEAD}(?:(?:give me |get |show me )?directions to|navigate to|take me to|route to|drive me to|" +
@@ -109,14 +109,14 @@ object HandOffs {
             " (?:to|on|in) (?:my|the) calendar(?<when> .+)?$SUFFIX$",
     )
     private val eventFor = Regex(
-        "^${LEAD}(?:add|create|make|schedule) (?:an? )?(?:calendar )?(?:event|appointment|meeting) (?:called |for )?(?<title>.+?)(?<when> (?:today|tonight|tomorrow|on|at|this|next) .+)?$SUFFIX$",
+        "^${LEAD}(?:add|create|make|schedule) (?:an? )?(?:calendar )?(?<noun>event|appointment|meeting) (?:called |for )?(?<title>.+?)(?<when> (?:today|tonight|tomorrow|on|at|this|next) .+)?$SUFFIX$",
     )
     private val link = Regex("^${LEAD}(?:open|go to|visit|show me|launch) (?:the )?(?:link |website |site |page )?(?<url>(?:https?://)?[a-z0-9-]+(?:\\.[a-z0-9-]+)+(?:/\\S*)?)$SUFFIX$")
     private val share = Regex("^${LEAD}(?:share|send) (?:this|that|it|your (?:answer|reply)|the (?:answer|reply)|what you (?:said|just said))(?: with (?:someone|somebody|a friend))?$SUFFIX$")
 
     /** Callees that are not people: "call it a day", "call me Ishmael". */
     private val notAPerson = Regex(
-        "^(?:it|that|this|me|myself|us|you|yourself|them|him|her|back|off|out|home|for|a cab|a taxi|an uber|a doctor|911|the police|" +
+        "^(?:it|that|this|me|myself|us|you|yourself|them|him|her|back|off|out|home|for|from|about|of|to|a|an|a taxi|an uber|a doctor|911|the police|" +
             "an ambulance|it a day|it a night|attention|in|up|a meeting|a vote|someone|somebody|anyone)\\b",
     )
 
@@ -134,7 +134,11 @@ object HandOffs {
             return HandOff(HandOffKind.SHARE, body = said)
         }
         link.matchEntire(t)?.let { m ->
-            val u = urlIn(raw) ?: m.groups["url"]!!.value
+            val explicit = urlIn(raw)
+            val u = explicit ?: m.groups["url"]!!.value
+            // "open invoice.zip" is a file, not a site: without a scheme it
+            // must start with www. or end in a well-known web domain.
+            if (explicit == null && !looksLikeSite(u)) return null
             val full = if (u.startsWith("http://", true) || u.startsWith("https://", true)) u else "https://$u"
             return if (safeLink(full)) HandOff(HandOffKind.LINK, url = full) else null
         }
@@ -162,6 +166,14 @@ object HandOffs {
         (event.matchEntire(t) ?: eventFor.matchEntire(t))?.let { m ->
             var title = original(raw, m.groups["title"]!!.value)
             var whenText = m.groups["when"]?.value?.trim()
+            // "schedule a meeting for next tuesday": all of it is the when;
+            // the event is just "Meeting".
+            val noun = runCatching { m.groups["noun"]?.value }.getOrNull()
+            val whole = listOfNotNull(title, whenText).joinToString(" ").trim()
+            if (noun != null && WHEN_ONLY.matches(norm(whole))) {
+                title = noun
+                whenText = whole
+            }
             // "add lunch with Sam tomorrow at noon to my calendar": the time
             // was said inside the title.
             if (whenText == null) {
@@ -181,6 +193,20 @@ object HandOffs {
             )
         }
         return null
+    }
+
+    /** "smsto:5550123?body=On%20my%20way": the words in the link, where
+     *  Google Messages reads them (it ignores the sms_body extra). */
+    fun smsLink(number: String, body: String?): String =
+        "smsto:" + percent(number) + (body?.takeIf { it.isNotBlank() }?.let { "?body=" + percent(it) } ?: "")
+
+    /** RFC 3986 percent-encoding: all but the unreserved characters. */
+    internal fun percent(s: String): String = buildString {
+        for (b in s.toByteArray(Charsets.UTF_8)) {
+            val c = b.toInt() and 0xff
+            if (c in 'a'.code..'z'.code || c in 'A'.code..'Z'.code || c in '0'.code..'9'.code || c.toChar() in "-._~") append(c.toChar())
+            else append('%').append("0123456789ABCDEF"[c shr 4]).append("0123456789ABCDEF"[c and 15])
+        }
     }
 
     /** Only web links: never an intent:, file: or content: address typed
@@ -343,6 +369,33 @@ object HandOffs {
     }
 
     private fun urlIn(raw: String): String? = Regex("(?i)\\bhttps?://\\S+").find(raw)?.value?.trimEnd('.', ',', ')')
+
+    /** A whole phrase that is only a day and/or a time. */
+    private val WHEN_ONLY = Regex(
+        "^(?:(?:on )?(?:today|tonight|tomorrow|(?:this |next )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))(?: at .+)?|at .+)$",
+    )
+
+    /** Web domains people name without "https://"; not the ones that are
+     *  also file extensions (.zip, .mov). */
+    private val SITE_TLDS = setOf(
+        "com", "org", "net", "edu", "gov", "io", "dev", "app", "co", "info", "me", "tv", "ai", "uk", "us", "ca", "au",
+        "de", "fr", "es", "it", "nl", "se", "no", "dk", "fi", "ie", "nz", "jp", "in", "br", "eu", "ch", "at", "be", "pl",
+    )
+
+    /** File extensions that are never read as a site, whatever follows. */
+    private val FILE_EXTS = setOf(
+        "zip", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "txt", "md", "csv", "json", "xml",
+        "jpg", "jpeg", "png", "gif", "heic", "webp", "mov", "mp4", "mkv", "avi", "mp3", "wav", "flac", "m4a", "apk", "exe", "py", "kt",
+    )
+
+    /** "www.example.org", "example.org/a": a site; "invoice.zip",
+     *  "notes.txt", "readme.md": a file. */
+    internal fun looksLikeSite(u: String): Boolean {
+        val host = u.substringBefore('/').lowercase()
+        if (host.startsWith("www.")) return true
+        val tld = host.substringAfterLast('.')
+        return tld in SITE_TLDS && tld !in FILE_EXTS
+    }
 
     private val SAFE_LINK = Regex("^https?://[^\\s/?#@]+\\.[^\\s/?#@]+(?:[/?#]\\S*)?$", RegexOption.IGNORE_CASE)
 

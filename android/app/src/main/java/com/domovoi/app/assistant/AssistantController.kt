@@ -988,16 +988,20 @@ class AssistantController(
         return PhoneAnswerInputs(style.at(clock()), style, phone, chatModel.name, settings.backend)
     }
 
-    /** [h] with the best contact for its name: an exact first-name match
-     *  first, one with a number before one without. */
+    /** [h] with the contact for its name when there is one person it can
+     *  be (an exact full name, or a single person matching); two or more
+     *  ("Sam" with Sam Lee and Samantha Jones) leave it to the picker, never
+     *  a silent first pick. */
     private fun resolveContact(h: HandOff): HandOff {
         val who = h.who ?: return h
         val found = phone.reader.contacts(who).orEmpty().filter { !it.number.isNullOrBlank() }
-        val best = found.sortedWith(
-            compareByDescending<ContactMatch> { it.name.equals(who, ignoreCase = true) }
-                .thenByDescending { it.name.split(' ').firstOrNull().equals(who, ignoreCase = true) },
-        ).firstOrNull() ?: return h
-        return h.copy(name = best.name, number = best.number)
+        val exact = found.filter { it.name.equals(who, ignoreCase = true) }
+        val pick = when {
+            exact.map { it.name.lowercase() }.distinct().size == 1 -> exact.first()
+            found.map { it.name.lowercase() }.distinct().size == 1 -> found.first()
+            else -> return h
+        }
+        return h.copy(name = pick.name, number = pick.number)
     }
 
     private fun phoneMessage(text: String, fastPath: String, card: PhoneCard? = null): StoredMessage =
@@ -1036,12 +1040,15 @@ class AssistantController(
         val message = current.messages.getOrNull(index) ?: return
         val card = message.card?.takeIf { it.kind == CardKind.PERMISSION && it.state == CardState.OPEN } ?: return
         val p = card.phonePermission ?: return
-        if (!granted) phone.declined(p)
+        // What Android's dialog really left: "approximate" for a precise
+        // request is not the permission the feature needs.
+        val held = granted && phone.permission(p) == PermissionState.GRANTED
+        if (!held) phone.declined(p)
         if (_state.value.replying) return
         scope.launch {
             val marked = current.copy(
                 messages = current.messages.toMutableList().also {
-                    it[index] = message.copy(card = card.copy(state = if (granted) CardState.DONE else CardState.DISMISSED))
+                    it[index] = message.copy(card = card.copy(state = if (held) CardState.DONE else CardState.DISMISSED))
                 },
             )
             _state.update { it.copy(conversation = marked, replying = true, thinking = true) }

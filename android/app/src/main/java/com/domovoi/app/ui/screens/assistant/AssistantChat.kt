@@ -209,7 +209,9 @@ private fun ChatPane(
                             MessageBubble(
                                 m,
                                 writing = writing,
-                                onReport = if (!m.fromUser && !writing && m.text.isNotBlank()) ({ onReport(index) }) else null,
+                                // A reply read from the phone (where it is, its calendar…) is
+                                // not offered for a report: it would carry that off the phone.
+                                onReport = if (!m.fromUser && !writing && m.text.isNotBlank() && m.fastPath == null) ({ onReport(index) }) else null,
                                 onRetry = if (i == 0 && canRetry) actions.retry else null,
                                 onShare = if (!writing && m.text.isNotBlank()) ({ actions.shareMessage(m.text) }) else null,
                                 conversation = ui.conversation,

@@ -9,6 +9,7 @@ class FakeReader(
     var network: NetworkReading? = NetworkReading(NetworkKind.WIFI),
     var alarm: AlarmReading? = null,
     var dnd: DndMode? = DndMode.OFF,
+    var ringer: RingerMode? = RingerMode.NORMAL,
     var device: DeviceReading? = DeviceReading("Google", "Pixel 7", "15", 35, 7_700_000_000),
     var wifi: String? = "HomeNet",
     var location: LocationReading? = LocationReading(47.6062, -122.3321, 20f, 60_000),
@@ -22,6 +23,7 @@ class FakeReader(
     override fun network() = network.also { reads += "network" }
     override fun nextAlarm() = alarm.also { reads += "alarm" }
     override fun doNotDisturb() = dnd.also { reads += "dnd" }
+    override fun ringer() = ringer.also { reads += "ringer" }
     override fun device() = device.also { reads += "device" }
     override fun wifiName() = wifi.also { reads += "wifi" }
     override fun location() = location.also { reads += "location" }

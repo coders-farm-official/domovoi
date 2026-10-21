@@ -106,6 +106,28 @@ class HandOffsTest {
         assertFalse(HandOff(HandOffKind.EMAIL, who = "Sam").needsContact)
     }
 
+    /** Round 1 review: chit-chat the patterns caught. */
+    @Test fun chitChatIsNotAHandOff() {
+        listOf("Write to me in French", "Message from the kitchen: dinner is ready", "Ring a bell",
+            "open invoice.zip", "open report.pdf", "open notes.txt", "open readme.md", "open holiday.mov")
+            .forEach { assertNull(it, match(it)) }
+        assertEquals(HandOff(HandOffKind.LINK, url = "https://www.example.zip"), match("open www.example.zip"))
+        assertEquals(HandOff(HandOffKind.LINK, url = "https://files.example.org/a.zip"), match("open https://files.example.org/a.zip"))
+    }
+
+    @Test fun aMeetingWithOnlyAWhenIsCalledMeeting() {
+        val e = match("Schedule a meeting for next tuesday")!!
+        assertEquals("Meeting", e.title)
+        assertTrue(e.allDay)
+        assertEquals(now.plusDays(6).toLocalDate(), java.time.Instant.ofEpochMilli(e.beginMs!!).atZone(la).toLocalDate())
+    }
+
+    /** Google Messages reads a text's words from the link only. */
+    @Test fun aTextsWordsAreInTheLink() {
+        assertEquals("smsto:5550123?body=I%27m%20on%20my%20way%21", HandOffs.smsLink("5550123", "I'm on my way!"))
+        assertEquals("smsto:%2B15550123", HandOffs.smsLink("+15550123", null))
+    }
+
     @Test fun clockTimes() {
         assertEquals(15 to 0, HandOffs.clockTime("3"))
         assertEquals(9 to 0, HandOffs.clockTime("9"))

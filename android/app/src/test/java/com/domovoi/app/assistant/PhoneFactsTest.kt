@@ -39,16 +39,17 @@ class PhoneFactsTest {
             listener = "Bartholomew Fitzgerald",
         )
         val line = PhoneFacts.line(house)!!
-        val words = line.split(Regex("\\s+")).size
-        assertTrue("$words words: $line", words <= 48)
-        assertTrue(line, line.contains("and 4 more"))
-        // Even absurd names are cut: a title, artist or room is 40
-        // characters at most, and four rooms are named.
+        // About 60 tokens (4 characters a token): room names go first, the
+        // connection stays.
+        assertTrue("${line.length}: $line", line.length <= PhoneFacts.MAX_CHARS)
+        assertTrue(line, line.contains("onnected to the home server"))
+        // Even absurd names never pass the cap.
         val absurd = house.copy(
             playing = playing.copy(title = "A".repeat(500), artist = "B".repeat(500), room = "C".repeat(500)),
             rooms = (1..50).map { "R".repeat(100) },
+            listener = "Q".repeat(300),
         )
-        assertTrue(PhoneFacts.line(absurd)!!.length < 520)
+        assertTrue(PhoneFacts.line(absurd)!!.length <= PhoneFacts.MAX_CHARS)
     }
 
     /** The position changes every second: kept out so a kept conversation

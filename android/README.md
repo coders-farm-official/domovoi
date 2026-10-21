@@ -474,8 +474,9 @@ exactly what it sends, and the facts and tool results are not in it.
   ("Text Sam?") and launches only on a tap; one no app takes is never
   offered (`resolveActivity`, with the manifest's `<queries>`). Timers and
   alarms through the Clock app are N2's, asked first the same way.
-- **Permissions, asked on first use, always optional**: location (where
-  am I, the Wi-Fi name), contacts (calling or texting by name), the
+- **Permissions, asked on first use, always optional**: approximate
+  location (where am I), precise location (only for the Wi-Fi name, with
+  its own reason), contacts (calling or texting by name), the
   calendar (reading it). The chat's card gives the one-line reason, then
   Android's dialog; "not now" or a refusal is kept
   (`AssistantSettings.declinedPermissions`) and the feature says it can't,

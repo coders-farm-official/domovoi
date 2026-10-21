@@ -82,9 +82,10 @@ which stays in the app's private storage.
 Three things need your permission, asked the first time you ask for them,
 with the reason, and always optional:
 
-- **Location**, for "where am I" (the last location Android already has,
-  shown as coordinates; never looked up online, never in the background)
-  and the Wi-Fi network's name.
+- **Approximate location**, for "where am I" (the last location Android
+  already has, shown as coordinates; never looked up online, never in the
+  background). **Precise location** is asked for separately and only to
+  read the Wi-Fi network's name, which Android shows to no other app.
 - **Contacts**, to call or text someone by name. Without it, you choose the
   person in your contacts app each time.
 - **Calendar**, to read what is on this phone's calendar.

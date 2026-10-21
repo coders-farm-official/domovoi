@@ -116,7 +116,7 @@ class PhoneChatControllerTest {
         assertNotNull(a.firstTextMs)
         assertEquals("which model", "I'm Domovoi, running Test LLM on this phone's CPU, with no internet.", c.ask("which model are you").text)
         assertTrue("no model was loaded for them", engines.isEmpty())
-        assertEquals(ReplyReport.PHONE, c.draftReport(c.state.value.conversation, 1)!!.model)
+        assertNull("a phone reading is never reported", c.draftReport(c.state.value.conversation, 1))
     }
 
     // ── The model: facts and read tools ─────────────────────────────────
@@ -264,12 +264,17 @@ class PhoneChatControllerTest {
 
     @Test fun withContactsTheNumberIsFilledIn() {
         phone.permissions[PhonePermission.CONTACTS] = PermissionState.GRANTED
-        phone.reader.people = listOf(ContactMatch("Samantha Jones", "555 0199", null), ContactMatch("Sam Lee", "555 0123", null, "mobile"))
+        phone.reader.people = listOf(ContactMatch("Sam Lee", "555 0123", null, "mobile"), ContactMatch("Sam Lee", "555 0100", null, "home"))
         val c = controller()
         val h = c.ask("Text Sam I'm on my way").card!!.handOff!!
         assertEquals("Sam Lee", h.name)
         assertEquals("555 0123", h.number)
         assertEquals("I'm on my way", h.body)
+        // Two people it could be: the picker, never a silent first pick.
+        phone.reader.people = listOf(ContactMatch("Samantha Jones", "555 0199", null), ContactMatch("Sam Lee", "555 0123", null, "mobile"))
+        val again = c.ask("Call Sam").card!!.handOff!!
+        assertTrue(again.needsContact)
+        assertNull(again.number)
     }
 
     // ── Never blended ───────────────────────────────────────────────────

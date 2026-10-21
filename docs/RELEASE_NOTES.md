@@ -108,17 +108,20 @@ Android app only; nothing to run on the server.
   model: what's playing, the battery, free space, Wi-Fi or mobile data,
   the next alarm, Do Not Disturb, the timers this phone mirrors from the
   server, which phone and Android, which model is answering, connected
-  headphones. The model is told what's playing, the sleep timer, whether
-  the home server is connected, its room names (as the app last saw them)
-  and the listener's first name, and can look up the phone's music,
-  videos and saved audiobooks; it mentions none of it unless asked.
+  headphones, the songs, videos and saved audiobooks on the phone. The
+  model is told what's playing, the sleep timer, whether the home server
+  is connected, its room names (as the app last saw them) and the
+  listener's first name, and mentions none of it unless asked. (The
+  model's own read tools stay off for Gemma 4 E2B, which called them on
+  too many near-miss questions on a test phone.)
 * **Hand-offs**: "text Sam", "call Mom", "email Alex", "directions to…",
   "add … to my calendar", "open example.org", "share this" show a card;
   a tap opens the dialer, Messages, the email app, Maps, the calendar
   app's editor, the browser or the share sheet, and the person finishes
   there. Nothing is sent by Domovoi itself.
 * **New optional permissions**, each asked in the chat the first time it
-  is needed, with the reason: location (where am I, the Wi-Fi name),
+  is needed, with the reason: approximate location (where am I),
+  precise location (only for the Wi-Fi network's name),
   contacts (calling by name; the contact picker works without it), the
   calendar (reading the phone's own). A refusal is kept and never asked
   again. Never: texts, the call log, notifications.

@@ -68,9 +68,9 @@
     <!-- A phone chat (assistant/, N1) reads a few things on the phone only
          when asked, each permission asked on first use with the app's own
          one-line reason, all optional (refused: the chat says it can't and
-         never asks again): location for "where am I" and the Wi-Fi
-         network's name (the last fix Android has; never in the background,
-         never sent anywhere), contacts for calling or texting someone by
+         never asks again): approximate location for "where am I" (the
+         last fix Android has; never in the background, never sent
+         anywhere), precise location only for the Wi-Fi network's name, contacts for calling or texting someone by
          name (the contact picker works without it), the phone's own
          calendar to read it. Never SMS, the call log, notifications,
          usage stats or accessibility. -->
