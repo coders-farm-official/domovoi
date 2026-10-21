@@ -41,6 +41,7 @@ import com.domovoi.app.LocalToast
 import com.domovoi.app.ui.components.PageHeader
 import com.domovoi.app.ui.screens.assistant.AssistantIn64BitAppNote
 import com.domovoi.app.ui.screens.assistant.assistantIn64BitAppOnly
+import com.domovoi.app.ui.screens.printing.PrintersPanel
 import com.domovoi.app.ui.screens.satellites.SatellitesScreen
 import com.domovoi.app.ui.shell.LocalSettingsTabRequest
 import com.domovoi.app.ui.shell.Route
@@ -65,6 +66,7 @@ internal enum class SettingsTab(val key: String, val label: String, val sub: Str
     PhoneBar("phonebar", "Phone bar", "The tabs along the bottom of this phone, left to right."),
     Voice("voice", "Voice", "How this phone speaks: your Domovoi's voice, downloaded once, or the phone's own."),
     Satellites("satellites", "Satellites", "The Pi in each room: status, announcements, and each room's details."),
+    Printers("printers", "Printers and scanners", "The printers and scanners your home server prints and scans with."),
     Server("server", "Server settings", "Greetings, voices, wake words, models and configuration are managed on the dashboard."),
     About("about", "About", "What Domovoi is, a link to the user manual, this app's version, and this phone's problem reports.");
 
@@ -112,6 +114,7 @@ fun SettingsScreen(navigate: (Route) -> Unit) {
             SettingsTab.PhoneBar -> PhoneBarPanel()
             SettingsTab.Voice -> VoicePanel()
             SettingsTab.Satellites -> SatellitesScreen(embedded = true)
+            SettingsTab.Printers -> PrintersPanel()
             SettingsTab.Server -> ServerSettingsPanel()
             SettingsTab.About -> AboutPanel(navigate)
         }

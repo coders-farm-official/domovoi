@@ -19,7 +19,7 @@ class SettingsModelsTest {
         // Satellites), and the phone bar's editor lives here too. Voice is
         // the phone's own voice (2026-10-12), not the server's Voices tab.
         assertEquals(
-            listOf("Connection", "Phone bar", "Voice", "Satellites", "Server settings", "About"),
+            listOf("Connection", "Phone bar", "Voice", "Satellites", "Printers and scanners", "Server settings", "About"),
             SettingsTab.entries.map { it.label },
         )
         assertEquals(SettingsTab.Connection, SettingsTab.entries.first())
