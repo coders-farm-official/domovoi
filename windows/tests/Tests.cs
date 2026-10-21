@@ -74,6 +74,7 @@ static partial class Tests
         ProgressLines();
         Outcomes();
         Args();
+        AiChoice();
         Media();
         LanRules();
         PortOwners();
@@ -308,6 +309,112 @@ static partial class Tests
             Throws<ArgumentException>(delegate { ProvisionArgs.Build(o); }, "unknown name");
             o = Opts(); o.Media = new List<KeyValuePair<string, string>> { new KeyValuePair<string, string>("music", @"\\nas\music") };
             Throws<ArgumentException>(delegate { ProvisionArgs.Build(o); }, "network folder");
+        });
+    }
+
+    // -- "Include AI chat and questions?" (owner decision 2026-10-21) ----
+
+    // provision.sh's usage lines for the two options (wf/ai-optional-linux,
+    // b86d689), and the lines an older one ends its options with.
+    const string AiUsage = "  --wsl, --no-wsl       force WSL mode on or off\n"
+        + "  --ai-models           include AI chat and questions (the default): pull\n"
+        + "                        the tier's AI models, about 6.4 GB (about 9.1 GB on\n"
+        + "  --no-ai-models        leave AI chat and questions out: no AI models are\n"
+        + "                        pulled, and AI_FEATURES=false. Voice commands,\n";
+    const string OldUsage = "  --keep-downloads      keep the Ollama tarball in /var/cache/domovoi-provision\n  --dry-run             say what each step would do; change nothing\n";
+
+    static void AiChoice()
+    {
+        Run("ai: Yes to a provision.sh that takes the answer says --ai-models", delegate
+        {
+            var o = Opts(); o.ScriptHasAiChoice = true;
+            var a = ProvisionArgs.Build(o);
+            True(a.Contains("--ai-models") && !a.Contains("--no-ai-models"), "yes");
+            Eq(a.IndexOf("--tier") + 2, a.IndexOf("--ai-models"), "after --tier auto");
+            Eq(1, a.FindAll(x => x.EndsWith("ai-models", StringComparison.Ordinal)).Count, "once");
+        });
+        Run("ai: Yes to an older provision.sh keeps its arguments as they were", delegate
+        {
+            var o = Opts(); o.ScriptHasAiChoice = false; o.IncludeAi = true;
+            var a = ProvisionArgs.Build(o);
+            True(!a.Contains("--ai-models") && !a.Contains("--no-ai-models"), "no AI option");
+            var before = Opts();
+            SeqEq(ProvisionArgs.Build(before), a, "same as the default options");
+        });
+        Run("ai: Yes is the default", delegate
+        {
+            True(new ProvisionOptions().IncludeAi, "options");
+            True(new Ledger().IncludeAi, "a new record");
+        });
+        Run("ai: No says --no-ai-models", delegate
+        {
+            var o = Opts(); o.IncludeAi = false; o.ScriptHasAiChoice = true;
+            var a = ProvisionArgs.Build(o);
+            True(a.Contains("--no-ai-models") && !a.Contains("--ai-models"), "no");
+            Eq(a.IndexOf("--tier") + 2, a.IndexOf("--no-ai-models"), "after --tier auto");
+            // Everything else as for Yes.
+            o.IncludeAi = true;
+            var yes = ProvisionArgs.Build(o);
+            yes.Remove("--ai-models"); a.Remove("--no-ai-models");
+            SeqEq(yes, a, "the rest unchanged");
+        });
+        Run("ai: No to an older provision.sh is refused, not sent (it would exit 2)", delegate
+        {
+            var o = Opts(); o.IncludeAi = false; o.ScriptHasAiChoice = false;
+            Throws<ArgumentException>(delegate { ProvisionArgs.Build(o); }, "no --no-ai-models in the script");
+        });
+        Run("ai: which provision.sh takes the answer, from its usage text", delegate
+        {
+            True(ProvisionScript.SupportsAiChoice(AiUsage), "the new one");
+            True(!ProvisionScript.SupportsAiChoice(OldUsage), "an older one");
+            True(!ProvisionScript.SupportsAiChoice("# --ai-models and --no-ai-models in a comment only"), "a mention is not the option");
+            True(!ProvisionScript.SupportsAiChoice("\n  --ai-models           include\n"), "both options, not one");
+            True(!ProvisionScript.SupportsAiChoice(null), "null");
+        });
+        Run("ai: the models' download for this PC's memory", delegate
+        {
+            Eq("6.4", AiModels.DownloadGb(10), "below 24 GB of RAM: capped at 10");
+            Eq("6.4", AiModels.DownloadGb(22), "a cap of 22 reads under 22 GiB");
+            Eq("9.1", AiModels.DownloadGb(23), "a cap of 23 reads over 22 GiB");
+            const long G = 1024L * 1024 * 1024;
+            Eq("6.4", AiModels.DownloadGb(WslConfig.MemoryCapGb(16 * G)), "16 GB PC");
+            Eq("6.4", AiModels.DownloadGb(WslConfig.MemoryCapGb(24 * G)), "24 GB PC (cap 16)");
+            Eq("9.1", AiModels.DownloadGb(WslConfig.MemoryCapGb(32 * G)), "32 GB PC (cap 24)");
+            Eq("9.1", AiModels.DownloadGb(WslConfig.MemoryCapGb(64 * G)), "64 GB PC");
+        });
+        Run("ai: the answer is kept in the install record", delegate
+        {
+            var l = FullLedger(); l.IncludeAi = false;
+            var d = l.ToJson();
+            Eq(false, (bool)d["include_ai"], "written");
+            True(!Ledger.FromJson(Json.ParseObject(Json.Serialize(d))).IncludeAi, "No survives");
+            l.IncludeAi = true;
+            True(Ledger.FromJson(Json.ParseObject(Json.Serialize(l.ToJson()))).IncludeAi, "Yes survives");
+            var old = l.ToJson(); old.Remove("include_ai");
+            True(Ledger.FromJson(Json.ParseObject(Json.Serialize(old))).IncludeAi, "a record from before the question: Yes");
+        });
+        Run("ai: the job step passes the recorded answer to provision.sh", delegate
+        {
+            var l = FullLedger(); l.IncludeAi = false;
+            const string repo = "https://github.com/coders-farm-official/domovoi", sha = "eb4a497fe821c08b6b8c39d7603ff7384d696dfc";
+            var o = Domovoi.Windows.Helper.Steps.JobOptions(l, repo, sha, "stable", AiUsage);
+            True(!o.IncludeAi && o.ScriptHasAiChoice, "options");
+            True(ProvisionArgs.Build(o).Contains("--no-ai-models"), "No reaches the arguments");
+            l.IncludeAi = true;
+            True(ProvisionArgs.Build(Domovoi.Windows.Helper.Steps.JobOptions(l, repo, sha, "stable", AiUsage)).Contains("--ai-models"), "Yes");
+            var older = ProvisionArgs.Build(Domovoi.Windows.Helper.Steps.JobOptions(l, repo, sha, "stable", OldUsage));
+            True(!older.Contains("--ai-models") && !older.Contains("--no-ai-models"), "Yes to an older script: nothing");
+            l.IncludeAi = false;
+            var refused = Domovoi.Windows.Helper.Steps.JobOptions(l, repo, sha, "stable", OldUsage);
+            Throws<ArgumentException>(delegate { ProvisionArgs.Build(refused); }, "No to an older script");
+            Eq("never", o.Internet, "internet from the record too");
+            Eq(5, o.Media.Count, "media folders from the record");
+        });
+        Run("ai: a changed answer is a new job (the host provisions again)", delegate
+        {
+            var yes = Opts(); yes.ScriptHasAiChoice = true;
+            var no = Opts(); no.ScriptHasAiChoice = true; no.IncludeAi = false;
+            True(string.Join("\n", ProvisionArgs.Build(yes).ToArray()) != string.Join("\n", ProvisionArgs.Build(no).ToArray()), "different arguments");
         });
     }
 

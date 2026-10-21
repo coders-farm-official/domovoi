@@ -13,7 +13,7 @@
 //   preflight [--ports-only] [--skip-internet] [--installing]   read-only
 //   vmp-status | wsl-status | host-status | plan    read-only
 //   host-stop
-//   prepare --internet A --media-root DIR --commit SHA
+//   prepare --internet A [--ai yes|no] --media-root DIR --commit SHA
 //   account --exe PATH [--no-deny-logon]
 //   media
 //   firewall [--subnet CIDR]
@@ -112,7 +112,7 @@ namespace Domovoi.Windows.Helper
                             return 0;
                         }
                     case "host-stop": HostService.Stop(180, o.Say); return 0;
-                    case "prepare": Steps.Prepare(o, a.Req("--internet"), a.Req("--media-root"), a.Req("--commit")); return 0;
+                    case "prepare": Steps.Prepare(o, a.Req("--internet"), a.Opt("--ai") ?? "yes", a.Req("--media-root"), a.Req("--commit")); return 0;
                     case "account": Steps.AccountAndService(o, a.Req("--exe"), !a.Flag("--no-deny-logon")); return 0;
                     case "media": Steps.Media(o); return 0;
                     case "firewall": Steps.FirewallRules(o, a.Opt("--subnet")); return 0;

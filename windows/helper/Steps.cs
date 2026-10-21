@@ -81,20 +81,22 @@ namespace Domovoi.Windows.Helper
 
         // -- prepare: the admin-only tree and the answers ---------------
 
-        public static void Prepare(Output o, string internet, string mediaRoot, string commit)
+        public static void Prepare(Output o, string internet, string ai, string mediaRoot, string commit)
         {
             if (internet != "always" && internet != "sometimes" && internet != "never")
                 throw new ArgumentException("--internet must be always, sometimes or never");
+            if (ai != "yes" && ai != "no") throw new ArgumentException("--ai must be yes or no");
             Folders.CheckMediaRoot(mediaRoot);
             if (commit.Length != 40) throw new ArgumentException("--commit must be a full SHA");
             Ledger l = LoadLedger() ?? new Ledger();
             if (!Directory.Exists(Paths.ProgramData)) { l.ProgramDataCreated = true; SaveLedger(l); }
             Folders.EnsureProgramDataBase(l.ProgramDataCreated, o.Say);
             l.Internet = internet;
+            l.IncludeAi = ai == "yes";
             l.MediaRoot = MediaPaths.Normalize(mediaRoot);
             l.Commit = commit;
             SaveLedger(l);
-            o.Say("recorded the answers (internet: " + internet + "; media folder: " + l.MediaRoot + ")");
+            o.Say("recorded the answers (internet: " + internet + "; AI chat and questions: " + ai + "; media folder: " + l.MediaRoot + ")");
         }
 
         // -- the account and the service --------------------------------
@@ -249,6 +251,22 @@ namespace Domovoi.Windows.Helper
             o.Say("copied " + Path.GetFileName(src) + " to " + dest + " (SHA-256 checked)");
         }
 
+        // The provision.sh options from the recorded answers (all but the LAN
+        // address, which WriteJob looks up). scriptText: the pinned
+        // provision.sh, for the options it takes.
+        public static ProvisionOptions JobOptions(Ledger l, string repoUrl, string commit, string trackBranch, string scriptText)
+        {
+            var opts = new ProvisionOptions();
+            opts.RepoUrl = repoUrl;
+            opts.Ref = commit;
+            opts.TrackBranch = trackBranch;
+            opts.Internet = l.Internet;
+            opts.IncludeAi = l.IncludeAi;
+            opts.ScriptHasAiChoice = ProvisionScript.SupportsAiChoice(scriptText);
+            opts.Media = MediaPaths.Under(l.MediaRoot);
+            return opts;
+        }
+
         public static void WriteJob(Output o, string image, string imageSha, string provision, string provisionSha, string repoUrl, string commit, string trackBranch, string lanIp)
         {
             Ledger l = NeedLedger();
@@ -258,18 +276,14 @@ namespace Domovoi.Windows.Helper
             CopyPinned(image, imageDest, imageSha, o);
             CopyPinned(provision, provDest, provisionSha, o);
 
-            var opts = new ProvisionOptions();
-            opts.RepoUrl = repoUrl;
-            opts.Ref = commit;
-            opts.TrackBranch = trackBranch;
-            opts.Internet = l.Internet;
+            // The copy just checked against its pin: what DomovoiHost runs.
+            ProvisionOptions opts = JobOptions(l, repoUrl, commit, trackBranch, File.ReadAllText(provDest, Encoding.UTF8));
             if (lanIp == "auto")
             {
                 Preflight.LanInfo lan = Preflight.Lan();
                 opts.LanIp = lan != null && lan.Private ? lan.Ip : null;
             }
             else if (lanIp != "none") opts.LanIp = lanIp;
-            opts.Media = MediaPaths.Under(l.MediaRoot);
 
             var w = new WslConfigOptions();
             w.MemoryGb = WslConfig.MemoryCapGb(Preflight.InstalledRamBytes());
