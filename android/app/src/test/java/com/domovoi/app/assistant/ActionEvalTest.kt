@@ -221,8 +221,8 @@ class ActionEvalTest {
         chat("How many legs does a spider have?"),
     )
 
-    /** Review round 2's near-misses (functional-testing/review-phone-actions,
-     *  probe.txt): chat words and search verbs that must not act. Scored in
+    /** Review round 2's near-misses (the round-2 review's probe
+     *  list): chat words and search verbs that must not act. Scored in
      *  a chat with no playback (the turn before was the model's, nothing is
      *  playing): bare "continue" and "next one" are the model's there. */
     private val reviewNear: List<String> = listOf(
