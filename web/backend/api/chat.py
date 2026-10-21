@@ -918,7 +918,7 @@ def _retry_refused(code: str, detail: str) -> JSONResponse:
 
 @router.post(
     "/threads/{thread_id}/retry",
-    dependencies=DEVICE,
+    dependencies=SEND,
     responses={409: {"description": '{"detail": "...", "code": "..."}: `nothing_to_retry` (the thread doesn\'t '
                                     "end with a reply to a question), `not_retryable` (a spoken turn's or another "
                                     "writer's reply, not the chat model's), `already_retried` (another try again "
@@ -939,7 +939,6 @@ async def retry_reply(thread_id: int) -> StreamingResponse:
     ``nothing_to_retry`` when the thread doesn't end with a reply to a
     question, 409 ``already_retried`` when another try again is replacing
     it. The model doesn't see the reply being replaced."""
-    _refuse_with_ai_off()
     async with session_scope() as s:
         thread = (
             await s.execute(text("SELECT person_id FROM chat_threads WHERE id = :id"), {"id": thread_id})
@@ -1263,27 +1262,9 @@ _replies_busy = 0
 
 
 def _ai_turned_off() -> bool:
-    """The household's AI features switch (``domovoi.ai_features``, from
-    the AI-optional work), where this server has one; off means no model
-    is asked for anything, titles included."""
-    try:
-        from domovoi import ai_features  # type: ignore[attr-defined]
-    except ImportError:
-        return False
-    try:
-        return bool(ai_features.turned_off())
-    except Exception:  # noqa: BLE001 — unknown: the send's own gate decides
-        return False
-
-
-def _refuse_with_ai_off() -> None:
-    """The AI-off refusal for a route that asks the model (the retry),
-    where this server has the switch."""
-    if not _ai_turned_off():
-        return
-    from domovoi import ai_features  # type: ignore[attr-defined]
-
-    raise ai_features.http_exception("chat")
+    """The household's AI features switch (``domovoi.ai_features``): off
+    means no model is asked for anything, titles included."""
+    return ai_features.turned_off()
 
 
 def _auto_titles_on() -> bool:
