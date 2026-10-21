@@ -100,7 +100,10 @@ fun ChatScreen(away: Boolean = false, awayLine: String? = null) {
     val unsupported = assistant?.state?.value?.memory
         ?.takeIf { phoneEngine && !facts.phoneCapable }
         ?.let { unsupportedText(it.marketedGb, it.lowRamDevice) }
+    val request by app.pendingChat.collectAsState()
     ChatHome(
+        request = request,
+        onRequestTaken = { app.pendingChat.value = null },
         places = places,
         startable = startable,
         lastUsed = ChatPlaceKind.of(lastUsed),
@@ -153,9 +156,20 @@ internal fun ChatHome(
     subtitle: String,
     emptyHint: String?,
     onUsed: (ChatPlaceKind) -> Unit,
+    request: ChatOpenRequest? = null,
+    onRequestTaken: () -> Unit = {},
 ) {
     var open by remember { mutableStateOf<OpenChat?>(null) }
     var visits by remember { mutableIntStateOf(0) }
+    // A chat asked for from outside (Files' "Ask about this document"):
+    // opened here once its place is listed.
+    LaunchedEffect(request, places.map { it.kind }) {
+        val r = request ?: return@LaunchedEffect
+        val kind = ChatPlaceKind.of(r.place) ?: return@LaunchedEffect onRequestTaken()
+        if (places.none { it.kind == kind }) return@LaunchedEffect
+        open = OpenChat(kind, ChatRow(kind, r.id, NEW_CHAT, null, 0L, 0), ++visits)
+        onRequestTaken()
+    }
     var deleteTarget by remember { mutableStateOf<ChatRow?>(null) }
     val chip = { kind: ChatPlaceKind -> placeChip(kind, serverShareSeen) }
 

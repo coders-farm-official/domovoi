@@ -92,6 +92,18 @@ internal class AssistantActions(
     val deliverReport: (ReportSink, ReplyReport) -> Unit = { _, _ -> },
     val deleteReport: (String) -> Unit = {},
     val clearReports: () -> Unit = {},
+    /** The paperclip: attach a document (its name, and how to read it);
+     *  null where phone chats take no documents. */
+    val attachDocument: ((String, () -> java.io.InputStream) -> Unit)? = null,
+    /** "Ask the home server" for a PDF this phone can't read; null when no
+     *  paired home server is in reach. */
+    val askServer: ((com.domovoi.app.assistant.PendingDocument) -> Unit)? = null,
+    /** ...and it is reading one now. */
+    val askingServer: Boolean = false,
+    val dropPending: () -> Unit = {},
+    val closeDocProblem: () -> Unit = {},
+    /** The phone's own copy of a document of the conversation on screen, by id. */
+    val docFile: (String) -> java.io.File? = { null },
 )
 
 /** The phone chat's part of Chat's conversation frame: the way back to the
@@ -231,7 +243,26 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
     }
     // Saying something here makes this phone the place last used.
     val used = frame.onSent
-    AssistantContent(ui, actionsFor(assistant, download, talk, sinks, reportScope, used) { toast(it) }, chrome)
+    // "Ask the home server" for a PDF this phone can't read the text of:
+    // only with a paired home server in reach; it reads the text and keeps
+    // nothing, and the answer is still written on this phone.
+    val choice = com.domovoi.app.ui.shell.LocalServerChoice.current
+    var asking by remember { mutableStateOf(false) }
+    val askServer: ((com.domovoi.app.assistant.PendingDocument) -> Unit)? =
+        if (choice is com.domovoi.app.ui.shell.ServerChoice.Available && !choice.needsPairing) {
+            { p ->
+                reportScope.launch {
+                    asking = true
+                    com.domovoi.app.ui.screens.chat.extractOnServer(app, assistant.pendingFile(p), p.name)
+                        .onSuccess { assistant.attachRead(p, it) }
+                        .onFailure { toast(com.domovoi.app.ui.screens.chat.docFailureText("read", it)) }
+                    asking = false
+                }
+            }
+        } else {
+            null
+        }
+    AssistantContent(ui, actionsFor(assistant, download, talk, sinks, reportScope, used, askServer, asking) { toast(it) }, chrome)
 }
 
 /** Which conversation a phone chat's view waits for the controller to show. */
@@ -276,6 +307,8 @@ private fun actionsFor(
     sinks: List<ReportSink>,
     scope: CoroutineScope,
     used: () -> Unit,
+    askServer: ((com.domovoi.app.assistant.PendingDocument) -> Unit)? = null,
+    askingServer: Boolean = false,
     toast: (String) -> Unit,
 ) = AssistantActions(
     download = download,
@@ -309,6 +342,17 @@ private fun actionsFor(
     },
     deleteReport = a::deleteReport,
     clearReports = a::clearReports,
+    attachDocument = if (a.canAttach) { name, open ->
+        a.attach(name, open)
+        used()
+    } else {
+        null
+    },
+    askServer = askServer,
+    askingServer = askingServer,
+    dropPending = a::dropPending,
+    closeDocProblem = a::closeDocProblem,
+    docFile = { id -> a.docFile(id) },
 )
 
 /** The screen for [ui], with no controller behind it (the tests render it). */

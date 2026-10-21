@@ -134,6 +134,10 @@ class AppContainer(context: Context) {
      *  navigates there and clears it. */
     val pendingRoute = MutableStateFlow<String?>(null)
 
+    /** A chat something asked Chat to open ("Ask about this document" in
+     *  Files): Chat opens it and clears it. */
+    val pendingChat = MutableStateFlow<com.domovoi.app.ui.screens.chat.ChatOpenRequest?>(null)
+
     /** Phone files on their way to the server ("Your device" → upload),
      *  by row; they run in [scope], so leaving the page doesn't stop one. */
     val uploads = PhoneUploads()

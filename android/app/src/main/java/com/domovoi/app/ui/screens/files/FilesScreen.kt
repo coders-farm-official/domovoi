@@ -1,5 +1,15 @@
 package com.domovoi.app.ui.screens.files
 
+import androidx.compose.material.icons.outlined.QuestionAnswer
+import com.domovoi.app.assistant.AssistantSupport
+import com.domovoi.app.assistant.DeviceTier
+import com.domovoi.app.assistant.docs.DocExtract
+import com.domovoi.app.net.LocalCapabilities
+import com.domovoi.app.net.LocalSharedScreen
+import com.domovoi.app.ui.screens.chat.CHAT_ROUTE
+import com.domovoi.app.ui.screens.chat.ChatOpenRequest
+import com.domovoi.app.ui.screens.chat.chatFromDocument
+import com.domovoi.app.ui.screens.chat.docFailureText
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -249,6 +259,44 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
     var sendHomeEntry by remember { mutableStateOf<FileEntry?>(null) }
     var confirmForget by remember { mutableStateOf<FileLibrary?>(null) }
     var busy by remember { mutableStateOf<String?>(null) } // uploading | deleting | importing | sending
+
+    // "Ask about this document" (documents plan, D1): a phone file starts a
+    // phone chat with it attached, a file in the household's Documents a
+    // home-server chat. The places never blend, so each is offered only
+    // where its own chat can run.
+    val caps = LocalCapabilities.current
+    val sharedScreen = LocalSharedScreen.current
+    val phoneChats = source.onPhone && AssistantSupport.available && !sharedScreen &&
+        app.assistant.state.collectAsState().value.tier != DeviceTier.Unsupported
+    val serverChats = !source.onPhone && caps.aiEnabled && selectedId == DOCUMENTS_LIBRARY_ID
+    fun canAsk(e: FileEntry): Boolean = askable(e, phoneChats, serverChats)
+    fun ask(e: FileEntry) {
+        val id = selectedId ?: return
+        if (source.onPhone) {
+            val uri = source.contentUri(id, e.rel)
+            if (uri == null) {
+                toast("can't read \"${e.name}\"")
+                return
+            }
+            val conversation = app.assistant.startWithDocument(e.name) {
+                ctx.contentResolver.openInputStream(uri) ?: throw java.io.IOException("can't read ${e.name}")
+            }
+            app.pendingChat.value = ChatOpenRequest("phone", conversation)
+            app.pendingRoute.value = CHAT_ROUTE
+        } else {
+            busy = "asking"
+            toast("reading \"${e.name}\" on the home server…")
+            scope.launch {
+                runCatching { chatFromDocument(app, e.rel) }
+                    .onSuccess {
+                        app.pendingChat.value = ChatOpenRequest("server", it.thread.id.toString())
+                        app.pendingRoute.value = CHAT_ROUTE
+                    }
+                    .onFailure { toast(docFailureText("ask", it)) }
+                busy = null
+            }
+        }
+    }
 
     fun askSendHome(e: FileEntry) {
         if (uploader == null || uploader.gate()) sendHomeEntry = e
@@ -587,6 +635,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                                 onImport = if (isRemovable && !blocked) ({ importEntry = e }) else null,
                                 onDownload = if (source.canDownload) ({ source.download(ctx, selectedId ?: "", e) }) else null,
                                 onSendHome = if (canSendHome && !e.isDir) ({ askSendHome(e) }) else null,
+                                onAsk = if (canAsk(e)) ({ ask(e) }) else null,
                                 upload = uploader?.state(fileUploadKey(selectedId ?: "", e.rel)),
                                 // The web moves things by drag and drop; a phone
                                 // gets a destination picker instead (FilesMoveSheet).
@@ -821,6 +870,8 @@ private fun FileRow(
     onDelete: (() -> Unit)?,
     /** Set in "your device" mode: [onSendHome] is shown as the Upload button, in this state. */
     upload: UploadButtonState? = null,
+    /** "Ask about this document": a chat with it attached. */
+    onAsk: (() -> Unit)? = null,
 ) {
     Column {
         Row(
@@ -858,6 +909,11 @@ private fun FileRow(
                         color = Domovoi.colors.fgFaint,
                     )
                     entry.lockedBy?.let { Pill("editing in $it", Tone.Warn) }
+                }
+            }
+            onAsk?.let {
+                IconButton(onClick = it) {
+                    Icon(Icons.Outlined.QuestionAnswer, "ask about this document", tint = Domovoi.colors.fgMuted)
                 }
             }
             onImport?.let {
@@ -963,3 +1019,9 @@ private fun entryIcon(entry: FileEntry): ImageVector = when (entry.kind) {
     "pdf" -> Icons.Outlined.PictureAsPdf
     else -> Icons.Outlined.Description
 }
+
+/** Whether a file row offers "Ask about this document": a file of a kind
+ *  Chat reads, and a chat in its own place can run ([phoneChats] for a
+ *  phone file, [serverChats] for one in the household's Documents). */
+internal fun askable(e: FileEntry, phoneChats: Boolean, serverChats: Boolean): Boolean =
+    !e.isDir && DocExtract.kindFor(e.name) != null && (phoneChats || serverChats)
