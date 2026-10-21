@@ -17,7 +17,9 @@
 --   user_message_id  the message that asked for the summary.
 --   question      what the person asked ("summarize the lease").
 --   state         running | stopped | failed. A finished job's row is
---                 deleted: its summary is the assistant message.
+--                 deleted: its summary is the assistant message. A row left
+--                 running by a restart reads as interrupted until the
+--                 person carries it on.
 --   chunks        the plan: [{doc, units: [[part, start, end]], chars}]
 --                 over `documents` (the thread's tokens, in order).
 --   documents     the document tokens the chunks index, in order.
@@ -27,6 +29,8 @@
 --                 null when nothing was measured yet.
 --   stats         the job's own counts: prompt/output tokens, durations,
 --                 characters sent (they make the next estimate).
+--   model         the model the person's message named (null: the QA
+--                 model); carrying on keeps it.
 --
 -- A phone's private job ("Use home server" from a phone chat, owner
 -- decision Q6) is never written here: it lives in the web process's
@@ -43,6 +47,7 @@ CREATE TABLE IF NOT EXISTS chat_doc_jobs (
     notes           JSONB       NOT NULL DEFAULT '[]'::jsonb,
     estimate_s      REAL,
     stats           JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    model           TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );

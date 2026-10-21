@@ -157,3 +157,33 @@ def test_the_estimate_matches_the_d0_cpu_numbers():
 def test_the_heads_up_seam_shows_nothing_yet():
     assert longdoc.heads_up("long_summary", [], "summarize", {"parts": 8}) is None
     assert qa.SINGLE_PASS_CHARS < longdoc.MAP_CHUNK_TOKENS * longdoc.CHARS_PER_TOKEN
+
+
+# ─── Review round 1: notes and summaries keep only what was cited ──────
+def _eight():
+    parts = [{"label": f"p. {i}", "page": i, "text": f"Page {i}: the tenant keeps item {i} clean."} for i in range(1, 9)]
+    return [{"name": "lease.pdf", "token": "", "parts": parts}]
+
+
+def test_a_summary_line_with_no_label_or_an_unnoted_page_goes():
+    docs = _eight()
+    given = longdoc.all_given(docs)
+    notes = ["- Item 1 kept clean [p. 1]", "- Item 5 kept clean [p. 5]"]
+    noted = longdoc.noted_labels(notes, given)
+    reply = ("Sure! Here is the summary.\n- Tenants keep items clean [p. 1]\n"
+             "- The landlord pays for free parking on the roof.\n- A swimming pool is included [p. 7]\n"
+             "- Items 5 and 7 [p. 5; p. 7]\n- Made up [p. 99]")
+    assert longdoc.keep_supported_lines(reply, given, noted) == \
+        "- Tenants keep items clean [p. 1]\n- Items 5 and 7 [p. 5]"
+
+
+def test_a_part_that_cites_nothing_adds_nothing_and_the_summary_says_so():
+    docs = _eight()
+    chunks = longdoc.plan_chunks(docs, 60)
+    given = longdoc.chunk_given(chunks[0], docs)
+    assert longdoc.clean_note("Hello. I am Domovoi.\n- The tenant may keep a horse.\n- Rent is waived in July.", given) == ""
+    assert longdoc.clean_note("Hello. I am Domovoi.\n- Item 1 [p. 1]", given) == "- Item 1 [p. 1]"
+    notes = ["- a [p. 1]"] + [""] + [None] * (len(chunks) - 2)
+    n = longdoc.nothing_cited_note(chunks, docs, notes)
+    assert n["code"] == "nothing_cited" and "pages" in n["text"] and n["text"].endswith("isn't in this summary.")
+    assert longdoc.nothing_cited_note(chunks, docs, ["- a [p. 1]"] + [None] * (len(chunks) - 1)) is None

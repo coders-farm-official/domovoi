@@ -1130,9 +1130,17 @@ async def _answer(
         # job that carries on if the page goes, with progress, stop and the
         # reply written when it ends (chat_doc_jobs.py, documents plan D2).
         _docs._require_ai()
-        docs = [{"token": d.get("token"), "name": d.get("name"), "parts": d.get("parts") or []} for d in plan.docs]
-        job = await _jobs.start_thread_job(thread_id, user_row_id, plan.question, docs, model=override or None)
-        return _jobs.stream_thread_job(job)
+        # One job a thread: a second "summarize" follows the one reading;
+        # and at most MAX_RUNNING in the house (review round 1).
+        claim = await _jobs.claim_thread(thread_id)
+        if isinstance(claim, _jobs.Job):
+            return _jobs.stream_thread_job(claim)
+        if claim == "busy":
+            plan.long, plan.immediate, plan.found = False, _jobs.BUSY_TEXT, False
+        else:
+            docs = [{"token": d.get("token"), "name": d.get("name"), "parts": d.get("parts") or []} for d in plan.docs]
+            job = await _jobs.start_thread_job(thread_id, user_row_id, plan.question, docs, model=override or None)
+            return _jobs.stream_thread_job(job)
 
     refusal: tuple[str, str] | None = None
     if model_role == "vision":

@@ -231,6 +231,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from web.backend.api import chat_doc_jobs
 
     chat_doc_jobs.boot()
+    chat_doc_jobs.start_sweeper()
 
     broadcaster = StateBroadcaster()
     poll_loop = StatePollLoop(broadcaster, interval_sec=_POLL_INTERVAL)

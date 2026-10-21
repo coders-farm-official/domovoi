@@ -338,41 +338,77 @@ def reduce_groups(notes: Sequence[str], limit_chars: int = int(MAP_CHUNK_TOKENS 
 
 def clean_note(reply: str, given: Sequence[qa.Given]) -> str:
     """A map step's reply after the app's check (:func:`answer.check_reply`,
-    line by line): labels only of passages in its chunk, and a line whose
-    every label was made up goes (a point the part doesn't hold). When any
-    line cites a passage, the lines that cite none go too: a greeting or a
-    preamble ("Hello. I am Domovoi…", seen on the Fold bench) is not a
-    note. "" when the reply says the part has nothing, or says nothing."""
-    kept: list[tuple[str, bool]] = []
+    line by line): only the lines that cite a passage of its chunk, with
+    only those labels. A line with no label is not a note (a greeting, a
+    preamble, a claim the model didn't tie to the text: review round 1),
+    and a line whose every label was made up goes. "" when nothing was
+    cited: the part then adds nothing to the summary, and the summary says
+    so (:func:`nothing_cited_note`)."""
+    kept: list[str] = []
     for line in (reply or "").splitlines():
         if not line.strip():
             continue
         checked = qa.check_reply(line, given)
-        if checked.dropped and not checked.cited:
-            continue
-        if not checked.found:
-            continue
-        kept.append((checked.content, bool(checked.cited)))
-    if any(c for _, c in kept):
-        kept = [(t, c) for t, c in kept if c]
-    return "\n".join(t for t, _ in kept).strip()
+        if checked.found and checked.cited:
+            kept.append(checked.content)
+    return "\n".join(kept).strip()
 
 
-def drop_invented_lines(reply: str, given: Sequence[qa.Given]) -> str:
-    """The summary's lines less those whose every label names no passage
-    (a point the document doesn't hold: "Free parking [p. 999]"). Lines
-    with no label at all stay; the summary's own check comes next."""
-    out = []
+def _norm(label: str) -> str:
+    return qa.norm_label(label)
+
+
+def noted_labels(notes: Sequence[str], given: Sequence[qa.Given]) -> set[str]:
+    """The labels the parts' notes cite (each a passage the app gave)."""
+    out: set[str] = set()
+    for n in notes:
+        if (n or "").strip():
+            out.update(_norm(c) for c in qa.check_reply(n, given).cited)
+    return out
+
+
+def keep_supported_lines(reply: str, given: Sequence[qa.Given], noted: set[str]) -> str:
+    """The summary's lines that cite a page some part's notes cited, with
+    only such labels (review round 1): a line with no label, a line citing
+    only pages the notes never cited, and a line whose labels were made up
+    all go, so the combine step can't add a claim the parts didn't make."""
+    allowed = [g for g in given if _norm(g.cite) in noted]
+    kept: list[str] = []
     for line in (reply or "").splitlines():
-        if line.strip():
-            checked = qa.check_reply(line, given)
-            if checked.dropped and not checked.cited:
-                continue
-        out.append(line)
-    return "\n".join(out)
+        if not line.strip():
+            continue
+        checked = qa.check_reply(line, allowed)
+        if checked.found and checked.cited:
+            kept.append(checked.content)
+    return "\n".join(kept).strip()
+
+
+def nothing_cited_note(chunks: Sequence[Chunk], docs: Sequence[dict[str, Any]],
+                       notes: Sequence[str | None]) -> dict[str, str] | None:
+    """The honest line for parts the model read but cited nothing from: they
+    are not in the summary. None when every part read gave notes."""
+    empty = [i for i, n in enumerate(notes) if n is not None and not n.strip()]
+    if not empty:
+        return None
+    where = []
+    for i in empty:
+        span = chunk_pages(chunks[i], docs) if len(docs) == 1 else None
+        where.append(pages_phrase(*span) if span else f"part {i + 1}")
+    if len(where) > 1:
+        what = ", ".join(where[:-1]) + " and " + where[-1]
+    else:
+        what = where[0]
+    return {"code": "nothing_cited",
+            "text": f"Domovoi found nothing it could cite in {what}, so "
+                    f"{'it isn' if len(where) == 1 else 'they aren'}'t in this summary."}
 
 
 # ─── What the person reads ───────────────────────────────────────────────
+#: The reply when no part gave anything the model could cite.
+NOTHING_CITED = ("Domovoi couldn't find anything in the document it could cite, so there is no summary. "
+                 "Ask about something specific in it instead.")
+
+
 def stopped_text(phrase: str, notes: Sequence[str]) -> str:
     """The reply to a stopped summary: what was read so far, no model call."""
     kept = [x.strip() for x in notes if (x or "").strip()]

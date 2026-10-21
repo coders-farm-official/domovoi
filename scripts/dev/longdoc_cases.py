@@ -136,11 +136,25 @@ def build() -> dict:
          "- Deposit [page 2] and pets (p. 3)",
          "Hello. I am Domovoi, here are the notes.\n- Rent is due on the first [p. 1]\n**Notes**"]
     ]
-    out["drop_invented_lines"] = [
-        {"reply": r, "out": longdoc.drop_invented_lines(r, longdoc.all_given(given_docs))} for r in
-        ["- Rent [p. 1]\n- Free parking [p. 999]\n- A plain line\n\n- Pets [p. 3; p. 77]",
-         "- Nothing real [p. 50]"]
+    all_lease = longdoc.all_given(given_docs)
+    out["keep_supported_lines"] = [
+        {"reply": r, "notes": ns, "out": longdoc.keep_supported_lines(r, all_lease, longdoc.noted_labels(ns, all_lease))}
+        for r, ns in [
+            ("Hi!\n- Rent [p. 1]\n- Free parking [p. 999]\n- A plain line\n\n- Pets [p. 3; p. 2]",
+             ["- r [p. 1]", "- p [p. 3]"]),
+            ("- Nothing real [p. 50]\n- Deposit [p. 2]", ["- r [p. 1]"]),
+        ]
     ]
+    out["nothing_cited"] = [
+        {"notes": ns, "out": longdoc.nothing_cited_note(cs, ds, ns)}
+        for cs, ds, ns in [
+            (longdoc.plan_chunks([{"name": "x", "parts": _pages(9)}], 300), [{"name": "x", "parts": _pages(9)}],
+             ["- a [p. 1]", "", "", None, None]),
+            (longdoc.plan_chunks([{"name": "x", "parts": _pages(9)}], 300), [{"name": "x", "parts": _pages(9)}],
+             ["- a [p. 1]", None, None, None, None]),
+        ]
+    ]
+    out["nothing_cited_text"] = longdoc.NOTHING_CITED
     out["constants"] = {
         "MAP_CHUNK_TOKENS": longdoc.MAP_CHUNK_TOKENS, "PHONE_MAP_CHUNK_TOKENS": longdoc.PHONE_MAP_CHUNK_TOKENS,
         "PHONE_GPU_MAP_CHUNK_TOKENS": longdoc.PHONE_GPU_MAP_CHUNK_TOKENS,

@@ -223,8 +223,13 @@ async def _read_stored(token: str, path: Path, name: str, size: int) -> dict[str
     meta = _meta(token, name, size, result)
     data = {"version": doc_extract.FORMAT_VERSION, "meta": meta, "parts": result["parts"]}
     part = _parts_path(token).with_suffix(f".{uuid.uuid4().hex[:8]}.part")
-    part.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    part.replace(_parts_path(token))
+    try:
+        part.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        part.replace(_parts_path(token))
+    finally:
+        # A write that failed leaves no half-written copy (the sweep removes
+        # one a crash left: chat_doc_jobs.sweep).
+        part.unlink(missing_ok=True)
     return meta
 
 

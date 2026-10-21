@@ -970,12 +970,12 @@ app.include_router(printing_router)
 @app.get("/v1/voice/activity", dependencies=[Depends(require_device)])
 async def get_voice_activity() -> dict[str, Any]:
     """Whether a voice turn is being answered now (domovoi/voice_activity.py):
-    ``{"busy", "turns", "oldest_ms", "since_last_ms"}``. The web process's
-    document jobs ask between their parts and wait while ``busy``, so a
-    question in a room waits at most for the one part already being read.
-    Device tier, like the turns themselves: it says only that someone is
-    talking to Domovoi, never who or what."""
-    return voice_activity.snapshot()
+    ``{"busy"}`` and nothing else (review round 1: no counts or timings
+    over the device tier). The web process's document jobs ask before
+    every model call (parts and the combine step) and wait while it is
+    true, so a question in a room waits at most for the one call already
+    running. Device tier, like the turns themselves."""
+    return {"busy": bool(voice_activity.snapshot()["busy"])}
 
 
 @app.post(

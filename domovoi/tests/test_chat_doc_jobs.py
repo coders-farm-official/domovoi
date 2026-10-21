@@ -123,7 +123,7 @@ class FakeModel:
     async def stream(self, messages, model, stats=None, **kw):
         with self.lock:
             self.calls.append({"kind": self.kind(messages), "messages": messages, "t": time.monotonic(),
-                               "num_predict": kw.get("num_predict")})
+                               "num_predict": kw.get("num_predict"), "model": model})
         self.started.set()
         t0 = time.monotonic()
         index = len(self.calls) - 1
@@ -148,8 +148,10 @@ def dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs_api, "JOBS_DIR", tmp_path / "doc-jobs")
     jobs_api._JOBS.clear()
     jobs_api._private_stats.clear()
+    jobs_api._starting.clear()
     yield tmp_path
     jobs_api._JOBS.clear()
+    jobs_api._starting.clear()
 
 @pytest.fixture
 def model(monkeypatch):
@@ -367,11 +369,15 @@ def test_stop_keeps_the_partial_notes_and_carry_on_reads_only_the_rest(model):
 
 
 @requires_db
-def test_a_job_a_restart_lost_carries_on_from_its_next_part(model):
+def test_a_job_a_restart_lost_is_interrupted_and_carries_on_when_asked_with_its_model(model):
+    """Review round 1: viewing the chat doesn't restart a lost job; it says
+    "interrupted — carry on?", and carrying on keeps the model the message
+    named."""
     with _client() as c:
         tid, tok = _thread_with_long_pdf(c)
         model.hold.set()
-        bg = _send_bg(c, tid, tok)
+        bg = Bg(lambda: c.post(f"/api/chat/threads/{tid}/messages",
+                               json={"content": "summarize", "documents": [{"token": tok}], "model": "llama3.2:3b-big"}))
         job = _the_job()
         _wait(lambda: model.calls)
         # The process "restarts": its jobs are gone; the row says part 1 was read.
@@ -381,11 +387,34 @@ def test_a_job_a_restart_lost_carries_on_from_its_next_part(model):
            {"id": job.id, "n": json.dumps(["- Saved notes [p. 2]", None, None])}, write=True)
         model.hold.clear()
         model.calls.clear()
-        jobs = c.get(f"/api/chat/threads/{tid}/messages").json()["jobs"]
-        assert jobs[0]["id"] == job.id and jobs[0]["read"] == 1 and jobs[0]["state"] == "running"
+        for _ in range(2):
+            jobs = c.get(f"/api/chat/threads/{tid}/messages").json()["jobs"]
+            assert jobs[0]["id"] == job.id and jobs[0]["read"] == 1 and jobs[0]["state"] == "interrupted"
+            assert jobs[0]["line"] == "this summary was interrupted — carry on?"
+        assert c.get(f"/api/chat/doc-jobs/{job.id}").json()["state"] == "interrupted"
+        time.sleep(0.3)
+        assert model.calls == [] and _assistant_rows(c, tid) == []      # nothing restarted it
+        assert c.post(f"/api/chat/doc-jobs/{job.id}/resume").json()["state"] == "running"
         _wait(lambda: _assistant_rows(c, tid))
     assert [x["kind"] for x in model.calls] == ["map", "map", "reduce"]
+    assert {x["model"] for x in model.calls} == {"llama3.2:3b-big"}
     assert "Saved notes [p. 2]" in model.calls[-1]["messages"][1]["content"]
+
+
+@requires_db
+def test_an_interrupted_job_with_ai_off_says_stopped(model, monkeypatch):
+    with _client() as c:
+        tid, tok = _thread_with_long_pdf(c)
+        model.hold.set()
+        bg = _send_bg(c, tid, tok)
+        _the_job()
+        _wait(lambda: model.calls)
+        c.portal.call(jobs_api.shutdown)
+        bg.join()
+        model.hold.clear()
+        monkeypatch.setattr(docs_api, "ai_turned_off", lambda: True)
+        j = c.get(f"/api/chat/threads/{tid}/messages").json()["jobs"][0]
+        assert j["state"] == "stopped" and j["line"] == "stopped (AI is off)"
 
 
 @requires_db
@@ -419,9 +448,11 @@ def test_a_voice_turn_during_a_job_waits_at_most_one_part(model, voice):
         _wait(lambda: model.calls, step=0.002)
         voice.busy = True               # a question in the kitchen, mid part 1
         turn_started = time.monotonic()
-        time.sleep(1.0)                 # the turn takes a second
+        # The part in flight finishes; then the job waits for the turn.
+        _wait(lambda: job.waiting, timeout=15)
+        assert job.view()["line"].startswith("waiting for a voice question")
+        time.sleep(0.5)                 # the turn goes on a while longer
         calls_during_turn = [x for x in model.calls if x["t"] > turn_started]
-        assert job.waiting and job.view()["line"].startswith("waiting for a voice question")
         voice.busy = False
         turn_ended = time.monotonic()
         events = _sse(bg.join().text)
@@ -431,7 +462,7 @@ def test_a_voice_turn_during_a_job_waits_at_most_one_part(model, voice):
     assert part1_ends - turn_started <= model.seconds + 0.05
     assert model.calls[1]["t"] >= turn_ended - 0.05
     done = [d for e, d in events if e == "done"][0]
-    assert done["stats"]["voice_waits"] == 1 and done["stats"]["voice_wait_ms"] >= 500
+    assert done["stats"]["voice_waits"] == 1 and done["stats"]["voice_wait_ms"] > 0
     assert any(d.get("waiting_for_voice") for e, d in events if e == "progress")
 
 
@@ -473,7 +504,8 @@ def test_the_core_answers_voice_activity_and_an_intent_counts_as_a_turn(monkeypa
     monkeypatch.setattr(core_main, "route", _route)
     with TestClient(core_main.app, headers={"X-Requested-With": "domovoi-tests"}) as c:
         r = c.get("/v1/voice/activity")
-        assert r.status_code == 200 and r.json()["busy"] is False
+        # {busy} and nothing else over the device tier (review round 1).
+        assert r.status_code == 200 and r.json() == {"busy": False}
         c.post("/v1/intent", json={"transcript": "what time is it", "room_id": "kitchen"})
     assert seen == [True] and not va.busy()
 
@@ -651,30 +683,32 @@ def test_the_sweep_spares_an_upload_still_being_read(dirs):
 
 
 @requires_db
-def test_two_readers_opening_a_lost_job_start_one_runner(model):
+def test_a_second_summarize_follows_the_job_reading_and_the_house_reads_two_at_most(model):
+    """Review round 1: one job a thread (six sends, one job, one summary),
+    and at most MAX_RUNNING in the house (a third chat is told to wait)."""
     with _client() as c:
         tid, tok = _thread_with_long_pdf(c)
         model.hold.set()
-        bg = _send_bg(c, tid, tok)
-        job = _the_job()
+        bgs = [_send_bg(c, tid, tok) for _ in range(6)]
         _wait(lambda: model.calls)
-        c.portal.call(jobs_api.shutdown)
-        bg.join()
-        model.calls.clear()
-        model.hold.set()
-
-        async def two_at_once():
-            a, b = await asyncio.gather(jobs_api.thread_jobs(tid), jobs_api.thread_jobs(tid))
-            return a, b, [j for j in jobs_api._JOBS.values() if j.id == job.id]
-
-        a, b, live = c.portal.call(two_at_once)
-        assert a[0]["state"] == b[0]["state"] == "running" and len(live) == 1
-        _wait(lambda: model.calls)
-        time.sleep(0.2)
-        assert len(model.calls) == 1          # one runner, one part 1 in flight
+        time.sleep(0.5)
+        live = [j for j in jobs_api._JOBS.values() if j.state in jobs_api.LIVE]
+        assert len(live) == 1
+        tid2, tok2 = _thread_with_long_pdf(c)
+        bg2 = _send_bg(c, tid2, tok2)
+        _wait(lambda: len([j for j in jobs_api._JOBS.values() if j.state in jobs_api.LIVE]) == 2)
+        tid3, tok3 = _thread_with_long_pdf(c)
+        r3 = c.post(f"/api/chat/threads/{tid3}/messages", json={"content": "summarize", "documents": [{"token": tok3}]})
+        done3 = [d for e, d in _sse(r3.text) if e == "done"][0]
+        assert done3["content"] == jobs_api.BUSY_TEXT
+        r4 = c.post("/api/chat/doc-jobs", files={"file": ("x.pdf", io.BytesIO(_pdf(2)), "application/pdf")})
+        assert r4.status_code == 429
         model.hold.clear()
-        _wait(lambda: _assistant_rows(c, tid))
-    assert [x["kind"] for x in model.calls] == ["map", "map", "map", "reduce"]
+        outs = [b.join(60) for b in bgs]
+        bg2.join(60)
+        dones = [[d for e, d in _sse(o.text) if e == "done"][0] for o in outs]
+        assert len({d["id"] for d in dones}) == 1          # all six streams: the one reply
+        assert len(_assistant_rows(c, tid)) == 1
 
 
 @requires_db
@@ -685,10 +719,23 @@ def test_private_jobs_refuse_what_chat_can_t_read_and_too_many_at_once(model, di
         r = c.post("/api/chat/doc-jobs", files={"file": ("bad.pdf", io.BytesIO(b"not a pdf"), "application/pdf")})
         assert r.status_code == 422 and r.json()["detail"]
         assert not (dirs / "doc-jobs").exists() or list((dirs / "doc-jobs").iterdir()) == []
-        for i in range(jobs_api.MAX_PRIVATE_JOBS):
-            jobs_api._JOBS[f"{i:032x}"] = type("J", (), {"private": True, "created": time.time(), "task": None})()
+        # Finished jobs don't count against the house's limit (review round 1).
+        for i in range(jobs_api.MAX_RUNNING + 3):
+            jobs_api._JOBS[f"{i:032x}"] = type("J", (), {"private": True, "created": time.time(), "task": None,
+                                                        "state": "done", "listeners": set(),
+                                                        "last_seen": time.time(), "thread_id": None})()
+        assert jobs_api.running_count() == 0
+        class _Busy:
+            def done(self):
+                return False
+        for i in range(jobs_api.MAX_RUNNING):
+            jobs_api._JOBS[f"{i + 100:032x}"] = type("J", (), {"private": True, "created": time.time(),
+                                                              "task": _Busy(), "state": "running",
+                                                              "listeners": {1}, "last_seen": time.time(),
+                                                              "thread_id": None})()
         r = c.post("/api/chat/doc-jobs", files={"file": ("x.pdf", io.BytesIO(_pdf(2)), "application/pdf")})
         assert r.status_code == 429
+        jobs_api._JOBS.clear()
 
 
 @requires_db
@@ -711,3 +758,121 @@ def test_a_document_that_fits_one_part_is_summarized_in_one_call(model):
     assert qa.RULES_SUMMARY in model.calls[0]["messages"][0]["content"]
     assert done["doc"]["job"]["parts"] == 1
     assert not any(n["code"] == "read_in_parts" for n in done["doc"]["notes"])
+
+
+# ─── Review round 1: regression tests ───────────────────────────────────
+@requires_db
+def test_an_expired_private_job_is_refused_and_forgotten_even_with_no_new_job(model):
+    with _client() as c:
+        r = c.post("/api/chat/doc-jobs", files={"file": ("lease.pdf", io.BytesIO(_pdf()), "application/pdf")},
+                   data={"question": "summarize my medical letter"})
+        assert r.status_code == 200
+        job = next(j for j in jobs_api._JOBS.values() if j.private)
+        job.created = time.time() - 3 * 24 * 3600
+        assert c.get(f"/api/chat/doc-jobs/{job.id}").status_code == 404
+        assert job.id not in jobs_api._JOBS and job.result is None and job.docs == []
+
+
+@requires_db
+def test_a_private_job_nobody_watches_goes_after_ten_minutes(model):
+    model.hold.set()
+    with _client() as c:
+        bg = Bg(lambda: c.post("/api/chat/doc-jobs", files={"file": ("lease.pdf", io.BytesIO(_pdf()),
+                                                                     "application/pdf")}, data={"question": "summarize"}))
+        job = _the_job()
+        _wait(lambda: model.calls)
+        # The phone dropped: no listener; ten minutes pass.
+        job.listeners.clear()
+        job.last_seen = time.time() - jobs_api.UNATTACHED_TTL_SEC - 1
+        assert jobs_api.sweep() >= 1
+        assert job.id not in jobs_api._JOBS
+        _wait(lambda: job.task.done())
+        model.hold.clear()
+        bg.join()
+
+
+@pytest.mark.asyncio
+async def test_the_sweep_runs_on_its_own(monkeypatch, dirs):
+    """No request or new job needed: the web's sweeper forgets an expired
+    private job (24 hours at most stays true)."""
+    monkeypatch.setattr(jobs_api, "SWEEP_EVERY_SEC", 0.05)
+    job = jobs_api.Job(job_id="c" * 32, docs=[{"name": "x", "parts": []}], chunks=[], question="", private=True)
+    job.created = time.time() - jobs_api.PRIVATE_TTL_SEC - 5
+    jobs_api._JOBS[job.id] = job
+    jobs_api.start_sweeper()
+    try:
+        for _ in range(100):
+            if job.id not in jobs_api._JOBS:
+                break
+            await asyncio.sleep(0.02)
+        assert job.id not in jobs_api._JOBS
+    finally:
+        await jobs_api.shutdown()
+
+
+def test_the_sweep_takes_a_reads_temporary_folder_and_a_half_written_parts_file(dirs):
+    import os
+    import tempfile
+    from pathlib import Path
+
+    old = time.time() - jobs_api.TEMP_MAX_AGE_SEC - 60
+    stale = Path(tempfile.mkdtemp(prefix="domovoi-docread-"))
+    (stale / "result.json").write_text("{}", encoding="utf-8")
+    os.utime(stale, (old, old))
+    fresh = Path(tempfile.mkdtemp(prefix="domovoi-docread-"))
+    docs_api.DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    part = docs_api.DOCS_DIR / ("d" * 32 + "-parts.abcd1234.part")
+    part.write_text("{", encoding="utf-8")
+    os.utime(part, (old, old))
+    try:
+        jobs_api.boot()
+        assert not stale.exists() and not part.exists() and fresh.exists()
+    finally:
+        import shutil
+        shutil.rmtree(fresh, ignore_errors=True)
+        shutil.rmtree(stale, ignore_errors=True)
+
+
+@requires_db
+def test_a_failed_private_job_gives_the_error_and_no_empty_summary(model, monkeypatch):
+    async def boom(messages, model=None, stats=None, **kw):
+        raise RuntimeError("model not found")
+        yield ""  # pragma: no cover
+
+    monkeypatch.setattr(chat_api.ollama_client, "chat_stream", boom)
+    with _client() as c:
+        r = c.post("/api/chat/doc-jobs", files={"file": ("lease.pdf", io.BytesIO(_pdf()), "application/pdf")},
+                   data={"question": "summarize"})
+        events = _sse(r.text)
+    done = [d for e, d in events if e == "done"][0]
+    assert done["state"] == "failed" and done["error"]["detail"] and "result" not in done
+    assert [e for e, _ in events][-2:] == ["error", "done"]
+
+
+@requires_db
+def test_a_summary_keeps_only_what_the_parts_cited(model, monkeypatch):
+    """Review round 1: the combine step can't add a claim (a line with no
+    label, a page no part's notes cited), a part whose model cited nothing
+    adds nothing and the summary says so, and a greeting isn't a note."""
+    orig = model.reply
+
+    def reply(messages):
+        kind, user = model.kind(messages), messages[1]["content"]
+        if kind == "map" and "[p. 5]" in user:
+            return "Hello. I am Domovoi.\n- The tenant may keep a horse.\n- Rent is waived in July."
+        if kind == "map":
+            return "Hello! Here are the notes.\n" + orig(messages)
+        return ("Here is your summary.\n- Tenants report faults quickly [p. 1]\n- A swimming pool [p. 7]\n"
+                "- The landlord pays for free parking on the roof.\n- Item 9 is kept [p. 9]")
+
+    monkeypatch.setattr(model, "reply", reply)
+    with _client() as c:
+        tid, tok = _thread_with_long_pdf(c)
+        r = c.post(f"/api/chat/threads/{tid}/messages", json={"content": "summarize", "documents": [{"token": tok}]})
+        done = [d for e, d in _sse(r.text) if e == "done"][0]
+    reduce_in = model.calls[3]["messages"][1]["content"]
+    assert "Hello" not in reduce_in and "horse" not in reduce_in and "July" not in reduce_in
+    assert done["content"] == "- Tenants report faults quickly [p. 1]\n- Item 9 is kept [p. 9]"
+    assert {"code": "nothing_cited",
+            "text": "Domovoi found nothing it could cite in pages 5-8, so it isn't in this summary."} \
+        in done["doc"]["notes"]

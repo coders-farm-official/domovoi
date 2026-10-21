@@ -82,8 +82,18 @@ router = APIRouter()
 JOBS_DIR = Path.home() / ".domovoi" / "chat_uploads" / "doc-jobs"
 #: A private job, and its summary, are forgotten this long after it began.
 PRIVATE_TTL_SEC = 24 * 3600
-#: At most this many private jobs at once (each holds a document's text).
-MAX_PRIVATE_JOBS = 4
+#: At most this many jobs read at once in the house, home-server chats' and
+#: phones' together (review round 1): Ollama answers one request at a time,
+#: so more would only make every one of them slower.
+MAX_RUNNING = 2
+#: A private job no phone is watching is forgotten after this long, its
+#: summary with it (a phone that went away for good; review round 1).
+UNATTACHED_TTL_SEC = 600
+#: How often the sweep runs while the web process does.
+SWEEP_EVERY_SEC = 120
+#: What a home-server chat says when the house is already reading MAX_RUNNING.
+BUSY_TEXT = ("Domovoi is already reading two long documents for this home. "
+             "Ask for this summary again when one of them has finished.")
 #: How often a waiting job asks whether the voice turn has ended, and the
 #: longest it waits for voice before reading on regardless.
 VOICE_POLL_SEC = 0.25
@@ -96,6 +106,9 @@ TICK_SEC = 2.0
 #: States: running (reading, or waiting for voice), reducing (writing the
 #: summary), stopped, failed, done. Only the first two are live.
 LIVE = ("running", "reducing")
+#: A home-server chat's job whose runner went with a restart: shown as
+#: "interrupted", carried on only when the person says so (review round 1).
+INTERRUPTED = "interrupted"
 
 DEVICE = [Depends(require_device)]
 READ = [Depends(require_device_read)]
@@ -195,6 +208,9 @@ class Job:
         self.ended = asyncio.Event()
         #: What the parts read covered, kept when a private job's text goes.
         self.covers: str | None = None
+        #: When a client last watched or asked for it (private jobs expire
+        #: UNATTACHED_TTL_SEC after this with nobody watching).
+        self.last_seen = time.time()
 
     # The parts read so far (their notes are kept, empty or not).
     @property
@@ -244,6 +260,11 @@ class Job:
             "covers": self.covers if self.covers is not None else longdoc.read_phrase(self.chunks, self.docs, self.read),
             "elapsed_s": round(time.monotonic() - self.started, 1),
         }
+        if self.state == INTERRUPTED:
+            if _docs.ai_turned_off():
+                out["state"], out["line"] = "stopped", "stopped (AI is off)"
+            else:
+                out["line"] = "this summary was interrupted — carry on?"
         if self.result is not None:
             out["result"] = self.result
         if self.error is not None:
@@ -283,7 +304,7 @@ async def _save(job: Job) -> bool:
             "UPDATE chat_doc_jobs SET notes = CAST(:n AS JSONB), stats = CAST(:st AS JSONB), state = :state, "
             "updated_at = now() WHERE id = :id"),
             {"id": job.id, "n": json.dumps(job.notes), "st": json.dumps(job.stats),
-             "state": job.state if job.state in ("running", "stopped", "failed") else "running"})
+             "state": job.state if job.state in ("stopped", "failed") else "running"})
         await s.commit()
         return (r.rowcount or 0) > 0
 
@@ -409,6 +430,10 @@ async def _finish(job: Job, content: str, checked: qa.Checked | None, notes: lis
     job.result = result
     if error is not None:
         job.error = {"detail": error, "code": code}
+        if job.private and not content:
+            # Nothing to give the phone but the error (review round 1): no
+            # empty "result" it could file as a summary.
+            job.result = None
 
 
 async def _finish_stopped(job: Job, *, ai_off: bool = False) -> None:
@@ -429,6 +454,8 @@ async def _reduce(job: Job) -> str:
     """The summary from the notes: in groups first when they don't fit one
     pass, then all at once."""
     notes = [n or "" for n in job.notes]
+    given = longdoc.all_given(job.docs)
+    noted = longdoc.noted_labels(notes, given)
     while True:
         groups = longdoc.reduce_groups(notes)
         if len(groups) <= 1:
@@ -438,7 +465,10 @@ async def _reduce(job: Job) -> str:
             p = longdoc.build_reduce_prompt([notes[i] for i in g], job.names, job.question)
             reply, st, sent = await _ask(job, p["rules"], p["user"], longdoc.REDUCE_NUM_PREDICT)
             job.record(0, 0.0, st, sent)
-            merged.append(longdoc.clean_note(reply, longdoc.all_given(job.docs)))
+            # A group's summary keeps only what its notes cited; where it
+            # kept nothing, the notes themselves go on.
+            merged.append(longdoc.keep_supported_lines(reply, given, noted)
+                          or "\n".join(notes[i] for i in g if notes[i]))
         notes = merged
     p = longdoc.build_reduce_prompt(notes, job.names, job.question)
     reply, st, sent = await _ask(job, p["rules"], p["user"], longdoc.REDUCE_NUM_PREDICT)
@@ -450,8 +480,9 @@ async def _run(job: Job) -> None:
     """Reads the parts not read yet, then writes the summary; saves each
     part's notes as it goes. Stopping (the task cancelled with
     ``stop_requested``) keeps what was read."""
+    direct = job.total == 1 and job.notes[0] is None
     try:
-        if job.total == 1 and job.notes[0] is None:
+        if direct:
             # One part: the summary straight from it (no notes stage).
             given = longdoc.chunk_given(job.chunks[0], job.docs)
             prompt = qa.build_prompt(job.question or "Summarize it.", given, job.names, mode="summary")
@@ -481,10 +512,24 @@ async def _run(job: Job) -> None:
             job.publish()
             reply = await _reduce(job)
         given = longdoc.all_given(job.docs)
-        checked = qa.check_reply(longdoc.drop_invented_lines(reply, given), given, job.question, job.names)
+        notes_read = [n or "" for n in job.notes]
+        if direct:
+            noted = {qa.norm_label(g.cite) for g in longdoc.chunk_given(job.chunks[0], job.docs)}
+        else:
+            noted = longdoc.noted_labels(notes_read, given)
+        # Only lines that cite a page some part's notes cited (review round
+        # 1: the combine step can't add a claim); none left, the notes.
+        content = longdoc.keep_supported_lines(reply, given, noted) or "\n".join(n for n in notes_read if n)
         job.state = "done"
         notes = [longdoc.parts_note(job.total)] if job.total > 1 else []
-        await _finish(job, checked.content, checked, notes)
+        empty = None if direct else longdoc.nothing_cited_note(job.chunks, job.docs, job.notes)
+        if empty is not None:
+            notes.append(empty)
+        if not content:
+            await _finish(job, longdoc.NOTHING_CITED, None, notes)
+        else:
+            await _finish(job, qa.check_reply(content, given, job.question, job.names).content,
+                          qa.check_reply(content, given, job.question, job.names), notes)
     except asyncio.CancelledError:
         if job.stop_requested:
             await asyncio.shield(_finish_stopped(job))
@@ -549,6 +594,14 @@ async def start_thread_job(thread_id: int, user_message_id: int | None, question
     """A summary job for a thread's long documents (``docs``: loaded, with
     ``token``, ``name`` and ``parts``), answered by ``model`` (default: the
     QA model)."""
+    try:
+        return await _start_thread_job(thread_id, user_message_id, question, docs, model)
+    finally:
+        _starting.discard(thread_id)
+
+
+async def _start_thread_job(thread_id: int, user_message_id: int | None, question: str,
+                            docs: list[dict[str, Any]], model: str | None) -> Job:
     chunks = longdoc.plan_chunks(docs)
     speed = await measured_speed(model)
     estimate = longdoc.estimate_seconds([c.chars for c in chunks], speed)
@@ -560,11 +613,11 @@ async def start_thread_job(thread_id: int, user_message_id: int | None, question
     async with session_scope() as s:
         await s.execute(text(
             "INSERT INTO chat_doc_jobs (id, thread_id, user_message_id, question, state, documents, chunks, notes, "
-            "estimate_s) VALUES (:id, :t, :u, :q, 'running', CAST(:d AS JSONB), CAST(:c AS JSONB), "
-            "CAST(:n AS JSONB), :e)"),
+            "estimate_s, model) VALUES (:id, :t, :u, :q, 'running', CAST(:d AS JSONB), CAST(:c AS JSONB), "
+            "CAST(:n AS JSONB), :e, :m)"),
             {"id": job.id, "t": thread_id, "u": user_message_id, "q": question,
              "d": json.dumps([d.get("token") for d in docs]), "c": json.dumps([c.to_json() for c in chunks]),
-             "n": json.dumps(job.notes), "e": estimate})
+             "n": json.dumps(job.notes), "e": estimate, "m": model})
         await s.commit()
     return _start(job)
 
@@ -589,47 +642,65 @@ async def _load_thread_job(row: Any) -> Job | None:
         notes = (list(notes) + [None] * len(chunks))[:len(chunks)]
     job = Job(job_id=row["id"], docs=docs, chunks=chunks, question=row["question"] or "", private=False,
               thread_id=int(row["thread_id"]), user_message_id=row["user_message_id"], notes=notes,
-              estimate_s=row["estimate_s"], stats=stats)
-    job.state = row["state"]
+              estimate_s=row["estimate_s"], stats=stats, model=row.get("model") or None)
+    # A row that says running with no runner here: the restart took it.
+    job.state = INTERRUPTED if row["state"] == "running" else row["state"]
     job.current = job.read
     return job
 
 
-async def thread_jobs(thread_id: int, *, carry_on: bool = True) -> list[dict[str, Any]]:
-    """The thread's jobs as the message list shows them (running, stopped,
-    failed). A running job this process isn't running (it restarted)
-    carries on from the next part, with AI features on."""
+async def thread_jobs(thread_id: int) -> list[dict[str, Any]]:
+    """The thread's jobs as the message list shows them: running, stopped,
+    failed, and "interrupted" (its runner went with a restart). Viewing a
+    chat never starts a job (review round 1): an interrupted one carries on
+    only when the person asks (``POST /doc-jobs/{id}/resume``)."""
     async with session_scope() as s:
         rows = (await s.execute(text(
-            "SELECT id, thread_id, user_message_id, question, state, documents, chunks, notes, estimate_s, stats "
+            "SELECT id, thread_id, user_message_id, question, state, documents, chunks, notes, estimate_s, stats, model "
             "FROM chat_doc_jobs WHERE thread_id = :t ORDER BY created_at"), {"t": thread_id})).mappings().all()
     out = []
     for row in rows:
         live = _JOBS.get(row["id"])
-        if live is not None and ((live.task is not None and not live.task.done()) or live.state not in LIVE):
+        if live is not None:
             out.append(live.view())
             continue
         job = await _load_thread_job(row)
-        if job is None:
-            continue
-        out.append((await _carry_on_if_lost(job) if carry_on else job).view())
+        if job is not None:
+            out.append(job.view())
     return out
 
 
-async def _carry_on_if_lost(job: Job) -> Job:
-    """A running job's row with no runner here (a restart): it carries on
-    from its next part, AI features on. One runner per job: a reader that
-    got here first while this one was loading has started it already."""
-    if job.state != "running" or _docs.ai_turned_off():
-        return job
-    live = _JOBS.get(job.id)
-    if live is not None and live.task is not None and not live.task.done():
+def live_thread_job(thread_id: int) -> "Job | None":
+    """The job reading in this thread now, if any."""
+    return next((j for j in _JOBS.values() if j.thread_id == thread_id and j.state in LIVE
+                 and j.task is not None and not j.task.done()), None)
+
+
+def running_count() -> int:
+    """Jobs reading now in the house (home-server chats' and phones')."""
+    return sum(1 for j in _JOBS.values() if j.state in LIVE and j.task is not None and not j.task.done()) \
+        + len(_starting)
+
+
+#: Threads whose job is being started (before it is in _JOBS).
+_starting: set[int] = set()
+
+
+async def claim_thread(thread_id: int) -> "Job | str":
+    """For a summary request in a thread: the job already reading there (a
+    second "summarize" follows it rather than starting another), ``"go"``
+    when this request may start one, or ``"busy"`` when the house is already
+    reading :data:`MAX_RUNNING` (review round 1). A ``"go"`` holds the
+    thread until :func:`start_thread_job` registers the job."""
+    while thread_id in _starting:
+        await asyncio.sleep(0.05)
+    live = live_thread_job(thread_id)
+    if live is not None:
         return live
-    job.fallback = await measured_speed()
-    live = _JOBS.get(job.id)
-    if live is not None and live.task is not None and not live.task.done():
-        return live
-    return _start(job)
+    if running_count() >= MAX_RUNNING:
+        return "busy"
+    _starting.add(thread_id)
+    return "go"
 
 
 async def cancel_thread(thread_id: int) -> None:
@@ -645,18 +716,21 @@ async def _job(job_id: str) -> Job:
         raise HTTPException(status_code=404, detail="job not found")
     job = _JOBS.get(job_id)
     if job is not None:
+        if job.private and _expired(job, time.time()):
+            # Past its time: forgotten now, never shown (review round 1).
+            _drop(job)
+            raise HTTPException(status_code=404, detail="job not found")
+        job.last_seen = time.time()
         return job
     async with session_scope() as s:
         row = (await s.execute(text(
-            "SELECT id, thread_id, user_message_id, question, state, documents, chunks, notes, estimate_s, stats "
+            "SELECT id, thread_id, user_message_id, question, state, documents, chunks, notes, estimate_s, stats, model "
             "FROM chat_doc_jobs WHERE id = :id"), {"id": job_id})).mappings().first()
     if row is None:
         raise HTTPException(status_code=404, detail="job not found")
     loaded = await _load_thread_job(row)
     if loaded is None:
         raise HTTPException(status_code=404, detail="the job's document is no longer on this Domovoi")
-    if loaded.state == "running":
-        return await _carry_on_if_lost(loaded)
     if loaded.id not in _JOBS:
         _JOBS[loaded.id] = loaded
     return _JOBS[loaded.id]
@@ -675,6 +749,7 @@ async def follow(job: Job) -> AsyncIterator[dict[str, Any]]:
                 v = await asyncio.wait_for(q.get(), timeout=TICK_SEC)
             except asyncio.TimeoutError:
                 v = job.view()      # the time left, ticking down
+            job.last_seen = time.time()
             yield v
     finally:
         job.listeners.discard(q)
@@ -747,16 +822,38 @@ def _stream(gen: AsyncIterator[str]) -> StreamingResponse:
 
 
 # ─── Private jobs (a phone's "Use home server") ─────────────────────────
+def _expired(job: Job, now: float) -> bool:
+    """A private job past its 24 hours, or one no phone has watched for
+    :data:`UNATTACHED_TTL_SEC`."""
+    return job.private and (now - job.created > PRIVATE_TTL_SEC
+                            or (not job.listeners and now - job.last_seen > UNATTACHED_TTL_SEC))
+
+
+def _drop(job: Job) -> None:
+    if job.task is not None and not job.task.done():
+        job.task.cancel()
+    _JOBS.pop(job.id, None)
+    job.docs = []
+    job.result = None
+
+
+#: Temporary folders a document read leaves while it runs (runner.extract,
+#: /documents/extract): removed at boot and by the sweep when older than this.
+TEMP_PREFIXES = ("domovoi-docread-", "domovoi-docx-")
+TEMP_MAX_AGE_SEC = 600
+
+
 def sweep(now: float | None = None) -> int:
-    """Forgets private jobs past :data:`PRIVATE_TTL_SEC` (their text with
-    them) and removes any upload folder no live job owns (a restart left
-    it). Returns how many went."""
+    """Forgets private jobs past their 24 hours or unwatched for 10 minutes
+    (their text and summary with them), removes any upload folder no live
+    job owns, a read's temporary folder left by a crash, and a parts file
+    half-written. Returns how many went."""
+    import tempfile
+
     now = time.time() if now is None else now
     gone = 0
-    for job in [j for j in _JOBS.values() if j.private and now - j.created > PRIVATE_TTL_SEC]:
-        if job.task is not None and not job.task.done():
-            job.task.cancel()
-        _JOBS.pop(job.id, None)
+    for job in [j for j in _JOBS.values() if _expired(j, now)]:
+        _drop(job)
         gone += 1
     if JOBS_DIR.is_dir():
         for p in JOBS_DIR.iterdir():
@@ -765,21 +862,64 @@ def sweep(now: float | None = None) -> int:
             if p.name not in _JOBS or not _JOBS[p.name].private:
                 shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
                 gone += 1
+    # Files' ages by the real clock, whatever ``now`` the jobs were judged
+    # by: a read in progress (its folder minutes old at most) is never taken.
+    wall = time.time()
+    try:
+        for p in Path(tempfile.gettempdir()).iterdir():
+            if p.name.startswith(TEMP_PREFIXES) and p.is_dir() and wall - p.stat().st_mtime > TEMP_MAX_AGE_SEC:
+                shutil.rmtree(p, ignore_errors=True)
+                gone += 1
+    except OSError:
+        pass
+    if _docs.DOCS_DIR.is_dir():
+        for p in _docs.DOCS_DIR.glob("*.part"):
+            try:
+                if wall - p.stat().st_mtime > TEMP_MAX_AGE_SEC:
+                    p.unlink(missing_ok=True)
+                    gone += 1
+            except OSError:
+                pass
     return gone
 
 
 def boot() -> None:
-    """The web process starts: a private job's leftover upload (the
-    process stopped while reading one) is removed. Never fatal."""
+    """The web process starts: a private job's leftover upload, a read's
+    temporary folder, a half-written parts file (the process stopped
+    mid-way) go. Never fatal."""
     try:
         sweep()
     except Exception as e:  # noqa: BLE001
         log.warning("chat doc jobs: boot sweep failed: %s", type(e).__name__)
 
 
+_sweeper: asyncio.Task | None = None
+
+
+async def _sweep_forever() -> None:
+    while True:
+        await asyncio.sleep(SWEEP_EVERY_SEC)
+        try:
+            sweep()
+        except Exception as e:  # noqa: BLE001 — the next round tries again
+            log.warning("chat doc jobs: sweep failed: %s", type(e).__name__)
+
+
+def start_sweeper() -> None:
+    """The sweep every :data:`SWEEP_EVERY_SEC` while the web process runs, so
+    "24 hours at most" holds with no new job or request to trigger it."""
+    global _sweeper
+    if _sweeper is None or _sweeper.done():
+        _sweeper = asyncio.get_running_loop().create_task(_sweep_forever(), name="chat-doc-jobs-sweep")
+
+
 async def shutdown() -> None:
     """The web process stops: running jobs end where they are (a thread's
-    job carries on from its next part after the restart)."""
+    job shows as interrupted after the restart, and carries on when asked)."""
+    global _sweeper
+    if _sweeper is not None:
+        _sweeper.cancel()
+        _sweeper = None
     for job in list(_JOBS.values()):
         if job.task is not None and not job.task.done():
             job.task.cancel()
@@ -809,8 +949,8 @@ async def start_private_job(file: UploadFile = File(...), question: str = Form("
     only, and the job is forgotten when the phone deletes it
     (``DELETE /doc-jobs/{id}``), after 24 hours, or at a restart."""
     sweep()
-    if sum(1 for j in _JOBS.values() if j.private) >= MAX_PRIVATE_JOBS:
-        return _docs._refused(429, "busy", "The home server is already reading other phones' documents. "
+    if running_count() >= MAX_RUNNING:
+        return _docs._refused(429, "busy", "The home server is already reading two long documents. "
                               "Try again in a few minutes.")
     name = _docs._clean_name(file.filename, "")
     kind, refusal = _docs._kind_or_refusal(name)
@@ -876,8 +1016,10 @@ async def resume_job(job_id: str) -> Any:
         return _docs._refused(409, "private", "A phone's job can't carry on: its document was deleted when it ended.")
     if job.task is not None and not job.task.done():
         return job.view()
-    if job.state not in ("stopped", "failed"):
+    if job.state not in ("stopped", "failed", INTERRUPTED):
         return _docs._refused(409, "not_stopped", "That job isn't stopped.")
+    if running_count() >= MAX_RUNNING:
+        return _docs._refused(429, "busy", BUSY_TEXT)
     job.state, job.stop_requested, job.result, job.error = "running", False, None, None
     job.current = job.read
     job.started = time.monotonic()

@@ -1135,16 +1135,49 @@
    "out": "- Rent is due on the first [p. 1]"
   }
  ],
- "drop_invented_lines": [
+ "keep_supported_lines": [
   {
-   "reply": "- Rent [p. 1]\n- Free parking [p. 999]\n- A plain line\n\n- Pets [p. 3; p. 77]",
-   "out": "- Rent [p. 1]\n- A plain line\n\n- Pets [p. 3; p. 77]"
+   "reply": "Hi!\n- Rent [p. 1]\n- Free parking [p. 999]\n- A plain line\n\n- Pets [p. 3; p. 2]",
+   "notes": [
+    "- r [p. 1]",
+    "- p [p. 3]"
+   ],
+   "out": "- Rent [p. 1]\n- Pets [p. 3]"
   },
   {
-   "reply": "- Nothing real [p. 50]",
+   "reply": "- Nothing real [p. 50]\n- Deposit [p. 2]",
+   "notes": [
+    "- r [p. 1]"
+   ],
    "out": ""
   }
  ],
+ "nothing_cited": [
+  {
+   "notes": [
+    "- a [p. 1]",
+    "",
+    "",
+    null,
+    null
+   ],
+   "out": {
+    "code": "nothing_cited",
+    "text": "Domovoi found nothing it could cite in pages 3-4 and pages 5-6, so they aren't in this summary."
+   }
+  },
+  {
+   "notes": [
+    "- a [p. 1]",
+    null,
+    null,
+    null,
+    null
+   ],
+   "out": null
+  }
+ ],
+ "nothing_cited_text": "Domovoi couldn't find anything in the document it could cite, so there is no summary. Ask about something specific in it instead.",
  "constants": {
   "MAP_CHUNK_TOKENS": 3500,
   "PHONE_MAP_CHUNK_TOKENS": 2250,
