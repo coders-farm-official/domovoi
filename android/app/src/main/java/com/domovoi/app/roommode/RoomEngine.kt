@@ -132,7 +132,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     @Volatile private var ready = false
     /** The voice the server renders this room in (`ready.room_voice`; null:
      *  the server's own): whose greeting clips the room mirrors. Not the
-     *  phone's own voice (Settings → Voice), which room mode never uses. */
+     *  phone's own voice (Settings → Voices), which room mode never uses. */
     @Volatile private var roomVoice: String? = null
     @Volatile private var readyAt = 0L
     @Volatile private var downSince = SystemClock.elapsedRealtime()
@@ -565,7 +565,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
                 Log.w(TAG, "models missing on the server: ${r.names}")
                 update {
                     it.copy(wakeProblem = "The server has no wake-word models yet (${r.names.joinToString()}). " +
-                        "On the dashboard: Settings → Satellites → prepare satellite media → Refresh caches.")
+                        "On the dashboard: Settings → Rooms → prepare satellite media → Refresh caches.")
                 }
             }
             is RoomModels.Outcome.Failed -> {

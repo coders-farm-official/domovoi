@@ -296,7 +296,7 @@ voices](#node:people)).
 - "forget that I parked on level 3"
 
 **Also:** notes show in each room's **Notes** tab ([Settings →
-Satellites](#settings/rooms)). Memories show on [People](#people),
+Rooms](#settings/rooms)). Memories show on [People](#people),
 under each person's **Memory** tab.
 
 [More detail](docs/FAQ.md#does-it-support-multiple-people)
@@ -439,7 +439,7 @@ announcements.
 5. Approve the six-digit code on the dashboard.
 
 **App:** a phone that already has the app can do this from [Settings →
-Satellites](#settings/rooms) → **Use this device as a room**, or
+Rooms](#settings/rooms) → **Use this device as a room**, or
 from the **Domovoi Room** icon.
 
 To leave, hold **exit room mode**, unlock, then choose **Keep this room**
@@ -509,7 +509,7 @@ Three voices, all on the server: **Kristin** (default), **Norman** and
 - A word said wrong? **Say it like**: type the word and how it sounds, the
   stressed part in capitals (Siobhan = shiv-AWN). Press play to hear it
   first.
-- **App:** how *this phone* speaks: [Settings → Voice](#app/voice): "Same
+- **App:** how *this phone* speaks: [Settings → Voices](#app/voice): "Same
   as the server" or one of the three (about 64 MB, downloaded once).
 
 **Try saying**

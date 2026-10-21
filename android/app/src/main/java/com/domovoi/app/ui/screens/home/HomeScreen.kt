@@ -382,6 +382,7 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
                 val url = dashboardUrl(serverUrl, t.hash)
                 if (url == null || !openInBrowser(context, url)) toast("no browser found to open the dashboard")
             }
+            is HomeTarget.Settings -> openSettingsTab(t.tab)
         }
     }
 
@@ -498,7 +499,7 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
                         HomeEverything(
                             everythingTiles(caps, shared, PhoneBar.routes(PhoneBar.decode(savedBar), caps, shared)),
                             counts,
-                            onEditBar = { openSettingsTab("phonebar") },
+                            onEditBar = { openSettingsTab("app-layout") },
                         ) { navigate(it) }
                     }
                 }

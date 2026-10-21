@@ -5,7 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 import kotlinx.serialization.json.Json
 
-/** Settings → Satellites colours a satellite's Wi-Fi by its received signal
+/** Settings → Rooms colours a satellite's Wi-Fi by its received signal
  *  since 2026-10-12 (the web's wifiTone): an idle link reads the 1 Mbit/s
  *  beacon rate, which used to paint every idle satellite red. */
 class SatWifiToneTest {

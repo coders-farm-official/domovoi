@@ -194,7 +194,7 @@ internal fun ConnectionPanel() {
             PanelCard(
                 "Household token",
                 "What this phone presents so the server knows it belongs here. " +
-                    "An admin finds it on the dashboard under Settings → Devices.",
+                    "An admin finds it on the dashboard under Settings → Phones & browsers.",
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
@@ -395,7 +395,7 @@ internal fun ConnectionPanel() {
  * and has grown one since is never pinned behind the user's back
  * (net/IdentityGate.kt, Legacy with an offered key): the key it proved is
  * shown here with a button to pin it, after comparing it with the
- * dashboard's Settings → About.
+ * dashboard's Settings → About & updates.
  */
 @Composable
 internal fun IdentitySection(
@@ -413,7 +413,7 @@ internal fun IdentitySection(
                 color = Domovoi.colors.fg,
             )
             Text(
-                "Compare with Settings → About on the dashboard. The household token is " +
+                "Compare with Settings → About & updates on the dashboard. The household token is " +
                     "sent only after the server proves this identity: on every network, " +
                     "every ten minutes, and whenever the app comes back to the foreground.",
                 style = MaterialTheme.typography.bodySmall,
@@ -428,7 +428,7 @@ internal fun IdentitySection(
             )
             Text(
                 "Not pinned: this server was trusted while it offered no identity, and it " +
-                    "proves this one now. Compare it with Settings → About on the dashboard, " +
+                    "proves this one now. Compare it with Settings → About & updates on the dashboard, " +
                     "then pin it — from then on the household token goes out only after a " +
                     "proof of this key. Until then it is sent as before (unverified).",
                 style = MaterialTheme.typography.bodySmall,
@@ -530,7 +530,7 @@ internal fun TrustedServersCard(
 internal data class TrustedServerRow(val url: String, val name: String?, val active: Boolean)
 
 /**
- * What Settings → Connection lists: every trusted server and every known
+ * What Settings → Phones & browsers lists: every trusted server and every known
  * one (a known server is trusted by construction, but the two lists can
  * drift — a pre-trust-list install, a harness write), the active one
  * first, then by address. The active server is listed even when it is

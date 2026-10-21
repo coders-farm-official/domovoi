@@ -618,18 +618,25 @@ stale rule, or an analytics, advertising or crash-reporting library fails
 the unit tests. **Adding a dependency** therefore means checking its
 licence at its source and adding (or confirming) its rule.
 
-## Settings: device-local only
+## Settings: the dashboard's groups, device-local panels
 
-The app's Settings screen keeps just the tabs that belong to the phone —
-**Connection** (server, theme, this device's name, "listening as") and
-**About** (with the app's version, and the developer options it turns on:
-"On-device assistant", above). The dashboard's server-administration tabs (Greetings, Voices,
-Wake Words, Models, Configuration) are *not* mirrored: they need the
-dashboard's admin session, which this app does not have, so they could
-never apply a change correctly. In their place a **Server settings** tab
-says so in plain words and its **Open the dashboard** button launches the
-browser at the connected server's Settings page (`<server>/#settings`);
-with no server configured the button is disabled with a hint.
+The app's Settings has the dashboard's five groups and plain names
+(2026-10-21, `SettingsScreen.kt` `SettingsGroup` / `SettingsSection`): a
+search box and the groups, then a group's sections, then the section; Back
+steps out one level. What belongs to the phone has its panel here:
+**Rooms** (the satellites), **Phones & browsers** (which server, theme,
+this device's name, "listening as"), **App layout** (the bottom bar),
+**Voices** (how this phone speaks), **About & updates** (with the app's
+version, and the developer options it turns on: "On-device assistant",
+above) and **Health** (the checks Home's problem rows come from, and the
+container guard's details). The sections only an admin changes on the
+server (Wake words, Greetings, Models, Internet, Voice history, Advanced)
+need the dashboard's admin session, which this app does not have: each
+says so in plain words, and **Open on the dashboard** launches the browser
+at that section of the connected server (`<server>/#settings/<section>`,
+in the words every dashboard version knows); with no server configured
+the button is disabled with a hint. Links from before the regroup
+(`satellites`, `phonebar`, `connection`, `voice`, `server`) still land.
 
 While connected, the save-to-device actions across Music / Videos /
 Podcasts download through the system `DownloadManager` into
@@ -929,9 +936,9 @@ web-dashboard plugin pages only; this app stays provider-agnostic.
   Web-Audio-style filter graph without a custom audio processor).
 - No offline pin/auto-cache of tracks yet (the web PWA's Cache Storage
   feature) — streaming only.
-- No server administration (greetings, voices, wake words, models,
-  configuration) — by design; Settings → Server settings opens the
-  dashboard instead.
+- No server administration (greetings, wake words, models, the internet
+  answer, voice history, Advanced) — by design; each of those Settings
+  sections opens the dashboard instead.
 - Home shows the problem rows a household member may see and never the
   admin-only ones (satellites waiting for approval or adoption, updates,
   disk) or the "this box isn't claimed yet" row: the app has no admin

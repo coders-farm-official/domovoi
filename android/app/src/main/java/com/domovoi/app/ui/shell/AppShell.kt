@@ -749,7 +749,7 @@ private fun OfflineShell(choice: ServerChoice, verdict: IdentityVerdict?) {
 
 // ---------------------------------------------------------------------------
 // Compact: bottom bar (this phone's phone bar, PhoneBar.kt: home, music,
-// videos, chat unless picked otherwise in Settings → Phone bar), mini player
+// videos, chat unless picked otherwise in Settings → App layout), mini player
 // docked above it. Everything else is on Home's "everything" grid, and while
 // one of those screens is open the home tab is the one lit, as on the web
 // strip (and as the More tab was).

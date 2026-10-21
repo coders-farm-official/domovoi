@@ -3090,7 +3090,7 @@ const SpareDeviceCard = ({ fire }) => {
 /* The satellites view. `embedded` is how Settings → Rooms shows it
  * (SatellitesPanel): under the Settings header, with the roster's counts
  * as its first line. Without it, the same view as a page of its own, which
- * the shell no longer routes to (#settings/rooms opens the Settings tab). Every
+ * the shell no longer routes to (#satellites opens Settings → Rooms). Every
  * read, action and auth tier is the same either way. */
 // How often the page asks whether the core answers (the web pings it).
 const SAT_HEALTH_POLL_MS = 10000;

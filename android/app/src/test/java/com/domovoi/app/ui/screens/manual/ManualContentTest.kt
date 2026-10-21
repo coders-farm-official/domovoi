@@ -3,7 +3,7 @@ package com.domovoi.app.ui.screens.manual
 import com.domovoi.app.net.ApiClient
 import com.domovoi.app.net.Capabilities
 import com.domovoi.app.net.FEATURE_AI
-import com.domovoi.app.ui.screens.settings.SettingsTab
+import com.domovoi.app.ui.screens.settings.SettingsSection
 import com.domovoi.app.ui.shell.Route
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
@@ -50,7 +50,7 @@ class ManualContentTest {
 
     @Test fun everyRouteOpensAScreenTheAppHasOrTheDashboard() {
         val screens = Route.entries.map { it.name }.toSet()
-        val tabs = SettingsTab.entries.map { it.key }.toSet()
+        val tabs = SettingsSection.entries.map { it.key }.toSet()
         doc.routes.forEach { (id, r) ->
             if (r.app.dashboard) {
                 assertNotNull("$id opens the dashboard at a page it has", r.dashboard)

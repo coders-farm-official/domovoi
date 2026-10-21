@@ -20,7 +20,7 @@ class TokenCheckMessageTest {
 
     @Test fun refusedSaysWhereTheRightTokenIs() {
         assertEquals(
-            "That token doesn't match this server. Copy it from Settings → Devices → Household token " +
+            "That token doesn't match this server. Copy it from Settings → Phones & browsers → Household token " +
                 "on this server's dashboard.",
             tokenCheckMessage(TokenCheck.Refused),
         )

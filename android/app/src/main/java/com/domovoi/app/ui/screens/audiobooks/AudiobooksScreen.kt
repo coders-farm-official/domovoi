@@ -330,7 +330,7 @@ private fun BookCard(
     }
 }
 
-/** "listening as" hint chip — the full selector lives in Settings > Connection. */
+/** "listening as" hint chip — the full selector lives in Settings > Phones & browsers. */
 @Composable
 private fun ListeningAsChip(modifier: Modifier = Modifier) {
     val app = LocalApp.current

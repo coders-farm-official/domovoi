@@ -77,7 +77,7 @@ data class ThisInstall(
 )
 
 /** What the app has to say about updates. Only [Available] and
- *  [NotOnServer] ever show outside Settings → About. */
+ *  [NotOnServer] ever show outside Settings → About & updates. */
 sealed interface UpdateState {
     /** Installed by Google Play, which updates it itself. */
     data object PlayStore : UpdateState
@@ -188,15 +188,15 @@ object AppUpdate {
         is UpdateState.Available -> if (state.link != null) {
             "Domovoi ${state.version} is available from your server."
         } else {
-            "Domovoi ${state.version} is available from your server: on the dashboard, Settings → Devices → " +
+            "Domovoi ${state.version} is available from your server: on the dashboard, Settings → Phones & browsers → " +
                 "get the Domovoi app."
         }
         is UpdateState.NotOnServer -> "Domovoi ${state.version} is out, but your server doesn't hold it for this " +
-            "phone yet. An admin can press “Download the app to this server” on the dashboard (Settings → Devices)."
+            "phone yet. An admin can press “Download the app to this server” on the dashboard (Settings → Phones & browsers)."
         else -> null
     }
 
-    /** Settings → About's line, for every state. */
+    /** Settings → About & updates's line, for every state. */
     fun aboutText(state: UpdateState): String = noticeText(state) ?: when (state) {
         UpdateState.PlayStore -> "Installed from Google Play, which keeps it up to date."
         UpdateState.DebugBuild -> "Debug build: it isn't compared with the release builds your server hands out."

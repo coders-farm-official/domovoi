@@ -11,7 +11,7 @@ import kotlinx.serialization.json.Json
  * The phone bar: the bottom bar's tabs at compact width — the web's phone
  * strip (web/static/components.jsx PHONE_BAR_DEFAULT / phoneBarRoutes).
  * home · music · videos · chat until someone picks others on THIS phone
- * (Settings → Phone bar): Home always first, at most [MAX], at least [MIN],
+ * (Settings → App layout): Home always first, at most [MAX], at least [MIN],
  * any screen a launcher may offer here ([Route.visibleOn] — so the plugin
  * screens this server allows too, and on a shared screen never the
  * personal ones, whatever was saved). Kept in this install's Prefs

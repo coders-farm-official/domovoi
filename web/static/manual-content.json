@@ -382,7 +382,7 @@
     "platforms": [
      "dashboard"
     ],
-    "app_text": "**Pair this phone**: [Settings → Connection](route:app/connection) → **Household token**.",
+    "app_text": "**Pair this phone**: [Settings → Phones & browsers](route:app/connection) → **Household token**.",
     "app_done_when": "this_phone_paired",
     "text": "**Put the app on your phones**: [Settings → Phones & browsers → Get the Domovoi app](route:settings/phones-and-browsers)."
    }
@@ -1309,7 +1309,7 @@
     },
     {
      "type": "p",
-     "text": "Notes show in each room's **Notes** tab ([Settings → Satellites](route:settings/rooms)). Memories show on [People](route:people), under each person's **Memory** tab."
+     "text": "Notes show in each room's **Notes** tab ([Settings → Rooms](route:settings/rooms)). Memories show on [People](route:people), under each person's **Memory** tab."
     }
    ],
    "more": {
@@ -1693,7 +1693,7 @@
     },
     {
      "type": "p",
-     "text": "A phone that already has the app can do this from [Settings → Satellites](route:settings/rooms) → **Use this device as a room**, or from the **Domovoi Room** icon.",
+     "text": "A phone that already has the app can do this from [Settings → Rooms](route:settings/rooms) → **Use this device as a room**, or from the **Domovoi Room** icon.",
      "only": "app"
     },
     {
@@ -1882,7 +1882,7 @@
        "text": "A word said wrong? **Say it like**: type the word and how it sounds, the stressed part in capitals (Siobhan = shiv-AWN). Press play to hear it first."
       },
       {
-       "text": "How *this phone* speaks: [Settings → Voice](route:app/voice): \"Same as the server\" or one of the three (about 64 MB, downloaded once).",
+       "text": "How *this phone* speaks: [Settings → Voices](route:app/voice): \"Same as the server\" or one of the three (about 64 MB, downloaded once).",
        "only": "app"
       }
      ]

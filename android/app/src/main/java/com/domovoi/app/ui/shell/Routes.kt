@@ -30,8 +30,8 @@ import com.domovoi.app.net.Capabilities
  * top-left brand (the "domovoi" crumb, the rail glyph, the drawer's brand
  * row) leads back to it. The web sidebar order is preserved; Settings
  * comes from Home's "everything" grid (and the rail/drawer), Manual from
- * the grid and Settings > About. Satellites is a Settings tab since
- * 2026-10-11 (the web's Settings → Satellites): [Route.Satellites] stays as
+ * the grid and Settings > About & updates. Satellites is a Settings tab since
+ * 2026-10-11 (the web's Settings → Rooms): [Route.Satellites] stays as
  * the way a link names it, and the shell opens Settings on that tab
  * ([settingsTabFor]).
  *
@@ -51,8 +51,8 @@ enum class Route(val label: String, val icon: ImageVector) {
     People("People", Icons.Filled.Groups),
 
     /** Not a screen of its own any more: navigating here opens Settings on
-     *  its Satellites tab ([settingsTabFor]), as the web's old #satellites
-     *  opens Settings → Satellites. On no launcher ([LauncherlessRoutes]). */
+     *  its Rooms section ([settingsTabFor]), as the web's old #satellites
+     *  opens Settings → Rooms. On no launcher ([LauncherlessRoutes]). */
     Satellites("Satellites", Icons.Filled.CellTower),
     Calendar("Calendar", Icons.Filled.CalendarMonth),
     Stations("Stations", Icons.Filled.Radio),
@@ -60,9 +60,11 @@ enum class Route(val label: String, val icon: ImageVector) {
     Settings("Settings", Icons.Filled.Settings),
     Manual("Manual", Icons.Filled.HelpOutline),
 
-    /** The container guard's details (the web's #containers): reached from
-     *  the banner the shell shows while an incident is open and from an
-     *  incident's notification, never from a launcher ([LauncherlessRoutes]). */
+    /** The container guard's details, part of Settings → Health since
+     *  2026-10-21 (navigating here opens that section, [settingsTabFor], as
+     *  the web's old #containers does): reached from the banner the shell
+     *  shows while an incident is open and from an incident's notification,
+     *  never from a launcher ([LauncherlessRoutes]). */
     Containers("Containers", Icons.Filled.Shield),
 
     /** The on-device assistant: answered by a model on this phone, with no
@@ -115,7 +117,7 @@ fun Route.unavailableNote(caps: Capabilities): Pair<String, String> =
 
 /**
  * Pages a shared screen (an admin marks the device in the dashboard's
- * Settings → Devices; the kitchen tablet) leaves off EVERY launcher — the
+ * Settings → Phones & browsers; the kitchen tablet) leaves off EVERY launcher — the
  * bottom bar, the rail, the drawer and Home's "everything" grid — the web's
  * SHARED_SCREEN_HIDDEN (web/static/components.jsx): one person's things.
  * The app adds its on-device assistant, whose conversations are kept on
@@ -133,12 +135,14 @@ fun Route.visibleOn(caps: Capabilities, shared: Boolean): Boolean =
 
 /** Routes no launcher offers (not the bottom bar, the rail, the drawer or
  *  Home's grid): the Containers screen, which the banner and a container
- *  incident's notification open, as the web's banner opens #containers;
+ *  incident's notification open, as the web's banner opens #settings/health/containers;
  *  and Satellites, a Settings tab, which Settings and Home's rooms open. */
 val LauncherlessRoutes: Set<Route> = setOf(Route.Containers, Route.Satellites)
 
-/** Routes that are a Settings tab, by the tab's key ([settingsTabFor]). */
-private val SettingsTabRoutes: Map<Route, String> = mapOf(Route.Satellites to "satellites")
+/** Routes that are a Settings section, by the section's key ([settingsTabFor]):
+ *  Satellites is Settings → Rooms, and the container guard's details are
+ *  part of Settings → Health (both since 2026-10-21, the web's regroup). */
+private val SettingsTabRoutes: Map<Route, String> = mapOf(Route.Satellites to "rooms", Route.Containers to "health")
 
 /** The Settings tab [route] stands for, or null for a screen of its own:
  *  navigating to such a route opens Settings on that tab (the web's

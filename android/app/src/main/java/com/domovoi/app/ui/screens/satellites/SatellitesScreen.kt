@@ -72,7 +72,7 @@ import kotlinx.serialization.json.put
 /**
  * Satellites — per-room Pi grid + drill-in detail + broadcast composer.
  * Android analog of web/static/satellites.jsx. Since 2026-10-11 a Settings
- * tab (Settings → Satellites), [embedded] under the Settings header: the
+ * tab (Settings → Rooms), [embedded] under the Settings header: the
  * roster's counts become its first line instead of a page header of its
  * own. Every read and action is the same either way.
  */

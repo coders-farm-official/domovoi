@@ -7,7 +7,7 @@ import java.nio.charset.CodingErrorAction
 import java.text.Normalizer
 
 /**
- * What the dashboard's Settings → Satellites → "Add a spare device" hands a
+ * What the dashboard's Settings → Rooms → "Add a spare device" hands a
  * phone that is to become a room: the core to dial, the fingerprint of the
  * server identity to hold it to, and the room it is for. The shared
  * payload (the Linux install command carries the same string):

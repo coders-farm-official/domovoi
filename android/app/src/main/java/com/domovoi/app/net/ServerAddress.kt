@@ -9,7 +9,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
  * network is refused with the reason, before anything is probed or stored.
  *
  * One rule for both places an address can be typed: the picker's "add
- * manually" and Settings → Connection. Until 2026-10-08 the Connection
+ * manually" and Settings → Phones & browsers. Until 2026-10-08 the Connection
  * panel saved the raw string with neither the normalisation nor the check
  * (security round 3, A6-05 / P2-at-01).
  */

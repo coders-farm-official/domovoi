@@ -4,6 +4,26 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-21 — Settings in groups, with search and one Health page
+
+Dashboard and app. Nothing to run; old bookmarks keep working.
+
+* **Settings is five groups** — Rooms & devices, Voice, Chat & AI,
+  Privacy, System — with a search box at the top ("wake", "voice
+  history", "token"). Plain names: Satellites is **Rooms**, Devices is
+  **Phones & browsers**, Phone bar is **App layout**, Recordings is
+  **Voice history**, Configuration is **Advanced** (folded until you open
+  it), and the version and updates moved to **About & updates**.
+  `#settings/configuration[/setup]`, `#settings/satellites`,
+  `#settings/devices`, `#settings/phone-bar`, `#settings/recordings`,
+  `#satellites` and `#containers` rewrite to the new addresses in place.
+* **Settings → System → Health** shows every check, green or not: the
+  server, updates, rooms, plugins, internet and containers. Home's "needs
+  attention" rows are the problems among the same checks and open their
+  part of Health. The container guard's page is part of Health (open
+  incidents at the top; the watched list and the music player image's
+  rebuild under "behind the scenes"); the banner's "details" lands there.
+
 ## 2026-10-21 — AI chat and questions are optional
 
 Core, dashboard, installers and app. Nothing to run: an existing install

@@ -34,7 +34,8 @@ class HomeGuardRowTest {
         ))!!
         assertEquals("the music player for kitchen stopped (exit code 137)", row.text)
         assertEquals(Tone.Err, row.tone)
-        assertEquals(HomeTarget.Screen(Route.Containers), row.target)
+        // Home's rows open Settings → Health, where the details are (2026-10-21).
+        assertEquals(HomeTarget.Settings("health"), row.target)
         assertEquals("containers", row.key)
     }
 

@@ -164,7 +164,7 @@ CHECKLIST: list[dict] = [
     {"id": "introduce", "done_when": "people", "platforms": ["dashboard", "app"]},
     {"id": "music", "done_when": "music", "platforms": ["dashboard", "app"]},
     {"id": "app", "done_when": "phone_app", "platforms": ["dashboard"],
-     "app_text": "**Pair this phone**: [Settings → Connection](#app/connection) → **Household token**.",
+     "app_text": "**Pair this phone**: [Settings → Phones & browsers](#app/connection) → **Household token**.",
      "app_done_when": "this_phone_paired"},
 ]
 

@@ -36,7 +36,7 @@ interface VoiceKit : AutoCloseable {
 /**
  * The phone's: Silero VAD and Moonshine tiny through the app's sherpa-onnx
  * build (listening only; no text to speech is compiled in), and the phone's
- * own voice as Settings → Voice picks it ([phoneVoice]: Domovoi's Piper
+ * own voice as Settings → Voices picks it ([phoneVoice]: Domovoi's Piper
  * voice once downloaded, the one the chat mic's replies use; Kristin by
  * default), else Android's own TextToSpeech, on the phone (owner decision
  * 2026-10-12, option A). The mic is the real one, or in a debug build a

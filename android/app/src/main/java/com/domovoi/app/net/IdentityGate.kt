@@ -60,7 +60,7 @@ sealed class IdentityVerdict {
      *  ([offered] null — a server from before identity, or one trusted
      *  while it had none), or it proved one this phone has not pinned
      *  ([offered] set — a server trusted without identity that has grown
-     *  one since; Settings → Connection can pin it). The token goes out as
+     *  one since; Settings → Phones & browsers can pin it). The token goes out as
      *  it always did for this server. */
     data class Legacy(val offered: ServerIdentity.Pin? = null) : IdentityVerdict()
 

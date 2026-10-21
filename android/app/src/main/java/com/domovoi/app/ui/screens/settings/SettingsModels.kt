@@ -29,9 +29,10 @@ import kotlinx.serialization.Serializable
 // Serializable models — tolerant of missing fields (the backend evolves).
 // Property names deliberately match the JSON keys (snake_case).
 //
-// Settings is device-local only (Connection + About): server administration
-// — greetings, voices, wake words, models, configuration — lives on the web
-// dashboard, which has the admin session this app does not.
+// What Settings changes here belongs to this phone (Phones & browsers, App
+// layout, Voices, About & updates): server administration — greetings,
+// wake words, models, the internet answer, voice history, Advanced — lives
+// on the web dashboard, which has the admin session this app does not.
 // ---------------------------------------------------------------------------
 
 @Serializable
@@ -50,14 +51,15 @@ internal const val DASHBOARD_SETTINGS_HASH = "#settings"
 
 /**
  * Deep link to the connected server's dashboard Settings page — the same
- * base URL the app talks to (Prefs.serverUrl / the Connection tab), so the
- * browser lands on the server the user is already looking at. Null when no
- * server is configured: the caller disables the "Open the dashboard" button.
+ * base URL the app talks to (Prefs.serverUrl / Phones & browsers), so the
+ * browser lands on the server the user is already looking at — on
+ * [section] when given ("#settings/models"). Null when no server is
+ * configured: the caller disables the "Open on the dashboard" button.
  */
-internal fun dashboardSettingsUrl(serverUrl: String?): String? {
+internal fun dashboardSettingsUrl(serverUrl: String?, section: String? = null): String? {
     val base = serverUrl?.trim()?.trimEnd('/').orEmpty()
     if (base.isEmpty()) return null
-    return "$base/$DASHBOARD_SETTINGS_HASH"
+    return if (section.isNullOrEmpty()) "$base/$DASHBOARD_SETTINGS_HASH" else "$base/$DASHBOARD_SETTINGS_HASH/$section"
 }
 
 // ---------------------------------------------------------------------------

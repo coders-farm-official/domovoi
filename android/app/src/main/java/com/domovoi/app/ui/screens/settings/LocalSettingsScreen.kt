@@ -39,7 +39,7 @@ import com.domovoi.app.ui.theme.Domovoi
  * server — the voice, the problem reports, privacy, the licences, the
  * app's version and, while they are on, the developer options (the
  * on-device assistant's benchmark; DeveloperOptionsSection.kt) — the same
- * cards Settings → Voice and About show when a Domovoi is connected.
+ * cards Settings → Voices and About show when a Domovoi is connected.
  */
 @Composable
 internal fun LocalSettingsScreen(

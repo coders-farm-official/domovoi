@@ -51,10 +51,10 @@ import com.domovoi.app.ui.theme.Domovoi
  * One-time pairing: this phone presents the household device token
  * (`X-Device-Token`) on every request, and asks for it here — once, when the
  * server first refuses a request for want of it, or from
- * Settings → Connection.
+ * Settings → Phones & browsers.
  *
  * The token is the household's, so it is read off an admin's dashboard
- * (Settings → Devices → Household token) rather than typed like a password.
+ * (Settings → Phones & browsers → Household token) rather than typed like a password.
  * It is stored per server in the app's private DataStore and cleared when
  * the server is forgotten.
  */
@@ -100,7 +100,7 @@ fun PairingScreen(onDone: () -> Unit, onSkip: (() -> Unit)? = null) {
                 onDone()
             })
             Text(
-                "An admin finds it on the dashboard under Settings → Devices → Household token.",
+                "An admin finds it on the dashboard under Settings → Phones & browsers → Household token.",
                 style = MaterialTheme.typography.bodySmall,
                 color = Domovoi.colors.fgSubtle,
             )
@@ -117,7 +117,7 @@ fun PairingScreen(onDone: () -> Unit, onSkip: (() -> Unit)? = null) {
 internal fun tokenCheckMessage(check: TokenCheck?, waitLeftMs: Long = 0): String? = when (check) {
     null, TokenCheck.Accepted -> null
     TokenCheck.Refused ->
-        "That token doesn't match this server. Copy it from Settings → Devices → Household token " +
+        "That token doesn't match this server. Copy it from Settings → Phones & browsers → Household token " +
             "on this server's dashboard."
     is TokenCheck.Throttled ->
         if (waitLeftMs > 0) "Too many tries — wait ${waitClockText(waitLeftMs)} before the next one."

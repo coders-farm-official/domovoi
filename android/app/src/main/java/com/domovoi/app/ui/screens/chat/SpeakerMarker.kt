@@ -24,7 +24,7 @@ import com.domovoi.app.ui.theme.Domovoi
  * phone belongs to a person, but voice identification still runs, and a
  * small marker on each spoken message names who it heard. The marker is
  * softer when the match was weak, or when it names someone other than the
- * phone's owner (Settings → Connection → "This phone belongs to"). The
+ * phone's owner (Settings → Phones & browsers → "This phone belongs to"). The
  * decision is pure and unit-tested; the composable only draws it.
  */
 

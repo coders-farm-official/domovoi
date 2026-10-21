@@ -77,7 +77,7 @@ class ServerTrustTest {
     }
 
     @Test fun confirmingHandsTheTrustDecisionTheIdentityTheDialogShowed() {
-        // What the person compared with Settings → About is what gets
+        // What the person compared with Settings → About & updates is what gets
         // pinned — not whatever answers first on some later network.
         val r = Recorder()
         val gate = r.gate()

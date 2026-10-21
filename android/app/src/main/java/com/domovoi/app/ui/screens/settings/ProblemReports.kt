@@ -47,7 +47,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Settings > About > Problem reports: the crashes, "not responding" closes and
+ * Settings > About & updates > Problem reports: the crashes, "not responding" closes and
  * freezes this phone recorded (diagnostics/Diagnostics.kt), with copy and
  * share so the owner can pass them on. Kept on the phone; this screen is the
  * only way out, and only when the owner taps copy or share.
