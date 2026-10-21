@@ -359,7 +359,8 @@ def test_every_settings_tab_has_an_address_and_its_id_opens_it_too(driven) -> No
     assert slugs == {
         "about": "about", "greetings": "greetings", "voices": "voices", "wakewords": "wake-words",
         "recordings": "recordings", "devices": "devices", "phonebar": "phone-bar",
-        "satellites": "satellites", "models": "models", "internet": "internet", "config": "configuration",
+        "satellites": "satellites", "printers": "printers", "models": "models", "internet": "internet",
+        "config": "configuration",
     }
     ids = [i for i, _ in o["slugs"]]
     assert o["roundTrip"] == ids and o["byId"] == ids

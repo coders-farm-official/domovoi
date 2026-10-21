@@ -44,6 +44,7 @@ from web.backend.api import devices as devices_api
 from web.backend.api import audiobooks as audiobooks_api
 from web.backend.api import documents as documents_api
 from web.backend.api import files as files_api
+from web.backend.api import printers as printers_api
 from web.backend.api import files_security
 from web.backend.api import greetings as greetings_api
 from web.backend.api import images as images_api
@@ -400,6 +401,8 @@ app.include_router(captures_api.router)
 app.include_router(documents_api.router)
 app.include_router(files_api.router)
 app.include_router(files_api.blocks_router)
+# Printers, printing and scanning: proxies to the core's /v1/printers, /v1/print, /v1/scan.
+app.include_router(printers_api.router)
 app.include_router(podcasts_api.router)
 app.include_router(audiobooks_api.router)
 app.include_router(videos_api.router)

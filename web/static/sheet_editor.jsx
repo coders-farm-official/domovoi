@@ -161,6 +161,10 @@ const SheetEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null }) =
         <span style={{ flex: 1 }}/>
         <Button icon="file-down" title="export as .csv" onClick={() => onExport('csv')}>csv</Button>
         <Button icon="file-down" title="export as .xlsx" onClick={() => onExport('xlsx')}>xlsx</Button>
+        {window.PrintFileButton && (
+          <window.PrintFileButton libraryId="core:documents" path={rel_path} name={rel_path}
+                                  title={dirty ? 'prints the last saved version' : 'print'}/>
+        )}
         {state.status === 'ready' && (
           <Button variant="primary" icon="save" disabled={saving || !dirty || !!blocked}
                   title={blocked || undefined} onClick={onSave}>

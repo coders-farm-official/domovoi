@@ -4170,6 +4170,7 @@ const SETTINGS_TABS = [
   { id: 'devices', label: 'Devices' },        // device names + queue / files access
   { id: 'phonebar', slug: 'phone-bar', label: 'Phone bar' },  // this browser's phone tabs (no sign-in: kept in the browser)
   { id: 'satellites', label: 'Satellites' },  // the rooms' Pis (was a nav route, #satellites still opens it)
+  { id: 'printers', label: 'Printers and scanners' },   // network printers and scanners (printers.jsx)
   { id: 'models', label: 'Models' },          // model-management hub (was a nav route)
   { id: 'internet', label: 'Internet' },      // the INTERNET_ACCESS answer (its one home)
   { id: 'config', slug: 'configuration', label: 'Configuration' },   // last tab, by request
@@ -4186,6 +4187,7 @@ const SETTINGS_SUB = {
   devices: 'Name this device, the household token, shared screens, and who may edit a room’s play queue.',
   phonebar: 'The tabs along the bottom of this browser at phone width — kept in this browser only.',
   satellites: 'The Pi in each room: status, approvals and adoption, announcements, and each room’s drawer.',
+  printers: 'Network printers and scanners: add them, see their ink and paper, and set the defaults.',
   models: "What's active in each role, install more, and the host hardware readout.",
   internet: 'Will this Domovoi have internet? It sets the defaults of the online extras.',
   config: 'Editable domovoi configuration.',
@@ -4210,6 +4212,7 @@ const SettingsPage = () => {
       {tab === 'devices' && <DevicesPanel/>}
       {tab === 'phonebar' && <PhoneBarPanel/>}
       {tab === 'satellites' && <SatellitesPanel/>}
+      {tab === 'printers' && <PrintersPanel/>}
       {tab === 'models' && <ModelsPanel/>}
       {tab === 'internet' && <InternetPanel/>}
       {tab === 'config' && <ConfigPanel setupAsked={marks[0] === 'setup'} mark={marks[0] || null}/>}
