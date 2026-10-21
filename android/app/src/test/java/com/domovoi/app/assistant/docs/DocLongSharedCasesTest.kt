@@ -118,17 +118,31 @@ class DocLongSharedCasesTest {
         }
     }
 
-    @Test fun dropInventedLines() {
+    @Test fun summariesKeepOnlyWhatThePartsCited() {
         val lease = listOf(
             DocPart("p. 1", "The monthly rent is \$1,200, due on the first day of each month.", page = 1),
             DocPart("p. 2", "The security deposit is \$1,500. It is returned within 30 days.", page = 2),
             DocPart("p. 3", "Pets are not allowed without written permission from the landlord.", page = 3),
         )
         val all = DocLong.allGiven(listOf(QaDoc("lease.pdf", lease)))
-        for (c in cases["drop_invented_lines"]!!.jsonArray) {
+        for (c in cases["keep_supported_lines"]!!.jsonArray) {
             val o = c.jsonObject
-            assertEquals(o.s("out"), DocLong.dropInventedLines(o.s("reply")!!, all))
+            val notes = o["notes"]!!.jsonArray.map { it.str()!! }
+            assertEquals(o.s("out"), DocLong.keepSupportedLines(o.s("reply")!!, all, DocLong.notedLabels(notes, all)))
         }
+        val pages = (1..9).map { i ->
+            val body = ("The tenant keeps the garden tidy and reports repairs within a week. ".repeat(6)).trim()
+            DocPart("p. $i", "Page $i. $body", page = i)
+        }
+        val d = listOf(QaDoc("x", pages))
+        val chunks = DocLong.planChunks(d, 300)
+        for (c in cases["nothing_cited"]!!.jsonArray) {
+            val o = c.jsonObject
+            val notes = o["notes"]!!.jsonArray.map { it.str() }
+            val want = o["out"]!!.let { if (it is JsonNull) null else note(it) }
+            assertEquals(want, DocLong.nothingCitedNote(chunks, d, notes))
+        }
+        assertEquals(cases.s("nothing_cited_text"), DocLong.NOTHING_CITED)
     }
 
     @Test fun stoppedTextAndNotes() {

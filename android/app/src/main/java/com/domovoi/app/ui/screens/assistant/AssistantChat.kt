@@ -243,12 +243,13 @@ private fun ChatPane(
                 parts = j.parts,
                 onStop = when (j.state) {
                     "server" -> actions.stopServer
-                    "paused" -> null
+                    "paused", "held" -> null
                     else -> actions.stop
                 },
-                offer = actions.serverOffer?.takeIf { j.state == "reading" }?.let { DocLong.offerLine(it) },
-                offerNote = j.names.firstOrNull()?.let { PhoneDocJobs.handOverText(it) },
-                onOffer = actions.useServer,
+                offer = if (j.state == "held") "read it on this phone"
+                    else actions.serverOffer?.takeIf { j.state == "reading" }?.let { DocLong.offerLine(it) },
+                offerNote = if (j.state == "held") null else j.names.firstOrNull()?.let { PhoneDocJobs.handOverText(it) },
+                onOffer = if (j.state == "held") actions.carryOn else actions.useServer,
             )
         }
         ui.docProblem?.let { DocProblemNote(it, onClose = actions.closeDocProblem) }
@@ -522,7 +523,7 @@ internal const val PHONE_EMPTY_HINT =
         "internet, and this chat stays on this phone."
 
 /** The job states the progress card shows. */
-internal val JOB_CARD_STATES = setOf("reading", "reducing", "paused", "server")
+internal val JOB_CARD_STATES = setOf("reading", "reducing", "paused", "server", "held")
 
 internal const val ACTION_COPY = "copy"
 internal const val ACTION_REPORT = "report this reply"

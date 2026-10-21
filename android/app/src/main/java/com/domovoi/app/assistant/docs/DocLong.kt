@@ -55,12 +55,23 @@ object DocLong {
 
     /** 19,000 characters: a GPU job's part in its 8K window. */
     const val PHONE_GPU_MAP_CHUNK_TOKENS = 4750
+
+    /** The most notes one combine step reads on the phone, characters: its
+     *  window less the persona, the rules and the summary written (600
+     *  tokens), notes being prose with labels (review round 1). */
+    const val PHONE_REDUCE_CHARS_CPU = 7000
+    const val PHONE_REDUCE_CHARS_GPU = 16000
+
     const val CHARS_PER_TOKEN = 4.0
     const val OVERHEAD_TOKENS = 250
     const val MAP_OUT_TOKENS = 150
     const val MAP_NUM_PREDICT = 240
     const val REDUCE_OUT_TOKENS = 350
     const val REDUCE_NUM_PREDICT = 600
+    /** The longest a phone map step or combine step may write, characters
+     *  (the server's num_predict caps, at 4 characters a token). */
+    const val MAP_MAX_CHARS = MAP_NUM_PREDICT * 4
+    const val REDUCE_MAX_CHARS = REDUCE_NUM_PREDICT * 4
     const val MAP_BULLETS = 8
     const val LONG_PROMPT_TOKENS = 400
 
@@ -252,17 +263,46 @@ object DocLong {
      *  of passages in its chunk; a line whose every label was made up goes;
      *  "" when the reply says the part has nothing. */
     fun cleanNote(reply: String, given: List<Given>): String {
-        var kept = ArrayList<Pair<String, Boolean>>()
+        val kept = ArrayList<String>()
         for (line in reply.lines()) {
             if (line.isBlank()) continue
             val checked = DocQa.checkReply(line, given)
-            if (checked.dropped.isNotEmpty() && checked.cited.isEmpty()) continue
-            if (!checked.found) continue
-            kept += checked.content to checked.cited.isNotEmpty()
+            if (checked.found && checked.cited.isNotEmpty()) kept += checked.content
         }
-        // A greeting or preamble cites nothing: when any line cites, it goes.
-        if (kept.any { it.second }) kept = ArrayList(kept.filter { it.second })
-        return kept.joinToString("\n") { it.first }.trim()
+        return kept.joinToString("\n").trim()
+    }
+
+    /** The labels the parts' notes cite (the server's `noted_labels`). */
+    fun notedLabels(notes: List<String?>, given: List<Given>): Set<String> {
+        val out = HashSet<String>()
+        notes.forEach { n -> if (!n.isNullOrBlank()) DocQa.checkReply(n, given).cited.forEach { out += DocQa.normLabel(it) } }
+        return out
+    }
+
+    /** The summary's lines that cite a page some part's notes cited, with
+     *  only such labels (the server's `keep_supported_lines`). */
+    fun keepSupportedLines(reply: String, given: List<Given>, noted: Set<String>): String {
+        val allowed = given.filter { DocQa.normLabel(it.cite) in noted }
+        val kept = ArrayList<String>()
+        for (line in reply.lines()) {
+            if (line.isBlank()) continue
+            val checked = DocQa.checkReply(line, allowed)
+            if (checked.found && checked.cited.isNotEmpty()) kept += checked.content
+        }
+        return kept.joinToString("\n").trim()
+    }
+
+    /** Parts read with nothing cited: not in the summary, said so. */
+    fun nothingCitedNote(chunks: List<DocChunk>, docs: List<QaDoc>, notes: List<String?>): DocNote? {
+        val empty = notes.indices.filter { notes[it] != null && notes[it]!!.isBlank() }
+        if (empty.isEmpty()) return null
+        val where = empty.map { i ->
+            val span = if (docs.size == 1) chunkPages(chunks[i], docs) else null
+            if (span != null) pagesPhrase(span.first, span.second) else "part ${i + 1}"
+        }
+        val what = if (where.size > 1) where.dropLast(1).joinToString(", ") + " and " + where.last() else where[0]
+        return DocNote("nothing_cited", "Domovoi found nothing it could cite in $what, so " +
+            (if (where.size == 1) "it isn" else "they aren") + "'t in this summary.")
     }
 
     /** What a phone's estimate uses before this phone has measured anything:
@@ -273,16 +313,11 @@ object DocLong {
     fun benchSpeed(gpu: Boolean): DocSpeed =
         if (gpu) DocSpeed(1100.0, 20.0, 4.44) else DocSpeed(156.0, 12.0, 4.44)
 
-    /** The summary's lines less those whose every label names no passage;
-     *  lines with no label stay (the server's `drop_invented_lines`). */
-    fun dropInventedLines(reply: String, given: List<Given>): String =
-        reply.lines().filter { line ->
-            if (line.isBlank()) return@filter true
-            val c = DocQa.checkReply(line, given)
-            !(c.dropped.isNotEmpty() && c.cited.isEmpty())
-        }.joinToString("\n")
-
     // ── What the person reads ───────────────────────────────────────────
+
+    /** The reply when no part gave anything the model could cite. */
+    const val NOTHING_CITED = "Domovoi couldn't find anything in the document it could cite, so there is no summary. " +
+        "Ask about something specific in it instead."
 
     fun stoppedText(phrase: String, notes: List<String>): String {
         val kept = notes.map { it.trim() }.filter { it.isNotEmpty() }

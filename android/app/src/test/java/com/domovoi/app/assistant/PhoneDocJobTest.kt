@@ -51,6 +51,7 @@ class PhoneDocJobTest {
     private val docs = ChatDocStore(File(root, "chat-docs/attachments"))
     private val settings = MemoryAssistantSettings()
     private val engine = JobEngine()
+    @Volatile private var pageCount = 12
     private val scopes = CopyOnWriteArrayList<CoroutineScope>()
 
     private val llm = CatalogModel(
@@ -62,8 +63,8 @@ class PhoneDocJobTest {
     /** 12 pages of about 1,900 characters: 3 parts on the phone's CPU
      *  (9,000 a part), 2 on its GPU (19,000). */
     private val pdf = PdfTextReader { _, _ ->
-        (1..12).map { n ->
-            val text = WORDS[n] + " rules. " +
+        (1..pageCount).map { n ->
+            val text = WORDS[(n - 1) % (WORDS.size - 1) + 1] + " $n rules. " +
                 (1..30).joinToString(" ") { k -> "Clause $n.$k: the tenant of flat $n reports fault $k within ${k + n} days." }
             PdfPageText(listOf(PdfBlock(text, 50f, 100f, 550f, 112f)), 612f, 0)
         }
@@ -121,8 +122,12 @@ class PhoneDocJobTest {
         val reply = c.replies().last()
         assertEquals("summary", reply.docMode)
         assertFalse(reply.text.contains("p. 99"))
-        assertEquals(listOf("p. 1", "p. 6"), reply.sources.map { it.label })
-        assertTrue(reply.sources.all { it.cited } && reply.sources[1].page == 6)
+        // Only lines citing a page some part's notes cited: no greeting, no
+        // unlabeled claim, no page no part cited (p. 6), no made-up one.
+        assertEquals("- Faults are reported quickly [p. 1]\n- Flats keep their items [p. 5]", reply.text)
+        assertFalse(engine.users[3].contains("Hello"))
+        assertEquals(listOf("p. 1", "p. 5"), reply.sources.map { it.label })
+        assertTrue(reply.sources.all { it.cited } && reply.sources[1].page == 5)
         assertTrue(reply.notes.contains(DocLong.partsNote(3)))
         assertNull(c.ui().conversation.job)
         assertNull(c.ui().docJob)
@@ -316,9 +321,65 @@ class PhoneDocJobTest {
         engine.releaseAll()
         engine.calls.clear()
         c.serverFailed(h.conversation, "the home server isn't in reach")
+        // Held for the person, said, nothing filed (review round 1).
+        until("held") { c.ui().conversation.job?.state == PhoneDocJob.STATE_HELD && c.ui().docJob?.state == "held" }
+        assertEquals("the home server isn't in reach", c.ui().docProblem)
+        assertEquals(PhoneDocJobs.HELD_LINE, c.ui().docJob!!.line)
+        assertTrue(c.replies().isEmpty())
+        Thread.sleep(100)
+        assertTrue(engine.kinds().isEmpty())
+        // Coming back doesn't start it either: it waits to be asked.
+        c.screenHidden()
+        c.screenShown()
+        Thread.sleep(100)
+        assertTrue(engine.kinds().isEmpty())
+        c.carryOnJob()
         until("read on the phone") { c.replies().isNotEmpty() && !c.ui().replying }
         // Part 1 was kept; parts 2 and 3 were read here.
         assertEquals(listOf("map", "map", "reduce"), engine.kinds())
+    }
+
+    @Test fun anEightyPageCombineOnTheCpuFitsItsWindow() {
+        pageCount = 80
+        engine.longNotes = true
+        val c = controller()
+        c.ready()
+        c.screenShown()
+        c.summarize()
+        until("the summary", timeoutMs = 30_000) { c.replies().isNotEmpty() && !c.ui().replying }
+        val kinds = engine.kinds()
+        assertTrue(kinds.count { it == "reduce" } >= 2)          // grouped first
+        engine.users.zip(kinds).forEach { (user, kind) ->
+            val limit = if (kind == "reduce") DocLong.PHONE_REDUCE_CHARS_CPU else DocLong.PHONE_MAP_CHUNK_TOKENS * 4
+            // The notes or the part, plus the markers and the request.
+            assertTrue("$kind prompt of ${user.length}", user.length <= limit + 700)
+        }
+        // A 4,096-token window holds it, at the bench's worst 2.7 characters
+        // a token for the part and 4 for notes, with the persona and rules.
+        engine.users.zip(kinds).filter { it.second == "reduce" }.forEach { (user, _) ->
+            assertTrue(user.length / 4.0 + 400 + DocLong.REDUCE_NUM_PREDICT <= 4096)
+        }
+        assertEquals("summary", c.replies().last().docMode)
+    }
+
+    @Test fun aStepThatWritesOnIsCutAtTheCap() {
+        engine.runOn = true
+        val c = controller()
+        c.ready()
+        c.screenShown()
+        c.summarize()
+        until("the summary") { c.replies().isNotEmpty() && !c.ui().replying }
+        val reply = c.replies().last()
+        assertTrue(reply.text.length <= DocLong.REDUCE_MAX_CHARS + 20)
+    }
+
+    @Test fun aServerViewIsAnErrorBeforeItIsASummary() {
+        assertEquals("failed", PhoneDocJobs.serverOutcome(live = false, hasError = true, content = ""))
+        assertEquals("failed", PhoneDocJobs.serverOutcome(live = false, hasError = true, content = "words"))
+        assertEquals("failed", PhoneDocJobs.serverOutcome(live = false, hasError = false, content = "  "))
+        assertEquals("failed", PhoneDocJobs.serverOutcome(live = false, hasError = false, content = null))
+        assertEquals("progress", PhoneDocJobs.serverOutcome(live = true, hasError = false, content = null))
+        assertEquals("done", PhoneDocJobs.serverOutcome(live = false, hasError = false, content = "- Rent [p. 1]"))
     }
 
     @Test fun theOfferAppearsOnlyWhenTheServerIsMeasuredFaster() {
@@ -356,6 +417,9 @@ class PhoneDocJobTest {
         assertTrue(v.single)
         val p = PhoneDocJobs.view("c", job.copy(notes = listOf("a") + List(chunks.size - 1) { null }), listOf("x.pdf"), "paused", null)
         assertEquals("paused at part 2 of ${chunks.size} · carries on when you come back", p.line)
+        // The home server would read it all: the offer compares that.
+        assertEquals(chunks.sumOf { it.chars }, v.totalChars)
+        assertTrue(v.totalChars > v.remainingChars || job.read == 0)
     }
 }
 
@@ -372,6 +436,10 @@ class JobEngine : LlmEngine {
     val loads = CopyOnWriteArrayList<LlmBackend>()
     @Volatile var failOn: LlmBackend? = null
     @Volatile var closes = 0
+    /** Eight long bullets a part (an 80-page combine's worth of notes). */
+    @Volatile var longNotes = false
+    /** Writes on and on (the phone's own output cap must stop it). */
+    @Volatile var runOn = false
 
     fun holdFrom(index: Int) {
         holdFrom = calls.size + index
@@ -408,9 +476,17 @@ class JobEngine : LlmEngine {
         val text = when (kind) {
             "map" -> {
                 val label = Regex("""\[(p\. \d+)]""").find(user)?.groupValues?.get(1) ?: "p. 1"
-                "- The part from $label covers repairs [$label]\n- A pool on the roof [p. 99]"
+                when {
+                    runOn -> "- Endless [$label] ".repeat(2000)
+                    longNotes -> (1..8).joinToString("\n") { k ->
+                        "- Point $k of this part: the tenant's duties and the landlord's repairs, set out at length [$label]"
+                    }
+                    else -> "Hello. I am Domovoi.\n- The part from $label covers repairs [$label]\n- A pool on the roof [p. 99]"
+                }
             }
-            else -> "- Faults are reported quickly [p. 1]\n- Flats keep their items [p. 6]\n- Free parking [p. 99]"
+            else -> if (runOn) "- Endless [p. 1] ".repeat(2000)
+                else "Here is your summary.\n- Faults are reported quickly [p. 1]\n- Flats keep their items [p. 5]\n" +
+                    "- The landlord pays for parking.\n- Free parking [p. 99]\n- A pool [p. 6]"
         }
         text.chunked(7).forEach { emit(it) }
     }

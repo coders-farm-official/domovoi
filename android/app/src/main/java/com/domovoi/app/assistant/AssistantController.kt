@@ -40,6 +40,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -1521,6 +1522,10 @@ class AssistantController(
             PhoneDocJob.STATE_SERVER -> scope.launch {
                 jobDocs(ui.conversation, job)?.let { showJob(ui.conversation, job, it.map { d -> d.name }, "server") }
             }
+            // Waits for the person ("read it on this phone?").
+            PhoneDocJob.STATE_HELD -> scope.launch {
+                jobDocs(ui.conversation, job)?.let { showJob(ui.conversation, job, it.map { d -> d.name }, "held") }
+            }
         }
     }
 
@@ -1567,7 +1572,7 @@ class AssistantController(
                 partStartedMs = clock()
                 showJob(conv, job, names, "reducing")
                 val t0 = nanos()
-                reply = collectReply(llm, prompt.rules, prompt.user)
+                reply = collectReply(llm, prompt.rules, prompt.user, DocLong.REDUCE_MAX_CHARS)
                 job = recordStep(job, backend, llm, Persona.SYSTEM_PROMPT.length + prompt.rules.length + prompt.user.length,
                     job.chunks[0].chars, (nanos() - t0) / 1_000_000).let { it.copy(notes = listOf("")) }
             } else {
@@ -1578,7 +1583,7 @@ class AssistantController(
                     partStartedMs = clock()
                     showJob(conv, job, names, "reading")
                     val t0 = nanos()
-                    val text = collectReply(llm, p.rules, p.user)
+                    val text = collectReply(llm, p.rules, p.user, DocLong.MAP_MAX_CHARS)
                     val ms = (nanos() - t0) / 1_000_000
                     val note = DocLong.cleanNote(text, p.given)
                     job = recordStep(job, backend, llm, Persona.SYSTEM_PROMPT.length + p.rules.length + p.user.length, job.chunks[i].chars, ms)
@@ -1592,27 +1597,46 @@ class AssistantController(
                 partStartedMs = clock()
                 showJob(conv, job, names, "reducing")
                 var notes = job.notes.map { it.orEmpty() }
+                // Sized for this phone's window (4K on the CPU, 8K on the GPU
+                // engine), not the server's (review round 1).
+                val reduceLimit = if (backend == LlmBackend.GPU && job.backend == "GPU") DocLong.PHONE_REDUCE_CHARS_GPU
+                    else DocLong.PHONE_REDUCE_CHARS_CPU
+                val all = DocLong.allGiven(qaDocs)
+                val noted = DocLong.notedLabels(notes, all)
                 while (true) {
-                    val groups = DocLong.reduceGroups(notes)
+                    val groups = DocLong.reduceGroups(notes, reduceLimit)
                     if (groups.size <= 1) break
                     notes = groups.map { g ->
                         val rp = DocLong.buildReducePrompt(g.map { notes[it] }, names, job.question)
-                        DocLong.cleanNote(collectReply(llm, rp.rules, rp.user), DocLong.allGiven(qaDocs))
+                        DocLong.keepSupportedLines(collectReply(llm, rp.rules, rp.user, DocLong.REDUCE_MAX_CHARS), all, noted)
+                            .ifEmpty { g.map { notes[it] }.filter { it.isNotBlank() }.joinToString("\n") }
                     }
                 }
                 val rp = DocLong.buildReducePrompt(notes, names, job.question)
                 val t0 = nanos()
-                reply = collectReply(llm, rp.rules, rp.user)
+                reply = collectReply(llm, rp.rules, rp.user, DocLong.REDUCE_MAX_CHARS)
                 job = recordStep(job, backend, llm, Persona.SYSTEM_PROMPT.length + rp.rules.length + rp.user.length, 0, (nanos() - t0) / 1_000_000, part = false)
             }
             partStartedMs = null
             val all = DocLong.allGiven(qaDocs)
-            val checked = DocQa.checkReply(DocLong.dropInventedLines(reply, all), all, job.question, names)
-            onDelta(checked.content)
-            val notes = checked.notes + if (job.total > 1) listOf(DocLong.partsNote(job.total)) else emptyList()
+            // Only lines citing a page some part's notes cited (review round
+            // 1): the combine step can't add a claim. None left: the notes.
+            val direct = job.total == 1
+            val noted = if (direct) DocLong.chunkGiven(job.chunks[0], qaDocs).map { DocQa.normLabel(it.cite) }.toSet()
+                else DocLong.notedLabels(job.notes, all)
+            val content = DocLong.keepSupportedLines(reply, all, noted)
+                .ifEmpty { job.notes.filterNotNull().filter { it.isNotBlank() }.joinToString("\n") }
+            val extra = (if (job.total > 1) listOf(DocLong.partsNote(job.total)) else emptyList()) +
+                listOfNotNull(if (direct) null else DocLong.nothingCitedNote(job.chunks, qaDocs, job.notes))
             val done = conv.copy(job = null)
             _state.update { it.copy(docJob = null) }
-            return finishReply(done, summaryMessage(checked.content, citedSources(checked.sources, qaDocs), notes, job, backend))
+            if (content.isEmpty()) {
+                onDelta(DocLong.NOTHING_CITED)
+                return finishReply(done, summaryMessage(DocLong.NOTHING_CITED, emptyList(), extra, job, backend))
+            }
+            val checked = DocQa.checkReply(content, all, job.question, names)
+            onDelta(checked.content)
+            return finishReply(done, summaryMessage(checked.content, citedSources(checked.sources, qaDocs), checked.notes + extra, job, backend))
         } catch (e: CancellationException) {
             partStartedMs = null
             when {
@@ -1641,9 +1665,13 @@ class AssistantController(
         }
     }
 
-    private suspend fun collectReply(llm: LlmEngine, rules: String, user: String): String {
+    /** One job step's reply, stopped at [maxChars] (the server's output caps:
+     *  a step that runs on can't fill the window; review round 1). */
+    private suspend fun collectReply(llm: LlmEngine, rules: String, user: String, maxChars: Int): String {
         val text = StringBuilder()
-        llm.reply(Persona.SYSTEM_PROMPT + "\n\n" + rules, listOf(ChatTurn(fromUser = true, text = user)), null).collect { text.append(it) }
+        llm.reply(Persona.SYSTEM_PROMPT + "\n\n" + rules, listOf(ChatTurn(fromUser = true, text = user)), null)
+            .takeWhile { text.length < maxChars }
+            .collect { text.append(it) }
         return text.toString()
     }
 
@@ -1754,11 +1782,12 @@ class AssistantController(
 
     /** The home server couldn't (it went, it lost the job): this phone reads on. */
     fun serverFailed(conversation: String, why: String) {
-        say(why)
+        // Said, and held for the person: no empty summary is filed, and
+        // nothing is read here until they say so (review round 1).
         scope.launch {
-            updateJob(conversation) { it.copy(state = PhoneDocJob.STATE_PAUSED, serverJob = null) }
+            updateJob(conversation) { it.copy(state = PhoneDocJob.STATE_HELD, serverJob = null) }
             if (_state.value.conversation.id == conversation) {
-                _state.update { it.copy(docJob = null) }
+                _state.update { it.copy(docJob = null, docProblem = why) }
                 resumeJobIfAny()
             }
         }

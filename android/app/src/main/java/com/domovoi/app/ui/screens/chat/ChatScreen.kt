@@ -832,6 +832,19 @@ internal fun ConversationPane(
                         onRetry = if (i == transcript.lastIndex && !sending && canRetry(transcript)) ({ retry() }) else null,
                     )
                 }
+                // A job a restart interrupted: carried on only when asked.
+                if (!sending) {
+                    items(jobs.filter { it.state == "interrupted" }, key = { "int-" + it.id }) { j ->
+                        DocJobCard(j.line.ifEmpty { "this summary was interrupted — carry on?" }, j.read, j.parts, onStop = null,
+                            offer = carryOnText(j.parts - j.read), onOffer = {
+                                scope.launch {
+                                    runCatching { resumeServerJob(app, j.id) }
+                                        .onSuccess { v -> jobs.indexOfFirst { it.id == v.id }.takeIf { it >= 0 }?.let { jobs[it] = v } }
+                                        .onFailure { toast(docFailureText("carry on", it)) }
+                                }
+                            })
+                    }
+                }
                 // A job this screen didn't start, while it runs.
                 if (!sending) {
                     items(jobs.filter { it.live }, key = { "job-" + it.id }) { j ->

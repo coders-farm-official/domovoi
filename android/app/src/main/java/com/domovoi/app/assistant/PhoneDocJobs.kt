@@ -66,6 +66,10 @@ data class PhoneDocJob(
         const val STATE_PAUSED = "paused"
         const val STATE_STOPPED = "stopped"
         const val STATE_SERVER = "server"
+
+        /** The home server couldn't finish it (failed, lost, out of reach):
+         *  it waits for the person to read it on this phone (review round 1). */
+        const val STATE_HELD = "held"
     }
 }
 
@@ -83,8 +87,11 @@ data class DocJobView(
     val etaS: Double?,
     val line: String,
     val names: List<String>,
-    /** Characters still to read (what "use home server" would send to read). */
+    /** Characters still to read on this phone. */
     val remainingChars: Int,
+    /** The whole document's characters: what the home server would read
+     *  (it starts from the beginning; review round 1). */
+    val totalChars: Int = 0,
     /** The job reads one document (the home server takes one file). */
     val single: Boolean,
 )
@@ -151,9 +158,11 @@ object PhoneDocJobs {
         val line = when (state) {
             "reading", "reducing" -> DocLong.progressLine(state, part, job.total, eta)
             "paused" -> DocLong.progressLine("paused", minOf(job.read + 1, job.total), job.total, null)
+            "held" -> HELD_LINE
             else -> ""
         }
-        return DocJobView(job.id, conversation, state, part, job.total, job.read, eta, line, names, job.remainingChars(), job.docIds.size == 1)
+        return DocJobView(job.id, conversation, state, part, job.total, job.read, eta, line, names, job.remainingChars(),
+            job.chunks.sumOf { it.chars }, job.docIds.size == 1)
     }
 
     /**
@@ -171,6 +180,21 @@ object PhoneDocJobs {
 
     /** What "use home server" does, said before it is tapped. */
     fun handOverText(name: String): String = "Sends $name to your home server to read. Nothing is kept there."
+
+    /** A job the home server couldn't finish, waiting for the person. */
+    const val HELD_LINE = "the home server couldn't finish it · read it on this phone?"
+
+    /**
+     * What a view of the home server's job means for this phone: "progress",
+     * "failed" (its error, or a "result" with no words: never filed as a
+     * summary; review round 1) or "done".
+     */
+    fun serverOutcome(live: Boolean, hasError: Boolean, content: String?): String = when {
+        hasError -> "failed"
+        live -> "progress"
+        content.isNullOrBlank() -> "failed"
+        else -> "done"
+    }
 
     /** The note under a summary the home server wrote. */
     val SERVER_NOTE = DocNote("read_by_server", "Read by your home server; nothing was kept there.")
