@@ -61,20 +61,24 @@ internal suspend fun preparePhoto(bytes: ByteArray): PreparedPhoto {
 }
 
 /** Width and height from the header, nothing decoded; -1 when unknown. */
-private fun boundsOf(bytes: ByteArray): Pair<Int, Int> {
+internal fun boundsOf(bytes: ByteArray): Pair<Int, Int> {
     val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
     return o.outWidth to o.outHeight
 }
 
-private fun decodeForChat(bytes: ByteArray): Bitmap? =
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) decodeWithImageDecoder(bytes) else decodeWithBitmapFactory(bytes)
+/** [bytes] decoded upright at most [maxEdge] on the long edge (and
+ *  [maxPixels] in all); null when this phone can't open it. Phone photos
+ *  (PhonePhotoPrep.kt) use it at their own, smaller size. */
+internal fun decodeForChat(bytes: ByteArray, maxEdge: Int = CHAT_PHOTO_MAX_EDGE, maxPixels: Long = SERVER_MAX_PIXELS): Bitmap? =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) decodeWithImageDecoder(bytes, maxEdge, maxPixels)
+    else decodeWithBitmapFactory(bytes, maxEdge, maxPixels)
 
 @RequiresApi(Build.VERSION_CODES.P)
-private fun decodeWithImageDecoder(bytes: ByteArray): Bitmap? = try {
+private fun decodeWithImageDecoder(bytes: ByteArray, maxEdge: Int, maxPixels: Long): Bitmap? = try {
     ImageDecoder.decodeBitmap(ImageDecoder.createSource(ByteBuffer.wrap(bytes))) { decoder, info, _ ->
         // info.size is the upright size; the scale is the same either way.
-        val size = chatPhotoSize(info.size.width, info.size.height)
+        val size = chatPhotoSize(info.size.width, info.size.height, maxEdge, maxPixels)
         decoder.setTargetSize(size.width, size.height)
         decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE        // compress() needs pixels in memory
         decoder.setTargetColorSpace(ColorSpace.get(ColorSpace.Named.SRGB))
@@ -87,10 +91,10 @@ private fun decodeWithImageDecoder(bytes: ByteArray): Bitmap? = try {
 
 /** Android 8: no ImageDecoder, so a sampled decode, scaled to size, turned
  *  upright by the EXIF orientation. Null for a kind it can't open (HEIC). */
-private fun decodeWithBitmapFactory(bytes: ByteArray): Bitmap? {
+private fun decodeWithBitmapFactory(bytes: ByteArray, maxEdge: Int, maxPixels: Long): Bitmap? {
     val (w, h) = boundsOf(bytes)
     if (w <= 0 || h <= 0) return null
-    val target = chatPhotoSize(w, h)
+    val target = chatPhotoSize(w, h, maxEdge, maxPixels)
     var sample = 1
     while (w / (sample * 2) >= target.width && h / (sample * 2) >= target.height) sample *= 2
     val raw = BitmapFactory.decodeByteArray(
@@ -127,7 +131,7 @@ private fun upright(bmp: Bitmap, orientation: Int): Bitmap {
 /** The bitmap as a JPEG. Transparency goes onto white (a JPEG has none, and
  *  would show it black), and a wide or deep bitmap is drawn into plain
  *  8-bit sRGB first. */
-private fun toJpeg(bmp: Bitmap): ByteArray {
+internal fun toJpeg(bmp: Bitmap): ByteArray {
     val plain = bmp.config == Bitmap.Config.ARGB_8888 || bmp.config == Bitmap.Config.RGB_565
     val opaque = if (bmp.hasAlpha() || !plain) {
         Bitmap.createBitmap(bmp.width, bmp.height, Bitmap.Config.ARGB_8888).also {

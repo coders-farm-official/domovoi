@@ -90,16 +90,62 @@ object LocalMedia {
         }
     }
 
-    /** One page of the phone's videos, newest first (see [pageTracks]). */
-    fun pageVideos(context: Context, req: PageRequest): Page<LocalVideo> {
+    /** The names of the genres the phone's songs carry (the phone
+     *  assistant's library check, AssistantController.musicFor). */
+    fun genres(context: Context): List<String> =
+        context.contentResolver.query(
+            MediaStore.Audio.Genres.EXTERNAL_CONTENT_URI, arrayOf(MediaStore.Audio.Genres.NAME), null, null, null,
+        )?.use { c -> buildList { while (c.moveToNext()) c.getString(0)?.takeIf { it.isNotBlank() }?.let { add(it) } } }
+            .orEmpty().distinct()
+
+    /** Up to [limit] of the phone's songs in genre [name] (as [genres] gave it). */
+    fun genreTracks(context: Context, name: String, limit: Int): List<LocalTrack> {
+        val ids = context.contentResolver.query(
+            MediaStore.Audio.Genres.EXTERNAL_CONTENT_URI, arrayOf(MediaStore.Audio.Genres._ID),
+            "${MediaStore.Audio.Genres.NAME} = ?", arrayOf(name), null,
+        )?.use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }.orEmpty()
+        return ids.flatMap { gid ->
+            context.contentResolver.query(
+                MediaStore.Audio.Genres.Members.getContentUri("external", gid),
+                arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.TITLE, MediaStore.Audio.Media.ARTIST,
+                    MediaStore.Audio.Media.ALBUM, MediaStore.Audio.Media.DURATION, MediaStore.Audio.Media.ALBUM_ID),
+                "${MediaStore.Audio.Media.IS_MUSIC} != 0", null, "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC",
+            )?.use { c ->
+                buildList {
+                    while (c.moveToNext() && size < limit) {
+                        val id = c.getLong(0)
+                        val albumId = c.getLong(5)
+                        add(LocalTrack(
+                            id = id,
+                            title = c.getString(1) ?: "unknown",
+                            artist = c.getString(2)?.takeIf { it != "<unknown>" },
+                            album = c.getString(3)?.takeIf { it != "<unknown>" },
+                            durationSec = c.getLong(4).takeIf { it > 0 }?.div(1000.0),
+                            uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id).toString(),
+                            albumArtUri = if (albumId > 0) {
+                                ContentUris.withAppendedId(Uri.parse("content://media/external/audio/albumart"), albumId).toString()
+                            } else null,
+                        ))
+                    }
+                }
+            }.orEmpty()
+        }.distinctBy { it.id }.take(limit)
+    }
+
+    /** One page of the phone's videos, newest first (see [pageTracks]);
+     *  [q] matches the file name (the phone assistant's find_video). */
+    fun pageVideos(context: Context, req: PageRequest, q: String = ""): Page<LocalVideo> {
         val proj = arrayOf(
             MediaStore.Video.Media._ID,
             MediaStore.Video.Media.DISPLAY_NAME,
             MediaStore.Video.Media.DURATION,
             MediaStore.Video.Media.SIZE,
         )
+        val needle = q.trim()
+        val sel = if (needle.isEmpty()) null else "${MediaStore.Video.Media.DISPLAY_NAME} LIKE ? ESCAPE '\\'"
+        val args = if (needle.isEmpty()) null else arrayOf("%" + likeEscape(needle) + "%")
         return pageOf(
-            context, MediaStore.Video.Media.EXTERNAL_CONTENT_URI, proj, null, null,
+            context, MediaStore.Video.Media.EXTERNAL_CONTENT_URI, proj, sel, args,
             "${MediaStore.Video.Media.DATE_ADDED} DESC, ${MediaStore.Video.Media._ID} DESC", req,
         ) { c ->
             val id = c.getLong(0)

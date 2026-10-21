@@ -10,10 +10,15 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import com.domovoi.app.net.ReportUpload
 import com.domovoi.app.alerts.HelpAlerts
 import com.domovoi.app.alerts.IncidentAlerts
+import com.domovoi.app.assistant.AppActionHost
 import com.domovoi.app.assistant.AssistantBench
 import com.domovoi.app.assistant.AssistantController
+import com.domovoi.app.assistant.AppPhoneContext
+import com.domovoi.app.assistant.AssistantSettings
 import com.domovoi.app.assistant.AssistantSupport
 import com.domovoi.app.assistant.ModelDownloader
+import com.domovoi.app.assistant.PhoneContext
+import com.domovoi.app.data.HouseholdNames
 import com.domovoi.app.alerts.TimerAlerts
 import com.domovoi.app.data.DeveloperOptions
 import com.domovoi.app.data.Prefs
@@ -216,8 +221,35 @@ class AppContainer(context: Context) {
             // opened without asking any server.
             phoneVoice = { phoneVoice.openOnPhone() },
             lookups = phoneLookups(context),
+            phone = { settings -> phoneChatContext(context, settings) },
+            // N2: the Clock app, the player, the saved songs, books and
+            // videos. Nothing in it holds the server client.
+            actions = { AppActionHost(context, player, books, bookPositions) },
         )
     }
+
+    /** The room names and listener name this phone's screens last saw, per
+     *  server (data/HouseholdNames.kt): the phone chat's prompt reads them,
+     *  never the server. */
+    val householdNames: HouseholdNames by lazy { HouseholdNames.forApp(context) }
+
+    /**
+     * What a phone chat may read (assistant/AppPhoneContext.kt, N1): the
+     * player's state, whether the connection is up, the cached listener
+     * name and the saved books, all as they are on the phone now. Never the
+     * server's rooms or its timer mirror (owner, 2026-10-21: phone chats
+     * answer about the phone only); nothing here hands it the server client.
+     */
+    internal fun phoneChatContext(context: Context, settings: AssistantSettings): PhoneContext = AppPhoneContext(
+        context = context,
+        settings = settings,
+        nowPlaying = { PhoneChatFacts.nowPlaying(player) },
+        sleepRemainingSec = { player.sleepRemainingSec.value },
+        serverSet = { prefs.serverUrl.value.isNotBlank() },
+        connected = { bus.connected.value },
+        listener = { householdNames.listenerName(prefs.serverUrl.value, prefs.listenerPersonId.value) },
+        savedBooks = { PhoneChatFacts.savedBooks(books, bookPositions) },
+    )
     val assistant: AssistantController by assistantLazy
 
     /** Phone chats' lookups (assistant/lookup/, part 5 W1), used only after

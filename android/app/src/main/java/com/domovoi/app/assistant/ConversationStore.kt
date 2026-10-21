@@ -1,5 +1,6 @@
 package com.domovoi.app.assistant
 
+import com.domovoi.app.data.AtomicFiles
 import com.domovoi.app.assistant.docs.DocNote
 import com.domovoi.app.assistant.docs.DocSource
 import com.domovoi.app.assistant.docs.StoredDocument
@@ -8,8 +9,6 @@ import com.domovoi.app.assistant.lookup.SourceLine
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import kotlin.random.Random
 
 /** Who said a message in an on-phone conversation. */
@@ -51,6 +50,16 @@ data class StoredMessage(
     val stopMs: Long? = null,
     /** A reply from the phone's own clock (ClockQuestions), not the model. */
     val fromClock: Boolean = false,
+    /** A reply read from the phone itself (PhoneQuestions: "battery",
+     *  "timers"…) or a hand-off ("handoff"), not the model; null for the
+     *  model's. */
+    val fastPath: String? = null,
+    /** A card under the reply: a hand-off waiting for its tap, or a
+     *  permission asked on first use (HandOffs.kt). */
+    val card: PhoneCard? = null,
+    /** The read tools the model called for this reply (names only: their
+     *  results are never kept). */
+    val tools: List<String> = emptyList(),
     /** Documents attached with this message (ids of [StoredConversation.documents]). */
     val documents: List<String> = emptyList(),
     /** A reply about the chat's documents: "question", "summary" or "attached". */
@@ -75,6 +84,13 @@ data class StoredMessage(
     /** A summary written by a long-document job ([PhoneDocJob.id]): a
      *  stopped one offers "carry on" while the job is kept. */
     val jobId: String? = null,
+    /** A question asked with a photo (N3). Only this mark is kept: the
+     *  photo itself never is, on the phone or anywhere else. */
+    val photo: Boolean = false,
+    /** A photo reply: where the photo encoder ran ("gpu"). */
+    val vision: String? = null,
+    /** ...and the app's peak resident memory while it was written, MB. */
+    val peakMb: Int? = null,
 ) {
     val fromUser: Boolean get() = from == Speaker.USER
 }
@@ -241,7 +257,7 @@ class ConversationStore(val dir: File) {
         val target = file(conversation.id)
         val tmp = File(dir, "${conversation.id}.json.tmp")
         tmp.writeText(json.encodeToString(StoredConversation.serializer(), conversation))
-        Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        AtomicFiles.replace(tmp, target)
     }
 
     fun delete(id: String): Boolean = !isValidId(id) || file(id).let { !it.exists() || it.delete() }

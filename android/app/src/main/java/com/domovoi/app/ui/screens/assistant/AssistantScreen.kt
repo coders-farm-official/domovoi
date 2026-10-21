@@ -33,8 +33,16 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
+import com.domovoi.app.assistant.AppPhoneContext
 import com.domovoi.app.assistant.AssistantController
 import com.domovoi.app.assistant.AssistantUi
+import com.domovoi.app.assistant.CardKind
+import com.domovoi.app.assistant.CardState
+import com.domovoi.app.assistant.HandOff
+import com.domovoi.app.assistant.HandOffLauncher
+import com.domovoi.app.assistant.HandOffs
+import com.domovoi.app.assistant.PhoneCard
+import com.domovoi.app.assistant.PhonePermission
 import com.domovoi.app.assistant.DeviceTier
 import com.domovoi.app.assistant.DeviceTiers
 import com.domovoi.app.assistant.LlmBackend
@@ -100,6 +108,12 @@ internal class AssistantActions(
     val deliverReport: (ReportSink, ReplyReport) -> Unit = { _, _ -> },
     val deleteReport: (String) -> Unit = {},
     val clearReports: () -> Unit = {},
+    /** A card's main button (the message's index and card): a hand-off's
+     *  app opens (after the contact picker when it needs a person), or
+     *  Android's permission dialog shows. */
+    val cardPrimary: (Int, PhoneCard) -> Unit = { _, _ -> },
+    /** A card's second button: "not now", "use the picker". */
+    val cardSecondary: (Int, PhoneCard) -> Unit = { _, _ -> },
     /** "Try again": the last reply goes, the last question is answered again. */
     val retry: () -> Unit = {},
     /** One message's words to the share sheet. */
@@ -119,6 +133,11 @@ internal class AssistantActions(
     val askingServer: Boolean = false,
     val dropPending: () -> Unit = {},
     val closeDocProblem: () -> Unit = {},
+    /** A photo for the next question (N3); null where phone chats take no
+     *  photos (the buttons also need the GPU probe to have passed). */
+    val attachPhoto: ((com.domovoi.app.assistant.PendingPhoto) -> Unit)? = null,
+    /** The waiting photo goes, unsent. */
+    val dropPhoto: () -> Unit = {},
     /** The phone's own copy of a document of the conversation on screen, by id. */
     val docFile: (String) -> java.io.File? = { null },
     /** A draft of the conversation on screen, by id (documents plan D4);
@@ -136,6 +155,10 @@ internal class AssistantActions(
     val useServer: (() -> Unit)? = null,
     /** Stop a job handed to the home server (what it read is kept). */
     val stopServer: (() -> Unit)? = null,
+    /** The video a phone chat played (N2) was closed. */
+    val closeVideo: () -> Unit = {},
+    /** A done timer or alarm card offers "open Clock" (some app takes it). */
+    val clockOpens: (PhoneCard) -> Boolean = { false },
 )
 
 /** The phone chat's part of Chat's conversation frame: the way back to the
@@ -419,6 +442,7 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
     val stopServer: (() -> Unit)? = serverJob?.serverJob?.let { id ->
         { reportScope.launch { runCatching { com.domovoi.app.ui.screens.chat.stopServerJob(app, id) } } }
     }
+    val cards = rememberCardActions(assistant, ui.conversation.id)
     val actions = actionsFor(assistant, download, talk, sinks, reportScope, used, askServer, asking) { toast(it) }
     // Drafts (documents plan D4): kept on this phone; saved to its "Chat
     // documents" library, and to the home server's From Chat by "Send to
@@ -469,9 +493,98 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
             closeDocProblem = actions.closeDocProblem, docFile = actions.docFile,
             draftDoc = draftDoc, printDraft = printDraft, reviseDraft = assistant::reviseDraft,
             carryOn = actions.carryOn, serverOffer = offerS, useServer = useServer, stopServer = stopServer,
+            cardPrimary = cards.primary, cardSecondary = cards.secondary,
+            attachPhoto = actions.attachPhoto, dropPhoto = actions.dropPhoto,
+            closeVideo = assistant::videoClosed,
+            clockOpens = assistant::clockOpens,
         ),
         chrome,
     )
+}
+
+/** A card's two buttons, with what they launch: Android's permission
+ *  dialog, the contact picker, the other app (HandOffLauncher). */
+internal class CardActions(val primary: (Int, PhoneCard) -> Unit, val secondary: (Int, PhoneCard) -> Unit)
+
+@Composable
+private fun rememberCardActions(assistant: AssistantController, conversationId: String): CardActions {
+    val context = LocalContext.current
+    val toast = LocalToast.current
+    // The card waiting on Android's dialog or the picker.
+    var waiting by remember { mutableStateOf<Pair<Int, PhoneCard>?>(null) }
+    val askPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        val (index, _) = waiting ?: return@rememberLauncherForActivityResult
+        waiting = null
+        assistant.permissionDecided(conversationId, index, granted = result.values.any { it })
+    }
+    fun open(index: Int, h: HandOff) {
+        val opened = HandOffLauncher.launch(context, h)
+        if (!opened) toast(HandOffs.noApp(h.kind).lowercase().removeSuffix("."))
+        assistant.handOffTapped(conversationId, index, done = opened, chosen = h)
+    }
+    val pickContact = rememberLauncherForActivityResult(HandOffLauncher.PickPhone()) { picked ->
+        val (index, card) = waiting ?: return@rememberLauncherForActivityResult
+        waiting = null
+        val h = card.handOff ?: return@rememberLauncherForActivityResult
+        val number = picked?.number?.takeIf { it.isNotBlank() }
+        if (number == null) {
+            if (picked != null) toast("that contact has no phone number")
+            return@rememberLauncherForActivityResult
+        }
+        open(index, h.copy(name = picked.name.ifBlank { null } ?: h.who, number = number))
+    }
+    // "use the picker" on the contacts card: the call or text card that
+    // follows opens the picker itself, with no second tap.
+    var pickNext by remember { mutableStateOf<Int?>(null) }
+    val shown by assistant.state.collectAsState()
+    val messages = shown.conversation.messages
+    LaunchedEffect(pickNext, messages.size) {
+        val i = pickNext ?: return@LaunchedEffect
+        val card = messages.getOrNull(i)?.card ?: return@LaunchedEffect
+        pickNext = null
+        if (card.kind == CardKind.HANDOFF && card.handOff?.needsContact == true && HandOffLauncher.canPickContact(context)) {
+            waiting = i to card
+            pickContact.launch(Unit)
+        }
+    }
+    return remember(assistant, conversationId) {
+        CardActions(
+            primary = { index, card ->
+                when (card.kind) {
+                    CardKind.PERMISSION -> card.phonePermission?.let { p ->
+                        waiting = index to card
+                        askPermission.launch(AppPhoneContext.androidPermissions(p).toTypedArray())
+                    }
+                    CardKind.ACTION ->
+                        if (card.state == CardState.DONE) assistant.openClock(card) else assistant.actionConfirmed(conversationId, index)
+                    CardKind.UNDO -> assistant.undoTapped(conversationId, index)
+                    CardKind.HANDOFF -> card.handOff?.let { h ->
+                        if (h.needsContact) {
+                            if (!HandOffLauncher.canPickContact(context)) {
+                                toast("this phone has no contacts app to choose from")
+                            } else {
+                                waiting = index to card
+                                pickContact.launch(Unit)
+                            }
+                        } else {
+                            open(index, h)
+                        }
+                    }
+                }
+            },
+            secondary = { index, card ->
+                when (card.kind) {
+                    CardKind.PERMISSION -> {
+                        if (card.phonePermission == PhonePermission.CONTACTS) pickNext = assistant.state.value.conversation.messages.size
+                        assistant.permissionDecided(conversationId, index, granted = false)
+                    }
+                    CardKind.HANDOFF -> assistant.handOffTapped(conversationId, index, done = false)
+                    CardKind.ACTION -> assistant.actionDeclined(conversationId, index)
+                    CardKind.UNDO -> Unit
+                }
+            },
+        )
+    }
 }
 
 /** Which conversation a phone chat's view waits for the controller to show. */
@@ -566,6 +679,10 @@ private fun actionsFor(
     askingServer = askingServer,
     dropPending = a::dropPending,
     closeDocProblem = a::closeDocProblem,
+    attachPhoto = { photo ->
+        if (!a.attachPhoto(photo)) toast("one photo per question: send or remove the one waiting first")
+    },
+    dropPhoto = a::dropPhoto,
     docFile = { id -> a.docFile(id) },
     carryOn = a::carryOnJob,
 )

@@ -145,6 +145,43 @@ table; Flyway applies it on update). No new dependencies.
 * **With AI features turned off,** a running job stops at its next part
   (keeping its notes) and no new one starts.
 
+## 2026-10-21 — Ask about a photo in a phone chat
+
+App only; no server change.
+
+* **Pictures on the phone.** A chat **on this phone** takes one photo per
+  question, from the in-app camera or Android's photo picker, and the model
+  on the phone answers about it, in airplane mode too. The photo is shrunk
+  to 1,024 px and read in memory: it isn't saved to the gallery or the
+  app's storage, never leaves the phone, and is discarded from memory once
+  answered. The
+  chat keeps a "photo (not kept)" mark, not the photo, so a photo question
+  has no **try again**.
+* **Where:** the **+** left of the message box (it replaces the paperclip)
+  lists **a document**, **take a photo** and **choose a photo**; the photo
+  items appear only where pictures work, and the camera item only on a
+  phone with a back camera. The mic stays on the right. While a photo
+  waits to be sent, the screen is kept out of screenshots and the recents
+  preview.
+* **The first question after an install or update waits a little
+  longer** (a few seconds) while the app tries the photo reader once.
+* **Only where the phone is fast enough.** The camera and gallery buttons
+  show only on phones whose GPU runs the model's photo encoder. The first
+  time a phone chat opens after an update, the app tries it once with a
+  test picture and remembers the answer for that model file and app build.
+  Phones where it fails (or where the encoder only runs on the CPU, which
+  was too slow and used too much memory on the owner's test phone) get no
+  buttons; if the app crashes during that try, the next start treats it
+  as a failure and doesn't try again until the next update. The same guard
+  covers every photo: if the app crashes while reading one, photos turn
+  off until the next update, and the model settings say why. A crash is
+  told from a memory kill or a swipe away by Android's own record
+  (Android 11+; on older phones the second unexplained close counts).
+  Deleting the model resets it.
+* **Camera permission:** asked on the first tap of **take a photo**, after
+  a one-line reason. The gallery needs no permission (the photo picker).
+* Home-server chats send pictures to the server as before.
+
 ## 2026-10-21 — Ask about a document in Chat
 
 Core and dashboard update with one migration, **V036** (two columns on
@@ -240,6 +277,85 @@ phone is marked as yours.
   Markdown plus JSON where you pick. The dashboard's chat gets search,
   rename and the archived list. The update applies migration **V034**
   (chat titles) by itself; threads from before keep their titles.
+
+## 2026-10-21 — The phone's own assistant does things on the phone (app)
+
+Android app only; nothing to run on the server.
+
+* A chat **on this phone** now acts, from the app's own patterns (never a
+  model's guess: on the test phone the model alone acted on 28.6% of
+  sentences that only mentioned a timer or music):
+  * **Timers and alarms in the Clock app**: "set a timer for 10 minutes
+    for the pasta", "wake me at 6:30", "set an alarm for quarter to seven
+    every weekday". Each asks first ("Set a timer for 10 minutes in the
+    Clock app?"), on a card or, in a voice turn, by yes or no; any "no",
+    "wait" or "cancel" in the answer cancels, and only a clear yes sets it.
+    "Wake me a bit before seven" asks "How about 6:45 AM?"; "12 tonight"
+    and "1 at night" are the small hours. Once sent, the reply says "Sent
+    to the Clock app" (the Clock app doesn't tell the phone it took it),
+    and the card offers **open Clock**. "Show my timers" and "show my
+    alarms" open the Clock app.
+  * **The phone's player**: "play some jazz", "shuffle my music", "pause",
+    "resume", "next", "go back", "stop", "set a sleep timer for 20 minutes"
+    (playback's sleep timer, never a Clock timer), "continue my book" (a
+    book saved on the phone, at its place). These run at once with
+    **Undo** under the reply for 10 seconds; saying or typing "undo" in
+    the next minute works too, and puts back the queue, the song and the
+    place. Undo is for the last action only: after a timer or an alarm,
+    after you changed the music yourself, or while the phone casts to a
+    room, it leaves the player alone. A bare "continue" or "next one"
+    right after a story or a joke is for the chat, not the player. "Play
+    …" plays only what the phone's music really holds (a title, artist,
+    album or genre by that name): "put on my shoes" is chat.
+  * **A video saved on the phone** ("play the glacier trip video") asks
+    first, then plays over the chat.
+* An action no app on the phone can do is not offered (no Clock app: the
+  chat says so). Phone chats are phone-only: house things ("play
+  jazz in the kitchen", "cancel the kitchen timer") get one line, "Those
+  are in your home server chats.", and a home-server chat
+  does them as before. A phone chat never reads the house's timers or
+  names its rooms.
+* Known limits: there is no volume action ("turn it up" goes to the
+  chat); "07:30" with no am or pm is read like "7:30" (the next one to
+  come), and "1 tomorrow night" is 1:00 AM tomorrow (the card says
+  so), not the small hours after tomorrow evening; "wake me at 12:30" is 12:30 PM; a room name the phone doesn't
+  know ("play jazz in Emma's room") is searched as music.
+* **New normal permission** `SET_ALARM` (install-time, no prompt), which
+  Android requires for handing a timer or an alarm to the Clock app.
+
+## 2026-10-21 — The phone's own assistant knows the phone (app)
+
+Android app only; nothing to run on the server.
+
+* A chat **on this phone** answers about the phone at once, with no
+  model: what's playing, the battery, free space, Wi-Fi or mobile data,
+  the next alarm, Do Not Disturb, which phone and Android, which model is
+  answering, connected headphones, the songs, videos and saved
+  audiobooks on the phone. The model is told what's playing, the sleep
+  timer, whether the home server is connected and the listener's first
+  name, and mentions none of it unless asked. (The
+  model's own read tools stay off for Gemma 4 E2B, which called them on
+  too many near-miss questions on a test phone.)
+* **Hand-offs**: "text Sam", "call Mom", "email Alex", "directions to…",
+  "add … to my calendar", "open example.org", "share this" show a card;
+  a tap opens the dialer, Messages, the email app, Maps, the calendar
+  app's editor, the browser or the share sheet, and the person finishes
+  there. Nothing is sent by Domovoi itself.
+* **New optional permissions**, each asked in the chat the first time it
+  is needed, with the reason: approximate location (where am I),
+  precise location (only for the Wi-Fi network's name),
+  contacts (calling by name; the contact picker works without it), the
+  calendar (reading the phone's own). A refusal is kept and never asked
+  again. Never: texts, the call log, notifications.
+* **Each place answers from its own world** (owner's strict rule): a
+  phone chat answers about the phone only. It never reads the household
+  calendar, the house timers (the copy this phone keeps only rings them)
+  or the rooms, and never names a room; asked, it says in one line that
+  those are in your home server chats.
+
+What an operator should know: the app's install screen on Google Play
+will list location, contacts and calendar; the Play Console's Data safety
+form needs a check at v1 (`android/play/DATA_SAFETY.md`, owner note).
 
 ## 2026-10-21 — Printing and scanning
 
