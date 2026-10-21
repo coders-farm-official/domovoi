@@ -21,6 +21,7 @@ Owner decisions (2026-10-21), all enforced here and in the voice handler
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -113,6 +114,28 @@ async def refusal(session: AsyncSession, *, person_id: int, title: str, asker_se
     return None
 
 
+#: ``stats.model_role`` of a help reply written by the help, not a model.
+HELP_MODEL_ROLE = "help"
+
+
+async def has_title_generated(session: AsyncSession) -> bool:
+    """Whether chat history's V034 ``chat_threads.title_generated`` is here."""
+    row = (await session.execute(text(
+        "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() "
+        "AND table_name = 'chat_threads' AND column_name = 'title_generated'"
+    ))).first()
+    return row is not None
+
+
+async def mark_title_kept(session: AsyncSession, thread_id: int) -> None:
+    """A "Help: …" title is final: chat history's title job (C2) must not
+    rename it. Written only where V034's column exists (C2 also skips any
+    "Help:" title)."""
+    if await has_title_generated(session):
+        await session.execute(text("UPDATE chat_threads SET title_generated = true WHERE id = :t"),
+                              {"t": thread_id})
+
+
 async def person_name(session: AsyncSession, person_id: int) -> str | None:
     row = (await session.execute(text("SELECT name FROM people WHERE id = :p"), {"p": person_id})).first()
     return row[0] if row else None
@@ -167,14 +190,18 @@ async def deliver(
         text("INSERT INTO chat_threads (title, person_id) VALUES (:t, :p) RETURNING id"),
         {"t": title, "p": person_id},
     )).scalar_one()
+    await mark_title_kept(session, thread_id)
     await session.execute(
         text("INSERT INTO chat_messages (thread_id, role, content, source, speaker_person_id) "
              "VALUES (:t, 'user', :c, 'voice', :p)"),
         {"t": thread_id, "c": question.strip() or title, "p": person_id},
     )
+    # model_role "help": the steps came from the help, not a model, so
+    # chat history (C2) never offers to retry or retitle from them.
     await session.execute(
-        text("INSERT INTO chat_messages (thread_id, role, content, model) VALUES (:t, 'assistant', :c, NULL)"),
-        {"t": thread_id, "c": steps},
+        text("INSERT INTO chat_messages (thread_id, role, content, model, stats) "
+             "VALUES (:t, 'assistant', :c, NULL, CAST(:st AS JSONB))"),
+        {"t": thread_id, "c": steps, "st": json.dumps({"model_role": HELP_MODEL_ROLE})},
     )
     delivery_id = (await session.execute(
         text("INSERT INTO help_deliveries (person_id, thread_id, title) VALUES (:p, :t, :ti) RETURNING id"),

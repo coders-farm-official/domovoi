@@ -207,6 +207,10 @@ async def create_thread(body: ThreadCreate) -> dict[str, Any]:
                 {"t": body.title},
             )
         ).mappings().first()
+        if (body.title or "").startswith(help_delivery.TITLE_PREFIX):
+            # A help chat ("ask Domovoi"): its title is final (chat history's
+            # title job leaves it; V034's column, when it is there).
+            await help_delivery.mark_title_kept(s, row["id"])
         await _notify_chat(s, "thread-created")
         await s.commit()
     return dict(row) | {

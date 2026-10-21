@@ -288,3 +288,24 @@ async def test_a_command_in_how_to_clothes_runs_the_command(voice) -> None:
     assert r.matched_handler != "help_desk"
     r = await voice("how do I fix my phone screen")
     assert r.matched_handler != "help_desk"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_help_chat_keeps_its_title_and_its_steps_are_the_helps(voice) -> None:
+    """Chat history (C2) retitles threads in the background and offers a
+    retry on model replies: a "Help: …" chat is neither's."""
+    from domovoi.help_desk import delivery
+
+    sarah = await voice.person("Sarah")
+    await voice.phone("android-sarah", sarah)
+    await voice("how do I change the wake word", person=sarah)
+    await voice("yes", person=sarah)
+    row = (await voice.db.execute(text(
+        "SELECT m.stats->>'model_role' FROM chat_messages m JOIN help_deliveries d ON d.thread_id = m.thread_id "
+        "WHERE m.role = 'assistant'"))).scalar_one()
+    assert row == "help"
+    if await delivery.has_title_generated(voice.db):       # V034 (wf/chat-history) present
+        kept = (await voice.db.execute(text(
+            "SELECT t.title_generated FROM chat_threads t JOIN help_deliveries d ON d.thread_id = t.id"))).scalar_one()
+        assert kept is True
