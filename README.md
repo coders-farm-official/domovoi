@@ -154,7 +154,11 @@ We build Domovoi in public. Here's where it stands.
   sit in a frame with the plugin's name, publisher and colour and a link
   to its row on the Plugins page. Videos and Files show a file uploaded
   from another device without leaving the page, and each has a Rescan
-  button.
+  button. Audiobooks show their covers (read from the book's own files,
+  never looked up online), a book made of one file per chapter plays
+  chapter after chapter in the browser and in a room, a room saves its
+  place in a book as it plays, and a book deleted from the folder leaves
+  the list.
 - **The Android app** brings the dashboard, a music player, chat and drop-in
   to your phone, on Android 8.0 or later, 32-bit phones included
   ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)). With no server it
@@ -174,6 +178,15 @@ We build Domovoi in public. Here's where it stands.
   them down, a video uploaded from the phone shows on the server's side
   straight away, and screens a plugin provides (Stations, Images) carry
   the plugin's frame and colour, as on the dashboard.
+  **Audiobooks on the phone** (in the code now, released with 1.0.0-rc3):
+  save a book to the phone, its size shown first, into the app's own
+  storage; the download pauses when you leave home and finishes by itself
+  when the server is back in reach. Saved books play with no server, in
+  airplane mode too, chapters included, and with no server at all the app
+  shows them in an Audiobooks tab once a book is saved. The phone keeps one place per book and sends it
+  to the server when it connects, and offers to continue from a room that
+  got further ("Continue from the kitchen"). From the phone you can also
+  add books to the server, and an admin can remove one.
 
 **Previews**
 
@@ -218,16 +231,20 @@ they have been tried on fewer devices than the rest, aren't yet held to
 
 **Coming next** (being finished now)
 
-1. **Domovoi v1.0.0,** after
-   [v1.0.0-rc1](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc1)
-   and [v1.0.0-rc2](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc2),
-   the dress rehearsal (the server, the app and a Windows Setup, one
-   `SHA256SUMS` for every file, published the way v1.0.0 will be:
-   [Releasing](docs/CONTRIBUTING.md#releasing)). It adds the fixes from
-   rc2's smoke tests above, and ships once the freeze fixes have run for a
-   week with no freeze and no satellite dropping out, and the hardware
-   checks on real phones and spare computers are done. `stable` then
-   points at it, and new installs follow it.
+1. **Domovoi v1.0.0-rc3,** the next release candidate: audiobooks on the
+   phone, the fixes from rc2's smoke tests, and everything else above
+   that came after rc2 (the tray icon on Windows, the user manual, the
+   satellites' faster Wi-Fi recovery), as the server, the app and a
+   Windows Setup ([release notes](docs/RELEASE_NOTES.md)).
+2. **Domovoi v1.0.0,** after
+   [v1.0.0-rc1](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc1),
+   [v1.0.0-rc2](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc2)
+   and rc3, the dress rehearsals (the server, the app and a Windows Setup,
+   one `SHA256SUMS` for every file, published the way v1.0.0 will be:
+   [Releasing](docs/CONTRIBUTING.md#releasing)). It ships once the freeze
+   fixes have run for a week with no freeze and no satellite dropping
+   out, and the hardware checks on real phones and spare computers are
+   done. `stable` then points at it, and new installs follow it.
 
 **Later**
 
@@ -596,12 +613,12 @@ Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
 | Videos | — | — | ✅ | ✅ |
 | Text chat with Domovoi, pictures included | — | — | ✅ | ✅ |
 | An assistant that answers with no server | — | — | — | ✅ preview: 64-bit phones with 8 GB or more |
-| Save music, podcasts & audiobooks to your device | — | — | ✅ browser download | ✅ via DownloadManager |
+| Save music, podcasts & audiobooks to your device | — | — | ✅ browser download | ✅ music & podcasts via DownloadManager; audiobooks into the app, played offline |
 | Calendar, documents, people & voice profiles | voice where it makes sense | voice where it makes sense | ✅ | ✅ |
 | Satellite management & per-room settings | — | — | ✅ edits a Pi's or spare computer's config remotely | ✅ view/manage |
 | Custom wake-word recording & training | records the clips | wakes on a pushed model; no recording | ✅ record → train → push to room | — |
 | **Plugin install & administration** | — | — | ✅ **only here** — admin-gated, two-phase trust screen | — (plugin *screens* appear when installed) |
-| Admin setup / login | — | — | ✅ | — (no admin session; Settings → Server settings opens the dashboard) |
+| Admin setup / login | — | — | ✅ | — (no admin session; Settings → Server settings opens the dashboard; removing an audiobook from the server asks for the admin password for that one delete) |
 
 The differences are deliberate:
 
