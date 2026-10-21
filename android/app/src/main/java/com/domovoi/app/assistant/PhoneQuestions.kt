@@ -19,6 +19,7 @@ enum class PhoneQuestion {
     MEMORY,
     ANDROID_VERSION,
     WHICH_MODEL,
+    WHO_AM_I,
 
     // Asked on first use (PhonePermission), but HEADPHONES: Android's audio
     // outputs name them with no permission.
@@ -126,6 +127,8 @@ object PhoneQuestions {
         PhoneQuestion.WHICH_MODEL to "(?:which|what) (?:language |ai )?model are you|(?:which|what) (?:language |ai )?model is (?:this|answering|running)|" +
             "(?:which|what) ai (?:are you|is this)|what are you running on|are you (?:running )?on the (?:cpu|gpu)|" +
             "what model are you using|who made you|what llm are you",
+        PhoneQuestion.WHO_AM_I to "what is my name|who am i|do you know (?:my name|who i am)|who are you talking (?:to|with)|" +
+            "do you know who this is",
         PhoneQuestion.CALENDAR_TOMORROW to "what is on my calendar tomorrow|what do i have (?:on )?tomorrow|do i have anything (?:on )?tomorrow|" +
             "what is my schedule (?:for )?tomorrow|what is on (?:my calendar|the calendar) for tomorrow|what is tomorrow looking like",
         PhoneQuestion.CALENDAR_NEXT to "what is my next (?:meeting|event|appointment)|when is my next (?:meeting|event|appointment)|" +
@@ -184,6 +187,8 @@ object PhoneQuestions {
         val nowMs = inputs.now.toInstant().toEpochMilli()
         return when (q) {
             PhoneQuestion.NOW_PLAYING -> nowPlaying(inputs.phone.facts())
+            PhoneQuestion.WHO_AM_I -> PhoneFacts.firstName(inputs.phone.facts().listener)?.let { "You're $it, as this phone's Settings say." }
+                ?: "I don't know your name. Pick who's listening in this app's Settings and I will."
             PhoneQuestion.SLEEP_TIMER -> inputs.phone.facts().sleepRemainingSec?.takeIf { it > 0 }
                 ?.let { "The sleep timer stops playback in ${PhoneFacts.minutes(it)}." } ?: "No sleep timer is set."
             PhoneQuestion.BATTERY -> r.battery()?.let { b ->

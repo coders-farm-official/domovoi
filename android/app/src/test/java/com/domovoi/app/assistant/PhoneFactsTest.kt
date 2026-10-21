@@ -21,7 +21,7 @@ class PhoneFactsTest {
     @Test fun theLineSaysEachFact() {
         assertEquals(
             "Phone facts: playing \"Glass Harbor\" by Velvet Kites on this phone, sleep timer 20 minutes left. " +
-                "Connected to the home server, rooms: kitchen, office, garage. You are talking with Kamron.",
+                "Connected to the home server, rooms: kitchen, office, garage. The person talking is Kamron (say the name only if asked).",
             PhoneFacts.line(full),
         )
     }
@@ -40,10 +40,10 @@ class PhoneFactsTest {
         )
         val line = PhoneFacts.line(house)!!
         val words = line.split(Regex("\\s+")).size
-        assertTrue("$words words: $line", words <= 45)
-        assertTrue(line, line.contains("and 3 more"))
+        assertTrue("$words words: $line", words <= 48)
+        assertTrue(line, line.contains("and 4 more"))
         // Even absurd names are cut: a title, artist or room is 40
-        // characters at most, and five rooms are named.
+        // characters at most, and four rooms are named.
         val absurd = house.copy(
             playing = playing.copy(title = "A".repeat(500), artist = "B".repeat(500), room = "C".repeat(500)),
             rooms = (1..50).map { "R".repeat(100) },
@@ -69,7 +69,7 @@ class PhoneFactsTest {
     }
 
     @Test fun noServerSetUpSaysNothingAboutOne() {
-        assertEquals("You are talking with Sam.", PhoneFacts.line(PromptFacts(listener = "  Sam  ")))
+        assertEquals("The person talking is Sam (say the name only if asked).", PhoneFacts.line(PromptFacts(listener = "  Sam  ")))
     }
 
     @Test fun connectedWithNoRoomsKnown() {

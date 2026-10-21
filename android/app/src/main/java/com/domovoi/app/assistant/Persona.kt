@@ -15,7 +15,8 @@ object Persona {
      *  they are used; otherwise they are never brought up. */
     const val FACTS_SENTENCE: String =
         "You may also be given phone facts (what is playing, the home server connection, its rooms, " +
-            "who you are talking with): use them only to answer a question about them, and never mention them otherwise."
+            "who you are talking with): use them when a question is about them and never mention them otherwise. " +
+            "Answer every other question from your own knowledge, as usual."
 
     const val SYSTEM_PROMPT: String =
         "You are $NAME, a helpful voice assistant. Keep responses concise and " +

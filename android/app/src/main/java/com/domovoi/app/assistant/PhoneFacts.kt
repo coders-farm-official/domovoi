@@ -59,7 +59,7 @@ data class ContextLine(val kind: String, val text: String) {
 
 object PhoneFacts {
     /** At most this many room names go in (a big house says "and 3 more"). */
-    const val MAX_ROOMS = 5
+    const val MAX_ROOMS = 4
 
     /** Longer titles and names are cut, so the line stays small. */
     private const val MAX_NAME = 40
@@ -68,8 +68,9 @@ object PhoneFacts {
      * The facts as the model reads them, or null when there is nothing to
      * say. About 15-55 tokens: "Phone facts: playing "Glass Harbor" by
      * Velvet Kites on this phone, sleep timer 20 minutes left. Connected to
-     * the home server, rooms: kitchen, office, garage. You are talking with
-     * Kamron."
+     * the home server, rooms: kitchen, office, garage. The person talking is
+     * Kamron (say the name only if asked)." (The last clause after
+     * the emulator gate: E2B once offered "a board game night with Kamron".)
      *
      * The playback position is left out on purpose: it changes every second,
      * so a kept conversation would be told the line again on every turn (the
@@ -108,7 +109,7 @@ object PhoneFacts {
             val body = parts.mapIndexed { i, p -> if (i == 0) p else p.replaceFirstChar { it.uppercase() } }
             sentences += "Phone facts: " + body.joinToString(". ") + "."
         }
-        firstName(f.listener)?.let { sentences += "You are talking with $it." }
+        firstName(f.listener)?.let { sentences += "The person talking is $it (say the name only if asked)." }
         return sentences.joinToString(" ").ifBlank { null }
     }
 
