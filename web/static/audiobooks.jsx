@@ -1,8 +1,10 @@
 /* Audiobooks page — local .m4b / chaptered books, played in the browser via
  * the shared mini-player (player.jsx). A book becomes a generic queue item
  * (kind='audiobook') carrying chapters + a per-(device × person) resume
- * position. Single-file books stream directly; folder books stream the
- * current chapter file (the player seeks within it).
+ * position. Single-file books stream directly; a per-chapter folder book
+ * plays as one queue item per file (itemsFromBook, `?file=`), the book's
+ * one resume position spread over them. Covers come from the books' own
+ * files (GET /api/audiobooks/{id}/cover, `cover_url`; null when none).
  *
  * Data sources:
  *   * GET  /api/audiobooks              — indexed books, one page at a time
@@ -45,10 +47,10 @@ const AudiobooksPage = () => {
   };
 
   const play = async (book) => {
-    const item = p.itemFromBook(book);
-    const pos = await p.spoken.fetchPosition(item);
-    if (pos && pos.position_sec > 5) setResumePrompt({ item, pos });
-    else p.playSpoken(item, { resumeSec: 0, speed: (pos && pos.speed) || 1 });
+    const items = p.itemsFromBook(book);
+    const pos = await p.spoken.fetchPosition(items[0]);
+    if (pos && pos.position_sec > 5) setResumePrompt({ items, title: book.title || 'audiobook', pos });
+    else p.playSpoken(items, { resumeSec: 0, speed: (pos && pos.speed) || 1 });
   };
 
   return (
@@ -86,18 +88,14 @@ const AudiobooksPage = () => {
           {books.map((b) => (
             <div key={b.id} style={{ background: 'var(--card)', border: '1px solid var(--border)',
                                      borderRadius: 'var(--r-md)', padding: 14, display: 'flex', gap: 12 }}>
-              <div style={{ width: 56, height: 56, borderRadius: 'var(--r-sm)', flexShrink: 0,
-                            border: '1px solid var(--border)',
-                            background: b.artwork ? `center/cover url(${b.artwork})` : 'var(--sunken)',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                {!b.artwork && <Icon name="book-open" size={26}/>}
-              </div>
+              <CoverArt src={b.cover_url ? absMedia(b.cover_url) : null} size={56} icon="book-open"/>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 14, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.title}</div>
                 {b.author && <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{b.author}</div>}
                 <div className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)', marginTop: 2 }}>
                   {b.duration_sec ? fmtDur(b.duration_sec) : '—'}
                   {b.chapters && b.chapters.length ? ` · ${b.chapters.length} chapters` : ''}
+                  {b.size_bytes ? ` · ${fmtBytes(b.size_bytes)}` : ''}
                 </div>
                 <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
                   <Button variant="primary" icon="play" onClick={() => play(b)}>play</Button>
@@ -113,8 +111,8 @@ const AudiobooksPage = () => {
 
       {resumePrompt && (
         <AbResumePrompt prompt={resumePrompt} onClose={() => setResumePrompt(null)}
-                        onResume={() => { p.playSpoken(resumePrompt.item, { resumeSec: resumePrompt.pos.position_sec, speed: resumePrompt.pos.speed }); setResumePrompt(null); }}
-                        onRestart={() => { p.playSpoken(resumePrompt.item, { resumeSec: 0, speed: resumePrompt.pos.speed }); setResumePrompt(null); }}/>
+                        onResume={() => { p.playSpoken(resumePrompt.items, { resumeSec: resumePrompt.pos.position_sec, speed: resumePrompt.pos.speed }); setResumePrompt(null); }}
+                        onRestart={() => { p.playSpoken(resumePrompt.items, { resumeSec: 0, speed: resumePrompt.pos.speed }); setResumePrompt(null); }}/>
       )}
       {toastNode}
     </>
@@ -128,7 +126,7 @@ const AbResumePrompt = ({ prompt, onClose, onResume, onRestart }) => (
     <div style={{ position: 'fixed', top: '35vh', left: '50%', transform: 'translateX(-50%)', width: 'min(380px, 92vw)',
                   zIndex: 71, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
                   boxShadow: 'var(--shadow-md)', padding: 20, textAlign: 'center' }}>
-      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>{prompt.item.title}</div>
+      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>{prompt.title}</div>
       <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginBottom: 16 }}>
         You were at {fmtDur(prompt.pos.position_sec)}.
       </div>

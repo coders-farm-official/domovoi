@@ -120,8 +120,38 @@ _ROOM_SPOKEN_RE = spoken_room_pattern(_PLAY_LATEST_RE, _PLAY_BOOK_RE, _RESUME_RE
 
 # Session-context key holding the currently-playing spoken item so chapter /
 # time-left / "what am I listening to" can resolve without re-querying MPD's
-# tag DB. Shape: {item_type, item_id, title, chapters, duration_sec, uri}.
+# tag DB. Shape: {item_type, item_id, title, chapters, duration_sec, uri};
+# a per-chapter FOLDER book playing in a room adds ``uris`` (its files' MPD
+# URIs, the room's queue) and ``starts`` (each file's start in the book), so
+# a place in the book is the file's start plus MPD's elapsed in the file.
 _CTX_KEY = "spoken_now"
+
+
+def folder_book_parts(file_path: str, chapters: Any) -> list[tuple[str, int]]:
+    """A folder book's files as ``[(MPD URI, start_sec in the book)]``, in
+    play order, from its chapters (the indexer names each chapter's file).
+    A file outside AUDIOBOOKS_DIR is left out (``sa.mpd_uri_for``)."""
+    from pathlib import Path
+
+    out: list[tuple[str, int]] = []
+    for c in chapters if isinstance(chapters, list) else []:
+        if not isinstance(c, dict) or not c.get("file"):
+            continue
+        name = Path(str(c["file"]).replace("\\", "/")).name
+        uri = sa.mpd_uri_for(sa.ITEM_AUDIOBOOK, str(Path(file_path) / name))
+        if uri:
+            out.append((uri, int(c.get("start_sec") or 0)))
+    return out
+
+
+def locate_in_parts(starts: list[int], pos: int) -> tuple[int, int]:
+    """``(file index, seconds into that file)`` for a place ``pos`` seconds
+    into a folder book whose files start at ``starts``."""
+    idx = 0
+    for i, s in enumerate(starts):
+        if pos >= s:
+            idx = i
+    return idx, max(0, int(pos) - starts[idx]) if starts else 0
 
 
 class PodcastDirectoryUnreachable(Exception):
@@ -409,7 +439,7 @@ class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
             item_type=sa.ITEM_AUDIOBOOK, item_id=book["id"],
             title=book["title"], file_path=book["file_path"],
             chapters=book.get("chapters"), duration=book.get("duration_sec"),
-            resume=True,
+            resume=True, is_folder=bool(book.get("is_folder")),
         )
 
     async def _play_resolved(
@@ -419,7 +449,8 @@ class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
         """Resume path: look the item's title/file up by id, then play."""
         if item_type == sa.ITEM_AUDIOBOOK:
             row = (await session.execute(
-                text("SELECT title, file_path, chapters, duration_sec FROM audiobooks WHERE id=:id"),
+                text("SELECT title, file_path, chapters, duration_sec, is_folder "
+                     "FROM audiobooks WHERE id=:id"),
                 {"id": item_id},
             )).mappings().first()
         else:
@@ -436,13 +467,14 @@ class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
             ctx, session, item_type=item_type, item_id=item_id,
             title=row["title"] or "your audio", file_path=row["file_path"],
             chapters=row.get("chapters"), duration=row.get("duration_sec"),
-            resume=True, resume_sec=resume_sec,
+            resume=True, resume_sec=resume_sec, is_folder=bool(row.get("is_folder")),
         )
 
     async def _play_item(
         self, ctx: Context, session: AsyncSession, *,
         item_type: str, item_id: int, title: str, file_path: str,
         chapters: Any, duration: int | None, resume: bool, resume_sec: int | None = None,
+        is_folder: bool = False,
     ) -> Response:
         if ctx.from_phone:
             # A phone plays the book or episode itself, from the dashboard's
@@ -465,23 +497,17 @@ class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
                 device_actions=[{"type": "play", "items": [item], "resume": True}],
             )
         uri = sa.mpd_uri_for(item_type, file_path)
-        if uri is None:
+        # A per-chapter folder book plays as its files, in order, in the
+        # room's queue: the folder itself is no song MPD can play (handed to
+        # prepare_filename it matched the first chapter's path and the book
+        # stopped after one file, resumed at a place in the BOOK seeked
+        # into that file).
+        parts = folder_book_parts(file_path, chapters) if is_folder else []
+        if uri is None or (is_folder and not parts):
             return self._reply(
                 ctx,
                 "That file isn't in the spoken-audio library the player can "
                 "reach. Try re-indexing.",
-            )
-        mpd = get_mpd_client_for(ctx.room_id)
-        try:
-            song = await mpd.prepare_filename(uri)
-        except Exception as e:
-            log.warning("spoken_audio MPD prepare failed: %s", e)
-            return self._reply(ctx, "I couldn't reach the audio player.")
-        if not song:
-            return self._reply(
-                ctx,
-                f"I found {title} but the player couldn't load it — "
-                "try re-indexing the library.",
             )
 
         # Resume position: read saved unless an explicit resume_sec was given.
@@ -496,17 +522,50 @@ class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
                 if pos is None:
                     pos = saved["position_sec"]
                 speed = saved["speed"]
-        if pos and pos > 0:
+
+        mpd = get_mpd_client_for(ctx.room_id)
+        try:
+            if parts:
+                idx, offset = locate_in_parts([s for _, s in parts], int(pos or 0))
+                queued = await mpd.prepare_files(
+                    [u for u, _ in parts], start_sec=float(offset), start_index=idx,
+                )
+                song = queued[0] if queued else None
+            else:
+                song = await mpd.prepare_filename(uri)
+        except Exception as e:
+            log.warning("spoken_audio MPD prepare failed: %s", e)
+            return self._reply(ctx, "I couldn't reach the audio player.")
+        if not song:
+            return self._reply(
+                ctx,
+                f"I found {title} but the player couldn't load it — "
+                "try re-indexing the library.",
+            )
+        if pos and pos > 0 and not parts:
             try:
                 await mpd.seek_to(float(pos))
             except Exception as e:
                 log.debug("spoken_audio seek-to-resume failed: %s", e)
 
         # Remember what's playing for chapter / time-left / now-listening.
-        await self._remember(ctx, session, {
+        now_item: dict[str, Any] = {
             "item_type": item_type, "item_id": item_id, "title": title,
             "chapters": chapters, "duration_sec": duration, "uri": uri,
-        })
+        }
+        if parts:
+            now_item["uris"] = [u for u, _ in parts]
+            now_item["starts"] = [s for _, s in parts]
+        await self._remember(ctx, session, now_item)
+        if item_type == sa.ITEM_AUDIOBOOK and ctx.room_id:
+            # Whose place this is, for the room's 30 s position saves
+            # (domovoi/workers/room_book_positions.py): only this slot.
+            from domovoi.workers.room_book_positions import RoomBook, record_room_book
+
+            record_room_book(ctx.room_id, RoomBook(
+                item_id=int(item_id), device_id=self._device(ctx), person_id=ctx.person_id,
+                starts=dict(parts) if parts else {uri: 0},
+            ))
         # Persist a fresh position row so "resume" finds it next time.
         await sa.upsert_position(
             session, item_type=item_type, item_id=item_id,
@@ -536,10 +595,7 @@ class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
             # we can offer (the plan's "degrade to time-skip only").
             return await self._skip(ctx, session, 60 * direction, save_only=False)
         mpd = get_mpd_client_for(ctx.room_id)
-        try:
-            elapsed = await mpd.elapsed_sec() or 0.0
-        except Exception:
-            elapsed = 0.0
+        elapsed = await self._elapsed_in_item(now, mpd)
         starts = [int(c.get("start_sec", 0)) for c in chapters]
         # Index of the chapter we're in.
         cur_idx = 0
@@ -551,7 +607,13 @@ class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
             target_idx = cur_idx  # restart current chapter if >3s in
         target_sec = starts[target_idx]
         try:
-            await mpd.seek_to(float(target_sec))
+            if now.get("uris") and target_idx != cur_idx and len(now["uris"]) == len(starts):
+                # A folder book: each chapter is a file in the room's queue.
+                await (mpd.next() if target_idx > cur_idx else mpd.previous())
+            elif now.get("uris"):
+                await mpd.seek_to(0.0)  # the chapter's file, from its top
+            else:
+                await mpd.seek_to(float(target_sec))
         except Exception as e:
             log.warning("chapter seek failed: %s", e)
             return self._reply(ctx, "I couldn't move chapters.")
@@ -569,7 +631,8 @@ class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
             log.warning("skip failed: %s", e)
             return self._reply(ctx, "I couldn't skip.")
         if now is not None and elapsed is not None:
-            await self._save_position(ctx, session, now, int(elapsed))
+            await self._save_position(
+                ctx, session, now, int(elapsed + await self._file_start(now, mpd)))
         verb = "forward" if delta >= 0 else "back"
         return self._reply(ctx, f"Skipped {verb} {abs(delta)} seconds.")
 
@@ -597,10 +660,7 @@ class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
         if now is None:
             return self._reply(ctx, "Nothing spoken is playing right now.")
         mpd = get_mpd_client_for(ctx.room_id)
-        try:
-            elapsed = await mpd.elapsed_sec() or 0.0
-        except Exception:
-            elapsed = 0.0
+        elapsed = await self._elapsed_in_item(now, mpd)
         chapters = now.get("chapters") or []
         duration = now.get("duration_sec")
         # End of current chapter, or end of item if no chapters.
@@ -740,6 +800,29 @@ class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
             )
         except Exception as e:
             log.debug("couldn't save position: %s", e)
+
+    @staticmethod
+    async def _file_start(now: dict[str, Any], mpd: Any) -> int:
+        """Where the room's current song starts in the item: 0, except for a
+        folder book, where it is that chapter file's start in the book."""
+        uris, starts = now.get("uris"), now.get("starts")
+        if not uris or not starts or len(uris) != len(starts):
+            return 0
+        try:
+            song = await mpd.current_song() or {}
+        except Exception:
+            return 0
+        f = song.get("file")
+        return int(starts[uris.index(f)]) if f in uris else 0
+
+    async def _elapsed_in_item(self, now: dict[str, Any], mpd: Any) -> float:
+        """The room's place in the item: MPD's elapsed in the song, plus the
+        song's start in the book for a folder book."""
+        try:
+            elapsed = await mpd.elapsed_sec() or 0.0
+        except Exception:
+            elapsed = 0.0
+        return elapsed + await self._file_start(now, mpd)
 
     # ─── Small helpers ──────────────────────────────────────────────────
     def _device(self, ctx: Context) -> str:

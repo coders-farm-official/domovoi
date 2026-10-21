@@ -10056,7 +10056,7 @@
           "files"
         ],
         "summary": "Upload",
-        "description": "Upload files into the currently-browsed directory. Open (daily tier);\n``403`` when the calling device is blocked. Rejected unless the library is\neditable. Each name is sanitized to a bare basename, deduped, and the\ndeduped target re-containment-checked before write.",
+        "description": "Upload files into the currently-browsed directory. Open (daily tier);\n``403`` when the calling device is blocked. Rejected unless the library is\neditable. Each name is sanitized to a bare basename, deduped, and the\ndeduped target re-containment-checked before write.\n\n``create_dir=true`` makes the destination ``path`` first \u2014 ONE level:\nits parent must exist; the new name is checked like a file name (no\n``..``, control bytes, a Windows device name, a secret-shaped or\ntrailing-dot name) and the folder re-checked inside the library root.\nA folder already there is fine. How the app adds a per-chapter folder\nas one audiobook: the folder, its files, then the usual reindex. A\nfolder made here that ends up with nothing saved in it is removed.",
         "operationId": "upload_api_files_upload_post",
         "requestBody": {
           "content": {
@@ -11457,12 +11457,133 @@
         }
       }
     },
+    "/api/audiobooks/{book_id}/cover": {
+      "get": {
+        "tags": [
+          "audiobooks"
+        ],
+        "summary": "Book Cover",
+        "description": "A book's cover, read from its files on request: the picture built\ninto it (an .m4b's ``covr``, ID3 APIC, FLAC / Vorbis pictures; a folder\nbook's first chapter file), else an image beside it (a folder book's\ncover / folder / front / album .jpg / .jpeg / .png / .webp; a\nsingle-file book's image of the same name). Served as-is with its real\ncontent type, a strong ``ETag`` and ``Cache-Control``; ``304`` when\n``If-None-Match`` still matches; ``404`` when there is none.\n\nOpen, like the book list it decorates and the audio route (an\n``<img>`` and the phone's lock screen can't send a credential); the id\nresolves the path from the database, containment-checked inside\nAUDIOBOOKS_DIR. Nothing is stored on disk; no online lookup.",
+        "operationId": "book_cover_api_audiobooks__book_id__cover_get",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Book Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/audiobooks/{book_id}/positions": {
+      "get": {
+        "tags": [
+          "audiobooks"
+        ],
+        "summary": "Other Positions",
+        "description": "This listener's places in the book on OTHER devices and rooms, newest\nfirst: ``[{device_label, room, position_sec, updated_at}]``. ``room`` is\nthe room id for a place a room's player saved (\"play my book\" in the\nkitchen), null for a phone or a browser (``device_label`` is then its\nname from the device list). Only rows for exactly this ``person_id`` \u2014\nthe unidentified listener's when it is absent, never another\nperson's \u2014 and only places past the start. The unidentified listener\nsees a phone's or a browser's place as ``phone`` / ``browser``, never\nits name. What the app's \"Continue from the kitchen (2 h 13 m)\"\noffers. Device tier.",
+        "operationId": "other_positions_api_audiobooks__book_id__positions_get",
+        "parameters": [
+          {
+            "name": "book_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Book Id"
+            }
+          },
+          {
+            "name": "device_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "description": "the asking device: its own place is left out",
+              "title": "Device Id"
+            },
+            "description": "the asking device: its own place is left out"
+          },
+          {
+            "name": "person_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "the listener; none = the unidentified one",
+              "title": "Person Id"
+            },
+            "description": "the listener; none = the unidentified one"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response Other Positions Api Audiobooks  Book Id  Positions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/audiobooks/{book_id}/position": {
       "get": {
         "tags": [
           "audiobooks"
         ],
         "summary": "Get Position",
+        "description": "This device's place in the book for ``person_id`` (exactly that\nslot; without one, the unidentified listener's). Device tier since\n2026-10-20 (review): it names any person, so it is the household's\nread, like the places on other devices.",
         "operationId": "get_position_api_audiobooks__book_id__position_get",
         "parameters": [
           {
@@ -11496,8 +11617,10 @@
                   "type": "null"
                 }
               ],
+              "description": "the listener; none = the unidentified one's slot only",
               "title": "Person Id"
-            }
+            },
+            "description": "the listener; none = the unidentified one's slot only"
           }
         ],
         "responses": {
@@ -14017,6 +14140,11 @@
             },
             "type": "array",
             "title": "Files"
+          },
+          "create_dir": {
+            "type": "boolean",
+            "title": "Create Dir",
+            "default": false
           }
         },
         "type": "object",
@@ -20454,6 +20582,11 @@
           "reindex_triggered": {
             "type": "boolean",
             "title": "Reindex Triggered"
+          },
+          "created_dir": {
+            "type": "boolean",
+            "title": "Created Dir",
+            "default": false
           }
         },
         "type": "object",

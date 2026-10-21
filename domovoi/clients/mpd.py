@@ -72,10 +72,15 @@ class MPDClient(Protocol):
     # could land on another song. A path MPD refuses (not in its database,
     # a stale file) is skipped. Leaves MPD paused on the first queued song
     # like every ``prepare_*``; ``start_sec`` as in ``prepare_tracks``.
-    # Returns the queued entries as ``playlistinfo`` reports them (each with
-    # ``file``, ``id`` and ``pos``); empty when nothing could be queued.
+    # ``start_index`` leaves it paused on that one of ``uris`` instead of the
+    # first (a per-chapter audiobook resumed in its fifth file), ``start_sec``
+    # into it; a refused start URI starts the next one that was queued (the
+    # last one, when none after it was), from its top. Returns the queued
+    # entries as ``playlistinfo`` reports them
+    # (each with ``file``, ``id`` and ``pos``); empty when nothing could be
+    # queued.
     async def prepare_files(
-        self, uris: list[str], *, start_sec: float = 0.0
+        self, uris: list[str], *, start_sec: float = 0.0, start_index: int = 0
     ) -> list[dict[str, Any]]: ...
     # ── Queue editing (the dashboard/app room-queue surface) ──────────────
     # These operate on the EXISTING queue rather than replacing it, which is
@@ -214,7 +219,7 @@ class MPDStubClient:
         return queued
 
     async def prepare_files(
-        self, uris: list[str], *, start_sec: float = 0.0
+        self, uris: list[str], *, start_sec: float = 0.0, start_index: int = 0
     ) -> list[dict[str, Any]]:
         # The stub has no database to refuse a path: every URI is queued,
         # its title read from the file name.
@@ -226,10 +231,12 @@ class MPDStubClient:
         ]
         if not songs:  # like the real client: nothing queued, nothing touched
             return []
+        # Where the start URI lands once the blanks are dropped.
+        at = min(sum(1 for u in uris[: max(0, start_index)] if u), len(songs) - 1)
         queued = self._assign_ids(songs)
         self._queue = list(queued)
         if queued:
-            self._song = queued[0]
+            self._song = queued[at]
             self._state = "pause"
             if start_sec > 0:
                 self._song["_elapsed"] = float(int(start_sec))
@@ -700,10 +707,12 @@ class RealMPDClient:
             return queued
 
     async def prepare_files(
-        self, uris: list[str], *, start_sec: float = 0.0
+        self, uris: list[str], *, start_sec: float = 0.0, start_index: int = 0
     ) -> list[dict[str, Any]]:
         """Replace the queue with these URIs as they are (no search) and
-        leave MPD paused on the first one. A URI MPD refuses with an ACK
+        leave MPD paused on the first one (on ``uris[start_index]``, or the
+        next one MPD took when it refused that one — the last it took when
+        none after — from its top). A URI MPD refuses with an ACK
         (not in its database — a file added since its last update, or gone)
         is skipped; any other failure is the connection and propagates.
 
@@ -713,14 +722,18 @@ class RealMPDClient:
         Returns the queue as ``playlistinfo`` reports it, ``id`` / ``pos``
         normalized as in :meth:`queue_list`; empty when nothing was
         queued."""
-        wanted = [u for u in uris if u]
+        wanted = [(i, u) for i, u in enumerate(uris) if u]
         if not wanted:
             return []
+        # The start, as an index into ``wanted``: the URI asked for, or the
+        # first real one after it when it was blank.
+        start = next((k for k, (i, _) in enumerate(wanted) if i >= max(0, start_index)), 0)
         async with self._connect() as c:
             old_len = len(await c.playlistinfo() or [])
             added = 0
-            first_added = False
-            for i, uri in enumerate(wanted):
+            start_pos: int | None = None
+            start_taken = False
+            for k, (_, uri) in enumerate(wanted):
                 try:
                     await c.add(uri)
                 except Exception as e:
@@ -728,18 +741,21 @@ class RealMPDClient:
                         raise
                     log.debug("MPD prepare_files: %r refused: %s", uri, e)
                     continue
+                if start_pos is None and k >= start:
+                    start_pos = added
+                    start_taken = k == start
                 added += 1
-                if i == 0:
-                    first_added = True
             if not added:
                 return []
+            if start_pos is None:  # nothing from the start on was taken:
+                start_pos = added - 1  # the last one that was, from its top
             if old_len:
                 await c.delete(f"0:{old_len}")
             started = False
             offset = int(start_sec) if start_sec and start_sec > 0 else 0
-            if offset and first_added:
+            if offset and start_taken:
                 try:
-                    await c.seek(0, str(offset))
+                    await c.seek(start_pos, str(offset))
                     started = True
                 except Exception as e:
                     log.warning(
@@ -747,7 +763,7 @@ class RealMPDClient:
                         "starting the track from the top", offset, e,
                     )
             if not started:
-                await c.play(0)
+                await c.play(start_pos)
             await c.pause(1)
             entries = await c.playlistinfo()
         out: list[dict[str, Any]] = []

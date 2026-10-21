@@ -4,6 +4,51 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-20 — Audiobooks: folder books play, covers, and what the phone needs
+
+Core and dashboard update with one migration, **V032** (two columns on
+`audiobooks`; Flyway applies it on update). The next index sweep (at start,
+then every 5 minutes, or **reindex** on the Audiobooks page) fills in what
+is new for books already listed.
+
+* **Books made of one file per chapter play.** In the browser they never
+  did (the player asked for the folder and the server refused it), and in a
+  room "play my book" played only the first chapter, then stopped, and
+  resumed at the wrong place. Now a folder book plays its files in order,
+  in the browser and in rooms; "next chapter" / "previous chapter" move
+  between them, and the book keeps one place in the whole book.
+* **Covers.** The Audiobooks page (and the phone) shows each book's cover,
+  read from the book's own files on request: the picture built into it,
+  else a `cover` / `folder` / `front` / `album` image in a folder book's
+  folder, or an image with a single-file book's own name (`Dune.m4b` +
+  `Dune.jpg`). Nothing is looked up online and nothing is copied.
+* **A deleted book leaves the list.** A book whose file or folder is gone
+  is taken off at the next index sweep, with its resume positions. When the
+  whole audiobooks folder looks empty (a drive or share that isn't mounted)
+  nothing is taken off, so the list and everyone's place survive until it
+  is back; a book deleted on the Files page or from the app still goes at
+  once. A folder with no book in it at all (only a stray `desktop.ini`, say)
+  counts as empty. A book file, folder or chapter linked in from outside
+  the audiobooks folder is not listed (it could not be played).
+* **A room's place in a book is saved while it plays** (every 30 s), in the
+  place of whoever's voice command started it there (the unidentified
+  listener's when nobody was recognised), never anyone else's. Before, it
+  was saved only when a voice command moved it, so "resume my book" went
+  back to where the room had last started it. After a core restart a room
+  is saved again from its next voice command.
+* **Reading a resume position now needs the household token**
+  (`GET /api/audiobooks/{id}/position`, device tier like saving one). The
+  dashboard and the app already send it.
+* **API** (the Android app's audiobooks work codes against it): the book
+  list and `GET /api/audiobooks/{id}` add `size_bytes`, `cover_url`,
+  `library_path` and `files`; new `GET /api/audiobooks/{id}/cover` (open)
+  and `GET /api/audiobooks/{id}/positions` (device tier: this listener's
+  places on other devices and rooms, for "Continue from the kitchen");
+  `GET /api/audiobooks/{id}/audio?file=` refuses a name that isn't an audio
+  file (a folder book's `cover.jpg` was served before). `POST
+  /api/files/upload` takes `create_dir=true` to make the one new folder it
+  uploads into. Details in docs/API_REFERENCE.md §3.13 and §3.15.
+
 ## 2026-10-17 — Satellites: faster Wi-Fi recovery, mpg123 put back, less CPU
 
 Satellite update (pushed with the satellite code; **reboot each satellite
