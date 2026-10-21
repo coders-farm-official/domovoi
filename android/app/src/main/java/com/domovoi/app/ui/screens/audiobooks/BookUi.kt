@@ -25,7 +25,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -54,8 +53,6 @@ import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.fmtBytes
 import com.domovoi.app.ui.components.fmtDur
 import com.domovoi.app.ui.theme.Domovoi
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 /** The books on this phone and their download jobs, as one view. */
 internal class SavedBooksView(
@@ -72,8 +69,11 @@ internal class SavedBooksView(
 }
 
 /**
- * The saved books, read from disk off the main thread, again whenever a
- * download job moves (a book finishing, a cancel) and on [SavedBooksView.refresh].
+ * The saved books: the app's one shelf ([com.domovoi.app.audiobooks.SavedShelf]),
+ * so both sides of Audiobooks show the same books at the same moment, plus
+ * the download jobs. The shelf re-reads by itself when a record is written
+ * or a book removed; a download job moving on (a book finishing, a cancel)
+ * and [SavedBooksView.refresh] ask it to read again too.
  */
 @Composable
 internal fun rememberSavedBooks(): SavedBooksView {
@@ -81,25 +81,13 @@ internal fun rememberSavedBooks(): SavedBooksView {
     val context = LocalContext.current
     val jobsFlow = remember(context) { BookDownloads.watch(context.applicationContext) }
     val jobs by jobsFlow.collectAsState(initial = emptyMap())
-    var tick by remember { mutableIntStateOf(0) }
-    var books by remember { mutableStateOf<List<SavedBook>>(emptyList()) }
-    var used by remember { mutableStateOf(0L) }
-    var sizes by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
-    var free by remember { mutableStateOf(0L) }
-    var loaded by remember { mutableStateOf(false) }
+    val shelf by app.savedShelf.state.collectAsState()
     // The states that change what is on disk; progress ticks don't.
     val shape = jobs.map { (k, j) -> k to j.state }.toSet()
-    LaunchedEffect(tick, shape) {
-        withContext(Dispatchers.IO) {
-            val list = runCatching { app.books.list() }.getOrDefault(emptyList())
-            books = list
-            sizes = list.associate { it.key to runCatching { app.books.bytesOf(it.key) }.getOrDefault(0L) }
-            used = runCatching { app.books.totalBytes() }.getOrDefault(0L)
-            free = runCatching { app.books.usableBytes() }.getOrDefault(0L)
-        }
-        loaded = true
+    LaunchedEffect(shape) { app.savedShelf.reload() }
+    return SavedBooksView(shelf.books, jobs, shelf.usedBytes, shelf.bytes, shelf.freeBytes, shelf.loaded) {
+        app.savedShelf.reload()
     }
-    return SavedBooksView(books, jobs, used, sizes, free, loaded) { tick++ }
 }
 
 /** A book's cover at [size]: the picture when there is one, else the book glyph. */

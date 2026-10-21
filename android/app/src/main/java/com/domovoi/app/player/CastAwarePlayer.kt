@@ -57,15 +57,50 @@ class CastAwarePlayer(
 
     private fun roomPlaying(room: String): Boolean = reading(room)?.state == "play"
 
+    /** Each session listener as the ExoPlayer hears it ([ownCommands]). */
+    private val wrapped = java.util.concurrent.ConcurrentHashMap<Player.Listener, Player.Listener>()
+
     override fun addListener(listener: Player.Listener) {
         listeners += listener
-        super.addListener(listener)
+        super.addListener(wrapped.getOrPut(listener) { ownCommands(listener) })
     }
 
     override fun removeListener(listener: Player.Listener) {
         listeners -= listener
-        super.removeListener(listener)
+        super.removeListener(wrapped.remove(listener) ?: listener)
     }
+
+    /**
+     * [inner], hearing every ExoPlayer event as it was, except that a
+     * change of the ExoPlayer's commands is told as THIS player's: on a book
+     * the ExoPlayer has no next item, and its own list would drop the
+     * notification's next button while the book's next chapter is there.
+     *
+     * A proxy, not Kotlin's `by` delegation: `by` forwards none of
+     * Player.Listener's methods (they are all Java default methods), so the
+     * session would have heard nothing at all (BookChapterControlsTest).
+     */
+    private fun ownCommands(inner: Player.Listener): Player.Listener =
+        java.lang.reflect.Proxy.newProxyInstance(
+            Player.Listener::class.java.classLoader,
+            arrayOf(Player.Listener::class.java),
+        ) { proxy, method, args ->
+            when (method.name) {
+                "equals" -> proxy === args?.getOrNull(0)
+                "hashCode" -> System.identityHashCode(proxy)
+                "toString" -> "ownCommands($inner)"
+                "onAvailableCommandsChanged" -> inner.onAvailableCommandsChanged(availableCommands)
+                else -> try {
+                    method.invoke(inner, *(args ?: emptyArray()))
+                } catch (e: java.lang.reflect.InvocationTargetException) {
+                    throw e.targetException
+                }
+            }
+        } as Player.Listener
+
+    /** On this phone, a book moves by chapter ([ChapterSkip]); the rest is
+     *  the ExoPlayer's own next and previous. */
+    private val book: Boolean get() = room == null && ChapterSkip.applies(controller.current)
 
     // ---- commands ------------------------------------------------------------
     override fun play() {
@@ -85,19 +120,19 @@ class CastAwarePlayer(
     }
 
     override fun seekToNext() {
-        if (room != null) controller.next() else super.seekToNext()
+        if (room != null || book) controller.next() else super.seekToNext()
     }
 
     override fun seekToNextMediaItem() {
-        if (room != null) controller.next() else super.seekToNextMediaItem()
+        if (room != null || book) controller.next() else super.seekToNextMediaItem()
     }
 
     override fun seekToPrevious() {
-        if (room != null) controller.prev() else super.seekToPrevious()
+        if (room != null || book) controller.prev() else super.seekToPrevious()
     }
 
     override fun seekToPreviousMediaItem() {
-        if (room != null) controller.prev() else super.seekToPreviousMediaItem()
+        if (room != null || book) controller.prev() else super.seekToPreviousMediaItem()
     }
 
     override fun seekTo(positionMs: Long) {
@@ -127,6 +162,17 @@ class CastAwarePlayer(
     // ---- what the session shows ----------------------------------------------
     override fun getAvailableCommands(): Player.Commands {
         val own = super.getAvailableCommands()
+        if (book) {
+            // A book's next is its next chapter, there or not; previous
+            // always does something (this chapter's start at least).
+            return Player.Commands.Builder()
+                .addAll(own)
+                .removeAll(*NEXT.toIntArray())
+                .apply { if (controller.canNextHere()) addAll(*NEXT.toIntArray()) }
+                .addAll(*PREVIOUS.toIntArray())
+                .removeAll(*NEVER_FROM_THE_SESSION.toIntArray())
+                .build()
+        }
         if (room == null) {
             return Player.Commands.Builder().addAll(own).removeAll(*NEVER_FROM_THE_SESSION.toIntArray()).build()
         }
@@ -140,6 +186,8 @@ class CastAwarePlayer(
 
     override fun isCommandAvailable(command: Int): Boolean = when {
         command in NEVER_FROM_THE_SESSION -> false
+        book && command in NEXT -> controller.canNextHere()
+        book && command in PREVIOUS -> true
         room == null -> super.isCommandAvailable(command)
         command in NOT_IN_A_ROOM -> false
         command in IN_A_ROOM -> true
@@ -219,7 +267,24 @@ class CastAwarePlayer(
         }
     }
 
+    /**
+     * Tell the session the commands changed: a book crossed into its last
+     * chapter (no next any more) or back out of it. Main thread.
+     */
+    fun commandsChanged() {
+        val commands = availableCommands
+        val events = Player.Events(FlagSet.Builder().add(Player.EVENT_AVAILABLE_COMMANDS_CHANGED).build())
+        for (l in listeners) {
+            l.onAvailableCommandsChanged(commands)
+            l.onEvents(this, events)
+        }
+    }
+
     internal companion object {
+        /** A book's next (its next chapter) and previous. */
+        val NEXT: Set<Int> = setOf(Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+        val PREVIOUS: Set<Int> = setOf(Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+
         /** What a room can do from the notification: play/pause, next and
          *  previous. */
         val IN_A_ROOM: Set<Int> = setOf(

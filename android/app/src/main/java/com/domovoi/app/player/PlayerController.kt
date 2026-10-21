@@ -21,6 +21,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -225,6 +226,7 @@ class PlayerController(
                     val dur = player.duration
                     _durationSec.value = if (dur > 0) dur / 1000.0 else (current?.durationSec ?: 0.0)
                 }
+                bookCommandsTick()
                 if (_isPlaying.value) {
                     sinceSave++
                     if (sinceSave >= 20) { // 10s
@@ -233,6 +235,29 @@ class PlayerController(
                     }
                 } else sinceSave = 0
             }
+        }
+    }
+
+    /** What the session last heard about next ([bookCommandsTick]). */
+    private var sessionCanNext: Boolean? = null
+
+    /**
+     * A book's next comes and goes with its chapters (none from the last
+     * one), which the ExoPlayer never hears of: when it changes, tell the
+     * session, so the notification and the lock screen show next only when
+     * there is one. Only once the session exists, and only on this phone
+     * (a room's next is always there).
+     */
+    internal fun bookCommandsTick() {
+        val s = session ?: return
+        if (_target.value !is PlayTarget.Local) {
+            sessionCanNext = null
+            return
+        }
+        val can = canNextHere()
+        if (can != sessionCanNext) {
+            sessionCanNext = can
+            s.commandsChanged()
         }
     }
 
@@ -429,7 +454,42 @@ class PlayerController(
     fun next() {
         val t = _target.value
         if (t is PlayTarget.Room) return roomAction("skip", t.roomId)
+        // A book is one item: next is its next chapter (ChapterSkip).
+        val item = current
+        if (ChapterSkip.applies(item)) {
+            return move(ChapterSkip.next(item!!.chapters, exoPlayer.currentPosition / 1000.0, hasNextItem()))
+        }
         exoPlayer.seekToNextMediaItem()
+    }
+
+    /** Whether next does anything on this phone now ([ChapterSkip.canNext]). */
+    fun canNextHere(): Boolean =
+        ChapterSkip.canNext(_queue.value, _index.value, exoPlayer.currentPosition / 1000.0, casting = false)
+
+    /**
+     * Whether a next button does anything ([ChapterSkip.canNext]), for the
+     * app's buttons, which are greyed when not. It changes only when the
+     * answer does (a book reaching its last chapter), so a button reading it
+     * is not recomposed on every position tick.
+     */
+    val canNext: Flow<Boolean>
+        get() = combine(_queue, _index, _positionSec, _target) { q, i, pos, t ->
+            ChapterSkip.canNext(q, i, pos, casting = t is PlayTarget.Room)
+        }.distinctUntilChanged()
+
+    /** [canNext] as it stands, for the first frame. */
+    fun canNextNow(): Boolean =
+        ChapterSkip.canNext(_queue.value, _index.value, _positionSec.value, casting = _target.value is PlayTarget.Room)
+
+    private fun hasNextItem(): Boolean = _index.value < _queue.value.lastIndex
+
+    private fun move(m: ChapterSkip.Move) {
+        when (m) {
+            is ChapterSkip.Move.Seek -> seekTo(m.sec)
+            ChapterSkip.Move.NextItem -> exoPlayer.seekToNextMediaItem()
+            ChapterSkip.Move.PreviousItem -> exoPlayer.seekToPreviousMediaItem()
+            ChapterSkip.Move.None -> {}
+        }
     }
 
     fun prev() {
@@ -439,6 +499,11 @@ class PlayerController(
         // did nothing; the phone's own player is never the one moved.
         val t = _target.value
         if (t is PlayTarget.Room) return roomAction("previous", t.roomId)
+        // A book: this chapter's start, or the one before (ChapterSkip).
+        val item = current
+        if (ChapterSkip.applies(item)) {
+            return move(ChapterSkip.previous(item!!.chapters, exoPlayer.currentPosition / 1000.0, _index.value > 0))
+        }
         // Web behavior: restart if >3s in, else go to previous item.
         if (exoPlayer.currentPosition > 3000) exoPlayer.seekTo(0)
         else exoPlayer.seekToPreviousMediaItem()
@@ -860,8 +925,12 @@ class PlayerController(
      * ([CastAwarePlayer]); before 2026-10-01 the session held the ExoPlayer
      * itself, so a lock-screen "play" started the phone under a playing room.
      */
+    /** [sessionPlayer], once something asked for it. */
+    private var session: CastAwarePlayer? = null
+
     val sessionPlayer: CastAwarePlayer by lazy {
         CastAwarePlayer(exoPlayer, this).also { p ->
+            session = p
             // The session reads the player's getters only when told
             // something changed; a room's play state and track change
             // without the ExoPlayer knowing, so say so whenever they do.

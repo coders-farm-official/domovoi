@@ -23,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -105,8 +106,17 @@ fun MiniPlayer(onOpenPlayer: () -> Unit) {
                         tint = Domovoi.colors.fg,
                     )
                 }
-                IconButton(onClick = { app.player.next() }) {
-                    Icon(Icons.Filled.SkipNext, contentDescription = "next", tint = Domovoi.colors.fgMuted)
+                // Greyed when it would do nothing: a book's last chapter with
+                // nothing queued after it, a book of one chapter (ChapterSkip).
+                // Not hidden: the stop button beside it must not slide under a
+                // second tap.
+                val canNext by remember(app.player) { app.player.canNext }.collectAsState(initial = app.player.canNextNow())
+                IconButton(onClick = { app.player.next() }, enabled = canNext) {
+                    Icon(
+                        Icons.Filled.SkipNext,
+                        contentDescription = "next",
+                        tint = if (canNext) Domovoi.colors.fgMuted else Domovoi.colors.fgFaint,
+                    )
                 }
                 IconButton(onClick = { app.player.stop() }) {
                     Icon(Icons.Filled.Close, contentDescription = "stop", tint = Domovoi.colors.fgSubtle, modifier = Modifier.size(16.dp))

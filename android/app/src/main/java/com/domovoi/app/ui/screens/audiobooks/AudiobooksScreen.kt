@@ -81,6 +81,8 @@ import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.MonoFamily
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.dropWhile
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -130,6 +132,22 @@ fun AudiobooksScreen() {
     val books by pager.state.collectAsState()
     val gridState = rememberLazyGridState()
     LoadMoreNearEnd(gridState, pager)
+    // A new sort or search is a new list, and it opens at the top (batch 18:
+    // it opened where the old list was scrolled to, the first book out of
+    // view). Once the new list has loaded (the reset's load started, then
+    // ended), jump to its first book; the jump also drops the old first
+    // book's key, which a lazy grid otherwise follows into the new list. A
+    // fresh grid state per list was not enough on the emulator: "author"
+    // still opened one book down. [toppedFor] is saved, so coming back to the
+    // page or turning the phone keeps the place in the same list.
+    val listKey = "${sort.key}|$needle"
+    var toppedFor by rememberSaveable { mutableStateOf(listKey) }
+    LaunchedEffect(listKey) {
+        if (toppedFor == listKey) return@LaunchedEffect
+        pager.state.dropWhile { !it.loading }.first { !it.loading }
+        gridState.scrollToItem(0)
+        toppedFor = listKey
+    }
     val saved = rememberSavedBooks()
 
     // Places set while away go up, and waiting saves try, once the page is

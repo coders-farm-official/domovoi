@@ -364,6 +364,9 @@ private fun TransportRow(isRemote: Boolean, effPlaying: Boolean, rooms: List<Str
     // The app's scope: this row is a lazy item that scrolls away, and a cast
     // already started must finish (ServerAction.kt says why).
     val scope = app.scope
+    // Greyed when it would do nothing (a book's last chapter, ChapterSkip);
+    // the flow moves only when that answer does, never on a position tick.
+    val canNext by remember(app.player) { app.player.canNext }.collectAsState(initial = app.player.canNextNow())
     Row(
         Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -385,7 +388,7 @@ private fun TransportRow(isRemote: Boolean, effPlaying: Boolean, rooms: List<Str
                 tint = Domovoi.colors.brandFg,
             )
         }
-        SmallIconButton(Icons.Filled.SkipNext, "next") { app.player.next() }
+        SmallIconButton(Icons.Filled.SkipNext, "next", enabled = canNext) { app.player.next() }
         SmallIconButton(Icons.Filled.Stop, "stop") { app.player.stop() }
         Spacer(Modifier.weight(1f))
         Box {

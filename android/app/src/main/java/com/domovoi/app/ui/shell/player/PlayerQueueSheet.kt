@@ -247,6 +247,9 @@ private fun SheetHead(
 @Composable
 internal fun SheetTransport(playing: Boolean, onDismiss: () -> Unit) {
     val app = LocalApp.current
+    // Greyed when it would do nothing (a book's last chapter, ChapterSkip);
+    // the flow moves only when that answer does, never on a position tick.
+    val canNext by remember(app.player) { app.player.canNext }.collectAsState(initial = app.player.canNextNow())
     Row(
         Modifier.fillMaxWidth().padding(vertical = 6.dp),
         horizontalArrangement = Arrangement.Center,
@@ -268,8 +271,8 @@ internal fun SheetTransport(playing: Boolean, onDismiss: () -> Unit) {
                 tint = Domovoi.colors.brandFg,
             )
         }
-        IconButton(onClick = { app.player.next() }) {
-            Icon(Icons.Filled.SkipNext, "next", tint = Domovoi.colors.fg)
+        IconButton(onClick = { app.player.next() }, enabled = canNext) {
+            Icon(Icons.Filled.SkipNext, "next", tint = if (canNext) Domovoi.colors.fg else Domovoi.colors.fgFaint)
         }
         IconButton(onClick = { app.player.stop(); onDismiss() }) {
             Icon(Icons.Filled.Stop, "stop", tint = Domovoi.colors.fgMuted)

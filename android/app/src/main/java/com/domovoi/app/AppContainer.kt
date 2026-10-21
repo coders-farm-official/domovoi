@@ -19,6 +19,7 @@ import com.domovoi.app.audiobooks.BookDownloads
 import com.domovoi.app.audiobooks.BookStore
 import com.domovoi.app.audiobooks.PositionStore
 import com.domovoi.app.audiobooks.PositionSync
+import com.domovoi.app.audiobooks.SavedShelf
 import com.domovoi.app.net.ApiClient
 import com.domovoi.app.net.HouseholdLock
 import com.domovoi.app.net.DeviceAuthInterceptor
@@ -140,6 +141,10 @@ class AppContainer(context: Context) {
     /** App-lifetime scope for fire-and-forget work that must outlive a
      *  composable (e.g. the video position save on player dispose). */
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    /** The saved books as every screen shows them, re-read whenever
+     *  [books] changes (audiobooks/SavedShelf.kt). */
+    val savedShelf = SavedShelf(books, scope)
 
     init {
         player.bookPositions = bookPositions
