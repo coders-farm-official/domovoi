@@ -51,6 +51,12 @@ import java.io.File
  *
  * [audioInput] also loads the model's audio encoder, for the M0 experiment
  * that hands the recorded question to the model directly ([replyToAudio]).
+ *
+ * Photos (N3): loaded with a vision backend, the engine also gets the
+ * model's photo encoder (`maxNumImages = 1`, [PhonePhotos.IMAGE_TOKENS] per
+ * photo; the runtime loads the encoder itself on the first photo). A photo
+ * turn ([replyToPhoto]) runs in a conversation of its own, which is closed
+ * when it ends, so no photo stays in the runtime once its reply is done.
  */
 @OptIn(ExperimentalApi::class)
 class LiteRtLlmEngine(
@@ -68,28 +74,91 @@ class LiteRtLlmEngine(
     private var told: Map<String, String> = emptyMap()
     @Volatile private var active: Conversation? = null
     @Volatile private var stats: LlmStats? = null
+    @Volatile private var vision: LlmBackend? = null
 
     override val isLoaded: Boolean get() = engine != null
 
-    override suspend fun load(model: File, backend: LlmBackend) = withContext(Dispatchers.IO) {
+    override val seesPhotos: Boolean get() = engine != null && vision != null
+
+    override suspend fun load(model: File, backend: LlmBackend) = load(model, backend, null)
+
+    override suspend fun load(model: File, backend: LlmBackend, vision: LlmBackend?) = withContext(Dispatchers.IO) {
         close()
         // The engine's own prefill/decode counters (getBenchmarkInfo); read
-        // once, when the engine is created.
+        // once, when the engine is created. The per-photo token budget is
+        // read then too (its largest), and again at each photo's send.
         ExperimentalFlags.enableBenchmark = true
+        ExperimentalFlags.visualTokenBudget = if (vision != null) PhonePhotos.IMAGE_TOKENS else null
         val config = EngineConfig(
             modelPath = model.absolutePath,
-            backend = when (backend) {
-                LlmBackend.CPU -> Backend.CPU()
-                LlmBackend.GPU -> Backend.GPU()
-            },
+            backend = backend.toBackend(),
+            visionBackend = vision?.toBackend(),
             audioBackend = if (audioInput) Backend.CPU() else null,
             maxNumTokens = maxTokens,
+            maxNumImages = if (vision != null) PhonePhotos.MAX_PER_QUESTION else null,
             cacheDir = cacheDir.apply { mkdirs() }.absolutePath,
         )
         val created = Engine(config)
-        created.initialize()
-        synchronized(lock) { engine = created }
+        try {
+            created.initialize()
+        } catch (e: Throwable) {
+            runCatching { created.close() }
+            throw e
+        }
+        synchronized(lock) {
+            engine = created
+            this@LiteRtLlmEngine.vision = vision
+        }
     }
+
+    /** A plain grey-and-white test card, made here: the probe's picture. */
+    private fun probePicture(): ByteArray {
+        val bmp = android.graphics.Bitmap.createBitmap(PROBE_EDGE, PROBE_EDGE, android.graphics.Bitmap.Config.ARGB_8888)
+        try {
+            val canvas = android.graphics.Canvas(bmp)
+            canvas.drawColor(android.graphics.Color.WHITE)
+            val paint = android.graphics.Paint().apply { color = android.graphics.Color.DKGRAY }
+            canvas.drawRect(PROBE_EDGE / 4f, PROBE_EDGE / 4f, PROBE_EDGE * 3 / 4f, PROBE_EDGE * 3 / 4f, paint)
+            val out = java.io.ByteArrayOutputStream()
+            check(bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, PhonePhotos.JPEG_QUALITY, out)) { "no test picture" }
+            return out.toByteArray()
+        } finally {
+            bmp.recycle()
+        }
+    }
+
+    override suspend fun probeVision() {
+        check(seesPhotos) { "this engine was loaded without its photo encoder" }
+        var words = 0
+        replyToPhoto(PROBE_SYSTEM, probePicture(), PROBE_QUESTION, null, maxOutput = PROBE_TOKENS).collect { words++ }
+        check(words > 0) { "the photo encoder gave no answer" }
+    }
+
+    override fun replyToPhoto(system: String, jpeg: ByteArray, question: String, now: String?): Flow<String> =
+        replyToPhoto(system, jpeg, question, now, PhonePhotos.MAX_ANSWER_TOKENS)
+
+    private fun replyToPhoto(system: String, jpeg: ByteArray, question: String, now: String?, maxOutput: Int): Flow<String> = flow {
+        check(seesPhotos) { "this engine was loaded without its photo encoder" }
+        val conv = synchronized(lock) {
+            // The kept text conversation goes: the next text turn rebuilds
+            // from the history, and the photo stays in no conversation.
+            dropConversation()
+            val e = engine ?: error("the model is not loaded")
+            val instruction = if (now.isNullOrBlank()) system else "$system\n\n$now"
+            e.createConversation(conversationConfig(instruction, emptyList(), null)).also { conversation = it }
+        }
+        try {
+            ExperimentalFlags.visualTokenBudget = PhonePhotos.IMAGE_TOKENS
+            stream(conv, Message.user(Contents.of(Content.ImageBytes(jpeg), Content.Text(question))), maxTokens = maxOutput)
+                .collect { emit(it) }
+            stats = runCatching { conv.getBenchmarkInfo() }.getOrNull()?.let {
+                LlmStats(it.timeToFirstTokenInSecond, it.lastPrefillTokenCount, it.lastDecodeTokenCount,
+                    it.lastPrefillTokensPerSecond, it.lastDecodeTokensPerSecond)
+            }
+        } finally {
+            synchronized(lock) { if (conversation === conv) dropConversation() else runCatching { conv.close() } }
+        }
+    }.flowOn(Dispatchers.IO)
 
     override fun reply(system: String, history: List<ChatTurn>, now: String?): Flow<String> =
         reply(ModelTurn(system, history, listOfNotNull(now?.let { ContextLine(ContextLine.CLOCK, it) })))
@@ -197,6 +266,7 @@ class LiteRtLlmEngine(
             dropConversation()
             engine?.let { runCatching { it.close() } }
             engine = null
+            vision = null
         }
     }
 
@@ -312,5 +382,17 @@ class LiteRtLlmEngine(
 
         /** Tool rounds a turn may take before the model must answer. */
         const val MAX_TOOL_ROUNDS = 3
+
+        /** The probe's test card: its edge in px, its words, and how many
+         *  tokens of answer it waits for (any word at all will do). */
+        private const val PROBE_EDGE = 256
+        private const val PROBE_SYSTEM = "Answer in one word."
+        private const val PROBE_QUESTION = "What colour is the square?"
+        private const val PROBE_TOKENS = 8
+
+        private fun LlmBackend.toBackend(): Backend = when (this) {
+            LlmBackend.CPU -> Backend.CPU()
+            LlmBackend.GPU -> Backend.GPU()
+        }
     }
 }

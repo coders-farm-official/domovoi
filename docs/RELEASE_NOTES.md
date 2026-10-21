@@ -97,6 +97,43 @@ table; Flyway applies it on update). No new dependencies.
 * **With AI features turned off,** a running job stops at its next part
   (keeping its notes) and no new one starts.
 
+## 2026-10-21 — Ask about a photo in a phone chat
+
+App only; no server change.
+
+* **Pictures on the phone.** A chat **on this phone** takes one photo per
+  question, from the in-app camera or Android's photo picker, and the model
+  on the phone answers about it, in airplane mode too. The photo is shrunk
+  to 1,024 px and read in memory: it isn't saved to the gallery or the
+  app's storage, never leaves the phone, and is discarded from memory once
+  answered. The
+  chat keeps a "photo (not kept)" mark, not the photo, so a photo question
+  has no **try again**.
+* **Where:** the **+** left of the message box (it replaces the paperclip)
+  lists **a document**, **take a photo** and **choose a photo**; the photo
+  items appear only where pictures work, and the camera item only on a
+  phone with a back camera. The mic stays on the right. While a photo
+  waits to be sent, the screen is kept out of screenshots and the recents
+  preview.
+* **The first question after an install or update waits a little
+  longer** (a few seconds) while the app tries the photo reader once.
+* **Only where the phone is fast enough.** The camera and gallery buttons
+  show only on phones whose GPU runs the model's photo encoder. The first
+  time a phone chat opens after an update, the app tries it once with a
+  test picture and remembers the answer for that model file and app build.
+  Phones where it fails (or where the encoder only runs on the CPU, which
+  was too slow and used too much memory on the owner's test phone) get no
+  buttons; if the app crashes during that try, the next start treats it
+  as a failure and doesn't try again until the next update. The same guard
+  covers every photo: if the app crashes while reading one, photos turn
+  off until the next update, and the model settings say why. A crash is
+  told from a memory kill or a swipe away by Android's own record
+  (Android 11+; on older phones the second unexplained close counts).
+  Deleting the model resets it.
+* **Camera permission:** asked on the first tap of **take a photo**, after
+  a one-line reason. The gallery needs no permission (the photo picker).
+* Home-server chats send pictures to the server as before.
+
 ## 2026-10-21 — Ask about a document in Chat
 
 Core and dashboard update with one migration, **V036** (two columns on

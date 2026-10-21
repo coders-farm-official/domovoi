@@ -37,6 +37,8 @@ data class CatalogModel(
      *  first word, so on E2B the phone's facts come from the fast paths
      *  only. Meant for E4B once it is in the catalog and measured. */
     val readTools: Boolean = false,
+    /** The model file carries a photo encoder (N3: pictures on the phone). */
+    val takesImages: Boolean = false,
 ) {
     val totalBytes: Long get() = files.sumOf { it.size }
 }
@@ -74,6 +76,8 @@ object ModelCatalog {
         licenseUrl = "https://huggingface.co/google/gemma-4-E2B-it",
         // Fast paths only (see CatalogModel.readTools).
         readTools = false,
+        // Its header lists tf_lite_vision_encoder and _adapter (plan part 3).
+        takesImages = true,
     )
 
     private const val TINY_REV = "d1e6c30921780b8508d04b492dfb3ce8a51605d4"

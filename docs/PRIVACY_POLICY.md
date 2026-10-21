@@ -96,6 +96,14 @@ directions, calendar events, links and sharing open the app that does
 them, after you tap; you finish there. The app never reads your texts, call
 log or notifications.
 
+In a chat on the phone you can ask about a photo, on phones fast enough to
+read one. The camera is asked for the first time you tap "take a photo";
+choosing a photo uses Android's photo picker and needs no permission. The
+photo is shrunk and read by the model on the phone, in memory: it isn't
+saved to your gallery or the app's storage, it isn't sent anywhere (to us,
+your home server or anyone else), and it is discarded from memory once
+Domovoi has answered. The chat keeps a "photo" mark, not the photo.
+
 ## Photos, music, videos and files on the phone
 
 When no server is connected, the app can play the music and videos on the
