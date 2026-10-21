@@ -26,7 +26,16 @@ class PersonaTest {
 
     @Test fun thePromptSaysWhatThePhoneCannotDo() {
         val p = Persona.SYSTEM_PROMPT
-        listOf("no internet", "timers", "music", "files").forEach { assertTrue(it, p.contains(it)) }
+        listOf("no internet", "timer", "music", "files", "rooms of the house").forEach { assertTrue(it, p.contains(it)) }
+    }
+
+    /** N2: the app does the phone's actions, never the model on E2B; a
+     *  request that reaches the model was not done, and it must not say so. */
+    @Test fun thePromptSaysTheAppDoesTheActionsNotTheModel() {
+        val p = Persona.SYSTEM_PROMPT
+        assertTrue(p.contains("The app itself, not you"))
+        assertTrue(p.contains("If such a request reaches you, it was not done: never say it was"))
+        listOf("Clock app", "sleep timer", "audiobook", "video").forEach { assertTrue(it, p.contains(it)) }
     }
 
     /** The owner's report (2026-10-16): "I cannot tell you the time. I do not

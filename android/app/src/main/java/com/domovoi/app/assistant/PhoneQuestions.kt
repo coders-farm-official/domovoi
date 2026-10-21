@@ -128,7 +128,8 @@ object PhoneQuestions {
         PhoneQuestion.TIMERS to "what timers do i have|do i have any timers(?: running| set)?|what timers are (?:running|set|on)|" +
             "how (?:much time|long) is left on (?:my|the) timers?|how (?:much time|long) is left on (?:my |the )?[a-z]+(?: [a-z]+)? timer|"+
             "when (?:is|does) (?:my|the) (?:[a-z]+ )?timer (?:done|going off|go off|finish|end)|(?:any|my) timers|list (?:my |the )?timers|" +
-            "what reminders do i have|do i have any reminders|what are my timers|show (?:me )?my timers",
+            // "show my timers" opens the Clock app's (an action, N2).
+            "what reminders do i have|do i have any reminders|what are my timers",
         PhoneQuestion.MEMORY to "how much (?:memory|ram) (?:does (?:this|my|the) phone have|do i have|is there|is in (?:this|my) phone|have i got)|" +
             "how much (?:memory|ram)|what is (?:my|the|this phones) (?:memory|ram)",
         PhoneQuestion.PHONE_MODEL to "what phone is this|which phone is this|what phone (?:do i have|am i using|is this)|" +

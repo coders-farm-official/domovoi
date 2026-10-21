@@ -10,6 +10,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import com.domovoi.app.net.ReportUpload
 import com.domovoi.app.alerts.HelpAlerts
 import com.domovoi.app.alerts.IncidentAlerts
+import com.domovoi.app.assistant.AppActionHost
 import com.domovoi.app.assistant.AssistantBench
 import com.domovoi.app.assistant.AssistantController
 import com.domovoi.app.assistant.AppPhoneContext
@@ -221,6 +222,9 @@ class AppContainer(context: Context) {
             phoneVoice = { phoneVoice.openOnPhone() },
             lookups = phoneLookups(context),
             phone = { settings -> phoneChatContext(context, settings) },
+            // N2: the Clock app, the player, the saved songs, books and
+            // videos. Nothing in it holds the server client.
+            actions = { AppActionHost(context, player, books, bookPositions) },
         )
     }
 

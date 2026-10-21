@@ -13,9 +13,9 @@ import java.time.temporal.TemporalAdjusters
  * permission; each shows a card first ("Text Sam?") and launches only on a
  * tap.
  *
- * N2 adds timers and alarms through the Clock app (AlarmClock) beside these,
- * asked first the same way: they are [HandOffKind]s of their own then, and
- * this card is their confirmation.
+ * N2's actions (PhoneActions.kt) use the same card: a timer, an alarm or a
+ * video asks first ([CardKind.ACTION]), and the player's actions show Undo
+ * ([CardKind.UNDO]).
  */
 @Serializable
 enum class HandOffKind {
@@ -52,13 +52,30 @@ data class HandOff(
         get() = (kind == HandOffKind.CALL || kind == HandOffKind.TEXT) && number.isNullOrBlank()
 }
 
-/** Where a card stands. */
+/** Where a card stands. [REPLACED]: an action card asked again below (the
+ *  answer wasn't a clear yes or no); [FAILED]: the other app didn't take it. */
 @Serializable
-enum class CardState { OPEN, DONE, DISMISSED }
+enum class CardState {
+    OPEN, DONE, DISMISSED, REPLACED, FAILED,
 
-/** The kind of card a reply carries. */
+    /** An action card whose yes (a tap or a spoken one) is being sent to
+     *  the Clock app: taken, not open; DONE or FAILED follows. */
+    SENDING,
+    ;
+
+    /** How far along a card is: a card is never written back to a lower
+     *  rank (AssistantController.finishReply). */
+    val rank: Int get() = when (this) {
+        OPEN -> 0
+        SENDING -> 1
+        DONE, DISMISSED, REPLACED, FAILED -> 2
+    }
+}
+
+/** The kind of card a reply carries: a hand-off, a permission, an action
+ *  asked first (N2), or the Undo of one done at once (N2). */
 @Serializable
-enum class CardKind { HANDOFF, PERMISSION }
+enum class CardKind { HANDOFF, PERMISSION, ACTION, UNDO }
 
 /**
  * A card under a reply: a hand-off waiting for its tap, or a permission
@@ -74,6 +91,13 @@ data class PhoneCard(
     val permission: String? = null,
     /** PERMISSION: the question answered once it is decided (its text). */
     val question: String? = null,
+    /** ACTION: what runs on a yes (PhoneActions.kt). UNDO: what was done. */
+    val action: PhoneAction? = null,
+    /** ACTION / UNDO: the card's title, written when it was made. */
+    val title: String? = null,
+    /** ACTION, a video: the one found, played on a yes. */
+    val videoUri: String? = null,
+    val videoTitle: String? = null,
 ) {
     val phonePermission: PhonePermission? get() = permission?.let { p -> PhonePermission.entries.firstOrNull { it.name == p } }
 }

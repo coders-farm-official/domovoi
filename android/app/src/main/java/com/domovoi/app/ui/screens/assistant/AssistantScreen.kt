@@ -37,6 +37,7 @@ import com.domovoi.app.assistant.AppPhoneContext
 import com.domovoi.app.assistant.AssistantController
 import com.domovoi.app.assistant.AssistantUi
 import com.domovoi.app.assistant.CardKind
+import com.domovoi.app.assistant.CardState
 import com.domovoi.app.assistant.HandOff
 import com.domovoi.app.assistant.HandOffLauncher
 import com.domovoi.app.assistant.HandOffs
@@ -147,6 +148,10 @@ internal class AssistantActions(
     val useServer: (() -> Unit)? = null,
     /** Stop a job handed to the home server (what it read is kept). */
     val stopServer: (() -> Unit)? = null,
+    /** The video a phone chat played (N2) was closed. */
+    val closeVideo: () -> Unit = {},
+    /** A done timer or alarm card offers "open Clock" (some app takes it). */
+    val clockOpens: (PhoneCard) -> Boolean = { false },
 )
 
 /** The phone chat's part of Chat's conversation frame: the way back to the
@@ -456,6 +461,8 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
             carryOn = actions.carryOn, serverOffer = offerS, useServer = useServer, stopServer = stopServer,
             cardPrimary = cards.primary, cardSecondary = cards.secondary,
             attachPhoto = actions.attachPhoto, dropPhoto = actions.dropPhoto,
+            closeVideo = assistant::videoClosed,
+            clockOpens = assistant::clockOpens,
         ),
         chrome,
     )
@@ -514,6 +521,9 @@ private fun rememberCardActions(assistant: AssistantController, conversationId: 
                         waiting = index to card
                         askPermission.launch(AppPhoneContext.androidPermissions(p).toTypedArray())
                     }
+                    CardKind.ACTION ->
+                        if (card.state == CardState.DONE) assistant.openClock(card) else assistant.actionConfirmed(conversationId, index)
+                    CardKind.UNDO -> assistant.undoTapped(conversationId, index)
                     CardKind.HANDOFF -> card.handOff?.let { h ->
                         if (h.needsContact) {
                             if (!HandOffLauncher.canPickContact(context)) {
@@ -535,6 +545,8 @@ private fun rememberCardActions(assistant: AssistantController, conversationId: 
                         assistant.permissionDecided(conversationId, index, granted = false)
                     }
                     CardKind.HANDOFF -> assistant.handOffTapped(conversationId, index, done = false)
+                    CardKind.ACTION -> assistant.actionDeclined(conversationId, index)
+                    CardKind.UNDO -> Unit
                 }
             },
         )

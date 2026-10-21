@@ -230,6 +230,51 @@ phone is marked as yours.
   rename and the archived list. The update applies migration **V034**
   (chat titles) by itself; threads from before keep their titles.
 
+## 2026-10-21 — The phone's own assistant does things on the phone (app)
+
+Android app only; nothing to run on the server.
+
+* A chat **on this phone** now acts, from the app's own patterns (never a
+  model's guess: on the test phone the model alone acted on 28.6% of
+  sentences that only mentioned a timer or music):
+  * **Timers and alarms in the Clock app**: "set a timer for 10 minutes
+    for the pasta", "wake me at 6:30", "set an alarm for quarter to seven
+    every weekday". Each asks first ("Set a timer for 10 minutes in the
+    Clock app?"), on a card or, in a voice turn, by yes or no; any "no",
+    "wait" or "cancel" in the answer cancels, and only a clear yes sets it.
+    "Wake me a bit before seven" asks "How about 6:45 AM?"; "12 tonight"
+    and "1 at night" are the small hours. Once sent, the reply says "Sent
+    to the Clock app" (the Clock app doesn't tell the phone it took it),
+    and the card offers **open Clock**. "Show my timers" and "show my
+    alarms" open the Clock app.
+  * **The phone's player**: "play some jazz", "shuffle my music", "pause",
+    "resume", "next", "go back", "stop", "set a sleep timer for 20 minutes"
+    (playback's sleep timer, never a Clock timer), "continue my book" (a
+    book saved on the phone, at its place). These run at once with
+    **Undo** under the reply for 10 seconds; saying or typing "undo" in
+    the next minute works too, and puts back the queue, the song and the
+    place. Undo is for the last action only: after a timer or an alarm,
+    after you changed the music yourself, or while the phone casts to a
+    room, it leaves the player alone. A bare "continue" or "next one"
+    right after a story or a joke is for the chat, not the player. "Play
+    …" plays only what the phone's music really holds (a title, artist,
+    album or genre by that name): "put on my shoes" is chat.
+  * **A video saved on the phone** ("play the glacier trip video") asks
+    first, then plays over the chat.
+* An action no app on the phone can do is not offered (no Clock app: the
+  chat says so). Phone chats are phone-only: house things ("play
+  jazz in the kitchen", "cancel the kitchen timer") get one line, "Those
+  are in your home server chats.", and a home-server chat
+  does them as before. A phone chat never reads the house's timers or
+  names its rooms.
+* Known limits: there is no volume action ("turn it up" goes to the
+  chat); "07:30" with no am or pm is read like "7:30" (the next one to
+  come), and "1 tomorrow night" is 1:00 AM tomorrow (the card says
+  so), not the small hours after tomorrow evening; "wake me at 12:30" is 12:30 PM; a room name the phone doesn't
+  know ("play jazz in Emma's room") is searched as music.
+* **New normal permission** `SET_ALARM` (install-time, no prompt), which
+  Android requires for handing a timer or an alarm to the Clock app.
+
 ## 2026-10-21 — The phone's own assistant knows the phone (app)
 
 Android app only; nothing to run on the server.

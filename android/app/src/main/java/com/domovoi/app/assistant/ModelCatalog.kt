@@ -39,6 +39,12 @@ data class CatalogModel(
     val readTools: Boolean = false,
     /** The model file carries a photo encoder (N3: pictures on the phone). */
     val takesImages: Boolean = false,
+    /** The model may be offered the action tools (ActionTools: a timer or
+     *  an alarm, always asked first). Off for Gemma 4 E2B: on the Fold (N0)
+     *  it made false actions on 28.6% of near-misses and 11.5% of
+     *  chit-chat, so on E2B every action comes from the phone's patterns
+     *  (PhoneActions.kt). For a later model that passes the action eval. */
+    val actionTools: Boolean = false,
 ) {
     val totalBytes: Long get() = files.sumOf { it.size }
 }
@@ -74,10 +80,11 @@ object ModelCatalog {
         ),
         license = "Apache-2.0",
         licenseUrl = "https://huggingface.co/google/gemma-4-E2B-it",
-        // Fast paths only (see CatalogModel.readTools).
+        // Fast paths only (see CatalogModel.readTools and actionTools).
         readTools = false,
         // Its header lists tf_lite_vision_encoder and _adapter (plan part 3).
         takesImages = true,
+        actionTools = false,
     )
 
     private const val TINY_REV = "d1e6c30921780b8508d04b492dfb3ce8a51605d4"
