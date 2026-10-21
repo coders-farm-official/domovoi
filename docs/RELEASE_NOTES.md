@@ -4,6 +4,23 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-21 — Chat history and titles
+
+* **Chats name themselves, and can be renamed, pinned, archived, searched.**
+  A chat is titled by its first five words at once; after the first reply
+  the model writes a short title in the background (the phone's model for
+  phone chats, the server's chat model for home-server chats), never over a
+  name someone gave it, and never while the household's AI features are
+  off. The app's Chat opens on its history (pinned first, then by last use)
+  with "Message Domovoi…" at the bottom; a long press renames, pins (kept
+  on this phone), archives, shares or deletes, and a swipe archives. Search
+  finds both kinds of chat; copy, share and "try again" are on every
+  reply; a quiet line marks where older messages fall out of what the model
+  can see; "export all phone chats" (the phone model's settings) saves
+  Markdown plus JSON where you pick. The dashboard's chat gets search,
+  rename and the archived list. The update applies migration **V034**
+  (chat titles) by itself; threads from before keep their titles.
+
 ## 2026-10-21 — One Chat in the app
 
 * **The app's Assistant tab is now part of Chat.** Chat has one list for

@@ -77,6 +77,7 @@ class Prefs(
     private val kPhoneBar = stringPreferencesKey("phone_bar")
     private val kChatPlace = stringPreferencesKey("chat_place")
     private val kChatServerShareSeen = booleanPreferencesKey("chat_server_share_seen")
+    private val kChatPins = stringPreferencesKey("chat_pins")
     private val kVoiceChoice = stringPreferencesKey("voice_choice")
     private val kVoiceInfo = stringPreferencesKey("voice_server_info")
     private val kDeveloperOptions = booleanPreferencesKey("developer_options")
@@ -175,6 +176,12 @@ class Prefs(
     private val _chatServerShareSeen = MutableStateFlow(false)
     val chatServerShareSeen: StateFlow<Boolean> = _chatServerShareSeen
 
+    /** The chats pinned on this phone, both kinds (ChatPlace.kt pinKey):
+     *  kept here, never on the server, so one person's pins don't move the
+     *  household's list. */
+    private val _chatPins = MutableStateFlow<Set<String>>(emptySet())
+    val chatPins: StateFlow<Set<String>> = _chatPins
+
     /** The phone's voice (Settings → Voice): "server" (the default: the
      *  server's voice) or a voice id (voice/PhoneVoice.kt). */
     private val _voiceChoice = MutableStateFlow("server")
@@ -249,6 +256,7 @@ class Prefs(
             if (bar != null && bar != savedBar) scope.launch { context.dataStore.edit { it[kPhoneBar] = bar } }
             _chatPlace.value = p[kChatPlace]
             _chatServerShareSeen.value = p[kChatServerShareSeen] ?: false
+            _chatPins.value = ServerCredentials.decodeTrusted(p[kChatPins])
             _voiceChoice.value = p[kVoiceChoice] ?: "server"
             voiceInfo = decodeVoiceInfo(p[kVoiceInfo])
             developerOptions = p[kDeveloperOptions]
@@ -523,6 +531,14 @@ class Prefs(
         if (_chatPlace.value == key) return
         _chatPlace.value = key
         scope.launch { context.dataStore.edit { it[kChatPlace] = key } }
+    }
+
+    /** Pins (or unpins) the chat [key] names on this phone. */
+    fun setChatPinned(key: String, pinned: Boolean) {
+        val next = if (pinned) _chatPins.value + key else _chatPins.value - key
+        if (next == _chatPins.value) return
+        _chatPins.value = next
+        scope.launch { context.dataStore.edit { it[kChatPins] = ServerCredentials.encodeTrusted(next) } }
     }
 
     fun setChatServerShareSeen() {

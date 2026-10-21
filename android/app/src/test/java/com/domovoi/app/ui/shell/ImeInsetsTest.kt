@@ -158,7 +158,7 @@ class ImeInsetsTest {
         // nothing, and inlining the title row back into the pane is exactly
         // the shape of the bug it was extracted to fix.
         val chat = source("ui/screens/chat/ChatScreen.kt")
-        assertTrue(chat, chat.contains("ThreadTitleRow(open?.title ?: NEW_CHAT, frame)"))
+        assertTrue(chat, chat.contains("ThreadTitleRow(title, frame, shareChat)"))
         assertEquals(chat, 2, Regex("^\\s*ChatPaneGutter\\(\\)$", RegexOption.MULTILINE).findAll(chat).count())
         // The pane's own vertical padding moved INTO ChatPaneGutter; left on
         // the Column it is 84px of a 320px window spent on whitespace.

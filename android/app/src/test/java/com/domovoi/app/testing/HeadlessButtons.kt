@@ -51,3 +51,14 @@ internal fun elementsOf(node: Any): List<Modifier.Element> {
         ?: return emptyList()
     return modifier.foldIn(mutableListOf()) { acc, e -> acc.also { it += e } }
 }
+
+/** Taps the first long-pressable (combinedClickable) in the tree: a card
+ *  that opens on a tap and offers its actions on a long press. */
+internal fun NodeTree.combinedClick() {
+    val tap = nodes().firstNotNullOfOrNull { node ->
+        elementsOf(node).filterIsInstance<InspectableValue>().firstOrNull { it.nameFallback == "combinedClickable" }
+            ?.inspectableElements?.firstOrNull { it.name == "onClick" }?.value
+    } ?: error("nothing long-pressable in the tree")
+    @Suppress("UNCHECKED_CAST")
+    (tap as () -> Unit).invoke()
+}

@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -73,6 +74,9 @@ data class AssistantUi(
     /** ...and no words of it have arrived yet. */
     val thinking: Boolean = false,
     val history: List<ConversationSummary> = emptyList(),
+    /** [history] has been read from the disk once (Chat opens a new chat at
+     *  once only when it knows there are none). */
+    val historyRead: Boolean = false,
     /** How long the last finished download took, ms. */
     val lastDownloadMs: Long? = null,
     /** The listening models (speech to text, the voice detector). */
@@ -161,6 +165,9 @@ class AssistantController(
     /** Called before the model loads: frees a copy the benchmark holds. */
     private val beforeLoad: () -> Unit = {},
     private val unloadAfterMs: Long = UNLOAD_AFTER_MS,
+    /** How long after a reply the title job waits before asking the model,
+     *  so a quick follow-up doesn't have to stop it. */
+    private val titleDelayMs: Long = TITLE_DELAY_MS,
     /** What the assistant downloads: the language model and the listening
      *  models. */
     private val models: List<CatalogModel> = ModelCatalog.chat,
@@ -207,6 +214,9 @@ class AssistantController(
     @Volatile private var engine: LlmEngine? = null
     private var engineBackend: LlmBackend? = null
     private var replyJob: Job? = null
+    /** The model writing a chat's title ([writeTitle]), and for which chat. */
+    @Volatile private var titleJob: Job? = null
+    @Volatile private var titleFor: String? = null
     private var loadJob: Job? = null
     private var unloadTimer: Job? = null
     @Volatile private var screensShowing = 0
@@ -704,7 +714,12 @@ class AssistantController(
         }
     }
 
-    private suspend fun reply(asked: StoredConversation, onDelta: (String) -> Unit = {}): StoredConversation {
+    private suspend fun reply(question: StoredConversation, onDelta: (String) -> Unit = {}): StoredConversation {
+        // The model's time is the reply's: a title being written stops (it
+        // runs again once this reply is done), and whatever it wrote, or a
+        // rename meanwhile, is kept.
+        pauseTitle()
+        val asked = question.withMetaOf(_state.value.conversation)
         save(asked)
         clockReply(asked, onDelta)?.let { return it }
         val backend = settings.backend
@@ -718,29 +733,36 @@ class AssistantController(
             val why = (_state.value.engine as? EngineState.Failed)?.reason ?: "the model did not load"
             return finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), error = "The model could not start: $why"))
         }
-        val turns = modelHistory(asked.messages)
+        val indexed = modelTurns(asked.messages)
+        val turns = indexed.map { it.turn }
         window = window.next(asked.id, turns)
+        // Where the model's view begins, as a message index, for the
+        // conversation view's quiet divider (null: it sees it all).
+        val viewed = asked.copy(windowFrom = indexed.getOrNull(window.start)?.index?.takeIf { window.start > 0 })
         val sent = nanos()
         var firstMs: Long? = null
         val text = StringBuilder()
         fun live(): StoredMessage = StoredMessage(Speaker.DOMOVOI, text.toString(), clock(), backend = backend.label)
-        _state.update { it.copy(conversation = asked.copy(messages = asked.messages + live())) }
+        _state.update { it.copy(conversation = viewed.withMetaOf(it.conversation).copy(messages = viewed.messages + live())) }
         try {
             llm.reply(Persona.SYSTEM_PROMPT, window.of(turns), clockLine()).collect { delta ->
                 if (firstMs == null && delta.isNotBlank()) firstMs = (nanos() - sent) / 1_000_000
                 text.append(delta)
                 onDelta(delta)
                 _state.update { ui ->
-                    ui.copy(thinking = text.isBlank(), conversation = asked.copy(messages = asked.messages + live()))
+                    ui.copy(
+                        thinking = text.isBlank(),
+                        conversation = viewed.withMetaOf(ui.conversation).copy(messages = viewed.messages + live()),
+                    )
                 }
             }
             val stats = llm.lastStats()
-            return finishReply(asked, live().copy(firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }))
+            return finishReply(viewed, live().copy(firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }))
         } catch (e: CancellationException) {
-            finishReply(asked, live().copy(stopped = true, firstTextMs = firstMs, stopMs = voice?.lastStopMs))
+            finishReply(viewed, live().copy(stopped = true, firstTextMs = firstMs, stopMs = voice?.lastStopMs))
             throw e
         } catch (e: Throwable) {
-            return finishReply(asked, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
+            return finishReply(viewed, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
         }
     }
 
@@ -772,9 +794,12 @@ class AssistantController(
     }.onFailure { Log.w(TAG, "the phone's clock could not be read", it) }.getOrNull()
 
     private suspend fun finishReply(asked: StoredConversation, reply: StoredMessage): StoredConversation {
-        val done = asked.copy(updated = reply.at.coerceAtLeast(asked.updated), messages = asked.messages + reply)
+        // A rename while the reply was written is kept.
+        val done = asked.withMetaOf(_state.value.conversation)
+            .copy(updated = reply.at.coerceAtLeast(asked.updated), messages = asked.messages + reply)
         _state.update { it.copy(conversation = done, replying = false, thinking = false, lastStopMs = voice?.lastStopMs) }
         withContext(NonCancellable) { save(done) }
+        startTitle(done)
         return done
     }
 
@@ -818,6 +843,7 @@ class AssistantController(
 
     fun delete(id: String) {
         scope.launch {
+            if (titleFor == id) pauseTitle()
             if (_state.value.conversation.id == id) stopReply()
             val ok = withContext(io) { conversations.delete(id).also { readHistory() } }
             if (_state.value.conversation.id == id) {
@@ -831,6 +857,7 @@ class AssistantController(
     /** Deletes every conversation on the phone. */
     fun clearAll() {
         scope.launch {
+            pauseTitle()
             stopReply()
             val ok = withContext(io) { conversations.clearAll().also { readHistory() } }
             settings.currentConversation = null
@@ -839,17 +866,136 @@ class AssistantController(
         }
     }
 
-    private suspend fun save(conversation: StoredConversation) {
+    private suspend fun save(conversation: StoredConversation, makeCurrent: Boolean = true) {
         withContext(io) {
             runCatching { conversations.save(conversation) }
                 .onFailure { say("could not save the conversation: ${it.message}") }
             readHistory()
         }
-        settings.currentConversation = conversation.id
+        if (makeCurrent) settings.currentConversation = conversation.id
     }
 
     private fun readHistory() {
-        _state.update { it.copy(history = conversations.list()) }
+        _state.update { it.copy(history = conversations.list(), historyRead = true) }
+    }
+
+    // ── History: rename, archive, try again, search, export ─────────────
+
+    /** Changes conversation [id] with [change], on screen and on disk; false
+     *  when it can't be read. */
+    private suspend fun changeConversation(id: String, change: (StoredConversation) -> StoredConversation): Boolean {
+        val shown = _state.value.conversation.takeIf { it.id == id && it.messages.isNotEmpty() }
+        val current = shown ?: withContext(io) { conversations.load(id) } ?: return false
+        val changed = change(current)
+        _state.update { if (it.conversation.id == id) it.copy(conversation = changed.copy(messages = it.conversation.messages)) else it }
+        withContext(NonCancellable) { save(changed, makeCurrent = false) }
+        return true
+    }
+
+    /** Names conversation [id] [title]: the person's name, which the
+     *  model's title never replaces. A blank name changes nothing. */
+    fun rename(id: String, title: String) {
+        val name = title.trim().take(RENAME_MAX_CHARS)
+        if (name.isEmpty()) return
+        scope.launch {
+            if (titleFor == id) pauseTitle()
+            if (!changeConversation(id) { it.copy(name = name, titleByUser = true) }) say("that conversation could not be read")
+        }
+    }
+
+    /** Moves conversation [id] to the "archived" view, or back. */
+    fun setArchived(id: String, archived: Boolean) {
+        scope.launch {
+            if (changeConversation(id) { it.copy(archived = archived) }) {
+                say(if (archived) "archived" else "moved back to chats")
+            } else {
+                say("that conversation could not be read")
+            }
+        }
+    }
+
+    /** Whether "try again" can run on the conversation on screen now: it
+     *  ends with a finished reply to a question. */
+    fun canRetry(ui: AssistantUi = _state.value): Boolean =
+        !ui.replying && voice?.active != true && ui.installed && retryBase(ui.conversation) != null
+
+    /** "Try again": the last reply goes, and the last question is answered
+     *  again in its place. */
+    fun retry() {
+        val ui = _state.value
+        if (!canRetry(ui)) return
+        val asked = retryBase(ui.conversation) ?: return
+        _state.update { it.copy(conversation = asked, replying = true, thinking = true) }
+        replyJob = scope.launch { reply(asked) }
+    }
+
+    /** The phone conversations whose title or text contains [query]. */
+    suspend fun search(query: String): List<ConversationHit> = withContext(io) { conversations.search(query) }
+
+    /** Conversation [id] as plain text, for the share sheet (one chat). */
+    suspend fun transcript(id: String): String? {
+        val c = _state.value.conversation.takeIf { it.id == id && it.messages.isNotEmpty() }
+            ?: withContext(io) { conversations.load(id) } ?: return null
+        return ChatExport.text(c)
+    }
+
+    /** Every phone conversation, as Markdown and as JSON ("export all phone
+     *  chats"); the caller writes them where the person picked. */
+    suspend fun exportAll(): ChatExport.Bundle = withContext(io) { ChatExport.bundle(conversations.all(), clock()) }
+
+    // ── Titles ──────────────────────────────────────────────────────────
+
+    /** After a finished reply: the model writes [done]'s title in the
+     *  background, when it still needs one. */
+    private fun startTitle(done: StoredConversation) {
+        if (!done.needsTitle) return
+        titleJob?.cancel()
+        titleFor = done.id
+        titleJob = scope.launch { writeTitle(done.id) }
+    }
+
+    /** Stops the title being written and waits for it to go. */
+    private suspend fun pauseTitle() {
+        val job = titleJob ?: return
+        titleJob = null
+        job.cancelAndJoin()
+    }
+
+    /**
+     * The title job: once the engine is idle, the model writes a title for
+     * conversation [id] from its first exchange, in a conversation of its
+     * own (LlmEngine.oneShot). A model that isn't in memory isn't loaded for
+     * it: the next reply tries again. The person's own name always wins.
+     */
+    private suspend fun writeTitle(id: String) {
+        delay(titleDelayMs)
+        while (_state.value.replying || voice?.active == true) delay(TITLE_POLL_MS)
+        val conv = (_state.value.conversation.takeIf { it.id == id } ?: withContext(io) { conversations.load(id) })
+            ?.takeIf { it.needsTitle } ?: return
+        val (question, answer) = conv.firstExchange() ?: return
+        val raw = try {
+            engineLock.withLock {
+                val llm = engine?.takeIf { it.isLoaded } ?: return
+                llm.oneShot(ChatTitles.SYSTEM, ChatTitles.prompt(question, answer), ChatTitles.MAX_TOKENS)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.w(TAG, "no title from the model: ${plainReason(e)}")
+            changeConversation(id) { it.copy(titleTries = it.titleTries + 1) }
+            return
+        } ?: return
+        val title = ChatTitles.clean(raw)
+        withContext(NonCancellable) {
+            if (withContext(io) { conversations.load(id) } == null) return@withContext
+            changeConversation(id) {
+                when {
+                    it.titleByUser || it.titled -> it
+                    title == null -> it.copy(titleTries = it.titleTries + 1)
+                    else -> it.copy(name = title, titled = true)
+                }
+            }
+        }
     }
 
     // ── Reply reports ───────────────────────────────────────────────────
@@ -903,6 +1049,10 @@ class AssistantController(
     companion object {
         /** Unload the model this long after the assistant leaves the screen. */
         const val UNLOAD_AFTER_MS = 5 * 60 * 1000L
+        const val TITLE_DELAY_MS = 1_500L
+        private const val TITLE_POLL_MS = 500L
+        /** The longest name a chat can be given. */
+        const val RENAME_MAX_CHARS = 200
         private const val REPLY_POLL_MS = 2_000L
         private const val STOP_WAIT_MS = 10_000L
 
@@ -974,20 +1124,37 @@ fun shouldUnload(level: Int, replying: Boolean, onScreen: Boolean): Boolean = wh
  * answer (the app closed mid-reply), so the turns alternate user, model,
  * user... and end with the user's.
  */
-fun modelHistory(messages: List<StoredMessage>): List<ChatTurn> {
-    val out = mutableListOf<ChatTurn>()
-    for (m in messages) {
+fun modelHistory(messages: List<StoredMessage>): List<ChatTurn> = modelTurns(messages).map { it.turn }
+
+/** A turn the model is given and the index of the message it came from. */
+data class IndexedTurn(val index: Int, val turn: ChatTurn)
+
+/** [modelHistory], each turn with its message's index in [messages] (where
+ *  the window's divider goes). */
+fun modelTurns(messages: List<StoredMessage>): List<IndexedTurn> {
+    val out = mutableListOf<IndexedTurn>()
+    fun lastFromUser() = out.lastOrNull()?.turn?.fromUser == true
+    for ((i, m) in messages.withIndex()) {
         if (m.fromUser) {
             // An unanswered question before this one: drop it.
-            if (out.lastOrNull()?.fromUser == true) out.removeAt(out.lastIndex)
-            if (m.text.isNotBlank()) out += ChatTurn(fromUser = true, text = m.text)
+            if (lastFromUser()) out.removeAt(out.lastIndex)
+            if (m.text.isNotBlank()) out += IndexedTurn(i, ChatTurn(fromUser = true, text = m.text))
         } else if (m.text.isNotBlank()) {
-            if (out.lastOrNull()?.fromUser == true) out += ChatTurn(fromUser = false, text = m.text)
-        } else if (out.lastOrNull()?.fromUser == true) {
+            if (lastFromUser()) out += IndexedTurn(i, ChatTurn(fromUser = false, text = m.text))
+        } else if (lastFromUser()) {
             out.removeAt(out.lastIndex)
         }
     }
     return out
+}
+
+/** The conversation "try again" answers: [c] without its last reply, when
+ *  it ends with a finished reply (words, an error or a stop) to a question;
+ *  null otherwise. */
+fun retryBase(c: StoredConversation): StoredConversation? {
+    val last = c.messages.lastOrNull() ?: return null
+    if (last.fromUser || c.messages.size < 2 || !c.messages[c.messages.size - 2].fromUser) return null
+    return c.copy(messages = c.messages.dropLast(1))
 }
 
 /**

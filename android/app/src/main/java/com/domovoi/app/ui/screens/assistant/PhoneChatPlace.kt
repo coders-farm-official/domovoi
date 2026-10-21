@@ -21,6 +21,7 @@ internal fun ConversationSummary.toChatRow(): ChatRow = ChatRow(
     snippet = null,
     updatedMs = updated,
     messages = messages,
+    archived = archived,
 )
 
 /** Whether the phone can write a reply now: its model is on the phone;
@@ -52,12 +53,23 @@ private class PhoneChatPlace(private val assistant: AssistantController, ui: Ass
 
     override val ready: Boolean? = phoneReady(ui)
 
+    override val loaded: Boolean = ui.historyRead || ui.tier == DeviceTier.Unsupported
+
     /** The controller keeps its list current itself. */
     override fun refresh() = Unit
 
     override fun deleteText(row: ChatRow): String = "\"${row.title}\" is deleted from this phone. This can't be undone."
 
     override fun delete(row: ChatRow) = assistant.delete(row.id)
+
+    override fun rename(row: ChatRow, title: String) = assistant.rename(row.id, title)
+
+    override fun setArchived(row: ChatRow, archived: Boolean) = assistant.setArchived(row.id, archived)
+
+    override suspend fun search(query: String): List<ChatRow> =
+        assistant.search(query).map { hit -> hit.summary.toChatRow().copy(match = hit.snippet) }
+
+    override suspend fun shareText(row: ChatRow): String? = assistant.transcript(row.id)
 
     @Composable
     override fun Conversation(row: ChatRow?, frame: ChatFrame) = PhoneChat(assistant, row?.id, frame)

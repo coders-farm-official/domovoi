@@ -82,7 +82,12 @@ import com.domovoi.app.ui.components.fmtBytes
 import com.domovoi.app.ui.screens.chat.COMPOSER_HINT
 import com.domovoi.app.ui.screens.chat.ChatHeader
 import com.domovoi.app.ui.screens.chat.ChatPlaceKind
+import com.domovoi.app.ui.screens.chat.ACTION_SHARE
+import com.domovoi.app.ui.screens.chat.ACTION_TRY_AGAIN
 import com.domovoi.app.ui.screens.chat.NEW_CHAT
+import com.domovoi.app.ui.screens.chat.ShareChatButton
+import com.domovoi.app.ui.screens.chat.WindowDivider
+import com.domovoi.app.assistant.retryBase
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.serialization.json.Json
 import java.util.Locale
@@ -156,6 +161,7 @@ private fun ChatPane(
             if (messages.isEmpty()) NEW_CHAT else ui.conversation.title,
             chrome.chip, ChatPlaceKind.Phone, chrome.onBack, Modifier.padding(top = 8.dp),
         ) {
+            if (messages.isNotEmpty() && !ui.replying) ShareChatButton(actions.shareChat)
             IconButton(onClick = onModel) {
                 Icon(Icons.Outlined.Tune, contentDescription = "model settings", tint = Domovoi.colors.fgMuted)
             }
@@ -178,14 +184,21 @@ private fun ChatPane(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     val reversed = messages.asReversed()
+                    val canRetry = phoneCanRetry(ui)
                     itemsIndexed(reversed) { i, m ->
                         val writing = i == 0 && ui.replying && !m.fromUser
                         val index = messages.size - 1 - i
-                        MessageBubble(
-                            m,
-                            writing = writing,
-                            onReport = if (!m.fromUser && !writing && m.text.isNotBlank()) ({ onReport(index) }) else null,
-                        )
+                        Column {
+                            // Above the first message the model still sees.
+                            if (index == ui.conversation.windowFrom && index > 0) WindowDivider()
+                            MessageBubble(
+                                m,
+                                writing = writing,
+                                onReport = if (!m.fromUser && !writing && m.text.isNotBlank()) ({ onReport(index) }) else null,
+                                onRetry = if (i == 0 && canRetry) actions.retry else null,
+                                onShare = if (!writing && m.text.isNotBlank()) ({ actions.shareMessage(m.text) }) else null,
+                            )
+                        }
                     }
                 }
             }
@@ -315,7 +328,13 @@ private fun EngineLine(ui: AssistantUi, actions: AssistantActions, onModel: () -
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageBubble(m: StoredMessage, writing: Boolean, onReport: (() -> Unit)? = null) {
+private fun MessageBubble(
+    m: StoredMessage,
+    writing: Boolean,
+    onReport: (() -> Unit)? = null,
+    onRetry: (() -> Unit)? = null,
+    onShare: (() -> Unit)? = null,
+) {
     val toast = LocalToast.current
     val clipboard = LocalClipboardManager.current
     val haptics = LocalHapticFeedback.current
@@ -342,9 +361,14 @@ private fun MessageBubble(m: StoredMessage, writing: Boolean, onReport: (() -> U
                     )
                     .semantics {
                         stateDescription = bubbleState(isUser, writing)
-                        customActions = bubbleActions(onReport != null).map { label ->
+                        customActions = bubbleActions(onReport != null, onShare != null, onRetry != null).map { label ->
                             CustomAccessibilityAction(label) {
-                                if (label == ACTION_COPY) copy() else onReport?.invoke()
+                                when (label) {
+                                    ACTION_COPY -> copy()
+                                    ACTION_SHARE -> onShare?.invoke()
+                                    ACTION_TRY_AGAIN -> onRetry?.invoke()
+                                    else -> onReport?.invoke()
+                                }
                                 true
                             }
                         }
@@ -376,6 +400,18 @@ private fun MessageBubble(m: StoredMessage, writing: Boolean, onReport: (() -> U
                     copy()
                     menu = false
                 })
+                onShare?.let { share ->
+                    DropdownMenuItem(text = { Text(ACTION_SHARE) }, onClick = {
+                        menu = false
+                        share()
+                    })
+                }
+                onRetry?.let { again ->
+                    DropdownMenuItem(text = { Text(ACTION_TRY_AGAIN) }, onClick = {
+                        menu = false
+                        again()
+                    })
+                }
                 onReport?.let { report ->
                     DropdownMenuItem(text = { Text(ACTION_REPORT) }, onClick = {
                         menu = false
@@ -407,8 +443,20 @@ internal fun bubbleState(fromUser: Boolean, writing: Boolean): String = when {
 }
 
 /** A message's actions, as its long-press menu and a screen reader's
- *  custom actions list them: report only on a finished reply with words. */
-internal fun bubbleActions(canReport: Boolean): List<String> = listOfNotNull(ACTION_COPY, ACTION_REPORT.takeIf { canReport })
+ *  custom actions list them: report only on a finished reply with words;
+ *  share on a message with words; try again on the last finished reply. */
+internal fun bubbleActions(canReport: Boolean, canShare: Boolean = false, canRetry: Boolean = false): List<String> =
+    listOfNotNull(
+        ACTION_COPY,
+        ACTION_SHARE.takeIf { canShare },
+        ACTION_TRY_AGAIN.takeIf { canRetry },
+        ACTION_REPORT.takeIf { canReport },
+    )
+
+/** "Try again" works on the phone chat now: it ends with a finished reply
+ *  to a question, and nothing is being written or said. */
+internal fun phoneCanRetry(ui: AssistantUi): Boolean =
+    !ui.replying && ui.voicePhase == VoicePhase.Idle && ui.installed && retryBase(ui.conversation) != null
 
 /** "0.45 s to first words · 30.2 tokens/s · cpu": how a reply went; a clock
  *  answer names the phone's clock instead, with no model numbers. */
@@ -516,6 +564,9 @@ private fun ModelPane(ui: AssistantUi, actions: AssistantActions, onClose: () ->
                 color = Domovoi.colors.fgMuted,
             )
             if (ui.history.isNotEmpty()) {
+                // Markdown plus the JSON, in one zip, to a file the person
+                // picks; nothing leaves the phone any other way.
+                TextButton(onClick = actions.exportAll) { Text("export all phone chats", color = Domovoi.colors.brand) }
                 TextButton(onClick = { confirmClear = true }) { Text("clear all conversations", color = Domovoi.colors.err) }
             }
         }
