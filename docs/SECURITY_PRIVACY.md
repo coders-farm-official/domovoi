@@ -1785,6 +1785,48 @@ migration V021 (`track_lyrics`, the `track_lyrics_shown` view,
 | **What LRCLIB receives** | Only while "Synced lyrics from LRCLIB" is on (its default follows the internet answer: on for **Yes** and **Sometimes**, off for **No** and while unanswered; a hand-set value wins) and the server is online: for songs that have no timed lyrics of their own, each song's title, artist credit and primary performer, album and length in seconds, to lrclib.net, about one request a second. Nothing else — no file, no path, no account, no listening history. See the table below. |
 | **What is written to your music folders** | With "Save lyrics as .lrc files" on (only while LRCLIB is), LRCLIB's TIMED lyrics are saved as a `.lrc` next to a song that has none, marked `[re:Domovoi]`. Domovoi never changes or deletes a `.lrc` it did not write — nor one it wrote that you have since edited or deleted — and never writes outside `MUSIC_DIR`. Plain-only lyrics stay in the database. |
 
+## Asking Domovoi for help: screenshots, records and the problem report
+
+Chat and voice answer questions about Domovoi from its own help (the
+manual, the FAQ, the troubleshooting guide, installed plugins' help files)
+and from the system's own state (`domovoi/help_desk`, `/api/help`).
+
+* **Screenshots stay at home.** A screenshot pasted or attached in a
+  home-server chat is an ordinary chat picture: stored under
+  `~/.domovoi/chat_uploads` like every other, read by the vision model on
+  this server, shown to the household like the rest of the chat, deleted
+  with the chat. Nothing about it leaves the network. With AI features off
+  no screenshot is read at all. A chat on the phone can't read pictures;
+  it offers a home-server chat instead and sends nothing by itself.
+* **The records help reads are summaries, and redacted.** Troubleshooting
+  picks named fields from the rooms' health samples and outage reports,
+  the update record, plugins' status and the container guard's household
+  view. Network names, gateway addresses, host names, boot ids, SHAs and
+  tokens are never read; every free-text value (an exit reason, an error
+  line) goes through `domovoi/help_desk/redact.py`, which replaces
+  addresses, URLs, e-mail addresses, MACs, tokens, word-phrase codes,
+  six-digit codes, secret `key=value` pairs and home folders. Reading them
+  is household tier (`GET /api/help/checks`), and what Home shows only to
+  an admin (the update's details, the internet question) is shown only to
+  one. The passages and records reach a model only on this box, in a block
+  marked as data, never as instructions.
+* **"Report a problem" sends nothing.** `POST /api/help/report` builds a
+  Markdown summary (version, host kind, the AI and internet answers,
+  plugins, how many rooms in which state, the checks' findings, what the
+  person wrote) and returns it. Room names become `room 1`, `room 2`…
+  unless the person ticks "include room names"; no people's names, tokens,
+  codes, addresses or file paths are in it, and the whole text is redacted
+  once more at the end. The server keeps no copy; the person reads it, then
+  copies or saves it and posts it themselves.
+* **Help steps go to the asker's own phones.** Voice "how do I…" sends
+  steps only to the phones marked "This phone belongs to <person>" for the
+  recognised speaker, or for the person named when asked; never to every
+  phone. The app now tells the server that mark (`devices.owner_person_id`,
+  V033), self-asserted like the rest of the device row: it decides where
+  help steps are offered, nothing more. The steps are a home-server chat
+  (household-shared, like every server chat); the delivery row holds only
+  the person, the chat and its title.
+
 ## The container guard (what it does and does not detect)
 
 Owner decision 2026-10-11: a container Domovoi expects that fails alerts
