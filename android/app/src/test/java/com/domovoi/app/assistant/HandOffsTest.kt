@@ -34,7 +34,8 @@ class HandOffsTest {
     }
 
     @Test fun notAPersonIsNotACall() {
-        listOf("call it a day", "call me later", "call back", "text me", "call someone", "call the police").forEach {
+        listOf("call it a day", "call me later", "call back", "text me", "call someone", "call the police",
+            "call mom and tell her I will be late tonight").forEach {
             assertNull(it, match(it))
         }
     }
@@ -47,7 +48,8 @@ class HandOffsTest {
     @Test fun directions() {
         assertEquals(HandOff(HandOffKind.DIRECTIONS, place = "Pike Place Market"), match("Directions to Pike Place Market"))
         assertEquals(HandOff(HandOffKind.DIRECTIONS, place = "the airport"), match("navigate to the airport"))
-        assertEquals(HandOff(HandOffKind.DIRECTIONS, place = "Grandma's house"), match("how do I get to Grandma's house?"))
+        assertEquals(HandOff(HandOffKind.DIRECTIONS, place = "Grandma's house"), match("take me to Grandma's house"))
+        assertNull(match("how do I get to sleep faster"))
     }
 
     @Test fun calendarEventsGoToTheCalendarAppsEditor() {

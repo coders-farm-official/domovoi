@@ -100,8 +100,9 @@ object HandOffs {
     private val textSaying = Regex("^${LEAD}(?:text|message) (?<who>.+?) (?:saying|that says|to say|that) (?<body>.+)$")
     private val email = Regex("^${LEAD}(?:email|e mail|write an email to|send an email to|draft an email to|write to) (?<who>.+?)(?: (?:about|saying|regarding|re) (?<about>.+))?$SUFFIX$")
     private val directions = Regex(
-        "^${LEAD}(?:(?:give me |get )?directions to|navigate to|take me to|how do i get to|show me the way to|route to|drive me to|" +
-            "get me to|(?:open )?(?:maps|google maps) (?:to|for)) (?<place>.+?)$SUFFIX$",
+        // Not "how do I get to …": that is as often "… sleep" or "… level 5".
+        "^${LEAD}(?:(?:give me |get |show me )?directions to|navigate to|take me to|route to|drive me to|" +
+            "(?:open )?maps (?:to|for)) (?<place>.+?)$SUFFIX$",
     )
     private val event = Regex(
         "^${LEAD}(?:add|put|schedule|create|make) (?:an? (?:event|appointment|meeting|reminder in my calendar) (?:for |called )?)?(?<title>.+?)" +
@@ -145,7 +146,7 @@ object HandOffs {
             val who = m.groups["who"]!!.value
             if (notAPerson.containsMatchIn(who) && phoneNumber(who) == null) return null
             val body = (m.groups["body"] ?: m.groups["body2"])?.value?.let { rest(text.trim(), it) }
-            return person(HandOffKind.TEXT, original(raw, who)).copy(body = body?.replaceFirstChar { it.uppercase() })
+            return person(HandOffKind.TEXT, original(raw, who))?.copy(body = body?.replaceFirstChar { it.uppercase() })
         }
         call.matchEntire(t)?.let { m ->
             val who = (m.groups["who"] ?: m.groups["who2"])!!.value
@@ -186,8 +187,11 @@ object HandOffs {
      *  into the chat. */
     fun safeLink(url: String): Boolean = SAFE_LINK.matches(url)
 
-    /** A call or text for [who]: a number said aloud goes straight in. */
-    private fun person(kind: HandOffKind, who: String): HandOff {
+    /** A call or text for [who]: a number said aloud goes straight in. A
+     *  "name" of more than four words is a sentence ("call mom and tell
+     *  her…"): that's the model's. */
+    private fun person(kind: HandOffKind, who: String): HandOff? {
+        if (phoneNumber(who) == null && who.trim().split(Regex("\\s+")).size > MAX_NAME_WORDS) return null
         val number = phoneNumber(who)
         return if (number != null) HandOff(kind, number = number) else HandOff(kind, who = cleanName(who))
     }
@@ -341,6 +345,8 @@ object HandOffs {
     private fun urlIn(raw: String): String? = Regex("(?i)\\bhttps?://\\S+").find(raw)?.value?.trimEnd('.', ',', ')')
 
     private val SAFE_LINK = Regex("^https?://[^\\s/?#@]+\\.[^\\s/?#@]+(?:[/?#]\\S*)?$", RegexOption.IGNORE_CASE)
+
+    private const val MAX_NAME_WORDS = 4
 
     private const val HOUR_MS = 3_600_000L
     private const val DAY_MS = 24 * HOUR_MS
