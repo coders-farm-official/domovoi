@@ -29,3 +29,18 @@ import androidx.compose.runtime.Composable
  */
 internal val drawerSheetInsets: WindowInsets
     @Composable get() = WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.Start)
+
+/**
+ * The END-edge insets the tablet shells' content column (the topbar, the
+ * screen, the docked player — everything right of the rail or sidebar in
+ * RailShell and DrawerShell) pads by.
+ *
+ * A phone turned sideways is one of these shells (EXPANDED, or MEDIUM on a
+ * small phone), and at 270° its camera cutout lands on the end edge, at 90°
+ * a 3-button navigation bar does: before this the topbar's theme toggle and
+ * the end of every screen sat under them. Only End: the rail or sidebar
+ * covers the start edge and handles its own, the topbar pads by the status
+ * bar, and the bottom is BottomChromeColumn's navigation-bar spacer.
+ */
+internal val shellContentInsets: WindowInsets
+    @Composable get() = WindowInsets.safeDrawing.only(WindowInsetsSides.End)

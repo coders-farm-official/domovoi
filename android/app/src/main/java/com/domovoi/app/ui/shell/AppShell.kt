@@ -827,7 +827,7 @@ private fun RailShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCo
                 }
             }
         }
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.weight(1f).windowInsetsPadding(shellContentInsets)) {
             TopChrome { Topbar(route, navigate) }
             ContainerGuardBanner(route, navigate)
             Box(Modifier.weight(1f)) { ScreenRouter(route, navigate, counts) }
@@ -884,7 +884,7 @@ private fun DrawerShell(route: Route, navigate: (Route) -> Unit, counts: Sidebar
                 SidebarItem(Route.Manual, route == Route.Manual, counts) { navigate(Route.Manual) }
             }
         }
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.weight(1f).windowInsetsPadding(shellContentInsets)) {
             TopChrome { Topbar(route, navigate) }
             ContainerGuardBanner(route, navigate)
             Box(Modifier.weight(1f)) { ScreenRouter(route, navigate, counts) }

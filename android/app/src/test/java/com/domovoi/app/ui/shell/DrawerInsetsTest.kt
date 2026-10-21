@@ -39,12 +39,24 @@ class DrawerInsetsTest {
         assertTrue(chain, insets < chain.indexOf(".padding(") && insets < chain.indexOf(".verticalScroll("))
     }
 
+    @Test fun bothTabletShellsPadTheirContentColumnByTheEndInsets() {
+        // A phone sideways is RailShell or DrawerShell; at 270° its cutout is
+        // on the end edge, over the topbar's theme toggle without this.
+        val shell = source("ui/shell/AppShell.kt")
+        for (name in listOf("RailShell", "DrawerShell")) {
+            val body = shell.substringAfter("private fun $name(").substringBefore("\n}\n")
+            assertTrue("$name: $body", body.contains("Column(Modifier.weight(1f).windowInsetsPadding(shellContentInsets)) {"))
+        }
+        val body = source("ui/shell/DrawerInsets.kt").substringAfter("val shellContentInsets: WindowInsets")
+        assertTrue(body, body.contains("WindowInsets.safeDrawing.only(WindowInsetsSides.End)"))
+    }
+
     @Test fun theDrawerInsetsAreSafeDrawingOnTheTopBottomAndStartEdges() {
         // safeDrawing, not statusBars alone: a phone in landscape is EXPANDED
         // too and its camera cutout sits on the start edge in one rotation.
         // Vertical + Start is Material3's DrawerDefaults.windowInsets shape.
         val src = source("ui/shell/DrawerInsets.kt")
-        val body = src.substringAfter("val drawerSheetInsets: WindowInsets")
+        val body = src.substringAfter("val drawerSheetInsets: WindowInsets").substringBefore("/**")
         assertTrue(body, body.contains("WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.Start)"))
     }
 }
