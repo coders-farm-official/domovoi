@@ -29,6 +29,13 @@ enum class ChatPlaceKind(val key: String) {
     }
 }
 
+/** A chat to open from outside Chat ("Ask about this document" in Files):
+ *  [place] is a [ChatPlaceKind.key], [id] that place's own chat id. */
+data class ChatOpenRequest(val place: String, val id: String)
+
+/** [com.domovoi.app.AppContainer.pendingRoute] for Chat. */
+const val CHAT_ROUTE = "chat"
+
 /** The chips, lowercase like the rest of the chrome (docs/design/README.md). */
 const val CHIP_PHONE = "on this phone"
 const val CHIP_SERVER = "on home server"

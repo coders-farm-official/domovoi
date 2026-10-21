@@ -2074,14 +2074,16 @@
    "id": "phone-chat",
    "topic": "your-phone",
    "title": "Chat and the chat mic",
-   "subtitle": "type, talk, send photos",
+   "subtitle": "type, talk, send photos and documents",
    "keywords": [
     "chat mic",
     "talk",
     "push to talk",
     "photo",
     "heic",
-    "picture"
+    "picture",
+    "document",
+    "pdf"
    ],
    "blocks": [
     {
@@ -2121,6 +2123,15 @@
       },
       {
        "text": "**attach image**: up to 4 pictures. Phone photos in HEIC are turned into a JPEG on the phone first (Android 9 or newer), without their location."
+      },
+      {
+       "text": "**attach a document**: a PDF, Word, OpenDocument, Excel, CSV, text or markdown file, then ask about it. In a chat **on this phone** it is read on the phone and stays there. The answer lists the pages it came from; tap one to see the passage (a PDF shows the page itself)."
+      },
+      {
+       "text": "A PDF needs Android 15 (or 12 to 14 with the PDF update) to be read on the phone. Otherwise **ask the home server** reads its text and sends it back; nothing is kept there."
+      },
+      {
+       "text": "In [Files](route:files), the question mark on a document starts a chat about it: a file on this phone in a phone chat, a file in the home server's Documents in a home-server chat."
       }
      ]
     }
@@ -2580,13 +2591,17 @@
    "id": "chat",
    "topic": "chat-files-calendar",
    "title": "Chat",
-   "subtitle": "type to Domovoi, pictures too",
+   "subtitle": "type to Domovoi, pictures and documents too",
    "keywords": [
     "chat",
     "text",
     "pictures",
     "vision",
-    "images"
+    "images",
+    "document",
+    "pdf",
+    "word",
+    "ask about"
    ],
    "blocks": [
     {
@@ -2601,6 +2616,10 @@
     {
      "type": "p",
      "text": "[Chat](route:chat) → **new chat**. Press the paperclip to add up to 4 pictures (PNG, JPEG, GIF, WebP or BMP, 20 MB each). Beside each chat in the list: rename, archive and delete; **search chats** above the list, and **archived** at its end."
+    },
+    {
+     "type": "p",
+     "text": "**Ask about a document:** the paperclip also takes a PDF, Word (.docx), OpenDocument (.odt), Excel (.xlsx), CSV, text or markdown file, up to 100 MB. Ask what it says. The answer names the pages or sections it came from; press one to see the passage, or to open a PDF at that page. If the document doesn't say, Domovoi answers \"I couldn't find that in the document\" instead of guessing. In [Files](route:files) → Documents, **Ask** on a file starts a chat about it."
     },
     {
      "type": "p",
@@ -2624,6 +2643,15 @@
       },
       {
        "text": "A HEIC phone photo is refused on the dashboard: send it from the app, which converts it."
+      },
+      {
+       "text": "An old .doc or .rtf file: save it as .docx or PDF, then attach it again."
+      },
+      {
+       "text": "\"pictures of text (scanned)\": scanned pages aren't searched yet."
+      },
+      {
+       "text": "A summary of a long document: not yet. Ask about something specific in it instead."
       }
      ]
     },
@@ -3572,7 +3600,7 @@
     },
     {
      "type": "p",
-     "text": "After the short answer, Domovoi asks \"Want me to send the steps to your phone?\" Say yes, and they arrive as a chat called \"Help: …\" on the phones marked as yours ([Settings → Connection](route:app/connection), **This phone belongs to**, in the app). If Domovoi doesn't know your voice, it asks who to send them to. It never sends them to every phone."
+     "text": "After the short answer, Domovoi asks \"Want me to send the steps to your phone?\" Say yes, and they arrive as a chat called \"Help: …\" on the phones marked as yours ([Settings → Phones & browsers](route:app/connection), **This phone belongs to**, in the app). If Domovoi doesn't know your voice, it asks who to send them to. It never sends them to every phone."
     },
     {
      "type": "label",

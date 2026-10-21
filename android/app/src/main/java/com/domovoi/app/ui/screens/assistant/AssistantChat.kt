@@ -1,6 +1,16 @@
 package com.domovoi.app.ui.screens.assistant
 
 import androidx.activity.compose.BackHandler
+import com.domovoi.app.assistant.docs.PDF_NO_API
+import com.domovoi.app.assistant.StoredConversation
+import com.domovoi.app.ui.screens.chat.DocMarker
+import com.domovoi.app.ui.screens.chat.DocProblemNote
+import com.domovoi.app.ui.screens.chat.PendingPdfCard
+import com.domovoi.app.ui.screens.chat.ReadingLine
+import com.domovoi.app.ui.screens.chat.ReplyDocs
+import com.domovoi.app.ui.screens.chat.SourceSheet
+import com.domovoi.app.ui.screens.chat.SourceView
+import com.domovoi.app.ui.screens.chat.DocAttachButton
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -155,7 +165,12 @@ private fun ChatPane(
     val toast = LocalToast.current
     var draft by rememberSaveable { mutableStateOf("") }
     var offerSpeechFiles by remember { mutableStateOf(false) }
+    var openSource by remember { mutableStateOf<SourceView?>(null) }
     val messages = ui.conversation.messages
+    // The paperclip: a document for this phone chat (documents plan, D1),
+    // copied into the app's storage and read on the phone. What's typed
+    // goes with it as the question.
+    val attach = actions.attachDocument
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         ChatHeader(
             if (messages.isEmpty()) NEW_CHAT else ui.conversation.title,
@@ -197,6 +212,9 @@ private fun ChatPane(
                                 onReport = if (!m.fromUser && !writing && m.text.isNotBlank()) ({ onReport(index) }) else null,
                                 onRetry = if (i == 0 && canRetry) actions.retry else null,
                                 onShare = if (!writing && m.text.isNotBlank()) ({ actions.shareMessage(m.text) }) else null,
+                                conversation = ui.conversation,
+                                docFile = actions.docFile,
+                                onSource = { openSource = it },
                             )
                         }
                     }
@@ -206,12 +224,26 @@ private fun ChatPane(
         // Nothing said yet: the place can still change (Chat's picker).
         if (messages.isEmpty() && ui.voicePhase == VoicePhase.Idle && !ui.replying) chrome.picker?.invoke()
         if (ui.voicePhase != VoicePhase.Idle) VoiceLine(ui) else EngineLine(ui, actions, onModel)
+        ui.reading?.let { ReadingLine(it) }
+        ui.docProblem?.let { DocProblemNote(it, onClose = actions.closeDocProblem) }
+        ui.pendingPdf?.let { p ->
+            PendingPdfCard(
+                p.name, PDF_NO_API, canAskServer = actions.askServer != null, busy = actions.askingServer,
+                onAsk = { actions.askServer?.invoke(p) }, onDrop = actions.dropPending,
+            )
+        }
+        openSource?.let { SourceSheet(it, onClose = { openSource = null }) }
         if (offerSpeechFiles) SpeechFilesDialog(ui, actions) { offerSpeechFiles = false }
         Row(
             Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 10.dp),
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+            if (attach != null && ui.voicePhase == VoicePhase.Idle && !ui.replying) {
+                DocAttachButton(enabled = ui.reading == null) { name, open ->
+                    draft = attachWithDraft(attach, name, open, draft)
+                }
+            }
             LocalComposerField.current(draft, { draft = it }, Modifier.weight(1f))
             if (ui.voicePhase != VoicePhase.Idle) {
                 // One button for the turn: while it listens and has heard
@@ -314,7 +346,11 @@ private fun EngineLine(ui: AssistantUi, actions: AssistantActions, onModel: () -
                 TextButton(onClick = onModel) { Text("model settings", color = Domovoi.colors.fgMuted) }
             }
         }
-        else -> if (ui.thinking) {
+        else -> if (ui.checking) {
+            Row(Modifier.padding(top = 6.dp).semantics { liveRegion = LiveRegionMode.Polite }) {
+                Pill("reading the passages and checking the answer", Tone.Brand, live = true)
+            }
+        } else if (ui.thinking) {
             Row(Modifier.padding(top = 6.dp).semantics { liveRegion = LiveRegionMode.Polite }) { Pill("thinking", Tone.Brand, live = true) }
         }
     }
@@ -334,6 +370,9 @@ private fun MessageBubble(
     onReport: (() -> Unit)? = null,
     onRetry: (() -> Unit)? = null,
     onShare: (() -> Unit)? = null,
+    conversation: StoredConversation? = null,
+    docFile: (String) -> java.io.File? = { null },
+    onSource: (SourceView) -> Unit = {},
 ) {
     val toast = LocalToast.current
     val clipboard = LocalClipboardManager.current
@@ -345,6 +384,12 @@ private fun MessageBubble(
         toast("copied")
     }
     Column(Modifier.fillMaxWidth(), horizontalAlignment = if (isUser) Alignment.End else Alignment.Start) {
+        // An attachment's marker: the document is not part of the
+        // conversation's text, only this line (plan part 10).
+        m.documents.mapNotNull { id -> conversation?.documents?.firstOrNull { it.id == id } }.forEach { d ->
+            DocMarker(d.summary, d.notes.map { it.text }, Modifier.padding(bottom = 4.dp))
+        }
+        if (isUser && m.text.isBlank() && m.documents.isNotEmpty()) return@Column
         Box {
             Box(
                 Modifier.widthIn(max = 480.dp)
@@ -376,7 +421,7 @@ private fun MessageBubble(
                     .padding(horizontal = if (isUser) 12.dp else 0.dp, vertical = if (isUser) 8.dp else 2.dp),
             ) {
                 Column {
-                    if (isUser) {
+                    if (isUser && m.text.isNotBlank()) {
                         Text(m.text, style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fg)
                         if (m.spoken) {
                             Text("spoken", style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgFaint,
@@ -392,6 +437,9 @@ private fun MessageBubble(
                     if (m.stopped) {
                         Text("stopped", style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgFaint,
                             modifier = Modifier.padding(top = 2.dp))
+                    }
+                    if (!isUser && !writing) {
+                        ReplyDocs(m.notes.map { it.text }, phoneSources(m, conversation, docFile), onSource)
                     }
                 }
             }
@@ -425,6 +473,17 @@ private fun MessageBubble(
         }
     }
 }
+
+/** A phone reply's sources as the shared chips show them; a PDF's page is
+ *  drawn from the phone's own copy ([docFile], by document id). */
+internal fun phoneSources(m: StoredMessage, conversation: StoredConversation?, docFile: (String) -> java.io.File?): List<SourceView> =
+    m.sources.map { s ->
+        val doc = conversation?.documents?.getOrNull(s.doc)
+        SourceView(
+            s.label, s.text, s.match, s.cited, s.page,
+            pdf = if (doc?.kind == "pdf" && s.page != null) ({ docFile(doc.id) }) else null,
+        )
+    }
 
 /** An empty phone chat: where the answers come from, and where the chat
  *  stays. Home-server chats are a different place, never mixed in. */
@@ -648,4 +707,17 @@ internal fun durationText(ms: Long): String {
         s < 3600 -> "${s / 60} min ${s % 60} s"
         else -> "${s / 3600} h ${(s % 3600) / 60} min"
     }
+}
+
+/** The paperclip in a phone chat: the document goes with what is typed as
+ *  its question (review round 1: the draft used to be dropped), and the
+ *  box is cleared. Returns the new draft. */
+internal fun attachWithDraft(
+    attach: (String, () -> java.io.InputStream, String) -> Unit,
+    name: String,
+    open: () -> java.io.InputStream,
+    draft: String,
+): String {
+    attach(name, open, draft.trim())
+    return ""
 }

@@ -4,6 +4,35 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-21 — Ask about a document in Chat
+
+Core and dashboard update with one migration, **V036** (two columns on
+`chat_messages`; Flyway applies it on update), and a new dependency,
+`pypdfium2` (Apache-2.0 or BSD-3-Clause; reads a PDF's text).
+
+* **Chat reads documents.** The paperclip takes a PDF, Word (.docx),
+  OpenDocument (.odt), Excel (.xlsx), CSV, text or markdown file (up to
+  100 MB) in a home-server chat on the dashboard and in the app, and in a
+  chat on the phone. Ask what it says: the answer names the pages or
+  sections it came from, and a press on one shows the passage (a PDF opens
+  at that page). When the document doesn't say, the answer is "I couldn't
+  find that in the document" rather than a guess. Files → Documents (and
+  the app's Files) gets "Ask about this document".
+* **Very large files:** about the first 4 million characters (roughly
+  1,000 pages) are read, and the attachment says how far it got.
+* **What it doesn't do yet:** scanned pages (pictures of text) are listed,
+  not read; a summary of a long document says it can't yet (short ones
+  work); old .doc and .rtf files are refused with what to save them as.
+* **Phones:** a phone chat reads the document on the phone and keeps it
+  there. A PDF needs Android 15, or Android 12-14 with the PDF update;
+  other phones offer "ask the home server", which reads the text and keeps
+  nothing.
+* **With AI chat and questions turned off,** the server takes no document
+  for a chat (the dashboard and the app don't offer it).
+* Each document is read in a separate, time-limited process with capped
+  memory; zip bombs, XML entity tricks and files that aren't what their
+  name says are refused with a sentence saying why.
+
 ## 2026-10-21 — Domovoi as its own help desk
 
 Core, dashboard and app. **Run Flyway** (V035: `devices.owner_person_id`,
@@ -104,8 +133,7 @@ printers that need a maker's driver are not supported, on any host.
 What an operator should know:
 
 * The update applies migration **V033** (printers, the job log, the
-  limits) by itself. For whoever merges: V033 must land before
-  `wf/chat-history`'s migration (renumber that one if it was cut as V033).
+  limits) by itself.
 * Two new dependencies, both permissive: **pypdfium2** and **ReportLab**
   (in both locks). A Linux server installed from the lock picks them up on
   its next update.

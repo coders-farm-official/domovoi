@@ -612,6 +612,16 @@ reply; a name you give it stays.
 - **attach image**: up to 4 pictures. Phone photos in HEIC are turned
   into a JPEG on the phone first (Android 9 or newer), without their
   location.
+- **attach a document**: a PDF, Word, OpenDocument, Excel, CSV, text or
+  markdown file, then ask about it. In a chat **on this phone** it is read
+  on the phone and stays there. The answer lists the pages it came from;
+  tap one to see the passage (a PDF shows the page itself).
+- A PDF needs Android 15 (or 12 to 14 with the PDF update) to be read on
+  the phone. Otherwise **ask the home server** reads its text and sends it
+  back; nothing is kept there.
+- In [Files](#files), the question mark on a document starts a chat about
+  it: a file on this phone in a phone chat, a file in the home server's
+  Documents in a home-server chat.
 
 [More detail](docs/FAQ.md#can-i-send-pictures-in-chat)
 
@@ -772,6 +782,14 @@ Type to Domovoi. Answers come from the models on your server.
 the list: rename, archive and delete; **search chats** above the list, and
 **archived** at its end.
 
+**Ask about a document:** the paperclip also takes a PDF, Word (.docx),
+OpenDocument (.odt), Excel (.xlsx), CSV, text or markdown file, up to
+100 MB. Ask what it says. The answer names the pages or sections it came
+from; press one to see the passage, or to open a PDF at that page. If the
+document doesn't say, Domovoi answers "I couldn't find that in the
+document" instead of guessing. In [Files](#files) → Documents, **Ask** on
+a file starts a chat about it.
+
 **App:** the picture button is **attach image**, and the app also takes
 HEIC photos. See [Chat and the chat mic](#node:phone-chat).
 
@@ -784,6 +802,10 @@ HEIC photos. See [Chat and the chat mic](#node:phone-chat).
   Models](#settings/models).
 - A HEIC phone photo is refused on the dashboard: send it from the app,
   which converts it.
+- An old .doc or .rtf file: save it as .docx or PDF, then attach it again.
+- "pictures of text (scanned)": scanned pages aren't searched yet.
+- A summary of a long document: not yet. Ask about something specific in
+  it instead.
 
 **Also:** voice chat mode, a spoken conversation in a room, is an early
 experiment and off unless whoever set up Domovoi turned it on.
@@ -1108,7 +1130,7 @@ says "The manual doesn't cover that." rather than guessing.
 
 After the short answer, Domovoi asks "Want me to send the steps to your
 phone?" Say yes, and they arrive as a chat called "Help: …" on the phones
-marked as yours ([Settings → Connection](#app/connection), **This phone
+marked as yours ([Settings → Phones & browsers](#app/connection), **This phone
 belongs to**, in the app). If Domovoi doesn't know your voice, it asks who
 to send them to. It never sends them to every phone.
 

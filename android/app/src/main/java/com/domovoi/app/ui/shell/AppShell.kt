@@ -1,5 +1,6 @@
 package com.domovoi.app.ui.shell
 
+import com.domovoi.app.ui.screens.chat.CHAT_ROUTE
 import android.os.SystemClock
 import android.util.Log
 import androidx.activity.compose.BackHandler
@@ -323,6 +324,7 @@ private fun ShellContent(trouble: TokenTrouble?) {
     LaunchedEffect(pendingRoute) {
         val target = when (pendingRoute) {
             "home" -> Route.Home
+            CHAT_ROUTE -> Route.Chat
             CONTAINERS_ROUTE -> Route.Containers
             CHAT_ROUTE -> Route.Chat
             else -> null
@@ -586,6 +588,15 @@ private fun OfflineShell(choice: ServerChoice, verdict: IdentityVerdict?) {
     val tabs = remember(shared, savedBooks) { localTabs(shared = shared, savedBooks = savedBooks) }
     var tab by rememberSaveable { mutableStateOf(0) }
     LaunchedEffect(tabs) { if (tab >= tabs.size) tab = 0 }
+    // "Ask about this document" in Files: to the Chat tab, which opens it.
+    val askedRoute by app.pendingRoute.collectAsState()
+    LaunchedEffect(askedRoute, tabs) {
+        if (askedRoute == CHAT_ROUTE) {
+            val at = tabs.indexOf(Route.Chat)
+            if (at >= 0) tab = at
+            app.pendingRoute.value = null
+        }
+    }
     // This phone's own settings (voice, problem reports, the app's version
     // and developer options): the top bar's gear opens them, with no server
     // needed.

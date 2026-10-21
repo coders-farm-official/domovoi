@@ -1680,6 +1680,30 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .chat-note-row { display: flex; align-items: flex-start; gap: 8px; }
 .chat-note-sub { margin-top: 4px; color: var(--fg-muted); }
 .chat-note-link { display: inline-block; margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--fg); text-decoration: underline; text-decoration-color: var(--brand); text-underline-offset: 2px; }
+/* Documents in chats (chat_documents.jsx): the attachment, the notes and
+   the sources under a reply (a cited passage at full strength, one only
+   read faint: no status colours), the passage sheet. */
+.chat-doc-chip { display: flex; flex-direction: column; gap: 2px; max-width: min(360px, 100%); padding: 7px 10px; background: var(--card); border: 1px solid var(--border); border-radius: var(--r-md); font-size: 12px; }
+.chat-doc-chip.mine { align-self: flex-end; }
+.chat-doc-chip-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.chat-doc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--fg); }
+.chat-doc-summary { font-size: 10px; color: var(--fg-muted); padding-left: 20px; }
+.chat-doc-notes { display: flex; flex-direction: column; gap: 2px; margin-top: 2px; }
+.chat-doc-note { font-size: 11px; line-height: 1.45; color: var(--fg-muted); }
+.chat-doc-chip .chat-doc-notes { padding-left: 20px; }
+.chat-doc-answer { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.chat-doc-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.chat-doc-sources-label { font-size: 10px; color: var(--fg-muted); margin-right: 2px; }
+.chat-doc-source { font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 999px; cursor: pointer; background: transparent; color: var(--fg-muted); border: 1px dashed var(--border-strong); }
+.chat-doc-source.cited { background: var(--brand-soft); color: var(--fg); border: 1px solid var(--border); font-weight: 600; }
+.chat-doc-source:hover, .chat-doc-source:focus-visible { border-color: var(--brand); color: var(--fg); }
+.chat-passage { width: min(640px, 100%); }
+.chat-passage-of { font-size: 11px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.chat-passage-text { padding: 14px 16px; overflow-y: auto; font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); }
+.chat-doc-mark { background: var(--brand-soft); color: var(--fg); border-radius: 2px; padding: 0 1px; box-shadow: inset 0 -2px 0 var(--brand); }
+.chat-passage-why { font-size: 11px; color: var(--fg-muted); align-self: center; }
+.chat-doc-ask-why { flex-basis: 100%; font-size: 11px; color: var(--fg-muted); }
+.chat-doc-checking { display: block; font-size: 11px; color: var(--fg-muted); }
 @media (max-width: 760px) {
   .chat-more { width: 36px; height: 36px; }
   .chat-menu-item { min-height: 44px; }

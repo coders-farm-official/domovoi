@@ -109,6 +109,7 @@ from domovoi.help_desk import delivery as help_delivery
 from domovoi.config import settings as core_settings
 from domovoi.profile_context import build_profile_prefix
 from domovoi.voice_identifier import speaker_is_confident
+from web.backend.api import chat_documents as _docs
 from web.backend.api.devices import valid_device_id
 from web.backend.db import session_scope
 from web.backend.domovoi_client import auth_forward_headers, domovoi_url
@@ -346,9 +347,22 @@ async def delete_thread(thread_id: int) -> dict[str, Any]:
                 {"id": thread_id},
             )
         ).scalars().all()
+        doc_tokens = {d.get("token") for d in await _docs.thread_documents(thread_id, s)}
         r = await s.execute(text("DELETE FROM chat_threads WHERE id = :id"), {"id": thread_id})
         if r.rowcount == 0:
             raise HTTPException(status_code=404, detail="thread not found")
+        docs_still_used = set(
+            (
+                await s.execute(
+                    text(
+                        """
+                        SELECT jsonb_array_elements(documents)->>'token'
+                          FROM chat_messages WHERE documents IS NOT NULL
+                        """
+                    )
+                )
+            ).scalars().all()
+        )
         still_used = set(
             (
                 await s.execute(
@@ -370,21 +384,24 @@ async def delete_thread(thread_id: int) -> dict[str, Any]:
                 # The upload, and the copy the model was sent (_vision_bytes).
                 for p in [*UPLOADS_DIR.glob(f"{token}.*"), *UPLOADS_DIR.glob(f"{token}-*")]:
                     p.unlink(missing_ok=True)
+    # The thread's documents, and the text read from them (chat_documents).
+    _docs.remove({t for t in doc_tokens if t and t not in docs_still_used})
     return {"deleted": thread_id}
 
 
 # ─── Messages ───────────────────────────────────────────────────────────────
 _MSG_COLUMNS = (
     "m.id, m.role, m.content, m.images, m.model, m.error, m.created_at, m.stats, m.device_id, "
-    "m.source, m.speaker_person_id, m.speaker_confidence"
+    "m.source, m.speaker_person_id, m.speaker_confidence, m.documents, m.doc"
 )
 
 
 def _msg_dict(r: Any) -> dict[str, Any]:
     d = dict(r)
     d["created_at"] = d["created_at"].isoformat()
-    if isinstance(d.get("stats"), str):
-        d["stats"] = json.loads(d["stats"])
+    for key in ("stats", "documents", "doc"):
+        if isinstance(d.get(key), str):
+            d[key] = json.loads(d[key])
     if d.get("speaker_confidence") is not None:
         d["speaker_confidence"] = round(float(d["speaker_confidence"]), 4)
     # The same judgement the core made when the turn came in
@@ -597,8 +614,12 @@ async def list_messages(thread_id: int) -> dict[str, Any]:
 
 
 class SendBody(BaseModel):
-    content: str = Field(..., min_length=1, max_length=32000)
+    # Empty only with documents attached (an attachment with no question:
+    # chat_documents.attach_reply answers it).
+    content: str = Field("", max_length=32000)
     images: list[dict[str, str]] = Field(default_factory=list, max_length=_MAX_IMAGES_PER_MESSAGE)
+    # Documents staged with POST /api/chat/documents: [{token}].
+    documents: list[dict[str, str]] = Field(default_factory=list, max_length=4)
     model: Optional[str] = Field(None, max_length=200)
     # The sending install (the device tier's usual id), for the details view.
     device_id: Optional[str] = Field(None, max_length=64)
@@ -913,6 +934,11 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
         for i in body.images
         if _upload_path(i.get("token", "")) is not None
     ]
+    # Documents staged for this message (chat_documents.py); a thread with
+    # any is answered from them unless the message carries pictures.
+    documents = _docs.resolve(body.documents)
+    if not body.content.strip() and not documents:
+        raise HTTPException(status_code=422, detail="a message needs some words, or a document attached")
     # Well-formed or nothing, as every other route that reads a device id.
     device_id = valid_device_id(body.device_id)
 
@@ -925,17 +951,22 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
         # The model's attention is the reply's now: every title job stops
         # and waits for it (a refused request holds nothing up).
         stop_title_jobs()
-        await s.execute(
-            text(
-                """
-                INSERT INTO chat_messages (thread_id, role, content, images, device_id)
-                VALUES (:t, 'user', :c, CAST(:imgs AS JSONB), :dev)
-                """
-            ),
-            {"t": thread_id, "c": body.content,
-             "imgs": json.dumps(images) if images else None, "dev": device_id},
-        )
-        # The first user message titles the thread: its first five words.
+        user_row_id = (
+            await s.execute(
+                text(
+                    """
+                    INSERT INTO chat_messages (thread_id, role, content, images, device_id, documents)
+                    VALUES (:t, 'user', :c, CAST(:imgs AS JSONB), :dev, CAST(:docs AS JSONB))
+                    RETURNING id
+                    """
+                ),
+                {"t": thread_id, "c": body.content,
+                 "imgs": json.dumps(images) if images else None, "dev": device_id,
+                 "docs": json.dumps(documents) if documents else None},
+            )
+        ).scalar_one()
+        # The first user message titles the thread: its first five words;
+        # an attachment with no words titles it after the document.
         await s.execute(
             text(
                 """
@@ -945,12 +976,17 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
                  WHERE id = :t
                 """
             ),
-            {"t": thread_id, "c": chat_titles.first_words_title(body.content)},
+            {"t": thread_id, "c": chat_titles.first_words_title(body.content)
+                                  or (f"About {documents[0]['name']}" if documents else None)},
         )
         await _notify_chat(s, "message")
         await s.commit()
 
-    return await _answer(thread_id, thread.person_id, has_images=bool(images), override=body.model)
+    return await _answer(
+        thread_id, thread.person_id, has_images=bool(images), override=body.model,
+        question=body.content, thread_title=thread.title, request=request,
+        documents=documents, user_row_id=user_row_id,
+    )
 
 
 #: Who wrote a reply that "try again" may replace: the chat model, for a
@@ -1012,7 +1048,7 @@ async def retry_reply(thread_id: int) -> StreamingResponse:
     it. The model doesn't see the reply being replaced."""
     async with session_scope() as s:
         thread = (
-            await s.execute(text("SELECT person_id FROM chat_threads WHERE id = :id"), {"id": thread_id})
+            await s.execute(text("SELECT person_id, title FROM chat_threads WHERE id = :id"), {"id": thread_id})
         ).first()
         if thread is None:
             raise HTTPException(status_code=404, detail="thread not found")
@@ -1020,7 +1056,7 @@ async def retry_reply(thread_id: int) -> StreamingResponse:
             await s.execute(
                 text(
                     """
-                    SELECT id, role, images, source, stats FROM chat_messages
+                    SELECT id, role, content, images, source, stats FROM chat_messages
                      WHERE thread_id = :id ORDER BY id DESC LIMIT 2
                     """
                 ),
@@ -1039,7 +1075,10 @@ async def retry_reply(thread_id: int) -> StreamingResponse:
     stop_title_jobs()
     # The thread is marked as retrying by the stream itself (_answer), so a
     # client that drops before the first byte leaves no mark behind.
-    return await _answer(thread_id, thread.person_id, has_images=bool(asked_images), replace_id=last[0].id)
+    return await _answer(
+        thread_id, thread.person_id, has_images=bool(asked_images), replace_id=last[0].id,
+        question=last[1].content or "", thread_title=thread.title,
+    )
 
 
 async def _answer(
@@ -1049,16 +1088,32 @@ async def _answer(
     has_images: bool,
     override: str | None = None,
     replace_id: int | None = None,
+    question: str = "",
+    thread_title: str | None = None,
+    request: Request | None = None,
+    documents: list[dict[str, Any]] | None = None,
+    user_row_id: int | None = None,
 ) -> StreamingResponse:
     """The SSE reply to the thread's last question (:func:`send_message`,
     and :func:`retry_reply` with ``replace_id``: the reply it replaces,
     left out of what the model sees and deleted once the new one is
-    written)."""
+    written). ``question`` is the message being answered, ``documents``
+    the ones it carried and ``user_row_id`` its row (a send only)."""
     override = (override or "").strip()
     model = override or (
         core_settings.ollama_vision_model if has_images else core_settings.ollama_model
     )
     model_role = "override" if override else ("vision" if has_images else "chat")
+
+    # A thread with documents: find, then answer (chat_documents.plan_reply).
+    # A retry never has one: a document reply is not the chat model's to
+    # write again (reply_retryable).
+    plan: Any = None
+    if not has_images and replace_id is None:
+        previous = await _docs.previous_question(thread_id, before_id=user_row_id)
+        plan = await _docs.plan_reply(thread_id, question, documents or [], previous)
+        if plan is not None and not override:
+            model_role = "documents"
 
     refusal: tuple[str, str] | None = None
     if model_role == "vision":
@@ -1073,11 +1128,19 @@ async def _answer(
     # thread's earlier ones out (see _history_for_model). A turn that may
     # carry pictures is cut to the vision window, less the system message
     # (at its longest: with the pictures paragraph) and room for the reply.
-    with_images = model_role != "chat"
+    with_images = model_role not in ("chat", "documents")
     history: list[dict[str, Any]] = []
     window: dict[str, Any] = {}
     profile = model_system = None
-    if refusal is None:
+    if refusal is None and plan is not None:
+        # Answered from the documents: the passages and the question are the
+        # whole prompt (no earlier replies: an answer comes only from what
+        # the app found), the rules after who is answering.
+        # No profile in a document turn (review round 1): the person's
+        # memories have no business next to a stranger's file.
+        if plan.immediate is None:
+            history = [{"role": "user", "content": plan.user}]
+    elif refusal is None:
         profile = await _thread_profile(person_id)
         if with_images:
             model_system = await ollama_client.model_system_or_none(model)
@@ -1103,9 +1166,9 @@ async def _answer(
     # A help turn: the help desk's instruction and its material instead.
     help_turn = None
     fixed_reply: str | None = None
-    if refusal is None and not override:
+    if refusal is None and not override and plan is None:
         help_turn = await _help_turn(
-            body.content, thread_title=thread.title, request=request, history=history,
+            question, thread_title=thread_title, request=request, history=history,
             vision_call=vision_call, model=model,
         )
         if help_turn is not None:
@@ -1116,6 +1179,8 @@ async def _answer(
             }
             if not help_turn.covered:
                 fixed_reply = help_answer.not_covered_answer(help_turn)
+    if plan is not None and plan.immediate is None:
+        system["content"] += "\n\n" + plan.rules
     num_ctx = (core_settings.ollama_vision_num_ctx if vision_call else 0) or core_settings.ollama_num_ctx
     stream_knobs: dict[str, Any] = (
         {"think": False, "num_ctx": core_settings.ollama_vision_num_ctx} if vision_call else {}
@@ -1164,6 +1229,7 @@ async def _answer(
         ollama_stats: dict[str, Any] = {}
         started = time.monotonic()
         first_token_ms: float | None = None
+        doc: dict[str, Any] | None = None
         if refusal is not None:
             code, error = refusal
             log.info("chat refused up front (thread %s, model %r): %s", thread_id, model, code)
@@ -1171,7 +1237,20 @@ async def _answer(
             # Help that found nothing: the honest line, no model asked.
             chunks.append(fixed_reply)
             yield f"event: delta\ndata: {json.dumps({'text': fixed_reply})}\n\n"
+        elif plan is not None and plan.immediate is not None:
+            # Said by the app, with no model asked: nothing found, an
+            # attachment with no question, a summary too long for one pass.
+            first_token_ms = 0.0
+            chunks.append(plan.immediate)
+            doc = plan.doc_json()
+            yield f"event: delta\ndata: {json.dumps({'text': plan.immediate})}\n\n"
         else:
+            # A document turn shows nothing until the app has checked the
+            # reply (review round 1): the client gets "checking" now and
+            # the checked text, once, at the end.
+            checking = plan is not None
+            if checking:
+                yield f"event: status\ndata: {json.dumps({'state': 'checking'})}\n\n"
             try:
                 async for delta in ollama_client.chat_stream(
                     [system, *history], model=model, stats=ollama_stats,
@@ -1180,13 +1259,15 @@ async def _answer(
                     if first_token_ms is None:
                         first_token_ms = (time.monotonic() - started) * 1000
                     chunks.append(delta)
-                    yield f"event: delta\ndata: {json.dumps({'text': delta})}\n\n"
+                    if not checking:
+                        yield f"event: delta\ndata: {json.dumps({'text': delta})}\n\n"
                 if chunks and ollama_stats.get("done_reason") == "length":
                     # The cap stopped it (a loop, or an answer that long):
                     # end it visibly, the same in the stream and the row.
                     tail = "…" + CUT_OFF_NOTE
                     chunks.append(tail)
-                    yield f"event: delta\ndata: {json.dumps({'text': tail})}\n\n"
+                    if not checking:
+                        yield f"event: delta\ndata: {json.dumps({'text': tail})}\n\n"
             except Exception as e:  # noqa: BLE001 — surfaced as an SSE error event
                 code, error = _failure(e, model, model_role)
                 # The detail is for whoever reads the log; the user gets
@@ -1207,6 +1288,17 @@ async def _answer(
             content = final
         if not content and error is None:
             code, error = _plain(ERR_EMPTY, model, model_role)
+        if plan is not None and plan.immediate is None and error is None:
+            # The app's check: citations only of passages it gave, quotes
+            # word for word, "I couldn't find that" said exactly. Only now
+            # does the reply reach the client.
+            content, doc = plan.finish(content)
+            yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
+        elif plan is not None and plan.immediate is None:
+            # The model failed partway through a document answer: what it
+            # had written was never checked, so none of it is kept or sent
+            # (review round 2); the error says what happened.
+            content = ""
         if refusal is not None:
             # No reply was attempted, so there are no reply figures.
             stats: dict[str, Any] = {"model_role": model_role}
@@ -1241,12 +1333,14 @@ async def _answer(
                 await s.execute(
                     text(
                         """
-                        INSERT INTO chat_messages AS m (thread_id, role, content, model, error, stats)
-                        VALUES (:t, 'assistant', :c, :m, :e, CAST(:st AS JSONB))
+                        INSERT INTO chat_messages AS m (thread_id, role, content, model, error, stats, doc)
+                        VALUES (:t, 'assistant', :c, :m, :e, CAST(:st AS JSONB), CAST(:doc AS JSONB))
                         RETURNING {cols}, NULL::text AS device_name, NULL::text AS speaker_name
                         """.format(cols=_MSG_COLUMNS)
                     ),
-                    {"t": thread_id, "c": content, "m": None if fixed_reply is not None else model, "e": error, "st": json.dumps(stats)},
+                    {"t": thread_id, "c": content,
+                     "m": None if (fixed_reply is not None or (plan is not None and plan.immediate is not None)) else model,
+                     "e": error, "st": json.dumps(stats), "doc": json.dumps(doc) if doc is not None else None},
                 )
             ).mappings().first()
             await s.execute(
@@ -1790,3 +1884,7 @@ async def chat_models() -> dict[str, Any]:
         "vision_model": vision,
         "vision_installed": None if tags is None else ollama_client.model_installed(vision, tags),
     }
+
+
+# Documents in chats (chat_documents.py): their routes ride on this router.
+router.include_router(_docs.router)

@@ -1,5 +1,8 @@
 package com.domovoi.app.assistant
 
+import com.domovoi.app.assistant.docs.DocNote
+import com.domovoi.app.assistant.docs.DocSource
+import com.domovoi.app.assistant.docs.StoredDocument
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -46,6 +49,16 @@ data class StoredMessage(
     val stopMs: Long? = null,
     /** A reply from the phone's own clock (ClockQuestions), not the model. */
     val fromClock: Boolean = false,
+    /** Documents attached with this message (ids of [StoredConversation.documents]). */
+    val documents: List<String> = emptyList(),
+    /** A reply about the chat's documents: "question", "summary" or "attached". */
+    val docMode: String? = null,
+    /** ...the passages it was given, each with its matched sentence and
+     *  whether the reply cited it (only passages the app gave). */
+    val sources: List<DocSource> = emptyList(),
+    /** ...the notes under it ("couldn't find", "uncited", a quote that
+     *  doesn't match). */
+    val notes: List<DocNote> = emptyList(),
 ) {
     val fromUser: Boolean get() = from == Speaker.USER
 }
@@ -72,12 +85,16 @@ data class StoredConversation(
      *  view draws "earlier messages are beyond what Domovoi can keep in
      *  mind" above that message. */
     val windowFrom: Int? = null,
+    /** Documents attached in this conversation (kept in [ChatDocStore]). */
+    val documents: List<StoredDocument> = emptyList(),
 ) {
     /** The history list's title: the name it was given, or the first five
-     *  words of the first thing asked ([ChatTitles.firstWords]). */
+     *  words of the first thing asked ([ChatTitles.firstWords]); "About
+     *  lease.pdf" for a document attached with no question yet. */
     val title: String
         get() = name?.takeIf { it.isNotBlank() }
             ?: ChatTitles.firstWords(messages.firstOrNull { it.fromUser && it.text.isNotBlank() }?.text)
+            ?: documents.firstOrNull()?.let { "About ${it.name}" }
             ?: NEW_TITLE
 
     /** The first question and the first good answer after it, for the
