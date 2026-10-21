@@ -154,6 +154,16 @@ data class AssistantUi(
     /** A long document read in parts (documents plan D2), on this phone or
      *  handed to the home server: how far it is, for the progress card. */
     val docJob: DocJobView? = null,
+    /** The chat model takes photos (N3: Gemma 4 E2B carries its encoder). */
+    val modelTakesImages: Boolean = false,
+    /** Whether the photo encoder works on this phone's GPU ([VisionCheck]):
+     *  the camera and gallery buttons show only once it [VisionProbe.PASSED]. */
+    val vision: VisionProbe = VisionProbe.UNKNOWN,
+    /** The photo waiting for its question (one per question), in memory. */
+    val pendingPhoto: PendingPhoto? = null,
+    /** A video a phone chat was asked to play (N2), shown over the chat
+     *  until it is closed. */
+    val playingVideo: VideoChoice? = null,
 ) {
     val installed: Boolean get() = setup == ModelSetup.Installed
 
@@ -201,12 +211,27 @@ data class AssistantUi(
  *   sentence by sentence in the phone's own voice. Replies to typed
  *   questions stay silent unless the owner turns that on.
  * - **Conversations:** kept on the phone ([ConversationStore]); the model
- *   sees the system prompt, the phone's clock (read every turn) and the
- *   conversation, nothing else, and only as much of a long conversation as
- *   fits its context ([HistoryWindow]).
+ *   sees the system prompt, the phone's clock and facts (read every turn:
+ *   [PhoneFacts]), the conversation and what its read tools return
+ *   ([PhoneTools]), and only as much of a long conversation as fits its
+ *   context ([HistoryWindow]).
  * - **The clock:** "what time is it", "what's the date", "what day is it"
  *   and the like ([ClockQuestions]) are answered from the phone's own clock
  *   at once, typed or spoken, without the model.
+ * - **The phone (N1):** "how much battery", "what's playing", "what timers
+ *   do I have" and the rest of [PhoneQuestions] are answered from the phone
+ *   at once; "text Sam", "directions to…" and the other [HandOffs] become a
+ *   card that opens another app only on a tap. A permission is asked once,
+ *   on first use, with its reason; a refusal is kept and never asked again.
+ *   Everything comes from the phone ([PhoneContext]): a phone chat never
+ *   fetches from the home server.
+ * - **Actions (N2):** "set a timer for 10 minutes", "wake me at 6:30",
+ *   "pause", "play some jazz", "continue my book" and the rest of
+ *   [ActionPatterns] run from the phone's own patterns, never a model tool
+ *   call on E2B. A timer, an alarm or a video asks first (a card, or yes or
+ *   no in a voice turn; [actionReply]); the player's actions run at once
+ *   with Undo ([PhonePlayer.restore]). An action no app takes is never
+ *   offered, and house actions are "not this round".
  * - **Help:** a question about Domovoi itself ("how do I add a room?") is
  *   looked up in the manual the app carries ([LocalHelp]): the model is
  *   given what was found and told to answer only from it, and the reply
@@ -253,6 +278,10 @@ class AssistantController(
     /** How the phone shows the time (zone, locale, 12/24-hour), read every
      *  turn; [clock] gives the moment. */
     private val clockStyle: () -> ClockStyle = { ClockStyle.system(is24Hour = false) },
+    /** What a phone chat reads about the phone (N1): the prompt's facts,
+     *  the fast paths' readings, the read tools' library, the permissions
+     *  and which hand-offs some app takes. Never the home server's data. */
+    private val phone: PhoneContext = PhoneContext.NONE,
     /** The manual the phone carries, for questions about Domovoi itself
      *  ([LocalHelp]); null: none, the model answers as ever. */
     private val helpIndex: suspend () -> HelpIndex? = { null },
@@ -276,6 +305,24 @@ class AssistantController(
     /** The measured weak-spots table the heads-up reads (the app's assets);
      *  null: no cards (tests of everything else). */
     private val weakSpots: () -> WeakSpots? = { null },
+    /** Where the GPU-vision probe's answer is kept between runs (N3). */
+    private val visionMemory: VisionMemory = MemoryVisionMemory(),
+    /** Where the photo encoder runs: the GPU (the bench's rule); a debug
+     *  build can say otherwise (DebugVision). */
+    private val visionBackend: () -> LlmBackend = { LlmBackend.GPU },
+    /** The app build the probe's answer belongs to (versionName and code). */
+    private val appBuild: String = appVersion,
+    /** The longest the probe may take before it counts as a failure. */
+    private val probeTimeoutMs: Long = PROBE_TIMEOUT_MS,
+    /** The app's resident memory now, KB (/proc/self/status VmRSS); null
+     *  when it can't be read. Sampled while a photo is answered. */
+    private val residentKb: () -> Long? = { null },
+    /** How the app's last run ended (the photo crash guard); Android 11+
+     *  in the app, unknown otherwise. */
+    private val exitReasons: ExitReasons = ExitReasons { ExitKind.UNKNOWN },
+    /** What a phone chat's actions run on (N2): the Clock app, the player,
+     *  the saved books and videos. [PhoneActionHost.NONE]: none offered. */
+    private val actions: PhoneActionHost = PhoneActionHost.NONE,
 ) {
     private val table: WeakSpots? by lazy { runCatching { weakSpots() }.getOrNull() }
 
@@ -299,6 +346,7 @@ class AssistantController(
             alwaysAllowInternet = settings.alwaysAllowInternet,
             ownSearchKind = lookups?.own?.own?.kind,
             ownSearchUrl = lookups?.own?.own?.url.orEmpty(),
+            modelTakesImages = models.first { it.kind == ModelKind.LLM }.takesImages,
         ),
     )
     val state: StateFlow<AssistantUi> = _state
@@ -325,6 +373,9 @@ class AssistantController(
     private val changeLock = Mutex()
     private var loadJob: Job? = null
     private var unloadTimer: Job? = null
+    /** The photo encoder failed to load this run though it passed before
+     *  (memory, a driver update): no photos until the app starts again. */
+    @Volatile private var visionDown = false
     @Volatile private var screensShowing = 0
 
     /** Bytes of each model on disk, read on [io]; progress fills in the
@@ -366,6 +417,9 @@ class AssistantController(
                 readDisk()
                 readHistory()
                 readReports()
+                // A probe the last run never finished (it died in the GPU
+                // driver) reads as failed here, before anything loads.
+                readVision(atStart = true)
             }
             if (screensShowing > 0) {
                 prepare()
@@ -483,6 +537,14 @@ class AssistantController(
                 readDisk()
                 if (ok) before else null
             }
+            if (freed != null) {
+                // A fresh model is a fresh try at photos (N3): the probe runs
+                // again once it is back. Also the way to retry a failed one.
+                visionDown = false
+                visionMemory.write(null)
+                visionMemory.writeGuard(null)
+                readVision()
+            }
             say(if (freed != null) "model deleted; ${gb(freed)} freed" else "could not delete the model")
         }
     }
@@ -599,6 +661,7 @@ class AssistantController(
         if (backend == settings.backend) return
         settings.backend = backend
         _state.update { it.copy(backend = backend) }
+        readVision()
         scope.launch {
             stopReply()
             closeEngine()
@@ -695,27 +758,120 @@ class AssistantController(
         runCatching { beforeLoad() }
         _state.update { it.copy(engine = EngineState.Loading(wanted)) }
         val file = store.fileFor(chatModel, chatModel.files.single())
-        val created = newEngine()
         val started = nanos()
+        // Photos (N3): the encoder loads with the model on [visionBackend]
+        // unless it has failed there; the first time it is tried once, with
+        // a test picture ([VisionCheck]), and the answer is kept.
+        val check = if (chatModel.takesImages) visionCheck() else null
+        if (check != null) resolveVisionOnce()
+        val before = check?.state()
+        val tryVision = check != null && (before == VisionProbe.UNKNOWN || before == VisionProbe.PASSED) && !visionDown
+        // The crash guard (VisionCheck.begin): a driver that takes the app
+        // down while the encoder loads or reads the test picture is caught
+        // at the next start.
+        if (tryVision) check!!.begin(clock())
+        var created = newEngine()
         try {
-            withContext(io) {
-                check(store.isInstalled(chatModel)) { "the model is not on the phone" }
-                created.load(file, wanted)
+            var withVision = tryVision
+            try {
+                withContext(io) {
+                    check(store.isInstalled(chatModel)) { "the model is not on the phone" }
+                    created.load(file, wanted, if (tryVision) visionBackend() else null)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                if (!tryVision || !store.isInstalled(chatModel)) throw e
+                // Not with the encoder: the text model alone.
+                Log.w(TAG, "the photo encoder didn't load: ${plainReason(e)}")
+                visionFailed(check!!, before)
+                runCatching { created.close() }
+                withVision = false
+                created = newEngine()
+                withContext(io) { created.load(file, wanted, null) }
+            }
+            if (withVision && before == VisionProbe.UNKNOWN) {
+                val ok = try {
+                    withTimeoutOrNull(probeTimeoutMs) {
+                        created.probeVision()
+                        true
+                    } ?: false
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    Log.w(TAG, "the photo encoder failed its test picture: ${plainReason(e)}")
+                    false
+                }
+                if (ok) {
+                    check!!.passed()
+                } else {
+                    visionFailed(check!!, before)
+                    // The encoder may have left the runtime in a bad way:
+                    // the text model alone, fresh.
+                    runCatching { created.close() }
+                    created = newEngine()
+                    withContext(io) { created.load(file, wanted, null) }
+                }
             }
         } catch (e: CancellationException) {
             runCatching { created.close() }
+            // A load stopped part-way is no verdict on the encoder.
+            if (tryVision) check!!.end()
+            readVision()
             _state.update { it.copy(engine = EngineState.Unloaded) }
             throw e
         } catch (e: Throwable) {
             runCatching { created.close() }
+            if (tryVision) check!!.end()
+            readVision()
             _state.update { it.copy(engine = EngineState.Failed(wanted, plainReason(e))) }
             return@withLock null
         }
+        if (tryVision) check!!.end()
+        readVision()
         val ms = (nanos() - started) / 1_000_000
         engine = created
         engineBackend = wanted
         _state.update { it.copy(engine = EngineState.Ready(wanted, ms)) }
         created
+    }
+
+    /** The probe's memory for this model, app build and backends. */
+    private fun visionCheck(): VisionCheck =
+        VisionCheck(visionMemory, visionKey(chatModel, appBuild, settings.backend, visionBackend()))
+
+    /** The encoder failed: remembered when this was its first try, else for
+     *  this run only (it passed before: memory, a driver update). */
+    private fun visionFailed(check: VisionCheck, before: VisionProbe?) {
+        if (before == VisionProbe.UNKNOWN) check.failed() else visionDown = true
+    }
+
+    @Volatile private var visionResolved = false
+
+    /** Once per run, before the encoder is used: a crash-guard mark the last
+     *  run left behind is settled ([VisionCheck.resolveAtStart]); a crash
+     *  says so once. */
+    @Synchronized
+    private fun resolveVisionOnce() {
+        if (visionResolved || !chatModel.takesImages) return
+        visionResolved = true
+        val v = runCatching { visionCheck().resolveAtStart(exitReasons) }
+            .onFailure { Log.w(TAG, "the photo guard could not be read", it) }.getOrNull()
+        if (v == VisionProbe.CRASHED) say(VISION_CRASHED_NOTE)
+    }
+
+    /** [AssistantUi.vision] from the probe's memory; a waiting photo goes
+     *  when photos stop being offered. [atStart]: the first read of a run
+     *  (the crash guard is settled first). */
+    private fun readVision(atStart: Boolean = false) {
+        if (!chatModel.takesImages) return
+        if (atStart) resolveVisionOnce()
+        val check = visionCheck()
+        val v = if (visionDown) VisionProbe.FAILED else check.state().let {
+            // A first try under way isn't an answer yet.
+            if (it == VisionProbe.PASSED || !check.running()) it else VisionProbe.UNKNOWN
+        }
+        _state.update { it.copy(vision = v, pendingPhoto = if (v == VisionProbe.PASSED) it.pendingPhoto else null) }
     }
 
     private suspend fun closeEngine() {
@@ -792,22 +948,44 @@ class AssistantController(
 
     // ── Conversation ────────────────────────────────────────────────────
 
-    /** Sends [text] and streams the reply into the conversation. */
+    /** Sends [text] (with the waiting photo, if there is one) and streams
+     *  the reply into the conversation. */
     fun send(text: String) {
         val said = text.trim()
         val ui = _state.value
-        if (said.isEmpty() || ui.replying || !ui.installed || voice?.active == true) return
+        val photo = ui.pendingPhoto
+        if ((said.isEmpty() && photo == null) || ui.replying || !ui.installed || voice?.active == true) return
         val now = clock()
         val asked = ui.conversation.let {
-            it.copy(updated = now, messages = it.messages + StoredMessage(Speaker.USER, said, now))
+            it.copy(updated = now, messages = it.messages + StoredMessage(Speaker.USER, said, now, photo = photo != null))
         }
-        _state.update { it.copy(conversation = asked, replying = true, thinking = true) }
+        // The photo leaves the screen's state now; only this turn holds it.
+        _state.update { it.copy(conversation = asked, replying = true, thinking = true, pendingPhoto = null) }
         val v = voice
         if (settings.speakTyped && v != null && ui.voiceReady) {
-            v.answerAloud { onDelta -> reply(asked, onDelta) }
+            v.answerAloud { onDelta -> reply(asked, onDelta, photo) }
         } else {
-            replyJob = scope.launch { reply(asked) }
+            replyJob = scope.launch { reply(asked, photo = photo) }
         }
+    }
+
+    // ── Photos (N3) ─────────────────────────────────────────────────────
+
+    /** Whether a photo can be added now ([photoButtonsShown]). */
+    fun canTakePhoto(ui: AssistantUi = _state.value): Boolean = photoButtonsShown(ui) && voice?.active != true
+
+    /** [photo] waits for its question. One per question: refused (false)
+     *  while another waits, a reply is written, or photos aren't offered.
+     *  Held in memory only. */
+    fun attachPhoto(photo: PendingPhoto): Boolean {
+        if (!canTakePhoto()) return false
+        _state.update { it.copy(pendingPhoto = photo) }
+        return true
+    }
+
+    /** The waiting photo goes, unsent. */
+    fun dropPhoto() {
+        _state.update { it.copy(pendingPhoto = null) }
     }
 
     // ── Voice ───────────────────────────────────────────────────────────
@@ -875,7 +1053,11 @@ class AssistantController(
         }
     }
 
-    private suspend fun reply(question: StoredConversation, onDelta: (String) -> Unit = {}): StoredConversation {
+    private suspend fun reply(
+        question: StoredConversation,
+        onDelta: (String) -> Unit = {},
+        photo: PendingPhoto? = null,
+    ): StoredConversation {
         // The model's time is the reply's: a title being written stops (it
         // runs again once this reply is done), and whatever it wrote, or a
         // rename meanwhile, is kept.
@@ -884,8 +1066,19 @@ class AssistantController(
         // A retry's question is already on disk with the reply it may
         // replace: that copy stays until the new reply is finished.
         if (retryingFrom == null) save(asked)
-        clockReply(asked, onDelta)?.let { return it }
-        if (asked.documents.isNotEmpty()) return docReply(asked, onDelta)
+        // A photo question goes to the model with its photo: no fast path
+        // answers "what time is it on this sign?".
+        if (photo != null) { undoEntry = null; return photoReply(asked, photo, onDelta) }
+        // Any turn that isn't an action (the model's, the clock, a phone
+        // question) ends the Undo, so "undo" only reaches the turn before.
+        clockReply(asked, onDelta)?.let { undoEntry = null; return it }
+        // An attachment is the clearest sign of intent: with a document in
+        // the chat, "what's the total?" never reaches the actions or the
+        // phone's facts.
+        if (asked.documents.isNotEmpty()) { undoEntry = null; return docReply(asked, onDelta) }
+        actionTurn(asked, onDelta)?.let { return it }
+        undoEntry = null
+        phoneReply(asked, onDelta)?.let { return it }
         // A question about Domovoi: the manual on the phone (LocalHelp).
         val help = helpTurn(asked)
         if (help != null && help.passages.isEmpty()) return notCoveredReply(asked, help, onDelta)
@@ -945,10 +1138,26 @@ class AssistantController(
         val sent = nanos()
         var firstMs: Long? = null
         val text = StringBuilder()
-        fun live(): StoredMessage = StoredMessage(Speaker.DOMOVOI, text.toString(), clock(), backend = backend.label)
+        val used = java.util.concurrent.CopyOnWriteArrayList<String>()
+        // Actions a model proposed (only behind CatalogModel.actionTools):
+        // never run, each becomes a card that asks first.
+        val proposed = java.util.concurrent.CopyOnWriteArrayList<PhoneAction>()
+        fun live(): StoredMessage =
+            StoredMessage(Speaker.DOMOVOI, text.toString(), clock(), backend = backend.label, tools = used.distinct())
         _state.update { it.copy(conversation = viewed.withMetaOf(it.conversation).copy(messages = viewed.messages + live())) }
         try {
             val sentTurns = window.of(turns).let { if (help != null) LocalHelp.withPassages(it, help) else it }
+            val turn = ModelTurn(
+                system = if (offered) Persona.SYSTEM_PROMPT_LOOKUPS else Persona.SYSTEM_PROMPT,
+                history = sentTurns,
+                context = listOfNotNull(
+                    clockLine()?.let { ContextLine(ContextLine.CLOCK, it) },
+                    factsLine()?.let { ContextLine(ContextLine.FACTS, it) },
+                ),
+                // A help turn answers from the manual's passages only.
+                tools = if (help != null) null else modelTools(backend, proposed),
+                onTool = { used += it },
+            )
             // While a reply might still be a lookup line ("LOOK_UP: …"), its
             // first characters are held back: a proposal never reaches the
             // screen, or the voice, as words.
@@ -956,7 +1165,7 @@ class AssistantController(
             var holding = offered
             var proposing = false
             try {
-                llm.reply(if (offered) Persona.SYSTEM_PROMPT_LOOKUPS else Persona.SYSTEM_PROMPT, sentTurns, clockLine())
+                llm.reply(turn)
                     .collect { piece ->
                         if (firstMs == null && piece.isNotBlank()) firstMs = (nanos() - sent) / 1_000_000
                         var delta = piece
@@ -994,18 +1203,104 @@ class AssistantController(
             }
             val stats = llm.lastStats()
             recordSpeed(backend, stats, Persona.SYSTEM_PROMPT.length + sentTurns.sumOf { it.text.length })
+            // A turn that ended in a tool call written as text (kept off the
+            // screen) says so rather than leaving an empty bubble.
+            if (text.isBlank() && used.isNotEmpty()) text.append(NO_TOOL_ANSWER).also { onDelta(NO_TOOL_ANSWER) }
             // The sources line, written here, never by the model.
             val footer = help?.let { LocalHelp.footer(it, text.toString()) }.orEmpty()
             val said = if (footer.isEmpty()) text.toString() else text.toString().trimEnd() + "\n\n" + footer
+            val card = proposed.firstOrNull()?.let { proposalCard(it) }
             return finishReply(
                 viewed,
-                live().copy(text = said, firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }),
+                live().copy(text = said, firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }, card = card),
             )
         } catch (e: CancellationException) {
             finishReply(viewed, live().copy(stopped = true, firstTextMs = firstMs, stopMs = voice?.lastStopMs))
             throw e
         } catch (e: Throwable) {
             return finishReply(viewed, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
+        }
+    }
+
+    /**
+     * A photo and its question (N3): the model on the phone looks at the
+     * photo, in a turn of its own (LlmEngine.replyToPhoto: the system
+     * prompt, the clock, the photo, the question). The photo's bytes live
+     * only in [photo] and are wiped when the reply ends, however it ends;
+     * the conversation keeps the "photo" marker on the question. The app's
+     * peak memory over the reply is written on it (developer details).
+     */
+    private suspend fun photoReply(asked: StoredConversation, photo: PendingPhoto, onDelta: (String) -> Unit): StoredConversation {
+        try {
+            val backend = settings.backend
+            val llm = try {
+                ensureEngine()
+            } catch (e: CancellationException) {
+                finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), stopped = true))
+                throw e
+            }
+            if (llm == null) {
+                val why = (_state.value.engine as? EngineState.Failed)?.reason ?: "the model did not load"
+                return finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), error = "The model could not start: $why"))
+            }
+            if (!llm.seesPhotos) {
+                return finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), error = PHOTO_UNAVAILABLE))
+            }
+            val question = PhonePhotos.question(asked.messages.last().text)
+            val sent = nanos()
+            var firstMs: Long? = null
+            val text = StringBuilder()
+            val peak = java.util.concurrent.atomic.AtomicLong(-1)
+            fun sample() {
+                residentKb()?.let { kb -> peak.accumulateAndGet(kb) { a, b -> maxOf(a, b) } }
+            }
+            fun peakKb(): Long? = peak.get().takeIf { it >= 0 }
+            fun live(): StoredMessage = StoredMessage(
+                Speaker.DOMOVOI, text.toString(), clock(), backend = backend.label,
+                vision = visionBackend().label, peakMb = peakKb()?.let { (it / 1024).toInt() },
+            )
+            _state.update { it.copy(conversation = asked.withMetaOf(it.conversation).copy(messages = asked.messages + live())) }
+            val sampler = scope.launch(io) {
+                while (true) {
+                    sample()
+                    delay(MEMORY_SAMPLE_MS)
+                }
+            }
+            // The crash guard: a driver that takes the app down while it reads
+            // this photo turns photos off at the next start (VisionCheck).
+            val guard = visionCheck().also { it.begin(clock()) }
+            try {
+                llm.replyToPhoto(PhonePhotos.systemPrompt(Persona.SYSTEM_PROMPT), photo.jpeg, question, clockLine()).collect { delta ->
+                    if (firstMs == null && delta.isNotBlank()) firstMs = (nanos() - sent) / 1_000_000
+                    text.append(delta)
+                    onDelta(delta)
+                    _state.update { ui ->
+                        ui.copy(
+                            thinking = text.isBlank(),
+                            conversation = asked.withMetaOf(ui.conversation).copy(messages = asked.messages + live()),
+                        )
+                    }
+                }
+                sampler.cancelAndJoin()
+                guard.end()
+                sample()
+                val stats = llm.lastStats()
+                Log.i(TAG, "photo turn: first word $firstMs ms, peak ${peakKb()?.div(1024)} MB, " +
+                    "${photo.width}x${photo.height} (${photo.source}) prepared in ${photo.prepMs} ms")
+                return finishReply(asked, live().copy(firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }))
+            } catch (e: CancellationException) {
+                sampler.cancel()
+                guard.end()
+                finishReply(asked, live().copy(stopped = true, firstTextMs = firstMs, stopMs = voice?.lastStopMs))
+                throw e
+            } catch (e: Throwable) {
+                sampler.cancel()
+                guard.end()
+                return finishReply(asked, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
+            }
+        } finally {
+            // Nothing of the photo outlives its reply.
+            photo.jpeg.fill(0)
         }
     }
 
@@ -1248,6 +1543,747 @@ class AssistantController(
         Persona.clockLine(style.at(clock()), style)
     }.onFailure { Log.w(TAG, "the phone's clock could not be read", it) }.getOrNull()
 
+    // ── Actions (N2) ────────────────────────────────────────────────────
+
+    /** What an action turn says, and what it leaves behind. */
+    private data class ActionOutcome(
+        val text: String,
+        val fastPath: String,
+        val card: PhoneCard? = null,
+        /** What a voice turn says aloud (an asked-first card adds "Say yes
+         *  or no."). */
+        val spoken: String = text,
+        /** The player before an action done at once: what Undo puts back. */
+        val undo: PlayerSnapshot? = null,
+        /** The player right after it: Undo refuses once it has moved on. */
+        val undoAfter: PlayerSnapshot? = null,
+        /** Whether the action means the player to be playing (null: it
+         *  doesn't touch play or pause, e.g. a sleep timer). */
+        val undoPlays: Boolean? = null,
+        /** An earlier card this turn marks: (its index, its new state). */
+        val mark: Pair<Int, CardState>? = null,
+        /** Not an action after all (a "play" whose words aren't in the
+         *  library): the turn goes on to the model. */
+        val notAnAction: Boolean = false,
+    )
+
+    /** The Undo on screen: the player as it was before the last action done
+     *  at once, for that action's card (message [index] of conversation
+     *  [conversationId]). In memory only: an app restart ends it. */
+    private data class UndoEntry(
+        val conversationId: String,
+        val index: Int,
+        val before: PlayerSnapshot,
+        val atMs: Long,
+        /** The player right after the action (null: not read). */
+        val after: PlayerSnapshot? = null,
+        /** Whether the action left the player playing, as it meant to (not
+         *  as the instant snapshot saw it: right after a skip or a restart
+         *  the player is still seeking, playing=false, and plays a moment
+         *  later). Null: play state isn't checked. */
+        val plays: Boolean? = null,
+    )
+
+    @Volatile private var undoEntry: UndoEntry? = null
+
+    /** One action at a time: a tap and a spoken yes can't both run a card. */
+    private val actionLock = Mutex()
+
+    /** A card's state and a finished reply reach the disk one at a time. */
+    private val diskLock = Mutex()
+
+    /**
+     * An action turn (N2), answered with no model: a yes or no to the card
+     * just asked; "undo"; or one of [ActionPatterns]. Null: not an action
+     * (the phone's questions, hand-offs or the model come next).
+     */
+    private suspend fun actionTurn(asked: StoredConversation, onDelta: (String) -> Unit): StoredConversation? {
+        val question = asked.messages.lastOrNull()?.takeIf { it.fromUser } ?: return null
+        val sent = nanos()
+        // A card asked just before: a clear yes runs it, any no-word cancels
+        // it, anything short and unclear asks again; a longer sentence is a
+        // new question and leaves the card as it is.
+        val cardIndex = asked.messages.lastIndex - 1
+        // Open, or SENDING (a tap is in the Clock app call): a reply to it
+        // then waits for the tap and hears it's already answered.
+        val pending = asked.messages.getOrNull(cardIndex)?.card
+            ?.takeIf { it.kind == CardKind.ACTION && (it.state == CardState.OPEN || it.state == CardState.SENDING) }
+        var isUndo = false
+        val reply0 = if (pending != null) actionReply(question.text) else null
+        val out: ActionOutcome? = if (pending != null && reply0 != null) actionLock.withLock {
+            // A tap on the card got there first (it is SENDING or DONE):
+            // nothing runs twice, and the card keeps the state the tap gave
+            // it (this turn's copy of the conversation still has it open).
+            val now = cardNow(asked.id, cardIndex)
+            if (now != null && now.state != CardState.OPEN) {
+                return@withLock ActionOutcome(ActionTexts.ALREADY_ANSWERED, FAST_ACTION_YES, mark = cardIndex to now.state)
+            }
+            when (reply0) {
+                ActionReply.Yes -> {
+                    markCard(asked.id, cardIndex, CardState.SENDING)
+                    val (ran, line) = runConfirmed(pending)
+                    val st = if (ran) CardState.DONE else CardState.FAILED
+                    // Marked before the lock goes: a tap waiting on it sees
+                    // the card answered.
+                    markCard(asked.id, cardIndex, st)
+                    ActionOutcome(line, FAST_ACTION_YES, mark = cardIndex to st)
+                }
+                ActionReply.No -> ActionOutcome(ActionTexts.DECLINED, FAST_ACTION_NO, mark = cardIndex to CardState.DISMISSED)
+                ActionReply.Unclear -> {
+                    val again = pending.action?.let { a ->
+                        runCatching { clockStyle().let { st -> ActionTexts.question(a, st, st.at(clock()), pending.videoTitle) } }.getOrNull()
+                    } ?: asked.messages[cardIndex].text.removePrefix("${ActionTexts.DIDNT_CATCH} ")
+                    ActionOutcome(
+                        "${ActionTexts.DIDNT_CATCH} $again", FAST_ACTION_AGAIN, card = pending,
+                        spoken = "${ActionTexts.DIDNT_CATCH} $again ${ActionTexts.SAY_YES_OR_NO}",
+                        mark = cardIndex to CardState.REPLACED,
+                    )
+                }
+            }
+        } else {
+            null
+        }
+        val outcome = out ?: run {
+            val now = runCatching { clockStyle().at(clock()) }.getOrNull() ?: return null
+            // Phone chats are phone-only (owner, 2026-10-21): the house's
+            // rooms and timers are never read, named or acted on here.
+            // Bare "continue" or "next one" is playback's only when the chat
+            // was just about playback, or the player is playing (or paused
+            // with no model reply since): after a story it's the model's.
+            val ask = ActionPatterns.match(question.text, now, playback = playbackContext(asked)) ?: return null
+            isUndo = ask == ActionAsk.Undo
+            when (ask) {
+                ActionAsk.House -> ActionOutcome(PhoneQuestions.HOUSE_THINGS, FAST_ACTION_HOUSE)
+                ActionAsk.Undo -> undoNow(asked.id)
+                is ActionAsk.Do -> try {
+                    // "put on my shoes": not in the library, so not music;
+                    // the model answers it as chat.
+                    actionLock.withLock { runAction(ask.action, question.text) }.takeIf { !it.notAnAction } ?: return null
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "an action failed", e)
+                    ActionOutcome("That didn't work on this phone.", "action_" + ask.action.kind.name.lowercase())
+                }
+            }
+        }
+        val base = outcome.mark?.let { (i, st) ->
+            asked.messages.getOrNull(i)?.card?.let { c -> asked.withCard(i, c.copy(state = st)) }
+        } ?: asked
+        onDelta(outcome.spoken)
+        val reply = phoneMessage(outcome.text, outcome.fastPath, outcome.card).copy(firstTextMs = (nanos() - sent) / 1_000_000)
+        // The Undo is in place before the reply shows: an "undo" right after
+        // must find this action's, never the one before.
+        // Any other action turn (a timer, an alarm, its yes or no, a house
+        // line) ends the Undo: "undo" then can't reach back past it.
+        val before = outcome.undo
+        if (before != null) {
+            undoEntry = UndoEntry(base.id, base.messages.size, before, clock(), outcome.undoAfter, outcome.undoPlays)
+        } else if (!isUndo) {
+            undoEntry = null
+        }
+        return finishReply(base, reply)
+    }
+
+    /** This conversation with each card at least as far along as in [other]. */
+    private fun StoredConversation.keepingCards(other: StoredConversation?): StoredConversation {
+        if (other == null || other.id != id) return this
+        var changed = false
+        val out = messages.mapIndexed { i, m ->
+            val mine = m.card ?: return@mapIndexed m
+            val theirs = other.messages.getOrNull(i)?.card ?: return@mapIndexed m
+            if (theirs.kind == mine.kind && theirs.state.rank > mine.state.rank) {
+                changed = true
+                m.copy(card = mine.copy(state = theirs.state))
+            } else {
+                m
+            }
+        }
+        return if (changed) copy(messages = out) else this
+    }
+
+    private fun StoredConversation.withCard(index: Int, card: PhoneCard): StoredConversation =
+        copy(messages = messages.toMutableList().also { it[index] = it[index].copy(card = card) })
+
+    /** [a], said as [said]: asked first, done with Undo, or why it can't be. */
+    private suspend fun runAction(a: PhoneAction, said: String): ActionOutcome {
+        val style = clockStyle()
+        val now = style.at(clock())
+        val fp = "action_" + a.kind.name.lowercase()
+        return when (a.kind) {
+            ActionKind.SET_TIMER, ActionKind.SET_ALARM -> {
+                val intent = if (a.kind == ActionKind.SET_TIMER) ClockIntent.SET_TIMER else ClockIntent.SET_ALARM
+                when {
+                    !actions.clockTakes(intent) -> ActionOutcome(ActionTexts.noClock(intent), fp)
+                    a.kind == ActionKind.SET_TIMER && (a.seconds ?: 0) > MAX_TIMER_S -> ActionOutcome(ActionTexts.TIMER_TOO_LONG, fp)
+                    else -> askFirst(a, said, fp, style, now)
+                }
+            }
+            ActionKind.SHOW_TIMERS, ActionKind.SHOW_ALARMS -> {
+                val timers = a.kind == ActionKind.SHOW_TIMERS
+                val intent = if (timers) ClockIntent.SHOW_TIMERS else ClockIntent.SHOW_ALARMS
+                if (actions.clockTakes(intent)) {
+                    val opened = actions.clock(ClockRequest(intent, skipUi = false))
+                    ActionOutcome(if (opened) "Opening your ${if (timers) "timers" else "alarms"} in the Clock app." else ActionTexts.CLOCK_FAILED.substringBefore(" Nothing"), fp)
+                } else {
+                    // No Clock app takes it: said so. Never the house's
+                    // timers (phone chats are phone-only).
+                    ActionOutcome(ActionTexts.noClock(intent), fp)
+                }
+            }
+            ActionKind.PLAY_VIDEO -> {
+                val q = a.query.orEmpty()
+                val found = findVideos(q) ?: return ActionOutcome(ActionTexts.NO_VIDEO_PERMISSION, fp)
+                val v = found.firstOrNull() ?: return ActionOutcome("I can't find a video matching \"$q\" on this phone.", fp)
+                askFirst(a, said, fp, style, now, v)
+            }
+            ActionKind.OTHER -> ActionOutcome("This version of the app can't do that.", fp)
+            else -> playback(a, fp)
+        }
+    }
+
+    private fun askFirst(a: PhoneAction, said: String, fp: String, style: ClockStyle, now: java.time.ZonedDateTime, video: VideoChoice? = null): ActionOutcome {
+        val q = ActionTexts.question(a, style, now, video?.title)
+        val card = PhoneCard(
+            CardKind.ACTION, action = a, title = ActionTexts.cardTitle(a, style, now, video?.title), question = said,
+            videoUri = video?.uri, videoTitle = video?.title,
+        )
+        return ActionOutcome(q, fp, card, spoken = "$q ${ActionTexts.SAY_YES_OR_NO}")
+    }
+
+    /** The player's actions: done at once, with Undo. */
+    private suspend fun playback(a: PhoneAction, fp: String): ActionOutcome {
+        val player = actions.player ?: return ActionOutcome(ActionTexts.NO_PLAYER, fp)
+        // Casting to a room: that's the house's, and the room isn't named.
+        // "put on my shoes", "listen to the kids": a "play" acts only on
+        // what the library holds (MusicEvidence), before anything else.
+        val songs = if (a.kind == ActionKind.PLAY_MUSIC) musicFor(a) else null
+        if (songs is MusicPick.NotMusic) return ActionOutcome("", fp, notAnAction = true)
+        if (player.castingTo() != null) return ActionOutcome(PhoneQuestions.HOUSE_THINGS, FAST_ACTION_HOUSE)
+        val before = player.snapshot()
+        fun said(text: String) = ActionOutcome(text, fp)
+        val text: String = when (a.kind) {
+            ActionKind.PAUSE -> {
+                if (before.empty) return said(ActionTexts.NOTHING_PLAYING)
+                if (!before.playing) return said("It's already paused.")
+                player.pause()
+                "Paused."
+            }
+            ActionKind.RESUME -> {
+                if (before.empty) return said("Nothing is queued on this phone. Ask me to play some music first.")
+                if (before.playing) return said("It's already playing.")
+                player.resume()
+                "Playing \"${before.current?.title}\"."
+            }
+            ActionKind.NEXT -> {
+                if (before.empty) return said(ActionTexts.NOTHING_PLAYING)
+                player.next()
+                if (before.current?.chapters?.isNotEmpty() == true) "On to the next chapter." else "Skipped to the next one."
+            }
+            ActionKind.PREVIOUS -> {
+                if (before.empty) return said(ActionTexts.NOTHING_PLAYING)
+                player.previous()
+                if (before.current?.chapters?.isNotEmpty() == true) "Back a chapter." else "Back one."
+            }
+            ActionKind.STOP -> {
+                if (before.empty) return said(ActionTexts.NOTHING_PLAYING)
+                player.stop()
+                "Stopped."
+            }
+            ActionKind.SLEEP -> {
+                if (before.empty) return said("Nothing is playing, so there's nothing for a sleep timer to stop.")
+                val min = (a.minutes ?: 0).coerceIn(1, MAX_SLEEP_MIN)
+                player.sleep(min)
+                "Playback stops in ${ActionTexts.length(min * 60)}."
+            }
+            ActionKind.CANCEL_SLEEP -> {
+                if (before.sleepSec == null) return said("No sleep timer is set.")
+                player.cancelSleep()
+                "The sleep timer is off."
+            }
+            ActionKind.PLAY_MUSIC -> {
+                val q = a.query.orEmpty()
+                val found = when (songs) {
+                    is MusicPick.Found -> songs.items
+                    MusicPick.NoPermission -> return said(ActionTexts.NO_MUSIC_PERMISSION)
+                    MusicPick.House -> return ActionOutcome(PhoneQuestions.HOUSE_THINGS, FAST_ACTION_HOUSE)
+                    else -> emptyList()
+                }
+                if (found.isEmpty()) return said("There's no music saved on this phone.")
+                val items = if (a.shuffle) found.shuffled(random) else found
+                // A song asked for by its name starts the queue.
+                // The words as said first ("the smile" is The Smile, not Smile).
+                val start = if (a.shuffle || q.isEmpty()) 0 else listOfNotNull(a.phrase, q).firstNotNullOfOrNull { said ->
+                    items.indexOfFirst { it.title.equals(said.trim(), ignoreCase = true) }.takeIf { it >= 0 }
+                } ?: items.indexOfFirst { MusicEvidence.words(it.title) == MusicEvidence.words(q) }.coerceAtLeast(0)
+                player.play(items, start)
+                val first = items[start]
+                "Playing \"${first.title}\"" + (first.artist?.takeIf { it.isNotBlank() }?.let { " by $it" } ?: "") +
+                    (if (items.size > 1) ", then ${items.size - 1} more" else "") + (if (a.shuffle) ", shuffled" else "") + "."
+            }
+            ActionKind.PLAY_BOOK -> {
+                val books = actions.books()
+                if (books.isEmpty()) return said(ActionTexts.NO_BOOKS)
+                val q = a.query?.trim().orEmpty()
+                val pick = (if (q.isEmpty()) books else books.filter { bookMatches(it, q) }).maxByOrNull { it.lastPlayedMs }
+                    ?: return said("I can't find a saved audiobook matching \"$q\" on this phone.")
+                player.play(listOf(pick.item), 0, pick.positionSec, pick.speed)
+                if (pick.positionSec > 5) "Continuing \"${pick.title}\" at ${PhoneFacts.clock(pick.positionSec)}." else "Starting \"${pick.title}\"."
+            }
+            else -> return said("This version of the app can't do that.")
+        }
+        val after = runCatching { player.snapshot() }.getOrNull()
+        // What the action means for play or pause: a pause stops it; a
+        // resume or a new queue plays; next, previous or a restart keep it
+        // as it was; a sleep timer leaves it alone.
+        val plays: Boolean? = when (a.kind) {
+            ActionKind.PAUSE -> false
+            ActionKind.RESUME, ActionKind.PLAY_MUSIC, ActionKind.PLAY_BOOK -> true
+            ActionKind.NEXT, ActionKind.PREVIOUS -> before.playing
+            else -> null
+        }
+        return ActionOutcome(
+            text, fp, card = PhoneCard(CardKind.UNDO, action = a, title = text), undo = before, undoAfter = after, undoPlays = plays,
+        )
+    }
+
+    /** Whether a bare transport word ("continue", "next one") is the
+     *  player's: the turn before was playback's, or the player is playing,
+     *  or it is paused with no model reply since the chat began or since
+     *  the last playback turn. */
+    private suspend fun playbackContext(asked: StoredConversation): Boolean {
+        val last = asked.messages.dropLast(1).lastOrNull { !it.fromUser }
+        // The model spoke last (a joke, a story): "next one" and "continue"
+        // are for it, whatever is playing.
+        if (last != null && last.fastPath == null) return false
+        if (last?.fastPath in PLAYBACK_FAST_PATHS) return true
+        // A fresh chat (or a phone question before): playing or paused music.
+        val player = actions.player ?: return false
+        val s = runCatching { player.snapshot() }.getOrNull() ?: return false
+        return s.playing || !s.empty
+    }
+
+    private fun bookMatches(b: BookChoice, q: String): Boolean {
+        val words = searchWords(q.removePrefix("the "))
+        val have = searchWords(listOfNotNull(b.title, b.author).joinToString(" "))
+        return b.title.contains(q, ignoreCase = true) || (words.isNotEmpty() && words.all { it in have })
+    }
+
+    /** What a "play" finds in the phone's library. */
+    private sealed interface MusicPick {
+        data class Found(val items: List<com.domovoi.app.player.PlayItem>) : MusicPick
+        data object NoPermission : MusicPick
+        /** Nothing has that name, and it ends like a room ("in the larkspur"). */
+        data object House : MusicPick
+        /** Nothing in the library is what was asked for: not music. */
+        data object NotMusic : MusicPick
+    }
+
+    /**
+     * The phone's songs for [a], by library evidence only (MusicEvidence): a
+     * title, artist, album or genre the words really name, as a phrase. "Play
+     * music" (no query) is every song. No permission: the permission line
+     * only when the words say music ("play some music by …"); otherwise the
+     * library can't vouch for it, and it is the model's.
+     */
+    private suspend fun musicFor(a: PhoneAction): MusicPick {
+        val q = a.query.orEmpty()
+        if (q.isBlank()) return actions.songs("", MUSIC_LIMIT)?.let { MusicPick.Found(it) } ?: MusicPick.NoPermission
+        val genres = actions.genres()
+        val searched = (MusicEvidence.asked(a) + listOfNotNull(Regex("^(.+?) by .+$").matchEntire(q)?.groupValues?.get(1)))
+            .distinct().map { actions.songs(it, MUSIC_LIMIT * 4) }
+        if (genres == null || searched.any { it == null }) {
+            val musicWords = Regex("\\b(?:music|songs?|album|playlist|artist|band|tracks?|tunes)\\b")
+            return if (musicWords.containsMatchIn(a.phrase ?: q)) MusicPick.NoPermission else MusicPick.NotMusic
+        }
+        val byName = searched.flatMap { it.orEmpty() }.distinctBy { it.uid }.filter { MusicEvidence.matches(a, it) }
+        val byGenre = genres.filter { MusicEvidence.genre(a, it) }.flatMap { actions.genreSongs(it, MUSIC_LIMIT).orEmpty() }
+        val items = (byName + byGenre).distinctBy { it.uid }.take(MUSIC_LIMIT)
+        if (items.isNotEmpty()) return MusicPick.Found(items)
+        // "play jazz in the larkspur": a room the patterns don't know.
+        if (Regex(" (?:in|on) (?:the|my|our) [a-z' ]{2,40}$").containsMatchIn(q)) return MusicPick.House
+        return MusicPick.NotMusic
+    }
+
+    /** The phone's videos for [q] (as written, then every word: "glacier
+     *  trip" finds "glacier-trip.mp4"). Null: no permission. */
+    private suspend fun findVideos(q: String): List<VideoChoice>? {
+        val exact = actions.videos(q, VIDEO_LIMIT) ?: return null
+        if (exact.isNotEmpty()) return exact
+        val words = searchWords(q)
+        if (words.size < 2) return exact
+        return actions.videos(words.maxBy { it.length }, VIDEO_LIMIT * 4).orEmpty().filter { v ->
+            words.all { it in searchWords(v.title) }
+        }
+    }
+
+    private fun searchWords(s: String): List<String> = s.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }
+
+    /** "undo" said or typed: the player put back as it was before the last
+     *  action done at once, within [UNDO_WORD_MS]. */
+    private suspend fun undoNow(conversationId: String): ActionOutcome {
+        val e = undoEntry?.takeIf { it.conversationId == conversationId && clock() - it.atMs <= UNDO_WORD_MS }
+            ?: return ActionOutcome(ActionTexts.NOTHING_TO_UNDO, FAST_ACTION_UNDO)
+        return when (val r = undoRun(e)) {
+            null -> ActionOutcome(undoneText(e.before), FAST_ACTION_UNDO, mark = e.index to CardState.DONE)
+            PhoneQuestions.HOUSE_THINGS -> ActionOutcome(r, FAST_ACTION_HOUSE)
+            else -> ActionOutcome(r, FAST_ACTION_UNDO)
+        }
+    }
+
+    /** Puts [e]'s player back, under the action lock; null when it did, or
+     *  why not: casting to a room (the house's, nothing is touched), or the
+     *  player moved on since (another queue or song: never overwritten). */
+    private suspend fun undoRun(e: UndoEntry): String? = actionLock.withLock {
+        // A later action (or the other Undo) got there first.
+        if (undoEntry != e) return@withLock ActionTexts.NOTHING_TO_UNDO
+        val player = actions.player ?: return@withLock ActionTexts.NO_PLAYER
+        if (player.castingTo() != null) return@withLock PhoneQuestions.HOUSE_THINGS
+        val after = e.after
+        if (after != null) {
+            val now = player.snapshot()
+            // Another queue, another song, or played or paused since.
+            val moved = now.queue.map { it.uid } != after.queue.map { it.uid } ||
+                (!now.empty && (now.index != after.index || (e.plays != null && now.playing != e.plays)))
+            if (moved) {
+                undoEntry = null
+                return@withLock ActionTexts.UNDO_CHANGED
+            }
+        }
+        undoEntry = null
+        player.restore(e.before)
+        null
+    }
+
+    private fun undoneText(s: PlayerSnapshot): String = when {
+        s.empty -> "Undone: nothing is playing again."
+        else -> "Undone: back to \"${s.current?.title}\"" + (if (s.playing) "" else ", paused") + "."
+    }
+
+    /** Runs an asked-first card's action (a yes, spoken or tapped): whether
+     *  it ran, and the line that says so. */
+    private suspend fun runConfirmed(card: PhoneCard): Pair<Boolean, String> {
+        val a = card.action ?: return false to "This version of the app can't do that."
+        val style = clockStyle()
+        val now = style.at(clock())
+        return when (a.kind) {
+            ActionKind.SET_TIMER, ActionKind.SET_ALARM -> {
+                val intent = if (a.kind == ActionKind.SET_TIMER) ClockIntent.SET_TIMER else ClockIntent.SET_ALARM
+                if (!actions.clockTakes(intent)) return false to ActionTexts.noClock(intent)
+                val request = if (a.kind == ActionKind.SET_TIMER) {
+                    ClockRequest(intent, seconds = a.seconds, label = a.label)
+                } else {
+                    ClockRequest(intent, hour = a.hour, minute = a.minute, days = a.days, label = a.label)
+                }
+                val ok = runCatching { actions.clock(request) }.getOrDefault(false)
+                ok to if (ok) ActionTexts.done(a, style, now) else ActionTexts.CLOCK_FAILED
+            }
+            ActionKind.PLAY_VIDEO -> {
+                val uri = card.videoUri ?: return false to "That video isn't on this phone any more."
+                val title = card.videoTitle ?: a.query.orEmpty()
+                _state.update { it.copy(playingVideo = VideoChoice("chat:$uri", title, uri)) }
+                true to ActionTexts.done(a, style, now, title)
+            }
+            else -> false to "This version of the app can't do that."
+        }
+    }
+
+    /** An action card's main button: its action runs, and the card says so
+     *  (or the toast says why not). */
+    fun actionConfirmed(conversationId: String, index: Int) {
+        scope.launch {
+            val card = _state.value.conversation.takeIf { it.id == conversationId }?.messages?.getOrNull(index)?.card
+                ?.takeIf { it.kind == CardKind.ACTION && it.state == CardState.OPEN } ?: return@launch
+            val (ran, line) = actionLock.withLock {
+                // Answered meanwhile (a spoken yes, a no, a second tap):
+                // nothing runs twice.
+                if (cardNow(conversationId, index)?.state != CardState.OPEN) return@launch
+                // SENDING, on screen and on disk, before the Clock call: a
+                // reply finishing meanwhile, a "hmm", a "no" or a new chat
+                // all see it taken.
+                markCard(conversationId, index, CardState.SENDING)
+                runConfirmed(card).also { (ran, _) ->
+                    markCard(conversationId, index, if (ran) CardState.DONE else CardState.FAILED)
+                }
+            }
+            if (!ran) say(line.lowercase().removeSuffix("."))
+        }
+    }
+
+    /** Card [index] of conversation [conversationId] as it stands now: the
+     *  screen's copy, else the disk's. */
+    private suspend fun cardNow(conversationId: String, index: Int): PhoneCard? =
+        (_state.value.conversation.takeIf { it.id == conversationId } ?: withContext(io) { conversations.load(conversationId) })
+            ?.messages?.getOrNull(index)?.card
+
+    /** Marks card [index] [state] on screen and on disk at once, even while
+     *  a reply is written (finishReply keeps the more advanced state) and
+     *  when another chat is on screen. */
+    private suspend fun markCard(conversationId: String, index: Int, state: CardState) {
+        _state.update { ui ->
+            val c = ui.conversation.takeIf { it.id == conversationId } ?: return@update ui
+            val card = c.messages.getOrNull(index)?.card ?: return@update ui
+            ui.copy(conversation = c.withCard(index, card.copy(state = state)))
+        }
+        withContext(NonCancellable) {
+            diskLock.withLock {
+                // Only this card changes on disk: the screen's copy may hold a
+                // question whose reply isn't written yet.
+                val disk = withContext(io) { conversations.load(conversationId) } ?: return@withLock
+                val card = disk.messages.getOrNull(index)?.card ?: return@withLock
+                save(disk.withCard(index, card.copy(state = state)), makeCurrent = false)
+            }
+        }
+    }
+
+    /** A done timer or alarm card's "open Clock": shown only when some app
+     *  opens the Clock app's timers (or alarms). */
+    fun clockOpens(card: PhoneCard): Boolean = clockShows(card)?.let { actions.clockTakes(it) } == true
+
+    private fun clockShows(card: PhoneCard): ClockIntent? = when (card.action?.kind) {
+        ActionKind.SET_TIMER -> ClockIntent.SHOW_TIMERS
+        ActionKind.SET_ALARM -> ClockIntent.SHOW_ALARMS
+        else -> null
+    }.takeIf { card.kind == CardKind.ACTION && card.state == CardState.DONE }
+
+    /** "open Clock" on a done card: the Clock app's timers or alarms. */
+    fun openClock(card: PhoneCard) {
+        val intent = clockShows(card) ?: return
+        scope.launch {
+            val opened = actions.clockTakes(intent) && runCatching { actions.clock(ClockRequest(intent, skipUi = false)) }.getOrDefault(false)
+            if (!opened) say("the Clock app didn't open")
+        }
+    }
+
+    /** An action card's "cancel": nothing runs. */
+    fun actionDeclined(conversationId: String, index: Int) {
+        editCard(conversationId, index) { if (it.state == CardState.OPEN) it.copy(state = CardState.DISMISSED) else it }
+    }
+
+    /** The Undo button under a reply: the player goes back as it was. */
+    fun undoTapped(conversationId: String, index: Int) {
+        scope.launch {
+            val e = undoEntry?.takeIf { it.conversationId == conversationId && it.index == index && clock() - it.atMs <= UNDO_WORD_MS }
+            if (e == null) {
+                say("that can't be undone any more")
+                return@launch
+            }
+            when (val r = undoRun(e)) {
+                null -> {
+                    editCard(conversationId, index) { it.copy(state = CardState.DONE) }
+                    say("undone")
+                }
+                else -> say(r.lowercase().removeSuffix("."))
+            }
+        }
+    }
+
+    /** The video a phone chat played was closed. */
+    fun videoClosed() {
+        _state.update { it.copy(playingVideo = null) }
+    }
+
+    /** The action tools, offered only to a model whose catalog entry allows
+     *  them ([CatalogModel.actionTools]: not E2B), on the CPU, beside the
+     *  read tools. A call is never run: it becomes a card that asks first
+     *  ([proposalCard]). Timers and alarms only; the player stays with the
+     *  patterns. */
+    private fun modelTools(backend: LlmBackend, proposed: MutableList<PhoneAction>): ReadTools? {
+        val reads = readTools(backend)
+        if (!chatModel.actionTools || backend != LlmBackend.CPU) return reads
+        val acts = ActionTools.offered(actions)
+        if (acts.isEmpty()) return reads
+        return ReadTools(reads?.names.orEmpty() + acts, reads?.specs.orEmpty() + acts.map { ActionTools.spec(it) }) { name, args ->
+            if (name in acts) {
+                ActionTools.parse(name, args)?.let { proposed += it }
+                ActionTools.PROPOSED
+            } else {
+                reads?.run?.invoke(name, args) ?: mapOf("error" to "no such tool")
+            }
+        }
+    }
+
+    /** The card for a model's proposed action, or null when it can't be
+     *  offered (no Clock app, a timer too long). */
+    private fun proposalCard(a: PhoneAction): PhoneCard? {
+        val intent = when (a.kind) {
+            ActionKind.SET_TIMER -> ClockIntent.SET_TIMER
+            ActionKind.SET_ALARM -> ClockIntent.SET_ALARM
+            else -> return null
+        }
+        if (!actions.clockTakes(intent)) return null
+        if (a.kind == ActionKind.SET_TIMER && (a.seconds ?: 0) !in 1..MAX_TIMER_S) return null
+        val style = clockStyle()
+        val now = style.at(clock())
+        return PhoneCard(CardKind.ACTION, action = a, title = ActionTexts.cardTitle(a, style, now), question = ActionTexts.question(a, style, now))
+    }
+
+    private val random = java.util.Random()
+
+    // ── Phone facts, fast paths and hand-offs (N1) ──────────────────────
+
+    /** The prompt's phone facts, read now (PhoneFacts.line); null when
+     *  there are none or they can't be read. */
+    private fun factsLine(): String? = runCatching { PhoneFacts.line(phone.facts()) }
+        .onFailure { Log.w(TAG, "the phone facts could not be read", it) }.getOrNull()
+
+    /** The read tools for a turn on [backend]: only for a model whose
+     *  catalog entry allows them ([CatalogModel.readTools]: not E2B, whose
+     *  false calls on near-miss phrases were too many on the Fold), and on
+     *  the CPU only (a GPU field report mangles numbers in tool arguments,
+     *  plan part 2). */
+    private fun readTools(backend: LlmBackend): ReadTools? {
+        if (!chatModel.readTools || backend != LlmBackend.CPU) return null
+        val names = runCatching { PhoneTools.offered(phone.library) }.getOrNull() ?: return null
+        return ReadTools(names, names.map { PhoneTools.spec(it) }) { name, args ->
+            withContext(io) {
+                val style = clockStyle()
+                PhoneTools.run(name, args, names, phone, clock()) { ms ->
+                    PhoneQuestions.whenSaid(ms, PhoneAnswerInputs(style.at(clock()), style, phone, chatModel.name, backend))
+                }
+            }
+        }
+    }
+
+    /**
+     * A question the phone answers itself ([PhoneQuestions]: the battery,
+     * the timers, what's playing…) or a hand-off ([HandOffs]: "text Sam",
+     * "directions to the airport"), answered at once with no model. A
+     * permission never asked yet comes back as its card; a hand-off no app
+     * takes says so instead of offering a card. Null: a question for the
+     * model.
+     */
+    private suspend fun phoneReply(asked: StoredConversation, onDelta: (String) -> Unit): StoredConversation? {
+        val question = asked.messages.lastOrNull()?.takeIf { it.fromUser } ?: return null
+        val sent = nanos()
+        val reply = runCatching { phoneAnswer(question.text, asked) }
+            .onFailure { Log.w(TAG, "a phone fast path failed", it) }.getOrNull() ?: return null
+        onDelta(reply.text)
+        return finishReply(asked, reply.copy(at = clock(), firstTextMs = (nanos() - sent) / 1_000_000))
+    }
+
+    /** The phone's own answer to [text], as the reply message; null when it
+     *  is a question for the model. */
+    private suspend fun phoneAnswer(text: String, conversation: StoredConversation): StoredMessage? {
+        PhoneQuestions.match(text)?.let { q ->
+            return when (val a = withContext(io) { PhoneQuestions.answer(q, inputs()) }) {
+                is PhoneAnswer.Said -> phoneMessage(a.text, q.name.lowercase())
+                is PhoneAnswer.Ask -> permissionCard(a.permission, text, q.name.lowercase())
+            }
+        }
+        LibraryQuestions.match(text)?.let { ask ->
+            return phoneMessage(withContext(io) { LibraryQuestions.answer(ask, phone.library) }, "library_" + ask.kind.name.lowercase())
+        }
+        val lastReply = conversation.messages.lastOrNull { !it.fromUser && it.text.isNotBlank() && it.error == null }?.text
+        val style = clockStyle()
+        val h = HandOffs.match(text, lastReply, style.at(clock())) ?: return null
+        if (!phone.canHandOff(h.kind)) return phoneMessage(HandOffs.noApp(h.kind), FAST_HANDOFF)
+        // Calling or texting someone by name: their number from the
+        // contacts when that's allowed; asked once; the picker otherwise.
+        val person = if (h.needsContact && h.who != null) {
+            when (phone.permission(PhonePermission.CONTACTS)) {
+                PermissionState.ASKABLE -> return permissionCard(PhonePermission.CONTACTS, text, FAST_HANDOFF)
+                PermissionState.GRANTED -> withContext(io) { resolveContact(h) }
+                PermissionState.DECLINED -> h
+            }
+        } else {
+            h
+        }
+        return handOffMessage(person, style)
+    }
+
+    private fun inputs(): PhoneAnswerInputs {
+        val style = clockStyle()
+        return PhoneAnswerInputs(style.at(clock()), style, phone, chatModel.name, settings.backend)
+    }
+
+    /** [h] with the contact for its name when there is one person it can
+     *  be (an exact full name, or a single person matching); two or more
+     *  ("Sam" with Sam Lee and Samantha Jones) leave it to the picker, never
+     *  a silent first pick. */
+    private fun resolveContact(h: HandOff): HandOff {
+        val who = h.who ?: return h
+        val found = phone.reader.contacts(who).orEmpty().filter { !it.number.isNullOrBlank() }
+        val exact = found.filter { it.name.equals(who, ignoreCase = true) }
+        val pick = when {
+            exact.map { it.name.lowercase() }.distinct().size == 1 -> exact.first()
+            found.map { it.name.lowercase() }.distinct().size == 1 -> found.first()
+            else -> return h
+        }
+        return h.copy(name = pick.name, number = pick.number)
+    }
+
+    private fun phoneMessage(text: String, fastPath: String, card: PhoneCard? = null): StoredMessage =
+        StoredMessage(Speaker.DOMOVOI, text, clock(), fastPath = fastPath, card = card)
+
+    private fun permissionCard(p: PhonePermission, question: String, fastPath: String): StoredMessage =
+        phoneMessage(
+            PhonePermissions.reason(p), fastPath,
+            PhoneCard(CardKind.PERMISSION, permission = p.name, question = question),
+        )
+
+    private fun handOffMessage(h: HandOff, style: ClockStyle): StoredMessage {
+        val whenText = h.beginMs?.let { ms ->
+            if (h.allDay) "for ${style.date(style.at(ms))}" else "at ${style.time(style.at(ms))} on ${style.date(style.at(ms))}"
+        }
+        return phoneMessage(HandOffs.replyText(h, whenText), FAST_HANDOFF, PhoneCard(CardKind.HANDOFF, handOff = h))
+    }
+
+    /** The person tapped a hand-off card and the other app opened ([done]),
+     *  or set the card aside: the card stays, marked, in the conversation.
+     *  [chosen]: the contact picked for a call or text. */
+    fun handOffTapped(conversationId: String, index: Int, done: Boolean, chosen: HandOff? = null) {
+        editCard(conversationId, index) { card ->
+            card.copy(state = if (done) CardState.DONE else CardState.DISMISSED, handOff = chosen ?: card.handOff)
+        }
+    }
+
+    /**
+     * A permission card was answered: [granted] by Android's dialog, or
+     * not (the card's second button, or a refusal there). A refusal is kept
+     * so the chat never asks again; then the question the card held is
+     * answered as it now can be, as a new reply.
+     */
+    fun permissionDecided(conversationId: String, index: Int, granted: Boolean) {
+        val current = _state.value.conversation.takeIf { it.id == conversationId } ?: return
+        val message = current.messages.getOrNull(index) ?: return
+        val card = message.card?.takeIf { it.kind == CardKind.PERMISSION && it.state == CardState.OPEN } ?: return
+        val p = card.phonePermission ?: return
+        // What Android's dialog really left: "approximate" for a precise
+        // request is not the permission the feature needs.
+        val held = granted && phone.permission(p) == PermissionState.GRANTED
+        if (!held) phone.declined(p)
+        if (_state.value.replying) return
+        scope.launch {
+            val marked = current.copy(
+                messages = current.messages.toMutableList().also {
+                    it[index] = message.copy(card = card.copy(state = if (held) CardState.DONE else CardState.DISMISSED))
+                },
+            )
+            _state.update { it.copy(conversation = marked, replying = true, thinking = true) }
+            save(marked)
+            val question = card.question.orEmpty()
+            val again = runCatching { phoneAnswer(question, marked) }.getOrNull()
+                // The permission is still not held (asked again by nothing):
+                // the fast path's refusal, never another card.
+                ?.let { if (it.card?.kind == CardKind.PERMISSION) null else it }
+                ?: phoneMessage(PhoneQuestions.cannot(p, phone.serverKnown()), "permission")
+            finishReply(marked, again)
+        }
+    }
+
+    private fun editCard(conversationId: String, index: Int, change: (PhoneCard) -> PhoneCard) {
+        scope.launch {
+            val current = _state.value.conversation.takeIf { it.id == conversationId }
+                ?: withContext(io) { conversations.load(conversationId) } ?: return@launch
+            val message = current.messages.getOrNull(index) ?: return@launch
+            val card = message.card ?: return@launch
+            val changed = current.copy(messages = current.messages.toMutableList().also { it[index] = message.copy(card = change(card)) })
+            _state.update { if (it.conversation.id == conversationId) it.copy(conversation = changed) else it }
+            withContext(NonCancellable) { save(changed) }
+        }
+    }
+
     private suspend fun finishReply(asked: StoredConversation, reply: StoredMessage): StoredConversation {
         // "Try again" that brought no new reply (it failed, came back empty
         // or was stopped): the reply it was to replace goes back.
@@ -1257,11 +2293,26 @@ class AssistantController(
         if (failedRetry) say(reply.error?.let { "couldn't try again: $it" } ?: "the earlier reply is kept")
         val last = if (failedRetry) old!! else reply
         // A rename while the reply was written is kept.
-        val done = asked.withMetaOf(_state.value.conversation)
+        val written = asked.withMetaOf(_state.value.conversation)
             .copy(updated = if (failedRetry) asked.updated else reply.at.coerceAtLeast(asked.updated),
                 messages = asked.messages + last)
-        _state.update { it.copy(conversation = done, replying = false, thinking = false, lastStopMs = voice?.lastStopMs) }
-        withContext(NonCancellable) { save(done) }
+        val done = withContext(NonCancellable) {
+            diskLock.withLock {
+                // A card a tap moved on meanwhile (SENDING, DONE) is never
+                // written back to an earlier state: the most advanced of
+                // this copy's, the screen's and the disk's is kept.
+                val disk = withContext(io) { conversations.load(written.id) }
+                var merged = written
+                // Merged with the screen as it is at this instant: a tap's
+                // mark landing now is never lost.
+                _state.update { ui ->
+                    merged = written.keepingCards(ui.conversation.takeIf { it.id == written.id }).keepingCards(disk)
+                    ui.copy(conversation = merged, replying = false, thinking = false, lastStopMs = voice?.lastStopMs)
+                }
+                save(merged)
+                merged
+            }
+        }
         startTitle(done)
         return done
     }
@@ -1288,7 +2339,7 @@ class AssistantController(
         scope.launch {
             stopReply()
             settings.currentConversation = null
-            _state.update { it.copy(conversation = conversations.create(clock()), docJob = null) }
+            _state.update { it.copy(conversation = conversations.create(clock()), docJob = null, pendingPhoto = null) }
         }
     }
 
@@ -1301,7 +2352,7 @@ class AssistantController(
                 return@launch
             }
             settings.currentConversation = loaded.id
-            _state.update { it.copy(conversation = loaded, docJob = null) }
+            _state.update { it.copy(conversation = loaded, docJob = null, pendingPhoto = it.pendingPhoto.takeIf { _ -> it.conversation.id == loaded.id }) }
             resumeJobIfAny()
         }
     }
@@ -2276,6 +3327,13 @@ class AssistantController(
         /** The window of the engine a long-document job loads on the GPU. */
         const val DOC_JOB_MAX_TOKENS = 8192
 
+        /** The GPU-vision probe's limit: past it, the encoder counts as failed. */
+        const val PROBE_TIMEOUT_MS = 60_000L
+        private const val MEMORY_SAMPLE_MS = 150L
+
+        /** A photo question when the model came up without its encoder. */
+        const val PHOTO_UNAVAILABLE = "This phone can't look at photos right now. Try again after reopening the app."
+
         /** Unload the model this long after the assistant leaves the screen. */
         const val UNLOAD_AFTER_MS = 5 * 60 * 1000L
         const val TITLE_DELAY_MS = 1_500L
@@ -2290,6 +3348,42 @@ class AssistantController(
         /** What works in a phone chat: "calculate exactly". (The home server
          *  is offered on a long summary's progress card, measured, D2.) */
         private val PHONE_CAN = setOf("calculate")
+        /** [StoredMessage.fastPath] of a hand-off's reply. */
+        const val FAST_HANDOFF = "handoff"
+
+        /** [StoredMessage.fastPath] of N2's action replies. */
+        const val FAST_ACTION_YES = "action_yes"
+        const val FAST_ACTION_NO = "action_no"
+        const val FAST_ACTION_AGAIN = "action_again"
+        const val FAST_ACTION_HOUSE = "action_house"
+        const val FAST_ACTION_UNDO = "action_undo"
+
+        /** The replies of the player's own actions: a bare "continue" or
+         *  "next one" after one of these is playback's. */
+        private val PLAYBACK_FAST_PATHS: Set<String?> = setOf(
+            ActionKind.PLAY_MUSIC, ActionKind.PAUSE, ActionKind.RESUME, ActionKind.NEXT, ActionKind.PREVIOUS,
+            ActionKind.STOP, ActionKind.SLEEP, ActionKind.CANCEL_SLEEP, ActionKind.PLAY_BOOK,
+        ).map { "action_" + it.name.lowercase() }.toSet() + FAST_ACTION_UNDO
+
+        /** The Clock app's longest timer (AlarmClock.EXTRA_LENGTH: 1 to 86400 s). */
+        const val MAX_TIMER_S = 86_400
+
+        /** The longest playback sleep timer, minutes. */
+        const val MAX_SLEEP_MIN = 24 * 60
+
+        /** Songs one "play" queues. */
+        const val MUSIC_LIMIT = 200
+        private const val VIDEO_LIMIT = 5
+
+        /** Undo shows under a reply this long (plan part 2: 10 s). */
+        const val UNDO_SHOWN_MS = 10_000L
+
+        /** ..."undo" said or typed works this long after the action: a
+         *  spoken one needs the reply read out and the mic tapped first. */
+        const val UNDO_WORD_MS = 60_000L
+
+        /** A model turn whose only output was a tool call written as text. */
+        const val NO_TOOL_ANSWER = "Sorry, I couldn't find that on this phone."
 
         /** The app's assistant, built by AppContainer. [phoneVoice]: the
          *  phone's own Domovoi voice, opened without asking a server. */
@@ -2299,15 +3393,18 @@ class AssistantController(
             phoneVoice: suspend () -> PhoneSpeech?,
             lookups: PhoneLookups? = null,
             headsUp: HeadsUpStore = HeadsUpStore.forApp(context),
+            phone: (AssistantSettings) -> PhoneContext = { PhoneContext.NONE },
+            actions: () -> PhoneActionHost = { PhoneActionHost.NONE },
         ): AssistantController {
             val app = context.applicationContext
             val store = ModelStore.forApp(app)
+            val settings = PhoneAssistantSettings(app)
             return AssistantController(
                 memory = DeviceTiers.read(app),
                 store = store,
                 conversations = ConversationStore(File(app.filesDir, "assistant")),
                 jobs = WorkDownloadJobs(app),
-                settings = PhoneAssistantSettings(app),
+                settings = settings,
                 newEngine = { LiteRtLlmEngine(File(app.cacheDir, "litertlm")) },
                 scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
                 beforeLoad = beforeLoad,
@@ -2328,8 +3425,21 @@ class AssistantController(
                 newJobEngine = { LiteRtLlmEngine(File(app.cacheDir, "litertlm"), maxTokens = DOC_JOB_MAX_TOKENS) },
                 headsUp = headsUp,
                 weakSpots = { app.assets.open(WeakSpots.ASSET).bufferedReader().use { WeakSpots.parse(it.readText()) } },
+                phone = phone(settings),
+                visionMemory = PhoneVisionMemory(app),
+                visionBackend = { DebugVision.backend(app) ?: LlmBackend.GPU },
+                appBuild = appBuild(app),
+                exitReasons = AndroidExitReasons(app),
+                residentKb = { runCatching { parseProcStatus(File("/proc/self/status").readText()).second }.getOrNull() },
+                actions = actions(),
             ).also { it.attach(app) }
         }
+
+        /** "1.0.0 (42)": the probe tries again on every new build. */
+        private fun appBuild(app: Context): String = runCatching {
+            val info = app.packageManager.getPackageInfo(app.packageName, 0)
+            "${info.versionName} (${androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(info)})"
+        }.getOrDefault("unknown")
 
         private fun gb(bytes: Long) = String.format(Locale.US, "%.2f GB", bytes / 1073741824.0)
     }
@@ -2385,7 +3495,10 @@ fun modelTurns(messages: List<StoredMessage>): List<IndexedTurn> {
         if (m.fromUser) {
             // An unanswered question before this one: drop it.
             if (lastFromUser()) out.removeAt(out.lastIndex)
-            if (m.text.isNotBlank()) out += IndexedTurn(i, ChatTurn(fromUser = true, text = m.text))
+            // A photo question: the marker stands for the photo, which is
+            // never kept (N3), so later turns know one was there.
+            val said = if (m.photo) PhonePhotos.historyText(m.text) else m.text
+            if (said.isNotBlank()) out += IndexedTurn(i, ChatTurn(fromUser = true, text = said))
         } else if (m.text.isNotBlank()) {
             if (lastFromUser()) out += IndexedTurn(i, ChatTurn(fromUser = false, text = m.text))
         } else if (lastFromUser()) {
@@ -2403,6 +3516,8 @@ fun retryBase(c: StoredConversation): StoredConversation? {
     // A heads-up card is answered by its options, not tried again.
     if (last.headsUp != null) return null
     if (last.fromUser || c.messages.size < 2 || !c.messages[c.messages.size - 2].fromUser) return null
+    // A photo question can't be asked again: its photo is gone (N3).
+    if (c.messages[c.messages.size - 2].photo) return null
     return c.copy(messages = c.messages.dropLast(1))
 }
 

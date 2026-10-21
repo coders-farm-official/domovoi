@@ -338,6 +338,8 @@ private fun ListeningAsChip(modifier: Modifier = Modifier) {
     val id = listenerId ?: return
     val people = rememberApi("people-hint") { it.api.get("/api/people").decode<List<PersonRow>>() }
     val name = people.data?.firstOrNull { it.id.toString() == id }?.name
+    // Kept for the phone chat's prompt (data/HouseholdNames.kt).
+    LaunchedEffect(id, name) { app.householdNames.recordListener(app.prefs.serverUrl.value, id, name) }
     Box(modifier) { Pill("listening as ${name ?: "…"}", Tone.Brand) }
 }
 

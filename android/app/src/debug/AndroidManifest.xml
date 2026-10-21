@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Debug builds only: the room-mode test feed (DebugFeedReceiver). Only a
+<!-- Debug builds only: the room-mode test feed (DebugFeedReceiver) and the
+     phone assistant's N1 and N2 gates (N1GateReceiver, N2GateReceiver). Only a
      sender holding DUMP may use it — adb's shell does, an installed app
      cannot — and a release APK does not contain it at all. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -10,6 +11,24 @@
             android:permission="android.permission.DUMP">
             <intent-filter>
                 <action android:name="com.domovoi.app.debug.ROOM_FEED" />
+            </intent-filter>
+        </receiver>
+        <!-- The phone assistant's N1 gate (assistant/N1GateReceiver.kt). -->
+        <receiver
+            android:name=".assistant.N1GateReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.domovoi.app.debug.N1_GATE" />
+            </intent-filter>
+        </receiver>
+        <!-- The phone assistant's N2 gate (assistant/N2GateReceiver.kt). -->
+        <receiver
+            android:name=".assistant.N2GateReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.domovoi.app.debug.N2_GATE" />
             </intent-filter>
         </receiver>
     </application>

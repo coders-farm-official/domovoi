@@ -41,6 +41,9 @@ object ChatExport {
 
     /** One message's words as exported: a failed or stopped reply says so. */
     private fun words(m: StoredMessage): String = buildString {
+        // A photo question: the mark only, as the chat keeps it (N3).
+        if (m.photo) append("[photo]")
+        if (m.photo && m.text.isNotBlank()) append(" ")
         append(m.text.trim())
         m.error?.let { if (isNotEmpty()) append("\n"); append("[").append(it).append("]") }
         if (m.stopped) { if (isNotEmpty()) append(" "); append("[stopped]") }

@@ -73,6 +73,8 @@ android {
         if (!apkPerAbi) {
             ndk { abiFilters += appAbis }
         }
+        // The launcher's name (AndroidManifest.xml); a bench build says so.
+        manifestPlaceholders["appLabel"] = "domovoi"
     }
 
     splits {
@@ -91,6 +93,20 @@ android {
     }
 
     buildTypes {
+        // `-Pdomovoi.idSuffix=.bench`: a debug build that installs BESIDE the
+        // release app (its own package, data and model download), named
+        // "domovoi bench", so a phone keeps its real install while it runs
+        // the benchmark card. Without the property nothing changes.
+        debug {
+            (findProperty("domovoi.idSuffix") as String?)?.trim()?.takeIf { it.isNotEmpty() }?.let { suffix ->
+                if (!Regex("""^\.[a-z][a-z0-9_]*$""").matches(suffix)) {
+                    throw GradleException("domovoi.idSuffix: '$suffix' is not a package suffix like .bench")
+                }
+                applicationIdSuffix = suffix
+                versionNameSuffix = "-${suffix.removePrefix(".")}"
+                manifestPlaceholders["appLabel"] = "domovoi ${suffix.removePrefix(".")}"
+            }
+        }
         release {
             // R8 shrinks, optimises and renames the code, and drops the
             // resources nothing uses (Google Play checks a release is

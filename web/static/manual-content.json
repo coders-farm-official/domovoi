@@ -2139,7 +2139,7 @@
        "text": "**attach image**: up to 4 pictures. Phone photos in HEIC are turned into a JPEG on the phone first (Android 9 or newer), without their location."
       },
       {
-       "text": "**attach a document**: a PDF, Word, OpenDocument, Excel, CSV, text or markdown file, then ask about it. In a chat **on this phone** it is read on the phone and stays there. The answer lists the pages it came from; tap one to see the passage (a PDF shows the page itself)."
+       "text": "**attach a document** (in a chat on this phone, under **+**): a PDF, Word, OpenDocument, Excel, CSV, text or markdown file, then ask about it. In a chat **on this phone** it is read on the phone and stays there. The answer lists the pages it came from; tap one to see the passage (a PDF shows the page itself)."
       },
       {
        "text": "A PDF needs Android 15 (or 12 to 14 with the PDF update) to be read on the phone. Otherwise **ask the home server** reads its text and sends it back; nothing is kept there."
@@ -2176,7 +2176,15 @@
    "blocks": [
     {
      "type": "p",
-     "text": "A Domovoi that runs on the phone itself: type or talk, in airplane mode too. It knows the time and date, and it answers questions. It can't set timers, play music or look things up."
+     "text": "A Domovoi that runs on the phone itself: type or talk, in airplane mode too. It knows the time and date, and it answers questions. It also knows the phone: what's playing, the battery, free space, Wi-Fi or mobile data, your next alarm, Do Not Disturb, which phone and Android this is, and which songs, videos and saved books are on it. It can't look things up online. House things (rooms, house timers, the household calendar) are in your home server chats."
+    },
+    {
+     "type": "p",
+     "text": "It also does things on the phone. \"Set a timer for 10 minutes\", \"wake me at 6:30\" or \"set an alarm for 7 every weekday\" go to the phone's Clock app, and it asks first: tap **set**, or in a voice chat say yes (any \"no\", \"wait\" or \"cancel\" stops it). \"Show my timers\" opens the Clock app. \"Play some jazz\", \"shuffle my music\", \"pause\", \"next\", \"go back\", \"stop\", \"set a sleep timer for 20 minutes\" and \"continue my book\" happen at once, with **undo** under the reply for a few seconds; saying \"undo\" works too. \"Play the beach video\" asks first, then plays it. Music in the house's rooms and the house's timers are in your home server chats."
+    },
+    {
+     "type": "p",
+     "text": "\"Text Sam\", \"call Mom\", \"email Alex\", \"directions to the station\", \"add lunch tomorrow at noon to my calendar\", \"open a link\" and \"share this\" show a card first; a tap opens the app that does it, and you finish there. Your calendar, where you are and calling people by name each ask for permission the first time, with the reason; say no and it simply says it can't, and never asks again. Everything is read on the phone and never sent anywhere; a phone chat never asks your home server."
     },
     {
      "type": "label",
@@ -2189,7 +2197,11 @@
     },
     {
      "type": "p",
-     "text": "It needs a 64-bit phone with 8 GB of memory or more. To report a bad reply, long-press it. **Export all phone chats** (in a phone chat, the model settings button) saves them as Markdown and JSON where you pick. Its chats stay on the phone, marked **on this phone**; away from home they are the only ones Chat lists. They never mix with your home server's chats."
+     "text": "It needs a 64-bit phone with 8 GB of memory or more. To report a bad reply, long-press it."
+    },
+    {
+     "type": "p",
+     "text": "**Ask about a photo:** on phones whose graphics chip can run the model's photo reader, the **+** left of the message box offers **take a photo** and **choose a photo** (and **a document**). One photo per question; type a question or just send it (\"what's in this photo?\"). The photo is read on the phone, isn't saved to your gallery, and is gone once Domovoi has answered: the chat keeps only a **photo (not kept)** mark. The camera asks for its permission the first time. Phones without the buttons can't do it quickly enough; a home-server chat's **attach image** still works there. **Export all phone chats** (in a phone chat, the model settings button) saves them as Markdown and JSON where you pick. Its chats stay on the phone, marked **on this phone**; away from home they are the only ones Chat lists. They never mix with your home server's chats."
     }
    ],
    "more": {

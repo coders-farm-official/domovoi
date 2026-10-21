@@ -21,11 +21,13 @@ Checked and **not** a problem:
 
 | Item | Finding |
 |---|---|
-| `QUERY_ALL_PACKAGES` | Not declared (merged release manifest checked). The one `<queries>` entry is the text-to-speech service intent. |
+| `QUERY_ALL_PACKAGES` | Not declared (merged release manifest checked). The `<queries>` entries are the text-to-speech service intent and, since N1, the phone chat's hand-offs (dial, SMS and mail `SENDTO`, `geo:`, calendar `INSERT`, https `VIEW`, text `SEND`, the contact picker), and since N2 the Clock app's `SET_TIMER`, `SET_ALARM`, `SHOW_TIMERS` and `SHOW_ALARMS`: intent-scoped visibility, which needs no declaration. |
+| `com.android.alarm.permission.SET_ALARM` | **Since N2 (2026-10-21).** A normal (install-time) permission, which Android requires to send `AlarmClock.ACTION_SET_TIMER` / `ACTION_SET_ALARM` to the Clock app. The Clock app sets the timer or alarm; the app itself schedules nothing new, so it needs no exact-alarm grant and no declaration *(none exists for a normal permission)*. Each timer and alarm is asked first in the chat. |
 | `REQUEST_INSTALL_PACKAGES` | Not declared. The app never installs APKs; the household server hands the APK to the browser. |
-| Location (fine, coarse, background) | None declared. Wi-Fi names are read only where Android allows without it. |
-| `SYSTEM_ALERT_WINDOW`, `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, accessibility, SMS, call log, contacts | None. Room mode only opens the system's battery settings for the person. |
-| `CAMERA` | Only for scanning room mode's room code, asked when "Scan" is pressed, `uses-feature` not required; frames are decoded on the phone and dropped. No declaration exists for camera. |
+| Location (fine, coarse, background) | **Fine and coarse since N1 (2026-10-21), foreground only**, asked in a phone chat the first time someone asks "where am I" or the Wi-Fi network's name, after the app's one-line reason; optional. No background location (`ACCESS_BACKGROUND_LOCATION` is not declared), so no location declaration form applies *(unverified that none exists for foreground-only; none was found)*. Room mode still reads Wi-Fi names only where Android allows without it. |
+| Contacts, calendar (read) | **Since N1, optional**: `READ_CONTACTS` to call or text someone by name from a phone chat (the contact picker works without it), `READ_CALENDAR` to read the phone's own calendar. Neither is a restricted permission with a declaration form *(unverified)*; both are read on the phone only and never sent (Data safety: not collected). Owner, at v1: check the Play Console's "Sensitive app permissions" page lists nothing for them. |
+| `SYSTEM_ALERT_WINDOW`, `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, accessibility, SMS, call log, notification access, usage stats | None (owner rule for the phone assistant: never texts, the call log, notifications, screen-time or accessibility). Room mode only opens the system's battery settings for the person. |
+| `CAMERA` | For scanning room mode's room code (asked when "Scan" is pressed) and, since N3, for taking one photo for a question in a chat on the phone (asked on the first tap of "take a photo", after the app's own one-line reason; in-app CameraX, the photo is held in memory and discarded from memory after the reply, never saved or sent; once Android won't ask again, the tap opens the app's own "the camera is off" note with a way to the settings). `uses-feature` not required. No declaration exists for camera; the Data safety form treats both as processed on the device. The phone chat's "choose a photo" uses the system Photo Picker, which needs no permission. |
 | `RECORD_AUDIO` | Asked at the first mic tap with the app's own reason first (`MicPermission.kt`), and by room mode after its explainer. Prominent disclosure: room mode's explainer screen, read to the end before "Start room mode". |
 | `RECEIVE_BOOT_COMPLETED` | Re-arms timer alarms, and room mode posts "tap to resume". No microphone or media service is started from boot (Android 15 forbids it; `RoomLockRules`). |
 | Cleartext HTTP | `network_security_config.xml` allows it, and `net/CleartextPolicy.kt` enforces it **only** to private addresses and local names (RFC 1918, loopback, link-local, `.local`, `.home.arpa`, `.lan`…): the household server on the LAN has no public certificate. Everything on the internet must be HTTPS. No Play policy found against this; justification for any reviewer question: "Domovoi is self-hosted; the app talks to the household's own server on the home network, which has no publicly trusted certificate; all internet traffic is HTTPS." |
@@ -114,9 +116,18 @@ What the policy asks and what the app does:
   residual risk and the one-line HTTPS switch.
 - **Prevent restricted content:** the model's own safety tuning, a fixed
   system prompt (`assistant/Persona.kt`) asking for short spoken answers, a
-  4,096-token limit on prompt plus reply (`LiteRtLlmEngine.DEFAULT_MAX_TOKENS`), and no
-  tools: the model can't reach files, media, contacts or the network
-  (`NoNetworkTest`).
+  4,096-token limit on prompt plus reply (`LiteRtLlmEngine.DEFAULT_MAX_TOKENS`), and
+  since N1 at most read-only tools the app runs itself, and none for the
+  shipped model (Gemma 4 E2B answers phone questions from the app's own
+  patterns) (finding a song, video
+  or saved book, the timers, the phone's status: `assistant/PhoneTools.kt`);
+  the model can't change anything, reach files or contacts, or the network
+  (`NoNetworkTest`). Calls, texts and the other hand-offs are the app's own
+  patterns, shown as a card the person taps, never the model's. Since N2
+  the phone's actions (Clock timers and alarms, the player, saved books and
+  videos) are also the app's own patterns (`assistant/PhoneActions.kt`),
+  never a model tool call for the shipped model; timers, alarms and videos
+  are asked first, playback can be undone.
 
 ## 5. Photo and video permissions declaration (App content → Sensitive app permissions)
 

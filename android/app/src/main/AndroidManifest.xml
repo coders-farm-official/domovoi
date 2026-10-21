@@ -65,9 +65,78 @@
     <!-- The on-device assistant speaks with the phone's text-to-speech
          engine (assistant/AndroidSpeechOut); from API 30 an app sees the
          installed engines only when it declares that it looks for them. -->
+    <!-- A phone chat (assistant/, N1) reads a few things on the phone only
+         when asked, each permission asked on first use with the app's own
+         one-line reason, all optional (refused: the chat says it can't and
+         never asks again): approximate location for "where am I" (the
+         last fix Android has; never in the background, never sent
+         anywhere), precise location only for the Wi-Fi network's name, contacts for calling or texting someone by
+         name (the contact picker works without it), the phone's own
+         calendar to read it. Never SMS, the call log, notifications,
+         usage stats or accessibility. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <!-- A phone chat's timers and alarms go to the Clock app
+         (AlarmClock.ACTION_SET_TIMER / ACTION_SET_ALARM), which requires
+         this normal, install-time permission. The app sets nothing itself. -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+
     <queries>
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+        <!-- A phone chat's hand-offs (assistant/HandOffLauncher.kt): each is
+             offered only when some app takes it, which from API 30 the app
+             can see only for intents named here. -->
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+            <data android:scheme="tel" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="smsto" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="mailto" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="geo" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.INSERT" />
+            <data android:mimeType="vnd.android.cursor.dir/event" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="text/plain" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.PICK" />
+            <data android:mimeType="vnd.android.cursor.dir/phone_v2" />
+        </intent>
+        <!-- A phone chat's actions (N2, assistant/AppActionHost.kt): timers
+             and alarms in the Clock app, each offered only when some app
+             takes it. -->
+        <intent>
+            <action android:name="android.intent.action.SET_TIMER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SET_ALARM" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SHOW_TIMERS" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SHOW_ALARMS" />
         </intent>
     </queries>
 
@@ -90,7 +159,7 @@
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
-        android:label="domovoi"
+        android:label="${appLabel}"
         android:icon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:networkSecurityConfig="@xml/network_security_config"
@@ -124,7 +193,7 @@
             android:name=".roommode.RoomSetupActivity"
             android:exported="true"
             android:label="Domovoi Room"
-            android:taskAffinity="com.domovoi.app.room"
+            android:taskAffinity="${applicationId}.room"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:windowSoftInputMode="adjustResize">
@@ -139,7 +208,7 @@
             android:name=".roommode.RoomModeActivity"
             android:exported="false"
             android:label="Domovoi Room"
-            android:taskAffinity="com.domovoi.app.room"
+            android:taskAffinity="${applicationId}.room"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" />
         <activity-alias
