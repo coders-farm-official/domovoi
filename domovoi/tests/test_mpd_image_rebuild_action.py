@@ -48,6 +48,7 @@ def docker(monkeypatch):
     async def run_docker(*args, timeout=60.0):
         state["calls"].append(args)
         if args[0] == "build":
+            await asyncio.sleep(0.05)  # a build takes a while: room for a second click
             state["held_during_build"] = holds.held("mpd-image")
             state["tag"] = NEW
             return 0, "", ""
@@ -216,6 +217,52 @@ async def test_the_holds_go_on_every_exit_path(docker, rooms, monkeypatch) -> No
     assert not any(h._RUNNING.get(k, [0])[0] for k in active), "no step still counted as running"
     assert all(h._TIMED[k][0] - time.monotonic() <= 61 for k in active), "a settle, not more"
     assert not mpd_provisioner._REBUILD_LOCK.locked()
+    holds.clear()
+
+
+@requires_db
+async def test_two_clicks_at_once_give_one_rebuild_and_one_409(_db, docker, monkeypatch) -> None:  # noqa: F811
+    """Review round 2: the update check's await sat between the busy check
+    and the lock, so two concurrent calls both passed and built twice."""
+    from domovoi.container_guard import engine as engine_mod
+
+    async def note(image_id, *, built):
+        return "built"
+
+    class _Guard:
+        async def check(self, force=False):
+            return {"state": "ok"}
+
+    monkeypatch.setattr(engine_mod, "note_mpd_image", note)
+    monkeypatch.setattr(engine_mod, "get_guard", lambda: _Guard())
+    async with web_client() as w:
+        token = await claim_admin(w)
+    async with core_client() as c:
+        a, b = await asyncio.gather(
+            c.post("/v1/admin/containers/mpd-image/rebuild", json={}, headers=bearer(token)),
+            c.post("/v1/admin/containers/mpd-image/rebuild", json={}, headers=bearer(token)),
+        )
+    assert sorted((a.status_code, b.status_code)) == [200, 409], (a.text, b.text)
+    busy = a if a.status_code == 409 else b
+    assert "already being rebuilt" in busy.json()["detail"]
+    assert len([x for x in docker["calls"] if x[0] == "build"]) == 1
+    holds.clear()
+
+
+@requires_db
+async def test_two_concurrent_rebuilds_build_once(docker, rooms, monkeypatch) -> None:
+    from domovoi.container_guard import engine as engine_mod
+
+    async def note(image_id, *, built):
+        return "built"
+
+    monkeypatch.setattr(engine_mod, "note_mpd_image", note)
+    results = await asyncio.gather(mpd_provisioner.rebuild_image(), mpd_provisioner.rebuild_image(),
+                                   return_exceptions=True)
+    busy = [r for r in results if isinstance(r, mpd_provisioner.RebuildBusy)]
+    done = [r for r in results if isinstance(r, dict)]
+    assert len(busy) == 1 and len(done) == 1, results
+    assert len([x for x in docker["calls"] if x[0] == "build"]) == 1
     holds.clear()
 
 

@@ -481,16 +481,18 @@ async def rebuild_image() -> dict:
     why = rebuild_unavailable()
     if why:
         raise RuntimeError(why)
-    if _REBUILD_LOCK is None:
-        _REBUILD_LOCK = asyncio.Lock()
-    if _REBUILD_LOCK.locked():
-        raise RebuildBusy("the music player image is already being rebuilt")
     from domovoi import self_restart
 
     if await asyncio.to_thread(self_restart.underway):
         raise RebuildBusy(
             "an update or restart is under way; rebuild the music player image once it has finished"
         )
+    # No await between this check and taking the lock below: two clicks at
+    # once give one rebuild and one "already being rebuilt".
+    if _REBUILD_LOCK is None:
+        _REBUILD_LOCK = asyncio.Lock()
+    if _REBUILD_LOCK.locked():
+        raise RebuildBusy("the music player image is already being rebuilt")
     from contextlib import ExitStack
 
     from domovoi.container_guard import holds
