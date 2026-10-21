@@ -508,6 +508,20 @@ def start(root: Path, *, test_hooks: bool = False) -> None:
     )
 
 
+def power_answer(choice: str, interactive: bool) -> Callable[[str], bool]:
+    """How each power question is answered: ``no``, ``yes`` (both),
+    ``standby`` or ``lid`` (that one only: the Setup's two tick boxes,
+    windows/installer/DomovoiSatelliteSetup.iss), or ``ask``."""
+    if choice == "no":
+        return lambda _q: False
+    if choice == "yes":
+        return lambda _q: True
+    if choice in ("standby", "lid"):
+        wanted = POWER_SETTINGS[choice][2]
+        return lambda q: q == wanted
+    return lambda q: ask_choice(q, interactive)
+
+
 def ask_choice(prompt: str, interactive: bool) -> bool:
     if not interactive:
         return False
@@ -699,17 +713,7 @@ def install(args: argparse.Namespace, *, run: Callable[..., Any] = subprocess.ru
         "Installed apps and the Start menu as Domovoi Satellite")
 
     # 6. Power: asked, plugged in only, default No.
-    if args.power == "no":
-        answer = lambda _q: False  # noqa: E731
-    elif args.power == "yes":
-        answer = lambda _q: True  # noqa: E731
-    elif args.power in ("standby", "lid"):
-        # The Setup's two tick boxes (DomovoiSatelliteSetup.iss): this one only.
-        wanted_q = POWER_SETTINGS[args.power][2]
-        answer = lambda q: q == wanted_q  # noqa: E731
-    else:
-        answer = lambda q: ask_choice(q, interactive)  # noqa: E731
-    power = change_power(answer, run=run)
+    power = change_power(power_answer(args.power, interactive), run=run)
     if power:
         write_state(root, power=merge_power(read_state(root).get("power"), power))
 

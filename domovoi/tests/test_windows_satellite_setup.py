@@ -154,7 +154,7 @@ class FakeCore:
                 if m and m.group(1) in core.bundles:
                     code = m.group(1)
                     core.served = code
-                    digest = hashlib.sha256(core.bundles[self.GOOD if code == self.SWAP else code]).hexdigest()
+                    digest = hashlib.sha256(core.bundles[core.GOOD if code == core.SWAP else code]).hexdigest()
                     doc = {"format": 1, "payload": PAYLOAD, "core": "http://192.168.1.20:6370", "room": "Küche",
                            "room_id": "kuche", "fingerprint": FP, "bundle_sha256": digest,
                            "bundle_size": 1, "bundle_path": "/v1/satellite-code/bundle.tar.gz",
@@ -164,7 +164,7 @@ class FakeCore:
                     return self._send(404, json.dumps({"detail": "that setup code is not known here"}).encode())
                 if self.path == "/v1/satellite-code/bundle.tar.gz":
                     body = core.bundles[core.served]
-                    if core.served == self.SWAP:
+                    if core.served == core.SWAP:
                         body = body + b"\0"
                     return self._send(200, body, "application/gzip")
                 return self._send(404, b'{"detail": "Not Found"}')

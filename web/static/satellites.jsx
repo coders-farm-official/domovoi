@@ -2511,14 +2511,98 @@ const SpareQr = ({ text }) => {
   );
 };
 
-/* The Windows laptop's command (2026-10-13). The same trust model as the
- * Linux one: the bundle's SHA-256 is checked before anything runs, the
- * server proves its fingerprint before anything is written. It installs for
+/* The Windows laptop or PC (2026-10-13; the double-click Setup 2026-10-21).
+ * First the Setup, DomovoiSatelliteSetup.exe, handed out by this server:
+ * the link downloads it named so it carries this room's setup code and the
+ * server, so nobody types anything (domovoi/satellite_setup.py; the code
+ * names the enrolment payload for 24 hours and is not a password). It is
+ * not signed by Microsoft yet (owner decision 2026-10-21), so SmartScreen
+ * stops it once: the steps say what Windows shows and why. The PowerShell
+ * command stays, under "advanced": the same trust model as the Linux one
+ * (the bundle's SHA-256 is checked before anything runs, the server proves
+ * its fingerprint before anything is written). Either way it installs for
  * the signed-in account only, with no administrator rights; the Python and
- * libraries it needs come from this server's cache when an admin has
- * fetched them (here), else straight from python.org and PyPI — the same
- * pinned files either way. Unsigned for now: said plainly. */
+ * libraries come from this server's cache when an admin has fetched them,
+ * else straight from python.org and PyPI, the same pinned files. */
 const spareMb = (b) => b == null ? '—' : `${Math.round(b / 1e6)} MB`;
+const SPARE_SETUP_RELEASES = 'https://github.com/coders-farm-official/domovoi/releases/latest';
+const SpareWindowsSetup = ({ ws, fire }) => {
+  const [st, setSt] = React.useState(ws.setup || null);
+  const [fetching, setFetching] = React.useState(false);
+  React.useEffect(() => { setSt(ws.setup || null); }, [ws]);
+  React.useEffect(() => {
+    if (!st || !st.fetch || !st.fetch.running) return undefined;
+    const t = setInterval(async () => {
+      try { setSt(await apiGet('/api/satellites/windows-setup')); } catch (e) { /* keep the last */ }
+    }, 3000);
+    return () => clearInterval(t);
+  }, [st && st.fetch && st.fetch.running]);
+  const getSetup = async () => {
+    setFetching(true);
+    try {
+      setSt(await apiPost('/api/satellites/windows-setup/fetch', {}));
+    } catch (e) {
+      fire(apiErrorText(e, 0));
+    } finally {
+      setFetching(false);
+    }
+  };
+  const note = { fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 };
+  const running = !!(st && st.fetch && st.fetch.running);
+  const ready = !!(st && st.ready);
+  return (
+    <div className="spare-windows-setup" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div className="spare-windows-code" style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'baseline' }}>
+        <div><span className="label">setup code</span>{' '}
+          <b className="mono" style={{ fontSize: 18, letterSpacing: 1 }}>{ws.code_display || ws.code}</b></div>
+        <div><span className="label">server</span> <span className="mono">{ws.server}</span></div>
+      </div>
+      <div style={{ fontSize: 11.5, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
+        The code works for 24 hours, for this room only. It is not a password: it only tells Setup
+        which server and which room.
+      </div>
+      {ready ? (
+        <ol className="spare-windows-steps" style={{ ...note, margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <li>On that PC, signed in as the account it will run in, download the Setup:{' '}
+            <a className="btn btn-primary spare-windows-download" href={ws.download_url}
+               style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <Icon name="download" size={14}/>Download the Windows Setup ({spareMb(st.size)})
+            </a>
+            <div style={{ marginTop: 4 }}>Or type this into its browser:{' '}
+              <span className="mono spare-windows-short" style={{ userSelect: 'all' }}>{ws.short_url}</span>.
+              The file's name carries the code and the server, so Setup fills them in by itself.</div>
+          </li>
+          <li>Your browser may say the file isn't commonly downloaded or can't be downloaded securely
+            (it comes over your home network, without https). Choose <b>Keep</b>.</li>
+          <li>Open it. Windows shows a blue box, <b>“Windows protected your PC”</b>. Click <b>More info</b>,
+            check that the app is <b>DomovoiSatelliteSetup</b>, then click <b>Run anyway</b>. Why: Domovoi isn't
+            signed by Microsoft yet, so Windows doesn't recognise it; the file comes from your own
+            Domovoi server.</li>
+          <li>Follow Setup. It needs no administrator rights, and stops on the PC that runs this Domovoi
+            server. At the end it shows a six-digit approval code: type it above, under waiting for approval.</li>
+        </ol>
+      ) : (
+        <div className="spare-windows-setup-missing" style={{ ...note, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div>This server doesn't have the Windows Setup yet. Get it once (a few MB, from Domovoi's release
+            on GitHub, checked against that release's checksum list), and every Windows PC in the house
+            downloads it from here.</div>
+          {st && st.internet_off && <div style={{ color: 'var(--warn-ink)' }}>Internet access is off
+            (Settings → Internet), so this server can't fetch it. Download <span className="mono">DomovoiSatelliteSetup.exe</span> on
+            that PC from <a href={SPARE_SETUP_RELEASES} target="_blank" rel="noopener noreferrer">Domovoi's releases</a> and
+            type the code and server above into it, or use the PowerShell command below.</div>}
+          {st && st.fetch && st.fetch.ok === false && st.fetch.message &&
+            <div role="alert" style={{ color: 'var(--err-ink)' }}>Last try: {st.fetch.message}</div>}
+          <div>
+            <Button icon="download" disabled={running || fetching || (st && st.internet_off)} onClick={getSetup}>
+              {running ? 'getting the Windows Setup…' : 'get the Windows Setup'}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const SpareWindows = ({ res, fire }) => {
   const [rt, setRt] = React.useState(res.windows_runtime || null);
   const [fetching, setFetching] = React.useState(false);
@@ -2549,9 +2633,9 @@ const SpareWindows = ({ res, fire }) => {
     }
   };
   const running = !!(rt && rt.fetch && rt.fetch.running);
-  return (
-    <div className="spare-windows" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div className="label">windows laptop or pc (windows 10 or 11, 64-bit)</div>
+  const ws = res.windows_setup;
+  const command = (
+    <>
       <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
         On the PC, signed in as the person whose account it will run in (a normal window, not
         "Run as administrator"), open Windows PowerShell or Terminal and paste this. It installs
@@ -2564,11 +2648,17 @@ const SpareWindows = ({ res, fire }) => {
                     background: 'var(--bg-sunken, var(--bg))', border: '1px solid var(--border)',
                     borderRadius: 'var(--r-sm)', maxHeight: 160, overflow: 'auto' }}>{res.command_windows}</pre>
       <div><Button icon="copy" onClick={copy}>copy the Windows command</Button></div>
+    </>
+  );
+  return (
+    <div className="spare-windows" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div className="label">windows laptop or pc (windows 10 or 11, 64-bit)</div>
+      {ws ? <SpareWindowsSetup ws={ws} fire={fire}/> : command}
       <div role="note" className="spare-windows-unsigned"
            style={{ fontSize: 11.5, color: 'var(--warn-ink)', lineHeight: 1.5 }}>
-        Not signed yet: the satellite's own code carries no Coders Farm signature (Python itself is
+        Not signed yet: neither the Setup nor the satellite's own code carries a signature (Python itself is
         signed by the Python Software Foundation). Windows Security or another antivirus may warn
-        about a command that downloads and starts programs; Windows shows its microphone-in-use
+        about a program that downloads and starts programs; Windows shows its microphone-in-use
         icon the whole time the satellite listens for the wake word.
       </div>
       {rt && (
@@ -2590,6 +2680,12 @@ const SpareWindows = ({ res, fire }) => {
             </div>
           )}
         </div>
+      )}
+      {ws && (
+        <details className="spare-windows-advanced">
+          <summary style={{ fontSize: 12, cursor: 'pointer' }}>advanced: the PowerShell command instead of the Setup</summary>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>{command}</div>
+        </details>
       )}
     </div>
   );

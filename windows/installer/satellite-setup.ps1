@@ -170,7 +170,11 @@ function Get-Answer([string]$Url) {
     } catch [Net.WebException] {
         $resp = $_.Exception.Response
         if ($null -eq $resp) { return @{ status = 0; body = $_.Exception.Message } }
+        # Windows PowerShell has already read the body: it is in ErrorDetails.
         $text = ''
+        if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+            return @{ status = [int]$resp.StatusCode; body = [string]$_.ErrorDetails.Message }
+        }
         try {
             $sr = New-Object IO.StreamReader($resp.GetResponseStream(), [Text.Encoding]::UTF8)
             $text = $sr.ReadToEnd()
