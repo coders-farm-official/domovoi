@@ -265,9 +265,16 @@ they have been tried on fewer devices than the rest, aren't yet held to
   for text chat and push-to-talk voice, in airplane mode too once its
   2.45 GB of models are downloaded. It needs a 64-bit phone with 8 GB of
   memory or more ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)).
-  It answers the time and date from the phone's own clock. A bad reply can
-  be reported (an email draft you send yourself), and its controls, like
-  room mode's, are labelled for screen readers.
+  It answers the time and date from the phone's own clock, and questions
+  about the phone itself (what is playing, the battery, free space, Wi-Fi
+  or mobile data, its music, videos and saved books) from what the phone
+  reads at that moment; the house's rooms and calendar stay in home-server
+  chats. It also acts on the phone after a card or a yes: timers and alarms
+  in the Clock app, the phone's player (with undo), a saved audiobook or
+  video. With a photo it can answer about a picture, on phones whose GPU
+  runs the model's photo encoder (the buttons show only there). A bad reply
+  can be reported (an email draft you send yourself), and its controls,
+  like room mode's, are labelled for screen readers.
 - **A Windows installer.** `DomovoiSetup.exe` puts the Linux
   server inside WSL2 on a Windows 11 PC. It is not code-signed yet;
   download it from the
@@ -320,7 +327,9 @@ they have been tried on fewer devices than the rest, aren't yet held to
    scanning, AI chat and questions as an option, Settings in groups with
    one Health page, One Chat in the app, chat history and titles, the help
    desk, asking a chat about a document and summarizing long ones, looking
-   things up from chat with your permission, the Windows satellite Setup, a smaller (R8-shrunk) release
+   things up from chat with your permission, a phone chat that answers about
+   the phone, does things on it and looks at a photo, the Windows satellite
+   Setup, a smaller (R8-shrunk) release
    build of the app, tablet and sideways-phone screens that clear the
    clock and cutouts, and a repair by Setup that no longer trips the
    container guard.
