@@ -212,6 +212,30 @@ CASES = [
 ]
 
 
+# Review round 2 (strict allowlist reading): these became plain refusals,
+# each written out here by hand. "$-40" is outside the grammar (the sign
+# goes before the currency), "per" after a number refuses, and a listed
+# number its page doesn't show as that exact token refuses the whole
+# calculation instead of being left out.
+BECAME_REFUSALS = {
+    "minus after the currency": "I can't be sure how to read -40 here, so I won't add it up.",
+    "trailing minus": "I can't be sure how to read 40- here, so I won't add it up.",
+    "the page's scale, not the bare digits": "I can't find $2 on p. 2 exactly as listed, so I won't add it up.",
+    "unknown language, the document's own numbers decide": "I can't be sure how to read 1,234.56 here, so I won't add it up.",
+    "a unit the page doesn't have": "I can't find $1,500 on p. 1 exactly as listed, so I won't add it up.",
+    "3.75 is 3.75, not the 75 elsewhere": "I can't find 3.75 on p. 6 exactly as listed, so I won't add it up.",
+    "an unbulleted decimal": "I can't be sure how to read 3.75 here, so I won't add it up.",
+    "an invented number left out": "I can't find $1,300 on p. 1 exactly as listed, so I won't add it up.",
+    "a page that doesn't exist": "I can't find $1,200 on p. 9 exactly as listed, so I won't add it up.",
+    "a time is no number": "I can't find 30 on p. 1 exactly as listed, so I won't add it up.",
+    "a code is no number": "I can't be sure how to read 4 here, so I won't add it up.",
+    "days, a date not on the page": "I can't find April 15, 2026 on p. 7 exactly as listed, so I won't count the days."
+}
+for _c in CASES:
+    if _c["name"] in BECAME_REFUSALS:
+        _c["head"], _c["notes"] = BECAME_REFUSALS[_c["name"]], ["calc_unsure"]
+
+
 def build() -> dict:
     return {"_note": "Written by scripts/dev/calc_cases.py; every expected answer is written by hand. Read by "
                      "domovoi/tests/test_doc_calc.py and DocCalcAdversarialTest.kt.",

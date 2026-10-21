@@ -45,3 +45,43 @@ def test_nothing_unsure_is_ever_labelled_worked_out_by_the_app():
             assert head.startswith("**"), case["name"]
         if head.startswith("I can't be sure") or head.startswith("These numbers are in"):
             assert "calc_worked" not in notes, case["name"]
+
+
+# ─── The review's sets (round 2): a wrong number is never acceptable ────
+REVIEW = json.loads((ROOT / "domovoi" / "doc_qa" / "calc_cases_review.json").read_text(encoding="utf-8"))["cases"]
+
+
+def _parsed(head: str):
+    """(kind, unit, value) of a result line, or the days line; as the review
+    compared them."""
+    import re
+    from decimal import Decimal
+
+    h = head.strip("*")
+    m = re.match(r"(Total|Average|Difference): (\S+)", h)
+    if m:
+        tok = m.group(2)
+        unit = "%" if tok.endswith("%") else next((c for c in tok if c in "$€£"), "")
+        num = re.sub(r"[^\d.\-−()]", "", tok).replace("−", "-")
+        neg = num.startswith("(") or num.startswith("-")
+        try:
+            v = Decimal(num.strip("()-")) * (-1 if neg else 1)
+        except Exception:  # noqa: BLE001
+            return (m.group(1), unit, None)
+        return (m.group(1), unit, v)
+    m = re.match(r"([\d,]+ days? from .+?\d{4} to .+?\d{4})", h)
+    return ("days", m.group(1)) if m else ("other", h)
+
+
+def test_the_review_sets_never_get_a_wrong_number():
+    wrong, correct, refused = [], 0, 0
+    for case in REVIEW:
+        head, notes = calc_cases.run_python(case)
+        if "calc_worked" not in notes:
+            refused += 1
+        elif case["truth"] is not None and _parsed(head) == _parsed(case["truth"]):
+            correct += 1
+        else:
+            wrong.append(f"{case['name']}: {head} (truth {case['truth']})")
+    assert wrong == [], "\n".join(wrong)
+    assert len(REVIEW) == 135 and correct >= 40

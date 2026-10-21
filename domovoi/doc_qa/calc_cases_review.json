@@ -1,0 +1,2042 @@
+{
+ "_note": "The review's adversarial cases for calculate exactly (D3 review round 2: 113 cases, and 22 for the thousands rule). truth is the right answer, or null where none is right. A case passes when the app works out the truth or refuses; working out anything else is a wrong number. Read by domovoi/tests/test_doc_calc.py and DocCalcAdversarialTest.kt.",
+ "cases": [
+  {
+   "group": "lakh",
+   "name": "lakh with rupee sign",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Advance: ₹1,00,000. Brokerage: ₹50,000."
+    }
+   ],
+   "reply": "- ₹1,00,000 [p. 1] advance\n- ₹50,000 [p. 1] brokerage",
+   "truth": "Total: 150,000",
+   "nonce": null
+  },
+  {
+   "group": "lakh",
+   "name": "lakh plain",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Deposit 1,00,000 and rent 25,000 per month."
+    }
+   ],
+   "reply": "- 1,00,000 [p. 1] deposit\n- 25,000 [p. 1] rent",
+   "truth": "Total: 125,000",
+   "nonce": null
+  },
+  {
+   "group": "lakh",
+   "name": "lakh with Rs.",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Rs. 2,50,000 is the fee and Rs. 10,000 the tax."
+    }
+   ],
+   "reply": "- Rs. 2,50,000 [p. 1] fee\n- Rs. 10,000 [p. 1] tax",
+   "truth": "Total: 260,000",
+   "nonce": null
+  },
+  {
+   "group": "lakh",
+   "name": "lakh with decimals",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Total paid 12,34,567.50 and refund 1,000.00."
+    }
+   ],
+   "reply": "- 12,34,567.50 [p. 1] paid\n- 1,000.00 [p. 1] refund",
+   "truth": "Total: 1,235,567.50",
+   "nonce": null
+  },
+  {
+   "group": "lakh",
+   "name": "lakh reformatted by the model",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Deposit 1,00,000 and rent 25,000."
+    }
+   ],
+   "reply": "- 100,000 [p. 1] deposit\n- 25,000 [p. 1] rent",
+   "truth": "Total: 125,000",
+   "nonce": null
+  },
+  {
+   "group": "lakh",
+   "name": "lakh word",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "The loan is 5 lakh and the fee 20,000."
+    }
+   ],
+   "reply": "- 5 lakh [p. 1] loan\n- 20,000 [p. 1] fee",
+   "truth": "Total: 520,000",
+   "nonce": null
+  },
+  {
+   "group": "lakh",
+   "name": "crore word",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Project cost 2 crore; contingency 50,000."
+    }
+   ],
+   "reply": "- 2 crore [p. 1] cost\n- 50,000 [p. 1] contingency",
+   "truth": "Total: 20,050,000",
+   "nonce": null
+  },
+  {
+   "group": "space",
+   "name": "French space thousands, copied whole, two items",
+   "op": "sum",
+   "lang": "fr",
+   "given": [
+    {
+     "label": "p. 2",
+     "text": "Loyer annuel : 1 200,50 €. Charges : 300,00 €."
+    }
+   ],
+   "reply": "- 1 200,50 € [p. 2] loyer\n- 300,00 € [p. 2] charges",
+   "truth": "Total: €1,500.50",
+   "nonce": null
+  },
+  {
+   "group": "space",
+   "name": "French space thousands, copied whole, three items",
+   "op": "sum",
+   "lang": "fr",
+   "given": [
+    {
+     "label": "p. 2",
+     "text": "Loyer annuel : 1 200,50 €. Charges : 300,00 €. Frais de dossier : 99,50 €."
+    }
+   ],
+   "reply": "- 1 200,50 € [p. 2] loyer\n- 300,00 € [p. 2] charges\n- 99,50 € [p. 2] frais",
+   "truth": "Total: €1,600.00",
+   "nonce": null
+  },
+  {
+   "group": "space",
+   "name": "French space thousands, model lists the tail",
+   "op": "sum",
+   "lang": "fr",
+   "given": [
+    {
+     "label": "p. 2",
+     "text": "Loyer annuel : 1 200,50 €. Charges : 300,00 €. Frais de dossier : 99,50 €."
+    }
+   ],
+   "reply": "- 200,50 € [p. 2] loyer\n- 300,00 € [p. 2] charges",
+   "truth": "Total: €1,500.50",
+   "nonce": null
+  },
+  {
+   "group": "space",
+   "name": "no-break space thousands, three items",
+   "op": "sum",
+   "lang": "fr",
+   "given": [
+    {
+     "label": "p. 2",
+     "text": "Loyer : 1 200 €. Charges : 300 €. Frais : 100 €."
+    }
+   ],
+   "reply": "- 1 200 € [p. 2] loyer\n- 300 € [p. 2] charges\n- 100 € [p. 2] frais",
+   "truth": "Total: €1,600",
+   "nonce": null
+  },
+  {
+   "group": "space",
+   "name": "narrow no-break space thousands, tail listed",
+   "op": "sum",
+   "lang": "fr",
+   "given": [
+    {
+     "label": "p. 2",
+     "text": "Loyer : 1 200 €. Charges : 300 €."
+    }
+   ],
+   "reply": "- 200 € [p. 2] loyer\n- 300 € [p. 2] charges",
+   "truth": "Total: €1,500",
+   "nonce": null
+  },
+  {
+   "group": "space",
+   "name": "English SI space thousands",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 2",
+     "text": "The grant is 1 200.50 and the fee 300.00. Bank charge 10.00."
+    }
+   ],
+   "reply": "- 1 200.50 [p. 2] grant\n- 300.00 [p. 2] fee\n- 10.00 [p. 2] bank",
+   "truth": "Total: 1,510.50",
+   "nonce": null
+  },
+  {
+   "group": "space",
+   "name": "thin space thousands, tail listed",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 2",
+     "text": "Price 12 500 and tax 500."
+    }
+   ],
+   "reply": "- 500 [p. 2] price\n- 500 [p. 2] tax",
+   "truth": "Total: 13,000",
+   "nonce": null
+  },
+  {
+   "group": "apostrophe",
+   "name": "Swiss 1'200.50",
+   "op": "sum",
+   "lang": "de",
+   "given": [
+    {
+     "label": "p. 3",
+     "text": "Miete CHF 1'200.50, Nebenkosten CHF 300.00."
+    }
+   ],
+   "reply": "- CHF 1'200.50 [p. 3] Miete\n- CHF 300.00 [p. 3] Nebenkosten",
+   "truth": "Total: 1,500.50",
+   "nonce": null
+  },
+  {
+   "group": "apostrophe",
+   "name": "Swiss 1'200 whole",
+   "op": "sum",
+   "lang": "de",
+   "given": [
+    {
+     "label": "p. 3",
+     "text": "Kaution 1'200 und Gebühr 300."
+    }
+   ],
+   "reply": "- 1'200 [p. 3] Kaution\n- 300 [p. 3] Gebühr",
+   "truth": "Total: 1,500",
+   "nonce": null
+  },
+  {
+   "group": "apostrophe",
+   "name": "Swiss curly apostrophe copied",
+   "op": "sum",
+   "lang": "de",
+   "given": [
+    {
+     "label": "p. 3",
+     "text": "Kaution 1’200, Gebühr 300, Reinigung 100."
+    }
+   ],
+   "reply": "- 1’200 [p. 3] Kaution\n- 300 [p. 3] Gebühr\n- 100 [p. 3] Reinigung",
+   "truth": "Total: 1,600",
+   "nonce": null
+  },
+  {
+   "group": "apostrophe",
+   "name": "Swiss curly apostrophe, tail listed",
+   "op": "sum",
+   "lang": "de",
+   "given": [
+    {
+     "label": "p. 3",
+     "text": "Kaution 1’200, Gebühr 300."
+    }
+   ],
+   "reply": "- 200 [p. 3] Kaution\n- 300 [p. 3] Gebühr",
+   "truth": "Total: 1,500",
+   "nonce": null
+  },
+  {
+   "group": "apostrophe",
+   "name": "Swiss millions",
+   "op": "sum",
+   "lang": "de",
+   "given": [
+    {
+     "label": "p. 3",
+     "text": "Preis 1'200'000 und Anzahlung 500'000."
+    }
+   ],
+   "reply": "- 1'200'000 [p. 3] Preis\n- 500'000 [p. 3] Anzahlung",
+   "truth": "Total: 1,700,000",
+   "nonce": null
+  },
+  {
+   "group": "apostrophe",
+   "name": "apostrophe with two-digit group",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 3",
+     "text": "Codes 1'20 and 300."
+    }
+   ],
+   "reply": "- 1'20 [p. 3] a\n- 300 [p. 3] b",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "currency",
+   "name": "dollar sign after",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 4",
+     "text": "Fee 40 $ and charge $10."
+    }
+   ],
+   "reply": "- 40 $ [p. 4] fee\n- $10 [p. 4] charge",
+   "truth": "Total: $50",
+   "nonce": null
+  },
+  {
+   "group": "currency",
+   "name": "euro after, French",
+   "op": "sum",
+   "lang": "fr",
+   "given": [
+    {
+     "label": "p. 4",
+     "text": "Frais 40 € et 10 €."
+    }
+   ],
+   "reply": "- 40 € [p. 4] frais\n- 10 € [p. 4] autre",
+   "truth": "Total: €50",
+   "nonce": null
+  },
+  {
+   "group": "currency",
+   "name": "USD code both",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 4",
+     "text": "Fee USD 40 and charge USD 10."
+    }
+   ],
+   "reply": "- USD 40 [p. 4] fee\n- USD 10 [p. 4] charge",
+   "truth": "Total: 50",
+   "nonce": null
+  },
+  {
+   "group": "currency",
+   "name": "USD and EUR codes",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 4",
+     "text": "Fee USD 40 and charge EUR 10."
+    }
+   ],
+   "reply": "- USD 40 [p. 4] fee\n- EUR 10 [p. 4] charge",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "currency",
+   "name": "dollars and euros in words",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 4",
+     "text": "A fee of 40 dollars and a charge of 10 euros."
+    }
+   ],
+   "reply": "- 40 dollars [p. 4] fee\n- 10 euros [p. 4] charge",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "currency",
+   "name": "US$ and A$",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 4",
+     "text": "Fee US$40, charge A$10."
+    }
+   ],
+   "reply": "- US$40 [p. 4] fee\n- A$10 [p. 4] charge",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "currency",
+   "name": "yen and rupee signs",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 4",
+     "text": "Fee ¥1,200 and charge ₹500."
+    }
+   ],
+   "reply": "- ¥1,200 [p. 4] fee\n- ₹500 [p. 4] charge",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "currency",
+   "name": "dollar sign and dollars word",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 4",
+     "text": "Fee $40 and a charge of 40 dollars."
+    }
+   ],
+   "reply": "- $40 [p. 4] fee\n- 40 dollars [p. 4] charge",
+   "truth": "Total: $80",
+   "nonce": null
+  },
+  {
+   "group": "currency",
+   "name": "Brazilian R$",
+   "op": "sum",
+   "lang": "pt",
+   "given": [
+    {
+     "label": "p. 4",
+     "text": "Aluguel R$ 1.200,00 e taxa R$ 300,00."
+    }
+   ],
+   "reply": "- R$ 1.200,00 [p. 4] aluguel\n- R$ 300,00 [p. 4] taxa",
+   "truth": "Total: 1,500.00",
+   "nonce": null
+  },
+  {
+   "group": "currency",
+   "name": "USD and EUR codes after",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 4",
+     "text": "Fee 40 USD, charge 10 EUR."
+    }
+   ],
+   "reply": "- 40 USD [p. 4] fee\n- 10 EUR [p. 4] charge",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "currency",
+   "name": "pound and pence",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 4",
+     "text": "Stamp £1.20 and envelope 40p."
+    }
+   ],
+   "reply": "- £1.20 [p. 4] stamp\n- 40p [p. 4] envelope",
+   "truth": "Total: £1.60",
+   "nonce": null
+  },
+  {
+   "group": "currency",
+   "name": "CHF and euro sign",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 4",
+     "text": "Fee CHF 40, charge €10."
+    }
+   ],
+   "reply": "- CHF 40 [p. 4] fee\n- €10 [p. 4] charge",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "range",
+   "name": "en-dash range copied whole",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 5",
+     "text": "Cleaning $40–50 per visit. Key fee $100."
+    }
+   ],
+   "reply": "- $40–50 [p. 5] cleaning\n- $100 [p. 5] key",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "range",
+   "name": "en-dash range, low end listed",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 5",
+     "text": "Cleaning $40–50 per visit. Key fee $100."
+    }
+   ],
+   "reply": "- $40 [p. 5] cleaning\n- $100 [p. 5] key",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "range",
+   "name": "hyphen range, low end listed",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 5",
+     "text": "Cleaning $40-50 per visit. Key fee $100."
+    }
+   ],
+   "reply": "- $40 [p. 5] cleaning\n- $100 [p. 5] key",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "range",
+   "name": "hyphen range, both ends listed",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 5",
+     "text": "Cleaning $40-50 per visit."
+    }
+   ],
+   "reply": "- $40 [p. 5] low\n- 50 [p. 5] high",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "range",
+   "name": "spaced en-dash range, both ends listed",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 5",
+     "text": "Cleaning costs $40 – $50."
+    }
+   ],
+   "reply": "- $40 [p. 5] low\n- $50 [p. 5] high",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "range",
+   "name": "to-range, both ends listed",
+   "op": "average",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 5",
+     "text": "Cleaning costs from $40 to $50."
+    }
+   ],
+   "reply": "- $40 [p. 5] low\n- $50 [p. 5] high",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "approx",
+   "name": "approx. before",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 6",
+     "text": "Utilities approx. $40. Rent $60."
+    }
+   ],
+   "reply": "- approx. $40 [p. 6] utilities\n- $60 [p. 6] rent",
+   "truth": "Total: $100",
+   "nonce": null
+  },
+  {
+   "group": "approx",
+   "name": "tilde before",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 6",
+     "text": "Utilities ~$40. Rent $60."
+    }
+   ],
+   "reply": "- ~$40 [p. 6] utilities\n- $60 [p. 6] rent",
+   "truth": "Total: $100",
+   "nonce": null
+  },
+  {
+   "group": "approx",
+   "name": "ca. German",
+   "op": "sum",
+   "lang": "de",
+   "given": [
+    {
+     "label": "p. 6",
+     "text": "Nebenkosten ca. 40 €, Miete 60 €."
+    }
+   ],
+   "reply": "- ca. 40 € [p. 6] Nebenkosten\n- 60 € [p. 6] Miete",
+   "truth": "Total: €100",
+   "nonce": null
+  },
+  {
+   "group": "approx",
+   "name": "plus sign after",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 6",
+     "text": "Utilities $40+ and rent $60."
+    }
+   ],
+   "reply": "- $40+ [p. 6] utilities\n- $60 [p. 6] rent",
+   "truth": "Total: $100",
+   "nonce": null
+  },
+  {
+   "group": "footnote",
+   "name": "superscript one copied",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 7",
+     "text": "Pet fee $40¹ and rent $60."
+    }
+   ],
+   "reply": "- $40¹ [p. 7] pet fee\n- $60 [p. 7] rent",
+   "truth": "Total: $100",
+   "nonce": null
+  },
+  {
+   "group": "footnote",
+   "name": "superscript one, bare number listed",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 7",
+     "text": "Pet fee $40¹, rent $60, key $5."
+    }
+   ],
+   "reply": "- $40 [p. 7] pet fee\n- $60 [p. 7] rent\n- $5 [p. 7] key",
+   "truth": "Total: $105",
+   "nonce": null
+  },
+  {
+   "group": "footnote",
+   "name": "superscript two copied",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 7",
+     "text": "Pet fee $40² and rent $60."
+    }
+   ],
+   "reply": "- $40² [p. 7] pet fee\n- $60 [p. 7] rent",
+   "truth": "Total: $100",
+   "nonce": null
+  },
+  {
+   "group": "footnote",
+   "name": "asterisk",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 7",
+     "text": "Pet fee $40* and rent $60."
+    }
+   ],
+   "reply": "- $40* [p. 7] pet fee\n- $60 [p. 7] rent",
+   "truth": "Total: $100",
+   "nonce": null
+  },
+  {
+   "group": "footnote",
+   "name": "bracket footnote",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 7",
+     "text": "Pet fee $40[1] and rent $60."
+    }
+   ],
+   "reply": "- $40[1] [p. 7] pet fee\n- $60 [p. 7] rent",
+   "truth": "Total: $100",
+   "nonce": null
+  },
+  {
+   "group": "footnote",
+   "name": "vulgar fraction percent",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 7",
+     "text": "Rate 2½% plus 1%."
+    }
+   ],
+   "reply": "- 2½% [p. 7] rate\n- 1% [p. 7] plus",
+   "truth": "Total: 3.5%",
+   "nonce": null
+  },
+  {
+   "group": "percent",
+   "name": "percent of an amount summed",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 8",
+     "text": "Late fee is 5% of $1,200."
+    }
+   ],
+   "reply": "- 5% [p. 8] late fee\n- $1,200 [p. 8] rent",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "percent",
+   "name": "difference of two rates",
+   "op": "difference",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 8",
+     "text": "Rate 5% in 2025, 3.5% in 2026."
+    }
+   ],
+   "reply": "- 5% [p. 8] 2025\n- 3.5% [p. 8] 2026",
+   "truth": "Difference: 1.5%",
+   "nonce": null
+  },
+  {
+   "group": "percent",
+   "name": "average of three rates",
+   "op": "average",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 8",
+     "text": "Rates were 10%, 20% and 25%."
+    }
+   ],
+   "reply": "- 10% [p. 8] a\n- 20% [p. 8] b\n- 25% [p. 8] c",
+   "truth": "Average: 18.33%",
+   "nonce": null
+  },
+  {
+   "group": "percent",
+   "name": "average of amount and rate",
+   "op": "average",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 8",
+     "text": "Rent $1,200, increase 15%."
+    }
+   ],
+   "reply": "- $1,200 [p. 8] rent\n- 15% [p. 8] increase",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "dates",
+   "name": "dates listed in reverse",
+   "op": "days",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 9",
+     "text": "Inspection March 15, 2026. Move-in March 1, 2026."
+    }
+   ],
+   "reply": "- March 15, 2026 [p. 9] inspection\n- March 1, 2026 [p. 9] move-in",
+   "truth": "14 days from March 1, 2026 to March 15, 2026",
+   "nonce": null
+  },
+  {
+   "group": "dates",
+   "name": "leap year 2024",
+   "op": "days",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 9",
+     "text": "From February 28, 2024 to March 1, 2024."
+    }
+   ],
+   "reply": "- February 28, 2024 [p. 9] a\n- March 1, 2024 [p. 9] b",
+   "truth": "2 days from February 28, 2024 to March 1, 2024",
+   "nonce": null
+  },
+  {
+   "group": "dates",
+   "name": "no leap 2025",
+   "op": "days",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 9",
+     "text": "From February 28, 2025 to March 1, 2025."
+    }
+   ],
+   "reply": "- February 28, 2025 [p. 9] a\n- March 1, 2025 [p. 9] b",
+   "truth": "1 day from February 28, 2025 to March 1, 2025",
+   "nonce": null
+  },
+  {
+   "group": "dates",
+   "name": "Feb 29 in a common year",
+   "op": "days",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 9",
+     "text": "From February 29, 2025 to March 10, 2025."
+    }
+   ],
+   "reply": "- February 29, 2025 [p. 9] a\n- March 10, 2025 [p. 9] b",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "dates",
+   "name": "1900 is no leap year",
+   "op": "days",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 9",
+     "text": "From February 28, 1900 to March 1, 1900."
+    }
+   ],
+   "reply": "- February 28, 1900 [p. 9] a\n- March 1, 1900 [p. 9] b",
+   "truth": "1 day from February 28, 1900 to March 1, 1900",
+   "nonce": null
+  },
+  {
+   "group": "dates",
+   "name": "2000 is a leap year, ISO",
+   "op": "days",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 9",
+     "text": "From 2000-02-28 to 2000-03-01."
+    }
+   ],
+   "reply": "- 2000-02-28 [p. 9] a\n- 2000-03-01 [p. 9] b",
+   "truth": "2 days from February 28, 2000 to March 1, 2000",
+   "nonce": null
+  },
+  {
+   "group": "dates",
+   "name": "Spanish month names",
+   "op": "days",
+   "lang": "es",
+   "given": [
+    {
+     "label": "p. 9",
+     "text": "El contrato empieza el 1 de marzo de 2026 y la inspección es el 15 de abril de 2026."
+    }
+   ],
+   "reply": "- 1 de marzo de 2026 [p. 9] inicio\n- 15 de abril de 2026 [p. 9] inspección",
+   "truth": "45 days from March 1, 2026 to April 15, 2026",
+   "nonce": null
+  },
+  {
+   "group": "dates",
+   "name": "Spanish January to December",
+   "op": "days",
+   "lang": "es",
+   "given": [
+    {
+     "label": "p. 9",
+     "text": "Del 1 de enero de 2026 al 1 de diciembre de 2026."
+    }
+   ],
+   "reply": "- 1 de enero de 2026 [p. 9] a\n- 1 de diciembre de 2026 [p. 9] b",
+   "truth": "334 days from January 1, 2026 to December 1, 2026",
+   "nonce": null
+  },
+  {
+   "group": "dates",
+   "name": "Spanish ordinal 1º",
+   "op": "days",
+   "lang": "es",
+   "given": [
+    {
+     "label": "p. 9",
+     "text": "Del 1º de marzo de 2026 al 15 de marzo de 2026."
+    }
+   ],
+   "reply": "- 1º de marzo de 2026 [p. 9] a\n- 15 de marzo de 2026 [p. 9] b",
+   "truth": "14 days from March 1, 2026 to March 15, 2026",
+   "nonce": null
+  },
+  {
+   "group": "dates",
+   "name": "Spanish abbreviation abr.",
+   "op": "days",
+   "lang": "es",
+   "given": [
+    {
+     "label": "p. 9",
+     "text": "Del 1 mar. 2026 al 15 abr. 2026."
+    }
+   ],
+   "reply": "- 1 mar. 2026 [p. 9] a\n- 15 abr. 2026 [p. 9] b",
+   "truth": "45 days from March 1, 2026 to April 15, 2026",
+   "nonce": null
+  },
+  {
+   "group": "dates",
+   "name": "Spanish numeric across the year",
+   "op": "days",
+   "lang": "es",
+   "given": [
+    {
+     "label": "p. 9",
+     "text": "Del 31/12/2025 al 01/03/2026."
+    }
+   ],
+   "reply": "- 31/12/2025 [p. 9] a\n- 01/03/2026 [p. 9] b",
+   "truth": "60 days from December 31, 2025 to March 1, 2026",
+   "nonce": null
+  },
+  {
+   "group": "dates",
+   "name": "Spanish leap day numeric",
+   "op": "days",
+   "lang": "es",
+   "given": [
+    {
+     "label": "p. 9",
+     "text": "Del 29/02/2024 al 01/03/2024."
+    }
+   ],
+   "reply": "- 29/02/2024 [p. 9] a\n- 01/03/2024 [p. 9] b",
+   "truth": "1 day from February 29, 2024 to March 1, 2024",
+   "nonce": null
+  },
+  {
+   "group": "dates",
+   "name": "Spanish month name mixed case",
+   "op": "days",
+   "lang": "es",
+   "given": [
+    {
+     "label": "p. 9",
+     "text": "Desde el 5 de Mayo de 2026 hasta el 5 de Junio de 2026."
+    }
+   ],
+   "reply": "- 5 de Mayo de 2026 [p. 9] a\n- 5 de Junio de 2026 [p. 9] b",
+   "truth": "31 days from May 5, 2026 to June 5, 2026",
+   "nonce": null
+  },
+  {
+   "group": "dates",
+   "name": "English doc, its own 13/02 decides",
+   "op": "days",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 9",
+     "text": "Signed 01/02/2026; handover 13/02/2026."
+    }
+   ],
+   "reply": "- 01/02/2026 [p. 9] signed\n- 13/02/2026 [p. 9] handover",
+   "truth": "12 days from February 1, 2026 to February 13, 2026",
+   "nonce": null
+  },
+  {
+   "group": "dates",
+   "name": "two-digit years",
+   "op": "days",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 9",
+     "text": "From 01/03/26 to 15/03/26."
+    }
+   ],
+   "reply": "- 01/03/26 [p. 9] a\n- 15/03/26 [p. 9] b",
+   "truth": "14 days from March 1, 2026 to March 15, 2026",
+   "nonce": null
+  },
+  {
+   "group": "dates",
+   "name": "dashed day-first dates",
+   "op": "days",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 9",
+     "text": "From 01-03-2026 to 15-03-2026."
+    }
+   ],
+   "reply": "- 01-03-2026 [p. 9] a\n- 15-03-2026 [p. 9] b",
+   "truth": "14 days from March 1, 2026 to March 15, 2026",
+   "nonce": null
+  },
+  {
+   "group": "dates",
+   "name": "a date range on the page, two dates listed",
+   "op": "days",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 9",
+     "text": "The event runs March 1–15, 2026."
+    }
+   ],
+   "reply": "- March 1, 2026 [p. 9] start\n- March 15, 2026 [p. 9] end",
+   "truth": "14 days from March 1, 2026 to March 15, 2026",
+   "nonce": null
+  },
+  {
+   "group": "dates",
+   "name": "minus-looking ISO with a bad day",
+   "op": "days",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 9",
+     "text": "From 2026-02-30 to 2026-03-05."
+    }
+   ],
+   "reply": "- 2026-02-30 [p. 9] a\n- 2026-03-05 [p. 9] b",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "dates",
+   "name": "a year number is not a date",
+   "op": "days",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 9",
+     "text": "Built in 1998, renovated in 2021."
+    }
+   ],
+   "reply": "- 1998 [p. 9] built\n- 2021 [p. 9] renovated",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "split",
+   "name": "thousands split after the comma",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 10",
+     "text": "Rent: $1,\n200 per month. Deposit $500. Fee $10."
+    }
+   ],
+   "reply": "- $1,200 [p. 10] rent\n- $500 [p. 10] deposit\n- $10 [p. 10] fee",
+   "truth": "Total: $1,710",
+   "nonce": null
+  },
+  {
+   "group": "split",
+   "name": "currency sign at the end of a line",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 10",
+     "text": "Charges: $1,200 rent and $\n300 deposit."
+    }
+   ],
+   "reply": "- $1,200 [p. 10] rent\n- $300 [p. 10] deposit",
+   "truth": "Total: $1,500",
+   "nonce": null
+  },
+  {
+   "group": "split",
+   "name": "minus at the end of a line, spaced",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 10",
+     "text": "Rent $100. Credit: - $40."
+    }
+   ],
+   "reply": "- $100 [p. 10] rent\n- - $40 [p. 10] credit",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "split",
+   "name": "decimals on the next line",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 10",
+     "text": "Rent 1,200.\n50 is the fee. Tax 10."
+    }
+   ],
+   "reply": "- 1,200 [p. 10] rent\n- 50 [p. 10] fee\n- 10 [p. 10] tax",
+   "truth": "Total: 1,260",
+   "nonce": null
+  },
+  {
+   "group": "split",
+   "name": "tail of a line-split number listed",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 10",
+     "text": "Grant 12\n500 awarded. Fee 500."
+    }
+   ],
+   "reply": "- 500 [p. 10] grant\n- 500 [p. 10] fee",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "sign",
+   "name": "U+2010 hyphen as minus",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 11",
+     "text": "Credit ‐$40 and rent $100."
+    }
+   ],
+   "reply": "- ‐$40 [p. 11] credit\n- $100 [p. 11] rent",
+   "truth": "Total: $60",
+   "nonce": null
+  },
+  {
+   "group": "sign",
+   "name": "U+2012 figure dash as minus",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 11",
+     "text": "Credit ‒40 and rent 100."
+    }
+   ],
+   "reply": "- ‒40 [p. 11] credit\n- 100 [p. 11] rent",
+   "truth": "Total: 60",
+   "nonce": null
+  },
+  {
+   "group": "sign",
+   "name": "U+FE63 small hyphen-minus",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 11",
+     "text": "Credit ﹣$40 and rent $100."
+    }
+   ],
+   "reply": "- ﹣$40 [p. 11] credit\n- $100 [p. 11] rent",
+   "truth": "Total: $60",
+   "nonce": null
+  },
+  {
+   "group": "sign",
+   "name": "U+FF0D fullwidth minus",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 11",
+     "text": "Credit －40 and rent 100."
+    }
+   ],
+   "reply": "- －40 [p. 11] credit\n- 100 [p. 11] rent",
+   "truth": "Total: 60",
+   "nonce": null
+  },
+  {
+   "group": "sign",
+   "name": "CR credit suffix",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 11",
+     "text": "Balance $40.00 CR. Rent $100.00."
+    }
+   ],
+   "reply": "- $40.00 CR [p. 11] balance\n- $100.00 [p. 11] rent",
+   "truth": "Total: $60.00",
+   "nonce": null
+  },
+  {
+   "group": "sign",
+   "name": "DR/CR ledger listed bare",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 11",
+     "text": "Opening 500.00 DR, payment 200.00 CR."
+    }
+   ],
+   "reply": "- 500.00 [p. 11] opening\n- 200.00 [p. 11] payment",
+   "truth": "Total: 300.00",
+   "nonce": null
+  },
+  {
+   "group": "scale",
+   "name": "Spanish mil millones",
+   "op": "sum",
+   "lang": "es",
+   "given": [
+    {
+     "label": "p. 12",
+     "text": "El presupuesto es de 3 mil millones y la reserva de 500 millones."
+    }
+   ],
+   "reply": "- 3 mil millones [p. 12] presupuesto\n- 500 millones [p. 12] reserva",
+   "truth": "Total: 3,500,000,000",
+   "nonce": null
+  },
+  {
+   "group": "scale",
+   "name": "English $5 mil",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 12",
+     "text": "The fund raised $5 mil and $200,000 more."
+    }
+   ],
+   "reply": "- $5 mil [p. 12] fund\n- $200,000 [p. 12] more",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "scale",
+   "name": "Spanish 1,5 millones",
+   "op": "sum",
+   "lang": "es",
+   "given": [
+    {
+     "label": "p. 12",
+     "text": "Costo 1,5 millones y 200.000."
+    }
+   ],
+   "reply": "- 1,5 millones [p. 12] costo\n- 200.000 [p. 12] otro",
+   "truth": "Total: 1,700,000",
+   "nonce": null
+  },
+  {
+   "group": "scale",
+   "name": "Spanish billones (10^12)",
+   "op": "sum",
+   "lang": "es",
+   "given": [
+    {
+     "label": "p. 12",
+     "text": "Deuda de 2 billones y 500 millones."
+    }
+   ],
+   "reply": "- 2 billones [p. 12] deuda\n- 500 millones [p. 12] otro",
+   "truth": "Total: 2,000,500,000,000",
+   "nonce": null
+  },
+  {
+   "group": "scale",
+   "name": "English trillion",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 12",
+     "text": "Debt $2 trillion and $500 billion."
+    }
+   ],
+   "reply": "- $2 trillion [p. 12] debt\n- $500 billion [p. 12] more",
+   "truth": "Total: $2,500,000,000,000",
+   "nonce": null
+  },
+  {
+   "group": "scale",
+   "name": "German Mio.",
+   "op": "sum",
+   "lang": "de",
+   "given": [
+    {
+     "label": "p. 12",
+     "text": "Kosten 1,5 Mio. und 500.000."
+    }
+   ],
+   "reply": "- 1,5 Mio. [p. 12] Kosten\n- 500.000 [p. 12] Rest",
+   "truth": "Total: 2,000,000",
+   "nonce": null
+  },
+  {
+   "group": "scale",
+   "name": "German Mrd. and Millionen",
+   "op": "sum",
+   "lang": "de",
+   "given": [
+    {
+     "label": "p. 12",
+     "text": "Umsatz 2 Mrd. und 300 Millionen."
+    }
+   ],
+   "reply": "- 2 Mrd. [p. 12] Umsatz\n- 300 Millionen [p. 12] Rest",
+   "truth": "Total: 2,300,000,000",
+   "nonce": null
+  },
+  {
+   "group": "scale",
+   "name": "German Tsd.",
+   "op": "sum",
+   "lang": "de",
+   "given": [
+    {
+     "label": "p. 12",
+     "text": "Kaution 3 Tsd. und Gebühr 500."
+    }
+   ],
+   "reply": "- 3 Tsd. [p. 12] Kaution\n- 500 [p. 12] Gebühr",
+   "truth": "Total: 3,500",
+   "nonce": null
+  },
+  {
+   "group": "overlap",
+   "name": "line items, a passage boundary on the deposit line",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 3",
+     "text": "Line item 1: service charge 17 units Line item 2: service charge 27 units Line item 3: service charge 37 units Line item 4: service charge 47 units Line item 5: service charge 57 units Line item 6: service charge 67 units Line item 7: service charge 77 units Line item 8: service charge 87 units Line item 9: service charge 97 units Line item 10: service charge 107 units Line item 11: service charge 117 units Line item 12: service charge 127 units Line item 13: service charge 137 units Line item 14: service charge 147 units Line item 15: service charge 157 units Line item 16: service charge 167 units Line item 17: service charge 177 units Line item 18: service charge 187 units Line item 19: service charge 197 units Line item 20: service charge 207 units Line item 21: service charge 217 units Line item 22: service charge 227 units Line item 23: service charge 237 units Line item 24: service charge 247 units Line item 25: service charge 257 units Line item 26: service charge 267 units Line item 27: service charge 277 units Line item 28: service charge 287 units Line item 29: service charge 297 units Line item 30: service charge 307 units Rent: $1,200 Deposit: $1,500",
+     "part": 0
+    },
+    {
+     "label": "p. 3",
+     "text": "Deposit: $1,500 Line item 33: service charge 337 units Line item 34: service charge 347 units Line item 35: service charge 357 units Line item 36: service charge 367 units Line item 37: service charge 377 units Line item 38: service charge 387 units Line item 39: service charge 397 units Line item 40: service charge 407 units Line item 41: service charge 417 units Line item 42: service charge 427 units Line item 43: service charge 437 units Line item 44: service charge 447 units Line item 45: service charge 457 units Line item 46: service charge 467 units Line item 47: service charge 477 units Line item 48: service charge 487 units Line item 49: service charge 497 units Line item 50: service charge 507 units Line item 51: service charge 517 units Line item 52: service charge 527 units Line item 53: service charge 537 units Line item 54: service charge 547 units Line item 55: service charge 557 units Line item 56: service charge 567 units Line item 57: service charge 577 units Line item 58: service charge 587 units Line item 59: service charge 597 units",
+     "part": 0
+    }
+   ],
+   "reply": "- $1,200 [p. 3] rent\n- $1,500 [p. 3] deposit\n- $1,500 [p. 3] deposit",
+   "truth": "Total: $2,700",
+   "nonce": null
+  },
+  {
+   "group": "overlap",
+   "name": "a passage boundary after a question mark",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 4",
+     "text": "Clause 1 applies here and says a few things. Clause 2 applies here and says a few things. Clause 3 applies here and says a few things. Clause 4 applies here and says a few things. Clause 5 applies here and says a few things. Clause 6 applies here and says a few things. Clause 7 applies here and says a few things. Clause 8 applies here and says a few things. Clause 9 applies here and says a few things. Clause 10 applies here and says a few things. Clause 11 applies here and says a few things. Clause 12 applies here and says a few things. Clause 13 applies here and says a few things. Clause 14 applies here and says a few things. Clause 15 applies here and says a few things. Clause 16 applies here and says a few things. Clause 17 applies here and says a few things. Clause 18 applies here and says a few things. Clause 19 applies here and says a few things. Clause 20 applies here and says a few things. Clause 21 applies here and says a few things. Clause 22 applies here and says a few things. Clause 23 applies here and says a few things. Clause 24 applies here and says a few things. Rent is $1,200. Clause 26 applies here and says a few things. Is that all? Deposit is $1,500.",
+     "part": 0
+    },
+    {
+     "label": "p. 4",
+     "text": "Deposit is $1,500. Clause 29 applies here and says a few things. Clause 30 applies here and says a few things. Clause 31 applies here and says a few things. Clause 32 applies here and says a few things. Clause 33 applies here and says a few things. Clause 34 applies here and says a few things. Clause 35 applies here and says a few things. Clause 36 applies here and says a few things. Clause 37 applies here and says a few things. Clause 38 applies here and says a few things. Clause 39 applies here and says a few things. Clause 40 applies here and says a few things. Clause 41 applies here and says a few things. Clause 42 applies here and says a few things. Clause 43 applies here and says a few things. Clause 44 applies here and says a few things. Clause 45 applies here and says a few things. Clause 46 applies here and says a few things. Clause 47 applies here and says a few things. Clause 48 applies here and says a few things. Clause 49 applies here and says a few things. Clause 50 applies here and says a few things. Clause 51 applies here and says a few things. Clause 52 applies here and says a few things. Clause 53 applies here and says a few things.",
+     "part": 0
+    }
+   ],
+   "reply": "- $1,200 [p. 4] rent\n- $1,500 [p. 4] deposit\n- $1,500 [p. 4] deposit",
+   "truth": "Total: $2,700",
+   "nonce": null
+  },
+  {
+   "group": "misc",
+   "name": "short English doc, $1,500 (builder's open limit)",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Rent $1,200. Deposit $1,500."
+    }
+   ],
+   "reply": "- $1,200 [p. 1] rent\n- $1,500 [p. 1] deposit",
+   "truth": "Total: $2,700",
+   "nonce": null
+  },
+  {
+   "group": "misc",
+   "name": "fuel price $3.499, language unknown",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Gas $3.499/gal, wash $5."
+    }
+   ],
+   "reply": "- $3.499 [p. 1] gas\n- $5 [p. 1] wash",
+   "truth": "Total: $8.499",
+   "nonce": null
+  },
+  {
+   "group": "misc",
+   "name": "Irish fuel €1.749 per litre, English",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Petrol €1.749 per litre, diesel €1.689."
+    }
+   ],
+   "reply": "- €1.749 [p. 1] petrol\n- €1.689 [p. 1] diesel",
+   "truth": "Total: €3.438",
+   "nonce": null
+  },
+  {
+   "group": "misc",
+   "name": "French fuel 1,459 €/l, language unknown",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Gazole 1,459 €/l ; SP95 1,689 €/l."
+    }
+   ],
+   "reply": "- 1,459 € [p. 1] gazole\n- 1,689 € [p. 1] SP95",
+   "truth": "Total: €3.148",
+   "nonce": null
+  },
+  {
+   "group": "misc",
+   "name": "Kuwaiti dinar 3 decimals, language unknown",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Fee KD 1.250 and KD 2.500."
+    }
+   ],
+   "reply": "- KD 1.250 [p. 1] a\n- KD 2.500 [p. 1] b",
+   "truth": "Total: 3.750",
+   "nonce": null
+  },
+  {
+   "group": "misc",
+   "name": "Arabic-Indic digits",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Fee ٤٠ and charge ١٠."
+    }
+   ],
+   "reply": "- ٤٠ [p. 1] fee\n- ١٠ [p. 1] charge",
+   "truth": "Total: 50",
+   "nonce": null
+  },
+  {
+   "group": "misc",
+   "name": "big numbers keep cents",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Price $12,345,678.91 and fee $0.09."
+    }
+   ],
+   "reply": "- $12,345,678.91 [p. 1] price\n- $0.09 [p. 1] fee",
+   "truth": "Total: $12,345,679.00",
+   "nonce": null
+  },
+  {
+   "group": "misc",
+   "name": "0.1 + 0.2",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Rates 0.1 and 0.2."
+    }
+   ],
+   "reply": "- 0.1 [p. 1] a\n- 0.2 [p. 1] b",
+   "truth": "Total: 0.3",
+   "nonce": null
+  },
+  {
+   "group": "misc",
+   "name": "percent and plain",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Rate 15% and 15 units."
+    }
+   ],
+   "reply": "- 15% [p. 1] rate\n- 15 [p. 1] units",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "misc",
+   "name": "Spanish doc, model writes English thousands",
+   "op": "sum",
+   "lang": "es",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Fianza 1.200 € y renta 950 €."
+    }
+   ],
+   "reply": "- 1,200 € [p. 1] fianza\n- 950 € [p. 1] renta",
+   "truth": "Total: €2,150",
+   "nonce": null
+  },
+  {
+   "group": "misc",
+   "name": "Spanish doc, model writes 1.5 for 1,5",
+   "op": "sum",
+   "lang": "es",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Tasa 1,5 % y 2,5 %."
+    }
+   ],
+   "reply": "- 1.5 % [p. 1] a\n- 2.5 % [p. 1] b",
+   "truth": "Total: 4.0%",
+   "nonce": null
+  },
+  {
+   "group": "misc",
+   "name": "difference with a negative",
+   "op": "difference",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Balance -$40 in May, $60 in June."
+    }
+   ],
+   "reply": "- -$40 [p. 1] May\n- $60 [p. 1] June",
+   "truth": "Difference: $100",
+   "nonce": null
+  },
+  {
+   "group": "misc",
+   "name": "average of negatives",
+   "op": "average",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Changes (10.00), (20.00) and 5.00."
+    }
+   ],
+   "reply": "- (10.00) [p. 1] a\n- (20.00) [p. 1] b\n- 5.00 [p. 1] c",
+   "truth": "Average: -8.33",
+   "nonce": null
+  },
+  {
+   "group": "misc",
+   "name": "number glued to a word after",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Fee 40USD and 10USD."
+    }
+   ],
+   "reply": "- 40USD [p. 1] a\n- 10USD [p. 1] b",
+   "truth": "Total: 50",
+   "nonce": null
+  },
+  {
+   "group": "misc",
+   "name": "the model copies a plus sign",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Rent $100 and +$20 surcharge."
+    }
+   ],
+   "reply": "- $100 [p. 1] rent\n- +$20 [p. 1] surcharge",
+   "truth": "Total: $120",
+   "nonce": null
+  },
+  {
+   "group": "misc",
+   "name": "x multiplier",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Two bins at 2 x $15, plus $10 setup."
+    }
+   ],
+   "reply": "- 2 x $15 [p. 1] bins\n- $10 [p. 1] setup",
+   "truth": "Total: $40",
+   "nonce": null
+  },
+  {
+   "group": "misc",
+   "name": "per-month amount times twelve stays listed",
+   "op": "sum",
+   "lang": "en",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "$100/month and $50 once."
+    }
+   ],
+   "reply": "- $100/month [p. 1] a\n- $50 [p. 1] b",
+   "truth": "Total: $150",
+   "nonce": null
+  },
+  {
+   "group": "es-dollar",
+   "name": "Mexican lease, $8,500 in Spanish",
+   "op": "sum",
+   "lang": "es",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Renta mensual: $8,500. Depósito en garantía: $8,500."
+    }
+   ],
+   "reply": "- $8,500 [p. 1] renta\n- $8,500 [p. 1] depósito",
+   "truth": "Total: $17,000",
+   "nonce": null
+  },
+  {
+   "group": "es-dollar",
+   "name": "Mexican lease with cents, Spanish",
+   "op": "sum",
+   "lang": "es",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Renta mensual: $8,500.00. Depósito: $8,500.00."
+    }
+   ],
+   "reply": "- $8,500.00 [p. 1] renta\n- $8,500.00 [p. 1] depósito",
+   "truth": "Total: $17,000.00",
+   "nonce": null
+  },
+  {
+   "group": "es-dollar",
+   "name": "US dollars quoted in a French doc",
+   "op": "sum",
+   "lang": "fr",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Le loyer est de $1,500 et la caution de $1,500 également."
+    }
+   ],
+   "reply": "- $1,500 [p. 1] loyer\n- $1,500 [p. 1] caution",
+   "truth": "Total: $3,000",
+   "nonce": null
+  },
+  {
+   "group": "es-dollar",
+   "name": "Argentine pesos, dot thousands, Spanish",
+   "op": "sum",
+   "lang": "es",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Alquiler $150.000 y expensas $25.000."
+    }
+   ],
+   "reply": "- $150.000 [p. 1] alquiler\n- $25.000 [p. 1] expensas",
+   "truth": "Total: $175,000",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "short doc $1,500",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Rent $1,200. Deposit $1,500."
+    }
+   ],
+   "reply": "- $1,200 [p. 1] rent\n- $1,500 [p. 1] deposit",
+   "truth": "Total: $2,700",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "short doc £1,500",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Rent £1,200. Deposit £1,500."
+    }
+   ],
+   "reply": "- £1,200 [p. 1] rent\n- £1,500 [p. 1] deposit",
+   "truth": "Total: £2,700",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "short doc €1,500 (Irish)",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Rent €1,200. Deposit €1,500."
+    }
+   ],
+   "reply": "- €1,200 [p. 1] rent\n- €1,500 [p. 1] deposit",
+   "truth": "Total: €2,700",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "short doc 1.500 € (Spanish)",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Fianza 1.500 €. Renta 1.200 €."
+    }
+   ],
+   "reply": "- 1.500 € [p. 1] fianza\n- 1.200 € [p. 1] renta",
+   "truth": "Total: €2,700",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "short doc US gas $3.499",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Gas $3.499/gal. Wash $5."
+    }
+   ],
+   "reply": "- $3.499 [p. 1] gas\n- $5 [p. 1] wash",
+   "truth": "Total: $8.499",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "short doc UK fuel £1.459",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Unleaded £1.459 a litre, diesel £1.529."
+    }
+   ],
+   "reply": "- £1.459 [p. 1] unleaded\n- £1.529 [p. 1] diesel",
+   "truth": "Total: £2.988",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "short doc Irish fuel €1.749",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Petrol €1.749, diesel €1.689."
+    }
+   ],
+   "reply": "- €1.749 [p. 1] petrol\n- €1.689 [p. 1] diesel",
+   "truth": "Total: €3.438",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "short doc French fuel 1,459 €/l",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Gazole 1,459 €/l, SP95 1,689 €/l."
+    }
+   ],
+   "reply": "- 1,459 € [p. 1] gazole\n- 1,689 € [p. 1] SP95",
+   "truth": "Total: €3.148",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "short doc Dutch fuel € 1,999",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Benzine € 1,999, diesel € 1,789."
+    }
+   ],
+   "reply": "- € 1,999 [p. 1] benzine\n- € 1,789 [p. 1] diesel",
+   "truth": "Total: €3.788",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "short doc Quebec fuel 1,599 $/L",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Essence 1,599 $/L, diesel 1,749 $/L."
+    }
+   ],
+   "reply": "- 1,599 $ [p. 1] essence\n- 1,749 $ [p. 1] diesel",
+   "truth": "Total: $3.348",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "short doc $ fuel with comma, per",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Fuel $1,459 per litre and $1,529 per litre."
+    }
+   ],
+   "reply": "- $1,459 [p. 1] a\n- $1,529 [p. 1] b",
+   "truth": null,
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "short doc negative -$1,500",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Credit -$1,500. Rent $2,000."
+    }
+   ],
+   "reply": "- -$1,500 [p. 1] credit\n- $2,000 [p. 1] rent",
+   "truth": "Total: $500",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "short doc ($1,500)",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Credit ($1,500). Rent $2,000."
+    }
+   ],
+   "reply": "- ($1,500) [p. 1] credit\n- $2,000 [p. 1] rent",
+   "truth": "Total: $500",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "short doc $12,500",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Car $12,500. Fees $1,250."
+    }
+   ],
+   "reply": "- $12,500 [p. 1] car\n- $1,250 [p. 1] fees",
+   "truth": "Total: $13,750",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "short doc plain 1,500",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Units 1,500 and 1,200."
+    }
+   ],
+   "reply": "- 1,500 [p. 1] a\n- 1,200 [p. 1] b",
+   "truth": "Total: 2,700",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "short doc 1,500 $ after",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Loyer 1,500 $ et 1,200 $."
+    }
+   ],
+   "reply": "- 1,500 $ [p. 1] a\n- 1,200 $ [p. 1] b",
+   "truth": "Total: $2,700",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "Mexican $8,500 Spanish",
+   "op": "sum",
+   "lang": "es",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Renta mensual: $8,500. Depósito en garantía: $8,500."
+    }
+   ],
+   "reply": "- $8,500 [p. 1] renta\n- $8,500 [p. 1] depósito",
+   "truth": "Total: $17,000",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "French doc $1,500",
+   "op": "sum",
+   "lang": "fr",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Le loyer est de $1,500 et la caution de $1,500 également."
+    }
+   ],
+   "reply": "- $1,500 [p. 1] loyer\n- $1,500 [p. 1] caution",
+   "truth": "Total: $3,000",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "Spanish doc 1,459 € fuel",
+   "op": "sum",
+   "lang": "es",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Gasóleo 1,459 € el litro y gasolina 1,689 €."
+    }
+   ],
+   "reply": "- 1,459 € [p. 1] gasóleo\n- 1,689 € [p. 1] gasolina",
+   "truth": "Total: €3.148",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "Argentine $1,50 two decimals",
+   "op": "sum",
+   "lang": "es",
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Boleto $1,50 y $2,25."
+    }
+   ],
+   "reply": "- $1,50 [p. 1] a\n- $2,25 [p. 1] b",
+   "truth": "Total: $3.75",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "Kuwaiti KD 1.250",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Fee KD 1.250 and KD 2.500."
+    }
+   ],
+   "reply": "- KD 1.250 [p. 1] a\n- KD 2.500 [p. 1] b",
+   "truth": "Total: 3.750",
+   "nonce": null
+  },
+  {
+   "group": "thousands rule: rule3",
+   "name": "Bahraini 1.250 BHD",
+   "op": "sum",
+   "lang": null,
+   "given": [
+    {
+     "label": "p. 1",
+     "text": "Fee 1.250 BHD and 2.500 BHD."
+    }
+   ],
+   "reply": "- 1.250 BHD [p. 1] a\n- 2.500 BHD [p. 1] b",
+   "truth": "Total: 3.750",
+   "nonce": null
+  }
+ ]
+}

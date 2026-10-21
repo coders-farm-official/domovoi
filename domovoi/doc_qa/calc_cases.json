@@ -96,10 +96,9 @@
     }
    ],
    "reply": "- $-40 [p. 1] credit\n- $1,200 [p. 1] rent",
-   "head": "**Total: $1,160 ((−40) + 1,200 = 1,160), from the 2 entries I found**",
+   "head": "I can't be sure how to read -40 here, so I won't add it up.",
    "notes": [
-    "calc_worked",
-    "calc_only_found"
+    "calc_unsure"
    ],
    "nonce": null
   },
@@ -149,7 +148,7 @@
     }
    ],
    "reply": "- 40- [p. 1] adjustment\n- 1,200 [p. 1] rent",
-   "head": "I can't be sure how to read 40 here, so I won't add it up.",
+   "head": "I can't be sure how to read 40- here, so I won't add it up.",
    "notes": [
     "calc_unsure"
    ],
@@ -255,9 +254,9 @@
     }
    ],
    "reply": "- $2 [p. 2] gift\n- $50 [p. 2] fee",
-   "head": "I couldn't find the numbers for that in the document.",
+   "head": "I can't find $2 on p. 2 exactly as listed, so I won't add it up.",
    "notes": [
-    "calc_dropped"
+    "calc_unsure"
    ],
    "nonce": null
   },
@@ -378,10 +377,9 @@
     }
    ],
    "reply": "- 1,200 [p. 1] rent\n- 1,234.56 [p. 1] fee",
-   "head": "**Total: 2,434.56 (1,200.00 + 1,234.56 = 2,434.56), from the 2 entries I found**",
+   "head": "I can't be sure how to read 1,234.56 here, so I won't add it up.",
    "notes": [
-    "calc_worked",
-    "calc_only_found"
+    "calc_unsure"
    ],
    "nonce": null
   },
@@ -537,9 +535,9 @@
     }
    ],
    "reply": "- $1,500 [p. 1] fee\n- €1,200 [p. 1] rent",
-   "head": "I couldn't find the numbers for that in the document.",
+   "head": "I can't find $1,500 on p. 1 exactly as listed, so I won't add it up.",
    "notes": [
-    "calc_dropped"
+    "calc_unsure"
    ],
    "nonce": null
   },
@@ -576,9 +574,9 @@
     }
    ],
    "reply": "- 3.75 [p. 6] fee\n- 12 [p. 5] units",
-   "head": "I couldn't find the numbers for that in the document.",
+   "head": "I can't find 3.75 on p. 6 exactly as listed, so I won't add it up.",
    "notes": [
-    "calc_dropped"
+    "calc_unsure"
    ],
    "nonce": null
   },
@@ -593,10 +591,9 @@
     }
    ],
    "reply": "3.75 [p. 5] fee\n12 [p. 5] units",
-   "head": "**Total: 15.75 (3.75 + 12.00 = 15.75), from the 2 entries I found**",
+   "head": "I can't be sure how to read 3.75 here, so I won't add it up.",
    "notes": [
-    "calc_worked",
-    "calc_only_found"
+    "calc_unsure"
    ],
    "nonce": null
   },
@@ -699,11 +696,9 @@
     }
    ],
    "reply": "- $1,300 [p. 1] rent\n- $1,500 [p. 3] deposit\n- $40 [p. 1] water",
-   "head": "**Total: $1,540 (1,500 + 40 = 1,540), from the 2 entries I found**",
+   "head": "I can't find $1,300 on p. 1 exactly as listed, so I won't add it up.",
    "notes": [
-    "calc_worked",
-    "calc_only_found",
-    "calc_dropped"
+    "calc_unsure"
    ],
    "nonce": null
   },
@@ -722,9 +717,9 @@
     }
    ],
    "reply": "- $1,200 [p. 9] rent\n- $1,500 [p. 2] deposit",
-   "head": "I couldn't find the numbers for that in the document.",
+   "head": "I can't find $1,200 on p. 9 exactly as listed, so I won't add it up.",
    "notes": [
-    "calc_dropped"
+    "calc_unsure"
    ],
    "nonce": null
   },
@@ -739,11 +734,9 @@
     }
    ],
    "reply": "- 30 [p. 1] minutes\n- $1,200 [p. 1] rent\n- $1,500 [p. 1] deposit",
-   "head": "**Total: $2,700 (1,200 + 1,500 = 2,700), from the 2 entries I found**",
+   "head": "I can't find 30 on p. 1 exactly as listed, so I won't add it up.",
    "notes": [
-    "calc_worked",
-    "calc_only_found",
-    "calc_dropped"
+    "calc_unsure"
    ],
    "nonce": null
   },
@@ -758,11 +751,9 @@
     }
    ],
    "reply": "- 4 [p. 12] error\n- 2 [p. 12] filters\n- 3 [p. 12] hoses",
-   "head": "**Total: 5 (2 + 3 = 5), from the 2 entries I found**",
+   "head": "I can't be sure how to read 4 here, so I won't add it up.",
    "notes": [
-    "calc_worked",
-    "calc_only_found",
-    "calc_dropped"
+    "calc_unsure"
    ],
    "nonce": null
   },
@@ -956,9 +947,9 @@
     }
    ],
    "reply": "- March 1, 2026 [p. 7] move in\n- April 15, 2026 [p. 7] inspection",
-   "head": "That needs exactly two dates.",
+   "head": "I can't find April 15, 2026 on p. 7 exactly as listed, so I won't count the days.",
    "notes": [
-    "calc_dropped"
+    "calc_unsure"
    ],
    "nonce": null
   },
