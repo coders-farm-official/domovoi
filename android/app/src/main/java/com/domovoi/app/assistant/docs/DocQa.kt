@@ -1,5 +1,6 @@
 package com.domovoi.app.assistant.docs
 
+import com.domovoi.app.phonemizer.Py
 import kotlinx.serialization.Serializable
 import java.util.Locale
 
@@ -226,12 +227,15 @@ object DocQa {
 
     // ── The check ───────────────────────────────────────────────────────
 
-    private val PAGE_RE = Regex("""(?U)\b(?:pages|page|pgs|pg|pp|p)\s*\.?\s*(\d+)\b""")
+    // Android's ICU regex rejects the JVM's inline U (Unicode classes) flag, and
+    // without it the JVM's \b \w \d \s are ASCII only: these spell out Python's
+    // Unicode classes (Py). IcuRegexSafetyTest keeps the flag out.
+    internal val PAGE_RE = Regex("""${Py.B}(?:pages|page|pgs|pg|pp|p)${Py.S}*\.?${Py.S}*(${Py.D}+)${Py.B}""")
     private val BRACKET_RE = Regex("""\[([^\[\]\n]{1,120})\](?!\()""")
-    private val PAREN_PAGE_RE = Regex("""(?iU)\(((?:p|pp|pg|page)\.?\s*\d+)\)""")
+    internal val PAREN_PAGE_RE = Regex("""(?i)\(((?:p|pp|pg|page)\.?${Py.S}*${Py.D}+)\)""")
     private val QUOTE_RE = Regex(""""([^"\n]{12,400})"""")
-    private val CITATION_WORDS = Regex(
-        """(?U)\b(p\. \d+|section|sheet|rows?|para|paragraph|header|footer|footnotes?|totals|photo|\w+\.(pdf|docx|odt|xlsx|csv|txt|md))\b""",
+    internal val CITATION_WORDS = Regex(
+        """${Py.B}(p\. ${Py.D}+|section|sheet|rows?|para|paragraph|header|footer|footnotes?|totals|photo|${Py.W}+\.(pdf|docx|odt|xlsx|csv|txt|md))${Py.B}""",
     )
     private val SPACE_BEFORE_PUNCT = Regex("""[ \t]+([.,;:!?])""")
     private val DOUBLE_SPACE = Regex("""[ \t]{2,}""")

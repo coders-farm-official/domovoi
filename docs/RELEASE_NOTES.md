@@ -4,6 +4,13 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-21 — App fix: asking about a document in a phone chat
+
+App only. A question about a document in a phone chat could crash the app on
+a real phone: three of its citation patterns used a regex flag Android
+doesn't accept (the desktop tests did). They now spell out the same Unicode
+letters, digits and spaces, and a test fails the build if the flag returns.
+
 ## 2026-10-21 — Looking things up, with your permission
 
 Core, dashboard, app and the Kiwix plugin (1.2.6). **Run Flyway** (V037:
