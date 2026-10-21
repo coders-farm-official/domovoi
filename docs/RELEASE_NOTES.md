@@ -47,6 +47,17 @@ a way that would otherwise get reported as a bug.
   Home-server replies can be reported too ("report this reply"). Nothing
   changes on the server or the dashboard.
 
+## 2026-10-21 — The Android app's release build is shrunk by R8
+
+The release APKs and the Play bundle are now built with R8 (code
+shrinking, optimisation and renaming, and unused resources dropped), as
+Google Play asks: about 15.7 MB smaller per APK (arm64-v8a 80.4 → 64.6 MB,
+armeabi-v7a 48.9 → 33.1 MB). Nothing changes for a household. For the
+maintainer: a crash's stack trace from a release build now has short
+renamed names; `android/scripts/release.ps1` and `play-bundle.ps1` keep that
+build's `mapping.txt` beside the signed files (R8's `retrace` turns a trace
+back), and the bundle carries it for Play.
+
 ## 2026-10-20 — 1.0.0-rc3: audiobooks on the phone, and everything since rc2
 
 Version 1.0.0rc3 (the app 1.0.0-rc3, versionCode 26102001; the Windows

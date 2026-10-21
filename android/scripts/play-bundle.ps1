@@ -170,6 +170,15 @@ if (-not $SkipBuild) {
 }
 if (-not (Test-Path $unsigned)) { Die "no $unsigned`: build first (drop -SkipBuild)" }
 
+# The release build is minified (android\app\build.gradle.kts): the bundle
+# must carry its R8 mapping, which Play uses to turn crash reports back into
+# class and method names.
+$mapEntry = 'BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map'
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip = [IO.Compression.ZipFile]::OpenRead((Join-Path $repo $unsigned))
+try { $hasMap = @($zip.Entries | Where-Object { $_.FullName -eq $mapEntry }).Count -eq 1 } finally { $zip.Dispose() }
+if (-not $hasMap) { Die "$unsigned carries no R8 mapping ($mapEntry): is the release build still minified?" }
+
 # --- sign ----------------------------------------------------------------
 if (-not $Keystore) {
     $default = Join-Path $HOME 'domovoi-release.jks'
@@ -238,12 +247,18 @@ $sha = Get-Sha256 $signedAab
 $sumLine = "$sha  $name"
 [IO.File]::WriteAllText((Join-Path $repo "$signedAab.sha256"), "$sumLine`n", (New-Object Text.UTF8Encoding $false))
 $size = (Get-Item -LiteralPath $signedAab).Length
+# The same mapping beside the bundle, for the release's records (Play has
+# its own copy from the bundle).
+$mapping = 'android\app\build\outputs\mapping\release\mapping.txt'
+$keptMap = Join-Path $outDir "domovoi-$versionName-$versionCode-mapping.txt"
+if (Test-Path -LiteralPath $mapping) { Copy-Item -LiteralPath $mapping -Destination $keptMap } else { $keptMap = '(none: the build left no mapping.txt)' }
 
 Say 'done.'
 Write-Host "  bundle:      $signedAab ($([math]::Round($size / 1MB, 1)) MB)"
 Write-Host "  SHA-256:     $sha"
 Write-Host "  certificate: $cert (SHA-256 of the signing certificate)"
 Write-Host "  version:     $versionName ($versionCode), commit $commit"
+Write-Host "  R8 mapping:  in the bundle (Play reads it), and $keptMap"
 Write-Host ''
 Write-Host '  Next: Play Console -> Test and release -> Testing -> Internal testing -> Create new release, upload the .aab'
 Write-Host '  (android\play\PUBLISH-CHECKLIST.md; the first upload needs App signing set up first).'
