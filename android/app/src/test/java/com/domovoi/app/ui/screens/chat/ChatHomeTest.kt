@@ -78,7 +78,7 @@ class ChatHomeTest {
                     HeadlessUi {
                         ChatHome(
                             places = places, startable = startable, lastUsed = lastUsed, serverShareSeen = seen,
-                            awayLine = awayLine, subtitle = chatSubtitle(places.map { it.kind }),
+                            awayLine = awayLine, subtitle = chatSubtitle(startable),
                             emptyHint = emptyHint(startable, null), onUsed = { log += "used:${it.key}" },
                         )
                     }

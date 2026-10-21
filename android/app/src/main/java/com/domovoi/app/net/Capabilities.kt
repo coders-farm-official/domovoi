@@ -28,18 +28,11 @@ import kotlinx.serialization.Serializable
 const val CAP_STATIONS = "stations"
 const val CAP_IMAGEGEN = "imagegen"
 
-/** The server's "AI features" switch, as `features.ai` in the manifest
- *  (the AI-optional work: a household that said no to the chat models). */
+/** `features.ai`: the household's "AI features" switch on the server (the
+ *  chat models). `false` = turned off, so the server's Chat (and its chat
+ *  mic) can't answer and the app hides it ([Capabilities.aiEnabled]). Not
+ *  `features.chat`, which is the voice open-mic chat mode. */
 const val FEATURE_AI = "ai"
-
-/**
- * Whether Chat may offer the home server as a place to chat
- * (ui/screens/chat/ChatPlace.kt): true unless the server says its AI
- * features are off. A server that predates the switch says nothing, and
- * counts as on. The phone's own chats never depend on this: they run on the
- * phone, so Chat stays for them when the server's AI is off.
- */
-fun Capabilities.serverChatOn(): Boolean = features[FEATURE_AI] != false
 
 @Serializable
 data class CapabilityPlugin(

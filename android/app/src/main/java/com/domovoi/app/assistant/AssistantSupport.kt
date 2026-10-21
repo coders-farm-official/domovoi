@@ -31,6 +31,21 @@ object AssistantSupport {
         }
     }
 
+    /** This phone's memory, read once when the app starts
+     *  (DomovoiApplication); null until then. */
+    @Volatile var memory: PhoneMemory? = null
+
+    /** This install can start a chat on the phone: it has the engine
+     *  ([available]) and the phone has the memory for the model
+     *  ([DeviceTiers.MIN_GB]). Chat's "on this phone" place, and Chat itself
+     *  where no server place works ([com.domovoi.app.ui.shell.chatAvailable]). */
+    val phoneCanChat: Boolean
+        get() = available && canChat(memory)
+
+    /** The memory half of [phoneCanChat]; unknown memory counts as enough. */
+    internal fun canChat(memory: PhoneMemory?): Boolean =
+        memory == null || DeviceTiers.of(memory) != DeviceTier.Unsupported
+
     /** A 64-bit phone running the 32-bit app: the 64-bit APK would add the
      *  assistant, so Settings says so instead of saying nothing. */
     val thirtyTwoBitAppOn64BitPhone: Boolean by lazy {

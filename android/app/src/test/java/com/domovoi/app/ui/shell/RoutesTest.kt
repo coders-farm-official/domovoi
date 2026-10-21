@@ -5,7 +5,6 @@ import com.domovoi.app.net.CAP_STATIONS
 import com.domovoi.app.net.Capabilities
 import com.domovoi.app.net.CapabilityPlugin
 import com.domovoi.app.net.FEATURE_AI
-import com.domovoi.app.net.serverChatOn
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -43,16 +42,19 @@ class RoutesTest {
     private val aiOff = Capabilities(features = mapOf(FEATURE_AI to false))
     private val aiOn = Capabilities(features = mapOf(FEATURE_AI to true))
 
-    /** The household's AI features off, on a phone without the engine:
-     *  no place to chat, so no launcher offers Chat. Every other screen
-     *  stays, plugin gates still apply on top (One Chat keeps Chat for the
-     *  phone's own chats when the engine is there: chatStaysWhileOnePlaceWorks). */
+    /** The household's AI features off: the server's Chat can't answer, so
+     *  no launcher offers it. Absent (older server, failed manifest read)
+     *  and true keep it. */
     @Test fun chatFollowsTheServersAiSwitch() {
+        // A phone that can't chat on itself: the server is Chat's only place.
         onDeviceAssistant = { false }
+        assertTrue(Route.Chat.visibleWith(Capabilities.EMPTY))
+        assertTrue(Route.Chat.visibleWith(aiOn))
         assertFalse(Route.Chat.visibleWith(aiOff))
         assertFalse(Route.Chat.visibleOn(aiOff, shared = false))
         // features.chat is the voice chat mode, not this switch.
         assertTrue(Route.Chat.visibleWith(Capabilities(features = mapOf("chat" to false))))
+        // Every other screen stays, plugin gates still apply on top.
         Route.entries.filter { it != Route.Chat }.forEach {
             assertEquals(it.name, it.visibleWith(Capabilities.EMPTY), it.visibleWith(aiOff))
         }
@@ -62,9 +64,27 @@ class RoutesTest {
         )
         assertTrue(Route.Stations.visibleWith(radioAiOff))
         assertFalse(Route.Chat.visibleWith(radioAiOff))
+        // Off every launcher: the drawer/rail list, Home's grid, the bar.
         assertFalse(Route.Chat in WorkspaceRoutes.filter { it.visibleOn(aiOff, shared = false) })
         assertFalse(Route.Chat in everythingTiles(aiOff, shared = false))
+        assertFalse(Route.Chat in everythingTiles(aiOff, shared = false, bar = listOf(Route.Home, Route.Music)))
+        assertTrue(Route.Chat in everythingTiles(aiOn, shared = false, bar = listOf(Route.Home, Route.Music)))
+        assertEquals(listOf(Route.Home, Route.Music, Route.Videos), PhoneBar.routes(null, aiOff, shared = false))
+        // Home, where the shell lands when the open route stops existing, stays.
         assertTrue(StartRoute.visibleWith(aiOff))
+    }
+
+    /** The switch governs the home-server place only (One Chat): a phone
+     *  that can chat on itself keeps Chat, for its own chats. */
+    @Test fun chatStaysForThePhonesChatsWhenTheServersAiIsOff() {
+        onDeviceAssistant = { true }
+        assertTrue(Route.Chat.visibleWith(aiOff))
+        assertTrue(Route.Chat in everythingTiles(aiOff, shared = false, bar = listOf(Route.Home, Route.Music)))
+        assertTrue(Route.Chat in localTabs())
+        assertEquals(
+            listOf(Route.Home, Route.Chat, Route.Music),
+            PhoneBar.routes(listOf(Route.Home, Route.Chat, Route.Music), aiOff, shared = false),
+        )
     }
 
     @Test fun aHiddenChatsPlaceholderSaysWhy() {
@@ -178,9 +198,12 @@ class RoutesTest {
     @Test fun chatStaysWhileOnePlaceWorks() {
         val aiOff = Capabilities(features = mapOf(FEATURE_AI to false))
         val aiOn = Capabilities(features = mapOf(FEATURE_AI to true))
-        assertTrue(Capabilities.EMPTY.serverChatOn())
-        assertTrue(aiOn.serverChatOn())
-        assertFalse(aiOff.serverChatOn())
+        assertTrue(Capabilities.EMPTY.aiEnabled)
+        assertTrue(aiOn.aiEnabled)
+        assertFalse(aiOff.aiEnabled)
+        assertTrue(chatAvailable(aiOff, phoneCanChat = true))
+        assertFalse(chatAvailable(aiOff, phoneCanChat = false))
+        assertTrue(chatAvailable(aiOn, phoneCanChat = false))
 
         onDeviceAssistant = { true }
         assertTrue(Route.Chat.visibleWith(aiOff))
@@ -213,5 +236,22 @@ class RoutesTest {
         assertEquals(listOf(Route.Music, Route.Videos, Route.Files), localTabs(assistant = false))
         // On the JVM there is no engine: the default asks AssistantSupport.
         assertFalse(Route.Chat in localTabs())
+    }
+
+    /** Review round 1: a 64-bit phone under the memory floor can't chat on
+     *  itself, so it adds no Chat of its own: none in the local shell, and
+     *  none in the workspace while the server's AI is off. */
+    @Test fun aPhoneThatCannotRunTheModelAddsNoChat() {
+        val small = com.domovoi.app.assistant.PhoneMemory(6L shl 30, lowRamDevice = false)
+        val big = com.domovoi.app.assistant.PhoneMemory(8L shl 30, lowRamDevice = false)
+        val lowRam = com.domovoi.app.assistant.PhoneMemory(8L shl 30, lowRamDevice = true)
+        assertFalse(com.domovoi.app.assistant.AssistantSupport.canChat(small))
+        assertFalse(com.domovoi.app.assistant.AssistantSupport.canChat(lowRam))
+        assertTrue(com.domovoi.app.assistant.AssistantSupport.canChat(big))
+        // The hook is that whole answer (engine and memory): false here.
+        onDeviceAssistant = { false }
+        assertEquals(listOf(Route.Music, Route.Videos, Route.Files), localTabs())
+        assertFalse(Route.Chat.visibleWith(Capabilities(features = mapOf(FEATURE_AI to false))))
+        assertTrue(Route.Chat.visibleWith(Capabilities.EMPTY))
     }
 }

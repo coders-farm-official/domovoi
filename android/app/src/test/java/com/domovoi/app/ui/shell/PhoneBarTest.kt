@@ -130,6 +130,8 @@ class PhoneBarTest {
         // A bar that had both keeps its Chat where it was.
         assertEquals("""["Home","Chat","Music"]""", PhoneBar.migrate("""["Home","Chat","Assistant","Music"]"""))
         assertEquals("""["Home","Music","Chat"]""", PhoneBar.migrate("""["Home","Music","Chat","Assistant"]"""))
+        // ...even when the Assistant came first: Chat does not jump forward.
+        assertEquals("""["Home","Music","Chat"]""", PhoneBar.migrate("""["Home","Assistant","Music","Chat"]"""))
         // Nothing to move: untouched, including the default and junk.
         val plain = """["Home","Calendar"]"""
         assertSame(plain, PhoneBar.migrate(plain))
