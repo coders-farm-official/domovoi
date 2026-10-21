@@ -85,14 +85,14 @@ _STYLE = (r"(?:formal|informal|casual|friendly|friendlier|professional|polite|co
 #: calendar or a person, never the draft ("make it warm in the bedroom",
 #: "add stamps for the letter to my shopping list", "mention it to dad").
 _ELSEWHERE = re.compile(
-    r"\b(?:in|on|to|into|onto|from|off|at) (?:the |my |our |your |this |that )?"
+    r"\b(?:in|on|to|into|onto|off|at) (?:the |my |our |your |this |that )?"
     r"(?:shopping list|grocery list|to-?do list|list|calendar|cart|basket|bedroom|bathroom|kitchen|living room|"
     r"dining room|office|garage|house|home|room|here|there|reminders?|notes?|playlist|queue|phone|fridge)\b"
     r"|\b(?:in|out) here\b|\bto (?:mom|mum|dad|grandma|grandpa|him|her|them)\b")
 #: "it"/"this" as the object of an editing verb.
 _EDITS_IT = re.compile(r"^(?:(?:shorten|lengthen|rewrite|reword|rephrase|redo|revise|edit|tighten|simplify|"
                        r"condense|trim|polish|proofread) (?:it|this)\b"
-                       r"|make (?:it|this) (?:a bit |a little |much |even )?(?:(?:more|less|sound) )?" + _STYLE + r"\b"
+                       r"|make (?:it|this) (?:sound )?(?:a bit |a little |much |even )?(?:(?:more|less) )?" + _STYLE + r"\b"
                        r"|tone (?:it|this) (?:down|up)\b|sign (?:it|this) |address (?:it|this) to )")
 #: What a complaint right after the draft may be about: the writing
 #: ("it's too long"), never the room ("it's too cold", "too loud") or a
@@ -105,8 +105,12 @@ _EDIT_ONLY = re.compile(
     r"|(?:(?:it|that|this)(?:'s| is) )?(?:too|way too|a bit too|a little too|a bit|a little) " + _WRITING_FAULT +
     r"|tone it (?:down|up)|(?:shorten|tighten|simplify|condense|polish|proofread|reword|rephrase|rewrite|redo)"
     r"(?: it)?|(?:fix|check) the (?:typos|spelling|grammar)|another version|one more version"
-    r"|mention (?!(?:it|that|this|him|her|them)\b)[a-z0-9 ,.'-]+|sign it [a-z ,.'-]+|address it to [a-z ,.'-]+)$"
+    r"|mention (?!(?:it|this|him|her|them)\b|that$)[a-z0-9 ,.'-]+|sign it [a-z ,.'-]+|address it to [a-z ,.'-]+)$"
 )
+#: A polite ending ("shorter please", "more formal, thanks"); the polite
+#: opening ("can you", "could you please", "i'd like you to") goes in
+#: :func:`normalize`.
+_POLITE_END = re.compile(r"(?:,? (?:please|thanks|thank you))+$")
 _PRINT = re.compile(
     r"^print(?: (?:it|this|that|out|it out|this out|that out|a copy|me a copy|"
     r"(?:the|my) (?:draft|letter|resume|cv|cover letter|document)))?$"
@@ -175,7 +179,7 @@ def revision_request(text: str, after_draft: bool = False) -> bool:
     """Whether ``text`` asks to change the chat's draft; ``after_draft``:
     the message right before it was the reply that wrote (or revised) the
     draft."""
-    s = normalize(text)
+    s = _POLITE_END.sub("", normalize(text)).rstrip(" ,")
     if not s:
         return False
     if _ELSEWHERE.search(s):

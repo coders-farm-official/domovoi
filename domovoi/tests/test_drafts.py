@@ -94,6 +94,9 @@ def test_everyday_messages_never_revise_and_the_revisions_do():
     assert [t for t in sets["revise_any_time"] if not phrases.revision_request(t)] == []
     assert [t for t in sets["revise_after_a_draft"] if not phrases.revision_request(t, after_draft=True)] == []
     assert len(everyday) == 140 and len(sets["revise_any_time"]) == 20 and len(sets["revise_after_a_draft"]) == 11
+    # ...and their polite forms ("shorter please", "can you make it sound more confident").
+    assert [t for t in sets["revise_polite_any_time"] if not phrases.revision_request(t)] == []
+    assert [t for t in sets["revise_polite_after_a_draft"] if not phrases.revision_request(t, after_draft=True)] == []
 
 
 def test_what_the_phrases_must_say():

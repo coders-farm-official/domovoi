@@ -63,7 +63,7 @@ object DraftPhrases {
     /** A place or a destination: about the house, a list, the calendar or a
      *  person, never the draft (review round 2). */
     private val ELSEWHERE = Regex(
-        "\\b(?:in|on|to|into|onto|from|off|at) (?:the |my |our |your |this |that )?" +
+        "\\b(?:in|on|to|into|onto|off|at) (?:the |my |our |your |this |that )?" +
             "(?:shopping list|grocery list|to-?do list|list|calendar|cart|basket|bedroom|bathroom|kitchen|living room|" +
             "dining room|office|garage|house|home|room|here|there|reminders?|notes?|playlist|queue|phone|fridge)\\b" +
             "|\\b(?:in|out) here\\b|\\bto (?:mom|mum|dad|grandma|grandpa|him|her|them)\\b",
@@ -77,7 +77,7 @@ object DraftPhrases {
     private val EDITS_IT = Regex(
         "^(?:(?:shorten|lengthen|rewrite|reword|rephrase|redo|revise|edit|tighten|simplify|" +
             "condense|trim|polish|proofread) (?:it|this)\\b" +
-            "|make (?:it|this) (?:a bit |a little |much |even )?(?:(?:more|less|sound) )?" + STYLE + "\\b" +
+            "|make (?:it|this) (?:sound )?(?:a bit |a little |much |even )?(?:(?:more|less) )?" + STYLE + "\\b" +
             "|tone (?:it|this) (?:down|up)\\b|sign (?:it|this) |address (?:it|this) to )",
     )
 
@@ -88,8 +88,11 @@ object DraftPhrases {
             "|(?:(?:it|that|this)(?:'s| is) )?(?:too|way too|a bit too|a little too|a bit|a little) " + WRITING_FAULT +
             "|tone it (?:down|up)|(?:shorten|tighten|simplify|condense|polish|proofread|reword|rephrase|rewrite|redo)" +
             "(?: it)?|(?:fix|check) the (?:typos|spelling|grammar)|another version|one more version" +
-            "|mention (?!(?:it|that|this|him|her|them)\\b)[a-z0-9 ,.'-]+|sign it [a-z ,.'-]+|address it to [a-z ,.'-]+)$",
+            "|mention (?!(?:it|this|him|her|them)\\b|that$)[a-z0-9 ,.'-]+|sign it [a-z ,.'-]+|address it to [a-z ,.'-]+)$",
     )
+    /** A polite ending ("shorter please", "more formal, thanks"); the polite
+     *  opening goes in [normalize]. */
+    private val POLITE_END = Regex("(?:,? (?:please|thanks|thank you))+$")
     private val PRINT = Regex(
         "^print(?: (?:it|this|that|out|it out|this out|that out|a copy|me a copy|" +
             "(?:the|my) (?:draft|letter|resume|cv|cover letter|document)))?$",
@@ -171,7 +174,7 @@ object DraftPhrases {
      * card's Revise box revises whatever it says).
      */
     fun revisionRequest(text: String, afterDraft: Boolean = false): Boolean {
-        val s = normalize(text)
+        val s = POLITE_END.replace(normalize(text), "").trimEnd(' ', ',')
         if (s.isEmpty()) return false
         if (ELSEWHERE.containsMatchIn(s)) return false
         if (NAMES_DRAFT.find(s) != null || EDITS_IT.find(s) != null) return true

@@ -2046,6 +2046,31 @@
   }
  ],
  "phrase_sets": {
+  "revise_polite_after_a_draft": [
+   "shorter please",
+   "shorter, please",
+   "more formal, thanks",
+   "a bit shorter thank you",
+   "can you make it sound more confident",
+   "could you please make it shorter",
+   "please make it more formal",
+   "would you tone it down please",
+   "will you rewrite it",
+   "i'd like you to shorten it",
+   "i want you to make it more concise",
+   "mention that I work from home",
+   "can you mention my forklift licence"
+  ],
+  "revise_polite_any_time": [
+   "can you make it sound more confident",
+   "could you please make it shorter",
+   "please make it more formal",
+   "would you tone it down please",
+   "will you rewrite it",
+   "i'd like you to shorten it",
+   "i want you to make it more concise",
+   "make the letter shorter, thanks"
+  ],
   "everyday": [
    "turn on the kitchen lights",
    "turn off the lights",
@@ -2658,6 +2683,118 @@
   {
    "in": "address it to Ms. Lee",
    "normalized": "address it to ms. lee",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "shorter please",
+   "normalized": "shorter please",
+   "draft": null,
+   "revise": false,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "shorter, please",
+   "normalized": "shorter, please",
+   "draft": null,
+   "revise": false,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "more formal, thanks",
+   "normalized": "more formal, thanks",
+   "draft": null,
+   "revise": false,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "a bit shorter thank you",
+   "normalized": "a bit shorter thank you",
+   "draft": null,
+   "revise": false,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "can you make it sound more confident",
+   "normalized": "make it sound more confident",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "could you please make it shorter",
+   "normalized": "make it shorter",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "please make it more formal",
+   "normalized": "make it more formal",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "would you tone it down please",
+   "normalized": "tone it down please",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "will you rewrite it",
+   "normalized": "rewrite it",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "i'd like you to shorten it",
+   "normalized": "shorten it",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "i want you to make it more concise",
+   "normalized": "make it more concise",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "mention that I work from home",
+   "normalized": "mention that i work from home",
+   "draft": null,
+   "revise": false,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "can you mention my forklift licence",
+   "normalized": "mention my forklift licence",
+   "draft": null,
+   "revise": false,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "make the letter shorter, thanks",
+   "normalized": "make the letter shorter, thanks",
    "draft": null,
    "revise": true,
    "revise_after": true,

@@ -166,6 +166,9 @@ class DraftSharedCasesTest {
         assertEquals(emptyList<String>(), sets["revise_any_time"]!!.strs().filter { !DraftPhrases.revisionRequest(it) })
         assertEquals(emptyList<String>(),
             sets["revise_after_a_draft"]!!.strs().filter { !DraftPhrases.revisionRequest(it, afterDraft = true) })
+        assertEquals(emptyList<String>(), sets["revise_polite_any_time"]!!.strs().filter { !DraftPhrases.revisionRequest(it) })
+        assertEquals(emptyList<String>(),
+            sets["revise_polite_after_a_draft"]!!.strs().filter { !DraftPhrases.revisionRequest(it, afterDraft = true) })
         assertEquals(listOf(140, 20, 11),
             listOf(everyday.size, sets["revise_any_time"]!!.strs().size, sets["revise_after_a_draft"]!!.strs().size))
     }

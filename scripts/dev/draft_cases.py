@@ -126,6 +126,18 @@ TYPOGRAPHY = ("# Dear Mr. O\u2019Brien,\n\n\u201cSmart quotes\u201d, \u2018singl
               "Sincerely,\n\nJordan\n")
 
 PHRASE_SETS = {
+    #: Review round 2's follow-up: the polite forms of real revisions.
+    'revise_polite_after_a_draft': [
+        "shorter please", "shorter, please", "more formal, thanks", "a bit shorter thank you",
+        "can you make it sound more confident", "could you please make it shorter", "please make it more formal",
+        "would you tone it down please", "will you rewrite it", "i'd like you to shorten it",
+        "i want you to make it more concise", "mention that I work from home", "can you mention my forklift licence",
+    ],
+    'revise_polite_any_time': [
+        "can you make it sound more confident", "could you please make it shorter", "please make it more formal",
+        "would you tone it down please", "will you rewrite it", "i'd like you to shorten it",
+        "i want you to make it more concise", "make the letter shorter, thanks",
+    ],
     'everyday': [
         "turn on the kitchen lights",
         "turn off the lights",
