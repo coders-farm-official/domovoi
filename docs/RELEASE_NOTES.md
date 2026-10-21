@@ -21,6 +21,36 @@ a way that would otherwise get reported as a bug.
   rename and the archived list. The update applies migration **V034**
   (chat titles) by itself; threads from before keep their titles.
 
+## 2026-10-21 — A repair by Setup no longer trips the container guard
+
+* **"The music player image was replaced outside Domovoi" after running
+  Setup again.** A repair (or any re-run of `provision.sh`) rebuilt the
+  music player image with a new ID and told the guard nothing, so it
+  opened a tamper incident and paused plugin installs, updates, satellite
+  upgrades and media preparation. Now the installer keeps the image unless
+  it is missing or `Dockerfile.mpd` changed since the installer built it,
+  and every build it makes leaves a root-owned record the guard accepts
+  (`/var/lib/domovoi-provision/mpd-image.json`); after such a build the
+  rooms' players restart on the new image, as after an update. An image
+  built by hand is still reported. **If the incident is open on your box
+  now** (it pauses updates too, so it goes first): on the Containers page
+  (admin), **clear after review** the incident about the music player
+  image, then take this update, then press **rebuild the music player
+  image** (new; not offered while internet access is turned off), which
+  builds it as the core does, makes it the image the guard expects and
+  restarts every room's player on it (what is playing stops; playlists and
+  queues stay). Without the rebuild the guard keeps expecting the old
+  image, and a room created on the new one would be reported.
+
+## 2026-10-21 — Android: the tablet sidebar clears the status bar
+
+* On a tablet, or a phone turned sideways, the side menu's "domovoi /
+  android" header no longer sits under the clock, and the menu stays clear
+  of a camera cutout or a side navigation bar, as does the narrower icon
+  rail on a small phone. The rest of the screen (the
+  top bar's theme switch included) also clears a cutout or navigation bar
+  on its far edge. Nothing to do: update the app.
+
 ## 2026-10-21 — One Chat in the app
 
 * **The app's Assistant tab is now part of Chat.** Chat has one list for
@@ -33,6 +63,44 @@ a way that would otherwise get reported as a bug.
   phone bar that had the Assistant tab gets Chat in its place by itself.
   Home-server replies can be reported too ("report this reply"). Nothing
   changes on the server or the dashboard.
+
+## 2026-10-21 — The Android app's release build is shrunk by R8
+
+The release APKs and the Play bundle are now built with R8 (code
+shrinking, optimisation and renaming, and unused resources dropped), as
+Google Play asks: about 15.7 MB smaller per APK (arm64-v8a 80.4 → 64.6 MB,
+armeabi-v7a 48.9 → 33.1 MB). Nothing changes for a household. For the
+maintainer: a crash's stack trace from a release build now has short
+renamed names; `android/scripts/release.ps1` and `play-bundle.ps1` keep that
+build's `mapping.txt` beside the signed files (R8's `retrace` turns a trace
+back), and the bundle carries it for Play.
+
+## 2026-10-21 — Windows satellites: a Setup to double-click
+
+A spare Windows laptop or PC becomes a room with `DomovoiSatelliteSetup.exe`
+instead of a PowerShell command. **Settings → Satellites → add a spare
+device → make the code**: when the server holds the Setup, the Windows
+column shows a setup code (24 hours, not a password) and **Download the
+Windows Setup**, whose file name carries the code and the server, so
+nothing is typed; the PowerShell command moves under "advanced". The
+Setup checks that the server answering is the one the code was made on
+(a signature by its identity key) before it downloads anything.
+
+* **A Windows server** gets the Setup with its own: the next
+  `DomovoiSetup.exe` carries it and puts it in place, offline.
+* **A Linux server** downloads it once from Domovoi's GitHub release, on
+  an admin's press of **get the Windows Setup** (offered only when a
+  release carries it: the first is the release after 1.0.0-rc3). Until
+  then the card shows the PowerShell command first, as before.
+* **It is not code-signed yet.** Windows SmartScreen says "Windows
+  protected your PC": **More info → Run anyway**. The dashboard and
+  docs/SPARE_DEVICE_SATELLITES.md say so step by step; the limit is in
+  docs/SECURITY_PRIVACY.md.
+* Setup codes live in the core's memory: a code made before a server
+  restart no longer works (make a new one).
+* **Releases:** `finish-release` attaches `DomovoiSatelliteSetup.exe`
+  beside `DomovoiSetup.exe` and lists it in `SHA256SUMS`;
+  `windows\build.ps1` builds both.
 
 ## 2026-10-20 — 1.0.0-rc3: audiobooks on the phone, and everything since rc2
 

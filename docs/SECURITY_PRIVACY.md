@@ -1797,7 +1797,7 @@ admin reviews them (docs/CONTAINER_GUARD.md). Migration V024
 | | |
 |---|---|
 | **What it detects** | An expected container missing, stopped, crash-looping or unhealthy, and Docker not answering (only where the database isn't in that Docker — below). A compose or plugin container on another registry image of its own repository than its pin: a failure, "recreate it". As tampering: any running Domovoi container — expected right now or not, a one-off `compose run` included — on an image from another repository than its pin or with no registry provenance (compose services and plugins that pin by digest; a disabled plugin's container against its declared repository), a different repository:tag (plugins that pin only a tag; another tag of the same repository from the registry is "outdated", a failure), or a different image ID than the music player image the core built. An unknown running container wearing the compose project's label or the music player prefix. Privileged mode, the host's network or process namespace, or a bind mount of the Docker socket or the host's root (`/`, or the system drive on Windows — not another drive's root) on any container that is Domovoi's, when its declaration allows none of it. The pins are read from the committed compose file (`git show HEAD:…`), so editing the file on disk doesn't move them. |
-| **What it does not detect** | **Anything a root user on the host does.** The guard asks the Docker daemon what is running; root (or anyone in the `docker` group, which is root-equivalent) controls the daemon, the images, the database the incidents live in and the core itself, and can make all of them say whatever it likes. The guard is a tripwire for an unexpected change, not a defence against the host's own administrator. Nor does it see: a different image retagged under a tag a plugin pins by tag only; what happens INSIDE a container that runs the right image (a compromised process, changed files in a volume); a change made and undone between two checks (30 s); containers of plugins that declare none (older Jellyfin, RomM and Kiwix — their Plugins card says "containers not watched"); containers that only look like Domovoi's (`domovoi-…`) but nothing claims, which it lists and never alarms on; a host that doesn't run the compose stack (`CONTAINER_GUARD_COMPOSE`). **Docker or the database being down on a compose install**: the incidents live in the compose Postgres, so nothing can be recorded — Home's "the database isn't answering" row is what shows. The first music player image it sees is trusted (no record exists before it), and so is a new one found at start on a host whose update unit's record is missing or unreadable (adopted "unverified", logged and shown on the Containers page): only root can remove that record, and only someone with Docker access — root-equivalent — can replace the image. A plugin container whose resolver keeps raising is checked only for its repository and settings after 30 minutes. |
+| **What it does not detect** | **Anything a root user on the host does.** The guard asks the Docker daemon what is running; root (or anyone in the `docker` group, which is root-equivalent) controls the daemon, the images, the database the incidents live in and the core itself, and can make all of them say whatever it likes. The guard is a tripwire for an unexpected change, not a defence against the host's own administrator. Nor does it see: a different image retagged under a tag a plugin pins by tag only; what happens INSIDE a container that runs the right image (a compromised process, changed files in a volume); a change made and undone between two checks (30 s); containers of plugins that declare none (older Jellyfin, RomM and Kiwix — their Plugins card says "containers not watched"); containers that only look like Domovoi's (`domovoi-…`) but nothing claims, which it lists and never alarms on; a host that doesn't run the compose stack (`CONTAINER_GUARD_COMPOSE`). **Docker or the database being down on a compose install**: the incidents live in the compose Postgres, so nothing can be recorded — Home's "the database isn't answering" row is what shows. The first music player image it sees is trusted (no record exists before it), and so is a new one the installer or the update unit recorded building (root-owned records under `/var/lib`), and a new one found at start on a host whose update unit's record is missing or unreadable (adopted "unverified", logged and shown on the Containers page): only root can remove that record, and only someone with Docker access — root-equivalent — can replace the image. The installer's record (`/var/lib/domovoi-provision/mpd-image.json`) vouches for whatever its `docker build` produced, from the checkout's `Dockerfile.mpd` and Docker's build cache: the service user can edit that file before a repair, and anyone in the `docker` group can poison the build cache, and either gets the result vouched for. Both are root-equivalent through the `docker` group, so the guard does not claim to catch them. A plugin container whose resolver keeps raising is checked only for its repository and settings after 30 minutes. |
 | **What freezes** | While a tamper incident is open: plugin install, upgrade and enable; satellite code upgrades and the code and plugin payload channels; satellite media preparation; the update pull, and a restart that would load new code. `423`, naming the incident to a caller who passed the route's own gate; the open satellite channels say only that they are paused. The freeze is in the database, so a restart doesn't lift it; turning the guard off doesn't either. |
 | **Who sees what** | Anyone (no credential): only "Something needs an admin's attention." and its colour, over the open `GET /api/containers/summary` — never a container, an image or what failed; a shared screen shows the same. The household tier: what failed in plain words, when, and whether it is acknowledged or cleared (the banner, Home, the Containers page, Android notifications, the `containers` realtime event). Admins: also the expected and found image references, digests and IDs, settings and exit codes, and who acknowledged or cleared what. |
 | **Who acts** | Acknowledging a failure and clearing a tamper incident are admin mutations (Bearer), recorded with the admin's source address and an optional note. A household device can do neither, nor can the Android app (it holds no admin credential). |
@@ -2531,6 +2531,104 @@ is a filled red microphone while audio is leaving for the server, and Mute
 closes the capture stream itself (Windows' icon goes out too). The
 approval code is shown in the tray, its toast and the installer's window,
 never logged.
+
+**The double-click Setup and its setup codes (2026-10-21).** Most
+households install with `DomovoiSatelliteSetup.exe` instead of the
+command. It is only a wizard in front of the same install
+(`windows/installer/DomovoiSatelliteSetup.iss`, its worker
+`satellite-setup.ps1`), so everything above holds; what it adds:
+
+* **A setup code is not a credential.** The dashboard's "make the code"
+  (admin tier, `POST /v1/admin/satellite-setup/codes`) gives a 12-character
+  code (Crockford base 32): **60 bits of the SHA-256 of the room's
+  enrolment payload**, which holds the server's fingerprint. It names
+  that payload for **24 hours**, in the core's memory only (a restart
+  forgets every code; at most 64 live). `GET /v1/satellite-setup/codes/{code}` is
+  public on the LAN, like the bundle, and answers with the payload and the
+  bundle's SHA-256: exactly what the PowerShell command carries, and
+  nothing secret (an address, a public fingerprint, a room name). So the
+  code may sit in the Setup's file name and in the download URL
+  (`/v1/satellite-setup/download/{code}`, `/win/{code}`), where a browser's
+  history or a log can keep it: it expires, and guessing one gains
+  nothing the server's `/v1/health` doesn't already say. Joining still
+  needs the device's six-digit approval code typed into the dashboard.
+* **The answer is bound to your server** (review of wf/win-sat-installer,
+  round 1). The Setup asks for the code with a fresh 16-byte challenge.
+  The answer must carry a payload whose own hash **is** that code, the
+  public key whose fingerprint that payload names, and that key's Ed25519
+  signature over the challenge, the code, the payload and the bundle's
+  SHA-256 (`domovoi-satellite-setup-v1`, `domovoi/satellite_setup.py`
+  `setup_message`; the worker verifies it with its own Ed25519, since
+  .NET Framework has none). Only then does it download the bundle, and it
+  runs nothing unless the bundle has that signed SHA-256; the bundle's
+  `install-windows.ps1` then proves the fingerprint again before anything
+  is written. So a rogue host on the LAN, a renamed download pointing at
+  it, or something on the path of the plain-HTTP talk can't make the Setup
+  run its code: it can't sign as your server. What protects the code
+  itself is the work of finding another payload with the same code (one
+  with its own fingerprint in it): an offline 2^60 second-preimage search.
+  A room's code is fixed (the same payload always has the same code, and
+  the payload is public: an address, the fingerprint, the room's name), so
+  the 24 hours don't bound it; the search does, at roughly $10,000 to
+  $20,000 of rented GPU time per room (2026 prices). A household worried
+  about that can rename the room, which gives it a new code. Every request goes direct,
+  never through the system proxy (no WPAD detour), and follows no
+  redirect.
+* **What it still trusts.** The code itself, as it reaches the PC. Typed
+  from the dashboard, it is as good as the dashboard page (plain HTTP on
+  the LAN, as for the command): someone who can rewrite that page can
+  show you their own code. In a file name, it is as good as the file:
+  someone who hands you a renamed Setup can name their own server and
+  code in it, which is why the Setup shows the code and asks you to check
+  it against the dashboard, and the server's fingerprint beside it (the
+  same as **Settings → About**).
+* **Only a home-network server.** The Setup talks to an address on the
+  home network (the enrolment code's rule: a private address, or a name
+  ending in `.local`, `.home.arpa`, `.lan` or `.internal`) or to the PC
+  itself, and refuses any other, whether it came from its file name or
+  was typed. **A limit:** a name is taken by its ending, not resolved and
+  checked, so a `.lan` or `.internal` name the network's DNS points
+  elsewhere is still asked; what keeps that harmless is the signature
+  above, not the name.
+* **No elevation, nothing of its own left.** It runs as the signed-in
+  account (`PrivilegesRequired=lowest`), stops if started elevated, copies
+  no file, writes no registry value and has no uninstaller of its own; its
+  worker runs from its temporary folder, which Setup deletes when it
+  closes. The satellite it installs is removed by its own uninstaller, as
+  above.
+* **Where the Setup file comes from.** On a server installed by
+  Domovoi's Windows Setup: from that Setup, which carries the
+  `DomovoiSatelliteSetup.exe` of the same build; DomovoiHost places it,
+  with its SHA-256 in a record, in the core's cache at every start, and
+  the core serves it only while its bytes match. Nothing is fetched from
+  GitHub for it there. On a Linux server: only when an admin presses
+  **get the Windows Setup**, which the card offers only when a release
+  has it (the core reads that release's `SHA256SUMS`, at most every six
+  hours and never under `INTERNET_ACCESS=never`), the core downloads it
+  from Domovoi's GitHub release (the one `android/release.json` names,
+  preferred because it matches this server's version, else the latest),
+  through the outbound gate, and keeps it only if its SHA-256 is the one
+  that release's `SHA256SUMS` lists and it is a Windows program; it serves
+  it only while its bytes are still those. `scripts/release/finish-release`
+  builds both Setups from the tag's own files and attaches them.
+
+**The unsigned installer, plainly.** The Setup is **not code-signed**
+(owner decision 2026-10-21; signing is on hold), so nothing
+cryptographic ties the file to Coders Farm: what vouches for it is the
+server's own Setup (on Windows) or GitHub's HTTPS and the release's own
+`SHA256SUMS` (on Linux), and then your server, which hands the laptops the
+copy it checked. What the Setup then runs is bound to your server's key
+(above); the Setup program itself is not. Someone who
+could replace a release asset and its checksum list on GitHub, or the
+file in your server's cache, could hand out a different program, and
+nothing on the laptop would notice. Windows SmartScreen says "Windows
+protected your PC" for it (an unrecognised, unsigned app): the dashboard
+and [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#2-run-the-setup)
+say to press **More info → Run anyway** for this file, from your own
+server, and only for it. Smart App Control, when on, may block it with no
+way round it. When signing comes back, the same Setup is signed
+(`windows/build.ps1 -Sign`, the `SignTool` hook in the `.iss`) and these
+warnings go away.
 
 ### Old computers: the room stick
 

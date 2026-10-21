@@ -4379,6 +4379,26 @@
         }
       }
     },
+    "/api/containers/mpd-image/rebuild": {
+      "post": {
+        "tags": [
+          "containers"
+        ],
+        "summary": "Containers Mpd Rebuild",
+        "description": "Rebuild the music player image now (admin): the core builds it the\nway it does when it is missing, makes it the image the guard expects,\nand moves every room's player onto it. The security tier at both hops:\nit decides which image the guard trusts.",
+        "operationId": "containers_mpd_rebuild_api_containers_mpd_image_rebuild_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/containers/incidents/{incident_id}/acknowledge": {
       "post": {
         "tags": [
@@ -4728,6 +4748,46 @@
         "summary": "Windows Runtime Fetch",
         "description": "Start fetching the Windows satellite's runtime onto the core.",
         "operationId": "windows_runtime_fetch_api_satellites_windows_runtime_fetch_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/windows-setup": {
+      "get": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Windows Setup Status",
+        "description": "Whether the core holds ``DomovoiSatelliteSetup.exe`` (``ready``,\n``size``, ``release``, ``internet_off``, ``fetch``).",
+        "operationId": "windows_setup_status_api_satellites_windows_setup_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/windows-setup/fetch": {
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Windows Setup Fetch",
+        "description": "Start fetching the Windows satellite Setup onto the core.",
+        "operationId": "windows_setup_fetch_api_satellites_windows_setup_fetch_post",
         "responses": {
           "200": {
             "description": "Successful Response",

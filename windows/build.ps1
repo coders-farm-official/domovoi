@@ -7,7 +7,9 @@ Builds the Windows installer (a preview).
    notification-area icon), with the C# compiler that ships inside .NET
    Framework 4.8.1 (C# 5; nothing to install).
 2. The unit tests in tests\Tests.cs (the same compiler), run at once.
-3. DomovoiSetup.exe, with Inno Setup 6's ISCC.exe.
+3. DomovoiSatelliteSetup.exe (installer\DomovoiSatelliteSetup.iss: the
+   double-click Setup that makes a spare Windows PC a room), then
+   DomovoiSetup.exe, which carries it, with Inno Setup 6's ISCC.exe.
 
 Output goes to windows\build\ (ignored by git). Windows PowerShell 5.1.
 Building changes nothing on this PC beyond that folder.
@@ -139,6 +141,8 @@ function Set-Pins([string]$Ref, [string]$Channel, [string]$File) {
 # Disabled hook: when signing comes back, sign DomovoiHost.exe and
 # DomovoiSetupHelper.exe before ISCC packs them, and DomovoiSetup.exe after
 # (Inno's SignTool directive can sign the setup and the uninstaller).
+# DomovoiSatelliteSetup.iss is ready for it: compiled with /DSignSetup and
+# /Sdomovoi=<sign command>, its SignTool=domovoi line signs that Setup.
 function Invoke-Sign([string[]]$Files) {
     throw 'Code signing is on hold (PLAN.md section 10): this build stays unsigned.'
 }
@@ -216,9 +220,14 @@ if (-not $SkipInstaller) {
         }
     }
     if (-not $Iscc) { throw 'Inno Setup 6 not found (ISCC.exe). Install it, or pass -Iscc.' }
+    # The satellite Setup first: DomovoiSetup.exe carries it.
+    & $Iscc '/Q' "/O$out" (Join-Path $here 'installer\DomovoiSatelliteSetup.iss')
+    if ($LASTEXITCODE -ne 0) { throw 'ISCC failed for DomovoiSatelliteSetup.iss' }
     & $Iscc '/Q' "/O$out" (Join-Path $here 'installer\DomovoiSetup.iss')
     if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
-    $setup = Join-Path $out 'DomovoiSetup.exe'
-    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
-    Write-Output "built $setup ($((Get-Item -LiteralPath $setup).Length) bytes, sha256 $hash)"
+    foreach ($name in 'DomovoiSetup.exe', 'DomovoiSatelliteSetup.exe') {
+        $setup = Join-Path $out $name
+        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
+        Write-Output "built $setup ($((Get-Item -LiteralPath $setup).Length) bytes, sha256 $hash)"
+    }
 }

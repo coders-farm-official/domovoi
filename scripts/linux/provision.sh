@@ -72,7 +72,14 @@
 #   piper        the three Piper voices (SHIPPED_VOICES), each checked against
 #                PIPER_PINS; a configured voice outside them is left to the core
 #   images       the database images the compose file pins, and docker build of
-#                domovoi-mpd exactly as the core builds it
+#                domovoi-mpd exactly as the core builds it: only when the tag
+#                names no image, or this script built the image it names and
+#                Dockerfile.mpd changed since (an image the core or the update
+#                unit built is theirs to keep current). Each build is recorded
+#                in /var/lib/domovoi-provision/mpd-image.json for the core's
+#                container guard; a build that moved the tag removes the rooms'
+#                players still on the old image and restarts a running core,
+#                which recreates them on the new one, as an update does
 #   searxng      the search helper, started for always/sometimes, off for never
 #   os-jobs      Ubuntu's own background jobs follow the internet answer:
 #                scripts/linux/os-jobs.sh masks the updaters, news and
@@ -432,6 +439,12 @@ UNITS_CHANGED_FILE=$STATE_DIR/units-changed
 ENV_RECORD=$STATE_DIR/env-written
 ENV_STAMP=$STATE_DIR/env-stamp
 ENV_CREATING=$STATE_DIR/env-creating
+# The images step's record of the music player image it last built (the
+# image ID, the tag, Dockerfile.mpd's hash, when): root's, 0644, read by the
+# core's container guard as the evidence that the new image is Domovoi's own
+# build (domovoi/container_guard/engine.py, provision_evidence) and by the
+# next run to tell whether Dockerfile.mpd changed since.
+MPD_RECORD=$STATE_DIR/mpd-image.json
 # The settings domovoi-update.service reads (docs/LINUX_HOST.md, Updates
 # from the dashboard): this script writes DOMOVOI_USE_LOCK there and reads
 # DOMOVOI_MANAGE_OS_JOBS and DOMOVOI_MANAGE_GPU_RUNTIME.
@@ -3173,6 +3186,78 @@ do_piper() {
 DB_SERVICES=(postgres flyway)
 compose_refs() { (cd "$CHECKOUT/domovoi" && as_svc docker compose config --images "$@"); }
 mpd_tag() { local t; t=$(dotenv_get MPD_IMAGE_TAG); printf '%s' "${t:-domovoi-mpd:latest}"; }
+mpd_prefix() { local p; p=$(dotenv_get MPD_CONTAINER_PREFIX); printf '%s' "${p:-domovoi-mpd-}"; }
+# The image ID the tag names (sha256:...), or nothing.
+mpd_image_id() { { as_svc docker image inspect -f '{{.Id}}' "$(mpd_tag)" 2>/dev/null || true; } | tr -d '[:space:]'; }
+# mpd_record_field KEY: KEY's value in MPD_RECORD (one key a line, as
+# write_mpd_record writes it), or nothing.
+mpd_record_field() {
+  [ -f "$MPD_RECORD" ] || return 0
+  sed -n "s/^  \"$1\": \"\([^\"]*\)\",\{0,1\}\$/\1/p" "$MPD_RECORD" | head -n 1
+}
+# mpd_build_reason IMAGE_ID: why the music player image must be built now
+# (printed), or status 1: keep the image the tag names (IMAGE_ID). Built
+# when the tag names none (a first install, or someone removed it), or when
+# this script built that very image and Dockerfile.mpd changed since. Any
+# other image is kept: one the core or the update unit built follows
+# Dockerfile.mpd by itself (apply-update.sh rebuilds it when the file
+# changes), and one nobody here built is the container guard's to report,
+# not this script's to paper over. Until 2026-10-21 every re-run of this
+# step rebuilt (a repair by Setup after any change to the compose file, one
+# of the step's inputs); a build that misses Docker's build cache gets a
+# new image ID (the apt layer is not reproducible), and the guard reported
+# it as "the music player image was replaced outside Domovoi".
+mpd_build_reason() {
+  if [ -z "$1" ]; then echo "$(mpd_tag) is not there"; return 0; fi
+  if [ "$(mpd_record_field image_id)" = "$1" ] \
+    && [ "$(mpd_record_field dockerfile_sha256)" != "$(file_sig "$CHECKOUT/domovoi/Dockerfile.mpd")" ]; then
+    echo "Dockerfile.mpd changed since this script built $(mpd_tag)"; return 0
+  fi
+  return 1
+}
+# write_mpd_record IMAGE_ID: MPD_RECORD for the image just built, by rename
+# from a temp file beside it (root's, 0644; the core reads it).
+write_mpd_record() {
+  local tmp=$MPD_RECORD.tmp
+  [[ $1 =~ ^sha256:[0-9a-f]{64}$ ]] || die "docker build of $(mpd_tag) left no image ID (got '$1')"
+  {
+    printf '{\n'
+    printf '  "by": "provision",\n'
+    printf '  "image_id": "%s",\n' "$1"
+    printf '  "tag": %s,\n' "$(json_str "$(mpd_tag)")"
+    printf '  "dockerfile_sha256": "%s",\n' "$(file_sig "$CHECKOUT/domovoi/Dockerfile.mpd")"
+    printf '  "built_at": "%s"\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '}\n'
+  } >"$tmp" && chmod 0644 "$tmp" && mv -f "$tmp" "$MPD_RECORD" || die "could not write $MPD_RECORD"
+}
+# mpd_move_rooms IMAGE_ID: after a build that moved the tag, the rooms'
+# players still run the image they were made from (the guard would call
+# that a different image). Remove each one that isn't on IMAGE_ID and
+# restart a running core: its startup warm recreates them from mpd_rooms on
+# the new image, with the same data volumes, and its start takes the new
+# image on (the record above vouches for it). What the update unit's
+# rebuild-mpd does too. A first install has no rooms and no core running.
+mpd_move_rooms() {
+  local prefix names n img
+  prefix=$(mpd_prefix)
+  names=$(as_svc docker ps -a --format '{{.Names}}') || die "docker ps failed"
+  for n in $names; do
+    [[ $n == "$prefix"* ]] || continue
+    img=$({ as_svc docker inspect -f '{{.Image}}' "$n" 2>/dev/null || true; } | tr -d '[:space:]')
+    [ "$img" = "$1" ] && continue
+    log "removing $n: it runs the previous music player image (the core recreates it on the new one, data volume kept)"
+    as_svc docker rm -f "$n" >/dev/null || die "docker rm -f $n failed"
+  done
+  # Unless it is down: a core still starting ("activating") has read the
+  # old image already, and is restarted too.
+  local core
+  core=$(systemctl is-active domovoi-core.service 2>/dev/null || true)
+  if [ -n "$core" ] && [ "$core" != inactive ] && [ "$core" != failed ]; then
+    log "restarting domovoi-core: it recreates the rooms' players on the new image and takes the image on"
+    systemctl restart domovoi-core.service --no-block \
+      || warn "systemctl restart domovoi-core failed; restart it to move the rooms onto the new image"
+  fi
+}
 inputs_images() { file_sig "$CHECKOUT/domovoi/docker-compose.yml"; file_sig "$CHECKOUT/domovoi/Dockerfile.mpd"; mpd_tag; }
 check_images() {
   local refs r
@@ -3182,15 +3267,23 @@ check_images() {
 }
 plan_images() {
   echo "docker compose pull ${DB_SERVICES[*]} (the digests domovoi/docker-compose.yml pins)"
-  echo "docker build -t $(mpd_tag) -f domovoi/Dockerfile.mpd domovoi"
+  echo "docker build -t $(mpd_tag) -f domovoi/Dockerfile.mpd domovoi (only when $(mpd_tag) is missing, or Dockerfile.mpd changed since this script built it)"
 }
 do_images() {
-  local tag
+  local tag cur new why
   # Pulled here rather than at domovoi-db's first start, where the download
   # would have no progress and the start step would wait on it.
   emit_frac 50 "Downloading the database images"
   (cd "$CHECKOUT/domovoi" && as_svc docker compose pull "${DB_SERVICES[@]}") || die "docker compose pull ${DB_SERVICES[*]} failed"
   tag=$(mpd_tag)
+  cur=$(mpd_image_id)
+  if ! why=$(mpd_build_reason "$cur"); then
+    log "keeping $tag ($cur): this script builds it only when it is missing or when Dockerfile.mpd changed since it built it"
+    check_images || die "the database images are not there after the pull"
+    STEP_DONE_MSG="Images ready ($tag kept)"
+    return 0
+  fi
+  log "building $tag: $why"
   # Exactly what domovoi/mpd_provisioner.py _build_image runs, ahead of the
   # core's first boot (which would build it with no progress, and not at
   # all on a box without internet).
@@ -3198,6 +3291,10 @@ do_images() {
   (cd "$CHECKOUT/domovoi" && as_svc docker build --progress=plain -t "$tag" -f "$CHECKOUT/domovoi/Dockerfile.mpd" "$CHECKOUT/domovoi") \
     || die "docker build of $tag failed"
   check_images || die "the database images or $tag are not there after the pull and build"
+  new=$(mpd_image_id)
+  # Recorded before anything else, so a core that starts now finds it.
+  write_mpd_record "$new"
+  if [ "$new" != "$cur" ]; then mpd_move_rooms "$new"; fi
   STEP_DONE_MSG="Images ready ($tag built)"
 }
 

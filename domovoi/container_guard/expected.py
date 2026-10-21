@@ -90,6 +90,9 @@ class ExpectedSet:
     mpd_prefix: str | None = None
     mpd_tag_ref: str | None = None
     mpd_image_id: str | None = None
+    # When that ID was recorded (the baseline's recorded_at): a record of a
+    # Domovoi rebuild vouches for a new image only if it is newer.
+    mpd_image_at: Any = None
     mpd_tag_hold: str | None = None
     # Every container name a plugin declares, whatever the plugin's state.
     plugin_names: frozenset[str] = frozenset()

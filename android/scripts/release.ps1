@@ -500,6 +500,16 @@ if ($prevCert -and $prevCert -ne $cert) {
 }
 Say "signed by certificate SHA-256 $cert"
 
+# The R8 mapping of the build these APKs came from (the release build is
+# minified: android\app\build.gradle.kts): what turns a stack trace from them
+# back into class and method names (R8's retrace). Kept beside the signed
+# files for the release's records; not attached to the GitHub release (a
+# household has no use for it, and the same commit builds the same mapping).
+$mapping = 'android\app\build\outputs\mapping\release\mapping.txt'
+if (-not (Test-Path -LiteralPath $mapping)) { Die "no $mapping`: the release build writes it (build again: drop -SkipBuild)" }
+Copy-Item -LiteralPath $mapping -Destination (Join-Path $signed "domovoi-$versionName-mapping.txt")
+Say "kept the R8 mapping as $signed\domovoi-$versionName-mapping.txt"
+
 $staged = Join-Path $signed 'release.json'
 $published = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
 if ($null -eq (Invoke-Tool $python @('-m', 'domovoi.android_app', 'write', $staged, $signed, '--version-name', $versionName,

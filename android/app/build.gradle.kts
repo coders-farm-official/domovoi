@@ -92,8 +92,23 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 shrinks, optimises and renames the code, and drops the
+            // resources nothing uses (Google Play checks a release is
+            // optimised). What must keep its name (JNI, reflection) is in
+            // proguard-rules.pro. Each build writes
+            // app/build/outputs/mapping/release/mapping.txt, what turns a
+            // release's stack traces back into names: the App Bundle carries
+            // it for Play, and release.ps1 / play-bundle.ps1 keep a copy
+            // beside the signed files.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // No ndk.debugSymbolLevel: every native library arrives built and
+            // stripped (the AARs', and native/sherpa-onnx's), with no symbols
+            // beyond the dynamic ones Play reads from the libraries
+            // themselves, and extracting even those needs the NDK, which this
+            // build otherwise never uses. Play's "no debug symbols" note on a
+            // bundle is advice, not a requirement.
         }
     }
     compileOptions {
@@ -537,6 +552,16 @@ androidComponents {
         }
         tasks.matching { it.name == "assemble$cap" }.configureEach { dependsOn(alignment) }
     }
+}
+
+// The Compose compiler plugin adds Compose's group-key mapping to R8's
+// mapping.txt in a minified build, with a tool it downloads for that
+// (org.jetbrains.kotlin:compose-group-mapping). The mapping serves
+// Compose's composition stack traces, which Compose 1.10 brought; this app's
+// Compose (BOM 2024.12.01, Compose 1.7) has none, so the tool stays out of
+// the build and out of gradle/verification-metadata.xml.
+composeCompiler {
+    includeComposeMappingFile.set(false)
 }
 
 // Kotlin 2.4 makes the old `android { kotlinOptions { jvmTarget } }` block an

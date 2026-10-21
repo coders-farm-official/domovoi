@@ -36,9 +36,11 @@ doesn't wear out its battery.
 1. In the dashboard, as admin: **Settings → Satellites → add a spare
    device**. Type the room's name ("Kid's Room") and press **make the
    code**. The page shows the room id it will connect as
-   (`kids_room`), a **one-line install command** for Linux, another for
-   Windows, a **QR code** for a phone, and **Prepare the stick** for an
-   old computer. All three carry the same short *enrolment code*:
+   (`kids_room`), a **one-line install command** for Linux, a **Setup to
+   download** for Windows (with a short *setup code* that stands for the
+   enrolment code, and a PowerShell command under "advanced"), a **QR
+   code** for a phone, and **Prepare the stick** for an old computer. All
+   of them carry the same short *enrolment code*:
    `domovoi-room:1?core=…&fp=…&room=…` — your server's address, its
    fingerprint, and the room's name. **Nothing in it is a password.** The
    QR code wraps it in a link to your server's own join page
@@ -589,28 +591,117 @@ browser control → Smart App Control settings**); read what Windows Security
 says first — on many Windows 11 builds it can only be turned back on by
 resetting Windows.
 
-**Unsigned, for now.** Coders Farm's signing is on hold, so the satellite's
-own code carries no signature. Python itself, which runs it, is signed by
-the Python Software Foundation. Expect Windows Security or another
-antivirus to look twice at a command that downloads and starts programs;
-the command shows you exactly what it checks before it runs anything
-(below). Install it only on a PC whose owner agrees.
+**Unsigned, for now.** Coders Farm's signing is on hold, so neither the
+Setup nor the satellite's own code carries a signature. Python itself,
+which runs it, is signed by the Python Software Foundation. So Windows
+SmartScreen stops the Setup once, with **"Windows protected your PC"**
+(what to press is below), and Windows Security or another antivirus may
+look twice at a program that downloads and starts programs. Install it
+only on a PC whose owner agrees. When signing comes back, the same Setup
+is signed and the SmartScreen step goes away.
 
-### 1. Make the command
+There are two ways in: **the Setup** (a program you double-click: the
+way for most households) and, under [Advanced](#advanced-the-powershell-command),
+a one-line PowerShell command. Both install exactly the same thing.
+
+### 1. Get the Setup
 
 **Settings → Satellites → add a spare device**, the room's name, **make
-the code**. Under **windows laptop or pc** is a one-line command for
-Windows PowerShell; **copy the Windows command**.
+the code**. Under **windows laptop or pc** the card shows:
 
-The first time, the card may say the server doesn't hold the Windows files
-yet (Python and its libraries, about 96 MB): press **get the Windows
-files** and the server downloads them from python.org and PyPI, each file
-checked against the SHA-256 pinned in the satellite code. If you don't, the
-laptop downloads the same pinned files from there itself. Under
-`INTERNET_ACCESS=never` the server can't fetch them; a laptop that can
-reach the internet still can.
+- a **setup code**, like `K7M4-QX2P-9TRA`, and your **server**'s address.
+  The code works for **24 hours**, for this room only (make a new one after
+  that, or after the server restarts). It is **not a password**: it tells
+  the Setup which server and which room, the PC still has to be approved
+  with its own six-digit code (step 3), and the Setup checks that the
+  server answering is really the one the code was made on (the code is
+  made from that server's fingerprint and the room);
+- **Download the Windows Setup**, and a short address to type into the
+  PC's browser instead, like `http://192.168.1.20:6370/win/K7M4-QX2P-9TRA`.
 
-### 2. Run it
+The file comes **from your own Domovoi server**, over your home network,
+and its name carries the code and the server
+(`DomovoiSatelliteSetup_K7M4QX2P9TRA_192.168.1.20_6370.exe`), so the Setup
+fills them in by itself: don't rename it (if you do, it just asks for
+both).
+
+**Where your server gets the Setup.** A server installed with Domovoi's
+Windows Setup has it already: `DomovoiSetup.exe` carries the satellite
+Setup of the same version and puts it where the dashboard finds it, so it
+works with no internet at all. A **Linux** server downloads it once from
+Domovoi's release on GitHub: when a release carries it, the card offers
+**get the Windows Setup** (a few MB, checked against that release's
+`SHA256SUMS`), and every Windows PC in the house then gets it from your
+server. Until a release carries it (the first is the release after
+1.0.0-rc3), or under `INTERNET_ACCESS=never`, the card shows the
+PowerShell command first, which installs exactly the same thing.
+
+The card may also say the server doesn't hold the **Windows files** yet
+(Python and its libraries, about 96 MB): press **get the Windows files**
+and the server downloads them from python.org and PyPI, each file checked
+against the SHA-256 pinned in the satellite code. If you don't, the PC
+downloads the same pinned files from there itself.
+
+### 2. Run the Setup
+
+On the PC, signed in as the person whose account it will run in:
+
+1. **Download it.** Your browser may say the file "isn't commonly
+   downloaded" or "can't be downloaded securely": it comes over your home
+   network without https. Choose **Keep** (in Edge: the **…** beside the
+   download, then **Keep**, then **Keep anyway**).
+2. **Open it.** Windows shows a blue box, **"Windows protected your PC:
+   Microsoft Defender SmartScreen prevented an unrecognized app from
+   starting"**. Click **More info**: it shows the app's name
+   (`DomovoiSatelliteSetup_…`) and *Publisher: Unknown publisher*. Click
+   **Run anyway**. Why: Domovoi isn't signed by Microsoft yet, so Windows
+   doesn't recognise it; the file comes from your own Domovoi server. No
+   "Do you want to allow this app to make changes" question follows: the
+   Setup needs no administrator rights (and stops if you start it with
+   **Run as administrator**).
+3. **Follow it.** The code and the server are filled in; it asks the
+   server which room the code is for, and the server has to **prove** it
+   is the one the code was made on (it signs a fresh challenge with the
+   key behind its fingerprint, which is part of the code); if anything
+   else answers, Setup stops before it downloads anything. It then shows
+   the room, the code (check it is the one on the dashboard) and your
+   server's **fingerprint** (the same as **Settings → About**). Then two
+   choices:
+   whether the server may **update and restart the satellite on its own**
+   ("Ask me first" or "Automatic", [below](#automatic-or-ask-me-on-windows))
+   and, while plugged in, **never sleep** and **keep running with the lid
+   closed** (both unticked unless you tick them; see the PowerShell steps
+   below for what they change). **Install** does the rest, the same steps
+   as the command: it downloads the satellite from your server and runs
+   nothing unless it is exactly what the server signed for that code,
+   refuses the PC that runs your Domovoi server, makes your server prove
+   its fingerprint before anything is written, and installs into
+   `%LOCALAPPDATA%\Domovoi\Satellite` for this account only.
+4. Its last page shows the six-digit **approval code** (or, if it has
+   not arrived yet, where to find it). The Setup itself leaves nothing
+   behind: no files, no Installed apps entry of its own. The satellite
+   it installs has its own entry, **Domovoi Satellite (room)**.
+
+A few minutes, mostly downloads. It takes about 350 MB on disk.
+
+For admins: the Setup also runs silently, `DomovoiSatelliteSetup.exe
+/VERYSILENT /SERVER=192.168.1.20 /CODE=K7M4-QX2P-9TRA /PERMISSIONS=ask
+/POWER=no` (`/POWER=standby`, `lid` or `yes` for the power choices).
+
+### 3. Approve it
+
+The code is on the Setup's last page (or in the PowerShell window), in a
+notification ("Kid's Room: waiting for approval, code 123456"), in the
+tray icon's tooltip and its menu. Type it into the dashboard's approval
+card; the notification then says **Approved**. It is never written to the
+satellite's log.
+
+### Advanced: the PowerShell command
+
+The same install, without the Setup: for someone who would rather read
+what runs, or a PC where a program from the network is not allowed to
+start. Under **windows laptop or pc**, open **advanced: the PowerShell
+command instead of the Setup** and **copy the Windows command**.
 
 On the laptop, signed in as the person whose account it will run in, open
 **Windows PowerShell** (or Terminal) — a normal window, **not "Run as
@@ -655,13 +746,6 @@ process: the PC's script policy is never changed. A policy your
 organisation set through Group Policy still wins, and then the installer
 can't run.
 
-### 3. Approve it
-
-The code is in the PowerShell window, in a notification ("Kid's Room:
-waiting for approval, code 123456"), in the tray icon's tooltip and its
-menu. Type it into the dashboard's approval card; the notification then
-says **Approved**. It is never written to the satellite's log.
-
 ### What warnings you may see
 
 | What | Why |
@@ -669,7 +753,7 @@ says **Approved**. It is never written to the satellite's log.
 | Windows Security or another antivirus warns about, or blocks, PowerShell downloading and starting programs | The command does exactly that, and the satellite's code is unsigned. If it is blocked, the antivirus's history says what; allow it only if the command came from your own dashboard. |
 | The microphone icon in the taskbar stays on | The satellite listens for the wake word all the time; Windows shows that any program has the mic open. Hovering it names *Python*. The satellite's own tray icon says whether audio is leaving for the server (below). |
 | "Let desktop apps access your microphone" is off | Then Windows gives the satellite silence and the wake word never fires. Turn it on in **Settings → Privacy & security → Microphone**. |
-| A "Windows protected your PC" (SmartScreen) window | Not expected: nothing the command starts was downloaded through a browser. If one appears for *Domovoi Satellite* from the Start menu, it is the shortcut to Python's own `pythonw.exe`. |
+| A "Windows protected your PC" (SmartScreen) window | Expected once, for the Setup: it is not signed by Microsoft yet. **More info**, then **Run anyway** (step 2). The PowerShell command starts nothing that was downloaded through a browser, so it shows none; if one appears for *Domovoi Satellite* from the Start menu, it is the shortcut to Python's own `pythonw.exe`. |
 
 ### The tray
 
@@ -770,6 +854,7 @@ checked against the SHA-256 in `satellite/windows-runtime.json`:
 | tqdm | MPL-2.0 and MIT (unmodified) |
 | certifi | MPL-2.0 (unmodified) |
 | pip (used to install the others) | MIT |
+| The Setup itself (`DomovoiSatelliteSetup.exe`, built with Inno Setup 6, as the server's Setup is) | Inno Setup's own licence: permissive (use for any purpose, commercial included, keeping its copyright notice); it installs no file of its own |
 | Microsoft Visual C++ runtime (`msvcp140.dll`, `msvcp140_1.dll` 14.44, from the `msvc-runtime` wheel) | Microsoft's, not open source: the Visual Studio 2022 licence's "Distributable Code" ([REDIST list](https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution), Visual C++ Runtime Files) lets them be copied and distributed unmodified with a program — the same terms as the `vcruntime140.dll` Python itself ships |
 
 Nothing GPL or LGPL is bundled: there is no mpg123 on Windows (MP3 is
@@ -782,8 +867,12 @@ same question as on every Pi; see the wake-word notes).
 
 | What you see | Why, and what to do |
 |---|---|
-| "This is not the download the dashboard expected" | Domovoi was updated since the command was made (or the download was changed on the way). Make a new command. |
-| "this window runs as administrator" | Open a normal PowerShell window and paste it again. |
+| The Setup says the server "does not know the code" | The code is more than 24 hours old, the server restarted since, or it was mistyped. Make a new code on the dashboard (the same room gets the same code again while it lives). |
+| The Setup says "that is not the address of a Domovoi server on your home network" | Type the server as the card shows it (`192.168.1.20`, or `192.168.1.20:6400` for another port). The Setup talks only to an address on your home network (or this PC), never anywhere else. |
+| The Setup says "no Domovoi server answered" | This PC is on another network (a guest Wi-Fi), or the server is off. |
+| The Setup says the server "did not prove it is the Domovoi server this code was made on" | The address or the code is not the one on the dashboard, or another machine answers at that address. Check both on the dashboard (Settings → Satellites); nothing was downloaded or installed. |
+| "This is not the download the dashboard expected" (or "the server signed for this code", in the Setup) | Domovoi was updated since the command was made (or the download was changed on the way). Make a new command. |
+| "this window runs as administrator" (or the Setup says it runs as administrator) | Open a normal PowerShell window and paste it again; for the Setup, start it with a double-click, not **Run as administrator**. |
 | "never installed on the PC that runs the Domovoi server" | This PC runs the server. Use another PC. |
 | "did not prove it is the one in the code" | As on Linux: a different machine answers at that address. Compare the fingerprint with **Settings → About**. |
 | "running scripts is disabled on this system" | A Group Policy forbids scripts here; the installer can't run on this PC. |

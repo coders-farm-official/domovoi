@@ -79,13 +79,18 @@ on Google's video site); paste the link.
 - **Video:** `domovoi-fgs-demo-3-playback-download.mp4` (first half:
   playback behind the home screen and its notification).
 
-### dataSync (WorkManager's `SystemForegroundService`, used by `assistant/ModelDownloadWork.kt`)
+### dataSync (WorkManager's `SystemForegroundService`, used by `assistant/ModelDownloadWork.kt` and `audiobooks/BookDownloads.kt`)
 
 - **Feature description:** When the user taps "download" for the on-device
   assistant's models (about 2.5 GB, once) or a phone voice (about 60 MB),
   the app downloads the files over HTTPS from pinned addresses, resumably,
   with a progress notification that has a pause button. Wi-Fi only unless
-  the user allows mobile data.
+  the user allows mobile data. Since 1.0.0-rc3, "Save to phone" on an
+  audiobook from the household's own Domovoi server works the same way:
+  resumable, with a notification and cancel; if the server goes out of
+  reach, the download pauses and finishes when it's back. Play's form for
+  this type takes only the task kind ("Network processing → Other") and a
+  video, so the existing entry covers it; nothing to change there.
 - **User impact if deferred or interrupted:** A 2.5 GB download takes many
   minutes; if it stopped when the user left the app, the assistant could
   not be set up without keeping the screen on for the whole download.

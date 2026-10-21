@@ -60,6 +60,15 @@ APP_MISSING = dict(APP_NONE, release={"version_name": "9.9.9", "version_code": 9
                    upload_max=79409584)
 APP_READY = dict(APP_MISSING, ready=True, missing=[], bytes_cached=127337246,
                  apks=[dict(a, ready=True) for a in APP_APKS])
+#: The core's answer to a setup code (domovoi/main.py, 2026-10-21) and what
+#: it says about the Windows satellite Setup it holds.
+CODES = "/v1/admin/satellite-setup/codes"
+SETUP_CODE = {"code": "K7M4QX2P9TRA", "code_display": "K7M4-QX2P-9TRA", "expires_at": 1.0,
+              "server": "192.168.1.20", "file_name": "DomovoiSatelliteSetup_K7M4QX2P9TRA_192.168.1.20_6370.exe",
+              "download_path": "/v1/satellite-setup/download/K7M4QX2P9TRA", "short_path": "/win/K7M4-QX2P-9TRA"}
+SETUP_HELD = {"ready": True, "file": "DomovoiSatelliteSetup.exe", "size": 3252640, "sha256": "cd" * 32,
+              "release": "v9.9.9", "bundled": False, "fetched_at": 1.0, "windows_install": False,
+              "fetchable": None, "internet_off": False, "fetch": IDLE}
 
 
 @pytest.fixture
@@ -72,14 +81,21 @@ def core(monkeypatch):
         "/v1/admin/satellite-linux": (200, LINUX_RUNTIME),
         "/v1/admin/usb-stick": (200, {"debian": {"version": "13.7.0", "cached": False}, "refusal": None,
                                       "job": {"running": False}, "builds": []}),
+        "/v1/admin/satellite-setup": (200, SETUP_HELD),
+        CODES: (200, SETUP_CODE),
     }
     posted: list[str] = []
     answers["posted"] = posted
+    answers["code_bodies"] = []
 
     async def get_admin(path, headers=None, **kw):
         return answers[path]
 
     async def post_admin(path, body=None, headers=None, **kw):
+        if path == CODES:
+            # A setup code downloads nothing: kept apart from the fetches.
+            answers["code_bodies"].append(body)
+            return answers[CODES]
         posted.append(path)
         return 200, dict(answers["/v1/admin/android-app"][1], started=True,
                          fetch=dict(IDLE, running=True))
@@ -109,6 +125,47 @@ async def test_the_route_answers_with_a_payload_the_device_parses(core):
     assert got["command_windows"] == web_sats.install_command_windows(parsed.core, SHA, got["payload"])
     assert got["windows_runtime"] == WIN_RUNTIME
     assert got["linux_runtime"] == LINUX_RUNTIME
+
+
+async def test_the_windows_column_gets_a_setup_code_and_the_links_that_carry_it(core):
+    got = await web_sats.spare_device_enrolment(SpareDeviceEnrolRequest(room="Kid's Room"), Req())
+    assert core["code_bodies"] == [{"payload": got["payload"]}], "the code names exactly this payload"
+    ws = got["windows_setup"]
+    assert ws["code"] == "K7M4QX2P9TRA" and ws["code_display"] == "K7M4-QX2P-9TRA" and ws["server"] == "192.168.1.20"
+    assert ws["download_url"] == "http://192.168.1.20:6370/v1/satellite-setup/download/K7M4QX2P9TRA"
+    assert ws["short_url"] == "http://192.168.1.20:6370/win/K7M4-QX2P-9TRA"
+    assert ws["setup"] == SETUP_HELD
+    assert core["posted"] == [], "making a code downloads nothing"
+
+
+async def test_a_core_without_setup_codes_leaves_the_powershell_command(core):
+    core[CODES] = (404, {"detail": "Not Found"})
+    got = await web_sats.spare_device_enrolment(SpareDeviceEnrolRequest(room="Den"), Req())
+    assert got["windows_setup"] is None and "install-windows.ps1" in got["command_windows"]
+
+
+async def test_the_windows_setup_status_and_fetch_go_to_the_core_as_an_admin(monkeypatch):
+    seen = []
+
+    async def get_admin(path, headers=None, **kw):
+        seen.append(("GET", path))
+        return 200, SETUP_HELD
+
+    async def post_admin(path, body=None, headers=None, **kw):
+        seen.append(("POST", path))
+        return 200, {"started": True, **SETUP_HELD}
+
+    monkeypatch.setattr(web_sats, "get_admin", get_admin)
+    monkeypatch.setattr(web_sats, "post_admin", post_admin)
+    assert (await web_sats.windows_setup_status(Req())) == SETUP_HELD
+    assert (await web_sats.windows_setup_fetch(Req()))["started"] is True
+    assert seen == [("GET", "/v1/admin/satellite-setup"), ("POST", "/v1/admin/satellite-setup/fetch")]
+    from domovoi.admin_auth import require_admin_mutation, require_admin_read
+
+    routes = {r.path: r for r in web_sats.router.routes}
+    assert any(d.dependency is require_admin_read for d in routes["/api/satellites/windows-setup"].dependencies)
+    fetch = routes["/api/satellites/windows-setup/fetch"]
+    assert any(d.dependency is require_admin_mutation for d in fetch.dependencies) and fetch.methods == {"POST"}
 
 
 async def test_a_core_that_does_not_say_gives_no_linux_runtime(core):
@@ -370,7 +427,10 @@ const card = h.find((e) => String((e.props && e.props.className) || '').includes
 const svg = h.find((e) => e.type === 'svg' && String(e.props.className || '').includes('spare-qr'));
 const rects = svg ? h.findAll((e) => e.type === 'rect' && h.ancestors(e).includes(svg)).length : 0;
 const win = h.find((e) => String((e.props && e.props.className) || '').includes('spare-windows'));
-const winText = win ? w.__deep(win) : '';
+const wsu = h.find((e) => String((e.props && e.props.className) || '') === 'spare-windows-setup');
+const wso = h.find((e) => String((e.props && e.props.className) || '').startsWith('spare-windows-setup-offer'));
+// The Setup's halves are components of their own: their text joins the column's.
+const winText = (win ? w.__deep(win) : '') + (wsu ? 'SETUP:' + w.__deep(wsu) : '') + (wso ? 'OFFER:' + w.__deep(wso) : '');
 if (win) { await h.click(isBtn('get the Windows files')); await w.__settle(h, 10); }
 const lpy = h.find((e) => String((e.props && e.props.className) || '').includes('spare-linux-python'));
 const linuxText = lpy ? w.__deep(lpy) : '';
@@ -424,7 +484,27 @@ def card(tmp_path_factory) -> dict:
              "setup": _SETUP + qr_js + "\nwindow.qrcode = qrcode;\n"}
     guest = dict(admin, setup=_SETUP + "Auth = { status: {}, subscribe: () => () => {}, "
                  "isLoggedIn: () => false, headers: () => ({}), modalOpen: false };")
-    return _drive({"admin": admin, "guest": guest}, tmp_path_factory.mktemp("spare-card"))
+    # The double-click Setup (2026-10-21): held by the server, and not yet.
+    ws = {"code": "K7M4QX2P9TRA", "code_display": "K7M4-QX2P-9TRA", "expires_at": 1.0, "server": "192.168.1.20",
+          "file_name": "DomovoiSatelliteSetup_K7M4QX2P9TRA_192.168.1.20_6370.exe",
+          "download_url": "http://192.168.1.20:6370/v1/satellite-setup/download/K7M4QX2P9TRA",
+          "short_url": "http://192.168.1.20:6370/win/K7M4-QX2P-9TRA", "setup": SETUP_HELD}
+    missing = dict(SETUP_HELD, ready=False, size=None, sha256=None, release=None, fetchable="v9.9.9")
+    nowhere = dict(missing, fetchable=None)
+    windows = dict(nowhere, windows_install=True)
+    setup = dict(admin, api=dict(api, **{"POST /api/satellites/enrolment": dict(answer, windows_setup=ws)}))
+    setup_missing = dict(admin, script=_SCRIPT.replace("get the Windows files", "get the Windows Setup"),
+                         api=dict(api, **{
+                             "POST /api/satellites/enrolment": dict(answer, windows_setup=dict(ws, setup=missing)),
+                             "POST /api/satellites/windows-setup/fetch": dict(missing, started=True,
+                                                                              fetch=dict(IDLE, running=True)),
+                             "GET /api/satellites/windows-setup": SETUP_HELD}))
+    def with_setup(state):
+        return dict(admin, api=dict(api, **{"POST /api/satellites/enrolment": dict(answer, windows_setup=dict(ws, setup=state))}))
+
+    return _drive({"admin": admin, "guest": guest, "setup": setup, "setup_missing": setup_missing,
+                   "setup_nowhere": with_setup(nowhere), "setup_windows": with_setup(windows)},
+                  tmp_path_factory.mktemp("spare-card"))
 
 
 def test_an_admin_gets_the_command_and_the_qr(card):
@@ -449,6 +529,38 @@ def test_the_card_gives_windows_its_command_the_unsigned_warning_and_the_files_b
     assert "not as administrator" in text or "Run as administrator" in text
     assert "get the Windows files" in text and "96 MB" in text
     assert any("windows-runtime/fetch" in json.dumps(c) for c in r["calls"]), "the button asks the server"
+
+
+def test_the_card_offers_the_setup_first_with_what_smartscreen_shows_and_why(card):
+    text = card["setup"]["winText"]
+    assert "K7M4-QX2P-9TRA" in text and "192.168.1.20" in text and "24 hours" in text and "not a password" in text
+    assert "Download the Windows Setup" in text and "http://192.168.1.20:6370/win/K7M4-QX2P-9TRA" in text
+    assert "Windows protected your PC" in text and "More info" in text and "Run anyway" in text
+    assert "isn't signed by Microsoft yet" in text and "comes from your own" in text
+    assert "Keep" in text, "the browser's download warning is said too"
+    # The PowerShell command is still there, under advanced.
+    assert "advanced: the PowerShell command" in text and "install-windows.ps1" in text
+
+
+def test_a_server_without_the_setup_shows_the_command_first_and_offers_to_get_it(card):
+    r = card["setup_missing"]
+    text = r["winText"]
+    assert "Download the Windows Setup" not in text and "SETUP:" not in text
+    assert "install-windows.ps1" in text and "advanced:" not in text, "the command, not hidden"
+    assert text.index("copy the Windows command") < text.index("OFFER:")
+    assert "release v9.9.9" in text and "get the Windows Setup" in text
+    assert any("windows-setup/fetch" in json.dumps(c) for c in r["calls"]), "the button asks the server"
+
+
+@pytest.mark.parametrize(("case", "says"), [("setup_nowhere", "once a Domovoi release carries it"),
+                                            ("setup_windows", "Domovoi's Windows Setup")])
+def test_no_button_when_pressing_it_could_not_work(card, case, says):
+    """Review round 1: no "get the Windows Setup" when no release has it
+    (or on a Windows install, whose own Setup brings it)."""
+    text = card[case]["winText"]
+    assert "get the Windows Setup" not in text and says in text
+    assert "install-windows.ps1" in text and "advanced:" not in text
+    assert not any("windows-setup/fetch" in json.dumps(c) for c in card[case]["calls"])
 
 
 # ─── the phone's join link and the app this server hands out (2026-10-15) ──
