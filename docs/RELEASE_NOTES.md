@@ -19,7 +19,8 @@ What a household notices:
   first) and listen with no server in reach; the phone and the server keep
   one place per book, and the app offers to carry on from where a room got
   to. Books made of one file per chapter play everywhere now, covers
-  show, and a deleted book leaves the list.
+  show, and a deleted book leaves the list. On the phone, next and
+  previous move by chapter.
 * **Satellites recover from a Wi-Fi drop sooner, and get mpg123 back.**
   Reboot each satellite once, with the Wi-Fi up, after the update.
 * **Satellite cards:** prepare a card again after the update so a new
@@ -124,7 +125,13 @@ works with an older server, with less: no size before saving, no cover, no
   between the two, the session stays valid until its 30-day expiry; it is
   listed in the dashboard's admin sessions as `phone app: remove an
   audiobook` and can be revoked there.
-* The book grid sorts by title, author or newest.
+* The book grid sorts by title, author or newest; a new sort starts at the
+  top.
+* **Next and previous move by chapter** in a book, in the app's player and
+  in the notification, lock screen and headset controls: previous goes back
+  to the start of the chapter, or to the chapter before within its first
+  3 s; next is greyed out (and left off the notification) when there is no
+  next chapter and nothing queued after the book.
 
 ## 2026-10-17 — Satellites: faster Wi-Fi recovery, mpg123 put back, less CPU
 

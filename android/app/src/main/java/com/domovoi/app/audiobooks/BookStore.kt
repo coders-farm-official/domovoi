@@ -4,6 +4,9 @@ import android.content.Context
 import com.domovoi.app.net.DomovoiJson
 import com.domovoi.app.player.Chapter
 import com.domovoi.app.player.ServerScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.serialization.Serializable
 import java.io.File
 import java.io.IOException
@@ -119,6 +122,18 @@ data class SavedBook(val key: String, val meta: SavedBookMeta)
  */
 class BookStore(val root: File) {
 
+    /**
+     * Goes up by one whenever a book's record is written or a book is
+     * removed: by this store or any other on the same folder (the download
+     * job keeps its own). The saved-books shelf ([SavedShelf]) re-reads on
+     * it, so every screen that shows saved books sees a change at once.
+     */
+    val changes: StateFlow<Long> get() = signal
+
+    private val signal: MutableStateFlow<Long> = SIGNALS.getOrPut(root.absoluteFile.normalize().path) { MutableStateFlow(0L) }
+
+    private fun changed() = signal.update { it + 1 }
+
     fun dirOf(key: String): File = File(root, key)
 
     fun fileOf(key: String, local: String): File = File(dirOf(key), local)
@@ -164,12 +179,18 @@ class BookStore(val root: File) {
             target.delete()
             if (!tmp.renameTo(target)) throw IOException("could not save the book's details")
         }
+        changed()
     }
 
     /** Removes the book's folder and everything in it. */
     fun remove(key: String): Boolean {
         require(key.startsWith(PREFIX) && '/' !in key && '\\' !in key && ".." !in key) { "not a book folder: $key" }
-        return dirOf(key).deleteRecursively()
+        try {
+            return dirOf(key).deleteRecursively()
+        } finally {
+            // Even a partial delete changes what is on the phone.
+            changed()
+        }
     }
 
     /** Bytes the book takes on the phone now (finished and partial files). */
@@ -192,6 +213,9 @@ class BookStore(val root: File) {
     companion object {
         const val PREFIX = "b"
         const val META = "book.json"
+
+        /** One change signal per folder, shared by every store on it. */
+        private val SIGNALS = java.util.concurrent.ConcurrentHashMap<String, MutableStateFlow<Long>>()
 
         fun forApp(context: Context): BookStore = BookStore(File(context.applicationContext.filesDir, "audiobooks"))
     }
