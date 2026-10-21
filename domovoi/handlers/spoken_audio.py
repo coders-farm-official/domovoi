@@ -524,12 +524,20 @@ class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
                 speed = saved["speed"]
 
         mpd = get_mpd_client_for(ctx.room_id)
+        # An audiobook is queued by its exact MPD path(s) (a folder book as
+        # its files), so the queue entries' song ids are known: the room's
+        # 30 s place saves follow exactly those entries and nothing else
+        # that plays the same file later (domovoi/workers/room_book_positions.py).
+        queued: list[dict[str, Any]] = []
         try:
             if parts:
                 idx, offset = locate_in_parts([s for _, s in parts], int(pos or 0))
                 queued = await mpd.prepare_files(
                     [u for u, _ in parts], start_sec=float(offset), start_index=idx,
                 )
+                song = queued[0] if queued else None
+            elif item_type == sa.ITEM_AUDIOBOOK:
+                queued = await mpd.prepare_files([uri], start_sec=float(pos or 0))
                 song = queued[0] if queued else None
             else:
                 song = await mpd.prepare_filename(uri)
@@ -542,7 +550,7 @@ class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
                 f"I found {title} but the player couldn't load it — "
                 "try re-indexing the library.",
             )
-        if pos and pos > 0 and not parts:
+        if pos and pos > 0 and not queued:
             try:
                 await mpd.seek_to(float(pos))
             except Exception as e:
@@ -565,6 +573,10 @@ class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
             record_room_book(ctx.room_id, RoomBook(
                 item_id=int(item_id), device_id=self._device(ctx), person_id=ctx.person_id,
                 starts=dict(parts) if parts else {uri: 0},
+                song_ids=frozenset(
+                    int(e["id"]) for e in queued
+                    if e.get("id") is not None and str(e.get("file")) in (dict(parts) if parts else {uri: 0})
+                ),
             ))
         # Persist a fresh position row so "resume" finds it next time.
         await sa.upsert_position(
