@@ -127,6 +127,11 @@ fi
 #    later boot by the boot step (satellite/base_packages.py), because this
 #    stage is marked done once the satellite runs.
 #
+#    "Fresh" means every list was fetched: a plain `apt-get update` with no
+#    network prints "W: Failed to fetch", keeps the old lists and still
+#    exits 0. `--error-on=any` makes that a failure, so the repair never
+#    runs on stale lists; the log says so and the boot carries on.
+#
 #    A card prepared while the server's internet access was turned off
 #    carries root's flag /var/lib/domovoi/internet-off (stage 1). Then this
 #    step does not go online at all - no `apt-get update`, no install: the
@@ -136,8 +141,8 @@ if [ ! -f "$STEPS/online-debs" ] && [ -f /var/lib/domovoi/internet-off ]; then
 elif [ ! -f "$STEPS/online-debs" ]; then
   UPDATE_OK=0
   for TRY in 1 2 3; do
-    if apt-get update -qq -o DPkg::Lock::Timeout=120; then UPDATE_OK=1; break; fi
-    echo "WARN: apt-get update failed (try $TRY of 3)"
+    if apt-get update -qq --error-on=any -o DPkg::Lock::Timeout=120; then UPDATE_OK=1; break; fi
+    echo "WARN: apt-get update failed or could not fetch every package list (try $TRY of 3)"
     [ "$TRY" = 3 ] || sleep 15
   done
   APT_OK=$UPDATE_OK
@@ -158,7 +163,7 @@ elif [ ! -f "$STEPS/online-debs" ]; then
     if [ "$UPDATE_OK" = 1 ]; then
       echo "WARN: some system packages did not install — the boot step installs what is missing at every boot until they are there"
     else
-      echo "WARN: no package lists (no network?), so no system package was installed or repaired — the boot step installs what is missing at every boot until they are there"
+      echo "WARN: no fresh package lists (no network?), so no system package was installed or repaired — the boot step installs what is missing at every boot until they are there"
     fi
   fi
 fi

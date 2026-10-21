@@ -145,6 +145,8 @@ def test_stage_2_repairs_only_with_fresh_lists_and_never_removes():
     gate = code.index('if [ "$UPDATE_OK" = 1 ]; then')
     fix = code.index("-f install")
     assert update < gate < fix, "the repair runs only after an update that worked"
+    update_line = next(ln for ln in code.splitlines() if "apt-get update" in ln)
+    assert "--error-on=any" in update_line, "a failed fetch must fail the update (stale lists)"
     for line in code.splitlines():
         if "apt-get" in line and ("install" in line) and "-f install" in line:
             assert "--no-remove" in line
@@ -230,7 +232,26 @@ _FAKES = (
 )
 
 
-def _run_package_step(tmp_path: Path, *, flag: bool) -> tuple[str, list[str], bool]:
+# Real apt with the network down: `apt-get update` warns "Failed to fetch",
+# keeps the stale lists and exits 0, unless --error-on=any is given (then
+# it exits 100). Integration 1020a: stage 2 took that 0 as fresh lists and
+# ran the repair (`-f install`) on stale ones.
+_FAKES_NETWORK_DOWN = (
+    'apt-get() {\n'
+    '  echo "apt-get $*" >>"$FAKE_LOG"\n'
+    '  case " $* " in\n'
+    '    *" update "*)\n'
+    '      echo "W: Failed to fetch http://deb.debian.org/debian/dists/trixie/InRelease" >&2\n'
+    '      case " $* " in *" --error-on=any "*) return 100;; esac\n'
+    '      return 0;;\n'
+    '  esac\n'
+    '  return 0\n'
+    '}\n'
+    "sleep() { :; }\n"
+)
+
+
+def _run_package_step(tmp_path: Path, *, flag: bool, fakes: str = _FAKES) -> tuple[str, list[str], bool]:
     import subprocess
 
     body = overlay.render_stage2("domovoi")
@@ -246,7 +267,7 @@ def _run_package_step(tmp_path: Path, *, flag: bool) -> tuple[str, list[str], bo
     script = tmp_path / "step2.sh"
     script.write_bytes((
         "set -u\n"
-        + _FAKES
+        + fakes
         + f'STEPS="{steps.as_posix()}"\n'
         f'export FAKE_LOG="{log.as_posix()}"\n'
         'APT_PACKAGES="mpg123 alsa-utils"\n'
@@ -275,3 +296,17 @@ def test_stage_2_still_goes_online_without_the_flag(tmp_path):
     assert any("-f install -y --no-remove" in c for c in calls)
     assert any(c.endswith("install -y --no-install-recommends --no-remove mpg123") for c in calls)
     assert "system packages present" in stdout and marked
+
+
+@pytest.mark.skipif(_BASH is None, reason="no usable bash (Git Bash on Windows)")
+def test_stage_2_does_not_repair_on_stale_lists_with_the_network_down(tmp_path):
+    stdout, calls, marked = _run_package_step(tmp_path, flag=False, fakes=_FAKES_NETWORK_DOWN)
+    updates = [c for c in calls if c.startswith("apt-get update")]
+    assert len(updates) == 3, calls
+    assert all("--error-on=any" in c for c in updates), updates
+    assert calls == updates, f"stage 2 installed or repaired on stale lists: {calls}"
+    assert "could not fetch every package list (try 3 of 3)" in stdout
+    assert "no fresh package lists (no network?)" in stdout
+    assert "the boot step installs what is missing" in stdout
+    # The step ends normally (the boot carries on) and is not marked done.
+    assert not marked

@@ -135,7 +135,9 @@ reset helper. No core or dashboard change is needed, and no migration.
   * the Health card says **reboot needed: system packages missing
     (mpg123)** until it is there;
   * setup's own repair never runs without fresh package lists and never
-    removes anything;
+    removes anything (a list update that could not reach the mirrors
+    counts as failed, so with the network down setup does not repair from
+    old lists: it says so in its log and the boot carries on);
   * preparing a card refetches a package cache that lacks a base package,
     and the build warns **BASE PACKAGES NOT ON THIS CARD** when it still
     does.
