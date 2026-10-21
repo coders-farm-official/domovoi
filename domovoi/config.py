@@ -427,6 +427,14 @@ class Settings(BaseSettings):
     # satellite when a voice turn needs a model that isn't loaded, rather
     # than leaving the room silent through the load.
     ollama_cold_start_notice: bool = True
+    # The household's "AI features" switch (Settings → Models; both
+    # installers ask "Include AI chat and questions?"). Off: nothing asks
+    # a language model — no questions, no Chat, no news summary, no
+    # warm-up — while voice commands keep running on their fixed phrases,
+    # with speech recognition, the voices and the wake word as they are.
+    # Both processes read the live answer through domovoi/ai_features.py
+    # (environment, then .env); this is the value the core read at boot.
+    ai_features: bool = True
     searxng_url: str = "http://localhost:6888"
 
     connectivity_probe_target: str = "1.1.1.1:443"

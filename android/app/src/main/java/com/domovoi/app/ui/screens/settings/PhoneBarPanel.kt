@@ -100,7 +100,9 @@ internal fun PhoneBarPanel() {
                         enabled = saved != null,
                         onClick = {
                             app.prefs.setPhoneBar(null)
-                            toast("phone bar back to home · music · videos · chat")
+                            // What the default is here: no chat while the
+                            // server's AI features are off, none on a shared screen.
+                            toast("phone bar back to " + PhoneBar.routes(null, caps, shared).joinToString(" · ") { it.label.lowercase() })
                         },
                     ) {
                         Icon(Icons.Filled.Restore, contentDescription = null, modifier = Modifier.size(16.dp))

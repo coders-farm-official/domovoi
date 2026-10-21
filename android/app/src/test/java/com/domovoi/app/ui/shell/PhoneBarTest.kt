@@ -3,6 +3,7 @@ package com.domovoi.app.ui.shell
 import com.domovoi.app.net.CAP_STATIONS
 import com.domovoi.app.net.Capabilities
 import com.domovoi.app.net.CapabilityPlugin
+import com.domovoi.app.net.FEATURE_AI
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -89,6 +90,26 @@ class PhoneBarTest {
         assertSame(default, PhoneBar.edit(default, PhoneBar.Op.Left, Route.Music))
         assertSame(default, PhoneBar.edit(default, PhoneBar.Op.Right, Route.Chat))
         assertSame(default, PhoneBar.edit(default, PhoneBar.Op.Right, Route.Home))
+    }
+
+    /** The server's AI features off: Chat leaves the bar, and no empty slot
+     *  is left behind. On again, a saved bar that had it gets it back. */
+    @Test fun chatLeavesTheBarWhileTheServersAiFeaturesAreOff() {
+        val aiOff = Capabilities(features = mapOf(FEATURE_AI to false))
+        val aiOn = Capabilities(features = mapOf(FEATURE_AI to true))
+        // The default bar: home · music · videos.
+        assertEquals(listOf(Route.Home, Route.Music, Route.Videos), PhoneBar.routes(null, aiOff, shared = false))
+        assertEquals(default, PhoneBar.routes(null, aiOn, shared = false))
+        // A saved bar keeps the rest, in its order.
+        val saved = listOf(Route.Home, Route.Chat, Route.Calendar, Route.Music)
+        assertEquals(listOf(Route.Home, Route.Calendar, Route.Music), PhoneBar.routes(saved, aiOff, shared = false))
+        assertEquals(saved, PhoneBar.routes(saved, aiOn, shared = false))
+        assertEquals(saved, PhoneBar.routes(saved, none, shared = false))
+        // Only Chat besides Home: below the minimum, so the default, minus chat.
+        assertEquals(
+            listOf(Route.Home, Route.Music, Route.Videos),
+            PhoneBar.routes(listOf(Route.Home, Route.Chat), aiOff, shared = false),
+        )
     }
 
     @Test fun everyChoiceIsALauncherScreen() {

@@ -35,6 +35,7 @@ import com.domovoi.app.ui.screens.local.YourDeviceVideos
 import com.domovoi.app.ui.screens.videos.VideosScreen
 import com.domovoi.app.ui.shell.Route
 import com.domovoi.app.ui.shell.SidebarCounts
+import com.domovoi.app.ui.shell.unavailableNote
 import com.domovoi.app.ui.shell.visibleWith
 
 /** [counts] is the shell's one sidebar-counts read, handed to Home's
@@ -44,12 +45,11 @@ fun ScreenRouter(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts 
     // Capability-gated routes (design §8): render only when the server's
     // manifest allows them — reachable-but-hidden states (deep link, race
     // with the manifest fetch) get a quiet placeholder, never a dead screen.
-    if (!route.visibleWith(LocalCapabilities.current)) {
+    val caps = LocalCapabilities.current
+    if (!route.visibleWith(caps)) {
+        val (title, body) = route.unavailableNote(caps)
         DomovoiCard(Modifier.fillMaxWidth().padding(16.dp)) {
-            EmptyState(
-                "${route.label.lowercase()} isn't available",
-                "the plugin providing this screen isn't installed on this server",
-            )
+            EmptyState(title, body)
         }
         return
     }

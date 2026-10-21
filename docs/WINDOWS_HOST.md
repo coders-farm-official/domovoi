@@ -40,7 +40,7 @@ doesn't do that yet).
 | Processor | Firmware virtualization on (Intel VT-x / AMD-V) | AVX2 is checked and only warned about. |
 | Disk | 40 GB free on the system drive | An SSD is strongly recommended; Setup warns on a spinning disk. Wake-word training, if you turn it on, takes about 32 GB more. |
 | GPU | Optional | Ollama uses an NVIDIA GPU that WSL passes through; without one it runs on the CPU. Wake-word training uses it too, through the NVIDIA Container Toolkit Setup adds to the distro. Whisper always runs on the CPU. |
-| Internet | Needed during setup (about 10.5-13.5 GB, most of it the AI models) | Afterwards Domovoi works with or without it, as you answer in Setup. |
+| Internet | Needed during setup (about 10.5-13.5 GB, most of it the AI models; about 4.5 GB if you leave out AI chat and questions) | Afterwards Domovoi works with or without it, as you answer in Setup. |
 | Docker Desktop, Ollama for Windows, your own WSL distros | Fine alongside | Setup checks the ports Domovoi needs, not which programs you run. A program holding one of them gets a pop-up naming it, with Retry and Cancel. |
 | Smart App Control | Must be off | It blocks unsigned programs, and this build is unsigned. See [Unsigned](#unsigned). |
 
@@ -87,13 +87,30 @@ that:
    `C:\Program Files\Domovoi`, or the `DomovoiRemoveProfile` task), Setup
    asks you to restart first: Windows deletes those by path, and would take
    a new install's files of the same name with them.
-2. **Lists every change it will make** (the table below) before it makes
+2. **Asks "Include AI chat and questions?"** Yes is picked to begin with:
+   Domovoi then answers questions and chats, and Setup downloads about
+   6.4 GB of AI models (about 9.1 GB on a PC with about 32 GB of memory or
+   more, which gets the standard models; the page shows the one for this
+   PC). No leaves the AI models out (`provision.sh --no-ai-models`, which
+   writes `AI_FEATURES=false`), and the whole download is about 4.5 GB.
+   Voice commands, music, timers and everything else work either way;
+   speech recognition, Domovoi's voices, the wake word and Ollama itself
+   are installed either way, so you can turn AI on later in the dashboard,
+   **Settings > Models**, which downloads the models then. The download
+   sizes on the pages after this one follow the answer.
+   `DomovoiSetup.exe /ai=no` starts the page at No (the answer also rides
+   along when Setup carries on after a restart). Yes is passed as
+   `--ai-models`, so a later Setup's Yes is heard over an earlier No; a
+   pinned `provision.sh` from before the question gets no option for Yes
+   (it always downloads the models) and can't do No, which the job step
+   then refuses with a message rather than starting it.
+3. **Lists every change it will make** (the table below) before it makes
    any.
-3. **Asks whether this PC will have internet after setup** (Yes, always /
+4. **Asks whether this PC will have internet after setup** (Yes, always /
    Sometimes / No; nothing is preselected). The answer goes to
    `provision.sh --internet`; see [INTERNET.md](INTERNET.md). You can
    change it later in **Settings > Internet**.
-4. **Asks for the media folder** (default `C:\Users\Public\Domovoi`), the
+5. **Asks for the media folder** (default `C:\Users\Public\Domovoi`), the
    Windows folder you open in Explorer and copy music, pictures, videos,
    documents and audiobooks into. It must be a folder of your own on a
    drive of this PC: Windows, Program Files, ProgramData, the Users folder,
@@ -101,7 +118,7 @@ that:
    its AppData isn't), anything holding one of those, and links (junctions)
    are refused, because Domovoi's account and its Linux system can write
    there.
-5. **Downloads** Ubuntu 26.04.1's official WSL image, and `provision.sh`
+6. **Downloads** Ubuntu 26.04.1's official WSL image, and `provision.sh`
    from the pinned commit (GitHub's raw file at `DomovoiCommit`; a release
    build pins its release tag's commit), each checked against a pinned
    SHA-256 (`windows/installer/pins.iss`). A build whose `provision.sh` is
@@ -113,17 +130,17 @@ that:
    channel and the dashboard's tab addresses move together:
    `windows\build.ps1 -Pin` sets all of them from one commit
    ([Building it](#building-it)).
-6. **Turns on Virtual Machine Platform** and installs WSL 2.7.14 only if
+7. **Turns on Virtual Machine Platform** and installs WSL 2.7.14 only if
    they are missing. If Windows needs a restart, Setup asks, and starts
    again by itself after you sign in.
-7. **Makes the hidden account and the service**, sets the folders' access,
+8. **Makes the hidden account and the service**, sets the folders' access,
    adds the firewall rules, and hands the rest to the service:
    `DomovoiHost`, running as the hidden account, writes that account's
    `.wslconfig`, imports the distro, switches the distro's interop with
    Windows off (and restarts it) before anything else runs in it, and runs
    `provision.sh` inside it as root. Setup's progress bar follows
    `provision.sh`'s progress lines (about 20-40 minutes, most of it the AI
-   models); **Stop Setup** stops waiting, and after four hours Setup asks
+   models, less without them); **Stop Setup** stops waiting, and after four hours Setup asks
    whether to keep waiting. When `provision.sh` asks for a restart of the
    distro, the service does it and runs the script once more to confirm.
    If you stop Setup and don't remove what it did, the service is set to
@@ -152,7 +169,7 @@ that:
    there would run as administrator too). Every line is filtered on the
    way: passwords, tokens and setup codes are blanked as far as Setup can
    recognise them.
-8. **Shows your setup code** once, with a **Copy** button, **Open
+9. **Shows your setup code** once, with a **Copy** button, **Open
    Domovoi**, and the steps to the admin account in the dashboard's own
    words. The code works for 24 hours (a restart of the service writes a
    fresh one). **Open Domovoi** copies the code too, then opens
@@ -172,7 +189,8 @@ that:
    page also says where the AI models run, from what Setup found: the
    chat and voice-command models on the NVIDIA cards it lists (or on the
    processor when there is none), speech recognition always on the
-   processor. Domovoi's icon appears beside the clock for the account that
+   processor; with AI chat and questions left out, it says so and where to
+   turn them on (**Settings > Models**). Domovoi's icon appears beside the clock for the account that
    ran Setup, and starts at every account's sign-in from then on
    ([The tray icon](#the-tray-icon)).
 

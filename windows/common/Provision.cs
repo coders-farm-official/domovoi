@@ -214,6 +214,39 @@ namespace Domovoi.Windows
         {
             return scriptText != null && scriptText.IndexOf("\n  --stop-before STEP ", StringComparison.Ordinal) >= 0;
         }
+
+        // --ai-models / --no-ai-models (provision.sh after 2026-10-21, "AI
+        // chat and questions" optional): an older pinned script has neither
+        // and would refuse them (exit 2). It always pulls the AI models,
+        // which is the Yes answer.
+        public static bool SupportsAiChoice(string scriptText)
+        {
+            return scriptText != null
+                && scriptText.IndexOf("\n  --ai-models ", StringComparison.Ordinal) >= 0
+                && scriptText.IndexOf("\n  --no-ai-models ", StringComparison.Ordinal) >= 0;
+        }
+    }
+
+    // The AI models' download, for the question "Include AI chat and
+    // questions?" (owner decision 2026-10-21: optional, included by
+    // default). provision.sh --tier auto picks the standard models when the
+    // distro's MemTotal is at least 22,528 MiB (provision-manifest.conf),
+    // else the smaller ones; the distro sees about 97% of the memory cap
+    // Setup gives it (WslConfig.MemoryCapGb: 24 GB reads 23.3 GiB), so a cap
+    // of 23 GB or more is the standard tier: a PC with about 32 GB of
+    // memory or more. Sizes: the question model, the voice-command model
+    // and the vision model of each tier (2.0 + 2.5 + 1.9 GB on the smaller
+    // tier, 2.0 + 5.2 + 1.9 GB on the standard one).
+    public static class AiModels
+    {
+        public const string FloorGb = "6.4";
+        public const string StandardGb = "9.1";
+        public const int StandardMinCapGb = 23;
+
+        public static string DownloadGb(int wslMemoryCapGb)
+        {
+            return wslMemoryCapGb >= StandardMinCapGb ? StandardGb : FloorGb;
+        }
     }
 
     // The port check right before provision.sh starts Domovoi (owner fixes
@@ -295,7 +328,8 @@ namespace Domovoi.Windows
     }
 
     // The provision.sh options for one install (PLAN 4.8; the brief:
-    // --internet, --media, --lan-ip, tier auto, from the pinned commit).
+    // --internet, --media, --lan-ip, tier auto, from the pinned commit; AI
+    // chat and questions since 2026-10-21).
     public sealed class ProvisionOptions
     {
         public string RepoUrl;
@@ -308,6 +342,14 @@ namespace Domovoi.Windows
         // name -> Windows folder, in a stable order.
         public List<KeyValuePair<string, string>> Media = new List<KeyValuePair<string, string>>();
         public int HealthTimeoutSec = 900;
+        // "Include AI chat and questions?" (Setup's page; Yes by default).
+        // No: provision.sh --no-ai-models (no AI models pulled, AI_FEATURES
+        // =false); speech recognition, the voices and Ollama itself are
+        // installed either way.
+        public bool IncludeAi = true;
+        // The pinned provision.sh has --ai-models / --no-ai-models
+        // (ProvisionScript.SupportsAiChoice).
+        public bool ScriptHasAiChoice;
     }
 
     public static class ProvisionArgs
@@ -334,6 +376,19 @@ namespace Domovoi.Windows
             a.Add("--track-branch"); a.Add(o.TrackBranch);
             a.Add("--internet"); a.Add(o.Internet);
             a.Add("--tier"); a.Add("auto");
+            // The household's answer, always said out loud to a provision.sh
+            // that takes it: with neither option, provision.sh keeps the
+            // answer an earlier install left in domovoi/.env, so a Yes in a
+            // later Setup over an earlier No would not be heard. An older
+            // pinned script gets nothing for Yes (its arguments as before:
+            // it pulls the models anyway) and can't do No.
+            if (!o.IncludeAi)
+            {
+                if (!o.ScriptHasAiChoice)
+                    throw new ArgumentException("this Setup's provision.sh always downloads the AI models (it has no --no-ai-models); run Setup again and include AI chat and questions, or use a newer Setup");
+                a.Add("--no-ai-models");
+            }
+            else if (o.ScriptHasAiChoice) a.Add("--ai-models");
             if (!string.IsNullOrEmpty(o.LanIp))
             {
                 if (!Lan.IsPrivateIPv4(o.LanIp)) throw new ArgumentException("LAN IP must be a private IPv4 address: " + o.LanIp);

@@ -1578,10 +1578,76 @@ const buildNavItems = (manifest) => {
   return items;
 };
 
+/* GET /api/capabilities, asked once per page load and shared (the host
+ * kind, the feature flags). `ask(true)` asks again: the Models page does
+ * after it changes the AI switch, and every page does when its tab comes
+ * back into view, so a switch flipped on another device reaches this one.
+ * A failed ask is tried again by the next caller. */
+const CapabilitiesStore = (() => {
+  let caps = null;
+  let asking = null;
+  const subs = new Set();
+  const tell = () => subs.forEach((fn) => { try { fn(caps); } catch { /* one bad subscriber */ } });
+  return {
+    get: () => caps,
+    ask(force = false) {
+      if (asking) return asking;
+      if (caps && !force) return Promise.resolve(caps);
+      asking = Promise.resolve()
+        .then(() => apiGet('/api/capabilities', { quiet: true }))
+        .then((c) => { if (c && typeof c === 'object') caps = c; })
+        .catch(() => { /* unknown: keep what we had */ })
+        .then(() => { asking = null; tell(); return caps; });
+      return asking;
+    },
+    subscribe(fn) { subs.add(fn); return () => { subs.delete(fn); }; },
+  };
+})();
+
+/* The household's AI switch (Settings → Models; features.ai in
+ * /api/capabilities, domovoi/ai_features.py). Off hides Chat from every
+ * launcher (navItemsFor) — a page that can't work is not offered. Until
+ * the server answers, this browser's last answer (localStorage, a per-
+ * device convenience) or on: a server too old to say has AI. */
+const AI_FEATURES_KEY = 'domovoi-ai-features';
+const AI_ONLY_ROUTES = new Set(['chat']);
+const aiFeaturesOn = () => {
+  const caps = CapabilitiesStore.get();
+  const f = caps && caps.features;
+  if (f && typeof f.ai === 'boolean') return f.ai;
+  try { return localStorage.getItem(AI_FEATURES_KEY) !== 'off'; } catch { return true; }
+};
+CapabilitiesStore.subscribe((caps) => {
+  const f = caps && caps.features;
+  if (!f || typeof f.ai !== 'boolean') return;
+  try { localStorage.setItem(AI_FEATURES_KEY, f.ai ? 'on' : 'off'); } catch { /* not kept */ }
+});
+let aiFeaturesWatching = false;
+const useAiFeatures = () => {
+  const [on, setOn] = useState(aiFeaturesOn());
+  useEffect(() => {
+    const un = CapabilitiesStore.subscribe(() => setOn(aiFeaturesOn()));
+    CapabilitiesStore.ask();
+    if (!aiFeaturesWatching) {
+      aiFeaturesWatching = true;
+      try {
+        document.addEventListener('visibilitychange', () => {
+          if (!document.hidden) CapabilitiesStore.ask(true);
+        });
+      } catch { /* no document events */ }
+    }
+    setOn(aiFeaturesOn());
+    return un;
+  }, []);
+  return on;
+};
+
 // buildNavItems as a launcher shows it: on a shared screen, without the
-// SHARED_SCREEN_HIDDEN pages.
-const navItemsFor = (manifest, { shared = false } = {}) =>
-  buildNavItems(manifest).filter((it) => !(shared && SHARED_SCREEN_HIDDEN.has(it.route)));
+// SHARED_SCREEN_HIDDEN pages; with the household's AI features off,
+// without Chat (`ai`: the caller's useAiFeatures(), so it re-renders).
+const navItemsFor = (manifest, { shared = false, ai = aiFeaturesOn() } = {}) =>
+  buildNavItems(manifest).filter((it) => !(shared && SHARED_SCREEN_HIDDEN.has(it.route))
+    && !(!ai && AI_ONLY_ROUTES.has(it.route)));
 
 /* ---- the phone bar ----------------------------------------------------
  * The tabs along the bottom of a phone-width screen (760px and below).
@@ -1903,7 +1969,8 @@ const Sidebar = ({ route, setRoute, counts, manifest, badges: given }) => {
   const own = usePluginBadges(given ? null : manifest);
   const badges = given || own;
   const shared = useSharedScreen();
-  const items = navItemsFor(manifest, { shared });
+  const ai = useAiFeatures();
+  const items = navItemsFor(manifest, { shared, ai });
   const strip = phoneBarRoutes(items, usePhoneBar());
   const primaryRoutes = new Set(strip);
   return (
@@ -2359,22 +2426,14 @@ const loginErrorText = (e) => {
  * and shared; a failed ask is tried again by the next component that wants
  * it. "wsl" is the Linux system the Windows installer sets up. */
 const HostKindStore = (() => {
-  let kind = null;
-  let asking = null;
-  const subs = new Set();
-  const tell = () => subs.forEach((fn) => { try { fn(kind); } catch { /* one bad subscriber */ } });
+  const kindOf = (caps) => (caps && typeof caps.host_kind === 'string' && caps.host_kind) || null;
   return {
-    get: () => kind,
-    ask() {
-      if (kind || asking) return asking || Promise.resolve(kind);
-      asking = Promise.resolve()
-        .then(() => apiGet('/api/capabilities', { quiet: true }))
-        .then((caps) => { kind = (caps && typeof caps.host_kind === 'string' && caps.host_kind) || null; })
-        .catch(() => { /* unknown: the words cover both kinds of server */ })
-        .then(() => { asking = null; tell(); return kind; });
-      return asking;
-    },
-    subscribe(fn) { subs.add(fn); return () => { subs.delete(fn); }; },
+    get: () => kindOf(CapabilitiesStore.get()),
+    // Unknown after a failed ask: the words cover both kinds of server.
+    ask: () => (kindOf(CapabilitiesStore.get())
+      ? Promise.resolve(kindOf(CapabilitiesStore.get()))
+      : CapabilitiesStore.ask(true).then(kindOf)),
+    subscribe: (fn) => CapabilitiesStore.subscribe((caps) => fn(kindOf(caps))),
   };
 })();
 
@@ -3506,7 +3565,7 @@ const DeviceTokenNotice = () => {
 Object.assign(window, {
   Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, PreviewTag, PREVIEW_MEANS, RoomChip, Avatar,
   Card, Empty, Button, IconButton, Sidebar, Topbar, PageHeader, Stat, useToast, Tabs,
-  CORE_NAV_ITEMS, buildNavItems, navItemsFor, PluginNavIcon, useDarkTheme, usePluginBadges,
+  CORE_NAV_ITEMS, buildNavItems, navItemsFor, CapabilitiesStore, useAiFeatures, aiFeaturesOn, AI_ONLY_ROUTES, PluginNavIcon, useDarkTheme, usePluginBadges,
   PluginPageFrame, pluginAccentStyle,
   SHARED_SCREEN_HIDDEN, useSharedScreen,
   PHONE_BAR_DEFAULT, PHONE_BAR_MAX, PHONE_BAR_MIN, PhoneBarStore, usePhoneBar, phoneBarRoutes, phoneBarEdit,

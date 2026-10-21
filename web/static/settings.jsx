@@ -3780,7 +3780,8 @@ const HouseholdTokenCard = ({ fire }) => {
 const PhoneBarCard = ({ fire }) => {
   const shared = useSharedScreen();
   const manifest = window.DomovoiPluginManifest || { plugins: [] };
-  const items = navItemsFor(manifest, { shared });
+  const ai = useAiFeatures();
+  const items = navItemsFor(manifest, { shared, ai });
   const saved = usePhoneBar();
   const bar = phoneBarRoutes(items, saved);
   const byRoute = {};

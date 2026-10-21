@@ -852,7 +852,10 @@ from domovoi.sdk import (
 `connectivity.policy` / `.reason` / `.internet_allowed`, and made
 `sdk.http` refuse non-local requests when the answer is `never`; 1.5 added
 the `[[containers]]` table and `ctx.add_container` /
-`ContainerExpectation`, §4.18; 1.6 added `sdk.playback.dispatch`, §4.5) is
+`ContainerExpectation`, §4.18; 1.6 added `sdk.playback.dispatch`, §4.5;
+1.7 added `sdk.core_config.ai_features` and made `sdk.http` refuse a model
+request to this box's Ollama while the household's AI features are off,
+§4.14) is
 the semver your `domovoi_api` range is checked against. Ask for `">=1.4"`
 if you use the 1.4 names; for 1.5's, either ask for `">=1.5"` or call
 `ctx.add_container` only `if hasattr(ctx, "add_container")` so an older
@@ -1279,7 +1282,9 @@ variables shadow the file**.
 `sdk.core_config` is a read-only whitelist of core facts: `bot_name`,
 `music_dir`, `podcasts_dir`, `audiobooks_dir`, `mpd_host`,
 `mpd_port_base_control`, `mpd_port_base_http`, `mpd_http_base`, `use_stubs`,
-`log_level`. Anything else raises — and it's read-only. `mpd_http_base`
+`log_level`, and since SDK 1.7 `ai_features` (the household's AI switch,
+live: false means nothing may ask a language model). Anything else raises
+— and it's read-only. `mpd_http_base`
 reads back as a usable URL prefix (`http://<host>`) even when the setting
 is `auto`, which the core resolves to its current LAN address.
 
@@ -1306,6 +1311,18 @@ is `auto`, which the core resolves to its current LAN address.
   only handles `httpx.HTTPError` / `httpx.TransportError` treats it as
   "the network is unavailable" (which it is) rather than letting a
   `ValueError` escape as a 500.
+  **It honours the household's AI switch** (SDK 1.7): while AI chat and
+  questions are off (Settings → Models, `AI_FEATURES=false`), a request
+  that would run or fetch a model on this box's Ollama (`/api/generate`,
+  `/api/chat`, `/api/embed`, `/api/embeddings`, `/api/pull`, `/api/create`
+  on the core's `OLLAMA_URL` or on port 11434) raises
+  `ai_features.AITurnedOffConnectError` (an `AITurnedOff` and an
+  `httpx.ConnectError`) before anything is sent; `/api/tags`, `/api/ps` and
+  every other host stay open. Treat it like Ollama being down: skip the
+  step (a summary, a generated answer) and keep what works without it.
+  Better still, read `sdk.core_config.ai_features` first and don't offer
+  the step at all. A plugin that calls Ollama through its own client is
+  outside this check — read the flag yourself.
 * `egress` (`from domovoi.sdk import egress`; `domovoi.webkit.egress` in
   `web.py`; SDK 1.4) — the one place the internet answer
   (`INTERNET_ACCESS`: `always` \| `sometimes` \| `never`, `""` while
@@ -1498,7 +1515,9 @@ Runs in the separate dashboard process. Your `web.py` receives a
   calls the same tier.
   Relative paths resolve to `/v1/plugins/<slug>/...`.
 * `ctx.http(**kwargs)` — UA-preset httpx client factory. Like `sdk.http`, it
-  refuses non-local requests when the server is answered `never` (SDK 1.4).
+  refuses non-local requests when the server is answered `never` (SDK 1.4),
+  and a model request to this box's Ollama while AI features are off
+  (SDK 1.7).
 * `domovoi.webkit.egress` — the internet-answer gate (see
   [§4.14](#414-sounds-http-state-logging)); a web route that would reach the
   internet raises `egress.http_exception("what")` first under `never`.

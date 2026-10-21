@@ -17,6 +17,40 @@ a way that would otherwise get reported as a bug.
   Home-server replies can be reported too ("report this reply"). Nothing
   changes on the server or the dashboard.
 
+## 2026-10-21 — AI chat and questions are optional
+
+Core, dashboard, installers and app. Nothing to run: an existing install
+keeps AI on, exactly as before.
+
+* **A household switch.** Settings → Models → **AI chat and questions**
+  (admin; `AI_FEATURES` in `domovoi/.env`, default on). Off, nothing asks a
+  language model: voice commands keep working on their usual phrases, and
+  speech recognition, the voices and the wake word stay. A question gets
+  "I can't answer that one — I'm set up for home commands. Say 'what can
+  you do' to hear them." Chat is hidden on the dashboard and in the app
+  (`features.ai` in `GET /api/capabilities`; a server without the key has
+  AI), and a send gets 409 `X-Domovoi-Refusal: ai-off`. The news briefing
+  summary, memory suggestions, the warm-up, "are you sure?" and voice chat
+  mode stop too. Turning it on shows the download size, then downloads the
+  models (`POST /api/models/ai`, progress on the page).
+* **Both installers ask "Include AI chat and questions?"** (default Yes,
+  with the size: about 6.4 GB, or 9.1 GB on a box with 24 GB of memory or
+  more). No skips the chat, router and vision models, keeps Whisper and
+  the wake word, and writes `AI_FEATURES=false`; Ollama itself is still
+  installed, so turning AI on later needs no reinstall.
+  `provision.sh --no-ai-models` / `--ai-models` (no flag: asks on a
+  terminal, else Yes); Windows Setup has a page for it and `/ai=no`. The
+  Windows Setup's pinned `provision.sh` must be one with the new options
+  before a No install can run (the release build re-pins).
+* **No more "waking up my language model" for a model that was never
+  downloaded.** The router model is skipped, and a question hears that the
+  question-answering model isn't installed and where to add it.
+* **Plugins (SDK 1.7.0):** `sdk.core_config.ai_features` is the switch,
+  live; with it off, `sdk.http` (and the web host's `http()`) refuses a
+  request that would run or fetch a model on this box's Ollama with
+  `ai_features.AITurnedOff`. Kiwix's spoken summaries degrade to the
+  extract it already speaks.
+
 ## 2026-10-20 — 1.0.0-rc3: audiobooks on the phone, and everything since rc2
 
 Version 1.0.0rc3 (the app 1.0.0-rc3, versionCode 26102001; the Windows

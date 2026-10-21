@@ -394,7 +394,24 @@ const useChatNarrow = (ref) => {
   return narrow;
 };
 
+/* Chat while the household's AI features are off (Settings → Models): the
+ * page is off every launcher then (navItemsFor), and a link or an old
+ * bookmark that still lands here says why instead of offering a composer
+ * whose every send would be refused. */
+const ChatAiOff = () => (
+  <div style={{ padding: 24 }}>
+    <Empty title="chat is off"
+           sub="AI chat and questions are turned off for this home. Voice commands still work. An admin can turn AI on in Settings → Models."
+           action={<a href="#settings/models" className="home-link">Settings → Models</a>}/>
+  </div>
+);
+
 const ChatPage = () => {
+  const ai = useAiFeatures();
+  return ai ? <ChatPageMain/> : <ChatAiOff/>;
+};
+
+const ChatPageMain = () => {
   const [fire, toastNode] = useToast();
   const copyMessage = async (text) => fire((await chatCopyText(text || '')) ? 'copied' : 'copy failed');
   const { items: threads, error: threadsError, refresh: refreshThreads } =

@@ -209,6 +209,16 @@ falls through to the next.
 | 4 | **Volatile-question gate** | `volatile_offer` / `qa` | For freshness-critical categories (weather, prices, scores, current events) the local model's confident-but-stale guess is exactly the failure mode, so Domovoi doesn't guess: online it asks "want me to check <subject>?" and parks a `core.self_doubt_offer` confirmation; offline it says plainly that it can't answer. |
 | 5 | **QA fallthrough** | `qa` | General Q&A via the local Ollama QA model, with session history and a per-speaker profile prefix (memories, favorites, preferences). The answer is the model's plain-text reply, spoken whole — on a voice turn sentence by sentence as the model writes it (`Context.stream_qa` → `Response.qa_stream`, `domovoi/spoken_answer.py`), the turn recorded with the full text once it has been said; an empty reply is retried once (while nothing has been said; a cut tail is never spoken) and then answered with a short "no answer" line (the "language model isn't answering" line is only for a failed call). For a question, an answer that admits it may be out of date, or a heuristic category, appends "Want me to check that online?" as its own sentence (parking `core.self_doubt_offer`); an answer that already ends by offering to look it up has that offer parked instead. Otherwise the implicit memory extractor may surface one pending "should I remember that?" offer. |
 
+**AI features off** (`AI_FEATURES=false`, Settings → Models;
+`domovoi/ai_features.py`): tiers 2-5 never run. A turn no fast path took
+(or one its fast path declined) is answered with a fixed line ("I can't
+answer that one — I'm set up for home commands. Say 'what can you do' to
+hear them.", or "I can't look that up with AI turned off." for a
+time-sensitive category) as a `qa` turn, and nothing asks Ollama. The
+background model users (warm-up, memory extraction, the news briefing
+summary, the intro classifier, chat mode, the dashboard's chat) check the
+same switch, and plugins' `sdk.http` clients refuse model requests.
+
 **Every routed turn is persisted** by `router._persist_turn`: one `intents_log`
 row (routing decision, latency, presence), one `conversation_log` row (full
 user/assistant text), and an append to the session's `recent_turns`. This is

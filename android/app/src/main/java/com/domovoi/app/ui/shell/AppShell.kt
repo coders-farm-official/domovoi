@@ -384,7 +384,8 @@ private fun ShellContent(trouble: TokenTrouble?) {
     val sharedAnswers by app.prefs.sharedScreens.collectAsState()
     val shared = isSharedScreen(ServerCredentials.sharedAnswerFor(sharedAnswers, shellServerUrl), paired)
     // If the active route lost its capability (plugin uninstalled,
-    // different server), fall back home rather than rendering a stub.
+    // different server, Chat with the server's AI features turned off),
+    // fall back home rather than rendering a stub.
     LaunchedEffect(caps, route) {
         if (!route.visibleWith(caps)) {
             backStack.clear()

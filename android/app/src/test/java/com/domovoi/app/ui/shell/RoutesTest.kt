@@ -40,6 +40,42 @@ class RoutesTest {
         assertTrue(Route.Images.visibleWith(caps(CAP_STATIONS, CAP_IMAGEGEN)))
     }
 
+    private val aiOff = Capabilities(features = mapOf(FEATURE_AI to false))
+    private val aiOn = Capabilities(features = mapOf(FEATURE_AI to true))
+
+    /** The household's AI features off, on a phone without the engine:
+     *  no place to chat, so no launcher offers Chat. Every other screen
+     *  stays, plugin gates still apply on top (One Chat keeps Chat for the
+     *  phone's own chats when the engine is there: chatStaysWhileOnePlaceWorks). */
+    @Test fun chatFollowsTheServersAiSwitch() {
+        onDeviceAssistant = { false }
+        assertFalse(Route.Chat.visibleWith(aiOff))
+        assertFalse(Route.Chat.visibleOn(aiOff, shared = false))
+        // features.chat is the voice chat mode, not this switch.
+        assertTrue(Route.Chat.visibleWith(Capabilities(features = mapOf("chat" to false))))
+        Route.entries.filter { it != Route.Chat }.forEach {
+            assertEquals(it.name, it.visibleWith(Capabilities.EMPTY), it.visibleWith(aiOff))
+        }
+        val radioAiOff = Capabilities(
+            plugins = listOf(CapabilityPlugin(slug = "p", androidCapabilities = listOf(CAP_STATIONS))),
+            features = mapOf(FEATURE_AI to false),
+        )
+        assertTrue(Route.Stations.visibleWith(radioAiOff))
+        assertFalse(Route.Chat.visibleWith(radioAiOff))
+        assertFalse(Route.Chat in WorkspaceRoutes.filter { it.visibleOn(aiOff, shared = false) })
+        assertFalse(Route.Chat in everythingTiles(aiOff, shared = false))
+        assertTrue(StartRoute.visibleWith(aiOff))
+    }
+
+    @Test fun aHiddenChatsPlaceholderSaysWhy() {
+        assertEquals(
+            "chat is turned off" to "this server has its AI features turned off",
+            Route.Chat.unavailableNote(aiOff),
+        )
+        assertEquals("stations isn't available", Route.Stations.unavailableNote(aiOff).first)
+        assertEquals("chat isn't available", Route.Chat.unavailableNote(Capabilities.EMPTY).first)
+    }
+
     @Test fun appOpensOnHome() {
         // The web opens (and falls back) on #home; so does the app.
         assertEquals(Route.Home, StartRoute)

@@ -30,7 +30,10 @@ from __future__ import annotations
 # 1.6.0: added playback.dispatch(response, room_id): a play or stop from a
 #        plugin's HTTP route or worker (no voice turn) reaches the room's
 #        satellite as music_start / music_stop.
-API_VERSION = "1.6.0"
+# 1.7.0: added core_config.ai_features (the household's AI switch, live);
+#        sdk.http refuses a request that runs or fetches a model on this
+#        box's Ollama while it is off (ai_features.AITurnedOff).
+API_VERSION = "1.7.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,

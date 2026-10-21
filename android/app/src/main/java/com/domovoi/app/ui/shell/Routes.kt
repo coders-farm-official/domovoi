@@ -91,6 +91,15 @@ fun Route.visibleWith(caps: Capabilities): Boolean =
     (requiredCapability()?.let { caps.has(it) } ?: true) &&
         (this != Route.Chat || caps.serverChatOn() || onDeviceAssistant())
 
+/** Why a route a link reached is not shown here, for its placeholder:
+ *  the title and the line under it. */
+fun Route.unavailableNote(caps: Capabilities): Pair<String, String> =
+    if (this == Route.Chat && !caps.serverChatOn()) {
+        "${label.lowercase()} is turned off" to "this server has its AI features turned off"
+    } else {
+        "${label.lowercase()} isn't available" to "the plugin providing this screen isn't installed on this server"
+    }
+
 /**
  * Pages a shared screen (an admin marks the device in the dashboard's
  * Settings → Devices; the kitchen tablet) leaves off EVERY launcher — the

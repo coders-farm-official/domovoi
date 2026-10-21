@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 
+from domovoi import ai_features
 from domovoi.clients.ollama import get_ollama_client
 from domovoi.log_privacy import said
 
@@ -72,6 +73,10 @@ async def classify_third_party_match(
     confirmation flow still works — just less confidently filtered."""
     if not candidate_text.strip():
         return 0.0
+    # AI features off (domovoi/ai_features.py): the classifier's "can't
+    # tell" answer, without asking the model.
+    if ai_features.turned_off():
+        return 0.5
 
     prompt = _PROMPT_TEMPLATE.format(
         intro_text=intro_text.strip(),

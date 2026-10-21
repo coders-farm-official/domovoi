@@ -1174,7 +1174,8 @@ const HomeEverything = ({ counts, badges: given, shared }) => {
   const own = usePluginBadges(given ? null : manifest);
   const badges = given || own;
   const c = counts || {};
-  const items = navItemsFor(manifest, { shared });
+  const ai = useAiFeatures();
+  const items = navItemsFor(manifest, { shared, ai });
   const onBar = new Set(phoneBarRoutes(items, usePhoneBar()));
   const tiles = items.filter((it) => !onBar.has(it.route)).concat(HOME_EXTRA_TILES);
   const edit = (

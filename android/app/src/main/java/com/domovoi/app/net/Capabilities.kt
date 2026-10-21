@@ -19,7 +19,9 @@ import kotlinx.serialization.Serializable
  *
  * Everything is defensive: if the endpoint is missing or the fetch fails,
  * the app falls back to [Capabilities.EMPTY], which hides all gated
- * screens and renders neutral tones.
+ * screens and renders neutral tones. The one gate that reads a server
+ * switch rather than a plugin, Chat on `features.ai`, fails open: Chat
+ * hides only when the server says AI is off.
  */
 
 /** Well-known Android capability slugs. */
@@ -100,6 +102,13 @@ data class Capabilities(
     /** Server-supplied label for a handler/source name, else the raw name. */
     fun labelFor(name: String?): String? =
         handlerDisplay.firstOrNull { it.name == name }?.label ?: name
+
+    /** False only when the server says its AI features are off
+     *  (`features.ai == false`). Absent means on: an older server has no
+     *  switch, and a manifest that failed to load ([EMPTY]) must not hide
+     *  Chat on a server that has its models. */
+    val aiEnabled: Boolean
+        get() = features[FEATURE_AI] != false
 
     companion object {
         val EMPTY = Capabilities()
