@@ -10,6 +10,20 @@ import androidx.core.content.ContextCompat
 import com.domovoi.app.audio.MicArbiter
 import com.domovoi.app.audio.MicOwnership
 import androidx.work.WorkInfo
+import com.domovoi.app.assistant.docs.ChatDocStore
+import com.domovoi.app.assistant.docs.DocExtract
+import com.domovoi.app.assistant.docs.DocExtraction
+import com.domovoi.app.assistant.docs.DocHeadsUp
+import com.domovoi.app.assistant.docs.DocNote
+import com.domovoi.app.assistant.docs.DocNotes
+import com.domovoi.app.assistant.docs.DocQa
+import com.domovoi.app.assistant.docs.DocRefused
+import com.domovoi.app.assistant.docs.NoPdfTextApi
+import com.domovoi.app.assistant.docs.PdfTextReader
+import com.domovoi.app.assistant.docs.PhonePdfText
+import com.domovoi.app.assistant.docs.QaDoc
+import com.domovoi.app.assistant.docs.StoredDocument
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -31,6 +45,10 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.Locale
 import kotlin.coroutines.CoroutineContext
+
+/** A PDF attached on a phone without the PDF text API, waiting for the
+ *  home server to read it (or to be dropped). */
+data class PendingDocument(val conversation: String, val id: String, val name: String, val question: String)
 
 /** Where the assistant's models are, as its screens show it. */
 sealed interface ModelSetup {
@@ -90,6 +108,13 @@ data class AssistantUi(
     val lastStopMs: Long? = null,
     /** The reply reports saved on this phone, newest first. */
     val reports: List<ReplyReport> = emptyList(),
+    /** A document being read for the conversation (its name). */
+    val reading: String? = null,
+    /** A PDF this phone can't read the text of, waiting for "Ask the home
+     *  server" or to be dropped. */
+    val pendingPdf: PendingDocument? = null,
+    /** Why the last attachment wasn't taken, in words, until closed. */
+    val docProblem: String? = null,
 ) {
     val installed: Boolean get() = setup == ModelSetup.Installed
 
@@ -181,6 +206,13 @@ class AssistantController(
     /** How the phone shows the time (zone, locale, 12/24-hour), read every
      *  turn; [clock] gives the moment. */
     private val clockStyle: () -> ClockStyle = { ClockStyle.system(is24Hour = false) },
+    /** Where phone chats' attachments are kept; null: no attachments
+     *  (tests of everything else). */
+    private val docs: ChatDocStore? = null,
+    /** The phone's PDF text API, or null on a phone without one. */
+    private val pdfText: () -> PdfTextReader? = { null },
+    /** The longest a document may take to read before Chat gives up on it. */
+    private val docReadTimeoutMs: Long = DOC_READ_TIMEOUT_MS,
 ) {
     private val _state = MutableStateFlow(
         AssistantUi(
@@ -707,6 +739,7 @@ class AssistantController(
     private suspend fun reply(asked: StoredConversation, onDelta: (String) -> Unit = {}): StoredConversation {
         save(asked)
         clockReply(asked, onDelta)?.let { return it }
+        if (asked.documents.isNotEmpty()) return docReply(asked, onDelta)
         val backend = settings.backend
         val llm = try {
             ensureEngine()
@@ -819,7 +852,11 @@ class AssistantController(
     fun delete(id: String) {
         scope.launch {
             if (_state.value.conversation.id == id) stopReply()
-            val ok = withContext(io) { conversations.delete(id).also { readHistory() } }
+            val ok = withContext(io) {
+                docs?.delete(id)
+                docCache.keys.removeAll { it.startsWith("$id/") }
+                conversations.delete(id).also { readHistory() }
+            }
             if (_state.value.conversation.id == id) {
                 settings.currentConversation = null
                 _state.update { it.copy(conversation = conversations.create(clock())) }
@@ -832,7 +869,11 @@ class AssistantController(
     fun clearAll() {
         scope.launch {
             stopReply()
-            val ok = withContext(io) { conversations.clearAll().also { readHistory() } }
+            val ok = withContext(io) {
+                docs?.clearAll()
+                docCache.clear()
+                conversations.clearAll().also { readHistory() }
+            }
             settings.currentConversation = null
             _state.update { it.copy(conversation = conversations.create(clock())) }
             say(if (ok) "conversations cleared" else "some conversations could not be deleted")
@@ -900,7 +941,230 @@ class AssistantController(
         _messages.tryEmit(text)
     }
 
+    // ── Documents (documents plan, D1) ──────────────────────────────────
+
+    /** Read documents' parts, by "conversation/id" (read once per chat). */
+    private val docCache = java.util.concurrent.ConcurrentHashMap<String, DocExtraction>()
+
+    /** Whether phone chats take documents here (a store exists). */
+    val canAttach: Boolean get() = docs != null
+
+    /**
+     * Attaches the file [open] reads (named [name]) to the conversation on
+     * screen, with [question] (blank: Domovoi says it has read it, with no
+     * model). The file is copied into app storage and read on the phone; a
+     * PDF on a phone without the PDF text API waits in [AssistantUi.pendingPdf]
+     * for "Ask the home server" ([attachRead]) or [dropPending]. A refusal
+     * lands in [AssistantUi.docProblem].
+     */
+    fun attach(name: String, open: () -> java.io.InputStream, question: String = "") {
+        val store = docs ?: return
+        val ui = _state.value
+        if (ui.replying || ui.reading != null || voice?.active == true) return
+        DocExtract.refusalFor(name)?.let { why ->
+            _state.update { it.copy(docProblem = why) }
+            return
+        }
+        _state.update { it.copy(reading = name, docProblem = null, pendingPdf = null) }
+        scope.launch {
+            val conv = _state.value.conversation
+            var copied: Pair<String, File>? = null
+            try {
+                copied = withContext(io) { store.import(conv.id, name, open(), clock()) }
+                val file = copied.second
+                val reader = pdfText()
+                val extraction = readWithin { DocExtract.extract(file, name, reader) }
+                addDocument(conv.id, copied.first, name, extraction, question)
+            } catch (e: NoPdfTextApi) {
+                val id = copied?.first
+                _state.update { it.copy(reading = null, pendingPdf = id?.let { PendingDocument(conv.id, it, name, question) }) }
+            } catch (e: DocRefused) {
+                copied?.let { (id, _) -> withContext(io) { store.deleteDocument(conv.id, id) } }
+                _state.update { it.copy(reading = null, docProblem = e.message) }
+            } catch (e: CancellationException) {
+                _state.update { it.copy(reading = null) }
+                throw e
+            } catch (e: Throwable) {
+                Log.w(TAG, "a document could not be read", e)
+                copied?.let { (id, _) -> withContext(io) { store.deleteDocument(conv.id, id) } }
+                _state.update { it.copy(reading = null, docProblem = "That document couldn't be read.") }
+            }
+        }
+    }
+
+    /**
+     * A new conversation on screen, with the file [open] reads attached
+     * ("Ask about this document" in Files). Returns its id, already the one
+     * showing, so Chat opens it as the current conversation.
+     */
+    fun startWithDocument(name: String, open: () -> java.io.InputStream): String {
+        if (_state.value.replying) stop()
+        val fresh = conversations.create(clock())
+        settings.currentConversation = null
+        _state.update { it.copy(conversation = fresh, replying = false, thinking = false, reading = null, pendingPdf = null) }
+        attach(name, open)
+        return fresh.id
+    }
+
+    /** The phone's own copy of document [id] of the conversation on screen
+     *  (the page sheet draws a PDF page from it); null when it is gone. */
+    fun docFile(id: String): File? {
+        val c = _state.value.conversation
+        val d = c.documents.firstOrNull { it.id == id } ?: return null
+        return docs?.file(c.id, d.id, d.name)?.takeIf { it.isFile }
+    }
+
+    /** The pending PDF's file, for "Ask the home server" to send. */
+    fun pendingFile(p: PendingDocument): File? = docs?.file(p.conversation, p.id, p.name)?.takeIf { it.isFile }
+
+    /** The pending PDF, read by the home server ([extraction]). */
+    fun attachRead(p: PendingDocument, extraction: DocExtraction) {
+        _state.update { it.copy(pendingPdf = null, reading = p.name) }
+        scope.launch {
+            try {
+                val e = DocExtract.finish(extraction.copy(kind = "pdf", readByServer = true))
+                addDocument(p.conversation, p.id, p.name, e, p.question)
+            } catch (e: DocRefused) {
+                withContext(io) { docs?.deleteDocument(p.conversation, p.id) }
+                _state.update { it.copy(reading = null, docProblem = e.message) }
+            }
+        }
+    }
+
+    /** Drops the pending PDF (and its copy). */
+    fun dropPending() {
+        val p = _state.value.pendingPdf ?: return
+        _state.update { it.copy(pendingPdf = null) }
+        scope.launch { withContext(io) { docs?.deleteDocument(p.conversation, p.id) } }
+    }
+
+    fun closeDocProblem() = _state.update { it.copy(docProblem = null) }
+
+    /** Reads with a time limit: a file that would take longer is given up
+     *  on (the read runs on [io], so Chat is never blocked by it). */
+    private suspend fun readWithin(read: () -> DocExtraction): DocExtraction {
+        val job = scope.async(io) { read() }
+        return withTimeoutOrNull(docReadTimeoutMs) { job.await() }
+            ?: run {
+                job.cancel()
+                throw DocRefused("Reading that document took too long, so Domovoi stopped.")
+            }
+    }
+
+    private suspend fun addDocument(conversation: String, id: String, name: String, e: DocExtraction, question: String) {
+        withContext(io) { docs?.saveParts(conversation, id, e) }
+        docCache["$conversation/$id"] = e
+        val now = clock()
+        val doc = StoredDocument(
+            id = id, name = name, kind = e.kind, pages = e.pages, sheets = e.sheets, words = e.words, chars = e.chars,
+            summary = DocNotes.summaryLine(name, e.kind, e.pages, e.words, e.sheets), notes = e.notes,
+            scannedPages = e.scannedPages, readByServer = e.readByServer, added = now,
+        )
+        val current = _state.value.conversation.takeIf { it.id == conversation }
+            ?: withContext(io) { conversations.load(conversation) }
+            ?: StoredConversation(conversation, now, now)
+        val asked = current.copy(
+            updated = now,
+            documents = current.documents + doc,
+            messages = current.messages + StoredMessage(Speaker.USER, question.trim(), now, documents = listOf(id)),
+        )
+        val showing = _state.value.conversation.id == conversation
+        if (!showing) {
+            _state.update { it.copy(reading = null) }
+            save(asked)
+            return
+        }
+        _state.update { it.copy(conversation = asked, reading = null, replying = true, thinking = true) }
+        replyJob = scope.launch { reply(asked) }
+    }
+
+    private suspend fun docParts(conversation: String, d: StoredDocument): QaDoc {
+        val key = "$conversation/${d.id}"
+        val e = docCache[key] ?: withContext(io) { docs?.loadParts(conversation, d.id) }?.also { docCache[key] = it }
+        return QaDoc(d.name, e?.parts.orEmpty())
+    }
+
+    /**
+     * A turn in a conversation with documents (plan part 3): the passages
+     * that match, the rules, ONE user turn carrying them (nothing from
+     * earlier replies goes to the model), then the app's check. With nothing
+     * that matches, or a summary of a document longer than one pass (D2:
+     * map/reduce), Domovoi answers itself, with no model call.
+     */
+    private suspend fun docReply(asked: StoredConversation, onDelta: (String) -> Unit): StoredConversation {
+        val last = asked.messages.lastOrNull()
+        val question = last?.takeIf { it.fromUser }?.text?.trim().orEmpty()
+        val names = asked.documents.map { it.name }
+        fun own(text: String, mode: String, notes: List<DocNote> = emptyList()): StoredMessage {
+            onDelta(text)
+            return StoredMessage(Speaker.DOMOVOI, text, clock(), docMode = mode, notes = notes)
+        }
+        if (question.isEmpty()) {
+            val attached = last?.documents.orEmpty().mapNotNull { id -> asked.documents.firstOrNull { it.id == id } }
+                .ifEmpty { asked.documents.takeLast(1) }
+            val text = attached.joinToString("\n\n") { DocNotes.attachedReply(it.name, it.kind, it.pages, it.words) }
+            return finishReply(asked, own(text, "attached"))
+        }
+        val qaDocs = asked.documents.map { docParts(asked.id, it) }
+        val previous = asked.messages.dropLast(1).lastOrNull { it.fromUser && it.text.isNotBlank() }?.text
+        val mode = DocQa.chooseMode(question)
+        DocHeadsUp.check(mode, qaDocs, question) // D3: the heads-up card; none in D1
+        if (mode == "summary" && !DocQa.fitsOnePass(qaDocs, DocQa.PHONE_SINGLE_PASS_CHARS)) {
+            return finishReply(asked, own(DocQa.summaryTooLongText(names, asked.documents.sumOf { it.words }), "summary"))
+        }
+        val given = DocQa.retrieve(qaDocs, question, previous, mode = mode, singlePass = DocQa.PHONE_SINGLE_PASS_CHARS)
+        if (given.isEmpty()) {
+            return finishReply(asked, own(DocQa.NOT_FOUND, mode, listOf(DocNote("not_found", DocQa.noteNotFound(names)))))
+        }
+        val backend = settings.backend
+        val llm = try {
+            ensureEngine()
+        } catch (e: CancellationException) {
+            finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), stopped = true))
+            throw e
+        }
+        if (llm == null) {
+            val why = (_state.value.engine as? EngineState.Failed)?.reason ?: "the model did not load"
+            return finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), error = "The model could not start: $why"))
+        }
+        val prompt = DocQa.buildPrompt(question, given, names, mode = mode, previous = previous)
+        val system = Persona.SYSTEM_PROMPT + "\n\n" + prompt.rules
+        val sent = nanos()
+        var firstMs: Long? = null
+        val text = StringBuilder()
+        fun live(): StoredMessage = StoredMessage(Speaker.DOMOVOI, text.toString(), clock(), backend = backend.label, docMode = mode)
+        _state.update { it.copy(conversation = asked.copy(messages = asked.messages + live())) }
+        try {
+            llm.reply(system, listOf(ChatTurn(fromUser = true, text = prompt.user)), clockLine()).collect { delta ->
+                if (firstMs == null && delta.isNotBlank()) firstMs = (nanos() - sent) / 1_000_000
+                text.append(delta)
+                onDelta(delta)
+                _state.update { ui -> ui.copy(thinking = text.isBlank(), conversation = asked.copy(messages = asked.messages + live())) }
+            }
+        } catch (e: CancellationException) {
+            finishReply(asked, live().copy(stopped = true, firstTextMs = firstMs, stopMs = voice?.lastStopMs))
+            throw e
+        } catch (e: Throwable) {
+            return finishReply(asked, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
+        }
+        val checked = DocQa.checkReply(text.toString(), given, question, names)
+        val stats = llm.lastStats()
+        return finishReply(
+            asked,
+            live().copy(
+                text = checked.content,
+                sources = checked.sources.map { src -> src.copy(page = qaDocs.getOrNull(src.doc)?.parts?.getOrNull(src.part)?.page) },
+                notes = checked.notes,
+                firstTextMs = firstMs,
+                tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 },
+            ),
+        )
+    }
+
     companion object {
+        /** A document taking longer than this to read is given up on. */
+        const val DOC_READ_TIMEOUT_MS = 90_000L
+
         /** Unload the model this long after the assistant leaves the screen. */
         const val UNLOAD_AFTER_MS = 5 * 60 * 1000L
         private const val REPLY_POLL_MS = 2_000L
@@ -932,6 +1196,8 @@ class AssistantController(
                 appVersion = runCatching { app.packageManager.getPackageInfo(app.packageName, 0).versionName }
                     .getOrNull().orEmpty(),
                 clockStyle = { ClockStyle.system(android.text.format.DateFormat.is24HourFormat(app)) },
+                docs = ChatDocStore(File(app.filesDir, "chat-docs/attachments")),
+                pdfText = { PhonePdfText.readerOrNull() },
             ).also { it.attach(app) }
         }
 
