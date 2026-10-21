@@ -4,6 +4,47 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-21 — "What does this letter say?" in Chat
+
+Core and dashboard update, and the app. No migration and no new
+dependencies.
+
+* **Photograph a letter or a bill and ask what it says or what to do.**
+  The answer explains it plainly in a fixed shape: who it's from, what it's
+  about, the deadlines, the amounts, the reference numbers, what to do
+  next and what was unclear.
+* **Every date and amount shown is the letter's.** The picture model
+  transcribes the photo; the chat model explains the transcript; then the
+  app reads every date and amount in the explanation with the strict
+  grammar of "calculate exactly" and keeps only those the transcript has,
+  written the way the letter writes them. One the letter doesn't have is
+  left out, and a note says how many were. Deadlines and amounts due the
+  model missed are added from the letter's own sentences.
+* **Heads-up first.** A blurry photo gets its card before anything is
+  sent to a model (as before, now for letter questions too: "what do I
+  need to do about this bill?"). Handwriting now has its card too: the
+  picture model is asked one word first, printed or handwritten, and a
+  handwritten letter gets "Handwriting is hard for Domovoi" before it is
+  transcribed, once a chat.
+* **Text in a letter is data, never instructions.** It reaches the model
+  in a marked block it can't close, and a letter that talks to an AI
+  assistant ("ignore previous instructions…") is named in a note under
+  the answer; nothing from that text is shown as a fact.
+* **Home-server chats** keep the transcript with the thread (as the photo
+  already is), under the answer as "photo 1".
+* **Phone chats** read the letter on the phone where its GPU runs the photo
+  model (as N3's pictures do). Elsewhere, with a home server paired and AI
+  on there, "+" offers "a letter for the home server": the server reads
+  the photo and keeps nothing (`POST /api/chat/letters/read`), and the
+  phone writes and checks the explanation. With neither, the chat says so
+  plainly. Nothing is kept on the phone: the photo is wiped once answered,
+  and the transcript is never stored.
+* **With AI features off**, none of this starts: the routes refuse as
+  every chat send does.
+* **Measured** on 12 synthetic phone photos (our own letters, including a
+  Spanish one; blur, tilt, shadow, JPEG) with the default server models on
+  CPU: see the manual's "What Domovoi is good and not so good at".
+
 ## 2026-10-21 — App fix: asking about a document in a phone chat
 
 App only. A question about a document in a phone chat could crash the app on

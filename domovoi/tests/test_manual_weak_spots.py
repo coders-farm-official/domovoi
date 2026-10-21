@@ -81,4 +81,4 @@ def test_a_heads_up_is_promised_only_where_the_rules_fire():
         fires = c["kind"] in TABLE["kinds"] and c["verdict"] in h.FIRES and "heads-up" not in c["manual"]
         assert promised == fires, item
     handwriting = next(i for i, c in zip(items, cells) if c["kind"] == "handwriting")
-    assert "no heads-up for it yet" in handwriting
+    assert "heads-up before it is read" in handwriting
