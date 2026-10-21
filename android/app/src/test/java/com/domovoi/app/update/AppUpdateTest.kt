@@ -72,6 +72,25 @@ class AppUpdateTest {
         assertTrue(AppUpdate.decide(final, offer(code = 26110101, name = "1.0.1")) is UpdateState.Available)
     }
 
+    @Test fun theRc3SchemeGoesUpByVersionCodeAlone() {
+        // 1.0.0-rc2 (26101602) < 1.0.0-rc3 (26102001) < 1.0.0. An rc2 phone
+        // hears about rc3; an rc3 phone hears about 1.0.0, not rc2 or rc3.
+        val rc2 = install(code = 26101602, name = "1.0.0-rc2")
+        assertEquals(
+            UpdateState.Available("1.0.0-rc3", 26102001, "arm64-v8a", "$joinUrl?abi=arm64-v8a&update=1"),
+            AppUpdate.decide(rc2, offer(code = 26102001, name = "1.0.0-rc3")),
+        )
+        val rc3 = install(code = 26102001, name = "1.0.0-rc3")
+        assertTrue(AppUpdate.decide(rc3, offer(code = 26101602, name = "1.0.0-rc2")) is UpdateState.UpToDate)
+        assertTrue(AppUpdate.decide(rc3, offer(code = 26102001, name = "1.0.0-rc3")) is UpdateState.UpToDate)
+        assertEquals(
+            UpdateState.Available("1.0.0", 26102401, "arm64-v8a", "$joinUrl?abi=arm64-v8a&update=1"),
+            AppUpdate.decide(rc3, offer(code = 26102401, name = "1.0.0")),
+        )
+        val final = install(code = 26102401, name = "1.0.0")
+        assertTrue(AppUpdate.decide(final, offer(code = 26102001, name = "1.0.0-rc3")) is UpdateState.UpToDate)
+    }
+
     @Test fun aNewerReleaseOnTheServerIsAvailableWithItsJoinPage() {
         val state = AppUpdate.decide(install(), offer())
         assertEquals(

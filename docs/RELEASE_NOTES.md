@@ -4,6 +4,42 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-20 — 1.0.0-rc3: audiobooks on the phone, and everything since rc2
+
+Version 1.0.0rc3 (the app 1.0.0-rc3, versionCode 26102001; the Windows
+Setup 1.0.0-rc3). It holds every entry between this one and "Phone
+photos in chat" (2026-10-16), which was the newest in 1.0.0-rc2. The
+update applies three migrations by itself (**V030** voice
+history, **V031** a phone room's voice, **V032** audiobook files); there is
+nothing to run by hand.
+
+What a household notices:
+
+* **Audiobooks on the phone.** Save a book to the phone (its size is shown
+  first) and listen with no server in reach; the phone and the server keep
+  one place per book, and the app offers to carry on from where a room got
+  to. Books made of one file per chapter play everywhere now, covers
+  show, and a deleted book leaves the list.
+* **Satellites recover from a Wi-Fi drop sooner, and get mpg123 back.**
+  Reboot each satellite once, with the Wi-Fi up, after the update.
+* **Satellite cards:** prepare a card again after the update so a new
+  satellite says its setup code clearly and Samsung phones can join its
+  setup network. Satellites already set up need nothing.
+* **Windows:** Domovoi's tray icon, and satellite cards written from the
+  icon's menu. An install from before the icon can add it by running
+  `DomovoiTray.exe` from the release once.
+* **Phone and dashboard:** they stop and say so when the server no longer
+  knows them, pages fill in once you sign in, new uploads show without
+  leaving the page, "play in room" from a track's drawer works again, and
+  the dark theme is readable.
+* **Voice:** reminders at a clock time, "what can you do", the calendar
+  (read-only), and a phone in room mode can change its voice. What people
+  say is kept 90 days, and People → Voice history can delete it all.
+* **Also:** the user manual on the dashboard and in the app, the chat
+  answers as Domovoi, a slow first database start no longer fails an
+  install, the AcoustID key in the dashboard, plugin pages in their own
+  frame and colour.
+
 ## 2026-10-20 — Audiobooks: folder books play, covers, and what the phone needs
 
 Core and dashboard update with one migration, **V032** (two columns on

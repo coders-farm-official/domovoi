@@ -210,7 +210,7 @@ class HttpMusicBrainzClient:
     the last request.
     """
 
-    USER_AGENT = "domovoi/1.0.0rc2 (+https://github.com/coders-farm-official/domovoi)"
+    USER_AGENT = "domovoi/1.0.0rc3 (+https://github.com/coders-farm-official/domovoi)"
     BASE = "https://musicbrainz.org/ws/2"
     MIN_INTERVAL_SEC = 1.0
     REQUEST_TIMEOUT_SEC = 5.0
