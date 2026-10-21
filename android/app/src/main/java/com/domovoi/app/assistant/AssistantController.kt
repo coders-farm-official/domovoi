@@ -875,8 +875,8 @@ class AssistantController(
         // replace: that copy stays until the new reply is finished.
         if (retryingFrom == null) save(asked)
         clockReply(asked, onDelta)?.let { return it }
-        if (asked.documents.isNotEmpty()) return docReply(asked, onDelta)
         phoneReply(asked, onDelta)?.let { return it }
+        if (asked.documents.isNotEmpty()) return docReply(asked, onDelta)
         // A question about Domovoi: the manual on the phone (LocalHelp).
         val help = helpTurn(asked)
         if (help != null && help.passages.isEmpty()) return notCoveredReply(asked, help, onDelta)
