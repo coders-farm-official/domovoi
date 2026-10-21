@@ -1,12 +1,6 @@
 package com.domovoi.app.assistant.drafts
 
 import android.content.Context
-import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.Typeface
-import android.graphics.pdf.PdfDocument
-import java.io.ByteArrayOutputStream
-import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -17,29 +11,26 @@ import java.util.concurrent.ConcurrentHashMap
 class DraftAssets(private val context: Context) {
     private val templates = ConcurrentHashMap<String, DraftTemplate>()
     private val fonts = ConcurrentHashMap<String, DraftFont>()
-    private val faces = ConcurrentHashMap<String, Typeface>()
+    private val bytes = ConcurrentHashMap<String, ByteArray>()
 
     fun template(id: String): DraftTemplate = templates.getOrPut(id) {
         require(id in DraftTemplates.IDS) { "not a template: $id" }
         DraftTemplates.parse(context.assets.open("drafts/templates/$id.json").use { it.readBytes().toString(Charsets.UTF_8) })
     }
 
-    fun font(stem: String): DraftFont = fonts.getOrPut(stem) {
-        DraftFont.parse(stem, context.assets.open(path(stem)).use { it.readBytes() })
-    }
+    fun font(stem: String): DraftFont = fonts.getOrPut(stem) { DraftFont.parse(stem, fontBytes(stem)) }
 
-    fun typeface(stem: String): Typeface = faces.getOrPut(stem) {
-        // From a file, not the asset: the same bytes either way, and a file
-        // face is what Skia embeds and subsets in the PDF.
-        val f = File(context.cacheDir, "drafts-fonts/$stem.ttf")
-        if (!f.isFile) {
-            f.parentFile?.mkdirs()
-            context.assets.open(path(stem)).use { input -> f.outputStream().use { input.copyTo(it) } }
-        }
-        Typeface.createFromFile(f)
+    /** The font file itself, which the PDF embeds (subset). */
+    fun fontBytes(stem: String): ByteArray = bytes.getOrPut(stem) {
+        require(SAFE_STEM.matches(stem)) { "not a font: $stem" }
+        context.assets.open(path(stem)).use { it.readBytes() }
     }
 
     private fun path(stem: String) = "drafts/fonts/$stem.ttf"
+
+    private companion object {
+        val SAFE_STEM = Regex("^[A-Za-z0-9-]{1,60}$")
+    }
 
     fun layout(markdown: String, templateId: String): DraftLaidOut =
         DraftLayout.layout(markdown, template(templateId)) { font(it) }
@@ -47,41 +38,12 @@ class DraftAssets(private val context: Context) {
 
 /**
  * A draft as a PDF on the phone: the laid-out lines ([DraftLayout], the same
- * as the server's) drawn one `drawText` per line by Android's `PdfDocument`
- * (Skia: fonts embedded and subset, with ToUnicode maps, so the text layer
- * is real), in the bundled Liberation fonts, ligatures and kerning off. One
- * column by construction. The twin of the server's
- * `domovoi/drafts/pdf_file.py`.
+ * as the server's) written by the app's own text-only writer
+ * ([DraftPdfWriter]) in the bundled Liberation fonts, embedded and subset,
+ * one line per `Tj` with real spaces. One column by construction. The twin
+ * of the server's `domovoi/drafts/pdf_file.py`.
  */
 object DraftPdf {
-    fun render(assets: DraftAssets, markdown: String, templateId: String): ByteArray {
-        val lay = assets.layout(markdown, templateId)
-        val s = DraftLayout.SCALE.toFloat()
-        val doc = PdfDocument()
-        try {
-            lay.pages.forEachIndexed { i, lines ->
-                val page = doc.startPage(PdfDocument.PageInfo.Builder(lay.width / DraftLayout.SCALE, lay.height / DraftLayout.SCALE, i + 1).create())
-                val canvas = page.canvas
-                val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = Color.BLACK
-                    fontFeatureSettings = "'liga' 0, 'clig' 0, 'kern' 0"
-                }
-                for (ln in lines) {
-                    paint.typeface = assets.typeface(ln.font)
-                    paint.textSize = ln.size / s
-                    if (ln.marker.isNotEmpty()) canvas.drawText(ln.marker + " ", ln.markerX / s, ln.y / s, paint)
-                    // Skia writes no glyph for a space (the reader restores the
-                    // ones between words from the gaps), so a wrap's kept space
-                    // is left off here and on the server alike (pdf_file.py).
-                    canvas.drawText(ln.text.trimEnd(' '), ln.x / s, ln.y / s, paint)
-                }
-                doc.finishPage(page)
-            }
-            val out = ByteArrayOutputStream()
-            doc.writeTo(out)
-            return out.toByteArray()
-        } finally {
-            doc.close()
-        }
-    }
+    fun render(assets: DraftAssets, markdown: String, templateId: String, title: String = ""): ByteArray =
+        DraftPdfWriter.write(assets.layout(markdown, templateId), { DraftPdfWriter.Face(assets.font(it), assets.fontBytes(it)) }, title)
 }

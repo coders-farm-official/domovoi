@@ -9,14 +9,15 @@ so every reader breaks the line there and the words either side of a wrap
 never run together ("if I" never reads "ifI").
 
 A wrapped line's kept space (:mod:`.layout`) is not drawn at the line's
-end: Android's PDF writer (Skia) writes no glyph for a space at all (the
-2026-10-21 emulator check: none of a letter's 105 spaces were in the
-phone's PDF; the reader puts them back from the gaps between words, but
-not at a line's end). Drawing it here would make the server's text differ
-from the phone's by those spaces; leaving it off makes the two identical,
-and the line break is what keeps the words apart. ReportLab can't tag a PDF (that is its paid
-version), which is why .docx is offered beside it and is the default for
-resumes and cover letters. The phone's twin is ``DraftPdf.kt``.
+end (the line break keeps the words apart), here and on the phone alike.
+The phone's twin is ``DraftPdfWriter.kt``, the app's own small writer that
+writes each line the way ReportLab does here (its own text object, one
+``Tj`` with real spaces, no kerning, the same fonts embedded and subset):
+pdfminer, pypdf, poppler (default and ``-raw``) and pdfium read the same
+text from either (review round 1; Android's ``PdfDocument`` writes no
+space glyphs, and those readers guessed differently). ReportLab can't tag
+a PDF (that is its paid version), which is why .docx is offered beside it
+and is the default for resumes and cover letters.
 """
 
 from __future__ import annotations

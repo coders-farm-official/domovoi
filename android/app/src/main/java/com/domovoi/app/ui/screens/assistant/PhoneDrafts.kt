@@ -44,7 +44,7 @@ internal object PhoneDraftFiles {
     /** A version as .docx or PDF: its file name and bytes. */
     fun render(context: Context, d: PhoneDraft, version: Int, body: String, format: String): Pair<String, ByteArray> {
         val a = assets(context)
-        val bytes = if (format == "pdf") DraftPdf.render(a, body, d.template) else DraftDocx.render(body, a.template(d.template), d.title)
+        val bytes = if (format == "pdf") DraftPdf.render(a, body, d.template, d.title) else DraftDocx.render(body, a.template(d.template), d.title)
         return ChatDocumentsLibrary.fileName(d.title, version, format) to bytes
     }
 
@@ -52,12 +52,16 @@ internal object PhoneDraftFiles {
      *  the phone's PDF text API (when it has one), a .docx from its XML. */
     fun check(context: Context, bytes: ByteArray, format: String, markdown: String): DraftCheck {
         if (format != "pdf") return DraftAts.checkDocx(bytes, markdown)
-        val reader = PhonePdfText.readerOrNull() ?: return DraftCheck(true, DraftAts.NO_PDF_API, 0, 0)
+        // Read as written always; with the phone's PDF text API too when it
+        // has one (Android 15).
+        val reader = PhonePdfText.readerOrNull()
         val tmp = File(context.cacheDir, "drafts-check-${System.nanoTime()}.pdf")
         return try {
-            tmp.writeBytes(bytes)
-            val text = reader.read(tmp, 200).joinToString("\n") { page -> page.blocks.joinToString("\n") { it.text } }
-            DraftAts.checkText(text, markdown)
+            val text = reader?.let { r ->
+                tmp.writeBytes(bytes)
+                r.read(tmp, 200).joinToString("\n") { page -> page.blocks.joinToString("\n") { it.text } }
+            }
+            DraftAts.checkPdf(bytes, markdown, text)
         } catch (e: Exception) {
             DraftCheck(false, "text check: the saved file couldn't be read back", 0, DraftAts.expectedWords(markdown).size)
         } finally {

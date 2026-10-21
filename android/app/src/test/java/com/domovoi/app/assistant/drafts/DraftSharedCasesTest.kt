@@ -208,6 +208,38 @@ class DraftSharedCasesTest {
         assertFalse(DraftAts.checkDocx(wrong, "Dear Sam,\n\nThe radiator is broken.").ok)
     }
 
+    /**
+     * Review round 1: the phone's PDF, read as written (no space guessed
+     * from a gap), is the server's lines word for word, and passes its own
+     * stricter check. The files land in build/draft-pdfs for the
+     * maintainers' check with the common readers (pdfminer, pypdf, poppler,
+     * pdfium).
+     */
+    @Test fun thePhonesPdfReadsAsWrittenAsTheServersLines() {
+        val out = File("build/draft-pdfs").apply { mkdirs() }
+        for (c in cases["layout"]!!.jsonArray) {
+            val o = c.jsonObject
+            val md = o["markdown"]!!.s()
+            val lay = DraftLayout.layout(md, template(o["template"]!!.s())) { font(it) }
+            val pdf = DraftPdfWriter.write(lay, { DraftPdfWriter.Face(font(it), File(repo, "domovoi/drafts/fonts/$it.ttf").readBytes()) },
+                "Cover letter — Jordan Avery")
+            File(out, o["template"]!!.s() + "__" + o["name"]!!.s() + ".pdf").writeBytes(pdf)
+            val drawn = o["text"]!!.s().split("\u000c").joinToString("\n") { p -> p.split("\n").joinToString("\n") { it.trimEnd(' ') } }
+            assertEquals(o["name"]!!.s(), drawn, DraftAts.pdfStreamText(pdf))
+            if (o["name"]!!.s() == "traps") continue
+            val check = DraftAts.checkPdf(pdf, md, null)
+            assertTrue(o["name"]!!.s() + ": " + check.line, check.ok)
+            assertTrue(o["name"]!!.s() + " is ${pdf.size} bytes", pdf.size < 120_000)
+        }
+        // A PDF whose spaces aren't written (Skia's) fails the as-written read.
+        val lay = DraftLayout.layout("Dear Sam,\n\nThe heater is broken.", template("letter-personal")) { font(it) }
+        val noSpaces = lay.copy(pages = lay.pages.map { p -> p.map { it.copy(text = it.text.replace(" ", "")) } })
+        val skia = DraftPdfWriter.write(noSpaces, { DraftPdfWriter.Face(font(it), File(repo, "domovoi/drafts/fonts/$it.ttf").readBytes()) })
+        val failed = DraftAts.checkPdf(skia, "Dear Sam,\n\nThe heater is broken.", "Dear Sam,\nThe heater is broken.")
+        assertFalse(failed.ok)
+        assertEquals("text check: “Dear” reads as “DearSam,” (word 1 of 6)", failed.line)
+    }
+
     @Test fun everyWrapKeepsItsSpace() {
         val serif = font("LiberationSerif-Regular")
         val text = "Thank you for your letter. If I may say so, the power was off for nine hours, if I recall."

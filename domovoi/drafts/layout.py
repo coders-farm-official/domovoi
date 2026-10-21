@@ -1,5 +1,5 @@
 """Pages and lines for a draft in a template: the one layout both PDF
-renderers draw (ReportLab here, Android's ``PdfDocument`` in
+renderers draw (ReportLab here, the app's ``DraftPdfWriter`` after
 ``DraftLayout.kt``), so the same template gives the same text from the
 server and the phone.
 

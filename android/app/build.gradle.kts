@@ -277,7 +277,7 @@ abstract class ManualAssetsTask : DefaultTask() {
  * and `drafts/fonts/` (Liberation Sans and Serif, SIL OFL 1.1, with the
  * licence): the phone renders a template's PDF from the same JSON and the
  * same font files as the server, which is what keeps the two PDFs' text
- * identical.
+ * the same.
  */
 abstract class DraftAssetsTask : DefaultTask() {
     @get:InputDirectory

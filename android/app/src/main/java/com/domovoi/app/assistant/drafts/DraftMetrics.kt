@@ -19,6 +19,9 @@ class DraftFont(
 ) {
     fun has(cp: Int): Boolean = (cmap[cp] ?: 0) != 0
 
+    /** The glyph drawn for [cp] (0, the missing glyph, when there's none). */
+    fun glyph(cp: Int): Int = cmap[cp] ?: 0
+
     fun advance(cp: Int): Int {
         val gid = cmap[cp] ?: 0
         return if (gid >= advances.size) advances[advances.size - 1] else advances[gid]

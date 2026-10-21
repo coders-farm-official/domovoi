@@ -804,16 +804,21 @@ a file starts a chat about it.
 **Write a resume or a letter:** ask for one ("write a cover letter for the
 warehouse job at Acme", "draft a letter to my landlord about the heater").
 Domovoi writes a draft, shown as a card with **open**, **save**,
-**download** and **print**. Then say what to change ("shorter", "make it
-more formal", "mention my forklift licence"): each change is a new
-version, and the reply says what changed. Every version is kept.
+**download** and **print**. Then say what to change ("make the letter
+shorter", "make it more formal", or just "shorter" as your next message),
+or type it in the card's **revise** box: each change is a new version,
+and the reply says what changed. Every version is kept. A message about
+something else ("turn on the kitchen lights") is answered as usual and
+leaves the draft alone.
 
 - **open** shows the draft beside the chat on a wide screen (in its place
   on a narrow one), with the message box still below it. Pick **v1**,
   **v2** … to see any version; **changes** marks added words and strikes
   out removed ones.
 - **edit** lets you change it by hand; saving makes a new version
-  "edited by you".
+  "edited by you" (on another device it says "edited on" and the device's
+  name). If a change comes in while you edit, you're told, and nothing is
+  lost: every version stays in the version list.
 - **save** puts it in [Files](#files) → Documents → **From Chat**: a
   resume or cover letter as **.docx** (best for job sites), a letter as
   **PDF**; the other format is one press away. After saving, Domovoi reads

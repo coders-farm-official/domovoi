@@ -34,11 +34,18 @@ the PDFs Chat writes.
   into the app's chat mic in a home-server chat asks first, like every
   voice print.
 * **Same text from the server and the phone.** Both make a template's PDF
-  from the same template files and fonts with the same line breaking, so
-  the text is identical; NFKC is applied before drawing (the fonts have no
-  ff/ffi/ffl ligature glyphs), and each line is drawn as its own text
-  line, so the words either side of a line break never run together when
-  the text is read back.
+  from the same template files and fonts with the same line breaking, and
+  write it the same way: each line one text string, with real spaces and
+  no kerning, in the embedded Liberation fonts (the app has its own small
+  PDF writer for this; Android's left spaces out, and some readers then
+  ran words together). Checked on eight drafts: pdfminer, pypdf, poppler
+  (`pdftotext`, default and `-raw`) and pdfium read the same text from the
+  phone's PDF as from the server's, and exactly the draft's words. The
+  files themselves aren't byte-identical (different PDF writers). NFKC is
+  applied before drawing (the fonts have no ff/ffi/ffl ligature glyphs).
+* **The phone's save check reads a PDF as written** (no space guessed
+  from a gap) as well as with Android's PDF reader, so it runs on every
+  phone, not only Android 15.
 * **With AI chat and questions turned off,** nothing new is drafted, but
   drafts already written can still be opened, edited, saved and printed
   (the dashboard's Chat page lists them).
