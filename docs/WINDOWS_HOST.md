@@ -606,7 +606,7 @@ that has it, a fresh install's first update does the same.
 From a Windows PowerShell 5.1 prompt in the repository:
 
 ```powershell
-.\windows\build.ps1                  # exes (DomovoiTray.exe too), unit tests, then DomovoiSetup.exe
+.\windows\build.ps1                  # exes (DomovoiTray.exe too), unit tests, then DomovoiSetup.exe and DomovoiSatelliteSetup.exe
 .\windows\build.ps1 -SkipInstaller   # exes and unit tests only
 .\windows\build.ps1 -Pin v1.0.0      # move the pins to a release tag's commit, then build
 .\windows\build.ps1 -Pin <sha> -Channel main -PinOnly   # a test pin, nothing built
@@ -629,6 +629,7 @@ the installer needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)
 | Path | What |
 |---|---|
 | `windows/installer/DomovoiSetup.iss` | The wizard (Inno Setup Pascal script); the UI only. |
+| `windows/installer/DomovoiSatelliteSetup.iss`, `satellite-setup.ps1` | The Windows *satellite* Setup (2026-10-21): a per-user wizard in front of `satellite/scripts/install-windows.ps1` for a spare PC that becomes a room; its worker trades the dashboard's setup code for the enrolment payload, held to the server's identity key ([SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)). Built first: `DomovoiSetup.exe` carries it, and DomovoiHost places it in the core's cache at every start (`windows/common/SatelliteSetup.cs`), so this server hands it out offline. Tested by `domovoi/tests/test_windows_satellite_setup.py`. |
 | `windows/installer/pins.iss` | The commit and every pinned download (URL and SHA-256). |
 | `windows/installer/art/` | Domovoi's icon (16-256 px) and the wizard's pictures at every size Inno Setup uses, made from `docs/assets/domovoi-icon.png` by `make_art.py` (Pillow 12.3.0 from `requirements.txt` in a private venv; `--check` compares them pixel for pixel). Don't edit them by hand: change the source or the script and run it again. |
 | `windows/helper/` | `DomovoiSetupHelper.exe`: every change to the PC, one verb per call, run elevated from `C:\Program Files\Domovoi`. |
@@ -638,7 +639,8 @@ the installer needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)
 | `windows/tests/` | The unit tests, compiled with `common/`, `helper/`, `host/` and `tray/`. They run Firewall's cleanup script against stand-in cmdlets, the helper's folder code on throwaway junctions under `%TEMP%`, and the card helper on folders that mimic a flashed card, against `card-goldens.json` (the server's own `config.txt`/`cmdline.txt` edits, made and kept current by `domovoi/tests/test_windows_card_parity.py`); nothing else on the PC is touched. |
 
 `build.ps1 -Sign` is the place code signing goes back in; while signing is
-on hold it refuses, and every build is unsigned.
+on hold it refuses, and every build is unsigned. `DomovoiSatelliteSetup.iss`
+holds the matching hook (`SignTool=domovoi` under `#ifdef SignSetup`).
 
 `pytest domovoi/tests/test_windows_installer.py` runs the build and the
 unit tests on Windows, and the file checks everywhere.

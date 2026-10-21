@@ -628,3 +628,8 @@ def test_build_and_unit_tests():
     proc = subprocess.run(args, capture_output=True, text=True, timeout=900)
     assert proc.returncode == 0, proc.stdout[-6000:] + proc.stderr[-3000:]
     assert re.search(r"^\d+ passed, 0 failed$", proc.stdout, re.M), proc.stdout[-3000:]
+    if any(p.is_file() for p in iscc):
+        # Both Setups: the server's and the satellite's (2026-10-21).
+        for name in ("DomovoiSetup.exe", "DomovoiSatelliteSetup.exe"):
+            assert re.search(r"^built .*\\" + re.escape(name) + r" \(\d+ bytes, sha256 [0-9a-f]{64}\)$",
+                             proc.stdout, re.M), name

@@ -89,6 +89,10 @@ Source: "..\build\bin\DomovoiHost.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; sign-in by the Run value below and right after a successful install.
 Source: "..\build\bin\DomovoiTray.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "art\domovoi.ico"; DestDir: "{app}"; Flags: ignoreversion
+; The satellite Setup of this same build (DomovoiSatelliteSetup.iss, built
+; first by build.ps1): DomovoiHost places it in Domovoi's cache, so the
+; dashboard hands the household's PCs the version that matches, offline.
+Source: "..\build\DomovoiSatelliteSetup.exe"; DestDir: "{app}"; Flags: ignoreversion
 #ifdef ProvisionBundled
 ; provision.sh shipped inside Setup (pins.iss), extracted to {tmp} before
 ; the downloads and handed to DomovoiHost by the helper's job step.

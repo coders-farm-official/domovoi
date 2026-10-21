@@ -58,6 +58,33 @@ renamed names; `android/scripts/release.ps1` and `play-bundle.ps1` keep that
 build's `mapping.txt` beside the signed files (R8's `retrace` turns a trace
 back), and the bundle carries it for Play.
 
+## 2026-10-21 — Windows satellites: a Setup to double-click
+
+A spare Windows laptop or PC becomes a room with `DomovoiSatelliteSetup.exe`
+instead of a PowerShell command. **Settings → Satellites → add a spare
+device → make the code**: when the server holds the Setup, the Windows
+column shows a setup code (24 hours, not a password) and **Download the
+Windows Setup**, whose file name carries the code and the server, so
+nothing is typed; the PowerShell command moves under "advanced". The
+Setup checks that the server answering is the one the code was made on
+(a signature by its identity key) before it downloads anything.
+
+* **A Windows server** gets the Setup with its own: the next
+  `DomovoiSetup.exe` carries it and puts it in place, offline.
+* **A Linux server** downloads it once from Domovoi's GitHub release, on
+  an admin's press of **get the Windows Setup** (offered only when a
+  release carries it: the first is the release after 1.0.0-rc3). Until
+  then the card shows the PowerShell command first, as before.
+* **It is not code-signed yet.** Windows SmartScreen says "Windows
+  protected your PC": **More info → Run anyway**. The dashboard and
+  docs/SPARE_DEVICE_SATELLITES.md say so step by step; the limit is in
+  docs/SECURITY_PRIVACY.md.
+* Setup codes live in the core's memory: a code made before a server
+  restart no longer works (make a new one).
+* **Releases:** `finish-release` attaches `DomovoiSatelliteSetup.exe`
+  beside `DomovoiSetup.exe` and lists it in `SHA256SUMS`;
+  `windows\build.ps1` builds both.
+
 ## 2026-10-20 — 1.0.0-rc3: audiobooks on the phone, and everything since rc2
 
 Version 1.0.0rc3 (the app 1.0.0-rc3, versionCode 26102001; the Windows

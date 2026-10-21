@@ -271,7 +271,47 @@ namespace Domovoi.Windows.Host
             if (!WaitHealthy(240)) return false;
             Status("ready", HostProgress.PhaseReady, 100, "Domovoi is running");
             log.Write("ready");
+            PlaceSatelliteSetup();
             return true;
+        }
+
+        // The satellite Setup this server's Setup brought, into the core's
+        // cache (common\SatelliteSetup.cs). Never fails the bring-up: a
+        // server without it still runs, and its dashboard offers the
+        // PowerShell command instead.
+        void PlaceSatelliteSetup()
+        {
+            try
+            {
+                string src = SatelliteSetupPlacement.Source(AppDomain.CurrentDomain.BaseDirectory);
+                if (src == null) return;
+                byte[] exe = File.ReadAllBytes(src);
+                string sha;
+                using (var h = System.Security.Cryptography.SHA256.Create()) sha = Sha256.Hex(h.ComputeHash(exe));
+                var user = new[] { "-d", Paths.DistroName, "-u", SatelliteSetupPlacement.ServiceUser, "--cd", "/", "--exec", "/bin/sh", "-c" };
+                WslResult have = Wsl.Run(Concat(user, SatelliteSetupPlacement.CheckScript()), 60000, null, 4096);
+                if (have.ExitCode == 0 && SatelliteSetupPlacement.IsPlaced(have.Stdout, sha, exe.Length)) return;
+                long now = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
+                WslResult r = Wsl.Run(Concat(user, SatelliteSetupPlacement.PlaceScript(sha, exe.Length, now)), 120000, exe, 4096);
+                if (r.ExitCode == 0 && r.Stdout.StartsWith(sha, StringComparison.Ordinal))
+                    log.Write("placed the satellite Setup (" + sha + ") in the core's cache");
+                else
+                    log.Write("could not place the satellite Setup (exit " + Inv.S(r.ExitCode) + "): " + FirstLine(r.Stderr + r.Stdout));
+            }
+            catch (Exception e)
+            {
+                if (!(e is IOException || e is UnauthorizedAccessException || e is InvalidOperationException
+                      || e is System.ComponentModel.Win32Exception)) throw;
+                log.Write("could not place the satellite Setup: " + e.Message);
+            }
+        }
+
+        static string[] Concat(string[] head, string last)
+        {
+            var all = new string[head.Length + 1];
+            Array.Copy(head, all, head.Length);
+            all[head.Length] = last;
+            return all;
         }
 
         bool WriteWslConfig(HostJob job)
