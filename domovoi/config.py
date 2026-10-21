@@ -436,6 +436,26 @@ class Settings(BaseSettings):
     # (environment, then .env); this is the value the core read at boot.
     ai_features: bool = True
     searxng_url: str = "http://localhost:6888"
+    # ── Looking things up (assistant plan part 5, W1; domovoi/lookup_web.py)
+    # "Always allow internet" (Settings → Chat & AI → Search): off asks
+    # before every lookup that leaves the house (the permission card); on
+    # lets every chat look things up without asking. Starts off (owner
+    # decision 2026-10-20). Internet "never" wins over it.
+    lookup_always_allow: bool = False
+    # The household's own order of lookup sources (slugs, first first;
+    # empty = the core's: local, then public APIs, then the web).
+    lookup_source_order: str = ""
+    # "Use your own search": "" (this server's search helper), "searxng"
+    # (lookup_own_searxng_url) or "brave" (lookup_brave_key). Replaces the
+    # open-web source only; Wikipedia stays first among the internet ones.
+    lookup_own_search: str = ""
+    lookup_own_searxng_url: str = ""
+    # A Brave Search API key (write-only, like the AcoustID key).
+    lookup_brave_key: str = ""
+    # Where the public APIs are (env only, never editable from the
+    # dashboard; the tests point them at fakes).
+    lookup_wikipedia_url: str = "https://en.wikipedia.org"
+    lookup_brave_url: str = "https://api.search.brave.com"
 
     connectivity_probe_target: str = "1.1.1.1:443"
     connectivity_probe_interval_sec: float = 30.0

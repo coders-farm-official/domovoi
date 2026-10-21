@@ -53,6 +53,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -289,3 +290,56 @@ internal fun ReadingLine(name: String) {
         com.domovoi.app.ui.components.Pill("reading $name…", com.domovoi.app.ui.components.Tone.Brand, live = true)
     }
 }
+
+/**
+ * A long document read in parts (documents plan D2): the line ("reading
+ * part 3 of 8 · about 1 min left"), a bar of the parts read, stop, and,
+ * where the home server's measured speed beats this phone's, the offer
+ * with what it does said first.
+ */
+@Composable
+internal fun DocJobCard(
+    line: String,
+    read: Int,
+    parts: Int,
+    onStop: (() -> Unit)?,
+    offer: String? = null,
+    offerNote: String? = null,
+    onOffer: (() -> Unit)? = null,
+) {
+    Column(
+        Modifier.fillMaxWidth().padding(top = 6.dp).clip(RoundedCornerShape(8.dp)).background(Domovoi.colors.sunken)
+            .padding(10.dp)
+            .semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite },
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(line, style = MaterialTheme.typography.labelMedium, color = Domovoi.colors.fg)
+        androidx.compose.material3.LinearProgressIndicator(
+            progress = { if (parts > 0) read.toFloat() / parts else 0f },
+            modifier = Modifier.fillMaxWidth(),
+            color = Domovoi.colors.brand,
+            trackColor = Domovoi.colors.border,
+        )
+        if (offer != null && onOffer != null) {
+            offerNote?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgMuted) }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (onStop != null) {
+                TextButton(onClick = onStop) { Text("stop", color = Domovoi.colors.brand) }
+            }
+            if (offer != null && onOffer != null) {
+                OutlinedButton(onClick = onOffer) { Text(offer) }
+            }
+        }
+    }
+}
+
+/** "carry on" under a stopped summary: [left] parts still to read. */
+@Composable
+internal fun CarryOnButton(left: Int, onClick: () -> Unit) {
+    OutlinedButton(onClick = onClick, modifier = Modifier.padding(top = 6.dp)) {
+        Text(carryOnText(left))
+    }
+}
+
+internal fun carryOnText(left: Int) = "carry on ($left part${if (left == 1) "" else "s"} left)"

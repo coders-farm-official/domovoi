@@ -68,6 +68,8 @@ internal data class ChatStats(
     val identify_ms: Double? = null,
     val route_ms: Double? = null,
     val tts_ms: Double? = null,
+    /** A lookup's permission card (part 5, W1): the reply is the card. */
+    val lookup_card: com.domovoi.app.assistant.lookup.LookupCard? = null,
 )
 
 /** What the details dialog knows about one message. [firstWordsMs] and

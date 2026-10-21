@@ -223,8 +223,13 @@ async def _read_stored(token: str, path: Path, name: str, size: int) -> dict[str
     meta = _meta(token, name, size, result)
     data = {"version": doc_extract.FORMAT_VERSION, "meta": meta, "parts": result["parts"]}
     part = _parts_path(token).with_suffix(f".{uuid.uuid4().hex[:8]}.part")
-    part.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    part.replace(_parts_path(token))
+    try:
+        part.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        part.replace(_parts_path(token))
+    finally:
+        # A write that failed leaves no half-written copy (the sweep removes
+        # one a crash left: chat_doc_jobs.sweep).
+        part.unlink(missing_ok=True)
     return meta
 
 
@@ -475,7 +480,7 @@ class DocPlan:
     """How a message in a thread with documents is answered."""
     mode: str
     #: The reply when no model is asked ("I couldn't find that ...", an
-    #: attachment with no question, a summary too long for one pass).
+    #: attachment with no question).
     immediate: str | None = None
     #: The user turn for the model (passages and question), when one is.
     user: str = ""
@@ -486,6 +491,9 @@ class DocPlan:
     given: list[qa.Given] = field(default_factory=list)
     notes: list[dict[str, str]] = field(default_factory=list)
     found: bool = True
+    #: A summary of documents longer than one pass: read in parts by a job
+    #: (chat_doc_jobs.py, D2), not one model call.
+    long: bool = False
 
     def doc_json(self, checked: qa.Checked | None = None) -> dict[str, Any]:
         sources = []
@@ -549,9 +557,8 @@ def _plan(docs: list[dict[str, Any]], question: str, new_docs: list[dict[str, An
     if mode == "summary":
         given = qa.retrieve(loaded, q, mode="summary")
         if not given:
-            words = sum(int(d.get("words") or 0) for d in loaded)
-            return DocPlan(mode="summary", immediate=qa.summary_too_long_text(names, words), names=names,
-                           docs=loaded, found=False)
+            # Longer than one pass: read in parts, then combined (D2).
+            return DocPlan(mode="summary", question=q, names=names, docs=loaded, long=True)
     else:
         given = qa.retrieve(loaded, q, previous)
         if not given:

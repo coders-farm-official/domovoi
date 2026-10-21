@@ -47,7 +47,7 @@ COMPONENTS = "web/static/components.jsx"
 # The chat page's own helpers load before it, as in index.html (without
 # marked, chat_markdown.js shows a reply as escaped text).
 CHAT_FILES = [COMPONENTS, "web/static/chat_markdown.js", "web/static/chat_details.js",
-              "web/static/chat_documents.jsx", "web/static/chat_drafts.jsx", "web/static/chat.jsx"]
+              "web/static/chat_documents.jsx", "web/static/chat_lookups.jsx", "web/static/chat_drafts.jsx", "web/static/chat.jsx"]
 SATELLITE_FILES = [COMPONENTS, "web/static/satellite_media.jsx", "web/static/satellites.jsx"]
 
 

@@ -27,6 +27,14 @@ interface AssistantSettings {
     /** Read typed questions' replies aloud too. Off (plan decision 7):
      *  replies to spoken questions are spoken, typed ones stay silent. */
     var speakTyped: Boolean
+
+    /** "Always allow internet" for phone chats' lookups (part 5, W1). Off
+     *  (owner decision 2026-10-20): each lookup asks first. */
+    var alwaysAllowInternet: Boolean
+
+    /** The engine's measured speeds, per backend (PhoneDocJobs.addRow):
+     *  what a long document's time estimate comes from. */
+    var speedRows: String
 }
 
 /** In memory only: for tests. */
@@ -37,6 +45,8 @@ class MemoryAssistantSettings(
     override var downloadStartedAt: Long? = null,
     override var lastDownloadMs: Long? = null,
     override var speakTyped: Boolean = false,
+    override var alwaysAllowInternet: Boolean = false,
+    override var speedRows: String = "",
 ) : AssistantSettings
 
 /** The app's: SharedPreferences `assistant`. */
@@ -67,7 +77,17 @@ class PhoneAssistantSettings(context: Context) : AssistantSettings {
         get() = prefs.getBoolean(K_SPEAK_TYPED, false)
         set(value) = prefs.edit().putBoolean(K_SPEAK_TYPED, value).apply()
 
+    override var alwaysAllowInternet: Boolean
+        get() = prefs.getBoolean(K_ALWAYS_INTERNET, false)
+        set(value) = prefs.edit().putBoolean(K_ALWAYS_INTERNET, value).apply()
+
+    override var speedRows: String
+        get() = prefs.getString(K_SPEEDS, null).orEmpty()
+        set(value) = prefs.edit().putString(K_SPEEDS, value).apply()
+
     private companion object {
+        const val K_ALWAYS_INTERNET = "always_allow_internet"
+        const val K_SPEEDS = "measured_speeds"
         const val K_SPEAK_TYPED = "speak_typed_replies"
         const val K_BACKEND = "backend"
         const val K_MOBILE = "allow_mobile_data"

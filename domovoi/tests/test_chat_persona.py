@@ -200,7 +200,13 @@ def test_a_picture_turn_carries_the_persona_and_the_threads_history(uploads_dir,
         _send(c, t["id"], "what can you do?")
         text_call = fake.chats[-1]
         assert text_call["model"] == chat_api.core_settings.ollama_model
-        assert text_call["messages"][0] == {"role": "system", "content": ollama.chat_system_prompt()}
+        # A text turn is also told how to ask for a lookup (part 5, W1).
+        from domovoi import lookup_answer
+
+        assert text_call["messages"][0] == {
+            "role": "system",
+            "content": ollama.chat_system_prompt() + "\n\n" + lookup_answer.tool_prompt(internet=True),
+        }
 
         token = _upload(c, _png())
         _send(c, t["id"], "hey domo!", [token])

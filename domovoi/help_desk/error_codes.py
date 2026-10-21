@@ -164,6 +164,19 @@ ERROR_CODES: dict[str, ErrorHelp] = {
         "Try again.",
         "phone-chat",
     ),
+    # ── lookups (Chat → look things up, W1) ──────────────────────────────
+    "lookup_timeout": _e(
+        "The lookup took too long",
+        "Looking it up didn't finish in time: the search helper, Wikipedia or the page was slow. "
+        "Try again, or ask in other words.",
+        "chat",
+    ),
+    "too_many": _e(
+        "Too many lookups this minute",
+        "Domovoi limits how many lookups it makes a minute, per device and for the whole house. "
+        "Wait a minute and try again.",
+        "chat",
+    ),
     "core_unreachable": _e(
         "Domovoi's voice service isn't answering",
         "The Domovoi server's voice service (the core) isn't answering; it may be restarting. "

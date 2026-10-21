@@ -11,6 +11,11 @@ import com.domovoi.app.ui.screens.chat.ReplyDocs
 import com.domovoi.app.ui.screens.chat.SourceSheet
 import com.domovoi.app.ui.screens.chat.SourceView
 import com.domovoi.app.ui.screens.chat.DocAttachButton
+import com.domovoi.app.ui.screens.chat.CarryOnButton
+import com.domovoi.app.ui.screens.chat.DocJobCard
+import com.domovoi.app.assistant.PhoneDocJob
+import com.domovoi.app.assistant.PhoneDocJobs
+import com.domovoi.app.assistant.docs.DocLong
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -191,6 +196,10 @@ private fun ChatPane(
                 Icon(Icons.Outlined.Tune, contentDescription = "model settings", tint = Domovoi.colors.fgMuted)
             }
         }
+        // Whether this chat may go online (part 5, W1).
+        if (ui.lookups) {
+            Row(Modifier.padding(bottom = 4.dp)) { InternetChip(ui, ui.conversation, actions.setChatInternet) }
+        }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             val openDoc = canvas?.let { id -> actions.draftDoc?.invoke(id) }
             if (openDoc != null) {
@@ -215,6 +224,9 @@ private fun ChatPane(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     val reversed = messages.asReversed()
+                    // A stopped long-document summary: its newest reply offers "carry on".
+                    val job = ui.conversation.job?.takeIf { it.state == PhoneDocJob.STATE_STOPPED }
+                    val carryAt = job?.let { j -> messages.indexOfLast { !it.fromUser && it.jobId == j.id } } ?: -1
                     val canRetry = phoneCanRetry(ui)
                     itemsIndexed(reversed) { i, m ->
                         val writing = i == 0 && ui.replying && !m.fromUser
@@ -222,6 +234,11 @@ private fun ChatPane(
                         Column {
                             // Above the first message the model still sees.
                             if (index == ui.conversation.windowFrom && index > 0) WindowDivider()
+                            val card = m.lookupCard
+                            if (card != null) {
+                                LookupCardView(card, enabled = !ui.replying) { d -> actions.decideLookup(index, d) }
+                                return@Column
+                            }
                             MessageBubble(
                                 m,
                                 writing = writing,
@@ -238,6 +255,8 @@ private fun ChatPane(
                                             scope = draftScope)
                                     }
                                 },
+                                carryOnLeft = if (index == carryAt && !ui.replying && job != null) job.total - job.read else null,
+                                onCarryOn = actions.carryOn,
                             )
                         }
                     }
@@ -248,6 +267,23 @@ private fun ChatPane(
         if (messages.isEmpty() && ui.voicePhase == VoicePhase.Idle && !ui.replying) chrome.picker?.invoke()
         if (ui.voicePhase != VoicePhase.Idle) VoiceLine(ui) else EngineLine(ui, actions, onModel)
         ui.reading?.let { ReadingLine(it) }
+        // A long document read in parts (documents plan D2).
+        ui.docJob?.takeIf { it.state in JOB_CARD_STATES }?.let { j ->
+            DocJobCard(
+                line = j.line,
+                read = j.read,
+                parts = j.parts,
+                onStop = when (j.state) {
+                    "server" -> actions.stopServer
+                    "paused", "held" -> null
+                    else -> actions.stop
+                },
+                offer = if (j.state == "held") "read it on this phone"
+                    else actions.serverOffer?.takeIf { j.state == "reading" }?.let { DocLong.offerLine(it) },
+                offerNote = if (j.state == "held") null else j.names.firstOrNull()?.let { PhoneDocJobs.handOverText(it) },
+                onOffer = if (j.state == "held") actions.carryOn else actions.useServer,
+            )
+        }
         ui.docProblem?.let { DocProblemNote(it, onClose = actions.closeDocProblem) }
         ui.pendingPdf?.let { p ->
             PendingPdfCard(
@@ -398,6 +434,9 @@ private fun MessageBubble(
     onSource: (SourceView) -> Unit = {},
     /** A draft reply's card (documents plan D4), in place of its text. */
     draftCard: (@Composable () -> Unit)? = null,
+    /** A stopped summary's parts still to read: "carry on" shows (null: no). */
+    carryOnLeft: Int? = null,
+    onCarryOn: () -> Unit = {},
 ) {
     val toast = LocalToast.current
     val clipboard = LocalClipboardManager.current
@@ -467,6 +506,7 @@ private fun MessageBubble(
                     }
                     if (!isUser && !writing) {
                         ReplyDocs(m.notes.map { it.text }, phoneSources(m, conversation, docFile), onSource)
+                        carryOnLeft?.let { left -> CarryOnButton(left, onCarryOn) }
                     }
                 }
             }
@@ -517,6 +557,9 @@ internal fun phoneSources(m: StoredMessage, conversation: StoredConversation?, d
 internal const val PHONE_EMPTY_HINT =
     "Type, or tap the mic and speak. Answers come from a model running on this phone, with no server and no " +
         "internet, and this chat stays on this phone."
+
+/** The job states the progress card shows. */
+internal val JOB_CARD_STATES = setOf("reading", "reducing", "paused", "server", "held")
 
 internal const val ACTION_COPY = "copy"
 internal const val ACTION_REPORT = "report this reply"
@@ -609,6 +652,7 @@ private fun ModelPane(ui: AssistantUi, actions: AssistantActions, onClose: () ->
             Spacer(Modifier.height(10.dp))
             OutlinedButton(onClick = { confirmDelete = true }) { Text("delete model", color = Domovoi.colors.err) }
         }
+        LookupSettingsCard(ui, actions)
         DomovoiCard(Modifier.fillMaxWidth()) {
             Text("Speech", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg, modifier = Modifier.asHeading())
             Text(speechSummary(ui), style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)

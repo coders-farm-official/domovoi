@@ -353,7 +353,7 @@ async def test_a_chat_thread_is_read_back_by_the_paired_device_only(_db) -> None
         assert listed.status_code == 200
         assert [t["title"] for t in listed.json()["threads"]] == ["shopping for Mira"]
         msgs = await paired.get(f"/api/chat/threads/{tid}/messages")
-        assert msgs.status_code == 200 and msgs.json() == {"messages": []}
+        assert msgs.status_code == 200 and msgs.json() == {"messages": [], "jobs": []}
 
     async with _client() as anon:
         for path in ("/api/chat/threads", f"/api/chat/threads/{tid}/messages"):

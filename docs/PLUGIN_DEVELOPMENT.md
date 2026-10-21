@@ -914,7 +914,7 @@ what makes disable/uninstall a clean teardown:
 | `ctx.add_canned_sounds(sounds)` | Shortcut for `sdk.assets.add_canned_sounds`. |
 | `ctx.add_context_provider(key, fn)` | Contribute a key to the per-turn Context extras (keys are exclusive across plugins). |
 | `ctx.add_container(id, resolve=None)` | SDK 1.5: tell the container guard how to see one of your `[[containers]]` right now (§4.18). |
-| `ctx.add_lookup_source(source)` | SDK 1.8: register a lookup source (`search(query)` / `fetch(id)` and a class of local, api or web) that answers lookups from Chat, voice and the phone (§4.19). One per plugin. |
+| `ctx.add_lookup_source(source)` | SDK 1.8: register a lookup source (`search(query)` / `fetch(id)` and a class of local, api or web) that answers lookups from Chat and the phone app (voice "double check" still asks the search helper directly) (§4.19). One per plugin. |
 
 `register` may be sync or async. Do **not** import heavy libraries at module
 import time — there's a 10-second import budget, and initializing CUDA during
@@ -1694,7 +1694,20 @@ def register(ctx):
   the other sources still answer. Titles are cut to 200 characters and
   snippets to 600; at most 10 hits are read.
 * One source per plugin; it is torn down with the rest of your
-  registrations on disable.
+  registrations on disable. It needs no `[capabilities].provides` line, so
+  guard the call (`if hasattr(ctx, "add_lookup_source")`) and the plugin
+  still loads on an older core.
+* `LookupHit` and `LookupDocument` take an optional `licence` ("CC BY-SA
+  4.0" for Wikipedia's text): the reply's sources line says it.
+* **The core's own sources** sit beside yours: Domovoi's help (`local`),
+  Wikipedia and Wikidata through the search helper (`api`, slug
+  `core.wikipedia`) and the open web or the household's own search (`web`,
+  `core.web`). A household can reorder the list in Settings → Chat & AI →
+  Search; that changes which passages are read first, never whether a
+  source asks before it is used.
+* **"local" is the core's decision.** Only allowlisted plugins
+  (`domovoi.lookup.LOCAL_PLUGINS`) are local; a local source must never
+  leave the box (Kiwix answers only while its server is on this network).
 
 ## 5. Worked example — the bundled radio plugin
 

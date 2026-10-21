@@ -1,5 +1,6 @@
 package com.domovoi.app.ui.screens.chat
 
+import androidx.compose.foundation.clickable
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -134,6 +135,10 @@ internal data class ThreadRow(
     val title_by_user: Boolean = false,
     /** A search hit (`?q=`): the words around the match in a message. */
     val match_snippet: String? = null,
+    /** "Allow in this chat" is on (V037): lookups go without asking. */
+    val internet_allowed: Boolean = false,
+    /** A lookup in it went online (V037): the list's globe. */
+    val used_internet: Boolean = false,
 )
 
 @Serializable
@@ -175,7 +180,12 @@ internal data class MessageRow(
 )
 
 @Serializable
-internal data class MessageList(val messages: List<MessageRow> = emptyList())
+internal data class MessageList(
+    val messages: List<MessageRow> = emptyList(),
+    /** Long-document jobs (documents plan D2): running ones show their
+     *  progress, a stopped one lets its reply carry on. */
+    val jobs: List<ServerJobView> = emptyList(),
+)
 
 /** Documents per message the backend accepts (documents plan D1). */
 internal const val MAX_CHAT_DOCUMENTS = 4
@@ -249,6 +259,8 @@ internal class LiveMessage(
     var draft by mutableStateOf(draft)
     /** A reply's sources and notes about the chat's documents. */
     var doc by mutableStateOf(doc)
+    /** A long document read in parts for this pending reply: how far. */
+    var job by mutableStateOf<ServerJobView?>(null)
     var error by mutableStateOf(error)
     /** The server's code for [error] (`stats.error_code`, or the live
      *  stream's `error` event); null for an error this phone made. */
@@ -295,13 +307,20 @@ private suspend fun sendStreaming(
     /** (detail, code, model): the server's plain sentence and its code. */
     onError: (String, String?, String?) -> Unit,
     onDone: (MessageRow) -> Unit = {},
+    /** A long document's job (documents plan D2): its `job` and `progress` views. */
+    onJob: (ServerJobView) -> Unit = {},
     /** "Try again" (`POST .../retry`): no body, a new reply to the last
      *  question in place of the last reply. */
     retry: Boolean = false,
     /** A draft card's Revise box: the message revises this draft. */
     reviseDraft: Long? = null,
+    /** The answer to a lookup card (`POST .../lookups/<message id>`). */
+    decision: Pair<Long, String>? = null,
 ) = withContext(Dispatchers.IO) {
-    val body = (if (retry) buildJsonObject {} else buildJsonObject {
+    val body = (if (decision != null) buildJsonObject {
+        put("decision", decision.second)
+        put("device_id", app.prefs.deviceId)
+    } else if (retry) buildJsonObject {} else buildJsonObject {
         put("content", content)
         // Which install sent it, for the message's details (V017).
         put("device_id", app.prefs.deviceId)
@@ -315,7 +334,11 @@ private suspend fun sendStreaming(
         }
         if (reviseDraft != null) put("revise_draft", reviseDraft)
     }).toString().toRequestBody("application/json".toMediaType())
-    val path = if (retry) "/api/chat/threads/$threadId/retry" else "/api/chat/threads/$threadId/messages"
+    val path = when {
+        decision != null -> "/api/chat/threads/$threadId/lookups/${decision.first}"
+        retry -> "/api/chat/threads/$threadId/retry"
+        else -> "/api/chat/threads/$threadId/messages"
+    }
     val req = Request.Builder()
         .url(app.api.absolute(path))
         // SSE, so it builds its own call instead of using ApiClient.raw()
@@ -346,6 +369,9 @@ private suspend fun sendStreaming(
                             "delta" -> payload["text"]?.jsonPrimitive?.content?.let {
                                 withContext(Dispatchers.Main) { onDelta(it) }
                             }
+                            // A lookup answer that became the honest line: the
+                            // done row carries the kept text (finishWith).
+                            "replace" -> Unit
                             "error" -> payload["detail"]?.jsonPrimitive?.content?.let { detail ->
                                 val code = payload["code"]?.jsonPrimitive?.contentOrNull
                                 val model = payload["model"]?.jsonPrimitive?.contentOrNull
@@ -354,6 +380,9 @@ private suspend fun sendStreaming(
                             // The persisted row: its id, timestamp and model.
                             "done" -> payload.decode<MessageRow>().let {
                                 withContext(Dispatchers.Main) { onDone(it) }
+                            }
+                            "job", "progress" -> payload.decode<ServerJobView>().let {
+                                withContext(Dispatchers.Main) { onJob(it) }
                             }
                         }
                     }
@@ -459,12 +488,18 @@ internal fun ConversationPane(
     val draftDocs = remember { HashMap<Long, ServerDraftDoc>() }
     fun draftDoc(id: Long) = draftDocs.getOrPut(id) { ServerDraftDoc(app, id) }
 
+    // The thread's long-document jobs (documents plan D2).
+    val jobs = remember { mutableStateListOf<ServerJobView>() }
+    var reloads by remember { mutableStateOf(0) }
     // A thread's messages, read from the server (opening it, and after
-    // "try again").
+    // "try again"), with its jobs.
     suspend fun loadMessages(threadId: Long) {
         runCatching {
-            app.api.get("/api/chat/threads/$threadId/messages").decode<MessageList>().messages
-        }.onSuccess { rows ->
+            app.api.get("/api/chat/threads/$threadId/messages").decode<MessageList>()
+        }.onSuccess { list ->
+            val rows = list.messages
+            jobs.clear()
+            jobs.addAll(list.jobs)
             transcript.clear()
             rows.forEach {
                 transcript.add(
@@ -491,7 +526,7 @@ internal fun ConversationPane(
         }
     }
     // A thread opened from the list: its messages. A new chat has none.
-    LaunchedEffect(thread?.id) {
+    LaunchedEffect(thread?.id, reloads) {
         if (thread != null) loadMessages(thread.id)
     }
     // Keep the newest message pinned to the bottom. Two triggers, because the
@@ -548,6 +583,26 @@ internal fun ConversationPane(
     }
     LaunchedEffect(transcript.size) {
         if (transcript.isNotEmpty()) listState.animateScrollToItem(transcript.size - 1)
+    }
+    // A job running in this chat that this screen didn't start (Chat was
+    // left and opened again, another device asked): its progress every two
+    // seconds until it ends, then the thread again (its reply is in).
+    val liveIds = jobs.filter { it.live }.joinToString(",") { it.id }
+    LaunchedEffect(liveIds, sending) {
+        if (liveIds.isEmpty() || sending) return@LaunchedEffect
+        while (true) {
+            kotlinx.coroutines.delay(2_000)
+            var ended = false
+            jobs.filter { it.live }.forEach { j ->
+                val v = runCatching { fetchJob(app, j.id) }.getOrNull()
+                if (v == null || !v.live) ended = true
+                else jobs.indexOfFirst { it.id == v.id }.takeIf { it >= 0 }?.let { jobs[it] = v }
+            }
+            if (ended) {
+                reloads++
+                return@LaunchedEffect
+            }
+        }
     }
     // Follow a streaming reply down as it grows — the size trigger above only
     // fires when a message is ADDED, and the reply grows inside one item.
@@ -701,6 +756,7 @@ internal fun ConversationPane(
                     },
                     onDone = { row -> live.finishWith(row) },
                     reviseDraft = revise?.first,
+                    onJob = { live.job = it },
                 )
             }.onFailure { live.error = failureText("send", it) }
             // Refused for want of the vision model: re-read what's installed,
@@ -710,6 +766,8 @@ internal fun ConversationPane(
             if (live.createdAt == null) live.createdAt = Instant.now().toString()
             live.pending = false
             sending = false
+            // A long summary that was stopped can carry on: the jobs again.
+            if (live.job != null) reloads++
         }
     }
 
@@ -754,6 +812,43 @@ internal fun ConversationPane(
         }
     }
 
+    // The answer to a lookup card (part 5, W1): the card shows it at once,
+    // the reply streams in, and the thread is read back after.
+    fun decideLookup(m: LiveMessage, decision: String) {
+        val target = current ?: return
+        val id = m.id ?: return
+        if (sending) return
+        sending = true
+        following = true
+        val state = when (decision) { "once" -> "allowed_once"; "chat" -> "allowed_chat"; else -> "declined" }
+        m.stats = m.stats?.let { s -> s.copy(lookup_card = s.lookup_card?.copy(state = state)) }
+        val live = LiveMessage("assistant", "", pending = true)
+        live.sentAtMs = System.currentTimeMillis()
+        transcript.add(live)
+        scope.launch {
+            runCatching {
+                sendStreaming(
+                    app, target.id, "", emptyList(), emptyList(),
+                    onDelta = {
+                        if (live.firstWordsAtMs == null) live.firstWordsAtMs = System.currentTimeMillis()
+                        live.content += it
+                    },
+                    onError = { detail, code, model ->
+                        live.error = detail
+                        live.errorCode = code
+                        if (model != null) live.model = model
+                    },
+                    onDone = { row -> live.finishWith(row) },
+                    decision = id to decision,
+                )
+            }.onFailure { live.error = failureText("look it up", it) }
+            live.pending = false
+            sending = false
+            if (decision == "chat") current = target.copy(internet_allowed = true)
+            loadMessages(target.id)
+        }
+    }
+
     // A chat started from the list's "Message Domovoi…" box: its first
     // message goes out as the chat opens.
     LaunchedEffect(Unit) {
@@ -786,6 +881,18 @@ internal fun ConversationPane(
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         ChatPaneGutter()
         ThreadTitleRow(title, frame, shareChat)
+        open?.let { t ->
+            ServerInternetChip(t, onToggle = { allowed ->
+                scope.launch {
+                    runCatching {
+                        app.api.patch("/api/chat/threads/${t.id}", kotlinx.serialization.json.buildJsonObject {
+                            put("internet_allowed", allowed)
+                        })
+                    }.onSuccess { current = t.copy(internet_allowed = allowed) }
+                        .onFailure { toast(failureText("change it", it)) }
+                }
+            })
+        }
 
         val openDraft = canvas
         if (openDraft != null) Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -799,13 +906,34 @@ internal fun ConversationPane(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                // A stopped summary: its newest reply offers "carry on".
+                val stopped = jobs.filter { it.state == "stopped" || it.state == "failed" }
+                val carryAt = stopped.associate { j -> j.id to transcript.indexOfLast { it.doc?.job?.id == j.id } }
                 itemsIndexed(transcript) { i, m ->
                     if (i == windowAt) WindowDivider()
+                    // A lookup's permission card: the exact words, where they
+                    // go, and the three answers (part 5, W1).
+                    val card = m.stats?.lookup_card
+                    if (card != null && m.role != "user") {
+                        com.domovoi.app.ui.screens.assistant.LookupCardView(card, enabled = !sending) { d -> decideLookup(m, d) }
+                        return@itemsIndexed
+                    }
                     // The draft is made at the tap, from the transcript then.
+                    val stoppedJob = m.doc?.job?.id?.let { id -> stopped.firstOrNull { it.id == id && carryAt[id] == i } }
                     MessageBubble(
                         m, threadId,
                         onReport = if (canReport(m)) ({ reporting = reportableAt(i) }) else null,
                         onSource = { openSource = it },
+                        carryOnLeft = stoppedJob?.let { it.parts - it.read }.takeIf { !sending },
+                        onCarryOn = {
+                            stoppedJob?.let { j ->
+                                scope.launch {
+                                    runCatching { resumeServerJob(app, j.id) }
+                                        .onSuccess { v -> jobs.indexOfFirst { it.id == v.id }.takeIf { it >= 0 }?.let { jobs[it] = v } }
+                                        .onFailure { toast(docFailureText("carry on", it)) }
+                                }
+                            }
+                        },
                         onRetry = if (i == transcript.lastIndex && !sending && canRetry(transcript)) ({ retry() }) else null,
                         draftCard = m.draft?.takeIf { !m.pending }?.let { ref ->
                             {
@@ -819,6 +947,30 @@ internal fun ConversationPane(
                             }
                         },
                     )
+                }
+                // A job a restart interrupted: carried on only when asked.
+                if (!sending) {
+                    items(jobs.filter { it.state == "interrupted" }, key = { "int-" + it.id }) { j ->
+                        DocJobCard(j.line.ifEmpty { "this summary was interrupted — carry on?" }, j.read, j.parts, onStop = null,
+                            offer = carryOnText(j.parts - j.read), onOffer = {
+                                scope.launch {
+                                    runCatching { resumeServerJob(app, j.id) }
+                                        .onSuccess { v -> jobs.indexOfFirst { it.id == v.id }.takeIf { it >= 0 }?.let { jobs[it] = v } }
+                                        .onFailure { toast(docFailureText("carry on", it)) }
+                                }
+                            })
+                    }
+                }
+                // A job this screen didn't start, while it runs.
+                if (!sending) {
+                    items(jobs.filter { it.live }, key = { "job-" + it.id }) { j ->
+                        DocJobCard(j.line, j.read, j.parts, onStop = {
+                            scope.launch {
+                                runCatching { stopServerJob(app, j.id) }.onFailure { toast(docFailureText("stop", it)) }
+                                reloads++
+                            }
+                        })
+                    }
                 }
             }
         }
@@ -1034,6 +1186,42 @@ private fun ThreadTitleRow(title: String, frame: ChatFrame, onShare: (() -> Unit
     })
 }
 
+/** The conversation header's internet chip for a home-server chat: the
+ *  household's answer (never / always allow) from `GET /api/chat/internet`
+ *  and this thread's "Allow in this chat". */
+@Composable
+private fun ServerInternetChip(thread: ThreadRow, onToggle: (Boolean) -> Unit) {
+    val app = LocalApp.current
+    var info by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
+    LaunchedEffect(thread.id) {
+        info = runCatching {
+            val o = app.api.get("/api/chat/internet").jsonObject
+            (o["internet"]?.jsonPrimitive?.contentOrNull.orEmpty()) to
+                (o["always_allow"]?.jsonPrimitive?.contentOrNull == "true")
+        }.getOrNull()
+    }
+    val (policy, always) = info ?: return
+    val (label, on) = serverInternetChip(policy, always, thread.internet_allowed)
+    val fixed = policy == "never" || always
+    Row(
+        Modifier.padding(bottom = 4.dp)
+            .border(1.dp, if (on) Domovoi.colors.brand else Domovoi.colors.border, RoundedCornerShape(999.dp))
+            .clickable(enabled = !fixed) { onToggle(!thread.internet_allowed) }
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = if (on) Domovoi.colors.fg else Domovoi.colors.fgMuted)
+    }
+}
+
+/** The server chat chip's words: (label, on). */
+internal fun serverInternetChip(policy: String, alwaysAllow: Boolean, chatAllowed: Boolean): Pair<String, Boolean> = when {
+    policy == "never" -> "internet off" to false
+    alwaysAllow -> "internet always on" to true
+    chatAllowed -> "internet on for this chat" to true
+    else -> "internet off" to false
+}
+
 /** A message as the share text reads it. */
 private fun LiveMessage.asRow() = MessageRow(role = role, content = content, error = error, speaker_name = speakerName)
 
@@ -1109,6 +1297,9 @@ internal fun MessageBubble(
     onSource: (SourceView) -> Unit = {},
     /** A draft reply's card (documents plan D4), in place of its text. */
     draftCard: (@Composable () -> Unit)? = null,
+    /** A stopped summary's parts still to read: "carry on" shows (null: no). */
+    carryOnLeft: Int? = null,
+    onCarryOn: () -> Unit = {},
 ) {
     val app = LocalApp.current
     val context = LocalContext.current
@@ -1175,10 +1366,18 @@ internal fun MessageBubble(
                     } else if (draftCard != null) {
                         draftCard()
                     } else {
-                        MarkdownText(m.content, trailing = cursor)
+                        val job = m.job
+                        if (m.pending && job != null && m.content.isEmpty()) {
+                            // A long document read in parts: how far, and stop.
+                            DocJobCard(job.line.ifEmpty { "reading part ${job.part} of ${job.parts}" }, job.read, job.parts,
+                                onStop = if (job.live) ({ app.scope.launch { runCatching { stopServerJob(app, job.id) } } }) else null)
+                        } else {
+                            MarkdownText(m.content, trailing = cursor)
+                        }
                         if (!m.pending) {
                             val sources = serverSources(m.doc) { token -> { serverDocumentFile(app, context.cacheDir, token) } }
                             ReplyDocs(m.doc?.notes.orEmpty().map { it.text }, sources, onSource)
+                            carryOnLeft?.let { left -> CarryOnButton(left, onCarryOn) }
                         }
                     }
                     chatErrorView(m.error, m.errorCode, m.model)?.let { err ->

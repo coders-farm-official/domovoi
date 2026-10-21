@@ -462,6 +462,7 @@ from sqlalchemy import text
 
 from domovoi import ai_features, command_captures
 from domovoi import fast_lane
+from domovoi import voice_activity
 from domovoi.admin_auth import TRUSTED_PROXIES, SlidingWindowLimiter, token_sha256
 from domovoi.clients.letta import get_letta_client
 from domovoi.clients.tts import get_tts_client
@@ -4003,7 +4004,14 @@ class StreamSession:
             cleaned,
         )
 
-    async def _process_utterance(
+    async def _process_utterance(self, pcm_bytes: bytes, **kw: Any) -> None:
+        """One utterance's turn, marked in progress for its whole length
+        (domovoi/voice_activity.py): a document job on the home server
+        waits between its parts while a voice turn is being answered."""
+        async with voice_activity.turn("satellite"):
+            await self._process_utterance_turn(pcm_bytes, **kw)
+
+    async def _process_utterance_turn(
         self,
         pcm_bytes: bytes,
         *,

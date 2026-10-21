@@ -15,7 +15,16 @@
  * same paperclip to /api/chat/documents (chat_documents.jsx, ChatDocs); a
  * thread with documents is answered from them, each reply with its sources
  * and notes. #chat/<id> opens a thread (the Documents page's "Ask about
- * this document" lands there).
+ * this document" lands there). A summary of a long document is read in
+ * parts by a job on the server (chat_doc_jobs.py): the reply's place shows
+ * its progress with stop while the send streams; a thread opened while one
+ * runs shows it from the message list's `jobs`, polled until it ends; a
+ * stopped summary offers "carry on".
+ *
+ * Lookups (chat_lookups.jsx, ChatLookups): a reply that would look
+ * something up online arrives as a permission card (Allow once / Allow
+ * in this chat / Not now); the header's chip says whether this chat may go
+ * online, and the list marks chats that did with a globe.
  *
  * Design notes: the cat glyph marks assistant-attributed lines (one of its
  * three sanctioned homes); user bubbles sit right-aligned on the card
@@ -33,14 +42,16 @@ const chatUploadUrl = (token) => withDeviceToken(`${API_BASE}/api/chat/uploads/$
 const CHAT_AI_OFF_TEXT = 'AI chat is turned off on your home server';
 
 /* SSE reader for the send endpoint: fetch + ReadableStream, calling
- * onDelta(text) per chunk and resolving with the final done payload. */
-const chatSendStream = async (threadId, body, onDelta, onStatus) => {
+ * onDelta(text) per chunk and resolving with the final done payload. A
+ * long document's job (chat_doc_jobs.py) sends `job` and `progress`
+ * events first: onJob(view) for each. */
+const chatSendStream = async (threadId, body, onDelta, onStatus, onJob, opts = {}) => {
   // Streams the reply, so it needs the Response itself rather than parsed
   // JSON — apiFetchRaw, not apiFetch. Going through the helper is what
   // gets an unpaired browser the "pair this browser" prompt and one
   // replay of the message, instead of a red bubble it can do nothing
   // about; a bare fetch() sends the same headers and none of that.
-  const r = await apiFetchRaw(`/api/chat/threads/${threadId}/messages`, {
+  const r = await apiFetchRaw(opts.path || `/api/chat/threads/${threadId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -50,6 +61,12 @@ const chatSendStream = async (threadId, body, onDelta, onStatus) => {
   // plainly instead of "409 Conflict" or an empty bubble.
   if (r.status === 409 && r.headers && r.headers.get && r.headers.get('X-Domovoi-Refusal') === 'ai-off') {
     throw new Error(CHAT_AI_OFF_TEXT);
+  }
+  // A refusal before any reply (a lookup card already answered): its words.
+  if (!r.ok) {
+    let detail = null;
+    try { detail = (await r.json()).detail; } catch { /* not JSON */ }
+    throw new Error(typeof detail === 'string' ? detail : `${r.status} ${r.statusText}`);
   }
   if (!r.body) throw new Error(`${r.status} ${r.statusText}`);
   const reader = r.body.getReader();
@@ -80,6 +97,9 @@ const chatSendStream = async (threadId, body, onDelta, onStatus) => {
       // A document turn: the reply is being checked against the document
       // and arrives whole, checked (chat_documents.py).
       else if (event === 'status') { if (onStatus) onStatus(payload.state || ''); }
+      // A lookup answer that became the honest line: the text as kept.
+      else if (event === 'replace') { if (opts.onReplace) opts.onReplace(payload.text || ''); }
+      else if (event === 'job' || event === 'progress') { if (onJob) onJob(payload); }
       else if (event === 'done') done = payload;
       else if (event === 'error') {
         errorDetail = payload.detail || 'model error';
@@ -150,7 +170,7 @@ const ChatThreadRow = ({ t, active, onSelect, onDelete, onRename, onArchive }) =
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: active ? 600 : 500, overflow: 'hidden',
                       textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {t.title || 'new chat'}
+          {t.title || 'new chat'}{' '}<ChatLookups.Mark t={t}/>
         </div>
         <div style={{ fontSize: 11, color: active ? 'var(--fg-muted)' : 'var(--fg-faint)', overflow: 'hidden',
                       textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -285,7 +305,7 @@ const ChatDetailsDialog = ({ m, threadId, onCopy, onClose }) => {
 // A touch held this long opens the menu (iOS fires no contextmenu event).
 const CHAT_LONG_PRESS_MS = 500;
 
-const ChatMessage = ({ m, threadId, onCopy, admin, draftHooks = null }) => {
+const ChatMessage = ({ m, threadId, onCopy, admin, onLookup, busy, stoppedJob, onCarryOn, draftHooks = null }) => {
   const isUser = m.role === 'user';
   const [menuAt, setMenuAt] = React.useState(null);
   const [details, setDetails] = React.useState(false);
@@ -368,17 +388,20 @@ const ChatMessage = ({ m, threadId, onCopy, admin, draftHooks = null }) => {
                                           onOpen={draftHooks.open} onSave={draftHooks.save}
                                           onPrint={draftHooks.print} canPrint={draftHooks.canPrint}
                                           onRevise={draftHooks.revise}/>
-            ) : (
-              <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(m.content || '') }}/>
-            )}
+            ) : m.stats && m.stats.lookup_card
+              ? <ChatLookups.Card m={m} busy={busy} onDecide={onLookup}/>
+              : <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(m.content || '') }}/>}
             {m.pending && m.status === 'drafting' && (
               <span className="mono chat-doc-checking">writing the draft…</span>
             )}
             {m.pending && m.status === 'checking' && !m.content && (
               <span className="mono chat-doc-checking">reading the passages and checking the answer…</span>
             )}
-            {m.pending && <span className="mono" style={{ color: 'var(--fg-faint)' }}>▍</span>}
-            {!m.pending && <ChatDocs.DocAnswer doc={m.doc}/>}
+            {m.pending && m.job && !m.content && (
+              <ChatDocs.JobProgress job={m.job} onStop={ChatDocs.isLive(m.job) ? ChatDocs.stopJob : null}/>
+            )}
+            {m.pending && !m.job && <span className="mono" style={{ color: 'var(--fg-faint)' }}>▍</span>}
+            {!m.pending && <ChatDocs.DocAnswer doc={m.doc} stoppedJob={stoppedJob} onCarryOn={onCarryOn}/>}
             <ChatReplyError m={m} admin={admin}/>
           </div>
         </div>
@@ -554,13 +577,18 @@ const ChatPageMain = () => {
   // the refusal re-runs the read once a credential arrives. The thread
   // list is a useApiList and recovers on its own.
   const [messagesRefusal, setMessagesRefusal] = React.useState(null);
+  // The thread's long-document jobs (chat_doc_jobs.py): running ones show
+  // their progress, stopped ones let their reply carry on.
+  const [jobs, setJobs] = React.useState([]);
   const loadMessages = async (id) => {
     try {
       const r = await apiGet(`/api/chat/threads/${id}/messages`);
       setMessages(r.messages || []);
+      setJobs(r.jobs || []);
       setMessagesRefusal(null);
     } catch (e) {
       setMessages([]);
+      setJobs([]);
       setMessagesRefusal(e && (e.status === 401 || e.status === 403
         || (e.status === 429 && e.deviceTokenWait)) ? e : null);
     }
@@ -569,6 +597,44 @@ const ChatPageMain = () => {
     if (threadId != null) loadMessages(threadId);
   }, [threadId]);
   useRetryAfterCredential(messagesRefusal, reloadMessages);
+
+  // A job running in this thread that this page didn't start (the page was
+  // left and opened again, another device asked): its progress, read every
+  // two seconds until it ends, then the thread again (its reply is in).
+  const sendingRef = React.useRef(false);
+  const liveJobs = jobs.filter((j) => ChatDocs.isLive(j));
+  const liveKey = liveJobs.map((j) => j.id).join(',');
+  React.useEffect(() => {
+    if (!liveKey || threadId == null) return undefined;
+    let gone = false;
+    const tick = async () => {
+      const next = [];
+      let ended = false;
+      for (const j of liveJobs) {
+        try {
+          const v = await apiGet(`/api/chat/doc-jobs/${j.id}`);
+          next.push(v);
+          if (!ChatDocs.isLive(v)) ended = true;
+        } catch { ended = true; }
+      }
+      if (gone) return;
+      if (ended) { if (!sendingRef.current) loadMessages(threadId); return; }
+      setJobs((cur) => cur.map((j) => next.find((v) => v.id === j.id) || j));
+    };
+    const timer = setInterval(tick, 2000);
+    return () => { gone = true; clearInterval(timer); };
+  }, [liveKey, threadId]);
+  const carryOn = async (job) => {
+    const v = await ChatDocs.resumeJob(job);
+    setJobs((cur) => [...cur.filter((j) => j.id !== v.id), v]);
+  };
+  const stoppedJobs = jobs.filter((j) => j.state === 'stopped' || j.state === 'failed');
+  // The newest reply of a stopped job is the one that offers carry on.
+  const carryOnAt = {};
+  messages.forEach((m) => {
+    const j = m.doc && m.doc.job;
+    if (j && stoppedJobs.some((s) => s.id === j.id)) carryOnAt[j.id] = m.id;
+  });
 
   // A chat the help panel started ("ask Domovoi", help.jsx): open it with
   // the question typed in, for the person to send (or change) themselves.
@@ -750,6 +816,45 @@ const ChatPageMain = () => {
     }
   };
 
+  const [internetInfo] = ChatLookups.useInternet();
+  const setChatInternet = async (allowed) => {
+    try {
+      await apiPatch(`/api/chat/threads/${threadId}`, { internet_allowed: allowed });
+      fire(allowed ? 'this chat may look things up' : 'this chat asks first again');
+      refreshThreads();
+    } catch { fire('could not change it'); }
+  };
+
+  // The answer to a permission card: the card shows it at once, and the
+  // reply streams as a send does.
+  const decideLookup = async (m, decision) => {
+    if (sending || threadId == null) return;
+    setSending(true);
+    setMessages((cur) => [
+      ...cur.map((x) => (x.id === m.id ? ChatLookups.decided(x, decision) : x)),
+      { id: 'pending', role: 'assistant', content: '', pending: true },
+    ]);
+    try {
+      const { done, errorDetail, errorCode, errorModel } = await chatSendStream(
+        threadId, { decision, device_id: DeviceIdentity.id() },
+        (delta) => setMessages((cur) => cur.map((x) => (x.id === 'pending' ? { ...x, content: x.content + delta } : x))),
+        null, null,
+        { path: `/api/chat/threads/${threadId}/lookups/${m.id}`,
+          onReplace: (text) => setMessages((cur) => cur.map((x) => (x.id === 'pending' ? { ...x, content: text } : x))) },
+      );
+      setMessages((cur) => cur.map((x) =>
+        x.id === 'pending'
+          ? (done || { ...x, pending: false, error: errorDetail, error_code: errorCode, model: errorModel })
+          : x));
+      refreshThreads();
+    } catch (e) {
+      setMessages((cur) => cur.filter((x) => x.id !== 'pending'));
+      fire(String(e.message || e));
+      loadMessages(threadId);
+    }
+    setSending(false);
+  };
+
   // `revise`: {draftId, text} from a draft card's Revise box (that text is
   // a revision of that draft, whatever it says); else the composer's.
   const send = async (revise = null) => {
@@ -771,6 +876,7 @@ const ChatPageMain = () => {
       setDocAttachments([]);
     }
     setSending(true);
+    sendingRef.current = true;
     setMessages((cur) => [
       ...cur,
       { id: `u-${Date.now()}`, role: 'user', content, images, documents: docs,
@@ -787,7 +893,10 @@ const ChatPageMain = () => {
           m.id === 'pending' ? { ...m, content: m.content + delta } : m));
       }, (state) => {
         setMessages((cur) => cur.map((m) => (m.id === 'pending' ? { ...m, status: state } : m)));
-      });
+      }, (job) => {
+        // A long document read in parts: the reply's place shows how far.
+        setMessages((cur) => cur.map((m) => (m.id === 'pending' ? { ...m, job } : m)));
+      }, { onReplace: (text) => setMessages((cur) => cur.map((m) => (m.id === 'pending' ? { ...m, content: text } : m))) });
       setMessages((cur) => cur.map((m) =>
         m.id === 'pending'
           ? (done || { ...m, pending: false, error: errorDetail, error_code: errorCode,
@@ -812,6 +921,11 @@ const ChatPageMain = () => {
         m.id === 'pending' ? { ...m, pending: false, error: String(e.message || e) } : m));
     }
     setSending(false);
+    sendingRef.current = false;
+    // A stopped summary can carry on: the thread's jobs, read again.
+    if (id != null) {
+      try { setJobs((await apiGet(`/api/chat/threads/${id}/messages`)).jobs || []); } catch { /* next open */ }
+    }
   };
 
   // A screenshot pasted into the box attaches like the paperclip's
@@ -931,6 +1045,8 @@ const ChatPageMain = () => {
           <div className="chat-head-title">
             {(threads.find((t) => t.id === threadId) || {}).title || 'new chat'}
           </div>
+          <ChatLookups.Chip info={internetInfo} thread={threads.find((t) => t.id === threadId)}
+                            onToggle={setChatInternet}/>
           {modelsInfo && (
             <span className="mono chat-head-model">{modelsInfo.default_model}</span>
           )}
@@ -953,7 +1069,26 @@ const ChatPageMain = () => {
                      : null}/>
           ) : messages.map((m) => (
             <ChatMessage key={m.id} m={m} threadId={threadId} onCopy={copyMessage} admin={admin}
-                         draftHooks={draftHooks}/>
+                         onLookup={decideLookup} busy={sending}
+                         stoppedJob={m.doc && m.doc.job && carryOnAt[m.doc.job.id] === m.id
+                           ? stoppedJobs.find((j) => j.id === m.doc.job.id) : null}
+                         onCarryOn={carryOn} draftHooks={draftHooks}/>
+          ))}
+          {!sending && jobs.filter((j) => j.state === 'interrupted' || (j.line === 'stopped (AI is off)')).map((j) => (
+            <div key={`int-${j.id}`} style={{ display: 'flex', gap: 10, maxWidth: '86%' }}>
+              <span style={{ flexShrink: 0, marginTop: 3 }}><DomovoiGlyph size={14}/></span>
+              <ChatDocs.JobInterrupted job={j} onCarryOn={carryOn}/>
+            </div>
+          ))}
+          {!sending && liveJobs.map((j) => (
+            <div key={j.id} style={{ display: 'flex', gap: 10, maxWidth: '86%' }}>
+              <span style={{ flexShrink: 0, marginTop: 3 }}><DomovoiGlyph size={14}/></span>
+              <ChatDocs.JobProgress job={j} onStop={async (job) => {
+                const v = await ChatDocs.stopJob(job);
+                setJobs((cur) => cur.map((x) => (x.id === v.id ? v : x)));
+                loadMessages(threadId);
+              }}/>
+            </div>
           ))}
         </div>
 

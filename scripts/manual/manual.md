@@ -633,6 +633,14 @@ reply; a name you give it stays.
   puts it in the home server's Documents → From Chat. **print** uses the
   phone's own print dialog. In a chat **on home server**, save and print
   go through the home server, as on the dashboard.
+- **Summarize a long document:** it is read in parts, with "reading part 3
+  of 8 · about 1 min left" and **stop**. Stop keeps what was read;
+  **carry on** reads the rest. Leave Chat and it pauses at the end of the
+  part, then carries on when you come back.
+- **use home server** appears only when your home server is measured to be
+  faster than this phone for that document (reading all of it, plus sending
+  it). It sends the file to be read there; nothing is kept there. If the
+  server can't finish, Chat says so and offers **read it on this phone**.
 
 [More detail](docs/FAQ.md#can-i-send-pictures-in-chat)
 
@@ -831,6 +839,30 @@ leaves the draft alone.
   With AI chat and questions turned off, nothing new is drafted, but
   drafts already written can still be opened, edited, saved and printed.
 
+**Look things up:** say "look up …", "what does this page say:
+https://…", or ask something Domovoi doesn't know. It searches its own
+manual and your offline library first, without asking. Before anything
+goes online it shows a card with the exact words and where they go:
+**Allow once**, **Allow in this chat** or **Not now**. The chip at the top
+of a chat says whether it may go online; chats that did show a globe. The
+answer lists what it read (Wikipedia's with "CC BY-SA 4.0"), and says "I
+couldn't find that" when what it read doesn't say. [Settings →
+Search](#settings/search) *(admin)* has **Always allow internet** (off to
+start), the order of the sources, and **Use your own search** (your own
+SearXNG, or a Brave Search key).
+
+**Summarize a long document:** ask for a summary and Domovoi reads it in
+parts, then combines them. The reply's place shows "reading part 3 of 8 ·
+about 1 min left" (the time comes from how fast your server has been) with
+**stop**. Stop keeps what was read ("Summary of pages 1-9 (stopped)"), and
+**carry on** reads the rest. You can leave the page: the summary is there
+when you come back. A question asked by voice while it reads goes next,
+after the part being read (a few seconds on a GPU, up to about a minute on
+a server without one). Each point cites a page; a part Domovoi couldn't
+cite anything from is named under the summary. After a server restart the
+chat asks "carry on?" before it reads any more. One summary reads at a time
+per chat, and two in the house.
+
 **App:** the picture button is **attach image**, and the app also takes
 HEIC photos. See [Chat and the chat mic](#node:phone-chat).
 
@@ -845,8 +877,13 @@ HEIC photos. See [Chat and the chat mic](#node:phone-chat).
   which converts it.
 - An old .doc or .rtf file: save it as .docx or PDF, then attach it again.
 - "pictures of text (scanned)": scanned pages aren't searched yet.
-- A summary of a long document: not yet. Ask about something specific in
-  it instead.
+- "set to stay off the internet": your home's internet answer is No
+  ([Settings → Internet](#settings/internet)); only the manual and the
+  offline library are searched.
+- "Brave Search refused your key": check the key in [Settings →
+  Search](#settings/search); the answer came from Wikipedia meanwhile.
+- "Points that span parts may be missed": a long summary is made part by
+  part. Ask about the specific thing to have it found wherever it is.
 
 **Also:** voice chat mode, a spoken conversation in a room, is an early
 experiment and off unless whoever set up Domovoi turned it on.

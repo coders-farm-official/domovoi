@@ -131,6 +131,7 @@ SECRET_SETTING_NAMES: frozenset[str] = frozenset(
         "database_url",      # carries the Postgres password
         "acoustid_api_key",  # third-party API key
         "letta_token",       # chat-agent server token
+        "lookup_brave_key",  # third-party API key (Settings → Search)
     }
 )
 
@@ -148,7 +149,7 @@ def is_secret_setting(name: str) -> bool:
 # browser once has no reason to travel back to one. A subset of the
 # secrets above; the database URL stays readable to an admin Bearer, who
 # edits it in place.
-WRITE_ONLY_SETTING_NAMES: frozenset[str] = frozenset({"acoustid_api_key"})
+WRITE_ONLY_SETTING_NAMES: frozenset[str] = frozenset({"acoustid_api_key", "lookup_brave_key"})
 
 
 def is_write_only_setting(name: str) -> bool:
@@ -462,6 +463,59 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "choice", tier="reapply",
         choices=list(VOICE_HISTORY_KEEP_CHOICES),
         choice_labels=dict(VOICE_HISTORY_KEEP_LABELS),
+    ),
+
+    # ─── Search (Settings → Chat & AI → Search; domovoi/lookup_web.py) ──
+    # All 'hot': every lookup reads them when it runs.
+    FieldSpec(
+        "lookup_always_allow", "Always allow internet", "Search",
+        "Off (the default): before a chat looks something up on the "
+        "internet, it shows what it would send and where, and asks: allow "
+        "once, allow in this chat, or not now. On: chats look things up "
+        "without asking. Domovoi's own manual and your offline library are "
+        "always searched without asking; nothing goes online while the "
+        "internet answer is No.",
+        "bool", tier="hot",
+    ),
+    FieldSpec(
+        "lookup_source_order", "Search order", "Search",
+        "The order Domovoi reads its sources in, by name, separated by "
+        "commas (Settings → Chat & AI → Search sets it for you). Empty: "
+        "your offline sources first, then Wikipedia and Wikidata, then the "
+        "open web.",
+        "str", tier="hot",
+        pattern=r"[A-Za-z0-9._\- ,]{0,400}",
+        pattern_help="expected source names separated by commas",
+    ),
+    FieldSpec(
+        "lookup_own_search", "Use your own search", "Search",
+        "Where open-web lookups go: this server's search helper, your own "
+        "SearXNG address, or Brave Search with your own key. Wikipedia is "
+        "still read first; a search that fails says so and falls back to "
+        "Wikipedia.",
+        "choice", tier="hot", needs_internet=True,
+        choices=["", "searxng", "brave"],
+        choice_labels={"": "This server's search helper", "searxng": "Your own SearXNG",
+                       "brave": "Brave Search (your key)"},
+    ),
+    FieldSpec(
+        "lookup_own_searxng_url", "Your SearXNG address", "Search",
+        "The address of a SearXNG you run, with its JSON output turned on "
+        "(search.formats: json), for example http://192.168.1.20:8888. "
+        "Used when 'Use your own search' is Your own SearXNG.",
+        "str", tier="hot", needs_internet=True,
+        pattern=r"(https?://[^\s]{1,300})?",
+        pattern_help="expected an address starting with http:// or https://",
+    ),
+    FieldSpec(
+        "lookup_brave_key", "Brave Search key", "Search",
+        "Your own Brave Search API key, from Brave's API dashboard. Brave "
+        "charges for searches after its monthly free credit, and its terms "
+        "don't let you share a key or store results. Once saved it is never "
+        "shown again, only whether one is set; it goes only to Brave.",
+        "str", tier="hot", needs_internet=True,
+        pattern=r"[A-Za-z0-9_\-]{0,128}",
+        pattern_help="expected the key alone, with no spaces or other words",
     ),
 
     # ─── Library ───────────────────────────────────────────────────────

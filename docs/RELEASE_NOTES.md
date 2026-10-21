@@ -52,6 +52,99 @@ the PDFs Chat writes.
 * **Changed answer:** `POST /api/documents/upload` takes an optional
   `folder` (`From Chat` only). A chat reply row may carry `draft`.
 
+## 2026-10-21 — App fix: asking about a document in a phone chat
+
+App only. A question about a document in a phone chat could crash the app on
+a real phone: three of its citation patterns used a regex flag Android
+doesn't accept (the desktop tests did). They now spell out the same Unicode
+letters, digits and spaces, and a test fails the build if the flag returns.
+
+## 2026-10-21 — Looking things up, with your permission
+
+Core, dashboard, app and the Kiwix plugin (1.2.6). **Run Flyway** (V037:
+`chat_threads.internet_allowed` and `used_internet`). The search helper is
+recreated by the next update (`DOMOVOI_SEARXNG_SETTINGS_REV`), so its new
+settings take effect; a box updated by hand needs
+`docker compose up -d searxng` once.
+
+* **Chat can look things up.** Ask "look up …", "what does this page say:
+  https://…", or a question the model doesn't know. Before anything leaves
+  the house, a card shows the exact words and where they go: **Allow
+  once**, **Allow in this chat** or **Not now**. Domovoi's manual and an
+  offline library (Kiwix) are searched first, with no card.
+* **"Always allow internet"** (Settings → Chat & AI → Search, and the
+  phone's model settings) starts **off**. A chip in each chat's header says
+  whether that chat may go online; chats that did carry a globe.
+* **Sources are listed by Domovoi, not the model:** titles and sites, with
+  "CC BY-SA 4.0 · summarised" on Wikipedia's. A page's text can't make
+  Domovoi do anything: it is fenced as data and the answer has no tools.
+* **Wikipedia and Wikidata first.** The search helper turns on its
+  Wikipedia (summaries and full-text search) and Wikidata engines and ranks
+  them first; when the helper doesn't answer, Wikipedia is asked directly.
+* **Use your own search:** your own SearXNG address, or a Brave Search key
+  (kept like the AcoustID key: never shown again; Brave charges after a
+  free monthly credit and sells AI answers separately). A failing one says
+  so and Wikipedia answers. The phone can keep its own, in its keystore.
+* **Phones away from home** look things up on Wikipedia directly, and read
+  a page you name themselves (HTTPS only, no cookies, 2 MB). At home they
+  ask the home server, and a server set to stay off the internet is
+  respected.
+* **Internet "never"** refuses every lookup that would leave the house
+  (409), and the chat says so; the manual and the offline library still
+  answer.
+* **Plugins (SDK 1.8):** a lookup source may say its text's `licence`, and
+  needs no `[capabilities]` line. Kiwix 1.2.6 registers its library as a
+  local source.
+
+## 2026-10-21 — Summaries of long documents in Chat
+
+Core and dashboard update with one migration, **V038** (a `chat_doc_jobs`
+table; Flyway applies it on update). No new dependencies.
+
+* **"Summarize" works on long documents.** A document longer than one
+  pass is read in parts (about 14,000 characters each on the server,
+  9,000 on a phone's CPU), then the parts' notes are combined into the summary.
+  On a phone the job loads the model on the GPU when it can (an 8K window,
+  19,000-character parts, about 2 GB released when the job ends); where the
+  GPU won't load it runs on the CPU, with a longer estimate.
+  The reply says "Read in 8 parts. Points that span parts may be missed."
+  Every point in it cites a page that one of the parts' notes cited: a
+  point with no page, or a page no part cited, is left out, and a part the
+  model cited nothing from adds nothing (the reply says which pages).
+* **Progress, with stop.** While it reads, the reply's place says
+  "reading part 3 of 8 · about 1 min left", on the dashboard and in the
+  app. **Stop** keeps what was read: the reply is "Summary of pages 1-9
+  (stopped)", and **carry on** reads only the rest.
+* **It carries on when you leave.** On the home server the job doesn't
+  depend on the page: close it and the summary is there when you come back
+  (the chat shows the job running in the meantime). After a server restart
+  the chat says "this summary was interrupted — carry on?" and reads the
+  rest only when asked (with AI features off: "stopped (AI is off)"). One
+  summary reads at a time in a chat (asking again follows the one
+  reading), and at most two in the house; a third chat is told to ask
+  again when one has finished. On a phone it
+  runs while Chat is open, pauses at the end of the part when you leave,
+  and carries on when you come back, also after the app was closed.
+* **Time estimates come from measured speeds** (the token rates every
+  reply already records). Before anything has been measured the card shows
+  the part without a time.
+* **"Use home server" on a phone**, offered only when the home server's
+  measured speed (plus sending the file) beats the phone's, and AI features
+  are on there. It is private: the file is deleted on the server as soon as
+  it has been read, its text goes when the job ends, the summary is kept
+  only in memory until the phone takes it (24 hours at most, and 10
+  minutes if no phone is watching), and nothing is written to the database. A
+  CPU-only server is often slower than a recent phone, so the offer often
+  won't appear: that is the point of measuring.
+* **Voice comes first.** Before every model call (each part, and the
+  combine step) a job asks the core whether a voice turn is being answered
+  (new: `GET /v1/voice/activity`, which says only busy or not) and waits
+  while one is. A question in a room waits at most for the one call
+  already running: a few seconds on a GPU, but on a CPU-only server about
+  a minute (a part takes that long there).
+* **With AI features turned off,** a running job stops at its next part
+  (keeping its notes) and no new one starts.
+
 ## 2026-10-21 — Ask about a document in Chat
 
 Core and dashboard update with one migration, **V036** (two columns on
@@ -69,8 +162,8 @@ Core and dashboard update with one migration, **V036** (two columns on
 * **Very large files:** about the first 4 million characters (roughly
   1,000 pages) are read, and the attachment says how far it got.
 * **What it doesn't do yet:** scanned pages (pictures of text) are listed,
-  not read; a summary of a long document says it can't yet (short ones
-  work); old .doc and .rtf files are refused with what to save them as.
+  not read; old .doc and .rtf files are refused with what to save them as.
+  (Summaries of long documents came the same day: see above.)
 * **Phones:** a phone chat reads the document on the phone and keeps it
   there. A PDF needs Android 15, or Android 12-14 with the PDF update;
   other phones offer "ask the home server", which reads the text and keeps

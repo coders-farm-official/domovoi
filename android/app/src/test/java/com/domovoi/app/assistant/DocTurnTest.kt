@@ -203,16 +203,22 @@ class DocTurnTest {
         assertTrue(reply.sources.none { it.cited })
     }
 
-    @Test fun aSummaryOfALongDocumentWaitsForD2WithNoModelCall() {
+    @Test fun aSummaryLongerThanOnePassIsReadAsAJob() {
+        // D2 (PhoneDocJobTest has the rest): longer than one pass but one
+        // part on the phone, so one call writes it, checked like any other.
+        script = listOf("- The garden needs watering [Section: Garden]", " and a pool [p. 9].")
         val c = controller()
         c.ready()
-        val long = (1..120).joinToString("") { DocFixtures.p("Paragraph $it says the garden needs watering every morning in summer.") }
+        val long = DocFixtures.p("Garden", "Heading1") +
+            (1..120).joinToString("") { DocFixtures.p("Paragraph $it says the garden needs watering every morning in summer.") }
         c.attach("garden.docx", { DocFixtures.docx(long).inputStream() }, question = "Summarize this")
         c.replied(1)
         val reply = c.ui().conversation.messages.last()
         assertEquals("summary", reply.docMode)
-        assertTrue(reply.text, reply.text.contains("more than Domovoi can summarize in one go yet"))
-        assertTrue(engines.isEmpty())
+        assertEquals(1, engines.single().replies.size)
+        assertTrue(engines.single().systems.single().endsWith(DocQa.RULES_SUMMARY))
+        assertFalse(reply.text, reply.text.contains("p. 9"))
+        assertNull(c.ui().conversation.job)
     }
 
     @Test fun aPdfWithoutTheTextApiWaitsForTheHomeServer() {

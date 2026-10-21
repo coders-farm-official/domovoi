@@ -6823,6 +6823,46 @@
         }
       }
     },
+    "/api/config/search-test": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Search Key Test",
+        "description": "Settings \u2192 Chat & AI \u2192 Search \u2192 \"Use your own search\" \u2192 Test: proxy\nof the core's ``POST /v1/admin/config/search-test`` \u2192\n``{result: works|refused|unreachable|error, detail}``; 409 when the\ninternet answer is No (nothing sent), 422 with nothing to test. The\nkey is never echoed or logged.",
+        "operationId": "search_key_test_api_config_search_test_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/config/internet": {
       "get": {
         "tags": [
@@ -13634,6 +13674,158 @@
         }
       }
     },
+    "/api/chat/internet": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Chat Internet",
+        "description": "What the conversation header's chip reads: the household's internet\nanswer (``never`` turns lookups off) and its \"Always allow internet\".",
+        "operationId": "chat_internet_api_chat_internet_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Chat Internet Api Chat Internet Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/lookup": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Phone Lookup",
+        "description": "A phone chat's lookup at home: forwarded with the caller's own\ncredentials to the core's ``POST /v1/phone/lookup`` (at most 3\nresults; 409 internet-off under \"never\" for anything that would leave;\nthe core's tier and pace apply). The phone's chats never land here as\nrows: nothing is stored. The AI switch doesn't apply.",
+        "operationId": "phone_lookup_api_chat_lookup_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PhoneLookupBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/lookup-sources": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Chat Lookup Sources",
+        "description": "Settings \u2192 Chat & AI \u2192 Search: the core's lookup sources in the order\nthey are asked (``GET /v1/lookup/sources``, with the caller's own\ncredentials). 502 when the core doesn't answer.",
+        "operationId": "chat_lookup_sources_api_chat_lookup_sources_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Chat Lookup Sources Api Chat Lookup Sources Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/threads/{thread_id}/lookups/{message_id}": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Decide Lookup",
+        "description": "The person's answer to a permission card (``stats.lookup_card`` on\nassistant row ``message_id``): ``once`` / ``chat`` look it up and\nanswer from what was found (``chat`` also allows this chat's later\nlookups); ``no`` answers without looking. Streamed like a send\n(``delta`` / ``replace`` / ``done`` / ``error``). A card is answered\nonce: 409 for a card already answered, 404 for no such card.",
+        "operationId": "decide_lookup_api_chat_threads__thread_id__lookups__message_id__post",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "title": "Message Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LookupDecision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/chat/threads/{thread_id}/voice": {
       "post": {
         "tags": [
@@ -14483,6 +14675,312 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/doc-jobs/speed": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Doc Speed",
+        "description": "This server's measured speed for documents, and (with ``chars``) how\nlong a summary of a document that long would take here: what a phone\ncompares with its own before it offers \"Use home server\". ``ai``\nfalse: the household turned AI features off (no offer).",
+        "operationId": "doc_speed_api_chat_doc_jobs_speed_get",
+        "parameters": [
+          {
+            "name": "chars",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 8000000,
+              "minimum": 0,
+              "default": 0,
+              "title": "Chars"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Doc Speed Api Chat Doc Jobs Speed Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/doc-jobs": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Start Private Job",
+        "description": "\"Use home server\" from a phone chat: summarize ``file`` here and send\nthe progress and the summary back over SSE (``event: job``, ``event:\nprogress``, ``event: done``). Nothing is kept: the file is deleted as\nsoon as it has been read, its text lives in this process's memory\nonly, and the job is forgotten when the phone deletes it\n(``DELETE /doc-jobs/{id}``), after 24 hours, or at a restart.",
+        "operationId": "start_private_job_api_chat_doc_jobs_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_start_private_job_api_chat_doc_jobs_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Start Private Job Api Chat Doc Jobs Post"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Too large: {\"detail\", \"code\": \"file_too_large\", \"max_mb\": 100}"
+          },
+          "415": {
+            "description": "Not a kind Chat reads: {\"detail\", \"code\": \"unsupported_format\" | \"old_format\"}"
+          },
+          "422": {
+            "description": "Couldn't be read: {\"detail\": the reason in a sentence, \"code\": \"unreadable\"}"
+          }
+        }
+      }
+    },
+    "/api/chat/doc-jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Get Job",
+        "description": "A job's progress, or its result once it ended (a phone coming back\nto a private job, a dashboard re-opening a chat).",
+        "operationId": "get_job_api_chat_doc_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Job Api Chat Doc Jobs  Job Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Delete Job",
+        "description": "A phone took its private job's summary: the job goes, its text with\nit. (A home-server chat's job goes with its chat.)",
+        "operationId": "delete_job_api_chat_doc_jobs__job_id__delete",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Job Api Chat Doc Jobs  Job Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/doc-jobs/{job_id}/events": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Job Stream",
+        "description": "The job's progress as SSE from now on (the same events as the start).",
+        "operationId": "job_stream_api_chat_doc_jobs__job_id__events_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/doc-jobs/{job_id}/stop": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Stop Job",
+        "description": "Stops the job: the part being read is abandoned, the notes kept, and\nthe reply is the summary of what was read (\"(stopped)\").",
+        "operationId": "stop_job_api_chat_doc_jobs__job_id__stop_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Stop Job Api Chat Doc Jobs  Job Id  Stop Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/doc-jobs/{job_id}/resume": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Resume Job",
+        "description": "Carry on: a stopped (or failed) home-server chat's job reads the parts\nit hasn't, then writes the whole summary as a new reply.",
+        "operationId": "resume_job_api_chat_doc_jobs__job_id__resume_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Resume Job Api Chat Doc Jobs  Job Id  Resume Post"
+                }
               }
             }
           },
@@ -16211,6 +16709,26 @@
           "phone_id"
         ],
         "title": "Body_send_voice_api_chat_threads__thread_id__voice_post"
+      },
+      "Body_start_private_job_api_chat_doc_jobs_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          },
+          "question": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Question",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_start_private_job_api_chat_doc_jobs_post"
       },
       "Body_upload_api_chat_uploads_post": {
         "properties": {
@@ -18818,6 +19336,36 @@
         ],
         "title": "LoginRequest"
       },
+      "LookupDecision": {
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "once",
+              "chat",
+              "no"
+            ],
+            "title": "Decision"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "decision"
+        ],
+        "title": "LookupDecision"
+      },
       "LyricLine": {
         "properties": {
           "t": {
@@ -20168,6 +20716,48 @@
           "name"
         ],
         "title": "PersonRename"
+      },
+      "PhoneLookupBody": {
+        "properties": {
+          "query": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "internet": {
+            "type": "boolean",
+            "title": "Internet",
+            "default": true
+          },
+          "limit": {
+            "type": "integer",
+            "maximum": 3.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "default": 3
+          }
+        },
+        "type": "object",
+        "title": "PhoneLookupBody"
       },
       "PlayPlaylistRequest": {
         "properties": {
@@ -22029,6 +22619,42 @@
         "type": "object",
         "title": "ScanBody"
       },
+      "SearchTestRequest": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "pattern": "^(brave|searxng)$",
+            "title": "Kind"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "SearchTestRequest"
+      },
       "SendBody": {
         "properties": {
           "content": {
@@ -22419,6 +23045,17 @@
               }
             ],
             "title": "Archived"
+          },
+          "internet_allowed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Internet Allowed"
           }
         },
         "type": "object",
