@@ -4,6 +4,41 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-21 — An honest heads-up before shaky results in Chat
+
+Core and dashboard update, and the app. No migration and no new
+dependencies.
+
+* **A short card before a shaky result.** Before Domovoi answers a request
+  it is measured to be weak at, the reply is a card that names the
+  weakness and offers what works there: a whole-document rewrite,
+  translation or proofread of a document longer than one reply sees; an
+  exact sum, average, difference or days-between over numbers spread
+  through a document; a long summary that will take more than 3 minutes
+  where it runs; a document that looks like a language not tested yet
+  (English and Spanish are); and, in home-server chats, a blurry photo
+  asked to be read. Scanned pages get a line under the answer naming the
+  pages skipped (a card before a summary).
+* **The app decides, not the model.** The rules read one measured table,
+  `domovoi/doc_qa/chat-weak-spots.json` (shipped with the server and in the
+  app), cell by cell with the number, the eval, the date and the device.
+  The model is never asked whether it is sure.
+* **Calculate exactly.** On an exact sum the model only lists the numbers
+  with their pages; each one is checked against its page (a number not
+  there is left out, and the reply says so), and the app adds them up.
+* **It doesn't nag.** A kind shows once per chat; each card has "don't
+  warn me about this again", and Settings → Chat & AI → **Chat** turns the
+  heads-up off. Both are kept on each device (a browser, a phone), not for
+  the household. Off, an exact sum and scanned pages still get a one-line
+  note under the answer.
+* **The manual has a page for it:** "What Domovoi is good and not so good
+  at" (Chat, files and calendar), written from the same table, so the page
+  and the cards can't disagree.
+* **API:** a card reply has `doc.mode: "heads_up"`; the pick is
+  `POST /api/chat/threads/{id}/heads-up`. A send may carry `heads_up:
+  {off, skip}`. An older app ignores both and gets the card's sentence as
+  the reply's text.
+
 ## 2026-10-21 — Summaries of long documents in Chat
 
 Core and dashboard update with one migration, **V037** (a `chat_doc_jobs`
