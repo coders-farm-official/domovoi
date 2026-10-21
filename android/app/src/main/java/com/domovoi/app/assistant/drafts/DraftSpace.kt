@@ -2,7 +2,7 @@ package com.domovoi.app.assistant.drafts
 
 /**
  * Whitespace as Python's `\s` and `str.split()` read it (the server's rules),
- * written out as one character class: Android's ICU regex has no `(?U)` flag
+ * written out as one character class: Android's ICU regex has no Unicode-classes flag
  * and the JVM's `\s` (the unit tests) is ASCII only, so neither can be used
  * where the phone and the server must split text the same way.
  */
