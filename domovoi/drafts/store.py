@@ -1,4 +1,4 @@
-"""Reading a chat's draft from the core (V038 tables), for "print it" said
+"""Reading a chat's draft from the core (V039 tables), for "print it" said
 into the app's chat mic in a home-server chat (handlers/printing.py). The
 web process owns writing drafts (web/backend/api/chat_drafts.py); the core
 only reads the latest version and draws its PDF.

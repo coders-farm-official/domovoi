@@ -1,4 +1,4 @@
--- V038 — drafts in Chat: write, revise and save (2026-10-21).
+-- V039 — drafts in Chat: write, revise and save (2026-10-21).
 --
 -- Documents plan D4 ("write and save"): a home-server chat can write a
 -- resume, a cover letter or a letter. The draft is markdown in a fixed
@@ -22,8 +22,8 @@
 -- The plan called the tables chat_documents / chat_document_versions; D1
 -- uses "documents" for attachments (chat_messages.documents), so these are
 -- named for drafts. IF NOT EXISTS, so a lane patched by hand migrates
--- cleanly. (V037 is taken twice by branches in flight at the time of
--- writing, wf/documents-d2 and wf/lookups; this is the next number.)
+-- cleanly. (V037 is lookups' and V038 documents D2's, integrated in the
+-- same batch; this is the next number.)
 
 CREATE TABLE IF NOT EXISTS chat_drafts (
     id          BIGSERIAL PRIMARY KEY,

@@ -22,7 +22,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
 /** A home-server chat reply's `draft` (web/backend/api/chat_drafts.py,
- *  V038): the draft and the version this turn wrote, or offered to print. */
+ *  V039): the draft and the version this turn wrote, or offered to print. */
 @Serializable
 internal data class ServerDraftRef(
     val id: Long = 0,

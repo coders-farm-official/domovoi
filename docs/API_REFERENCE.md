@@ -1591,7 +1591,7 @@ token as `?device_token=`. The model picker (`/models`) stays **Open**. Every
 write — creating, renaming or deleting a thread, sending a message, staging an
 upload — is **Device** tier.
 
-**Drafts** (documents plan D4, `web/backend/api/chat_drafts.py`, V038). A
+**Drafts** (documents plan D4, `web/backend/api/chat_drafts.py`, V039). A
 message asking for a resume, a cover letter or a letter ("write a cover
 letter for the warehouse job at Acme") is a draft turn: the model writes
 markdown in the kind's skeleton (`domovoi/drafts`), it streams as `delta`

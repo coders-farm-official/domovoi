@@ -6,7 +6,7 @@ A home-server chat writes a resume, a cover letter or a letter when asked
 markdown in the kind's skeleton (:mod:`domovoi.drafts`) and the chat shows
 it as a **draft card**. Follow-ups revise the latest version ("shorter",
 "make it more formal"), and the reply says in one line what changed.
-Every version is kept (V038: ``chat_drafts`` / ``chat_draft_versions``),
+Every version is kept (V039: ``chat_drafts`` / ``chat_draft_versions``),
 with what produced it: the instruction, "edited by you", or "first draft".
 Only the version being revised goes to the model, never the others; a
 version longer than one pass is revised section by section, and the reply

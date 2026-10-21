@@ -6,7 +6,7 @@ a way that would otherwise get reported as a bug.
 
 ## 2026-10-21 — Write resumes and letters in Chat
 
-Core, dashboard and app, with one migration, **V038** (`chat_drafts`,
+Core, dashboard and app, with one migration, **V039** (`chat_drafts`,
 `chat_draft_versions`, `chat_messages.draft`; Flyway applies it on update).
 No new dependency: ReportLab (BSD) and python-docx (MIT) were already
 there. The app and the server carry the **Liberation Sans and Serif**
