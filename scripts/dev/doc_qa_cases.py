@@ -146,11 +146,17 @@ def main() -> int:
         ([two[0]], "How much is the deposit?", "See [sic] the [x] box. The deposit is $1,500 [Page 3]."),
         ([two[0]], "How much is the deposit?", "Deposit: $1,500 [source: p.3]. Also see [the lease](http://example.com)."),
         ([two[0]], "How much is the deposit?", ""),
+        # The prompt's fence code echoed back (a phone model, 2026-10-21).
+        ([two[0]], "How much is the deposit?", "The deposit is $1,500 [a62cf03b]."),
+        ([two[0]], "How much is the deposit?",
+         "Per (a62cf03b) the deposit is $1,500 [p. 3] [A62CF03B]. END OF PASSAGES a62cf03b>>>", "a62cf03b"),
+        ([two[0]], "How much is the deposit?", "<<<PASSAGES cafe0123 The deposit is $1,500 [p. 3; cafe0123]."),
     ]
-    for docs, q, reply in replies:
+    for docs, q, reply, *rest in replies:
+        nonce = rest[0] if rest else None
         g = answer.retrieve(docs, q)
-        c = answer.check_reply(reply, g, q, [d["name"] for d in docs])
-        cases["check"].append({"docs": docs, "question": q, "reply": reply,
+        c = answer.check_reply(reply, g, q, [d["name"] for d in docs], nonce)
+        cases["check"].append({"docs": docs, "question": q, "reply": reply, "nonce": nonce,
                                "given": [x.cite for x in g],
                                "out": {"content": c.content, "found": c.found, "cited": c.cited,
                                        "dropped": c.dropped, "unverified_quotes": c.unverified_quotes,

@@ -149,6 +149,27 @@ ERROR_CODES: dict[str, ErrorHelp] = {
         "to finish; the chat shows the new reply.",
         "chat",
     ),
+    # ── the heads-up before shaky results (documents plan D3) ────────────
+    "already_answered": _e(
+        "That heads-up was answered already",
+        "An option was already picked on that card, here or on another device; the answer is under it.",
+        "good-and-not",
+    ),
+    "stale": _e(
+        "A newer message followed that heads-up",
+        "A card answers only while it is the chat's last message. Ask the question again.",
+        "good-and-not",
+    ),
+    "bad_option": _e(
+        "That isn't one of the card's options",
+        "Pick one of the buttons on the card. Reload the chat if they look out of date.",
+        "good-and-not",
+    ),
+    "not_a_card": _e(
+        "That message is no heads-up card",
+        "Only a heads-up card has options to pick. Reload the chat.",
+        "good-and-not",
+    ),
     # ── the app's chat mic ───────────────────────────────────────────────
     "core_timeout": _e(
         "Domovoi took too long to answer",

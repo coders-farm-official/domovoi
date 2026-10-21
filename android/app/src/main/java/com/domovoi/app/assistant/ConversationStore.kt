@@ -4,6 +4,7 @@ import com.domovoi.app.data.AtomicFiles
 import com.domovoi.app.assistant.docs.DocNote
 import com.domovoi.app.assistant.docs.DocSource
 import com.domovoi.app.assistant.docs.StoredDocument
+import com.domovoi.app.assistant.docs.StoredHeadsUp
 import com.domovoi.app.assistant.lookup.LookupCard
 import com.domovoi.app.assistant.lookup.SourceLine
 import kotlinx.serialization.Serializable
@@ -87,6 +88,9 @@ data class StoredMessage(
     val vision: String? = null,
     /** ...and the app's peak resident memory while it was written, MB. */
     val peakMb: Int? = null,
+    /** A heads-up card (documents plan D3): the reply until an option is
+     *  picked, with the pick once made. */
+    val headsUp: StoredHeadsUp? = null,
 ) {
     val fromUser: Boolean get() = from == Speaker.USER
 }

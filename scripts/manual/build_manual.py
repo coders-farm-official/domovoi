@@ -26,6 +26,11 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 SOURCE = REPO / "scripts" / "manual" / "manual.md"
+# The weak spots the chat's heads-up reads (domovoi/doc_qa/headsup.py and the
+# app's DocHeadsUp.kt), and the manual's "What Domovoi is good and not so good
+# at" page, written from it here ({{generated:weak-spots}} in the source), so
+# the page and the cards can't disagree. test_manual_content.py checks both.
+WEAK_SPOTS = REPO / "domovoi" / "doc_qa" / "chat-weak-spots.json"
 OUT = REPO / "web" / "static" / "manual-content.json"
 SCHEMA = "domovoi-manual/2"
 
@@ -61,6 +66,7 @@ ROUTES: dict[str, dict] = {
     "settings/wake-words": {"dashboard": "#settings/wake-words", "app": {"screen": "Settings", "tab": "wake-words"}},
     "settings/phones-and-browsers": {"dashboard": "#settings/phones-and-browsers", "app": {"dashboard": True}},
     "settings/models": {"dashboard": "#settings/models", "app": {"screen": "Settings", "tab": "models"}},
+    "settings/chat": {"dashboard": "#settings/chat", "app": {"screen": "Settings", "tab": "chat"}},
     "settings/internet": {"dashboard": "#settings/internet", "app": {"screen": "Settings", "tab": "internet"}},
     "settings/search": {"dashboard": "#settings/search", "app": {"dashboard": True}},
     "settings/voice-history": {"dashboard": "#settings/voice-history", "app": {"screen": "Settings", "tab": "voice-history"}},
@@ -138,6 +144,7 @@ PIECES: dict[str, tuple] = {
     "Radio": ("radio", "stations you star", ["radio", "station", "fm", "stream"], {"plugin": "radio"}),
     # Chat, files and calendar
     "Chat": ("chat", "type to Domovoi, pictures and documents too", ["chat", "text", "pictures", "vision", "images", "document", "pdf", "word", "ask about"], {}),
+    "What Domovoi is good and not so good at": ("good-and-not", "where to trust the answers, and where to check", ["trust", "accurate", "accuracy", "reliable", "wrong", "mistakes", "heads-up", "warning", "limits", "good at", "bad at", "weak"], {}),
     "Files and photos": ("files", "every library, one place", ["files", "upload", "photos", "pictures", "move", "delete", "usb drive"], {}),
     "Documents, sheets and drawings": ("documents", "write and edit on the server", ["document", "spreadsheet", "sheet", "drawing", "text file", "markdown", "xlsx"], {}),
     "Calendar": ("calendar", "the household's events", ["calendar", "event", "appointment", "what's on"], {}),
@@ -348,6 +355,49 @@ LABEL_ROLES = {
 ONLY_PREFIXES = [("**App:**", "app"), ("**Dashboard:**", "dashboard")]
 DOC_PREFIXES = ("docs/", "README.md", "scripts/", "android/", "plugins/")
 LIVE_SLOTS = ("things-to-say", "rooms", "plugins", "wake-word")
+
+
+def weak_spot_lines(table: dict | None = None) -> list[str]:
+    """The "What Domovoi is good and not so good at" page, from the weak
+    spots table: one bullet per measured cell, kind by kind, with its
+    verdict, the number, where and when it was measured, whether a
+    heads-up comes first, and what to do instead."""
+    t = table if table is not None else json.loads(WEAK_SPOTS.read_text(encoding="utf-8"))
+    m = t["manual"]
+    th = t.get("thresholds") or {}
+    fires = {"not_reliable", "not_measured", "slow"}
+    card_kinds = set(t.get("kinds") or {})
+    long_wait = f"{int(th.get('long_wait_s', 180)) // 60} minutes"
+    lines = [m["intro"].format(bar=f"{round(float(t.get('bar', 0.7)) * 100)}%"), ""]
+    for kind in m["order"]:
+        for c in [c for c in t["cells"] if c["kind"] == kind]:
+            v = c.get("verdict") or "not_measured"
+            pct = f"{round(float(c['pass']) * 100)}%" if c.get("pass") is not None else ""
+            text = c["manual"].format(pct=pct, long_wait=long_wait)
+            extra = []
+            if kind in card_kinds and v in fires and "heads-up" not in text:
+                extra.append(m["heads_up"])
+            instead = (t["kinds"].get(kind) or {}).get("instead") if kind in card_kinds else None
+            if instead and v in fires:
+                extra.append(m["instead"].format(instead=instead))
+            where = f"{c['eval']}, {c['date']}, {c['device']}"
+            lines.append(f"- **{m['titles'][kind]}** ({m['verdicts'][v]}): " + " ".join([text, *extra])
+                         + f" *({where})*")
+    return lines
+
+
+def apply_generated(secs: list[tuple[int, str, list[str]]]) -> list[tuple[int, str, list[str]]]:
+    """Replace a '{{generated:weak-spots}}' line with :func:`weak_spot_lines`."""
+    out = []
+    for lvl, h, body in secs:
+        new: list[str] = []
+        for ln in body:
+            if ln.strip() == "{{generated:weak-spots}}":
+                new.extend(weak_spot_lines())
+            else:
+                new.append(ln)
+        out.append((lvl, h, new))
+    return out
 
 
 class SourceError(ValueError):
@@ -595,7 +645,7 @@ def strip_flags(h: str) -> tuple[str, bool, bool]:
 
 def build(source: Path = SOURCE) -> dict:
     md = strip_comments(source.read_text(encoding="utf-8"))
-    secs = apply_snippets(sections(md))
+    secs = apply_generated(apply_snippets(sections(md)))
     if not secs or secs[0][:2] != (2, "Start here"):
         raise SourceError("the source must open with ## Start here")
     topics_by_title = {t["title"]: t for t in TOPICS}

@@ -208,6 +208,11 @@ class Job:
         self.ended = asyncio.Event()
         #: What the parts read covered, kept when a private job's text goes.
         self.covers: str | None = None
+        #: Notes the heads-up adds under the summary (documents plan D3:
+        #: scanned pages it skipped, with the card silenced).
+        self.extra_notes: list[dict[str, str]] = []
+        #: The combine (or single) step's fence code, never kept in the reply.
+        self.fence_code: str | None = None
         #: When a client last watched or asked for it (a finished private
         #: job expires UNATTACHED_TTL_SEC after this, or after it ended,
         #: with nobody watching).
@@ -407,7 +412,7 @@ def _summary_doc(job: Job, checked: qa.Checked | None, notes: list[dict[str, str
             sources.append({"token": d.get("token") or "", "name": d.get("name"), "label": src["label"],
                             "page": part.get("page"), "text": src["text"], "match": src["match"], "cited": True})
     return {"mode": "summary", "found": checked.found if checked is not None else bool(job.read),
-            "sources": sources, "notes": (checked.notes if checked is not None else []) + notes,
+            "sources": sources, "notes": (checked.notes if checked is not None else []) + notes + job.extra_notes,
             "job": {"id": job.id, "state": job.state, "parts": job.total, "read": job.read,
                     "estimate_s": round(job.estimate_s, 1) if job.estimate_s is not None else None,
                     "wall_s": round(time.monotonic() - job.started, 1)}}
@@ -469,10 +474,11 @@ async def _reduce(job: Job) -> str:
             job.record(0, 0.0, st, sent)
             # A group's summary keeps only what its notes cited; where it
             # kept nothing, the notes themselves go on.
-            merged.append(longdoc.keep_supported_lines(reply, given, noted)
+            merged.append(longdoc.keep_supported_lines(reply, given, noted, p["nonce"])
                           or "\n".join(notes[i] for i in g if notes[i]))
         notes = merged
     p = longdoc.build_reduce_prompt(notes, job.names, job.question)
+    job.fence_code = p["nonce"]
     reply, st, sent = await _ask(job, p["rules"], p["user"], longdoc.REDUCE_NUM_PREDICT)
     job.record(0, 0.0, st, sent)
     return reply
@@ -488,6 +494,7 @@ async def _run(job: Job) -> None:
             # One part: the summary straight from it (no notes stage).
             given = longdoc.chunk_given(job.chunks[0], job.docs)
             prompt = qa.build_prompt(job.question or "Summarize it.", given, job.names, mode="summary")
+            job.fence_code = prompt["nonce"]
             job.state = "reducing"
             reply, st, sent = await _ask(job, prompt["rules"], prompt["user"], longdoc.REDUCE_NUM_PREDICT)
             job.record(job.chunks[0].chars, time.monotonic() - (job.part_started or job.started), st, sent)
@@ -501,7 +508,7 @@ async def _run(job: Job) -> None:
                 job.publish()
                 p = longdoc.build_map_prompt(chunk, job.docs, i, job.total, job.question)
                 reply, st, sent = await _ask(job, p["rules"], p["user"], longdoc.MAP_NUM_PREDICT)
-                job.notes[i] = longdoc.clean_note(reply, p["given"])
+                job.notes[i] = longdoc.clean_note(reply, p["given"], p["nonce"])
                 job.record(chunk.chars, time.monotonic() - (job.part_started or job.started), st, sent)
                 job.part_started = None
                 if not await _save(job):
@@ -521,7 +528,8 @@ async def _run(job: Job) -> None:
             noted = longdoc.noted_labels(notes_read, given)
         # Only lines that cite a page some part's notes cited (review round
         # 1: the combine step can't add a claim); none left, the notes.
-        content = longdoc.keep_supported_lines(reply, given, noted) or "\n".join(n for n in notes_read if n)
+        content = (longdoc.keep_supported_lines(reply, given, noted, job.fence_code)
+                   or "\n".join(n for n in notes_read if n))
         job.state = "done"
         notes = [longdoc.parts_note(job.total)] if job.total > 1 else []
         empty = None if direct else longdoc.nothing_cited_note(job.chunks, job.docs, job.notes)
@@ -592,27 +600,38 @@ async def stop(job: Job, wait: float = 10.0) -> None:
 
 
 # ─── Starting a home-server chat's job ──────────────────────────────────
+async def summary_facts(docs: list[dict[str, Any]], model: str | None = None) -> dict[str, Any]:
+    """What the heads-up needs before a summary job starts (documents plan
+    D3, the "long" kind): how many parts, and how long this server's
+    measured speed says they take (None before anything was measured)."""
+    chunks = longdoc.plan_chunks(docs)
+    speed = await measured_speed(model)
+    est = longdoc.estimate_seconds([c.chars for c in chunks], speed)
+    return {"parts": len(chunks), "estimate_s": est, "chars": sum(c.chars for c in chunks)}
+
+
 async def start_thread_job(thread_id: int, user_message_id: int | None, question: str,
-                           docs: list[dict[str, Any]], model: str | None = None) -> Job:
+                           docs: list[dict[str, Any]], model: str | None = None,
+                           notes: list[dict[str, str]] | None = None) -> Job:
     """A summary job for a thread's long documents (``docs``: loaded, with
     ``token``, ``name`` and ``parts``), answered by ``model`` (default: the
-    QA model)."""
+    QA model). ``notes``: the heads-up's, for under the summary."""
     try:
-        return await _start_thread_job(thread_id, user_message_id, question, docs, model)
+        return await _start_thread_job(thread_id, user_message_id, question, docs, model, notes or [])
     finally:
         _starting.discard(thread_id)
 
 
 async def _start_thread_job(thread_id: int, user_message_id: int | None, question: str,
-                            docs: list[dict[str, Any]], model: str | None) -> Job:
+                            docs: list[dict[str, Any]], model: str | None,
+                            notes: list[dict[str, str]]) -> Job:
     chunks = longdoc.plan_chunks(docs)
     speed = await measured_speed(model)
     estimate = longdoc.estimate_seconds([c.chars for c in chunks], speed)
-    longdoc.heads_up("long_summary", docs, question,
-                     {"parts": len(chunks), "estimate_s": estimate, "chars": sum(c.chars for c in chunks)})
     job = Job(job_id=uuid.uuid4().hex, docs=docs, chunks=chunks, question=question, private=False,
               thread_id=thread_id, user_message_id=user_message_id, estimate_s=estimate, model=model)
     job.fallback = speed
+    job.extra_notes = list(notes)
     async with session_scope() as s:
         await s.execute(text(
             "INSERT INTO chat_doc_jobs (id, thread_id, user_message_id, question, state, documents, chunks, notes, "

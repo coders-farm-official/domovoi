@@ -131,6 +131,9 @@ internal enum class SettingsSection(
     Models("models", "Models", SettingsGroup.ChatAndAi,
         "AI chat and questions, and the models behind speech and answers.",
         "model ai chat questions llm whisper speech recognition", dashboard = "models"),
+    Chat("chat", "Chat", SettingsGroup.ChatAndAi,
+        "A heads-up before shaky results, on this phone.",
+        "chat heads-up heads up warning warn trust shaky calculate exactly reliable"),
     Internet("internet", "Internet", SettingsGroup.Privacy,
         "Will this Domovoi have internet? It sets the defaults of the online extras.",
         "internet online offline network web", dashboard = "internet"),
@@ -254,6 +257,7 @@ fun SettingsScreen(navigate: (Route) -> Unit) {
                     SettingsSection.Voices -> VoicePanel()
                     SettingsSection.About -> AboutPanel(navigate)
                     SettingsSection.Health -> HealthPanel(navigate)
+                    SettingsSection.Chat -> ChatSettingsPanel(navigate)
                     else -> DashboardPanel(place.section)
                 }
             }

@@ -308,11 +308,22 @@ private suspend fun sendStreaming(
     retry: Boolean = false,
     /** The answer to a lookup card (`POST .../lookups/<message id>`). */
     decision: Pair<Long, String>? = null,
+    /** A pick on a heads-up card (documents plan D3): (card row id, option),
+     *  streamed from `POST .../heads-up`. */
+    headsUpPick: Pair<Long, String>? = null,
 ) = withContext(Dispatchers.IO) {
-    val body = (if (decision != null) buildJsonObject {
+    val prefs = app.headsUp.prefs
+    val body = (if (headsUpPick != null) buildJsonObject {
+        put("message_id", headsUpPick.first)
+        put("option", headsUpPick.second)
+        put("heads_up", headsUpBody(prefs))
+    } else if (decision != null) buildJsonObject {
         put("decision", decision.second)
         put("device_id", app.prefs.deviceId)
     } else if (retry) buildJsonObject {} else buildJsonObject {
+        // This phone's heads-up switch and silenced kinds (the server's
+        // rules decide when a card shows).
+        put("heads_up", headsUpBody(prefs))
         put("content", content)
         // Which install sent it, for the message's details (V017).
         put("device_id", app.prefs.deviceId)
@@ -326,6 +337,7 @@ private suspend fun sendStreaming(
         }
     }).toString().toRequestBody("application/json".toMediaType())
     val path = when {
+        headsUpPick != null -> "/api/chat/threads/$threadId/heads-up"
         decision != null -> "/api/chat/threads/$threadId/lookups/${decision.first}"
         retry -> "/api/chat/threads/$threadId/retry"
         else -> "/api/chat/threads/$threadId/messages"
@@ -745,6 +757,62 @@ internal fun ConversationPane(
         }
     }
 
+    // A pick on a heads-up card (documents plan D3): the card keeps it and
+    // the question before it is answered that way; "choose another" answers
+    // nothing and opens the picture picker.
+    fun pickHeadsUp(card: LiveMessage, option: String) {
+        val target = current ?: return
+        val id = card.id ?: return
+        if (sending) return
+        val hu = card.doc?.heads_up ?: return
+        if (option == "choose_another") {
+            scope.launch {
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        app.api.post("/api/chat/threads/${target.id}/heads-up", buildJsonObject {
+                            put("message_id", id)
+                            put("option", option)
+                        })
+                    }
+                }.onSuccess {
+                    card.doc = card.doc?.copy(heads_up = hu.copy(chosen = option))
+                    picker.launch("image/*")
+                }.onFailure { toast(failureText("heads-up", it)) }
+            }
+            return
+        }
+        sending = true
+        following = true
+        card.doc = card.doc?.copy(heads_up = hu.copy(chosen = option))
+        val live = LiveMessage("assistant", "", pending = true)
+        live.sentAtMs = System.currentTimeMillis()
+        transcript.add(live)
+        scope.launch {
+            runCatching {
+                sendStreaming(
+                    app, target.id, "", emptyList(), emptyList(),
+                    onDelta = {
+                        if (live.firstWordsAtMs == null) live.firstWordsAtMs = System.currentTimeMillis()
+                        live.content += it
+                    },
+                    onError = { detail, code, model ->
+                        live.error = detail
+                        live.errorCode = code
+                        if (model != null) live.model = model
+                    },
+                    onDone = { row -> live.finishWith(row) },
+                    onJob = { live.job = it },
+                    headsUpPick = id to option,
+                )
+            }.onFailure { live.error = failureText("heads-up", it) }
+            live.doneAtMs = System.currentTimeMillis()
+            if (live.createdAt == null) live.createdAt = Instant.now().toString()
+            live.pending = false
+            sending = false
+            loadMessages(target.id)
+        }
+    }
+
     // "Try again": the last reply makes way for a new one to the same
     // question; the server swaps them once the new one is written, and the
     // thread is read back after (a failed retry writes nothing there, so the
@@ -903,6 +971,9 @@ internal fun ConversationPane(
                             }
                         },
                         onRetry = if (i == transcript.lastIndex && !sending && canRetry(transcript)) ({ retry() }) else null,
+                        // A card answers only while it ends the thread.
+                        onHeadsUp = if (i == transcript.lastIndex && !sending) ({ option -> pickHeadsUp(m, option) }) else null,
+                        busy = sending,
                     )
                 }
                 // A job a restart interrupted: carried on only when asked.
@@ -1246,6 +1317,9 @@ internal fun MessageBubble(
     /** A stopped summary's parts still to read: "carry on" shows (null: no). */
     carryOnLeft: Int? = null,
     onCarryOn: () -> Unit = {},
+    /** A pick on this heads-up card (null: it doesn't answer now). */
+    onHeadsUp: ((String) -> Unit)? = null,
+    busy: Boolean = false,
 ) {
     val app = LocalApp.current
     val context = LocalContext.current
@@ -1315,10 +1389,16 @@ internal fun MessageBubble(
                             // A long document read in parts: how far, and stop.
                             DocJobCard(job.line.ifEmpty { "reading part ${job.part} of ${job.parts}" }, job.read, job.parts,
                                 onStop = if (job.live) ({ app.scope.launch { runCatching { stopServerJob(app, job.id) } } }) else null)
+                        } else if (m.doc?.mode == "heads_up" && m.doc?.heads_up != null) {
+                            // A heads-up card is the reply until an option is picked (D3).
+                            val hu = m.doc!!.heads_up!!
+                            val skip by app.headsUp.state.collectAsState()
+                            HeadsUpCard(hu.view(), silenced = hu.kind in skip.skip, busy = busy, onPick = onHeadsUp,
+                                onNever = { app.headsUp.neverWarn(hu.kind) })
                         } else {
                             MarkdownText(m.content, trailing = cursor)
                         }
-                        if (!m.pending) {
+                        if (!m.pending && m.doc?.mode != "heads_up") {
                             val sources = serverSources(m.doc) { token -> { serverDocumentFile(app, context.cacheDir, token) } }
                             ReplyDocs(m.doc?.notes.orEmpty().map { it.text }, sources, onSource)
                             carryOnLeft?.let { left -> CarryOnButton(left, onCarryOn) }

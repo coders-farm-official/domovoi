@@ -152,6 +152,12 @@ internal class AssistantActions(
     val closeVideo: () -> Unit = {},
     /** A done timer or alarm card offers "open Clock" (some app takes it). */
     val clockOpens: (PhoneCard) -> Boolean = { false },
+    /** A pick on the heads-up card ending the chat (documents plan D3). */
+    val pickHeadsUp: (String) -> Unit = {},
+    /** "don't warn me about this again" for a kind, on this phone. */
+    val neverWarn: (String) -> Unit = {},
+    /** The kinds this phone silenced (the card says so instead of the link). */
+    val headsUpSkip: Set<String> = emptySet(),
 )
 
 /** The phone chat's part of Chat's conversation frame: the way back to the
@@ -189,6 +195,7 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
     val toast = LocalToast.current
     val context = LocalContext.current
     val ui by assistant.state.collectAsState()
+    val headsUpPrefs by assistant.headsUpPrefs.collectAsState()
     // The controller's one-line news is toasted by ChatScreen, which is
     // always around this view (and around the list, where a delete happens).
 
@@ -463,6 +470,7 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
             attachPhoto = actions.attachPhoto, dropPhoto = actions.dropPhoto,
             closeVideo = assistant::videoClosed,
             clockOpens = assistant::clockOpens,
+            pickHeadsUp = actions.pickHeadsUp, neverWarn = actions.neverWarn, headsUpSkip = headsUpPrefs.skip,
         ),
         chrome,
     )
@@ -651,6 +659,8 @@ private fun actionsFor(
     dropPhoto = a::dropPhoto,
     docFile = { id -> a.docFile(id) },
     carryOn = a::carryOnJob,
+    pickHeadsUp = a::pickHeadsUp,
+    neverWarn = a::neverWarn,
 )
 
 /** The screen for [ui], with no controller behind it (the tests render it). */

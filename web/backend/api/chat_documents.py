@@ -56,7 +56,8 @@ from domovoi import ai_features, doc_extract
 from domovoi.admin_auth import require_device, require_device_read
 from domovoi.doc_extract import runner
 from domovoi.doc_qa import answer as qa
-from domovoi.doc_qa import longdoc
+from domovoi.doc_qa import calc as qa_calc
+from domovoi.doc_qa import headsup
 from domovoi.doc_qa import notes as qa_notes
 from web.backend.api.inline_serve import inert_headers
 from web.backend.db import session_scope
@@ -494,6 +495,16 @@ class DocPlan:
     #: A summary of documents longer than one pass: read in parts by a job
     #: (chat_doc_jobs.py, D2), not one model call.
     long: bool = False
+    #: The heads-up card this reply is (mode "heads_up", D3): what it says
+    #: and its options (headsup.Card.to_json, plus "chosen").
+    heads_up: dict[str, Any] | None = None
+    #: The person's pick on this question's card: (kind, option).
+    chosen: tuple[str, str] | None = None
+    #: "Calculate exactly": the model lists the numbers, the app adds them
+    #: up (domovoi/doc_qa/calc.py); the calculation.
+    calc_op: str | None = None
+    #: The prompt's fence code, never kept in the reply (answer.strip_fence).
+    nonce: str | None = None
 
     def doc_json(self, checked: qa.Checked | None = None) -> dict[str, Any]:
         sources = []
@@ -505,12 +516,27 @@ class DocPlan:
                 sources.append({"token": d.get("token"), "name": d.get("name"), "label": s["label"],
                                 "page": part.get("page"), "text": s["text"], "match": s["match"],
                                 "cited": s["cited"]})
-        return {"mode": self.mode, "found": checked.found if checked is not None else self.found,
-                "sources": sources, "notes": (checked.notes if checked is not None else []) + self.notes}
+        out = {"mode": self.mode, "found": checked.found if checked is not None else self.found,
+               "sources": sources, "notes": (checked.notes if checked is not None else []) + self.notes}
+        if self.heads_up is not None:
+            out["heads_up"] = self.heads_up
+        if self.chosen is not None:
+            out["heads_up_chosen"] = {"kind": self.chosen[0], "option": self.chosen[1]}
+        if self.calc_op:
+            out["calc"] = self.calc_op
+        return out
 
     def finish(self, content: str) -> tuple[str, dict[str, Any]]:
-        """The model's reply after the app's check, and the row's ``doc``."""
-        checked = qa.check_reply(content, self.given, self.question, self.names)
+        """The model's reply after the app's check, and the row's ``doc``.
+        "Calculate exactly": the model's list, each number checked against
+        its page, added up here (:func:`domovoi.doc_qa.calc.finish`)."""
+        if self.calc_op:
+            # Each document's way of writing numbers and dates: its language
+            # and its own numbers (calc.docs_ctx); unsure is refused.
+            checked = qa_calc.finish(content, self.given, self.question, self.names, self.calc_op, self.nonce,
+                                     qa_calc.docs_ctx(self.docs))
+        else:
+            checked = qa.check_reply(content, self.given, self.question, self.names, self.nonce)
         return checked.content, self.doc_json(checked)
 
 
@@ -523,22 +549,100 @@ async def previous_question(thread_id: int, before_id: int | None = None) -> str
     return row[0] if row else None
 
 
+@dataclass
+class HeadsUpPrefs:
+    """What this device says about heads-up cards (documents plan, part 5):
+    the master switch (``off``), the kinds it said "don't warn me about
+    this again" for (``skip``), and the person's pick on the card this
+    request answers (``chosen``: kind, option). Kept on the device, sent
+    with each message; the rules themselves are the server's."""
+    off: bool = False
+    skip: list[str] = field(default_factory=list)
+    chosen: tuple[str, str] | None = None
+
+
+class HeadsUpBody(BaseModel):
+    """A send's ``heads_up``: this device's switch and its silenced kinds."""
+    off: bool = False
+    skip: list[str] = Field(default_factory=list, max_length=16)
+
+    def prefs(self, chosen: tuple[str, str] | None = None) -> HeadsUpPrefs:
+        return HeadsUpPrefs(off=self.off, skip=headsup.valid_kinds(self.skip), chosen=chosen)
+
+
+async def shown_kinds(thread_id: int) -> set[str]:
+    """The heads-up kinds a card was shown for in this thread (a card row's
+    ``doc.heads_up``): each kind shows once per chat."""
+    async with session_scope() as s:
+        rows = (await s.execute(text(
+            "SELECT DISTINCT doc->'heads_up'->>'kind' FROM chat_messages WHERE thread_id = :t "
+            "AND doc ? 'heads_up'"), {"t": thread_id})).scalars().all()
+    return {r for r in rows if r}
+
+
+def _parts_chars(parts: list[dict[str, Any]]) -> int:
+    return sum(len(str(p.get("text") or "")) + len(str(p.get("head") or "")) for p in parts or [])
+
+
+def heads_up_docs(loaded: list[dict[str, Any]]) -> list[headsup.Doc]:
+    """The documents as the heads-up rules see them."""
+    out = []
+    for d in loaded:
+        parts = d.get("parts") or []
+        out.append(headsup.Doc(
+            name=str(d.get("name") or "the document"), chars=_parts_chars(parts),
+            pages=d.get("pages") if d.get("kind") == "pdf" else None, words=int(d.get("words") or 0),
+            scanned_pages=[int(x) for x in (d.get("scanned_pages") or []) if str(x).isdigit()],
+            sample=headsup.doc_sample(parts)))
+    return out
+
+
+def opening_passages(loaded: list[dict[str, Any]], budget: int = qa.RETRIEVE_CHARS) -> list[qa.Given]:
+    """The documents' first passages, in order, within what one question
+    reads (the best one always goes)."""
+    out: list[qa.Given] = []
+    used = 0
+    for p in qa.doc_passages(loaded):
+        size = len(p.shown())
+        if out and used + size > budget:
+            break
+        out.append(qa.Given(p, qa._cite_label(p, loaded), 0.0))
+        used += size
+    return out
+
+
+#: What works on the home server's own chat: "calculate exactly". (Section
+#: by section is D4's, for drafts; "use home server" is the phone's.)
+SERVER_CAN = frozenset({"calculate"})
+
+
+def heads_up_card_plan(base: "DocPlan", card: headsup.Card) -> "DocPlan":
+    """A reply that is the card: said by the app, no model asked."""
+    hu = card.to_json() | {"chosen": None}
+    return DocPlan(mode="heads_up", immediate=card.text, question=base.question, names=base.names,
+                   docs=base.docs, heads_up=hu)
+
+
 async def plan_reply(thread_id: int, question: str, new_docs: list[dict[str, Any]],
-                     previous: str | None) -> DocPlan | None:
+                     previous: str | None, prefs: HeadsUpPrefs | None = None) -> DocPlan | None:
     """How to answer ``question`` in a thread, or None when the thread has
     no documents (an ordinary chat turn). ``new_docs``: the documents sent
-    with this message (already in the thread's list)."""
+    with this message (already in the thread's list). ``prefs``: this
+    device's heads-up switch, silenced kinds, and the pick on a card."""
     docs = await thread_documents(thread_id)
     if not docs:
         return None
+    shown = await shown_kinds(thread_id)
     # Reading the cached parts and searching them is CPU work proportional
     # to the documents (review round 1: 6.6 s for a 40 MB text file, with
     # the event loop blocked), so it runs in a worker thread.
-    return await asyncio.to_thread(_plan, docs, question, new_docs, previous)
+    return await asyncio.to_thread(_plan, docs, question, new_docs, previous, prefs or HeadsUpPrefs(), shown)
 
 
 def _plan(docs: list[dict[str, Any]], question: str, new_docs: list[dict[str, Any]],
-          previous: str | None) -> DocPlan:
+          previous: str | None, prefs: HeadsUpPrefs | None = None, shown: set[str] | None = None) -> DocPlan:
+    prefs = prefs or HeadsUpPrefs()
+    shown = shown or set()
     loaded = []
     for d in docs:
         cache = load_cache(str(d.get("token") or ""))
@@ -553,17 +657,66 @@ def _plan(docs: list[dict[str, Any]], question: str, new_docs: list[dict[str, An
         return DocPlan(mode="question", immediate=qa.NOT_FOUND, names=names, docs=loaded, found=False,
                        notes=[{"code": "missing", "text": "The attached document is no longer on this Domovoi."}])
     mode = qa.choose_mode(q)
-    longdoc.heads_up(mode, loaded, q)       # D3: the heads-up card plugs in here
+    hu_docs = heads_up_docs(loaded)
+    ai_on = not ai_turned_off()
     if mode == "summary":
         given = qa.retrieve(loaded, q, mode="summary")
         if not given:
-            # Longer than one pass: read in parts, then combined (D2).
-            return DocPlan(mode="summary", question=q, names=names, docs=loaded, long=True)
+            # Longer than one pass: read in parts, then combined (D2). Its
+            # heads-up needs the job's estimate (long_heads_up, from chat.py).
+            return DocPlan(mode="summary", question=q, names=names, docs=loaded, long=True, chosen=prefs.chosen)
     else:
         given = qa.retrieve(loaded, q, previous)
+        if not given and prefs.chosen is not None and prefs.chosen[0] == "rewrite":
+            # "Try anyway" on a whole-document rewrite whose words match
+            # nothing: as much of the document as one reply sees, from the
+            # start (the answer's note says the rest wasn't in it).
+            given = opening_passages(loaded)
         if not given:
+            # Nothing matched: "I couldn't find that", said by the app. A
+            # whole-document rewrite or an untested language still gets
+            # its card first; pages Domovoi couldn't read, their note.
+            found = headsup.when_nothing_found(headsup.findings(headsup.Request(
+                mode="question", question=q, where="server", docs=hu_docs, can=SERVER_CAN, ai_on=ai_on)))
+            decision = headsup.decide(found, shown=shown, skip=prefs.skip, off=prefs.off, chosen=prefs.chosen)
+            base = DocPlan(mode="question", question=q, names=names, docs=loaded, chosen=prefs.chosen)
+            if decision.card is not None:
+                return heads_up_card_plan(base, decision.card)
+            # (An "after" note speaks of the passages below: there are none.)
+            notes = [{"code": "not_found", "text": qa.note_not_found(names)}] + [
+                n for n in decision.notes if n["code"] in ("heads_up_scanned", "heads_up_calc")]
             return DocPlan(mode="question", immediate=qa.NOT_FOUND, names=names, docs=loaded, found=False,
-                           notes=[{"code": "not_found", "text": qa.note_not_found(names)}])
-    prompt = qa.build_prompt(q, given, names, mode=mode, previous=previous if mode == "question" else None)
-    return DocPlan(mode=mode, user=prompt["user"], rules=prompt["rules"], question=q, names=names,
-                   docs=loaded, given=given)
+                           notes=notes, chosen=prefs.chosen)
+    # The honest heads-up (D3): the measured weak spots decide, not the model.
+    req = headsup.Request(mode=mode, question=q, where="server", docs=hu_docs,
+                          given=[(g.cite, g.passage.shown()) for g in given], can=SERVER_CAN, ai_on=ai_on)
+    found = headsup.findings(req)
+    decision = headsup.decide(found, shown=shown, skip=prefs.skip, off=prefs.off, chosen=prefs.chosen)
+    base = DocPlan(mode=mode, question=q, names=names, docs=loaded, given=given, chosen=prefs.chosen)
+    if decision.card is not None:
+        return heads_up_card_plan(base, decision.card)
+    calc_card = next((c for c in found if c.kind == "calc"), None)
+    if prefs.chosen == ("calc", "calculate") and calc_card is not None and calc_card.op in headsup.CALCULATOR_OPS:
+        prompt = qa_calc.build_prompt(q, given, names, calc_card.op)
+        base.calc_op = calc_card.op
+    else:
+        prompt = qa.build_prompt(q, given, names, mode=mode, previous=previous if mode == "question" else None)
+    base.user, base.rules, base.nonce = prompt["user"], prompt["rules"], prompt.get("nonce")
+    base.notes = list(decision.notes)
+    return base
+
+
+async def long_heads_up(plan: DocPlan, thread_id: int, prefs: HeadsUpPrefs | None,
+                        facts: dict[str, Any]) -> tuple[DocPlan | None, list[dict[str, str]]]:
+    """Before a long summary's job starts: the card to show instead (None:
+    start it), and the notes for its reply. ``facts``: the job's parts and
+    estimate (chat_doc_jobs.summary_facts)."""
+    prefs = prefs or HeadsUpPrefs()
+    shown = await shown_kinds(thread_id)
+    req = headsup.Request(mode="long_summary", question=plan.question, where="server",
+                          docs=heads_up_docs(plan.docs), facts=facts, can=SERVER_CAN, ai_on=not ai_turned_off())
+    decision = headsup.decide(headsup.findings(req), shown=shown, skip=prefs.skip, off=prefs.off,
+                              chosen=prefs.chosen)
+    if decision.card is not None:
+        return heads_up_card_plan(plan, decision.card), []
+    return None, decision.notes
