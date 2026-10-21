@@ -38,6 +38,27 @@ keeps AI on, exactly as before.
   `ai_features.AITurnedOff`. Kiwix's spoken summaries degrade to the
   extract it already speaks.
 
+## 2026-10-21 — A repair by Setup no longer trips the container guard
+
+* **"The music player image was replaced outside Domovoi" after running
+  Setup again.** A repair (or any re-run of `provision.sh`) rebuilt the
+  music player image with a new ID and told the guard nothing, so it
+  opened a tamper incident and paused plugin installs, updates, satellite
+  upgrades and media preparation. Now the installer keeps the image unless
+  it is missing or `Dockerfile.mpd` changed since the installer built it,
+  and every build it makes leaves a root-owned record the guard accepts
+  (`/var/lib/domovoi-provision/mpd-image.json`); after such a build the
+  rooms' players restart on the new image, as after an update. An image
+  built by hand is still reported. **If the incident is open on your box
+  now** (it pauses updates too, so it goes first): on the Containers page
+  (admin), **clear after review** the incident about the music player
+  image, then take this update, then press **rebuild the music player
+  image** (new; not offered while internet access is turned off), which
+  builds it as the core does, makes it the image the guard expects and
+  restarts every room's player on it (what is playing stops; playlists and
+  queues stay). Without the rebuild the guard keeps expecting the old
+  image, and a room created on the new one would be reported.
+
 ## 2026-10-20 — 1.0.0-rc3: audiobooks on the phone, and everything since rc2
 
 Version 1.0.0rc3 (the app 1.0.0-rc3, versionCode 26102001; the Windows

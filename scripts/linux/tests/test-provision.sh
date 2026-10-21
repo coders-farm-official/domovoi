@@ -499,9 +499,24 @@ case "$1 ${2-}" in
     esac
     exit 0 ;;
   "version "*) echo 29.8.1 ;;
-  "image inspect") [ -f "$SHIM_STATE/images/${3//[:\/@]/_}" ] || exit 1 ;;
+  # image inspect [-f '{{.Id}}'] REF: there or not; with -f, the image's
+  # ID (what a build wrote in its file, else one made from the name).
+  "image inspect")
+    ref=${!#}; f=$SHIM_STATE/images/${ref//[:\/@]/_}
+    [ -f "$f" ] || exit 1
+    if [ "$3" = -f ]; then
+      if [ -s "$f" ]; then cat "$f"; else echo "sha256:$(printf '%s' "$ref" | sha256sum | cut -c1-64)"; fi
+    fi ;;
+  # Every build gives a new image ID (as one that misses Docker's build
+  # cache does: the apt layer is not reproducible).
   "build "*)
-    while [ $# -gt 0 ]; do [ "$1" = -t ] && { touch "$SHIM_STATE/images/${2//[:\/@]/_}"; break; }; shift; done ;;
+    n=$(($(cat "$SHIM_STATE/builds" 2>/dev/null || echo 0) + 1)); echo "$n" >"$SHIM_STATE/builds"
+    while [ $# -gt 0 ]; do
+      [ "$1" = -t ] && { echo "sha256:$(printf 'build-%s' "$n" | sha256sum | cut -c1-64)" >"$SHIM_STATE/images/${2//[:\/@]/_}"; break; }
+      shift
+    done ;;
+  # Room containers: $SHIM_STATE/containers/NAME holds the image ID it runs.
+  "ps -a") ls "$SHIM_STATE/containers" 2>/dev/null || true ;;
   "compose config") echo "$refs" ;;
   "compose pull")
     [ ! -f "$SHIM_STATE/pull-fail" ] || { echo "Error response from daemon: toomanyrequests" >&2; exit 1; }
@@ -533,9 +548,11 @@ case "$1 ${2-}" in
     if [ "$2" = --tail ]; then tail -n "$3" "$SHIM_STATE/pg-logs" | exec perl -pe ''; else exec perl -pe '' "$SHIM_STATE/pg-logs"; fi ;;
   "volume inspect") [ -f "$SHIM_STATE/pg-volume" ] || { echo "Error: no such volume: $3" >&2; exit 1; } ;;
   "volume rm") rm -f "$SHIM_STATE/pg-volume" ;;
-  "rm -f") rm -f "$SHIM_STATE/pg-state" ;;
+  "rm -f") if [ -f "$SHIM_STATE/containers/$3" ]; then rm -f "$SHIM_STATE/containers/$3"; else rm -f "$SHIM_STATE/pg-state"; fi ;;
   "run --rm") [ -f "$SHIM_STATE/pg-volume" ] || exit 1; cat "$SHIM_STATE/pg-volume" ;;
-  "inspect -f") if [ -f "$SHIM_STATE/searxng-running" ]; then echo true; else echo false; fi ;;
+  "inspect -f")
+    if [ -f "$SHIM_STATE/containers/${!#}" ]; then cat "$SHIM_STATE/containers/${!#}"; exit 0; fi
+    if [ -f "$SHIM_STATE/searxng-running" ]; then echo true; else echo false; fi ;;
   "stop "*) rm -f "$SHIM_STATE/searxng-running" ;;
 esac
 exit 0
@@ -1346,6 +1363,158 @@ case_second_run_skips_everything() {
   check "no daemon-reload" not_called "daemon-reload"
   check "no mount" not_called "mount /srv"
   check "still needs the distro restart" eq "$(final_field restart_required)" true
+  end_case
+}
+
+# The music player image (2026-10-21): a repair by Setup re-ran the images
+# step (its inputs include the compose file, which updates change), rebuilt
+# domovoi-mpd with a new image ID, and the core's container guard reported
+# it as replaced outside Domovoi. A re-run now keeps the image, builds only
+# when it is missing or when Dockerfile.mpd changed since this script built
+# it, and records every build for the guard.
+mpd_img() { cat "$STATE/images/domovoi-mpd_latest"; }
+mpd_record() { cat "$ROOT/var/lib/domovoi-provision/mpd-image.json"; }
+record_field() { sed -n "s/^  \"$1\": \"\([^\"]*\)\",\{0,1\}\$/\1/p" "$ROOT/var/lib/domovoi-provision/mpd-image.json"; }
+json_ok() { [ -z "$JSON_PY" ] || "$JSON_PY" -c 'import json, sys; json.load(open(sys.argv[1], encoding="utf-8"))' "$1"; }
+# A room's player, running IMAGE, and the core up (a repair of a live box).
+live_room() { mkdir -p "$STATE/containers"; printf '%s\n' "$2" >"$STATE/containers/$1"; touch "$STATE/active/domovoi-core.service"; }
+# The images step's inputs as they were before an update moved the checkout.
+stale_images_marker() { echo stale >"$ROOT/var/lib/domovoi-provision/steps/images"; }
+
+case_first_build_of_the_music_player_is_recorded() {
+  new_case first_build_of_the_music_player_is_recorded
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "built once" eq "$(grep -c '^docker build' "$STATE/calls.log")" 1
+  local rec=$ROOT/var/lib/domovoi-provision/mpd-image.json
+  check "recorded" test -f "$rec"
+  check "0644" eq "$(stat -c %a "$rec")" 644
+  check "by the installer" has_line "$rec" '  "by": "provision",'
+  check "names the image the tag names" eq "$(record_field image_id)" "$(mpd_img)"
+  check "the tag" has_line "$rec" '  "tag": "domovoi-mpd:latest",'
+  check "Dockerfile.mpd's hash" eq "$(record_field dockerfile_sha256)" "$(sha256sum "$CHECKOUT/domovoi/Dockerfile.mpd" | cut -d' ' -f1)"
+  check "when, in UTC" grep -qE '^  "built_at": "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"$' "$rec"
+  check "valid JSON" json_ok "$rec"
+  check "no temp file left" absent "$rec.tmp"
+  check "no core to restart on a first install" not_called "systemctl restart domovoi-core"
+  end_case
+}
+
+case_repair_rerun_keeps_the_music_player_image() {
+  new_case repair_rerun_keeps_the_music_player_image
+  run_prov "${wsl_args[@]}"
+  check "first run exit 0" eq "$RC" 0
+  local img rec_before; img=$(mpd_img); rec_before=$(mpd_record)
+  live_room domovoi-mpd-kitchen "$img"
+  stale_images_marker
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "the images step ran" eq "$(state_of images)" done
+  check "the database images pulled" called "docker compose pull postgres flyway"
+  check "no build" not_called "docker build"
+  check "said why" said "keeping domovoi-mpd:latest ($img)"
+  check "the same image" eq "$(mpd_img)" "$img"
+  check "the record as it was" eq "$(mpd_record)" "$rec_before"
+  check "the room's player left alone" test -f "$STATE/containers/domovoi-mpd-kitchen"
+  check "no container removed" not_called "docker rm"
+  check "the core not restarted" not_called "systemctl restart domovoi-core"
+  end_case
+}
+
+case_repair_rerun_keeps_an_image_built_elsewhere_unvouched() {
+  new_case repair_rerun_keeps_an_image_built_elsewhere_unvouched
+  run_prov "${wsl_args[@]}"
+  check "first run exit 0" eq "$RC" 0
+  local rec_before; rec_before=$(mpd_record)
+  # A docker build by hand (or the core, or the update unit): another ID.
+  local other="sha256:$(printf manual | sha256sum | cut -c1-64)"
+  echo "$other" >"$STATE/images/domovoi-mpd_latest"
+  # ...and the Dockerfile the record names is no longer the checkout's.
+  sed -i 's/^  "dockerfile_sha256": "[^"]*"/  "dockerfile_sha256": "older"/' "$ROOT/var/lib/domovoi-provision/mpd-image.json"
+  rec_before=$(mpd_record)
+  stale_images_marker
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "no build" not_called "docker build"
+  check "the image left as it is" eq "$(mpd_img)" "$other"
+  # The record still names the installer's own build, so it vouches for
+  # nothing the tag names now: the guard reports the hand-made image.
+  check "the record not rewritten" eq "$(mpd_record)" "$rec_before"
+  check "it doesn't name the image the tag names" test "$(record_field image_id)" != "$other"
+  end_case
+}
+
+case_changed_dockerfile_rebuilds_records_and_moves_the_rooms() {
+  new_case changed_dockerfile_rebuilds_records_and_moves_the_rooms
+  run_prov "${wsl_args[@]}"
+  check "first run exit 0" eq "$RC" 0
+  local old; old=$(mpd_img)
+  live_room domovoi-mpd-kitchen "$old"
+  live_room domovoi-mpd-den "$old"
+  live_room domovoi-searxng-lookalike "$old"
+  # This script built the image the tag names, from another Dockerfile.mpd.
+  sed -i 's/^  "dockerfile_sha256": "[^"]*"/  "dockerfile_sha256": "older"/' "$ROOT/var/lib/domovoi-provision/mpd-image.json"
+  stale_images_marker
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "said why" said "building domovoi-mpd:latest: Dockerfile.mpd changed since this script built domovoi-mpd:latest"
+  check "built" called "docker build --progress=plain -t domovoi-mpd:latest"
+  local new; new=$(mpd_img)
+  check "a new image ID" test "$new" != "$old"
+  check "recorded: the new image" eq "$(record_field image_id)" "$new"
+  check "recorded: this Dockerfile" eq "$(record_field dockerfile_sha256)" "$(sha256sum "$CHECKOUT/domovoi/Dockerfile.mpd" | cut -d' ' -f1)"
+  check "the rooms on the old image removed" eq "$(ls "$STATE/containers")" domovoi-searxng-lookalike
+  check "only Domovoi's music players" called "docker rm -f domovoi-mpd-kitchen"
+  check "after the build" before "docker build" "docker rm -f domovoi-mpd-den"
+  check "the core restarted to recreate them" called "systemctl restart domovoi-core.service --no-block"
+  check "after the rooms went" before "docker rm -f domovoi-mpd-kitchen" "systemctl restart domovoi-core.service"
+  check "said so" said "restarting domovoi-core: it recreates the rooms' players on the new image"
+  end_case
+}
+
+case_missing_music_player_image_is_built_on_a_repair() {
+  new_case missing_music_player_image_is_built_on_a_repair
+  run_prov "${wsl_args[@]}"
+  check "first run exit 0" eq "$RC" 0
+  local old; old=$(mpd_img)
+  live_room domovoi-mpd-kitchen "$old"
+  rm -f "$STATE/images/domovoi-mpd_latest"
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "the images step re-ran (its check)" eq "$(state_of images)" done
+  check "built" called "docker build --progress=plain -t domovoi-mpd:latest"
+  check "recorded" eq "$(record_field image_id)" "$(mpd_img)"
+  check "the room removed" absent "$STATE/containers/domovoi-mpd-kitchen"
+  check "the core restarted" called "systemctl restart domovoi-core.service --no-block"
+  end_case
+}
+
+case_a_core_still_starting_is_restarted_after_a_rebuild() {
+  new_case a_core_still_starting_is_restarted_after_a_rebuild
+  run_prov "${wsl_args[@]}"
+  check "first run exit 0" eq "$RC" 0
+  live_room domovoi-mpd-kitchen "$(mpd_img)"
+  # The core is starting, not active yet (review round 1).
+  rm -f "$STATE/active/domovoi-core.service"
+  mkdir -p "$STATE/activating"; touch "$STATE/activating/domovoi-core.service"
+  rm -f "$STATE/images/domovoi-mpd_latest"
+  run_prov "${wsl_args[@]}"
+  check "built" called "docker build --progress=plain -t domovoi-mpd:latest"
+  check "the starting core restarted" called "systemctl restart domovoi-core.service --no-block"
+  end_case
+}
+
+case_a_stopped_core_is_left_stopped_after_a_rebuild() {
+  new_case a_stopped_core_is_left_stopped_after_a_rebuild
+  run_prov "${wsl_args[@]}"
+  check "first run exit 0" eq "$RC" 0
+  live_room domovoi-mpd-kitchen "$(mpd_img)"
+  rm -f "$STATE/active/domovoi-core.service"
+  rm -f "$STATE/images/domovoi-mpd_latest"
+  run_prov "${wsl_args[@]}"
+  check "built" called "docker build --progress=plain -t domovoi-mpd:latest"
+  check "not restarted by the images step" not_said "restarting domovoi-core: it recreates"
+  check "the room removed (the core recreates it when it starts)" absent "$STATE/containers/domovoi-mpd-kitchen"
   end_case
 }
 
@@ -3942,6 +4111,13 @@ CASES=(
   case_setup_code_kept_out_of_the_journal_it_prints
   case_failed_start_logs_status_and_journal
   case_unhealthy_start_logs_all_three_units
+  case_first_build_of_the_music_player_is_recorded
+  case_repair_rerun_keeps_the_music_player_image
+  case_repair_rerun_keeps_an_image_built_elsewhere_unvouched
+  case_changed_dockerfile_rebuilds_records_and_moves_the_rooms
+  case_missing_music_player_image_is_built_on_a_repair
+  case_a_core_still_starting_is_restarted_after_a_rebuild
+  case_a_stopped_core_is_left_stopped_after_a_rebuild
   case_apt_step_installs_the_stick_tool
   case_stop_before_start
   case_stop_before_takes_a_step_inside_the_run
