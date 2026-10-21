@@ -26,17 +26,26 @@ class XmlEl(val qname: String, val attrs: Map<String, String>) {
 
     fun all(local: String): List<XmlEl> = elements().filter { it.name == local }
 
-    /** Every element under this one (itself first), in document order. */
+    /** Every element under this one (itself first), in document order:
+     *  walked with a stack, not nested sequences, so a deep tree costs one
+     *  step per element. */
     fun descendants(): Sequence<XmlEl> = sequence {
-        yield(this@XmlEl)
-        for (c in elements()) yieldAll(c.descendants())
+        val stack = ArrayDeque<XmlEl>()
+        stack.addLast(this@XmlEl)
+        while (stack.isNotEmpty()) {
+            val e = stack.removeLast()
+            yield(e)
+            val kids = e.elements()
+            for (i in kids.indices.reversed()) stack.addLast(kids[i])
+        }
     }
 
     fun find(local: String): Sequence<XmlEl> = descendants().drop(1).filter { it.name == local }
 }
 
 object DocXml {
-    const val MAX_DEPTH = 2000
+    /** Real Word and OpenDocument files nest a few dozen deep. */
+    const val MAX_DEPTH = 256
     private val REFUSED = Regex("(?i)<!DOCTYPE|<!ENTITY")
 
     fun parse(xml: String, what: String): XmlEl {
@@ -44,7 +53,9 @@ object DocXml {
         val root = XmlEl("#document", emptyMap())
         val stack = ArrayList<XmlEl>().apply { add(root) }
         var pos = 0
+        var n = 0
         for (tag in MiniXml.tags(xml)) {
+            if (++n and 0xFFF == 0) DocCancel.check()
             if (tag.start > pos) {
                 val t = MiniXml.textBetween(xml, pos, tag.start)
                 if (t.isNotEmpty()) stack.last().children += t

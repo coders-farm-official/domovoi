@@ -116,9 +116,13 @@ object DocWord {
         val rels = rels(z)
         val headers = ArrayList<String>()
         val footers = ArrayList<String>()
+        // Each header or footer part is read once, however many sections
+        // name it (20,000 references to one part are one read).
+        val readParts = HashSet<String>()
         for ((tag, dst) in listOf("headerReference" to headers, "footerReference" to footers)) {
             root.find(tag).forEach { ref ->
                 val target = rels[ref.attr("id") ?: ""] ?: return@forEach
+                if (!readParts.add(target)) return@forEach
                 val t = partText(z, target)
                 if (t.isNotEmpty() && t !in dst) dst += t
             }

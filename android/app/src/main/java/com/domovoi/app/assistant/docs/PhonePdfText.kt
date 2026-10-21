@@ -41,6 +41,8 @@ object PhonePdfText : PdfTextReader {
                 throw DocRefused("This PDF has a password. Save a copy without the password, then attach that.")
             } catch (e: DocRefused) {
                 throw e
+            } catch (e: InterruptedException) {
+                throw DocRefused(DocCancel.TOO_LONG)
             } catch (e: Exception) {
                 throw DocRefused("That PDF is damaged and couldn't be read.")
             }
@@ -56,6 +58,7 @@ object PhonePdfText : PdfTextReader {
     private fun readNew(fd: ParcelFileDescriptor, maxPages: Int): List<PdfPageText> = PdfRenderer(fd).use { r ->
         tooMany(r.pageCount, maxPages)
         (0 until r.pageCount).map { i ->
+            DocCancel.check()
             r.openPage(i).use { p -> PdfPageText(DocPdf.blocks(contents(p.textContents)), p.width.toFloat(), p.imageContents.size) }
         }
     }
@@ -64,6 +67,7 @@ object PhonePdfText : PdfTextReader {
     private fun readPreV(fd: ParcelFileDescriptor, maxPages: Int): List<PdfPageText> = PdfRendererPreV(fd).use { r ->
         tooMany(r.pageCount, maxPages)
         (0 until r.pageCount).map { i ->
+            DocCancel.check()
             r.openPage(i).use { p -> PdfPageText(DocPdf.blocks(contents(p.textContents)), p.width.toFloat(), p.imageContents.size) }
         }
     }

@@ -65,4 +65,17 @@ class ChatDocsUiTest {
     @Test fun askingTheServerSaysWhatHappensFirst() {
         assertEquals("Sends lease.pdf to your home server to read its text. Nothing is kept there.", askServerText("lease.pdf"))
     }
+
+    @Test fun aServerReplyEndsAsTheKeptRowNotTheStream() {
+        // Review round 1: what streamed is replaced by the row the server
+        // kept after its check (a citation it took out stays out).
+        val live = LiveMessage("assistant", "The deposit is 1,500 [p. 2] [p. 99].", pending = true)
+        live.finishWith(MessageRow(id = 7, role = "assistant", content = "The deposit is 1,500 [p. 2].", model = "m"))
+        assertEquals("The deposit is 1,500 [p. 2].", live.content)
+        assertEquals(7L, live.id)
+        val failed = LiveMessage("assistant", "partial words", pending = true)
+        failed.finishWith(MessageRow(id = 8, role = "assistant", content = "", error = "The model stopped."))
+        assertEquals("partial words", failed.content)
+        assertEquals("The model stopped.", failed.error)
+    }
 }

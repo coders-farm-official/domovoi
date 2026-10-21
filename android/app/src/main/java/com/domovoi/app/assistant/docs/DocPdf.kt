@@ -134,6 +134,7 @@ object DocPdf {
         val garbled = ArrayList<Int>()
         val twoCol = ArrayList<Int>()
         pages.forEachIndexed { i, page ->
+            DocCancel.check()
             val (raw, cols) = columnSort(page.blocks, page.width)
             var lines = raw.map { DocText.nfkc(it).trim() }.filter { it.isNotEmpty() }
             val text = lines.joinToString(" ")

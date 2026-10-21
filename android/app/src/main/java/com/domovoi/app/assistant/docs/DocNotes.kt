@@ -48,6 +48,16 @@ object DocNotes {
             "passages that best match it.",
     )
 
+    /** A document cut at the text cap: what was read. */
+    fun truncatedNote(pagesRead: Int?, words: Int): DocNote = DocNote(
+        "truncated",
+        if (pagesRead != null) {
+            "This document is very large; Domovoi read the first $pagesRead page${if (pagesRead == 1) "" else "s"}."
+        } else {
+            "This document is very large; Domovoi read the first part of it (about ${DocQa.about(words)} words)."
+        },
+    )
+
     const val NO_TEXT_SCANNED = "That PDF is pictures of text (a scan), so there is no text Domovoi can search yet."
     const val NO_TEXT = "That file has no text Domovoi can read."
 
