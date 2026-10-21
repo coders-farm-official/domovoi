@@ -82,7 +82,7 @@ class SettingsModelsTest {
         assertEquals(SettingsSection.VoiceHistory, searchSettings("recordings").first())
         assertEquals(SettingsSection.Rooms, searchSettings("satellite").first())
         assertEquals(SettingsSection.PhonesAndBrowsers, searchSettings("token").first())
-        assertEquals(emptyList<SettingsSection>(), searchSettings("printer"))
+        assertEquals(SettingsSection.Printers, searchSettings("printer").first())
         assertEquals(emptyList<SettingsSection>(), searchSettings("  "))
     }
 

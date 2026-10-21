@@ -3606,7 +3606,7 @@ case_before_the_first_release_installs_follow_main() {
   check "HEAD is main's" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$FIXTURE_B"
   check "on main, tracking origin/main" tracks main
   check "says why" said "has no stable branch yet (no release has been published): installing main"
-  check "and how to move later" said "switch to stable in Settings > Version after the first release"
+  check "and how to move later" said "switch to stable in Settings > About & updates after the first release"
   check "the checkout keeps what was asked for" eq "$(git -C "$CHECKOUT" config domovoi.intendedChannel)" stable
   check "the channel pin written (main is one)" has_line "$ROOT/etc/default/domovoi-update" "$PIN_LINE"
   end_case
