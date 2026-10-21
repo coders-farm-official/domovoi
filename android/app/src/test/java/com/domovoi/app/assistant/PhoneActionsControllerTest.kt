@@ -29,13 +29,22 @@ class FakePlayer : PhonePlayer {
     @Volatile var state = PlayerSnapshot(emptyList(), 0, 0.0, playing = false, sleepSec = null)
     @Volatile var casting: String? = null
     val calls = CopyOnWriteArrayList<String>()
+    /** Like ExoPlayer: right after a skip or a restart it reports
+     *  playing=false while it seeks, and plays this long after. */
+    @Volatile var seekMs: Long = 0
+
+    private fun seeking() {
+        if (seekMs <= 0 || !state.playing) return
+        state = state.copy(playing = false)
+        Thread { Thread.sleep(seekMs); state = state.copy(playing = true) }.start()
+    }
 
     override suspend fun snapshot() = state
     override suspend fun castingTo() = casting
     override suspend fun pause() { calls += "pause"; state = state.copy(playing = false) }
     override suspend fun resume() { calls += "resume"; state = state.copy(playing = true) }
-    override suspend fun next() { calls += "next"; state = state.copy(index = (state.index + 1).coerceAtMost(state.queue.lastIndex), positionSec = 0.0) }
-    override suspend fun previous() { calls += "previous"; state = state.copy(index = (state.index - 1).coerceAtLeast(0), positionSec = 0.0) }
+    override suspend fun next() { calls += "next"; state = state.copy(index = (state.index + 1).coerceAtMost(state.queue.lastIndex), positionSec = 0.0); seeking() }
+    override suspend fun previous() { calls += "previous"; state = state.copy(index = (state.index - 1).coerceAtLeast(0), positionSec = 0.0); seeking() }
     override suspend fun stop() { calls += "stop"; state = PlayerSnapshot(emptyList(), 0, 0.0, false, state.sleepSec) }
     override suspend fun sleep(minutes: Int) { calls += "sleep:$minutes"; state = state.copy(sleepSec = minutes * 60) }
     override suspend fun cancelSleep() { calls += "cancelSleep"; state = state.copy(sleepSec = null) }
@@ -779,5 +788,29 @@ class PhoneActionsControllerTest {
         // The library still answers real requests, a genre among them.
         assertEquals("Playing \"Blue in Green\".", c.ask("play some jazz").text)
         assertEquals("action_play_music", c.ask("play home").fastPath)
+    }
+
+    // ── Batch 23 emulator gate: "go back", then "undo" ─────────────────
+
+    @Test fun undoWorksWhenThePlayerWasStillSeekingRightAfterTheAction() {
+        playing("Glass Harbor", "Paper Moon", "Blue Train", index = 1, pos = 42.0)
+        player.seekMs = 150
+        val c = controller()
+        for (said in listOf("go back", "next", "skip")) {
+            val before = player.state
+            c.ask(said)
+            Thread.sleep(400) // it plays again a moment later
+            assertTrue(said, player.state.playing)
+            val r = c.ask("undo")
+            assertTrue("$said: ${r.text}", r.text.startsWith("Undone"))
+            assertEquals(said, before, player.state)
+        }
+        // A pause undone after it is still paused, and a person's own resume
+        // is still refused.
+        c.ask("pause")
+        assertTrue(c.ask("undo").text.startsWith("Undone"))
+        c.ask("pause")
+        player.state = player.state.copy(playing = true)
+        assertEquals(ActionTexts.UNDO_CHANGED, c.ask("undo").text)
     }
 }
