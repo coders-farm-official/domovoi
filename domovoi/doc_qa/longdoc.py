@@ -358,6 +358,20 @@ def clean_note(reply: str, given: Sequence[qa.Given]) -> str:
     return "\n".join(t for t, _ in kept).strip()
 
 
+def drop_invented_lines(reply: str, given: Sequence[qa.Given]) -> str:
+    """The summary's lines less those whose every label names no passage
+    (a point the document doesn't hold: "Free parking [p. 999]"). Lines
+    with no label at all stay; the summary's own check comes next."""
+    out = []
+    for line in (reply or "").splitlines():
+        if line.strip():
+            checked = qa.check_reply(line, given)
+            if checked.dropped and not checked.cited:
+                continue
+        out.append(line)
+    return "\n".join(out)
+
+
 # ─── What the person reads ───────────────────────────────────────────────
 def stopped_text(phrase: str, notes: Sequence[str]) -> str:
     """The reply to a stopped summary: what was read so far, no model call."""

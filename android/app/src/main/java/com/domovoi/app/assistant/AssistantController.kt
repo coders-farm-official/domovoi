@@ -1393,7 +1393,8 @@ class AssistantController(
                 job = recordStep(job, backend, llm, Persona.SYSTEM_PROMPT.length + rp.rules.length + rp.user.length, 0, (nanos() - t0) / 1_000_000, part = false)
             }
             partStartedMs = null
-            val checked = DocQa.checkReply(reply, DocLong.allGiven(qaDocs), job.question, names)
+            val all = DocLong.allGiven(qaDocs)
+            val checked = DocQa.checkReply(DocLong.dropInventedLines(reply, all), all, job.question, names)
             onDelta(checked.content)
             val notes = checked.notes + if (job.total > 1) listOf(DocLong.partsNote(job.total)) else emptyList()
             val done = conv.copy(job = null)

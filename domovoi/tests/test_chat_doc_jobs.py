@@ -262,6 +262,7 @@ def test_a_long_summary_is_read_in_parts_then_combined(model):
     assert "p. 99" not in reduce_in and "pool on the roof" not in reduce_in
     done = events[-1][1]
     assert done["role"] == "assistant" and "[p. 99]" not in done["content"] and "[p. 5]" in done["content"]
+    assert "Free parking" not in done["content"]          # a point with only a made-up page goes
     assert done["doc"]["mode"] == "summary" and done["doc"]["found"]
     assert [s["label"] for s in done["doc"]["sources"]] == ["p. 1", "p. 5"]
     assert all(s["cited"] and s["token"] == tok for s in done["doc"]["sources"])

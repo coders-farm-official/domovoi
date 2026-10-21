@@ -118,6 +118,19 @@ class DocLongSharedCasesTest {
         }
     }
 
+    @Test fun dropInventedLines() {
+        val lease = listOf(
+            DocPart("p. 1", "The monthly rent is \$1,200, due on the first day of each month.", page = 1),
+            DocPart("p. 2", "The security deposit is \$1,500. It is returned within 30 days.", page = 2),
+            DocPart("p. 3", "Pets are not allowed without written permission from the landlord.", page = 3),
+        )
+        val all = DocLong.allGiven(listOf(QaDoc("lease.pdf", lease)))
+        for (c in cases["drop_invented_lines"]!!.jsonArray) {
+            val o = c.jsonObject
+            assertEquals(o.s("out"), DocLong.dropInventedLines(o.s("reply")!!, all))
+        }
+    }
+
     @Test fun stoppedTextAndNotes() {
         for (c in cases["stopped_text"]!!.jsonArray) {
             val o = c.jsonObject

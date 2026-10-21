@@ -136,6 +136,11 @@ def build() -> dict:
          "- Deposit [page 2] and pets (p. 3)",
          "Hello. I am Domovoi, here are the notes.\n- Rent is due on the first [p. 1]\n**Notes**"]
     ]
+    out["drop_invented_lines"] = [
+        {"reply": r, "out": longdoc.drop_invented_lines(r, longdoc.all_given(given_docs))} for r in
+        ["- Rent [p. 1]\n- Free parking [p. 999]\n- A plain line\n\n- Pets [p. 3; p. 77]",
+         "- Nothing real [p. 50]"]
+    ]
     out["constants"] = {
         "MAP_CHUNK_TOKENS": longdoc.MAP_CHUNK_TOKENS, "PHONE_MAP_CHUNK_TOKENS": longdoc.PHONE_MAP_CHUNK_TOKENS,
         "PHONE_GPU_MAP_CHUNK_TOKENS": longdoc.PHONE_GPU_MAP_CHUNK_TOKENS,

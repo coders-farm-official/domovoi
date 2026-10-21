@@ -273,6 +273,15 @@ object DocLong {
     fun benchSpeed(gpu: Boolean): DocSpeed =
         if (gpu) DocSpeed(1100.0, 20.0, 4.44) else DocSpeed(156.0, 12.0, 4.44)
 
+    /** The summary's lines less those whose every label names no passage;
+     *  lines with no label stay (the server's `drop_invented_lines`). */
+    fun dropInventedLines(reply: String, given: List<Given>): String =
+        reply.lines().filter { line ->
+            if (line.isBlank()) return@filter true
+            val c = DocQa.checkReply(line, given)
+            !(c.dropped.isNotEmpty() && c.cited.isEmpty())
+        }.joinToString("\n")
+
     // ── What the person reads ───────────────────────────────────────────
 
     fun stoppedText(phrase: String, notes: List<String>): String {

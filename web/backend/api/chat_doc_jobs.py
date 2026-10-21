@@ -480,7 +480,8 @@ async def _run(job: Job) -> None:
             job.current = job.total - 1
             job.publish()
             reply = await _reduce(job)
-        checked = qa.check_reply(reply, longdoc.all_given(job.docs), job.question, job.names)
+        given = longdoc.all_given(job.docs)
+        checked = qa.check_reply(longdoc.drop_invented_lines(reply, given), given, job.question, job.names)
         job.state = "done"
         notes = [longdoc.parts_note(job.total)] if job.total > 1 else []
         await _finish(job, checked.content, checked, notes)
