@@ -578,6 +578,13 @@ one starts where you chatted last.
 - In [Files](#files), the question mark on a document starts a chat about
   it: a file on this phone in a phone chat, a file in the home server's
   Documents in a home-server chat.
+- **Summarize a long document:** it is read in parts, with "reading part 3
+  of 8 · about 1 min left" and **stop**. Stop keeps what was read;
+  **carry on** reads the rest. Leave Chat and it pauses at the end of the
+  part, then carries on when you come back.
+- **use home server** appears only when your home server is measured to be
+  faster than this phone for that document. It sends the file to be read
+  there; nothing is kept there.
 
 [More detail](docs/FAQ.md#can-i-send-pictures-in-chat)
 
@@ -737,6 +744,13 @@ document doesn't say, Domovoi answers "I couldn't find that in the
 document" instead of guessing. In [Files](#files) → Documents, **Ask** on
 a file starts a chat about it.
 
+**Summarize a long document:** ask for a summary and Domovoi reads it in
+parts, then combines them. The reply's place shows "reading part 3 of 8 ·
+about 1 min left" (the time comes from how fast your server has been) with
+**stop**. Stop keeps what was read ("Summary of pages 1-9 (stopped)"), and
+**carry on** reads the rest. You can leave the page: the summary is there
+when you come back. A question asked by voice while it reads goes first.
+
 **App:** the picture button is **attach image**, and the app also takes
 HEIC photos. See [Chat and the chat mic](#node:phone-chat).
 
@@ -748,8 +762,8 @@ HEIC photos. See [Chat and the chat mic](#node:phone-chat).
   which converts it.
 - An old .doc or .rtf file: save it as .docx or PDF, then attach it again.
 - "pictures of text (scanned)": scanned pages aren't searched yet.
-- A summary of a long document: not yet. Ask about something specific in
-  it instead.
+- "Points that span parts may be missed": a long summary is made part by
+  part. Ask about the specific thing to have it found wherever it is.
 
 [More detail](docs/FAQ.md#can-i-send-pictures-in-chat)
 
