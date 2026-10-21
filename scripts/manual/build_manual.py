@@ -139,7 +139,7 @@ PIECES: dict[str, tuple] = {
     # Chat, files and calendar
     "Chat": ("chat", "type to Domovoi, pictures and documents too", ["chat", "text", "pictures", "vision", "images", "document", "pdf", "word", "ask about"], {}),
     "Files and photos": ("files", "every library, one place", ["files", "upload", "photos", "pictures", "move", "delete", "usb drive"], {}),
-    "Documents, sheets and drawings": ("documents", "write and edit on the server", ["document", "spreadsheet", "sheet", "drawing", "text file", "markdown", "xlsx"], {}),
+    "Documents, sheets and drawings": ("documents", "write, edit, read aloud", ["document", "spreadsheet", "sheet", "drawing", "text file", "markdown", "xlsx", "read aloud", "read me", "take a letter", "dictate", "letter"], {}),
     "Calendar": ("calendar", "the household's events", ["calendar", "event", "appointment", "what's on"], {}),
     "Printers and scanners": ("printers", "print and scan, by voice too", ["print", "printer", "scan", "scanner", "ink", "toner", "paper", "airprint", "mopria", "test page"], {}),
     # People and privacy
@@ -267,6 +267,10 @@ PHRASES: dict[str, tuple] = {
     "set up the printer": ("printing", "fast", {}),
     "scan this to Documents": ("printing", "fast", {}),
     "stop printing": ("printing", "fast", {}),
+    "read me the lease": ("documents", "fast", {}),
+    "read it back": ("documents", "fast", {}),
+    # Reading needs no model; writing the letter up does.
+    "take a letter to the landlord": ("documents", "fast", {"needs": "ai"}),
 }
 
 # The wake word: what {wake} and [live slot: wake-word] say. One place, so
@@ -470,6 +474,8 @@ def phrase_claim(text: str) -> dict:
     needs = phrase_needs(handler, path)
     if needs:
         claim["needs"] = needs
+    if extras.get("needs"):
+        claim["needs"] = extras["needs"]
     for k in ("try", "plugin", "pending"):
         if extras.get(k):
             claim[k] = extras[k]

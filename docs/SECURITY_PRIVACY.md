@@ -404,6 +404,22 @@ device tier already admits. Read-only — nothing is added, moved or deleted
 by voice — and every voice reads the one household calendar (events carry
 no owner).
 
+**Documents by voice (2026-10-21, documents plan D7).** "Read me the
+lease" reads a file from the household's Documents folder aloud in the
+room that asked: the same tier that can already open everything there
+(`require_device_read`; a satellite's turn is a household device, and a
+guest has neither a satellite nor Documents). The lookup is the voice
+printer's (`domovoi/printing/lookup.py`): inside the folder only, links
+that lead out skipped, no hidden folders, the Files tab's secret-name
+filter. Never a phone's own files, never another room. "Take a letter"
+writes one new file into `Documents/From Chat/` (through the same writer
+as the chat's Save, which refuses a `From Chat` link that leads elsewhere)
+and a chat holding the dictation; nothing is sent anywhere. Like "scan
+this to Documents" by voice, a voice turn names no device, so Settings →
+Devices' per-device file block (keyed on a device's id or name) has
+nothing to match; a phone's chat mic is pointed at its own chat instead.
+The room's "saved" line names the title, never the letter's words.
+
 `GET /api/music/now-playing` stays open — the kiosk reads it unpaired —
 but its `added_by`, the registered name of the device that queued what a
 room is playing ("Kamron's Pixel"), is named only to a household

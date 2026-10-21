@@ -176,10 +176,15 @@ class DocumentsHandler(Handler):
     requires_network = "no"
     confirmation_kinds = (DOC_PICK, DOC_LENGTH, DOC_MORE, DOC_PAUSED, LETTER_AUTHOR, LETTER_DICTATION)
     choice_kinds = (DOC_PICK, DOC_LENGTH, DOC_MORE, DOC_PAUSED, LETTER_AUTHOR, LETTER_DICTATION)
-    example_phrases = (
-        "read me the lease",
-        "take a letter to the landlord",
-    )
+    @property
+    def example_phrases(self) -> tuple[str, ...]:  # type: ignore[override]
+        # The manual, Home and "what can you do" never suggest a letter
+        # while AI features are off: it would only say they're off.
+        from domovoi import ai_features
+
+        if ai_features.enabled():
+            return ("read me the lease", "take a letter to the landlord")
+        return ("read me the lease",)
 
     tool_schema = {
         "name": "documents",
