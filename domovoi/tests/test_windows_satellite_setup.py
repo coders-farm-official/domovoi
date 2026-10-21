@@ -419,15 +419,18 @@ def test_the_worker_s_ed25519_against_the_vector_suite(tmp_path):
     assert wrong == []
 
 
-def test_the_python_twin_agrees_except_where_the_worker_is_stricter():
-    """satellite/_ed25519.py on the same vectors: the same verdict, but for
-    the small-order key it still accepts (the worker refuses it)."""
+def test_the_python_verifiers_agree_with_the_worker_on_every_vector():
+    """satellite/_ed25519.py, its domovoi twin, and both identity layers'
+    verify (whichever backend they use): the worker's verdict on every
+    vector, small-order keys and R refused too."""
+    from domovoi import _ed25519 as core_ed25519, server_identity as core_identity
+
     cases = json.loads(VECTORS.read_text(encoding="utf-8"))["vectors"]
     for c in cases:
-        got = _ed25519.verify(bytes.fromhex(c["pub"]), bytes.fromhex(c["msg"]), bytes.fromhex(c["sig"]))
-        assert got == c["python_twin"], c["name"]
-        if not c.get("small_order"):
-            assert got == c["expect"], c["name"]
+        args = (bytes.fromhex(c["pub"]), bytes.fromhex(c["msg"]), bytes.fromhex(c["sig"]))
+        for name, fn in (("satellite twin", _ed25519.verify), ("domovoi twin", core_ed25519.verify),
+                         ("satellite identity", server_identity.verify), ("core identity", core_identity.verify)):
+            assert fn(*args) == c["expect"], (name, c["name"])
 
 
 @windows_only
