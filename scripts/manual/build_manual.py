@@ -123,7 +123,7 @@ PIECES: dict[str, tuple] = {
     # Your phone
     "Get the app and connect": ("connect", "from your own server", ["install", "apk", "connect", "pair", "household token", "server", "qr"], {}),
     "Music on the phone": ("phone-music", "here or in a room, saved offline", ["offline", "download", "save to device", "player", "your device", "add folder"], {}),
-    "Chat and the chat mic": ("phone-chat", "type, talk, send photos", ["chat mic", "talk", "push to talk", "photo", "heic", "picture"], {}),
+    "Chat and the chat mic": ("phone-chat", "type, talk, send photos and documents", ["chat mic", "talk", "push to talk", "photo", "heic", "picture", "document", "pdf"], {}),
     "The assistant": ("assistant", "no server needed", ["assistant", "offline", "no server", "airplane"], {}),
     "This phone as a room": ("phone-as-room", "room mode, on this phone", ["room mode", "this phone"], {"alias_of": "phone-room"}),
     "App settings and updates": ("app-settings", "bar, voice, new versions", ["settings", "phone bar", "update", "new version", "privacy", "about"], {}),
@@ -136,7 +136,7 @@ PIECES: dict[str, tuple] = {
     "News": ("news", "briefings and topics", ["news", "headlines", "briefing", "topics", "feeds"], {}),
     "Radio": ("radio", "stations you star", ["radio", "station", "fm", "stream"], {"plugin": "radio"}),
     # Chat, files and calendar
-    "Chat": ("chat", "type to Domovoi, pictures too", ["chat", "text", "pictures", "vision", "images"], {}),
+    "Chat": ("chat", "type to Domovoi, pictures and documents too", ["chat", "text", "pictures", "vision", "images", "document", "pdf", "word", "ask about"], {}),
     "Files and photos": ("files", "every library, one place", ["files", "upload", "photos", "pictures", "move", "delete", "usb drive"], {}),
     "Documents, sheets and drawings": ("documents", "write and edit on the server", ["document", "spreadsheet", "sheet", "drawing", "text file", "markdown", "xlsx"], {}),
     "Calendar": ("calendar", "the household's events", ["calendar", "event", "appointment", "what's on"], {}),
@@ -153,6 +153,7 @@ PIECES: dict[str, tuple] = {
     "Backups and moving": ("backups", "what to keep safe", ["backup", "restore", "move", "new computer", "reinstall"], {}),
     "Plugins": ("plugins", "add features", ["plugin", "install", "add feature", "github", "zip"], {"live": "plugins"}),
     "Models": ("models", "speech, answers, pictures", ["models", "vision", "whisper", "ollama", "speech-to-text"], {}),
+    "Asking Domovoi for help": ("help-desk", "ask it, show it, report it", ["help", "how do i", "ask domovoi", "screenshot", "report a problem", "diagnostics", "send the steps", "question mark"], {}),
     "Troubleshooting": ("troubleshooting", "the common fixes", ["problem", "not working", "help", "fix", "error", "broken"], {}),
 }
 
@@ -226,6 +227,14 @@ PHRASES: dict[str, tuple] = {
     "forget that I parked on level 3": ("memory", "fast", {}),
     "what can you do": ("help", "fast", {}),
     "what can I say": ("help", "fast", {}),
+    "how do I add a room": ("help_desk", "fast", {}),
+    "how's the wifi": ("wifi", "fast", {}),
+    "fix the wifi": ("wifi", "fast", {}),
+    "how's domovoi doing": ("homelab", "fast", {}),
+    "how many songs do I have": ("library", "fast", {}),
+    "what did I add this week": ("library", "fast", {}),
+    "let's chat": ("chat_mode", "fast", {}),
+    "how do I change the wake word": ("help_desk", "fast", {}),
     "say that again": ("repeat", "fast", {}),
     "never mind": ("dismiss", "fast", {}),
     "what voices are there": ("voice", "fast", {}),

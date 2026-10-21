@@ -4,6 +4,102 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-21 — Ask about a document in Chat
+
+Core and dashboard update with one migration, **V036** (two columns on
+`chat_messages`; Flyway applies it on update), and a new dependency,
+`pypdfium2` (Apache-2.0 or BSD-3-Clause; reads a PDF's text).
+
+* **Chat reads documents.** The paperclip takes a PDF, Word (.docx),
+  OpenDocument (.odt), Excel (.xlsx), CSV, text or markdown file (up to
+  100 MB) in a home-server chat on the dashboard and in the app, and in a
+  chat on the phone. Ask what it says: the answer names the pages or
+  sections it came from, and a press on one shows the passage (a PDF opens
+  at that page). When the document doesn't say, the answer is "I couldn't
+  find that in the document" rather than a guess. Files → Documents (and
+  the app's Files) gets "Ask about this document".
+* **Very large files:** about the first 4 million characters (roughly
+  1,000 pages) are read, and the attachment says how far it got.
+* **What it doesn't do yet:** scanned pages (pictures of text) are listed,
+  not read; a summary of a long document says it can't yet (short ones
+  work); old .doc and .rtf files are refused with what to save them as.
+* **Phones:** a phone chat reads the document on the phone and keeps it
+  there. A PDF needs Android 15, or Android 12-14 with the PDF update;
+  other phones offer "ask the home server", which reads the text and keeps
+  nothing.
+* **With AI chat and questions turned off,** the server takes no document
+  for a chat (the dashboard and the app don't offer it).
+* Each document is read in a separate, time-limited process with capped
+  memory; zip bombs, XML entity tricks and files that aren't what their
+  name says are refused with a sentence saying why.
+
+## 2026-10-21 — Domovoi as its own help desk
+
+Core, dashboard and app. **Run Flyway** (V035: `devices.owner_person_id`,
+`help_deliveries`); without it help still answers, and voice help says no
+phone is marked as yours.
+
+* **Ask Domovoi about Domovoi.** Chat and voice answer questions about
+  Domovoi itself from its own help: the user manual, `docs/FAQ.md`,
+  `docs/TROUBLESHOOTING.md`, a help entry for every dashboard error code
+  and the help files of installed plugins. Answers come only from what is
+  found, name the section and link to it; when nothing covers the
+  question the answer is "The manual doesn't cover that." and no model is
+  asked. Live facts (version, rooms, the internet and AI answers, plugins
+  and their versions) come from the server, exact, and "why is the kitchen
+  offline?" / "why did the update fail?" read the system's own records:
+  Home's attention checks, the rooms' health and self-checks, the update
+  record, the container guard. Redacted: no addresses, tokens or codes;
+  update details only for an admin.
+* **On the dashboard:** a **?** in the top bar of every page opens help
+  for that page (a search of the help, then **ask Domovoi**, which starts
+  a chat titled "Help: <page>"), and error messages have **ask Domovoi
+  about this**, prefilled with the error's code. Chat takes a pasted
+  screenshot as well as an attached one; in a help chat the vision model
+  reads it on the server. **report a problem** builds a redacted summary
+  to copy or save and post yourself; nothing is sent.
+* **With AI features off** help is a plain search of the manual and the
+  docs, and no screenshot is read.
+* **Voice "how do I…"** ("how do I add a room?") gives a short answer from
+  the manual, then asks "Want me to send the steps to your phone?". Yes
+  sends them to the asker only: the phones marked "This phone belongs to"
+  them (the app's Settings → Connection), as a chat "Help: …" and a
+  notification. A voice Domovoi doesn't know is asked "Who should I send it
+  to?"; no answer sends nothing. It never sends to every phone. A how-to
+  question the help doesn't hold ("how do I make pancakes") is answered
+  as before.
+* **App:** it tells the server whose phone it is when it registers, posts
+  the help notification for its owner, and a chat on the phone answers
+  Domovoi questions from the app's own copy of the manual, offline.
+* **Plugins (SDK 1.8.0):** lookup sources (`domovoi.lookup`:
+  `search(query)` / `fetch(id)` and a class of local, api or web;
+  `ctx.add_lookup_source`; the core orders them by class, and local ones
+  need no permission), and an optional `[plugin] help = "HELP.md"`, indexed
+  with the manual (required for Coders Farm's own plugins; a core before
+  1.8 ignores it). The bundled radio plugin has one (radio 1.4.0).
+* **API:** `GET /api/help/search` (open), `GET /api/help/facts`, `GET
+  /api/help/checks`, `GET /api/help/deliveries` (device read), `POST
+  /api/help/report` (device); `owner_person_id` on `POST
+  /api/devices/register`; the `help_deliveries` socket channel; a help
+  chat reply's `stats.help`.
+
+## 2026-10-21 — Chat history and titles
+
+* **Chats name themselves, and can be renamed, pinned, archived, searched.**
+  A chat is titled by its first five words at once; after the first reply
+  the model writes a short title in the background (the phone's model for
+  phone chats, the server's chat model for home-server chats), never over a
+  name someone gave it, and never while the household's AI features are
+  off. The app's Chat opens on its history (pinned first, then by last use)
+  with "Message Domovoi…" at the bottom; a long press renames, pins (kept
+  on this phone), archives, shares or deletes, and a swipe archives. Search
+  finds both kinds of chat; copy and share are on every reply, and "try
+  again" on the last reply to a typed question; a quiet line marks where older messages fall out of what the model
+  can see; "export all phone chats" (the phone model's settings) saves
+  Markdown plus JSON where you pick. The dashboard's chat gets search,
+  rename and the archived list. The update applies migration **V034**
+  (chat titles) by itself; threads from before keep their titles.
+
 ## 2026-10-21 — Printing and scanning
 
 Domovoi prints to network printers and scans from network scanners, with
@@ -37,8 +133,7 @@ printers that need a maker's driver are not supported, on any host.
 What an operator should know:
 
 * The update applies migration **V033** (printers, the job log, the
-  limits) by itself. For whoever merges: V033 must land before
-  `wf/chat-history`'s migration (renumber that one if it was cut as V033).
+  limits) by itself.
 * Two new dependencies, both permissive: **pypdfium2** and **ReportLab**
   (in both locks). A Linux server installed from the lock picks them up on
   its next update.
@@ -80,7 +175,8 @@ keeps AI on, exactly as before.
   language model: voice commands keep working on their usual phrases, and
   speech recognition, the voices and the wake word stay. A question gets
   "I can't answer that one — I'm set up for home commands. Say 'what can
-  you do' to hear them." Chat is hidden on the dashboard, and the app keeps only this phone's own chats where it can run its model
+  you do' to hear them." Chat is hidden on the dashboard, and the app keeps
+  only this phone's own chats where it can run its model
   (`features.ai` in `GET /api/capabilities`; a server without the key has
   AI), and a send gets 409 `X-Domovoi-Refusal: ai-off`. The news briefing
   summary, memory suggestions, the warm-up, "are you sure?" and voice chat

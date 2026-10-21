@@ -160,9 +160,14 @@ def dry_run_winner(transcript: str, handlers: list[Handler]) -> str | None:
     """Replicate the router's normalization + band-ordered fast-path scan
     WITHOUT dispatching. ``handlers`` must be band-sorted (the live
     registry list is)."""
-    from domovoi.router import first_fast_path, normalize_transcript, strip_leading_filler
+    from domovoi.router import (
+        first_fast_path,
+        normalize_transcript,
+        strip_leading_filler,
+        strip_request_preamble,
+    )
 
-    t = strip_leading_filler(normalize_transcript(transcript))
+    t = strip_request_preamble(strip_leading_filler(normalize_transcript(transcript)), handlers)
     hit = first_fast_path(t, handlers)
     return hit[0].name if hit is not None else None
 

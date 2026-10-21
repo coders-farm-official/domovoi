@@ -63,6 +63,8 @@ class AssistantControllerTest {
         memoryGib: Double = 7.6,
         models: List<CatalogModel> = listOf(llm),
         unloadAfterMs: Long = 60_000,
+        titleDelayMs: Long = 0,
+        helpIndex: HelpIndex? = null,
     ): AssistantController = AssistantController(
         memory = PhoneMemory((memoryGib * (1L shl 30)).toLong(), lowRamDevice = false),
         store = store,
@@ -73,9 +75,11 @@ class AssistantControllerTest {
         scope = scope,
         beforeLoad = { beforeLoads++ },
         unloadAfterMs = unloadAfterMs,
+        titleDelayMs = titleDelayMs,
         models = models,
         clock = { nowMs ?: System.currentTimeMillis() },
         clockStyle = { style },
+        helpIndex = { helpIndex },
     ).also { c -> scope.launch { c.messages.collect { said += it } } }
 
     private fun install(m: CatalogModel = llm) {
@@ -366,6 +370,50 @@ class AssistantControllerTest {
         assertTrue(engines.isEmpty())
     }
 
+    // ── Help from the manual on the phone (LocalHelp) ───────────────────
+
+    @Test fun aHelpQuestionTheManualAnswersGivesTheModelPassagesAndNamesTheSources() {
+        install()
+        val index = LocalHelpTest.reposManual()
+        val c = controller(helpIndex = index)
+        until("installed") { c.ui().installed }
+        c.send("How do I add a room?")
+        until("replied") { !c.ui().replying && c.ui().conversation.messages.size == 2 }
+        val engine = engines.single()
+        val asked = engine.replies.last().last()
+        assertTrue(asked.fromUser)
+        assertTrue(asked.text, asked.text.startsWith("[From the Domovoi manual. Answer only from these; if they don't answer it, say exactly: The manual doesn't cover that.]"))
+        assertTrue(asked.text, asked.text.endsWith("Question: How do I add a room?"))
+        assertEquals(Persona.SYSTEM_PROMPT, engine.systems.last())
+        val reply = c.ui().conversation.messages.last().text
+        assertTrue(reply, reply.startsWith("Hello there.\n\nFrom: "))
+        assertTrue(reply, reply.contains("Rooms and devices → "))
+        // What is kept is the question as asked, not the manual's block.
+        assertEquals("How do I add a room?", c.ui().conversation.messages.first().text)
+    }
+
+    @Test fun aHelpQuestionTheManualDoesntCoverIsSaidSoWithoutTheModel() {
+        install()
+        val c = controller(helpIndex = LocalHelpTest.reposManual())
+        until("installed") { c.ui().installed }
+        c.send("How do I paint the dashboard purple?")
+        until("answered") { !c.ui().replying && c.ui().conversation.messages.size == 2 }
+        assertEquals(LocalHelp.NOT_COVERED, c.ui().conversation.messages.last().text)
+        assertTrue("no model was loaded for it", engines.isEmpty())
+
+        // About the screen: the note that this phone can't read screenshots.
+        c.send("Why is there a purple giraffe on my screen?")
+        until("answered again") { !c.ui().replying && c.ui().conversation.messages.size == 4 }
+        assertEquals("${LocalHelp.NOT_COVERED}\n\n${LocalHelp.SCREENSHOT_NOTE}", c.ui().conversation.messages.last().text)
+        assertTrue(engines.isEmpty())
+
+        // Not about Domovoi: the model, as ever, with nothing added.
+        c.send("How do I bake bread?")
+        until("the model answered") { !c.ui().replying && c.ui().conversation.messages.size == 6 }
+        assertEquals("Hello there.", c.ui().conversation.messages.last().text)
+        assertEquals("How do I bake bread?", engines.single().replies.last().last().text)
+    }
+
     @Test fun everyModelTurnIsToldThePhoneClockAsItIsThen() {
         nowMs = OCT_15_1542
         install()
@@ -456,6 +504,178 @@ class AssistantControllerTest {
         until("the toast") { "conversations cleared" in said }
     }
 
+    // ── History and titles (assistant plan part 7) ──────────────────────
+
+    @Test fun theModelTitlesAChatOnceAfterItsFirstReply() {
+        install()
+        configure = { it.title = "\"Sky Colour Question.\"" }
+        val c = controller()
+        until("installed") { c.ui().installed }
+        c.send("Why is the sky blue at noon?")
+        until("replied") { !c.ui().replying && c.ui().conversation.messages.size == 2 }
+        val id = c.ui().conversation.id
+        // Right away, the first five words; then the model's title, cleaned.
+        until("the model's title") { c.ui().history.singleOrNull()?.title == "Sky Colour Question" }
+        val engine = engines.single()
+        assertEquals(listOf(ChatTitles.SYSTEM to ChatTitles.prompt("Why is the sky blue at noon?", "Hello there.")), engine.titleCalls.toList())
+        until("saved") { conversations.load(id)?.titled == true }
+        assertEquals("Sky Colour Question", c.ui().conversation.title)
+        // Once: the next reply doesn't ask again, and the kept conversation
+        // was never what the title went through.
+        c.send("And at sunset?")
+        until("replied again") { !c.ui().replying && c.ui().conversation.messages.size == 4 }
+        Thread.sleep(200)
+        assertEquals(1, engine.titleCalls.size)
+        assertEquals(2, engine.replies.size)
+    }
+
+    @Test fun theNextQuestionStopsTheTitleAndItIsWrittenAfterThatReply() {
+        install()
+        val gate = CompletableDeferred<Unit>()
+        configure = { it.title = "Dinner Plans"; it.titleGate = gate }
+        val c = controller()
+        until("installed") { c.ui().installed }
+        c.send("plan a dinner for six")
+        until("the title asked") { engines.singleOrNull()?.titleCalls?.size == 1 }
+        val engine = engines.single()
+        c.send("and a dessert")
+        until("replied again") { !c.ui().replying && c.ui().conversation.messages.size == 4 }
+        assertEquals("the title stopped before the reply", 1, engine.titleCancels)
+        assertEquals("the first words meanwhile", "plan a dinner for six", c.ui().history.single().title)
+        // After that reply it runs again; this time it is let through.
+        until("asked again") { engine.titleCalls.size == 2 }
+        gate.complete(Unit)
+        until("titled") { c.ui().history.single().title == "Dinner Plans" }
+    }
+
+    @Test fun aNameThePersonGaveIsNeverWrittenOver() {
+        install()
+        val gate = CompletableDeferred<Unit>()
+        configure = { it.title = "Model Title"; it.titleGate = gate }
+        val c = controller()
+        until("installed") { c.ui().installed }
+        c.send("plan a dinner")
+        until("the title asked") { engines.singleOrNull()?.titleCalls?.size == 1 }
+        val id = c.ui().conversation.id
+        c.rename(id, "  Our dinner  ")
+        until("renamed") { c.ui().history.single().title == "Our dinner" }
+        gate.complete(Unit)
+        Thread.sleep(200)
+        assertEquals("Our dinner", c.ui().history.single().title)
+        assertTrue(c.ui().history.single().titleByUser)
+        c.send("more")
+        until("replied") { !c.ui().replying && c.ui().conversation.messages.size == 4 }
+        Thread.sleep(200)
+        assertEquals("Our dinner", conversations.load(id)!!.title)
+        assertEquals(1, engines.single().titleCalls.size)
+        // A blank name changes nothing.
+        c.rename(id, "   ")
+        Thread.sleep(100)
+        assertEquals("Our dinner", c.ui().history.single().title)
+    }
+
+    @Test fun anEngineWithNoTitlesKeepsTheFirstWords() {
+        install()
+        val c = controller()
+        until("installed") { c.ui().installed }
+        c.send("one two three four five six seven")
+        until("replied") { !c.ui().replying && c.ui().conversation.messages.size == 2 }
+        Thread.sleep(200)
+        assertEquals("one two three four five…", c.ui().history.single().title)
+    }
+
+    @Test fun archiveSearchAndTryAgain() {
+        install()
+        val c = controller()
+        until("installed") { c.ui().installed }
+        c.send("lentil soup ideas")
+        until("replied") { !c.ui().replying && c.ui().conversation.messages.size == 2 }
+        val id = c.ui().conversation.id
+        c.setArchived(id, true)
+        until("archived") { c.ui().history.single().archived }
+        until("the toast") { "archived" in said }
+        assertTrue(conversations.load(id)!!.archived)
+        assertEquals(listOf(id), kotlinx.coroutines.runBlocking { c.search("LENTIL") }.map { it.summary.id })
+        c.setArchived(id, false)
+        until("back") { !c.ui().history.single().archived }
+
+        // Try again: the last reply goes, the question is answered again.
+        assertTrue(c.canRetry())
+        configure = {}
+        engines.single().script = listOf("A better", " answer.")
+        c.retry()
+        until("answered again") { !c.ui().replying && c.ui().conversation.messages.lastOrNull()?.text == "A better answer." }
+        assertEquals(listOf("lentil soup ideas", "A better answer."), c.ui().conversation.messages.map { it.text })
+        assertEquals(listOf(ChatTurn(true, "lentil soup ideas")), engines.single().replies.last())
+        until("saved") { conversations.load(id)?.messages?.size == 2 }
+        assertTrue(kotlinx.coroutines.runBlocking { c.transcript(id) }!!.contains("Domovoi: A better answer."))
+    }
+
+    @Test fun aRetryThatFailsOrIsStoppedKeepsTheGoodAnswer() {
+        install()
+        val c = controller()
+        until("installed") { c.ui().installed }
+        c.send("tell me a joke")
+        until("replied") { !c.ui().replying && c.ui().conversation.messages.size == 2 }
+        val id = c.ui().conversation.id
+        val good = c.ui().conversation.messages.last()
+
+        // The model fails: the good answer comes back, on screen and on disk.
+        engines.single().failNext = RuntimeException("out of memory")
+        c.retry()
+        until("restored") { !c.ui().replying && c.ui().conversation.messages.lastOrNull() == good }
+        until("said why") { said.any { it.startsWith("couldn't try again: The model stopped") } }
+        until("on disk") { conversations.load(id)?.messages == listOf(c.ui().conversation.messages[0], good) }
+
+        // Stopped part-way: the earlier answer is kept as well.
+        val gate = CompletableDeferred<Unit>()
+        engines.single().gate = gate
+        c.retry()
+        until("the retry's first words") { c.ui().conversation.messages.lastOrNull()?.text == "Hello" && c.ui().replying }
+        // While it runs, the disk still has the good answer.
+        assertEquals(good, conversations.load(id)!!.messages.last())
+        c.stop()
+        until("stopped") { !c.ui().replying }
+        assertEquals(good, c.ui().conversation.messages.last())
+        until("on disk again") { conversations.load(id)?.messages?.last() == good }
+    }
+
+    @Test fun archiveDuringAReplyIsKeptAndNotUndoneByTheTitle() {
+        install()
+        val gate = CompletableDeferred<Unit>()
+        configure = { it.gate = gate; it.title = "Model Title" }
+        val c = controller()
+        until("installed") { c.ui().installed }
+        c.send("plan a dinner")
+        until("writing") { c.ui().conversation.messages.lastOrNull()?.text == "Hello" }
+        val id = c.ui().conversation.id
+        c.setArchived(id, true)
+        until("archived on screen") { c.ui().conversation.archived }
+        gate.complete(Unit)
+        until("titled") { conversations.load(id)?.titled == true }
+        val saved = conversations.load(id)!!
+        assertTrue("the title job kept the archive", saved.archived)
+        assertEquals("Model Title", saved.title)
+        assertEquals(2, saved.messages.size)
+    }
+
+    @Test fun aLongChatSaysWhereTheModelsViewBegins() {
+        install()
+        val c = controller()
+        until("installed") { c.ui().installed }
+        // 2,500 characters a question: past the 9,000 high mark on the fourth.
+        for (n in 1..4) {
+            c.send("q$n " + "x".repeat(2_500))
+            until("reply $n") { !c.ui().replying && c.ui().conversation.messages.size == n * 2 }
+            if (n < 4) assertNull(c.ui().conversation.windowFrom)
+        }
+        val from = c.ui().conversation.windowFrom!!
+        assertTrue("it begins at a question", c.ui().conversation.messages[from].fromUser)
+        assertTrue(from > 0)
+        assertEquals(engines.single().replies.last().first().text, c.ui().conversation.messages[from].text)
+        until("saved") { conversations.load(c.ui().conversation.id)?.windowFrom == from }
+    }
+
     @Test fun theConversationOnScreenComesBackAfterARestart() {
         install()
         val first = controller()
@@ -507,6 +727,13 @@ class ScriptedEngine : LlmEngine {
     var failLoad: Throwable? = null
     var script = listOf("Hello", " there.")
     var gate: CompletableDeferred<Unit>? = null
+    /** The next reply throws this (then it is cleared). */
+    @Volatile var failNext: Throwable? = null
+    /** What [oneShot] answers (a title), and what it waits for first. */
+    @Volatile var title: String? = null
+    @Volatile var titleGate: CompletableDeferred<Unit>? = null
+    val titleCalls = CopyOnWriteArrayList<Pair<String, String>>()
+    @Volatile var titleCancels = 0
     @Volatile var closes = 0
     @Volatile var cancels = 0
     @Volatile override var isLoaded = false
@@ -521,6 +748,7 @@ class ScriptedEngine : LlmEngine {
         systems += system
         replies += history
         nows += now.orEmpty()
+        failNext?.let { failNext = null; throw it }
         script.forEachIndexed { i, d ->
             emit(d)
             if (i == 0) gate?.await()
@@ -532,6 +760,18 @@ class ScriptedEngine : LlmEngine {
     }
 
     override fun lastStats(): LlmStats = LlmStats(0.1, 20, 2, 200.0, 25.0)
+
+    override suspend fun oneShot(system: String, prompt: String, maxTokens: Int): String? {
+        val answer = title ?: return null
+        titleCalls += system to prompt
+        try {
+            titleGate?.await()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            titleCancels++
+            throw e
+        }
+        return answer
+    }
 
     override fun close() {
         closes++

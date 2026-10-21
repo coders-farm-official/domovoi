@@ -366,6 +366,11 @@ played**, **Notes**, **Timers**, **Logs**, and **Settings** (the gear).
 
 **App:** [Settings → Rooms](#settings/rooms) shows the same rooms.
 
+**Try saying** (in the room itself)
+
+- "how's the wifi"
+- "fix the wifi"
+
 **If something's wrong**
 
 - *offline*: power and Wi-Fi first. If **every** room says *can't
@@ -585,8 +590,21 @@ the 32-bit app from the same page. [More detail](docs/ANDROID_COMPATIBILITY.md)
 phone** (the assistant, below). Each chat shows where it runs, and a new
 one starts where you chatted last.
 
+Chat opens on your chats, pinned ones first, then the most recent; type
+in **Message Domovoi…** at the bottom to start a new one. A chat is named
+by its first words, then Domovoi gives it a short title after the first
+reply; a name you give it stays.
+
 **How to**
 
+- Long-press a chat (or its **chat actions** button) to **rename**, **pin** (pins stay on
+  this phone), **archive**, **share** or **delete** it; swipe to archive.
+  Archived chats are under **archived** at the end of the list.
+- **search chats** finds words in titles and messages, in both kinds of
+  chat.
+- Long-press a reply to **copy**, **share** or **try again**.
+- A line saying **earlier messages are beyond what Domovoi can keep in
+  mind** marks where the model stops seeing the older part of a long chat.
 - Tap **talk** to speak a message: **hold to talk**, release to send,
   slide away to cancel. Up to 30 seconds.
 - "my name is …" in the chat mic teaches Domovoi your voice from this
@@ -594,6 +612,16 @@ one starts where you chatted last.
 - **attach image**: up to 4 pictures. Phone photos in HEIC are turned
   into a JPEG on the phone first (Android 9 or newer), without their
   location.
+- **attach a document**: a PDF, Word, OpenDocument, Excel, CSV, text or
+  markdown file, then ask about it. In a chat **on this phone** it is read
+  on the phone and stays there. The answer lists the pages it came from;
+  tap one to see the passage (a PDF shows the page itself).
+- A PDF needs Android 15 (or 12 to 14 with the PDF update) to be read on
+  the phone. Otherwise **ask the home server** reads its text and sends it
+  back; nothing is kept there.
+- In [Files](#files), the question mark on a document starts a chat about
+  it: a file on this phone in a phone chat, a file in the home server's
+  Documents in a home-server chat.
 
 [More detail](docs/FAQ.md#can-i-send-pictures-in-chat)
 
@@ -609,7 +637,8 @@ assistant on this phone** →
 unless you **allow mobile data**.
 
 It needs a 64-bit phone with 8 GB of memory or more. To report a bad
-reply, long-press it. Its chats stay on the phone, marked **on this
+reply, long-press it. **Export all phone chats** (in a phone chat, the
+model settings button) saves them as Markdown and JSON where you pick. Its chats stay on the phone, marked **on this
 phone**; away from home they are the only ones Chat lists. They never mix
 with your home server's chats.
 
@@ -657,6 +686,11 @@ Your music library, on the server, played in any room or in the browser.
   up** and **move down** on each song.
 - Playlists and favorites: [Music → Playlists](#music/playlists).
 - Each queued song says which device added it.
+
+**Try saying**
+
+- "how many songs do I have"
+- "what did I add this week"
 
 **Also:** guests on your Wi-Fi can change the queue of a room that's
 playing. See [Guests, household, admin](#node:guests).
@@ -744,7 +778,17 @@ name.
 Type to Domovoi. Answers come from the models on your server.
 
 **How to:** [Chat](#chat) → **new chat**. Press the paperclip to add up to
-4 pictures (PNG, JPEG, GIF, WebP or BMP, 20 MB each).
+4 pictures (PNG, JPEG, GIF, WebP or BMP, 20 MB each). Beside each chat in
+the list: rename, archive and delete; **search chats** above the list, and
+**archived** at its end.
+
+**Ask about a document:** the paperclip also takes a PDF, Word (.docx),
+OpenDocument (.odt), Excel (.xlsx), CSV, text or markdown file, up to
+100 MB. Ask what it says. The answer names the pages or sections it came
+from; press one to see the passage, or to open a PDF at that page. If the
+document doesn't say, Domovoi answers "I couldn't find that in the
+document" instead of guessing. In [Files](#files) → Documents, **Ask** on
+a file starts a chat about it.
 
 **App:** the picture button is **attach image**, and the app also takes
 HEIC photos. See [Chat and the chat mic](#node:phone-chat).
@@ -758,6 +802,15 @@ HEIC photos. See [Chat and the chat mic](#node:phone-chat).
   Models](#settings/models).
 - A HEIC phone photo is refused on the dashboard: send it from the app,
   which converts it.
+- An old .doc or .rtf file: save it as .docx or PDF, then attach it again.
+- "pictures of text (scanned)": scanned pages aren't searched yet.
+- A summary of a long document: not yet. Ask about something specific in
+  it instead.
+
+**Also:** voice chat mode, a spoken conversation in a room, is an early
+experiment and off unless whoever set up Domovoi turned it on.
+
+**Try saying:** "let's chat" (in a room, while voice chat mode is on)
 
 [More detail](docs/FAQ.md#can-i-send-pictures-in-chat)
 
@@ -935,6 +988,10 @@ each room's **Conversations** tab.
 - *(admin)* turn recordings off in a room's **Overview** (**Stop and
   delete**); the commands kept so far are in [Settings → Voice
   history](#settings/voice-history).
+- *(admin)* listen to a room's command recordings, mark whether each one
+  ended at the right moment, and delete them: [Settings → Voice
+  history](#settings/voice-history). A room keeps them only while an admin
+  has turned them on for it.
 
 An admin can change play history, news and timer history in [Settings →
 Advanced](#settings/advanced). [More detail](docs/SECURITY_PRIVACY.md#data-at-rest)
@@ -990,6 +1047,9 @@ doesn't, an admin presses **Restart the core** (on [Home](#home),
 [Settings → Rooms](#settings/rooms) or [Settings → Health](#settings/health)). The app
 says the core isn't answering, and reconnects by itself.
 
+**Try saying:** "how's domovoi doing" (how the server is: its processor,
+memory and disk)
+
 [More detail](docs/TROUBLESHOOTING.md#everything-offline-dashboard-up)
 
 ### Backups and moving
@@ -1039,6 +1099,51 @@ a server with 24 GB of memory or more) before it starts.
 
 [More detail](docs/CPU_HOST.md#the-short-version)
 
+### Asking Domovoi for help
+
+Domovoi answers questions about itself: from this manual, its FAQ and
+troubleshooting guide, and the help of the plugins you installed. It
+answers only from what it finds. When nothing covers the question, it
+says "The manual doesn't cover that." rather than guessing.
+
+**How to**
+
+- **Dashboard:** press **?** at the top of any page. Search the help, or
+  press **ask Domovoi** to start a chat called "Help: …".
+- **Dashboard:** an error message has **ask Domovoi about this**: the help
+  opens with the error's code and the page you were on.
+- In a chat, ask "how do I …?" or "why is the kitchen offline?". Domovoi
+  also reads what its own checks show: rooms that are offline and why,
+  plugins, its containers, and the last update (its details only for an
+  admin).
+- **Something on your screen?** Paste or attach a screenshot in a chat on
+  the home server. The vision model reads it on your server; it never
+  leaves your home.
+- **App:** a chat on this phone answers from the app's own copy of the
+  manual, offline. It can't read screenshots yet: use a home-server chat
+  for those.
+
+**Try saying**
+
+- "how do I add a room"
+- "how do I change the wake word"
+
+After the short answer, Domovoi asks "Want me to send the steps to your
+phone?" Say yes, and they arrive as a chat called "Help: …" on the phones
+marked as yours ([Settings → Phones & browsers](#app/connection), **This phone
+belongs to**, in the app). If Domovoi doesn't know your voice, it asks who
+to send them to. It never sends them to every phone.
+
+**If something's wrong**
+
+- **AI chat and questions are off**: help still searches the manual and
+  the docs, with no model, and screenshots can't be read. See
+  [Models](#node:models).
+- **Help can't solve it**: **report a problem**, in the **?** panel, builds
+  a summary of your Domovoi with no passwords, codes, addresses or names.
+  Read it, then copy or save it and post it yourself, on GitHub
+  Discussions or Discord. Nothing is sent for you.
+
 ### Troubleshooting
 
 - **A room doesn't answer**: see [Your rooms](#node:rooms).
@@ -1049,6 +1154,7 @@ a server with 24 GB of memory or more) before it starts.
 - **A word is said wrong**: [Say it like](#node:voice).
 - **Chat says pictures need the vision model**: [Models](#node:models).
 - **Something is greyed with "needs internet"**: [Internet](#node:internet).
+- **Not sure where to look**: ask Domovoi: [Asking Domovoi for help](#node:help-desk).
 - **App: can't find the server**: same Wi-Fi as the server? **add
   manually** with the dashboard's address.
 

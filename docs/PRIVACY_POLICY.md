@@ -76,6 +76,11 @@ permissions Android asks you for. They are read on the phone and not sent
 anywhere. A file goes to your Domovoi server only when you upload it there
 yourself.
 
+Documents you attach or write in a phone chat stay in the app's private
+storage. A PDF this phone can't read itself goes to your Domovoi server
+only when you tap "ask the home server", which reads its text, sends it
+back and keeps nothing.
+
 ## What goes to your Domovoi server
 
 When you connect the app to a Domovoi server (at an address you give it,

@@ -86,7 +86,8 @@ const ChatDetails = (() => {
     if (isUser && m.device) out.push(['device', m.device]);
     if (!isUser && m.model) {
       const why = { chat: ' (chat model)', vision: ' (vision model: images attached)',
-                    override: ' (chosen for this message)' }[st && st.model_role] || '';
+                    override: ' (chosen for this message)',
+                    documents: ' (chat model: answered from the attached documents)' }[st && st.model_role] || '';
       out.push(['model', m.model + why]);
     }
     if (st) {

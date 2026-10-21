@@ -171,11 +171,12 @@ internal object XlsxSheet {
         return sb.toString()
     }
 
-    private fun sharedStrings(xml: String?): List<String> {
+    private fun sharedStrings(xml: String?, maxCount: Int = Int.MAX_VALUE): List<String> {
         if (xml == null) return emptyList()
         val out = mutableListOf<String>()
         var pos = 0
         while (true) {
+            if (out.size >= maxCount) throw IOException("too many shared strings")
             val t = MiniXml.tags(xml, pos).firstOrNull { it.name == "si" && it.kind != Kind.Close } ?: break
             if (t.kind == Kind.Empty) {
                 out += ""
@@ -342,9 +343,11 @@ internal object XlsxSheet {
         val dataInnerEnd: Int,
         val rows: List<RowSpan>,
         val prefix: String,
+        /** The scan stopped at its cell limit. */
+        val truncated: Boolean = false,
     )
 
-    private fun scan(xml: String): SheetScan {
+    private fun scan(xml: String, maxCells: Int = Int.MAX_VALUE, checkCancel: () -> Unit = {}): SheetScan {
         val dataOpen = MiniXml.tags(xml).firstOrNull { it.name == "sheetData" && it.kind != Kind.Close }
             ?: throw IOException("worksheet has no sheetData")
         val prefix = if (dataOpen.qname.contains(':')) dataOpen.qname.substringBefore(':') + ":" else ""
@@ -353,7 +356,14 @@ internal object XlsxSheet {
         val rows = mutableListOf<RowSpan>()
         var pos = dataOpen.end
         var lastRow = -1
+        var cellCount = 0
+        var truncated = false
         while (pos < innerEnd) {
+            checkCancel()
+            if (cellCount >= maxCells) {
+                truncated = true
+                break
+            }
             val t = MiniXml.tags(xml, pos, innerEnd).firstOrNull() ?: break
             if (t.name != "row" || t.kind == Kind.Close) { pos = t.end; continue }
             val r = t.attr("r")?.toIntOrNull()?.minus(1) ?: (lastRow + 1)
@@ -371,13 +381,14 @@ internal object XlsxSheet {
                     lastCol = col
                     val cEnd = MiniXml.elementEnd(xml, c)
                     cells += CellSpan(CellAt(r, col), c, cEnd)
+                    cellCount++
                     cp = cEnd
                 }
             }
             rows += RowSpan(r, t, rowEnd, cells)
             pos = rowEnd
         }
-        return SheetScan(xml, dataOpen, innerEnd, rows, prefix)
+        return SheetScan(xml, dataOpen, innerEnd, rows, prefix, truncated)
     }
 
     /** The first child element named [name] inside a cell, if any. */
@@ -478,6 +489,114 @@ internal object XlsxSheet {
             }
         }
         return SheetCell(v = text)
+    }
+
+    // ── read every sheet, for Chat (documents plan part 1) ─────────────
+
+    /** A whole workbook as Chat reads it: every sheet by name, every row
+     *  (not the editor's window), cells as text: a formula's saved value,
+     *  or the formula itself when the file kept none ([formulasWithoutValue]
+     *  counts those, as the phone's own editor writes them). */
+    /** A workbook for Chat: each sheet's rows, sparse (row number, 1 for
+     *  the first, to its cells); [truncated] when a limit cut it short. */
+    internal class ChatWorkbook(
+        val sheets: List<Pair<String, List<Pair<Int, List<String>>>>>,
+        val formulasWithoutValue: Int,
+        val truncated: Boolean = false,
+    )
+
+    /** The bounds Chat reads a workbook within (review round 1): a cell past
+     *  [cols] columns is left out, a sheet stops at [cells] cells, the
+     *  workbook at [chars] characters of cell text, and the shared strings
+     *  may be at most [stringsBytes] long and [strings] many. Nothing is
+     *  padded: a row holds the cells it has. */
+    internal class ChatLimits(
+        val cols: Int = 256,
+        val cells: Int = 200_000,
+        val chars: Int = 4_000_000,
+        val strings: Int = 200_000,
+        val stringsBytes: Int = 16 * 1024 * 1024,
+    )
+
+    /**
+     * Every sheet of the workbook whose parts are [parts] (name to bytes,
+     * read by the caller through the zip's central directory, the same
+     * bytes its checks saw), within [limits]. [checkCancel] is called as it
+     * goes, so a timed-out read stops.
+     */
+    internal fun readForChat(
+        parts: List<Pair<String, ByteArray>>,
+        limits: ChatLimits = ChatLimits(),
+        checkCancel: () -> Unit = {},
+    ): ChatWorkbook {
+        val entries = parts.map { (n, b) -> Entry(n, b, 0L) }
+        val book = book(entries)
+        val wb = entries.text(book.workbookPath) ?: throw IOException("not an xlsx file (no workbook)")
+        val wbDir = book.workbookPath.substringBeforeLast('/', "")
+        val wbRels = rels(entries.text(relsPathOf(book.workbookPath)))
+        val sst = book.sharedStringsPath?.let { p -> entries.firstOrNull { it.name == p } }
+        if (sst != null && sst.bytes.size > limits.stringsBytes) throw IOException("shared strings too large")
+        val strings = sharedStrings(sst?.let { String(it.bytes, Charsets.UTF_8) }, limits.strings)
+        val st = styles(book.stylesPath?.let { entries.text(it) })
+        var noValue = 0
+        var chars = 0
+        var truncated = false
+        val sheets = ArrayList<Pair<String, List<Pair<Int, List<String>>>>>()
+        for (tag in MiniXml.tags(wb).filter { it.name == "sheet" && it.kind != Kind.Close }) {
+            checkCancel()
+            if (chars >= limits.chars) {
+                truncated = true
+                break
+            }
+            val rel = wbRels.firstOrNull { it.id == tag.attr("id") } ?: continue
+            val xml = entries.text(resolve(wbDir, rel.target)) ?: continue
+            val sc = scan(xml, limits.cells, checkCancel)
+            if (sc.truncated) truncated = true
+            val masters = HashMap<String, Pair<String, CellAt>>()
+            val rows = java.util.TreeMap<Int, MutableList<String>>()
+            rows@ for (row in sc.rows) {
+                checkCancel()
+                for (cell in row.cells) {
+                    if (cell.at.col >= limits.cols) {
+                        truncated = true
+                        continue
+                    }
+                    val cv = cellValue(xml, cell, strings, st, book.date1904, masters) ?: continue
+                    val formula = cv.f
+                    val text = if (formula != null) {
+                        savedValue(xml, cell, strings, st, book.date1904) ?: formula.also { noValue++ }
+                    } else {
+                        cv.v ?: continue
+                    }
+                    if (chars + text.length > limits.chars) {
+                        truncated = true
+                        break@rows
+                    }
+                    chars += text.length
+                    val r = rows.getOrPut(cell.at.row + 1) { mutableListOf() }
+                    while (r.size < cell.at.col) r += ""
+                    if (r.size == cell.at.col) r += text else r[cell.at.col] = text
+                }
+            }
+            sheets += (tag.attr("name") ?: "Sheet${sheets.size + 1}") to rows.entries.map { (n, r) -> n to r.toList() }
+        }
+        return ChatWorkbook(sheets, noValue, truncated)
+    }
+
+    /** A formula cell's saved value (its `<v>`), as text; null when none. */
+    private fun savedValue(xml: String, cell: CellSpan, strings: List<String>, st: Styles, date1904: Boolean): String? {
+        val v = child(xml, cell, "v")?.let { innerText(xml, it) }?.takeIf { it.isNotEmpty() } ?: return null
+        val style = cell.open.attr("s")?.toIntOrNull() ?: 0
+        return when (cell.open.attr("t") ?: "n") {
+            "s" -> strings.getOrNull(v.trim().toIntOrNull() ?: -1) ?: ""
+            "b" -> if ((v.trim().toIntOrNull() ?: 0) != 0) "True" else "False"
+            "str", "e", "inlineStr" -> v
+            else -> if (style in st.dates) {
+                v.trim().toDoubleOrNull()?.let { excelDateText(it, date1904, style in st.timedeltas) } ?: numberText(v)
+            } else {
+                numberText(v)
+            }
+        }
     }
 
     // ── patch ────────────────────────────────────────────────────────────

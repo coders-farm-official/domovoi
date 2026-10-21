@@ -935,6 +935,118 @@
       "handler": null,
       "tags": ["qa", "printing"],
       "note": "2026-10-21: 'paper' in passing is not the printer"
+    },
+    {
+      "utterance": "how do I add a room",
+      "handler": "help_desk",
+      "path": "fast",
+      "tags": ["action", "help-desk"],
+      "note": "2026-10-21 part 9: a how-to about Domovoi, answered from its manual"
+    },
+    {
+      "utterance": "how do I change the wake word",
+      "handler": "help_desk",
+      "path": "fast",
+      "tags": ["action", "help-desk"],
+      "note": "2026-10-21 part 9"
+    },
+    {
+      "utterance": "how do I install a plugin",
+      "handler": "help_desk",
+      "path": "fast",
+      "tags": ["action", "help-desk"],
+      "note": "2026-10-21 part 9"
+    },
+    {
+      "utterance": "is there a way to set a timer for ten minutes",
+      "handler": "timer",
+      "path": "fast",
+      "tags": ["action", "help-desk"],
+      "note": "2026-10-21 review: a command in how-to clothes is the command's (help_desk hands it over)"
+    },
+    {
+      "utterance": "is there a way to play some music",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "help-desk"],
+      "note": "2026-10-21 review: poach case"
+    },
+    {
+      "utterance": "is there a way to play music in the kitchen",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "help-desk"],
+      "note": "2026-10-21 review: poach case"
+    },
+    {
+      "utterance": "how can I play my playlist",
+      "handler": "help_desk",
+      "path": "fast",
+      "tags": ["action", "help-desk"],
+      "note": "2026-10-21 review 2: a question about a command is answered from the manual, not carried out"
+    },
+    {
+      "utterance": "how can I restart my router",
+      "handler": null,
+      "declined_by": "help_desk",
+      "tags": ["qa", "help-desk"],
+      "note": "2026-10-21 review: not about Domovoi; help_desk declines"
+    },
+    {
+      "utterance": "how do I fix my phone screen",
+      "handler": null,
+      "declined_by": "help_desk",
+      "tags": ["qa", "help-desk"],
+      "note": "2026-10-21 review: not about Domovoi"
+    },
+    {
+      "utterance": "how do I reset my password for gmail",
+      "handler": null,
+      "declined_by": "help_desk",
+      "tags": ["qa", "help-desk"],
+      "note": "2026-10-21 review: not about Domovoi"
+    },
+    {
+      "utterance": "how do I make pancakes",
+      "handler": null,
+      "declined_by": "help_desk",
+      "tags": ["qa", "help-desk"],
+      "note": "2026-10-21: no Domovoi word"
+    },
+    {
+      "utterance": "how do I train a machine learning model",
+      "handler": null,
+      "declined_by": "help_desk",
+      "tags": ["qa", "help-desk"],
+      "note": "2026-10-21 review: 'model' alone isn't Domovoi"
+    },
+    {
+      "utterance": "how do I fix the wifi",
+      "handler": "help_desk",
+      "path": "fast",
+      "tags": ["action", "help-desk"],
+      "note": "2026-10-21 review 2: a how-to question is answered from the manual; OK, reconnecting now. (review 2) was the wifi handler acting"
+    },
+    {
+      "utterance": "how do I stop the music",
+      "handler": "help_desk",
+      "path": "fast",
+      "tags": ["action", "help-desk"],
+      "note": "2026-10-21 review 2: a how-to question is answered from the manual; it stopped the music (review 2)"
+    },
+    {
+      "utterance": "how do I cancel the timer",
+      "handler": "help_desk",
+      "path": "fast",
+      "tags": ["action", "help-desk"],
+      "note": "2026-10-21 review 2: a how-to question is answered from the manual; it cancelled a timer (review 2)"
+    },
+    {
+      "utterance": "how do I drop in on the office",
+      "handler": "help_desk",
+      "path": "fast",
+      "tags": ["action", "help-desk"],
+      "note": "2026-10-21 review 2: a how-to question is answered from the manual; it started a drop-in (review 2)"
     }
   ]
 }

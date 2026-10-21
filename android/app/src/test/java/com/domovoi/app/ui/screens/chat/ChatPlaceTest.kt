@@ -153,5 +153,18 @@ class ChatPlaceTest {
         assertFalse(emptyHint(emptyList(), null) != null)
     }
 
+    @Test fun askForHelpGoesToTheHomeServerThenThePhoneThenTheManual() {
+        val f = PlaceFacts(away = false, serverChatOn = true, phoneEngine = true, phoneCapable = true, shared = false)
+        assertEquals(HelpEntry.ServerChat, helpEntry(startablePlaces(f)))
+        // Away from home, or the server's AI off: a phone chat.
+        assertEquals(HelpEntry.PhoneChat, helpEntry(startablePlaces(f.copy(away = true))))
+        assertEquals(HelpEntry.PhoneChat, helpEntry(startablePlaces(f.copy(serverChatOn = false))))
+        // AI off and a phone that can't run the model, or a shared screen: the manual.
+        assertEquals(HelpEntry.Manual, helpEntry(startablePlaces(f.copy(serverChatOn = false, phoneCapable = false))))
+        assertEquals(HelpEntry.Manual, helpEntry(startablePlaces(f.copy(away = true, shared = true))))
+        assertEquals(HelpEntry.ServerChat, helpEntry(startablePlaces(f.copy(phoneEngine = false))))
+        assertEquals("Help: App", HELP_APP_TITLE)
+    }
+
     private fun row(place: ChatPlaceKind, id: String, at: Long) = ChatRow(place, id, "t$id", null, at, 1)
 }

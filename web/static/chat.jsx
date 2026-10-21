@@ -11,6 +11,12 @@
  * reply's error reads as a plain sentence (ChatDetails.errorView), with
  * Settings → Models one press away for an admin.
  *
+ * Documents (PDF, Word, OpenDocument, Excel, CSV, text, markdown) ride the
+ * same paperclip to /api/chat/documents (chat_documents.jsx, ChatDocs); a
+ * thread with documents is answered from them, each reply with its sources
+ * and notes. #chat/<id> opens a thread (the Documents page's "Ask about
+ * this document" lands there).
+ *
  * Design notes: the cat glyph marks assistant-attributed lines (one of its
  * three sanctioned homes); user bubbles sit right-aligned on the card
  * surface; assistant text renders as Markdown (chat_markdown.js: the
@@ -28,7 +34,7 @@ const CHAT_AI_OFF_TEXT = 'AI chat is turned off on your home server';
 
 /* SSE reader for the send endpoint: fetch + ReadableStream, calling
  * onDelta(text) per chunk and resolving with the final done payload. */
-const chatSendStream = async (threadId, body, onDelta) => {
+const chatSendStream = async (threadId, body, onDelta, onStatus) => {
   // Streams the reply, so it needs the Response itself rather than parsed
   // JSON — apiFetchRaw, not apiFetch. Going through the helper is what
   // gets an unpaired browser the "pair this browser" prompt and one
@@ -71,6 +77,9 @@ const chatSendStream = async (threadId, body, onDelta) => {
       let payload;
       try { payload = JSON.parse(data); } catch { continue; }
       if (event === 'delta') onDelta(payload.text || '');
+      // A document turn: the reply is being checked against the document
+      // and arrives whole, checked (chat_documents.py).
+      else if (event === 'status') { if (onStatus) onStatus(payload.state || ''); }
       else if (event === 'done') done = payload;
       else if (event === 'error') {
         errorDetail = payload.detail || 'model error';
@@ -126,28 +135,48 @@ const ChatPictureNote = ({ model, admin, onClose }) => (
 
 /* ─── Thread list rail ──────────────────────────────────────────────────── */
 
-const ChatThreadRow = ({ t, active, onSelect, onDelete }) => (
-  <div onClick={() => onSelect(t)}
-       style={{ padding: '9px 12px', borderRadius: 'var(--r-sm)', cursor: 'pointer',
-                background: active ? 'var(--brand-soft)' : 'transparent',
-                display: 'flex', alignItems: 'center', gap: 8 }}>
-    <div style={{ flex: 1, minWidth: 0 }}>
-      <div style={{ fontSize: 13, fontWeight: active ? 600 : 500, overflow: 'hidden',
-                    textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {t.title || 'new chat'}
+/* One chat in the rail: its title (the first words, then the model's, or
+ * the name someone gave it), its last words (or, in a search, the words
+ * around the match), and rename / archive / delete — the same actions as
+ * the app's history list (assistant plan part 7). */
+const ChatThreadRow = ({ t, active, onSelect, onDelete, onRename, onArchive }) => {
+  const stop = (fn) => (e) => { e.stopPropagation(); fn(t); };
+  const snippet = t.match_snippet || t.last_snippet || 'no messages yet';
+  return (
+    <div onClick={() => onSelect(t)}
+         style={{ padding: '9px 12px', borderRadius: 'var(--r-sm)', cursor: 'pointer',
+                  background: active ? 'var(--brand-soft)' : 'transparent',
+                  display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: active ? 600 : 500, overflow: 'hidden',
+                      textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {t.title || 'new chat'}
+        </div>
+        <div style={{ fontSize: 11, color: active ? 'var(--fg-muted)' : 'var(--fg-faint)', overflow: 'hidden',
+                      textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {t.archived ? 'archived · ' : ''}{snippet}
+        </div>
       </div>
-      <div style={{ fontSize: 11, color: 'var(--fg-faint)', overflow: 'hidden',
-                    textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {t.last_snippet || 'no messages yet'}
-      </div>
+      <span className="mono" style={{ fontSize: 10, color: active ? 'var(--fg-muted)' : 'var(--fg-faint)', flexShrink: 0 }}>
+        {liveRelTime(t.updated_at)}
+      </span>
+      <IconButton name="pencil" title="rename chat" aria-label="rename chat" onClick={stop(onRename)}/>
+      <IconButton name={t.archived ? 'archive-restore' : 'archive'}
+                  title={t.archived ? 'move back to chats' : 'archive chat'}
+                  aria-label={t.archived ? 'move back to chats' : 'archive chat'}
+                  onClick={stop(onArchive)}/>
+      <IconButton name="trash-2" title="delete chat" aria-label="delete chat" onClick={stop(onDelete)}/>
     </div>
-    <span className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)', flexShrink: 0 }}>
-      {liveRelTime(t.updated_at)}
-    </span>
-    <IconButton name="trash-2" title="delete chat"
-                onClick={(e) => { e.stopPropagation(); onDelete(t); }}/>
-  </div>
-);
+  );
+};
+
+/* What the rail lists: a search across every chat (archived ones too),
+ * the archived chats, or the chats. */
+const chatRailPath = (q, archived) => {
+  const query = (q || '').trim();
+  if (query) return `/api/chat/threads?q=${encodeURIComponent(query)}`;
+  return archived ? '/api/chat/threads?archived=true' : '/api/chat/threads';
+};
 
 /* ─── Messages ──────────────────────────────────────────────────────────── */
 
@@ -316,7 +345,10 @@ const ChatMessage = ({ m, threadId, onCopy, admin }) => {
           ))}
         </div>
       )}
-      {isUser ? (
+      {(m.documents || []).map((d) => (
+        <ChatDocs.DocChip key={d.token} doc={d} mine={isUser}/>
+      ))}
+      {isUser && !m.content && (m.documents || []).length > 0 ? null : isUser ? (
         <div {...bubbleEvents}
              style={{ maxWidth: '76%', padding: '9px 13px', fontSize: 13, lineHeight: 1.55,
                       background: 'var(--card)', border: '1px solid var(--border)',
@@ -330,7 +362,11 @@ const ChatMessage = ({ m, threadId, onCopy, admin }) => {
           <div {...bubbleEvents}
                style={{ fontSize: 13, lineHeight: 1.6, overflowWrap: 'break-word', minWidth: 0 }}>
             <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(m.content || '') }}/>
+            {m.pending && m.status === 'checking' && !m.content && (
+              <span className="mono chat-doc-checking">reading the passages and checking the answer…</span>
+            )}
             {m.pending && <span className="mono" style={{ color: 'var(--fg-faint)' }}>▍</span>}
+            {!m.pending && <ChatDocs.DocAnswer doc={m.doc}/>}
             <ChatReplyError m={m} admin={admin}/>
           </div>
         </div>
@@ -425,6 +461,14 @@ const ChatPageMain = () => {
   const copyMessage = async (text) => fire((await chatCopyText(text || '')) ? 'copied' : 'copy failed');
   const { items: threads, error: threadsError, refresh: refreshThreads } =
     useApiList('/api/chat/threads', { pickItems: (x) => x.threads, eventTypes: ['chat.changed'] });
+  // The rail: the chats, the archived ones, or a search across them all.
+  const [railQuery, setRailQuery] = React.useState('');
+  const [showArchived, setShowArchived] = React.useState(false);
+  const railQ = useDebouncedValue(railQuery, 250);
+  const railPath = chatRailPath(railQ, showArchived);
+  const railList = useApiList(railPath, { pickItems: (x) => x.threads, eventTypes: ['chat.changed'] });
+  const railItems = railPath === '/api/chat/threads' ? threads : railList.items;
+  const refreshAll = () => { refreshThreads(); railList.refresh(); };
   const { data: modelsInfo, refresh: refreshModels } = useApiObject('/api/chat/models');
   const admin = useAdminSignedIn();
   // Pictures can't be read here (the vision model isn't installed): the
@@ -436,6 +480,9 @@ const ChatPageMain = () => {
   const [messages, setMessages] = React.useState([]);
   const [draft, setDraft] = React.useState('');
   const [attachments, setAttachments] = React.useState([]); // [{token, name}]
+  // Documents staged for the next message (chat_documents.jsx): their metadata.
+  const [docAttachments, setDocAttachments] = React.useState([]);
+  const [docBusy, setDocBusy] = React.useState(0);
   const [sending, setSending] = React.useState(false);
   const pageRef = React.useRef(null);
   const narrow = useChatNarrow(pageRef);
@@ -475,6 +522,23 @@ const ChatPageMain = () => {
   }, [threadId]);
   useRetryAfterCredential(messagesRefusal, reloadMessages);
 
+  // A chat the help panel started ("ask Domovoi", help.jsx): open it with
+  // the question typed in, for the person to send (or change) themselves.
+  React.useEffect(() => {
+    const takeHelp = () => {
+      const h = window.DomovoiHelpHandoff && window.DomovoiHelpHandoff.take();
+      if (!h) return;
+      setThreadId(h.threadId);
+      loadMessages(h.threadId);
+      setDraft(h.draft || '');
+      refreshThreads();
+      if (inputRef.current) inputRef.current.focus();
+    };
+    takeHelp();
+    window.addEventListener('domovoi-help-handoff', takeHelp);
+    return () => window.removeEventListener('domovoi-help-handoff', takeHelp);
+  }, []);
+
   // Narrow, the list and the conversation take turns (useChatNarrow), so
   // opening a chat puts the list away; the panel button brings it back.
   const hideRailOnPhone = () => {
@@ -485,6 +549,21 @@ const ChatPageMain = () => {
     loadMessages(t.id);
     hideRailOnPhone();
   };
+
+  // #chat/<id>: open that thread (the Documents page's "Ask about this
+  // document" makes one and lands here). The address goes back to #chat.
+  React.useEffect(() => {
+    const follow = () => {
+      const m = /^#?chat\/(\d+)$/.exec(String(window.location.hash || ''));
+      if (!m) return;
+      selectThread({ id: Number(m[1]) });
+      try { window.history.replaceState(null, '', '#chat'); } catch { /* the address stays */ }
+      refreshThreads();
+    };
+    follow();
+    window.addEventListener('hashchange', follow);
+    return () => window.removeEventListener('hashchange', follow);
+  }, []);
 
   // The thread keeps its newest line in view: on a new message, and when
   // the thread itself gets shorter or taller (the keyboard coming up, the
@@ -528,17 +607,47 @@ const ChatPageMain = () => {
     } catch { fire('could not create chat'); }
   };
 
+  // The household's chats: a delete is for everyone (the app says the same).
   const deleteThread = async (t) => {
-    if (!window.confirm(`Delete "${t.title || 'new chat'}"? This can't be undone.`)) return;
+    if (!window.confirm(`Delete "${t.title || 'new chat'}"? Deletes it for everyone in the house. `
+      + "This can't be undone.")) return;
     try {
       await apiDelete(`/api/chat/threads/${t.id}`);
       if (t.id === threadId) { setThreadId(null); setMessages([]); }
-      refreshThreads();
+      refreshAll();
     } catch { fire('delete failed'); }
   };
 
+  // A name set here is the person's: the model's title never replaces it.
+  const renameThread = async (t) => {
+    const name = window.prompt('rename chat', t.title || '');
+    if (name == null) return;
+    const title = name.trim();
+    if (!title || title === t.title) return;
+    try {
+      await apiPatch(`/api/chat/threads/${t.id}`, { title });
+      refreshAll();
+    } catch { fire('rename failed'); }
+  };
+
+  const archiveThread = async (t) => {
+    try {
+      await apiPatch(`/api/chat/threads/${t.id}`, { archived: !t.archived });
+      fire(t.archived ? 'moved back to chats' : 'archived');
+      refreshAll();
+    } catch { fire(t.archived ? 'could not move it back' : 'archive failed'); }
+  };
+
   const attach = async (files) => {
-    for (const f of Array.from(files).slice(0, 4 - attachments.length)) {
+    const all = Array.from(files);
+    const pictures = all.filter((f) => ChatDocs.isPicture(f));
+    const documents = all.filter((f) => !ChatDocs.isPicture(f));
+    // A picture with no vision model to read it: the note says why.
+    if (pictures.length && visionMissing) {
+      setPictureNote(true);
+      refreshModels();
+    }
+    for (const f of visionMissing ? [] : pictures.slice(0, 4 - attachments.length)) {
       const form = new FormData();
       form.append('file', f);
       try {
@@ -549,11 +658,24 @@ const ChatPageMain = () => {
         fire(ChatDetails.uploadRefusalText(e.status, e.detail) || 'upload failed');
       }
     }
+    for (const f of documents.slice(0, 4 - docAttachments.length)) {
+      setDocBusy((n) => n + 1);
+      try {
+        const meta = await ChatDocs.upload(f);
+        setDocAttachments((cur) => [...cur, meta]);
+      } catch (e) {
+        // Every refusal is a sentence: an old .doc, a scan, a zip bomb.
+        fire(ChatDocs.refusalText(e));
+      } finally {
+        setDocBusy((n) => n - 1);
+      }
+    }
   };
 
   const send = async () => {
     const content = draft.trim();
-    if (!content || sending) return;
+    const docs = docAttachments;
+    if ((!content && docs.length === 0) || sending || docBusy) return;
     let id = threadId;
     if (id == null) {
       try {
@@ -565,19 +687,23 @@ const ChatPageMain = () => {
     const images = attachments;
     setDraft('');
     setAttachments([]);
+    setDocAttachments([]);
     setSending(true);
     setMessages((cur) => [
       ...cur,
-      { id: `u-${Date.now()}`, role: 'user', content, images,
+      { id: `u-${Date.now()}`, role: 'user', content, images, documents: docs,
         created_at: new Date().toISOString(), device: 'this browser' },
       { id: 'pending', role: 'assistant', content: '', pending: true },
     ]);
     try {
       // device_id: which install sent it, for the message's details (V017).
-      const body = { content, images, device_id: DeviceIdentity.id() };
+      const body = { content, images, documents: docs.map((d) => ({ token: d.token })),
+                     device_id: DeviceIdentity.id() };
       const { done, errorDetail, errorCode, errorModel } = await chatSendStream(id, body, (delta) => {
         setMessages((cur) => cur.map((m) =>
           m.id === 'pending' ? { ...m, content: m.content + delta } : m));
+      }, (state) => {
+        setMessages((cur) => cur.map((m) => (m.id === 'pending' ? { ...m, status: state } : m)));
       });
       setMessages((cur) => cur.map((m) =>
         m.id === 'pending'
@@ -596,6 +722,17 @@ const ChatPageMain = () => {
     setSending(false);
   };
 
+  // A screenshot pasted into the box attaches like the paperclip's
+  // pictures (help: "paste or attach a screenshot").
+  const onPaste = (e) => {
+    const files = Array.from((e.clipboardData && e.clipboardData.files) || [])
+      .filter((f) => /^image\//.test(f.type));
+    if (!files.length) return;
+    e.preventDefault();
+    if (visionMissing) { setPictureNote(true); refreshModels(); return; }
+    attach(files);
+  };
+
   const onKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   };
@@ -607,12 +744,9 @@ const ChatPageMain = () => {
   // The paperclip: the picker, or — when a picture would be refused —
   // the note saying why (and a fresh read, in case an admin has since
   // installed the model; the note goes once the read says so).
+  // Documents are read on the server whatever the vision model, so the
+  // picker always opens; a picture is the one thing the note may stop.
   const pickPictures = () => {
-    if (visionMissing) {
-      setPictureNote(true);
-      refreshModels();
-      return;
-    }
     setPictureNote(false);
     if (fileRef.current) fileRef.current.click();
   };
@@ -625,21 +759,22 @@ const ChatPageMain = () => {
   const textarea = (
     <textarea ref={inputRef} className="chat-input" value={draft}
               onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={onKeyDown} rows={narrow ? 1 : 2} aria-label="message"
+              onKeyDown={onKeyDown} onPaste={onPaste} rows={narrow ? 1 : 2} aria-label="message"
               placeholder={narrow ? 'message the domovoi…'
                 : 'message the domovoi… (Enter to send, Shift+Enter for a new line)'}/>
   );
   const clip = (
     <IconButton name="paperclip"
                 title={visionMissing
-                  ? "attach pictures — the vision model isn't installed"
-                  : 'attach pictures (up to 4)'}
-                aria-label="attach pictures"
+                  ? "attach documents (pictures need the vision model, which isn't installed)"
+                  : 'attach pictures or documents (up to 4 of each)'}
+                aria-label="attach pictures or documents"
                 onClick={pickPictures}/>
   );
   const sendButton = (
     <Button variant="primary" icon="send" className="btn btn-primary chat-send" onClick={send}
-            disabled={sending || !draft.trim()} aria-label={sending ? 'thinking…' : 'send'}
+            disabled={sending || docBusy > 0 || (!draft.trim() && docAttachments.length === 0)}
+            aria-label={sending ? 'thinking…' : 'send'}
             title={narrow ? (sending ? 'thinking…' : 'send') : undefined}>
       <span className="chat-send-label">{sending ? 'thinking…' : 'send'}</span>
     </Button>
@@ -659,17 +794,36 @@ const ChatPageMain = () => {
           )}
           <Button variant="primary" icon="plus" className="btn btn-primary chat-new"
                   onClick={newThread}>new chat</Button>
+          <div className="chat-rail-search">
+            <input type="search" value={railQuery} onChange={(e) => setRailQuery(e.target.value)}
+                   placeholder="search chats…" aria-label="search chats" maxLength={200}/>
+            <span className="chat-rail-search-icon"><Icon name="search" size={13}/></span>
+          </div>
+          {showArchived && !railQ.trim() && (
+            <div className="chat-rail-head">
+              <IconButton name="arrow-left" title="back to chats" aria-label="back to chats"
+                          onClick={() => setShowArchived(false)}/>
+              <span style={{ flex: 1 }}>archived</span>
+            </div>
+          )}
           <div className="chat-rail-list">
-            {threads.length === 0
+            {railItems.length === 0
               ? <div style={{ fontSize: 12, color: 'var(--fg-faint)', padding: 8 }}>
                   {threadsError && threadsError.deviceTokenRequired
                     ? 'paired devices only — pair this browser, or sign in, to read the chats'
-                    : 'no chats yet'}
+                    : railQ.trim() ? (railList.error ? "couldn't search" : 'no chats match')
+                    : showArchived ? 'no archived chats' : 'no chats yet'}
                 </div>
-              : threads.map((t) => (
+              : railItems.map((t) => (
                   <ChatThreadRow key={t.id} t={t} active={t.id === threadId}
-                                 onSelect={selectThread} onDelete={deleteThread}/>
+                                 onSelect={selectThread} onDelete={deleteThread}
+                                 onRename={renameThread} onArchive={archiveThread}/>
                 ))}
+            {!showArchived && !railQ.trim() && (
+              <button type="button" className="chat-rail-archived" onClick={() => setShowArchived(true)}>
+                <Icon name="archive" size={13}/> archived
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -693,7 +847,7 @@ const ChatPageMain = () => {
         <div ref={scrollRef} className="chat-thread" onScroll={onThreadScroll}>
           {threadId == null && messages.length === 0 ? (
             <Empty glyph="sleeping" title="ask anything"
-                   sub="chats run on your own hardware — attach an image and the vision model reads it"
+                   sub="chats run on your own hardware — attach a document to ask about it, or an image for the vision model"
                    action={narrow && threads.length > 0
                      ? <Button icon="panel-left-open" onClick={() => setRailOpen(true)}>
                          your chats ({threads.length})
@@ -721,11 +875,20 @@ const ChatPageMain = () => {
               {visionPill}
             </div>
           )}
+          {(docAttachments.length > 0 || docBusy > 0) && (
+            <div className="chat-doc-staged" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+              {docAttachments.map((d) => (
+                <ChatDocs.DocChip key={d.token} doc={d}
+                                  onRemove={() => setDocAttachments((cur) => cur.filter((x) => x.token !== d.token))}/>
+              ))}
+              {docBusy > 0 && <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', alignSelf: 'center' }}>reading the document…</span>}
+            </div>
+          )}
           {showPictureNote && (
             <ChatPictureNote model={modelsInfo.vision_model} admin={admin}
                              onClose={() => setPictureNote(false)}/>
           )}
-          <input ref={fileRef} type="file" accept="image/*" multiple hidden
+          <input ref={fileRef} type="file" accept={ChatDocs.ACCEPT} multiple hidden
                  onChange={(e) => { attach(e.target.files); e.target.value = ''; }}/>
           {narrow ? (
             <div className="chat-composer-row">{clip}{textarea}{sendButton}</div>

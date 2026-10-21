@@ -26,7 +26,7 @@ internal object CsvSheet {
     private enum class St { StartRecord, StartField, InField, InQuoted, QuoteInQuoted }
 
     /** Every record, unbounded, by Python's reader state machine. A blank line is an empty record. */
-    fun parse(text: String): List<List<String>> {
+    fun parse(text: String, delimiter: Char = ','): List<List<String>> {
         val rows = mutableListOf<List<String>>()
         var row = mutableListOf<String>()
         val field = StringBuilder()
@@ -50,18 +50,18 @@ internal object CsvSheet {
                 St.StartField -> when {
                     nl -> { saveField(); endRecord() }
                     c == '"' -> st = St.InQuoted
-                    c == ',' -> saveField()
+                    c == delimiter -> saveField()
                     else -> { field.append(c); st = St.InField }
                 }
                 St.InField -> when {
                     nl -> { saveField(); endRecord() }
-                    c == ',' -> { saveField(); st = St.StartField }
+                    c == delimiter -> { saveField(); st = St.StartField }
                     else -> field.append(c)
                 }
                 St.InQuoted -> if (c == '"') st = St.QuoteInQuoted else field.append(c)
                 St.QuoteInQuoted -> when {
                     c == '"' -> { field.append('"'); st = St.InQuoted }
-                    c == ',' -> { saveField(); st = St.StartField }
+                    c == delimiter -> { saveField(); st = St.StartField }
                     nl -> { saveField(); endRecord() }
                     else -> { field.append(c); st = St.InField }
                 }

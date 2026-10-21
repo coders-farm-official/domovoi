@@ -25,6 +25,7 @@ from domovoi.handlers.base import (
 CORE_BANDS = {
     "dismiss": 100,
     "help": 105,
+    "help_desk": 106,
     "voice_profile": 110,
     "wifi": 120,
     "voice": 130,
@@ -201,6 +202,7 @@ def test_choice_kinds_are_confirmation_kinds_with_a_reply_handler() -> None:
         "music_alias": {"core.alias_target"},
         "voice_profile": {"core.phone_voice_add", "core.room_voice_add", "core.forget_me"},
         "printing": {"core.print_pick", "core.print_printer", "core.printer_pick", "core.scan_more"},
+        "help_desk": {"core.help_who"},
     }
 
 
@@ -225,6 +227,7 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
             "core.print_confirm", "core.print_pick", "core.print_printer", "core.printer_add",
             "core.printer_pick", "core.scan_ready", "core.scan_more", "core.scan_read", "core.print_test",
         },
+        "help_desk": {"core.help_send", "core.help_who"},
     }
     for name, kinds in expected.items():
         assert set(HANDLER_BY_NAME[name].confirmation_kinds) == kinds
