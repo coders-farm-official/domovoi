@@ -73,8 +73,9 @@ def _lifespan_source() -> str:
 def test_the_worker_order_comment_matches_the_registrations() -> None:
     body = _lifespan_source()
     comment = re.search(
-        r"# Registration order is the canonical start order.*?\n((?:\s*#.*\n)+?)\s*#\s*\n",
-        body, re.S,
+        # (line by line: with DOTALL the old pattern backtracked for minutes on a lifespan this long)
+        r"# Registration order is the canonical start order[^\n]*\n((?:[ \t]*#[^\n]*\n)+?)[ \t]*#[ \t]*\n",
+        body,
     )
     assert comment, "the worker-order comment is gone"
     said = re.findall(r"[a-z_]+", comment.group(1).replace("#", " "))
@@ -85,7 +86,13 @@ def test_the_worker_order_comment_matches_the_registrations() -> None:
         (cls, mod) for mod, cls in
         re.findall(r"from (domovoi\.workers\.\w+) import (\w+)", src)
     )
-    registered = re.findall(r"WORKERS\.add_worker\((\w+)\(", body)
+    # The printing workers register through one call (workers/printing.py
+    # register(), three workers, in this order) rather than one line each.
+    printing = ["PrinterStatusWorker", "PrintJobsWorker", "PrintHistoryWorker"]
+    modules.update({cls: "domovoi.workers.printing" for cls in printing})
+    registered: list[str] = []
+    for direct, via_register in re.findall(r"WORKERS\.add_worker\((\w+)\(|(printing_workers\.register\(WORKERS\))", body):
+        registered.extend([direct] if direct else printing)
     names = [getattr(importlib.import_module(modules[cls]), cls).name for cls in registered]
     assert said == names
     assert names[-3:] == ["library_alias_fetch", "lyrics_scan", "lyrics_fetch"]

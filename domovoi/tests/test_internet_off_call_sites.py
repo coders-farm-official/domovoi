@@ -19,6 +19,7 @@ DB-free except the news-feed test (``requires_db``).
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -301,4 +302,5 @@ def test_every_site_imports_egress_at_module_level() -> None:
         "web/backend/api/satellite_media.py",
     ):
         src = (root / rel).read_text(encoding="utf-8")
-        assert "\nfrom domovoi import egress" in src, rel
+        # (one name among others is fine: ``from domovoi import ai_features, egress``)
+        assert re.search(r"^from domovoi import (?:[\w, ]*, )?egress\b", src, re.M), rel
