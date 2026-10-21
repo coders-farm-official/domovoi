@@ -40,14 +40,14 @@ class CapabilitiesTest {
     /** The household "AI features" switch (`features.ai`): off only when the
      *  server says false. Absent (an older server; a manifest that failed to
      *  load) counts as on, and `features.chat` (voice chat mode) is not it. */
-    @Test fun aiEnabled_isOffOnlyWhenTheServerSaysSo() {
-        assertTrue(Capabilities.EMPTY.aiEnabled)
-        assertTrue(DomovoiJson.parseToJsonElement(manifest).decode<Capabilities>().aiEnabled)
-        assertTrue(Capabilities(features = mapOf(FEATURE_AI to true)).aiEnabled)
-        assertFalse(Capabilities(features = mapOf(FEATURE_AI to false)).aiEnabled)
-        assertTrue(Capabilities(features = mapOf("chat" to false)).aiEnabled)
+    @Test fun serverChatOn_isOffOnlyWhenTheServerSaysSo() {
+        assertTrue(Capabilities.EMPTY.serverChatOn())
+        assertTrue(DomovoiJson.parseToJsonElement(manifest).decode<Capabilities>().serverChatOn())
+        assertTrue(Capabilities(features = mapOf(FEATURE_AI to true)).serverChatOn())
+        assertFalse(Capabilities(features = mapOf(FEATURE_AI to false)).serverChatOn())
+        assertTrue(Capabilities(features = mapOf("chat" to false)).serverChatOn())
         val off = DomovoiJson.parseToJsonElement("""{"features": {"chat": true, "ai": false}}""").decode<Capabilities>()
-        assertFalse(off.aiEnabled)
+        assertFalse(off.serverChatOn())
         assertEquals("ai", FEATURE_AI)
     }
 

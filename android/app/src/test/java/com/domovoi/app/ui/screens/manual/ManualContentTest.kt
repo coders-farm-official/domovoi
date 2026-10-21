@@ -5,6 +5,7 @@ import com.domovoi.app.net.Capabilities
 import com.domovoi.app.net.FEATURE_AI
 import com.domovoi.app.ui.screens.settings.SettingsTab
 import com.domovoi.app.ui.shell.Route
+import com.domovoi.app.ui.shell.onDeviceAssistant
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -67,6 +68,8 @@ class ManualContentTest {
     @Test fun aLinkToChatIsPlainTextWithTheServersAiOff() {
         val chat = doc.routes["chat"]!!
         val aiOff = Capabilities(features = mapOf(FEATURE_AI to false))
+        // No on-device assistant here (after One Chat, Chat stays for it).
+        onDeviceAssistant = { false }
         assertFalse(manualRouteOpens(chat, aiOff))
         assertTrue(manualRouteOpens(chat, Capabilities.EMPTY))
         assertTrue(manualRouteOpens(chat, Capabilities(features = mapOf(FEATURE_AI to true))))
