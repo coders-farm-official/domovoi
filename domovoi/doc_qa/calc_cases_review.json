@@ -1,5 +1,5 @@
 {
- "_note": "The review's adversarial cases for calculate exactly (D3 review round 2: 113 cases, and 22 for the thousands rule). truth is the right answer, or null where none is right. A case passes when the app works out the truth or refuses; working out anything else is a wrong number. Read by domovoi/tests/test_doc_calc.py and DocCalcAdversarialTest.kt.",
+ "_note": "The review's adversarial cases for calculate exactly (D3 review round 2: 113 cases, and 22 for the thousands rule). truth is the right answer, or null where none is right. A case passes when the app works out the truth or refuses; working out anything else is a wrong number. head and notes are what the server gives (the phone must give the same). Read by domovoi/tests/test_doc_calc.py and DocCalcAdversarialTest.kt.",
  "cases": [
   {
    "group": "lakh",
@@ -14,7 +14,11 @@
    ],
    "reply": "- ₹1,00,000 [p. 1] advance\n- ₹50,000 [p. 1] brokerage",
    "truth": "Total: 150,000",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read ₹1,00,000 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "lakh",
@@ -29,7 +33,11 @@
    ],
    "reply": "- 1,00,000 [p. 1] deposit\n- 25,000 [p. 1] rent",
    "truth": "Total: 125,000",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 1,00,000 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "lakh",
@@ -44,7 +52,11 @@
    ],
    "reply": "- Rs. 2,50,000 [p. 1] fee\n- Rs. 10,000 [p. 1] tax",
    "truth": "Total: 260,000",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 2,50,000 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "lakh",
@@ -59,7 +71,11 @@
    ],
    "reply": "- 12,34,567.50 [p. 1] paid\n- 1,000.00 [p. 1] refund",
    "truth": "Total: 1,235,567.50",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 12,34,567.50 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "lakh",
@@ -74,7 +90,11 @@
    ],
    "reply": "- 100,000 [p. 1] deposit\n- 25,000 [p. 1] rent",
    "truth": "Total: 125,000",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't find 100,000 on p. 1 exactly as listed, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "lakh",
@@ -89,7 +109,11 @@
    ],
    "reply": "- 5 lakh [p. 1] loan\n- 20,000 [p. 1] fee",
    "truth": "Total: 520,000",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 5 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "lakh",
@@ -104,7 +128,11 @@
    ],
    "reply": "- 2 crore [p. 1] cost\n- 50,000 [p. 1] contingency",
    "truth": "Total: 20,050,000",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 2 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "space",
@@ -119,7 +147,12 @@
    ],
    "reply": "- 1 200,50 € [p. 2] loyer\n- 300,00 € [p. 2] charges",
    "truth": "Total: €1,500.50",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: €1,500.50 (1,200.50 + 300.00 = 1,500.50), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "space",
@@ -134,7 +167,12 @@
    ],
    "reply": "- 1 200,50 € [p. 2] loyer\n- 300,00 € [p. 2] charges\n- 99,50 € [p. 2] frais",
    "truth": "Total: €1,600.00",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: €1,600.00 (1,200.50 + 300.00 + 99.50 = 1,600.00), from the 3 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "space",
@@ -149,7 +187,11 @@
    ],
    "reply": "- 200,50 € [p. 2] loyer\n- 300,00 € [p. 2] charges",
    "truth": "Total: €1,500.50",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 200,50 € here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "space",
@@ -164,7 +206,12 @@
    ],
    "reply": "- 1 200 € [p. 2] loyer\n- 300 € [p. 2] charges\n- 100 € [p. 2] frais",
    "truth": "Total: €1,600",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: €1,600 (1,200 + 300 + 100 = 1,600), from the 3 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "space",
@@ -179,7 +226,11 @@
    ],
    "reply": "- 200 € [p. 2] loyer\n- 300 € [p. 2] charges",
    "truth": "Total: €1,500",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 200 € here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "space",
@@ -194,7 +245,11 @@
    ],
    "reply": "- 1 200.50 [p. 2] grant\n- 300.00 [p. 2] fee\n- 10.00 [p. 2] bank",
    "truth": "Total: 1,510.50",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 1 200.50 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "space",
@@ -209,7 +264,11 @@
    ],
    "reply": "- 500 [p. 2] price\n- 500 [p. 2] tax",
    "truth": "Total: 13,000",
-   "nonce": null
+   "nonce": null,
+   "head": "I couldn't find the numbers for that in the document.",
+   "notes": [
+    "calc_repeated"
+   ]
   },
   {
    "group": "apostrophe",
@@ -224,7 +283,11 @@
    ],
    "reply": "- CHF 1'200.50 [p. 3] Miete\n- CHF 300.00 [p. 3] Nebenkosten",
    "truth": "Total: 1,500.50",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 1'200.50 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "apostrophe",
@@ -239,7 +302,12 @@
    ],
    "reply": "- 1'200 [p. 3] Kaution\n- 300 [p. 3] Gebühr",
    "truth": "Total: 1,500",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: 1,500 (1,200 + 300 = 1,500), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "apostrophe",
@@ -254,7 +322,12 @@
    ],
    "reply": "- 1’200 [p. 3] Kaution\n- 300 [p. 3] Gebühr\n- 100 [p. 3] Reinigung",
    "truth": "Total: 1,600",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: 1,600 (1,200 + 300 + 100 = 1,600), from the 3 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "apostrophe",
@@ -269,7 +342,11 @@
    ],
    "reply": "- 200 [p. 3] Kaution\n- 300 [p. 3] Gebühr",
    "truth": "Total: 1,500",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 200 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "apostrophe",
@@ -284,7 +361,12 @@
    ],
    "reply": "- 1'200'000 [p. 3] Preis\n- 500'000 [p. 3] Anzahlung",
    "truth": "Total: 1,700,000",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: 1,700,000 (1,200,000 + 500,000 = 1,700,000), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "apostrophe",
@@ -299,7 +381,11 @@
    ],
    "reply": "- 1'20 [p. 3] a\n- 300 [p. 3] b",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 1'20 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "currency",
@@ -314,7 +400,12 @@
    ],
    "reply": "- 40 $ [p. 4] fee\n- $10 [p. 4] charge",
    "truth": "Total: $50",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: $50 (40 + 10 = 50), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "currency",
@@ -329,7 +420,12 @@
    ],
    "reply": "- 40 € [p. 4] frais\n- 10 € [p. 4] autre",
    "truth": "Total: €50",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: €50 (40 + 10 = 50), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "currency",
@@ -344,7 +440,12 @@
    ],
    "reply": "- USD 40 [p. 4] fee\n- USD 10 [p. 4] charge",
    "truth": "Total: 50",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: 50 USD (40 + 10 = 50), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "currency",
@@ -359,7 +460,9 @@
    ],
    "reply": "- USD 40 [p. 4] fee\n- EUR 10 [p. 4] charge",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "These numbers are in USD and €, so I won't add them up.",
+   "notes": []
   },
   {
    "group": "currency",
@@ -374,7 +477,9 @@
    ],
    "reply": "- 40 dollars [p. 4] fee\n- 10 euros [p. 4] charge",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "These numbers are in dollars and €, so I won't add them up.",
+   "notes": []
   },
   {
    "group": "currency",
@@ -389,7 +494,11 @@
    ],
    "reply": "- US$40 [p. 4] fee\n- A$10 [p. 4] charge",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $10 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "currency",
@@ -404,7 +513,9 @@
    ],
    "reply": "- ¥1,200 [p. 4] fee\n- ₹500 [p. 4] charge",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "These numbers are in ¥ and ₹, so I won't add them up.",
+   "notes": []
   },
   {
    "group": "currency",
@@ -419,7 +530,9 @@
    ],
    "reply": "- $40 [p. 4] fee\n- 40 dollars [p. 4] charge",
    "truth": "Total: $80",
-   "nonce": null
+   "nonce": null,
+   "head": "These numbers are in $ and dollars, so I won't add them up.",
+   "notes": []
   },
   {
    "group": "currency",
@@ -434,7 +547,11 @@
    ],
    "reply": "- R$ 1.200,00 [p. 4] aluguel\n- R$ 300,00 [p. 4] taxa",
    "truth": "Total: 1,500.00",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $ 1.200,00 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "currency",
@@ -449,7 +566,9 @@
    ],
    "reply": "- 40 USD [p. 4] fee\n- 10 EUR [p. 4] charge",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "These numbers are in USD and €, so I won't add them up.",
+   "notes": []
   },
   {
    "group": "currency",
@@ -464,7 +583,11 @@
    ],
    "reply": "- £1.20 [p. 4] stamp\n- 40p [p. 4] envelope",
    "truth": "Total: £1.60",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 40p here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "currency",
@@ -479,7 +602,11 @@
    ],
    "reply": "- CHF 40 [p. 4] fee\n- €10 [p. 4] charge",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 40 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "range",
@@ -494,7 +621,11 @@
    ],
    "reply": "- $40–50 [p. 5] cleaning\n- $100 [p. 5] key",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $40–50 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "range",
@@ -509,7 +640,11 @@
    ],
    "reply": "- $40 [p. 5] cleaning\n- $100 [p. 5] key",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $40 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "range",
@@ -524,7 +659,11 @@
    ],
    "reply": "- $40 [p. 5] cleaning\n- $100 [p. 5] key",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $40 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "range",
@@ -539,7 +678,11 @@
    ],
    "reply": "- $40 [p. 5] low\n- 50 [p. 5] high",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $40 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "range",
@@ -554,7 +697,11 @@
    ],
    "reply": "- $40 [p. 5] low\n- $50 [p. 5] high",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $40 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "range",
@@ -569,7 +716,11 @@
    ],
    "reply": "- $40 [p. 5] low\n- $50 [p. 5] high",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $40 here, so I won't work it out.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "approx",
@@ -584,7 +735,12 @@
    ],
    "reply": "- approx. $40 [p. 6] utilities\n- $60 [p. 6] rent",
    "truth": "Total: $100",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: $100 (40 + 60 = 100), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "approx",
@@ -599,7 +755,11 @@
    ],
    "reply": "- ~$40 [p. 6] utilities\n- $60 [p. 6] rent",
    "truth": "Total: $100",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read ~$40 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "approx",
@@ -614,7 +774,12 @@
    ],
    "reply": "- ca. 40 € [p. 6] Nebenkosten\n- 60 € [p. 6] Miete",
    "truth": "Total: €100",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: €100 (40 + 60 = 100), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "approx",
@@ -629,7 +794,11 @@
    ],
    "reply": "- $40+ [p. 6] utilities\n- $60 [p. 6] rent",
    "truth": "Total: $100",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $40+ here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "footnote",
@@ -644,7 +813,11 @@
    ],
    "reply": "- $40¹ [p. 7] pet fee\n- $60 [p. 7] rent",
    "truth": "Total: $100",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $40¹ here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "footnote",
@@ -659,7 +832,11 @@
    ],
    "reply": "- $40 [p. 7] pet fee\n- $60 [p. 7] rent\n- $5 [p. 7] key",
    "truth": "Total: $105",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $40 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "footnote",
@@ -674,7 +851,11 @@
    ],
    "reply": "- $40² [p. 7] pet fee\n- $60 [p. 7] rent",
    "truth": "Total: $100",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $40² here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "footnote",
@@ -689,7 +870,11 @@
    ],
    "reply": "- $40* [p. 7] pet fee\n- $60 [p. 7] rent",
    "truth": "Total: $100",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $40* here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "footnote",
@@ -704,7 +889,11 @@
    ],
    "reply": "- $40[1] [p. 7] pet fee\n- $60 [p. 7] rent",
    "truth": "Total: $100",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't find $40 on 1 exactly as listed, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "footnote",
@@ -719,7 +908,11 @@
    ],
    "reply": "- 2½% [p. 7] rate\n- 1% [p. 7] plus",
    "truth": "Total: 3.5%",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 2½% here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "percent",
@@ -734,7 +927,9 @@
    ],
    "reply": "- 5% [p. 8] late fee\n- $1,200 [p. 8] rent",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "These numbers are in $ and %, so I won't add them up.",
+   "notes": []
   },
   {
    "group": "percent",
@@ -749,7 +944,12 @@
    ],
    "reply": "- 5% [p. 8] 2025\n- 3.5% [p. 8] 2026",
    "truth": "Difference: 1.5%",
-   "nonce": null
+   "nonce": null,
+   "head": "**Difference: 1.5% (5.0 − 3.5 = 1.5)**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "percent",
@@ -764,7 +964,12 @@
    ],
    "reply": "- 10% [p. 8] a\n- 20% [p. 8] b\n- 25% [p. 8] c",
    "truth": "Average: 18.33%",
-   "nonce": null
+   "nonce": null,
+   "head": "**Average: 18.33% ((10 + 20 + 25) ÷ 3 = 18.33), from the 3 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "percent",
@@ -779,7 +984,9 @@
    ],
    "reply": "- $1,200 [p. 8] rent\n- 15% [p. 8] increase",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "These numbers are in $ and %, so I won't work them out.",
+   "notes": []
   },
   {
    "group": "dates",
@@ -794,7 +1001,11 @@
    ],
    "reply": "- March 15, 2026 [p. 9] inspection\n- March 1, 2026 [p. 9] move-in",
    "truth": "14 days from March 1, 2026 to March 15, 2026",
-   "nonce": null
+   "nonce": null,
+   "head": "**14 days from March 1, 2026 to March 15, 2026**",
+   "notes": [
+    "calc_worked"
+   ]
   },
   {
    "group": "dates",
@@ -809,7 +1020,11 @@
    ],
    "reply": "- February 28, 2024 [p. 9] a\n- March 1, 2024 [p. 9] b",
    "truth": "2 days from February 28, 2024 to March 1, 2024",
-   "nonce": null
+   "nonce": null,
+   "head": "**2 days from February 28, 2024 to March 1, 2024**",
+   "notes": [
+    "calc_worked"
+   ]
   },
   {
    "group": "dates",
@@ -824,7 +1039,11 @@
    ],
    "reply": "- February 28, 2025 [p. 9] a\n- March 1, 2025 [p. 9] b",
    "truth": "1 day from February 28, 2025 to March 1, 2025",
-   "nonce": null
+   "nonce": null,
+   "head": "**1 day from February 28, 2025 to March 1, 2025**",
+   "notes": [
+    "calc_worked"
+   ]
   },
   {
    "group": "dates",
@@ -839,7 +1058,11 @@
    ],
    "reply": "- February 29, 2025 [p. 9] a\n- March 10, 2025 [p. 9] b",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read the date February 29, 2025 here, so I won't count the days.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "dates",
@@ -854,7 +1077,11 @@
    ],
    "reply": "- February 28, 1900 [p. 9] a\n- March 1, 1900 [p. 9] b",
    "truth": "1 day from February 28, 1900 to March 1, 1900",
-   "nonce": null
+   "nonce": null,
+   "head": "**1 day from February 28, 1900 to March 1, 1900**",
+   "notes": [
+    "calc_worked"
+   ]
   },
   {
    "group": "dates",
@@ -869,7 +1096,11 @@
    ],
    "reply": "- 2000-02-28 [p. 9] a\n- 2000-03-01 [p. 9] b",
    "truth": "2 days from February 28, 2000 to March 1, 2000",
-   "nonce": null
+   "nonce": null,
+   "head": "**2 days from February 28, 2000 to March 1, 2000**",
+   "notes": [
+    "calc_worked"
+   ]
   },
   {
    "group": "dates",
@@ -884,7 +1115,11 @@
    ],
    "reply": "- 1 de marzo de 2026 [p. 9] inicio\n- 15 de abril de 2026 [p. 9] inspección",
    "truth": "45 days from March 1, 2026 to April 15, 2026",
-   "nonce": null
+   "nonce": null,
+   "head": "**45 days from March 1, 2026 to April 15, 2026**",
+   "notes": [
+    "calc_worked"
+   ]
   },
   {
    "group": "dates",
@@ -899,7 +1134,11 @@
    ],
    "reply": "- 1 de enero de 2026 [p. 9] a\n- 1 de diciembre de 2026 [p. 9] b",
    "truth": "334 days from January 1, 2026 to December 1, 2026",
-   "nonce": null
+   "nonce": null,
+   "head": "**334 days from January 1, 2026 to December 1, 2026**",
+   "notes": [
+    "calc_worked"
+   ]
   },
   {
    "group": "dates",
@@ -914,7 +1153,11 @@
    ],
    "reply": "- 1º de marzo de 2026 [p. 9] a\n- 15 de marzo de 2026 [p. 9] b",
    "truth": "14 days from March 1, 2026 to March 15, 2026",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read the date 1º de marzo de 2026 here, so I won't count the days.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "dates",
@@ -929,7 +1172,11 @@
    ],
    "reply": "- 1 mar. 2026 [p. 9] a\n- 15 abr. 2026 [p. 9] b",
    "truth": "45 days from March 1, 2026 to April 15, 2026",
-   "nonce": null
+   "nonce": null,
+   "head": "**45 days from March 1, 2026 to April 15, 2026**",
+   "notes": [
+    "calc_worked"
+   ]
   },
   {
    "group": "dates",
@@ -944,7 +1191,11 @@
    ],
    "reply": "- 31/12/2025 [p. 9] a\n- 01/03/2026 [p. 9] b",
    "truth": "60 days from December 31, 2025 to March 1, 2026",
-   "nonce": null
+   "nonce": null,
+   "head": "**60 days from December 31, 2025 to March 1, 2026**",
+   "notes": [
+    "calc_worked"
+   ]
   },
   {
    "group": "dates",
@@ -959,7 +1210,11 @@
    ],
    "reply": "- 29/02/2024 [p. 9] a\n- 01/03/2024 [p. 9] b",
    "truth": "1 day from February 29, 2024 to March 1, 2024",
-   "nonce": null
+   "nonce": null,
+   "head": "**1 day from February 29, 2024 to March 1, 2024**",
+   "notes": [
+    "calc_worked"
+   ]
   },
   {
    "group": "dates",
@@ -974,7 +1229,11 @@
    ],
    "reply": "- 5 de Mayo de 2026 [p. 9] a\n- 5 de Junio de 2026 [p. 9] b",
    "truth": "31 days from May 5, 2026 to June 5, 2026",
-   "nonce": null
+   "nonce": null,
+   "head": "**31 days from May 5, 2026 to June 5, 2026**",
+   "notes": [
+    "calc_worked"
+   ]
   },
   {
    "group": "dates",
@@ -989,7 +1248,11 @@
    ],
    "reply": "- 01/02/2026 [p. 9] signed\n- 13/02/2026 [p. 9] handover",
    "truth": "12 days from February 1, 2026 to February 13, 2026",
-   "nonce": null
+   "nonce": null,
+   "head": "**12 days from February 1, 2026 to February 13, 2026**",
+   "notes": [
+    "calc_worked"
+   ]
   },
   {
    "group": "dates",
@@ -1004,7 +1267,11 @@
    ],
    "reply": "- 01/03/26 [p. 9] a\n- 15/03/26 [p. 9] b",
    "truth": "14 days from March 1, 2026 to March 15, 2026",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read the date 01/03/26 here, so I won't count the days.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "dates",
@@ -1019,7 +1286,11 @@
    ],
    "reply": "- 01-03-2026 [p. 9] a\n- 15-03-2026 [p. 9] b",
    "truth": "14 days from March 1, 2026 to March 15, 2026",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read the date 01-03-2026 here, so I won't count the days.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "dates",
@@ -1034,7 +1305,11 @@
    ],
    "reply": "- March 1, 2026 [p. 9] start\n- March 15, 2026 [p. 9] end",
    "truth": "14 days from March 1, 2026 to March 15, 2026",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't find March 1, 2026 on p. 9 exactly as listed, so I won't count the days.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "dates",
@@ -1049,7 +1324,11 @@
    ],
    "reply": "- 2026-02-30 [p. 9] a\n- 2026-03-05 [p. 9] b",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read the date 2026-02-30 here, so I won't count the days.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "dates",
@@ -1064,7 +1343,11 @@
    ],
    "reply": "- 1998 [p. 9] built\n- 2021 [p. 9] renovated",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read the date 1998 here, so I won't count the days.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "split",
@@ -1079,7 +1362,11 @@
    ],
    "reply": "- $1,200 [p. 10] rent\n- $500 [p. 10] deposit\n- $10 [p. 10] fee",
    "truth": "Total: $1,710",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't find $1,200 on p. 10 exactly as listed, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "split",
@@ -1094,7 +1381,11 @@
    ],
    "reply": "- $1,200 [p. 10] rent\n- $300 [p. 10] deposit",
    "truth": "Total: $1,500",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $300 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "split",
@@ -1109,7 +1400,11 @@
    ],
    "reply": "- $100 [p. 10] rent\n- - $40 [p. 10] credit",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $40 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "split",
@@ -1124,7 +1419,11 @@
    ],
    "reply": "- 1,200 [p. 10] rent\n- 50 [p. 10] fee\n- 10 [p. 10] tax",
    "truth": "Total: 1,260",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 1,200 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "split",
@@ -1139,7 +1438,11 @@
    ],
    "reply": "- 500 [p. 10] grant\n- 500 [p. 10] fee",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 500 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "sign",
@@ -1154,7 +1457,11 @@
    ],
    "reply": "- ‐$40 [p. 11] credit\n- $100 [p. 11] rent",
    "truth": "Total: $60",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read ‐$40 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "sign",
@@ -1169,7 +1476,11 @@
    ],
    "reply": "- ‒40 [p. 11] credit\n- 100 [p. 11] rent",
    "truth": "Total: 60",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read ‒40 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "sign",
@@ -1184,7 +1495,11 @@
    ],
    "reply": "- ﹣$40 [p. 11] credit\n- $100 [p. 11] rent",
    "truth": "Total: $60",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read ﹣$40 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "sign",
@@ -1199,7 +1514,11 @@
    ],
    "reply": "- －40 [p. 11] credit\n- 100 [p. 11] rent",
    "truth": "Total: 60",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read －40 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "sign",
@@ -1214,7 +1533,11 @@
    ],
    "reply": "- $40.00 CR [p. 11] balance\n- $100.00 [p. 11] rent",
    "truth": "Total: $60.00",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $40.00 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "sign",
@@ -1229,7 +1552,11 @@
    ],
    "reply": "- 500.00 [p. 11] opening\n- 200.00 [p. 11] payment",
    "truth": "Total: 300.00",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 500.00 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "scale",
@@ -1244,7 +1571,11 @@
    ],
    "reply": "- 3 mil millones [p. 12] presupuesto\n- 500 millones [p. 12] reserva",
    "truth": "Total: 3,500,000,000",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 3 mil here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "scale",
@@ -1259,7 +1590,11 @@
    ],
    "reply": "- $5 mil [p. 12] fund\n- $200,000 [p. 12] more",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $5 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "scale",
@@ -1274,7 +1609,12 @@
    ],
    "reply": "- 1,5 millones [p. 12] costo\n- 200.000 [p. 12] otro",
    "truth": "Total: 1,700,000",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: 1,700,000 (1,500,000 + 200,000 = 1,700,000), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "scale",
@@ -1289,7 +1629,11 @@
    ],
    "reply": "- 2 billones [p. 12] deuda\n- 500 millones [p. 12] otro",
    "truth": "Total: 2,000,500,000,000",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 2 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "scale",
@@ -1304,7 +1648,11 @@
    ],
    "reply": "- $2 trillion [p. 12] debt\n- $500 billion [p. 12] more",
    "truth": "Total: $2,500,000,000,000",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $2 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "scale",
@@ -1319,7 +1667,11 @@
    ],
    "reply": "- 1,5 Mio. [p. 12] Kosten\n- 500.000 [p. 12] Rest",
    "truth": "Total: 2,000,000",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 1,5 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "scale",
@@ -1334,7 +1686,11 @@
    ],
    "reply": "- 2 Mrd. [p. 12] Umsatz\n- 300 Millionen [p. 12] Rest",
    "truth": "Total: 2,300,000,000",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 2 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "scale",
@@ -1349,7 +1705,11 @@
    ],
    "reply": "- 3 Tsd. [p. 12] Kaution\n- 500 [p. 12] Gebühr",
    "truth": "Total: 3,500",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 3 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "overlap",
@@ -1370,7 +1730,13 @@
    ],
    "reply": "- $1,200 [p. 3] rent\n- $1,500 [p. 3] deposit\n- $1,500 [p. 3] deposit",
    "truth": "Total: $2,700",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: $2,700 (1,200 + 1,500 = 2,700), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found",
+    "calc_repeated"
+   ]
   },
   {
    "group": "overlap",
@@ -1391,7 +1757,13 @@
    ],
    "reply": "- $1,200 [p. 4] rent\n- $1,500 [p. 4] deposit\n- $1,500 [p. 4] deposit",
    "truth": "Total: $2,700",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: $2,700 (1,200 + 1,500 = 2,700), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found",
+    "calc_repeated"
+   ]
   },
   {
    "group": "misc",
@@ -1406,7 +1778,12 @@
    ],
    "reply": "- $1,200 [p. 1] rent\n- $1,500 [p. 1] deposit",
    "truth": "Total: $2,700",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: $2,700 (1,200 + 1,500 = 2,700), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "misc",
@@ -1421,7 +1798,11 @@
    ],
    "reply": "- $3.499 [p. 1] gas\n- $5 [p. 1] wash",
    "truth": "Total: $8.499",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $3.499 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "misc",
@@ -1436,7 +1817,11 @@
    ],
    "reply": "- €1.749 [p. 1] petrol\n- €1.689 [p. 1] diesel",
    "truth": "Total: €3.438",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read €1.749 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "misc",
@@ -1451,7 +1836,11 @@
    ],
    "reply": "- 1,459 € [p. 1] gazole\n- 1,689 € [p. 1] SP95",
    "truth": "Total: €3.148",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 1,459 € here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "misc",
@@ -1466,7 +1855,11 @@
    ],
    "reply": "- KD 1.250 [p. 1] a\n- KD 2.500 [p. 1] b",
    "truth": "Total: 3.750",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 1.250 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "misc",
@@ -1481,7 +1874,11 @@
    ],
    "reply": "- ٤٠ [p. 1] fee\n- ١٠ [p. 1] charge",
    "truth": "Total: 50",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read ٤٠ here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "misc",
@@ -1496,7 +1893,12 @@
    ],
    "reply": "- $12,345,678.91 [p. 1] price\n- $0.09 [p. 1] fee",
    "truth": "Total: $12,345,679.00",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: $12,345,679.00 (12,345,678.91 + 0.09 = 12,345,679.00), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "misc",
@@ -1511,7 +1913,12 @@
    ],
    "reply": "- 0.1 [p. 1] a\n- 0.2 [p. 1] b",
    "truth": "Total: 0.3",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: 0.3 (0.1 + 0.2 = 0.3), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "misc",
@@ -1526,7 +1933,9 @@
    ],
    "reply": "- 15% [p. 1] rate\n- 15 [p. 1] units",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "These numbers are in plain numbers and %, so I won't add them up.",
+   "notes": []
   },
   {
    "group": "misc",
@@ -1541,7 +1950,11 @@
    ],
    "reply": "- 1,200 € [p. 1] fianza\n- 950 € [p. 1] renta",
    "truth": "Total: €2,150",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't find 1,200 € on p. 1 exactly as listed, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "misc",
@@ -1556,7 +1969,11 @@
    ],
    "reply": "- 1.5 % [p. 1] a\n- 2.5 % [p. 1] b",
    "truth": "Total: 4.0%",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 1.5 % here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "misc",
@@ -1571,7 +1988,12 @@
    ],
    "reply": "- -$40 [p. 1] May\n- $60 [p. 1] June",
    "truth": "Difference: $100",
-   "nonce": null
+   "nonce": null,
+   "head": "**Difference: $100 (60 − (−40) = 100)**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "misc",
@@ -1586,7 +2008,12 @@
    ],
    "reply": "- (10.00) [p. 1] a\n- (20.00) [p. 1] b\n- 5.00 [p. 1] c",
    "truth": "Average: -8.33",
-   "nonce": null
+   "nonce": null,
+   "head": "**Average: −8.33 (((−10.00) + (−20.00) + 5.00) ÷ 3 = −8.33), from the 3 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "misc",
@@ -1601,7 +2028,11 @@
    ],
    "reply": "- 40USD [p. 1] a\n- 10USD [p. 1] b",
    "truth": "Total: 50",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 40USD here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "misc",
@@ -1616,7 +2047,11 @@
    ],
    "reply": "- $100 [p. 1] rent\n- +$20 [p. 1] surcharge",
    "truth": "Total: $120",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $20 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "misc",
@@ -1631,7 +2066,11 @@
    ],
    "reply": "- 2 x $15 [p. 1] bins\n- $10 [p. 1] setup",
    "truth": "Total: $40",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 2 x $15 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "misc",
@@ -1646,7 +2085,11 @@
    ],
    "reply": "- $100/month [p. 1] a\n- $50 [p. 1] b",
    "truth": "Total: $150",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $100/month here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "es-dollar",
@@ -1661,7 +2104,12 @@
    ],
    "reply": "- $8,500 [p. 1] renta\n- $8,500 [p. 1] depósito",
    "truth": "Total: $17,000",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: $17,000 (8,500 + 8,500 = 17,000), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "es-dollar",
@@ -1676,7 +2124,11 @@
    ],
    "reply": "- $8,500.00 [p. 1] renta\n- $8,500.00 [p. 1] depósito",
    "truth": "Total: $17,000.00",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $8,500.00 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "es-dollar",
@@ -1691,7 +2143,12 @@
    ],
    "reply": "- $1,500 [p. 1] loyer\n- $1,500 [p. 1] caution",
    "truth": "Total: $3,000",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: $3,000 (1,500 + 1,500 = 3,000), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "es-dollar",
@@ -1706,7 +2163,12 @@
    ],
    "reply": "- $150.000 [p. 1] alquiler\n- $25.000 [p. 1] expensas",
    "truth": "Total: $175,000",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: $175,000 (150,000 + 25,000 = 175,000), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -1721,7 +2183,12 @@
    ],
    "reply": "- $1,200 [p. 1] rent\n- $1,500 [p. 1] deposit",
    "truth": "Total: $2,700",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: $2,700 (1,200 + 1,500 = 2,700), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -1736,7 +2203,12 @@
    ],
    "reply": "- £1,200 [p. 1] rent\n- £1,500 [p. 1] deposit",
    "truth": "Total: £2,700",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: £2,700 (1,200 + 1,500 = 2,700), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -1751,7 +2223,11 @@
    ],
    "reply": "- €1,200 [p. 1] rent\n- €1,500 [p. 1] deposit",
    "truth": "Total: €2,700",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read €1,200 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -1766,7 +2242,11 @@
    ],
    "reply": "- 1.500 € [p. 1] fianza\n- 1.200 € [p. 1] renta",
    "truth": "Total: €2,700",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 1.500 € here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -1781,7 +2261,11 @@
    ],
    "reply": "- $3.499 [p. 1] gas\n- $5 [p. 1] wash",
    "truth": "Total: $8.499",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $3.499 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -1796,7 +2280,11 @@
    ],
    "reply": "- £1.459 [p. 1] unleaded\n- £1.529 [p. 1] diesel",
    "truth": "Total: £2.988",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read £1.459 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -1811,7 +2299,11 @@
    ],
    "reply": "- €1.749 [p. 1] petrol\n- €1.689 [p. 1] diesel",
    "truth": "Total: €3.438",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read €1.749 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -1826,7 +2318,11 @@
    ],
    "reply": "- 1,459 € [p. 1] gazole\n- 1,689 € [p. 1] SP95",
    "truth": "Total: €3.148",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 1,459 € here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -1841,7 +2337,11 @@
    ],
    "reply": "- € 1,999 [p. 1] benzine\n- € 1,789 [p. 1] diesel",
    "truth": "Total: €3.788",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read € 1,999 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -1856,7 +2356,11 @@
    ],
    "reply": "- 1,599 $ [p. 1] essence\n- 1,749 $ [p. 1] diesel",
    "truth": "Total: $3.348",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 1,599 $ here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -1871,7 +2375,11 @@
    ],
    "reply": "- $1,459 [p. 1] a\n- $1,529 [p. 1] b",
    "truth": null,
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read $1,459 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -1886,7 +2394,12 @@
    ],
    "reply": "- -$1,500 [p. 1] credit\n- $2,000 [p. 1] rent",
    "truth": "Total: $500",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: $500 ((−1,500) + 2,000 = 500), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -1901,7 +2414,12 @@
    ],
    "reply": "- ($1,500) [p. 1] credit\n- $2,000 [p. 1] rent",
    "truth": "Total: $500",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: $500 ((−1,500) + 2,000 = 500), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -1916,7 +2434,12 @@
    ],
    "reply": "- $12,500 [p. 1] car\n- $1,250 [p. 1] fees",
    "truth": "Total: $13,750",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: $13,750 (12,500 + 1,250 = 13,750), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -1931,7 +2454,11 @@
    ],
    "reply": "- 1,500 [p. 1] a\n- 1,200 [p. 1] b",
    "truth": "Total: 2,700",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 1,500 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -1946,7 +2473,11 @@
    ],
    "reply": "- 1,500 $ [p. 1] a\n- 1,200 $ [p. 1] b",
    "truth": "Total: $2,700",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 1,500 $ here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -1961,7 +2492,12 @@
    ],
    "reply": "- $8,500 [p. 1] renta\n- $8,500 [p. 1] depósito",
    "truth": "Total: $17,000",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: $17,000 (8,500 + 8,500 = 17,000), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -1976,7 +2512,12 @@
    ],
    "reply": "- $1,500 [p. 1] loyer\n- $1,500 [p. 1] caution",
    "truth": "Total: $3,000",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: $3,000 (1,500 + 1,500 = 3,000), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -1991,7 +2532,12 @@
    ],
    "reply": "- 1,459 € [p. 1] gasóleo\n- 1,689 € [p. 1] gasolina",
    "truth": "Total: €3.148",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: €3.148 (1.459 + 1.689 = 3.148), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -2006,7 +2552,12 @@
    ],
    "reply": "- $1,50 [p. 1] a\n- $2,25 [p. 1] b",
    "truth": "Total: $3.75",
-   "nonce": null
+   "nonce": null,
+   "head": "**Total: $3.75 (1.50 + 2.25 = 3.75), from the 2 entries I found**",
+   "notes": [
+    "calc_worked",
+    "calc_only_found"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -2021,7 +2572,11 @@
    ],
    "reply": "- KD 1.250 [p. 1] a\n- KD 2.500 [p. 1] b",
    "truth": "Total: 3.750",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 1.250 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   },
   {
    "group": "thousands rule: rule3",
@@ -2036,7 +2591,11 @@
    ],
    "reply": "- 1.250 BHD [p. 1] a\n- 2.500 BHD [p. 1] b",
    "truth": "Total: 3.750",
-   "nonce": null
+   "nonce": null,
+   "head": "I can't be sure how to read 1.250 here, so I won't add it up.",
+   "notes": [
+    "calc_unsure"
+   ]
   }
  ]
 }

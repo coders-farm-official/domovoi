@@ -110,7 +110,7 @@ object DocHeadsUp {
     // Only clear requests to read the words (review round 1).
     private val READING_RE = re(
         """\b(read|reads|reading|transcribe|transcription|translate|spell out|spelled out|copy out|type out)\b""" +
-            """|\bwhat (does|do|did) (it|this|that|(this|that|the|my|our|your) [\w ]{1,30}) say\b|\bwhat (it|this|that) says\b""" +
+            """|\bwhat (does|do|did) (it|this|that|(this|that|the|my|our|your) [\w ']{1,30}) say\b|\bwhat (it|this|that) says\b""" +
             """|\bwhat'?s written\b|\bwhat is written\b|\bwhat'?s the (text|writing|wording)\b|\bwhat words\b""",
     )
 
@@ -147,6 +147,16 @@ object DocHeadsUp {
     }
 
     fun numbersIn(text: String?): List<String> = NUMBER_RE.findAll(DocText.normalize(text)).map { it.value }.toList()
+
+    /** The numbers the passages show that "calculate exactly" can read for
+     *  certain, as written, each once; where some carry a currency or "%",
+     *  only those (the server's `amounts_in`). */
+    fun amountsIn(texts: List<String>): Set<String> {
+        val ctx = DocCalc.context(texts)
+        val nums = texts.flatMap { t -> DocCalc.readNumbers(t, ctx).filter { it.value != null } }
+        val priced = nums.filter { it.unit.isNotEmpty() }
+        return (priced.ifEmpty { nums }).map { it.written }.toSet()
+    }
 
     fun isLookup(op: String, texts: List<String>): Boolean {
         val words = LOOKUP_WORDS[op] ?: return false
@@ -324,9 +334,10 @@ object DocHeadsUp {
         val texts = req.given.map { it.second }
         if (req.mode == "question") {
             val op = calcRequest(question)
-            // Enough to work from: two dates to count between, or two numbers.
+            // Enough to work from: two dates to count between, or two amounts
+            // the app can read for certain (one number on the page is a lookup).
             val enough = if (op == "days") texts.sumOf { DocCalc.readDates(it).size } >= 2
-            else texts.flatMap { numbersIn(it) }.toSet().size >= 2
+            else amountsIn(texts).size >= 2
             if (op != null && enough && !isLookup(op, texts) && t.fires("calc", "combine", req.where)) {
                 val k = t.kind("calc")
                 out += if (op in CALCULATOR_OPS && "calculate" in req.can) {

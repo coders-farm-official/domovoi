@@ -505,6 +505,34 @@
    "cards": []
   },
   {
+   "name": "one stated amount is a lookup",
+   "request": {
+    "mode": "question",
+    "question": "What is the total amount due?",
+    "where": "server",
+    "can": [
+     "calculate"
+    ],
+    "docs": [
+     {
+      "name": "bill.pdf",
+      "chars": 4000,
+      "pages": 1,
+      "words": 0,
+      "scanned_pages": [],
+      "sample": ""
+     }
+    ],
+    "given": [
+     {
+      "label": "p. 1",
+      "text": "Account 4471. Amount due: $1,200.00 by March 1, 2026."
+     }
+    ]
+   },
+   "cards": []
+  },
+  {
    "name": "days",
    "request": {
     "mode": "question",
@@ -1417,6 +1445,31 @@
    ]
   },
   {
+   "name": "blurry, a doctor's note",
+   "request": {
+    "mode": "picture",
+    "question": "What does the doctor's note say?",
+    "where": "server",
+    "picture": {
+     "blur": 12.5
+    }
+   },
+   "cards": [
+    {
+     "kind": "blurry",
+     "text": "This photo looks blurry, so some words may be guessed.",
+     "options": [
+      "choose_another",
+      "send_anyway"
+     ],
+     "note": null,
+     "op": null,
+     "after": null,
+     "note_only": false
+    }
+   ]
+  },
+  {
    "name": "blurry, nothing to read",
    "request": {
     "mode": "picture",
@@ -1745,16 +1798,11 @@
      "text": "The security deposit is $1,500. Move in on March 1, 2026; inspection on April 15, 2026."
     }
    ],
-   "content": "**Total: $2,700 (1,200 + 1,500 = 2,700), from the 2 entries I found**\n\n- $1,200 [p. 1] rent\n- $1,500 [p. 2] deposit",
+   "content": "I can't find $999 on p. 2 exactly as listed, so I won't add it up.",
    "found": true,
-   "cited": [
-    "p. 1",
-    "p. 2"
-   ],
+   "cited": [],
    "notes": [
-    "calc_worked",
-    "calc_only_found",
-    "calc_dropped"
+    "calc_unsure"
    ]
   },
   {
@@ -1860,13 +1908,11 @@
      "text": "The security deposit is $1,500. Move in on March 1, 2026; inspection on April 15, 2026."
     }
    ],
-   "content": "That needs exactly two dates.\n\n- April 15, 2026 [p. 2] inspection",
+   "content": "I can't find March 2, 2026 on p. 2 exactly as listed, so I won't count the days.",
    "found": true,
-   "cited": [
-    "p. 2"
-   ],
+   "cited": [],
    "notes": [
-    "calc_dropped"
+    "calc_unsure"
    ]
   },
   {

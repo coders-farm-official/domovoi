@@ -264,12 +264,25 @@ def test_never_more_than_one_card_per_kind_per_chat_over_a_scripted_chat():
 EN = {0: calc.Ctx(style="dot")}
 
 def test_calculate_exactly_adds_only_numbers_their_page_shows():
-    c = calc.finish("- $1,200 [p. 1] rent\n- $1,500 [p. 2] deposit\n- $999 [p. 2] made up\n- 5 [p. 9] no page",
+    c = calc.finish("- $1,200 [p. 1] rent\n- $1,500 [p. 2] deposit",
                     _given(GIVEN), "total?", ["lease.pdf"], "sum", ctxs=EN)
     assert c.content.startswith("**Total: $2,700 (1,200 + 1,500 = 2,700), from the 2 entries I found**")
-    assert "$999" not in c.content
-    assert [n["code"] for n in c.notes] == ["calc_worked", "calc_only_found", "calc_dropped"]
+    assert [n["code"] for n in c.notes] == ["calc_worked", "calc_only_found"]
     assert c.cited == ["p. 1", "p. 2"] and all(s["cited"] for s in c.sources)
+    # A number its page doesn't show refuses the whole sum (review round 2), naming it.
+    c = calc.finish("- $1,200 [p. 1] rent\n- $1,500 [p. 2] deposit\n- $999 [p. 2] made up",
+                    _given(GIVEN), "total?", ["lease.pdf"], "sum", ctxs=EN)
+    assert c.content == "I can't find $999 on p. 2 exactly as listed, so I won't add it up."
+    assert [n["code"] for n in c.notes] == ["calc_unsure"]
+
+
+def test_one_stated_amount_is_a_lookup_not_a_calculation():
+    r = h.Request(mode="question", question="What is the total amount due?", where="server", can=["calculate"],
+                  docs=[h.Doc("bill.pdf", 4000, 1, 600, [], "")], given=[("p. 1", "Account 4471. Amount due: $1,200.00 by March 1, 2026.")])
+    assert not [c for c in h.findings(r) if c.kind == "calc"]
+    r.given.append(("p. 2", "Late fee: $35.00."))
+    assert [c.kind for c in h.findings(r)] == ["calc"]
+    assert h.reading_request("What does the doctor's note say?")
 
 
 def test_calculate_exactly_is_decimal_not_floating_point():
@@ -288,7 +301,7 @@ def test_days_between_two_dates_their_page_shows():
     assert c.content.startswith("**45 days from March 1, 2026 to April 15, 2026**")
     off = calc.finish("- March 2, 2026 [p. 2] move in\n- April 15, 2026 [p. 2] inspection",
                       _given(GIVEN), "days?", ["lease.pdf"], "days")
-    assert off.content.startswith("That needs exactly two dates.")
+    assert off.content == "I can't find March 2, 2026 on p. 2 exactly as listed, so I won't count the days."
 
 
 def test_a_model_that_answers_instead_of_listing_gets_couldnt_find():

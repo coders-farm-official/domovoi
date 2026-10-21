@@ -85,3 +85,10 @@ def test_the_review_sets_never_get_a_wrong_number():
             wrong.append(f"{case['name']}: {head} (truth {case['truth']})")
     assert wrong == [], "\n".join(wrong)
     assert len(REVIEW) == 135 and correct >= 40
+
+
+def test_the_review_sets_record_what_the_server_gives():
+    """calc_cases_review.json holds the server's head and notes for each case;
+    the phone's DocCalcAdversarialTest must give the same."""
+    for case in REVIEW:
+        assert calc_cases.run_python(case) == (case["head"], case["notes"]), case["name"]

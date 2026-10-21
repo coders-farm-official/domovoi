@@ -169,7 +169,7 @@ _LOOKUP_WORDS = {
 # "sign", "form" or "note", which a photo of anything may come with.
 _READING_RE = re.compile(
     r"\b(read|reads|reading|transcribe|transcription|translate|spell out|spelled out|copy out|type out)\b"
-    r"|\bwhat (does|do|did) (it|this|that|(this|that|the|my|our|your) [\w ]{1,30}) say\b|\bwhat (it|this|that) says\b"
+    r"|\bwhat (does|do|did) (it|this|that|(this|that|the|my|our|your) [\w ']{1,30}) say\b|\bwhat (it|this|that) says\b"
     r"|\bwhat'?s written\b|\bwhat is written\b|\bwhat'?s the (text|writing|wording)\b|\bwhat words\b")
 
 
@@ -225,6 +225,19 @@ def calc_request(question: str) -> str | None:
 def numbers_in(text: str) -> list[str]:
     """The numbers a text shows ("$1,200", "12.5%", "30"), as written."""
     return [m.group(0) for m in _NUMBER_RE.finditer(normalize(text or ""))]
+
+
+def amounts_in(texts: Sequence[str]) -> set[str]:
+    """The numbers the passages show that "calculate exactly" can read for
+    certain (:func:`calc.read_numbers`), as written, each once; where some
+    carry a currency or "%", only those (a bill's one amount beside its
+    account number is still one amount)."""
+    from domovoi.doc_qa import calc as _calc
+
+    ctx = _calc.context(list(texts))
+    nums = [n for t in texts for n in _calc.read_numbers(t, ctx) if n.value is not None]
+    priced = [n for n in nums if n.unit]
+    return {n.written for n in (priced or nums)}
 
 
 def is_lookup(op: str, texts: Iterable[str]) -> bool:
@@ -473,7 +486,10 @@ def findings(req: Request, table: dict[str, Any] | None = None) -> list[Card]:
 
             enough = sum(len(_calc.read_dates(txt)) for txt in texts) >= 2
         else:
-            enough = len(set(n for txt in texts for n in numbers_in(txt))) >= 2
+            # Two amounts the app can read for certain (review round 2): one
+            # number on the page ("What is the total amount due?" over a
+            # bill's one amount) is a lookup, quoted, not calculated.
+            enough = len(amounts_in(texts)) >= 2
         if op and enough and not is_lookup(op, texts) and fires(t, "calc", "combine", req.where):
             k = kinds["calc"]
             if op in CALCULATOR_OPS and "calculate" in req.can:

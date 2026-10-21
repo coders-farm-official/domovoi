@@ -237,7 +237,7 @@
       "eval": "documents plan D3",
       "date": "2026-10-21",
       "device": "phone and home server",
-      "manual": "Adding up, averaging or counting days between numbers spread over a document: the model's arithmetic isn't checked. With calculate exactly, the model only lists the numbers with their pages; the app checks each one is on its page, reads its sign, scale and separators the way the document writes them, and does the sum from the entries it found. When a number, a unit or a date's day and month can't be read for certain, it says so and works nothing out."
+      "manual": "Adding up, averaging or counting days between numbers spread over a document: the model's arithmetic isn't checked. With calculate exactly, the model only lists the numbers with their pages; the app checks each one is on its page as that whole number, reads it only in forms it knows for certain (a sign, a currency from a short list, the document's own separators, a scale like \"1.2k\" or \"1.2 million\"), and does the sum from the entries it found. When a number isn't on its page as listed, or it, its unit or a date's day and month can't be read for certain (a footnote mark, \"per month\", a range, an unknown currency), it names it and works nothing out."
     },
     {
       "kind": "long",

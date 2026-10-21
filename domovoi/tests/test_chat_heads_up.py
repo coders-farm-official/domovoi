@@ -149,14 +149,13 @@ def test_calculate_exactly_lists_the_numbers_and_the_app_adds_them(model):
     with _client() as c:
         tid, tok = _thread_with_doc(c)
         card = _send(c, tid, CALC_Q, [tok])
-        model.reply = "- $1,200 [p. 1] monthly rent\n- $1,500 [p. 2] security deposit\n- $777 [p. 2] invented"
+        model.reply = "- $1,200 [p. 1] monthly rent\n- $1,500 [p. 2] security deposit"
         done = _done(_pick(c, tid, card, "calculate"))
         rules = model.calls[0]["messages"][0]["content"]
         assert "Don't calculate anything" in rules and "Answer only from the passages" not in rules
         assert done["content"].startswith("**Total: $2,700 (1,200 + 1,500 = 2,700), from the 2 entries I found**")
-        assert "$777" not in done["content"]
         codes = [n["code"] for n in done["doc"]["notes"]]
-        assert "calc_worked" in codes and "calc_dropped" in codes and "heads_up_calc" not in codes
+        assert "calc_worked" in codes and "heads_up_calc" not in codes
         assert done["doc"]["calc"] == "sum" and done["doc"]["heads_up_chosen"] == {"kind": "calc", "option": "calculate"}
         assert {s["label"] for s in done["doc"]["sources"] if s["cited"]} == {"p. 1", "p. 2"}
         msgs = c.get(f"/api/chat/threads/{tid}/messages").json()["messages"]

@@ -32,15 +32,23 @@ dependencies.
   The model is never asked whether it is sure.
 * **Calculate exactly.** On a sum, an average, a difference or the days
   between two dates, the model only lists the numbers with their pages.
-  The app keeps a number only when its page shows that whole number (each
-  place once), reads its sign ("-$40", "(40.00)"), scale ("$1.2k",
-  "1.2 million") and separators the way the document's language writes
-  them ("1.200 €" in Spanish is 1,200), and adds them up to the inputs'
-  precision, "from the 3 entries I found". When a number, a mix of units
-  or a date's day and month can't be read for certain, the reply says so
-  plainly ("I can't be sure how to read 1.200 here, so I won't add it
-  up") and works nothing out. Only aggregations get this card: a lookup
-  of a stated number ("how many days after move-out…") doesn't.
+  The app reads each number by a strict grammar and refuses everything
+  else: an attached sign or parentheses ("-$40", "(40.00)"), a currency
+  from a short list ($ £ € ¥ ₹, USD, EUR, GBP, MXN, dollars, euros,
+  pounds, pesos), separators the way the document's language writes them
+  ("1.200 €" in Spanish is 1,200; "$1,500" and "£1,500" are thousands in
+  any language), a scale from a closed table ("$1.2k", "1.2 million",
+  "3 millones") and a trailing currency or "%". A number its page
+  doesn't show as that whole token, anything else touching it (a
+  footnote mark, "/", "per", a range, an unknown code or scale word, a
+  line break), a mix of units, or a date's day and month that can't be
+  told apart refuses the whole calculation in a plain sentence naming it
+  ("I can't be sure how to read $1,200/month here, so I won't add it
+  up"); otherwise it adds them up to the inputs' precision, each place
+  on the page once, "from the 3 entries I found". Only aggregations over
+  at least two amounts get this card: a lookup of a stated number ("how
+  many days after move-out…", "what is the total amount due?" over a
+  bill's one amount) doesn't.
 * **Known limits.** "Don't warn me" and the switch are kept per browser or
   phone; the long-summary card follows its time thresholds (3 minutes);
   a spoken question on the phone gets the notes, not a spoken yes or no;
