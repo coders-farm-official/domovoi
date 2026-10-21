@@ -153,8 +153,9 @@ class SafeZip:
         except KeyError:
             return False
 
-    def read(self, name: str, cap: int = MAX_MEMBER_BYTES) -> bytes:
+    def read(self, name: str, cap: int | None = None) -> bytes:
         """Member ``name``, inflated through a bounded stream."""
+        cap = MAX_MEMBER_BYTES if cap is None else cap
         try:
             with self.zf.open(name) as f:
                 data = f.read(cap + 1)

@@ -96,6 +96,7 @@ from domovoi.clients import ollama as ollama_client
 from domovoi.config import settings as core_settings
 from domovoi.profile_context import build_profile_prefix
 from domovoi.voice_identifier import speaker_is_confident
+from web.backend.api import chat_documents as _docs
 from web.backend.api.devices import valid_device_id
 from web.backend.db import session_scope
 from web.backend.domovoi_client import auth_forward_headers, domovoi_url
@@ -236,9 +237,22 @@ async def delete_thread(thread_id: int) -> dict[str, Any]:
                 {"id": thread_id},
             )
         ).scalars().all()
+        doc_tokens = {d.get("token") for d in await _docs.thread_documents(thread_id, s)}
         r = await s.execute(text("DELETE FROM chat_threads WHERE id = :id"), {"id": thread_id})
         if r.rowcount == 0:
             raise HTTPException(status_code=404, detail="thread not found")
+        docs_still_used = set(
+            (
+                await s.execute(
+                    text(
+                        """
+                        SELECT jsonb_array_elements(documents)->>'token'
+                          FROM chat_messages WHERE documents IS NOT NULL
+                        """
+                    )
+                )
+            ).scalars().all()
+        )
         still_used = set(
             (
                 await s.execute(
@@ -260,21 +274,24 @@ async def delete_thread(thread_id: int) -> dict[str, Any]:
                 # The upload, and the copy the model was sent (_vision_bytes).
                 for p in [*UPLOADS_DIR.glob(f"{token}.*"), *UPLOADS_DIR.glob(f"{token}-*")]:
                     p.unlink(missing_ok=True)
+    # The thread's documents, and the text read from them (chat_documents).
+    _docs.remove({t for t in doc_tokens if t and t not in docs_still_used})
     return {"deleted": thread_id}
 
 
 # ─── Messages ───────────────────────────────────────────────────────────────
 _MSG_COLUMNS = (
     "m.id, m.role, m.content, m.images, m.model, m.error, m.created_at, m.stats, m.device_id, "
-    "m.source, m.speaker_person_id, m.speaker_confidence"
+    "m.source, m.speaker_person_id, m.speaker_confidence, m.documents, m.doc"
 )
 
 
 def _msg_dict(r: Any) -> dict[str, Any]:
     d = dict(r)
     d["created_at"] = d["created_at"].isoformat()
-    if isinstance(d.get("stats"), str):
-        d["stats"] = json.loads(d["stats"])
+    for key in ("stats", "documents", "doc"):
+        if isinstance(d.get(key), str):
+            d[key] = json.loads(d[key])
     if d.get("speaker_confidence") is not None:
         d["speaker_confidence"] = round(float(d["speaker_confidence"]), 4)
     # The same judgement the core made when the turn came in
@@ -484,8 +501,12 @@ async def list_messages(thread_id: int) -> dict[str, Any]:
 
 
 class SendBody(BaseModel):
-    content: str = Field(..., min_length=1, max_length=32000)
+    # Empty only with documents attached (an attachment with no question:
+    # chat_documents.attach_reply answers it).
+    content: str = Field("", max_length=32000)
     images: list[dict[str, str]] = Field(default_factory=list, max_length=_MAX_IMAGES_PER_MESSAGE)
+    # Documents staged with POST /api/chat/documents: [{token}].
+    documents: list[dict[str, str]] = Field(default_factory=list, max_length=4)
     model: Optional[str] = Field(None, max_length=200)
     # The sending install (the device tier's usual id), for the details view.
     device_id: Optional[str] = Field(None, max_length=64)
@@ -720,6 +741,11 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         if _upload_path(i.get("token", "")) is not None
     ]
     has_images = bool(images)
+    # Documents staged for this message (chat_documents.py); a thread with
+    # any is answered from them unless the message carries pictures.
+    documents = _docs.resolve(body.documents)
+    if not body.content.strip() and not documents:
+        raise HTTPException(status_code=422, detail="a message needs some words, or a document attached")
     override = (body.model or "").strip()
     model = override or (
         core_settings.ollama_vision_model if has_images else core_settings.ollama_model
@@ -734,17 +760,23 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         ).first()
         if thread is None:
             raise HTTPException(status_code=404, detail="thread not found")
-        await s.execute(
-            text(
-                """
-                INSERT INTO chat_messages (thread_id, role, content, images, device_id)
-                VALUES (:t, 'user', :c, CAST(:imgs AS JSONB), :dev)
-                """
-            ),
-            {"t": thread_id, "c": body.content,
-             "imgs": json.dumps(images) if images else None, "dev": device_id},
-        )
-        # First user message titles the thread (cheap heuristic, editable).
+        user_row_id = (
+            await s.execute(
+                text(
+                    """
+                    INSERT INTO chat_messages (thread_id, role, content, images, device_id, documents)
+                    VALUES (:t, 'user', :c, CAST(:imgs AS JSONB), :dev, CAST(:docs AS JSONB))
+                    RETURNING id
+                    """
+                ),
+                {"t": thread_id, "c": body.content,
+                 "imgs": json.dumps(images) if images else None, "dev": device_id,
+                 "docs": json.dumps(documents) if documents else None},
+            )
+        ).scalar_one()
+        # First user message titles the thread (cheap heuristic, editable);
+        # an attachment with no words titles it after the document.
+        first_line = (body.content.strip().splitlines() or [""])[0]
         await s.execute(
             text(
                 """
@@ -754,10 +786,18 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
                  WHERE id = :t
                 """
             ),
-            {"t": thread_id, "c": body.content.strip().splitlines()[0]},
+            {"t": thread_id, "c": first_line or f"About {documents[0]['name']}"},
         )
         await _notify_chat(s, "message")
         await s.commit()
+
+    # A thread with documents: find, then answer (chat_documents.plan_reply).
+    plan: Any = None
+    if not has_images:
+        previous = await _docs.previous_question(thread_id, before_id=user_row_id)
+        plan = await _docs.plan_reply(thread_id, body.content, documents, previous)
+        if plan is not None and not override:
+            model_role = "documents"
 
     refusal: tuple[str, str] | None = None
     if model_role == "vision":
@@ -772,10 +812,17 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
     # thread's earlier ones out (see _history_for_model). A turn that may
     # carry pictures is cut to the vision window, less the system message
     # (at its longest: with the pictures paragraph) and room for the reply.
-    with_images = model_role != "chat"
+    with_images = model_role not in ("chat", "documents")
     history: list[dict[str, Any]] = []
     profile = model_system = None
-    if refusal is None:
+    if refusal is None and plan is not None:
+        # Answered from the documents: the passages and the question are the
+        # whole prompt (no earlier replies: an answer comes only from what
+        # the app found), the rules after who is answering.
+        if plan.immediate is None:
+            profile = await _thread_profile(thread.person_id)
+            history = [{"role": "user", "content": plan.user}]
+    elif refusal is None:
         profile = await _thread_profile(thread.person_id)
         if with_images:
             model_system = await ollama_client.model_system_or_none(model)
@@ -796,6 +843,8 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
             profile, pictures=vision_call, model_system=model_system,
         ),
     }
+    if plan is not None and plan.immediate is None:
+        system["content"] += "\n\n" + plan.rules
     num_ctx = (core_settings.ollama_vision_num_ctx if vision_call else 0) or core_settings.ollama_num_ctx
     stream_knobs: dict[str, Any] = (
         {"think": False, "num_ctx": core_settings.ollama_vision_num_ctx} if vision_call else {}
@@ -815,9 +864,17 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         ollama_stats: dict[str, Any] = {}
         started = time.monotonic()
         first_token_ms: float | None = None
+        doc: dict[str, Any] | None = None
         if refusal is not None:
             code, error = refusal
             log.info("chat refused up front (thread %s, model %r): %s", thread_id, model, code)
+        elif plan is not None and plan.immediate is not None:
+            # Said by the app, with no model asked: nothing found, an
+            # attachment with no question, a summary too long for one pass.
+            first_token_ms = 0.0
+            chunks.append(plan.immediate)
+            doc = plan.doc_json()
+            yield f"event: delta\ndata: {json.dumps({'text': plan.immediate})}\n\n"
         else:
             try:
                 async for delta in ollama_client.chat_stream(
@@ -846,6 +903,10 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         content = "".join(chunks)
         if not content and error is None:
             code, error = _plain(ERR_EMPTY, model, model_role)
+        if plan is not None and plan.immediate is None and error is None:
+            # The app's check: citations only of passages it gave, quotes
+            # word for word, "I couldn't find that" said exactly.
+            content, doc = plan.finish(content)
         if refusal is not None:
             # No reply was attempted, so there are no reply figures.
             stats: dict[str, Any] = {"model_role": model_role}
@@ -866,12 +927,13 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
                 await s.execute(
                     text(
                         """
-                        INSERT INTO chat_messages AS m (thread_id, role, content, model, error, stats)
-                        VALUES (:t, 'assistant', :c, :m, :e, CAST(:st AS JSONB))
+                        INSERT INTO chat_messages AS m (thread_id, role, content, model, error, stats, doc)
+                        VALUES (:t, 'assistant', :c, :m, :e, CAST(:st AS JSONB), CAST(:doc AS JSONB))
                         RETURNING {cols}, NULL::text AS device_name, NULL::text AS speaker_name
                         """.format(cols=_MSG_COLUMNS)
                     ),
-                    {"t": thread_id, "c": content, "m": model, "e": error, "st": json.dumps(stats)},
+                    {"t": thread_id, "c": content, "m": None if (plan is not None and plan.immediate is not None) else model,
+                     "e": error, "st": json.dumps(stats), "doc": json.dumps(doc) if doc is not None else None},
                 )
             ).mappings().first()
             await s.execute(
@@ -1130,3 +1192,7 @@ async def chat_models() -> dict[str, Any]:
         "vision_model": vision,
         "vision_installed": None if tags is None else ollama_client.model_installed(vision, tags),
     }
+
+
+# Documents in chats (chat_documents.py): their routes ride on this router.
+router.include_router(_docs.router)
