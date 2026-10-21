@@ -62,9 +62,10 @@ import kotlinx.coroutines.withContext
  * per book, and can be removed; the header says how much space they take.
  */
 
-/** The cover of a saved book, from its folder. */
+/** The cover of a saved book, from its folder (named in the record only
+ *  once written; no disk check, as this runs while drawing). */
 internal fun savedCover(book: SavedBook, store: BookStore): String? =
-    book.meta.cover?.let { store.fileOf(book.key, it) }?.takeIf { it.isFile }?.toURI()?.toString()
+    book.meta.cover?.let { store.fileOf(book.key, it) }?.toURI()?.toString()
 
 @Composable
 fun SavedBooksScreen(offline: Boolean = false) {

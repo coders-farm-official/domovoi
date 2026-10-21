@@ -4,6 +4,7 @@ import com.domovoi.app.net.DomovoiJson
 import com.domovoi.app.player.ServerScope
 import com.domovoi.app.ui.components.parseInstant
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
@@ -171,7 +172,8 @@ class PositionSync(
     suspend fun open(bookId: Long, server: ServerScope): Pair<Double, Float> {
         val local = store.get(bookId, server, person())
         val r = remoteFor(server) ?: return (local?.positionSec ?: 0.0) to (local?.speed ?: 1f)
-        val theirs = runCatching { r.get(bookId) }.getOrNull()
+        // Bounded: a server out of reach must not hold up play.
+        val theirs = runCatching { withTimeoutOrNull(READ_TIMEOUT_MS) { r.get(bookId) } }.getOrNull()
             ?: return (local?.positionSec ?: 0.0) to (local?.speed ?: 1f)
         val res = PositionRules.resolve(local, theirs) ?: return 0.0 to 1f
         if (res.adopted) {
@@ -203,6 +205,11 @@ class PositionSync(
             if (now != null && now.updatedAtMs == p.updatedAtMs) store.put(now.copy(dirty = false, serverStamp = stamp))
             true
         }.getOrDefault(false)
+    }
+
+    companion object {
+        /** How long opening a book waits for the server's slot. */
+        const val READ_TIMEOUT_MS = 3_000L
     }
 
     /** Send every place set here while away, for books of [server]
