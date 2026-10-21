@@ -291,6 +291,11 @@ async def wikipedia_summary(url: str) -> tuple[str, str] | None:
     host_base = f"{parts.scheme}://{parts.netloc}"
     if not (is_wikipedia(url) or host_base.rstrip("/") == _wiki_base()):
         return None
+    # The English Wikipedia's API is the configured one (LOOKUP_WIKIPEDIA_URL,
+    # the real one unless a test points it at a fake); another language's
+    # page is summarised by its own wiki.
+    if (parts.hostname or "").lower() == "en.wikipedia.org":
+        host_base = _wiki_base()
     status, payload = await _get_json(f"{host_base}/api/rest_v1/page/summary/{quote(title, safe='')}")
     if status >= 400 or not isinstance(payload, dict):
         return None
