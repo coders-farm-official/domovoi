@@ -55,7 +55,7 @@ data class ReplyReport(
     val fromServer: Boolean get() = place == PLACE_SERVER
 
     /** The reply came from the phone's own clock, not a model. */
-    val fromClock: Boolean get() = model == CLOCK && modelId.isEmpty()
+    val fromClock: Boolean get() = (model == CLOCK || model == PHONE) && modelId.isEmpty()
 
     /** What [modelLine] is labelled: "source" for the clock, else "model". */
     val sourceLabel: String get() = if (fromClock) "source" else "model"
@@ -109,6 +109,10 @@ data class ReplyReport(
         /** The source of a reply the phone's clock gave (no model wrote it). */
         const val CLOCK = "the phone's clock"
 
+        /** The source of a reply read from the phone itself (PhoneQuestions,
+         *  a hand-off card): no model wrote it either. */
+        const val PHONE = "the phone itself"
+
         /** [place] of a reply written on this phone... */
         const val PLACE_PHONE = "phone"
 
@@ -144,9 +148,13 @@ data class ReplyReport(
                 spoken = asked?.spoken == true,
                 answer = reply.text,
                 answeredAt = reply.at,
-                model = if (reply.fromClock) CLOCK else model.name,
-                modelId = if (reply.fromClock) "" else model.id,
-                backend = reply.backend.takeUnless { reply.fromClock },
+                model = when {
+                    reply.fromClock -> CLOCK
+                    reply.fastPath != null -> PHONE
+                    else -> model.name
+                },
+                modelId = if (reply.fromClock || reply.fastPath != null) "" else model.id,
+                backend = reply.backend.takeUnless { reply.fromClock || reply.fastPath != null },
                 appVersion = appVersion,
             )
         }

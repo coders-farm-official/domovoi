@@ -137,12 +137,20 @@ data class AssistantUi(
  *   sentence by sentence in the phone's own voice. Replies to typed
  *   questions stay silent unless the owner turns that on.
  * - **Conversations:** kept on the phone ([ConversationStore]); the model
- *   sees the system prompt, the phone's clock (read every turn) and the
- *   conversation, nothing else, and only as much of a long conversation as
- *   fits its context ([HistoryWindow]).
+ *   sees the system prompt, the phone's clock and facts (read every turn:
+ *   [PhoneFacts]), the conversation and what its read tools return
+ *   ([PhoneTools]), and only as much of a long conversation as fits its
+ *   context ([HistoryWindow]).
  * - **The clock:** "what time is it", "what's the date", "what day is it"
  *   and the like ([ClockQuestions]) are answered from the phone's own clock
  *   at once, typed or spoken, without the model.
+ * - **The phone (N1):** "how much battery", "what's playing", "what timers
+ *   do I have" and the rest of [PhoneQuestions] are answered from the phone
+ *   at once; "text Sam", "directions to…" and the other [HandOffs] become a
+ *   card that opens another app only on a tap. A permission is asked once,
+ *   on first use, with its reason; a refusal is kept and never asked again.
+ *   Everything comes from the phone ([PhoneContext]): a phone chat never
+ *   fetches from the home server.
  *
  * Nothing here touches the network: the download job is the only network
  * use, and it lives in the worker ([ModelDownloadWorker]).
@@ -181,6 +189,10 @@ class AssistantController(
     /** How the phone shows the time (zone, locale, 12/24-hour), read every
      *  turn; [clock] gives the moment. */
     private val clockStyle: () -> ClockStyle = { ClockStyle.system(is24Hour = false) },
+    /** What a phone chat reads about the phone (N1): the prompt's facts,
+     *  the fast paths' readings, the read tools' library, the permissions
+     *  and which hand-offs some app takes. Never the home server's data. */
+    private val phone: PhoneContext = PhoneContext.NONE,
 ) {
     private val _state = MutableStateFlow(
         AssistantUi(
@@ -707,6 +719,7 @@ class AssistantController(
     private suspend fun reply(asked: StoredConversation, onDelta: (String) -> Unit = {}): StoredConversation {
         save(asked)
         clockReply(asked, onDelta)?.let { return it }
+        phoneReply(asked, onDelta)?.let { return it }
         val backend = settings.backend
         val llm = try {
             ensureEngine()
@@ -723,10 +736,22 @@ class AssistantController(
         val sent = nanos()
         var firstMs: Long? = null
         val text = StringBuilder()
-        fun live(): StoredMessage = StoredMessage(Speaker.DOMOVOI, text.toString(), clock(), backend = backend.label)
+        val used = java.util.concurrent.CopyOnWriteArrayList<String>()
+        fun live(): StoredMessage =
+            StoredMessage(Speaker.DOMOVOI, text.toString(), clock(), backend = backend.label, tools = used.distinct())
         _state.update { it.copy(conversation = asked.copy(messages = asked.messages + live())) }
         try {
-            llm.reply(Persona.SYSTEM_PROMPT, window.of(turns), clockLine()).collect { delta ->
+            val turn = ModelTurn(
+                system = Persona.SYSTEM_PROMPT,
+                history = window.of(turns),
+                context = listOfNotNull(
+                    clockLine()?.let { ContextLine(ContextLine.CLOCK, it) },
+                    factsLine()?.let { ContextLine(ContextLine.FACTS, it) },
+                ),
+                tools = readTools(backend),
+                onTool = { used += it },
+            )
+            llm.reply(turn).collect { delta ->
                 if (firstMs == null && delta.isNotBlank()) firstMs = (nanos() - sent) / 1_000_000
                 text.append(delta)
                 onDelta(delta)
@@ -735,6 +760,9 @@ class AssistantController(
                 }
             }
             val stats = llm.lastStats()
+            // A turn that ended in a tool call written as text (kept off the
+            // screen) says so rather than leaving an empty bubble.
+            if (text.isBlank() && used.isNotEmpty()) text.append(NO_TOOL_ANSWER).also { onDelta(NO_TOOL_ANSWER) }
             return finishReply(asked, live().copy(firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }))
         } catch (e: CancellationException) {
             finishReply(asked, live().copy(stopped = true, firstTextMs = firstMs, stopMs = voice?.lastStopMs))
@@ -770,6 +798,157 @@ class AssistantController(
         val style = clockStyle()
         Persona.clockLine(style.at(clock()), style)
     }.onFailure { Log.w(TAG, "the phone's clock could not be read", it) }.getOrNull()
+
+    // ── Phone facts, fast paths and hand-offs (N1) ──────────────────────
+
+    /** The prompt's phone facts, read now (PhoneFacts.line); null when
+     *  there are none or they can't be read. */
+    private fun factsLine(): String? = runCatching { PhoneFacts.line(phone.facts()) }
+        .onFailure { Log.w(TAG, "the phone facts could not be read", it) }.getOrNull()
+
+    /** The read tools for a turn on [backend]: on the CPU only (a GPU field
+     *  report mangles numbers in tool arguments, plan part 2). */
+    private fun readTools(backend: LlmBackend): ReadTools? {
+        if (backend != LlmBackend.CPU) return null
+        val names = runCatching { PhoneTools.offered(phone.library) }.getOrNull() ?: return null
+        return ReadTools(names, names.map { PhoneTools.spec(it) }) { name, args ->
+            withContext(io) {
+                val style = clockStyle()
+                PhoneTools.run(name, args, names, phone, clock()) { ms ->
+                    PhoneQuestions.whenSaid(ms, PhoneAnswerInputs(style.at(clock()), style, phone, chatModel.name, backend))
+                }
+            }
+        }
+    }
+
+    /**
+     * A question the phone answers itself ([PhoneQuestions]: the battery,
+     * the timers, what's playing…) or a hand-off ([HandOffs]: "text Sam",
+     * "directions to the airport"), answered at once with no model. A
+     * permission never asked yet comes back as its card; a hand-off no app
+     * takes says so instead of offering a card. Null: a question for the
+     * model.
+     */
+    private suspend fun phoneReply(asked: StoredConversation, onDelta: (String) -> Unit): StoredConversation? {
+        val question = asked.messages.lastOrNull()?.takeIf { it.fromUser } ?: return null
+        val sent = nanos()
+        val reply = runCatching { phoneAnswer(question.text, asked) }
+            .onFailure { Log.w(TAG, "a phone fast path failed", it) }.getOrNull() ?: return null
+        onDelta(reply.text)
+        return finishReply(asked, reply.copy(at = clock(), firstTextMs = (nanos() - sent) / 1_000_000))
+    }
+
+    /** The phone's own answer to [text], as the reply message; null when it
+     *  is a question for the model. */
+    private suspend fun phoneAnswer(text: String, conversation: StoredConversation): StoredMessage? {
+        PhoneQuestions.match(text)?.let { q ->
+            return when (val a = withContext(io) { PhoneQuestions.answer(q, inputs()) }) {
+                is PhoneAnswer.Said -> phoneMessage(a.text, q.name.lowercase())
+                is PhoneAnswer.Ask -> permissionCard(a.permission, text, q.name.lowercase())
+            }
+        }
+        val lastReply = conversation.messages.lastOrNull { !it.fromUser && it.text.isNotBlank() && it.error == null }?.text
+        val style = clockStyle()
+        val h = HandOffs.match(text, lastReply, style.at(clock())) ?: return null
+        if (!phone.canHandOff(h.kind)) return phoneMessage(HandOffs.noApp(h.kind), FAST_HANDOFF)
+        // Calling or texting someone by name: their number from the
+        // contacts when that's allowed; asked once; the picker otherwise.
+        val person = if (h.needsContact && h.who != null) {
+            when (phone.permission(PhonePermission.CONTACTS)) {
+                PermissionState.ASKABLE -> return permissionCard(PhonePermission.CONTACTS, text, FAST_HANDOFF)
+                PermissionState.GRANTED -> withContext(io) { resolveContact(h) }
+                PermissionState.DECLINED -> h
+            }
+        } else {
+            h
+        }
+        return handOffMessage(person, style)
+    }
+
+    private fun inputs(): PhoneAnswerInputs {
+        val style = clockStyle()
+        return PhoneAnswerInputs(style.at(clock()), style, phone, chatModel.name, settings.backend)
+    }
+
+    /** [h] with the best contact for its name: an exact first-name match
+     *  first, one with a number before one without. */
+    private fun resolveContact(h: HandOff): HandOff {
+        val who = h.who ?: return h
+        val found = phone.reader.contacts(who).orEmpty().filter { !it.number.isNullOrBlank() }
+        val best = found.sortedWith(
+            compareByDescending<ContactMatch> { it.name.equals(who, ignoreCase = true) }
+                .thenByDescending { it.name.split(' ').firstOrNull().equals(who, ignoreCase = true) },
+        ).firstOrNull() ?: return h
+        return h.copy(name = best.name, number = best.number)
+    }
+
+    private fun phoneMessage(text: String, fastPath: String, card: PhoneCard? = null): StoredMessage =
+        StoredMessage(Speaker.DOMOVOI, text, clock(), fastPath = fastPath, card = card)
+
+    private fun permissionCard(p: PhonePermission, question: String, fastPath: String): StoredMessage =
+        phoneMessage(
+            PhonePermissions.reason(p), fastPath,
+            PhoneCard(CardKind.PERMISSION, permission = p.name, question = question),
+        )
+
+    private fun handOffMessage(h: HandOff, style: ClockStyle): StoredMessage {
+        val whenText = h.beginMs?.let { ms ->
+            if (h.allDay) "for ${style.date(style.at(ms))}" else "at ${style.time(style.at(ms))} on ${style.date(style.at(ms))}"
+        }
+        return phoneMessage(HandOffs.replyText(h, whenText), FAST_HANDOFF, PhoneCard(CardKind.HANDOFF, handOff = h))
+    }
+
+    /** The person tapped a hand-off card and the other app opened ([done]),
+     *  or set the card aside: the card stays, marked, in the conversation.
+     *  [chosen]: the contact picked for a call or text. */
+    fun handOffTapped(conversationId: String, index: Int, done: Boolean, chosen: HandOff? = null) {
+        editCard(conversationId, index) { card ->
+            card.copy(state = if (done) CardState.DONE else CardState.DISMISSED, handOff = chosen ?: card.handOff)
+        }
+    }
+
+    /**
+     * A permission card was answered: [granted] by Android's dialog, or
+     * not (the card's second button, or a refusal there). A refusal is kept
+     * so the chat never asks again; then the question the card held is
+     * answered as it now can be, as a new reply.
+     */
+    fun permissionDecided(conversationId: String, index: Int, granted: Boolean) {
+        val current = _state.value.conversation.takeIf { it.id == conversationId } ?: return
+        val message = current.messages.getOrNull(index) ?: return
+        val card = message.card?.takeIf { it.kind == CardKind.PERMISSION && it.state == CardState.OPEN } ?: return
+        val p = card.phonePermission ?: return
+        if (!granted) phone.declined(p)
+        if (_state.value.replying) return
+        scope.launch {
+            val marked = current.copy(
+                messages = current.messages.toMutableList().also {
+                    it[index] = message.copy(card = card.copy(state = if (granted) CardState.DONE else CardState.DISMISSED))
+                },
+            )
+            _state.update { it.copy(conversation = marked, replying = true, thinking = true) }
+            save(marked)
+            val question = card.question.orEmpty()
+            val again = runCatching { phoneAnswer(question, marked) }.getOrNull()
+                // The permission is still not held (asked again by nothing):
+                // the fast path's refusal, never another card.
+                ?.let { if (it.card?.kind == CardKind.PERMISSION) null else it }
+                ?: phoneMessage(PhoneQuestions.cannot(p, phone.serverKnown()), "permission")
+            finishReply(marked, again)
+        }
+    }
+
+    private fun editCard(conversationId: String, index: Int, change: (PhoneCard) -> PhoneCard) {
+        scope.launch {
+            val current = _state.value.conversation.takeIf { it.id == conversationId }
+                ?: withContext(io) { conversations.load(conversationId) } ?: return@launch
+            val message = current.messages.getOrNull(index) ?: return@launch
+            val card = message.card ?: return@launch
+            val changed = current.copy(messages = current.messages.toMutableList().also { it[index] = message.copy(card = change(card)) })
+            _state.update { if (it.conversation.id == conversationId) it.copy(conversation = changed) else it }
+            withContext(NonCancellable) { save(changed) }
+        }
+    }
 
     private suspend fun finishReply(asked: StoredConversation, reply: StoredMessage): StoredConversation {
         val done = asked.copy(updated = reply.at.coerceAtLeast(asked.updated), messages = asked.messages + reply)
@@ -908,17 +1087,29 @@ class AssistantController(
 
         private const val TAG = "Assistant"
 
+        /** [StoredMessage.fastPath] of a hand-off's reply. */
+        const val FAST_HANDOFF = "handoff"
+
+        /** A model turn whose only output was a tool call written as text. */
+        const val NO_TOOL_ANSWER = "Sorry, I couldn't find that on this phone."
+
         /** The app's assistant, built by AppContainer. [phoneVoice]: the
          *  phone's own Domovoi voice, opened without asking a server. */
-        fun forApp(context: Context, beforeLoad: () -> Unit, phoneVoice: suspend () -> PhoneSpeech?): AssistantController {
+        fun forApp(
+            context: Context,
+            beforeLoad: () -> Unit,
+            phoneVoice: suspend () -> PhoneSpeech?,
+            phone: (AssistantSettings) -> PhoneContext = { PhoneContext.NONE },
+        ): AssistantController {
             val app = context.applicationContext
             val store = ModelStore.forApp(app)
+            val settings = PhoneAssistantSettings(app)
             return AssistantController(
                 memory = DeviceTiers.read(app),
                 store = store,
                 conversations = ConversationStore(File(app.filesDir, "assistant")),
                 jobs = WorkDownloadJobs(app),
-                settings = PhoneAssistantSettings(app),
+                settings = settings,
                 newEngine = { LiteRtLlmEngine(File(app.cacheDir, "litertlm")) },
                 scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
                 beforeLoad = beforeLoad,
@@ -932,6 +1123,7 @@ class AssistantController(
                 appVersion = runCatching { app.packageManager.getPackageInfo(app.packageName, 0).versionName }
                     .getOrNull().orEmpty(),
                 clockStyle = { ClockStyle.system(android.text.format.DateFormat.is24HourFormat(app)) },
+                phone = phone(settings),
             ).also { it.attach(app) }
         }
 

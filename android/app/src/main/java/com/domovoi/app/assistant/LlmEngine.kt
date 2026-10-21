@@ -20,10 +20,27 @@ data class LlmStats(
 )
 
 /**
- * A language model running on the phone. By design it has no tool, file or
- * media parameters: the model sees the system prompt, the phone's clock and
- * the conversation, nothing else, so there is no path from it to the user's
- * data.
+ * One turn as the model is given it (N1): the system prompt, the
+ * conversation, the context lines told alongside it (the clock, the phone
+ * facts: [withContextLines]), and the read tools it may call ([ReadTools],
+ * run by the app in manual mode; null: none). [onTool] hears each tool
+ * name as it is called.
+ */
+data class ModelTurn(
+    val system: String,
+    val history: List<ChatTurn>,
+    val context: List<ContextLine> = emptyList(),
+    val tools: ReadTools? = null,
+    val onTool: (String) -> Unit = {},
+)
+
+/**
+ * A language model running on the phone. It sees the system prompt, the
+ * context lines (the phone's clock and facts), the conversation and, since
+ * N1, the results of the read tools the app offers it ([ModelTurn.tools]):
+ * the app runs each call itself, and the tools only read (PhoneTools.kt).
+ * There is no file, media or network parameter, and no tool that changes
+ * anything.
  */
 interface LlmEngine : AutoCloseable {
     val isLoaded: Boolean
@@ -36,6 +53,11 @@ interface LlmEngine : AutoCloseable {
      *  [now]: the phone's clock for this turn (Persona.clockLine), or null;
      *  the model is given it as [withClock] says. */
     fun reply(system: String, history: List<ChatTurn>, now: String? = null): Flow<String>
+
+    /** The reply to [turn]. An engine without tools gives the context lines
+     *  as one clock-style line and ignores the tools. */
+    fun reply(turn: ModelTurn): Flow<String> =
+        reply(turn.system, turn.history, turn.context.filter { it.text.isNotBlank() }.joinToString("\n") { it.text }.ifBlank { null })
 
     /** Stops a reply in progress; a no-op when there is none. */
     fun cancel()
@@ -80,4 +102,65 @@ internal fun withClock(system: String, question: String, now: String?, told: Str
     rebuilt -> ClockedTurn("$system\n\n$now", question)
     now == told -> ClockedTurn(system, question)
     else -> ClockedTurn(system, "$now\n\n$question")
+}
+
+/**
+ * Keeps a tool call the runtime didn't parse out of the reply's words: once
+ * Gemma's tool-call token ("<|tool_call>") or a "call:name{" turns up in the
+ * streamed text, nothing from there on is shown. A tail that may still grow
+ * into one is held back until it clearly doesn't.
+ */
+internal class ToolTextFilter {
+    private val all = StringBuilder()
+    private var shown = 0
+    private var cut = false
+
+    /** Whether a tool call was cut out of the text. */
+    val sawToolText: Boolean get() = cut
+
+    /** The part of the text so far that can be shown, after [delta]. */
+    fun accept(delta: String): String {
+        if (cut) return ""
+        all.append(delta)
+        val text = all.toString()
+        val marker = MARKER.find(text)?.range?.first
+        if (marker != null) {
+            cut = true
+            val out = if (marker > shown) text.substring(shown, marker).trimEnd() else ""
+            shown = text.length
+            return out
+        }
+        var safe = holdFrom(text).coerceAtLeast(shown)
+        // Trailing spaces wait for the next word: a tool call may follow them.
+        while (safe > shown && text[safe - 1].isWhitespace()) safe--
+        val out = text.substring(shown, safe)
+        shown = safe
+        return out
+    }
+
+    /** What was held back, once the reply has ended. */
+    fun finish(): String {
+        if (cut) return ""
+        val out = all.substring(shown)
+        shown = all.length
+        return out
+    }
+
+    /** Where a possible start of a marker begins at the end of [text]
+     *  ([text]'s length when there is none). */
+    private fun holdFrom(text: String): Int {
+        for (k in minOf(HOLD, text.length) downTo 1) {
+            val tail = text.substring(text.length - k)
+            if (LITERALS.any { it.startsWith(tail) }) return text.length - k
+        }
+        PARTIAL_CALL.find(text)?.let { return it.range.first }
+        return text.length
+    }
+
+    private companion object {
+        const val HOLD = 12
+        val LITERALS = listOf("<|tool_call", "<tool_call", "tool_call|>")
+        val MARKER = Regex("<\\|tool_call|<tool_call|tool_call\\|>|\\bcall:[a-z_]+\\{")
+        val PARTIAL_CALL = Regex("\\bcall(?::[a-z_]*)?$")
+    }
 }

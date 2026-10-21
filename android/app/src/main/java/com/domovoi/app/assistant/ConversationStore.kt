@@ -46,6 +46,16 @@ data class StoredMessage(
     val stopMs: Long? = null,
     /** A reply from the phone's own clock (ClockQuestions), not the model. */
     val fromClock: Boolean = false,
+    /** A reply read from the phone itself (PhoneQuestions: "battery",
+     *  "timers"…) or a hand-off ("handoff"), not the model; null for the
+     *  model's. */
+    val fastPath: String? = null,
+    /** A card under the reply: a hand-off waiting for its tap, or a
+     *  permission asked on first use (HandOffs.kt). */
+    val card: PhoneCard? = null,
+    /** The read tools the model called for this reply (names only: their
+     *  results are never kept). */
+    val tools: List<String> = emptyList(),
 ) {
     val fromUser: Boolean get() = from == Speaker.USER
 }

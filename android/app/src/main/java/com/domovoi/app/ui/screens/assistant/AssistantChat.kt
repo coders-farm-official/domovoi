@@ -185,6 +185,16 @@ private fun ChatPane(
                             m,
                             writing = writing,
                             onReport = if (!m.fromUser && !writing && m.text.isNotBlank()) ({ onReport(index) }) else null,
+                            card = m.card?.let { card ->
+                                {
+                                    PhoneCardView(
+                                        card,
+                                        onPrimary = { actions.cardPrimary(index, card) },
+                                        onSecondary = { actions.cardSecondary(index, card) },
+                                        enabled = !ui.replying,
+                                    )
+                                }
+                            },
                         )
                     }
                 }
@@ -315,7 +325,12 @@ private fun EngineLine(ui: AssistantUi, actions: AssistantActions, onModel: () -
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageBubble(m: StoredMessage, writing: Boolean, onReport: (() -> Unit)? = null) {
+private fun MessageBubble(
+    m: StoredMessage,
+    writing: Boolean,
+    onReport: (() -> Unit)? = null,
+    card: (@Composable () -> Unit)? = null,
+) {
     val toast = LocalToast.current
     val clipboard = LocalClipboardManager.current
     val haptics = LocalHapticFeedback.current
@@ -387,6 +402,7 @@ private fun MessageBubble(m: StoredMessage, writing: Boolean, onReport: (() -> U
                 }
             }
         }
+        card?.invoke()
     }
 }
 
@@ -422,8 +438,13 @@ internal fun replyDetails(m: StoredMessage): String? {
         m.sttMs?.let { "heard in $it ms" },
         m.firstTextMs?.let { String.format(Locale.US, "%.2f s to first words", it / 1000.0) },
         // The clock's answer: no model wrote it, so no model numbers.
-        m.tokensPerS?.takeUnless { m.fromClock }?.let { String.format(Locale.US, "%.1f tokens/s", it) },
-        if (m.fromClock) ReplyReport.CLOCK else m.backend,
+        m.tokensPerS?.takeUnless { m.fromClock || m.fastPath != null }?.let { String.format(Locale.US, "%.1f tokens/s", it) },
+        when {
+            m.fromClock -> ReplyReport.CLOCK
+            m.fastPath != null -> ReplyReport.PHONE
+            else -> m.backend
+        },
+        m.tools.takeIf { it.isNotEmpty() }?.let { "looked up: " + it.joinToString(", ") },
         m.stopMs?.let { "silenced $it ms after stop" },
     )
     return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")

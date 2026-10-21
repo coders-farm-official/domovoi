@@ -105,6 +105,10 @@ internal fun ConnectionPanel() {
     // null == "me (this device)" — resume positions stay per-device.
     val listenerOptions: List<SettingsPerson?> = listOf(null) + people
     val selectedListener: SettingsPerson? = people.firstOrNull { it.id.toString() == listenerId }
+    // Kept for the phone chat's prompt (data/HouseholdNames.kt).
+    LaunchedEffect(listenerId, selectedListener?.name) {
+        app.householdNames.recordListener(serverUrl, listenerId, selectedListener?.name)
+    }
     val selectedOwner: SettingsPerson? = people.firstOrNull { it.id.toString() == ownerId }
 
     LazyColumn(

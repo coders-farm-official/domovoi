@@ -48,8 +48,45 @@ class NoNetworkTest {
 
         val androidNet = classes.flatMap { (name, bytes) ->
             utf8Constants(bytes).flatMap { Regex("android/net/[A-Za-z/$]+").findAll(it).map { m -> name to m.value } }
-        }.filterNot { (name, ref) -> name.startsWith("DeviceProbe") && ref in probeMayRead }
+        }.filterNot { (name, ref) ->
+            (name.startsWith("DeviceProbe") && ref in probeMayRead) ||
+                (name.startsWith("AndroidPhoneReader") && ref in phoneReaderMayRead) ||
+                (name.startsWith("HandOffLauncher") && ref in handOffsMayName)
+        }
         assertEquals(emptyList<Pair<String, String>>(), androidNet)
+    }
+
+    /** A phone chat's readings (N1): whether the phone is on Wi-Fi or mobile
+     *  data, the Wi-Fi network's name, a contacts lookup's address (a
+     *  content: Uri). Reading them opens no connection. */
+    private val phoneReaderMayRead = setOf(
+        "android/net/ConnectivityManager", "android/net/Network", "android/net/NetworkCapabilities", "android/net/Uri", "android/net/Uri\$Builder",
+        "android/net/wifi/WifiManager", "android/net/wifi/WifiInfo",
+    )
+
+    /** The hand-offs name the other app's address (tel:, smsto:, geo:, a
+     *  link): another app opens it, this one doesn't. */
+    private val handOffsMayName = setOf("android/net/Uri")
+
+    /**
+     * Each place answers from its own world (owner, 2026-10-21): the phone
+     * chat's code never names the app's server client, its sockets or its
+     * HTTP library, so it can't fetch the household's calendar, timers or
+     * anything else. What it knows of the server (connected or not, the
+     * room names the app's own screens saw) is handed in as plain values.
+     */
+    @Test fun aPhoneChatNeverReachesTheServer() {
+        val classes = classesIn("com/domovoi/app/assistant", AssistantBench::class.java)
+        val phoneChat = classes.filter { (name, _) ->
+            listOf("AssistantController", "AppPhoneContext", "AndroidPhoneReader", "PhoneFacts", "PhoneQuestions", "PhoneTools",
+                "HandOff", "PhoneContext", "PhonePermissions", "ReadTools", "ModelTurn", "LiteRtLlmEngine").any { name.startsWith(it) }
+        }
+        assertTrue("found ${phoneChat.size}", phoneChat.size > 15)
+        val server = listOf("com/domovoi/app/net/ApiClient", "com/domovoi/app/net/StateBus", "com/domovoi/app/net/ServerAction", "okhttp3/")
+        val offenders = phoneChat.mapNotNull { (name, bytes) ->
+            utf8Constants(bytes).filter { s -> server.any { s.contains(it) } }.takeIf { it.isNotEmpty() }?.let { "$name: $it" }
+        }
+        assertEquals(emptyList<String>(), offenders)
     }
 
     @Test fun theDownloaderIsWhereTheHttpClientIs() {

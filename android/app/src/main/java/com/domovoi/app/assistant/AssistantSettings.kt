@@ -27,6 +27,10 @@ interface AssistantSettings {
     /** Read typed questions' replies aloud too. Off (plan decision 7):
      *  replies to spoken questions are spoken, typed ones stay silent. */
     var speakTyped: Boolean
+
+    /** The phone-chat permissions (PhonePermission names) the person turned
+     *  down: the chat says it can't and never asks again. */
+    var declinedPermissions: Set<String>
 }
 
 /** In memory only: for tests. */
@@ -37,6 +41,7 @@ class MemoryAssistantSettings(
     override var downloadStartedAt: Long? = null,
     override var lastDownloadMs: Long? = null,
     override var speakTyped: Boolean = false,
+    override var declinedPermissions: Set<String> = emptySet(),
 ) : AssistantSettings
 
 /** The app's: SharedPreferences `assistant`. */
@@ -67,7 +72,12 @@ class PhoneAssistantSettings(context: Context) : AssistantSettings {
         get() = prefs.getBoolean(K_SPEAK_TYPED, false)
         set(value) = prefs.edit().putBoolean(K_SPEAK_TYPED, value).apply()
 
+    override var declinedPermissions: Set<String>
+        get() = prefs.getStringSet(K_DECLINED, null)?.toSet().orEmpty()
+        set(value) = prefs.edit().putStringSet(K_DECLINED, value.toSet()).apply()
+
     private companion object {
+        const val K_DECLINED = "declined_permissions"
         const val K_SPEAK_TYPED = "speak_typed_replies"
         const val K_BACKEND = "backend"
         const val K_MOBILE = "allow_mobile_data"

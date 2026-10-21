@@ -90,16 +90,20 @@ object LocalMedia {
         }
     }
 
-    /** One page of the phone's videos, newest first (see [pageTracks]). */
-    fun pageVideos(context: Context, req: PageRequest): Page<LocalVideo> {
+    /** One page of the phone's videos, newest first (see [pageTracks]);
+     *  [q] matches the file name (the phone assistant's find_video). */
+    fun pageVideos(context: Context, req: PageRequest, q: String = ""): Page<LocalVideo> {
         val proj = arrayOf(
             MediaStore.Video.Media._ID,
             MediaStore.Video.Media.DISPLAY_NAME,
             MediaStore.Video.Media.DURATION,
             MediaStore.Video.Media.SIZE,
         )
+        val needle = q.trim()
+        val sel = if (needle.isEmpty()) null else "${MediaStore.Video.Media.DISPLAY_NAME} LIKE ? ESCAPE '\\'"
+        val args = if (needle.isEmpty()) null else arrayOf("%" + likeEscape(needle) + "%")
         return pageOf(
-            context, MediaStore.Video.Media.EXTERNAL_CONTENT_URI, proj, null, null,
+            context, MediaStore.Video.Media.EXTERNAL_CONTENT_URI, proj, sel, args,
             "${MediaStore.Video.Media.DATE_ADDED} DESC, ${MediaStore.Video.Media._ID} DESC", req,
         ) { c ->
             val id = c.getLong(0)

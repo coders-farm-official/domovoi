@@ -9,8 +9,13 @@ import com.domovoi.app.net.ReportUpload
 import com.domovoi.app.alerts.IncidentAlerts
 import com.domovoi.app.assistant.AssistantBench
 import com.domovoi.app.assistant.AssistantController
+import com.domovoi.app.assistant.AppPhoneContext
+import com.domovoi.app.assistant.AssistantSettings
 import com.domovoi.app.assistant.AssistantSupport
 import com.domovoi.app.assistant.ModelDownloader
+import com.domovoi.app.assistant.PhoneContext
+import com.domovoi.app.assistant.PhoneTimer
+import com.domovoi.app.data.HouseholdNames
 import com.domovoi.app.alerts.TimerAlerts
 import com.domovoi.app.data.DeveloperOptions
 import com.domovoi.app.data.Prefs
@@ -196,8 +201,37 @@ class AppContainer(context: Context) {
             // The phone's own voice for spoken replies (Settings -> Voice),
             // opened without asking any server.
             phoneVoice = { phoneVoice.openOnPhone() },
+            phone = { settings -> phoneChatContext(context, settings) },
         )
     }
+
+    /** The room names and listener name this phone's screens last saw, per
+     *  server (data/HouseholdNames.kt): the phone chat's prompt reads them,
+     *  never the server. */
+    val householdNames: HouseholdNames by lazy { HouseholdNames.forApp(context) }
+
+    /**
+     * What a phone chat may read (assistant/AppPhoneContext.kt, N1): the
+     * player's state, whether the connection is up, the cached names, the
+     * timer mirror and the saved books, all as they are on the phone now.
+     * Nothing here hands it the server client.
+     */
+    internal fun phoneChatContext(context: Context, settings: AssistantSettings): PhoneContext = AppPhoneContext(
+        context = context,
+        settings = settings,
+        nowPlaying = { PhoneChatFacts.nowPlaying(player) },
+        sleepRemainingSec = { player.sleepRemainingSec.value },
+        serverSet = { prefs.serverUrl.value.isNotBlank() },
+        connected = { bus.connected.value },
+        rooms = { householdNames.rooms(prefs.serverUrl.value) },
+        listener = { householdNames.listenerName(prefs.serverUrl.value, prefs.listenerPersonId.value) },
+        mirroredTimers = { now ->
+            alerts.mirrored(now).map {
+                PhoneTimer(it.label ?: it.message, it.kind == "reminder", it.trigger_at_ms, it.room_id, it.masked)
+            }
+        },
+        savedBooks = { PhoneChatFacts.savedBooks(books, bookPositions) },
+    )
     val assistant: AssistantController by assistantLazy
 
     /** The phone's own voice (Settings → Voices): Domovoi's Piper voice

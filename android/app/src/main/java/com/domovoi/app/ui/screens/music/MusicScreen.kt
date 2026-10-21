@@ -152,6 +152,11 @@ fun MusicScreen() {
 
     val npList = nowPlaying.data.orEmpty()
     val rooms = castRooms(npList)
+    // Kept for the phone chat's prompt (data/HouseholdNames.kt), from this
+    // read only: the chat never asks the server.
+    LaunchedEffect(nowPlaying.data) {
+        if (nowPlaying.data != null) app.householdNames.recordRooms(app.prefs.serverUrl.value, rooms)
+    }
     val realPlaylists = playlists.data.orEmpty().filter { !it.isVirtual }
 
     // ── Local playback (this device) ──────────────────────────────────
