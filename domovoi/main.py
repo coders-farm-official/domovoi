@@ -685,7 +685,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   timer_watcher → playback_state_sweeper → media_plays_pruner →
     #   memory_extractor → lyrics_index → news_fetcher → wake_word_trainer →
     #   podcast_feed_poller → audiobook_indexer → room_book_positions →
-    #   command_capture_pruner → guests_seen_pruner → voice_history_pruner → container_guard →
+    #   command_capture_pruner → guests_seen_pruner → printer_status → print_jobs →
+    #   print_history → voice_history_pruner → container_guard →
     #   library_alias_fetch → lyrics_scan → lyrics_fetch.
     #
     # Per-worker rationale lives on each class (workers/*.py); the radio
@@ -733,6 +734,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.workers.guests_seen_pruner import GuestsSeenPruner
 
     WORKERS.add_worker(GuestsSeenPruner(), owner="core")
+    # Printers and scanners (V033): printer status, jobs in flight, and the
+    # 90-day job log (domovoi/workers/printing.py).
+    from domovoi.workers import printing as printing_workers
+
+    printing_workers.register(WORKERS)
     # Keep voice history (owner, 2026-10-17): once a day, what people said
     # longer ago than the setting goes; also finishes an open "Delete all
     # voice history" (domovoi/workers/voice_history_pruner.py).
@@ -933,6 +939,12 @@ app.add_middleware(BodyLimitMiddleware)
 from domovoi.plugins_runtime.installer import plugins_admin_router  # noqa: E402
 
 app.include_router(plugins_admin_router)
+
+# Printers, printing and scanning (domovoi/printing/routes.py): device-read,
+# device and admin tiers on their own routes.
+from domovoi.printing.routes import router as printing_router  # noqa: E402
+
+app.include_router(printing_router)
 
 
 @app.post(
