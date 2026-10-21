@@ -11,6 +11,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -20,7 +21,6 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
 import java.time.Instant
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -43,18 +43,16 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Mic
-import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -76,7 +74,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.domovoi.app.AppContainer
@@ -86,14 +83,20 @@ import com.domovoi.app.LocalToast
 import com.domovoi.app.net.decode
 import com.domovoi.app.net.failureText
 import com.domovoi.app.net.rememberApi
-import com.domovoi.app.ui.components.ConfirmDialog
-import com.domovoi.app.ui.components.DomovoiCard
-import com.domovoi.app.ui.components.EmptyState
-import com.domovoi.app.ui.components.PageHeader
 import com.domovoi.app.ui.shell.keyboardCrowdsTheWindow
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.MonoFamily
 import com.domovoi.app.ui.components.MarkdownText
+import com.domovoi.app.ui.components.composeEmail
+import com.domovoi.app.ui.components.parseInstant
+import com.domovoi.app.ui.components.shareText
+import com.domovoi.app.assistant.ReplyReport
+import com.domovoi.app.assistant.ReportOutcome
+import com.domovoi.app.assistant.ReportSinks
+import com.domovoi.app.ui.screens.assistant.ACTION_REPORT
+import com.domovoi.app.ui.screens.assistant.AssistantActions
+import com.domovoi.app.ui.screens.assistant.ReportPane
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -127,7 +130,7 @@ internal data class ThreadRow(
 )
 
 @Serializable
-private data class ThreadList(val threads: List<ThreadRow> = emptyList())
+internal data class ThreadList(val threads: List<ThreadRow> = emptyList())
 
 @Serializable
 internal data class ImageRef(val token: String = "", val name: String = "")
@@ -296,115 +299,32 @@ private suspend fun sendStreaming(
 }
 
 // ---------------------------------------------------------------------------
-// Screen — thread list when nothing selected; conversation otherwise.
+// A home-server chat's conversation (Chat's server place, ServerChatPlace.kt).
+// Chat's history list (ChatHome.kt) lists these threads with the phone's own
+// chats; this is the conversation, with the server's voice and photos.
 // ---------------------------------------------------------------------------
 
+/**
+ * One home-server chat. [thread] null is a new chat: nothing is made on the
+ * server until the first message (or the first spoken turn) needs a thread,
+ * so a new chat moved to the phone with the picker, or left empty, leaves no
+ * empty thread in the household's list. [onCreated] hears of the thread made.
+ */
 @Composable
-fun ChatScreen() {
-    val app = LocalApp.current
-    val threads = rememberApi("chat-threads", eventTypes = setOf("chat.changed")) {
-        it.api.get("/api/chat/threads").decode<ThreadList>().threads
-    }
-    val toast = LocalToast.current
-    var openThread by remember { mutableStateOf<ThreadRow?>(null) }
-    var deleteTarget by remember { mutableStateOf<ThreadRow?>(null) }
-
-    val current = openThread
-    if (current == null) {
-        ThreadListPane(
-            threads.data.orEmpty(),
-            onOpen = { openThread = it },
-            onNew = {
-                app.scope.launch {
-                    runCatching {
-                        app.api.post("/api/chat/threads").decode<ThreadRow>()
-                    }.onSuccess { openThread = it; threads.refresh() }
-                }
-            },
-            onDelete = { deleteTarget = it },
-        )
-        // F-A010: destructive, so confirm first (web chat.jsx window.confirm parity).
-        deleteTarget?.let { t ->
-            ConfirmDialog(
-                title = "delete chat",
-                body = "Delete \"${t.title ?: "new chat"}\"? This can't be undone.",
-                confirmLabel = "delete",
-                destructive = true,
-                onConfirm = {
-                    app.scope.launch {
-                        runCatching { app.api.delete("/api/chat/threads/${t.id}") }
-                            .onFailure { toast(failureText("delete", it)) }
-                        threads.refresh()
-                    }
-                },
-                onDismiss = { deleteTarget = null },
-            )
-        }
-    } else {
-        val closeThread = { openThread = null; threads.refresh() }
-        // F-A006: the system back key closes the conversation like the in-app
-        // chevron does (PeopleScreen shape); without this it fell through to app
-        // nav and landed on Music.
-        BackHandler(onBack = closeThread)
-        ConversationPane(current, onBack = closeThread)
-    }
-}
-
-@Composable
-private fun ThreadListPane(
-    threads: List<ThreadRow>,
-    onOpen: (ThreadRow) -> Unit,
-    onNew: () -> Unit,
-    onDelete: (ThreadRow) -> Unit,
-) {
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        PageHeader(
-            "Chat", "text chat with the domovoi — runs on your own hardware",
-            actions = { Button(onClick = onNew) { Text("new chat") } },
-        )
-        Spacer(Modifier.height(12.dp))
-        if (threads.isEmpty()) {
-            EmptyState("no chats yet", "start one — attach an image and the vision model reads it")
-        } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(threads, key = { it.id }) { t ->
-                    DomovoiCard(Modifier.fillMaxWidth().clickable { onOpen(t) }) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    t.title ?: "new chat",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = Domovoi.colors.fg,
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    t.last_snippet ?: "no messages yet",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Domovoi.colors.fgFaint,
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            IconButton(onClick = { onDelete(t) }) {
-                                Icon(
-                                    Icons.Outlined.DeleteOutline, contentDescription = "delete",
-                                    tint = Domovoi.colors.fgMuted,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
+internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (ThreadRow) -> Unit = {}) {
     val app = LocalApp.current
     val toast = LocalToast.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    // The thread this chat writes to: the one opened, or the one the first
+    // message made.
+    var current by remember { mutableStateOf(thread) }
+    suspend fun ensureThread(): ThreadRow = current
+        ?: app.api.post("/api/chat/threads").decode<ThreadRow>().also {
+            current = it
+            onCreated(it)
+        }
 
     val transcript = remember { mutableStateListOf<LiveMessage>() }
     var draft by remember { mutableStateOf("") }
@@ -419,20 +339,38 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
     // Why a picked picture didn't reach the chat (photoFailureText), until
     // it is closed or the next pick.
     var uploadNote by remember { mutableStateOf<String?>(null) }
-    // The hold-to-talk view (VoiceView.kt), over the conversation.
+    // The hold-to-talk view (VoiceView.kt), over the conversation. It talks
+    // to a thread, so a new chat makes its thread first.
     var voiceOpen by remember { mutableStateOf(false) }
+    val startVoice: () -> Unit = {
+        if (current != null) {
+            voiceOpen = true
+            frame.onSent()
+        } else {
+            scope.launch {
+                runCatching { ensureThread() }
+                    .onSuccess { voiceOpen = true; frame.onSent() }
+                    .onFailure { toast(failureText("new chat", it)) }
+            }
+        }
+    }
     val micPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        if (granted) voiceOpen = true else toast("the microphone permission is needed to talk to the domovoi")
+        if (granted) startVoice() else toast("the microphone permission is needed to talk to the domovoi")
     }
-    val openVoice = {
+    val openVoice: () -> Unit = {
         val has = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
-        if (has) voiceOpen = true else micPermission.launch(Manifest.permission.RECORD_AUDIO)
+        if (has) startVoice() else micPermission.launch(Manifest.permission.RECORD_AUDIO)
     }
+    // "report this reply" (Play's AI-generated content policy covers the
+    // server's replies too): the report sheet, over the conversation.
+    var reporting by remember { mutableStateOf<ReplyReport?>(null) }
 
-    LaunchedEffect(thread.id) {
+    // A thread opened from the list: its messages. A new chat has none.
+    LaunchedEffect(thread?.id) {
+        if (thread == null) return@LaunchedEffect
         runCatching {
             app.api.get("/api/chat/threads/${thread.id}/messages").decode<MessageList>().messages
         }.onSuccess { rows ->
@@ -580,6 +518,24 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
         }
     }
 
+    // The report for the reply at [i], or null when it is not a finished
+    // reply with words (ReplyReport.draftServer).
+    fun reportableAt(i: Int): ReplyReport? {
+        val m = transcript.getOrNull(i) ?: return null
+        if (m.role == "user" || m.pending) return null
+        val asked = transcript.subList(0, i).lastOrNull { it.role == "user" }
+        val now = System.currentTimeMillis()
+        return ReplyReport.draftServer(
+            question = asked?.content,
+            spoken = asked?.source == "voice",
+            answer = m.content,
+            answeredAt = parseInstant(m.createdAt)?.toEpochMilli() ?: now,
+            model = m.model,
+            appVersion = appVersion(context),
+            now = now,
+        )
+    }
+
     fun send() {
         val content = draft.trim()
         if (content.isBlank() || sending) return
@@ -588,6 +544,7 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
         attachments.clear()
         sending = true
         following = true
+        frame.onSent()
         // Stamped now; the server's own row (with its id) is not sent back
         // for the user turn, and the two clocks agree to the second on a LAN.
         transcript.add(
@@ -598,8 +555,9 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
         transcript.add(live)
         scope.launch {
             runCatching {
+                val target = ensureThread()
                 sendStreaming(
-                    app, thread.id, content, images,
+                    app, target.id, content, images,
                     onDelta = {
                         if (live.firstWordsAtMs == null) live.firstWordsAtMs = System.currentTimeMillis()
                         live.content += it
@@ -629,14 +587,20 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
         }
     }
 
-    if (voiceOpen) {
-        VoiceView(thread.id, transcript, onClose = { voiceOpen = false })
+    val open = current
+    if (voiceOpen && open != null) {
+        VoiceView(open.id, transcript, onClose = { voiceOpen = false })
         return
     }
+    reporting?.let { draftReport ->
+        ReportPane(draftReport, serverReportActions(app.scope), canSave = false) { reporting = null }
+        return
+    }
+    val threadId = open?.id ?: 0L
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         ChatPaneGutter()
-        ThreadTitleRow(thread, onBack)
+        ThreadTitleRow(open?.title ?: NEW_CHAT, frame)
 
         Box(Modifier.weight(1f).fillMaxWidth().then(rememberFitStretch(listState))) {
             LazyColumn(
@@ -644,7 +608,10 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(transcript) { m -> MessageBubble(m, thread.id) }
+                itemsIndexed(transcript) { i, m ->
+                    // The draft is made at the tap, from the transcript then.
+                    MessageBubble(m, threadId, onReport = if (canReport(m)) ({ reporting = reportableAt(i) }) else null)
+                }
             }
         }
 
@@ -682,6 +649,8 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
             PictureNote(models.data?.vision_model, onClose = { pictureNote = false })
         }
         uploadNote?.let { UploadNote(it, onClose = { uploadNote = null }) }
+        // A new chat with nothing said yet: the place can still change.
+        if (open == null && transcript.isEmpty() && !sending) frame.picker?.invoke()
 
         Row(
             Modifier.fillMaxWidth().padding(top = 6.dp),
@@ -706,7 +675,7 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
             }
             OutlinedTextField(
                 value = draft, onValueChange = { draft = it },
-                placeholder = { Text("message the domovoi…") },
+                placeholder = { Text(COMPOSER_HINT) },
                 modifier = Modifier.weight(1f),
                 maxLines = 4,
             )
@@ -804,20 +773,10 @@ private fun rememberFitStretch(listState: LazyListState): Modifier {
  * than invalidating the pane, composer and caret included.
  */
 @Composable
-private fun ThreadTitleRow(thread: ThreadRow, onBack: () -> Unit) {
+private fun ThreadTitleRow(title: String, frame: ChatFrame) {
     if (keyboardCrowdsTheWindow()) return
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        IconButton(onClick = onBack) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "back", tint = Domovoi.colors.fg)
-        }
-        Text(
-            thread.title ?: "new chat",
-            style = MaterialTheme.typography.titleMedium,
-            color = Domovoi.colors.fg,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
-        )
-    }
-    Spacer(Modifier.height(8.dp))
+    // Chat's header in every place (ChatHome.kt): back, the title, the chip.
+    ChatHeader(title, frame.chip, ChatPlaceKind.Server, frame.onBack)
 }
 
 /**
@@ -834,9 +793,49 @@ private fun ChatPaneGutter() {
     Spacer(Modifier.height(if (keyboardCrowdsTheWindow()) 2.dp else 16.dp))
 }
 
+/** The report sheet's actions for a home-server reply: no save (saved
+ *  reports live under the phone model's settings), only the sinks that hand
+ *  it on (the owner's destination, the share menu). */
+@Composable
+private fun serverReportActions(scope: CoroutineScope): AssistantActions {
+    val context = LocalContext.current
+    val app = LocalApp.current
+    val toast = LocalToast.current
+    val sinks = remember(context) {
+        ReportSinks.available(
+            share = { subject, text -> shareText(context, subject, text) },
+            email = { to, subject, body -> composeEmail(context, to, subject, body) },
+            upload = { url, json -> app.reportUpload.post(url, json) },
+        )
+    }
+    return AssistantActions(
+        reportSinks = sinks,
+        deliverReport = { sink, report ->
+            scope.launch { serverReportToast(sink.deliver(report))?.let(toast) }
+        },
+    )
+}
+
+/** A home-server message "report this reply" is offered on: a finished
+ *  reply with words. */
+internal fun canReport(m: LiveMessage): Boolean = m.role != "user" && !m.pending && m.content.isNotBlank()
+
+/** What the person is told once a home-server reply's report is handed on;
+ *  it is not kept on the phone, so nothing says it is. */
+internal fun serverReportToast(outcome: ReportOutcome): String? = when (outcome) {
+    ReportOutcome.HANDED_ON -> null
+    ReportOutcome.SENT -> "report sent to coders farm"
+    ReportOutcome.NO_APP -> "no app on this phone can take the report"
+    ReportOutcome.FAILED -> "couldn't send the report; try again"
+}
+
+/** The app's versionName, for a report. */
+private fun appVersion(context: android.content.Context): String =
+    runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty()
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-internal fun MessageBubble(m: LiveMessage, threadId: Long) {
+internal fun MessageBubble(m: LiveMessage, threadId: Long, onReport: (() -> Unit)? = null) {
     val app = LocalApp.current
     val toast = LocalToast.current
     val clipboard = LocalClipboardManager.current
@@ -928,6 +927,14 @@ internal fun MessageBubble(m: LiveMessage, threadId: Long) {
                     leadingIcon = { Icon(Icons.Outlined.Info, contentDescription = null) },
                     onClick = { menu = false; details = true },
                 )
+                // On every finished reply with words (owner, 2026-10-20).
+                if (onReport != null) {
+                    DropdownMenuItem(
+                        text = { Text(ACTION_REPORT) },
+                        leadingIcon = { Icon(Icons.Outlined.Flag, contentDescription = null) },
+                        onClick = { menu = false; onReport() },
+                    )
+                }
             }
         }
         // Who Domovoi heard, on a message said into the chat mic.

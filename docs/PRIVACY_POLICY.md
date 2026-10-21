@@ -117,12 +117,15 @@ your Domovoi server offers new versions.
 
 ## Reports about the assistant's replies
 
-If one of the on-device assistant's answers is offensive, harmful or
-wrong, long-press it and choose **report this reply**. The report shows
+If one of Domovoi's answers in the app's Chat is offensive, harmful or
+wrong, whether the model on the phone or the one on your home server wrote
+it, long-press it and choose **report this reply**. The report shows
 exactly what it holds: your question before that reply, the reply, which
-model wrote it and when, the app's version, and an optional note.
+model wrote it, where (this phone or the home server) and when, the app's
+version, and an optional note.
 
-- **Save on this phone** keeps it in the app only.
+- **Save on this phone** keeps it in the app only (offered for the phone's
+  own replies, listed under its model settings).
 - **Email draft to Coders Farm** opens your email app with the report
   addressed to info@codersfarm.org (codersfarm@gmail.com in the first
   release, build 26101501). Nothing is sent until you press send in your

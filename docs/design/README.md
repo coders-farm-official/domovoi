@@ -54,6 +54,7 @@ The product talks like a competent, slightly dry sysadmin who knows you personal
 - Sentence case for content the user wrote or sees as data ("Dinner with Mom", "Creep — Radiohead").
 - Title Case never, except in a few proper nouns (Domovoi as the product name, Wi-Fi).
 - Short. Most labels are one or two words. Tooltips and toasts top out around twelve.
+- Chat's composer hint is the one exception to lowercase chrome: `Message Domovoi…`, with Domovoi capitalised as the product name, in every place a chat runs (the app's Chat, 2026-10-21). The place chips beside it stay lowercase (`on this phone`, `on home server`).
 - "you" sparingly, "we" never. The system isn't a personality, it's a control panel. The domovoi (the cat) is the only personality, and it doesn't talk — it appears.
 
 **Naming**

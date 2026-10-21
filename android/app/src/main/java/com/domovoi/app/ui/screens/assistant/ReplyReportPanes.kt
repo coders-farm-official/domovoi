@@ -66,7 +66,7 @@ internal const val NO_QUESTION = "(none: the reply was the first message)"
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun ReportPane(draft: ReplyReport, actions: AssistantActions, onClose: () -> Unit) {
+internal fun ReportPane(draft: ReplyReport, actions: AssistantActions, canSave: Boolean = true, onClose: () -> Unit) {
     BackHandler(onBack = onClose)
     var note by rememberSaveable(draft.id) { mutableStateOf(draft.note) }
     val report = draft.copy(note = note.take(ReplyReport.NOTE_MAX_CHARS))
@@ -92,10 +92,14 @@ internal fun ReportPane(draft: ReplyReport, actions: AssistantActions, onClose: 
         SectionLabel("your note")
         LocalNoteField.current(note, { note = it.take(ReplyReport.NOTE_MAX_CHARS) }, Modifier.fillMaxWidth())
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Button(onClick = {
-                actions.saveReport(report)
-                onClose()
-            }) { Text("save on this phone") }
+            // Saved reports are listed under the phone model's settings, so a
+            // home-server reply is only handed on (canSave false).
+            if (canSave) {
+                Button(onClick = {
+                    actions.saveReport(report)
+                    onClose()
+                }) { Text("save on this phone") }
+            }
             actions.reportSinks.forEach { sink ->
                 OutlinedButton(onClick = {
                     actions.deliverReport(sink, report)
@@ -103,11 +107,13 @@ internal fun ReportPane(draft: ReplyReport, actions: AssistantActions, onClose: 
                 }) { Text(sink.label) }
             }
         }
-        Text(
-            "Save keeps the report on this phone, outside backups, under model settings → reports, until you delete it.",
-            style = MaterialTheme.typography.bodySmall,
-            color = Domovoi.colors.fgSubtle,
-        )
+        if (canSave) {
+            Text(
+                "Save keeps the report on this phone, outside backups, under model settings → reports, until you delete it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Domovoi.colors.fgSubtle,
+            )
+        }
         actions.reportSinks.forEach { sink ->
             Text(sink.explains, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgSubtle)
         }

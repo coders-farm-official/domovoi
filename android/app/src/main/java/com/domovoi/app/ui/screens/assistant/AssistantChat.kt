@@ -4,7 +4,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,7 +16,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,9 +26,6 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.DeleteOutline
-import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -65,11 +60,9 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.assistant.AssistantUi
-import com.domovoi.app.assistant.ConversationSummary
 import com.domovoi.app.assistant.EngineState
 import com.domovoi.app.assistant.LlmBackend
 import com.domovoi.app.assistant.ModelSetup
@@ -86,13 +79,15 @@ import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.fmtBytes
-import com.domovoi.app.ui.components.relTime
+import com.domovoi.app.ui.screens.chat.COMPOSER_HINT
+import com.domovoi.app.ui.screens.chat.ChatHeader
+import com.domovoi.app.ui.screens.chat.ChatPlaceKind
+import com.domovoi.app.ui.screens.chat.NEW_CHAT
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.serialization.json.Json
-import java.time.Instant
 import java.util.Locale
 
-private enum class Pane { Chat, History, Model, Report, Reports }
+private enum class Pane { Chat, Model, Report, Reports }
 
 /** A report being written survives a rotation as its JSON. */
 private val reportSaver = Saver<ReplyReport?, String>(
@@ -107,7 +102,7 @@ internal val LocalComposerField = staticCompositionLocalOf<@Composable (String, 
         OutlinedTextField(
             value = value,
             onValueChange = onChange,
-            placeholder = { Text("ask domovoi on this phone…") },
+            placeholder = { Text(COMPOSER_HINT) },
             modifier = modifier,
             maxLines = 4,
         )
@@ -115,27 +110,27 @@ internal val LocalComposerField = staticCompositionLocalOf<@Composable (String, 
 }
 
 /**
- * The text chat with the model on the phone (M1 is text only; voice is M2):
- * the conversation, newest at the bottom, replies rendered with the server
- * chat's MarkdownText and its bubble look, a composer that turns into a stop
- * button while a reply is written. The title bar opens the conversations on
- * this phone (open one, delete one, clear all) and the model's settings
- * (CPU or GPU, delete the model).
+ * A chat on this phone (Chat's phone place): the conversation, newest at
+ * the bottom, replies rendered with the server chat's MarkdownText and its
+ * bubble look, a composer that turns into a stop button while a reply is
+ * written. Chat's header leads back to the history list (where phone and
+ * home-server chats are listed together, and deleted); its one action opens
+ * the model's settings (CPU or GPU, delete the model, clear all phone
+ * conversations, the saved reports).
  */
 @Composable
-internal fun AssistantChat(ui: AssistantUi, actions: AssistantActions) {
+internal fun AssistantChat(ui: AssistantUi, actions: AssistantActions, chrome: PhoneChatChrome = PhoneChatChrome()) {
     var pane by rememberSaveable { mutableStateOf(Pane.Chat) }
     var reporting by rememberSaveable(stateSaver = reportSaver) { mutableStateOf<ReplyReport?>(null) }
     val report = reporting
     when {
-        pane == Pane.History -> HistoryPane(ui.history, ui.conversation.id, actions, onClose = { pane = Pane.Chat })
         pane == Pane.Model -> ModelPane(ui, actions, onClose = { pane = Pane.Chat }, onReports = { pane = Pane.Reports })
         pane == Pane.Reports -> ReportsPane(ui.reports, actions, onClose = { pane = Pane.Model })
         pane == Pane.Report && report != null -> ReportPane(report, actions, onClose = {
             reporting = null
             pane = Pane.Chat
         })
-        else -> ChatPane(ui, actions, onHistory = { pane = Pane.History }, onModel = { pane = Pane.Model }, onReport = { index ->
+        else -> ChatPane(ui, actions, chrome, onModel = { pane = Pane.Model }, onReport = { index ->
             actions.draftReport(ui.conversation, index)?.let {
                 reporting = it
                 pane = Pane.Report
@@ -148,7 +143,7 @@ internal fun AssistantChat(ui: AssistantUi, actions: AssistantActions) {
 private fun ChatPane(
     ui: AssistantUi,
     actions: AssistantActions,
-    onHistory: () -> Unit,
+    chrome: PhoneChatChrome,
     onModel: () -> Unit,
     onReport: (Int) -> Unit,
 ) {
@@ -157,17 +152,10 @@ private fun ChatPane(
     var offerSpeechFiles by remember { mutableStateOf(false) }
     val messages = ui.conversation.messages
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        AssistantTitle(Modifier.padding(top = 8.dp)) {
-            IconButton(onClick = onHistory) {
-                Icon(Icons.Outlined.History, contentDescription = "conversations", tint = Domovoi.colors.fgMuted)
-            }
-            IconButton(onClick = {
-                actions.newConversation()
-                toast("new conversation")
-            }, enabled = messages.isNotEmpty()) {
-                Icon(Icons.Outlined.Add, contentDescription = "new conversation",
-                    tint = if (messages.isNotEmpty()) Domovoi.colors.fgMuted else Domovoi.colors.fgFaint)
-            }
+        ChatHeader(
+            if (messages.isEmpty()) NEW_CHAT else ui.conversation.title,
+            chrome.chip, ChatPlaceKind.Phone, chrome.onBack, Modifier.padding(top = 8.dp),
+        ) {
             IconButton(onClick = onModel) {
                 Icon(Icons.Outlined.Tune, contentDescription = "model settings", tint = Domovoi.colors.fgMuted)
             }
@@ -177,9 +165,7 @@ private fun ChatPane(
                 Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                     EmptyState(
                         "Ask Domovoi anything",
-                        "Type, or tap the mic and speak. Answers come from a model running on this phone, with no " +
-                            "server and no internet. Conversations stay on this phone; Chat, which talks to your " +
-                            "Domovoi server, is separate.",
+                        PHONE_EMPTY_HINT,
                     )
                 }
             } else {
@@ -204,6 +190,8 @@ private fun ChatPane(
                 }
             }
         }
+        // Nothing said yet: the place can still change (Chat's picker).
+        if (messages.isEmpty() && ui.voicePhase == VoicePhase.Idle && !ui.replying) chrome.picker?.invoke()
         if (ui.voicePhase != VoicePhase.Idle) VoiceLine(ui) else EngineLine(ui, actions, onModel)
         if (offerSpeechFiles) SpeechFilesDialog(ui, actions) { offerSpeechFiles = false }
         Row(
@@ -402,6 +390,12 @@ private fun MessageBubble(m: StoredMessage, writing: Boolean, onReport: (() -> U
     }
 }
 
+/** An empty phone chat: where the answers come from, and where the chat
+ *  stays. Home-server chats are a different place, never mixed in. */
+internal const val PHONE_EMPTY_HINT =
+    "Type, or tap the mic and speak. Answers come from a model running on this phone, with no server and no " +
+        "internet, and this chat stays on this phone."
+
 internal const val ACTION_COPY = "copy"
 internal const val ACTION_REPORT = "report this reply"
 
@@ -433,78 +427,6 @@ internal fun replyDetails(m: StoredMessage): String? {
         m.stopMs?.let { "silenced $it ms after stop" },
     )
     return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
-}
-
-/** The conversations on this phone: open one, delete one, clear all. */
-@Composable
-private fun HistoryPane(history: List<ConversationSummary>, currentId: String, actions: AssistantActions, onClose: () -> Unit) {
-    BackHandler(onBack = onClose)
-    var confirmClear by remember { mutableStateOf(false) }
-    var confirmDelete by remember { mutableStateOf<ConversationSummary?>(null) }
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        PaneTitle("Conversations on this phone", onClose)
-        Text(
-            "Kept only on this phone, outside backups. They never go to a Domovoi server.",
-            style = MaterialTheme.typography.bodySmall,
-            color = Domovoi.colors.fgMuted,
-        )
-        Spacer(Modifier.height(8.dp))
-        if (history.isEmpty()) {
-            EmptyState("No conversations yet", "Ask something and it is kept here.")
-        } else {
-            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(history, key = { it.id }) { c ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .background(
-                                if (c.id == currentId) Domovoi.colors.brandSoft else Domovoi.colors.card,
-                                RoundedCornerShape(8.dp),
-                            )
-                            .clickable(onClickLabel = "open", role = Role.Button) {
-                                actions.open(c.id)
-                                onClose()
-                            }
-                            .padding(start = 12.dp, top = 4.dp, bottom = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(c.title, style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fg,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text("${c.messages} messages · ${relTime(Instant.ofEpochMilli(c.updated).toString())}",
-                                style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgMuted)
-                        }
-                        IconButton(onClick = { confirmDelete = c }) {
-                            Icon(Icons.Outlined.DeleteOutline, contentDescription = "delete conversation: ${c.title}", tint = Domovoi.colors.fgMuted)
-                        }
-                    }
-                }
-            }
-            TextButton(onClick = { confirmClear = true }, modifier = Modifier.padding(vertical = 6.dp)) {
-                Text("clear all conversations", color = Domovoi.colors.err)
-            }
-        }
-    }
-    if (confirmClear) {
-        ConfirmDialog(
-            title = "clear all conversations?",
-            body = "Deletes every conversation kept on this phone (${history.size}). This can't be undone.",
-            confirmLabel = "clear all",
-            destructive = true,
-            onConfirm = actions.clearAll,
-            onDismiss = { confirmClear = false },
-        )
-    }
-    confirmDelete?.let { c ->
-        ConfirmDialog(
-            title = "delete this conversation?",
-            body = "\"${c.title}\" is deleted from this phone. This can't be undone.",
-            confirmLabel = "delete",
-            destructive = true,
-            onConfirm = { actions.delete(c.id) },
-            onDismiss = { confirmDelete = null },
-        )
-    }
 }
 
 /** The model on this phone: where it runs, its size, delete it. */

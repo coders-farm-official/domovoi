@@ -10,9 +10,11 @@ import java.time.temporal.ChronoUnit
 import kotlin.random.Random
 
 /**
- * A report on one of the on-phone model's replies ("report this reply",
- * long-press a reply): Google Play's AI-generated content policy asks that a
- * person can flag an offensive or harmful answer without leaving the app.
+ * A report on one of Domovoi's replies in Chat ("report this reply",
+ * long-press a reply), from the model on this phone or from the home
+ * server's ([place]): Google Play's AI-generated content policy asks that a
+ * person can flag an offensive or harmful answer without leaving the app,
+ * wherever the model ran.
  *
  * It holds exactly what the report sheet shows, nothing else: the question
  * the reply answered, the reply, the model that wrote it and where it ran,
@@ -46,7 +48,12 @@ data class ReplyReport(
     val note: String = "",
     /** The app's versionName. */
     val appVersion: String = "",
+    /** Where the reply was written: [PLACE_PHONE] or [PLACE_SERVER]. */
+    val place: String = PLACE_PHONE,
 ) {
+    /** A home-server chat's reply, written by the server's model. */
+    val fromServer: Boolean get() = place == PLACE_SERVER
+
     /** The reply came from the phone's own clock, not a model. */
     val fromClock: Boolean get() = model == CLOCK && modelId.isEmpty()
 
@@ -65,7 +72,7 @@ data class ReplyReport(
      * reads the same wherever it is opened.
      */
     fun asText(): String = buildString {
-        appendLine("Domovoi on this phone: a reported reply")
+        appendLine(if (fromServer) "Domovoi on the home server: a reported reply" else "Domovoi on this phone: a reported reply")
         appendLine()
         appendLine("Reported: ${utc(created)}")
         appendLine("${sourceLabel.replaceFirstChar { it.uppercase() }}: ${modelLine()}")
@@ -87,11 +94,13 @@ data class ReplyReport(
      *  and nothing else, under a kind and a version. */
     fun asJson(): String = REPORT_JSON.encodeToString(ReportEnvelope.serializer(), ReportEnvelope(report = this))
 
-    /** "Gemma 4 E2B (instruction-tuned), gemma-4-e2b-it, on the cpu". */
+    /** "Gemma 4 E2B (instruction-tuned), gemma-4-e2b-it, on the cpu"; a
+     *  home-server reply: "llama3.2:3b, on the home server". */
     fun modelLine(): String = listOfNotNull(
         model.ifBlank { null },
         modelId.ifBlank { null },
         backend?.let { "on the $it" },
+        "on the home server".takeIf { fromServer },
     ).joinToString(", ").ifBlank { "unknown" }
 
     companion object {
@@ -99,6 +108,12 @@ data class ReplyReport(
 
         /** The source of a reply the phone's clock gave (no model wrote it). */
         const val CLOCK = "the phone's clock"
+
+        /** [place] of a reply written on this phone... */
+        const val PLACE_PHONE = "phone"
+
+        /** ...and of one the home server wrote (a home-server chat). */
+        const val PLACE_SERVER = "home server"
 
         /** A note is a few sentences, not a document. */
         const val NOTE_MAX_CHARS = 2_000
@@ -133,6 +148,35 @@ data class ReplyReport(
                 modelId = if (reply.fromClock) "" else model.id,
                 backend = reply.backend.takeUnless { reply.fromClock },
                 appVersion = appVersion,
+            )
+        }
+
+        /**
+         * The report for a home-server chat's reply: [answer] (null or blank:
+         * not a reply with words, so no report), the [question] before it,
+         * the server's [model] as the reply names it. The server's own ids
+         * and its household are left out, as the device is for a phone reply.
+         */
+        fun draftServer(
+            question: String?,
+            spoken: Boolean,
+            answer: String?,
+            answeredAt: Long,
+            model: String?,
+            appVersion: String,
+            now: Long,
+        ): ReplyReport? {
+            if (answer.isNullOrBlank()) return null
+            return ReplyReport(
+                id = ReplyReportStore.newId(now),
+                created = now,
+                question = question,
+                spoken = spoken,
+                answer = answer,
+                answeredAt = answeredAt,
+                model = model.orEmpty(),
+                appVersion = appVersion,
+                place = PLACE_SERVER,
             )
         }
     }

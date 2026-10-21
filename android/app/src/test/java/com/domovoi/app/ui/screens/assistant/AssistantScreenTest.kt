@@ -75,6 +75,13 @@ class AssistantScreenTest {
         )
     }
 
+    /** Chat's frame around a phone chat, as ChatHome hands it: back, and
+     *  the place picker for a chat with nothing said yet. */
+    private val chrome = PhoneChatChrome(
+        onBack = { calls += "back" },
+        picker = { Text("picker") },
+    )
+
     private fun show(state: AssistantUi, taps: NodeTree.() -> Unit = {}): List<String> {
         val tree = NodeTree()
         var shown = emptyList<String>()
@@ -84,7 +91,7 @@ class AssistantScreenTest {
                     HeadlessUi {
                         // Material's text field reads Android resources the JVM lacks.
                         CompositionLocalProvider(LocalComposerField provides { value, _, _ -> Text("field: $value") }) {
-                            AssistantContent(state, actions)
+                            AssistantContent(state, actions, chrome)
                         }
                     }
                 }
@@ -97,11 +104,11 @@ class AssistantScreenTest {
     }
 
     @Test fun aPhoneUnderTheFloorIsToldWhyAndGetsNoControls() {
-        var buttons = -1
-        val shown = show(ui(memoryGib = 5.6)) { buttons = buttons().size }
+        var buttons = emptyList<String?>()
+        val shown = show(ui(memoryGib = 5.6)) { buttons = buttons().map { it.label } }
         assertTrue(shown.toString(), "This phone can't run the assistant" in shown)
         assertTrue(shown.any { it.contains("needs at least 8 GB of memory") && it.contains("This phone has 6 GB") })
-        assertEquals("no control at all", 0, buttons)
+        assertEquals("no control but Chat's way back", listOf("back"), buttons)
         assertFalse(shown.any { it.startsWith("download") })
     }
 
@@ -113,6 +120,9 @@ class AssistantScreenTest {
         assertTrue(shown.any { it.startsWith("Needs 2.65 GB of free space; this phone has 50.00 GB free.") })
         assertTrue("Off: the download waits for Wi-Fi." in shown)
         assertTrue("on this phone" in shown)
+        // Inside Chat: a new chat's header and its place picker, so someone
+        // who only wanted to chat can move to the home server instead.
+        assertTrue(shown.toString(), "new chat" in shown && "picker" in shown)
         // A preview (owner decision 2, 2026-10-16), said where it is chosen.
         assertTrue(shown.toString(), "preview" in shown && com.domovoi.app.ui.components.PREVIEW_MEANS in shown)
         assertEquals(listOf("download"), calls)
@@ -150,21 +160,46 @@ class AssistantScreenTest {
 
     @Test fun anEmptyChatSaysWhereTheAnswersComeFrom() {
         var sendShown: Boolean? = null
-        var newEnabled: Boolean? = null
+        var labels = emptyList<String?>()
         val shown = show(ui(setup = ModelSetup.Installed)) {
             // Nothing typed: the mic in the send button's place.
             button("talk").click()
             sendShown = buttons().any { it.label == "send" }
-            newEnabled = button("new conversation").enabled
-            button("conversations")
+            labels = buttons().map { it.label }
             button("model settings")
+            button("back").click()
         }
         assertTrue(shown.toString(), "Ask Domovoi anything" in shown)
-        assertTrue(shown.any { it.contains("model running on this phone") && it.contains("Chat, which talks to your Domovoi server, is separate") })
-        assertTrue("on this phone" in shown)
+        assertTrue(PHONE_EMPTY_HINT in shown)
+        assertTrue(PHONE_EMPTY_HINT.contains("model running on this phone") && PHONE_EMPTY_HINT.contains("stays on this phone"))
+        // Chat's header: the chat's name and where it runs.
+        assertTrue("new chat" in shown && "on this phone" in shown)
+        // Nothing said yet: the place can still change.
+        assertTrue(shown.toString(), "picker" in shown)
         assertEquals(false, sendShown)   // nothing typed yet
-        assertEquals(listOf("talk"), calls)
-        assertEquals(false, newEnabled)    // nothing to start over from
+        // Chat's own list replaced the history and new-conversation buttons.
+        assertFalse(labels.toString(), "conversations" in labels || "new conversation" in labels)
+        assertEquals(listOf("talk", "back"), calls)
+    }
+
+    @Test fun aChatWithMessagesIsNamedByItsQuestionAndKeepsItsPlace() {
+        val conversation = StoredConversation(
+            id = "c-1-a",
+            messages = listOf(StoredMessage(Speaker.USER, "Why is the sky blue?"), StoredMessage(Speaker.DOMOVOI, "Light.")),
+        )
+        val shown = show(ui(setup = ModelSetup.Installed, conversation = conversation))
+        assertTrue(shown.toString(), "Why is the sky blue?" in shown && "on this phone" in shown)
+        assertFalse("its place is fixed once something is said", "picker" in shown)
+    }
+
+    @Test fun aPhoneChatWaitsForTheControllerToShowTheRightConversation() {
+        assertEquals(PhoneTarget.NewAfter("c-1-a"), phoneTarget(null, "c-1-a"))
+        assertEquals(PhoneTarget.Current, phoneTarget("c-1-a", "c-1-a"))
+        assertEquals(PhoneTarget.Open("c-2-b"), phoneTarget("c-2-b", "c-1-a"))
+        assertFalse(PhoneTarget.NewAfter("c-1-a").reached("c-1-a"))
+        assertTrue(PhoneTarget.NewAfter("c-1-a").reached("c-3-c"))
+        assertFalse(PhoneTarget.Open("c-2-b").reached("c-1-a"))
+        assertTrue(PhoneTarget.Open("c-2-b").reached("c-2-b"))
     }
 
     @Test fun whileAReplyIsWrittenTheComposerStopsIt() {
@@ -174,7 +209,6 @@ class AssistantScreenTest {
         )
         val shown = show(ui(setup = ModelSetup.Installed, conversation = conversation, replying = true, thinking = true)) {
             button("stop").click()
-            button("new conversation")
         }
         assertTrue(shown.toString(), "thinking" in shown)
         assertEquals(listOf("stop"), calls)

@@ -7,16 +7,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PhoneAndroid
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -28,7 +23,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -40,7 +34,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.assistant.AssistantController
-import com.domovoi.app.assistant.AssistantSupport
 import com.domovoi.app.assistant.AssistantUi
 import com.domovoi.app.assistant.DeviceTier
 import com.domovoi.app.assistant.DeviceTiers
@@ -54,11 +47,14 @@ import com.domovoi.app.assistant.ReportSinks
 import com.domovoi.app.assistant.StoredConversation
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.LoadingState
-import com.domovoi.app.ui.components.Pill
-import com.domovoi.app.ui.components.Tone
-import com.domovoi.app.ui.components.openAppSettings
 import com.domovoi.app.ui.components.composeEmail
+import com.domovoi.app.ui.components.openAppSettings
 import com.domovoi.app.ui.components.shareText
+import com.domovoi.app.ui.screens.chat.CHIP_PHONE
+import com.domovoi.app.ui.screens.chat.ChatFrame
+import com.domovoi.app.ui.screens.chat.ChatHeader
+import com.domovoi.app.ui.screens.chat.ChatPlaceKind
+import com.domovoi.app.ui.screens.chat.NEW_CHAT
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -98,36 +94,55 @@ internal class AssistantActions(
     val clearReports: () -> Unit = {},
 )
 
+/** The phone chat's part of Chat's conversation frame: the way back to the
+ *  list, the place chip, and the place picker while nothing is said yet. */
+internal class PhoneChatChrome(
+    val onBack: (() -> Unit)? = null,
+    val chip: String = CHIP_PHONE,
+    val picker: (@Composable () -> Unit)? = null,
+)
+
 /**
- * The on-device assistant (Route.Assistant): Domovoi answering from a model
- * running on this phone, with no server and no internet once its model is
- * on the phone. A tab of the local shell (no server, or none in reach), and
- * reachable from Home's grid, the drawer, the rail and the phone bar's
- * choices with a server; never in Chat's place, and it always says "on this
- * phone", so nobody mistakes it for the server's chat. Its conversations
- * never go to a server and the server's never come here.
+ * A chat "on this phone" (ui/screens/chat/ChatPlace.kt): Domovoi answering
+ * from a model running on this phone, with no server and no internet once
+ * its model is on the phone. Part of Chat since One Chat (2026-10-21): the
+ * history list and the header are Chat's, and this is the phone place's
+ * conversation. Its conversations never go to a server and the server's
+ * never come here.
  *
- * - A 32-bit install has no engine ([AssistantSupport]): the route is on no
- *   launcher there; this screen says why if anything opens it anyway.
+ * - [openId]: the conversation to show (asked of the controller once);
+ *   null starts a new one.
  * - A phone under 8 GB ([DeviceTier.Unsupported]) gets a plain explanation
- *   and no controls.
+ *   and no controls (Chat doesn't offer the phone there; this is for a chat
+ *   opened anyway).
  * - Otherwise the setup ([AssistantSetupPanel]) until the model is on the
- *   phone, then the chat ([AssistantChat]).
+ *   phone, with the place picker above it, so someone who only wanted to
+ *   chat can move to the home server instead; then the chat ([AssistantChat]).
  *
  * Showing it keeps the model in memory (and loads it); five minutes after it
  * leaves the screen the model is freed ([AssistantController.screenHidden]).
+ * Chat's list and its home-server chats don't count as showing it, so they
+ * never load the model.
  */
 @Composable
-fun AssistantScreen() {
-    if (!AssistantSupport.available) {
-        NotInThisApp()
-        return
-    }
-    val assistant = LocalApp.current.assistant
+internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: ChatFrame) {
     val toast = LocalToast.current
     val context = LocalContext.current
     val ui by assistant.state.collectAsState()
-    LaunchedEffect(assistant) { assistant.messages.collect { toast(it) } }
+    // The controller's one-line news is toasted by ChatScreen, which is
+    // always around this view (and around the list, where a delete happens).
+
+    // The conversation this view is for. The controller holds one at a time
+    // and switches asynchronously, so until it has switched the view shows
+    // nothing to type into, rather than the conversation shown before.
+    val target = remember { phoneTarget(openId, assistant.state.value.conversation.id) }
+    LaunchedEffect(target) {
+        when (target) {
+            is PhoneTarget.NewAfter -> assistant.newConversation()
+            is PhoneTarget.Open -> assistant.open(target.id)
+            PhoneTarget.Current -> Unit
+        }
+    }
 
     // On screen (and the app started): the model stays and loads; off it,
     // the unload timer runs.
@@ -206,7 +221,43 @@ fun AssistantScreen() {
         )
     }
     val reportScope = rememberCoroutineScope()
-    AssistantContent(ui, actionsFor(assistant, download, talk, sinks, reportScope) { toast(it) })
+    val chrome = PhoneChatChrome(onBack = frame.onBack, chip = frame.chip, picker = frame.picker)
+    if (!target.reached(ui.conversation.id)) {
+        Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+            ChatHeader(NEW_CHAT, chrome.chip, ChatPlaceKind.Phone, chrome.onBack, Modifier.padding(top = 8.dp))
+            LoadingState()
+        }
+        return
+    }
+    // Saying something here makes this phone the place last used.
+    val used = frame.onSent
+    AssistantContent(ui, actionsFor(assistant, download, talk, sinks, reportScope, used) { toast(it) }, chrome)
+}
+
+/** Which conversation a phone chat's view waits for the controller to show. */
+internal sealed interface PhoneTarget {
+    /** A new one: any conversation other than the one showing before. */
+    data class NewAfter(val before: String) : PhoneTarget
+
+    /** One from the list, by its id. */
+    data class Open(val id: String) : PhoneTarget
+
+    /** The one already showing. */
+    data object Current : PhoneTarget
+
+    fun reached(showing: String): Boolean = when (this) {
+        is NewAfter -> showing != before
+        is Open -> showing == id
+        Current -> true
+    }
+}
+
+/** What a phone chat's view asks for: [openId] null is a new chat; the
+ *  conversation already showing ([showing]) needs nothing. */
+internal fun phoneTarget(openId: String?, showing: String): PhoneTarget = when (openId) {
+    null -> PhoneTarget.NewAfter(showing)
+    showing -> PhoneTarget.Current
+    else -> PhoneTarget.Open(openId)
 }
 
 /** What the person is told once a report has been handed on (nothing when
@@ -224,6 +275,7 @@ private fun actionsFor(
     talk: () -> Unit,
     sinks: List<ReportSink>,
     scope: CoroutineScope,
+    used: () -> Unit,
     toast: (String) -> Unit,
 ) = AssistantActions(
     download = download,
@@ -233,13 +285,19 @@ private fun actionsFor(
     deleteModel = a::deleteModel,
     setBackend = a::setBackend,
     retryLoad = a::retryLoad,
-    send = a::send,
+    send = { text ->
+        a.send(text)
+        used()
+    },
     stop = a::stop,
     newConversation = a::newConversation,
     open = a::open,
     delete = a::delete,
     clearAll = a::clearAll,
-    talk = talk,
+    talk = {
+        talk()
+        used()
+    },
     downloadVoice = a::downloadVoice,
     setSpeakTyped = a::setSpeakTyped,
     draftReport = a::draftReport,
@@ -255,18 +313,21 @@ private fun actionsFor(
 
 /** The screen for [ui], with no controller behind it (the tests render it). */
 @Composable
-internal fun AssistantContent(ui: AssistantUi, actions: AssistantActions) {
+internal fun AssistantContent(ui: AssistantUi, actions: AssistantActions, chrome: PhoneChatChrome = PhoneChatChrome()) {
     when {
-        ui.tier == DeviceTier.Unsupported -> Page { UnsupportedPhone(ui) }
-        ui.setup == ModelSetup.Checking -> Page { LoadingState() }
-        ui.setup == ModelSetup.Installed -> AssistantChat(ui, actions)
-        else -> Page { AssistantSetupPanel(ui, actions) }
+        ui.tier == DeviceTier.Unsupported -> Page(chrome) { UnsupportedPhone(ui) }
+        ui.setup == ModelSetup.Checking -> Page(chrome) { LoadingState() }
+        ui.setup == ModelSetup.Installed -> AssistantChat(ui, actions, chrome)
+        // A phone chat started before the model is on the phone: its setup,
+        // inside Chat, with the picker to chat on the home server instead.
+        else -> Page(chrome, withPicker = true) { AssistantSetupPanel(ui, actions) }
     }
 }
 
-/** A scrolling page under the assistant's title. */
+/** A scrolling page under Chat's header, for a phone chat that can't chat
+ *  yet. */
 @Composable
-private fun Page(content: @Composable () -> Unit) {
+private fun Page(chrome: PhoneChatChrome, withPicker: Boolean = false, content: @Composable () -> Unit) {
     Column(
         Modifier
             .fillMaxSize()
@@ -274,21 +335,9 @@ private fun Page(content: @Composable () -> Unit) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        AssistantTitle()
+        ChatHeader(NEW_CHAT, chrome.chip, ChatPlaceKind.Phone, chrome.onBack)
+        if (withPicker) chrome.picker?.invoke()
         content()
-    }
-}
-
-/** "Domovoi" with "on this phone": always, so it is never taken for Chat. */
-@Composable
-internal fun AssistantTitle(modifier: Modifier = Modifier, actions: (@Composable () -> Unit)? = null) {
-    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Icon(Icons.Filled.PhoneAndroid, contentDescription = null, tint = Domovoi.colors.brand, modifier = Modifier.size(20.dp))
-        Text("Domovoi", style = MaterialTheme.typography.titleLarge, color = Domovoi.colors.fg, modifier = Modifier.asHeading())
-        Pill("on this phone", Tone.Brand)
-        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-            actions?.invoke()
-        }
     }
 }
 
@@ -313,22 +362,3 @@ internal fun unsupportedText(gb: Int, lowRam: Boolean): String =
         (if (lowRam) "Android marks this phone as a low-memory device" else "This phone has $gb GB") +
         ", so the assistant isn't available here. Everything else in the app works as usual, " +
         "and Chat still talks to your Domovoi server when one is connected."
-
-/** Opened on a 32-bit install (no launcher offers it there). */
-@Composable
-private fun NotInThisApp() {
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        AssistantTitle()
-        DomovoiCard(Modifier.fillMaxWidth()) {
-            Text("Not in this version of the app", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg,
-                modifier = Modifier.asHeading())
-            Text(
-                "The assistant on the phone needs the 64-bit Domovoi app (the arm64-v8a download). " +
-                    "This one is the 32-bit app; everything else works the same in both.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Domovoi.colors.fgMuted,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-        }
-    }
-}

@@ -551,18 +551,18 @@ private fun TopChrome(content: @Composable () -> Unit) {
 // ---------------------------------------------------------------------------
 // Offline/local mode: no domovoi configured, or the saved one is out of
 // reach ([unreachableServer] names it). Music, Videos and Files, backed by
-// the phone's own media (MediaStore) and folders, and the on-device
-// assistant where this install has it ([localTabs]); "connect" opens the
+// the phone's own media (MediaStore) and folders, and Chat with the chats on
+// this phone where this install has the engine ([localTabs]); "connect" opens the
 // discovery/startup screen. Connecting flips prefs.serverUrl (or, for an
 // unreachable server, the live connection coming back), which recomposes
 // AppShell straight into the full workspace.
 // ---------------------------------------------------------------------------
 @Composable
 private fun OfflineShell(choice: ServerChoice, verdict: IdentityVerdict?) {
-    // Music, videos, files, and the on-device assistant where this install
-    // has it (localTabs); the index of the one showing. A shared screen
-    // (the kitchen tablet, as the saved server last answered) leaves Files
-    // and the assistant off here too, as the workspace does (N7).
+    // Music, videos, files, and Chat (this phone's chats) where this install
+    // has the engine (localTabs); the index of the one showing. A shared
+    // screen (the kitchen tablet, as the saved server last answered) leaves
+    // Files and Chat off here too, as the workspace does (N7).
     val app = LocalApp.current
     val savedServer by app.prefs.serverUrl.collectAsState()
     val savedToken by app.prefs.deviceToken.collectAsState()
@@ -738,7 +738,16 @@ private fun OfflineShell(choice: ServerChoice, verdict: IdentityVerdict?) {
             when (tabs.getOrElse(tab) { Route.Music }) {
                 Route.Videos -> com.domovoi.app.ui.screens.local.LocalVideosScreen()
                 Route.Files -> com.domovoi.app.ui.screens.files.LocalFilesScreen()
-                Route.Assistant -> com.domovoi.app.ui.screens.assistant.AssistantScreen()
+                // Chat with the chats kept on this phone; the server's are
+                // listed again once it is in reach (ChatPlace.kt).
+                Route.Chat -> com.domovoi.app.ui.screens.chat.ChatScreen(
+                    away = true,
+                    awayLine = when {
+                        serverName == null -> null
+                        outOfReach != null -> com.domovoi.app.ui.screens.chat.AWAY_LINE
+                        else -> com.domovoi.app.ui.screens.chat.LOCAL_CHOSEN_LINE
+                    },
+                )
                 Route.Audiobooks -> com.domovoi.app.ui.screens.audiobooks.SavedBooksScreen(offline = true)
                 else -> com.domovoi.app.ui.screens.local.LocalMusicScreen()
             }

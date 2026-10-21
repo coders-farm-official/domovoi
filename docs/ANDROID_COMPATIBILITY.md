@@ -90,9 +90,9 @@ Notes:
   button, on a smaller one.
 - **32-bit phones:** the app checks once per start whether the assistant's
   engine library is in this install and this process can load it
-  (`assistant/AssistantSupport.kt`). Where it isn't, the Assistant tab and
-  screen are on no launcher (local mode keeps Music, Videos and Files; Home's
-  grid, the drawer, the rail and the phone-bar choices leave it out), there
+  (`assistant/AssistantSupport.kt`). Where it isn't, Chat has no
+  "on this phone" place (it lists and starts home-server chats only, and local
+  mode keeps Music, Videos and Files, with no Chat tab), there
   are no developer options (the app version line is plain text, and the
   benchmark card they hold is not shown), and the licences list leaves out
   the models only the assistant downloads.
@@ -205,7 +205,7 @@ words for a screen reader or under 48 dp):
 | `android-36;google_apis_playstore_ps16k;x86_64` r7, **16 KB pages**, 8 GB | default | no page-size compatibility dialog; LiteRT-LM answered a typed question; Moonshine and Silero (sherpa-onnx on ONNX Runtime) heard a spoken question and the reply was spoken; the room code's camera preview (CameraX 1.4.2) ran |
 | `android-35;google_apis;x86_64`, 3 GB | default | local shell; the assistant says this phone can't run it (3 GB) with no controls; privacy and licences; room mode's explainer and microphone step |
 | `android-26;google_apis;x86_64` r16 (8.0), 3 GB | default | as Android 15, room mode's screens edge to edge; a refused microphone → "open the app's settings" |
-| `android-30;google_apis;x86` r16, **32-bit** | x86 | no assistant tab; privacy (without the assistant's points) and licences; room mode's explainer |
+| `android-30;google_apis;x86` r16, **32-bit** | x86 | no phone chats in Chat; privacy (without the assistant's points) and licences; room mode's explainer |
 
 What the scan flagged on the first API 36 pass was fixed the same day and
 scanned again: the licences' notice links (19 dp tall) and two "allow
