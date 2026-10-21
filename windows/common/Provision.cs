@@ -9,7 +9,8 @@
 // "final":true, result (ok, failed, rerun_after_restart, dry_run,
 // usage_error, busy, help, stopped), restart_required, exit_code, failed_step,
 // head, tier, wsl, gpu (a list, [] for the CPU alone, null when unknown),
-// warnings and dashboard. Only a SIGKILL leaves no final line, and the
+// ai (true: AI chat and questions are on, false: left out, null: the run
+// stopped before that was settled), warnings and dashboard. Only a SIGKILL leaves no final line, and the
 // installer treats that as a failure and runs the script again
 // (step1\REPORT.md). Exit codes: 0 done (or "stopped": the run given
 // --stop-before STEP got there), 1 failed, 2 bad usage, 3 WSL without
@@ -44,6 +45,9 @@ namespace Domovoi.Windows
         public bool? Wsl;
         // null: unknown (the line said null, or this is not the final line).
         public List<string> Gpu;
+        // "ai": what the run settled for AI chat and questions (from its
+        // options or the household's domovoi/.env); null: unknown.
+        public bool? Ai;
         public int Warnings;
         public string Dashboard;
 
@@ -89,6 +93,7 @@ namespace Domovoi.Windows
                 p.Tier = Json.Str(d, "tier");
                 p.Wsl = Json.Bool(d, "wsl");
                 p.Gpu = Json.StrList(d, "gpu");
+                p.Ai = Json.Bool(d, "ai");
                 p.Warnings = Json.Int(d, "warnings") ?? 0;
                 p.Dashboard = Json.Str(d, "dashboard");
             }
@@ -327,6 +332,98 @@ namespace Domovoi.Windows
         }
     }
 
+    // The household's answer to "Include AI chat and questions?" as it
+    // stands, for a Setup run again on an install (repair, upgrade): the
+    // saved answer wins over the page's usual Yes (review round 1, 2026-10-21:
+    // a re-run must never pull the AI models into a home that turned AI off
+    // in Settings > Models).
+    public static class HouseholdAi
+    {
+        // The household's own value, domovoi/.env in the checkout
+        // provision.sh makes (CHECKOUT=/opt/domovoi), read by DomovoiHost
+        // as the service user, whose file it is, the way provision.sh's
+        // dotenv_get reads it: the values of the AI_FEATURES lines, nothing
+        // else of the file (it holds passwords).
+        public const string EnvFile = "/opt/domovoi/domovoi/.env";
+        public const string SedScript = "s/^[[:space:]]*AI_FEATURES[[:space:]]*=[[:space:]]*//p";
+
+        static readonly string[] Off = { "0", "false", "no", "off", "disabled", "n", "f", "never" };
+
+        // One value as the core reads it (domovoi/ai_features.py parse):
+        // off only when it clearly says so; blank or unknown is on.
+        public static bool Parse(string value)
+        {
+            if (value == null) return true;
+            string v = value.Trim().ToLowerInvariant();
+            return Array.IndexOf(Off, v) < 0;
+        }
+
+        // sed's output (the value of each AI_FEATURES line) as the core reads
+        // the file: the last one counts; quotes stripped; an unquoted value
+        // ends at " #" (a comment). No line at all: on, as the core reads a
+        // .env without the key.
+        public static bool FromSedOutput(string stdout)
+        {
+            string last = null;
+            foreach (string raw in (stdout ?? "").Split('\n'))
+            {
+                string line = raw.TrimEnd('\r');
+                if (line.Trim().Length > 0) last = line;
+            }
+            if (last == null) return true;
+            string v = last.Trim();
+            if (v.Length >= 2 && (v[0] == '"' || v[0] == '\'') && v.IndexOf(v[0], 1) > 0)
+                v = v.Substring(1, v.IndexOf(v[0], 1) - 1);
+            else
+            {
+                int hash = v.IndexOf(" #", StringComparison.Ordinal);
+                if (hash >= 0) v = v.Substring(0, hash);
+            }
+            return Parse(v);
+        }
+    }
+
+    // What the AI page starts at on this run: the household's value when
+    // DomovoiHost could read it (From "household"), else the install
+    // record's last answer ("record"), else Yes for a first install
+    // ("none").
+    public sealed class SavedAiAnswer
+    {
+        public bool Yes = true;
+        public string From = "none";
+
+        public static SavedAiAnswer Decide(Ledger record, bool? household)
+        {
+            var a = new SavedAiAnswer();
+            if (household != null) { a.Yes = household.Value; a.From = "household"; }
+            else if (record != null) { a.Yes = record.IncludeAi; a.From = "record"; }
+            return a;
+        }
+    }
+
+    // What provision.sh's final line said ("ai"), once DomovoiHost reports
+    // Domovoi ready: the install record keeps that, not the click, and
+    // Setup's last page says it.
+    public static class AiReport
+    {
+        // The value a ready host's status carries, or null (not ready, or a
+        // provision.sh that didn't say).
+        public static bool? Reported(HostStatus st)
+        {
+            if (st == null || st.State != "ready") return null;
+            return st.Ai;
+        }
+
+        // Records it; true when the record changed.
+        public static bool Apply(Ledger l, HostStatus st)
+        {
+            bool? ai = Reported(st);
+            if (l == null || ai == null || l.IncludeAi == ai.Value) return false;
+            l.IncludeAi = ai.Value;
+            return true;
+        }
+    }
+
     // The provision.sh options for one install (PLAN 4.8; the brief:
     // --internet, --media, --lan-ip, tier auto, from the pinned commit; AI
     // chat and questions since 2026-10-21).
@@ -347,6 +444,13 @@ namespace Domovoi.Windows
         // =false); speech recognition, the voices and Ollama itself are
         // installed either way.
         public bool IncludeAi = true;
+        // Neither option: provision.sh keeps the answer the household's
+        // domovoi/.env has (Settings > Models may have changed it since the
+        // last Setup). Only for a Yes that came from the install record
+        // alone, untouched (Steps.Prepare --ai keep): Setup couldn't read the
+        // household's value, and a Yes said out loud would turn AI back on
+        // and pull the models into a home that turned it off.
+        public bool KeepAi;
         // The pinned provision.sh has --ai-models / --no-ai-models
         // (ProvisionScript.SupportsAiChoice).
         public bool ScriptHasAiChoice;
@@ -376,13 +480,15 @@ namespace Domovoi.Windows
             a.Add("--track-branch"); a.Add(o.TrackBranch);
             a.Add("--internet"); a.Add(o.Internet);
             a.Add("--tier"); a.Add("auto");
-            // The household's answer, always said out loud to a provision.sh
-            // that takes it: with neither option, provision.sh keeps the
-            // answer an earlier install left in domovoi/.env, so a Yes in a
-            // later Setup over an earlier No would not be heard. An older
+            // The household's answer, said out loud to a provision.sh that
+            // takes it: with neither option, provision.sh keeps the answer
+            // an earlier install left in domovoi/.env, so a Yes in a later
+            // Setup over an earlier No would not be heard. KeepAi (a Yes
+            // from the record alone) says neither on purpose. An older
             // pinned script gets nothing for Yes (its arguments as before:
             // it pulls the models anyway) and can't do No.
-            if (!o.IncludeAi)
+            if (o.KeepAi && o.IncludeAi) { }
+            else if (!o.IncludeAi)
             {
                 if (!o.ScriptHasAiChoice)
                     throw new ArgumentException("this Setup's provision.sh always downloads the AI models (it has no --no-ai-models); run Setup again and include AI chat and questions, or use a newer Setup");

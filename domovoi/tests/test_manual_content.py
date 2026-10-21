@@ -347,9 +347,11 @@ def test_the_static_label_table_names_every_core_handler() -> None:
 def test_chat_mode_is_listed_only_while_it_is_on() -> None:
     """Chat mode answers only while chat mode is enabled (off by default):
     the live feature list leaves it out unless the server says it is on
-    (GET /api/capabilities features.chat)."""
-    assert DOC["handler_needs_feature"] == {"chat_mode": "chat"}
+    (GET /api/capabilities features.chat). Double-Check likewise needs the
+    household's AI features (features.ai: a fact-check is the model reading
+    the search results)."""
+    assert DOC["handler_needs_feature"] == {"chat_mode": "chat", "double_check": "ai"}
     from web.backend.api.capabilities import _features
 
-    assert "chat" in _features()
+    assert "chat" in _features() and "ai" in _features()
     assert "handler_needs_feature" in (STATIC / "manual.jsx").read_text(encoding="utf-8")

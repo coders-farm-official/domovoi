@@ -241,6 +241,8 @@ namespace Domovoi.Windows.Host
         bool BringUp(HostJob job)
         {
             log.Write(Inv.F("job generation {0} attempt {1}", job.Generation, job.Attempt));
+            // What this job's provision.sh reports, not an earlier one's.
+            lock (statusGate) status.Ai = null;
             Status("config", HostProgress.PhaseConfig, 0, "Configuring WSL for Domovoi");
             if (!WriteWslConfig(job)) return false;
 
@@ -519,6 +521,7 @@ namespace Domovoi.Windows.Host
                         status.Head = final.Head;
                         status.Tier = final.Tier;
                         if (final.Gpu != null) { status.Gpu = final.Gpu; status.GpuKnown = true; }
+                        if (final.Ai != null) status.Ai = final.Ai;
                     }
                 }
                 string why;
@@ -711,6 +714,7 @@ namespace Domovoi.Windows.Host
                     var d = Json.ReadFile(f);
                     string verb = Json.Str(d, "verb");
                     if (verb == "setup-code") AnswerSetupCode(Json.Str(d, "public_key"), ready, resp);
+                    else if (verb == "ai-features") AnswerAiFeatures(ready, resp);
                     else { resp["ok"] = false; resp["error"] = "unknown request"; }
                 }
                 catch (FormatException e) { resp["ok"] = false; resp["error"] = "bad request: " + e.Message; }
@@ -759,6 +763,28 @@ namespace Domovoi.Windows.Host
             }
             catch (FormatException e) { resp["error"] = "bad public key: " + e.Message; }
             catch (System.Security.Cryptography.CryptographicException e) { resp["error"] = "encryption failed: " + e.Message; }
+        }
+
+        // The household's AI_FEATURES (Settings > Models writes it to
+        // domovoi/.env), for the AI page of a Setup run again on this
+        // install: on or off, nothing else of the file (sed prints only the
+        // values of AI_FEATURES lines). As the service user, the file's
+        // owner, the way provision.sh reads it.
+        void AnswerAiFeatures(bool ready, Dictionary<string, object> resp)
+        {
+            resp["ok"] = false;
+            if (!ready) { resp["error"] = "Domovoi is not running yet"; return; }
+            WslResult r = Wsl.Run(new[] { "-d", Paths.DistroName, "-u", "domovoi", "--cd", "/", "--exec", "/usr/bin/sed", "-n", HouseholdAi.SedScript, HouseholdAi.EnvFile }, 30000, null, 4096);
+            if (r.TimedOut || r.ExitCode != 0)
+            {
+                resp["error"] = "could not read domovoi/.env (exit " + Inv.S(r.ExitCode) + ")";
+                log.Write("ai-features request: " + (string)resp["error"]);
+                return;
+            }
+            bool on = HouseholdAi.FromSedOutput(r.Stdout);
+            resp["ai_features"] = on;
+            resp["ok"] = true;
+            log.Write("ai-features request: answered (" + (on ? "on" : "off") + ")");
         }
 
         // -- stopping and unregistering ---------------------------------

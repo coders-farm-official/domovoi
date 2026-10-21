@@ -145,7 +145,12 @@
 # one question this script asks, only when stdin is a terminal and not in
 # a dry run ("Include AI chat and questions? ... [Y/n]", on stderr; Enter
 # or yes includes them, n or no leaves them out, anything else asks again,
-# end of input includes them), else yes.
+# end of input includes them), else yes. On a box set up before, the
+# household's saved answer wins over an option: AI_FEATURES, once changed
+# in Settings or by hand, is kept like any managed key, and after the env
+# step the run follows what domovoi/.env holds, read as the core reads it
+# (blank or unknown is on): the models step pulls only when that is on,
+# and the final line's "ai" is that value, not the option's.
 #
 # Machine-readable progress for the Windows installer's UI: every line on
 # stdout that starts with "@@DOMOVOI " is one JSON object:
@@ -294,6 +299,12 @@ GPU_JSON=null
 # settled (decide_ai), empty before; AI_WHY says where the answer came from.
 AI=""
 AI_WHY=""
+# 1 when AI came from domovoi/.env (no option, no question): the household's
+# answer, which the env step then never records as the script's own.
+AI_FROM_ENV=0
+# 1 when the .env, after the env step, said otherwise than the option.
+AI_OVERRIDDEN=0
+AI_FLAG_NAME=""
 # 1 once this run is past its checks and holds the run lock: only then is
 # result.json its to write, and the restart question worth asking.
 STARTED=0
@@ -593,7 +604,9 @@ skipped, a killed run resumes, a changed option re-runs what it feeds.
                         With neither option: a box set up before keeps the
                         answer in its domovoi/.env; otherwise the script
                         asks once when run from a terminal (Enter: yes),
-                        and takes yes when it can't ask
+                        and takes yes when it can't ask. Either option
+                        leaves an answer changed in Settings as it is, and
+                        the models are pulled only when that answer is on
   --no-vision-model     don't pull the tier's vision model, which reads
                         pictures in chat (about 1.9 GB, part of the sizes
                         above). It is still the one configured: chat then
@@ -2819,7 +2832,14 @@ do_env() {
   else
     log "domovoi/.env: nothing to set"
   fi
-  for k in "${write[@]}" "${same[@]}"; do last[$k]=${want[$k]}; done
+  for k in "${write[@]}"; do last[$k]=${want[$k]}; done
+  for k in "${same[@]}"; do
+    # An AI answer this run took from the .env is the household's: it stays
+    # theirs (a later --ai-models or --no-ai-models keeps it), not the
+    # script's to replace.
+    if [ "$k" = AI_FEATURES ] && [ "$AI_FROM_ENV" = 1 ]; then continue; fi
+    last[$k]=${want[$k]}
+  done
   write_env_record last
   for k in "${kept[@]}"; do
     warn "domovoi/.env: $k holds a value this script did not write (set in Settings, or by hand); left as it is (this run would have written ${want[$k]})"
@@ -3086,17 +3106,23 @@ model_pairs() {
 
 skip_models() {
   if [ "$SKIP_MODELS" = 1 ]; then echo "--skip-models: no Ollama models pulled"; return 0; fi
+  if [ "$AI" = no ] && [ "$AI_OVERRIDDEN" = 1 ]; then
+    echo "AI chat and questions are off in this home's settings (AI_FEATURES=false in domovoi/.env, kept over $AI_FLAG_NAME): no AI models pulled (turn them on in Settings, Models)"
+    return 0
+  fi
   if [ "$AI" = no ]; then
     echo "$AI_WHY: AI chat and questions are off; no AI models pulled (turn them on later in Settings, Models)"
     return 0
   fi
   return 1
 }
-# The AI answer is not among these: a run that leaves AI out skips this
-# step before its inputs are read, and leaves its marker as it was. So a
-# later run that includes AI finds no marker (runs), or the marker of an
-# earlier run that pulled the same models, which check_models then holds
-# to Ollama's list (any one gone: it runs again).
+# The AI answer is not among these: a run that leaves AI out (the
+# effective answer, settle_ai) skips this step before its inputs are read,
+# and leaves its marker as it was. So a later run that includes AI (an
+# option, or the household turning it on in Settings) finds no marker
+# (runs), or the marker of an earlier run that pulled the same models,
+# which check_models then holds to Ollama's list (any one gone: it runs
+# again).
 inputs_models() { model_pairs; }
 check_models() {
   local tag want
@@ -4054,8 +4080,8 @@ decide_ai() {
     prev=$(dotenv_get AI_FEATURES 2>/dev/null) || prev=""
   fi
   case ${prev,,} in
-    true|1|yes|on) AI=yes; AI_WHY="AI_FEATURES=true in domovoi/.env"; return 0 ;;
-    false|0|no|off) AI=no; AI_WHY="AI_FEATURES=false in domovoi/.env"; return 0 ;;
+    true|1|yes|on) AI=yes; AI_WHY="AI_FEATURES=true in domovoi/.env"; AI_FROM_ENV=1; return 0 ;;
+    false|0|no|off) AI=no; AI_WHY="AI_FEATURES=false in domovoi/.env"; AI_FROM_ENV=1; return 0 ;;
   esac
   if ! dry && stdin_is_tty; then
     if ask_ai; then AI=yes; AI_WHY="answered yes"; else AI=no; AI_WHY="answered no"; fi
@@ -4063,6 +4089,39 @@ decide_ai() {
   fi
   AI=yes
   AI_WHY="the default"
+}
+
+# settle_ai: after the env step (run or skipped), AI is what domovoi/.env
+# holds, read the way the core reads it (env_bootstrap.env_values, then
+# domovoi.ai_features.parse: only a clear off value is off; blank, missing
+# or unknown is on). The env step keeps a value the household set, so on a
+# box set up before, their answer wins over an option. A checkout whose
+# core predates the setting still follows it for the models.
+settle_ai() {
+  local out v eff
+  ! dry || return 0
+  [ -f "$CHECKOUT/domovoi/.env" ] || return 0
+  if out=$(env_py "$PY_ENV_READ" PROVISION_ENV_NAMES=AI_FEATURES); then
+    v=$(printf '%s
+' "$out" | sed -n 's/^AI_FEATURES=//p' | tail -n 1)
+  else
+    warn "reading AI_FEATURES from domovoi/.env through the core failed; reading the file directly"
+    v=$(dotenv_get AI_FEATURES 2>/dev/null) || v=""
+  fi
+  v=${v#"${v%%[![:space:]]*}"}; v=${v%"${v##*[![:space:]]}"}
+  case ${v,,} in 0|false|no|off|disabled|n|f|never) eff=no ;; *) eff=yes ;; esac
+  [ "$eff" != "$AI" ] || return 0
+  if [ -n "$AI_FLAG" ]; then
+    AI_FLAG_NAME=$AI_WHY
+    AI_OVERRIDDEN=1
+    if [ "$eff" = no ]; then
+      log "AI chat and questions: off in this home's settings (AI_FEATURES=false in domovoi/.env), kept over $AI_FLAG_NAME: no AI models are pulled"
+    else
+      log "AI chat and questions: on in this home's settings (AI_FEATURES=${v:-true} in domovoi/.env), kept over $AI_FLAG_NAME: the AI models are pulled"
+    fi
+  fi
+  AI=$eff
+  AI_WHY="AI_FEATURES=${v:-(blank)} in domovoi/.env"
 }
 
 if [ "$DRY_RUN" = 0 ] && [ "$(id -u)" != 0 ]; then
@@ -4130,6 +4189,7 @@ for step in "${STEP_IDS[@]:1}"; do
   run_step "$step"
   case $step in
     user) SVC_HOME=$(svc_home) || true; [ -n "$SVC_HOME" ] || SVC_HOME=/home/$SVC_USER ;;
+    env) settle_ai ;;
     checkout)
       if ! dry; then tidy_checkout; fi
       if [ -d "$CHECKOUT/.git" ] && [ -z "$HEAD_SHA" ]; then HEAD_SHA=$(g rev-parse HEAD 2>/dev/null || true); fi

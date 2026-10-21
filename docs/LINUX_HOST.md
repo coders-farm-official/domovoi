@@ -291,7 +291,9 @@ goes into `domovoi/.env` as `AI_FEATURES=true` or `false`. Ollama itself
 is installed either way, so AI can be turned on later on the dashboard
 (Settings → Models), which downloads the models then. A later run of the
 script doesn't ask again: it keeps the answer `domovoi/.env` holds (yours,
-if you changed it in Settings since). What it checks:
+if you changed it in Settings since). An answer changed in Settings also
+stays over `--ai-models` or `--no-ai-models`, with a warning, and the AI
+models are downloaded only when it is on. What it checks:
 
 - **Against a pin, stopping on a mismatch:** every Python package (the
   lock's hashes), the Ollama release pinned under [By hand](#by-hand)

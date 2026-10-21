@@ -3121,6 +3121,104 @@ case_ai_features_on_an_older_core() {
   end_case
 }
 
+# The household's saved answer wins on a re-run (review round 1): an
+# explicit --ai-models (what the Windows Setup passes for every Yes) on a
+# box whose household turned AI off in Settings keeps AI_FEATURES=false,
+# pulls nothing, and the final line says what the .env holds.
+case_ai_flag_over_household_off() {
+  new_case ai_flag_over_household_off
+  local envf=$CHECKOUT/domovoi/.env rec=$ROOT/var/lib/domovoi-provision/env-written m
+  local skipped="[models] skipped: AI chat and questions are off in this home's settings (AI_FEATURES=false in domovoi/.env, kept over --ai-models): no AI models pulled (turn them on in Settings, Models)"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "first run exit 0" eq "$RC" 0
+  sed -i 's/^AI_FEATURES=.*/AI_FEATURES=false/' "$envf"
+  run_prov "${wsl_args[@]}" --ai-models --lan-ip 192.168.1.60
+  check "--ai-models exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "household's AI_FEATURES=false kept" has_line "$envf" "AI_FEATURES=false"
+  check "the usual warning" said "domovoi/.env: AI_FEATURES holds a value this script did not write"
+  check "no model pulled while AI stays off" not_called "/api/pull"
+  for m in "${AI_PULLS[@]}"; do check "not pulled: $m" not_called "$m"; done
+  check "models step skipped" eq "$(state_of models)" skip
+  check "says why, plainly" said "$skipped"
+  check "said when it settled" said "AI chat and questions: off in this home's settings (AI_FEATURES=false in domovoi/.env), kept over --ai-models: no AI models are pulled"
+  check "no models marker" no_marker models
+  check "the final line says AI is off" eq "$(final_field ai)" false
+  check "and result.json" grep -qF '"ai":false' "$ROOT/var/lib/domovoi-provision/result.json"
+  check "said at the end" said "AI chat and questions: off (turn them on later on the dashboard: Settings, Models)"
+  # The same options again: the env step is skipped (inputs unchanged), and
+  # the .env still decides.
+  run_prov "${wsl_args[@]}" --ai-models --lan-ip 192.168.1.60
+  check "again: exit 0" eq "$RC" 0
+  check "again: env skipped" eq "$(state_of env)" skip
+  check "again: no pull" not_called "/api/pull"
+  check "again: says why" said "$skipped"
+  check "again: AI off" eq "$(final_field ai)" false
+  # A run with no option follows the household, and leaves the answer
+  # theirs: a later --ai-models still keeps it.
+  run_prov "${wsl_args[@]}" --lan-ip 192.168.1.60
+  check "no option: exit 0" eq "$RC" 0
+  check "no option: no pull" not_called "/api/pull"
+  check "no option: the record still the script's own" has_line "$rec" "AI_FEATURES=true"
+  run_prov "${wsl_args[@]}" --ai-models --lan-ip 192.168.1.60
+  check "--ai-models after that: exit 0" eq "$RC" 0
+  check "--ai-models after that: still false" has_line "$envf" "AI_FEATURES=false"
+  check "--ai-models after that: no pull" not_called "/api/pull"
+  check "--ai-models after that: AI off" eq "$(final_field ai)" false
+  end_case
+}
+
+# Left out with --no-ai-models, then a re-run with no option and no
+# terminal (the Windows installer's repair): still off, nothing pulled.
+case_ai_off_rerun_without_option() {
+  new_case ai_off_rerun_without_option
+  local envf=$CHECKOUT/domovoi/.env
+  run_prov "${wsl_args[@]}" --no-ai-models
+  check "first run exit 0" eq "$RC" 0
+  run_prov "${wsl_args[@]}"
+  check "re-run exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "kept it" said "AI chat and questions: left out (AI_FEATURES=false in domovoi/.env)"
+  check "models skipped" eq "$(state_of models)" skip
+  check "says why" said "[models] skipped: AI_FEATURES=false in domovoi/.env: AI chat and questions are off"
+  check "no pull" not_called "/api/pull"
+  check "no models marker" no_marker models
+  check ".env still false" has_line "$envf" "AI_FEATURES=false"
+  check "the final line says AI is off" eq "$(final_field ai)" false
+  check "and result.json" grep -qF '"ai":false' "$ROOT/var/lib/domovoi-provision/result.json"
+  end_case
+}
+
+# Left out at install, then the household turns AI on in Settings: the next
+# run with no option pulls the models (the skipped step left no marker),
+# and a later --no-ai-models keeps their answer.
+case_ai_turned_on_in_settings_after_no() {
+  new_case ai_turned_on_in_settings_after_no
+  local envf=$CHECKOUT/domovoi/.env m
+  run_prov "${wsl_args[@]}" --no-ai-models
+  check "first run exit 0" eq "$RC" 0
+  check "no pull" not_called "/api/pull"
+  sed -i 's/^AI_FEATURES=.*/AI_FEATURES=true/' "$envf"
+  run_prov "${wsl_args[@]}"
+  check "no option exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "follows the household" said "AI chat and questions: included (AI_FEATURES=true in domovoi/.env)"
+  check "models ran" eq "$(state_of models)" done
+  for m in "${AI_PULLS[@]}"; do check "pulled: $m" called "$m"; done
+  check "models marker" marker models
+  check ".env still true" has_line "$envf" "AI_FEATURES=true"
+  check "the final line says AI is on" eq "$(final_field ai)" true
+  run_prov "${wsl_args[@]}" --no-ai-models --lan-ip 192.168.1.60
+  check "--no-ai-models exit 0" eq "$RC" 0
+  check "the household's answer kept" has_line "$envf" "AI_FEATURES=true"
+  check "the usual warning" said "domovoi/.env: AI_FEATURES holds a value this script did not write"
+  check "said when it settled" said "AI chat and questions: on in this home's settings (AI_FEATURES=true in domovoi/.env), kept over --no-ai-models: the AI models are pulled"
+  check "models skipped: already done" eq "$(state_of models)" skip
+  check "no pull: they are there" not_called "/api/pull"
+  check "the final line says AI is on" eq "$(final_field ai)" true
+  end_case
+}
+
 # ─── Docker's GPU runtime (wake-word training on the GPU, 2026-10-13) ────
 #
 # The spike's t7 distro: without the NVIDIA Container Toolkit, `docker run
@@ -4161,6 +4259,9 @@ CASES=(
   case_ai_question_at_a_terminal
   case_ai_models_dry_run_plans_both_answers
   case_ai_features_on_an_older_core
+  case_ai_flag_over_household_off
+  case_ai_off_rerun_without_option
+  case_ai_turned_on_in_settings_after_no
   case_gpu_runtime_on_wsl
   case_gpu_runtime_needs_nvidias_libcuda_on_wsl
   case_gpu_runtime_skipped_on_bare_metal_without_a_driver

@@ -258,7 +258,10 @@ private suspend fun sendStreaming(
         .build()
     app.api.http.newCall(req).execute().use { resp ->
         if (!resp.isSuccessful) {
-            onError("${resp.code} ${resp.message}", null, null)
+            // Plain words for the household's AI features being off (a 409
+            // ai-off), not "409 Conflict" or an empty reply.
+            val line = sendFailureLine(resp.code, resp.message, resp.header(com.domovoi.app.net.REFUSAL_HEADER), resp.body?.string())
+            withContext(Dispatchers.Main) { onError(line, null, null) }
             return@use
         }
         val source = resp.body?.source() ?: return@use

@@ -48,6 +48,7 @@ import com.domovoi.app.net.decode
 import com.domovoi.app.net.registerDevice
 import com.domovoi.app.net.rememberApi
 import com.domovoi.app.net.renameDevice
+import com.domovoi.app.net.serverChatOn
 import com.domovoi.app.net.suggestedDeviceName
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.SectionLabel
@@ -74,7 +75,7 @@ internal fun ConnectionPanel() {
     val themeMode by app.prefs.themeMode.collectAsState()
     val listenerId by app.prefs.listenerPersonId.collectAsState()
     val owners by app.prefs.owners.collectAsState()
-    val aiOn = LocalCapabilities.current.aiEnabled
+    val aiOn = LocalCapabilities.current.serverChatOn()
     // Per server: a person id belongs to the server that issued it.
     val ownerId = ServerCredentials.ownerFor(owners, serverUrl)
     val connected by app.bus.connected.collectAsState()

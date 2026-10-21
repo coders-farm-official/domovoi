@@ -277,6 +277,73 @@ SCENARIOS: dict[str, dict] = {
           return { text, sets: h.fnCalls };
         """,
     },
+    # Review round 1: an install with --no-vision-model has AI on and only
+    # the vision model missing; the card must not say questions break.
+    "models_card_vision_only": {
+        "files": [COMPONENTS, "web/static/models.jsx"], "component": "AiFeaturesCard",
+        "props": {"ai": dict(_AI_OFF, enabled=True, missing=[VISION], missing_gb=1.9,
+                             models=[dict(m, installed=m["role"] != "vision") for m in _AI_OFF["models"]])},
+        "fnProps": ["onSet"],
+        "setup": "const __LS = {};\n" + _SANDBOX,
+        "script": "h.render(); await h.settle(); return { text: h.text().join(' ') };",
+    },
+    "models_card_all_missing_on": {
+        "files": [COMPONENTS, "web/static/models.jsx"], "component": "AiFeaturesCard",
+        "props": {"ai": dict(_AI_OFF, enabled=True)},
+        "fnProps": ["onSet"],
+        "setup": "const __LS = {};\n" + _SANDBOX,
+        "script": "h.render(); await h.settle(); return { text: h.text().join(' ') };",
+    },
+    # The manual with AI off: no phrase the models answer, no Double-Check.
+    "manual_say_off": {
+        "files": [COMPONENTS, "web/static/manual.jsx"], "component": "UmSay",
+        "props": {"phrases": [
+            {"text": "set a timer for 10 minutes", "handler": "timer", "path": "fast"},
+            {"text": "what's the weather tomorrow", "handler": None, "path": "qa", "needs": "ai"},
+            {"text": "yes", "then": True, "needs": "ai"},
+            {"text": "are you sure?", "handler": "double_check", "path": "fast", "needs": "ai"}],
+            "ctx": {"live": {"features": {"ai": False}}, "doc": {"labels": {"pending": {}}}}},
+        "setup": "const __LS = {};\n" + _SANDBOX,
+        "script": "h.render(); await h.settle(); return { text: h.text().join(' ') };",
+    },
+    "manual_say_on": {
+        "files": [COMPONENTS, "web/static/manual.jsx"], "component": "UmSay",
+        "props": {"phrases": [
+            {"text": "set a timer for 10 minutes", "handler": "timer", "path": "fast"},
+            {"text": "are you sure?", "handler": "double_check", "path": "fast", "needs": "ai"}],
+            "ctx": {"live": {"features": {}}, "doc": {"labels": {"pending": {}}}}},
+        "setup": "const __LS = {};\n" + _SANDBOX,
+        "script": "h.render(); await h.settle(); return { text: h.text().join(' ') };",
+    },
+    "manual_everything_off": {
+        "files": [COMPONENTS, "web/static/manual.jsx"], "component": "UmThingsToSay",
+        "props": {"ctx": {
+            "live": {"caps": {"handlers": [
+                {"name": "double_check", "display": {"label": "Double-Check"}, "example_phrases": [],
+                 "requires_network": "yes", "origin": "core"},
+                {"name": "timer", "display": {"label": "Timers"}, "example_phrases": ["set a timer"],
+                 "requires_network": "no", "origin": "core"}]},
+                "features": {"ai": False, "chat": False}},
+            "doc": {"handler_needs_feature": json.loads(
+                (REPO_ROOT / "web/static/manual-content.json").read_text(encoding="utf-8"))["handler_needs_feature"],
+                "labels": {"net": {}, "say_none": "-", "plugin": {"text": "plugin"}}},
+            "phrasesByHandler": {"double_check": ["are you sure?"]}}},
+        "setup": "const __LS = {};\n" + _SANDBOX,
+        "script": "h.render(); await h.settle(); return { text: h.text().join(' ') };",
+    },
+    # A send refused with 409 ai-off reads as a plain sentence.
+    "chat_send_ai_off": {
+        "files": [COMPONENTS, "web/static/chat_markdown.js", "web/static/chat_details.js", "web/static/chat.jsx"],
+        "component": "(() => { window.__send = chatSendStream; return ChatAiOff; })()",
+        "setup": ("const __LS = {};\n" + _SANDBOX
+                  + "apiFetchRaw = () => Promise.resolve({ status: 409, ok: false, statusText: 'Conflict',"
+                    " body: {}, headers: { get: (k) => (k === 'X-Domovoi-Refusal' ? 'ai-off' : null) } });\n"),
+        "script": """
+          h.render();
+          try { await h.global('window').__send(1, { content: 'hi' }, () => {}); return { error: null }; }
+          catch (e) { return { error: String(e.message) }; }
+        """,
+    },
 }
 
 
@@ -342,3 +409,47 @@ def test_turning_it_off_is_one_press(driven) -> None:
     assert "On: Domovoi answers questions" in out["text"]
     assert "turn off" in out["text"]
     assert [c["name"] for c in out["sets"]] == ["onSet"]
+
+
+# ─── review round 1 ───────────────────────────────────────────────────────
+
+
+def test_the_card_names_only_what_is_missing(driven) -> None:
+    text = driven["models_card_vision_only"]["text"]
+    assert "One model isn’t downloaded yet" in text
+    assert "pictures in chat" in text and "Chat can’t read pictures" in text
+    assert "question-answering" not in text and "questions and Chat say" not in text
+    allm = driven["models_card_all_missing_on"]["text"]
+    assert "These models aren’t downloaded yet" in allm
+    assert "questions and Chat say the model isn’t installed" in allm
+    assert "go to the question model instead" in allm
+
+
+def test_the_manual_leaves_out_what_the_models_answer(driven) -> None:
+    off = driven["manual_say_off"]["text"]
+    assert "set a timer for 10 minutes" in off
+    assert "weather" not in off and "are you sure" not in off and "yes" not in off
+    on = driven["manual_say_on"]["text"]
+    assert "are you sure?" in on          # an older server, or AI on
+    everything = driven["manual_everything_off"]["text"]
+    assert "Timers" in everything and "Double-Check" not in everything
+
+
+def test_the_manual_marks_every_phrase_the_models_answer() -> None:
+    doc = json.loads((REPO_ROOT / "web/static/manual-content.json").read_text(encoding="utf-8"))
+    assert doc["handler_needs_feature"]["double_check"] == "ai"
+    blocks = list(doc["start"]["blocks"]) + [b for p in doc["pieces"] for b in p.get("blocks", [])]
+    phrases = [p for b in blocks if b["type"] == "say" for p in b["phrases"]]
+    for i, p in enumerate(phrases):
+        if p.get("then"):
+            continue
+        ai = p.get("path") in ("qa", "llm") or p.get("handler") in ("double_check", "chat_mode")
+        assert (p.get("needs") == "ai") is ai or p.get("handler") == "chat_mode", p
+        nxt = phrases[i + 1] if i + 1 < len(phrases) else None
+        if nxt and nxt.get("then"):
+            assert nxt.get("needs") == p.get("needs"), (p, nxt)
+    assert any(p["text"] == "are you sure?" and p["needs"] == "ai" for p in phrases)
+
+
+def test_a_send_refused_for_ai_off_says_so_plainly(driven) -> None:
+    assert driven["chat_send_ai_off"]["error"] == "AI chat is turned off on your home server"

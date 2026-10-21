@@ -419,7 +419,15 @@ const UmChecklist = ({ ctx }) => {
 /* ── blocks ──────────────────────────────────────────────────────── */
 const umShown = (x) => !x.only || x.only === 'dashboard';
 
-const UmSay = ({ phrases, ctx }) => (
+/* A phrase whose `needs` feature the server reports off (features.ai false:
+ * AI chat and questions are off) is left out, with its "then" reply; an
+ * unknown or older server shows it. */
+const umPhraseShown = (p, ctx) => !(p && p.needs && ((ctx.live && ctx.live.features) || {})[p.needs] === false);
+
+const UmSay = ({ phrases: all, ctx }) => {
+  const phrases = all.filter((p) => umPhraseShown(p, ctx));
+  if (!phrases.length) return null;
+  return (
   <ul className="um-say">
     {phrases.map((p, i) => {
       if (p.then) return null;
@@ -434,7 +442,8 @@ const UmSay = ({ phrases, ctx }) => (
       );
     })}
   </ul>
-);
+  );
+};
 
 const UmBlocks = ({ blocks, ctx }) => blocks.filter(umShown).map((b, i) => {
   switch (b.type) {

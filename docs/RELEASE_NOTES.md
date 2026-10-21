@@ -46,17 +46,30 @@ keeps AI on, exactly as before.
   the wake word, and writes `AI_FEATURES=false`; Ollama itself is still
   installed, so turning AI on later needs no reinstall.
   `provision.sh --no-ai-models` / `--ai-models` (no flag: asks on a
-  terminal, else Yes); Windows Setup has a page for it and `/ai=no`. The
-  Windows Setup's pinned `provision.sh` must be one with the new options
-  before a No install can run (the release build re-pins).
+  terminal, else Yes); Windows Setup has a page for it and `/ai=no`, shown
+  once the release build re-pins to a `provision.sh` with the options.
 * **No more "waking up my language model" for a model that was never
   downloaded.** The router model is skipped, and a question hears that the
   question-answering model isn't installed and where to add it.
 * **Plugins (SDK 1.7.0):** `sdk.core_config.ai_features` is the switch,
-  live; with it off, `sdk.http` (and the web host's `http()`) refuses a
-  request that would run or fetch a model on this box's Ollama with
-  `ai_features.AITurnedOff`. Kiwix's spoken summaries degrade to the
-  extract it already speaks.
+  live; with it off, `sdk.http` (and the web host's `http()`) refuses every
+  request to this box's Ollama but its read-only listings (`/api/tags`,
+  `/api/ps`, `/api/version`), the OpenAI-compatible `/v1/...` paths
+  included, with `ai_features.AITurnedOffConnectError` (also an
+  `httpx.ConnectError`).
+* **Kiwix 1.2.5** (its own release): with AI off, a voice lookup still
+  answers at once from the article's opening sentences, offline, and skips
+  the spoken summary follow-up, as if "Spoken summaries" were off; the
+  Library tab shows the lookup as "extract only". Kiwix 1.2.4 and older,
+  on a core with AI off, promise a summary that never comes: update the
+  plugin.
+* **Installers, on a re-run:** the household's saved answer wins.
+  `provision.sh` pulls the AI models only when `domovoi/.env` has AI on
+  after its env step (an `--ai-models` over a household "off" keeps it off
+  and pulls nothing), and its result's `"ai"` is that answer. Windows Setup
+  starts its page at the home's current answer, and shows the page only
+  when its pinned `provision.sh` has the options (`ProvisionAiChoice` in
+  `pins.iss`, set by `build.ps1 -Pin`).
 
 ## 2026-10-21 — A repair by Setup no longer trips the container guard
 

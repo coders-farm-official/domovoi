@@ -273,8 +273,25 @@ WAKE_WORD = {
 
 # "Everything it can do": a feature listed only while the server has it
 # switched on (GET /api/capabilities features). Chat mode answers only
-# while chat mode is enabled, which it isn't by default.
-HANDLER_NEEDS_FEATURE = {"chat_mode": "chat"}
+# while chat mode is enabled, which it isn't by default; Double-Check only
+# while the household's AI features are on (domovoi/ai_features.py: a
+# fact-check is the model reading the search results).
+HANDLER_NEEDS_FEATURE = {"chat_mode": "chat", "double_check": "ai"}
+
+# A "try saying" phrase the language models answer: one the router hands to
+# the tool model (llm) or to the Q&A model (qa), or one whose handler needs
+# a feature above. It carries "needs": the feature, and both clients leave it
+# out while GET /api/capabilities says that feature is off (features.ai
+# false: AI chat and questions are off). A "then" reply goes with its phrase.
+AI_PATHS = frozenset({"llm", "qa"})
+
+
+def phrase_needs(handler: str | None, path: str | None) -> str | None:
+    if handler in HANDLER_NEEDS_FEATURE:
+        return HANDLER_NEEDS_FEATURE[handler]
+    if path in AI_PATHS:
+        return "ai"
+    return None
 
 LABELS = {
     "start_here": "start here",
@@ -432,6 +449,9 @@ def phrase_claim(text: str) -> dict:
         raise SourceError(f'"try saying" phrase without a PHRASES entry: {text!r}')
     handler, path, extras = PHRASES[text]
     claim: dict = {"handler": handler, "path": path}
+    needs = phrase_needs(handler, path)
+    if needs:
+        claim["needs"] = needs
     for k in ("try", "plugin", "pending"):
         if extras.get(k):
             claim[k] = extras[k]
@@ -449,8 +469,12 @@ def parse_say(item: str) -> list[dict]:
         if rest == ".":
             rest = ""
         if len(quoted) == 2 and rest == "then":
-            phrases.append({"text": quoted[0], **phrase_claim(quoted[0])})
-            phrases.append({"text": quoted[1], "then": True})
+            first = {"text": quoted[0], **phrase_claim(quoted[0])}
+            phrases.append(first)
+            reply = {"text": quoted[1], "then": True}
+            if first.get("needs"):
+                reply["needs"] = first["needs"]
+            phrases.append(reply)
             continue
         if len(quoted) != 1:
             raise SourceError(f"a try-saying item must hold one phrase: {part!r}")
@@ -638,7 +662,9 @@ def build(source: Path = SOURCE) -> dict:
                        "{plugin} are pills; {wake} is the wake word (wake_word below)."),
             "blocks": ("A page's blocks, in order. p {text, only?}; list {ordered, items:[{text, only?}]}; "
                        "label {role: say|how|wrong|also|ways|checklist, text, admin?, note?}; "
-                       "say {phrases:[{text, handler, path, note?, then?, try?, plugin?, pending?}]}; "
+                       "say {phrases:[{text, handler, path, needs?, note?, then?, try?, plugin?, pending?}]} "
+                       "(needs: a GET /api/capabilities feature; the phrase is left out while that "
+                       "feature is false, e.g. ai for what the language models answer); "
                        "table {header, rows}; live {slot}; checklist (Start here only). "
                        "only: app = shown only in the app, dashboard = only on the dashboard."),
             "map": ("The centre (Domovoi) opens the centre topic (How it works); the other topics "

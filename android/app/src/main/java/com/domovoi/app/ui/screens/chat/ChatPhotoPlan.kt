@@ -219,7 +219,8 @@ internal class PhotoUnreadable(val kind: PictureKind) :
  */
 internal fun photoFailureText(e: Throwable, sdk: Int): String = when (e) {
     is PhotoUnreadable -> photoUnreadableText(e.kind, sdk)
-    is ApiException -> uploadRefusalText(e.status, e.body) ?: failureText("upload", e)
+    // The household's AI features are off: no picture is taken for a model.
+    is ApiException -> if (isAiOffRefusal(e)) AI_CHAT_OFF_TEXT else uploadRefusalText(e.status, e.body) ?: failureText("upload", e)
     else -> failureText("upload", e)
 }
 

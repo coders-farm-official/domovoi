@@ -196,6 +196,15 @@ def test_the_fact_check_phrase_is_not_suggested_with_ai_off() -> None:
     ("http://127.0.0.1:11434/api/pull", True),
     ("http://127.0.0.1:11434/api/tags", False),
     ("http://127.0.0.1:11434/api/ps", False),
+    ("http://127.0.0.1:11434/api/version", False),
+    # The review's proof (round 1): Ollama's OpenAI-compatible paths and an
+    # odd spelling of a native one. Denied by host and port, not by path.
+    ("http://localhost:11434/v1/chat/completions", True),
+    ("http://localhost:11434/v1/completions", True),
+    ("http://localhost:11434/v1/embeddings", True),
+    ("http://127.0.0.1:11434//api/generate", True),
+    ("http://127.0.0.1:11434/api/show", True),
+    ("http://127.0.0.1:11434/api/tags/../generate", True),
     ("http://127.0.0.1:6370/api/generate", False),
     ("https://example.org/api/chat", False),
 ])
@@ -208,6 +217,10 @@ def test_the_configured_ollama_counts_too(env_file, monkeypatch) -> None:
     env_file.write_text("OLLAMA_URL=http://192.168.1.20:8080\n", encoding="utf-8")
     assert ai_features.is_model_request("http://192.168.1.20:8080/api/generate")
     assert not ai_features.is_model_request("http://192.168.1.20:8081/api/generate")
+    assert ai_features.is_model_request("http://192.168.1.20:8080/v1/chat/completions")
+    assert not ai_features.is_model_request("http://192.168.1.20:8080/api/tags")
+    env_file.write_text("OLLAMA_URL=http://localhost:8080\n", encoding="utf-8")
+    assert ai_features.is_model_request("http://127.0.0.1:8080/api/chat")
 
 
 def _answer(request: httpx.Request) -> httpx.Response:

@@ -23,6 +23,9 @@
  * data.js) — the query the server accepts on reads and nowhere else. */
 const chatUploadUrl = (token) => withDeviceToken(`${API_BASE}/api/chat/uploads/${token}`);
 
+/* What a send says when the household's AI features are off. */
+const CHAT_AI_OFF_TEXT = 'AI chat is turned off on your home server';
+
 /* SSE reader for the send endpoint: fetch + ReadableStream, calling
  * onDelta(text) per chunk and resolving with the final done payload. */
 const chatSendStream = async (threadId, body, onDelta) => {
@@ -36,6 +39,12 @@ const chatSendStream = async (threadId, body, onDelta) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+  // The household turned AI chat off (Settings → Models): the server
+  // answers 409 with X-Domovoi-Refusal: ai-off before any reply; say so
+  // plainly instead of "409 Conflict" or an empty bubble.
+  if (r.status === 409 && r.headers && r.headers.get && r.headers.get('X-Domovoi-Refusal') === 'ai-off') {
+    throw new Error(CHAT_AI_OFF_TEXT);
+  }
   if (!r.body) throw new Error(`${r.status} ${r.statusText}`);
   const reader = r.body.getReader();
   const decoder = new TextDecoder();
