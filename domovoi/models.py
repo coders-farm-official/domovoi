@@ -154,6 +154,10 @@ class Context(BaseModel):
     # phone, the person spoke in. A "did you mean …?" asked there remembers
     # the garage, so the answer plays there too. None on every other turn.
     asked_from_room: str | None = None
+    # The home-server chat a phone's chat-mic turn was said in
+    # (domovoi/phone_voice.py), so "print it" there means that chat's draft
+    # (handlers/printing.py, documents plan D4). None everywhere else.
+    chat_thread_id: int | None = None
 
     @property
     def from_phone(self) -> bool:

@@ -1704,6 +1704,54 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .chat-passage-why { font-size: 11px; color: var(--fg-muted); align-self: center; }
 .chat-doc-ask-why { flex-basis: 100%; font-size: 11px; color: var(--fg-muted); }
 .chat-doc-checking { display: block; font-size: 11px; color: var(--fg-muted); }
+
+/* Drafts in chats (chat_drafts.jsx, documents plan D4): the card on the
+   reply, and the document panel ("canvas") — beside the conversation from
+   1,100 px, in place of the thread below that, the composer staying under
+   it. Changes: added words in the soft amber wash, removed ones struck
+   through in --fg-subtle; never green or red (those mean status). */
+.chat-draft-card { display: flex; flex-direction: column; gap: 6px; max-width: 520px; padding: 10px 12px; background: var(--card); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--inner-highlight); }
+.chat-draft-card-head { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; }
+.chat-draft-kind { color: var(--fg-muted); flex: none; }
+.chat-draft-kind::after { content: " ·"; }
+.chat-draft-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--fg); }
+.chat-draft-chip { flex: none; font-size: 10px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border-strong); color: var(--fg); }
+.chat-draft-newer { flex: none; font-size: 10px; color: var(--fg-muted); }
+.chat-draft-lines { font-size: 12px; line-height: 1.5; color: var(--fg-muted); white-space: pre-line; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.chat-draft-line { font-size: 12px; color: var(--fg); }
+.chat-draft-note { font-size: 11px; color: var(--fg-muted); align-self: center; }
+.chat-draft-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.chat-draft-revise { display: flex; gap: 6px; align-items: center; }
+.chat-draft-revise input { flex: 1; min-width: 0; font: inherit; font-size: 12px; height: 30px; padding: 0 8px; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--card); color: var(--fg); }
+.chat-page.narrow .chat-draft-revise input { height: 44px; font-size: 16px; }
+.chat-canvas { display: flex; flex-direction: column; gap: 8px; min-height: 0; min-width: 0; flex: 1; background: var(--card); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--inner-highlight); padding: 10px 12px; }
+.chat-canvas.wide { flex: 0 0 clamp(360px, 40%, 560px); }
+.chat-canvas-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.chat-canvas-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-canvas-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+.chat-canvas-versions { display: flex; gap: 2px; flex-wrap: wrap; }
+.chat-canvas-version { font-size: 11px; min-width: 32px; height: 26px; padding: 0 8px; border-radius: var(--r-sm); border: 1px solid transparent; background: transparent; color: var(--fg-muted); cursor: pointer; }
+.chat-canvas-version:hover { background: var(--raised); color: var(--fg); }
+.chat-canvas-version.on { background: var(--brand-soft); border-color: var(--border); color: var(--fg); font-weight: 600; }
+.chat-canvas-source { color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 260px; }
+.chat-canvas-switch { display: inline-flex; align-items: center; gap: 6px; color: var(--fg); cursor: pointer; }
+.chat-canvas-switch.off { color: var(--fg-subtle); cursor: default; }
+.chat-canvas-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.chat-canvas-saved, .chat-canvas-file { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: var(--fg-muted); }
+.chat-canvas-saved .mono, .chat-canvas-file .mono { color: var(--fg); overflow-wrap: anywhere; }
+.chat-canvas-saved.warn, .chat-canvas-file .warn { color: var(--warn-ink, var(--warn)); }
+.chat-canvas-files { display: flex; flex-direction: column; gap: 2px; border-top: 1px solid var(--border); padding-top: 6px; }
+.chat-canvas-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; font-size: 13px; line-height: 1.6; padding: 4px 2px; }
+.chat-canvas-edit { width: 100%; height: 100%; min-height: 240px; box-sizing: border-box; resize: none; font-size: 12px; line-height: 1.55; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--sunken, var(--bg)); color: var(--fg); }
+.chat-draft-changes { white-space: pre-wrap; overflow-wrap: break-word; color: var(--fg); }
+.chat-draft-add { background: var(--brand-soft); color: var(--fg); border-radius: 2px; }
+.chat-draft-del { color: var(--fg-subtle); text-decoration: line-through; }
+.chat-draft-list { display: flex; flex-direction: column; gap: 2px; max-width: 560px; width: 100%; align-self: center; }
+.chat-draft-list-head { font-size: 11px; color: var(--fg-muted); padding: 0 8px 4px; }
+.chat-draft-list-row { display: flex; align-items: center; gap: 8px; font: inherit; font-size: 13px; padding: 9px 12px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--fg); cursor: pointer; text-align: left; min-height: 40px; }
+.chat-draft-list-row:hover { background: var(--raised); }
+.chat-page.narrow .chat-canvas-version { min-width: 44px; height: 44px; }
+.chat-page.narrow .chat-canvas { padding: 8px; }
 /* A long document read in parts (chat_documents.jsx JobProgress, D2). */
 .chat-doc-job { display: flex; flex-direction: column; gap: 6px; min-width: min(320px, 100%); max-width: 460px; padding: 8px 10px; background: var(--card); border: 1px solid var(--border); border-radius: var(--r-md); }
 .chat-doc-job-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

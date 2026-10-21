@@ -226,12 +226,23 @@ async def _read_file(library_id: str, path: str) -> tuple[bytes, str]:
 
 async def _forward_print(core_path: str, request: Request, body: PrintBody, *, timeout: float):
     data, filename = await _read_file(body.library_id, body.path)
-    ident, name, source = await _caller(request)
     stem = filename.rsplit(".", 1)[0] if "." in filename else filename
-    meta = {"filename": filename, "title": stem, "printer_id": body.printer_id,
-            "options": {k: v for k, v in (body.options or {}).items()
+    return await forward_print_bytes(core_path, request, data, filename, title=stem, printer_id=body.printer_id,
+                                     options=body.options, library_id=body.library_id, path=body.path,
+                                     timeout=timeout)
+
+
+async def forward_print_bytes(core_path: str, request: Request, data: bytes, filename: str, *, title: str,
+                              printer_id: Optional[int], options: dict[str, Any] | None,
+                              library_id: str | None = None, path: str | None = None, timeout: float = 120.0):
+    """Sends ``data`` (a file this process made or read itself) to the
+    core's preview or print route with the caller's credentials: the Files
+    and Documents print, and a chat draft's PDF (chat_drafts.py)."""
+    ident, name, source = await _caller(request)
+    meta = {"filename": filename, "title": title, "printer_id": printer_id,
+            "options": {k: v for k, v in (options or {}).items()
                         if k in ("pages", "copies", "sides", "color", "media")},
-            "who": name, "source": source, "library_id": body.library_id, "path": body.path}
+            "who": name, "source": source, "library_id": library_id, "path": path}
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             r = await client.post(

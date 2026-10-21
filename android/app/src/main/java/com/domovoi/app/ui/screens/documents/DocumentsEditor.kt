@@ -56,7 +56,7 @@ private sealed class EditorStatus {
 }
 
 /** One markdown toolbar action: wrap the selection or prefix its lines. */
-private data class MdTool(val label: String, val before: String, val after: String = "", val linePrefix: Boolean = false)
+internal data class MdTool(val label: String, val before: String, val after: String = "", val linePrefix: Boolean = false)
 
 private val MD_TOOLS = listOf(
     MdTool("B", "**", "**"),
@@ -69,7 +69,7 @@ private val MD_TOOLS = listOf(
     MdTool(">", "> ", linePrefix = true),
 )
 
-private fun applyMdTool(value: androidx.compose.ui.text.input.TextFieldValue, tool: MdTool): androidx.compose.ui.text.input.TextFieldValue {
+internal fun applyMdTool(value: androidx.compose.ui.text.input.TextFieldValue, tool: MdTool): androidx.compose.ui.text.input.TextFieldValue {
     val s = value.selection.min
     val e = value.selection.max
     val text = value.text
@@ -104,7 +104,7 @@ private fun applyMdTool(value: androidx.compose.ui.text.input.TextFieldValue, to
  * leaf instead of invalidating the whole editor, caret and all.
  */
 @Composable
-private fun MarkdownToolbar(onTool: (MdTool) -> Unit) {
+internal fun MarkdownToolbar(onTool: (MdTool) -> Unit) {
     if (keyboardCrowdsTheWindow()) return
     Row(
         Modifier.fillMaxWidth()

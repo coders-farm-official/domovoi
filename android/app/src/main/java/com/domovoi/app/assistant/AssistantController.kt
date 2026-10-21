@@ -34,6 +34,16 @@ import com.domovoi.app.assistant.docs.PdfTextReader
 import com.domovoi.app.assistant.docs.PhonePdfText
 import com.domovoi.app.assistant.docs.QaDoc
 import com.domovoi.app.assistant.docs.StoredDocument
+import com.domovoi.app.assistant.drafts.DraftAsk
+import com.domovoi.app.assistant.drafts.DraftBlocks
+import com.domovoi.app.assistant.drafts.DraftDiff
+import com.domovoi.app.assistant.drafts.DraftKinds
+import com.domovoi.app.assistant.drafts.DraftPhrases
+import com.domovoi.app.assistant.drafts.DraftPrompts
+import com.domovoi.app.assistant.drafts.DraftRef
+import com.domovoi.app.assistant.drafts.DraftRevise
+import com.domovoi.app.assistant.drafts.PhoneDraft
+import com.domovoi.app.assistant.drafts.PhoneDraftStore
 import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -292,6 +302,9 @@ class AssistantController(
     private val pdfText: () -> PdfTextReader? = { null },
     /** The longest a document may take to read before Chat gives up on it. */
     private val docReadTimeoutMs: Long = DOC_READ_TIMEOUT_MS,
+    /** Where phone chats' drafts are kept (documents plan D4); null: no
+     *  drafts (tests of everything else). */
+    private val drafts: PhoneDraftStore? = null,
     /** Where phone chats' lookups go (assistant/lookup/); null: none, and
      *  the model is never told it could look anything up. */
     private val lookups: PhoneLookups? = null,
@@ -948,6 +961,23 @@ class AssistantController(
 
     // ── Conversation ────────────────────────────────────────────────────
 
+    /** The draft the next sent message revises (the card's Revise box). */
+    @Volatile private var reviseNext: String? = null
+
+    /** The draft card's Revise box: [text] is a revision of draft
+     *  [draftId], whatever it says (the chat's own box revises only when the
+     *  words clearly mean the draft). */
+    fun reviseDraft(draftId: String, text: String): Boolean {
+        if (text.isBlank() || _state.value.replying) return false
+        reviseNext = draftId
+        send(text)
+        if (!_state.value.replying) {
+            reviseNext = null
+            return false
+        }
+        return true
+    }
+
     /** Sends [text] (with the waiting photo, if there is one) and streams
      *  the reply into the conversation. */
     fun send(text: String) {
@@ -1058,6 +1088,10 @@ class AssistantController(
         onDelta: (String) -> Unit = {},
         photo: PendingPhoto? = null,
     ): StoredConversation {
+        // A Revise-box turn is this turn's and only this one's (review round
+        // 2: left set, it rewrote the draft at the next ordinary message),
+        // and it is always a revision: no clock or other fast path takes it.
+        val forced = reviseNext.also { reviseNext = null }
         // The model's time is the reply's: a title being written stops (it
         // runs again once this reply is done), and whatever it wrote, or a
         // rename meanwhile, is kept.
@@ -1069,9 +1103,17 @@ class AssistantController(
         // A photo question goes to the model with its photo: no fast path
         // answers "what time is it on this sign?".
         if (photo != null) { undoEntry = null; return photoReply(asked, photo, onDelta) }
+        // A Revise-box turn is always a revision of its draft (D4): no clock or
+        // other fast path takes it.
+        if (forced != null) draftReply(asked, onDelta, forced)?.let { undoEntry = null; return it }
         // Any turn that isn't an action (the model's, the clock, a phone
         // question) ends the Undo, so "undo" only reaches the turn before.
         clockReply(asked, onDelta)?.let { undoEntry = null; return it }
+        // A draft (documents plan D4): a request for a resume, cover letter or
+        // letter, a revision of this chat's draft, or "print it". Ahead of the
+        // documents' find-then-answer, so a draft turn never raises a heads-up
+        // or a calculation card.
+        draftReply(asked, onDelta)?.let { undoEntry = null; return it }
         // An attachment is the clearest sign of intent: with a document in
         // the chat, "what's the total?" never reaches the actions or the
         // phone's facts.
@@ -2363,6 +2405,7 @@ class AssistantController(
             if (_state.value.conversation.id == id) stopReply()
             val ok = withContext(io) {
                 docs?.delete(id)
+                drafts?.delete(id)
                 docCache.keys.removeAll { it.startsWith("$id/") }
                 conversations.delete(id).also { readHistory() }
             }
@@ -2381,6 +2424,7 @@ class AssistantController(
             stopReply()
             val ok = withContext(io) {
                 docs?.clearAll()
+                drafts?.clearAll()
                 docCache.clear()
                 conversations.clearAll().also { readHistory() }
             }
@@ -2717,6 +2761,173 @@ class AssistantController(
         val e = docCache[key] ?: withContext(io) { docs?.loadParts(conversation, d.id) }?.also { docCache[key] = it }
         return QaDoc(d.name, e?.parts.orEmpty())
     }
+
+    // ── Drafts (documents plan, D4) ─────────────────────────────────────
+
+    /** Where this phone's chat drafts are kept; null: no drafts (tests of
+     *  everything else). */
+    val draftStore: PhoneDraftStore? get() = drafts
+
+    /**
+     * A draft turn, or null for any other message: "print it" or a revision
+     * when the chat has a draft, a request for a resume, cover letter or
+     * letter otherwise. The model writes markdown in the kind's skeleton
+     * (only the version being revised goes to it; a long one is revised
+     * section by section); the reply is the draft card, its text the one
+     * line of what was done ("Version 2: cut 120 words (380 → 260).").
+     * Spoken, only that line is said, never the draft.
+     */
+    private suspend fun draftReply(
+        asked: StoredConversation,
+        onDelta: (String) -> Unit,
+        /** A Revise-box turn: this draft, whatever the words say. */
+        forced: String? = null,
+    ): StoredConversation? {
+        val store = drafts ?: return null
+        val last = asked.messages.lastOrNull()?.takeIf { it.fromUser } ?: return null
+        val question = last.text.trim()
+        if (question.isEmpty() || last.documents.isNotEmpty()) return null
+        if (forced != null) {
+            val picked = withContext(io) {
+                runCatching { store.load(asked.id, forced)?.let { d -> store.body(asked.id, d.id, d.latest)?.let { d to it } } }.getOrNull()
+            }
+            if (picked != null) return writeDraft(asked, picked, null, question, onDelta)
+        }
+        // Edit-only words ("shorter") revise only right after the reply
+        // that wrote the draft; naming it or "make it more formal" any time.
+        val before = asked.messages.getOrNull(asked.messages.size - 2)
+        val afterDraft = before != null && !before.fromUser && before.draft?.action in setOf("create", "revise")
+        val latest = withContext(io) { runCatching { store.latest(asked.id) }.getOrNull() }
+        if (latest != null) {
+            val (d, _) = latest
+            if (DraftPhrases.printRequest(question)) {
+                val v = d.latest
+                val text = "Ready to print “${d.title}”, version $v. Check the preview, then press Print."
+                onDelta(text)
+                val ref = DraftRef(d.id, v, d.kind, d.title, d.template, 0, "print")
+                return finishReply(asked, StoredMessage(Speaker.DOMOVOI, text, clock(), draft = ref))
+            }
+            if (DraftPhrases.revisionRequest(question, afterDraft)) return writeDraft(asked, latest, null, question, onDelta)
+        }
+        val ask = DraftPhrases.draftRequest(question) ?: return null
+        return writeDraft(asked, null, ask, question, onDelta)
+    }
+
+    private suspend fun writeDraft(
+        asked: StoredConversation,
+        base: Pair<PhoneDraft, String>?,
+        ask: DraftAsk?,
+        question: String,
+        onDelta: (String) -> Unit,
+    ): StoredConversation {
+        val store = drafts!!
+        val backend = settings.backend
+        val llm = try {
+            ensureEngine()
+        } catch (e: CancellationException) {
+            finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), stopped = true))
+            throw e
+        }
+        if (llm == null) {
+            val why = (_state.value.engine as? EngineState.Failed)?.reason ?: "the model did not load"
+            return finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), error = "The model could not start: $why"))
+        }
+        val passes: List<Pair<String, String>> = if (base == null) {
+            listOf(DraftPrompts.firstDraft(ask!!.kind, ask.template, question, draftToday()))
+        } else {
+            DraftRevise.passes(base.second, question)
+        }
+        val sent = nanos()
+        var firstMs: Long? = null
+        val text = StringBuilder()
+        val outputs = mutableListOf<String>()
+        // The draft shows as it is written (it is the person's own document,
+        // not an answer to check); the card replaces it when it is done.
+        fun live(): StoredMessage = StoredMessage(Speaker.DOMOVOI, text.toString(), clock(), backend = backend.label)
+        _state.update { it.copy(conversation = asked.withMetaOf(it.conversation).copy(messages = asked.messages + live())) }
+        try {
+            for ((i, pass) in passes.withIndex()) {
+                if (i > 0) text.append("\n\n")
+                val one = StringBuilder()
+                llm.reply(pass.first, listOf(ChatTurn(fromUser = true, text = pass.second)), null).collect { delta ->
+                    if (firstMs == null && delta.isNotBlank()) firstMs = (nanos() - sent) / 1_000_000
+                    text.append(delta)
+                    one.append(delta)
+                    _state.update { ui ->
+                        ui.copy(thinking = text.isBlank(),
+                            conversation = asked.withMetaOf(ui.conversation).copy(messages = asked.messages + live()))
+                    }
+                }
+                outputs += one.toString()
+            }
+        } catch (e: CancellationException) {
+            finishReply(asked, live().copy(text = "", stopped = true, firstTextMs = firstMs, stopMs = voice?.lastStopMs))
+            throw e
+        } catch (e: Throwable) {
+            return finishReply(asked, live().copy(text = "", error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
+        }
+        val body = DraftBlocks.xmlSafe(
+            outputs.map { DraftPrompts.clean(it) }.filter { it.isNotEmpty() }.joinToString("\n\n").take(MAX_DRAFT_CHARS))
+        if (DraftBlocks.parse(body).isEmpty()) {
+            return finishReply(asked, live().copy(text = "", error = "The model wrote no draft. Try again, or ask it another way.",
+                firstTextMs = firstMs))
+        }
+        val now = clock()
+        val words = DraftBlocks.wordCount(body)
+        val (draft, line, ref) = withContext(io) {
+            if (base == null) {
+                val k = DraftKinds.get(ask!!.kind)
+                val d = store.create(asked.id, ask.kind, ask.template, DraftPhrases.titleFor(k.label, ask.topic), body, now)
+                Triple(d, "First draft of your ${k.label.lowercase()}: $words words.",
+                    DraftRef(d.id, 1, d.kind, d.title, d.template, words, "create"))
+            } else {
+                val from = base.first.latest
+                val d = store.addVersion(asked.id, base.first.id, body, question, "model", now, base = from) ?: base.first
+                val change = DraftDiff.changeLine(base.second, body)
+                // A hand edit came in while this was written: both are kept.
+                val newer = d.latest - 1
+                var l = if (newer > from) {
+                    "Version ${d.latest}, based on version $from: $change. Version $newer came in while this was " +
+                        "written and isn't in it; both are in the version picker."
+                } else {
+                    "Version ${d.latest}: $change."
+                }
+                if (passes.size > 1) {
+                    l += " Revised section by section (${passes.size} parts), so the style can drift a little between them."
+                }
+                Triple(d, l, DraftRef(d.id, d.latest, d.kind, d.title, d.template, words, "revise", change,
+                    passes.size.takeIf { it > 1 }))
+            }
+        }
+        check(draft.id.isNotEmpty())
+        onDelta(line)
+        val stats = llm.lastStats()
+        return finishReply(asked, live().copy(text = line, draft = ref, firstTextMs = firstMs,
+            tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }))
+    }
+
+    /** "October 21, 2026" from the phone's clock, as the server writes it. */
+    private fun draftToday(): String = runCatching {
+        val d = java.time.Instant.ofEpochMilli(clock()).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
+        "${d.month.getDisplayName(java.time.format.TextStyle.FULL, Locale.US)} ${d.dayOfMonth}, ${d.year}"
+    }.getOrDefault("")
+
+    /**
+     * A hand edit of draft [draftId] of conversation [conversation]: saved
+     * as the next version, "edited by you". Null when the draft is gone or a
+     * newer version came in meanwhile ([baseVersion] is not the latest).
+     */
+    suspend fun editDraft(conversation: String, draftId: String, text: String, baseVersion: Int): PhoneDraft? =
+        withContext(io) {
+            val store = drafts ?: return@withContext null
+            val d = store.load(conversation, draftId) ?: return@withContext null
+            if (d.latest == baseVersion && store.body(conversation, draftId, d.latest) == text) return@withContext d
+            try {
+                store.addVersion(conversation, draftId, text, null, "person", clock(), base = baseVersion)
+            } catch (_: PhoneDraftStore.StaleVersion) {
+                null
+            }
+        }
 
     /**
      * A turn in a conversation with documents (plan part 3): the passages
@@ -3324,6 +3535,9 @@ class AssistantController(
         /** A document taking longer than this to read is given up on. */
         const val DOC_READ_TIMEOUT_MS = 90_000L
 
+        /** The longest draft kept from one turn (the server's MAX_BODY_CHARS). */
+        const val MAX_DRAFT_CHARS = 200_000
+
         /** The window of the engine a long-document job loads on the GPU. */
         const val DOC_JOB_MAX_TOKENS = 8192
 
@@ -3422,6 +3636,7 @@ class AssistantController(
                 helpIndex = BundledManual(app)::index,
                 docs = ChatDocStore(File(app.filesDir, "chat-docs/attachments")),
                 pdfText = { PhonePdfText.readerOrNull() },
+                drafts = PhoneDraftStore(File(app.filesDir, "chat-docs/drafts")),
                 lookups = lookups,
                 newJobEngine = { LiteRtLlmEngine(File(app.cacheDir, "litertlm"), maxTokens = DOC_JOB_MAX_TOKENS) },
                 phone = phone(settings),

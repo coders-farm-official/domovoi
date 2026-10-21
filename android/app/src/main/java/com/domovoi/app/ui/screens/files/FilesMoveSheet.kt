@@ -75,7 +75,7 @@ internal fun FilesMoveSheet(
     verb: String = "move",
     initialLibraryId: String? = null,
 ) {
-    val targets = libraries.filter { it.editable }
+    val targets = libraries.filter { it.editable && libraryTakesFiles(it.id) }
 
     var libId by remember {
         mutableStateOf(

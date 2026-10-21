@@ -295,9 +295,42 @@ abstract class ManualAssetsTask : DefaultTask() {
     }
 }
 
+/**
+ * The draft templates and their fonts (documents plan D4) from their one
+ * source, `domovoi/drafts/`, into the assets as `drafts/templates/<id>.json`
+ * and `drafts/fonts/` (Liberation Sans and Serif, SIL OFL 1.1, with the
+ * licence): the phone renders a template's PDF from the same JSON and the
+ * same font files as the server, which is what keeps the two PDFs' text
+ * the same.
+ */
+abstract class DraftAssetsTask : DefaultTask() {
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val drafts: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun copy() {
+        val out = outputDir.get().asFile
+        out.deleteRecursively()
+        val src = drafts.get().asFile
+        for (sub in listOf("templates", "fonts")) {
+            val files = File(src, sub).listFiles().orEmpty().filter { it.isFile && !it.name.startsWith(".") }
+            if (files.isEmpty()) throw GradleException("domovoi/drafts/$sub is empty")
+            files.forEach { it.copyTo(File(out, "drafts/$sub/${it.name}"), overwrite = true) }
+        }
+    }
+}
+
 val manualAssets = tasks.register<ManualAssetsTask>("manualAssets") {
     manual.set(rootProject.layout.projectDirectory.file("../web/static/manual-content.json"))
     weakSpots.set(rootProject.layout.projectDirectory.file("../domovoi/doc_qa/chat-weak-spots.json"))
+}
+
+val draftAssets = tasks.register<DraftAssetsTask>("draftAssets") {
+    drafts.set(rootProject.layout.projectDirectory.dir("../domovoi/drafts"))
 }
 
 val voiceAssets = tasks.register<VoiceAssetsTask>("voiceAssets") {
@@ -586,6 +619,7 @@ androidComponents {
     onVariants { variant ->
         variant.sources.assets?.addGeneratedSourceDirectory(voiceAssets, VoiceAssetsTask::outputDir)
         variant.sources.assets?.addGeneratedSourceDirectory(manualAssets, ManualAssetsTask::outputDir)
+        variant.sources.assets?.addGeneratedSourceDirectory(draftAssets, DraftAssetsTask::outputDir)
         val openSource = tasks.register<OpenSourceTask>("${variant.name}OpenSource") {
             val resolved = variant.runtimeConfiguration.incoming.artifactView { lenient(false) }.artifacts.resolvedArtifacts
             artifacts.set(resolved.map { set ->

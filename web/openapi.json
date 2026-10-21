@@ -9705,7 +9705,7 @@
           "documents"
         ],
         "summary": "Upload Documents",
-        "description": "Upload one or more files straight into ``documents_dir`` from the\nbrowser. Filenames are sanitized to a bare basename (defanging\n``../`` / zip-slip traversal across both separators), then deduped \u2014\nand secret-shaped names are skipped exactly as\n``POST /api/files/upload`` skips them, so the two doors into this\none folder cannot be played off against each other.",
+        "description": "Upload one or more files straight into ``documents_dir`` from the\nbrowser. Filenames are sanitized to a bare basename (defanging\n``../`` / zip-slip traversal across both separators), then deduped \u2014\nand secret-shaped names are skipped exactly as\n``POST /api/files/upload`` skips them, so the two doors into this\none folder cannot be played off against each other.\n\n``folder=\"From Chat\"`` puts the files in Documents \u2192 From Chat (the\none folder a client may name here; it is made when missing, as a scan\nmakes Scans), where home-server chats save their drafts.",
         "operationId": "upload_documents_api_documents_upload_post",
         "requestBody": {
           "content": {
@@ -14302,6 +14302,451 @@
         }
       }
     },
+    "/api/chat/drafts": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "List All Drafts",
+        "description": "Every chat's drafts, newest first (the Chat page lists them even with\nAI features off, so a draft can still be saved).",
+        "operationId": "list_all_drafts_api_chat_drafts_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List All Drafts Api Chat Drafts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/threads/{thread_id}/drafts": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "List Thread Drafts",
+        "operationId": "list_thread_drafts_api_chat_threads__thread_id__drafts_get",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Thread Drafts Api Chat Threads  Thread Id  Drafts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/drafts/{draft_id}": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Get Draft",
+        "description": "The draft and every version (oldest first): its markdown, the plain\ntext the changes view shows (``display``), and ``changes`` against the\nversion before (``[[op, text]]``: ``=`` kept, ``+`` added, ``-``\nremoved; null for v1).",
+        "operationId": "get_draft_api_chat_drafts__draft_id__get",
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Draft Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Draft Api Chat Drafts  Draft Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/drafts/{draft_id}/versions": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Edit Draft",
+        "description": "A hand edit: saved as the next version, \"edited by you\" on the device\nthat made it. Characters XML can't hold are taken out first. Two edits\nfrom the same version at once: one is saved, the other is a 409\n``stale_version`` (the draft's row is locked while the version is\nwritten).",
+        "operationId": "edit_draft_api_chat_drafts__draft_id__versions_post",
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Draft Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Edit Draft Api Chat Drafts  Draft Id  Versions Post"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "{\"detail\", \"code\": \"stale_version\", \"latest\": n}"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/drafts/{draft_id}/save": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Save Draft",
+        "description": "Saves a version (the latest by default) as .docx or PDF (the kind's\ndefault by default) into Documents \u2192 From Chat, then checks the file:\n``check`` is ``{ok, line}`` \u2014 ``text readable \u00b7 single column`` when\nthe saved file's text reads back word for word.",
+        "operationId": "save_draft_api_chat_drafts__draft_id__save_post",
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Draft Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Save Draft Api Chat Drafts  Draft Id  Save Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/drafts/{draft_id}/export": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Export Draft",
+        "description": "The version as a file to download; nothing is kept on the server.",
+        "operationId": "export_draft_api_chat_drafts__draft_id__export_get",
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Draft Id"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "docx",
+                    "pdf"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Format"
+            }
+          },
+          {
+            "name": "template",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 40
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Template"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/drafts/{draft_id}/print/preview": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Print Draft Preview",
+        "description": "The print preview of a version's PDF (the Print dialog's).",
+        "operationId": "print_draft_preview_api_chat_drafts__draft_id__print_preview_post",
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Draft Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrintDraftBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/drafts/{draft_id}/print/jobs": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Print Draft",
+        "description": "Prints a version's PDF on the home's printer (after its preview).",
+        "operationId": "print_draft_api_chat_drafts__draft_id__print_jobs_post",
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Draft Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrintDraftBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/chat/doc-jobs/speed": {
       "get": {
         "tags": [
@@ -16430,6 +16875,19 @@
               }
             ],
             "title": "Device Id"
+          },
+          "folder": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "From Chat"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder",
+            "description": "Where in Documents: the top (default), or \"From Chat\" (made when missing), where the app's Send to home puts a phone chat's document"
           }
         },
         "type": "object",
@@ -17730,6 +18188,40 @@
         ],
         "title": "DropInStartRequest",
         "description": "Open a drop-in FROM the path's ``{room_id}`` (initiator) TO\n``target_room``."
+      },
+      "EditBody": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 200000,
+            "minLength": 1,
+            "title": "Text"
+          },
+          "base_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Base Version"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text",
+          "base_version"
+        ],
+        "title": "EditBody"
       },
       "Favorite": {
         "properties": {
@@ -20846,6 +21338,52 @@
         ],
         "title": "PrintBody"
       },
+      "PrintDraftBody": {
+        "properties": {
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "template": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template"
+          },
+          "printer_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Printer Id"
+          },
+          "options": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Options"
+          }
+        },
+        "type": "object",
+        "title": "PrintDraftBody"
+      },
       "PronunciationBody": {
         "properties": {
           "word": {
@@ -22094,6 +22632,64 @@
         "title": "SatelliteUpgrade",
         "description": "A code upgrade the Domovoi server asked this satellite for, from the\nrequest until a while after it ended (domovoi/satellite_upgrades.py).\n``state``: ``running`` (asked, not back yet: the Upgrade button stays\nlocked), ``done`` (back on ``expected_sha``), ``rolled_back`` (back on\nanother version, ``back_sha``: the new code did not stay up) or\n``no_news`` (never came back with an answer by ``deadline_at``; a sync\nthat fails before the restart leaves the satellite on its old code\nwithout a word, and its log says why). Kept a plain str so a new state\nnever breaks deserialization."
       },
+      "SaveBody": {
+        "properties": {
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "docx",
+                  "pdf"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Format"
+          },
+          "template": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "title": "SaveBody"
+      },
       "ScanBody": {
         "properties": {
           "printer_id": {
@@ -22229,6 +22825,18 @@
                 "type": "null"
               }
             ]
+          },
+          "revise_draft": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revise Draft"
           }
         },
         "type": "object",

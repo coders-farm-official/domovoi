@@ -1,0 +1,16 @@
+{
+  "id": "letter-block",
+  "label": "Block",
+  "kinds": ["cover_letter", "letter"],
+  "page": {"width": 612, "height": 792, "margin": 72},
+  "fonts": {"regular": "LiberationSerif-Regular", "bold": "LiberationSerif-Bold"},
+  "docx_font": "Times New Roman",
+  "styles": {
+    "title": {"font": "bold", "size": 14, "leading": 18, "before": 0, "after": 6},
+    "heading": {"font": "bold", "size": 11.5, "leading": 15, "before": 8, "after": 4},
+    "strong": {"font": "bold", "size": 11.5, "leading": 15, "before": 0, "after": 10},
+    "body": {"font": "regular", "size": 11.5, "leading": 15, "before": 0, "after": 10},
+    "bullet": {"font": "regular", "size": 11.5, "leading": 15, "before": 0, "after": 4, "indent": 16, "marker": "•"}
+  },
+  "sections": ["Sender", "Date", "Recipient", "Subject", "Salutation", "Body", "Closing", "Signature"]
+}
