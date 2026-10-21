@@ -48,9 +48,13 @@ GATED = {
     # offered only when the calendar is named; help never (its fast path is
     # the whole question, and its tool would be bait for real questions)
     "calendar", "help",
+    # help_desk never: its fast path takes how-to questions about Domovoi
+    # (or hands a how-to-worded command to its handler); its tool would be
+    # bait for every other "how do I" question.
+    "help_desk",
 }
 # Never offered to the routing model.
-NEVER_OFFERED = {"help"}
+NEVER_OFFERED = {"help", "help_desk"}
 
 
 def _normalize(utterance: str) -> str:
@@ -63,6 +67,10 @@ def _fast_path_winner(normalized: str) -> str | None:
     for h in HANDLERS:
         for entry in h.fast_paths:
             if as_fast_path(entry).pattern.match(normalized):
+                # help_desk runs a command worded as a how-to through the
+                # command's own handler ("is there a way to set a timer…").
+                if h.name == "help_desk":
+                    return h.delegate_target(normalized) or h.name
                 return h.name
     return None
 

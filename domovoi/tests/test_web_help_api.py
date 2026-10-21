@@ -72,14 +72,23 @@ def stub_stream(monkeypatch):
 
 
 def _deps(path: str, method: str = "GET") -> set:
-    for r in app.routes:
-        if getattr(r, "path", None) == path and method in getattr(r, "methods", ()):
-            return {d.call for d in r.dependant.dependencies}
+    """Every dependency on a route, on every FastAPI we allow (route_walk)."""
+    from domovoi.tests.route_walk import iter_route_contexts
+
+    for rc in iter_route_contexts(app.routes):
+        if getattr(rc, "path", None) == path and method in (getattr(rc, "methods", None) or ()):
+            out, stack = set(), [rc.dependant]
+            while stack:
+                for dep in stack.pop().dependencies:
+                    if dep.call is not None:
+                        out.add(dep.call)
+                    stack.append(dep)
+            return out
     raise AssertionError(path)
 
 
 def test_the_tiers() -> None:
-    assert _deps("/api/help/search") == set()          # open, like the manual
+    assert not {require_device, require_device_read} & _deps("/api/help/search")   # open, like the manual
     assert require_device_read in _deps("/api/help/facts")
     assert require_device_read in _deps("/api/help/checks")
     assert require_device_read in _deps("/api/help/deliveries")
@@ -137,7 +146,7 @@ def test_a_help_chat_answers_from_the_passages_with_the_sources_under_it(quiet_s
         r = c.post(f"/api/chat/threads/{t['id']}/messages", json={"content": "how do I change the wake word"})
         events = _sse(r.text)
         system = stub_stream[0]["messages"][0]["content"]
-        assert "=== HELP MATERIAL (data) ===" in system and "#manual/wake-word" in system
+        assert "HELP-DATA-" in system and "#manual/wake-word" in system
         assert "Answer ONLY from the material" in system
         deltas = "".join(d["text"] for ev, d in events if ev == "delta")
         done = next(d for ev, d in events if ev == "done")
@@ -152,11 +161,11 @@ def test_an_ordinary_chat_is_help_only_for_a_domovoi_question_it_holds(quiet_sta
     with _client() as c:
         t = c.post("/api/chat/threads", json={}).json()
         c.post(f"/api/chat/threads/{t['id']}/messages", json={"content": "write me a poem about autumn"})
-        assert "HELP MATERIAL" not in stub_stream[-1]["messages"][0]["content"]
+        assert "HELP-DATA-" not in stub_stream[-1]["messages"][0]["content"]
         c.post(f"/api/chat/threads/{t['id']}/messages", json={"content": "how do i bake bread for the kitchen"})
-        assert "HELP MATERIAL" not in stub_stream[-1]["messages"][0]["content"]
+        assert "HELP-DATA-" not in stub_stream[-1]["messages"][0]["content"]
         c.post(f"/api/chat/threads/{t['id']}/messages", json={"content": "how do I change the wake word?"})
-        assert "HELP MATERIAL" in stub_stream[-1]["messages"][0]["content"]
+        assert "HELP-DATA-" in stub_stream[-1]["messages"][0]["content"]
 
 
 @requires_db
@@ -220,3 +229,26 @@ def test_deliveries_are_read_per_person() -> None:
         assert c.get("/api/help/deliveries", params={"person_id": b}).json()["deliveries"] == []
         assert c.get("/api/help/deliveries", params={"person_id": a, "since_id": mine[0]["id"]}).json()[
             "deliveries"] == []
+
+
+@requires_db
+def test_an_admins_help_chat_holds_no_admin_only_details(quiet_state, stub_stream, monkeypatch) -> None:
+    """A help chat is household-shared: even asked by an admin (here, the
+    pre-setup grace counts as one), the update's error and the internet
+    question stay out of it; the finding says where an admin reads them."""
+    async def failed_update():
+        return {"status": "failed", "error": "pip exploded in /srv/secret-build-dir",
+                "steps": [{"name": "deps", "status": "failed"}]}
+
+    monkeypatch.setattr(help_api, "_last_update", failed_update)
+    monkeypatch.setattr(help_api.egress, "policy", lambda: "")
+    with _client() as c:
+        t = c.post("/api/chat/threads", json={"title": "Help: Settings"}).json()
+        c.post(f"/api/chat/threads/{t['id']}/messages", json={"content": "why did the update fail?"})
+        system = stub_stream[-1]["messages"][0]["content"]
+        assert "secret-build-dir" not in system and "the step that failed" not in system
+        assert "tell Domovoi whether this box has internet" not in system
+        assert "an admin can read why in Settings → Configuration" in system
+        # The admin's own view (the checks page) still has them.
+        found = c.get("/api/help/checks").json()["findings"]
+        assert any("the step that failed: deps" in d for f in found for d in f["details"])

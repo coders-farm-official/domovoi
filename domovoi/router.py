@@ -807,7 +807,12 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
         except MPDNotProvisioned:
             response = _no_speakers_yet(session_id, ctx)
         if response is not None:
-            response.matched_handler = handler.name
+            # A fast path that ran ANOTHER handler's command (help_desk:
+            # "is there a way to set a timer…" is the timer's) names it, so
+            # the turn is logged as the handler that acted.
+            delegate = response.data.pop("delegated_to", None) if isinstance(response.data, dict) else None
+            acted = delegate if isinstance(delegate, str) and delegate in HANDLER_BY_NAME else handler.name
+            response.matched_handler = acted
             response.matched_path = "fast"
             response.session_id = session_id
             response.online = ctx.online
@@ -817,7 +822,7 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
                 intent=intent,
                 ctx=ctx,
                 response=response,
-                matched_handler=handler.name,
+                matched_handler=acted,
                 matched_path="fast",
                 latency_ms=_elapsed_ms(),
             )

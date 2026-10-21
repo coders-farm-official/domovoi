@@ -16,11 +16,19 @@ which CLASS it is, and the core, not the source, decides the order.
   terms: Wikipedia, Wikidata) or :data:`WEB` (scraped engines, a
   household's own search key).
 
-**The order is the core's.** :func:`ordered_sources` sorts by class (local,
-then API, then web), then by the slug the source was registered under. A
-plugin can't move itself up: any ``priority`` / ``order`` attribute on the
-object is ignored, and a source that names an unknown class is refused at
-registration (:func:`validate_source`).
+**The order and the class are the core's.** A source is registered wrapped
+in a :class:`RegisteredSource` that fixes its class when it is registered
+(:func:`register`), so a class that changes later changes nothing. The
+class is the core's decision, not the plugin's claim: a core source keeps
+its own; a plugin may be "local" only when the core allowlists it
+(:data:`LOCAL_PLUGINS`: plugins whose search never leaves the box), and
+any other plugin claiming "local" is treated as "web" (it asks first).
+:func:`ordered_sources` sorts by class (local, then API, then web), then
+core sources before plugins', then registration slug. Any ``priority`` /
+``order`` attribute on a source is ignored, and a source that names an
+unknown class is refused (:func:`validate_source`). What a source returns
+is capped: :data:`MAX_HITS_PER_SOURCE` hits, :data:`SNIPPET_MAX` characters
+a snippet and :data:`FETCH_MAX_CHARS` a fetched text.
 
 **Local sources skip the internet question** (:func:`needs_permission`):
 they never leave the box, so they work under internet "never" and with no
@@ -58,7 +66,24 @@ SEARCH_TIMEOUT_SEC = 8.0
 #: Hits one source may return, whatever it was asked for.
 MAX_HITS_PER_SOURCE = 10
 _TITLE_MAX = 200
-_SNIPPET_MAX = 600
+SNIPPET_MAX = 600
+_SNIPPET_MAX = SNIPPET_MAX
+#: A fetched text longer than this is cut (a passage, not a book).
+FETCH_MAX_CHARS = 64 * 1024
+#: Plugins whose source may be "local": their search runs on this box
+#: (Coders Farm's Kiwix: the offline library). Any other plugin's "local"
+#: claim is treated as "web".
+LOCAL_PLUGINS: frozenset[str] = frozenset({"kiwix"})
+CORE_SLUG = "core"
+# The types the core registered its own sources as (needs_permission).
+_CORE_TYPES: tuple[type, ...] = ()
+
+
+def mark_core_type(cls: type) -> None:
+    """Name a class as one of the core's own sources (needs_permission)."""
+    global _CORE_TYPES
+    if cls not in _CORE_TYPES:
+        _CORE_TYPES = (*_CORE_TYPES, cls)
 
 
 @dataclass(frozen=True)
@@ -108,27 +133,83 @@ class LookupSource(Protocol):
         ...
 
 
-def validate_source(source: Any) -> None:
+def validate_source(source: Any, *, lookup_class: str | None = None) -> str:
     """Raise ``TypeError`` / ``ValueError`` unless ``source`` keeps the
-    contract: the two async calls, a slug, a name and a known class."""
-    for attr in ("slug", "name", "lookup_class"):
-        value = getattr(source, attr, None)
+    contract: the two async calls, a slug, a name and a known class. The
+    class is read ONCE (or taken from ``lookup_class``) and returned: what
+    the core registers is that answer, whatever the attribute says later."""
+    cls = getattr(source, "lookup_class", None) if lookup_class is None else lookup_class
+    for attr, value in (("slug", getattr(source, "slug", None)), ("name", getattr(source, "name", None)),
+                        ("lookup_class", cls)):
         if not isinstance(value, str) or not value.strip():
             raise TypeError(f"a lookup source needs a non-empty string {attr!r}")
-    if source.lookup_class not in CLASS_ORDER:
-        raise ValueError(
-            f"lookup_class {source.lookup_class!r} must be one of {list(CLASS_ORDER)}"
-        )
+    if cls not in CLASS_ORDER:
+        raise ValueError(f"lookup_class {cls!r} must be one of {list(CLASS_ORDER)}")
     for meth in ("search", "fetch"):
         fn = getattr(source, meth, None)
         if not callable(fn) or not asyncio.iscoroutinefunction(fn):
             raise TypeError(f"a lookup source's {meth}() must be an async method")
+    return cls
+
+
+class RegisteredSource:
+    """A source as the core holds it: its class fixed at registration,
+    whether it is the core's, and its answers capped."""
+
+    def __init__(self, source: Any, *, slug: str, lookup_class: str, core: bool) -> None:
+        self.source = source
+        self.slug = str(getattr(source, "slug", slug))
+        self.name = str(getattr(source, "name", slug))
+        self.lookup_class = lookup_class
+        self.core = core
+        self.registered_as = slug
+
+    async def search(self, query: str, *, limit: int = 3) -> list[LookupHit]:
+        return await self.source.search(query, limit=limit)
+
+    async def fetch(self, id: str) -> LookupDocument | None:
+        doc = await self.source.fetch(id)
+        if not isinstance(doc, LookupDocument):
+            return None
+        text = str(doc.text or "")
+        if len(text) > FETCH_MAX_CHARS:
+            text = text[:FETCH_MAX_CHARS]
+        return LookupDocument(id=str(doc.id)[:200], title=str(doc.title or "")[:_TITLE_MAX], text=text,
+                              url=(str(doc.url)[:500] if doc.url else None),
+                              section=(str(doc.section)[:_TITLE_MAX] if doc.section else None))
+
+
+def decided_class(claimed: str, *, slug: str, core: bool) -> str:
+    """The class the core gives a source that claims ``claimed``."""
+    if core:
+        return claimed
+    if claimed == LOCAL and slug not in LOCAL_PLUGINS:
+        return WEB
+    return claimed
+
+
+def register(source: Any, *, slug: str, core: bool = False, registry: Any | None = None) -> RegisteredSource:
+    """Validate ``source``, fix its class and register it (the plugin
+    loader's ``add_lookup_source`` and the core's own help come here)."""
+    claimed = validate_source(source)
+    wrapped = RegisteredSource(source, slug=slug, lookup_class=decided_class(claimed, slug=slug, core=core),
+                               core=core)
+    _registry(registry).register(LOOKUP_SOURCE, wrapped, slug=slug)
+    return wrapped
 
 
 def needs_permission(source: Any) -> bool:
     """Whether asking ``source`` leaves the box (and so asks first). Local
-    sources never do: no permission card, and they work under "never"."""
-    return getattr(source, "lookup_class", None) != LOCAL
+    sources never do: no permission card, and they work under "never".
+    Decided by the core: a registered source by the class it was given; an
+    unregistered object only as a core source's type, or an allowlisted
+    plugin's slug, may be local, whatever its attribute says."""
+    if isinstance(source, RegisteredSource):
+        return source.lookup_class != LOCAL
+    if isinstance(source, _CORE_TYPES) and getattr(source, "lookup_class", None) == LOCAL:
+        return False
+    return not (getattr(source, "lookup_class", None) == LOCAL
+                and getattr(source, "slug", None) in LOCAL_PLUGINS)
 
 
 def _registry(registry: Any | None) -> Any:
@@ -144,17 +225,23 @@ def ordered_sources(registry: Any | None = None, *, classes: tuple[str, ...] | N
     web), then registration slug. Nothing on the source object changes it.
     ``classes`` keeps only those (``(LOCAL,)`` under internet "never")."""
     reg = _registry(registry)
-    pairs: list[tuple[int, str, Any]] = []
+    pairs: list[tuple[int, int, str, Any]] = []
     # Both sorted by slug, so they pair up.
     for slug, source in zip(reg.providers_for(LOOKUP_SOURCE), reg.get_all(LOOKUP_SOURCE)):
-        cls = getattr(source, "lookup_class", None)
-        if source is None or cls not in CLASS_ORDER:
-            continue
+        if not isinstance(source, RegisteredSource):
+            # Registered around the core's register(): treated as an
+            # unvetted plugin's, so it can't be "local".
+            claimed = getattr(source, "lookup_class", None)
+            if claimed not in CLASS_ORDER:
+                continue
+            source = RegisteredSource(source, slug=slug, core=False,
+                                      lookup_class=decided_class(claimed, slug=slug, core=False))
+        cls = source.lookup_class
         if classes is not None and cls not in classes:
             continue
-        pairs.append((CLASS_ORDER.index(cls), slug, source))
-    pairs.sort(key=lambda p: (p[0], p[1]))
-    return [p[2] for p in pairs]
+        pairs.append((CLASS_ORDER.index(cls), 0 if source.core else 1, slug, source))
+    pairs.sort(key=lambda p: (p[0], p[1], p[2]))
+    return [p[3] for p in pairs]
 
 
 def _clean_hit(hit: Any) -> LookupHit | None:
@@ -211,6 +298,8 @@ __all__ = [
     "WEB",
     "needs_permission",
     "ordered_sources",
+    "register",
+    "RegisteredSource",
     "search_sources",
     "validate_source",
 ]

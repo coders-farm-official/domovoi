@@ -95,6 +95,13 @@ def stem(word: str) -> str:
     return w
 
 
+# Verbs a how-to question wraps its subject in ("how do I SET a timer"):
+# a page's title need not hold them (Hit.title_coverage).
+_GENERIC_VERBS = frozenset(stem(w) for w in '''
+set add change make turn use find fix see open start stop put give show run reset restart get go
+remove delete create edit switch move install connect pair update upgrade enable disable
+'''.split())
+
 def tokens(text: str, *, keep_stop: bool = False) -> list[str]:
     out: list[str] = []
     for raw in _WORD_RE.findall((text or "").lower()):
@@ -148,6 +155,11 @@ class Hit:
     #: Share of the question's own words this passage holds (0..1).
     coverage: float
     matched: tuple[str, ...] = ()
+    #: Share of the question's words in the page's TITLE and search words
+    #: (not its body): "restart my router" only touches a room page's body.
+    title_coverage: float = 0.0
+    #: A plugin passage whose title copies a core page's ("Add a room").
+    mimic: bool = False
 
     #: Below this BM25 score, a hit is noise.
     MIN_SCORE = 1.5
@@ -326,20 +338,36 @@ def doc_passages(path: Path, kind: str, label: str, *, ref: str = "main") -> lis
     return out
 
 
+_URL_RE = re.compile(r"(?i)\b(?:https?|ftp)://[^\s)\]>]*|\bjavascript:[^\s)\]>]*|\bwww\.[^\s)\]>]+")
+_FENCE_RE = re.compile(r"(?i)={2,}|help\s+material|-{3,}|`{3,}")
+
+
+def plugin_text(text: str) -> str:
+    """A plugin's help as Domovoi will quote it: no web addresses (a help
+    answer links only to the manual and the dashboard), and nothing that
+    could pass for the help desk's own markers."""
+    t = _URL_RE.sub("[link removed]", text or "")
+    return _FENCE_RE.sub(" ", t)
+
+
 def plugin_passages(helps: Iterable[PluginHelp]) -> list[Passage]:
+    """A plugin's help file, cut into passages: third-party text, so its
+    addresses and anything shaped like a marker are taken out here, and its
+    link is only ever a dashboard route."""
     out: list[Passage] = []
     for h in helps:
+        link = h.link if (h.link or "").startswith("#") else "#plugins"
         sections = markdown_sections("## " + h.name + "\n" + h.text) if not re.search(
             r"^#{2,3}\s", h.text, re.M) else markdown_sections(h.text)
         for heading, body, anchor in sections:
             lines = _paragraph_lines(body)
             if not lines:
                 continue
-            title = plain_inline(heading)
+            title = plugin_text(plain_inline(heading)).strip() or h.name
             for i, chunk in enumerate(_chunks(lines)):
                 out.append(Passage(
-                    id=f"plugin:{h.slug}:{anchor}:{i}", title=title, text=chunk, kind=KIND_PLUGIN,
-                    section=f"{h.name} plugin → {title}", link=h.link, plugin=h.slug,
+                    id=f"plugin:{h.slug}:{anchor}:{i}", title=title, text=plugin_text(chunk), kind=KIND_PLUGIN,
+                    section=f"{plugin_text(h.name).strip()} plugin → {title}", link=link, plugin=h.slug,
                     keywords=(h.name, h.slug, "plugin"),
                 ))
     return out
@@ -368,11 +396,39 @@ class HelpIndex:
     _len: list[int] = field(default_factory=list, repr=False)
     _df: dict[str, int] = field(default_factory=dict, repr=False)
     _avg: float = 1.0
+    _head: list[set[str]] = field(default_factory=list, repr=False)
+    _mimic: set[int] = field(default_factory=set, repr=False)
+    _named_ok: set[int] = field(default_factory=set, repr=False)
 
     K1 = 1.2
     B = 0.75
+    #: Kinds in the order a tie (or a close match) goes: Domovoi's own first.
+    KIND_RANK = {KIND_MANUAL: 0, KIND_FAQ: 1, KIND_TROUBLESHOOTING: 1, KIND_ERROR: 2, KIND_PLUGIN: 3}
+    #: A plugin passage is worth this much of a core one with the same words…
+    PLUGIN_WEIGHT = 0.6
+    #: …and this much again when its title copies a core page's.
+    MIMIC_WEIGHT = 0.3
 
     def __post_init__(self) -> None:
+        core_heads: list[set[str]] = []
+        for p in self.passages:
+            head = set(tokens(p.title))
+            for kw in p.keywords:
+                head |= set(tokens(kw))
+            self._head.append(head)
+            if p.kind != KIND_PLUGIN:
+                core_heads.append(set(tokens(p.title)))
+                core_heads += [set(tokens(kw)) for kw in p.keywords if " " in kw.strip()]
+        for i, p in enumerate(self.passages):
+            if p.kind == KIND_PLUGIN and p.keywords:
+                name = set(tokens(p.keywords[0]))
+                if name and not any(name <= h for h in core_heads if h):
+                    self._named_ok.add(i)
+            title = set(tokens(p.title))
+            if p.kind == KIND_PLUGIN and title and any(title <= h for h in core_heads if h):
+                self._mimic.add(i)
+                log.info("help index: plugin %s's page %r copies a core page's title; ranked last",
+                         p.plugin, p.title)
         for p in self.passages:
             tf: dict[str, float] = {}
             body = tokens(p.text)
@@ -399,6 +455,10 @@ class HelpIndex:
         return None
 
     @staticmethod
+    def _names_plugin(p: Passage, lowered: str) -> bool:
+        return any(k and k.lower() in lowered for k in p.keywords[:2])
+
+    @staticmethod
     def _weight(p: Passage, lowered: str) -> float:
         """An error code's entry is the answer when the question names the
         code ("what does model_missing mean"), and a poor one otherwise:
@@ -411,6 +471,8 @@ class HelpIndex:
             return 1.6 if named else 0.45
         if p.kind == KIND_MANUAL:
             return 1.15
+        if p.kind == KIND_PLUGIN:
+            return HelpIndex.PLUGIN_WEIGHT
         return 1.0
 
     def search(self, query: str, *, limit: int = 3, kinds: tuple[str, ...] | None = None) -> list[Hit]:
@@ -441,13 +503,33 @@ class HelpIndex:
                 score += sum(3.0 for kw in p.keywords
                              if " " in kw.strip() and kw.lower() in lowered)
                 score *= self._weight(p, lowered)
-                scored.append(Hit(p, round(score, 4), len(matched) / len(q), tuple(matched)))
-        scored.sort(key=lambda h: (-h.score, -h.coverage, h.passage.id))
+                mimic = i in self._mimic
+                # Named by the person ("…with weather fun"), a copying
+                # page is the one they mean; never by a name that itself
+                # copies a core page.
+                if mimic and not (p.plugin and i in self._named_ok and self._names_plugin(p, lowered)):
+                    score *= self.MIMIC_WEIGHT
+                head = self._head[i]
+                need = [t for t in q if t not in _GENERIC_VERBS] or q
+                scored.append(Hit(p, round(score, 4), len(matched) / len(q), tuple(matched),
+                                  sum(1 for t in need if t in head) / len(need), mimic))
+        scored.sort(key=lambda h: (-h.score, self.KIND_RANK.get(h.passage.kind, 9), -h.coverage, h.passage.id))
+        # A close match goes to Domovoi's own page: a plugin passage within
+        # 15% of a core one below it gives way.
+        for _ in range(len(scored)):
+            moved = False
+            for j in range(len(scored) - 1):
+                a, b = scored[j], scored[j + 1]
+                if a.passage.kind == KIND_PLUGIN and b.passage.kind != KIND_PLUGIN and b.score >= 0.85 * a.score:
+                    scored[j], scored[j + 1] = b, a
+                    moved = True
+            if not moved:
+                break
         # One hit per page: the best piece of a long page stands for it.
         out: list[Hit] = []
         seen: set[str] = set()
         for h in scored:
-            key = h.passage.link or h.passage.id
+            key = h.passage.id.rsplit(":", 1)[0] if h.passage.kind == KIND_PLUGIN else (h.passage.link or h.passage.id)
             if key in seen:
                 continue
             seen.add(key)

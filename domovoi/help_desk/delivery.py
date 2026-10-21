@@ -59,6 +59,60 @@ class Delivery:
     phones: tuple[Phone, ...]
 
 
+#: Help steps one person (and so each of their phones) gets in an hour.
+PER_PERSON_HOUR = 3
+#: Sends one asking session may make in an hour, to anyone.
+PER_SESSION_HOUR = 3
+#: The same steps to the same person: once in this long.
+DEDUPE_SEC = 3600
+
+# Sends per asking session (process memory: a restart forgets, the
+# per-person limit in the database still holds).
+_SESSION_SENDS: dict[str, list[float]] = {}
+
+
+def note_sent(session_id: Any) -> None:
+    import time
+
+    if session_id is None:
+        return
+    now = time.monotonic()
+    key = str(session_id)
+    _SESSION_SENDS[key] = [t for t in _SESSION_SENDS.get(key, []) if now - t < 3600] + [now]
+    if len(_SESSION_SENDS) > 512:
+        for k in list(_SESSION_SENDS)[:256]:
+            _SESSION_SENDS.pop(k, None)
+
+
+async def refusal(session: AsyncSession, *, person_id: int, title: str, asker_session: Any = None,
+                  name: str = "", asker: bool = True) -> str | None:
+    """Why these steps may not be sent now, in words, or None. A few sends
+    an hour per person (each person's phones share it), per asking
+    session, and the same steps to the same person once an hour."""
+    import time
+
+    who = "your" if asker else f"{name}'s"
+    if asker_session is not None:
+        now = time.monotonic()
+        recent_here = [t for t in _SESSION_SENDS.get(str(asker_session), []) if now - t < 3600]
+        if len(recent_here) >= PER_SESSION_HOUR:
+            return "I've sent enough help steps from here for now, so I haven't sent this one. Try again later."
+    try:
+        row = (await session.execute(text(
+            "SELECT count(*) AS n, count(*) FILTER (WHERE title = :t AND created_at > now() - make_interval(secs => :d)) AS same "
+            "FROM help_deliveries WHERE person_id = :p AND created_at > now() - interval '1 hour'"
+        ), {"p": person_id, "t": title, "d": DEDUPE_SEC})).mappings().first()
+    except Exception as e:  # noqa: BLE001 — no table: nothing was sent yet
+        log.info("help delivery: limits unreadable: %s", e)
+        await session.rollback()
+        return None
+    if row and row["same"]:
+        return f"I already sent those steps to {who} phone in the last hour; they're in Chat."
+    if row and row["n"] >= PER_PERSON_HOUR:
+        return f"I've sent {who} phone enough help steps this hour, so I haven't sent this one. Try again later."
+    return None
+
+
 async def person_name(session: AsyncSession, person_id: int) -> str | None:
     row = (await session.execute(text("SELECT name FROM people WHERE id = :p"), {"p": person_id})).first()
     return row[0] if row else None

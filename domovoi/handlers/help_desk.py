@@ -24,12 +24,25 @@ FAQ, the troubleshooting guide, plugins' help files —
    * never a broadcast: there is no "everyone" here.
 
 **Not poaching, not poached.** The fast path is "how do/can/should I …",
-"how to …", "where do I find/change/set/turn …", "is there a way to …". It
-DECLINES (returns None, and the turn routes on as before: the tool model,
-then the answer model) unless the question names something Domovoi has
-(a room, the dashboard, a plugin, a timer… :func:`looks_like_domovoi`) AND
-the help index holds a confident page for it (most of the question's own
-words). "How do I make pancakes" and "how do you say hello in Spanish"
+"how to …", "where do I find/change/set/turn …", "is there a way to …".
+
+* A request in how-to clothes is the action's: when what follows "is there
+  a way to" / "how do I" is itself a command another handler's fast path
+  takes ("set a timer for ten minutes", "play some music", "play the
+  radio"), that handler runs it (:meth:`HelpDeskHandler._delegate`), as if
+  the person had said the command; "where do I …" is never delegated.
+* Otherwise it DECLINES (returns None, and the turn routes on as before:
+  the tool model, then the answer model) unless the question is about
+  Domovoi itself (:func:`domovoi.help_desk.answer.is_about_domovoi`: it
+  names something only Domovoi has, or a core help page's title and search
+  words hold all of it — "how can I restart my router" and "how do I fix my
+  phone screen" are not) AND the help index holds a confident page.
+
+**Sending is limited** (:mod:`domovoi.help_desk.delivery`): a few sends
+an hour per person (and so per phone) and per asking session, and the same
+steps to the same person once an hour. After "Who should I send it to?",
+only a name the household knows is taken as the answer; anything else
+("next song") is routed as the command it is, and nothing is sent. "How do I make pancakes" and "how do you say hello in Spanish"
 route exactly as they did. The band sits right after ``help`` (105): no
 earlier band has a "how do I" pattern ("how do I use you" is ``help``'s,
 whole), and every later handler's phrases start differently, which
@@ -78,8 +91,22 @@ NO_PHONE_TEXT = (
 )
 
 
-def looks_like_domovoi(question: str) -> bool:
-    return bool(_DOMOVOI_WORDS.search(question or ""))
+def looks_like_domovoi(question: str, index: Any = None) -> bool:
+    """A how-to question this handler answers: worded about something of
+    Domovoi's, not a command in how-to clothes (that one is its handler's),
+    and about Domovoi itself (``answer.is_about_domovoi``)."""
+    q = question or ""
+    if not _DOMOVOI_WORDS.search(q):
+        return False
+    from domovoi.handlers import HANDLER_BY_NAME
+
+    me = HANDLER_BY_NAME.get("help_desk")
+    if me is not None and me.delegate_target(q):
+        return False
+    from domovoi.help_desk.answer import is_about_domovoi
+    from domovoi.help_desk.index import get_index
+
+    return is_about_domovoi(q, index if index is not None else get_index())
 
 
 def _index_for(rows: list[dict[str, Any]]):
@@ -105,6 +132,13 @@ def steps_text(question: str, passages: list[Any]) -> str:
         parts.append(f"**{p.section}**\n\n{p.text}{link}")
     return "\n\n".join(parts)
 
+
+# What a request in how-to clothes asks for: the command after the prefix.
+_REQUEST_RE = re.compile(
+    r"^(?:(?:hey |ok |okay )?(?:domovoi|domo)[, ]+)?"
+    r"(?:how (?:do|can|should|would) (?:i|we)|how to|is there a way to|what's the way to|"
+    r"what is the way to)\s+(?:please\s+)?(?P<cmd>.+)$"
+)
 
 _DECLINE_RE = re.compile(
     r"^(?:no|nope|nah|nobody|no one|noone|none|never mind|nevermind|cancel|forget it|don't|do not|"
@@ -176,18 +210,83 @@ class HelpDeskHandler(Handler):
         return Response(text=text, session_id=ctx.session_id, matched_handler=self.name,
                         expect_followup=followup, data=data or {})
 
+    async def _delegate(self, question: str, ctx: Context, session: AsyncSession) -> Response | None:
+        """Run the command inside a how-to-worded request through the
+        handler whose fast path takes it; None when there is none (or it
+        declines)."""
+        from domovoi.handlers import HANDLERS
+        from domovoi.handlers.base import as_fast_path
+
+        m = _REQUEST_RE.match(question)
+        if not m:
+            return None
+        cmd = m.group("cmd").strip()
+        for h in HANDLERS:
+            if h.name in (self.name, "help"):
+                continue
+            if getattr(h, "satellite_only", False) and ctx.from_phone:
+                continue
+            if h.requires_network == "yes" and not ctx.online:
+                continue
+            for entry in h.fast_paths:
+                fp = as_fast_path(entry)
+                hit = fp.pattern.match(cmd)
+                if not hit:
+                    continue
+                resp = await fp.method(h, hit, ctx, session)
+                if resp is not None:
+                    resp.matched_handler = h.name
+                    resp.data = {**(resp.data or {}), "delegated_to": h.name}
+                    return resp
+        return None
+
+    def takes_command(self, question: str) -> bool:
+        """Whether a request in how-to clothes holds another handler's
+        command (the pattern only)."""
+        return self.delegate_target(question) is not None
+
+    def delegate_target(self, question: str) -> str | None:
+        """The handler whose fast path takes the command inside a
+        how-to-worded request, by pattern (the routing corpus and the eval
+        see the turn as that handler's)."""
+        from domovoi.handlers import HANDLERS
+        from domovoi.handlers.base import as_fast_path
+
+        m = _REQUEST_RE.match(question or "")
+        if not m:
+            return None
+        cmd = m.group("cmd").strip()
+        for h in HANDLERS:
+            if h.name in (self.name, "help"):
+                continue
+            if any(as_fast_path(e).pattern.match(cmd) for e in h.fast_paths):
+                return h.name
+        return None
+
     async def _answer(self, question: str, ctx: Context, session: AsyncSession) -> Response | None:
-        from domovoi.help_desk.answer import spoken_answer
+        from domovoi.help_desk.answer import is_about_domovoi, spoken_answer
 
         question = (question or "").strip()
-        if not question or not looks_like_domovoi(question):
+        if not question:
+            return None
+        acted = await self._delegate(question, ctx, session)
+        if acted is not None:
+            return acted
+        if self.takes_command(question):
+            # The command's own handler declined it: route it on as before.
+            return None
+        if not looks_like_domovoi(question):
             return None
         try:
             index = await _index(session)
-            hits = [h for h in index.search(question, limit=2) if h.confident()]
+            if not is_about_domovoi(question, index):
+                return None
+            hits = [h for h in index.search(question, limit=3) if h.confident()]
         except Exception as e:  # noqa: BLE001 — no help index: route the turn on
             log.warning("help desk: the index failed: %s", e)
             return None
+        # Domovoi's own pages first: a plugin's help speaks only for itself.
+        hits = sorted(hits, key=lambda h: h.passage.kind == "plugin")[:2]
         if not hits:
             return None
         said = spoken_answer(hits[0])
@@ -243,7 +342,9 @@ class HelpDeskHandler(Handler):
                                     "Nothing was sent.")
         people = await people_named(session, name)
         if not people:
-            return self._reply(ctx, f"I don't know anyone called {name}, so I haven't sent anything.")
+            # Not a name the household knows: not an answer ("next song").
+            # The turn routes as the command it is; nothing is sent.
+            return None
         if len(people) > 1:
             return self._reply(ctx, f"More than one person here is called {people[0][1]}, so I won't "
                                     "guess. Nothing was sent.")
@@ -261,6 +362,10 @@ class HelpDeskHandler(Handler):
         if not phones:
             who = "yours" if asker else f"{name}'s"
             return self._reply(ctx, NO_PHONE_TEXT.format(who=who))
+        refused = await delivery.refusal(session, person_id=person_id, title=delivery.help_title(question),
+                                         asker_session=ctx.session_id, name=name, asker=asker)
+        if refused:
+            return self._reply(ctx, refused)
         index = await _index(session)
         # The pages the spoken answer came from; if the index changed since
         # (a plugin, a new manual), the question's pages today.
@@ -271,6 +376,7 @@ class HelpDeskHandler(Handler):
             return self._reply(ctx, "I couldn't find those steps again, so I haven't sent anything.")
         d = await delivery.deliver(session, person_id=person_id, question=question,
                                    steps=steps_text(question, passages), phones=phones)
+        delivery.note_sent(ctx.session_id)
         where = "your phone" if asker else f"{name}'s phone"
         return self._reply(ctx, f"Sent to {where}. It's in Chat as {d.title}.",
                            data={"delivery_id": d.id, "thread_id": d.thread_id})

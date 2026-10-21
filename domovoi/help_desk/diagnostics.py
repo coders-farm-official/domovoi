@@ -10,11 +10,18 @@ answer, the plugins and their versions, how many rooms and in which state,
 the problems the checks show (:mod:`.troubleshoot`), the last update's
 result, and what the person wrote about the problem.
 
-What it never holds: tokens, codes, passwords, addresses, network or host
-names, people's names, file paths, transcripts. Rooms are "room 1",
-"room 2"… unless the person ticks "include room names" (their own
-choice). Every free-text value goes through :func:`.redact.redact`,
-including what the person typed, and the whole text once more at the end.
+What is taken out: the values this install holds — the household token,
+the setup code, password and token hashes, the Wi-Fi network names and
+host names its satellites reported, its own host name and the hosts and
+domains of its configured URLs, people's names — by exact match
+(:mod:`.known`), then whatever the patterns in :mod:`.redact` recognise
+(addresses, URLs, quoted text, tokens, codes, home folders). Rooms are
+"room 1", "room 2"… unless the person ticks "include room names" (their
+own choice). Every free-text value goes through :func:`.redact.redact`,
+what the person typed included, and the whole text once more at the end.
+What it can't promise: a value Domovoi never saw, written in a way no
+pattern matches. So the person reads the whole summary before posting it,
+and the note at its top says so.
 """
 
 from __future__ import annotations
@@ -29,8 +36,9 @@ from domovoi.help_desk.troubleshoot import Finding
 
 HEADER = "Domovoi problem report"
 NOTE = (
-    "Made by Domovoi's \"Report a problem\". Nothing was sent anywhere: read it, then post it "
-    "yourself. It leaves out tokens, codes, addresses and names."
+    "Made by Domovoi's \"Report a problem\". Nothing was sent anywhere. Domovoi took out the "
+    "tokens, codes, addresses and names it knows about; read it all before you post it, and remove "
+    "anything else you'd rather keep private."
 )
 WHAT_MAX = 2000
 

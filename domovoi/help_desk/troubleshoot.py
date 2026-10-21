@@ -228,7 +228,8 @@ def _update_findings(st: State, *, admin: bool) -> list[Finding]:
     if status not in ("failed", "rollback_failed", "rolled_back"):
         return []
     if not admin:
-        return [Finding("update", "warn", "the last update didn't finish · an admin can see the details",
+        return [Finding("update", "warn",
+                        "the last update didn't finish · an admin can read why in Settings → Configuration",
                         "#settings/configuration", scope="open")]
     failed_steps = [s.get("name") for s in last.get("steps") or []
                     if isinstance(s, dict) and s.get("status") in ("failed", "error")]
@@ -278,7 +279,21 @@ def _guard_findings(st: State) -> list[Finding]:
 
 
 def findings(st: State, *, admin: bool = False) -> list[Finding]:
-    """Every problem the records show right now, err first, in Home's order."""
+    """Every problem the records show right now, err first, in Home's order.
+
+    The private values the State itself carries (the satellites' network and
+    host names, this server's own names and its configured hosts) are
+    scrubbed on top of whatever the caller set with ``known_values``."""
+    from domovoi.help_desk.known import config_values, sample_values
+    from domovoi.help_desk.redact import _KNOWN, known_values
+
+    own = sample_values([(r or {}).get("sample") or {} for r in st.sat_health.values()])
+    own += sample_values([r.get("wifi") for r in st.rooms if isinstance(r.get("wifi"), dict)])
+    with known_values([*_KNOWN.get(), *own, *config_values()]):
+        return _findings(st, admin=admin)
+
+
+def _findings(st: State, *, admin: bool = False) -> list[Finding]:
     now = st.now or datetime.now(timezone.utc)
     out: list[Finding] = []
     out += _guard_findings(st)

@@ -41,7 +41,9 @@ from domovoi.admin_auth import require_device, require_device_read
 from domovoi.help_desk import answer as help_answer
 from domovoi.help_desk import delivery, diagnostics
 from domovoi.help_desk import facts as help_facts
+from domovoi.help_desk import known as help_known
 from domovoi.help_desk import troubleshoot
+from domovoi.help_desk.redact import known_values
 from domovoi.help_desk.index import HelpIndex, first_words, get_index
 from domovoi.help_desk.source import plugin_help_from_rows, plugin_rows
 from web.backend.db import session_scope
@@ -188,29 +190,61 @@ async def gather_state(rooms: list[dict[str, Any]] | None = None,
     )
 
 
+async def known_for(rooms: list[dict[str, Any]] | None = None) -> list[str]:
+    """This install's private values (help_desk/known.py), plus the Wi-Fi
+    rows of the live rooms list, for the redaction of this request."""
+    wifi = [r.get("wifi") for r in rooms or [] if isinstance(r.get("wifi"), dict)]
+    try:
+        async with session_scope() as s:
+            return await help_known.gather(s, extra_samples=wifi)
+    except Exception as e:  # noqa: BLE001 — the patterns still run
+        log.warning("help: known values unreadable: %s", e)
+        return help_known.config_values()
+
+
+async def household_findings(rooms: list[dict[str, Any]], plugins: list[dict[str, Any]], *,
+                             admin: bool) -> list[troubleshoot.Finding]:
+    """The findings, with this install's private values scrubbed."""
+    state = await gather_state(rooms, plugins)
+    with known_values(await known_for(rooms)):
+        return troubleshoot.findings(state, admin=admin)
+
+
 # ── chat's help turn ────────────────────────────────────────────────────
 
 
-async def help_turn_for(question: str, *, help_thread: bool, admin: bool,
+async def help_turn_for(question: str, *, help_thread: bool,
                         has_screenshot: bool = False, extra_query: str = "") -> help_answer.HelpTurn | None:
     """The help turn for a chat message, or None when it isn't one (a
     message in an ordinary chat that isn't about Domovoi, or that the help
-    holds nothing for: that chat goes on as before)."""
-    if not help_thread and not help_answer.looks_like_help(question):
-        return None
+    holds nothing for: that chat goes on as before).
+
+    Always the HOUSEHOLD view, whoever asks: a chat on the home server is
+    shared with every paired device, so what Home shows only to an admin
+    (the update's details, the internet question) never goes into it; the
+    finding says where an admin reads it instead."""
+    rooms: list[dict[str, Any]] | None = None
     plugins = await _plugins()
     index = index_for(plugins)
+    if not help_thread:
+        # An ordinary chat: only a question about Domovoi itself (its rooms
+        # count: "why is the kitchen offline"), never one merely worded
+        # like one ("how do I train a model").
+        rooms = await _rooms()
+        names = [r.get("room_id") for r in rooms]
+        if not help_answer.looks_like_help(question, index, anchors=names):
+            return None
     # Live state only when the question is about it: reading it asks the
     # core, and a plain how-to shouldn't wait on that.
     want_facts = help_answer.wants_facts(question)
     want_checks = help_answer.wants_troubleshoot(question) or help_answer.wants_troubleshoot(extra_query)
-    rooms = await _rooms() if (want_facts or want_checks) else []
+    if rooms is None:
+        rooms = await _rooms() if (want_facts or want_checks) else []
     facts_text = help_facts.render(await gather_facts(rooms, plugins)) if want_facts else None
-    found = (troubleshoot.findings(await gather_state(rooms, plugins), admin=admin)
-             if want_checks else None)
+    found = await household_findings(rooms, plugins, admin=False) if want_checks else None
     turn = help_answer.plan(question, index, facts_text=facts_text, findings=found,
                             has_screenshot=has_screenshot, extra_query=extra_query)
-    if not help_thread and not turn.hits:
+    if not help_thread and not turn.covered:
         return None
     return turn
 
@@ -245,7 +279,8 @@ async def facts() -> dict[str, Any]:
 
 @router.get("/checks", dependencies=READ)
 async def checks(request: Request) -> dict[str, Any]:
-    found = troubleshoot.findings(await gather_state(), admin=await caller_is_admin(request))
+    rooms = await _rooms()
+    found = await household_findings(rooms, await _plugins(), admin=await caller_is_admin(request))
     return {"findings": [f.as_dict() for f in found]}
 
 
@@ -262,12 +297,14 @@ async def report(body: ReportBody, request: Request) -> dict[str, Any]:
     plugins = await _plugins()
     state = await gather_state(rooms, plugins)
     admin = await caller_is_admin(request)
-    found = troubleshoot.findings(state, admin=admin)
     status = (state.last_update or {}).get("status") if admin else None
-    text_ = diagnostics.build(
-        await gather_facts(rooms, plugins), found, what_happened=body.what_happened,
-        include_room_names=body.include_room_names, last_update_status=status,
-    )
+    facts_ = await gather_facts(rooms, plugins)
+    with known_values(await known_for(rooms)):
+        found = troubleshoot.findings(state, admin=admin)
+        text_ = diagnostics.build(
+            facts_, found, what_happened=body.what_happened,
+            include_room_names=body.include_room_names, last_update_status=status,
+        )
     return {"text": text_, "filename": "domovoi-problem-report.md"}
 
 

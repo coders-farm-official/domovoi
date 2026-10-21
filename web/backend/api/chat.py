@@ -759,9 +759,9 @@ async def _help_turn(
         if not help_thread and not help_answer.looks_like_help(content):
             return None
         extra = await _describe_screenshot(history, model) if vision_call else ""
+        # The household view, even for an admin: this chat is shared.
         return await help_api.help_turn_for(
-            content, help_thread=help_thread, admin=await help_api.caller_is_admin(request),
-            has_screenshot=vision_call, extra_query=extra,
+            content, help_thread=help_thread, has_screenshot=vision_call, extra_query=extra,
         )
     except Exception as e:  # noqa: BLE001
         log.warning("chat help: the help could not be read: %s: %s", type(e).__name__, str(e)[:200])

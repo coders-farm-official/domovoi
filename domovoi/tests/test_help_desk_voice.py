@@ -209,7 +209,7 @@ async def test_an_unknown_speaker_with_no_answer_sends_nothing(voice) -> None:
     await voice("how do I change the wake word")
     await voice("yes")
     r = await voice("to bob")
-    assert "don't know anyone called bob" in r.text
+    assert r.matched_handler != "help_desk"          # not a name it knows: routed on
     await voice.person("Sarah")
     await voice("how do I change the wake word")
     await voice("yes")
@@ -224,3 +224,67 @@ async def test_a_phone_turn_gets_the_answer_without_the_offer(voice) -> None:
     ctx = Context(room_id="phone-1", person_id=None, online=True, device_kind="phone")
     r = await route(Intent(transcript="how do I change the wake word"), ctx, voice.db)
     assert r.matched_handler == "help_desk" and "Want me to send" not in r.text and not r.expect_followup
+
+
+# ── round 1 review: limits, the name question, commands in how-to clothes ──
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_same_steps_go_once_and_a_person_gets_a_few_an_hour(voice) -> None:
+    kamron = await voice.person("Kamron")
+    await voice.phone("android-kamron", kamron)
+    said = []
+    for _ in range(4):                                   # the reviewer's spam loop
+        await voice("how do I change the wake word")
+        await voice("yes")
+        said.append((await voice("kamron")).text)
+    assert said[0].startswith("Sent to Kamron's phone.")
+    assert all("already sent those steps" in s for s in said[1:])
+    assert len(await voice.deliveries()) == 1
+    # Different steps: at most PER_PERSON_HOUR an hour, from any session.
+    from domovoi.help_desk import delivery
+
+    for q, room in (("how do I add a room", "office"), ("how do I install a plugin", "garage"),
+                    ("how do I pair the app", "den")):
+        await voice(q, room=room)
+        await voice("yes", room=room)
+        await voice("kamron", room=room)
+    assert len(await voice.deliveries()) == delivery.PER_PERSON_HOUR
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_one_session_sends_a_few_an_hour(voice) -> None:
+    from domovoi.help_desk import delivery
+
+    people = [await voice.person(n) for n in ("Ann", "Bea", "Cid", "Dee")]
+    for i, pid in enumerate(people):
+        await voice.phone(f"android-{i}", pid)
+    texts = []
+    for name in ("ann", "bea", "cid", "dee"):
+        await voice("how do I change the wake word")
+        await voice("yes")
+        texts.append((await voice(name)).text)
+    assert len(await voice.deliveries()) == delivery.PER_SESSION_HOUR
+    assert "enough help steps from here" in texts[-1]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_name_question_eats_no_command(voice) -> None:
+    await voice("how do I change the wake word")
+    assert (await voice("yes")).text == "Who should I send it to?"
+    r = await voice("next song")
+    assert r.matched_handler == "music" and await voice.deliveries() == []
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_command_in_how_to_clothes_runs_the_command(voice) -> None:
+    r = await voice("is there a way to set a timer for ten minutes")
+    assert r.matched_handler == "timer", r.text
+    r = await voice("how can I restart my router")
+    assert r.matched_handler != "help_desk"
+    r = await voice("how do I fix my phone screen")
+    assert r.matched_handler != "help_desk"

@@ -134,12 +134,18 @@ class DomovoiHelpSource:
         return LookupDocument(id=p.id, title=p.title, text=p.text, url=p.link, section=p.section)
 
 
+# The core's own source: local without being registered as such.
+from domovoi import lookup as _lookup  # noqa: E402
+
+_lookup.mark_core_type(DomovoiHelpSource)
+
+
 def register_core_source(registry: Any | None = None) -> DomovoiHelpSource:
     """Register the core's help source (slug "core"): the core reads
     plugin help through its own lookups, so this one is the manual and
     docs; the core handler builds its own with plugin help per turn."""
-    from domovoi.capabilities import CAPABILITIES
+    from domovoi import lookup
 
     source = DomovoiHelpSource()
-    (registry or CAPABILITIES).register(LOOKUP_SOURCE, source, slug="core")
+    lookup.register(source, slug=lookup.CORE_SLUG, core=True, registry=registry)
     return source

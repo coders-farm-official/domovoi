@@ -1801,23 +1801,43 @@ and from the system's own state (`domovoi/help_desk`, `/api/help`).
 * **The records help reads are summaries, and redacted.** Troubleshooting
   picks named fields from the rooms' health samples and outage reports,
   the update record, plugins' status and the container guard's household
-  view. Network names, gateway addresses, host names, boot ids, SHAs and
-  tokens are never read; every free-text value (an exit reason, an error
-  line) goes through `domovoi/help_desk/redact.py`, which replaces
-  addresses, URLs, e-mail addresses, MACs, tokens, word-phrase codes,
-  six-digit codes, secret `key=value` pairs and home folders. Reading them
-  is household tier (`GET /api/help/checks`), and what Home shows only to
-  an admin (the update's details, the internet question) is shown only to
-  one. The passages and records reach a model only on this box, in a block
-  marked as data, never as instructions.
+  view; the network-name, gateway, host-name and boot-id fields are never
+  read. A free-text value (an exit reason, an error line, a plugin's load
+  error) can still hold anything, so every one goes through two passes
+  (`domovoi/help_desk/redact.py`): first the values this install actually
+  holds, by **exact match** (`domovoi/help_desk/known.py`, read per
+  request: the household token, the setup code, the admin password's and
+  sessions' and pairings' hashes, the Wi-Fi network names, host names and
+  gateways the satellites reported, this server's host name, the hosts and
+  domains of its configured URLs, people's names); then patterns as a
+  backstop (addresses, MACs, `host:port`, domain names, URLs, e-mail
+  addresses, quoted text, long tokens, word-phrase and six-digit codes,
+  secret or network `key=value` pairs, home folders). What neither can
+  promise is a value Domovoi never saw, written in a way no pattern
+  matches. Reading the checks is household tier (`GET /api/help/checks`),
+  and what Home shows only to an admin (the update's details, the internet
+  question) is shown only to one, on that page — **never in a chat**: a
+  help chat on the home server is household-shared, so its answers use the
+  household view whoever asks, and say where an admin reads the rest. The
+  passages and records reach a model only on this box, in a block marked
+  as data with a marker no passage can know; a plugin's help file is quoted
+  as third-party text with its web addresses removed, and a reply keeps
+  only links to Domovoi's own pages.
 * **"Report a problem" sends nothing.** `POST /api/help/report` builds a
   Markdown summary (version, host kind, the AI and internet answers,
   plugins, how many rooms in which state, the checks' findings, what the
   person wrote) and returns it. Room names become `room 1`, `room 2`…
-  unless the person ticks "include room names"; no people's names, tokens,
-  codes, addresses or file paths are in it, and the whole text is redacted
-  once more at the end. The server keeps no copy; the person reads it, then
-  copies or saves it and posts it themselves.
+  unless the person ticks "include room names". The same two passes take
+  out the values the install knows and what the patterns recognise, what
+  the person typed included, and the whole text once more at the end. Its
+  first line tells the person to read it all before they post it, because
+  a value Domovoi never saw can still be in a free-text line. The server
+  keeps no copy; the person reads it, then copies or saves it and posts it
+  themselves.
+* **Sending help steps is limited.** At most 3 sends an hour to a person
+  (their phones share it) and 3 from one asking session, and the same
+  steps to the same person once an hour; after "Who should I send it
+  to?", only a name the household knows counts as the answer.
 * **Help steps go to the asker's own phones.** Voice "how do I…" sends
   steps only to the phones marked "This phone belongs to <person>" for the
   recognised speaker, or for the person named when asked; never to every

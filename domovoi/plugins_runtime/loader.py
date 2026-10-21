@@ -164,12 +164,12 @@ class PluginContext:
         ``search(query)`` / ``fetch(id)`` and a ``lookup_class`` of local,
         api or web. The core orders sources by class, never by anything the
         source says about itself; one plugin registers one source."""
-        from domovoi.lookup import LOOKUP_SOURCE, validate_source
+        from domovoi import lookup
 
-        validate_source(source)
-        if LOOKUP_SOURCE in self.capabilities:
+        if lookup.LOOKUP_SOURCE in self.capabilities:
             raise ValueError("a plugin registers one lookup source")
-        self.add_capability(LOOKUP_SOURCE, source)
+        lookup.register(source, slug=self.slug, core=False)
+        self.capabilities.append(lookup.LOOKUP_SOURCE)
 
     # ── config ──────────────────────────────────────────────────────────────
 

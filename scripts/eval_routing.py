@@ -256,6 +256,10 @@ async def run_ollama(
         for h in HANDLERS:
             for entry in h.fast_paths:
                 if as_fast_path(entry).pattern.match(normalized):
+                    # help_desk runs a command worded as a how-to through the
+                    # command's own handler ("is there a way to set a timer…").
+                    if h.name == "help_desk":
+                        return h.delegate_target(normalized) or h.name
                     return h.name
         return None
 
