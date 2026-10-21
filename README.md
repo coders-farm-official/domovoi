@@ -108,7 +108,7 @@ We build Domovoi in public. Here's where it stands.
   ("wake me up at 7" is the next 7 o'clock), "what can you do", and
   what's on your calendar each have their own handler.
 - **Updates from the dashboard,** on a release channel. Settings →
-  Configuration → Version names the release the server runs (`1.0.0-rc2 +
+  Configuration → Version names the release the server runs (`1.0.0-rc3 +
   14 (abc1234)` between releases) and pulls and applies updates, rolling
   back by itself when the new code doesn't come up healthy. Root only
   ever runs a verified copy of the commit, never the files in the checkout
@@ -163,7 +163,7 @@ We build Domovoi in public. Here's where it stands.
   to your phone, on Android 8.0 or later, 32-bit phones included
   ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)). With no server it
   still plays your phone's own music, videos and files. It is a signed
-  release, [v1.0.0-rc2](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc2)
+  release, [v1.0.0-rc3](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc3)
   on GitHub, and your server can hand it to phones: press **Download the
   app to this server** once on the dashboard, and a phone installs it from
   your server's own page by scanning a QR code
@@ -177,8 +177,13 @@ We build Domovoi in public. Here's where it stands.
   screens (Videos, Files, Podcasts, Audiobooks) refresh when you pull
   them down, a video uploaded from the phone shows on the server's side
   straight away, and screens a plugin provides (Stations, Images) carry
-  the plugin's frame and colour, as on the dashboard.
-  **Audiobooks on the phone** (in the code now, released with 1.0.0-rc3):
+  the plugin's frame and colour, as on the dashboard. **Chat is one list**:
+  the home server's chats (shared with the household) and the ones on the
+  phone itself, each marked with where it runs; away from home it lists the
+  phone's own and says the server's show when you're home. The side menu
+  and top bar clear the clock, a camera cutout and the navigation bars on
+  tablets and phones turned sideways.
+  **Audiobooks on the phone** (since 1.0.0-rc3):
   save a book to the phone, its size shown first, into the app's own
   storage; the download pauses when you leave home and finishes by itself
   when the server is back in reach. Saved books play with no server, in
@@ -205,16 +210,23 @@ they have been tried on fewer devices than the rest, aren't yet held to
 - **A Windows installer.** `DomovoiSetup.exe` puts the Linux
   server inside WSL2 on a Windows 11 PC. It is not code-signed yet;
   download it from the
-  [v1.0.0-rc2 release](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc2)
-  ([Windows installer](docs/WINDOWS_HOST.md)). From the next release,
-  Setup also puts Domovoi's icon beside the clock: whether Domovoi is
+  [v1.0.0-rc3 release](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc3)
+  ([Windows installer](docs/WINDOWS_HOST.md)). Setup also puts
+  Domovoi's icon beside the clock: whether Domovoi is
   running, the dashboard, a QR code for phones, and a helper that prepares
   a Raspberry Pi's SD card from Windows
   ([the tray icon](docs/WINDOWS_HOST.md#the-tray-icon)).
 - **Satellites on spare devices.** A Linux or Windows laptop or PC, or an old
   phone or tablet through the Android app's room mode, can be a room instead
   of a Raspberry Pi. Each joins with a one-line command or a QR code from the
-  dashboard ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md)).
+  dashboard ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md)). A
+  Windows PC can instead download a Setup to double-click from the same card
+  (`DomovoiSatelliteSetup.exe`, with a setup code in its file name; it
+  checks the server it reached is the one the code came from, and is not
+  code-signed yet, so SmartScreen asks first). A Windows server carries that
+  Setup in its own; a Linux server downloads it from a release that has it,
+  and until then shows the one-line command
+  ([Windows PCs](docs/SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)).
   Older Linux laptops (Ubuntu 22.04, Mint 21, Debian 11) and Fedora,
   openSUSE or Arch get the satellite's own pinned Python
   ([older Linux](docs/SPARE_DEVICE_SATELLITES.md#older-linux-and-fedora-opensuse-arch)),
@@ -231,25 +243,30 @@ they have been tried on fewer devices than the rest, aren't yet held to
 
 **Coming next** (being finished now)
 
-1. **Domovoi v1.0.0-rc3,** the next release candidate: audiobooks on the
-   phone, the fixes from rc2's smoke tests, and everything else above
-   that came after rc2 (the tray icon on Windows, the user manual, the
-   satellites' faster Wi-Fi recovery), as the server, the app and a
-   Windows Setup ([release notes](docs/RELEASE_NOTES.md)).
-2. **Domovoi v1.0.0,** after
-   [v1.0.0-rc1](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc1),
-   [v1.0.0-rc2](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc2)
-   and rc3, the dress rehearsals (the server, the app and a Windows Setup,
-   one `SHA256SUMS` for every file, published the way v1.0.0 will be:
-   [Releasing](docs/CONTRIBUTING.md#releasing)). It ships once the freeze
-   fixes have run for a week with no freeze and no satellite dropping
-   out, and the hardware checks on real phones and spare computers are
-   done. `stable` then points at it, and new installs follow it.
+1. **Domovoi v1.0.0,** the full product. Three dress rehearsals went out
+   ([v1.0.0-rc1](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc1),
+   [rc2](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc2)
+   and [rc3](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc3));
+   there are no more release candidates. 1.0.0 is everything above and in
+   the previews, built once more and run for a while before it ships: the
+   server, the app and a Windows Setup (with the Windows satellite Setup
+   beside it), one `SHA256SUMS` for every file, published the way the
+   rehearsals were ([Releasing](docs/CONTRIBUTING.md#releasing)). It ships
+   once that build has run with no freeze and no satellite dropping out,
+   and the hardware checks on real phones and spare computers are done.
+   `stable` then points at it, and new installs follow it. What went in
+   since rc3 is in the [release notes](docs/RELEASE_NOTES.md): One Chat in
+   the app, the Windows satellite Setup, a smaller (R8-shrunk) release
+   build of the app, tablet and sideways-phone screens that clear the
+   clock and cutouts, and a repair by Setup that no longer trips the
+   container guard.
 
 **Later**
 
-- **The Android app on Google Play,** once Coders Farm's developer account
-  is cleared.
+- **The Android app on Google Play.** Coders Farm's developer account is
+  cleared and the store listing is written; the release build is made
+  the way Google Play asks (shrunk with R8, with its `mapping.txt` kept).
+- **An iPhone app.** Its own track, apart from 1.0.0.
 - **The Windows installer out of preview,** so one download turns the household
   gaming PC into a Domovoi server.
 - **"Hey Domovoi" as a default wake word.** A model trained at home can't be
@@ -384,7 +401,7 @@ Three ways in:
   [Or let the script do it](docs/LINUX_HOST.md#or-let-the-script-do-it).
 - **Windows 11, the installer (preview).** `DomovoiSetup.exe` runs that
   same script inside a private WSL2 distro. It is unsigned; download it from
-  the [v1.0.0-rc1 release](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc1),
+  the [latest release](https://github.com/coders-farm-official/domovoi/releases/latest),
   or build it with `windows\build.ps1`
   ([Windows installer](docs/WINDOWS_HOST.md)).
 - **By hand, on Windows or Linux:** the commands below.
@@ -482,7 +499,9 @@ Satellites** on the dashboard (as admin) to make it a room. Three routes:
   Fedora, openSUSE or Arch, gets the satellite's own Python). The computer
   checks it reached *your* server, then shows its approval code
   ([Linux](docs/SPARE_DEVICE_SATELLITES.md#linux-laptops-and-mini-pcs) ·
-  [Windows](docs/SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)).
+  [Windows](docs/SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)). On
+  Windows the card can also hand you a Setup to double-click instead of
+  the command (not code-signed yet).
 - **An old phone or tablet** (Android 8.0 or later; preview). The same **add a spare
   device** card shows a QR code: scan it with the phone's camera, and your
   server's page installs the Domovoi Android app (press **Download the app
