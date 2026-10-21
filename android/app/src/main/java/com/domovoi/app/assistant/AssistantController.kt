@@ -10,12 +10,28 @@ import androidx.core.content.ContextCompat
 import com.domovoi.app.audio.MicArbiter
 import com.domovoi.app.audio.MicOwnership
 import androidx.work.WorkInfo
+import com.domovoi.app.assistant.docs.ChatDocStore
+import com.domovoi.app.assistant.docs.DocCancel
+import com.domovoi.app.assistant.docs.DocExtract
+import com.domovoi.app.assistant.docs.DocExtraction
+import com.domovoi.app.assistant.docs.DocHeadsUp
+import com.domovoi.app.assistant.docs.DocNote
+import com.domovoi.app.assistant.docs.DocNotes
+import com.domovoi.app.assistant.docs.DocQa
+import com.domovoi.app.assistant.docs.DocRefused
+import com.domovoi.app.assistant.docs.NoPdfTextApi
+import com.domovoi.app.assistant.docs.PdfTextReader
+import com.domovoi.app.assistant.docs.PhonePdfText
+import com.domovoi.app.assistant.docs.QaDoc
+import com.domovoi.app.assistant.docs.StoredDocument
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,9 +44,14 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.runInterruptible
 import java.io.File
 import java.util.Locale
 import kotlin.coroutines.CoroutineContext
+
+/** A PDF attached on a phone without the PDF text API, waiting for the
+ *  home server to read it (or to be dropped). */
+data class PendingDocument(val conversation: String, val id: String, val name: String, val question: String)
 
 /** Where the assistant's models are, as its screens show it. */
 sealed interface ModelSetup {
@@ -73,6 +94,9 @@ data class AssistantUi(
     /** ...and no words of it have arrived yet. */
     val thinking: Boolean = false,
     val history: List<ConversationSummary> = emptyList(),
+    /** [history] has been read from the disk once (Chat opens a new chat at
+     *  once only when it knows there are none). */
+    val historyRead: Boolean = false,
     /** How long the last finished download took, ms. */
     val lastDownloadMs: Long? = null,
     /** The listening models (speech to text, the voice detector). */
@@ -90,6 +114,16 @@ data class AssistantUi(
     val lastStopMs: Long? = null,
     /** The reply reports saved on this phone, newest first. */
     val reports: List<ReplyReport> = emptyList(),
+    /** A document being read for the conversation (its name). */
+    val reading: String? = null,
+    /** A reply about documents is being checked against them before it is
+     *  shown (the model's own words are never shown unchecked). */
+    val checking: Boolean = false,
+    /** A PDF this phone can't read the text of, waiting for "Ask the home
+     *  server" or to be dropped. */
+    val pendingPdf: PendingDocument? = null,
+    /** Why the last attachment wasn't taken, in words, until closed. */
+    val docProblem: String? = null,
 ) {
     val installed: Boolean get() = setup == ModelSetup.Installed
 
@@ -166,6 +200,9 @@ class AssistantController(
     /** Called before the model loads: frees a copy the benchmark holds. */
     private val beforeLoad: () -> Unit = {},
     private val unloadAfterMs: Long = UNLOAD_AFTER_MS,
+    /** How long after a reply the title job waits before asking the model,
+     *  so a quick follow-up doesn't have to stop it. */
+    private val titleDelayMs: Long = TITLE_DELAY_MS,
     /** What the assistant downloads: the language model and the listening
      *  models. */
     private val models: List<CatalogModel> = ModelCatalog.chat,
@@ -189,6 +226,13 @@ class AssistantController(
     /** The manual the phone carries, for questions about Domovoi itself
      *  ([LocalHelp]); null: none, the model answers as ever. */
     private val helpIndex: suspend () -> HelpIndex? = { null },
+    /** Where phone chats' attachments are kept; null: no attachments
+     *  (tests of everything else). */
+    private val docs: ChatDocStore? = null,
+    /** The phone's PDF text API, or null on a phone without one. */
+    private val pdfText: () -> PdfTextReader? = { null },
+    /** The longest a document may take to read before Chat gives up on it. */
+    private val docReadTimeoutMs: Long = DOC_READ_TIMEOUT_MS,
 ) {
     private val _state = MutableStateFlow(
         AssistantUi(
@@ -215,6 +259,15 @@ class AssistantController(
     @Volatile private var engine: LlmEngine? = null
     private var engineBackend: LlmBackend? = null
     private var replyJob: Job? = null
+    /** The model writing a chat's title ([writeTitle]), and for which chat. */
+    @Volatile private var titleJob: Job? = null
+    @Volatile private var titleFor: String? = null
+    /** "Try again" running: the reply it would replace, kept until the new
+     *  one exists, and put back if it doesn't come. */
+    @Volatile private var retryingFrom: StoredMessage? = null
+    /** One change to a conversation's name, archive mark or title state at
+     *  a time, so archive and the title job can't undo each other. */
+    private val changeLock = Mutex()
     private var loadJob: Job? = null
     private var unloadTimer: Job? = null
     @Volatile private var screensShowing = 0
@@ -712,9 +765,17 @@ class AssistantController(
         }
     }
 
-    private suspend fun reply(asked: StoredConversation, onDelta: (String) -> Unit = {}): StoredConversation {
-        save(asked)
+    private suspend fun reply(question: StoredConversation, onDelta: (String) -> Unit = {}): StoredConversation {
+        // The model's time is the reply's: a title being written stops (it
+        // runs again once this reply is done), and whatever it wrote, or a
+        // rename meanwhile, is kept.
+        pauseTitle()
+        val asked = question.withMetaOf(_state.value.conversation)
+        // A retry's question is already on disk with the reply it may
+        // replace: that copy stays until the new reply is finished.
+        if (retryingFrom == null) save(asked)
         clockReply(asked, onDelta)?.let { return it }
+        if (asked.documents.isNotEmpty()) return docReply(asked, onDelta)
         // A question about Domovoi: the manual on the phone (LocalHelp).
         val help = helpTurn(asked)
         if (help != null && help.passages.isEmpty()) return notCoveredReply(asked, help, onDelta)
@@ -729,13 +790,17 @@ class AssistantController(
             val why = (_state.value.engine as? EngineState.Failed)?.reason ?: "the model did not load"
             return finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), error = "The model could not start: $why"))
         }
-        val turns = modelHistory(asked.messages)
+        val indexed = modelTurns(asked.messages)
+        val turns = indexed.map { it.turn }
         window = window.next(asked.id, turns)
+        // Where the model's view begins, as a message index, for the
+        // conversation view's quiet divider (null: it sees it all).
+        val viewed = asked.copy(windowFrom = indexed.getOrNull(window.start)?.index?.takeIf { window.start > 0 })
         val sent = nanos()
         var firstMs: Long? = null
         val text = StringBuilder()
         fun live(): StoredMessage = StoredMessage(Speaker.DOMOVOI, text.toString(), clock(), backend = backend.label)
-        _state.update { it.copy(conversation = asked.copy(messages = asked.messages + live())) }
+        _state.update { it.copy(conversation = viewed.withMetaOf(it.conversation).copy(messages = viewed.messages + live())) }
         try {
             val sentTurns = window.of(turns).let { if (help != null) LocalHelp.withPassages(it, help) else it }
             llm.reply(Persona.SYSTEM_PROMPT, sentTurns, clockLine()).collect { delta ->
@@ -743,7 +808,10 @@ class AssistantController(
                 text.append(delta)
                 onDelta(delta)
                 _state.update { ui ->
-                    ui.copy(thinking = text.isBlank(), conversation = asked.copy(messages = asked.messages + live()))
+                    ui.copy(
+                        thinking = text.isBlank(),
+                        conversation = viewed.withMetaOf(ui.conversation).copy(messages = viewed.messages + live()),
+                    )
                 }
             }
             val stats = llm.lastStats()
@@ -751,14 +819,14 @@ class AssistantController(
             val footer = help?.let { LocalHelp.footer(it, text.toString()) }.orEmpty()
             val said = if (footer.isEmpty()) text.toString() else text.toString().trimEnd() + "\n\n" + footer
             return finishReply(
-                asked,
+                viewed,
                 live().copy(text = said, firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }),
             )
         } catch (e: CancellationException) {
-            finishReply(asked, live().copy(stopped = true, firstTextMs = firstMs, stopMs = voice?.lastStopMs))
+            finishReply(viewed, live().copy(stopped = true, firstTextMs = firstMs, stopMs = voice?.lastStopMs))
             throw e
         } catch (e: Throwable) {
-            return finishReply(asked, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
+            return finishReply(viewed, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
         }
     }
 
@@ -815,9 +883,20 @@ class AssistantController(
     }.onFailure { Log.w(TAG, "the phone's clock could not be read", it) }.getOrNull()
 
     private suspend fun finishReply(asked: StoredConversation, reply: StoredMessage): StoredConversation {
-        val done = asked.copy(updated = reply.at.coerceAtLeast(asked.updated), messages = asked.messages + reply)
+        // "Try again" that brought no new reply (it failed, came back empty
+        // or was stopped): the reply it was to replace goes back.
+        val old = retryingFrom
+        retryingFrom = null
+        val failedRetry = old != null && (reply.error != null || reply.stopped || reply.text.isBlank())
+        if (failedRetry) say(reply.error?.let { "couldn't try again: $it" } ?: "the earlier reply is kept")
+        val last = if (failedRetry) old!! else reply
+        // A rename while the reply was written is kept.
+        val done = asked.withMetaOf(_state.value.conversation)
+            .copy(updated = if (failedRetry) asked.updated else reply.at.coerceAtLeast(asked.updated),
+                messages = asked.messages + last)
         _state.update { it.copy(conversation = done, replying = false, thinking = false, lastStopMs = voice?.lastStopMs) }
         withContext(NonCancellable) { save(done) }
+        startTitle(done)
         return done
     }
 
@@ -861,8 +940,13 @@ class AssistantController(
 
     fun delete(id: String) {
         scope.launch {
+            if (titleFor == id) pauseTitle()
             if (_state.value.conversation.id == id) stopReply()
-            val ok = withContext(io) { conversations.delete(id).also { readHistory() } }
+            val ok = withContext(io) {
+                docs?.delete(id)
+                docCache.keys.removeAll { it.startsWith("$id/") }
+                conversations.delete(id).also { readHistory() }
+            }
             if (_state.value.conversation.id == id) {
                 settings.currentConversation = null
                 _state.update { it.copy(conversation = conversations.create(clock())) }
@@ -874,25 +958,156 @@ class AssistantController(
     /** Deletes every conversation on the phone. */
     fun clearAll() {
         scope.launch {
+            pauseTitle()
             stopReply()
-            val ok = withContext(io) { conversations.clearAll().also { readHistory() } }
+            val ok = withContext(io) {
+                docs?.clearAll()
+                docCache.clear()
+                conversations.clearAll().also { readHistory() }
+            }
             settings.currentConversation = null
             _state.update { it.copy(conversation = conversations.create(clock())) }
             say(if (ok) "conversations cleared" else "some conversations could not be deleted")
         }
     }
 
-    private suspend fun save(conversation: StoredConversation) {
+    private suspend fun save(conversation: StoredConversation, makeCurrent: Boolean = true) {
         withContext(io) {
             runCatching { conversations.save(conversation) }
                 .onFailure { say("could not save the conversation: ${it.message}") }
             readHistory()
         }
-        settings.currentConversation = conversation.id
+        if (makeCurrent) settings.currentConversation = conversation.id
     }
 
     private fun readHistory() {
-        _state.update { it.copy(history = conversations.list()) }
+        _state.update { it.copy(history = conversations.list(), historyRead = true) }
+    }
+
+    // ── History: rename, archive, try again, search, export ─────────────
+
+    /** Changes conversation [id] with [change], on screen and on disk; false
+     *  when it can't be read. */
+    private suspend fun changeConversation(id: String, change: (StoredConversation) -> StoredConversation): Boolean =
+        changeLock.withLock {
+            val ui = _state.value
+            val shown = ui.conversation.takeIf { it.id == id && it.messages.isNotEmpty() }
+            val current = shown ?: withContext(io) { conversations.load(id) } ?: return@withLock false
+            val changed = change(current)
+            _state.update { if (it.conversation.id == id) it.copy(conversation = changed.copy(messages = it.conversation.messages)) else it }
+            // A reply being written to it: the screen has the change, and the
+            // finished reply saves it (finishReply keeps it); a save now would
+            // write the half-written reply (or drop the one a retry replaces).
+            if (shown != null && ui.replying) return@withLock true
+            withContext(NonCancellable) { save(changed, makeCurrent = false) }
+            true
+        }
+
+    /** Names conversation [id] [title]: the person's name, which the
+     *  model's title never replaces. A blank name changes nothing. */
+    fun rename(id: String, title: String) {
+        val name = ChatTitles.plainTitle(title).take(RENAME_MAX_CHARS)
+        if (name.isEmpty()) return
+        scope.launch {
+            if (titleFor == id) pauseTitle()
+            if (!changeConversation(id) { it.copy(name = name, titleByUser = true) }) say("that conversation could not be read")
+        }
+    }
+
+    /** Moves conversation [id] to the "archived" view, or back. */
+    fun setArchived(id: String, archived: Boolean) {
+        scope.launch {
+            if (changeConversation(id) { it.copy(archived = archived) }) {
+                say(if (archived) "archived" else "moved back to chats")
+            } else {
+                say("that conversation could not be read")
+            }
+        }
+    }
+
+    /** Whether "try again" can run on the conversation on screen now: it
+     *  ends with a finished reply to a question. */
+    fun canRetry(ui: AssistantUi = _state.value): Boolean =
+        !ui.replying && voice?.active != true && ui.installed && retryBase(ui.conversation) != null
+
+    /** "Try again": the last reply goes, and the last question is answered
+     *  again in its place. */
+    fun retry() {
+        val ui = _state.value
+        if (!canRetry(ui)) return
+        val asked = retryBase(ui.conversation) ?: return
+        retryingFrom = ui.conversation.messages.last()
+        _state.update { it.copy(conversation = asked, replying = true, thinking = true) }
+        replyJob = scope.launch { reply(asked) }
+    }
+
+    /** The phone conversations whose title or text contains [query]. */
+    suspend fun search(query: String): List<ConversationHit> = withContext(io) { conversations.search(query) }
+
+    /** Conversation [id] as plain text, for the share sheet (one chat). */
+    suspend fun transcript(id: String): String? {
+        val c = _state.value.conversation.takeIf { it.id == id && it.messages.isNotEmpty() }
+            ?: withContext(io) { conversations.load(id) } ?: return null
+        return ChatExport.text(c)
+    }
+
+    /** Every phone conversation, as Markdown and as JSON ("export all phone
+     *  chats"); the caller writes them where the person picked. */
+    suspend fun exportAll(): ChatExport.Bundle = withContext(io) { ChatExport.bundle(conversations.all(), clock()) }
+
+    // ── Titles ──────────────────────────────────────────────────────────
+
+    /** After a finished reply: the model writes [done]'s title in the
+     *  background, when it still needs one. */
+    private fun startTitle(done: StoredConversation) {
+        if (!done.needsTitle) return
+        titleJob?.cancel()
+        titleFor = done.id
+        titleJob = scope.launch { writeTitle(done.id) }
+    }
+
+    /** Stops the title being written and waits for it to go. */
+    private suspend fun pauseTitle() {
+        val job = titleJob ?: return
+        titleJob = null
+        job.cancelAndJoin()
+    }
+
+    /**
+     * The title job: once the engine is idle, the model writes a title for
+     * conversation [id] from its first exchange, in a conversation of its
+     * own (LlmEngine.oneShot). A model that isn't in memory isn't loaded for
+     * it: the next reply tries again. The person's own name always wins.
+     */
+    private suspend fun writeTitle(id: String) {
+        delay(titleDelayMs)
+        while (_state.value.replying || voice?.active == true) delay(TITLE_POLL_MS)
+        val conv = (_state.value.conversation.takeIf { it.id == id } ?: withContext(io) { conversations.load(id) })
+            ?.takeIf { it.needsTitle } ?: return
+        val (question, answer) = conv.firstExchange() ?: return
+        val raw = try {
+            engineLock.withLock {
+                val llm = engine?.takeIf { it.isLoaded } ?: return
+                llm.oneShot(ChatTitles.SYSTEM, ChatTitles.prompt(question, answer), ChatTitles.MAX_TOKENS)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.w(TAG, "no title from the model: ${plainReason(e)}")
+            changeConversation(id) { it.copy(titleTries = it.titleTries + 1) }
+            return
+        } ?: return
+        val title = ChatTitles.clean(raw)
+        withContext(NonCancellable) {
+            if (withContext(io) { conversations.load(id) } == null) return@withContext
+            changeConversation(id) {
+                when {
+                    it.titleByUser || it.titled -> it
+                    title == null -> it.copy(titleTries = it.titleTries + 1)
+                    else -> it.copy(name = title, titled = true)
+                }
+            }
+        }
     }
 
     // ── Reply reports ───────────────────────────────────────────────────
@@ -943,9 +1158,240 @@ class AssistantController(
         _messages.tryEmit(text)
     }
 
+    // ── Documents (documents plan, D1) ──────────────────────────────────
+
+    /** Read documents' parts, by "conversation/id" (read once per chat). */
+    private val docCache = java.util.concurrent.ConcurrentHashMap<String, DocExtraction>()
+
+    /** Whether phone chats take documents here (a store exists). */
+    val canAttach: Boolean get() = docs != null
+
+    /**
+     * Attaches the file [open] reads (named [name]) to the conversation on
+     * screen, with [question] (blank: Domovoi says it has read it, with no
+     * model). The file is copied into app storage and read on the phone; a
+     * PDF on a phone without the PDF text API waits in [AssistantUi.pendingPdf]
+     * for "Ask the home server" ([attachRead]) or [dropPending]. A refusal
+     * lands in [AssistantUi.docProblem].
+     */
+    fun attach(name: String, open: () -> java.io.InputStream, question: String = "") {
+        val store = docs ?: return
+        val ui = _state.value
+        if (ui.replying || ui.reading != null || voice?.active == true) return
+        DocExtract.refusalFor(name)?.let { why ->
+            _state.update { it.copy(docProblem = why) }
+            return
+        }
+        _state.update { it.copy(reading = name, docProblem = null, pendingPdf = null) }
+        scope.launch {
+            val conv = _state.value.conversation
+            var copied: Pair<String, File>? = null
+            try {
+                copied = withContext(io) { store.import(conv.id, name, open(), clock()) }
+                val file = copied.second
+                val reader = pdfText()
+                val extraction = readWithin { DocExtract.extract(file, name, reader) }
+                addDocument(conv.id, copied.first, name, extraction, question)
+            } catch (e: NoPdfTextApi) {
+                val id = copied?.first
+                _state.update { it.copy(reading = null, pendingPdf = id?.let { PendingDocument(conv.id, it, name, question) }) }
+            } catch (e: DocRefused) {
+                copied?.let { (id, _) -> withContext(io) { store.deleteDocument(conv.id, id) } }
+                _state.update { it.copy(reading = null, docProblem = e.message) }
+            } catch (e: CancellationException) {
+                _state.update { it.copy(reading = null) }
+                throw e
+            } catch (e: Throwable) {
+                Log.w(TAG, "a document could not be read", e)
+                copied?.let { (id, _) -> withContext(io) { store.deleteDocument(conv.id, id) } }
+                _state.update { it.copy(reading = null, docProblem = "That document couldn't be read.") }
+            }
+        }
+    }
+
+    /**
+     * A new conversation on screen, with the file [open] reads attached
+     * ("Ask about this document" in Files). Returns its id, already the one
+     * showing, so Chat opens it as the current conversation.
+     */
+    fun startWithDocument(name: String, open: () -> java.io.InputStream): String {
+        if (_state.value.replying) stop()
+        val fresh = conversations.create(clock())
+        settings.currentConversation = null
+        _state.update { it.copy(conversation = fresh, replying = false, thinking = false, reading = null, pendingPdf = null) }
+        attach(name, open)
+        return fresh.id
+    }
+
+    /** The phone's own copy of document [id] of the conversation on screen
+     *  (the page sheet draws a PDF page from it); null when it is gone. */
+    fun docFile(id: String): File? {
+        val c = _state.value.conversation
+        val d = c.documents.firstOrNull { it.id == id } ?: return null
+        return docs?.file(c.id, d.id, d.name)?.takeIf { it.isFile }
+    }
+
+    /** The pending PDF's file, for "Ask the home server" to send. */
+    fun pendingFile(p: PendingDocument): File? = docs?.file(p.conversation, p.id, p.name)?.takeIf { it.isFile }
+
+    /** The pending PDF, read by the home server ([extraction]). */
+    fun attachRead(p: PendingDocument, extraction: DocExtraction) {
+        _state.update { it.copy(pendingPdf = null, reading = p.name) }
+        scope.launch {
+            try {
+                val e = DocExtract.finish(extraction.copy(kind = "pdf", readByServer = true))
+                addDocument(p.conversation, p.id, p.name, e, p.question)
+            } catch (e: DocRefused) {
+                withContext(io) { docs?.deleteDocument(p.conversation, p.id) }
+                _state.update { it.copy(reading = null, docProblem = e.message) }
+            }
+        }
+    }
+
+    /** Drops the pending PDF (and its copy). */
+    fun dropPending() {
+        val p = _state.value.pendingPdf ?: return
+        _state.update { it.copy(pendingPdf = null) }
+        scope.launch { withContext(io) { docs?.deleteDocument(p.conversation, p.id) } }
+    }
+
+    fun closeDocProblem() = _state.update { it.copy(docProblem = null) }
+
+    /** Reads with a time limit (the read runs on [io], so Chat is never
+     *  blocked by it). At the limit the read's thread is interrupted
+     *  (runInterruptible) and the reading loops stop at their next
+     *  [DocCancel.check], so a file that would take longer is really given
+     *  up on, not left reading unseen. */
+    private suspend fun readWithin(read: () -> DocExtraction): DocExtraction =
+        withTimeoutOrNull(docReadTimeoutMs) { runInterruptible(io) { read() } }
+            ?: throw DocRefused(DocCancel.TOO_LONG)
+
+    private suspend fun addDocument(conversation: String, id: String, name: String, e: DocExtraction, question: String) {
+        withContext(io) { docs?.saveParts(conversation, id, e) }
+        docCache["$conversation/$id"] = e
+        val now = clock()
+        val doc = StoredDocument(
+            id = id, name = name, kind = e.kind, pages = e.pages, sheets = e.sheets, words = e.words, chars = e.chars,
+            summary = DocNotes.summaryLine(name, e.kind, e.pages, e.words, e.sheets), notes = e.notes,
+            scannedPages = e.scannedPages, readByServer = e.readByServer, added = now,
+        )
+        val current = _state.value.conversation.takeIf { it.id == conversation }
+            ?: withContext(io) { conversations.load(conversation) }
+            ?: StoredConversation(conversation, now, now)
+        val asked = current.copy(
+            updated = now,
+            documents = current.documents + doc,
+            messages = current.messages + StoredMessage(Speaker.USER, question.trim(), now, documents = listOf(id)),
+        )
+        val showing = _state.value.conversation.id == conversation
+        if (!showing) {
+            _state.update { it.copy(reading = null) }
+            save(asked)
+            return
+        }
+        _state.update { it.copy(conversation = asked, reading = null, replying = true, thinking = true) }
+        replyJob = scope.launch { reply(asked) }
+    }
+
+    private suspend fun docParts(conversation: String, d: StoredDocument): QaDoc {
+        val key = "$conversation/${d.id}"
+        val e = docCache[key] ?: withContext(io) { docs?.loadParts(conversation, d.id) }?.also { docCache[key] = it }
+        return QaDoc(d.name, e?.parts.orEmpty())
+    }
+
+    /**
+     * A turn in a conversation with documents (plan part 3): the passages
+     * that match, the rules, ONE user turn carrying them (nothing from
+     * earlier replies goes to the model), then the app's check. With nothing
+     * that matches, or a summary of a document longer than one pass (D2:
+     * map/reduce), Domovoi answers itself, with no model call.
+     */
+    private suspend fun docReply(asked: StoredConversation, onDelta: (String) -> Unit): StoredConversation {
+        val last = asked.messages.lastOrNull()
+        val question = last?.takeIf { it.fromUser }?.text?.trim().orEmpty()
+        val names = asked.documents.map { it.name }
+        fun own(text: String, mode: String, notes: List<DocNote> = emptyList()): StoredMessage {
+            onDelta(text)
+            return StoredMessage(Speaker.DOMOVOI, text, clock(), docMode = mode, notes = notes)
+        }
+        if (question.isEmpty()) {
+            val attached = last?.documents.orEmpty().mapNotNull { id -> asked.documents.firstOrNull { it.id == id } }
+                .ifEmpty { asked.documents.takeLast(1) }
+            val text = attached.joinToString("\n\n") { DocNotes.attachedReply(it.name, it.kind, it.pages, it.words) }
+            return finishReply(asked, own(text, "attached"))
+        }
+        val qaDocs = asked.documents.map { docParts(asked.id, it) }
+        val previous = asked.messages.dropLast(1).lastOrNull { it.fromUser && it.text.isNotBlank() }?.text
+        val mode = DocQa.chooseMode(question)
+        DocHeadsUp.check(mode, qaDocs, question) // D3: the heads-up card; none in D1
+        if (mode == "summary" && !DocQa.fitsOnePass(qaDocs, DocQa.PHONE_SINGLE_PASS_CHARS)) {
+            return finishReply(asked, own(DocQa.summaryTooLongText(names, asked.documents.sumOf { it.words }), "summary"))
+        }
+        val given = DocQa.retrieve(qaDocs, question, previous, mode = mode, singlePass = DocQa.PHONE_SINGLE_PASS_CHARS)
+        if (given.isEmpty()) {
+            return finishReply(asked, own(DocQa.NOT_FOUND, mode, listOf(DocNote("not_found", DocQa.noteNotFound(names)))))
+        }
+        val backend = settings.backend
+        val llm = try {
+            ensureEngine()
+        } catch (e: CancellationException) {
+            finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), stopped = true))
+            throw e
+        }
+        if (llm == null) {
+            val why = (_state.value.engine as? EngineState.Failed)?.reason ?: "the model did not load"
+            return finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), error = "The model could not start: $why"))
+        }
+        val prompt = DocQa.buildPrompt(question, given, names, mode = mode, previous = previous)
+        val system = Persona.SYSTEM_PROMPT + "\n\n" + prompt.rules
+        val sent = nanos()
+        var firstMs: Long? = null
+        val text = StringBuilder()
+        // The model's words are held back until the app has checked them
+        // (review round 1): nothing unchecked is shown or spoken. Meanwhile
+        // the reply is empty and the chat says it is checking.
+        fun live(): StoredMessage = StoredMessage(Speaker.DOMOVOI, "", clock(), backend = backend.label, docMode = mode)
+        _state.update { it.copy(checking = true, conversation = asked.copy(messages = asked.messages + live())) }
+        try {
+            llm.reply(system, listOf(ChatTurn(fromUser = true, text = prompt.user)), clockLine()).collect { delta ->
+                if (firstMs == null && delta.isNotBlank()) firstMs = (nanos() - sent) / 1_000_000
+                text.append(delta)
+            }
+        } catch (e: CancellationException) {
+            _state.update { it.copy(checking = false) }
+            finishReply(asked, live().copy(stopped = true, firstTextMs = firstMs, stopMs = voice?.lastStopMs))
+            throw e
+        } catch (e: Throwable) {
+            _state.update { it.copy(checking = false) }
+            return finishReply(asked, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
+        }
+        val checked = DocQa.checkReply(text.toString(), given, question, names)
+        _state.update { it.copy(checking = false) }
+        // Only the checked reply is shown, and spoken in a voice turn.
+        onDelta(checked.content)
+        val stats = llm.lastStats()
+        return finishReply(
+            asked,
+            live().copy(
+                text = checked.content,
+                sources = checked.sources.map { src -> src.copy(page = qaDocs.getOrNull(src.doc)?.parts?.getOrNull(src.part)?.page) },
+                notes = checked.notes,
+                firstTextMs = firstMs,
+                tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 },
+            ),
+        )
+    }
+
     companion object {
+        /** A document taking longer than this to read is given up on. */
+        const val DOC_READ_TIMEOUT_MS = 90_000L
+
         /** Unload the model this long after the assistant leaves the screen. */
         const val UNLOAD_AFTER_MS = 5 * 60 * 1000L
+        const val TITLE_DELAY_MS = 1_500L
+        private const val TITLE_POLL_MS = 500L
+        /** The longest name a chat can be given. */
+        const val RENAME_MAX_CHARS = 200
         private const val REPLY_POLL_MS = 2_000L
         private const val STOP_WAIT_MS = 10_000L
 
@@ -976,6 +1422,8 @@ class AssistantController(
                     .getOrNull().orEmpty(),
                 clockStyle = { ClockStyle.system(android.text.format.DateFormat.is24HourFormat(app)) },
                 helpIndex = BundledManual(app)::index,
+                docs = ChatDocStore(File(app.filesDir, "chat-docs/attachments")),
+                pdfText = { PhonePdfText.readerOrNull() },
             ).also { it.attach(app) }
         }
 
@@ -1018,20 +1466,37 @@ fun shouldUnload(level: Int, replying: Boolean, onScreen: Boolean): Boolean = wh
  * answer (the app closed mid-reply), so the turns alternate user, model,
  * user... and end with the user's.
  */
-fun modelHistory(messages: List<StoredMessage>): List<ChatTurn> {
-    val out = mutableListOf<ChatTurn>()
-    for (m in messages) {
+fun modelHistory(messages: List<StoredMessage>): List<ChatTurn> = modelTurns(messages).map { it.turn }
+
+/** A turn the model is given and the index of the message it came from. */
+data class IndexedTurn(val index: Int, val turn: ChatTurn)
+
+/** [modelHistory], each turn with its message's index in [messages] (where
+ *  the window's divider goes). */
+fun modelTurns(messages: List<StoredMessage>): List<IndexedTurn> {
+    val out = mutableListOf<IndexedTurn>()
+    fun lastFromUser() = out.lastOrNull()?.turn?.fromUser == true
+    for ((i, m) in messages.withIndex()) {
         if (m.fromUser) {
             // An unanswered question before this one: drop it.
-            if (out.lastOrNull()?.fromUser == true) out.removeAt(out.lastIndex)
-            if (m.text.isNotBlank()) out += ChatTurn(fromUser = true, text = m.text)
+            if (lastFromUser()) out.removeAt(out.lastIndex)
+            if (m.text.isNotBlank()) out += IndexedTurn(i, ChatTurn(fromUser = true, text = m.text))
         } else if (m.text.isNotBlank()) {
-            if (out.lastOrNull()?.fromUser == true) out += ChatTurn(fromUser = false, text = m.text)
-        } else if (out.lastOrNull()?.fromUser == true) {
+            if (lastFromUser()) out += IndexedTurn(i, ChatTurn(fromUser = false, text = m.text))
+        } else if (lastFromUser()) {
             out.removeAt(out.lastIndex)
         }
     }
     return out
+}
+
+/** The conversation "try again" answers: [c] without its last reply, when
+ *  it ends with a finished reply (words, an error or a stop) to a question;
+ *  null otherwise. */
+fun retryBase(c: StoredConversation): StoredConversation? {
+    val last = c.messages.lastOrNull() ?: return null
+    if (last.fromUser || c.messages.size < 2 || !c.messages[c.messages.size - 2].fromUser) return null
+    return c.copy(messages = c.messages.dropLast(1))
 }
 
 /**

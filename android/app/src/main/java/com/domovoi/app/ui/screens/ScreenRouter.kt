@@ -15,7 +15,7 @@ import com.domovoi.app.ui.screens.audiobooks.AudiobooksScreen
 import com.domovoi.app.ui.screens.audiobooks.SavedBooksScreen
 import com.domovoi.app.ui.screens.calendar.CalendarScreen
 import com.domovoi.app.ui.screens.chat.ChatScreen
-import com.domovoi.app.ui.screens.containers.ContainersScreen
+import com.domovoi.app.ui.screens.containers.HealthPanel
 import com.domovoi.app.ui.screens.files.FilesScreen
 import com.domovoi.app.ui.screens.home.HomeScreen
 import com.domovoi.app.ui.screens.manual.ManualScreen
@@ -73,6 +73,6 @@ fun ScreenRouter(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts 
         Route.Files -> SourceSwitchPage(DevicePage.Files, server = { FilesScreen() }, device = { YourDeviceFiles() })
         Route.Settings -> SettingsScreen(navigate)
         Route.Manual -> ManualScreen(navigate)
-        Route.Containers -> ContainersScreen()
+        Route.Containers -> HealthPanel(navigate)
     }
 }

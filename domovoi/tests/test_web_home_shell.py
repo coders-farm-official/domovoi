@@ -440,9 +440,9 @@ def test_a_shared_screen_drops_the_same_pages_from_the_everything_grid(driven) -
 def test_one_list_decides_what_a_shared_screen_hides() -> None:
     comps = _src("components.jsx")
     assert "const SHARED_SCREEN_HIDDEN = new Set(['people', 'chat', 'files', 'news']);" in comps
-    assert "const items = navItemsFor(manifest, { shared });" in comps
+    assert "const items = navItemsFor(manifest, { shared, ai });" in comps
     home = _src("home.jsx")
-    assert "navItemsFor(manifest, { shared })" in home
+    assert "navItemsFor(manifest, { shared, ai })" in home
     assert "HOME_SHARED_HIDDEN" not in home and "'documents'" not in home
 
 
@@ -455,9 +455,11 @@ def test_the_strip_reads_home_music_videos_chat(driven) -> None:
 
 
 def test_a_sidebar_handed_the_badges_polls_nothing_itself(driven) -> None:
-    assert driven["sidebar_polls_alone"]["gets"] == ["/api/plugins/radio/badge"]
+    # (the household's AI switch rides on the capabilities manifest: the
+    # sidebar asks the shared store for it, which is not a badge poll)
+    assert driven["sidebar_polls_alone"]["gets"] == ["/api/plugins/radio/badge", "/api/capabilities"]
     given = driven["sidebar_given_badges"]
-    assert given["gets"] == []
+    assert given["gets"] == ["/api/capabilities"]
     assert "4" in given["text"]
 
 

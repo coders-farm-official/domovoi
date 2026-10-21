@@ -594,7 +594,7 @@ def test_the_pair_prompt_says_a_wrong_token_does_not_match_and_stays(notice):
     o = notice["pair_refused"]
     assert o["closed"] == 0
     assert any("that token doesn't match this server" in t for t in o["texts"])
-    assert any("Settings → Devices → Household token on this server's dashboard" in t for t in o["texts"])
+    assert any("Settings → Phones & browsers → Household token on this server's dashboard" in t for t in o["texts"])
 
 
 def test_the_pair_prompt_counts_a_wait_down_and_holds_the_button(notice):

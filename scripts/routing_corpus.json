@@ -848,6 +848,95 @@
       "note": "2026-10-15: a resume of the book in progress; it used to reach music's catch-all as 'my audiobook'"
     },
     {
+      "utterance": "print my cover letter",
+      "handler": "printing",
+      "path": "fast",
+      "tags": ["action", "printing"],
+      "note": "2026-10-21: printing (band 222); confirms before printing"
+    },
+    {
+      "utterance": "print two copies of the lease, double-sided",
+      "handler": "printing",
+      "path": "fast",
+      "tags": ["action", "printing"],
+      "note": "2026-10-21: copies and sides read from the words"
+    },
+    {
+      "utterance": "how much ink is left",
+      "handler": "printing",
+      "path": "fast",
+      "tags": ["action", "printing"],
+      "note": "2026-10-21: 'how much' is the calculator's bait; ink is printing's"
+    },
+    {
+      "utterance": "is the printer out of paper",
+      "handler": "printing",
+      "path": "fast",
+      "tags": ["action", "printing"],
+      "note": "2026-10-21: never promises there IS paper"
+    },
+    {
+      "utterance": "set up the printer",
+      "handler": "printing",
+      "path": "fast",
+      "tags": ["action", "printing"],
+      "note": "2026-10-21: a 3-second look, then 'Add it?'"
+    },
+    {
+      "utterance": "scan this to documents",
+      "handler": "printing",
+      "path": "fast",
+      "tags": ["action", "printing"],
+      "note": "2026-10-21: asks whether the page is on the glass"
+    },
+    {
+      "utterance": "stop printing",
+      "handler": "printing",
+      "path": "fast",
+      "tags": ["action", "printing"],
+      "note": "2026-10-21: cancels this room's job"
+    },
+    {
+      "utterance": "print a joke",
+      "handler": "printing",
+      "path": "fast",
+      "tags": ["action", "printing"],
+      "note": "2026-10-21: refused: only documents in Documents print"
+    },
+    {
+      "utterance": "print the forecast",
+      "handler": "printing",
+      "path": "fast",
+      "tags": ["action", "printing"],
+      "note": "2026-10-21: refused the same way, never a weather answer"
+    },
+    {
+      "utterance": "scan for new music",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "printing"],
+      "note": "2026-10-21: music's rescan, excluded from printing's 'scan'"
+    },
+    {
+      "utterance": "how much is 12 times 4",
+      "handler": "calculator",
+      "path": "fast",
+      "tags": ["action", "printing"],
+      "note": "2026-10-21: the calculator keeps 'how much is'"
+    },
+    {
+      "utterance": "who invented the printing press",
+      "handler": null,
+      "tags": ["qa", "printing"],
+      "note": "2026-10-21: a history question, not a print job"
+    },
+    {
+      "utterance": "the paper says it will rain tomorrow",
+      "handler": null,
+      "tags": ["qa", "printing"],
+      "note": "2026-10-21: 'paper' in passing is not the printer"
+    },
+    {
       "utterance": "how do I add a room",
       "handler": "help_desk",
       "path": "fast",

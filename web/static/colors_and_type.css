@@ -282,7 +282,7 @@
 /* Tell the browser which theme is showing, so what it draws itself
    follows it: form controls, scrollbars, the date picker, and above all
    the default text colour of a <button> or <input> that sets none (black
-   on the dark card: Settings -> Satellites' "prepare satellite media"
+   on the dark card: Settings -> Rooms' "prepare satellite media"
    title, 1.15:1, 2026-10-17). */
 :root { color-scheme: light; }
 :root[data-theme='dark'] { color-scheme: dark; }

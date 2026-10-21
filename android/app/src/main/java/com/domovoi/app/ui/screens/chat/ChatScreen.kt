@@ -13,6 +13,8 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -127,6 +129,11 @@ internal data class ThreadRow(
     val updated_at: String? = null,
     val message_count: Int = 0,
     val last_snippet: String? = null,
+    val archived: Boolean = false,
+    /** A person named it (V034): the model's title never replaces it. */
+    val title_by_user: Boolean = false,
+    /** A search hit (`?q=`): the words around the match in a message. */
+    val match_snippet: String? = null,
 )
 
 @Serializable
@@ -155,10 +162,23 @@ internal data class MessageRow(
     val speaker_confidence: Double? = null,
     /** The match was clear enough to draw the speaker marker at full strength. */
     val speaker_confident: Boolean = false,
+    /** "Try again" may replace this reply (the chat model's own reply to
+     *  a typed message, V034); false for a spoken turn's or the help
+     *  desk's, and from a server that has no try again. */
+    val retryable: Boolean = false,
+    /** Documents attached with a user row (documents plan, D1). */
+    val documents: List<ServerDocument>? = null,
+    /** How a reply answered about the chat's documents: sources and notes. */
+    val doc: ServerDocReply? = null,
 )
 
 @Serializable
-private data class MessageList(val messages: List<MessageRow> = emptyList())
+internal data class MessageList(val messages: List<MessageRow> = emptyList())
+
+/** Documents per message the backend accepts (documents plan D1). */
+internal const val MAX_CHAT_DOCUMENTS = 4
+
+internal const val CHAT_DOC_CAP_TOAST = "up to $MAX_CHAT_DOCUMENTS documents per message"
 
 /** Images per message the backend accepts (web/static/chat.jsx: "up to 4 images per message"). */
 internal const val MAX_CHAT_IMAGES = 4
@@ -178,6 +198,26 @@ internal fun attachBudget(attached: Int, picked: Int, cap: Int = MAX_CHAT_IMAGES
 }
 
 /** Mutable transcript entry (the streaming assistant bubble updates live). */
+/**
+ * The server's kept row for a reply that streamed into [this]: its id,
+ * time, model, figures, error and sources, and its TEXT. The kept text
+ * replaces what streamed: for a reply about documents the server checks
+ * the model's words first (citations of passages it never gave are taken
+ * out, "couldn't find" is said exactly), so the row, not the stream, is
+ * what the reply says.
+ */
+internal fun LiveMessage.finishWith(row: MessageRow) {
+    id = row.id.takeIf { it > 0 }
+    createdAt = row.created_at
+    model = row.model ?: model
+    stats = row.stats
+    row.error?.let { error = it }
+    row.stats?.error_code?.let { errorCode = it }
+    doc = row.doc
+    retryable = row.retryable
+    if (row.error == null) content = row.content
+}
+
 internal class LiveMessage(
     val role: String,
     content: String,
@@ -195,8 +235,14 @@ internal class LiveMessage(
     speakerPersonId: Long? = null,
     speakerName: String? = null,
     speakerConfident: Boolean = false,
+    retryable: Boolean = false,
+    /** Documents attached with a user message. */
+    val documents: List<ServerDocument> = emptyList(),
+    doc: ServerDocReply? = null,
 ) {
     var content by mutableStateOf(content)
+    /** A reply's sources and notes about the chat's documents. */
+    var doc by mutableStateOf(doc)
     var error by mutableStateOf(error)
     /** The server's code for [error] (`stats.error_code`, or the live
      *  stream's `error` event); null for an error this phone made. */
@@ -210,6 +256,7 @@ internal class LiveMessage(
     var speakerPersonId by mutableStateOf(speakerPersonId)
     var speakerName by mutableStateOf(speakerName)
     var speakerConfident by mutableStateOf(speakerConfident)
+    var retryable by mutableStateOf(retryable)
     /** Measured on this phone while a reply streams (details dialog only). */
     var sentAtMs: Long? = null
     var firstWordsAtMs: Long? = null
@@ -237,12 +284,16 @@ private suspend fun sendStreaming(
     threadId: Long,
     content: String,
     images: List<ImageRef>,
+    documents: List<ServerDocument>,
     onDelta: (String) -> Unit,
     /** (detail, code, model): the server's plain sentence and its code. */
     onError: (String, String?, String?) -> Unit,
     onDone: (MessageRow) -> Unit = {},
+    /** "Try again" (`POST .../retry`): no body, a new reply to the last
+     *  question in place of the last reply. */
+    retry: Boolean = false,
 ) = withContext(Dispatchers.IO) {
-    val body = buildJsonObject {
+    val body = (if (retry) buildJsonObject {} else buildJsonObject {
         put("content", content)
         // Which install sent it, for the message's details (V017).
         put("device_id", app.prefs.deviceId)
@@ -251,9 +302,13 @@ private suspend fun sendStreaming(
                 add(buildJsonObject { put("token", img.token); put("name", img.name) })
             }
         })
-    }.toString().toRequestBody("application/json".toMediaType())
+        if (documents.isNotEmpty()) {
+            put("documents", buildJsonArray { documents.forEach { d -> add(buildJsonObject { put("token", d.token) }) } })
+        }
+    }).toString().toRequestBody("application/json".toMediaType())
+    val path = if (retry) "/api/chat/threads/$threadId/retry" else "/api/chat/threads/$threadId/messages"
     val req = Request.Builder()
-        .url(app.api.absolute("/api/chat/threads/$threadId/messages"))
+        .url(app.api.absolute(path))
         // SSE, so it builds its own call instead of using ApiClient.raw()
         // — and sends the same preflight-forcing header (WEB-6).
         .header("X-Requested-With", "DomovoiApp")
@@ -261,7 +316,10 @@ private suspend fun sendStreaming(
         .build()
     app.api.http.newCall(req).execute().use { resp ->
         if (!resp.isSuccessful) {
-            onError("${resp.code} ${resp.message}", null, null)
+            // Plain words for the household's AI features being off (a 409
+            // ai-off), not "409 Conflict" or an empty reply.
+            val line = sendFailureLine(resp.code, resp.message, resp.header(com.domovoi.app.net.REFUSAL_HEADER), resp.body?.string())
+            withContext(Dispatchers.Main) { onError(line, null, null) }
             return@use
         }
         val source = resp.body?.source() ?: return@use
@@ -311,7 +369,14 @@ private suspend fun sendStreaming(
  * empty thread in the household's list. [onCreated] hears of the thread made.
  */
 @Composable
-internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (ThreadRow) -> Unit = {}) {
+internal fun ConversationPane(
+    thread: ThreadRow?,
+    frame: ChatFrame,
+    /** The thread's title as the list has it now (the model's title comes
+     *  after the first reply); null: not known there yet. */
+    titleOf: (Long?) -> String? = { null },
+    onCreated: (ThreadRow) -> Unit = {},
+) {
     val app = LocalApp.current
     val toast = LocalToast.current
     val context = LocalContext.current
@@ -329,6 +394,12 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
     val transcript = remember { mutableStateListOf<LiveMessage>() }
     var draft by remember { mutableStateOf("") }
     val attachments = remember { mutableStateListOf<ImageRef>() }
+    // Documents for the next message (documents plan, D1): uploaded and
+    // read on the home server as they are picked.
+    val docAttachments = remember { mutableStateListOf<ServerDocument>() }
+    var docUploading by remember { mutableStateOf<String?>(null) }
+    var attachMenu by remember { mutableStateOf(false) }
+    var openSource by remember { mutableStateOf<SourceView?>(null) }
     var sending by remember { mutableStateOf(false) }
     // What's installed: when the vision model isn't, the paperclip explains
     // that instead of opening the picker (web chat.jsx parity).
@@ -368,11 +439,11 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
     // server's replies too): the report sheet, over the conversation.
     var reporting by remember { mutableStateOf<ReplyReport?>(null) }
 
-    // A thread opened from the list: its messages. A new chat has none.
-    LaunchedEffect(thread?.id) {
-        if (thread == null) return@LaunchedEffect
+    // A thread's messages, read from the server (opening it, and after
+    // "try again").
+    suspend fun loadMessages(threadId: Long) {
         runCatching {
-            app.api.get("/api/chat/threads/${thread.id}/messages").decode<MessageList>().messages
+            app.api.get("/api/chat/threads/$threadId/messages").decode<MessageList>().messages
         }.onSuccess { rows ->
             transcript.clear()
             rows.forEach {
@@ -390,10 +461,17 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
                         speakerPersonId = it.speaker_person_id,
                         speakerName = it.speaker_name,
                         speakerConfident = it.speaker_confident,
+                        retryable = it.retryable,
+                        documents = it.documents.orEmpty(),
+                        doc = it.doc,
                     ),
                 )
             }
         }
+    }
+    // A thread opened from the list: its messages. A new chat has none.
+    LaunchedEffect(thread?.id) {
+        if (thread != null) loadMessages(thread.id)
     }
     // Keep the newest message pinned to the bottom. Two triggers, because the
     // list loses its anchor for two different reasons:
@@ -518,6 +596,33 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
         }
     }
 
+    val docPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val name = pickedName(context, uri)
+        com.domovoi.app.assistant.docs.DocExtract.refusalFor(name)?.let { uploadNote = it; return@rememberLauncherForActivityResult }
+        if (docAttachments.size >= MAX_CHAT_DOCUMENTS) { toast(CHAT_DOC_CAP_TOAST); return@rememberLauncherForActivityResult }
+        docUploading = name
+        uploadNote = null
+        scope.launch {
+            runCatching {
+                val tmp = withContext(Dispatchers.IO) {
+                    val f = java.io.File(context.cacheDir, "chat-docs/upload-${System.nanoTime()}")
+                    f.parentFile?.mkdirs()
+                    context.contentResolver.openInputStream(uri)?.use { input -> f.outputStream().use { input.copyTo(it) } }
+                        ?: throw java.io.IOException("can't read $name")
+                    f
+                }
+                try {
+                    uploadServerDocument(app, tmp, name)
+                } finally {
+                    withContext(Dispatchers.IO) { tmp.delete() }
+                }
+            }.onSuccess { docAttachments.add(it) }
+                .onFailure { uploadNote = docFailureText("attach", it) }
+            docUploading = null
+        }
+    }
+
     // The report for the reply at [i], or null when it is not a finished
     // reply with words (ReplyReport.draftServer).
     fun reportableAt(i: Int): ReplyReport? {
@@ -538,17 +643,19 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
 
     fun send() {
         val content = draft.trim()
-        if (content.isBlank() || sending) return
+        if ((content.isBlank() && docAttachments.isEmpty()) || sending || docUploading != null) return
         val images = attachments.toList()
+        val docs = docAttachments.toList()
         draft = ""
         attachments.clear()
+        docAttachments.clear()
         sending = true
         following = true
         frame.onSent()
         // Stamped now; the server's own row (with its id) is not sent back
         // for the user turn, and the two clocks agree to the second on a LAN.
         transcript.add(
-            LiveMessage("user", content, images, createdAt = Instant.now().toString(), device = "this phone"),
+            LiveMessage("user", content, images, createdAt = Instant.now().toString(), device = "this phone", documents = docs),
         )
         val live = LiveMessage("assistant", "", pending = true)
         live.sentAtMs = System.currentTimeMillis()
@@ -557,7 +664,7 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
             runCatching {
                 val target = ensureThread()
                 sendStreaming(
-                    app, target.id, content, images,
+                    app, target.id, content, images, docs,
                     onDelta = {
                         if (live.firstWordsAtMs == null) live.firstWordsAtMs = System.currentTimeMillis()
                         live.content += it
@@ -567,14 +674,7 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
                         live.errorCode = code
                         if (model != null) live.model = model
                     },
-                    onDone = { row ->
-                        live.id = row.id.takeIf { it > 0 }
-                        live.createdAt = row.created_at
-                        live.model = row.model ?: live.model
-                        live.stats = row.stats
-                        row.error?.let { live.error = it }
-                        row.stats?.error_code?.let { live.errorCode = it }
-                    },
+                    onDone = { row -> live.finishWith(row) },
                 )
             }.onFailure { live.error = failureText("send", it) }
             // Refused for want of the vision model: re-read what's installed,
@@ -584,6 +684,57 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
             if (live.createdAt == null) live.createdAt = Instant.now().toString()
             live.pending = false
             sending = false
+        }
+    }
+
+    // "Try again": the last reply makes way for a new one to the same
+    // question; the server swaps them once the new one is written, and the
+    // thread is read back after (a failed retry writes nothing there, so the
+    // old reply comes back, and why is said).
+    fun retry() {
+        val target = current ?: return
+        if (sending || !canRetry(transcript)) return
+        sending = true
+        following = true
+        val old = transcript.removeAt(transcript.lastIndex)
+        val live = LiveMessage("assistant", "", pending = true)
+        live.sentAtMs = System.currentTimeMillis()
+        transcript.add(live)
+        scope.launch {
+            runCatching {
+                sendStreaming(
+                    app, target.id, "", emptyList(), emptyList(),
+                    onDelta = {
+                        if (live.firstWordsAtMs == null) live.firstWordsAtMs = System.currentTimeMillis()
+                        live.content += it
+                    },
+                    onError = { detail, code, model ->
+                        live.error = detail
+                        live.errorCode = code
+                        if (model != null) live.model = model
+                    },
+                    retry = true,
+                )
+            }.onFailure {
+                // Nothing reached the server: the old reply is still the one.
+                transcript.remove(live)
+                transcript.add(old)
+                toast(failureText("try again", it))
+            }
+            live.pending = false
+            sending = false
+            live.error?.let { toast("couldn't try again: $it") }
+            loadMessages(target.id)
+        }
+    }
+
+    // A chat started from the list's "Message Domovoi…" box: its first
+    // message goes out as the chat opens.
+    LaunchedEffect(Unit) {
+        val first = frame.firstMessage?.trim().orEmpty()
+        if (first.isNotEmpty() && thread == null && transcript.isEmpty()) {
+            draft = first
+            send()
         }
     }
 
@@ -597,10 +748,18 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
         return
     }
     val threadId = open?.id ?: 0L
+    val title = titleOf(open?.id) ?: open?.title ?: transcript.firstOrNull { it.role == "user" }
+        ?.let { com.domovoi.app.assistant.ChatTitles.firstWords(it.content) } ?: NEW_CHAT
+    // Where the newest reply's view of the thread began, when it didn't
+    // see all of it: the quiet divider goes above that message.
+    val windowAt = windowDividerIndex(transcript.map { it.id }, transcript.lastOrNull { it.role != "user" && it.stats != null }?.stats?.window_from_id)
+    val shareChat: (() -> Unit)? = if (transcript.isEmpty() || sending) null else {
+        { shareText(context, title, serverChatText(title, transcript.map { it.asRow() })) }
+    }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         ChatPaneGutter()
-        ThreadTitleRow(open?.title ?: NEW_CHAT, frame)
+        ThreadTitleRow(title, frame, shareChat)
 
         Box(Modifier.weight(1f).fillMaxWidth().then(rememberFitStretch(listState))) {
             LazyColumn(
@@ -609,8 +768,14 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 itemsIndexed(transcript) { i, m ->
+                    if (i == windowAt) WindowDivider()
                     // The draft is made at the tap, from the transcript then.
-                    MessageBubble(m, threadId, onReport = if (canReport(m)) ({ reporting = reportableAt(i) }) else null)
+                    MessageBubble(
+                        m, threadId,
+                        onReport = if (canReport(m)) ({ reporting = reportableAt(i) }) else null,
+                        onSource = { openSource = it },
+                        onRetry = if (i == transcript.lastIndex && !sending && canRetry(transcript)) ({ retry() }) else null,
+                    )
                 }
             }
         }
@@ -649,6 +814,20 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
             PictureNote(models.data?.vision_model, onClose = { pictureNote = false })
         }
         uploadNote?.let { UploadNote(it, onClose = { uploadNote = null }) }
+        docUploading?.let { ReadingLine(it) }
+        if (docAttachments.isNotEmpty()) {
+            Column(Modifier.padding(top = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                docAttachments.forEach { d ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        DocMarker(d.summary.ifEmpty { d.name }, d.notes.map { it.text }, Modifier.weight(1f, fill = false))
+                        IconButton(onClick = { docAttachments.remove(d) }) {
+                            Icon(Icons.Outlined.Close, contentDescription = "remove ${d.name}", tint = Domovoi.colors.fgMuted)
+                        }
+                    }
+                }
+            }
+        }
+        openSource?.let { SourceSheet(it, onClose = { openSource = null }) }
         // A new chat with nothing said yet: the place can still change.
         if (open == null && transcript.isEmpty() && !sending) frame.picker?.invoke()
 
@@ -658,20 +837,40 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             val action = attachAction(models.data, attachments.size)
-            IconButton(onClick = {
-                when (action) {
-                    // Explain, and read again in case an admin has since
-                    // installed it (the note goes once the read says so).
-                    AttachAction.ExplainVision -> { pictureNote = true; models.refresh() }
-                    AttachAction.AtCap -> toast(CHAT_IMAGE_CAP_TOAST)
-                    AttachAction.Pick -> { pictureNote = false; uploadNote = null; picker.launch("image/*") }
+            // The paperclip: a picture (the vision model reads it) or a
+            // document (read on the home server, documents plan D1).
+            Box {
+                IconButton(onClick = { attachMenu = true }) {
+                    Icon(Icons.Outlined.AttachFile, contentDescription = "attach", tint = Domovoi.colors.fgMuted)
                 }
-            }) {
-                Icon(
-                    Icons.Outlined.AttachFile,
-                    contentDescription = if (visionMissing) "attach pictures: the vision model isn't installed" else "attach image",
-                    tint = if (action == AttachAction.Pick) Domovoi.colors.fgMuted else Domovoi.colors.fgFaint,
-                )
+                DropdownMenu(expanded = attachMenu, onDismissRequest = { attachMenu = false }, containerColor = Domovoi.colors.raised) {
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                if (visionMissing) "a picture (the vision model isn't installed)" else "a picture",
+                                color = if (action == AttachAction.Pick) Domovoi.colors.fg else Domovoi.colors.fgMuted,
+                            )
+                        },
+                        onClick = {
+                            attachMenu = false
+                            when (action) {
+                                // Explain, and read again in case an admin has since
+                                // installed it (the note goes once the read says so).
+                                AttachAction.ExplainVision -> { pictureNote = true; models.refresh() }
+                                AttachAction.AtCap -> toast(CHAT_IMAGE_CAP_TOAST)
+                                AttachAction.Pick -> { pictureNote = false; uploadNote = null; picker.launch("image/*") }
+                            }
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("a document (PDF, Word, sheet, text)") },
+                        enabled = docUploading == null,
+                        onClick = {
+                            attachMenu = false
+                            docPicker.launch(com.domovoi.app.assistant.docs.DocExtract.PICKER_TYPES + "*/*")
+                        },
+                    )
+                }
             }
             OutlinedTextField(
                 value = draft, onValueChange = { draft = it },
@@ -680,7 +879,7 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
                 maxLines = 4,
             )
             // Nothing typed: the mic, which opens the hold-to-talk view.
-            if (draft.isBlank() && attachments.isEmpty()) {
+            if (draft.isBlank() && attachments.isEmpty() && docAttachments.isEmpty()) {
                 IconButton(onClick = openVoice, enabled = !sending) {
                     Icon(
                         Icons.Outlined.Mic, contentDescription = "talk",
@@ -688,10 +887,11 @@ internal fun ConversationPane(thread: ThreadRow?, frame: ChatFrame, onCreated: (
                     )
                 }
             } else {
-                IconButton(onClick = { send() }, enabled = draft.isNotBlank() && !sending) {
+                val canSend = (draft.isNotBlank() || docAttachments.isNotEmpty()) && !sending && docUploading == null
+                IconButton(onClick = { send() }, enabled = canSend) {
                     Icon(
                         Icons.AutoMirrored.Filled.Send, contentDescription = "send",
-                        tint = if (draft.isNotBlank() && !sending) Domovoi.colors.brand else Domovoi.colors.fgFaint,
+                        tint = if (canSend) Domovoi.colors.brand else Domovoi.colors.fgFaint,
                     )
                 }
             }
@@ -773,10 +973,24 @@ private fun rememberFitStretch(listState: LazyListState): Modifier {
  * than invalidating the pane, composer and caret included.
  */
 @Composable
-private fun ThreadTitleRow(title: String, frame: ChatFrame) {
+private fun ThreadTitleRow(title: String, frame: ChatFrame, onShare: (() -> Unit)?) {
     if (keyboardCrowdsTheWindow()) return
-    // Chat's header in every place (ChatHome.kt): back, the title, the chip.
-    ChatHeader(title, frame.chip, ChatPlaceKind.Server, frame.onBack)
+    // Chat's header in every place (ChatHome.kt): back, the title, the chip,
+    // and sharing the whole chat as text.
+    ChatHeader(title, frame.chip, ChatPlaceKind.Server, frame.onBack, actions = onShare?.let { share ->
+        { ShareChatButton(share) }
+    })
+}
+
+/** A message as the share text reads it. */
+private fun LiveMessage.asRow() = MessageRow(role = role, content = content, error = error, speaker_name = speakerName)
+
+/** "Try again" is offered on the last message when it is a finished reply
+ *  to a question. */
+internal fun canRetry(transcript: List<LiveMessage>): Boolean {
+    val last = transcript.lastOrNull() ?: return false
+    val before = transcript.getOrNull(transcript.size - 2) ?: return false
+    return last.role != "user" && !last.pending && before.role == "user" && last.retryable
 }
 
 /**
@@ -835,8 +1049,15 @@ private fun appVersion(context: android.content.Context): String =
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-internal fun MessageBubble(m: LiveMessage, threadId: Long, onReport: (() -> Unit)? = null) {
+internal fun MessageBubble(
+    m: LiveMessage,
+    threadId: Long,
+    onReport: (() -> Unit)? = null,
+    onRetry: (() -> Unit)? = null,
+    onSource: (SourceView) -> Unit = {},
+) {
     val app = LocalApp.current
+    val context = LocalContext.current
     val toast = LocalToast.current
     val clipboard = LocalClipboardManager.current
     val haptics = LocalHapticFeedback.current
@@ -865,6 +1086,9 @@ internal fun MessageBubble(m: LiveMessage, threadId: Long, onReport: (() -> Unit
                 }
             }
         }
+        // A document attached with this message: its marker line.
+        m.documents.forEach { d -> DocMarker(d.summary.ifEmpty { d.name }, d.notes.map { it.text }, Modifier.padding(bottom = 4.dp)) }
+        if (isUser && m.content.isBlank() && m.documents.isNotEmpty()) return@Column
         // Long-press: copy / details. The menu anchors to the bubble.
         Box {
             Box(
@@ -896,6 +1120,10 @@ internal fun MessageBubble(m: LiveMessage, threadId: Long, onReport: (() -> Unit
                         )
                     } else {
                         MarkdownText(m.content, trailing = cursor)
+                        if (!m.pending) {
+                            val sources = serverSources(m.doc) { token -> { serverDocumentFile(app, context.cacheDir, token) } }
+                            ReplyDocs(m.doc?.notes.orEmpty().map { it.text }, sources, onSource)
+                        }
                     }
                     chatErrorView(m.error, m.errorCode, m.model)?.let { err ->
                         if (err.code != null) {
@@ -922,6 +1150,19 @@ internal fun MessageBubble(m: LiveMessage, threadId: Long, onReport: (() -> Unit
                     enabled = m.content.isNotEmpty(),
                     onClick = { menu = false; copy() },
                 )
+                DropdownMenuItem(
+                    text = { Text(ACTION_SHARE) },
+                    leadingIcon = { Icon(Icons.Outlined.Share, contentDescription = null) },
+                    enabled = m.content.isNotEmpty(),
+                    onClick = { menu = false; shareText(context, "Domovoi", m.content) },
+                )
+                if (onRetry != null) {
+                    DropdownMenuItem(
+                        text = { Text(ACTION_TRY_AGAIN) },
+                        leadingIcon = { Icon(Icons.Outlined.Refresh, contentDescription = null) },
+                        onClick = { menu = false; onRetry() },
+                    )
+                }
                 DropdownMenuItem(
                     text = { Text("details") },
                     leadingIcon = { Icon(Icons.Outlined.Info, contentDescription = null) },

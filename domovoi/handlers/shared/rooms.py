@@ -12,7 +12,7 @@ music:
   rooms like any other; the app's chat mic (``phone-…`` ids) is not.
 * :func:`read_place` — what the words after "in"/"on"/... name: this room
   ("in here"), every room ("everywhere", "the whole house"), one of the
-  house's rooms by its id or its label in Settings → Satellites, or a word
+  house's rooms by its id or its label in Settings → Rooms, or a word
   that sounds like a room the house doesn't have ("in the attic").
 
 Matching is by the room's id and label with the usual slips forgiven —
@@ -105,7 +105,7 @@ def _order_free_key(phrase: str) -> str:
 
 def spoken_room(room_id: str, label: str | None = None) -> str:
     """How a reply says a room: "the garage", "the living room",
-    "Kamron's office" — its label from Settings → Satellites when it has
+    "Kamron's office" — its label from Settings → Rooms when it has
     one, else its id with the underscores read as spaces."""
     name = " ".join((label or "").split()) or " ".join(
         room_id.replace("_", " ").replace("-", " ").split()

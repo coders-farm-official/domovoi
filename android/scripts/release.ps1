@@ -283,7 +283,7 @@ function Publish-Release([string]$ReleaseCommit, [string]$BuiltFrom, [bool]$Exis
         $notes = @(
             "Domovoi $versionName. The Android app (versionCode $versionCode), built from $($manifest.commit); the release is tagged at $ReleaseCommit, which adds android/release.json naming these files. scripts/release/finish-release adds the Windows Setup, SHA256SUMS for every file and the release notes.",
             '',
-            'Install the app from your own Domovoi server: on the dashboard, Settings -> Satellites -> add a spare device (for a room) or Settings -> Devices -> get the Domovoi app. The server checks these files against android/release.json before it hands them out.',
+            'Install the app from your own Domovoi server: on the dashboard, Settings -> Rooms -> add a spare device (for a room) or Settings -> Phones & browsers -> get the Domovoi app. The server checks these files against android/release.json before it hands them out.',
             '',
             '| file | for | SHA-256 |',
             '|---|---|---|'
@@ -499,6 +499,16 @@ if ($prevCert -and $prevCert -ne $cert) {
     Die "this key ($cert) is not the last release's ($prevCert): phones refuse an update signed by another key"
 }
 Say "signed by certificate SHA-256 $cert"
+
+# The R8 mapping of the build these APKs came from (the release build is
+# minified: android\app\build.gradle.kts): what turns a stack trace from them
+# back into class and method names (R8's retrace). Kept beside the signed
+# files for the release's records; not attached to the GitHub release (a
+# household has no use for it, and the same commit builds the same mapping).
+$mapping = 'android\app\build\outputs\mapping\release\mapping.txt'
+if (-not (Test-Path -LiteralPath $mapping)) { Die "no $mapping`: the release build writes it (build again: drop -SkipBuild)" }
+Copy-Item -LiteralPath $mapping -Destination (Join-Path $signed "domovoi-$versionName-mapping.txt")
+Say "kept the R8 mapping as $signed\domovoi-$versionName-mapping.txt"
 
 $staged = Join-Path $signed 'release.json'
 $published = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')

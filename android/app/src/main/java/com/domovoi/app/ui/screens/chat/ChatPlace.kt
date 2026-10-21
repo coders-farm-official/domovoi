@@ -29,6 +29,10 @@ enum class ChatPlaceKind(val key: String) {
     }
 }
 
+/** A chat to open from outside Chat ("Ask about this document" in Files):
+ *  [place] is a [ChatPlaceKind.key], [id] that place's own chat id. */
+data class ChatOpenRequest(val place: String, val id: String)
+
 /** The chips, lowercase like the rest of the chrome (docs/design/README.md). */
 const val CHIP_PHONE = "on this phone"
 const val CHIP_SERVER = "on home server"
@@ -71,12 +75,76 @@ data class ChatRow(
     /** Last activity, epoch ms (0 when unknown). */
     val updatedMs: Long,
     val messages: Int,
+    /** In the "archived" view, not the main list. */
+    val archived: Boolean = false,
+    /** Pinned on this phone ([pinKey]); the list sets it from Prefs. */
+    val pinned: Boolean = false,
+    /** A search hit: the words around the match (null: the title matched,
+     *  or this is no search). */
+    val match: String? = null,
 )
 
 /** Both places' chats in one list, the most recently used first; on a tie
  *  the order the lists came in holds (stable sort). */
 fun mergeChats(lists: List<List<ChatRow>>): List<ChatRow> =
     lists.flatten().sortedByDescending { it.updatedMs }
+
+/**
+ * The history list's order (assistant plan part 7): the chats pinned on
+ * this phone first, then the rest, each by last use, newest first.
+ * Archived chats are left out (they have their own view).
+ */
+fun orderChats(rows: List<ChatRow>): List<ChatRow> =
+    rows.filter { !it.archived }.sortedWith(compareByDescending<ChatRow> { it.pinned }.thenByDescending { it.updatedMs })
+
+/** The "archived" view: the archived chats, newest first. */
+fun archivedChats(rows: List<ChatRow>): List<ChatRow> =
+    rows.filter { it.archived }.sortedByDescending { it.updatedMs }
+
+/**
+ * How Prefs keys a pin: a phone chat by its id; a home-server chat by its
+ * server ([server], the normalised address) and thread id, so pins on two
+ * servers never mix. Pins stay on this phone (owner, 2026-10-20): one
+ * person's pins don't move the household's list.
+ */
+fun pinKey(row: ChatRow, server: String): String = when (row.place) {
+    ChatPlaceKind.Phone -> "phone:${row.id}"
+    ChatPlaceKind.Server -> "server:$server#${row.id}"
+}
+
+/** [rows] with [ChatRow.pinned] set from [pins] ([pinKey]). */
+fun withPins(rows: List<ChatRow>, pins: Set<String>, server: String): List<ChatRow> =
+    rows.map { it.copy(pinned = pinKey(it, server) in pins) }
+
+/** What a chat's long-press menu offers, in order. */
+internal fun rowActions(row: ChatRow): List<String> = listOf(
+    ACTION_RENAME,
+    if (row.pinned) ACTION_UNPIN else ACTION_PIN,
+    if (row.archived) ACTION_UNARCHIVE else ACTION_ARCHIVE,
+    ACTION_SHARE,
+    ACTION_DELETE,
+)
+
+internal const val ACTION_RENAME = "rename"
+internal const val ACTION_PIN = "pin"
+internal const val ACTION_UNPIN = "unpin"
+internal const val ACTION_ARCHIVE = "archive"
+internal const val ACTION_UNARCHIVE = "move back to chats"
+internal const val ACTION_SHARE = "share"
+internal const val ACTION_DELETE = "delete"
+
+/** The quiet divider where the model's view of a chat begins (assistant
+ *  plan part 7: the honest window note). */
+const val WINDOW_NOTE = "earlier messages are beyond what Domovoi can keep in mind"
+
+/** The confirmation for deleting a home-server chat: it is the household's. */
+const val SERVER_DELETE_NOTE = "Deletes it for everyone in the house."
+
+/** What the list says when a search couldn't run in some place. */
+const val SEARCH_FAILED = "couldn't search"
+
+/** Chat's search field. */
+const val SEARCH_HINT = "search chats"
 
 /** What decides which places Chat offers, apart from Android. */
 data class PlaceFacts(
@@ -165,6 +233,9 @@ class ChatFrame(
     val picker: (@Composable () -> Unit)?,
     /** A message went out in this place: it becomes the last used. */
     val onSent: () -> Unit,
+    /** A new chat started from the list's "Message Domovoi…" box: this is
+     *  sent as its first message as soon as the chat opens. */
+    val firstMessage: String? = null,
 )
 
 /**
@@ -184,6 +255,10 @@ interface ChatPlace {
      *  it isn't known. Decides the first default place ([defaultPlace]). */
     val ready: Boolean?
 
+    /** The list has been read once (Chat opens a new chat at once only
+     *  when it knows there are none). */
+    val loaded: Boolean get() = true
+
     /** Reads the list again (a conversation closed, or a delete). */
     fun refresh()
 
@@ -192,6 +267,21 @@ interface ChatPlace {
 
     /** Deletes [row], after the list's confirmation. */
     fun delete(row: ChatRow)
+
+    /** Names [row] [title]: the person's name, which a generated title
+     *  never replaces. */
+    fun rename(row: ChatRow, title: String) {}
+
+    /** Moves [row] to the "archived" view, or back. */
+    fun setArchived(row: ChatRow, archived: Boolean) {}
+
+    /** This place's chats whose title or messages contain [query], archived
+     *  ones too, each with the words around the match. Throws when the
+     *  search couldn't run (the list says so, rather than "no chats match"). */
+    suspend fun search(query: String): List<ChatRow> = emptyList()
+
+    /** [row] as plain text for the share sheet; null when it can't be read. */
+    suspend fun shareText(row: ChatRow): String? = null
 
     /** The conversation: [row] null is a new chat in this place. */
     @Composable

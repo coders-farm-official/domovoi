@@ -2,8 +2,10 @@
 // Windows, one verb per call, so Setup's Pascal script stays a UI. It is
 // installed in C:\Program Files\Domovoi (admin-owned) and every verb that
 // changes the PC runs from there, elevated, as Setup's child. Only the
-// read-only preflight also runs from Setup's temporary folder, before
-// anything is installed, the way Setup's own engine does.
+// read-only preflight, check-media and saved-ai (which changes nothing but
+// a one-off request file in host\in, deleted again) also run from Setup's
+// temporary folder, before anything is installed, the way Setup's own
+// engine does.
 //
 // Output: key=value lines on stdout (Setup reads them); "error=" and exit
 // code 1 on failure. install.log gets a line per change. The account's
@@ -13,13 +15,15 @@
 //   preflight [--ports-only] [--skip-internet] [--installing]   read-only
 //   vmp-status | wsl-status | host-status | plan    read-only
 //   host-stop
-//   prepare --internet A [--ai yes|no] --media-root DIR --commit SHA
+//   saved-ai                 what Setup's AI page starts at (a re-run: the
+//                            household's answer, through DomovoiHost)
+//   prepare --internet A [--ai yes|no|keep] --media-root DIR --commit SHA
 //   account --exe PATH [--no-deny-logon]
 //   media
 //   firewall [--subnet CIDR]
 //   job --image P --image-sha256 H --provision P --provision-sha256 H --repo-url U --ref SHA [--track-branch stable|main] [--lan-ip IP|auto|none]
 //   check-media --root DIR                          read-only
-//   host-start | host-retry | host-park | setup-code
+//   host-start | host-retry | host-park | setup-code | record-ai
 //   uninstall [--dry-run]                           exit 3: done, with leftovers
 //   copy-logs --kind install|uninstall --dest DIR [--uninstall-log FILE]
 
@@ -126,6 +130,8 @@ namespace Domovoi.Windows.Helper
                     case "host-park": Steps.HostPark(o); return 0;
                     case "check-media": Steps.CheckMedia(o, a.Req("--root")); return 0;
                     case "setup-code": return Steps.ReadSetupCode(o);
+                    case "saved-ai": Steps.SavedAi(o); return 0;
+                    case "record-ai": Steps.RecordAi(o); return 0;
                     case "plan": Steps.Plan(o); return 0;
                     case "uninstall": return Uninstall.Run(o, dry);
                     case "copy-logs": Logs.Copy(o, a.Req("--dest"), a.Req("--kind"), a.Opt("--uninstall-log")); return 0;

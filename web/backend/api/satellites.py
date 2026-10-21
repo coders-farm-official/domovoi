@@ -311,7 +311,7 @@ async def list_approvals(request: Request):
 
 # ─── spare devices: the enrolment payload and the install command ─────────
 #
-# Settings → Satellites → "Add a spare device" (S1, 2026-10-13). One payload,
+# Settings → Rooms → "Add a spare device" (S1, 2026-10-13). One payload,
 # `domovoi-room:1?core=…&fp=…&room=…` (satellite/enrolment.py), shown two
 # ways: inside a one-line Linux install command, and as a QR code for a
 # phone's room mode. It carries no secret — the device still has to be
@@ -396,6 +396,31 @@ async def _windows_runtime(request: Request) -> dict[str, Any] | None:
     (domovoi/satellite_windows.py), or None from a core that doesn't say."""
     status, doc = await get_admin("/v1/admin/satellite-windows", headers=auth_forward_headers(request))
     return doc if status == 200 and isinstance(doc, dict) else None
+
+
+async def _windows_setup(request: Request, payload: str, core: str) -> dict[str, Any] | None:
+    """The double-click Setup's half of the Windows column (2026-10-21,
+    domovoi/satellite_setup.py): a setup code for this room's payload
+    (live 24 hours; the same one again while it lives), the links that
+    download the Setup from the core named so it carries the code, and
+    whether the core holds the Setup at all. None from a core that has no
+    setup codes (the card then shows the PowerShell command only)."""
+    headers = auth_forward_headers(request)
+    status, made = await post_admin("/v1/admin/satellite-setup/codes", {"payload": payload}, headers=headers)
+    if status != 200 or not isinstance(made, dict) or not made.get("code"):
+        return None
+    status, held = await get_admin("/v1/admin/satellite-setup", headers=headers)
+    base = core.rstrip("/")
+    return {
+        "code": made["code"],
+        "code_display": made.get("code_display"),
+        "expires_at": made.get("expires_at"),
+        "server": made.get("server"),
+        "file_name": made.get("file_name"),
+        "download_url": base + str(made.get("download_path") or ""),
+        "short_url": base + str(made.get("short_path") or ""),
+        "setup": held if status == 200 and isinstance(held, dict) else None,
+    }
 
 
 async def _linux_runtime(request: Request) -> dict[str, Any] | None:
@@ -484,6 +509,7 @@ async def spare_device_enrolment(body: SpareDeviceEnrolRequest, request: Request
         "bundle_size": digest.get("size"),
         "command": install_command(parsed.core, digest["sha256"], payload),
         "command_windows": install_command_windows(parsed.core, digest["sha256"], payload),
+        "windows_setup": await _windows_setup(request, payload, parsed.core),
         "windows_runtime": await _windows_runtime(request),
         "android_app": await _android_app_for_a_phone(request),
         "linux_runtime": await _linux_runtime(request),
@@ -593,6 +619,31 @@ async def windows_runtime_status(request: Request):
 async def windows_runtime_fetch(request: Request):
     """Start fetching the Windows satellite's runtime onto the core."""
     status, doc = await post_admin("/v1/admin/satellite-windows/fetch", headers=auth_forward_headers(request))
+    return bridge_response(status, doc) if status != 200 else doc
+
+
+@router.get(
+    "/windows-setup",
+    # Whether this server holds the Windows satellite Setup; the card's.
+    dependencies=[Depends(require_admin_read)],
+)
+async def windows_setup_status(request: Request):
+    """Whether the core holds ``DomovoiSatelliteSetup.exe`` (``ready``,
+    ``size``, ``release``, ``internet_off``, ``fetch``)."""
+    status, doc = await get_admin("/v1/admin/satellite-setup", headers=auth_forward_headers(request))
+    return bridge_response(status, doc) if status != 200 else doc
+
+
+@router.post(
+    "/windows-setup/fetch",
+    # The server downloads the Setup (a few MB) from Domovoi's GitHub
+    # release on an admin's word, held to that release's SHA256SUMS;
+    # refused when internet access is off.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def windows_setup_fetch(request: Request):
+    """Start fetching the Windows satellite Setup onto the core."""
+    status, doc = await post_admin("/v1/admin/satellite-setup/fetch", headers=auth_forward_headers(request))
     return bridge_response(status, doc) if status != 200 else doc
 
 

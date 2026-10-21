@@ -39,63 +39,6 @@ class RoutesTest {
         assertTrue(Route.Images.visibleWith(caps(CAP_STATIONS, CAP_IMAGEGEN)))
     }
 
-    private val aiOff = Capabilities(features = mapOf(FEATURE_AI to false))
-    private val aiOn = Capabilities(features = mapOf(FEATURE_AI to true))
-
-    /** The household's AI features off: the server's Chat can't answer, so
-     *  no launcher offers it. Absent (older server, failed manifest read)
-     *  and true keep it. */
-    @Test fun chatFollowsTheServersAiSwitch() {
-        // A phone that can't chat on itself: the server is Chat's only place.
-        onDeviceAssistant = { false }
-        assertTrue(Route.Chat.visibleWith(Capabilities.EMPTY))
-        assertTrue(Route.Chat.visibleWith(aiOn))
-        assertFalse(Route.Chat.visibleWith(aiOff))
-        assertFalse(Route.Chat.visibleOn(aiOff, shared = false))
-        // features.chat is the voice chat mode, not this switch.
-        assertTrue(Route.Chat.visibleWith(Capabilities(features = mapOf("chat" to false))))
-        // Every other screen stays, plugin gates still apply on top.
-        Route.entries.filter { it != Route.Chat }.forEach {
-            assertEquals(it.name, it.visibleWith(Capabilities.EMPTY), it.visibleWith(aiOff))
-        }
-        val radioAiOff = Capabilities(
-            plugins = listOf(CapabilityPlugin(slug = "p", androidCapabilities = listOf(CAP_STATIONS))),
-            features = mapOf(FEATURE_AI to false),
-        )
-        assertTrue(Route.Stations.visibleWith(radioAiOff))
-        assertFalse(Route.Chat.visibleWith(radioAiOff))
-        // Off every launcher: the drawer/rail list, Home's grid, the bar.
-        assertFalse(Route.Chat in WorkspaceRoutes.filter { it.visibleOn(aiOff, shared = false) })
-        assertFalse(Route.Chat in everythingTiles(aiOff, shared = false))
-        assertFalse(Route.Chat in everythingTiles(aiOff, shared = false, bar = listOf(Route.Home, Route.Music)))
-        assertTrue(Route.Chat in everythingTiles(aiOn, shared = false, bar = listOf(Route.Home, Route.Music)))
-        assertEquals(listOf(Route.Home, Route.Music, Route.Videos), PhoneBar.routes(null, aiOff, shared = false))
-        // Home, where the shell lands when the open route stops existing, stays.
-        assertTrue(StartRoute.visibleWith(aiOff))
-    }
-
-    /** The switch governs the home-server place only (One Chat): a phone
-     *  that can chat on itself keeps Chat, for its own chats. */
-    @Test fun chatStaysForThePhonesChatsWhenTheServersAiIsOff() {
-        onDeviceAssistant = { true }
-        assertTrue(Route.Chat.visibleWith(aiOff))
-        assertTrue(Route.Chat in everythingTiles(aiOff, shared = false, bar = listOf(Route.Home, Route.Music)))
-        assertTrue(Route.Chat in localTabs())
-        assertEquals(
-            listOf(Route.Home, Route.Chat, Route.Music),
-            PhoneBar.routes(listOf(Route.Home, Route.Chat, Route.Music), aiOff, shared = false),
-        )
-    }
-
-    @Test fun aHiddenChatsPlaceholderSaysWhy() {
-        assertEquals(
-            "chat is turned off" to "this server has its AI features turned off",
-            Route.Chat.unavailableNote(aiOff),
-        )
-        assertEquals("stations isn't available", Route.Stations.unavailableNote(aiOff).first)
-        assertEquals("chat isn't available", Route.Chat.unavailableNote(Capabilities.EMPTY).first)
-    }
-
     @Test fun appOpensOnHome() {
         // The web opens (and falls back) on #home; so does the app.
         assertEquals(Route.Home, StartRoute)
@@ -128,7 +71,7 @@ class RoutesTest {
 
     @Test fun theContainersScreenIsOnNoLauncher() {
         // Reached from the banner and from an incident's notification only,
-        // like the web's #containers, which is not in the nav.
+        // like the web's #settings/health/containers, which is not in the nav.
         assertEquals(setOf(Route.Containers, Route.Satellites), LauncherlessRoutes)
         assertFalse(Route.Containers in DefaultPhoneBar)
         assertFalse(Route.Containers in EverythingRoutes)
@@ -139,10 +82,13 @@ class RoutesTest {
     }
 
     @Test fun satellitesIsASettingsTabOnNoLauncher() {
-        // The web's Settings → Satellites (2026-10-11): the route is how a
+        // The web's Settings → Rooms (2026-10-11): the route is how a
         // link names it, and the shell opens Settings on that tab.
-        assertEquals("satellites", settingsTabFor(Route.Satellites))
-        Route.entries.filter { it != Route.Satellites }.forEach { assertNull(it.name, settingsTabFor(it)) }
+        assertEquals("rooms", settingsTabFor(Route.Satellites))
+        // The container guard's details are part of Settings → Health (2026-10-21).
+        assertEquals("health", settingsTabFor(Route.Containers))
+        Route.entries.filter { it != Route.Satellites && it != Route.Containers }
+            .forEach { assertNull(it.name, settingsTabFor(it)) }
         assertFalse(Route.Satellites in WorkspaceRoutes)
         assertFalse(Route.Satellites in EverythingRoutes)
         assertFalse(Route.Satellites in DefaultPhoneBar)

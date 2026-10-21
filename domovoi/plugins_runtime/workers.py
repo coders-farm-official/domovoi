@@ -196,7 +196,7 @@ class WorkerRunner:
     def start_worker(self, owner: str, name: str) -> bool:
         """Start ONE registered worker that isn't running (its enabled
         setting was off at boot and has just been switched on, e.g. the
-        wake-word trainer by Settings → Wake Words). Unlike start_owner it
+        wake-word trainer by Settings → Wake words). Unlike start_owner it
         fires no startup hooks. True when it is running afterwards."""
         for entry in self._workers.get(owner, []):
             if entry.worker.name == name:

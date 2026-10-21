@@ -6,20 +6,22 @@ Configuration, where the admin account is made, but "if we link to settings,
 it defaults to Greetings. Each tab should be able to be linked to directly
 and when clicking around our URL should change."
 
-* A tab's address is ``#<page>/<tab>``: ``#settings/configuration``,
+* A tab's address is ``#<page>/<tab>``: ``#settings/advanced``,
   ``#settings/wake-words``, ``#music/queue``, ``#calendar/week``. Clicking a
   tab writes it as a new history entry (so Back goes to the tab before),
   opening an address selects its tab, a tab the page doesn't have is the
   page's default tab (and the address is corrected to ``#<page>``), and a
-  tab named by its code id (``#settings/config``) is rewritten to its slug
-  in place. ``#settings`` alone is still Settings on Greetings, and the old
-  ``#satellites`` is ``#settings/satellites``.
+  tab named by its code id or an old name (``#settings/configuration``,
+  since the regroup of 2026-10-21) is rewritten to its slug in place,
+  markers kept. ``#settings`` alone is the list of groups (a desktop shows
+  About & updates), and the old ``#satellites`` is ``#settings/rooms``.
 * The shell picks the page by the first segment, so a deeper address never
   falls through to Home.
-* ``#settings/configuration/setup`` is what the Windows installer's "Open
-  Domovoi" opens: on an unclaimed box Configuration opens the first-run
-  admin setup by itself (as it does at ``#settings/configuration``); on a
-  box claimed before the visit it says so in one line and nothing opens.
+* ``#settings/configuration/setup`` is what the Windows installers already
+  out open (``#settings/advanced/setup`` since 2026-10-21): on an unclaimed
+  box Advanced opens the first-run admin setup by itself (as it does at
+  ``#settings/advanced``); on a box claimed before the visit it says so in
+  one line and nothing opens.
 * Where the setup code is, in the words of the kind of server
   (``/api/capabilities`` ``host_kind``): the Windows installer's last page
   on a Windows (WSL) install, ``~/.domovoi/setup-code.txt`` elsewhere, both
@@ -46,6 +48,10 @@ HARNESS = Path(__file__).with_name("jsx_interact_harness.js")
 COMPONENTS = "web/static/components.jsx"
 SETTINGS = "web/static/settings.jsx"
 MUSIC = "web/static/music.jsx"
+CONTAINERS = "web/static/containers.jsx"
+HEALTH = "web/static/health.jsx"
+# Settings with Health registered, as index.html loads them.
+SETTINGS_FILES = [COMPONENTS, SETTINGS, CONTAINERS, HEALTH]
 CALENDAR = "web/static/calendar.jsx"
 
 # The address bar, Back, and the window's events, recorded. replaceState
@@ -98,84 +104,109 @@ CLAIMED = {"setup_complete": True, "authenticated": False}
 # The routes a page's tabs read, without rendering anything.
 _PURE = r"""
   const w = h.global('window');
-  const T = w.__T;
-  const read = (r) => w.readRouteTab(r, 'settings', T, 'greetings');
+  const L = w.settingsLayout();
+  const T = [...L.sections, ...L.groups.map((g) => ({ id: g.id }))];
+  const read = (r) => w.readRouteTab(r, 'settings', T, 'index');
   const cases = ['#settings', 'settings', '#settings/', '#settings/configuration', 'settings/config',
                  '#Settings/Configuration/', '#settings/configuration/setup', '#settings/configuration/setup/',
-                 '#settings/wake-words', '#settings/wakewords', '#settings/phone-bar', '#settings/nonsense',
-                 '#settings/nonsense/setup', '#satellites', '#satellites/x', '#music/queue', '', '#'];
+                 '#settings/advanced', '#settings/advanced/setup',
+                 '#settings/wake-words', '#settings/wakewords', '#settings/phone-bar', '#settings/satellites',
+                 '#settings/satellites/media', '#settings/devices', '#settings/recordings', '#settings/voice',
+                 '#settings/system', '#settings/health', '#settings/nonsense',
+                 '#settings/nonsense/setup', '#satellites', '#satellites/x', '#containers', '#music/queue', '', '#'];
   const out = {};
   for (const c of cases) out[c] = read(c);
   return {
     out,
+    groups: L.groups.map((g) => [g.label, g.sections.map((x) => x.label)]),
     parts: ['#a/b//c/', '  #Music/Queue ', '', null].map(w.routeParts),
-    pages: ['#settings/configuration', 'music', '#', ''].map(w.routePage),
-    resolve: ['satellites', '#satellites/drawer', 'settings/satellites', 'home', '#'].map(w.resolveRoute),
-    slugs: T.map((t) => [t.id, w.tabSlug(T, t.id)]),
-    roundTrip: T.map((t) => read('#settings/' + w.tabSlug(T, t.id)).tab),
-    byId: T.map((t) => read('#settings/' + t.id).tab),
+    pages: ['#settings/advanced', 'music', '#', ''].map(w.routePage),
+    resolve: ['satellites', '#satellites/drawer', 'settings/satellites', 'home', '#', 'containers',
+              '#containers/x'].map(w.resolveRoute),
+    slugs: L.sections.map((t) => [t.id, w.tabSlug(T, t.id)]),
+    roundTrip: L.sections.map((t) => read('#settings/' + w.tabSlug(T, t.id)).tab),
+    byAlias: L.sections.flatMap((t) => (t.aliases || []).map((a) => [a, read('#settings/' + a).tab])),
     setup: w.SETUP_ROUTE,
-    href: w.settingsTabHref('configuration'),
+    acoustid: w.ACOUSTID_KEY_ROUTE,
+    href: w.settingsTabHref('advanced'),
+  };
+"""
+
+# The nav's links: which one is on, and the level the page says it shows.
+_NAV = r"""
+  const w = h.global('window');
+  const on = () => h.findAll((e) => e.type === 'a' && w.__cls(e).includes('settings-nav-item')
+    && w.__cls(e).includes('on')).map((e) => w.__deep(e));
+  const level = () => (h.find((e) => w.__cls(e).includes('settings-page')) || { props: {} }).props['data-level'];
+  const title = () => w.__deep(h.find((e) => w.__cls(e).includes('settings-section-title')));
+  const go = async (label) => {
+    await h.click((e) => e.type === 'a' && w.__cls(e).includes('settings-nav-item') && w.__deep(e) === label);
+    await w.__settle(h);
   };
 """
 
 SCENARIOS: dict[str, dict] = {
     "pure": {
-        "files": [COMPONENTS, SETTINGS], "component": "(window.__T = SETTINGS_TABS, SettingsPage)",
+        "files": SETTINGS_FILES, "component": "SettingsPage",
         "setup": _setup(), "script": _PURE,
     },
     "settings_clicks": {
-        "files": [COMPONENTS, SETTINGS], "component": "SettingsPage",
+        "files": SETTINGS_FILES, "component": "SettingsPage",
         "setup": _setup("#settings/configuration"),
         "api": {"GET /api/greetings": [], "GET /api/config/editable": {"fields": []}},
-        "script": r"""
-          const w = h.global('window');
-          const sub = () => w.__deep(h.find((e) => e.type === 'header' || w.__cls(e).includes('page-header')));
-          const on = (label) => {
-            const b = h.findAll({ type: 'button' }).find((e) => w.__deep(e) === label);
-            return b ? String((b.props.style || {}).borderBottom || '').includes('var(--brand)') : null;
-          };
+        "script": _NAV + r"""
           h.render(); await w.__settle(h);
-          const landed = { config: on('Configuration'), greetings: on('Greetings'), hash: w.location.hash };
-          await h.click({ type: 'button', text: 'Voices' }); await w.__settle(h);
-          const voices = { on: on('Voices'), hash: w.location.hash };
-          await h.click({ type: 'button', text: 'Wake Words' }); await w.__settle(h);
-          const wake = { on: on('Wake Words'), hash: w.location.hash };
+          const landed = { on: on(), title: title(), level: level(), hash: w.location.hash };
+          await go('Voices');
+          const voices = { on: on(), hash: w.location.hash };
+          await go('Wake words');
+          const wake = { on: on(), hash: w.location.hash };
           // Back: the browser puts the previous address back and says so.
           w.go('#settings/voices'); await w.__settle(h);
-          const back = { on: on('Voices'), wake: on('Wake Words') };
-          // A link to another tab while Settings is on screen.
+          const back = on();
+          // A link to another section while Settings is on screen.
           w.go('#settings/internet'); await w.__settle(h);
-          const link = on('Internet');
-          // #settings alone: the default tab, About (the manual's way in).
+          const link = on();
+          // A group's address: a phone's list of its sections; its first section.
+          w.go('#settings/voice'); await w.__settle(h);
+          const group = { on: on(), level: level(), title: title() };
+          // #settings alone: the list of groups (a desktop: About & updates).
           w.go('#settings'); await w.__settle(h);
-          const bare = { about: on('About'), hash: w.location.hash };
-          // An address for another page leaves the tab alone (Settings is on its way out).
-          w.go('#settings/about'); await w.__settle(h);
+          const bare = { on: on(), level: level(), title: title(), hash: w.location.hash };
+          // An address for another page leaves the section alone (Settings is on its way out).
+          w.go('#settings/greetings'); await w.__settle(h);
           w.go('#music/queue'); await w.__settle(h);
-          const leaving = on('About');
-          return { landed, voices, wake, back, link, bare, leaving, replaced: w.__replaced };
+          const leaving = on();
+          return { landed, voices, wake, back, link, group, bare, leaving, replaced: w.__replaced };
         """,
     },
     "settings_unknown_tab": {
-        "files": [COMPONENTS, SETTINGS], "component": "SettingsPage",
-        "setup": _setup("#settings/nonsense"), "api": {"GET /api/greetings": []},
-        "script": r"""
-          const w = h.global('window');
+        "files": SETTINGS_FILES, "component": "SettingsPage",
+        "setup": _setup("#settings/nonsense"), "api": {},
+        "script": _NAV + r"""
           h.render(); await w.__settle(h);
-          const about = h.findAll({ type: 'button' }).find((e) => w.__deep(e) === 'About');
-          return { on: String(about.props.style.borderBottom).includes('var(--brand)'),
-                   hash: w.location.hash, replaced: w.__replaced };
+          return { level: level(), hash: w.location.hash, replaced: w.__replaced };
         """,
     },
     "settings_id_for_slug": {
-        "files": [COMPONENTS, SETTINGS], "component": "SettingsPage",
+        "files": SETTINGS_FILES, "component": "SettingsPage",
         "setup": _setup("#settings/config/setup"),
         "api": {"GET /api/config/editable": {"fields": []}},
         "script": r"""
           const w = h.global('window');
           h.render(); await w.__settle(h);
           return { hash: w.location.hash, replaced: w.__replaced };
+        """,
+    },
+    "settings_groups_and_names": {
+        "files": SETTINGS_FILES, "component": "SettingsPage",
+        "setup": _setup("#settings/greetings"), "api": {"GET /api/greetings": []},
+        "script": _NAV + r"""
+          h.render(); await w.__settle(h);
+          const heads = h.findAll((e) => w.__cls(e).includes('settings-nav-group-label')).map((e) => w.__deep(e));
+          const items = h.findAll((e) => e.type === 'a' && w.__cls(e).includes('settings-nav-item'))
+            .map((e) => [w.__deep(e), e.props.href]);
+          return { heads, items, title: title() };
         """,
     },
     "music_tabs": {
@@ -214,7 +245,7 @@ SCENARIOS: dict[str, dict] = {
     },
     # ── the first-run claim ──
     "claim_route_unclaimed": {
-        "files": [COMPONENTS, SETTINGS], "component": "SettingsPage",
+        "files": SETTINGS_FILES, "component": "SettingsPage",
         "setup": _setup("#settings/configuration/setup", status=UNCLAIMED),
         "api": {"GET /api/config/editable": {"fields": []}, "GET /api/capabilities": {"host_kind": "wsl"}},
         "script": r"""
@@ -225,7 +256,7 @@ SCENARIOS: dict[str, dict] = {
         """,
     },
     "claim_plain_config_unclaimed": {
-        "files": [COMPONENTS, SETTINGS], "component": "SettingsPage",
+        "files": SETTINGS_FILES, "component": "SettingsPage",
         "setup": _setup("#settings/configuration", status=UNCLAIMED),
         "api": {"GET /api/config/editable": {"fields": []}},
         "script": r"""
@@ -235,7 +266,7 @@ SCENARIOS: dict[str, dict] = {
         """,
     },
     "claim_other_tab_unclaimed": {
-        "files": [COMPONENTS, SETTINGS], "component": "SettingsPage",
+        "files": SETTINGS_FILES, "component": "SettingsPage",
         "setup": _setup("#settings/greetings", status=UNCLAIMED),
         "api": {"GET /api/greetings": []},
         "script": r"""
@@ -245,7 +276,7 @@ SCENARIOS: dict[str, dict] = {
         """,
     },
     "claim_route_claimed": {
-        "files": [COMPONENTS, SETTINGS], "component": "SettingsPage",
+        "files": SETTINGS_FILES, "component": "SettingsPage",
         "setup": _setup("#settings/configuration/setup", status=CLAIMED),
         "api": {"GET /api/config/editable": {"fields": []}},
         "script": r"""
@@ -256,7 +287,7 @@ SCENARIOS: dict[str, dict] = {
         """,
     },
     "claim_route_claimed_live": {
-        "files": [COMPONENTS, SETTINGS], "component": "SettingsPage",
+        "files": SETTINGS_FILES, "component": "SettingsPage",
         "setup": _setup("#settings/configuration/setup", status={"setup_complete": True, "authenticated": True},
                         live=True),
         "api": {"GET /api/config/editable": {"fields": []}},
@@ -268,7 +299,7 @@ SCENARIOS: dict[str, dict] = {
         """,
     },
     "claimed_plain_config_has_no_note": {
-        "files": [COMPONENTS, SETTINGS], "component": "SettingsPage",
+        "files": SETTINGS_FILES, "component": "SettingsPage",
         "setup": _setup("#settings/configuration", status=CLAIMED),
         "api": {"GET /api/config/editable": {"fields": []}},
         "script": r"""
@@ -278,7 +309,7 @@ SCENARIOS: dict[str, dict] = {
         """,
     },
     "claimed_here_drops_the_marker": {
-        "files": [COMPONENTS, SETTINGS], "component": "SettingsPage",
+        "files": SETTINGS_FILES, "component": "SettingsPage",
         "setup": _setup("#settings/configuration/setup", status=UNCLAIMED),
         "api": {"GET /api/config/editable": {"fields": []}, "GET /api/capabilities": {"host_kind": "wsl"}},
         "script": r"""
@@ -353,18 +384,40 @@ def _src(name: str) -> str:
 # ─── the addresses ───────────────────────────────────────────────────────
 
 
-def test_every_settings_tab_has_an_address_and_its_id_opens_it_too(driven) -> None:
+def test_settings_is_five_groups_in_plain_words(driven) -> None:
+    """Owner design 2026-10-21. Printers & scanners, Search and Chat are
+    slots: they show once their panel is registered, never as a promise."""
+    assert driven["pure"]["groups"] == [
+        ["Rooms & devices", ["Rooms", "Phones & browsers", "App layout"]],
+        ["Voice", ["Wake words", "Voices", "Greetings"]],
+        ["Chat & AI", ["Models"]],
+        ["Privacy", ["Internet", "Voice history"]],
+        ["System", ["About & updates", "Health", "Advanced"]],
+    ]
+    o = driven["settings_groups_and_names"]
+    assert o["heads"] == ["Rooms & devices", "Voice", "Chat & AI", "Privacy", "System"]
+    assert [label for label, _ in o["items"]] == [
+        "Rooms", "Phones & browsers", "App layout", "Wake words", "Voices", "Greetings", "Models",
+        "Internet", "Voice history", "About & updates", "Health", "Advanced"]
+    assert dict(o["items"])["Voice history"] == "#settings/voice-history"
+    assert o["title"] == "Greetings"
+
+
+def test_every_settings_section_has_an_address_and_its_old_names_open_it(driven) -> None:
     o = driven["pure"]
     slugs = dict(o["slugs"])
-    assert slugs == {
-        "about": "about", "greetings": "greetings", "voices": "voices", "wakewords": "wake-words",
-        "recordings": "recordings", "devices": "devices", "phonebar": "phone-bar",
-        "satellites": "satellites", "models": "models", "internet": "internet", "config": "configuration",
-    }
+    assert slugs == {s: s for s in (
+        "rooms", "phones-and-browsers", "app-layout", "wake-words", "voices", "greetings", "models",
+        "internet", "voice-history", "about", "health", "advanced")}
     ids = [i for i, _ in o["slugs"]]
-    assert o["roundTrip"] == ids and o["byId"] == ids
-    assert o["setup"] == "settings/configuration/setup"
-    assert o["href"] == "#settings/configuration"
+    assert o["roundTrip"] == ids
+    assert dict(o["byAlias"]) == {
+        "satellites": "rooms", "devices": "phones-and-browsers", "phone-bar": "app-layout",
+        "phonebar": "app-layout", "wakewords": "wake-words", "recordings": "voice-history",
+        "configuration": "advanced", "config": "advanced"}
+    assert o["setup"] == "settings/advanced/setup"
+    assert o["acoustid"] == "settings/advanced/acoustid-key"
+    assert o["href"] == "#settings/advanced"
 
 
 def test_how_an_address_reads(driven) -> None:
@@ -375,59 +428,73 @@ def test_how_an_address_reads(driven) -> None:
         return r["tab"], r["rest"], r["fix"]
 
     for bare in ("#settings", "settings", "#settings/", "", "#"):
-        assert tab(bare) == ("greetings", [], None), bare
-    assert tab("#settings/configuration") == ("config", [], None)
-    assert tab("#Settings/Configuration/") == ("config", [], None)
-    # The code's id opens the tab, and the address is rewritten to the slug.
-    assert tab("settings/config") == ("config", [], "settings/configuration")
-    assert tab("#settings/wakewords") == ("wakewords", [], "settings/wake-words")
-    assert tab("#settings/wake-words") == ("wakewords", [], None)
-    assert tab("#settings/phone-bar") == ("phonebar", [], None)
-    # A marker after the tab is the tab's.
-    assert tab("#settings/configuration/setup") == ("config", ["setup"], None)
-    assert tab("#settings/configuration/setup/") == ("config", ["setup"], None)
-    # A tab Settings doesn't have: the default, and the address says #settings.
-    assert tab("#settings/nonsense") == ("greetings", [], "settings")
-    assert tab("#settings/nonsense/setup") == ("greetings", [], "settings")
-    # The old route of a Settings tab.
-    assert tab("#satellites") == ("satellites", [], None)
-    assert tab("#satellites/x") == ("satellites", ["x"], None)
-    # Another page's address says nothing about Settings' tabs.
-    assert tab("#music/queue") == ("greetings", [], None)
+        assert tab(bare) == ("index", [], None), bare
+    assert tab("#settings/advanced") == ("advanced", [], None)
+    # An old name opens the section, and the address is rewritten, markers kept.
+    assert tab("#settings/configuration") == ("advanced", [], "settings/advanced")
+    assert tab("#Settings/Configuration/") == ("advanced", [], "settings/advanced")
+    assert tab("settings/config") == ("advanced", [], "settings/advanced")
+    assert tab("#settings/configuration/setup") == ("advanced", ["setup"], "settings/advanced/setup")
+    assert tab("#settings/configuration/setup/") == ("advanced", ["setup"], "settings/advanced/setup")
+    assert tab("#settings/advanced/setup") == ("advanced", ["setup"], None)
+    assert tab("#settings/wakewords") == ("wake-words", [], "settings/wake-words")
+    assert tab("#settings/wake-words") == ("wake-words", [], None)
+    assert tab("#settings/phone-bar") == ("app-layout", [], "settings/app-layout")
+    assert tab("#settings/satellites") == ("rooms", [], "settings/rooms")
+    # The tray's "prepare a satellite card" link keeps its marker.
+    assert tab("#settings/satellites/media") == ("rooms", ["media"], "settings/rooms/media")
+    assert tab("#settings/devices") == ("phones-and-browsers", [], "settings/phones-and-browsers")
+    assert tab("#settings/recordings") == ("voice-history", [], "settings/voice-history")
+    # A group has an address too.
+    assert tab("#settings/voice") == ("voice", [], None)
+    assert tab("#settings/system") == ("system", [], None)
+    assert tab("#settings/health") == ("health", [], None)
+    # A section Settings doesn't have: the list of groups, and the address says #settings.
+    assert tab("#settings/nonsense") == ("index", [], "settings")
+    assert tab("#settings/nonsense/setup") == ("index", [], "settings")
+    # The old routes of pages that are part of Settings now.
+    assert tab("#satellites") == ("rooms", [], None)
+    assert tab("#satellites/x") == ("rooms", ["x"], None)
+    assert tab("#containers") == ("health", ["containers"], None)
+    # Another page's address says nothing about Settings' sections.
+    assert tab("#music/queue") == ("index", [], None)
 
 
 def test_the_route_helpers(driven) -> None:
     o = driven["pure"]
     assert o["parts"] == [["a", "b", "c"], ["music", "queue"], [], []]
     assert o["pages"] == ["settings", "music", "", ""]
-    assert o["resolve"] == ["settings/satellites", "settings/satellites/drawer",
-                            "settings/satellites", "home", ""]
+    assert o["resolve"] == ["settings/rooms", "settings/rooms/drawer", "settings/satellites", "home", "",
+                            "settings/health/containers", "settings/health/containers/x"]
 
 
-def test_clicking_tabs_writes_the_address_and_back_and_links_move_the_tab(driven) -> None:
+def test_clicking_sections_writes_the_address_and_back_and_links_move_it(driven) -> None:
     o = driven["settings_clicks"]
-    # A deep link opens its tab, not Greetings.
-    assert o["landed"] == {"config": True, "greetings": False, "hash": "#settings/configuration"}
-    # A click writes the tab's address (location.hash = …: a history entry).
-    assert o["voices"] == {"on": True, "hash": "settings/voices"}
-    assert o["wake"] == {"on": True, "hash": "settings/wake-words"}
-    # Back puts the previous address back; the tab follows.
-    assert o["back"] == {"on": True, "wake": False}
-    assert o["link"] is True
-    assert o["bare"] == {"about": True, "hash": "#settings"}
-    assert o["leaving"] is True
-    # Nothing was rewritten in place along the way.
-    assert o["replaced"] == []
+    # An old deep link opens its section (renamed in place), not the list.
+    assert o["landed"] == {"on": ["Advanced"], "title": "Advanced", "level": "section",
+                           "hash": "#settings/advanced"}
+    # A click writes the section's address (location.hash = …: a history entry).
+    assert o["voices"] == {"on": ["Voices"], "hash": "settings/voices"}
+    assert o["wake"] == {"on": ["Wake words"], "hash": "settings/wake-words"}
+    # Back puts the previous address back; the section follows.
+    assert o["back"] == ["Voices"]
+    assert o["link"] == ["Internet"]
+    assert o["group"] == {"on": ["Wake words"], "level": "group", "title": "Wake words"}
+    assert o["bare"] == {"on": ["About & updates"], "level": "index", "title": "About & updates",
+                         "hash": "#settings"}
+    assert o["leaving"] == ["Greetings"]
+    # Only the old name was rewritten in place.
+    assert o["replaced"] == ["#settings/advanced"]
 
 
-def test_an_unknown_tab_is_the_default_and_the_address_says_so(driven) -> None:
+def test_an_unknown_section_is_the_list_and_the_address_says_so(driven) -> None:
     o = driven["settings_unknown_tab"]
-    assert o == {"on": True, "hash": "#settings", "replaced": ["#settings"]}
+    assert o == {"level": "index", "hash": "#settings", "replaced": ["#settings"]}
 
 
-def test_an_id_in_the_address_is_rewritten_to_the_slug_keeping_the_marker(driven) -> None:
+def test_an_old_name_in_the_address_is_rewritten_keeping_the_marker(driven) -> None:
     o = driven["settings_id_for_slug"]
-    assert o == {"hash": "#settings/configuration/setup", "replaced": ["#settings/configuration/setup"]}
+    assert o == {"hash": "#settings/advanced/setup", "replaced": ["#settings/advanced/setup"]}
 
 
 def test_music_and_calendar_tabs_have_addresses_too(driven) -> None:
@@ -455,12 +522,13 @@ def test_the_shell_picks_the_page_by_the_first_segment() -> None:
 
 
 def test_links_into_settings_name_their_tab() -> None:
+    health = _src("health.jsx")
+    for key, href in (("stt", "#settings/models"), ("update", "#settings/about"),
+                      ("restart", "#settings/about"), ("internet", "#settings/internet"),
+                      ("disk", "#settings/models"), ("offline", "#settings/rooms")):
+        assert re.search(rf"key: '{key}'[^}}]*fix: '{re.escape(href)}'", health), key
     home = _src("home.jsx")
-    for key, href in (("stt", "#settings/models"), ("update", "#settings/configuration"),
-                      ("restart", "#settings/configuration"), ("internet", "#settings/internet"),
-                      ("disk", "#settings/models")):
-        assert re.search(rf"key: '{key}'[^}}]*href: '{re.escape(href)}'", home), key
-    assert '<a href="#settings/phone-bar" className="home-link home-bar-edit">' in home
+    assert '<a href="#settings/app-layout" className="home-link home-bar-edit">' in home
     assert '<a href="#settings/models" className="chat-note-link">' in _src("chat.jsx")
     assert '<a href="#settings/internet" className="needs-internet-link">' in _src("components.jsx")
     assert '<a href="#settings/internet" className="home-link">' in _src("settings.jsx")
@@ -481,7 +549,7 @@ def test_the_installers_address_opens_the_setup_on_an_unclaimed_box(driven) -> N
     assert o["opened"] == 1
     assert o["note"] is False
     assert "set up admin" in o["text"]                     # the card's button, if it is closed
-    # Configuration itself does the same, once per arrival.
+    # Advanced itself does the same, once per arrival.
     assert driven["claim_plain_config_unclaimed"]["opened"] == 1
     # Other tabs don't.
     assert driven["claim_other_tab_unclaimed"]["opened"] == 0
@@ -491,18 +559,18 @@ def test_the_installers_address_is_harmless_on_a_claimed_box(driven) -> None:
     o = driven["claim_route_claimed"]
     assert o["opened"] == 0
     assert o["note"] == "This Domovoi’s admin account is already set up: sign in with its password."
-    assert o["hash"] == "#settings/configuration/setup"
+    assert o["hash"] == "#settings/advanced/setup"
     live = driven["claim_route_claimed_live"]
     assert live["opened"] == 0
     assert live["note"] == "This Domovoi’s admin account is already set up, and you’re signed in."
-    # The note is the marker's: plain Configuration on a claimed box has none.
+    # The note is the marker's: plain Advanced on a claimed box has none.
     assert driven["claimed_plain_config_has_no_note"] == {"opened": 0, "note": False}
 
 
 def test_a_claim_made_on_the_installers_address_drops_the_marker(driven) -> None:
     o = driven["claimed_here_drops_the_marker"]
-    assert o["before"] == "#settings/configuration/setup"
-    assert o["after"] == "#settings/configuration"         # a reload won't say "already"
+    assert o["before"] == "#settings/advanced/setup"
+    assert o["after"] == "#settings/advanced"              # a reload won't say "already"
     assert o["opened"] == 1 and o["note"] is False
 
 
@@ -542,7 +610,7 @@ def test_the_labels_the_installer_names(driven) -> None:
     assert "set password" in o["buttons"]
     assert o["codeFocused"] == ["eight-words-separated-by-dashes"]   # paste and go
     assert "set up admin" in driven["card_wsl"]["buttons"]
-    assert "Settings → Configuration" not in o["hint"]     # it is on that page
+    assert "Settings → Advanced" not in o["hint"]          # it is on that page
 
 
 def test_the_servers_refusal_of_a_wrong_code_says_where_the_right_one_is(monkeypatch) -> None:

@@ -5,11 +5,14 @@ user only, with no administrator rights.
 
 .DESCRIPTION
 Spare-device satellites on Windows (2026-10-13). Run by the one-line command
-the dashboard shows under Settings > Satellites > Add a spare device >
+the dashboard shows under Settings > Rooms > Add a spare device >
 Windows, which has already checked this bundle's SHA-256 before running it:
 
     powershell -NoProfile -ExecutionPolicy Bypass -File install-windows.ps1 'domovoi-room:1?core=...&fp=...&room=...'
     powershell -NoProfile -ExecutionPolicy Bypass -File install-windows.ps1 -Uninstall [-Purge]
+
+DomovoiSatelliteSetup.exe (windows\installer, 2026-10-21) runs it the same way,
+with -Yes, -Permissions, -Power and -Wait 0 from its own pages.
 
 In order:
   0. Refuses a processor older than about 2009 (the satellite's numpy needs
@@ -41,7 +44,9 @@ runs the Domovoi server; 1 anything else.
 param(
     [Parameter(Position = 0)] [string]$Payload = '',
     [ValidateSet('', 'automatic', 'ask')] [string]$Permissions = '',
-    [ValidateSet('ask', 'no', 'yes')] [string]$Power = 'ask',
+    # ask (one question each), no, yes (both), or one of them: standby (never
+    # sleep while plugged in) or lid (keep running with the lid closed).
+    [ValidateSet('ask', 'no', 'yes', 'standby', 'lid')] [string]$Power = 'ask',
     [switch]$Yes,
     [switch]$NoStart,
     [int]$Wait = 900,
@@ -198,7 +203,7 @@ if ($reason) {
 # --- the code from the dashboard -----------------------------------------
 
 if (-not $Payload) {
-    Fail "give the enrolment code ('domovoi-room:1?...') from the dashboard: Settings > Satellites > Add a spare device" 2
+    Fail "give the enrolment code ('domovoi-room:1?...') from the dashboard: Settings > Rooms > Add a spare device" 2
 }
 
 function Test-HomeCore([string]$Url) {

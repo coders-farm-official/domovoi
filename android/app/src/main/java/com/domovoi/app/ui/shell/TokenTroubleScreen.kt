@@ -80,15 +80,15 @@ private const val OLD_TAB_HINT =
 internal fun tokenTroubleHint(trouble: TokenTrouble): String = when {
     trouble is TokenTrouble.NotRecognised && trouble.waitMs > 0 ->
         "Paste the household token to pair again. An admin finds it on the dashboard under " +
-            "Settings → Devices → Household token. Domovoi still wants this phone to wait " +
+            "Settings → Phones & browsers → Household token. Domovoi still wants this phone to wait " +
             "${waitClock(trouble.waitMs)} after the wrong token, so the new one is tried when that is over." +
             OLD_TAB_HINT
     trouble is TokenTrouble.NotRecognised ->
         "Paste the household token to pair again. An admin finds it on the dashboard under " +
-            "Settings → Devices → Household token." + OLD_TAB_HINT
+            "Settings → Phones & browsers → Household token." + OLD_TAB_HINT
     else ->
         "If the household token changed, paste the new one now: it is tried when the wait is over. " +
-            "An admin finds it on the dashboard under Settings → Devices → Household token." + OLD_TAB_HINT
+            "An admin finds it on the dashboard under Settings → Phones & browsers → Household token." + OLD_TAB_HINT
 }
 
 /**

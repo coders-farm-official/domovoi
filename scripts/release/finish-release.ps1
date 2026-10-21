@@ -16,12 +16,14 @@ checkout at the tag or after it:
    the tag, where windows\build.ps1 -Pin <tag> moves the Setup's pins to
    the tag's commit and builds (anything but pins.iss changed, or a bundled
    provision.sh, is refused); the same build makes DomovoiTray.exe, the
-   tray icon, attached too for Windows installs from before it;
+   tray icon, attached too for Windows installs from before it, and
+   DomovoiSatelliteSetup.exe, the double-click Setup that makes a spare
+   Windows PC a room (servers fetch it from the release);
 3. writes one SHA256SUMS (LF) for every asset;
 4. writes the notes: docs/release/v<version>.md at the tag, or a summary of
    docs/RELEASE_NOTES.md since the previous tag with links into the full
    file (GitHub caps a release body at 125,000 characters);
-5. uploads the Setup, the tray and SHA256SUMS (--clobber), sets the title and the
+5. uploads the Setup, the tray, the satellite Setup and SHA256SUMS (--clobber), sets the title and the
    notes, and keeps a pre-release one (only when GitHub marks it so; every
    other release, release candidates included, is a full one, Latest);
 6. checks every file on GitHub against SHA256SUMS;
@@ -51,6 +53,10 @@ taken from bin\ beside it, or from -Tray.
 .PARAMETER Tray
 With -Setup: the DomovoiTray.exe of that build.
 
+.PARAMETER SatelliteSetup
+With -Setup: the DomovoiSatelliteSetup.exe of that build (default: the one
+beside the Setup).
+
 .PARAMETER Since
 The tag the notes' summary counts from (default: the previous one).
 
@@ -63,6 +69,7 @@ param(
     [switch]$NoPublish,
     [string]$Setup,
     [string]$Tray,
+    [string]$SatelliteSetup,
     [string]$Since
 )
 
@@ -87,6 +94,7 @@ if ($Tag) { $pyArgs += @('--tag', $Tag) }
 if ($NoPublish) { $pyArgs += '--no-publish' }
 if ($Setup) { $pyArgs += @('--setup', $Setup) }
 if ($Tray) { $pyArgs += @('--tray', $Tray) }
+if ($SatelliteSetup) { $pyArgs += @('--satellite-setup', $SatelliteSetup) }
 if ($Since) { $pyArgs += @('--since', $Since) }
 
 Set-Location (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path

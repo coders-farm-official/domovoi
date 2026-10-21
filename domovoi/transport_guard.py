@@ -246,6 +246,9 @@ UPLOAD_LIMITS: tuple[tuple[str, int], ...] = (
     ("/api/documents/text", 64 * 1024 * 1024),
     ("/api/documents/sheet", 64 * 1024 * 1024),
     ("/api/chat/uploads", 64 * 1024 * 1024),
+    # A document for a chat, and one a phone hands over to be read
+    # (chat_documents.py caps the file itself at 100 MB, as it streams).
+    ("/api/chat/documents", 101 * 1024 * 1024),
     # A plugin zip, on both the core route and the web proxy in front of it.
     ("/v1/plugins/install", 256 * 1024 * 1024),
     ("/api/plugins/install", 256 * 1024 * 1024),
@@ -253,6 +256,10 @@ UPLOAD_LIMITS: tuple[tuple[str, int], ...] = (
     # caps an APK at 200 MiB; the route at the release's largest file).
     ("/v1/admin/android-app/upload", 210 * 1024 * 1024),
     ("/api/satellites/android-app/upload", 210 * 1024 * 1024),
+    # A document on its way to a printer: the web door reads the file
+    # (at most 100 MB, web/backend/api/printers.py) and posts it here.
+    ("/v1/print/preview", 101 * 1024 * 1024),
+    ("/v1/print/jobs", 101 * 1024 * 1024),
 )
 
 

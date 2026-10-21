@@ -115,7 +115,7 @@ def screen_for(st: dict | None, code: str | None, info: dict, cols: int) -> tupl
     if state == "awaiting_approval" and code:
         return head + [
             "To finish, type this code in the Domovoi dashboard:",
-            "Settings -> Satellites -> Waiting for approval",
+            "Settings -> Rooms -> Waiting for approval",
             "",
         ] + big(code, cols) + ["", f"(the code is {code[:3]} {code[3:]})"] + foot, False
     if state == "connected":
@@ -129,7 +129,7 @@ def screen_for(st: dict | None, code: str | None, info: dict, cols: int) -> tupl
                "Domovoi server, so nothing is sent to it.", "", reason[:70]]
     elif state == "refused":
         msg = ["Your Domovoi server turned this computer away:", reason[:70], "",
-               "Check Settings -> Satellites in the dashboard."]
+               "Check Settings -> Rooms in the dashboard."]
     elif state == "offline":
         msg = ["Can't reach your Domovoi server right now. Is it on?", reason[:70], "",
                "It keeps trying by itself."]

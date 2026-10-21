@@ -1347,13 +1347,13 @@ is `auto`, which the core resolves to its current LAN address.
   "the network is unavailable" (which it is) rather than letting a
   `ValueError` escape as a 500.
   **It honours the household's AI switch** (SDK 1.7): while AI chat and
-  questions are off (Settings → Models, `AI_FEATURES=false`), a request
-  that would run or fetch a model on this box's Ollama (`/api/generate`,
-  `/api/chat`, `/api/embed`, `/api/embeddings`, `/api/pull`, `/api/create`
-  on the core's `OLLAMA_URL` or on port 11434) raises
-  `ai_features.AITurnedOffConnectError` (an `AITurnedOff` and an
-  `httpx.ConnectError`) before anything is sent; `/api/tags`, `/api/ps` and
-  every other host stay open. Treat it like Ollama being down: skip the
+  questions are off (Settings → Models, `AI_FEATURES=false`), every request
+  to this box's Ollama (any host on port 11434, or the core's `OLLAMA_URL`)
+  raises `ai_features.AITurnedOffConnectError` (an `AITurnedOff` and an
+  `httpx.ConnectError`) before anything is sent, except its read-only
+  listings `/api/tags`, `/api/ps` and `/api/version`: the native API and
+  the OpenAI-compatible `/v1/chat/completions`, `/v1/completions`,
+  `/v1/embeddings` alike. Every other host stays open. Treat it like Ollama being down: skip the
   step (a summary, a generated answer) and keep what works without it.
   Better still, read `sdk.core_config.ai_features` first and don't offer
   the step at all. A plugin that calls Ollama through its own client is
@@ -1641,7 +1641,7 @@ the new manifest while your old code still runs the old container). A
 `pulling` (else `image`) isn't on the host yet — a long pull — up to 6
 hours in all. A resolver that raises holds them for
 30 minutes (and is logged); after that the container shows as "not
-watched · resolver failing" on the Containers page and only its
+watched · resolver failing" on Settings → Health and only its
 repository and settings are checked, until the resolver answers again.
 
 A disabled plugin's containers are known but not expected (stopping a
@@ -2091,7 +2091,7 @@ The runtime forces most of this, but know the shapes:
   written, but it loads at the next restart of the Domovoi services. Confirm
   answers `restart_required: true`; `GET /v1/admin/version` and
   `GET /v1/plugins` list the upgrade as pending, and the dashboard's Plugins
-  page and Settings → Version offer the restart (the same one that loads
+  page and Settings → About & updates offer the restart (the same one that loads
   pulled code — it bounces core and web). Until then the plugin is not
   loaded in the core. A plugin whose code the server never imported (its
   import failed at boot, say) is hot-loaded as before.

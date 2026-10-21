@@ -54,6 +54,9 @@ GATED = {
     # offered only when the calendar is named; help never (its fast path is
     # the whole question, and its tool would be bait for real questions)
     "calendar", "help",
+    # offered only when the turn talks about printing, scanning or the
+    # printer's supplies (handlers/printing.py)
+    "printing",
     # help_desk never: its fast path takes how-to questions about Domovoi
     # (or hands a how-to-worded command to its handler); its tool would be
     # bait for every other "how do I" question.
@@ -507,7 +510,7 @@ def test_every_registered_handler_is_offered_for_a_plain_command() -> None:
     music_alias's on-request tool) in it must see every tool."""
     names = _offered(
         "double check the latest news about the 3 timers i set and their other names"
-        " on my calendar"
+        " on my calendar for the printer"
     )
     assert set(names) == {h.name for h in HANDLERS} - NEVER_OFFERED
 

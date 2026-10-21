@@ -96,6 +96,7 @@ static partial class Tests
         UninstallTexts();
         LeftoverProfileTests();
         TrayTests();
+        SatelliteSetupTests();
         Console.WriteLine();
         Console.WriteLine(Inv.F("{0} passed, {1} failed", passed, failed));
         return failed == 0 ? 0 : 1;
@@ -415,6 +416,115 @@ static partial class Tests
             var yes = Opts(); yes.ScriptHasAiChoice = true;
             var no = Opts(); no.ScriptHasAiChoice = true; no.IncludeAi = false;
             True(string.Join("\n", ProvisionArgs.Build(yes).ToArray()) != string.Join("\n", ProvisionArgs.Build(no).ToArray()), "different arguments");
+        });
+        SavedAiAnswers();
+    }
+
+    // Review round 1 (2026-10-21): on a Setup run again, the saved answer
+    // wins; the models are pulled only when AI is actually on; the record
+    // keeps what provision.sh reported.
+    static List<string> JobArgsAfter(Ledger l, string prepareAi)
+    {
+        Domovoi.Windows.Helper.Steps.RecordAiAnswer(l, prepareAi);
+        return ProvisionArgs.Build(Domovoi.Windows.Helper.Steps.JobOptions(l, "https://github.com/coders-farm-official/domovoi",
+            "eb4a497fe821c08b6b8c39d7603ff7384d696dfc", "stable", AiUsage));
+    }
+
+    static HostStatus ReadyWith(bool? ai)
+    {
+        var s = new HostStatus(); s.State = "ready"; s.Ai = ai;
+        return HostStatus.FromJson(Json.ParseObject(Json.Serialize(s.ToJson())));
+    }
+
+    static void SavedAiAnswers()
+    {
+        Run("ai re-run: AI off (saved No): the page starts at No and No is said", delegate
+        {
+            // The household turned AI off in Settings > Models after a Yes.
+            var l = FullLedger(); l.IncludeAi = true;
+            var a = SavedAiAnswer.Decide(l, false);
+            True(!a.Yes, "page default No"); Eq("household", a.From, "from the household's .env");
+            var args = JobArgsAfter(l, "no");
+            True(args.Contains("--no-ai-models") && !args.Contains("--ai-models"), "--no-ai-models");
+            // The record alone says No (DomovoiHost couldn't be asked).
+            l = FullLedger(); l.IncludeAi = false;
+            a = SavedAiAnswer.Decide(l, null);
+            True(!a.Yes, "record No: page default No"); Eq("record", a.From, "from the record");
+            args = JobArgsAfter(l, "no");
+            True(args.Contains("--no-ai-models") && !args.Contains("--ai-models"), "record No: --no-ai-models");
+        });
+        Run("ai re-run: an earlier No, AI turned on later in Settings: the page follows the household", delegate
+        {
+            var l = FullLedger(); l.IncludeAi = false;
+            var a = SavedAiAnswer.Decide(l, true);
+            True(a.Yes, "page default Yes"); Eq("household", a.From, "from the household's .env");
+            var args = JobArgsAfter(l, "yes");
+            True(args.Contains("--ai-models") && !args.Contains("--no-ai-models"), "--ai-models");
+            True(l.IncludeAi && !l.AiKeep, "recorded");
+        });
+        Run("ai re-run: a Yes from the record alone, untouched, says neither option", delegate
+        {
+            // An older DomovoiHost can't read .env: provision.sh keeps it.
+            var l = FullLedger(); l.IncludeAi = true;
+            var a = SavedAiAnswer.Decide(l, null);
+            True(a.Yes, "page default Yes"); Eq("record", a.From, "from the record");
+            var args = JobArgsAfter(l, "keep");
+            True(!args.Contains("--ai-models") && !args.Contains("--no-ai-models"), "neither option");
+            True(l.AiKeep && l.IncludeAi, "recorded as keep");
+            True(Ledger.FromJson(Json.ParseObject(Json.Serialize(l.ToJson()))).AiKeep, "keep survives the record");
+            // A Yes picked again over keep is said out loud.
+            args = JobArgsAfter(l, "yes");
+            True(args.Contains("--ai-models") && !l.AiKeep, "yes after keep");
+            // keep over a recorded No is a No: never the models on a guess.
+            l = FullLedger(); l.IncludeAi = false;
+            args = JobArgsAfter(l, "keep");
+            True(args.Contains("--no-ai-models") && !l.AiKeep, "keep over No");
+            var old = FullLedger().ToJson(); old.Remove("ai_keep");
+            True(!Ledger.FromJson(Json.ParseObject(Json.Serialize(old))).AiKeep, "a record from before: no keep");
+        });
+        Run("ai: a first install starts at Yes", delegate
+        {
+            var a = SavedAiAnswer.Decide(null, null);
+            True(a.Yes, "yes"); Eq("none", a.From, "none");
+        });
+        Run("ai: the household's AI_FEATURES as the core reads it", delegate
+        {
+            True(!HouseholdAi.FromSedOutput("false\n"), "false");
+            True(HouseholdAi.FromSedOutput("true\n"), "true");
+            True(HouseholdAi.FromSedOutput(""), "no AI_FEATURES line: on");
+            True(HouseholdAi.FromSedOutput(null), "null: on");
+            True(!HouseholdAi.FromSedOutput("\"false\"\n"), "double quotes");
+            True(!HouseholdAi.FromSedOutput("'off'\n"), "single quotes");
+            True(!HouseholdAi.FromSedOutput("false # turned off in Settings\n"), "a comment");
+            True(HouseholdAi.FromSedOutput("false\ntrue\n"), "the last line counts");
+            True(!HouseholdAi.FromSedOutput("true\nFALSE\r\n"), "case and CRLF");
+            True(!HouseholdAi.FromSedOutput("0\n") && !HouseholdAi.FromSedOutput("never\n") && !HouseholdAi.FromSedOutput("disabled\n"), "other offs");
+            True(HouseholdAi.FromSedOutput("maybe\n") && HouseholdAi.FromSedOutput("\n\n"), "unknown or blank: on");
+            True(HouseholdAi.SedScript.IndexOf(' ') < 0 && HouseholdAi.SedScript.IndexOf('"') < 0, "one argument for wsl --exec");
+        });
+        Run("ai: provision.sh's reported ai reaches the host's status", delegate
+        {
+            var p = ProvisionLine.TryParse(RealFinal.Replace("\"warnings\":2", "\"ai\":false,\"warnings\":2"));
+            True(p != null && p.Ai == false, "false");
+            p = ProvisionLine.TryParse(RealFinal.Replace("\"warnings\":2", "\"ai\":true,\"warnings\":2"));
+            True(p != null && p.Ai == true, "true");
+            p = ProvisionLine.TryParse(RealFinal.Replace("\"warnings\":2", "\"ai\":null,\"warnings\":2"));
+            True(p != null && p.Ai == null, "null");
+            True(ProvisionLine.TryParse(RealFinal).Ai == null, "an older script: unknown");
+            True(ReadyWith(false).Ai == false && ReadyWith(true).Ai == true && ReadyWith(null).Ai == null, "status round trip");
+        });
+        Run("ai: the record takes provision.sh's reported ai, not the click", delegate
+        {
+            // Yes clicked (keep), but the household's .env had AI off.
+            var l = FullLedger(); l.IncludeAi = true;
+            True(AiReport.Apply(l, ReadyWith(false)), "changed");
+            True(!l.IncludeAi, "No recorded");
+            True(!AiReport.Apply(l, ReadyWith(false)), "no change the second time");
+            True(AiReport.Apply(l, ReadyWith(true)) && l.IncludeAi, "Yes recorded");
+            True(!AiReport.Apply(l, ReadyWith(null)) && l.IncludeAi, "unknown: the answer stays");
+            var busy = ReadyWith(false); busy.State = "provisioning";
+            True(!AiReport.Apply(l, busy) && l.IncludeAi && AiReport.Reported(busy) == null, "not ready: nothing yet");
+            True(!AiReport.Apply(l, null) && !AiReport.Apply(null, ReadyWith(false)), "nothing to go on");
         });
     }
 
@@ -1611,6 +1721,56 @@ static partial class Tests
             Eq(@"C:\Users\domovoi-svc.DESKTOP-ALEX\.wslconfig", WslConfig.FileIn(@"C:\Users\domovoi-svc.DESKTOP-ALEX"), "where Windows made the profile");
             Throws<ArgumentException>(delegate { WslConfig.FileIn(""); }, "no profile");
             True(UninstallFacts.IsDomovoiProfilePath(@"C:\Users\domovoi-svc.DESKTOP-ALEX"), "the uninstall recognises it");
+        });
+    }
+
+    // -- the satellite Setup DomovoiHost places (2026-10-21) ---------------
+
+    static void SatelliteSetupTests()
+    {
+        string sha = new string('a', 64);
+        Run("satellite setup: the record is the core's shape", delegate
+        {
+            Eq("{\"sha256\": \"" + sha + "\", \"size\": 3252640, \"release\": \"bundled\", \"fetched_at\": 1761000000}",
+               SatelliteSetupPlacement.Record(sha, 3252640, 1761000000), "record");
+            bool threw = false;
+            try { SatelliteSetupPlacement.Record("not-hex'; rm -rf /", 1, 1); } catch (ArgumentException) { threw = true; }
+            True(threw, "only a SHA-256 goes into the script");
+        });
+        Run("satellite setup: placed in the core's cache, then the record, then checked", delegate
+        {
+            string s = SatelliteSetupPlacement.PlaceScript(sha, 5, 6);
+            string d = "/home/domovoi/.domovoi/satellite_media/cache/satellite_setup";
+            True(s.StartsWith("set -e; umask 022; mkdir -p " + d + "; cat > "), s);
+            True(s.IndexOf("mv -f " + d + "/.DomovoiSatelliteSetup.exe.placing " + d + "/DomovoiSatelliteSetup.exe") > 0, "moved in");
+            True(s.IndexOf("/DomovoiSatelliteSetup.exe;") < s.IndexOf("/setup.json;"), "the file before its record");
+            True(s.EndsWith("sha256sum " + d + "/DomovoiSatelliteSetup.exe"), "checked");
+            Eq("sha256sum " + d + "/DomovoiSatelliteSetup.exe 2>/dev/null; echo; cat " + d + "/setup.json 2>/dev/null; true",
+               SatelliteSetupPlacement.CheckScript(), "check");
+        });
+        Run("satellite setup: placed only when the file and its record both match", delegate
+        {
+            string file = sha + "  /home/domovoi/.domovoi/satellite_media/cache/satellite_setup/DomovoiSatelliteSetup.exe\n\n";
+            string rec = SatelliteSetupPlacement.Record(sha, 5, 6);
+            True(SatelliteSetupPlacement.IsPlaced(file + rec, sha, 5), "both match");
+            True(!SatelliteSetupPlacement.IsPlaced(file, sha, 5), "the record missing");
+            True(!SatelliteSetupPlacement.IsPlaced("\n" + rec, sha, 5), "the file missing");
+            True(!SatelliteSetupPlacement.IsPlaced(file + SatelliteSetupPlacement.Record(new string('b', 64), 5, 6), sha, 5), "the record names another file");
+            True(!SatelliteSetupPlacement.IsPlaced(file + rec, sha, 7), "another size");
+            True(!SatelliteSetupPlacement.IsPlaced(file + rec.Replace("bundled", "v9.9.9"), sha, 5), "fetched, not bundled");
+            True(!SatelliteSetupPlacement.IsPlaced(new string('b', 64) + file.Substring(64) + rec, sha, 5), "another file");
+        });
+        Run("satellite setup: none beside the host is none", delegate
+        {
+            string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "domovoi-sat-" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(dir);
+            try
+            {
+                True(SatelliteSetupPlacement.Source(dir) == null, "absent");
+                System.IO.File.WriteAllBytes(System.IO.Path.Combine(dir, "DomovoiSatelliteSetup.exe"), new byte[] { 77, 90 });
+                Eq(System.IO.Path.Combine(dir, "DomovoiSatelliteSetup.exe"), SatelliteSetupPlacement.Source(dir), "present");
+            }
+            finally { System.IO.Directory.Delete(dir, true); }
         });
     }
 

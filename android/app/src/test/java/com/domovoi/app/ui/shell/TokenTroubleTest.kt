@@ -80,7 +80,7 @@ class TokenTroubleTest {
         assertTrue(text, text.contains("reinstalled"))
         assertTrue(text, text.contains("stopped sending the old one"))
         val hint = tokenTroubleHint(nr)
-        assertTrue(hint, hint.contains("Settings → Devices → Household token"))
+        assertTrue(hint, hint.contains("Settings → Phones & browsers → Household token"))
         for (copy in listOf(text, hint, tokenTroubleText(TokenTrouble.Waiting(53_000), "x"), tokenTroubleHint(TokenTrouble.Waiting(1)))) {
             assertFalse("no raw status or header names: $copy", copy.contains("429") || copy.contains("X-Device-Token"))
             assertFalse("not the dashboard's advice: $copy", copy.contains("sign in as an admin"))
@@ -136,7 +136,7 @@ class TokenTroubleTest {
     @Test fun theYesShowsBothKeys() {
         val t = trustAgainText("SHA256:old", "SHA256:new")
         assertTrue(t.contains("SHA256:old") && t.contains("SHA256:new"))
-        assertTrue(t.contains("Settings → About"))
+        assertTrue(t.contains("Settings → About & updates"))
         assertTrue(t.contains("say no"))
     }
 

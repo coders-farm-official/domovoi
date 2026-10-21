@@ -117,7 +117,7 @@ takes it back out of the address:
 kiosk_url = "http://<server>:6369/display.html?room=<room_id>&device_token=<household token>"
 ```
 
-The household token is under Settings → Devices → Household token on an
+The household token is under Settings → Phones & browsers → Household token on an
 admin's dashboard; percent-encode it if an admin chose one with spaces or
 `&`. Without it the screen shows what was playing when the page loaded and
 then stops updating — the live push refuses an unpaired screen, so no
@@ -131,7 +131,7 @@ a wrong token cannot unpair a browser that is already paired.
 
 ## 5. What you get
 
-- The dashboard's Settings → Satellites shows a `video` chip on the card; the
+- The dashboard's Settings → Rooms shows a `video` chip on the card; the
   drawer gains a **display** block (screen on/off, restart kiosk,
   kiosk-alive pill) and transport buttons on the now-playing row.
 - The screen shows cover art (library tracks; streams get the gradient),
@@ -140,7 +140,7 @@ a wrong token cannot unpair a browser that is already paired.
 - "Play music in <room>" through any voice satellite — or the dashboard —
   targets this satellite's own room id like any other satellite. Each
   satellite has its OWN music pipe (per-satellite MPD); group satellites
-  sharing a physical room with a room label in Settings → Satellites.
+  sharing a physical room with a room label in Settings → Rooms.
 
 ## 6. Troubleshooting
 

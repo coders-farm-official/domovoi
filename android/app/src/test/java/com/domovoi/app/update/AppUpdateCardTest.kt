@@ -13,7 +13,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Home's update card and Settings → About's line, composed for real on the
+ * Home's update card and Settings → About & updates's line, composed for real on the
  * JVM ([HeadlessUi]): "get the update" only when the phone can act on it,
  * "dismiss" always, and every control labelled.
  */

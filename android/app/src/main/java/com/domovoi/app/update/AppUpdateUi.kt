@@ -101,7 +101,7 @@ private fun UpdateLink(text: String, onClick: () -> Unit) {
 }
 
 /**
- * Settings → About: where updates come from and what the server offers,
+ * Settings → About & updates: where updates come from and what the server offers,
  * always (a dismissed notice is still here): "debug build", "from Google
  * Play", "up to date", or the notice with its button. Asks the server
  * afresh each time it is opened.

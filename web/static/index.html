@@ -83,12 +83,17 @@
   <script type="text/babel" data-presets="react" src="podcasts.jsx"></script>
   <script type="text/babel" data-presets="react" src="audiobooks.jsx"></script>
   <script type="text/babel" data-presets="react" src="videos.jsx"></script>
+  <script type="text/babel" data-presets="react" src="chat_documents.jsx"></script>
   <script type="text/babel" data-presets="react" src="chat.jsx"></script>
   <script type="text/babel" data-presets="react" src="people.jsx"></script>
   <script type="text/babel" data-presets="react" src="satellite_media.jsx"></script>
   <script type="text/babel" data-presets="react" src="satellites.jsx"></script>
   <script type="text/babel" data-presets="react" src="calendar.jsx"></script>
   <script type="text/babel" data-presets="react" src="plugins.jsx"></script>
+  <!-- Printers and scanners: the Settings tab (PrintersPanel), the Print
+       dialog and the Scan sheet that Files / Documents open. Before
+       settings.jsx and files.jsx, which render its components. -->
+  <script type="text/babel" data-presets="react" src="printers.jsx"></script>
   <script type="text/babel" data-presets="react" src="settings.jsx"></script>
   <!-- Files is a multi-library browser. It MUST load before doc_editor.jsx /
        sheet_editor.jsx (which register window.DocEditor / window.SheetEditor,
@@ -104,6 +109,7 @@
   <script type="text/babel" data-presets="react" src="news.jsx"></script>
   <script type="text/babel" data-presets="react" src="manual.jsx"></script>
   <script type="text/babel" data-presets="react" src="containers.jsx"></script>
+  <script type="text/babel" data-presets="react" src="health.jsx"></script>
   <script type="text/babel" data-presets="react" src="help.jsx"></script>
   <!-- Home is the default page. Loaded LAST of the core pages so every
        helper another page puts on window (satellites.jsx, calendar.jsx,
@@ -132,19 +138,21 @@
       videos: () => window.VideosPage,
       news: () => window.NewsPage,
       people: () => window.PeoplePage,
-      // A Settings tab since 2026-10-11: the shell turns #satellites into
-      // Settings → Satellites before it gets here (settingsTabRoute,
-      // components.jsx). The route stays a core one, so no plugin can
-      // take the old address.
+      // A Settings tab since 2026-10-11 (Rooms since 2026-10-21): the
+      // shell turns #settings/rooms into Settings → Rooms before it gets here
+      // (settingsTabRoute, components.jsx). The route stays a core one, so
+      // no plugin can take the old address.
       satellites: () => window.SettingsPage,
       calendar: () => window.CalendarPage,
       files: () => window.FilesPage,
       plugins: () => window.PluginsPage,
       settings: () => window.SettingsPage,
       manual: () => window.UserManualPage,
-      // The container guard's details (containers.jsx): reached from the
-      // banner, Home's problems row and a phone's notification, not the nav.
-      containers: () => window.ContainersPage,
+      // The container guard's details: part of Settings → Health since
+      // 2026-10-21 (containers.jsx, health.jsx); the shell turns the old
+      // #settings/health/containers into #settings/health/containers first. Kept a core
+      // route, so no plugin can take the old address.
+      containers: () => window.SettingsPage,
     };
 
     // Browser-side plugin error pipeline. Two sources feed it — script
@@ -311,9 +319,9 @@
         || localStorage.getItem('domovoi-theme') || 'light';
       // Home is where a bare URL, the installed app (manifest start_url)
       // and an unknown route all land. Deep links (#music, …) still work,
-      // and a page that became a Settings tab (#satellites) opens that tab
+      // and a page that became a Settings tab (#settings/rooms) opens that tab
       // (settingsTabRoute, components.jsx). `route` is the whole address
-      // (#settings/configuration): its first segment picks the page, the
+      // (#settings/advanced): its first segment picks the page, the
       // rest is the page's own (a tab, useRouteTab in components.jsx).
       const initialRoute = (window.location.hash || '#home').slice(1);
       const [theme, setThemeState] = React.useState(initialTheme);

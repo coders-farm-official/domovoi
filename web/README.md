@@ -25,8 +25,8 @@ python -m web.backend.main
 
 Open `http://localhost:6369/` (or `http://<server>:6369/` from any
 device on the LAN). Hash routing, so deep links like `#music` and
-`#plugins` work; `#satellites`, from before Satellites became a
-Settings tab, still opens Settings → Satellites.
+`#plugins` work; `#settings/rooms`, from before Satellites became a
+Settings tab, still opens Settings → Rooms.
 
 The web backend runs on its own — read pages still render straight
 from Postgres with the core down. Anything needing live core state

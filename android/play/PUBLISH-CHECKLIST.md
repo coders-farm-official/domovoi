@@ -66,7 +66,7 @@ own phones.
 ## 1. Create the app
 
 Play Console → **Home → Create app**:
-- App name: `Domovoi: self-hosted assistant` (or just `Domovoi`)
+- App name: `Domovoi: AI & home computer` (or just `Domovoi`)
 - Default language: English (United States)
 - App or game: **App**; Free or paid: **Free**
 - Tick the Developer Program Policies and US export laws declarations.

@@ -247,7 +247,7 @@ const _isDeviceTokenRefusal = (status, text) => (
 
 /* ── A device an admin BLOCKED, told apart from a missing credential ──
  *
- * An admin can block one device in Settings → Devices; the server then
+ * An admin can block one device in Settings → Phones & browsers; the server then
  * refuses that device's writes 403, with the block's own reason as the
  * body. 403 is also what "sign in" looks like, so the retry below used
  * to open the admin-password modal over the editor and replay the save.
@@ -815,7 +815,7 @@ const mutationErrorText = (e, verb = 'Save', { kept = true } = {}) => {
   const blocked = deviceBlockReason(e);
   if (blocked) {
     return `${verb} refused — ${blocked}. An admin lifts the block in `
-      + `Settings → Devices.${kept ? ' Your changes are still here.' : ''}`;
+      + `Settings → Phones & browsers.${kept ? ' Your changes are still here.' : ''}`;
   }
   if (e && e.authCancelled) {
     const what = e.deviceTokenRequired ? 'this browser is not paired' : 'not signed in';
@@ -1052,7 +1052,7 @@ const useRetryAfterCredential = (refusal, retry) => {
  * Most reads are allowed or refused, and the retry in the hooks below
  * recovers a refused one once a credential arrives. A few are allowed
  * EITHER way and answer differently by who asks:
- *   * Settings → Configuration (and the Models tab's active models, read
+ *   * Settings → Advanced (and the Models tab's active models, read
  *     from the same registry): the advanced section and the unmasked
  *     secrets come back only for a live admin Bearer. The cookie a
  *     reload keeps is view-only (CORE-6).
@@ -1628,7 +1628,7 @@ const DeviceIdentity = (() => {
   };
 
   /* Shared screen (V014). An admin marks a device — the kitchen tablet —
-   * as a shared screen in Settings → Devices, and every device row the
+   * as a shared screen in Settings → Phones & browsers, and every device row the
    * server returns carries `shared_screen`, this device's own registration
    * included. The last answer is echoed to localStorage so a reload paints
    * the shared view at once instead of flashing personal content while

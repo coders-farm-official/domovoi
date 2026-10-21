@@ -97,6 +97,8 @@ class PhoneBarTest {
     @Test fun chatLeavesTheBarWhileTheServersAiFeaturesAreOff() {
         val aiOff = Capabilities(features = mapOf(FEATURE_AI to false))
         val aiOn = Capabilities(features = mapOf(FEATURE_AI to true))
+        // No on-device assistant (with one, One Chat keeps Chat for it).
+        onDeviceAssistant = { false }
         // The default bar: home · music · videos.
         assertEquals(listOf(Route.Home, Route.Music, Route.Videos), PhoneBar.routes(null, aiOff, shared = false))
         assertEquals(default, PhoneBar.routes(null, aiOn, shared = false))

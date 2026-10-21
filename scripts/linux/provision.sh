@@ -75,7 +75,14 @@
 #   piper        the three Piper voices (SHIPPED_VOICES), each checked against
 #                PIPER_PINS; a configured voice outside them is left to the core
 #   images       the database images the compose file pins, and docker build of
-#                domovoi-mpd exactly as the core builds it
+#                domovoi-mpd exactly as the core builds it: only when the tag
+#                names no image, or this script built the image it names and
+#                Dockerfile.mpd changed since (an image the core or the update
+#                unit built is theirs to keep current). Each build is recorded
+#                in /var/lib/domovoi-provision/mpd-image.json for the core's
+#                container guard; a build that moved the tag removes the rooms'
+#                players still on the old image and restarts a running core,
+#                which recreates them on the new one, as an update does
 #   searxng      the search helper, started for always/sometimes, off for never
 #   os-jobs      Ubuntu's own background jobs follow the internet answer:
 #                scripts/linux/os-jobs.sh masks the updaters, news and
@@ -138,7 +145,12 @@
 # one question this script asks, only when stdin is a terminal and not in
 # a dry run ("Include AI chat and questions? ... [Y/n]", on stderr; Enter
 # or yes includes them, n or no leaves them out, anything else asks again,
-# end of input includes them), else yes.
+# end of input includes them), else yes. On a box set up before, the
+# household's saved answer wins over an option: AI_FEATURES, once changed
+# in Settings or by hand, is kept like any managed key, and after the env
+# step the run follows what domovoi/.env holds, read as the core reads it
+# (blank or unknown is on): the models step pulls only when that is on,
+# and the final line's "ai" is that value, not the option's.
 #
 # Machine-readable progress for the Windows installer's UI: every line on
 # stdout that starts with "@@DOMOVOI " is one JSON object:
@@ -287,6 +299,12 @@ GPU_JSON=null
 # settled (decide_ai), empty before; AI_WHY says where the answer came from.
 AI=""
 AI_WHY=""
+# 1 when AI came from domovoi/.env (no option, no question): the household's
+# answer, which the env step then never records as the script's own.
+AI_FROM_ENV=0
+# 1 when the .env, after the env step, said otherwise than the option.
+AI_OVERRIDDEN=0
+AI_FLAG_NAME=""
 # 1 once this run is past its checks and holds the run lock: only then is
 # result.json its to write, and the restart question worth asking.
 STARTED=0
@@ -456,6 +474,12 @@ UNITS_CHANGED_FILE=$STATE_DIR/units-changed
 ENV_RECORD=$STATE_DIR/env-written
 ENV_STAMP=$STATE_DIR/env-stamp
 ENV_CREATING=$STATE_DIR/env-creating
+# The images step's record of the music player image it last built (the
+# image ID, the tag, Dockerfile.mpd's hash, when): root's, 0644, read by the
+# core's container guard as the evidence that the new image is Domovoi's own
+# build (domovoi/container_guard/engine.py, provision_evidence) and by the
+# next run to tell whether Dockerfile.mpd changed since.
+MPD_RECORD=$STATE_DIR/mpd-image.json
 # The settings domovoi-update.service reads (docs/LINUX_HOST.md, Updates
 # from the dashboard): this script writes DOMOVOI_USE_LOCK there and reads
 # DOMOVOI_MANAGE_OS_JOBS and DOMOVOI_MANAGE_GPU_RUNTIME.
@@ -580,7 +604,9 @@ skipped, a killed run resumes, a changed option re-runs what it feeds.
                         With neither option: a box set up before keeps the
                         answer in its domovoi/.env; otherwise the script
                         asks once when run from a terminal (Enter: yes),
-                        and takes yes when it can't ask
+                        and takes yes when it can't ask. Either option
+                        leaves an answer changed in Settings as it is, and
+                        the models are pulled only when that answer is on
   --no-vision-model     don't pull the tier's vision model, which reads
                         pictures in chat (about 1.9 GB, part of the sizes
                         above). It is still the one configured: chat then
@@ -2173,7 +2199,7 @@ check_tag_record() {
 # given with --track-branch stable, the Windows installer's, follows main),
 # with a warning; the household can switch to stable from Settings >
 # Version once there is one. A --ref stable given on the command line has
-# no such fallback. The switch is the household's (Settings > Version);
+# no such fallback. The switch is the household's (Settings > About & updates);
 # nothing moves the box to stable by itself. The checkout keeps what was
 # asked for (git config domovoi.intendedChannel stable), and the Version
 # card says so once the first release is out.
@@ -2184,12 +2210,12 @@ checkout_ref() {
       ref=main
       [ "$TRACK_GIVEN" = 1 ] || track=main
       intended=stable
-      warn "$REPO_URL has no stable branch yet (no release has been published): installing main, and this box follows main; switch to stable in Settings > Version after the first release"
+      warn "$REPO_URL has no stable branch yet (no release has been published): installing main, and this box follows main; switch to stable in Settings > About & updates after the first release"
     fi
     if [ "$track" = stable ] && [ "$ref" != stable ]; then
       track=main
       intended=stable
-      warn "$REPO_URL has no stable branch yet (no release has been published): this box follows main; switch to stable in Settings > Version after the first release"
+      warn "$REPO_URL has no stable branch yet (no release has been published): this box follows main; switch to stable in Settings > About & updates after the first release"
     fi
   fi
   read -r kind name <<<"$(ref_kind "$ref")"
@@ -2806,7 +2832,14 @@ do_env() {
   else
     log "domovoi/.env: nothing to set"
   fi
-  for k in "${write[@]}" "${same[@]}"; do last[$k]=${want[$k]}; done
+  for k in "${write[@]}"; do last[$k]=${want[$k]}; done
+  for k in "${same[@]}"; do
+    # An AI answer this run took from the .env is the household's: it stays
+    # theirs (a later --ai-models or --no-ai-models keeps it), not the
+    # script's to replace.
+    if [ "$k" = AI_FEATURES ] && [ "$AI_FROM_ENV" = 1 ]; then continue; fi
+    last[$k]=${want[$k]}
+  done
   write_env_record last
   for k in "${kept[@]}"; do
     warn "domovoi/.env: $k holds a value this script did not write (set in Settings, or by hand); left as it is (this run would have written ${want[$k]})"
@@ -3073,17 +3106,23 @@ model_pairs() {
 
 skip_models() {
   if [ "$SKIP_MODELS" = 1 ]; then echo "--skip-models: no Ollama models pulled"; return 0; fi
+  if [ "$AI" = no ] && [ "$AI_OVERRIDDEN" = 1 ]; then
+    echo "AI chat and questions are off in this home's settings (AI_FEATURES=false in domovoi/.env, kept over $AI_FLAG_NAME): no AI models pulled (turn them on in Settings, Models)"
+    return 0
+  fi
   if [ "$AI" = no ]; then
     echo "$AI_WHY: AI chat and questions are off; no AI models pulled (turn them on later in Settings, Models)"
     return 0
   fi
   return 1
 }
-# The AI answer is not among these: a run that leaves AI out skips this
-# step before its inputs are read, and leaves its marker as it was. So a
-# later run that includes AI finds no marker (runs), or the marker of an
-# earlier run that pulled the same models, which check_models then holds
-# to Ollama's list (any one gone: it runs again).
+# The AI answer is not among these: a run that leaves AI out (the
+# effective answer, settle_ai) skips this step before its inputs are read,
+# and leaves its marker as it was. So a later run that includes AI (an
+# option, or the household turning it on in Settings) finds no marker
+# (runs), or the marker of an earlier run that pulled the same models,
+# which check_models then holds to Ollama's list (any one gone: it runs
+# again).
 inputs_models() { model_pairs; }
 check_models() {
   local tag want
@@ -3259,6 +3298,78 @@ do_piper() {
 DB_SERVICES=(postgres flyway)
 compose_refs() { (cd "$CHECKOUT/domovoi" && as_svc docker compose config --images "$@"); }
 mpd_tag() { local t; t=$(dotenv_get MPD_IMAGE_TAG); printf '%s' "${t:-domovoi-mpd:latest}"; }
+mpd_prefix() { local p; p=$(dotenv_get MPD_CONTAINER_PREFIX); printf '%s' "${p:-domovoi-mpd-}"; }
+# The image ID the tag names (sha256:...), or nothing.
+mpd_image_id() { { as_svc docker image inspect -f '{{.Id}}' "$(mpd_tag)" 2>/dev/null || true; } | tr -d '[:space:]'; }
+# mpd_record_field KEY: KEY's value in MPD_RECORD (one key a line, as
+# write_mpd_record writes it), or nothing.
+mpd_record_field() {
+  [ -f "$MPD_RECORD" ] || return 0
+  sed -n "s/^  \"$1\": \"\([^\"]*\)\",\{0,1\}\$/\1/p" "$MPD_RECORD" | head -n 1
+}
+# mpd_build_reason IMAGE_ID: why the music player image must be built now
+# (printed), or status 1: keep the image the tag names (IMAGE_ID). Built
+# when the tag names none (a first install, or someone removed it), or when
+# this script built that very image and Dockerfile.mpd changed since. Any
+# other image is kept: one the core or the update unit built follows
+# Dockerfile.mpd by itself (apply-update.sh rebuilds it when the file
+# changes), and one nobody here built is the container guard's to report,
+# not this script's to paper over. Until 2026-10-21 every re-run of this
+# step rebuilt (a repair by Setup after any change to the compose file, one
+# of the step's inputs); a build that misses Docker's build cache gets a
+# new image ID (the apt layer is not reproducible), and the guard reported
+# it as "the music player image was replaced outside Domovoi".
+mpd_build_reason() {
+  if [ -z "$1" ]; then echo "$(mpd_tag) is not there"; return 0; fi
+  if [ "$(mpd_record_field image_id)" = "$1" ] \
+    && [ "$(mpd_record_field dockerfile_sha256)" != "$(file_sig "$CHECKOUT/domovoi/Dockerfile.mpd")" ]; then
+    echo "Dockerfile.mpd changed since this script built $(mpd_tag)"; return 0
+  fi
+  return 1
+}
+# write_mpd_record IMAGE_ID: MPD_RECORD for the image just built, by rename
+# from a temp file beside it (root's, 0644; the core reads it).
+write_mpd_record() {
+  local tmp=$MPD_RECORD.tmp
+  [[ $1 =~ ^sha256:[0-9a-f]{64}$ ]] || die "docker build of $(mpd_tag) left no image ID (got '$1')"
+  {
+    printf '{\n'
+    printf '  "by": "provision",\n'
+    printf '  "image_id": "%s",\n' "$1"
+    printf '  "tag": %s,\n' "$(json_str "$(mpd_tag)")"
+    printf '  "dockerfile_sha256": "%s",\n' "$(file_sig "$CHECKOUT/domovoi/Dockerfile.mpd")"
+    printf '  "built_at": "%s"\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '}\n'
+  } >"$tmp" && chmod 0644 "$tmp" && mv -f "$tmp" "$MPD_RECORD" || die "could not write $MPD_RECORD"
+}
+# mpd_move_rooms IMAGE_ID: after a build that moved the tag, the rooms'
+# players still run the image they were made from (the guard would call
+# that a different image). Remove each one that isn't on IMAGE_ID and
+# restart a running core: its startup warm recreates them from mpd_rooms on
+# the new image, with the same data volumes, and its start takes the new
+# image on (the record above vouches for it). What the update unit's
+# rebuild-mpd does too. A first install has no rooms and no core running.
+mpd_move_rooms() {
+  local prefix names n img
+  prefix=$(mpd_prefix)
+  names=$(as_svc docker ps -a --format '{{.Names}}') || die "docker ps failed"
+  for n in $names; do
+    [[ $n == "$prefix"* ]] || continue
+    img=$({ as_svc docker inspect -f '{{.Image}}' "$n" 2>/dev/null || true; } | tr -d '[:space:]')
+    [ "$img" = "$1" ] && continue
+    log "removing $n: it runs the previous music player image (the core recreates it on the new one, data volume kept)"
+    as_svc docker rm -f "$n" >/dev/null || die "docker rm -f $n failed"
+  done
+  # Unless it is down: a core still starting ("activating") has read the
+  # old image already, and is restarted too.
+  local core
+  core=$(systemctl is-active domovoi-core.service 2>/dev/null || true)
+  if [ -n "$core" ] && [ "$core" != inactive ] && [ "$core" != failed ]; then
+    log "restarting domovoi-core: it recreates the rooms' players on the new image and takes the image on"
+    systemctl restart domovoi-core.service --no-block \
+      || warn "systemctl restart domovoi-core failed; restart it to move the rooms onto the new image"
+  fi
+}
 inputs_images() { file_sig "$CHECKOUT/domovoi/docker-compose.yml"; file_sig "$CHECKOUT/domovoi/Dockerfile.mpd"; mpd_tag; }
 check_images() {
   local refs r
@@ -3268,15 +3379,23 @@ check_images() {
 }
 plan_images() {
   echo "docker compose pull ${DB_SERVICES[*]} (the digests domovoi/docker-compose.yml pins)"
-  echo "docker build -t $(mpd_tag) -f domovoi/Dockerfile.mpd domovoi"
+  echo "docker build -t $(mpd_tag) -f domovoi/Dockerfile.mpd domovoi (only when $(mpd_tag) is missing, or Dockerfile.mpd changed since this script built it)"
 }
 do_images() {
-  local tag
+  local tag cur new why
   # Pulled here rather than at domovoi-db's first start, where the download
   # would have no progress and the start step would wait on it.
   emit_frac 50 "Downloading the database images"
   (cd "$CHECKOUT/domovoi" && as_svc docker compose pull "${DB_SERVICES[@]}") || die "docker compose pull ${DB_SERVICES[*]} failed"
   tag=$(mpd_tag)
+  cur=$(mpd_image_id)
+  if ! why=$(mpd_build_reason "$cur"); then
+    log "keeping $tag ($cur): this script builds it only when it is missing or when Dockerfile.mpd changed since it built it"
+    check_images || die "the database images are not there after the pull"
+    STEP_DONE_MSG="Images ready ($tag kept)"
+    return 0
+  fi
+  log "building $tag: $why"
   # Exactly what domovoi/mpd_provisioner.py _build_image runs, ahead of the
   # core's first boot (which would build it with no progress, and not at
   # all on a box without internet).
@@ -3284,6 +3403,10 @@ do_images() {
   (cd "$CHECKOUT/domovoi" && as_svc docker build --progress=plain -t "$tag" -f "$CHECKOUT/domovoi/Dockerfile.mpd" "$CHECKOUT/domovoi") \
     || die "docker build of $tag failed"
   check_images || die "the database images or $tag are not there after the pull and build"
+  new=$(mpd_image_id)
+  # Recorded before anything else, so a core that starts now finds it.
+  write_mpd_record "$new"
+  if [ "$new" != "$cur" ]; then mpd_move_rooms "$new"; fi
   STEP_DONE_MSG="Images ready ($tag built)"
 }
 
@@ -3764,7 +3887,7 @@ use_lock_lines() {
 channel_pin_set() { grep -q '^[[:space:]]*DOMOVOI_UPSTREAM_BRANCH[[:space:]]*=' "$UPDATE_DEFAULTS" 2>/dev/null; }
 channel_pin_lines() {
   printf '%s\n' "# Written by scripts/linux/provision.sh: updates follow one of Domovoi's" \
-    "# release channels, stable or main (Settings > Version switches between" \
+    "# release channels, stable or main (Settings > About & updates switches between" \
     "# them; docs/LINUX_HOST.md, Release channels). Any other branch is refused." \
     'DOMOVOI_UPSTREAM_BRANCH="stable main"'
 }
@@ -3957,8 +4080,8 @@ decide_ai() {
     prev=$(dotenv_get AI_FEATURES 2>/dev/null) || prev=""
   fi
   case ${prev,,} in
-    true|1|yes|on) AI=yes; AI_WHY="AI_FEATURES=true in domovoi/.env"; return 0 ;;
-    false|0|no|off) AI=no; AI_WHY="AI_FEATURES=false in domovoi/.env"; return 0 ;;
+    true|1|yes|on) AI=yes; AI_WHY="AI_FEATURES=true in domovoi/.env"; AI_FROM_ENV=1; return 0 ;;
+    false|0|no|off) AI=no; AI_WHY="AI_FEATURES=false in domovoi/.env"; AI_FROM_ENV=1; return 0 ;;
   esac
   if ! dry && stdin_is_tty; then
     if ask_ai; then AI=yes; AI_WHY="answered yes"; else AI=no; AI_WHY="answered no"; fi
@@ -3966,6 +4089,39 @@ decide_ai() {
   fi
   AI=yes
   AI_WHY="the default"
+}
+
+# settle_ai: after the env step (run or skipped), AI is what domovoi/.env
+# holds, read the way the core reads it (env_bootstrap.env_values, then
+# domovoi.ai_features.parse: only a clear off value is off; blank, missing
+# or unknown is on). The env step keeps a value the household set, so on a
+# box set up before, their answer wins over an option. A checkout whose
+# core predates the setting still follows it for the models.
+settle_ai() {
+  local out v eff
+  ! dry || return 0
+  [ -f "$CHECKOUT/domovoi/.env" ] || return 0
+  if out=$(env_py "$PY_ENV_READ" PROVISION_ENV_NAMES=AI_FEATURES); then
+    v=$(printf '%s
+' "$out" | sed -n 's/^AI_FEATURES=//p' | tail -n 1)
+  else
+    warn "reading AI_FEATURES from domovoi/.env through the core failed; reading the file directly"
+    v=$(dotenv_get AI_FEATURES 2>/dev/null) || v=""
+  fi
+  v=${v#"${v%%[![:space:]]*}"}; v=${v%"${v##*[![:space:]]}"}
+  case ${v,,} in 0|false|no|off|disabled|n|f|never) eff=no ;; *) eff=yes ;; esac
+  [ "$eff" != "$AI" ] || return 0
+  if [ -n "$AI_FLAG" ]; then
+    AI_FLAG_NAME=$AI_WHY
+    AI_OVERRIDDEN=1
+    if [ "$eff" = no ]; then
+      log "AI chat and questions: off in this home's settings (AI_FEATURES=false in domovoi/.env), kept over $AI_FLAG_NAME: no AI models are pulled"
+    else
+      log "AI chat and questions: on in this home's settings (AI_FEATURES=${v:-true} in domovoi/.env), kept over $AI_FLAG_NAME: the AI models are pulled"
+    fi
+  fi
+  AI=$eff
+  AI_WHY="AI_FEATURES=${v:-(blank)} in domovoi/.env"
 }
 
 if [ "$DRY_RUN" = 0 ] && [ "$(id -u)" != 0 ]; then
@@ -4033,6 +4189,7 @@ for step in "${STEP_IDS[@]:1}"; do
   run_step "$step"
   case $step in
     user) SVC_HOME=$(svc_home) || true; [ -n "$SVC_HOME" ] || SVC_HOME=/home/$SVC_USER ;;
+    env) settle_ai ;;
     checkout)
       if ! dry; then tidy_checkout; fi
       if [ -d "$CHECKOUT/.git" ] && [ -z "$HEAD_SHA" ]; then HEAD_SHA=$(g rev-parse HEAD 2>/dev/null || true); fi

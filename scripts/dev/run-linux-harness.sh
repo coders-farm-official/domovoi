@@ -13,8 +13,10 @@
 # Usage:
 #   scripts/dev/run-linux-harness.sh [options] HARNESS [--case NAME|GLOB]... [--list]
 #
-#   HARNESS   apply-update | provision | install-update-unit, or `all`
-#             (the three at once, each in its own container; no --case).
+#   HARNESS   apply-update | provision | install-update-unit | printing, or
+#             `all` (the four at once, each in its own container; no --case).
+#             printing runs in its own image (printing-harness.Dockerfile:
+#             the same base plus ippeveprinter, for tests only).
 #   --case, --list  passed to the harness (scripts/linux/tests/case-filter.sh).
 #   --src DIR       the tree to test (default: the checkout holding this
 #                   script). Its git-tracked and untracked-but-not-ignored
@@ -40,9 +42,18 @@ set -uo pipefail
 export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-DOCKERFILE=$HERE/linux-harness.Dockerfile
 IMAGE_REPO=domovoi-linux-harness
-HARNESSES=(apply-update provision install-update-unit)
+HARNESSES=(apply-update provision install-update-unit printing)
+
+# The Dockerfile a harness's image is built from: printing needs
+# ippeveprinter (printing-harness.Dockerfile), the others only the base set.
+dockerfile_for() {
+  if [ "$1" = printing ]; then
+    echo "$HERE/printing-harness.Dockerfile"
+  else
+    echo "$HERE/linux-harness.Dockerfile"
+  fi
+}
 
 usage() { sed -n '/^# Usage:/,/^# Exit status/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'; }
 die() { echo "run-linux-harness: $*" >&2; exit 2; }
@@ -74,7 +85,7 @@ if [ "$HARNESS" = all ]; then
 else
   ok=0
   for h in "${HARNESSES[@]}"; do [ "$h" = "$HARNESS" ] && ok=1; done
-  [ "$ok" = 1 ] || die "unknown harness: $HARNESS (apply-update, provision, install-update-unit or all)"
+  [ "$ok" = 1 ] || die "unknown harness: $HARNESS (apply-update, provision, install-update-unit, printing or all)"
 fi
 
 SRC=$(cd "${SRC:-$HERE/../..}" 2>/dev/null && pwd) || die "no such directory: ${SRC:-}"
@@ -91,15 +102,29 @@ docker version --format '{{.Server.Version}}' >/dev/null 2>&1 \
 
 # A hash of the Dockerfile's text (line endings aside) names the image, so
 # a changed file gets a new image and an unchanged one is never rebuilt.
-TAG=$(tr -d '\r' <"$DOCKERFILE" | sha256sum | cut -c1-12)
-IMAGE=$IMAGE_REPO:$TAG
-if [ "$REBUILD" = 1 ] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  echo "run-linux-harness: building $IMAGE (once per Dockerfile change)..." >&2
-  # The Dockerfile goes in on stdin: no build context, nothing of the tree
-  # is sent to the builder.
-  tr -d '\r' <"$DOCKERFILE" | docker build -q -t "$IMAGE" - >/dev/null \
-    || die "building $IMAGE failed (rerun with --rebuild after fixing; docker build output above)"
+# image_for HARNESS prints that harness's image name, building it first
+# when no copy is cached (each harness's Dockerfile: dockerfile_for).
+image_for() {
+  local dockerfile tag image
+  dockerfile=$(dockerfile_for "$1")
+  tag=$(tr -d '\r' <"$dockerfile" | sha256sum | cut -c1-12)
+  image=$IMAGE_REPO:$tag
+  if [ "$REBUILD" = 1 ] || ! docker image inspect "$image" >/dev/null 2>&1; then
+    echo "run-linux-harness: building $image (once per Dockerfile change)..." >&2
+    # The Dockerfile goes in on stdin: no build context, nothing of the tree
+    # is sent to the builder.
+    tr -d '\r' <"$dockerfile" | docker build -q -t "$image" - >/dev/null \
+      || die "building $image failed (rerun with --rebuild after fixing; docker build output above)"
+  fi
+  echo "$image"
+}
+# Build what this run needs up front (and once): `all` needs both images.
+if [ "$HARNESS" = all ]; then
+  for h in "${HARNESSES[@]}"; do image_for "$h" >/dev/null; done
+else
+  image_for "$HARNESS" >/dev/null
 fi
+REBUILD=0
 
 # ─── the copy of the tree ───────────────────────────────────────────────────
 
@@ -133,14 +158,15 @@ tar -C "$SRC" --null -T "$WORK/files" -cf "$WORK/tree.tar" || die "copying $SRC 
 # run_one NAME HARNESS [harness args]: stream the tree in, run the harness,
 # its output on stdout. NAME is the container's, so cleanup can find it.
 run_one() {
-  local name=$1 h=$2
+  local name=$1 h=$2 image
   shift 2
+  image=$(image_for "$h") || exit 2
   # --network none: the harnesses are hermetic, so nothing may reach out.
   # /tmp is a tmpfs: every case's throwaway repositories live there.
   docker run --rm -i --name "$name" --label org.domovoi.harness="$h" \
     --network none --tmpfs /tmp:rw,exec,nosuid,mode=1777,size=2g \
     -e HARNESS_PYTHON=/usr/bin/python3 \
-    "$IMAGE" bash -c 'mkdir -p src && tar -xf - -C src && cd src && exec bash "scripts/linux/tests/test-$0.sh" "$@"' \
+    "$image" bash -c 'mkdir -p src && tar -xf - -C src && cd src && exec bash "scripts/linux/tests/test-$0.sh" "$@"' \
     "$h" "$@" <"$WORK/tree.tar" 2>&1
 }
 
@@ -154,7 +180,7 @@ if [ "$HARNESS" != all ]; then
   run_one "$name" "$HARNESS" ${PASS[@]+"${PASS[@]}"} | tee "$log"
   rc=${PIPESTATUS[0]}
   if [ "$LISTING" = 0 ]; then
-    echo "run-linux-harness: $HARNESS exit $rc in $(($(date +%s) - t0))s ($IMAGE); log: $log" >&2
+    echo "run-linux-harness: $HARNESS exit $rc in $(($(date +%s) - t0))s ($(image_for "$HARNESS")); log: $log" >&2
   fi
   exit "$rc"
 fi
@@ -167,7 +193,7 @@ for h in "${HARNESSES[@]}"; do
   run_one "domovoi-harness-$h-$$" "$h" >"${LOGS[$h]}" &
   PIDS[$h]=$!
 done
-echo "run-linux-harness: running ${HARNESSES[*]} side by side ($IMAGE)..." >&2
+echo "run-linux-harness: running ${HARNESSES[*]} side by side..." >&2
 worst=0
 for h in "${HARNESSES[@]}"; do
   wait "${PIDS[$h]}"

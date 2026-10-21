@@ -201,6 +201,10 @@ const TextEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null }) =>
       <Pill tone="idle">text</Pill>
       {dirty && <span style={{ fontSize: 11, color: 'var(--warn-ink)' }}>unsaved — click Save</span>}
       <span style={{ flex: 1 }}/>
+      {window.PrintFileButton && (
+        <window.PrintFileButton libraryId="core:documents" path={rel_path} name={rel_path}
+                                title={dirty ? 'prints the last saved version' : 'print'}/>
+      )}
       {state.status === 'ready' && (
         <Button variant="primary" icon="save" disabled={saving || !dirty || !!blocked}
                 title={blocked || undefined} onClick={onSave}>
@@ -317,11 +321,18 @@ const DocRow = ({ doc, selected, onToggleSelect,
       <div className="files-row-acts">
         <Button icon={primary.icon} disabled={primary.disabled} title={primary.title}
                 onClick={primary.onClick}>{primary.label}</Button>
+        {/* Print (printers.jsx): only with a saved printer and a printable
+            kind of file; a Word file gets the "save it as PDF" line. */}
+        {window.PrintFileButton && (
+          <window.PrintFileButton libraryId="core:documents" path={doc.rel_path} name={doc.name + doc.ext}/>
+        )}
         {cat !== 'download' && (
           <Button icon="download" title="download"
                   onClick={() => downloadDoc(doc.rel_path)}>Download</Button>
         )}
         <Button icon="trash-2" title="delete" onClick={() => onDelete(doc)}>Delete</Button>
+        {/* A chat about this file (chat_documents.jsx): the kinds Chat reads. */}
+        {window.ChatDocs && <window.ChatDocs.AskButton relPath={doc.rel_path} name={doc.name + doc.ext}/>}
       </div>
     </div>
   );
@@ -709,12 +720,18 @@ const BrowserRow = ({ entry, libraryId, selected, onToggleSelect, editable, remo
         {!isDir && entry.kind === 'image' && (
           <Button icon="external-link" title="open in a new tab" onClick={openImage}>Open</Button>
         )}
+        {!isDir && window.PrintFileButton && (
+          <window.PrintFileButton libraryId={libraryId} path={entry.rel} name={entry.name}/>
+        )}
         <Button icon="download" title="download" onClick={onDownload}>Download</Button>
         {removable && (
           <ImportMenu importables={importables} onPick={(tid) => onImport(entry, tid)}/>
         )}
         {editable && (
           <Button icon="trash-2" title="delete" onClick={onDelete}>Delete</Button>
+        )}
+        {!isDir && libraryId === 'core:documents' && window.ChatDocs && (
+          <window.ChatDocs.AskButton relPath={entry.rel} name={entry.name}/>
         )}
       </div>
     </div>
@@ -1114,6 +1131,12 @@ const FilesPage = () => {
         actions={<>
           <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }}
                  onChange={(e) => onUpload(e.target.files)}/>
+          {/* Scan (printers.jsx): only with a saved scanner, and only where
+              this device may write to Documents (a scan writes there); a
+              finished scan lands in Documents, so the folder is read again. */}
+          {isDocuments && canUpload && window.PrintingScanButton && (
+            <window.PrintingScanButton fire={fire} onDone={() => refresh()}/>
+          )}
           {isDocuments && <NewMenu disabled={!canUpload} onPick={onCreate}/>}
           <Button variant={isDocuments ? 'secondary' : 'primary'} icon="upload"
                   disabled={uploading || !canUpload}
@@ -1140,7 +1163,7 @@ const FilesPage = () => {
           <span>
             {view.blocked_reason}. You can browse, open and download from this device,
             but not change anything here — no saving a document, uploading, moving or
-            importing. An admin lifts the block in Settings → Devices.
+            importing. An admin lifts the block in Settings → Phones & browsers.
           </span>
         </div>
       )}

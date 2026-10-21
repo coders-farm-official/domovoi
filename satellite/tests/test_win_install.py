@@ -224,6 +224,13 @@ def test_yes_changes_only_the_plugged_in_value_and_records_what_was_there():
     assert pc.calls[-1] == ["/setactive", "381b4222-f694-41f0-9685-ff5bb260df2e"]
 
 
+@pytest.mark.parametrize(("choice", "changed"), [("standby", {"standby", "hibernate"}), ("lid", {"lid"}),
+                                                ("yes", {"standby", "hibernate", "lid"}), ("no", set())])
+def test_the_setup_s_tick_boxes_change_only_what_was_ticked(choice, changed):
+    got = wi.change_power(wi.power_answer(choice, interactive=False), run=PowerCfg())
+    assert set(got) - {"scheme"} == changed
+
+
 def test_a_refused_power_change_is_said_and_the_install_goes_on(capsys):
     assert wi.change_power(lambda q: True, run=PowerCfg(fail_set=True)) == {}
     assert "could not change" in capsys.readouterr().out

@@ -41,6 +41,11 @@ dependencies = [
     # markdown docs. Both pure-Python with wheels everywhere.
     "openpyxl>=3.1",
     "python-docx>=1.1",
+    # Documents in Chat (domovoi/doc_extract): pypdfium2 (Apache-2.0 or
+    # BSD-3-Clause; its PDFium is BSD-style, with FreeType under the
+    # FreeType licence) reads a PDF's text page by page, in a capped worker
+    # process. The printing branch pins the same version for drawing pages.
+    "pypdfium2>=5.14",
     # Host hardware readout for the Models page (/v1/admin/hardware): CPU
     # load, RAM, and model-storage disk free. GPUs come from nvidia-smi
     # (no dep). Small, pure-wheel on Windows; in core so the hardware
@@ -63,6 +68,14 @@ dependencies = [
     # WebP cache in S–XL buckets. Pure-wheel on Windows; the endpoint
     # degrades to 204/no-thumbs if it were somehow absent.
     "pillow>=10.4",
+    # Printing (domovoi/printing/): pypdfium2 (Apache-2.0 or BSD-3-Clause;
+    # its PDFium is BSD-style, the FreeType inside it under the FreeType
+    # licence, credited in docs/LICENSES.md) draws pages for printers that
+    # don't take PDF, the print previews and the page counts; ReportLab
+    # (BSD) draws the test page, text/markdown and table printouts and the
+    # scan PDFs. Binary wheels for every platform incl. cp314 / pure Python.
+    "pypdfium2>=5.14",
+    "reportlab>=5.0",
     # Direct dependency for the chat-stream helper (clients/ollama.py) and
     # other httpx call sites (was already transitive via the ollama client).
     "httpx>=0.27",

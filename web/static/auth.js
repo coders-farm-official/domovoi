@@ -34,7 +34,7 @@
  * `X-Device-Token`. A browser learns it in one of two ways: an admin
  * login fetches it (`GET /api/auth/device-token`) and stores it
  * silently, or a request refused for want of it pops the "pair this
- * browser" modal, where the household token (Settings → Devices on an
+ * browser" modal, where the household token (Settings → Phones & browsers on an
  * admin's dashboard) is pasted once. Nobody is cornered by that modal:
  * it also offers "sign in as an admin instead" (signInInstead) — the
  * first way, spelled as a button.

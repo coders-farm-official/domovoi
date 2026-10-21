@@ -11,7 +11,7 @@ import kotlin.math.abs
 /*
  * The app's own record of what went wrong on this phone: crashes, ANRs ("app
  * isn't responding" kills) and long main-thread freezes. Kept in app storage
- * only, never uploaded; the owner copies or shares it from Settings > About.
+ * only, never uploaded; the owner copies or shares it from Settings > About & updates.
  *
  * Everything in this file is plain Kotlin so it runs in the JVM unit tests;
  * the Android glue (exit history, the crash handler, the watchdog thread) is

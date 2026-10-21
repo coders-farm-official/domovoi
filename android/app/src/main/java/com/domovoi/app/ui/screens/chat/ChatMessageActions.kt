@@ -56,6 +56,9 @@ internal data class ChatStats(
     val model_role: String? = null,
     /** Why a reply has an error, for the clients' own wording (ChatErrors.kt). */
     val error_code: String? = null,
+    /** The oldest message the model was sent, when it didn't see the whole
+     *  thread (V034): the window divider goes above it. */
+    val window_from_id: Long? = null,
     // A spoken turn's reply (the chat mic, V025): what answered it and where
     // the time went, instead of Ollama's figures.
     val matched_handler: String? = null,

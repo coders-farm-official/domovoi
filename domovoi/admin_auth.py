@@ -336,7 +336,7 @@ def setup_code_whereabouts() -> str:
     return (
         f"the setup code is in {setup_code_path()} on the Domovoi server "
         "(readable by the user the core runs as); open the dashboard, "
-        'Settings > Configuration > Admin > "set up admin", and enter it there'
+        'Settings > Advanced > Admin > "set up admin", and enter it there'
     )
 
 
@@ -640,7 +640,7 @@ async def cookie_session_hash(session: AsyncSession, cookie: str | None) -> str 
 # the resume too, and another browser — which has its own cookie, or none —
 # never inherits it.
 
-# The longest window an admin may choose (Settings → Configuration). One
+# The longest window an admin may choose (Settings → Advanced). One
 # day: past that, "stay signed in" is a different feature with a different
 # threat model, not a reload. One number, in domovoi/config.py.
 RELOAD_WINDOW_MAX_MIN = ADMIN_RELOAD_WINDOW_MAX_MIN

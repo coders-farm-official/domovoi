@@ -34,7 +34,7 @@ HARNESS = Path(__file__).with_name("jsx_interact_harness.js")
 SAT_FILES = ["web/static/components.jsx", "web/static/satellite_media.jsx",
              "web/static/satellites.jsx", "web/static/settings.jsx"]
 HOME_FILES = ["web/static/components.jsx", "web/static/satellite_media.jsx",
-              "web/static/satellites.jsx", "web/static/home.jsx"]
+              "web/static/satellites.jsx", "web/static/health.jsx", "web/static/home.jsx"]
 
 NOW = datetime.now(timezone.utc)
 HEARD = (NOW - timedelta(minutes=12)).isoformat()

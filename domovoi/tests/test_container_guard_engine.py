@@ -458,10 +458,10 @@ async def test_the_music_player_image_baseline(guard_env, monkeypatch) -> None:
         assert await cg_engine.note_mpd_image(img_a, built=False) == "adopted"
         assert await cg_engine.note_mpd_image(img_a, built=False) == "same"
         # Rebuilt outside the core with no update-unit record: reported.
-        monkeypatch.setattr(cg_engine, "mpd_rebuild_evidence", lambda _at: None)
+        monkeypatch.setattr(cg_engine, "mpd_rebuild_evidence", lambda _at, _id=None: None)
         assert await cg_engine.note_mpd_image(img_b, built=False) == "changed"
         # The update unit rebuilt it after the baseline: adopted.
-        monkeypatch.setattr(cg_engine, "mpd_rebuild_evidence", lambda _at: "finished")
+        monkeypatch.setattr(cg_engine, "mpd_rebuild_evidence", lambda _at, _id=None: "finished")
         assert await cg_engine.note_mpd_image(img_b, built=False) == "update"
         assert await cg_engine.note_mpd_image(img_a, built=True) == "built"
         async with session_scope() as s:

@@ -61,7 +61,7 @@ data class FileBrowse(
     val entries: List<FileEntry> = emptyList(),
     /** Whether THIS device may upload/move/import here. `editable` is the
      *  library's property; this is the device's — an admin can block a named
-     *  device from writing (Settings → Devices → Files access on the web).
+     *  device from writing (Settings → Phones & browsers → Files access on the web).
      *  Reads are never blocked, so a blocked device still sees the folder and
      *  is told why in [blockedReason]. Defaults to true for older servers. */
     val writable: Boolean = true,

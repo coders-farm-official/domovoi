@@ -197,13 +197,19 @@ def http_exception(what: str = "this"):
 
 # ─── Plugins' requests to Ollama ──────────────────────────────────────────
 
-# Ollama endpoints that run (or fetch) a model. /api/tags, /api/ps and
-# /api/version only describe what is there and stay open.
-_MODEL_PATHS = (
-    "/api/generate", "/api/chat", "/api/embed", "/api/embeddings",
-    "/api/pull", "/api/create",
-)
+# Deny by host and port, not by path: while AI is off, every request to
+# this box's Ollama is refused except the few that only describe what is
+# there. A path list of what runs a model would miss Ollama's other ways in
+# (its OpenAI-compatible /v1/chat/completions, /v1/completions,
+# /v1/embeddings, whatever a later release adds) and spellings like
+# //api/generate; an allow-list of read-only paths can't.
+_OPEN_PATHS = frozenset({"/", "/api/tags", "/api/ps", "/api/version"})
 OLLAMA_DEFAULT_PORT = 11434
+_LOOPBACK_NAMES = frozenset({"localhost", "127.0.0.1", "::1", "ip6-localhost"})
+
+
+def _is_loopback(host: str) -> bool:
+    return host in _LOOPBACK_NAMES or host.startswith("127.") or host.endswith(".localhost")
 
 
 def _ollama_endpoints() -> set[tuple[str, int]]:
@@ -246,21 +252,40 @@ def _env_file_named(path: Path, name: str) -> str | None:
     return None
 
 
-def is_model_request(url: str) -> bool:
-    """Whether ``url`` asks Ollama to run or fetch a model: a model path on
-    the default Ollama port (any host), or on the configured Ollama."""
+def is_ollama(url: str) -> bool:
+    """Whether ``url`` is this box's Ollama: any host on Ollama's port
+    (11434), or the core's configured ``OLLAMA_URL`` (host and port; a
+    loopback name there matches any loopback name)."""
     try:
         parts = urlsplit(str(url))
         host = (parts.hostname or "").lower()
         port = parts.port or (443 if parts.scheme == "https" else 80)
     except ValueError:
         return False
-    path = parts.path.rstrip("/") or "/"
-    if not any(path == p or path.startswith(p + "/") for p in _MODEL_PATHS):
-        return False
     if port == OLLAMA_DEFAULT_PORT:
         return True
-    return (host, port) in _ollama_endpoints()
+    for ohost, oport in _ollama_endpoints():
+        if oport == port and (ohost == host or (_is_loopback(ohost) and _is_loopback(host))):
+            return True
+    return False
+
+
+def is_model_request(url: str) -> bool:
+    """Whether ``url`` is a request to this box's Ollama that AI-off refuses:
+    everything on it but the read-only listings (``/api/tags``, ``/api/ps``,
+    ``/api/version``, ``/``). Denied by host and port, so the native API, the
+    OpenAI-compatible ``/v1/...`` paths and any odd spelling of either are
+    all covered."""
+    if not is_ollama(url):
+        return False
+    try:
+        path = urlsplit(str(url)).path or "/"
+    except ValueError:
+        return True
+    while "//" in path:
+        path = path.replace("//", "/")
+    path = path.rstrip("/") or "/"
+    return path not in _OPEN_PATHS
 
 
 def require_for_url(url: str) -> None:

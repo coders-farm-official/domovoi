@@ -51,12 +51,12 @@ Every optional outbound touchpoint, sourced from the code. One answer covers all
 | Radio plugin: station directory | Station-name searches; an FM favorite's call sign, to find its internet stream (when you favorite it, and at startup for FM favorites that still have none) | radio-browser.info | Disable or uninstall the radio plugin from the dashboard's Plugins page |
 | Radio plugin: FCC station import | One bulk query on demand | transition.fcc.gov | Off unless you click **Import FCC FM** (or set `RADIO_FCC_IMPORT_ON_BOOT=true`) |
 | Radio plugin: song detection | Short clips of favorited radio *streams*; ICY metadata polls | Shazam; the stations themselves | `RADIO_SAMPLER_ENABLED=false`, `RADIO_ICY_POLLER_ENABLED=false` in the plugin's own file, `~/.domovoi/plugins/radio.env` (restart the core) |
-| Library enricher | Audio fingerprints of your library files (and, to AcoustID, the AcoustID key) | AcoustID (only with an AcoustID application key: Settings → Configuration → Library → **AcoustID key**, or `ACOUSTID_API_KEY`; over HTTPS) and Shazam (only with the `shazam` extra installed); metadata lookups to MusicBrainz. **test the key** beside the key sends one lookup of a made-up fingerprint, never one of your files, only when an admin presses it | `LIBRARY_ENRICHER_ENABLED=false`. With neither a key nor Shazam it sends nothing and marks nothing. Under **No** neither the enricher nor the test sends anything |
-| MusicBrainz alias lookup — **off unless your internet answer is Yes or Sometimes** | Artist names from your library — tagged artists, and the "Artist" of an untagged file whose name reads "Artist - Title" (so a home recording named "Grandma Edith - Happy Birthday" would send "Grandma Edith"): one search per artist, once, then only for artists added later (about an hour and a half the first time for ~2,000 artists); the spoken stage names that come back are kept, legal names and a person's names sharing a word with one are filtered out and never stored. A band's other names (members, "The Farriss Brothers" for INXS) can be kept | musicbrainz.org, one request a second, only while the server is online | On when the internet answer is **Yes** or **Sometimes**, off when it is **No** or not answered. Settings → Configuration → Library → "Look up other names on MusicBrainz" (`music_alias_fetch_enabled` / `MUSIC_ALIAS_FETCH_ENABLED`) overrides the answer; switching it off stops it before its next request |
-| Synced lyrics (LRCLIB) — **off unless your internet answer is Yes or Sometimes** | A song's title, artist, album and length, for songs with no timed lyrics of their own (no `.lrc` beside them, none in their tags): one lookup per song, then again after a few weeks for songs LRCLIB didn't have (several hours the first time for 5,000 songs, about a night, longer when LRCLIB asks it to slow down). The lyrics that come back stay on the server, and with "Save lyrics as .lrc files" timed ones are also saved as a `.lrc` next to the song (never over a `.lrc` you made) | lrclib.net, about one request a second, only while the server is online | On when the internet answer is **Yes** or **Sometimes**, off when it is **No** or not answered. Settings → Configuration → Library → "Synced lyrics from LRCLIB" (`lyrics_lrclib_enabled` / `LYRICS_LRCLIB_ENABLED`) overrides the answer; switching it off stops it before its next request. Lyrics from `.lrc` files and the songs' own tags never touch the internet |
+| Library enricher | Audio fingerprints of your library files (and, to AcoustID, the AcoustID key) | AcoustID (only with an AcoustID application key: Settings → Advanced → Library → **AcoustID key**, or `ACOUSTID_API_KEY`; over HTTPS) and Shazam (only with the `shazam` extra installed); metadata lookups to MusicBrainz. **test the key** beside the key sends one lookup of a made-up fingerprint, never one of your files, only when an admin presses it | `LIBRARY_ENRICHER_ENABLED=false`. With neither a key nor Shazam it sends nothing and marks nothing. Under **No** neither the enricher nor the test sends anything |
+| MusicBrainz alias lookup — **off unless your internet answer is Yes or Sometimes** | Artist names from your library — tagged artists, and the "Artist" of an untagged file whose name reads "Artist - Title" (so a home recording named "Grandma Edith - Happy Birthday" would send "Grandma Edith"): one search per artist, once, then only for artists added later (about an hour and a half the first time for ~2,000 artists); the spoken stage names that come back are kept, legal names and a person's names sharing a word with one are filtered out and never stored. A band's other names (members, "The Farriss Brothers" for INXS) can be kept | musicbrainz.org, one request a second, only while the server is online | On when the internet answer is **Yes** or **Sometimes**, off when it is **No** or not answered. Settings → Advanced → Library → "Look up other names on MusicBrainz" (`music_alias_fetch_enabled` / `MUSIC_ALIAS_FETCH_ENABLED`) overrides the answer; switching it off stops it before its next request |
+| Synced lyrics (LRCLIB) — **off unless your internet answer is Yes or Sometimes** | A song's title, artist, album and length, for songs with no timed lyrics of their own (no `.lrc` beside them, none in their tags): one lookup per song, then again after a few weeks for songs LRCLIB didn't have (several hours the first time for 5,000 songs, about a night, longer when LRCLIB asks it to slow down). The lyrics that come back stay on the server, and with "Save lyrics as .lrc files" timed ones are also saved as a `.lrc` next to the song (never over a `.lrc` you made) | lrclib.net, about one request a second, only while the server is online | On when the internet answer is **Yes** or **Sometimes**, off when it is **No** or not answered. Settings → Advanced → Library → "Synced lyrics from LRCLIB" (`lyrics_lrclib_enabled` / `LYRICS_LRCLIB_ENABLED`) overrides the answer; switching it off stops it before its next request. Lyrics from `.lrc` files and the songs' own tags never touch the internet |
 | Podcasts | Feed polls + episode downloads; a show's name when you subscribe by voice or search in Discover; each show's artwork, once | Feeds you subscribe to; Apple's iTunes search | Automatic downloads follow the internet answer: on for **Yes**, off for **Sometimes**, **No** and not answered (`PODCAST_FEED_POLLER_ENABLED`). Search runs only when you ask. Show artwork is downloaded **by the server** and served to your browser and phone, which never contact the publisher |
 | Extra voices | Downloads of the other two Piper voices (about 130 MB) | Hugging Face | Off once the internet question is answered (any answer), unless `SEED_VOICE_CATALOG` is set in your `domovoi/.env` — which a server installed before October 2026 has (its old template wrote `SEED_VOICE_CATALOG=true`; Settings → Internet → **follow the answer again** hands it back). Not answered, it's on unless `SEED_VOICE_CATALOG=false` |
-| Wake-word training — **off until an admin turns it on** | The trainer image's build and its training data, about 22 GB, once; a rebuild when an update changes the trainer. On a box with an NVIDIA GPU, the install and the Linux update unit also fetch the NVIDIA Container Toolkit | Docker Hub, GitHub, PyPI and Ubuntu's archive (the build); Hugging Face and Backblaze B2 (the data); NVIDIA's apt repository (the toolkit) | Don't turn it on (Settings → Wake Words). Under **No** it can't be turned on, no training starts, and the update unit downloads none of it ([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#wake-word-training-the-gpu-runtime-the-trainer-image-and-what-it-downloads)) |
+| Wake-word training — **off until an admin turns it on** | The trainer image's build and its training data, about 22 GB, once; a rebuild when an update changes the trainer. On a box with an NVIDIA GPU, the install and the Linux update unit also fetch the NVIDIA Container Toolkit | Docker Hub, GitHub, PyPI and Ubuntu's archive (the build); Hugging Face and Backblaze B2 (the data); NVIDIA's apt repository (the toolkit) | Don't turn it on (Settings → Wake words). Under **No** it can't be turned on, no training starts, and the update unit downloads none of it ([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#wake-word-training-the-gpu-runtime-the-trainer-image-and-what-it-downloads)) |
 | A USB stick for an old computer — **only when an admin prepares one** | Debian's installer image (793 MB), once, kept for the next stick; on a server installed before October 2026, the `xorriso` package at the next update or restart | cdimage.debian.org (held to a pinned SHA-256); Ubuntu's archive | Don't press **Prepare the stick**. Under **No** it is refused unless the image is already on the server, and the update unit installs nothing. The old computer itself downloads Debian's packages and the satellite's libraries while it sets up ([SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick)) |
 | Things an admin starts | Downloads, only when an admin clicks: **Pull the latest** (and, with the update unit, Python packages and the music image's Debian packages, and the search helper's image when it starts it), plugin installs, model installs, **Refresh caches** for satellite media | GitHub; PyPI and the PyTorch CPU index; Debian's mirrors; Docker Hub; the Ollama registry; Hugging Face (a new Whisper size) | Nothing runs on its own; don't click them. Under **No** they are greyed and the server refuses them |
 
@@ -117,7 +117,7 @@ Yes. After setup (which downloads the software and models), answer **No, keep ev
 ## How do I add rooms?
 
 A room *is* a satellite, and every room is added from the dashboard, as
-admin, in **Settings → Satellites**:
+admin, in **Settings → Rooms**:
 
 1. **A Raspberry Pi:** put Raspberry Pi OS Lite (64-bit) on a microSD card,
    put the card in the server's card reader, and use **prepare satellite
@@ -131,7 +131,7 @@ admin, in **Settings → Satellites**:
    approval** and press **approve**.
 3. That's it — on first connection, the server provisions that room's own
    music daemon (an MPD container with its own queue and volume) and the
-   room appears in Settings → Satellites.
+   room appears in Settings → Rooms.
 
 Room names matter: intercom ("announce in the kitchen…") and drop-in ("drop in on the kitchen") address rooms by the name you gave. The by-hand route (installing the satellite client and pointing it at `ws://<server>:6370` yourself) is in the [Satellite hardware guide](SATELLITE_HARDWARE.md) and `satellite/PROVISIONING.md`.
 
@@ -139,7 +139,7 @@ Room names matter: intercom ("announce in the kitchen…") and drop-in ("drop in
 
 Yes. A spare **Linux laptop or mini PC** (Debian or Ubuntu) or a
 **Windows 10/11 laptop or PC** can be a room: in the dashboard, as admin,
-**Settings → Satellites → add a spare device**, name the room, and run the
+**Settings → Rooms → add a spare device**, name the room, and run the
 one-line command it shows on that computer (one for Linux, one for Windows
 PowerShell). It installs the satellite, makes sure it's talking to *your*
 server, and shows an approval code to type into the dashboard. A tray
@@ -176,7 +176,7 @@ Not once the real one has connected. Each satellite generates a random **pairing
 
 Strict pairing (`SATELLITE_PAIRING_STRICT=true`) is the default, and it closes the one gap left: a tokenless connection is refused, and a room's first pairing waits for you to type in the six-digit code the satellite is showing and saying. The honest caveat applies only if you turn strict pairing off: then the *first* token wins, so there's a one-time window when a room has never paired — whoever connects first claims it — and a device with no token at all can connect under any room name nobody has paired. Such a tokenless room can use itself (timers, music, voice commands) but can never drop in on another room or announce into one. An install that upgrades into this release and never set the line becomes strict at its next restart: paired rooms are unaffected, and a satellite that hasn't paired yet asks for approval once.
 
-**Re-flashed a Pi or moved a room to new hardware?** The new device has a new token that won't match, so it'll be refused. Clear the old pairing from the dashboard: Settings → Satellites → open the room → **Overview → Reset pairing** (admin login required). The next connection re-pairs. Full details: [Security & Privacy](SECURITY_PRIVACY.md#satellite-pairing-ws-auth).
+**Re-flashed a Pi or moved a room to new hardware?** The new device has a new token that won't match, so it'll be refused. Clear the old pairing from the dashboard: Settings → Rooms → open the room → **Overview → Reset pairing** (admin login required). The next connection re-pairs. Full details: [Security & Privacy](SECURITY_PRIVACY.md#satellite-pairing-ws-auth).
 
 One thing pairing does *not* do: encrypt the audio. LAN traffic is still unencrypted in v1 (TLS is on the hardening backlog), so keep satellites and the server on a network segment you control. See [Is my voice data leaving my network?](#is-my-voice-data-leaving-my-network).
 
@@ -189,7 +189,7 @@ Yes. In the Android app, open a satellite's page and tap **drop in from this pho
 Those are two separate things:
 
 - **The name** — what Domovoi calls itself in speech and on screen — is the `BOT_NAME` setting (dashboard settings gear → Identity, takes effect on restart). Greeting and sample clips re-render with the new name.
-- **The wake word** — the phrase that opens the mic — defaults to `hey_jarvis`, one of openWakeWord's prebuilt models. You can switch among the other built-ins in the satellite config, or **train a custom one** ("Hey Domovoi" is the natural choice) entirely from the product: dashboard → Settings → Wake Words. Training runs on the server, in a Docker container. An admin turns it on once there (**Turn on wake-word training**: about 32 GB of disk, a download of about 22 GB, once, a server with 24 GB of memory; it builds the trainer and downloads its data, no shell needed). Then record positive clips *on the actual satellite* (through its real mic), press Train (about 20 minutes on an NVIDIA GPU, over an hour on the CPU, where it asks first because voice answers more slowly meanwhile), and push the model to a room. A model trained this way is for your household only: its training data's licences don't allow sharing it. Details: `scripts/wake_word/README.md`.
+- **The wake word** — the phrase that opens the mic — defaults to `hey_jarvis`, one of openWakeWord's prebuilt models. You can switch among the other built-ins in the satellite config, or **train a custom one** ("Hey Domovoi" is the natural choice) entirely from the product: dashboard → Settings → Wake words. Training runs on the server, in a Docker container. An admin turns it on once there (**Turn on wake-word training**: about 32 GB of disk, a download of about 22 GB, once, a server with 24 GB of memory; it builds the trainer and downloads its data, no shell needed). Then record positive clips *on the actual satellite* (through its real mic), press Train (about 20 minutes on an NVIDIA GPU, over an hour on the CPU, where it asks first because voice answers more slowly meanwhile), and push the model to a room. A model trained this way is for your household only: its training data's licences don't allow sharing it. Details: `scripts/wake_word/README.md`.
 
 ## Which voice does Domovoi speak with, and can I fix how it says a word?
 
@@ -250,11 +250,11 @@ before this existed — simply show nothing rather than a guess.
 
 Devices name themselves. A browser or phone introduces itself the first time
 it loads, with a name guessed from the platform ("Chrome on Windows", "Pixel
-8"); you can rename it in **Settings → Devices** (dashboard) or **Settings →
+8"); you can rename it in **Settings → Phones & browsers** (dashboard) or **Settings →
 Connection** (app). Renaming relabels that device's existing queue entries.
 
 An admin can take queue editing away from a named device — one room, or every
-room — in **Settings → Devices → Queue access**. A blocked device can still
+room — in **Settings → Phones & browsers → Queue access**. A blocked device can still
 *see* the queue and still plays its own music; it just can't change what the
 room plays. Be aware of what this is: a device tells the server who it is, and
 nothing on a trusted LAN forces it to be honest, so this reliably settles a
@@ -276,7 +276,7 @@ a paired device. (A determined guest could still empty a queue song by song;
 that's what bans and the off switch are for.) A guest's songs show "added by a guest", and
 a guest isn't shown the names of the household's devices.
 
-To stop one guest, sign in as admin and open **Settings → Devices → Guests**:
+To stop one guest, sign in as admin and open **Settings → Phones & browsers → Guests**:
 it lists the guests that changed the music this week, with a **ban** button
 (also on any queue entry a guest added). A ban covers every room, the queue
 and the playback buttons alike, and matches that phone's browser id or its
@@ -285,7 +285,7 @@ while the network gives it the same address. It never affects a paired
 device or an admin. Like a queue block, a ban is household policy rather
 than a lock: someone determined can come back as a new guest. To turn guest
 access off altogether, switch off **Guests can change the music in a playing
-room** in **Settings → Configuration → Security**; then only paired devices
+room** in **Settings → Advanced → Security**; then only paired devices
 and the admin can see or change a room's queue or its playback.
 
 ## Can I move files around without the command line?
@@ -310,7 +310,7 @@ same as playing music. **Deleting** is the one Files action that does need
 admin, because it's the one that destroys something; the phone app can't sign
 in as admin, so delete from the dashboard. If one device keeps filling the
 libraries with things it shouldn't, an admin can take uploading, moving and
-importing away from it in **Settings → Devices → Files access** — it can still
+importing away from it in **Settings → Phones & browsers → Files access** — it can still
 browse and download, and the Files page tells it why it can't change anything.
 The same honesty note as queue access applies: a device tells the server who it
 is, so this settles a household argument rather than stopping someone
@@ -378,7 +378,7 @@ and what it answered, so the Conversations and Sessions tabs can show it
 
 - **Keep voice history**: 30 days, 90 days (the default), 1 year, or
   Forever. Anything older is deleted once a day, and right away when you
-  pick a shorter time. It's also in Settings → Configuration → Privacy.
+  pick a shorter time. It's also in Settings → Advanced → Privacy.
 - **Delete all voice history**: deletes everything said until now, in every
   room and on every phone, after a confirmation that lists what goes.
 

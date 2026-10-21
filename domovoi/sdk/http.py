@@ -14,10 +14,11 @@ its own raw ``httpx`` client is outside this gate — its author's job
 (docs/PLUGIN_DEVELOPMENT.md).
 
 The household's AI switch is enforced here too (SDK 1.7): while AI
-features are off (``domovoi/ai_features.py``) a request that would run or
-fetch a model on this box's Ollama (``/api/generate``, ``/api/chat``,
-``/api/embed``, ``/api/pull``, … on the configured Ollama or port 11434)
-raises ``ai_features.AITurnedOff`` before anything is sent, so a plugin's
+features are off (``domovoi/ai_features.py``) every request to this box's
+Ollama (port 11434, or the configured ``OLLAMA_URL``) but its read-only
+listings raises ``ai_features.AITurnedOffConnectError`` before anything is
+sent — denied by host and port, so the OpenAI-compatible ``/v1/...`` paths
+are covered as well as the native ones — so a plugin's
 summary or answer step fails cleanly, the way it fails when Ollama is
 down. ``sdk.core_config.ai_features`` says which it is up front.
 """

@@ -508,6 +508,20 @@ def start(root: Path, *, test_hooks: bool = False) -> None:
     )
 
 
+def power_answer(choice: str, interactive: bool) -> Callable[[str], bool]:
+    """How each power question is answered: ``no``, ``yes`` (both),
+    ``standby`` or ``lid`` (that one only: the Setup's two tick boxes,
+    windows/installer/DomovoiSatelliteSetup.iss), or ``ask``."""
+    if choice == "no":
+        return lambda _q: False
+    if choice == "yes":
+        return lambda _q: True
+    if choice in ("standby", "lid"):
+        wanted = POWER_SETTINGS[choice][2]
+        return lambda q: q == wanted
+    return lambda q: ask_choice(q, interactive)
+
+
 def ask_choice(prompt: str, interactive: bool) -> bool:
     if not interactive:
         return False
@@ -699,13 +713,7 @@ def install(args: argparse.Namespace, *, run: Callable[..., Any] = subprocess.ru
         "Installed apps and the Start menu as Domovoi Satellite")
 
     # 6. Power: asked, plugged in only, default No.
-    if args.power == "no":
-        answer = lambda _q: False  # noqa: E731
-    elif args.power == "yes":
-        answer = lambda _q: True  # noqa: E731
-    else:
-        answer = lambda q: ask_choice(q, interactive)  # noqa: E731
-    power = change_power(answer, run=run)
+    power = change_power(power_answer(args.power, interactive), run=run)
     if power:
         write_state(root, power=merge_power(read_state(root).get("power"), power))
 
@@ -721,7 +729,7 @@ def install(args: argparse.Namespace, *, run: Callable[..., Any] = subprocess.ru
     if args.wait <= 0:
         return 0
     say("")
-    say("Now approve it: in the dashboard, Settings -> Satellites, type the code shown below.")
+    say("Now approve it: in the dashboard, Settings -> Rooms, type the code shown below.")
     from satellite import control, pc_engine
 
     # This process is the staged Python in %TEMP%; the engine runs the
@@ -745,7 +753,7 @@ def main(argv: list[str] | None = None) -> int:
     i.add_argument("--staged-python", required=True, help="the checked embeddable Python, unpacked")
     i.add_argument("--root", required=True, help="the install folder")
     i.add_argument("--permissions", choices=("automatic", "ask"), default=None)
-    i.add_argument("--power", choices=("ask", "no", "yes"), default="ask")
+    i.add_argument("--power", choices=("ask", "no", "yes", "standby", "lid"), default="ask")
     i.add_argument("--yes", action="store_true")
     i.add_argument("--no-start", action="store_true")
     i.add_argument("--wait", type=int, default=900)

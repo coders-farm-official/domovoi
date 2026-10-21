@@ -1093,7 +1093,7 @@ norm_url() {
 # that follows another remote or branch is not the one the owner signs.
 # DOMOVOI_UPSTREAM_BRANCH names one branch, or several separated by spaces
 # or commas: provision.sh pins the two release channels, "stable main", so
-# the dashboard's channel switch (Settings > Version) works and no other
+# the dashboard's channel switch (Settings > About & updates) works and no other
 # branch does.
 check_upstream() {
   local t0 url up want b ok applied warned

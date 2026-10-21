@@ -24,6 +24,8 @@ Condensed band map — core handlers occupy exactly the design §4.2 table:
     200 dropin           immediately before intercom
     210 intercom         before voice_notes ("tell the kitchen X")
     220 chat_mode
+    222 printing         "print …", "scan this", ink and paper; after chat_mode,
+                         before the Documents plan's documents (225)
     230 voice_notes
     240 memory
     250 homelab
@@ -68,6 +70,7 @@ from domovoi.handlers.music import MusicHandler
 from domovoi.handlers.music_alias import MusicAliasHandler
 from domovoi.handlers.news import NewsHandler
 from domovoi.handlers.playlist import PlaylistHandler
+from domovoi.handlers.printing import PrintingHandler
 from domovoi.handlers.reminder import ReminderHandler
 from domovoi.handlers.repeat import RepeatHandler
 from domovoi.handlers.spoken_audio import SpokenAudioHandler
@@ -97,6 +100,7 @@ _CORE_HANDLERS: list[Handler] = [
     MusicAliasHandler(),
     NewsHandler(),
     PlaylistHandler(),
+    PrintingHandler(),
     ReminderHandler(),
     RepeatHandler(),
     SpokenAudioHandler(),
@@ -161,6 +165,7 @@ __all__ = [
     "MusicHandler",
     "NewsHandler",
     "PlaylistHandler",
+    "PrintingHandler",
     "register_handler",
     "ReminderHandler",
     "RepeatHandler",

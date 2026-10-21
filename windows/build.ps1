@@ -7,7 +7,9 @@ Builds the Windows installer (a preview).
    notification-area icon), with the C# compiler that ships inside .NET
    Framework 4.8.1 (C# 5; nothing to install).
 2. The unit tests in tests\Tests.cs (the same compiler), run at once.
-3. DomovoiSetup.exe, with Inno Setup 6's ISCC.exe.
+3. DomovoiSatelliteSetup.exe (installer\DomovoiSatelliteSetup.iss: the
+   double-click Setup that makes a spare Windows PC a room), then
+   DomovoiSetup.exe, which carries it, with Inno Setup 6's ISCC.exe.
 
 Output goes to windows\build\ (ignored by git). Windows PowerShell 5.1.
 Building changes nothing on this PC beyond that folder.
@@ -28,8 +30,10 @@ Before building, move every pin that belongs to the commit Setup installs,
 together, in installer\pins.iss: DomovoiCommit (the commit), DomovoiChannel
 (-Channel), ProvisionSha256 (that commit's scripts/linux/provision.sh, the
 bytes GitHub serves; LF only), ProvisionBundled (off: provision.sh is
-fetched from that commit) and DashboardTabRoutes (whether its dashboard has
-the tab addresses). Takes a release tag (v1.0.0, v1.0.0-rc2: refs/tags only,
+fetched from that commit), DashboardTabRoutes (whether its dashboard has
+the tab addresses) and ProvisionAiChoice (whether its provision.sh takes
+--ai-models / --no-ai-models: Setup asks about AI chat and questions only
+then). Takes a release tag (v1.0.0, v1.0.0-rc2: refs/tags only,
 never a branch) or a full commit SHA, which must be in this clone and on
 origin/main's history. The release scripts run it for the tag
 (design-notes V1-RELEASE-PLAN 3.2); pins.iss then changes, and is
@@ -122,6 +126,8 @@ function Set-Pins([string]$Ref, [string]$Channel, [string]$File) {
     $provSha = (($hasher.ComputeHash($script) | ForEach-Object { $_.ToString('x2') }) -join '')
     $jsx = [System.Text.Encoding]::UTF8.GetString((Invoke-GitBytes $git @('-C', $repo, 'cat-file', 'blob', ($sha + ':web/static/components.jsx'))))
     $routes = $jsx.Contains("const SETUP_ROUTE = 'settings/configuration/setup';")
+    # The usage lines ProvisionScript.SupportsAiChoice looks for.
+    $aiChoice = $text.Contains("`n  --ai-models ") -and $text.Contains("`n  --no-ai-models ")
 
     $pins = [System.IO.File]::ReadAllText($File)
     if ($pins.Contains("`r")) { throw "$File has CR line endings" }
@@ -131,14 +137,18 @@ function Set-Pins([string]$Ref, [string]$Channel, [string]$File) {
     $pins = Set-PinLine $pins '^(; )?#define ProvisionBundled[ \t]*$' '; #define ProvisionBundled'
     if ($routes) { $line = '#define DashboardTabRoutes' } else { $line = '; #define DashboardTabRoutes' }
     $pins = Set-PinLine $pins '^(; )?#define DashboardTabRoutes[ \t]*$' $line
+    if ($aiChoice) { $line = '#define ProvisionAiChoice' } else { $line = '; #define ProvisionAiChoice' }
+    $pins = Set-PinLine $pins '^(; )?#define ProvisionAiChoice[ \t]*$' $line
     [System.IO.File]::WriteAllBytes($File, [System.Text.Encoding]::ASCII.GetBytes($pins))
     $tagText = if ($tags) { ' (' + (($tags -split "`n") -join ', ') + ')' } else { '' }
-    Write-Output ("pinned $sha$tagText, channel $Channel, provision.sh sha256 $provSha (" + $script.Length + " bytes, fetched from that commit), tab addresses " + $(if ($routes) { 'on' } else { 'off' }) + ": $File")
+    Write-Output ("pinned $sha$tagText, channel $Channel, provision.sh sha256 $provSha (" + $script.Length + " bytes, fetched from that commit), tab addresses " + $(if ($routes) { 'on' } else { 'off' }) + ", AI question " + $(if ($aiChoice) { 'on' } else { 'off' }) + ": $File")
 }
 
 # Disabled hook: when signing comes back, sign DomovoiHost.exe and
 # DomovoiSetupHelper.exe before ISCC packs them, and DomovoiSetup.exe after
 # (Inno's SignTool directive can sign the setup and the uninstaller).
+# DomovoiSatelliteSetup.iss is ready for it: compiled with /DSignSetup and
+# /Sdomovoi=<sign command>, its SignTool=domovoi line signs that Setup.
 function Invoke-Sign([string[]]$Files) {
     throw 'Code signing is on hold (PLAN.md section 10): this build stays unsigned.'
 }
@@ -216,9 +226,14 @@ if (-not $SkipInstaller) {
         }
     }
     if (-not $Iscc) { throw 'Inno Setup 6 not found (ISCC.exe). Install it, or pass -Iscc.' }
+    # The satellite Setup first: DomovoiSetup.exe carries it.
+    & $Iscc '/Q' "/O$out" (Join-Path $here 'installer\DomovoiSatelliteSetup.iss')
+    if ($LASTEXITCODE -ne 0) { throw 'ISCC failed for DomovoiSatelliteSetup.iss' }
     & $Iscc '/Q' "/O$out" (Join-Path $here 'installer\DomovoiSetup.iss')
     if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
-    $setup = Join-Path $out 'DomovoiSetup.exe'
-    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
-    Write-Output "built $setup ($((Get-Item -LiteralPath $setup).Length) bytes, sha256 $hash)"
+    foreach ($name in 'DomovoiSetup.exe', 'DomovoiSatelliteSetup.exe') {
+        $setup = Join-Path $out $name
+        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
+        Write-Output "built $setup ($((Get-Item -LiteralPath $setup).Length) bytes, sha256 $hash)"
+    }
 }

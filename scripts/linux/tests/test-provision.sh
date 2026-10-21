@@ -499,9 +499,24 @@ case "$1 ${2-}" in
     esac
     exit 0 ;;
   "version "*) echo 29.8.1 ;;
-  "image inspect") [ -f "$SHIM_STATE/images/${3//[:\/@]/_}" ] || exit 1 ;;
+  # image inspect [-f '{{.Id}}'] REF: there or not; with -f, the image's
+  # ID (what a build wrote in its file, else one made from the name).
+  "image inspect")
+    ref=${!#}; f=$SHIM_STATE/images/${ref//[:\/@]/_}
+    [ -f "$f" ] || exit 1
+    if [ "$3" = -f ]; then
+      if [ -s "$f" ]; then cat "$f"; else echo "sha256:$(printf '%s' "$ref" | sha256sum | cut -c1-64)"; fi
+    fi ;;
+  # Every build gives a new image ID (as one that misses Docker's build
+  # cache does: the apt layer is not reproducible).
   "build "*)
-    while [ $# -gt 0 ]; do [ "$1" = -t ] && { touch "$SHIM_STATE/images/${2//[:\/@]/_}"; break; }; shift; done ;;
+    n=$(($(cat "$SHIM_STATE/builds" 2>/dev/null || echo 0) + 1)); echo "$n" >"$SHIM_STATE/builds"
+    while [ $# -gt 0 ]; do
+      [ "$1" = -t ] && { echo "sha256:$(printf 'build-%s' "$n" | sha256sum | cut -c1-64)" >"$SHIM_STATE/images/${2//[:\/@]/_}"; break; }
+      shift
+    done ;;
+  # Room containers: $SHIM_STATE/containers/NAME holds the image ID it runs.
+  "ps -a") ls "$SHIM_STATE/containers" 2>/dev/null || true ;;
   "compose config") echo "$refs" ;;
   "compose pull")
     [ ! -f "$SHIM_STATE/pull-fail" ] || { echo "Error response from daemon: toomanyrequests" >&2; exit 1; }
@@ -533,9 +548,11 @@ case "$1 ${2-}" in
     if [ "$2" = --tail ]; then tail -n "$3" "$SHIM_STATE/pg-logs" | exec perl -pe ''; else exec perl -pe '' "$SHIM_STATE/pg-logs"; fi ;;
   "volume inspect") [ -f "$SHIM_STATE/pg-volume" ] || { echo "Error: no such volume: $3" >&2; exit 1; } ;;
   "volume rm") rm -f "$SHIM_STATE/pg-volume" ;;
-  "rm -f") rm -f "$SHIM_STATE/pg-state" ;;
+  "rm -f") if [ -f "$SHIM_STATE/containers/$3" ]; then rm -f "$SHIM_STATE/containers/$3"; else rm -f "$SHIM_STATE/pg-state"; fi ;;
   "run --rm") [ -f "$SHIM_STATE/pg-volume" ] || exit 1; cat "$SHIM_STATE/pg-volume" ;;
-  "inspect -f") if [ -f "$SHIM_STATE/searxng-running" ]; then echo true; else echo false; fi ;;
+  "inspect -f")
+    if [ -f "$SHIM_STATE/containers/${!#}" ]; then cat "$SHIM_STATE/containers/${!#}"; exit 0; fi
+    if [ -f "$SHIM_STATE/searxng-running" ]; then echo true; else echo false; fi ;;
   "stop "*) rm -f "$SHIM_STATE/searxng-running" ;;
 esac
 exit 0
@@ -1346,6 +1363,158 @@ case_second_run_skips_everything() {
   check "no daemon-reload" not_called "daemon-reload"
   check "no mount" not_called "mount /srv"
   check "still needs the distro restart" eq "$(final_field restart_required)" true
+  end_case
+}
+
+# The music player image (2026-10-21): a repair by Setup re-ran the images
+# step (its inputs include the compose file, which updates change), rebuilt
+# domovoi-mpd with a new image ID, and the core's container guard reported
+# it as replaced outside Domovoi. A re-run now keeps the image, builds only
+# when it is missing or when Dockerfile.mpd changed since this script built
+# it, and records every build for the guard.
+mpd_img() { cat "$STATE/images/domovoi-mpd_latest"; }
+mpd_record() { cat "$ROOT/var/lib/domovoi-provision/mpd-image.json"; }
+record_field() { sed -n "s/^  \"$1\": \"\([^\"]*\)\",\{0,1\}\$/\1/p" "$ROOT/var/lib/domovoi-provision/mpd-image.json"; }
+json_ok() { [ -z "$JSON_PY" ] || "$JSON_PY" -c 'import json, sys; json.load(open(sys.argv[1], encoding="utf-8"))' "$1"; }
+# A room's player, running IMAGE, and the core up (a repair of a live box).
+live_room() { mkdir -p "$STATE/containers"; printf '%s\n' "$2" >"$STATE/containers/$1"; touch "$STATE/active/domovoi-core.service"; }
+# The images step's inputs as they were before an update moved the checkout.
+stale_images_marker() { echo stale >"$ROOT/var/lib/domovoi-provision/steps/images"; }
+
+case_first_build_of_the_music_player_is_recorded() {
+  new_case first_build_of_the_music_player_is_recorded
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "built once" eq "$(grep -c '^docker build' "$STATE/calls.log")" 1
+  local rec=$ROOT/var/lib/domovoi-provision/mpd-image.json
+  check "recorded" test -f "$rec"
+  check "0644" eq "$(stat -c %a "$rec")" 644
+  check "by the installer" has_line "$rec" '  "by": "provision",'
+  check "names the image the tag names" eq "$(record_field image_id)" "$(mpd_img)"
+  check "the tag" has_line "$rec" '  "tag": "domovoi-mpd:latest",'
+  check "Dockerfile.mpd's hash" eq "$(record_field dockerfile_sha256)" "$(sha256sum "$CHECKOUT/domovoi/Dockerfile.mpd" | cut -d' ' -f1)"
+  check "when, in UTC" grep -qE '^  "built_at": "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"$' "$rec"
+  check "valid JSON" json_ok "$rec"
+  check "no temp file left" absent "$rec.tmp"
+  check "no core to restart on a first install" not_called "systemctl restart domovoi-core"
+  end_case
+}
+
+case_repair_rerun_keeps_the_music_player_image() {
+  new_case repair_rerun_keeps_the_music_player_image
+  run_prov "${wsl_args[@]}"
+  check "first run exit 0" eq "$RC" 0
+  local img rec_before; img=$(mpd_img); rec_before=$(mpd_record)
+  live_room domovoi-mpd-kitchen "$img"
+  stale_images_marker
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "the images step ran" eq "$(state_of images)" done
+  check "the database images pulled" called "docker compose pull postgres flyway"
+  check "no build" not_called "docker build"
+  check "said why" said "keeping domovoi-mpd:latest ($img)"
+  check "the same image" eq "$(mpd_img)" "$img"
+  check "the record as it was" eq "$(mpd_record)" "$rec_before"
+  check "the room's player left alone" test -f "$STATE/containers/domovoi-mpd-kitchen"
+  check "no container removed" not_called "docker rm"
+  check "the core not restarted" not_called "systemctl restart domovoi-core"
+  end_case
+}
+
+case_repair_rerun_keeps_an_image_built_elsewhere_unvouched() {
+  new_case repair_rerun_keeps_an_image_built_elsewhere_unvouched
+  run_prov "${wsl_args[@]}"
+  check "first run exit 0" eq "$RC" 0
+  local rec_before; rec_before=$(mpd_record)
+  # A docker build by hand (or the core, or the update unit): another ID.
+  local other="sha256:$(printf manual | sha256sum | cut -c1-64)"
+  echo "$other" >"$STATE/images/domovoi-mpd_latest"
+  # ...and the Dockerfile the record names is no longer the checkout's.
+  sed -i 's/^  "dockerfile_sha256": "[^"]*"/  "dockerfile_sha256": "older"/' "$ROOT/var/lib/domovoi-provision/mpd-image.json"
+  rec_before=$(mpd_record)
+  stale_images_marker
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "no build" not_called "docker build"
+  check "the image left as it is" eq "$(mpd_img)" "$other"
+  # The record still names the installer's own build, so it vouches for
+  # nothing the tag names now: the guard reports the hand-made image.
+  check "the record not rewritten" eq "$(mpd_record)" "$rec_before"
+  check "it doesn't name the image the tag names" test "$(record_field image_id)" != "$other"
+  end_case
+}
+
+case_changed_dockerfile_rebuilds_records_and_moves_the_rooms() {
+  new_case changed_dockerfile_rebuilds_records_and_moves_the_rooms
+  run_prov "${wsl_args[@]}"
+  check "first run exit 0" eq "$RC" 0
+  local old; old=$(mpd_img)
+  live_room domovoi-mpd-kitchen "$old"
+  live_room domovoi-mpd-den "$old"
+  live_room domovoi-searxng-lookalike "$old"
+  # This script built the image the tag names, from another Dockerfile.mpd.
+  sed -i 's/^  "dockerfile_sha256": "[^"]*"/  "dockerfile_sha256": "older"/' "$ROOT/var/lib/domovoi-provision/mpd-image.json"
+  stale_images_marker
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "said why" said "building domovoi-mpd:latest: Dockerfile.mpd changed since this script built domovoi-mpd:latest"
+  check "built" called "docker build --progress=plain -t domovoi-mpd:latest"
+  local new; new=$(mpd_img)
+  check "a new image ID" test "$new" != "$old"
+  check "recorded: the new image" eq "$(record_field image_id)" "$new"
+  check "recorded: this Dockerfile" eq "$(record_field dockerfile_sha256)" "$(sha256sum "$CHECKOUT/domovoi/Dockerfile.mpd" | cut -d' ' -f1)"
+  check "the rooms on the old image removed" eq "$(ls "$STATE/containers")" domovoi-searxng-lookalike
+  check "only Domovoi's music players" called "docker rm -f domovoi-mpd-kitchen"
+  check "after the build" before "docker build" "docker rm -f domovoi-mpd-den"
+  check "the core restarted to recreate them" called "systemctl restart domovoi-core.service --no-block"
+  check "after the rooms went" before "docker rm -f domovoi-mpd-kitchen" "systemctl restart domovoi-core.service"
+  check "said so" said "restarting domovoi-core: it recreates the rooms' players on the new image"
+  end_case
+}
+
+case_missing_music_player_image_is_built_on_a_repair() {
+  new_case missing_music_player_image_is_built_on_a_repair
+  run_prov "${wsl_args[@]}"
+  check "first run exit 0" eq "$RC" 0
+  local old; old=$(mpd_img)
+  live_room domovoi-mpd-kitchen "$old"
+  rm -f "$STATE/images/domovoi-mpd_latest"
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "the images step re-ran (its check)" eq "$(state_of images)" done
+  check "built" called "docker build --progress=plain -t domovoi-mpd:latest"
+  check "recorded" eq "$(record_field image_id)" "$(mpd_img)"
+  check "the room removed" absent "$STATE/containers/domovoi-mpd-kitchen"
+  check "the core restarted" called "systemctl restart domovoi-core.service --no-block"
+  end_case
+}
+
+case_a_core_still_starting_is_restarted_after_a_rebuild() {
+  new_case a_core_still_starting_is_restarted_after_a_rebuild
+  run_prov "${wsl_args[@]}"
+  check "first run exit 0" eq "$RC" 0
+  live_room domovoi-mpd-kitchen "$(mpd_img)"
+  # The core is starting, not active yet (review round 1).
+  rm -f "$STATE/active/domovoi-core.service"
+  mkdir -p "$STATE/activating"; touch "$STATE/activating/domovoi-core.service"
+  rm -f "$STATE/images/domovoi-mpd_latest"
+  run_prov "${wsl_args[@]}"
+  check "built" called "docker build --progress=plain -t domovoi-mpd:latest"
+  check "the starting core restarted" called "systemctl restart domovoi-core.service --no-block"
+  end_case
+}
+
+case_a_stopped_core_is_left_stopped_after_a_rebuild() {
+  new_case a_stopped_core_is_left_stopped_after_a_rebuild
+  run_prov "${wsl_args[@]}"
+  check "first run exit 0" eq "$RC" 0
+  live_room domovoi-mpd-kitchen "$(mpd_img)"
+  rm -f "$STATE/active/domovoi-core.service"
+  rm -f "$STATE/images/domovoi-mpd_latest"
+  run_prov "${wsl_args[@]}"
+  check "built" called "docker build --progress=plain -t domovoi-mpd:latest"
+  check "not restarted by the images step" not_said "restarting domovoi-core: it recreates"
+  check "the room removed (the core recreates it when it starts)" absent "$STATE/containers/domovoi-mpd-kitchen"
   end_case
 }
 
@@ -2952,6 +3121,104 @@ case_ai_features_on_an_older_core() {
   end_case
 }
 
+# The household's saved answer wins on a re-run (review round 1): an
+# explicit --ai-models (what the Windows Setup passes for every Yes) on a
+# box whose household turned AI off in Settings keeps AI_FEATURES=false,
+# pulls nothing, and the final line says what the .env holds.
+case_ai_flag_over_household_off() {
+  new_case ai_flag_over_household_off
+  local envf=$CHECKOUT/domovoi/.env rec=$ROOT/var/lib/domovoi-provision/env-written m
+  local skipped="[models] skipped: AI chat and questions are off in this home's settings (AI_FEATURES=false in domovoi/.env, kept over --ai-models): no AI models pulled (turn them on in Settings, Models)"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "first run exit 0" eq "$RC" 0
+  sed -i 's/^AI_FEATURES=.*/AI_FEATURES=false/' "$envf"
+  run_prov "${wsl_args[@]}" --ai-models --lan-ip 192.168.1.60
+  check "--ai-models exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "household's AI_FEATURES=false kept" has_line "$envf" "AI_FEATURES=false"
+  check "the usual warning" said "domovoi/.env: AI_FEATURES holds a value this script did not write"
+  check "no model pulled while AI stays off" not_called "/api/pull"
+  for m in "${AI_PULLS[@]}"; do check "not pulled: $m" not_called "$m"; done
+  check "models step skipped" eq "$(state_of models)" skip
+  check "says why, plainly" said "$skipped"
+  check "said when it settled" said "AI chat and questions: off in this home's settings (AI_FEATURES=false in domovoi/.env), kept over --ai-models: no AI models are pulled"
+  check "no models marker" no_marker models
+  check "the final line says AI is off" eq "$(final_field ai)" false
+  check "and result.json" grep -qF '"ai":false' "$ROOT/var/lib/domovoi-provision/result.json"
+  check "said at the end" said "AI chat and questions: off (turn them on later on the dashboard: Settings, Models)"
+  # The same options again: the env step is skipped (inputs unchanged), and
+  # the .env still decides.
+  run_prov "${wsl_args[@]}" --ai-models --lan-ip 192.168.1.60
+  check "again: exit 0" eq "$RC" 0
+  check "again: env skipped" eq "$(state_of env)" skip
+  check "again: no pull" not_called "/api/pull"
+  check "again: says why" said "$skipped"
+  check "again: AI off" eq "$(final_field ai)" false
+  # A run with no option follows the household, and leaves the answer
+  # theirs: a later --ai-models still keeps it.
+  run_prov "${wsl_args[@]}" --lan-ip 192.168.1.60
+  check "no option: exit 0" eq "$RC" 0
+  check "no option: no pull" not_called "/api/pull"
+  check "no option: the record still the script's own" has_line "$rec" "AI_FEATURES=true"
+  run_prov "${wsl_args[@]}" --ai-models --lan-ip 192.168.1.60
+  check "--ai-models after that: exit 0" eq "$RC" 0
+  check "--ai-models after that: still false" has_line "$envf" "AI_FEATURES=false"
+  check "--ai-models after that: no pull" not_called "/api/pull"
+  check "--ai-models after that: AI off" eq "$(final_field ai)" false
+  end_case
+}
+
+# Left out with --no-ai-models, then a re-run with no option and no
+# terminal (the Windows installer's repair): still off, nothing pulled.
+case_ai_off_rerun_without_option() {
+  new_case ai_off_rerun_without_option
+  local envf=$CHECKOUT/domovoi/.env
+  run_prov "${wsl_args[@]}" --no-ai-models
+  check "first run exit 0" eq "$RC" 0
+  run_prov "${wsl_args[@]}"
+  check "re-run exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "kept it" said "AI chat and questions: left out (AI_FEATURES=false in domovoi/.env)"
+  check "models skipped" eq "$(state_of models)" skip
+  check "says why" said "[models] skipped: AI_FEATURES=false in domovoi/.env: AI chat and questions are off"
+  check "no pull" not_called "/api/pull"
+  check "no models marker" no_marker models
+  check ".env still false" has_line "$envf" "AI_FEATURES=false"
+  check "the final line says AI is off" eq "$(final_field ai)" false
+  check "and result.json" grep -qF '"ai":false' "$ROOT/var/lib/domovoi-provision/result.json"
+  end_case
+}
+
+# Left out at install, then the household turns AI on in Settings: the next
+# run with no option pulls the models (the skipped step left no marker),
+# and a later --no-ai-models keeps their answer.
+case_ai_turned_on_in_settings_after_no() {
+  new_case ai_turned_on_in_settings_after_no
+  local envf=$CHECKOUT/domovoi/.env m
+  run_prov "${wsl_args[@]}" --no-ai-models
+  check "first run exit 0" eq "$RC" 0
+  check "no pull" not_called "/api/pull"
+  sed -i 's/^AI_FEATURES=.*/AI_FEATURES=true/' "$envf"
+  run_prov "${wsl_args[@]}"
+  check "no option exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "follows the household" said "AI chat and questions: included (AI_FEATURES=true in domovoi/.env)"
+  check "models ran" eq "$(state_of models)" done
+  for m in "${AI_PULLS[@]}"; do check "pulled: $m" called "$m"; done
+  check "models marker" marker models
+  check ".env still true" has_line "$envf" "AI_FEATURES=true"
+  check "the final line says AI is on" eq "$(final_field ai)" true
+  run_prov "${wsl_args[@]}" --no-ai-models --lan-ip 192.168.1.60
+  check "--no-ai-models exit 0" eq "$RC" 0
+  check "the household's answer kept" has_line "$envf" "AI_FEATURES=true"
+  check "the usual warning" said "domovoi/.env: AI_FEATURES holds a value this script did not write"
+  check "said when it settled" said "AI chat and questions: on in this home's settings (AI_FEATURES=true in domovoi/.env), kept over --no-ai-models: the AI models are pulled"
+  check "models skipped: already done" eq "$(state_of models)" skip
+  check "no pull: they are there" not_called "/api/pull"
+  check "the final line says AI is on" eq "$(final_field ai)" true
+  end_case
+}
+
 # ─── Docker's GPU runtime (wake-word training on the GPU, 2026-10-13) ────
 #
 # The spike's t7 distro: without the NVIDIA Container Toolkit, `docker run
@@ -3339,7 +3606,7 @@ case_before_the_first_release_installs_follow_main() {
   check "HEAD is main's" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$FIXTURE_B"
   check "on main, tracking origin/main" tracks main
   check "says why" said "has no stable branch yet (no release has been published): installing main"
-  check "and how to move later" said "switch to stable in Settings > Version after the first release"
+  check "and how to move later" said "switch to stable in Settings > About & updates after the first release"
   check "the checkout keeps what was asked for" eq "$(git -C "$CHECKOUT" config domovoi.intendedChannel)" stable
   check "the channel pin written (main is one)" has_line "$ROOT/etc/default/domovoi-update" "$PIN_LINE"
   end_case
@@ -3942,6 +4209,13 @@ CASES=(
   case_setup_code_kept_out_of_the_journal_it_prints
   case_failed_start_logs_status_and_journal
   case_unhealthy_start_logs_all_three_units
+  case_first_build_of_the_music_player_is_recorded
+  case_repair_rerun_keeps_the_music_player_image
+  case_repair_rerun_keeps_an_image_built_elsewhere_unvouched
+  case_changed_dockerfile_rebuilds_records_and_moves_the_rooms
+  case_missing_music_player_image_is_built_on_a_repair
+  case_a_core_still_starting_is_restarted_after_a_rebuild
+  case_a_stopped_core_is_left_stopped_after_a_rebuild
   case_apt_step_installs_the_stick_tool
   case_stop_before_start
   case_stop_before_takes_a_step_inside_the_run
@@ -3985,6 +4259,9 @@ CASES=(
   case_ai_question_at_a_terminal
   case_ai_models_dry_run_plans_both_answers
   case_ai_features_on_an_older_core
+  case_ai_flag_over_household_off
+  case_ai_off_rerun_without_option
+  case_ai_turned_on_in_settings_after_no
   case_gpu_runtime_on_wsl
   case_gpu_runtime_needs_nvidias_libcuda_on_wsl
   case_gpu_runtime_skipped_on_bare_metal_without_a_driver

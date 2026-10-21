@@ -541,7 +541,7 @@ const _lyrJobsRows = (s) => {
   const counts = `${_lyrNum(lr.found || 0)} found · ${_lyrNum(lr.not_found || 0)} not found`;
   switch (lr.state) {
     case 'off':
-      add('LRCLIB: off — Settings → Configuration → Library'); break;
+      add('LRCLIB: off — Settings → Advanced → Library'); break;
     case 'internet_off':
       add('LRCLIB: off — this Domovoi stays off the internet (Settings → Internet)'); break;
     case 'offline':
@@ -569,7 +569,7 @@ const _lyrJobsRows = (s) => {
     add(line, failed ? lrc.last_error : null);
   }
   if (index.pending > 0) add(`making lyrics searchable — ${_lyrNum(index.pending)} to go`);
-  if (s.search_enabled === false) add('finding songs by their words: off — Settings → Configuration → Library');
+  if (s.search_enabled === false) add('finding songs by their words: off — Settings → Advanced → Library');
   return out;
 };
 const lyricsJobsLines = (s) => _lyrJobsRows(s).map((r) => r.text);

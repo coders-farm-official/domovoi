@@ -331,7 +331,7 @@ def test_the_screen_says_what_to_do_in_every_state():
     lines, done = c.screen_for({"connection": "awaiting_approval"}, "807662", info, 120)
     text = "\n".join(lines)
     assert not done and "Room: Kitchen" in text and "(the code is 807 662)" in text
-    assert "Settings -> Satellites -> Waiting for approval" in text
+    assert "Settings -> Rooms -> Waiting for approval" in text
     lines, done = c.screen_for({"connection": "connected"}, None, info, 120)
     assert done and "now the room \"Kitchen\"" in "\n".join(lines)
     for state, words in (("offline", "Can't reach"), ("unpinned", "did not prove"), ("refused", "turned this computer away")):
