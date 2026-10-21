@@ -22,6 +22,7 @@ Owner decisions (2026-10-21), all enforced here and in the voice handler
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -37,6 +38,8 @@ TITLE_MAX = 60
 
 def help_title(question: str) -> str:
     q = " ".join((question or "").split()).rstrip("?.! ")
+    # A transcript is lower case: "how do i …" reads "How do I …".
+    q = re.sub(r"\bi\b", "I", q)
     q = q[:1].upper() + q[1:] if q else "Domovoi"
     title = TITLE_PREFIX + q
     return title if len(title) <= TITLE_MAX else title[: TITLE_MAX - 1].rstrip() + "…"

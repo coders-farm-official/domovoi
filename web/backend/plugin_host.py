@@ -178,6 +178,19 @@ _WEB_BACKEND_CORE_IMPORTS = (
     # The household's AI switch: Capabilities, Chat and the Models page
     # read it, and every plugin http() client carries its request hook.
     "domovoi.ai_features",
+    # Domovoi's help desk (part 9): /api/help and Chat's help turns read
+    # the help index, the facts, the troubleshooting summaries and the
+    # report through these; error_codes is imported lazily by the index.
+    "domovoi.lookup",
+    "domovoi.help_desk.index",
+    "domovoi.help_desk.error_codes",
+    "domovoi.help_desk.source",
+    "domovoi.help_desk.redact",
+    "domovoi.help_desk.troubleshoot",
+    "domovoi.help_desk.facts",
+    "domovoi.help_desk.answer",
+    "domovoi.help_desk.diagnostics",
+    "domovoi.help_desk.delivery",
 )
 
 

@@ -193,6 +193,12 @@
     "dashboard": true
    }
   },
+  "settings/recordings": {
+   "dashboard": "#settings/recordings",
+   "app": {
+    "dashboard": true
+   }
+  },
   "settings/models": {
    "dashboard": "#settings/models",
    "app": {
@@ -544,6 +550,7 @@
     "backups",
     "plugins",
     "models",
+    "help-desk",
     "troubleshooting"
    ]
   }
@@ -1493,6 +1500,27 @@
     },
     {
      "type": "label",
+     "role": "say",
+     "text": "Try saying",
+     "note": "in the room itself"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "how's the wifi",
+       "handler": "wifi",
+       "path": "fast"
+      },
+      {
+       "text": "fix the wifi",
+       "handler": "wifi",
+       "path": "fast"
+      }
+     ]
+    },
+    {
+     "type": "label",
      "role": "wrong",
      "text": "If something's wrong"
     },
@@ -2203,6 +2231,26 @@
     },
     {
      "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "how many songs do I have",
+       "handler": "library",
+       "path": "fast"
+      },
+      {
+       "text": "what did I add this week",
+       "handler": "library",
+       "path": "fast"
+      }
+     ]
+    },
+    {
+     "type": "label",
      "role": "also",
      "text": "Also"
     },
@@ -2531,6 +2579,31 @@
       },
       {
        "text": "A HEIC phone photo is refused on the dashboard: send it from the app, which converts it."
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "also",
+     "text": "Also"
+    },
+    {
+     "type": "p",
+     "text": "Voice chat mode, a spoken conversation in a room, is an early experiment and off unless whoever set up Domovoi turned it on."
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "let's chat",
+       "handler": "chat_mode",
+       "path": "fast",
+       "note": "in a room, while voice chat mode is on"
       }
      ]
     }
@@ -2965,6 +3038,9 @@
       },
       {
        "text": "{admin} turn recordings off in a room's **Overview** (**Stop and delete**)."
+      },
+      {
+       "text": "{admin} listen to a room's command recordings, mark whether each one ended at the right moment, and delete them: [Settings → Recordings](route:settings/recordings). A room keeps them only while an admin has turned them on for it."
       }
      ]
     },
@@ -3100,6 +3176,22 @@
     {
      "type": "p",
      "text": "**If every room is offline but the dashboard opens**, the server's core has stopped answering. It restarts itself within about a minute. If it doesn't, an admin presses **Restart the core** (on [Home](route:home), [Settings → Satellites](route:settings/satellites) or **Version**). The app says the core isn't answering, and reconnects by itself."
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "how's domovoi doing",
+       "handler": "homelab",
+       "path": "fast",
+       "note": "how the server is: its processor, memory and disk"
+      }
+     ]
     }
    ],
    "more": {
@@ -3241,6 +3333,98 @@
    }
   },
   {
+   "id": "help-desk",
+   "topic": "keeping-it-running",
+   "title": "Asking Domovoi for help",
+   "subtitle": "ask it, show it, report it",
+   "keywords": [
+    "help",
+    "how do i",
+    "ask domovoi",
+    "screenshot",
+    "report a problem",
+    "diagnostics",
+    "send the steps",
+    "question mark"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "Domovoi answers questions about itself: from this manual, its FAQ and troubleshooting guide, and the help of the plugins you installed. It answers only from what it finds. When nothing covers the question, it says \"The manual doesn't cover that.\" rather than guessing."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "Press **?** at the top of any page. Search the help, or press **ask Domovoi** to start a chat called \"Help: …\".",
+       "only": "dashboard"
+      },
+      {
+       "text": "An error message has **ask Domovoi about this**: the help opens with the error's code and the page you were on.",
+       "only": "dashboard"
+      },
+      {
+       "text": "In a chat, ask \"how do I …?\" or \"why is the kitchen offline?\". Domovoi also reads what its own checks show: rooms that are offline and why, plugins, its containers, and the last update (its details only for an admin)."
+      },
+      {
+       "text": "**Something on your screen?** Paste or attach a screenshot in a chat on the home server. The vision model reads it on your server; it never leaves your home."
+      },
+      {
+       "text": "A chat on this phone answers from the app's own copy of the manual, offline. It can't read screenshots yet: use a home-server chat for those.",
+       "only": "app"
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "how do I add a room",
+       "handler": "help_desk",
+       "path": "fast"
+      },
+      {
+       "text": "how do I change the wake word",
+       "handler": "help_desk",
+       "path": "fast"
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "After the short answer, Domovoi asks \"Want me to send the steps to your phone?\" Say yes, and they arrive as a chat called \"Help: …\" on the phones marked as yours ([Settings → Connection](route:app/connection), **This phone belongs to**, in the app). If Domovoi doesn't know your voice, it asks who to send them to. It never sends them to every phone."
+    },
+    {
+     "type": "label",
+     "role": "wrong",
+     "text": "If something's wrong"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "**AI chat and questions are off**: help still searches the manual and the docs, with no model, and screenshots can't be read. See [Models](node:models)."
+      },
+      {
+       "text": "**Help can't solve it**: **report a problem**, in the **?** panel, builds a summary of your Domovoi with no passwords, codes, addresses or names. Read it, then copy or save it and post it yourself, on GitHub Discussions or Discord. Nothing is sent for you."
+      }
+     ]
+    }
+   ]
+  },
+  {
    "id": "troubleshooting",
    "topic": "keeping-it-running",
    "title": "Troubleshooting",
@@ -3278,6 +3462,9 @@
       },
       {
        "text": "**Something is greyed with \"needs internet\"**: [Internet](node:internet)."
+      },
+      {
+       "text": "**Not sure where to look**: ask Domovoi: [Asking Domovoi for help](node:help-desk)."
       },
       {
        "text": "**App: can't find the server**: same Wi-Fi as the server? **add manually** with the dashboard's address."

@@ -150,6 +150,11 @@ ERROR_CODES: dict[str, ErrorHelp] = {
         "A name needs letters or numbers that can be spoken.",
         "music",
     ),
+    "retry": _e(
+        "Someone else changed that name at the same moment",
+        "Two changes to the same name met. Try it again.",
+        "music",
+    ),
     "already_its_name": _e(
         "That's already its name",
         "The library already finds it by that name, so there is nothing to add.",

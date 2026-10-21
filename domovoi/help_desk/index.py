@@ -151,8 +151,8 @@ class Hit:
 
     #: Below this BM25 score, a hit is noise.
     MIN_SCORE = 1.5
-    #: A confident hit holds at least this share of the question's words.
-    MIN_COVERAGE = 0.5
+    #: A confident hit holds more than half of the question's own words.
+    MIN_COVERAGE = 0.6
 
     def confident(self) -> bool:
         return self.score >= self.MIN_SCORE and self.coverage >= self.MIN_COVERAGE

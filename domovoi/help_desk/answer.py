@@ -57,7 +57,7 @@ _DOMOVOI_RE = re.compile(
     r"manual|update|upgrade|server|chat|voice|timer|reminder|music|playlist|podcast|audiobook|"
     r"radio|calendar|files|household|admin|pair|token|phone|kitchen|bedroom|office|garage|"
     r"internet|model|models|whisper|ollama|backup|restart|guest|people|news|videos?|intercom|"
-    r"drop in|lyrics|stations?)\b",
+    r"drop in|lyrics|stations?|version)\b",
     re.I,
 )
 _SCREEN_RE = re.compile(

@@ -6,6 +6,9 @@ publisher = "Coders Farm"
 license = "MIT"
 description = "Internet radio + FM via RTL-SDR: station search, play-or-favorite, recents, live tuning, passive song detection."
 homepage = "https://github.com/coders-farm-official/domovoi"
+# The short help Domovoi's help desk answers from (SDK 1.8; cores before
+# it ignore the key). Coders Farm's own plugins must have one.
+help = "HELP.md"
 # 1.4: sdk.egress and connectivity.policy (the INTERNET_ACCESS answer).
 domovoi_api = ">=1.4,<2.0"
 # The Stations page's colour (docs/PLUGIN_DEVELOPMENT.md, "accent"): its
