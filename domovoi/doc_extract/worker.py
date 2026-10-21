@@ -29,7 +29,7 @@ def main(argv: list[str]) -> int:
         limits.apply(int(req.get("memory_bytes") or limits.worker_memory_bytes()),
                      int(req.get("cpu_seconds") or 120))
     except limits.LimitError as e:
-        return done({"ok": False, "error": "That document couldn't be read.", "detail": str(e)})
+        return done({"ok": False, "error": "That document couldn't be read.", "detail": type(e).__name__})
     from domovoi.doc_extract import extract
     from domovoi.doc_extract.safe import Refused
 
@@ -43,7 +43,10 @@ def main(argv: list[str]) -> int:
     except RecursionError:
         result = {"ok": False, "error": "That document is nested too deeply to read safely."}
     except Exception as e:  # noqa: BLE001 — a bad document is a failed read
-        result = {"ok": False, "error": "That document is damaged and couldn't be read.", "detail": repr(e)[:300]}
+        # Only the exception's kind for the log: its text can quote the
+        # document (review round 1), and the server keeps no document text.
+        result = {"ok": False, "error": "That document is damaged and couldn't be read.",
+                  "detail": type(e).__name__}
     return done(result)
 
 

@@ -26,8 +26,9 @@ log = logging.getLogger(__name__)
 
 TIMEOUT_SEC = 120.0
 MAX_PARALLEL = limits.worker_slots()
-#: The largest result read back (a 100 MB text file's parts and then some).
-MAX_RESULT_BYTES = 400 * 1024 * 1024
+#: The largest result read back: the 4,000,000-character text cap
+#: (doc_extract.MAX_TEXT_CHARS) as JSON, with room for the markup.
+MAX_RESULT_BYTES = 24 * 1024 * 1024
 
 
 
@@ -86,12 +87,13 @@ async def extract(path: Path, kind: str, *, timeout: float | None = None,
                 raise ExtractFailed("That document has more text than Domovoi keeps for a chat.")
             result = json.loads(out.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            log.warning("document read worker exited %s without a result: %s", proc.returncode,
-                        (err or b"")[-500:].decode("utf-8", "replace"))
+            # The exit code only: the worker's stderr could quote the file.
+            log.warning("document read worker exited %s without a result (%d bytes on stderr)",
+                        proc.returncode, len(err or b""))
             raise ExtractFailed("That document couldn't be read.")
         if not isinstance(result, dict) or not result.get("ok"):
             if isinstance(result, dict) and result.get("detail"):
-                log.info("document read refused: %s", result["detail"])
+                log.info("document read failed: %s", str(result["detail"])[:60])
             raise ExtractFailed(str((result or {}).get("error") or "That document couldn't be read."))
         if not isinstance(result.get("parts"), list):
             raise ExtractFailed("That document couldn't be read.")

@@ -24,11 +24,24 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
-from domovoi.doc_extract.safe import Refused, SafeZip, check_xml
+from typing import Iterable
+
+from domovoi.doc_extract.safe import Refused, SafeZip, check_member
 from domovoi.doc_extract.structure import md_table
 from domovoi.doc_qa.text import clean as normalize
 
 ROWS_PER_PART = 40
+#: Review round 1: a tiny file must not become a huge one. A sheet is read
+#: to at most this many columns and cells (rows are kept sparse: never
+#: padded to the header's width), and a workbook's shared strings part to
+#: at most this size.
+MAX_COLS = 256
+MAX_CELLS = 200_000
+MAX_SHARED_STRINGS_BYTES = 16 * 1024 * 1024
+#: The text a sheet may add up to (the document cap, doc_extract.MAX_TEXT_CHARS):
+#: 200,000 cells that all point at one 32,000-character shared string
+#: would otherwise be 6 GB.
+MAX_SHEET_CHARS = 4_000_000
 #: A column is numeric when this share of its filled cells are numbers.
 NUMERIC_SHARE = 0.6
 
@@ -92,9 +105,33 @@ def column_totals(header: list[str], rows: list[list[str]]) -> list[str]:
     return lines
 
 
-def _md_row(r: list[str], width: int) -> str:
-    cells = [" ".join(c.replace("|", "/").split()) for c in r] + [""] * (width - len(r))
+def _md_row(r: list[str]) -> str:
+    """One row as a markdown table row, as long as the row itself is (never
+    padded: a header 40,000 columns wide doesn't widen every row)."""
+    cells = [" ".join(c.replace("|", "/").split()) for c in r]
     return "| " + " | ".join(cells) + " |"
+
+
+def capped_rows(rows: "Iterable[list[str]]") -> tuple[list[list[str]], bool]:
+    """Rows cut to :data:`MAX_COLS` columns (trailing empty cells dropped),
+    stopping at :data:`MAX_CELLS` cells; and whether anything was cut."""
+    out: list[list[str]] = []
+    cells = 0
+    chars = 0
+    cut = False
+    for r in rows:
+        if len(r) > MAX_COLS:
+            cut = cut or any(str(c).strip() for c in r[MAX_COLS:])
+            r = r[:MAX_COLS]
+        r = list(r)
+        while r and not str(r[-1]).strip():
+            r.pop()
+        cells += len(r)
+        chars += sum(len(str(c)) for c in r)
+        if cells > MAX_CELLS or chars > MAX_SHEET_CHARS:
+            return out, True
+        out.append(r)
+    return out, cut
 
 
 def sheet_parts(rows: list[list[str]], sheet: str | None) -> list[dict[str, Any]]:
@@ -103,7 +140,6 @@ def sheet_parts(rows: list[list[str]], sheet: str | None) -> list[dict[str, Any]
     numbered = [(i + 1, r) for i, r in enumerate(rows)]
     while numbered and not any(c.strip() for c in numbered[-1][1]):
         numbered.pop()
-    numbered = [(n, r) for n, r in numbered]
     first = next((k for k, (_n, r) in enumerate(numbered) if any(c.strip() for c in r)), None)
     if first is None:
         return []
@@ -114,10 +150,9 @@ def sheet_parts(rows: list[list[str]], sheet: str | None) -> list[dict[str, Any]
     parts: list[dict[str, Any]] = []
     if not data:
         return [{"label": f"{prefix}row {header_no}".strip(), "text": md_table([header])}]
-    width = max(len(header), *(len(r) for _n, r in data))
     for k in range(0, len(data), ROWS_PER_PART):
         chunk = data[k:k + ROWS_PER_PART]
-        body = [_md_row(r, width) for _n, r in chunk]
+        body = [_md_row(r) for _n, r in chunk]
         lo, hi = chunk[0][0], chunk[-1][0]
         label = f"{prefix}rows {lo}-{hi}" if hi != lo else f"{prefix}row {lo}"
         parts.append({"label": label, "head": head, "text": "\n".join(body)})
@@ -134,8 +169,12 @@ def extract_xlsx(path: Path) -> dict[str, Any]:
     with SafeZip(path, "spreadsheet") as z:
         if not z.has("xl/workbook.xml"):
             raise Refused("That isn't an Excel workbook Domovoi can read (no workbook part inside).")
-        for name in z.xml_members():
-            check_xml(z.read(name), "spreadsheet")
+        # Every member, whatever its name: a sheet can be named "x.bin" in
+        # the workbook's relationships and openpyxl will still parse it.
+        for name in z.names():
+            check_member(name, z.read(name), "spreadsheet")
+            if name.lower() == "xl/sharedstrings.xml" and z.zf.getinfo(name).file_size > MAX_SHARED_STRINGS_BYTES:
+                raise Refused("That spreadsheet's text table is too large to read safely.")
     from openpyxl import load_workbook
 
     try:
@@ -146,11 +185,15 @@ def extract_xlsx(path: Path) -> dict[str, Any]:
     parts: list[dict[str, Any]] = []
     no_value = 0
     sheets = []
+    cut = False
     try:
         for ws in vals.worksheets:
             fws = forms[ws.title]
             rows: list[list[str]] = []
-            for vr, fr in zip(ws.iter_rows(values_only=True), fws.iter_rows(values_only=True)):
+            cells = 0
+            chars = 0
+            for vr, fr in zip(ws.iter_rows(values_only=True, max_col=MAX_COLS),
+                              fws.iter_rows(values_only=True, max_col=MAX_COLS)):
                 row = []
                 for v, f in zip(vr, fr):
                     if v is None and isinstance(f, str) and f.startswith("="):
@@ -161,12 +204,19 @@ def extract_xlsx(path: Path) -> dict[str, Any]:
                 while row and row[-1] == "":
                     row.pop()
                 rows.append(row)
+                cells += len(row)
+                chars += sum(len(c) for c in row)
+                if cells > MAX_CELLS or chars > MAX_SHEET_CHARS:
+                    cut = True
+                    break
+            if ws.max_column and ws.max_column > MAX_COLS:
+                cut = True
             sheets.append(ws.title)
             parts += sheet_parts(rows, normalize(ws.title))
     finally:
         vals.close()
         forms.close()
-    return {"parts": parts, "sheets": sheets, "formulas_without_value": no_value}
+    return {"parts": parts, "sheets": sheets, "formulas_without_value": no_value, "truncated": cut}
 
 
 def decode_text(raw: bytes) -> tuple[str, str]:
@@ -189,7 +239,8 @@ def extract_csv(path: Path) -> dict[str, Any]:
     except csv.Error:
         delim = ","
     try:
-        rows = [[normalize(c) for c in r] for r in csv.reader(io.StringIO(text), delimiter=delim)]
+        rows, cut = capped_rows([normalize(c) for c in r[:MAX_COLS + 1]]
+                                for r in csv.reader(io.StringIO(text), delimiter=delim))
     except csv.Error as e:
         raise Refused("That CSV file is damaged and couldn't be read.") from e
-    return {"parts": sheet_parts(rows, None), "encoding": enc, "delimiter": delim}
+    return {"parts": sheet_parts(rows, None), "encoding": enc, "delimiter": delim, "truncated": cut}

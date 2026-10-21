@@ -36,9 +36,11 @@ reply is "I couldn't find that in the document".
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import shutil
+import time
 import tempfile
 import uuid
 from dataclasses import dataclass, field
@@ -249,10 +251,45 @@ _REFUSALS = {
 }
 
 
+#: A staged document no message took is removed after this long.
+UNSENT_TTL_SEC = 3600
+
+
+async def sweep_unsent(now: float | None = None) -> int:
+    """Remove staged documents older than :data:`UNSENT_TTL_SEC` that no
+    message refers to (picked in the composer, never sent). Returns how
+    many went. Run at each upload, so the folder can't fill with them."""
+    if not DOCS_DIR.is_dir():
+        return 0
+    now = time.time() if now is None else now
+    old: set[str] = set()
+    for p in DOCS_DIR.glob("*-parts.json"):
+        token = p.name[:32]
+        try:
+            if _valid(token) and now - p.stat().st_mtime > UNSENT_TTL_SEC:
+                old.add(token)
+        except OSError:
+            continue
+    if not old:
+        return 0
+    async with session_scope() as s:
+        used = set((await s.execute(text(
+            "SELECT jsonb_array_elements(documents)->>'token' FROM chat_messages WHERE documents IS NOT NULL"
+        ))).scalars().all())
+    gone = old - used
+    remove(gone)
+    return len(gone)
+
+
 @router.post("/documents", dependencies=SEND, responses=_REFUSALS)
 async def upload_document(file: UploadFile = File(...)) -> Any:
     """Stage one document for a chat message: stored, read in the worker,
-    its parts cached. The answer is its metadata (``token`` for the send)."""
+    its parts cached. The answer is its metadata (``token`` for the send).
+    Staged documents never sent go after an hour (:func:`sweep_unsent`)."""
+    try:
+        await sweep_unsent()
+    except Exception as e:  # noqa: BLE001 — tidying never stops an upload
+        log.warning("chat documents: the unsent sweep failed: %s", type(e).__name__)
     name = _clean_name(file.filename, "")
     kind, refusal = _kind_or_refusal(name)
     if refusal is not None:
@@ -501,6 +538,14 @@ async def plan_reply(thread_id: int, question: str, new_docs: list[dict[str, Any
     docs = await thread_documents(thread_id)
     if not docs:
         return None
+    # Reading the cached parts and searching them is CPU work proportional
+    # to the documents (review round 1: 6.6 s for a 40 MB text file, with
+    # the event loop blocked), so it runs in a worker thread.
+    return await asyncio.to_thread(_plan, docs, question, new_docs, previous)
+
+
+def _plan(docs: list[dict[str, Any]], question: str, new_docs: list[dict[str, Any]],
+          previous: str | None) -> DocPlan:
     loaded = []
     for d in docs:
         cache = load_cache(str(d.get("token") or ""))

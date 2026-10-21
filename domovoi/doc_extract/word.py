@@ -36,6 +36,8 @@ R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 PKG_REL = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 MC_FALLBACK = "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
 _HEADING = re.compile(r"^heading\s*(\d)$", re.IGNORECASE)
+#: Distinct header (and footer) parts read from one document.
+MAX_HEADER_PARTS = 16
 
 
 def _styles(z: SafeZip) -> dict[str, str]:
@@ -86,8 +88,9 @@ def _para_block(p: ET.Element, styles: dict[str, str]) -> Block:
         if ps is not None:
             style = styles.get(ps.get(W + "val") or "", ps.get(W + "val") or "")
         ol = ppr.find(W + "outlineLvl")
-        if ol is not None and (ol.get(W + "val") or "").isdigit():
-            level = int(ol.get(W + "val")) + 2
+        val = (ol.get(W + "val") or "") if ol is not None else ""
+        if val.isascii() and val.isdecimal() and len(val) < 3:
+            level = int(val) + 2
         numbered = ppr.find(W + "numPr") is not None
     if style.lower() == "title":
         return Block("h", text, 1)
@@ -178,12 +181,20 @@ def extract(path: Path) -> dict[str, Any]:
         headers: list[str] = []
         footers: list[str] = []
         for ref_tag, dst in ((W + "headerReference", headers), (W + "footerReference", footers)):
+            # Each header part once, and at most MAX_HEADER_PARTS of them
+            # (review round 1: thousands of references to one big header
+            # held a worker for 120 s).
+            targets: list[str] = []
             for ref in root.iter(ref_tag):
                 target = rels.get(ref.get(R + "id") or "")
-                if target:
-                    t = _part_text(z, target)
-                    if t and t not in dst:
-                        dst.append(t)
+                if target and target not in targets:
+                    targets.append(target)
+                    if len(targets) >= MAX_HEADER_PARTS:
+                        break
+            for target in targets:
+                t = _part_text(z, target)
+                if t and t not in dst:
+                    dst.append(t)
         notes = _notes(z, "word/footnotes.xml", "footnote") + _notes(z, "word/endnotes.xml", "endnote")
     parts = blocks_to_parts(blocks, headers=headers, footers=footers, footnotes=notes)
     return {"parts": parts}

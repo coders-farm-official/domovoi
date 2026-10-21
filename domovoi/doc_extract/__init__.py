@@ -60,6 +60,10 @@ OLD_FORMATS = {
 
 #: The most pages a PDF may have (the time cap is the real limit).
 MAX_PAGES = 5000
+#: The most text kept from one document (review round 1): about 1,000
+#: pages. Past it, the parts are cut and a note says what was read; the
+#: readers stop early when they can.
+MAX_TEXT_CHARS = 4_000_000
 
 
 def kind_for(name: str) -> str | None:
@@ -102,7 +106,7 @@ def extract(path: Path, kind: str, *, single_pass: int | None = None) -> dict[st
     if kind == "pdf":
         from domovoi.doc_extract import pdf
 
-        result = pdf.extract(path, MAX_PAGES)
+        result = pdf.extract(path, MAX_PAGES, max_chars=MAX_TEXT_CHARS)
     elif kind == "docx":
         from domovoi.doc_extract import word
 
@@ -122,10 +126,11 @@ def extract(path: Path, kind: str, *, single_pass: int | None = None) -> dict[st
     elif kind in ("txt", "md"):
         from domovoi.doc_extract import plain
 
-        result = plain.extract(path, markdown=kind == "md")
+        result = plain.extract(path, markdown=kind == "md", max_chars=MAX_TEXT_CHARS)
     else:
         raise Refused(f"Chat reads {ACCEPTS} files.")
-    parts = [p for p in result.get("parts") or [] if str(p.get("text") or "").strip()]
+    parts, cut = _cap(result.get("parts") or [], MAX_TEXT_CHARS)
+    cut = cut or bool(result.get("truncated"))
     result["parts"] = parts
     result["kind"] = kind
     result["version"] = FORMAT_VERSION
@@ -136,4 +141,30 @@ def extract(path: Path, kind: str, *, single_pass: int | None = None) -> dict[st
             raise Refused(doc_notes.NO_TEXT_SCANNED)
         raise Refused(doc_notes.NO_TEXT)
     result["notes"] = doc_notes.attach_notes(result, single_pass or SINGLE_PASS_CHARS)
+    result["truncated"] = cut
+    if cut:
+        pages_read = max((int(p["page"]) for p in parts if p.get("page")), default=None) if kind == "pdf" else None
+        result["notes"].append(doc_notes.truncated_note(pages_read, result["words"]))
     return result
+
+
+def _cap(parts: list[dict[str, Any]], max_chars: int) -> tuple[list[dict[str, Any]], bool]:
+    """Non-empty parts kept whole up to ``max_chars`` (the phone's
+    ``DocExtract.finish`` does the same); the first part alone is cut to fit
+    when it is bigger than that. Returns (parts, whether anything was cut)."""
+    out: list[dict[str, Any]] = []
+    used = 0
+    for p in parts:
+        text = str(p.get("text") or "")
+        if not text.strip():
+            continue
+        size = len(text) + len(str(p.get("head") or ""))
+        if used + size <= max_chars:
+            out.append(p)
+            used += size
+            continue
+        room = max_chars - used - len(str(p.get("head") or ""))
+        if room > 0 and not out:
+            out.append({**p, "text": text[:room]})
+        return out, True
+    return out, False

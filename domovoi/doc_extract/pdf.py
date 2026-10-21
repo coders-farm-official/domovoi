@@ -83,12 +83,24 @@ def _merge_lines(segs: list[list[Any]]) -> list[str]:
     return [" ".join(s[4] for s in sorted(ln["segs"], key=lambda s: s[0])) for ln in lines]
 
 
+#: A page bigger than this on either side (PDF's own limit is 14,400 pt)
+#: isn't searched for columns: the gutter search would walk it point by
+#: point (review round 1: a 1 KB PDF held a worker for 120 s).
+MAX_PAGE_POINTS = 14400
+#: The gutter is looked for at this many x positions across the page.
+GUTTER_STEPS = 200
+#: Columns are looked for on a page with at most this many text rectangles.
+MAX_SORT_SEGMENTS = 5000
+
+
 def find_gutter(segs: list[list[Any]], width: float) -> float | None:
     """The x of a two-column page's gutter, or None for one column."""
-    if len(segs) < 12 or width <= 0:
+    if len(segs) < 12 or width <= 0 or width > MAX_PAGE_POINTS or len(segs) > MAX_SORT_SEGMENTS:
         return None
     best = None
-    for x in range(int(width * 0.3), int(width * 0.7), 2):
+    step = max(2.0, width * 0.4 / GUTTER_STEPS)
+    xs = [width * 0.3 + i * step for i in range(int(width * 0.4 / step) + 1)]
+    for x in xs:
         cross = sum(1 for s in segs if s[0] < x < s[2])
         left = sum(1 for s in segs if s[2] <= x)
         right = sum(1 for s in segs if s[0] >= x)
@@ -171,7 +183,7 @@ def strip_running(pages: list[list[str]], zone: int = 2) -> tuple[list[list[str]
     return out, headers, footers
 
 
-def extract(path: Path, max_pages: int) -> dict[str, Any]:
+def extract(path: Path, max_pages: int, max_chars: int | None = None) -> dict[str, Any]:
     import pypdfium2 as pdfium
 
     try:
@@ -190,7 +202,12 @@ def extract(path: Path, max_pages: int) -> dict[str, Any]:
         scanned: list[int] = []
         garbled: list[int] = []
         two_col: list[int] = []
+        read_chars = 0
+        cut = False
         for i in range(total):
+            if max_chars and read_chars > max_chars:
+                cut = True          # the rest isn't read: the cap is reached
+                break
             page = doc[i]
             try:
                 tp = page.get_textpage()
@@ -210,6 +227,7 @@ def extract(path: Path, max_pages: int) -> dict[str, Any]:
                 elif cols == 2:
                     two_col.append(i + 1)
                 pages.append(lines)
+                read_chars += sum(len(x) + 1 for x in lines)
             finally:
                 page.close()
     finally:
@@ -224,4 +242,4 @@ def extract(path: Path, max_pages: int) -> dict[str, Any]:
     if footers:
         parts.append({"label": "page footer", "text": "\n".join(footers)})
     return {"pages": total, "parts": parts, "scanned_pages": scanned, "garbled_pages": garbled,
-            "two_column_pages": two_col}
+            "two_column_pages": two_col, "truncated": cut}

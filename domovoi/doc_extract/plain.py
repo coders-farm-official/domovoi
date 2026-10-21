@@ -46,7 +46,14 @@ def blocks_of(text: str, markdown: bool) -> list[Block]:
     return blocks
 
 
-def extract(path: Path, markdown: bool) -> dict[str, Any]:
-    text, enc = decode_text(path.read_bytes())
+def extract(path: Path, markdown: bool, max_chars: int | None = None) -> dict[str, Any]:
+    """``max_chars``: read no more of the file than that many characters
+    can take (4 bytes each at most), and say when the file went on."""
+    with path.open("rb") as f:
+        raw = f.read(max_chars * 4 + 4 if max_chars else -1)
+        more = bool(max_chars) and bool(f.read(1))
+    text, enc = decode_text(raw)
     text = normalize(text)
-    return {"parts": blocks_to_parts(blocks_of(text, markdown)), "encoding": enc}
+    if max_chars and len(text) > max_chars:
+        text, more = text[:max_chars], True
+    return {"parts": blocks_to_parts(blocks_of(text, markdown)), "encoding": enc, "truncated": more}

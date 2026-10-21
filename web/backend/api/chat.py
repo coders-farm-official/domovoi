@@ -819,8 +819,9 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         # Answered from the documents: the passages and the question are the
         # whole prompt (no earlier replies: an answer comes only from what
         # the app found), the rules after who is answering.
+        # No profile in a document turn (review round 1): the person's
+        # memories have no business next to a stranger's file.
         if plan.immediate is None:
-            profile = await _thread_profile(thread.person_id)
             history = [{"role": "user", "content": plan.user}]
     elif refusal is None:
         profile = await _thread_profile(thread.person_id)
@@ -876,6 +877,12 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
             doc = plan.doc_json()
             yield f"event: delta\ndata: {json.dumps({'text': plan.immediate})}\n\n"
         else:
+            # A document turn shows nothing until the app has checked the
+            # reply (review round 1): the client gets "checking" now and
+            # the checked text, once, at the end.
+            checking = plan is not None
+            if checking:
+                yield f"event: status\ndata: {json.dumps({'state': 'checking'})}\n\n"
             try:
                 async for delta in ollama_client.chat_stream(
                     [system, *history], model=model, stats=ollama_stats,
@@ -884,13 +891,15 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
                     if first_token_ms is None:
                         first_token_ms = (time.monotonic() - started) * 1000
                     chunks.append(delta)
-                    yield f"event: delta\ndata: {json.dumps({'text': delta})}\n\n"
+                    if not checking:
+                        yield f"event: delta\ndata: {json.dumps({'text': delta})}\n\n"
                 if chunks and ollama_stats.get("done_reason") == "length":
                     # The cap stopped it (a loop, or an answer that long):
                     # end it visibly, the same in the stream and the row.
                     tail = "…" + CUT_OFF_NOTE
                     chunks.append(tail)
-                    yield f"event: delta\ndata: {json.dumps({'text': tail})}\n\n"
+                    if not checking:
+                        yield f"event: delta\ndata: {json.dumps({'text': tail})}\n\n"
             except Exception as e:  # noqa: BLE001 — surfaced as an SSE error event
                 code, error = _failure(e, model, model_role)
                 # The detail is for whoever reads the log; the user gets
@@ -905,8 +914,10 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
             code, error = _plain(ERR_EMPTY, model, model_role)
         if plan is not None and plan.immediate is None and error is None:
             # The app's check: citations only of passages it gave, quotes
-            # word for word, "I couldn't find that" said exactly.
+            # word for word, "I couldn't find that" said exactly. Only now
+            # does the reply reach the client.
             content, doc = plan.finish(content)
+            yield f"event: delta\ndata: {json.dumps({'text': content})}\n\n"
         if refusal is not None:
             # No reply was attempted, so there are no reply figures.
             stats: dict[str, Any] = {"model_role": model_role}

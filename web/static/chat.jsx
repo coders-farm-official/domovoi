@@ -31,7 +31,7 @@ const chatUploadUrl = (token) => withDeviceToken(`${API_BASE}/api/chat/uploads/$
 
 /* SSE reader for the send endpoint: fetch + ReadableStream, calling
  * onDelta(text) per chunk and resolving with the final done payload. */
-const chatSendStream = async (threadId, body, onDelta) => {
+const chatSendStream = async (threadId, body, onDelta, onStatus) => {
   // Streams the reply, so it needs the Response itself rather than parsed
   // JSON — apiFetchRaw, not apiFetch. Going through the helper is what
   // gets an unpaired browser the "pair this browser" prompt and one
@@ -68,6 +68,9 @@ const chatSendStream = async (threadId, body, onDelta) => {
       let payload;
       try { payload = JSON.parse(data); } catch { continue; }
       if (event === 'delta') onDelta(payload.text || '');
+      // A document turn: the reply is being checked against the document
+      // and arrives whole, checked (chat_documents.py).
+      else if (event === 'status') { if (onStatus) onStatus(payload.state || ''); }
       else if (event === 'done') done = payload;
       else if (event === 'error') {
         errorDetail = payload.detail || 'model error';
@@ -330,6 +333,9 @@ const ChatMessage = ({ m, threadId, onCopy, admin }) => {
           <div {...bubbleEvents}
                style={{ fontSize: 13, lineHeight: 1.6, overflowWrap: 'break-word', minWidth: 0 }}>
             <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(m.content || '') }}/>
+            {m.pending && m.status === 'checking' && !m.content && (
+              <span className="mono chat-doc-checking">reading the passages and checking the answer…</span>
+            )}
             {m.pending && <span className="mono" style={{ color: 'var(--fg-faint)' }}>▍</span>}
             {!m.pending && <ChatDocs.DocAnswer doc={m.doc}/>}
             <ChatReplyError m={m} admin={admin}/>
@@ -603,6 +609,8 @@ const ChatPage = () => {
       const { done, errorDetail, errorCode, errorModel } = await chatSendStream(id, body, (delta) => {
         setMessages((cur) => cur.map((m) =>
           m.id === 'pending' ? { ...m, content: m.content + delta } : m));
+      }, (state) => {
+        setMessages((cur) => cur.map((m) => (m.id === 'pending' ? { ...m, status: state } : m)));
       });
       setMessages((cur) => cur.map((m) =>
         m.id === 'pending'

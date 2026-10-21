@@ -112,6 +112,30 @@ def check_xml(data: bytes, what: str = "document") -> None:
         raise Refused(f"That {what} is damaged and couldn't be read.") from e
 
 
+_DECLS = (b"<!doctype", b"<!entity")
+
+
+def _looks_like_xml(data: bytes) -> bool:
+    head = data[:64].lstrip(b"\xef\xbb\xbf \t\r\n")
+    return (head.startswith(b"<") or data[:2] in (b"\xff\xfe", b"\xfe\xff")
+            or data[:2] in (b"<\x00", b"\x00<"))
+
+
+def check_member(name: str, data: bytes, what: str = "document") -> None:
+    """Refuse a zip member that declares a DOCTYPE or an entity, whatever
+    its name or encoding (review round 1: a workbook part named ``.bin``
+    that openpyxl parses anyway). XML-looking bytes go through the refusing
+    parser; anything else is searched for the declarations in UTF-8 and
+    UTF-16, so a part no extension names as XML can't carry one either."""
+    if _looks_like_xml(data):
+        check_xml(data, what)
+        return
+    low = data.lower()
+    for d in _DECLS:
+        if d in low or d.decode().encode("utf-16-le") in low or d.decode().encode("utf-16-be") in low:
+            raise Refused(f"That {what} has XML entity declarations, which Domovoi doesn't read.")
+
+
 class SafeZip:
     """A zip checked before anything in it is read (see the module doc)."""
 

@@ -50,6 +50,17 @@ def long_note(words: int) -> dict[str, str]:
                     "passages that best match it."}
 
 
+def truncated_note(pages_read: int | None, words: int) -> dict[str, str]:
+    """A document cut at the text cap (review round 1): what was read."""
+    if pages_read is not None:
+        return {"code": "truncated",
+                "text": f"This document is very large; Domovoi read the first {pages_read} "
+                        f"page{'' if pages_read == 1 else 's'}."}
+    return {"code": "truncated",
+            "text": f"This document is very large; Domovoi read the first part of it "
+                    f"(about {_about(words)} words)."}
+
+
 #: Why an attachment with no searchable text at all is refused.
 NO_TEXT_SCANNED = ("That PDF is pictures of text (a scan), so there is no text Domovoi can search yet.")
 NO_TEXT = "That file has no text Domovoi can read."
