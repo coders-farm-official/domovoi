@@ -1631,7 +1631,7 @@ While the household's AI features are off (the AI-optional switch, where
 the server has it) the routes that feed a chat refuse with `409`; reading
 text for a phone (`/documents/extract`) asks no model and stays open.
 
-**Long documents** (`web/backend/api/chat_doc_jobs.py`, V037). A summary
+**Long documents** (`web/backend/api/chat_doc_jobs.py`, V038). A summary
 of documents longer than one pass is a map/reduce **job**: the documents
 are cut into parts of about 3,500 tokens (14,000 characters, never across
 documents; a bigger part is sliced), each part gets "the main points of this

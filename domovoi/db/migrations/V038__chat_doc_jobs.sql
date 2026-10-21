@@ -1,4 +1,4 @@
--- V037 — long documents in Chat: map/reduce jobs (2026-10-21).
+-- V038 — long documents in Chat: map/reduce jobs (2026-10-21).
 --
 -- Documents plan D2 ("long documents"): a summary of a document longer
 -- than one pass is read in parts (map), then the notes are combined

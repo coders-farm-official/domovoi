@@ -135,9 +135,9 @@ internal data class ThreadRow(
     val title_by_user: Boolean = false,
     /** A search hit (`?q=`): the words around the match in a message. */
     val match_snippet: String? = null,
-    /** "Allow in this chat" is on (V038): lookups go without asking. */
+    /** "Allow in this chat" is on (V037): lookups go without asking. */
     val internet_allowed: Boolean = false,
-    /** A lookup in it went online (V038): the list's globe. */
+    /** A lookup in it went online (V037): the list's globe. */
     val used_internet: Boolean = false,
 )
 

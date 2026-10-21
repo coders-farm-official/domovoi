@@ -6,7 +6,7 @@ a way that would otherwise get reported as a bug.
 
 ## 2026-10-21 — Looking things up, with your permission
 
-Core, dashboard, app and the Kiwix plugin (1.2.6). **Run Flyway** (V038:
+Core, dashboard, app and the Kiwix plugin (1.2.6). **Run Flyway** (V037:
 `chat_threads.internet_allowed` and `used_internet`). The search helper is
 recreated by the next update (`DOMOVOI_SEARXNG_SETTINGS_REV`), so its new
 settings take effect; a box updated by hand needs
@@ -43,7 +43,7 @@ settings take effect; a box updated by hand needs
 
 ## 2026-10-21 — Summaries of long documents in Chat
 
-Core and dashboard update with one migration, **V037** (a `chat_doc_jobs`
+Core and dashboard update with one migration, **V038** (a `chat_doc_jobs`
 table; Flyway applies it on update). No new dependencies.
 
 * **"Summarize" works on long documents.** A document longer than one

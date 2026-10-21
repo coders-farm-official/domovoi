@@ -177,7 +177,7 @@ class ThreadCreate(BaseModel):
 class ThreadPatch(BaseModel):
     title: Optional[str] = Field(None, max_length=200)
     archived: Optional[bool] = None
-    # The header chip: "Allow in this chat" on or off (V038).
+    # The header chip: "Allow in this chat" on or off (V037).
     internet_allowed: Optional[bool] = None
 
 
