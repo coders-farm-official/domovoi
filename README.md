@@ -195,7 +195,7 @@ they have been tried on fewer devices than the rest, aren't yet held to
 1.0's promise, and may still change.
 
 - **An assistant on your phone, no server needed.** The Android app's
-  Assistant tab runs a model on the phone itself (Gemma 4 E2B on LiteRT-LM)
+  Chat can run on the phone itself (Gemma 4 E2B on LiteRT-LM)
   for text chat and push-to-talk voice, in airplane mode too once its
   2.45 GB of models are downloaded. It needs a 64-bit phone with 8 GB of
   memory or more ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)).
@@ -660,9 +660,9 @@ The differences are deliberate:
   and its Server settings tab opens the dashboard.
   From a satellite's page it can also **drop into that room** — your phone
   joins the room's live two-way audio bridge directly, so you can talk to
-  whoever's there from anywhere on the network. Its **Assistant** tab (a
-  preview) answers on the phone itself, with no server; it is separate
-  from Chat, which talks to your server.
+  whoever's there from anywhere on the network. Its **Chat** lists the
+  home server's chats and the phone's own (a preview, answered on the phone
+  itself with no server), each marked with where it runs.
 
 ---
 

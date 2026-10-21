@@ -11,7 +11,6 @@ import com.domovoi.app.net.LocalCapabilities
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.PluginScreenFrame
-import com.domovoi.app.ui.screens.assistant.AssistantScreen
 import com.domovoi.app.ui.screens.audiobooks.AudiobooksScreen
 import com.domovoi.app.ui.screens.audiobooks.SavedBooksScreen
 import com.domovoi.app.ui.screens.calendar.CalendarScreen
@@ -75,6 +74,5 @@ fun ScreenRouter(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts 
         Route.Settings -> SettingsScreen(navigate)
         Route.Manual -> ManualScreen(navigate)
         Route.Containers -> ContainersScreen()
-        Route.Assistant -> AssistantScreen()
     }
 }

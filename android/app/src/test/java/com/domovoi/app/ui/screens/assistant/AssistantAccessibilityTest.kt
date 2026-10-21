@@ -66,7 +66,7 @@ class AssistantAccessibilityTest {
                 setContent {
                     HeadlessUi {
                         CompositionLocalProvider(LocalComposerField provides { value, _, _ -> Text("field: $value") }) {
-                            AssistantContent(state, AssistantActions())
+                            AssistantContent(state, AssistantActions(), PhoneChatChrome(onBack = {}))
                         }
                     }
                 }
@@ -90,9 +90,9 @@ class AssistantAccessibilityTest {
     }
 
     @Test fun everyControlOfTheChatAndItsPanesSaysWhatItIs() {
-        val (_, described, unlabelled) = scan(ui(), panes = listOf("conversations", "model settings"))
+        val (_, described, unlabelled) = scan(ui(), panes = listOf("model settings"))
         assertEquals(emptyList<String>(), unlabelled)
-        listOf("conversations", "new conversation", "model settings", "talk", "back").forEach {
+        listOf("model settings", "talk", "back").forEach {
             assertTrue("$it in $described", it in described)
         }
     }

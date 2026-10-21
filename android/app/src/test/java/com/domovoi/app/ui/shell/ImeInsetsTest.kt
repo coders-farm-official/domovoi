@@ -144,6 +144,8 @@ class ImeInsetsTest {
             Triple("ui/screens/documents/DocumentsEditor.kt", "MarkdownToolbar", "if (keyboardCrowdsTheWindow()) return"),
             Triple("ui/screens/documents/DocumentsEditor.kt", "EditorHeader", "if (keyboardCrowdsTheWindow()) {"),
             Triple("ui/screens/chat/ChatScreen.kt", "ThreadTitleRow", "if (keyboardCrowdsTheWindow()) return"),
+            // Chat's header in every place (One Chat): the phone chat's too.
+            Triple("ui/screens/chat/ChatHome.kt", "ChatHeader", "if (keyboardCrowdsTheWindow()) return"),
             Triple("ui/screens/chat/ChatScreen.kt", "ChatPaneGutter", "if (keyboardCrowdsTheWindow())"),
             Triple("ui/screens/satellites/SatelliteDetail.kt", "CardHeader", "if (keyboardCrowdsTheWindow()) return"),
             Triple("ui/screens/satellites/SatelliteDetail.kt", "CardTabStrip", "if (keyboardCrowdsTheWindow()) return"),
@@ -156,7 +158,7 @@ class ImeInsetsTest {
         // nothing, and inlining the title row back into the pane is exactly
         // the shape of the bug it was extracted to fix.
         val chat = source("ui/screens/chat/ChatScreen.kt")
-        assertTrue(chat, chat.contains("ThreadTitleRow(thread, onBack)"))
+        assertTrue(chat, chat.contains("ThreadTitleRow(open?.title ?: NEW_CHAT, frame)"))
         assertEquals(chat, 2, Regex("^\\s*ChatPaneGutter\\(\\)$", RegexOption.MULTILINE).findAll(chat).count())
         // The pane's own vertical padding moved INTO ChatPaneGutter; left on
         // the Column it is 84px of a 320px window spent on whitespace.

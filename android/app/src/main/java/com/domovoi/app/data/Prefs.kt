@@ -10,6 +10,7 @@ import com.domovoi.app.net.IdentityGate
 import com.domovoi.app.net.ServerIdentity
 import com.domovoi.app.net.TokenHealth
 import com.domovoi.app.player.LyricsNudge
+import com.domovoi.app.ui.shell.PhoneBar
 import com.domovoi.app.ui.theme.ThemeMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -74,6 +75,8 @@ class Prefs(
     private val kPreferLocal = booleanPreferencesKey("prefer_local")
     private val kPhoneFolders = stringPreferencesKey("phone_folders")
     private val kPhoneBar = stringPreferencesKey("phone_bar")
+    private val kChatPlace = stringPreferencesKey("chat_place")
+    private val kChatServerShareSeen = booleanPreferencesKey("chat_server_share_seen")
     private val kVoiceChoice = stringPreferencesKey("voice_choice")
     private val kVoiceInfo = stringPreferencesKey("voice_server_info")
     private val kDeveloperOptions = booleanPreferencesKey("developer_options")
@@ -161,6 +164,17 @@ class Prefs(
     private val _phoneBar = MutableStateFlow<String?>(null)
     val phoneBar: StateFlow<String?> = _phoneBar
 
+    /** Where this phone last chatted (ui/screens/chat/ChatPlace.kt
+     *  ChatPlaceKind.key: "phone" or "server"); null = never, so a new chat
+     *  starts in the first default. */
+    private val _chatPlace = MutableStateFlow<String?>(null)
+    val chatPlace: StateFlow<String?> = _chatPlace
+
+    /** This phone has sent a message in a home-server chat, so the chip no
+     *  longer needs to say those chats are shared with the household. */
+    private val _chatServerShareSeen = MutableStateFlow(false)
+    val chatServerShareSeen: StateFlow<Boolean> = _chatServerShareSeen
+
     /** The phone's voice (Settings → Voice): "server" (the default: the
      *  server's voice) or a voice id (voice/PhoneVoice.kt). */
     private val _voiceChoice = MutableStateFlow("server")
@@ -227,7 +241,14 @@ class Prefs(
             _lyricsRoomNudge.value = LyricsNudge.decode(p[kLyricsRoomNudge])
             _preferLocal.value = p[kPreferLocal] ?: false
             _phoneFolders.value = PhoneFolders.decode(p[kPhoneFolders])
-            _phoneBar.value = p[kPhoneBar]
+            // The retired Assistant tab moves to Chat, written back once
+            // (PhoneBar.migrate).
+            val savedBar = p[kPhoneBar]
+            val bar = PhoneBar.migrate(savedBar)
+            _phoneBar.value = bar
+            if (bar != null && bar != savedBar) scope.launch { context.dataStore.edit { it[kPhoneBar] = bar } }
+            _chatPlace.value = p[kChatPlace]
+            _chatServerShareSeen.value = p[kChatServerShareSeen] ?: false
             _voiceChoice.value = p[kVoiceChoice] ?: "server"
             voiceInfo = decodeVoiceInfo(p[kVoiceInfo])
             developerOptions = p[kDeveloperOptions]
@@ -496,6 +517,18 @@ class Prefs(
         scope.launch {
             context.dataStore.edit { if (encoded == null) it.remove(kPhoneBar) else it[kPhoneBar] = encoded }
         }
+    }
+
+    fun setChatPlace(key: String) {
+        if (_chatPlace.value == key) return
+        _chatPlace.value = key
+        scope.launch { context.dataStore.edit { it[kChatPlace] = key } }
+    }
+
+    fun setChatServerShareSeen() {
+        if (_chatServerShareSeen.value) return
+        _chatServerShareSeen.value = true
+        scope.launch { context.dataStore.edit { it[kChatServerShareSeen] = true } }
     }
 
     fun setVoiceChoice(choice: String) {

@@ -254,8 +254,8 @@ Without a configured server (or with one out of reach) the app runs in
 **local mode**: Music, Videos and Files tabs, backed by the device's own
 media via MediaStore (granular `READ_MEDIA_AUDIO` / `READ_MEDIA_VIDEO` /
 `READ_MEDIA_IMAGES` permissions on API 33+) and the folders added to Files,
-plus an **Assistant** tab on a 64-bit install (the on-device assistant,
-below). A `connect` chip opens the discovery screen — the web backend on
+plus a **Chat** tab on a 64-bit install, with the chats kept on this
+phone (the on-device assistant, below). A `connect` chip opens the discovery screen — the web backend on
 your LAN, e.g. `http://192.168.1.20:6369`, health-checked via
 `/api/health` before accepting. Change it later under Settings →
 Connection. Traffic is plain HTTP on your LAN (same trust model as the
@@ -428,15 +428,34 @@ LiteRT-LM) on the phone's CPU, by text or by push-to-talk voice. The
 model sees the system prompt and the conversation and nothing else: no
 files, media, contacts, location or any other app data, and no tools.
 
-**Where it is.** The **Assistant** tab of local mode (beside Music, Videos
-and Files), so it works with no server at all and in airplane mode. With a
-server connected it is on Home's "everything" grid, in the drawer and the
-rail, and one of the screens Settings → Phone bar can put on the bottom
-bar; it never takes Chat's place (the default bar stays home · music ·
-videos · chat). Its title always says **on this phone**, so it is not
-mistaken for Chat, which talks to the server: the two never share a
-conversation. A shared screen (the kitchen tablet) leaves it off its
-launchers, as it does Chat.
+**Where it is: in Chat** (One Chat, 2026-10-21; there is no separate
+Assistant tab any more). Chat has one history list and one conversation
+view for two places a chat can run (`ui/screens/chat/ChatPlace.kt`): **on
+this phone** (this assistant) and **on home server** (the server's chat,
+shared with every paired device; its chip says "shared with the household"
+until this phone has used it once). Every chat shows its place as a chip
+in the list and in its header. Each place answers from its own world and
+they never share a conversation or data.
+
+- **A new chat** starts in the place this phone used last; the very first
+  time, on the home server when it is in reach and has a chat model
+  installed, else on this phone. Until something is said, a picker on the
+  "Message Domovoi…" box moves it to the other place; it lists only the
+  places that work right now.
+- **Away from home** (local mode: no server in reach) Chat is a tab beside
+  Music, Videos and Files and lists the phone's chats only, with the line
+  "home server chats show when you're home" (the phone keeps no copy of
+  them). Phone chats work with no server at all and in airplane mode.
+- **The model download** is shown inside Chat the first time a phone chat
+  is started without the model; home-server chat works without it.
+- **The home server's AI off** (its capability manifest says
+  `features.ai: false`): Chat offers no home-server chats, and keeps the
+  phone's. A 32-bit install has no phone place; with neither, Chat is on
+  no launcher.
+- A shared screen (the kitchen tablet) leaves Chat off its launchers, and
+  never lists the phone's chats there.
+- A saved phone bar that had the old Assistant tab has Chat in its place,
+  moved once on the first start after the update (`PhoneBar.migrate`).
 
 **Who gets it.** A 64-bit install (`assistant/AssistantSupport.kt`; the
 32-bit APKs carry no engine, and nothing offers the assistant there) on a

@@ -31,6 +31,25 @@ object PhoneBar {
     /** Route names as Prefs keeps them. */
     fun encode(routes: List<Route>): String = Json.encodeToString(codec, routes.map { it.name })
 
+    /** The on-device assistant's own screen, until One Chat (2026-10-21)
+     *  made its chats part of Chat. */
+    private const val RETIRED_ASSISTANT = "Assistant"
+
+    /**
+     * A saved bar ([raw], as Prefs keeps it) with the retired "Assistant"
+     * moved to Chat, once: Prefs writes the answer back, so the move happens
+     * on the first start after the update and never again. Chat takes the
+     * Assistant's place; a bar that already had Chat keeps it where it was.
+     * Anything else comes back as it is (null, unreadable, nothing to move).
+     */
+    fun migrate(raw: String?): String? {
+        if (raw.isNullOrBlank()) return raw
+        val names = runCatching { Json.decodeFromString(codec, raw) }.getOrNull() ?: return raw
+        if (RETIRED_ASSISTANT !in names) return raw
+        val moved = names.map { if (it == RETIRED_ASSISTANT) Route.Chat.name else it }.distinct()
+        return Json.encodeToString(codec, moved)
+    }
+
     /** A saved bar, or null (never saved, or unreadable: the default). Names
      *  this build doesn't know are dropped. */
     fun decode(raw: String?): List<Route>? {

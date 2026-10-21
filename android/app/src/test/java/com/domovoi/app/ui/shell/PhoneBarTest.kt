@@ -96,4 +96,25 @@ class PhoneBarTest {
         assertTrue(PhoneBar.Choices.drop(1) == WorkspaceRoutes)
         assertTrue(PhoneBar.Choices.none { it in LauncherlessRoutes })
     }
+
+    /** One Chat (C1): a bar saved with the retired Assistant tab gets Chat
+     *  in its place, once (Prefs writes the answer back), and nothing else
+     *  about it changes. */
+    @Test fun aSavedAssistantTabMovesToChatOnce() {
+        val moved = PhoneBar.migrate("""["Home","Assistant","Music"]""")
+        assertEquals("""["Home","Chat","Music"]""", moved)
+        assertEquals(listOf(Route.Home, Route.Chat, Route.Music), PhoneBar.routes(PhoneBar.decode(moved), none, shared = false))
+        // Already moved: the same string back, so Prefs writes nothing again.
+        assertSame(moved, PhoneBar.migrate(moved))
+        // A bar that had both keeps its Chat where it was.
+        assertEquals("""["Home","Chat","Music"]""", PhoneBar.migrate("""["Home","Chat","Assistant","Music"]"""))
+        assertEquals("""["Home","Music","Chat"]""", PhoneBar.migrate("""["Home","Music","Chat","Assistant"]"""))
+        // Nothing to move: untouched, including the default and junk.
+        val plain = """["Home","Calendar"]"""
+        assertSame(plain, PhoneBar.migrate(plain))
+        assertNull(PhoneBar.migrate(null))
+        assertEquals("not json", PhoneBar.migrate("not json"))
+        // Without the move the retired name would just drop out of the bar.
+        assertEquals(listOf(Route.Home, Route.Music), PhoneBar.decode("""["Home","Assistant","Music"]"""))
+    }
 }

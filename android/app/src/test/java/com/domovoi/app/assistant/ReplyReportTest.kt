@@ -261,10 +261,36 @@ class ReplyReportTest {
         assertEquals("1", o["version"].toString())
         val report = o["report"] as kotlinx.serialization.json.JsonObject
         assertEquals(
-            setOf("id", "created", "question", "spoken", "answer", "answeredAt", "model", "modelId", "backend", "note", "appVersion"),
+            setOf("id", "created", "question", "spoken", "answer", "answeredAt", "model", "modelId", "backend", "note", "appVersion", "place"),
             report.keys,
         )
         assertEquals("\"an answer\"", report["answer"].toString())
+        assertEquals("\"phone\"", report["place"].toString())
+    }
+
+    /** One Chat (C1): a home-server chat's reply is reported too (Play's
+     *  AI-content policy covers the whole app), and the report says where
+     *  it was written; the server's own ids are not in it. */
+    @Test fun aHomeServerReplyIsReportedAsTheServers() {
+        val r = ReplyReport.draftServer(
+            question = "is the moon cheese?", spoken = true, answer = "Yes, entirely.",
+            answeredAt = 1_760_550_000_000, model = "llama3.2:3b", appVersion = "1.2.3", now = 1_760_550_060_000,
+        )!!
+        assertTrue(r.fromServer)
+        assertEquals("llama3.2:3b, on the home server", r.modelLine())
+        assertEquals("model", r.sourceLabel)
+        val text = r.asText()
+        assertTrue(text, text.startsWith("Domovoi on the home server: a reported reply\n"))
+        assertTrue(text, text.contains("Question (spoken):\nis the moon cheese?"))
+        assertTrue(text, text.contains("Model: llama3.2:3b, on the home server"))
+        assertEquals("\"home server\"", ((kotlinx.serialization.json.Json.parseToJsonElement(r.asJson())
+            as kotlinx.serialization.json.JsonObject)["report"] as kotlinx.serialization.json.JsonObject)["place"].toString())
+        // No words, no report.
+        assertNull(ReplyReport.draftServer("q", false, "  ", 0, "m", "", 0))
+        assertNull(ReplyReport.draftServer("q", false, null, 0, "m", "", 0))
+        // A report kept by an older app reads as the phone's.
+        assertFalse(kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+            .decodeFromString(ReplyReport.serializer(), """{"id":"r-1-a","answer":"x"}""").fromServer)
     }
 
     // ── The controller ──────────────────────────────────────────────────

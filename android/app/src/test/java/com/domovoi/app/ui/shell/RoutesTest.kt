@@ -4,6 +4,8 @@ import com.domovoi.app.net.CAP_IMAGEGEN
 import com.domovoi.app.net.CAP_STATIONS
 import com.domovoi.app.net.Capabilities
 import com.domovoi.app.net.CapabilityPlugin
+import com.domovoi.app.net.FEATURE_AI
+import com.domovoi.app.net.serverChatOn
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -63,8 +65,9 @@ class RoutesTest {
         assertFalse(WorkspaceRoutes.contains(Route.Settings))
         assertFalse(WorkspaceRoutes.contains(Route.Manual))
         assertEquals(Route.Chat, WorkspaceRoutes.first())
-        // The web's workspace ends at Files; the app's own assistant follows.
-        assertEquals(listOf(Route.Files, Route.Assistant), WorkspaceRoutes.takeLast(2))
+        // The web's workspace ends at Files, and so does the app's: the
+        // phone's own chats are part of Chat since One Chat (2026-10-21).
+        assertEquals(Route.Files, WorkspaceRoutes.last())
     }
 
     @Test fun theContainersScreenIsOnNoLauncher() {
@@ -91,10 +94,9 @@ class RoutesTest {
     }
 
     @Test fun sharedScreenLeavesPersonalScreensOffEveryLauncher() {
-        // web/static/components.jsx SHARED_SCREEN_HIDDEN: people, chat, files, news.
-        // ...plus the app's on-device assistant, whose conversations are the
-        // device's, as Chat's are the server's.
-        assertEquals(setOf(Route.People, Route.Chat, Route.Files, Route.News, Route.Assistant), SharedScreenHidden)
+        // web/static/components.jsx SHARED_SCREEN_HIDDEN: people, chat, files,
+        // news. Chat holds the phone's own chats too, hidden with it.
+        assertEquals(setOf(Route.People, Route.Chat, Route.Files, Route.News), SharedScreenHidden)
         onDeviceAssistant = { true }
         SharedScreenHidden.forEach {
             assertTrue(it.visibleOn(Capabilities.EMPTY, shared = false))
@@ -111,36 +113,49 @@ class RoutesTest {
     }
 
     /** Delta review N7: "this phone" (the local shell, one tap from the
-     *  shared view) used to show Files and the assistant on the kitchen
-     *  tablet; it leaves them off as the workspace's launchers do. */
-    @Test fun aSharedScreensLocalShellLeavesFilesAndTheAssistantOff() {
+     *  shared view) used to show Files and the phone's own chats on the
+     *  kitchen tablet; it leaves them off as the workspace's launchers do. */
+    @Test fun aSharedScreensLocalShellLeavesFilesAndChatOff() {
         assertEquals(listOf(Route.Music, Route.Videos), localTabs(assistant = true, shared = true))
         assertEquals(listOf(Route.Music, Route.Videos), localTabs(assistant = false, shared = true))
-        assertEquals(listOf(Route.Music, Route.Videos, Route.Files, Route.Assistant), localTabs(assistant = true, shared = false))
+        assertEquals(listOf(Route.Music, Route.Videos, Route.Files, Route.Chat), localTabs(assistant = true, shared = false))
     }
 
-    /** The on-device assistant is on every launcher of an install that has
-     *  its engine (a 64-bit phone and APK) and on none of one that doesn't:
-     *  no dead tab on a 32-bit phone. */
-    @Test fun theAssistantIsOfferedOnlyWhereTheInstallHasIt() {
-        val saved = listOf(Route.Home, Route.Assistant, Route.Music)
+    /** One Chat (C1, 2026-10-21): the separate Assistant route is gone;
+     *  the phone's own chats are Chat's, on every launcher Chat is on. */
+    @Test fun thereIsOneChatAndNoAssistantRoute() {
+        assertEquals(listOf("Chat"), Route.entries.map { it.name }.filter { it == "Chat" || it == "Assistant" })
+        assertEquals(1, EverythingRoutes.count { it == Route.Chat })
+        assertEquals(1, WorkspaceRoutes.count { it == Route.Chat })
+        assertTrue(Route.Chat in PhoneBar.Choices)
+        assertTrue(Route.Chat in DefaultPhoneBar)
+        assertNull(Route.Chat.requiredCapability())
+    }
+
+    /**
+     * Chat needs one place to chat in. A server whose AI is off
+     * (`features.ai` false, the AI-optional switch) offers no server chat;
+     * with the engine on the phone Chat stays, for the phone's chats, and
+     * without it Chat is on no launcher. A server that says nothing about AI
+     * (older) counts as on.
+     */
+    @Test fun chatStaysWhileOnePlaceWorks() {
+        val aiOff = Capabilities(features = mapOf(FEATURE_AI to false))
+        val aiOn = Capabilities(features = mapOf(FEATURE_AI to true))
+        assertTrue(Capabilities.EMPTY.serverChatOn())
+        assertTrue(aiOn.serverChatOn())
+        assertFalse(aiOff.serverChatOn())
+
         onDeviceAssistant = { true }
-        assertTrue(Route.Assistant.visibleOn(Capabilities.EMPTY, shared = false))
-        assertEquals(listOf(Route.Music, Route.Videos, Route.Files, Route.Assistant), localTabs())
-        assertTrue(Route.Assistant in everythingTiles(Capabilities.EMPTY, shared = false))
-        assertEquals(saved, PhoneBar.routes(saved, Capabilities.EMPTY, shared = false))
-        assertTrue(Route.Assistant in PhoneBar.Choices)
-        // Never in Chat's place: the default bar is unchanged.
-        assertFalse(Route.Assistant in DefaultPhoneBar)
-        assertNull(Route.Assistant.requiredCapability())
-        // A shared screen (the kitchen tablet) keeps it off its launchers.
-        assertFalse(Route.Assistant.visibleOn(Capabilities.EMPTY, shared = true))
+        assertTrue(Route.Chat.visibleWith(aiOff))
+        assertTrue(Route.Chat in everythingTiles(aiOff, shared = false, bar = listOf(Route.Home)))
 
         onDeviceAssistant = { false }
-        assertFalse(Route.Assistant.visibleWith(Capabilities.EMPTY))
-        assertEquals(listOf(Route.Music, Route.Videos, Route.Files), localTabs())
-        assertFalse(Route.Assistant in everythingTiles(Capabilities.EMPTY, shared = false))
-        assertEquals(listOf(Route.Home, Route.Music), PhoneBar.routes(saved, Capabilities.EMPTY, shared = false))
+        assertTrue(Route.Chat.visibleWith(Capabilities.EMPTY))
+        assertTrue(Route.Chat.visibleWith(aiOn))
+        assertFalse(Route.Chat.visibleWith(aiOff))
+        assertFalse(Route.Chat in everythingTiles(aiOff, shared = false, bar = listOf(Route.Home)))
+        assertEquals(listOf(Route.Home, Route.Music, Route.Videos), PhoneBar.routes(null, aiOff, shared = false))
     }
 
     /** Books saved on the phone play with no server: the local shell gets
@@ -148,18 +163,19 @@ class RoutesTest {
     @Test fun savedBooksGiveTheLocalShellAnAudiobooksTab() {
         assertEquals(listOf(Route.Music, Route.Videos, Route.Files), localTabs(assistant = false))
         assertEquals(
-            listOf(Route.Music, Route.Videos, Route.Files, Route.Audiobooks, Route.Assistant),
+            listOf(Route.Music, Route.Videos, Route.Files, Route.Audiobooks, Route.Chat),
             localTabs(assistant = true, savedBooks = true),
         )
         // Not somebody's own page: a shared screen keeps it.
         assertEquals(listOf(Route.Music, Route.Videos, Route.Audiobooks), localTabs(assistant = true, shared = true, savedBooks = true))
     }
 
-    @Test fun theLocalShellIsTheAssistantsFirstHome() {
-        // No server needed: a tab of the local shell, after the phone's media.
-        assertEquals(listOf(Route.Music, Route.Videos, Route.Files, Route.Assistant), localTabs(assistant = true))
+    @Test fun theLocalShellHasChatWithThePhonesChats() {
+        // No server needed: Chat, with the phone's chats only, after the
+        // phone's media; where the install has no engine there is no tab.
+        assertEquals(listOf(Route.Music, Route.Videos, Route.Files, Route.Chat), localTabs(assistant = true))
         assertEquals(listOf(Route.Music, Route.Videos, Route.Files), localTabs(assistant = false))
         // On the JVM there is no engine: the default asks AssistantSupport.
-        assertFalse(Route.Assistant in localTabs())
+        assertFalse(Route.Chat in localTabs())
     }
 }
