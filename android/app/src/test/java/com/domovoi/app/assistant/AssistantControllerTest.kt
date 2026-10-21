@@ -63,6 +63,7 @@ class AssistantControllerTest {
         memoryGib: Double = 7.6,
         models: List<CatalogModel> = listOf(llm),
         unloadAfterMs: Long = 60_000,
+        helpIndex: HelpIndex? = null,
     ): AssistantController = AssistantController(
         memory = PhoneMemory((memoryGib * (1L shl 30)).toLong(), lowRamDevice = false),
         store = store,
@@ -76,6 +77,7 @@ class AssistantControllerTest {
         models = models,
         clock = { nowMs ?: System.currentTimeMillis() },
         clockStyle = { style },
+        helpIndex = { helpIndex },
     ).also { c -> scope.launch { c.messages.collect { said += it } } }
 
     private fun install(m: CatalogModel = llm) {
@@ -364,6 +366,50 @@ class AssistantControllerTest {
         until("and again") { !c.ui().replying && c.ui().conversation.messages.size == 6 }
         assertEquals("It's 16:42.", c.ui().conversation.messages.last().text)
         assertTrue(engines.isEmpty())
+    }
+
+    // ── Help from the manual on the phone (LocalHelp) ───────────────────
+
+    @Test fun aHelpQuestionTheManualAnswersGivesTheModelPassagesAndNamesTheSources() {
+        install()
+        val index = LocalHelpTest.reposManual()
+        val c = controller(helpIndex = index)
+        until("installed") { c.ui().installed }
+        c.send("How do I add a room?")
+        until("replied") { !c.ui().replying && c.ui().conversation.messages.size == 2 }
+        val engine = engines.single()
+        val asked = engine.replies.last().last()
+        assertTrue(asked.fromUser)
+        assertTrue(asked.text, asked.text.startsWith("[From the Domovoi manual. Answer only from these; if they don't answer it, say exactly: The manual doesn't cover that.]"))
+        assertTrue(asked.text, asked.text.endsWith("Question: How do I add a room?"))
+        assertEquals(Persona.SYSTEM_PROMPT, engine.systems.last())
+        val reply = c.ui().conversation.messages.last().text
+        assertTrue(reply, reply.startsWith("Hello there.\n\nFrom: "))
+        assertTrue(reply, reply.contains("Rooms and devices → "))
+        // What is kept is the question as asked, not the manual's block.
+        assertEquals("How do I add a room?", c.ui().conversation.messages.first().text)
+    }
+
+    @Test fun aHelpQuestionTheManualDoesntCoverIsSaidSoWithoutTheModel() {
+        install()
+        val c = controller(helpIndex = LocalHelpTest.reposManual())
+        until("installed") { c.ui().installed }
+        c.send("How do I paint the dashboard purple?")
+        until("answered") { !c.ui().replying && c.ui().conversation.messages.size == 2 }
+        assertEquals(LocalHelp.NOT_COVERED, c.ui().conversation.messages.last().text)
+        assertTrue("no model was loaded for it", engines.isEmpty())
+
+        // About the screen: the note that this phone can't read screenshots.
+        c.send("Why is there a purple giraffe on my screen?")
+        until("answered again") { !c.ui().replying && c.ui().conversation.messages.size == 4 }
+        assertEquals("${LocalHelp.NOT_COVERED}\n\n${LocalHelp.SCREENSHOT_NOTE}", c.ui().conversation.messages.last().text)
+        assertTrue(engines.isEmpty())
+
+        // Not about Domovoi: the model, as ever, with nothing added.
+        c.send("How do I bake bread?")
+        until("the model answered") { !c.ui().replying && c.ui().conversation.messages.size == 6 }
+        assertEquals("Hello there.", c.ui().conversation.messages.last().text)
+        assertEquals("How do I bake bread?", engines.single().replies.last().last().text)
     }
 
     @Test fun everyModelTurnIsToldThePhoneClockAsItIsThen() {

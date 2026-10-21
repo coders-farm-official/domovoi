@@ -97,6 +97,8 @@ fun ChatScreen(away: Boolean = false, awayLine: String? = null) {
     // The household note stays on the chip for this whole visit, so it is
     // still there while the first home-server message is being written.
     val serverShareSeen = remember { app.prefs.chatServerShareSeen.value }
+    // A help notification's tap: its home-server thread (alerts/HelpNotifier.kt).
+    val pendingThread by app.pendingChatThread.collectAsState()
     val unsupported = assistant?.state?.value?.memory
         ?.takeIf { phoneEngine && !facts.phoneCapable }
         ?.let { unsupportedText(it.marketedGb, it.lowRamDevice) }
@@ -112,6 +114,8 @@ fun ChatScreen(away: Boolean = false, awayLine: String? = null) {
             app.prefs.setChatPlace(kind.key)
             if (kind == ChatPlaceKind.Server) app.prefs.setChatServerShareSeen()
         },
+        openThread = pendingThread?.let { (id, title) -> id.toString() to title },
+        onThreadOpened = { app.pendingChatThread.value = null },
     )
 }
 
@@ -153,9 +157,21 @@ internal fun ChatHome(
     subtitle: String,
     emptyHint: String?,
     onUsed: (ChatPlaceKind) -> Unit,
+    /** A home-server thread to open now (id, title): help steps' tap. */
+    openThread: Pair<String, String>? = null,
+    onThreadOpened: () -> Unit = {},
 ) {
     var open by remember { mutableStateOf<OpenChat?>(null) }
     var visits by remember { mutableIntStateOf(0) }
+    val serverListed = places.any { it.kind == ChatPlaceKind.Server }
+    LaunchedEffect(openThread, serverListed) {
+        val (id, title) = openThread ?: return@LaunchedEffect
+        // Until the home server's chats are listed (its capabilities still
+        // loading at a cold start, or away from home) the ask waits.
+        if (!serverListed) return@LaunchedEffect
+        open = OpenChat(ChatPlaceKind.Server, ChatRow(ChatPlaceKind.Server, id, title, null, 0L, 0), ++visits)
+        onThreadOpened()
+    }
     var deleteTarget by remember { mutableStateOf<ChatRow?>(null) }
     val chip = { kind: ChatPlaceKind -> placeChip(kind, serverShareSeen) }
 

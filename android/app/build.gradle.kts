@@ -233,6 +233,33 @@ abstract class VoiceAssetsTask : DefaultTask() {
     }
 }
 
+/**
+ * The user manual (web/static/manual-content.json, the dashboard's own
+ * file) into the assets as `manual/manual-content.json`: a phone chat's
+ * help desk answers questions about Domovoi from it, offline and without
+ * asking a server (assistant/LocalHelp.kt). The Manual screen still reads
+ * the connected server's copy, so it matches that server's version.
+ */
+abstract class ManualAssetsTask : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val manual: RegularFileProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun copy() {
+        val out = outputDir.get().asFile
+        out.deleteRecursively()
+        manual.get().asFile.copyTo(File(out, "manual/manual-content.json"), overwrite = true)
+    }
+}
+
+val manualAssets = tasks.register<ManualAssetsTask>("manualAssets") {
+    manual.set(rootProject.layout.projectDirectory.file("../web/static/manual-content.json"))
+}
+
 val voiceAssets = tasks.register<VoiceAssetsTask>("voiceAssets") {
     phonemizerData.set(rootProject.layout.projectDirectory.dir("../domovoi/phonemizer/data"))
     voiceClips.set(rootProject.layout.projectDirectory.dir("../domovoi/voice_clips"))
@@ -518,6 +545,7 @@ fun pomChains(coords: Collection<String>): Map<String, List<String>> {
 androidComponents {
     onVariants { variant ->
         variant.sources.assets?.addGeneratedSourceDirectory(voiceAssets, VoiceAssetsTask::outputDir)
+        variant.sources.assets?.addGeneratedSourceDirectory(manualAssets, ManualAssetsTask::outputDir)
         val openSource = tasks.register<OpenSourceTask>("${variant.name}OpenSource") {
             val resolved = variant.runtimeConfiguration.incoming.artifactView { lenient(false) }.artifacts.resolvedArtifacts
             artifacts.set(resolved.map { set ->

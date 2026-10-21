@@ -69,6 +69,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.window.core.layout.WindowWidthSizeClass
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
+import com.domovoi.app.alerts.CHAT_ROUTE
 import com.domovoi.app.alerts.CONTAINERS_ROUTE
 import com.domovoi.app.alerts.IncidentAlerts
 import com.domovoi.app.data.ServerCredentials
@@ -323,6 +324,7 @@ private fun ShellContent(trouble: TokenTrouble?) {
         val target = when (pendingRoute) {
             "home" -> Route.Home
             CONTAINERS_ROUTE -> Route.Containers
+            CHAT_ROUTE -> Route.Chat
             else -> null
         }
         if (target != null) {
@@ -348,7 +350,11 @@ private fun ShellContent(trouble: TokenTrouble?) {
     // even while the live connection is down (canRegister).
     val shellServerUrl by app.prefs.serverUrl.collectAsState()
     val paired = !deviceToken.isNullOrBlank()
-    LaunchedEffect(connected, shellServerUrl, deviceToken) {
+    // ...and when "This phone belongs to" changes: the register carries it,
+    // so voice help knows whose phone this is (net/DeviceRegistry.kt).
+    val shellOwners by app.prefs.owners.collectAsState()
+    val shellOwner = ServerCredentials.ownerFor(shellOwners, shellServerUrl)
+    LaunchedEffect(connected, shellServerUrl, deviceToken, shellOwner) {
         if (shellServerUrl.isNotBlank() && canRegister(connected, paired)) registerDevice(app)
     }
     // ...and again every couple of minutes while the app is on screen, and

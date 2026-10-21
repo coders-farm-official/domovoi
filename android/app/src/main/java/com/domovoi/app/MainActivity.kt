@@ -14,8 +14,13 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
+import com.domovoi.app.alerts.CHAT_ROUTE
 import com.domovoi.app.alerts.CONTAINERS_ROUTE
+import com.domovoi.app.alerts.EXTRA_CHAT_THREAD
+import com.domovoi.app.alerts.EXTRA_CHAT_TITLE
 import com.domovoi.app.alerts.EXTRA_ROUTE
+import com.domovoi.app.alerts.EXTRA_SERVER_KEY
+import com.domovoi.app.alerts.serverKey
 import com.domovoi.app.data.LocalDeveloperOptionsOn
 import com.domovoi.app.diagnostics.Diagnostics
 import com.domovoi.app.roommode.RoomModeActivity
@@ -106,6 +111,7 @@ class MainActivity : ComponentActivity() {
         // The container guard re-reads on every return: an incident may have
         // opened or closed off screen, and its banner should say so now.
         (application as DomovoiApplication).container.containerAlerts.onAppResumed()
+        (application as DomovoiApplication).container.helpAlerts.onAppResumed()
     }
 
     /** True (and on its way to the room screen) while room mode is on.
@@ -120,14 +126,27 @@ class MainActivity : ComponentActivity() {
 
     private fun routeFrom(intent: Intent?) {
         val route = intent?.getStringExtra(EXTRA_ROUTE) ?: return
-        if (route in ROUTES_FROM_OUTSIDE) (application as DomovoiApplication).container.pendingRoute.value = route
+        val container = (application as DomovoiApplication).container
+        if (route == CHAT_ROUTE) {
+            // Help steps: their home-server thread, when the phone is still
+            // on the server that sent them; Chat's list otherwise.
+            val thread = intent.getLongExtra(EXTRA_CHAT_THREAD, -1L)
+            val sameServer = intent.getStringExtra(EXTRA_SERVER_KEY) ==
+                container.prefs.serverUrl.value.takeIf { it.isNotBlank() }?.let { serverKey(it) }
+            if (thread > 0 && sameServer) {
+                container.pendingChatThread.value = thread to (intent.getStringExtra(EXTRA_CHAT_TITLE) ?: "Help")
+            }
+            intent.removeExtra(EXTRA_CHAT_THREAD)
+        }
+        if (route in ROUTES_FROM_OUTSIDE) container.pendingRoute.value = route
         // Consumed: a later recreation must not navigate again.
         intent.removeExtra(EXTRA_ROUTE)
     }
 
     private companion object {
-        /** What a notification may ask for: Home (a timer alert) and the
-         *  Containers screen (a container incident). Anything else is ignored. */
-        val ROUTES_FROM_OUTSIDE = setOf("home", CONTAINERS_ROUTE)
+        /** What a notification may ask for: Home (a timer alert), the
+         *  Containers screen (a container incident) and Chat (help steps).
+         *  Anything else is ignored. */
+        val ROUTES_FROM_OUTSIDE = setOf("home", CONTAINERS_ROUTE, CHAT_ROUTE)
     }
 }
