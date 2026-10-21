@@ -831,9 +831,6 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
     ]
     # Well-formed or nothing, as every other route that reads a device id.
     device_id = valid_device_id(body.device_id)
-    # The model's attention is the reply's now: every title job stops and
-    # waits for it.
-    stop_title_jobs()
 
     async with session_scope() as s:
         thread = (
@@ -841,6 +838,9 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         ).first()
         if thread is None:
             raise HTTPException(status_code=404, detail="thread not found")
+        # The model's attention is the reply's now: every title job stops
+        # and waits for it (a refused request holds nothing up).
+        stop_title_jobs()
         await s.execute(
             text(
                 """
@@ -927,7 +927,6 @@ async def retry_reply(thread_id: int) -> StreamingResponse:
     question, 409 ``already_retried`` when another try again is replacing
     it. The model doesn't see the reply being replaced."""
     _refuse_with_ai_off()
-    stop_title_jobs()
     async with session_scope() as s:
         thread = (
             await s.execute(text("SELECT person_id FROM chat_threads WHERE id = :id"), {"id": thread_id})
@@ -954,12 +953,10 @@ async def retry_reply(thread_id: int) -> StreamingResponse:
     asked_images = [
         i for i in (last[1].images or []) if _upload_path((i or {}).get("token", "")) is not None
     ]
-    _retrying.add(thread_id)
-    try:
-        return await _answer(thread_id, thread.person_id, has_images=bool(asked_images), replace_id=last[0].id)
-    except BaseException:
-        _retrying.discard(thread_id)
-        raise
+    stop_title_jobs()
+    # The thread is marked as retrying by the stream itself (_answer), so a
+    # client that drops before the first byte leaves no mark behind.
+    return await _answer(thread_id, thread.person_id, has_images=bool(asked_images), replace_id=last[0].id)
 
 
 async def _answer(
@@ -1039,13 +1036,25 @@ async def _answer(
         ).scalar_one()
 
     async def sse() -> AsyncIterator[str]:
+        # A retry marks its thread for as long as it streams (set and
+        # cleared here, never outside the stream); a second one that got
+        # this far ends at once with already_retried, writing nothing.
+        claimed = False
+        if replace_id is not None:
+            if thread_id in _retrying:
+                payload = {"detail": "this reply is already being tried again", "code": "already_retried",
+                           "model": model}
+                yield f"event: error\ndata: {json.dumps(payload)}\n\n"
+                return
+            _retrying.add(thread_id)
+            claimed = True
         # The model is the reply's while it streams: no title job runs.
         _reply_started()
         try:
             async for event in _reply_events():
                 yield event
         finally:
-            if replace_id is not None:
+            if claimed:
                 _retrying.discard(thread_id)
             _reply_finished()
 

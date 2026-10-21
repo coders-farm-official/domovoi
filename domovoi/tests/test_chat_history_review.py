@@ -63,18 +63,25 @@ def titles(monkeypatch):
         gated = False
         gates: list[asyncio.Event] = []
         cancelled = 0
+        inflight = 0
+        most_at_once = 0
 
     async def _model_title(question, answer):
         _T.asked.append(question)
-        if _T.gated:
-            gate = asyncio.Event()
-            _T.gates.append(gate)
-            try:
-                await gate.wait()
-            except asyncio.CancelledError:
-                _T.cancelled += 1
-                raise
-        return _T.say
+        _T.inflight += 1
+        _T.most_at_once = max(_T.most_at_once, _T.inflight)
+        try:
+            if _T.gated:
+                gate = asyncio.Event()
+                _T.gates.append(gate)
+                try:
+                    await gate.wait()
+                except asyncio.CancelledError:
+                    _T.cancelled += 1
+                    raise
+            return _T.say
+        finally:
+            _T.inflight -= 1
 
     monkeypatch.setattr(chat_api, "AUTO_TITLES", True)
     monkeypatch.setattr(chat_api, "TITLE_DELAY_SEC", 0)
@@ -158,6 +165,8 @@ async def test_a_reply_already_replaced_elsewhere_is_not_answered_twice(monkeypa
     [
         ("voice", {"model_role": "voice", "matched_handler": "timer"}),
         ("typed", {"model_role": "help"}),
+        # The help desk's steps sent by voice (wf/help-desk fa81e6f4).
+        ("voice", {"model_role": "help"}),
         ("typed", {"matched_handler": "timer"}),
     ],
 )
@@ -187,6 +196,54 @@ async def test_a_spoken_action_or_help_reply_is_not_tried_again(monkeypatch, sou
         await c.delete(f"/api/chat/threads/{t}")
 
 
+@requires_db
+async def test_a_retry_dropped_before_its_first_byte_leaves_no_mark(monkeypatch) -> None:
+    """The route answered, the client went away before the stream began:
+    nothing marks the thread, and the next try again works."""
+    async def _stream(messages, model, **kw):
+        yield "an answer"
+
+    monkeypatch.setattr(chat_api.ollama_client, "chat_stream", _stream)
+    monkeypatch.setattr(chat_api, "_retrying", set())
+    async with _web() as c:
+        t = (await c.post("/api/chat/threads", json={})).json()["id"]
+        await c.post(f"/api/chat/threads/{t}/messages", json={"content": "tell me a joke"})
+        dropped = await chat_api.retry_reply(t)
+        assert dropped.status_code == 200
+        del dropped                      # never read: no stream ran
+        assert t not in chat_api._retrying
+        r = await c.post(f"/api/chat/threads/{t}/retry")
+        assert r.status_code == 200
+        assert next(d for e, d in _sse(r.text) if e == "done")["content"] == "an answer"
+        assert t not in chat_api._retrying
+        await c.delete(f"/api/chat/threads/{t}")
+
+
+@requires_db
+async def test_a_refused_request_leaves_the_title_job_running(monkeypatch, titles) -> None:
+    async def _stream(messages, model, **kw):
+        yield "ok"
+
+    monkeypatch.setattr(chat_api.ollama_client, "chat_stream", _stream)
+    titles.gated = True
+    async with _web() as c:
+        a = (await c.post("/api/chat/threads", json={})).json()["id"]
+        empty = (await c.post("/api/chat/threads", json={})).json()["id"]
+        await c.post(f"/api/chat/threads/{a}/messages", json={"content": "first thread"})
+        await _until("a's title asked", lambda: titles.asked == ["first thread"])
+        assert (await c.post(f"/api/chat/threads/{empty}/retry")).status_code == 409
+        assert (await c.post("/api/chat/threads/999999999/retry")).status_code == 404
+        assert (await c.post("/api/chat/threads/999999999/messages", json={"content": "x"})).status_code == 404
+        await asyncio.sleep(0.2)
+        assert titles.cancelled == 0
+        for g in titles.gates:
+            g.set()
+        titles.gated = False
+        await _until("titled", lambda: True)
+        for t in (a, empty):
+            await c.delete(f"/api/chat/threads/{t}")
+
+
 def test_which_replies_can_be_tried_again() -> None:
     assert chat_api.reply_retryable("typed", {"model_role": "chat"})
     assert chat_api.reply_retryable("typed", json.dumps({"model_role": "vision"}))
@@ -194,6 +251,7 @@ def test_which_replies_can_be_tried_again() -> None:
     assert chat_api.reply_retryable(None, {})
     assert not chat_api.reply_retryable("voice", {"model_role": "voice"})
     assert not chat_api.reply_retryable("typed", {"model_role": "help"})
+    assert not chat_api.reply_retryable("voice", {"model_role": "help"})
 
 
 # ─── Title jobs ─────────────────────────────────────────────────────────────
@@ -214,15 +272,18 @@ async def test_titles_run_one_at_a_time_and_any_message_stops_them(monkeypatch, 
         other = (await c.post("/api/chat/threads", json={})).json()["id"]
         await c.post(f"/api/chat/threads/{a}/messages", json={"content": "first thread"})
         await c.post(f"/api/chat/threads/{b}/messages", json={"content": "second thread"})
-        await _until("a's title asked", lambda: titles.asked == ["first thread"])
+        # (a's title may already have started, and been stopped by b's
+        # message: either way it is a's, and only one runs.)
+        await _until("a's title asked", lambda: titles.inflight == 1)
         await asyncio.sleep(0.2)
-        assert titles.asked == ["first thread"], "one title at a time"
+        assert set(titles.asked) == {"first thread"} and titles.inflight == 1, "one title at a time"
+        stopped, asked = titles.cancelled, len(titles.asked)
         # A message to a third thread stops the title being written...
         await c.post(f"/api/chat/threads/{other}/messages", json={"content": "something else"})
-        await _until("the title stopped", lambda: titles.cancelled == 1)
+        await _until("the title stopped", lambda: titles.cancelled == stopped + 1)
         # ...and the queue starts again after it, a's title first.
-        await _until("asked again", lambda: len(titles.asked) == 2)
-        assert titles.asked[1] == "first thread"
+        await _until("asked again", lambda: len(titles.asked) == asked + 1)
+        assert titles.asked[-1] == "first thread"
         titles.gated = False
         for g in titles.gates:
             g.set()
@@ -230,6 +291,7 @@ async def test_titles_run_one_at_a_time_and_any_message_stops_them(monkeypatch, 
         async def _titled() -> bool:
             return all([await _title(t) == "Model Title" for t in (a, b, other)])
         await _until("every thread titled", _titled)
+        assert titles.most_at_once == 1
         for t in (a, b, other):
             await c.delete(f"/api/chat/threads/{t}")
 
