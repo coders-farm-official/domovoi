@@ -357,7 +357,7 @@ const ChatDrafts = (() => {
     );
   };
 
-  return { api, KIND, WIDE_MIN, DraftCard, Canvas, Changes, List, useWidthAtLeast, seen, markSeen };
+  return { api, KIND, WIDE_MIN, DraftCard, Canvas, Changes, List, useWidthAtLeast, seen, markSeen, sourceLabel };
 })();
 
 window.ChatDrafts = ChatDrafts;

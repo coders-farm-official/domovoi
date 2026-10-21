@@ -26,7 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 HARNESS = Path(__file__).with_name("jsx_interact_harness.js")
 DATA_JS = REPO_ROOT / "web" / "static" / "data.js"
 FILES = ["web/static/components.jsx", "web/static/chat_markdown.js", "web/static/chat_details.js",
-         "web/static/chat_documents.jsx", "web/static/chat_drafts.jsx", "web/static/chat.jsx",
+         "web/static/chat_documents.jsx", "web/static/chat_lookups.jsx", "web/static/chat_drafts.jsx", "web/static/chat.jsx",
          "web/static/printers.jsx"]
 
 
@@ -38,7 +38,11 @@ def _setup(width: int) -> str:
             "globalThis.withDeviceToken = (u) => u + (u.includes('?') ? '&' : '?') + 'device_token=t';\n"
             "globalThis.useDebouncedValue = (v) => v;\n"
             "globalThis.deviceBlockReason = () => null;\n"
-            "globalThis.liveRelTime = () => 'now';\n" + m.group(0))
+            "globalThis.liveRelTime = () => 'now';\n"
+            # The chat's send streams through apiFetchRaw: what it sent, kept.
+            "globalThis.__sent = []; globalThis.apiFetchRaw = (u, o) => { globalThis.__sent.push({ url: String(u), "
+            "body: o && o.body }); return Promise.reject(new Error('no network in the harness')); };\n"
+            + m.group(0))
 
 
 V1 = "Dear Ms. Lee,\n\nI am writing to apply for the warehouse lead job.\n\nI would welcome a chat.\n\nSincerely,\n\nJordan"
@@ -101,6 +105,15 @@ await h.click((el) => el.type === 'div' && typeof el.props.onClick === 'function
                       && textOf(el).includes('Cover letter'));
 await h.settle(); h.rerender();
 const cards = h.findAll((el) => el.props && el.props.className === 'chat-draft-card').map((el) => textOf(el));
+// Review round 1: the first card's Revise box sends its words as a revision of that draft.
+await h.change((el) => el.type === 'input' && el.props['aria-label'] === 'revise Cover letter for Acme', 'less stiff');
+await h.submit((el) => el.type === 'form' && el.props.className === 'chat-draft-revise');
+await h.settle(); h.rerender();
+const S = h.global('window').ChatDrafts.sourceLabel;
+const labels = [S({ version: 3, source: 'edited', device_id: 'dev-1' }),
+                S({ version: 3, source: 'edited', device_id: 'android-b', device_name: "Sam's phone" }),
+                S({ version: 4, source: 'revision', instruction: 'shorter', based_on: 2 }),
+                S({ version: 3, source: 'revision', instruction: 'shorter', based_on: 2 })];
 // Open v2 from its card.
 const opens = h.findAll((el) => el.type === 'button' && textOf(el).trim() === 'open');
 const openV2 = opens[1];
@@ -126,7 +139,7 @@ await h.settle(); h.rerender();
 // The print card's Print opens the dialog on the draft's routes.
 await h.click((el) => el.type === 'button' && textOf(el).trim() === 'Print');
 await h.settle(); h.rerender(); await h.settle();
-return { cards, canvas, wide, tabs, del: del ? (del.text || textOf(del)) : null, threadHidden, composer, v1Text, savedLine,
+return { cards, labels, sent: h.global('__sent'), canvas, wide, tabs, del: del ? (del.text || textOf(del)) : null, threadHidden, composer, v1Text, savedLine,
          calls: h.calls.filter((c) => c.method !== 'GET') };
 """
 
@@ -176,7 +189,18 @@ def test_save_edit_and_print_go_to_the_drafts_routes(wide):
     assert save["body"]["version"] == 1 and save["body"]["format"] == "docx"
     assert "text readable · single column" in wide["savedLine"]
     edit = next(c for c in calls if c["path"] == "/api/chat/drafts/5/versions")
-    assert edit["body"] == {"text": "Dear Ms. Lee,\n\nHello.", "base_version": 2}
+    assert edit["body"] == {"text": "Dear Ms. Lee,\n\nHello.", "base_version": 2, "device_id": "dev-1"}
     prev = next(c for c in calls if c["path"] == "/api/chat/drafts/5/print/preview")
     assert prev["body"]["version"] == 2
     assert not any(c["path"].startswith("/api/print/") for c in calls)
+
+
+def test_the_cards_revise_box_sends_a_revision_of_that_draft(wide):
+    """Review round 1: the Revise box's words are a revision of its draft, whatever they say."""
+    send = next(c for c in wide["sent"] if c["url"].endswith("/api/chat/threads/11/messages"))
+    body = json.loads(send["body"])
+    assert body["content"] == "less stiff" and body["revise_draft"] == 5
+
+
+def test_edited_by_you_only_on_the_device_that_made_the_edit(wide):
+    assert wide["labels"] == ["edited by you", "edited on Sam's phone", "“shorter” · based on v2", "“shorter”"]

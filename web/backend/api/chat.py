@@ -1239,10 +1239,13 @@ async def _answer(
     if plan is not None and plan.immediate is None:
         system["content"] += "\n\n" + plan.rules
     # Lookups (part 5, W1): a plain text turn (not help, documents,
-    # pictures or a retry) is told about LOOK_UP / READ_PAGE, and a "look up
-    # …" or "what does this page say: …" needs no model to say so.
+    # pictures, a draft or a retry) is told about LOOK_UP / READ_PAGE, and a
+    # "look up …" or "what does this page say: …" needs no model to say so.
+    # A draft turn's prompt is the draft's alone (its model writes the
+    # document, never a lookup line).
     lookups_offered = (
-        refusal is None and help_turn is None and plan is None and not vision_call and replace_id is None
+        refusal is None and help_turn is None and plan is None and dturn is None and not vision_call
+        and replace_id is None
     )
     proposal: lookup_answer.Proposal | None = None
     thread_allowed = False
