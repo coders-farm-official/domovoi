@@ -218,8 +218,10 @@ internal fun DraftCard(
     onSave: () -> Unit,
     onShare: () -> Unit,
     onPrint: () -> Unit,
-    /** The Revise box: its text revises this draft, whatever it says. */
-    onRevise: ((String) -> Unit)? = null,
+    /** The Revise box: its text revises this draft, whatever it says;
+     *  false when the send was refused (a reply still being written), and
+     *  the box keeps its words. */
+    onRevise: ((String) -> Boolean)? = null,
 ) {
     val isPrint = card.action == "print"
     Column(
@@ -262,10 +264,7 @@ internal fun DraftCard(
             var ask by remember(card.id) { mutableStateOf("") }
             fun go() {
                 val t = ask.trim()
-                if (t.isNotEmpty()) {
-                    onRevise(t)
-                    ask = ""
-                }
+                if (t.isNotEmpty() && onRevise(t)) ask = ""
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedTextField(

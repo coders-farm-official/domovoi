@@ -267,8 +267,10 @@ class DraftTurn:
                     await s.commit()
                 break
             except IntegrityError:
-                # The same number taken meanwhile: the next one.
-                if attempt == 2:
+                # The same number taken meanwhile: the next one. (A new
+                # draft can't collide; its error, e.g. the thread gone, is
+                # raised as it is, not retried with a rolled-back id.)
+                if attempt == 2 or self.action == "create":
                     raise
         words = blocks.word_count(body)
         k = kinds.get(self.kind)

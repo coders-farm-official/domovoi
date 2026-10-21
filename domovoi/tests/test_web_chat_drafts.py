@@ -41,7 +41,7 @@ def _setup(width: int) -> str:
             "globalThis.liveRelTime = () => 'now';\n"
             # The chat's send streams through apiFetchRaw: what it sent, kept.
             "globalThis.__sent = []; globalThis.apiFetchRaw = (u, o) => { globalThis.__sent.push({ url: String(u), "
-            "body: o && o.body }); return Promise.reject(new Error('no network in the harness')); };\n"
+            "body: o && o.body }); return new Promise(() => {}); };\n"
             + m.group(0))
 
 
@@ -109,6 +109,13 @@ const cards = h.findAll((el) => el.props && el.props.className === 'chat-draft-c
 await h.change((el) => el.type === 'input' && el.props['aria-label'] === 'revise Cover letter for Acme', 'less stiff');
 await h.submit((el) => el.type === 'form' && el.props.className === 'chat-draft-revise');
 await h.settle(); h.rerender();
+// Review round 2: while that reply is still being written, the second card's
+// Revise box is refused and keeps its words.
+const reviseInputs = () => h.findAll((el) => el.type === 'input' && el.props['aria-label'] === 'revise Cover letter for Acme');
+reviseInputs()[1].props.onChange({ target: { value: 'more formal' } }); h.rerender();
+h.findAll((el) => el.type === 'form' && el.props.className === 'chat-draft-revise')[1].props.onSubmit({ preventDefault: () => {} });
+await h.settle(); h.rerender();
+const keptWords = reviseInputs()[1].props.value;
 const S = h.global('window').ChatDrafts.sourceLabel;
 const labels = [S({ version: 3, source: 'edited', device_id: 'dev-1' }),
                 S({ version: 3, source: 'edited', device_id: 'android-b', device_name: "Sam's phone" }),
@@ -139,7 +146,7 @@ await h.settle(); h.rerender();
 // The print card's Print opens the dialog on the draft's routes.
 await h.click((el) => el.type === 'button' && textOf(el).trim() === 'Print');
 await h.settle(); h.rerender(); await h.settle();
-return { cards, labels, sent: h.global('__sent'), canvas, wide, tabs, del: del ? (del.text || textOf(del)) : null, threadHidden, composer, v1Text, savedLine,
+return { cards, labels, keptWords, sent: h.global('__sent'), canvas, wide, tabs, del: del ? (del.text || textOf(del)) : null, threadHidden, composer, v1Text, savedLine,
          calls: h.calls.filter((c) => c.method !== 'GET') };
 """
 
@@ -204,3 +211,9 @@ def test_the_cards_revise_box_sends_a_revision_of_that_draft(wide):
 
 def test_edited_by_you_only_on_the_device_that_made_the_edit(wide):
     assert wide["labels"] == ["edited by you", "edited on Sam's phone", "“shorter” · based on v2", "“shorter”"]
+
+
+def test_a_refused_revise_keeps_its_words(wide):
+    """Review round 2: a Revise-box send refused while a reply is written keeps the text."""
+    assert wide["keptWords"] == "more formal"
+    assert len([c for c in wide["sent"] if c["url"].endswith("/api/chat/threads/11/messages")]) == 1

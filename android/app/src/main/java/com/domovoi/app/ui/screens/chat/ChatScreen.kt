@@ -719,9 +719,9 @@ internal fun ConversationPane(
 
     /** [revise]: (draft, text) from a draft card's Revise box; else the
      *  message box's words and attachments. */
-    fun send(revise: Pair<Long, String>? = null) {
+    fun send(revise: Pair<Long, String>? = null): Boolean {
         val content = revise?.second?.trim() ?: draft.trim()
-        if ((content.isBlank() && (revise != null || docAttachments.isEmpty())) || sending || docUploading != null) return
+        if ((content.isBlank() && (revise != null || docAttachments.isEmpty())) || sending || docUploading != null) return false
         val images = if (revise != null) emptyList() else attachments.toList()
         val docs = if (revise != null) emptyList() else docAttachments.toList()
         if (revise == null) {
@@ -769,6 +769,7 @@ internal fun ConversationPane(
             // A long summary that was stopped can carry on: the jobs again.
             if (live.job != null) reloads++
         }
+        return true
     }
 
     // "Try again": the last reply makes way for a new one to the same

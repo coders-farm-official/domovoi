@@ -21,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from domovoi.drafts import ats, blocks, diff, kinds, layout, metrics, phrases, prompts, templates  # noqa: E402
+from domovoi.drafts import ats, blocks, diff, docx_file, kinds, layout, metrics, phrases, prompts, templates  # noqa: E402
 
 OUT = ROOT / "domovoi" / "drafts" / "shared_cases.json"
 
@@ -112,6 +112,201 @@ SAMPLES = [
     ("traps", "resume-plain", TRAPS),
     ("long-letter", "letter-block", long_letter()),
 ]
+
+#: Review round 2's phrase sets (functional-testing/review-documents-d4-r2/phrases.json):
+#: everyday messages never revise, after a draft or not; the revisions do.
+#: ("try again" is in both of the reviewer's lists: right after a draft it is the
+#: chat's own retry, so it stays with the everyday ones.)
+#: Review round 2's typography case (soft hyphen, zero-width space, NBSP,
+#: ligatures, fullwidth letters): the .docx check reads it the same on both sides.
+TYPOGRAPHY = ("# Dear Mr. O\u2019Brien,\n\n\u201cSmart quotes\u201d, \u2018single ones\u2019, an em dash \u2014 an "
+              "en dash \u2013 and an ellipsis\u2026 A non\u00a0breaking space, a zero\u200bwidth space, a "
+              "soft\u00ad-hyphen, a soft\u00adhyphen inside, ligatures \ufb01le \ufb02ow o\ufb03ce, fullwidth "
+              "\uff11\uff12\uff13 \uff21\uff22\uff23, and a \u00bd fraction with \u2122 and \u00a9.\n\n"
+              "Sincerely,\n\nJordan\n")
+
+PHRASE_SETS = {
+    'everyday': [
+        "turn on the kitchen lights",
+        "turn off the lights",
+        "turn the lights down",
+        "dim the living room lights to 30 percent",
+        "make it brighter in here",
+        "make it warmer",
+        "make it a bit warmer in here",
+        "make it cooler",
+        "make it warm in the bedroom",
+        "set the thermostat to 70",
+        "it's too cold in here",
+        "it's too loud",
+        "it's a bit dark in here",
+        "this is too loud",
+        "that's not what I asked",
+        "it's not working",
+        "turn it up",
+        "turn it down",
+        "make it louder",
+        "make it quieter",
+        "add milk to my shopping list",
+        "add eggs and bread to the shopping list",
+        "put bananas on my shopping list",
+        "remove milk from the shopping list",
+        "what's on my shopping list",
+        "add stamps for the letter to my shopping list",
+        "add envelopes to my shopping list so I can mail the letter",
+        "add 'mail the cover letter' to my to-do list",
+        "remind me to mail the letter tomorrow",
+        "remind me to send my resume to Acme on Friday",
+        "set a timer for 10 minutes",
+        "set a timer for 5 minutes for the pasta",
+        "cancel the timer",
+        "how long is left on the timer",
+        "start a timer for twenty minutes",
+        "start a 3 minute timer",
+        "set an alarm for 7 am",
+        "wake me up at six thirty",
+        "play some jazz",
+        "play the beatles",
+        "play music in the kitchen",
+        "skip this song",
+        "pause the music",
+        "next song",
+        "play something relaxing",
+        "what song is this",
+        "turn the music up",
+        "stop",
+        "shuffle my playlist",
+        "play the letter song from sesame street",
+        "what time is it",
+        "what's the date today",
+        "what's the weather tomorrow",
+        "will it rain today",
+        "how far is the moon",
+        "who wrote pride and prejudice",
+        "what is the capital of australia",
+        "how many ounces in a cup",
+        "what's 15 percent of 80",
+        "tell me a joke",
+        "tell me a story",
+        "what's the news",
+        "how do I write a good cover letter",
+        "what should a resume include",
+        "is two pages too long for a resume",
+        "should I mention my salary in a cover letter",
+        "what does a cover letter usually say",
+        "thanks",
+        "thank you",
+        "ok",
+        "great, thanks",
+        "yes",
+        "no",
+        "sounds good",
+        "perfect",
+        "never mind",
+        "hello",
+        "good morning",
+        "how are you",
+        "what can you do",
+        "help",
+        "look up the weather in Toledo",
+        "look up warehouse jobs near me",
+        "what does this page say: https://example.com",
+        "search for forklift certification courses",
+        "find me a recipe for lasagna",
+        "open my documents",
+        "show me my files",
+        "open the files page",
+        "where are my documents",
+        "send the letter to my email",
+        "email the cover letter to my sister",
+        "save it",
+        "export it",
+        "keep it as it is",
+        "that's fine",
+        "looks good",
+        "it's perfect",
+        "who is at the front door",
+        "lock the front door",
+        "is the garage door open",
+        "close the garage door",
+        "start the vacuum",
+        "start the dishwasher",
+        "turn on the fan",
+        "open the blinds",
+        "close the blinds",
+        "what's on my calendar today",
+        "add a dentist appointment to my calendar on tuesday",
+        "call mom",
+        "text dad that I'm on my way",
+        "read my messages",
+        "make me a sandwich",
+        "make a grocery list",
+        "make a note that the plumber comes monday",
+        "write that down",
+        "write a note to myself",
+        "make it 20 minutes",
+        "make it 7 instead",
+        "change the timer to 15 minutes",
+        "change the song",
+        "use the living room speaker",
+        "move the music to the kitchen",
+        "keep playing",
+        "give me a minute",
+        "say that again",
+        "end the call",
+        "open the door",
+    ],
+    'everyday_after_a_draft': [
+        "it's too cold in here",
+        "it's too loud",
+        "it's a bit dark in here",
+        "this is too loud",
+        "that's not what I asked",
+        "it's not working",
+        "try again",
+        "a bit warmer",
+        "warmer",
+        "mention it to dad later",
+        "it's not raining is it",
+        "this is not my phone",
+    ],
+    'revise_any_time': [
+        "make it shorter",
+        "make it more formal",
+        "add my phone number to the letter",
+        "change the date in the cover letter",
+        "make the letter shorter",
+        "rewrite it",
+        "shorten this",
+        "add my forklift licence to the resume",
+        "the cover letter is too long",
+        "make it a bit more friendly",
+        "tone it down",
+        "proofread the letter",
+        "fix the typos in my resume",
+        "sign it Jordan Avery",
+        "address it to Ms Patel",
+        "remove the second paragraph from the letter",
+        "put my email at the top of the resume",
+        "can you make the letter more formal please",
+        "please change the greeting in the letter to Dear Hiring Manager",
+        "update the cover letter with my new address",
+    ],
+    'revise_after_a_draft': [
+        "shorter",
+        "more formal",
+        "a bit shorter",
+        "less formal",
+        "too long",
+        "it's too long",
+        "mention my forklift licence",
+        "tone it down",
+        "another version",
+        "fix the spelling",
+        "more formal and less wordy",
+    ],
+}
+
 
 PHRASES = [
     "Write a cover letter for the warehouse lead job at Acme Logistics.",
@@ -222,8 +417,13 @@ def main() -> int:
     for old, new in DIFFS:
         o, n = diff.display_text(old), diff.display_text(new)
         cases["diff"].append({"old": old, "new": new, "ops": diff.diff(o, n), "change": diff.change_line(old, new)})
+    cases["phrase_sets"] = PHRASE_SETS
     cases["phrases"] = []
-    for t in PHRASES:
+    seen: set[str] = set()
+    for t in PHRASES + [t for v in PHRASE_SETS.values() for t in v]:
+        if t in seen:
+            continue
+        seen.add(t)
         ask = phrases.draft_request(t)
         cases["phrases"].append({"in": t, "normalized": phrases.normalize(t),
                                  "draft": None if ask is None else {"kind": ask.kind, "template": ask.template,
@@ -243,7 +443,9 @@ def main() -> int:
     }
     cases["ats"] = {
         "passed": ats.PASSED,
-        "expected_words": [{"in": md, "out": ats.expected_words(md)} for md in (PERSONAL, "- • bullet · x")],
+        "expected_words": [{"in": md, "out": ats.expected_words(md)} for md in (PERSONAL, "- • bullet · x", TYPOGRAPHY)],
+        "docx_check": [{"in": md, "template": tpl, "out": ats.check(docx_file.render(md, templates.get(tpl)), "docx", md).as_json()}
+                       for md, tpl in ((TYPOGRAPHY, "letter-block"),)],
         "compare": [{"read": r, "want": w, "out": ats.compare(r, w).as_json()} for r, w in (
             (["a", "b"], ["a", "b"]), (["a", "c"], ["a", "b"]), (["a"], ["a", "b"]), (["a", "b", "c"], ["a", "b"]),
             (["coee"], ["coffee"]))],

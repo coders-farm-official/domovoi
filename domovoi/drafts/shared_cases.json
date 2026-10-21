@@ -2045,6 +2045,187 @@
    "change": "changed 1 word (10 → 10)"
   }
  ],
+ "phrase_sets": {
+  "everyday": [
+   "turn on the kitchen lights",
+   "turn off the lights",
+   "turn the lights down",
+   "dim the living room lights to 30 percent",
+   "make it brighter in here",
+   "make it warmer",
+   "make it a bit warmer in here",
+   "make it cooler",
+   "make it warm in the bedroom",
+   "set the thermostat to 70",
+   "it's too cold in here",
+   "it's too loud",
+   "it's a bit dark in here",
+   "this is too loud",
+   "that's not what I asked",
+   "it's not working",
+   "turn it up",
+   "turn it down",
+   "make it louder",
+   "make it quieter",
+   "add milk to my shopping list",
+   "add eggs and bread to the shopping list",
+   "put bananas on my shopping list",
+   "remove milk from the shopping list",
+   "what's on my shopping list",
+   "add stamps for the letter to my shopping list",
+   "add envelopes to my shopping list so I can mail the letter",
+   "add 'mail the cover letter' to my to-do list",
+   "remind me to mail the letter tomorrow",
+   "remind me to send my resume to Acme on Friday",
+   "set a timer for 10 minutes",
+   "set a timer for 5 minutes for the pasta",
+   "cancel the timer",
+   "how long is left on the timer",
+   "start a timer for twenty minutes",
+   "start a 3 minute timer",
+   "set an alarm for 7 am",
+   "wake me up at six thirty",
+   "play some jazz",
+   "play the beatles",
+   "play music in the kitchen",
+   "skip this song",
+   "pause the music",
+   "next song",
+   "play something relaxing",
+   "what song is this",
+   "turn the music up",
+   "stop",
+   "shuffle my playlist",
+   "play the letter song from sesame street",
+   "what time is it",
+   "what's the date today",
+   "what's the weather tomorrow",
+   "will it rain today",
+   "how far is the moon",
+   "who wrote pride and prejudice",
+   "what is the capital of australia",
+   "how many ounces in a cup",
+   "what's 15 percent of 80",
+   "tell me a joke",
+   "tell me a story",
+   "what's the news",
+   "how do I write a good cover letter",
+   "what should a resume include",
+   "is two pages too long for a resume",
+   "should I mention my salary in a cover letter",
+   "what does a cover letter usually say",
+   "thanks",
+   "thank you",
+   "ok",
+   "great, thanks",
+   "yes",
+   "no",
+   "sounds good",
+   "perfect",
+   "never mind",
+   "hello",
+   "good morning",
+   "how are you",
+   "what can you do",
+   "help",
+   "look up the weather in Toledo",
+   "look up warehouse jobs near me",
+   "what does this page say: https://example.com",
+   "search for forklift certification courses",
+   "find me a recipe for lasagna",
+   "open my documents",
+   "show me my files",
+   "open the files page",
+   "where are my documents",
+   "send the letter to my email",
+   "email the cover letter to my sister",
+   "save it",
+   "export it",
+   "keep it as it is",
+   "that's fine",
+   "looks good",
+   "it's perfect",
+   "who is at the front door",
+   "lock the front door",
+   "is the garage door open",
+   "close the garage door",
+   "start the vacuum",
+   "start the dishwasher",
+   "turn on the fan",
+   "open the blinds",
+   "close the blinds",
+   "what's on my calendar today",
+   "add a dentist appointment to my calendar on tuesday",
+   "call mom",
+   "text dad that I'm on my way",
+   "read my messages",
+   "make me a sandwich",
+   "make a grocery list",
+   "make a note that the plumber comes monday",
+   "write that down",
+   "write a note to myself",
+   "make it 20 minutes",
+   "make it 7 instead",
+   "change the timer to 15 minutes",
+   "change the song",
+   "use the living room speaker",
+   "move the music to the kitchen",
+   "keep playing",
+   "give me a minute",
+   "say that again",
+   "end the call",
+   "open the door"
+  ],
+  "everyday_after_a_draft": [
+   "it's too cold in here",
+   "it's too loud",
+   "it's a bit dark in here",
+   "this is too loud",
+   "that's not what I asked",
+   "it's not working",
+   "try again",
+   "a bit warmer",
+   "warmer",
+   "mention it to dad later",
+   "it's not raining is it",
+   "this is not my phone"
+  ],
+  "revise_any_time": [
+   "make it shorter",
+   "make it more formal",
+   "add my phone number to the letter",
+   "change the date in the cover letter",
+   "make the letter shorter",
+   "rewrite it",
+   "shorten this",
+   "add my forklift licence to the resume",
+   "the cover letter is too long",
+   "make it a bit more friendly",
+   "tone it down",
+   "proofread the letter",
+   "fix the typos in my resume",
+   "sign it Jordan Avery",
+   "address it to Ms Patel",
+   "remove the second paragraph from the letter",
+   "put my email at the top of the resume",
+   "can you make the letter more formal please",
+   "please change the greeting in the letter to Dear Hiring Manager",
+   "update the cover letter with my new address"
+  ],
+  "revise_after_a_draft": [
+   "shorter",
+   "more formal",
+   "a bit shorter",
+   "less formal",
+   "too long",
+   "it's too long",
+   "mention my forklift licence",
+   "tone it down",
+   "another version",
+   "fix the spelling",
+   "more formal and less wordy"
+  ]
+ },
  "phrases": [
   {
    "in": "Write a cover letter for the warehouse lead job at Acme Logistics.",
@@ -2481,6 +2662,1214 @@
    "revise": true,
    "revise_after": true,
    "print": false
+  },
+  {
+   "in": "turn off the lights",
+   "normalized": "turn off the lights",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "turn the lights down",
+   "normalized": "turn the lights down",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "dim the living room lights to 30 percent",
+   "normalized": "dim the living room lights to 30 percent",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "make it brighter in here",
+   "normalized": "make it brighter in here",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "make it warmer",
+   "normalized": "make it warmer",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "make it a bit warmer in here",
+   "normalized": "make it a bit warmer in here",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "make it cooler",
+   "normalized": "make it cooler",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "make it warm in the bedroom",
+   "normalized": "make it warm in the bedroom",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "set the thermostat to 70",
+   "normalized": "set the thermostat to 70",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "it's too cold in here",
+   "normalized": "it's too cold in here",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "it's too loud",
+   "normalized": "it's too loud",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "it's a bit dark in here",
+   "normalized": "it's a bit dark in here",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "this is too loud",
+   "normalized": "this is too loud",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "that's not what I asked",
+   "normalized": "that's not what i asked",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "it's not working",
+   "normalized": "it's not working",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "turn it down",
+   "normalized": "turn it down",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "make it quieter",
+   "normalized": "make it quieter",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "add eggs and bread to the shopping list",
+   "normalized": "add eggs and bread to the shopping list",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "put bananas on my shopping list",
+   "normalized": "put bananas on my shopping list",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "remove milk from the shopping list",
+   "normalized": "remove milk from the shopping list",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "what's on my shopping list",
+   "normalized": "what's on my shopping list",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "add stamps for the letter to my shopping list",
+   "normalized": "add stamps for the letter to my shopping list",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "add envelopes to my shopping list so I can mail the letter",
+   "normalized": "add envelopes to my shopping list so i can mail the letter",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "add 'mail the cover letter' to my to-do list",
+   "normalized": "add 'mail the cover letter' to my to-do list",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "remind me to mail the letter tomorrow",
+   "normalized": "remind me to mail the letter tomorrow",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "remind me to send my resume to Acme on Friday",
+   "normalized": "remind me to send my resume to acme on friday",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "set a timer for 10 minutes",
+   "normalized": "set a timer for 10 minutes",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "set a timer for 5 minutes for the pasta",
+   "normalized": "set a timer for 5 minutes for the pasta",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "cancel the timer",
+   "normalized": "cancel the timer",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "how long is left on the timer",
+   "normalized": "how long is left on the timer",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "start a timer for twenty minutes",
+   "normalized": "start a timer for twenty minutes",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "start a 3 minute timer",
+   "normalized": "start a 3 minute timer",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "set an alarm for 7 am",
+   "normalized": "set an alarm for 7 am",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "wake me up at six thirty",
+   "normalized": "wake me up at six thirty",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "play some jazz",
+   "normalized": "play some jazz",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "play the beatles",
+   "normalized": "play the beatles",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "play music in the kitchen",
+   "normalized": "play music in the kitchen",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "skip this song",
+   "normalized": "skip this song",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "pause the music",
+   "normalized": "pause the music",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "next song",
+   "normalized": "next song",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "play something relaxing",
+   "normalized": "play something relaxing",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "what song is this",
+   "normalized": "what song is this",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "turn the music up",
+   "normalized": "turn the music up",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "stop",
+   "normalized": "stop",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "shuffle my playlist",
+   "normalized": "shuffle my playlist",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "play the letter song from sesame street",
+   "normalized": "play the letter song from sesame street",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "what time is it",
+   "normalized": "what time is it",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "what's the date today",
+   "normalized": "what's the date today",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "what's the weather tomorrow",
+   "normalized": "what's the weather tomorrow",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "will it rain today",
+   "normalized": "will it rain today",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "how far is the moon",
+   "normalized": "how far is the moon",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "who wrote pride and prejudice",
+   "normalized": "who wrote pride and prejudice",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "what is the capital of australia",
+   "normalized": "what is the capital of australia",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "how many ounces in a cup",
+   "normalized": "how many ounces in a cup",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "what's 15 percent of 80",
+   "normalized": "what's 15 percent of 80",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "tell me a joke",
+   "normalized": "tell me a joke",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "tell me a story",
+   "normalized": "tell me a story",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "what's the news",
+   "normalized": "what's the news",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "how do I write a good cover letter",
+   "normalized": "how do i write a good cover letter",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "what should a resume include",
+   "normalized": "what should a resume include",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "is two pages too long for a resume",
+   "normalized": "is two pages too long for a resume",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "should I mention my salary in a cover letter",
+   "normalized": "should i mention my salary in a cover letter",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "what does a cover letter usually say",
+   "normalized": "what does a cover letter usually say",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "thanks",
+   "normalized": "thanks",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "thank you",
+   "normalized": "thank you",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "ok",
+   "normalized": "ok",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "great, thanks",
+   "normalized": "thanks",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "yes",
+   "normalized": "yes",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "no",
+   "normalized": "no",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "sounds good",
+   "normalized": "sounds good",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "perfect",
+   "normalized": "perfect",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "never mind",
+   "normalized": "never mind",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "hello",
+   "normalized": "hello",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "good morning",
+   "normalized": "good morning",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "how are you",
+   "normalized": "how are you",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "what can you do",
+   "normalized": "what can you do",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "help",
+   "normalized": "help",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "look up the weather in Toledo",
+   "normalized": "look up the weather in toledo",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "look up warehouse jobs near me",
+   "normalized": "look up warehouse jobs near me",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "what does this page say: https://example.com",
+   "normalized": "what does this page say: https://example.com",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "search for forklift certification courses",
+   "normalized": "search for forklift certification courses",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "find me a recipe for lasagna",
+   "normalized": "find me a recipe for lasagna",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "open my documents",
+   "normalized": "open my documents",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "show me my files",
+   "normalized": "show me my files",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "open the files page",
+   "normalized": "open the files page",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "where are my documents",
+   "normalized": "where are my documents",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "send the letter to my email",
+   "normalized": "send the letter to my email",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "email the cover letter to my sister",
+   "normalized": "email the cover letter to my sister",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "save it",
+   "normalized": "save it",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "export it",
+   "normalized": "export it",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "keep it as it is",
+   "normalized": "keep it as it is",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "that's fine",
+   "normalized": "that's fine",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "looks good",
+   "normalized": "looks good",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "it's perfect",
+   "normalized": "it's perfect",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "who is at the front door",
+   "normalized": "who is at the front door",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "lock the front door",
+   "normalized": "lock the front door",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "is the garage door open",
+   "normalized": "is the garage door open",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "close the garage door",
+   "normalized": "close the garage door",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "start the vacuum",
+   "normalized": "start the vacuum",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "start the dishwasher",
+   "normalized": "start the dishwasher",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "turn on the fan",
+   "normalized": "turn on the fan",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "open the blinds",
+   "normalized": "open the blinds",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "close the blinds",
+   "normalized": "close the blinds",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "what's on my calendar today",
+   "normalized": "what's on my calendar today",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "add a dentist appointment to my calendar on tuesday",
+   "normalized": "add a dentist appointment to my calendar on tuesday",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "call mom",
+   "normalized": "call mom",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "text dad that I'm on my way",
+   "normalized": "text dad that i'm on my way",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "read my messages",
+   "normalized": "read my messages",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "make me a sandwich",
+   "normalized": "make me a sandwich",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "make a grocery list",
+   "normalized": "make a grocery list",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "make a note that the plumber comes monday",
+   "normalized": "make a note that the plumber comes monday",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "write that down",
+   "normalized": "write that down",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "write a note to myself",
+   "normalized": "write a note to myself",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "make it 20 minutes",
+   "normalized": "make it 20 minutes",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "make it 7 instead",
+   "normalized": "make it 7 instead",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "change the timer to 15 minutes",
+   "normalized": "change the timer to 15 minutes",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "change the song",
+   "normalized": "change the song",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "use the living room speaker",
+   "normalized": "use the living room speaker",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "move the music to the kitchen",
+   "normalized": "move the music to the kitchen",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "keep playing",
+   "normalized": "keep playing",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "give me a minute",
+   "normalized": "give me a minute",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "say that again",
+   "normalized": "say that again",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "end the call",
+   "normalized": "end the call",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "open the door",
+   "normalized": "open the door",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "try again",
+   "normalized": "try again",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "a bit warmer",
+   "normalized": "a bit warmer",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "warmer",
+   "normalized": "warmer",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "mention it to dad later",
+   "normalized": "mention it to dad later",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "it's not raining is it",
+   "normalized": "it's not raining is it",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "this is not my phone",
+   "normalized": "this is not my phone",
+   "draft": null,
+   "revise": false,
+   "revise_after": false,
+   "print": false
+  },
+  {
+   "in": "make it shorter",
+   "normalized": "make it shorter",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "add my phone number to the letter",
+   "normalized": "add my phone number to the letter",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "change the date in the cover letter",
+   "normalized": "change the date in the cover letter",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "make the letter shorter",
+   "normalized": "make the letter shorter",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "make it a bit more friendly",
+   "normalized": "make it a bit more friendly",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "proofread the letter",
+   "normalized": "proofread the letter",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "fix the typos in my resume",
+   "normalized": "fix the typos in my resume",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "address it to Ms Patel",
+   "normalized": "address it to ms patel",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "remove the second paragraph from the letter",
+   "normalized": "remove the second paragraph from the letter",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "put my email at the top of the resume",
+   "normalized": "put my email at the top of the resume",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "can you make the letter more formal please",
+   "normalized": "make the letter more formal please",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "please change the greeting in the letter to Dear Hiring Manager",
+   "normalized": "change the greeting in the letter to dear hiring manager",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "update the cover letter with my new address",
+   "normalized": "update the cover letter with my new address",
+   "draft": null,
+   "revise": true,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "shorter",
+   "normalized": "shorter",
+   "draft": null,
+   "revise": false,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "more formal",
+   "normalized": "more formal",
+   "draft": null,
+   "revise": false,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "less formal",
+   "normalized": "less formal",
+   "draft": null,
+   "revise": false,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "too long",
+   "normalized": "too long",
+   "draft": null,
+   "revise": false,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "it's too long",
+   "normalized": "it's too long",
+   "draft": null,
+   "revise": false,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "another version",
+   "normalized": "another version",
+   "draft": null,
+   "revise": false,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "fix the spelling",
+   "normalized": "fix the spelling",
+   "draft": null,
+   "revise": false,
+   "revise_after": true,
+   "print": false
+  },
+  {
+   "in": "more formal and less wordy",
+   "normalized": "more formal and less wordy",
+   "draft": null,
+   "revise": false,
+   "revise_after": true,
+   "print": false
   }
  ],
  "titles": [
@@ -2629,6 +4018,70 @@
      "bullet",
      "x"
     ]
+   },
+   {
+    "in": "# Dear Mr. O’Brien,\n\n“Smart quotes”, ‘single ones’, an em dash — an en dash – and an ellipsis… A non breaking space, a zero​width space, a soft­-hyphen, a soft­hyphen inside, ligatures ﬁle ﬂow oﬃce, fullwidth １２３ ＡＢＣ, and a ½ fraction with ™ and ©.\n\nSincerely,\n\nJordan\n",
+    "out": [
+     "Dear",
+     "Mr.",
+     "O’Brien,",
+     "“Smart",
+     "quotes”,",
+     "‘single",
+     "ones’,",
+     "an",
+     "em",
+     "dash",
+     "—",
+     "an",
+     "en",
+     "dash",
+     "–",
+     "and",
+     "an",
+     "ellipsis...",
+     "A",
+     "non",
+     "breaking",
+     "space,",
+     "a",
+     "zero​width",
+     "space,",
+     "a",
+     "soft-hyphen,",
+     "a",
+     "softhyphen",
+     "inside,",
+     "ligatures",
+     "file",
+     "flow",
+     "office,",
+     "fullwidth",
+     "123",
+     "ABC,",
+     "and",
+     "a",
+     "1⁄2",
+     "fraction",
+     "with",
+     "TM",
+     "and",
+     "©.",
+     "Sincerely,",
+     "Jordan"
+    ]
+   }
+  ],
+  "docx_check": [
+   {
+    "in": "# Dear Mr. O’Brien,\n\n“Smart quotes”, ‘single ones’, an em dash — an en dash – and an ellipsis… A non breaking space, a zero​width space, a soft­-hyphen, a soft­hyphen inside, ligatures ﬁle ﬂow oﬃce, fullwidth １２３ ＡＢＣ, and a ½ fraction with ™ and ©.\n\nSincerely,\n\nJordan\n",
+    "template": "letter-block",
+    "out": {
+     "ok": true,
+     "line": "text readable · single column",
+     "read": 47,
+     "expected": 47
+    }
    }
   ],
   "compare": [

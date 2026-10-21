@@ -682,7 +682,12 @@ const ChatPageMain = () => {
     latest: draftLatest,
     canPrint: !!printing.hasPrinter,
     open: (id, version) => { setCanvas({ id, version }); setCanvasKey((k) => k + 1); },
-    revise: (id, text) => send({ draftId: id, text }),
+    // false: refused (a reply is still being written), so the box keeps its words.
+    revise: (id, text) => {
+      if (sendingRef.current || docBusy) return false;
+      send({ draftId: id, text });
+      return true;
+    },
     print: (id, version) => setPrintDraft({ id, version,
       title: ((draftLatest[id] || {}).title) || 'draft' }),
     save: async (id, version) => {

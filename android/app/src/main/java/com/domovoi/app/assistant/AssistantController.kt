@@ -789,11 +789,15 @@ class AssistantController(
     /** The draft card's Revise box: [text] is a revision of draft
      *  [draftId], whatever it says (the chat's own box revises only when the
      *  words clearly mean the draft). */
-    fun reviseDraft(draftId: String, text: String) {
-        if (text.isBlank() || _state.value.replying) return
+    fun reviseDraft(draftId: String, text: String): Boolean {
+        if (text.isBlank() || _state.value.replying) return false
         reviseNext = draftId
         send(text)
-        if (!_state.value.replying) reviseNext = null
+        if (!_state.value.replying) {
+            reviseNext = null
+            return false
+        }
+        return true
     }
 
     /** Sends [text] and streams the reply into the conversation. */
@@ -880,6 +884,10 @@ class AssistantController(
     }
 
     private suspend fun reply(question: StoredConversation, onDelta: (String) -> Unit = {}): StoredConversation {
+        // A Revise-box turn is this turn's and only this one's (review round
+        // 2: left set, it rewrote the draft at the next ordinary message),
+        // and it is always a revision: no clock or other fast path takes it.
+        val forced = reviseNext.also { reviseNext = null }
         // The model's time is the reply's: a title being written stops (it
         // runs again once this reply is done), and whatever it wrote, or a
         // rename meanwhile, is kept.
@@ -888,6 +896,7 @@ class AssistantController(
         // A retry's question is already on disk with the reply it may
         // replace: that copy stays until the new reply is finished.
         if (retryingFrom == null) save(asked)
+        if (forced != null) draftReply(asked, onDelta, forced)?.let { return it }
         clockReply(asked, onDelta)?.let { return it }
         // A draft (documents plan D4): a request for a resume, cover letter
         // or letter, a revision of this chat's draft, or "print it".
@@ -1691,8 +1700,12 @@ class AssistantController(
      * line of what was done ("Version 2: cut 120 words (380 → 260).").
      * Spoken, only that line is said, never the draft.
      */
-    private suspend fun draftReply(asked: StoredConversation, onDelta: (String) -> Unit): StoredConversation? {
-        val forced = reviseNext.also { reviseNext = null }
+    private suspend fun draftReply(
+        asked: StoredConversation,
+        onDelta: (String) -> Unit,
+        /** A Revise-box turn: this draft, whatever the words say. */
+        forced: String? = null,
+    ): StoredConversation? {
         val store = drafts ?: return null
         val last = asked.messages.lastOrNull()?.takeIf { it.fromUser } ?: return null
         val question = last.text.trim()

@@ -36,7 +36,10 @@ class Check:
 
 
 def words(text: str) -> list[str]:
-    s = unicodedata.normalize("NFKC", text or "")
+    # A soft hyphen is a hint where a word may break, not a character a
+    # reader keeps the same way (the phone's .docx reader drops it; review
+    # round 2): gone on both sides, as on the phone (DraftAts.words).
+    s = unicodedata.normalize("NFKC", text or "").replace("\u00ad", "")
     return [w for w in _WORD.findall(s) if w not in _BULLETS]
 
 

@@ -154,7 +154,7 @@ const ChatDrafts = (() => {
           // (the chat's own box only does when the words clearly mean it).
           <form className="chat-draft-revise" onSubmit={(e) => {
             e.preventDefault();
-            if (ask.trim()) { onRevise(d.id, ask.trim()); setAsk(''); }
+            if (ask.trim() && onRevise(d.id, ask.trim()) !== false) setAsk('');
           }}>
             <input type="text" value={ask} maxLength={500} aria-label={`revise ${d.title}`}
                    placeholder="change this draft…" onChange={(e) => setAsk(e.target.value)}/>

@@ -53,11 +53,25 @@ object DraftPhrases {
             "trim|polish|proofread) " + DRAFT_NOUN + "\\b",
     )
 
-    /** How a draft can sound ("make it louder" is the music's, never the letter's). */
+    /** How a draft can sound ("make it louder" is the music's, "make it
+     *  warmer" the thermostat's, never the letter's). */
     private const val STYLE = "(?:formal|informal|casual|friendly|friendlier|professional|polite|concise|detailed|direct|" +
-        "confident|enthusiastic|personal|specific|warm|warmer|upbeat|serious|simple|simpler|clear|clearer|" +
+        "confident|enthusiastic|personal|specific|upbeat|serious|simple|simpler|clear|clearer|" +
         "short|shorter|long|longer|brief|briefer|tight|tighter|persuasive|positive|firm|firmer|gentle|gentler|" +
-        "modern|plain|punchy|human)"
+        "modern|plain|punchy|human|wordy|stiff|verbose|repetitive|blunt)"
+
+    /** A place or a destination: about the house, a list, the calendar or a
+     *  person, never the draft (review round 2). */
+    private val ELSEWHERE = Regex(
+        "\\b(?:in|on|to|into|onto|from|off|at) (?:the |my |our |your |this |that )?" +
+            "(?:shopping list|grocery list|to-?do list|list|calendar|cart|basket|bedroom|bathroom|kitchen|living room|" +
+            "dining room|office|garage|house|home|room|here|there|reminders?|notes?|playlist|queue|phone|fridge)\\b" +
+            "|\\b(?:in|out) here\\b|\\bto (?:mom|mum|dad|grandma|grandpa|him|her|them)\\b",
+    )
+
+    /** What a complaint right after the draft may be about: the writing,
+     *  never the room ("it's too cold") or a thing ("it's not working"). */
+    private const val WRITING_FAULT = "(?:long|short|formal|informal|casual|wordy|stiff|blunt|verbose|repetitive|vague|generic)"
 
     /** "it"/"this" as the object of an editing verb. */
     private val EDITS_IT = Regex(
@@ -69,13 +83,12 @@ object DraftPhrases {
 
     /** An edit-only instruction: the whole message, right after the draft turn. */
     private val EDIT_ONLY = Regex(
-        "^(?:(?:a bit |a little |much |even )?(?:shorter|longer|simpler|clearer|friendlier|warmer|nicer|tighter)" +
+        "^(?:(?:a bit |a little |much |even )?(?:shorter|longer|simpler|clearer|friendlier|nicer|tighter)" +
             "|(?:a bit |a little |much |even )?(?:more|less) " + STYLE + "(?: and (?:more|less) " + STYLE + ")?" +
-            "|(?:too|way too|a bit too) (?:long|short|formal|casual|stiff|wordy|blunt)" +
-            "|(?:it|that|this)(?:'s| is) (?:too|a bit|a little|way too|not) [a-z ]+" +
+            "|(?:(?:it|that|this)(?:'s| is) )?(?:too|way too|a bit too|a little too|a bit|a little) " + WRITING_FAULT +
             "|tone it (?:down|up)|(?:shorten|tighten|simplify|condense|polish|proofread|reword|rephrase|rewrite|redo)" +
-            "(?: it)?|(?:fix|check) the (?:typos|spelling|grammar)|try again|another version|one more version" +
-            "|mention [a-z0-9 ,.'-]+|sign it [a-z ,.'-]+|address it to [a-z ,.'-]+)$",
+            "(?: it)?|(?:fix|check) the (?:typos|spelling|grammar)|another version|one more version" +
+            "|mention (?!(?:it|that|this|him|her|them)\\b)[a-z0-9 ,.'-]+|sign it [a-z ,.'-]+|address it to [a-z ,.'-]+)$",
     )
     private val PRINT = Regex(
         "^print(?: (?:it|this|that|out|it out|this out|that out|a copy|me a copy|" +
@@ -160,6 +173,7 @@ object DraftPhrases {
     fun revisionRequest(text: String, afterDraft: Boolean = false): Boolean {
         val s = normalize(text)
         if (s.isEmpty()) return false
+        if (ELSEWHERE.containsMatchIn(s)) return false
         if (NAMES_DRAFT.find(s) != null || EDITS_IT.find(s) != null) return true
         return afterDraft && EDIT_ONLY.find(s) != null
     }

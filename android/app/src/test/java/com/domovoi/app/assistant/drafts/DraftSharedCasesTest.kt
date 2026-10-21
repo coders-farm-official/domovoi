@@ -155,6 +155,21 @@ class DraftSharedCasesTest {
         }
     }
 
+    /** Review round 2's phrase sets: everyday messages never revise, after a
+     *  draft or not; the revisions do (the server's test_drafts checks the same). */
+    @Test fun everydayMessagesNeverReviseAndTheRevisionsDo() {
+        val sets = cases["phrase_sets"]!!.jsonObject
+        val everyday = sets["everyday"]!!.strs() + sets["everyday_after_a_draft"]!!.strs()
+        assertEquals(emptyList<String>(), everyday.filter {
+            DraftPhrases.revisionRequest(it) || DraftPhrases.revisionRequest(it, afterDraft = true)
+        })
+        assertEquals(emptyList<String>(), sets["revise_any_time"]!!.strs().filter { !DraftPhrases.revisionRequest(it) })
+        assertEquals(emptyList<String>(),
+            sets["revise_after_a_draft"]!!.strs().filter { !DraftPhrases.revisionRequest(it, afterDraft = true) })
+        assertEquals(listOf(140, 20, 11),
+            listOf(everyday.size, sets["revise_any_time"]!!.strs().size, sets["revise_after_a_draft"]!!.strs().size))
+    }
+
     @Test fun promptsAreTheServersWordForWord() {
         val p = cases["prompts"]!!.jsonObject
         assertEquals(p["rules"]!!.s(), DraftPrompts.RULES)
@@ -182,6 +197,17 @@ class DraftSharedCasesTest {
         assertEquals(a["passed"]!!.s(), DraftAts.PASSED)
         for (c in a["expected_words"]!!.jsonArray) {
             assertEquals(c.jsonObject["out"]!!.strs(), DraftAts.expectedWords(c.jsonObject["in"]!!.s()))
+        }
+        // Review round 2: a soft hyphen (and the other typography) reads the
+        // same from the phone's .docx as from the server's.
+        for (c in a["docx_check"]!!.jsonArray) {
+            val o = c.jsonObject
+            val md = o["in"]!!.s()
+            val got = DraftAts.checkDocx(DraftDocx.render(md, template(o["template"]!!.s()), "t"), md)
+            val w = o["out"]!!.jsonObject
+            assertEquals(w["line"]!!.s(), got.line)
+            assertEquals(w["read"]!!.jsonPrimitive.int, got.read)
+            assertTrue(got.ok)
         }
         for (c in a["compare"]!!.jsonArray) {
             val o = c.jsonObject

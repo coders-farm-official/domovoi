@@ -85,6 +85,17 @@ def test_phrases(case):
     assert phrases.normalize(case["in"]) == case["normalized"]
 
 
+def test_everyday_messages_never_revise_and_the_revisions_do():
+    """Review round 2's phrase sets (shared_cases.json phrase_sets; the
+    phone's DraftSharedCasesTest holds the Kotlin to the same)."""
+    sets = CASES["phrase_sets"]
+    everyday = sets["everyday"] + sets["everyday_after_a_draft"]
+    assert [t for t in everyday if phrases.revision_request(t) or phrases.revision_request(t, after_draft=True)] == []
+    assert [t for t in sets["revise_any_time"] if not phrases.revision_request(t)] == []
+    assert [t for t in sets["revise_after_a_draft"] if not phrases.revision_request(t, after_draft=True)] == []
+    assert len(everyday) == 140 and len(sets["revise_any_time"]) == 20 and len(sets["revise_after_a_draft"]) == 11
+
+
 def test_what_the_phrases_must_say():
     assert phrases.draft_request("Write a cover letter for the warehouse lead job at Acme").kind == "cover_letter"
     assert phrases.draft_request("How do I write a cover letter?") is None

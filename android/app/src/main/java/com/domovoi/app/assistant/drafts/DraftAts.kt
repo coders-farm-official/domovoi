@@ -28,8 +28,13 @@ object DraftAts {
     private val WORD = DraftSpace.WORDS
     private val BULLETS = setOf("•", "-", "*", "·")
 
+    /** The words, NFKC, soft hyphens dropped (a break hint readers keep
+     *  differently; the server's `ats.words` drops them too). */
     fun words(text: String): List<String> =
-        WORD.findAll(Normalizer.normalize(text, Normalizer.Form.NFKC)).map { it.value }.filter { it !in BULLETS }.toList()
+        WORD.findAll(Normalizer.normalize(text, Normalizer.Form.NFKC).replace(SOFT_HYPHEN, ""))
+            .map { it.value }.filter { it !in BULLETS }.toList()
+
+    private const val SOFT_HYPHEN = "\u00AD"
 
     fun expectedWords(markdown: String): List<String> = words(DraftBlocks.plainText(DraftBlocks.parse(markdown)))
 

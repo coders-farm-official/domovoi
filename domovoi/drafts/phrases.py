@@ -18,7 +18,15 @@ same answers), like the action phrases.
     "rewrite it", "shorten this");
   - or, right after the reply that wrote the draft (``after_draft``), the
     whole message is an edit-only instruction ("shorter", "more formal",
-    "it's too long", "mention my forklift licence", "tone it down").
+    "it's too long", "mention my forklift licence", "tone it down"); a
+    complaint only about the writing (too long, short, formal, casual,
+    wordy, stiff), never the room or a thing ("it's too cold", "it's
+    not working").
+
+  A place or a destination ("in the bedroom", "in here", "to my shopping
+  list", "to the calendar", "to dad") means it isn't a revision, whatever
+  else it says (review round 2). "try again" right after a draft is the
+  chat's own retry, not a revision; "another version" is one.
 
   Anything else routes as an ordinary message. The card's Revise box
   sends its text as a revision whatever it says (the send's
@@ -67,25 +75,37 @@ _NAMES_DRAFT = re.compile(r"^" + _EDIT_VERB + r"\b.*\b" + _DRAFT_NOUN + r"\b"
                           r"|^(?:shorten|lengthen|rewrite|reword|rephrase|redo|revise|edit|tighten|simplify|condense|"
                           r"trim|polish|proofread) " + _DRAFT_NOUN + r"\b")
 #: How a draft can sound: the words "more/less …", "make it …" take
-#: ("make it louder" is the music's, never the letter's).
+#: ("make it louder" is the music's, "make it warmer" the thermostat's,
+#: never the letter's).
 _STYLE = (r"(?:formal|informal|casual|friendly|friendlier|professional|polite|concise|detailed|direct|"
-          r"confident|enthusiastic|personal|specific|warm|warmer|upbeat|serious|simple|simpler|clear|clearer|"
+          r"confident|enthusiastic|personal|specific|upbeat|serious|simple|simpler|clear|clearer|"
           r"short|shorter|long|longer|brief|briefer|tight|tighter|persuasive|positive|firm|firmer|gentle|gentler|"
-          r"modern|plain|punchy|human)")
+          r"modern|plain|punchy|human|wordy|stiff|verbose|repetitive|blunt)")
+#: A place or a destination: the message is about the house, a list, the
+#: calendar or a person, never the draft ("make it warm in the bedroom",
+#: "add stamps for the letter to my shopping list", "mention it to dad").
+_ELSEWHERE = re.compile(
+    r"\b(?:in|on|to|into|onto|from|off|at) (?:the |my |our |your |this |that )?"
+    r"(?:shopping list|grocery list|to-?do list|list|calendar|cart|basket|bedroom|bathroom|kitchen|living room|"
+    r"dining room|office|garage|house|home|room|here|there|reminders?|notes?|playlist|queue|phone|fridge)\b"
+    r"|\b(?:in|out) here\b|\bto (?:mom|mum|dad|grandma|grandpa|him|her|them)\b")
 #: "it"/"this" as the object of an editing verb.
 _EDITS_IT = re.compile(r"^(?:(?:shorten|lengthen|rewrite|reword|rephrase|redo|revise|edit|tighten|simplify|"
                        r"condense|trim|polish|proofread) (?:it|this)\b"
                        r"|make (?:it|this) (?:a bit |a little |much |even )?(?:(?:more|less|sound) )?" + _STYLE + r"\b"
                        r"|tone (?:it|this) (?:down|up)\b|sign (?:it|this) |address (?:it|this) to )")
+#: What a complaint right after the draft may be about: the writing
+#: ("it's too long"), never the room ("it's too cold", "too loud") or a
+#: thing ("it's not working").
+_WRITING_FAULT = r"(?:long|short|formal|informal|casual|wordy|stiff|blunt|verbose|repetitive|vague|generic)"
 #: An edit-only instruction: the whole message, right after the draft turn.
 _EDIT_ONLY = re.compile(
-    r"^(?:(?:a bit |a little |much |even )?(?:shorter|longer|simpler|clearer|friendlier|warmer|nicer|tighter)"
+    r"^(?:(?:a bit |a little |much |even )?(?:shorter|longer|simpler|clearer|friendlier|nicer|tighter)"
     r"|(?:a bit |a little |much |even )?(?:more|less) " + _STYLE + r"(?: and (?:more|less) " + _STYLE + r")?"
-    r"|(?:too|way too|a bit too) (?:long|short|formal|casual|stiff|wordy|blunt)"
-    r"|(?:it|that|this)(?:'s| is) (?:too|a bit|a little|way too|not) [a-z ]+"
+    r"|(?:(?:it|that|this)(?:'s| is) )?(?:too|way too|a bit too|a little too|a bit|a little) " + _WRITING_FAULT +
     r"|tone it (?:down|up)|(?:shorten|tighten|simplify|condense|polish|proofread|reword|rephrase|rewrite|redo)"
-    r"(?: it)?|(?:fix|check) the (?:typos|spelling|grammar)|try again|another version|one more version"
-    r"|mention [a-z0-9 ,.'-]+|sign it [a-z ,.'-]+|address it to [a-z ,.'-]+)$"
+    r"(?: it)?|(?:fix|check) the (?:typos|spelling|grammar)|another version|one more version"
+    r"|mention (?!(?:it|that|this|him|her|them)\b)[a-z0-9 ,.'-]+|sign it [a-z ,.'-]+|address it to [a-z ,.'-]+)$"
 )
 _PRINT = re.compile(
     r"^print(?: (?:it|this|that|out|it out|this out|that out|a copy|me a copy|"
@@ -157,6 +177,8 @@ def revision_request(text: str, after_draft: bool = False) -> bool:
     draft."""
     s = normalize(text)
     if not s:
+        return False
+    if _ELSEWHERE.search(s):
         return False
     if _NAMES_DRAFT.match(s) or _EDITS_IT.match(s):
         return True

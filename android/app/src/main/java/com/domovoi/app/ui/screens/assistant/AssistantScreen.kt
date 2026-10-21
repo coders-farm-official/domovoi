@@ -127,7 +127,7 @@ internal class AssistantActions(
     /** Prints a draft's version with Android's print dialog. */
     val printDraft: (String, Int) -> Unit = { _, _ -> },
     /** A draft card's Revise box: (draft id, what to change). */
-    val reviseDraft: ((String, String) -> Unit)? = null,
+    val reviseDraft: ((String, String) -> Boolean)? = null,
     /** "carry on" a stopped long-document summary (documents plan D2). */
     val carryOn: () -> Unit = {},
     /** The home-server offer: its time, seconds, when the home server's

@@ -132,7 +132,7 @@ internal fun ServerDraftCard(
     canPrint: Boolean,
     onOpen: () -> Unit,
     onPrint: () -> Unit,
-    onRevise: ((String) -> Unit)? = null,
+    onRevise: ((String) -> Boolean)? = null,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val toast = com.domovoi.app.LocalToast.current

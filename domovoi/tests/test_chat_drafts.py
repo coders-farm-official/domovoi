@@ -404,6 +404,14 @@ def test_the_cards_revise_box_revises_whatever_it_says(model):
                    json={"content": "less stiff in the second paragraph", "revise_draft": one["draft"]["id"]})
         done = next(d for ev, d in _sse(r.text) if ev == "done")
         assert done["draft"]["version"] == 2 and done["draft"]["action"] == "revise"
+        # Review round 2: words a fast path would take (a lookup, the date)
+        # are still a revision from the box, and nothing is left pending.
+        model.replies = [SHORTER, FORMAL, "Sure."]
+        for words in ("look up the weather in Toledo", "what's the date today"):
+            r = c.post(f"/api/chat/threads/{tid}/messages", json={"content": words, "revise_draft": one["draft"]["id"]})
+            assert next(d for ev, d in _sse(r.text) if ev == "done")["draft"]["action"] == "revise"
+        after, _ = _send(c, tid, "tell me a joke")
+        assert after.get("draft") is None and after["content"] == "Sure."
         other = _thread(c)
         bad = c.post(f"/api/chat/threads/{other}/messages", json={"content": "x", "revise_draft": one["draft"]["id"]})
         assert bad.status_code == 404
@@ -539,3 +547,23 @@ async def test_a_version_names_its_device_and_the_person_whose_device_it_is():
             await s.execute(sql("DELETE FROM devices WHERE device_id = 'android-d4own'"))
             await s.execute(sql("DELETE FROM people WHERE id = :p"), {"p": pid})
             await s.commit()
+
+
+@requires_db
+async def test_a_first_draft_whose_version_fails_is_not_retried_as_a_revision(monkeypatch):
+    """Review round 2 (nit): a first draft's error is raised as it is, not
+    retried with the draft id its rolled-back transaction made ("draft gone")."""
+    from sqlalchemy import text as sql
+    from sqlalchemy.exc import IntegrityError as DbIntegrityError
+
+    from web.backend.db import session_scope
+
+    async with session_scope() as s:
+        tid = (await s.execute(sql("INSERT INTO chat_threads (title) VALUES ('nit') RETURNING id"))).scalar_one()
+        await s.commit()
+    # The version's row fails its person reference: an IntegrityError after
+    # the draft's own row was written in the same transaction.
+    monkeypatch.setattr(drafts_api, "_OWNER", "(SELECT -1)")
+    t = drafts_api.guided_turn(tid, "cover_letter", "letter-block", "Cover letter", "write a cover letter")
+    with pytest.raises(DbIntegrityError):
+        await t.finish(LETTER)
