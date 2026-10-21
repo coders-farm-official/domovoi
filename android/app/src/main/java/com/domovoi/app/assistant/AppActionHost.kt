@@ -83,7 +83,9 @@ class AppActionHost(
 
     override fun clockTakes(intent: ClockIntent): Boolean = ClockIntents.takes(ctx, intent)
 
-    override suspend fun clock(request: ClockRequest): Boolean = withContext(Dispatchers.Main) { ClockIntents.send(ctx, request) }
+    // Paced: the Clock app can drop an intent sent right after another.
+    override suspend fun clock(request: ClockRequest): Boolean =
+        pacer.send { withContext(Dispatchers.Main) { ClockIntents.send(ctx, request) } }
 
     override val player: PhonePlayer = Adapter(playerController)
 
@@ -108,6 +110,11 @@ class AppActionHost(
             val place = runCatching { positions.local(b.meta.bookId, b.meta.server) }.getOrNull()
             BookChoice(item, b.meta.title, b.meta.author, place?.positionSec ?: 0.0, place?.speed ?: 1f, place?.updatedAtMs ?: 0L)
         }
+    }
+
+    private companion object {
+        /** One for the app: every Clock intent from it is spaced out. */
+        val pacer = ClockPacer()
     }
 
     /** The player on its own thread (ExoPlayer's is the main one). */

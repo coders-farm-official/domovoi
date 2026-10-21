@@ -947,6 +947,8 @@ class AssistantController(
         val spoken: String = text,
         /** The player before an action done at once: what Undo puts back. */
         val undo: PlayerSnapshot? = null,
+        /** The player right after it: Undo refuses once it has moved on. */
+        val undoAfter: PlayerSnapshot? = null,
         /** An earlier card this turn marks: (its index, its new state). */
         val mark: Pair<Int, CardState>? = null,
     )
@@ -954,7 +956,14 @@ class AssistantController(
     /** The Undo on screen: the player as it was before the last action done
      *  at once, for that action's card (message [index] of conversation
      *  [conversationId]). In memory only: an app restart ends it. */
-    private data class UndoEntry(val conversationId: String, val index: Int, val before: PlayerSnapshot, val atMs: Long)
+    private data class UndoEntry(
+        val conversationId: String,
+        val index: Int,
+        val before: PlayerSnapshot,
+        val atMs: Long,
+        /** The player right after the action (null: not read). */
+        val after: PlayerSnapshot? = null,
+    )
 
     @Volatile private var undoEntry: UndoEntry? = null
 
@@ -974,16 +983,23 @@ class AssistantController(
         // new question and leaves the card as it is.
         val cardIndex = asked.messages.lastIndex - 1
         val pending = asked.messages.getOrNull(cardIndex)?.card?.takeIf { it.kind == CardKind.ACTION && it.state == CardState.OPEN }
+        var isUndo = false
         val out: ActionOutcome? = if (pending != null) {
             when (actionReply(question.text)) {
                 ActionReply.Yes -> actionLock.withLock {
-                    // A tap on the card got there first: nothing runs twice.
+                    // A tap on the card got there first: nothing runs twice,
+                    // and the card keeps the state the tap gave it (this
+                    // turn's copy of the conversation still has it open).
                     val now = _state.value.conversation.takeIf { it.id == asked.id }?.messages?.getOrNull(cardIndex)?.card
                     if (now != null && now.state != CardState.OPEN) {
-                        ActionOutcome("That's already answered.", FAST_ACTION_YES)
+                        ActionOutcome("That's already answered.", FAST_ACTION_YES, mark = cardIndex to now.state)
                     } else {
                         val (ran, line) = runConfirmed(pending)
-                        ActionOutcome(line, FAST_ACTION_YES, mark = cardIndex to if (ran) CardState.DONE else CardState.FAILED)
+                        val st = if (ran) CardState.DONE else CardState.FAILED
+                        // Marked before the lock goes: a tap waiting on it
+                        // sees the card answered.
+                        markCardNow(asked.id, cardIndex, st)
+                        ActionOutcome(line, FAST_ACTION_YES, mark = cardIndex to st)
                     }
                 }
                 ActionReply.No -> ActionOutcome(ActionTexts.DECLINED, FAST_ACTION_NO, mark = cardIndex to CardState.DISMISSED)
@@ -1006,7 +1022,12 @@ class AssistantController(
             val now = runCatching { clockStyle().at(clock()) }.getOrNull() ?: return null
             // Phone chats are phone-only (owner, 2026-10-21): the house's
             // rooms and timers are never read, named or acted on here.
-            when (val ask = ActionPatterns.match(question.text, now) ?: return null) {
+            // Bare "continue" or "next one" is playback's only when the chat
+            // was just about playback, or the player is playing (or paused
+            // with no model reply since): after a story it's the model's.
+            val ask = ActionPatterns.match(question.text, now, playback = playbackContext(asked)) ?: return null
+            isUndo = ask == ActionAsk.Undo
+            when (ask) {
                 ActionAsk.House -> ActionOutcome(ActionTexts.HOUSE, FAST_ACTION_HOUSE)
                 ActionAsk.Undo -> undoNow(asked.id)
                 is ActionAsk.Do -> try {
@@ -1026,7 +1047,14 @@ class AssistantController(
         val reply = phoneMessage(outcome.text, outcome.fastPath, outcome.card).copy(firstTextMs = (nanos() - sent) / 1_000_000)
         // The Undo is in place before the reply shows: an "undo" right after
         // must find this action's, never the one before.
-        outcome.undo?.let { before -> undoEntry = UndoEntry(base.id, base.messages.size, before, clock()) }
+        // Any other action turn (a timer, an alarm, its yes or no, a house
+        // line) ends the Undo: "undo" then can't reach back past it.
+        val before = outcome.undo
+        if (before != null) {
+            undoEntry = UndoEntry(base.id, base.messages.size, before, clock(), outcome.undoAfter)
+        } else if (!isUndo) {
+            undoEntry = null
+        }
         return finishReply(base, reply)
     }
 
@@ -1153,7 +1181,22 @@ class AssistantController(
             }
             else -> return said("This version of the app can't do that.")
         }
-        return ActionOutcome(text, fp, card = PhoneCard(CardKind.UNDO, action = a, title = text), undo = before)
+        val after = runCatching { player.snapshot() }.getOrNull()
+        return ActionOutcome(text, fp, card = PhoneCard(CardKind.UNDO, action = a, title = text), undo = before, undoAfter = after)
+    }
+
+    /** Whether a bare transport word ("continue", "next one") is the
+     *  player's: the turn before was playback's, or the player is playing,
+     *  or it is paused with no model reply since the chat began or since
+     *  the last playback turn. */
+    private suspend fun playbackContext(asked: StoredConversation): Boolean {
+        val last = asked.messages.dropLast(1).lastOrNull { !it.fromUser }
+        if (last?.fastPath in PLAYBACK_FAST_PATHS) return true
+        val player = actions.player ?: return false
+        val s = runCatching { player.snapshot() }.getOrNull() ?: return false
+        if (s.playing) return true
+        // Paused: the player's unless the model spoke last (a story, a joke).
+        return !s.empty && (last == null || last.fastPath != null)
     }
 
     private fun bookMatches(b: BookChoice, q: String): Boolean {
@@ -1199,10 +1242,33 @@ class AssistantController(
     private suspend fun undoNow(conversationId: String): ActionOutcome {
         val e = undoEntry?.takeIf { it.conversationId == conversationId && clock() - it.atMs <= UNDO_WORD_MS }
             ?: return ActionOutcome(ActionTexts.NOTHING_TO_UNDO, FAST_ACTION_UNDO)
-        val player = actions.player ?: return ActionOutcome(ActionTexts.NO_PLAYER, FAST_ACTION_UNDO)
+        return when (val r = undoRun(e)) {
+            null -> ActionOutcome(undoneText(e.before), FAST_ACTION_UNDO, mark = e.index to CardState.DONE)
+            ActionTexts.HOUSE -> ActionOutcome(r, FAST_ACTION_HOUSE)
+            else -> ActionOutcome(r, FAST_ACTION_UNDO)
+        }
+    }
+
+    /** Puts [e]'s player back, under the action lock; null when it did, or
+     *  why not: casting to a room (the house's, nothing is touched), or the
+     *  player moved on since (another queue or song: never overwritten). */
+    private suspend fun undoRun(e: UndoEntry): String? = actionLock.withLock {
+        // A later action (or the other Undo) got there first.
+        if (undoEntry != e) return@withLock ActionTexts.NOTHING_TO_UNDO
+        val player = actions.player ?: return@withLock ActionTexts.NO_PLAYER
+        if (player.castingTo() != null) return@withLock ActionTexts.HOUSE
+        val after = e.after
+        if (after != null) {
+            val now = player.snapshot()
+            val moved = now.queue.map { it.uid } != after.queue.map { it.uid } || (!now.empty && now.index != after.index)
+            if (moved) {
+                undoEntry = null
+                return@withLock ActionTexts.UNDO_CHANGED
+            }
+        }
         undoEntry = null
         player.restore(e.before)
-        return ActionOutcome(undoneText(e.before), FAST_ACTION_UNDO, mark = e.index to CardState.DONE)
+        null
     }
 
     private fun undoneText(s: PlayerSnapshot): String = when {
@@ -1270,6 +1336,25 @@ class AssistantController(
         changed?.let { c -> scope.launch { withContext(NonCancellable) { if (!_state.value.replying) save(c, makeCurrent = false) } } }
     }
 
+    /** A done timer or alarm card's "open Clock": shown only when some app
+     *  opens the Clock app's timers (or alarms). */
+    fun clockOpens(card: PhoneCard): Boolean = clockShows(card)?.let { actions.clockTakes(it) } == true
+
+    private fun clockShows(card: PhoneCard): ClockIntent? = when (card.action?.kind) {
+        ActionKind.SET_TIMER -> ClockIntent.SHOW_TIMERS
+        ActionKind.SET_ALARM -> ClockIntent.SHOW_ALARMS
+        else -> null
+    }.takeIf { card.kind == CardKind.ACTION && card.state == CardState.DONE }
+
+    /** "open Clock" on a done card: the Clock app's timers or alarms. */
+    fun openClock(card: PhoneCard) {
+        val intent = clockShows(card) ?: return
+        scope.launch {
+            val opened = actions.clockTakes(intent) && runCatching { actions.clock(ClockRequest(intent, skipUi = false)) }.getOrDefault(false)
+            if (!opened) say("the Clock app didn't open")
+        }
+    }
+
     /** An action card's "cancel": nothing runs. */
     fun actionDeclined(conversationId: String, index: Int) {
         editCard(conversationId, index) { if (it.state == CardState.OPEN) it.copy(state = CardState.DISMISSED) else it }
@@ -1283,11 +1368,13 @@ class AssistantController(
                 say("that can't be undone any more")
                 return@launch
             }
-            val player = actions.player ?: return@launch
-            undoEntry = null
-            player.restore(e.before)
-            editCard(conversationId, index) { it.copy(state = CardState.DONE) }
-            say("undone")
+            when (val r = undoRun(e)) {
+                null -> {
+                    editCard(conversationId, index) { it.copy(state = CardState.DONE) }
+                    say("undone")
+                }
+                else -> say(r.lowercase().removeSuffix("."))
+            }
         }
     }
 
@@ -2021,6 +2108,13 @@ class AssistantController(
         const val FAST_ACTION_AGAIN = "action_again"
         const val FAST_ACTION_HOUSE = "action_house"
         const val FAST_ACTION_UNDO = "action_undo"
+
+        /** The replies of the player's own actions: a bare "continue" or
+         *  "next one" after one of these is playback's. */
+        private val PLAYBACK_FAST_PATHS: Set<String?> = setOf(
+            ActionKind.PLAY_MUSIC, ActionKind.PAUSE, ActionKind.RESUME, ActionKind.NEXT, ActionKind.PREVIOUS,
+            ActionKind.STOP, ActionKind.SLEEP, ActionKind.CANCEL_SLEEP, ActionKind.PLAY_BOOK,
+        ).map { "action_" + it.name.lowercase() }.toSet() + FAST_ACTION_UNDO
 
         /** The Clock app's longest timer (AlarmClock.EXTRA_LENGTH: 1 to 86400 s). */
         const val MAX_TIMER_S = 86_400

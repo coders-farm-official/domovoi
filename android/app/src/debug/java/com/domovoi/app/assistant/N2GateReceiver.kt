@@ -103,7 +103,11 @@ class N2GateReceiver : BroadcastReceiver() {
             val t = ask("Set a timer for 2 minutes called pasta")
             check("timer asks first", t.card?.kind == CardKind.ACTION && t.card?.state == CardState.OPEN, t.text)
             val y = ask("yes")
-            check("a clear yes sets it", y.text.startsWith("Done:"), y.text)
+            check("a clear yes sends it", y.text.startsWith("Sent to the Clock app:"), y.text)
+            // Review round 1: a second Clock intent right after the first
+            // was dropped. The app spaces them now (ClockPacer); the gate
+            // pauses too, as a person would.
+            delay(2_000)
             val a = ask("Set an alarm for 6:45 am")
             val ai = lastIndex()
             c.actionConfirmed(id, ai)

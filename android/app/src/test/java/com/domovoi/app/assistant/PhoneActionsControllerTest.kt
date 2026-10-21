@@ -56,9 +56,13 @@ class FakeActionHost(
     var videos: List<VideoChoice>? = emptyList(),
 ) : PhoneActionHost {
     val sent = CopyOnWriteArrayList<ClockRequest>()
+    /** How long the Clock app takes to answer (a tap and a spoken yes can
+     *  then overlap). */
+    @Volatile var clockDelayMs: Long = 0
     override fun clockTakes(intent: ClockIntent) = intent in clockIntents
     override suspend fun clock(request: ClockRequest): Boolean {
         sent += request
+        if (clockDelayMs > 0) kotlinx.coroutines.delay(clockDelayMs)
         return clockWorks
     }
     override suspend fun songs(query: String, limit: Int): List<PlayItem>? = songs?.filter {
@@ -171,7 +175,7 @@ class PhoneActionsControllerTest {
         assertEquals("Timer: 10 minutes, pasta", q.card?.title)
         assertTrue("nothing is set before the yes", host.sent.isEmpty())
         val done = c.ask("yes")
-        assertEquals("Done: a 10 minutes timer called \"pasta\" is set in the Clock app.", done.text)
+        assertEquals("Sent to the Clock app: a timer for 10 minutes called \"pasta\".", done.text)
         assertEquals(listOf(ClockRequest(ClockIntent.SET_TIMER, seconds = 600, label = "pasta")), host.sent)
         assertEquals(CardState.DONE, c.card(1)?.state)
         assertTrue("no model was loaded", engines.isEmpty())
@@ -207,7 +211,7 @@ class PhoneActionsControllerTest {
         assertEquals("Set an alarm for 7:00 AM tomorrow in the Clock app? Say yes or no.", heard.joinToString(""))
         heard.clear()
         c.speakForTest("Yes.") { heard += it }
-        assertEquals("Done: an alarm for 7:00 AM is set in the Clock app.", heard.joinToString(""))
+        assertEquals("Sent to the Clock app: an alarm for 7:00 AM.", heard.joinToString(""))
         assertEquals(ClockRequest(ClockIntent.SET_ALARM, hour = 7, minute = 0), host.sent.single())
     }
 
@@ -483,5 +487,128 @@ class PhoneActionsControllerTest {
         assertEquals("battery", c.ask("how much battery do i have").fastPath)
         assertEquals("action_set_timer", c.ask("set a timer for 1 minute").fastPath)
         assertNotNull(c.state.value.conversation.messages.last().card)
+    }
+
+    // ── Review round 2 (wf/phone-actions) ───────────────────────────────
+
+    @Test fun undoWhileCastingToARoomTouchesNothing() {
+        playing("Glass Harbor")
+        val c = controller()
+        val paused = c.ask("pause")
+        player.casting = "kitchen" // cast from the Music screen
+        player.calls.clear()
+        val r = c.ask("undo")
+        assertEquals(ActionTexts.HOUSE, r.text)
+        assertEquals(AssistantController.FAST_ACTION_HOUSE, r.fastPath)
+        assertTrue("nothing reaches the room: ${player.calls}", player.calls.isEmpty())
+        // The button too.
+        val i = c.state.value.conversation.messages.indexOf(paused)
+        c.undoTapped(c.state.value.conversation.id, i)
+        Thread.sleep(300)
+        assertTrue("the button reaches nothing either: ${player.calls}", player.calls.isEmpty())
+        assertEquals(CardState.OPEN, c.card(i)?.state)
+    }
+
+    @Test fun aTapThenASpokenYesSendOneClockRequestAndTheCardStaysDone() {
+        val c = controller()
+        c.ask("set a timer for 10 minutes")
+        val id = c.state.value.conversation.id
+        host.clockDelayMs = 300
+        c.actionConfirmed(id, 1)
+        until("the tap reached the Clock app") { host.sent.size == 1 }
+        val n = c.state.value.conversation.messages.size
+        c.send("yes")
+        until("the reply to yes", 20_000) { !c.state.value.replying && c.state.value.conversation.messages.size >= n + 2 }
+        assertEquals(CardState.DONE, c.card(1)?.state)
+        c.actionConfirmed(id, 1)
+        Thread.sleep(500)
+        assertEquals("exactly one request", 1, host.sent.size)
+        assertEquals(CardState.DONE, conversations.load(id)!!.messages[1].card?.state)
+    }
+
+    @Test fun aSpokenYesThenATapSendOneClockRequest() {
+        val c = controller()
+        c.ask("set a timer for 10 minutes")
+        val id = c.state.value.conversation.id
+        host.clockDelayMs = 300
+        val n = c.state.value.conversation.messages.size
+        c.send("yes")
+        until("the yes reached the Clock app") { host.sent.size == 1 }
+        c.actionConfirmed(id, 1)
+        until("the reply to yes", 20_000) { !c.state.value.replying && c.state.value.conversation.messages.size >= n + 2 }
+        Thread.sleep(500)
+        assertEquals("exactly one request", 1, host.sent.size)
+        assertEquals(CardState.DONE, c.card(1)?.state)
+    }
+
+    @Test fun undoAfterATimerHasNothingToUndo() {
+        playing("Glass Harbor")
+        val c = controller()
+        c.ask("pause")
+        c.ask("set a timer for 5 minutes")
+        c.ask("yes")
+        player.calls.clear()
+        assertEquals(ActionTexts.NOTHING_TO_UNDO, c.ask("undo").text)
+        assertTrue(player.calls.isEmpty())
+        assertFalse(player.state.playing)
+        // An alarm's question alone ends it too.
+        c.ask("next")
+        c.ask("set an alarm for 7 am")
+        c.ask("no")
+        assertEquals(ActionTexts.NOTHING_TO_UNDO, c.ask("undo").text)
+        assertFalse(player.calls.contains("restore"))
+    }
+
+    @Test fun undoAfterThePersonChangedThePlayerIsRefused() {
+        playing("Glass Harbor", "Paper Moon")
+        val c = controller()
+        c.ask("pause")
+        val theirs = PlayerSnapshot(listOf(song(9, "A Whole New Album")), 0, 5.0, playing = true, sleepSec = null)
+        player.state = theirs
+        val r = c.ask("undo")
+        assertEquals(ActionTexts.UNDO_CHANGED, r.text)
+        assertFalse(player.calls.contains("restore"))
+        assertEquals(theirs, player.state)
+    }
+
+    @Test fun bareContinueAfterAStoryIsTheModels() {
+        playing("Glass Harbor", "Paper Moon", playing = false)
+        host.songs = listOf(song(3, "Shake It Off"), song(4, "Let It Be"))
+        script = { _, emit -> emit("Once upon a time, a fox") }
+        val c = controller()
+        c.ask("tell me a story about a fox")
+        for (said in listOf("continue", "next one", "keep going", "let's hear it", "can I hear it", "let's hear a joke")) {
+            val r = c.ask(said)
+            assertNull("$said: ${r.text}", r.fastPath)
+        }
+        assertTrue("the player was never touched: ${player.calls}", player.calls.isEmpty())
+    }
+
+    @Test fun bareContinueIsPlaybacksAfterAPlaybackTurnOrWhilePlaying() {
+        playing("Glass Harbor", "Paper Moon")
+        val c = controller()
+        c.ask("pause")
+        assertEquals("action_resume", c.ask("continue").fastPath)
+        assertEquals("action_next", c.ask("next one").fastPath)
+        // A fresh chat while music plays: "next one" skips.
+        val d = controller()
+        d.newConversation()
+        until("a new chat") { d.state.value.conversation.messages.isEmpty() }
+        player.state = player.state.copy(index = 0, playing = true)
+        assertEquals("action_next", d.ask("next one").fastPath)
+    }
+
+    @Test fun aDoneTimerCardOpensTheClockAppsTimers() {
+        val c = controller()
+        c.ask("set a timer for 10 minutes")
+        assertFalse("not before it's done", c.clockOpens(c.card(1)!!))
+        c.ask("yes")
+        val done = c.card(1)!!
+        assertTrue(c.clockOpens(done))
+        c.openClock(done)
+        until("the Clock app's timers") { host.sent.size == 2 }
+        assertEquals(ClockRequest(ClockIntent.SHOW_TIMERS, skipUi = false), host.sent.last())
+        host.clockIntents = setOf(ClockIntent.SET_TIMER)
+        assertFalse("no button when nothing opens them", c.clockOpens(done))
     }
 }

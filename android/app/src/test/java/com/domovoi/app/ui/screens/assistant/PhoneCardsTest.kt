@@ -38,7 +38,12 @@ class PhoneCardsTest {
     @Test fun anActionCardAsksThenSaysWhatHappened() {
         val timer = PhoneCard(CardKind.ACTION, action = PhoneAction(ActionKind.SET_TIMER, seconds = 600), title = "Timer: 10 minutes")
         assertEquals(CardFace("Timer: 10 minutes", "set timer", "cancel", null), cardFace(timer))
-        assertEquals("set in the Clock app", cardFace(timer.copy(state = CardState.DONE))!!.doneLine)
+        assertEquals("sent to the Clock app", cardFace(timer.copy(state = CardState.DONE))!!.doneLine)
+        // "open Clock" on a done timer, only when some app opens the Clock app's timers.
+        assertEquals(OPEN_CLOCK, cardFace(timer.copy(state = CardState.DONE), clockOpens = true)!!.doneButton)
+        assertNull(cardFace(timer.copy(state = CardState.DONE), clockOpens = false)!!.doneButton)
+        assertNull(cardFace(timer, clockOpens = true)!!.doneButton)
+        assertNull(cardFace(timer.copy(state = CardState.DISMISSED), clockOpens = true)!!.doneButton)
         assertEquals("cancelled", cardFace(timer.copy(state = CardState.DISMISSED))!!.doneLine)
         assertEquals("asked again below", cardFace(timer.copy(state = CardState.REPLACED))!!.doneLine)
         assertEquals("the Clock app didn't take it", cardFace(timer.copy(state = CardState.FAILED))!!.doneLine)

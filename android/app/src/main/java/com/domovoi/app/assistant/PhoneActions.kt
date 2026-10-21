@@ -212,16 +212,25 @@ object ActionPatterns {
 
     private val undo = Regex("^(?:undo|undo (?:that|it|this|the last (?:one|thing))|take (?:that|it) back|put (?:that|it) back|revert (?:that|it)|go back to what i was (?:playing|listening to)|put (?:the music|my music) back)$")
 
+    /** Transport words that are also chat words ("continue" after a story,
+     *  "next one" after a joke): the player's only in a playback context. */
+    private val BARE = setOf(
+        "continue", "go on", "keep going", "carry on", "next", "next one", "next please", "skip", "skip it",
+        "back", "go back", "play", "play it", "play again",
+    )
+
     /**
      * What [text] asks of the phone's actions, or null (a question for the
      * phone's other fast paths or the model). [now]: for an alarm said with
-     * no am or pm. [rooms]: the household's room names as this phone last
-     * saw them.
+     * no am or pm. [playback]: the chat is about playback (the turn before
+     * was the player's, or music is playing); without it a bare
+     * "continue" or "next one" is left to the model.
      */
-    fun match(text: String, now: ZonedDateTime): ActionAsk? {
+    fun match(text: String, now: ZonedDateTime, playback: Boolean = true): ActionAsk? {
         if (text.length > MAX_CHARS) return null
         val t = norm(text)
         if (t.isEmpty()) return null
+        if (!playback && t in BARE) return null
         if (undo.matches(t)) return ActionAsk.Undo
         if (isHouse(t)) return ActionAsk.House
         return action(t, now)?.let { ActionAsk.Do(it) }
@@ -278,19 +287,54 @@ object ActionPatterns {
         }
         video.matchEntire(t)?.let { m ->
             val q = (m.groups["q1"] ?: m.groups["q2"])!!.value.trim().removePrefix("the ")
-            if (q.isNotEmpty() && !notMusic.containsMatchIn(q)) return PhoneAction(ActionKind.PLAY_VIDEO, query = q)
+            if (q.isNotEmpty() && !notMusic.containsMatchIn(q) && realQuery(q)) return PhoneAction(ActionKind.PLAY_VIDEO, query = q)
         }
         if (shuffleAll.matches(t)) return PhoneAction(ActionKind.PLAY_MUSIC, query = "", shuffle = true)
         (play.matchEntire(t) ?: startMix.matchEntire(t))?.let { m ->
             val what = m.groups["what"]!!.value.trim()
             if (notMusic.containsMatchIn(what) || instrument.containsMatchIn(what)) return null
             val shuffle = t.startsWith("shuffle")
-            return PhoneAction(ActionKind.PLAY_MUSIC, query = musicQuery(what), shuffle = shuffle)
+            val q = musicQuery(what)
+            // "let's hear it", "listen to your heart", "put on a sweater":
+            // better to miss a fast path than to play the wrong thing.
+            if (q.isNotEmpty() && !realQuery(q)) return null
+            return PhoneAction(ActionKind.PLAY_MUSIC, query = q, shuffle = shuffle)
         }
         return null
     }
 
     private val NOT_LABELS = setOf("me", "a", "an", "it", "this")
+
+    /** Words that are never a search by themselves ("it", "that again", "the"). */
+    private val STOPWORDS = setOf(
+        "it", "that", "this", "these", "those", "them", "the", "a", "an", "again", "one", "ones", "some", "more",
+        "there", "here", "now", "then", "too", "please", "my", "me", "us",
+    )
+
+    /** What a phone's songs or videos are never named for, said after
+     *  "play", "put on", "hear", "listen to" ("a joke", "a sweater", "the
+     *  fool", "the harmonica", "a new playlist"). */
+    private val NOT_MEDIA = setOf(
+        "joke", "jokes", "prank", "pranks", "story", "stories", "riddle", "riddles", "trick", "tricks", "game", "games",
+        "deck", "hooky", "fool", "sweater", "jumper", "coat", "jacket", "hat", "scarf", "gloves", "smile",
+        "movie", "movies", "film", "films", "video", "videos", "harmonica", "piano", "guitar", "drums", "violin", "ukulele", "flute",
+        "cello", "harp", "banjo", "trumpet", "saxophone", "sax", "clarinet", "kazoo",
+    )
+
+    /** A query worth searching the phone for: more than pronouns and
+     *  stopwords, not someone else's ("your heart"), not a purpose ("to make
+     *  me laugh"), and not a known non-media thing. */
+    internal fun realQuery(q: String): Boolean {
+        val words = q.lowercase().split(Regex("[^\\p{L}\\p{N}']+")).filter { it.isNotEmpty() }
+        if (words.isEmpty() || words.all { it in STOPWORDS }) return false
+        if (words.first() in setOf("your", "his", "her", "their", "to")) return false
+        val rest = words.dropWhile { it in STOPWORDS }
+        val head = rest.firstOrNull() ?: return false
+        // "start a new playlist", "play the long game": whole phrases only
+        // (New Order and Long Tall Sally are music).
+        if (rest == listOf("new") || rest.take(2) == listOf("long", "game")) return false
+        return head !in NOT_MEDIA
+    }
 
     /** "some relaxing music" → "relaxing", "my running playlist" →
      *  "running", "something by Miles Davis" → "miles davis", "my music" →
@@ -443,7 +487,8 @@ internal data class SpokenTime(val hour: Int, val minute: Int, val pm: Boolean?)
 
 private val HOUR_WORDS = mapOf("one" to 1, "two" to 2, "three" to 3, "four" to 4, "five" to 5, "six" to 6,
     "seven" to 7, "eight" to 8, "nine" to 9, "ten" to 10, "eleven" to 11, "twelve" to 12)
-private val HOUR = "(?:2[0-3]|1\\d|0?[1-9]|${HOUR_WORDS.keys.sortedByDescending { it.length }.joinToString("|")})"
+// "0:30" and "00:15" too (a 24-hour time past midnight), with its minutes only.
+private val HOUR = "(?:2[0-3]|1\\d|0?[1-9]|0{1,2}(?=:[0-5]\\d)|${HOUR_WORDS.keys.sortedByDescending { it.length }.joinToString("|")})"
 private const val AMPM = "(?:am|pm|a m|p m)"
 private const val PART = "(?:in the morning|in the afternoon|in the evening|at night|tonight|tomorrow morning|this morning|this evening|" +
     "tomorrow evening|tomorrow night|tomorrow afternoon|tomorrow)"
@@ -457,18 +502,25 @@ private fun hourOf(word: String): Int? = word.toIntOrNull() ?: HOUR_WORDS[word]
 internal fun parseTime(text: String): SpokenTime? {
     var t = text.trim().lowercase()
     var pm: Boolean? = null
+    var night = false
     Regex(" ?($PART)$").find(t)?.let {
         pm = when (it.groupValues[1]) {
             "in the morning", "tomorrow morning", "this morning" -> false
             "tomorrow" -> null
             else -> true
         }
+        night = it.groupValues[1] in NIGHT_PARTS
         t = t.substring(0, it.range.first).trim()
     }
     Regex(" ?($AMPM)$").find(t)?.let {
         pm = it.groupValues[1].startsWith("p")
+        night = false // "2 pm tonight": am or pm said wins (clock_time.py)
         t = t.substring(0, it.range.first).trim()
     }
+    // "12 at night", "1 tonight": the small hours after the evening, as the
+    // server's clock_time.candidate_hours reads them (12 and 1-4 at night
+    // are a.m.; 5-11 at night are p.m.).
+    fun meridiem(h12: Int): Boolean? = if (night) !(h12 == 12 || h12 <= 4) else pm
     t = t.replace(Regex(" ?o'? ?clock$"), "")
     if (t == "noon" || t == "midday") return SpokenTime(12, 0, true)
     if (t == "midnight") return SpokenTime(0, 0, false)
@@ -484,7 +536,7 @@ internal fun parseTime(text: String): SpokenTime? {
             else -> (if (h == 1) 12 else h - 1) to (60 - (parseNumber(m.groupValues[3]) ?: return null))
         }
         if (mm !in 0..59) return null
-        return withMeridiem(hh, mm, pm)
+        return withMeridiem(hh, mm, meridiem(hh))
     }
     Regex("^(\\S+?)(?::(\\d{2})| (\\d{2})| (?:oh |o )?(.+))?$").matchEntire(t)?.let { m ->
         val h = hourOf(m.groupValues[1]) ?: return null
@@ -497,10 +549,12 @@ internal fun parseTime(text: String): SpokenTime? {
         if (h > 23 || minute > 59) return null
         if (h > 12) return if (pm == false) null else SpokenTime(h, minute, true)
         if (h == 0) return SpokenTime(0, minute, false)
-        return withMeridiem(h, minute, pm)
+        return withMeridiem(h, minute, meridiem(h))
     }
     return null
 }
+
+private val NIGHT_PARTS = setOf("at night", "tonight", "tomorrow night")
 
 private fun withMeridiem(hour: Int, minute: Int, pm: Boolean?): SpokenTime = when (pm) {
     null -> SpokenTime(hour, minute, null)

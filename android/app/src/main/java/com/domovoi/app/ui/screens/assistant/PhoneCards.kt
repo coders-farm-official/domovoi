@@ -36,14 +36,26 @@ import kotlinx.coroutines.delay
 /** What a card shows: its question, its two buttons (no second one when
  *  [secondary] is empty), and once it is done, the line that replaces the
  *  buttons. Kept apart from the drawing so the JVM tests read it. */
-internal data class CardFace(val title: String, val primary: String, val secondary: String, val doneLine: String?)
+internal data class CardFace(
+    val title: String,
+    val primary: String,
+    val secondary: String,
+    val doneLine: String?,
+    /** A done card's one button ("open Clock" on a timer or alarm sent to
+     *  the Clock app; tapping it is the primary action). Null: none. */
+    val doneButton: String? = null,
+)
+
+internal const val OPEN_CLOCK = "open Clock"
 
 /** Whether an Undo card still shows its button: for [AssistantController.UNDO_SHOWN_MS]
  *  after its reply ([atMs]), and only while it is open. */
 internal fun undoShowing(card: PhoneCard, atMs: Long, nowMs: Long): Boolean =
     card.kind == CardKind.UNDO && card.state == CardState.OPEN && nowMs - atMs in 0 until AssistantController.UNDO_SHOWN_MS
 
-internal fun cardFace(card: PhoneCard): CardFace? = when (card.kind) {
+/** [clockOpens]: some app opens the Clock app's timers or alarms
+ *  (AssistantController.clockOpens); no button otherwise. */
+internal fun cardFace(card: PhoneCard, clockOpens: Boolean = false): CardFace? = when (card.kind) {
     CardKind.HANDOFF -> card.handOff?.takeIf { it.kind != HandOffKind.OTHER }?.let { h ->
         CardFace(
             title = HandOffs.cardTitle(h),
@@ -83,6 +95,9 @@ internal fun cardFace(card: PhoneCard): CardFace? = when (card.kind) {
                 CardState.REPLACED -> "asked again below"
                 CardState.FAILED -> if (a.kind == ActionKind.PLAY_VIDEO) "couldn't play it" else "the Clock app didn't take it"
             },
+            doneButton = OPEN_CLOCK.takeIf {
+                clockOpens && card.state == CardState.DONE && (a.kind == ActionKind.SET_TIMER || a.kind == ActionKind.SET_ALARM)
+            },
         )
     }
     CardKind.UNDO -> CardFace(
@@ -100,8 +115,15 @@ internal fun cardFace(card: PhoneCard): CardFace? = when (card.kind) {
  * what happened.
  */
 @Composable
-internal fun PhoneCardView(card: PhoneCard, onPrimary: () -> Unit, onSecondary: () -> Unit, enabled: Boolean = true, atMs: Long = 0L) {
-    val face = cardFace(card) ?: return
+internal fun PhoneCardView(
+    card: PhoneCard,
+    onPrimary: () -> Unit,
+    onSecondary: () -> Unit,
+    enabled: Boolean = true,
+    atMs: Long = 0L,
+    clockOpens: Boolean = false,
+) {
+    val face = cardFace(card, clockOpens) ?: return
     if (card.kind == CardKind.UNDO) return UndoChip(card, face, atMs, onPrimary, enabled)
     DomovoiCard(Modifier.widthIn(max = 480.dp).padding(top = 6.dp)) {
         Text(face.title, style = MaterialTheme.typography.titleSmall, color = Domovoi.colors.fg, modifier = Modifier.asHeading())
@@ -116,6 +138,9 @@ internal fun PhoneCardView(card: PhoneCard, onPrimary: () -> Unit, onSecondary: 
         } else {
             Column(Modifier.padding(top = 4.dp).semantics { liveRegion = LiveRegionMode.Polite }) {
                 Text(done, style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgFaint)
+                face.doneButton?.let { label ->
+                    TextButton(onClick = onPrimary, enabled = enabled) { Text(label, color = Domovoi.colors.brand) }
+                }
             }
         }
     }

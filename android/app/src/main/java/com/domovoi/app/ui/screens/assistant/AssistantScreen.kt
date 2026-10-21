@@ -37,6 +37,7 @@ import com.domovoi.app.assistant.AppPhoneContext
 import com.domovoi.app.assistant.AssistantController
 import com.domovoi.app.assistant.AssistantUi
 import com.domovoi.app.assistant.CardKind
+import com.domovoi.app.assistant.CardState
 import com.domovoi.app.assistant.HandOff
 import com.domovoi.app.assistant.HandOffLauncher
 import com.domovoi.app.assistant.HandOffs
@@ -129,6 +130,8 @@ internal class AssistantActions(
     val docFile: (String) -> java.io.File? = { null },
     /** The video a phone chat played (N2) was closed. */
     val closeVideo: () -> Unit = {},
+    /** A done timer or alarm card offers "open Clock" (some app takes it). */
+    val clockOpens: (PhoneCard) -> Boolean = { false },
 )
 
 /** The phone chat's part of Chat's conversation frame: the way back to the
@@ -331,6 +334,7 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
             closeDocProblem = actions.closeDocProblem, docFile = actions.docFile,
             cardPrimary = cards.primary, cardSecondary = cards.secondary,
             closeVideo = assistant::videoClosed,
+            clockOpens = assistant::clockOpens,
         ),
         chrome,
     )
@@ -389,7 +393,8 @@ private fun rememberCardActions(assistant: AssistantController, conversationId: 
                         waiting = index to card
                         askPermission.launch(AppPhoneContext.androidPermissions(p).toTypedArray())
                     }
-                    CardKind.ACTION -> assistant.actionConfirmed(conversationId, index)
+                    CardKind.ACTION ->
+                        if (card.state == CardState.DONE) assistant.openClock(card) else assistant.actionConfirmed(conversationId, index)
                     CardKind.UNDO -> assistant.undoTapped(conversationId, index)
                     CardKind.HANDOFF -> card.handOff?.let { h ->
                         if (h.needsContact) {

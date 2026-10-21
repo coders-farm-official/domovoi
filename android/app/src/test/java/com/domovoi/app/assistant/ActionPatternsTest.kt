@@ -216,4 +216,61 @@ class ActionPatternsTest {
     @Test fun longTextIsNeverAnAction() {
         assertNull(ActionPatterns.match("play " + "very ".repeat(40) + "long", afternoon))
     }
+
+    // ── Review round 2 (wf/phone-actions) ───────────────────────────────
+
+    @Test fun searchVerbsNeedARealQuery() {
+        listOf(
+            "let's hear it", "can I hear it", "Can I hear that again?", "let's hear a joke", "listen to your heart",
+            "listen to this joke", "put on a sweater", "put on a smile", "put on a movie", "play a joke on him",
+            "play a prank on my brother", "play hooky", "play the fool", "play the long game", "play the harmonica",
+            "start a new playlist", "play something to make me laugh", "shuffle the deck",
+            "I want to watch the video", "open the video", "Can I watch a video?", "play that video again",
+        ).forEach { assertNull(it, ActionPatterns.match(it, afternoon)) }
+        // Real queries still go.
+        mapOf(
+            "play some jazz" to "jazz", "put on velvet kites" to "velvet kites", "let me hear paper moon" to "paper moon",
+            "listen to some rock" to "rock", "play some white noise" to "white noise", "start my workout mix" to "workout",
+        ).forEach { (said, q) -> assertEquals(said, q, act(said)?.query) }
+        assertEquals("cats", act("show me a video of cats")?.query)
+        assertEquals("glacier trip", act("play the glacier trip video")?.query)
+    }
+
+    @Test fun bareTransportWordsWaitForPlayback() {
+        for (said in listOf("continue", "Continue.", "next one", "next", "keep going", "carry on", "skip", "go back", "back", "play", "play it")) {
+            assertNull(said, ActionPatterns.match(said, afternoon, playback = false))
+            assertTrue(said, ActionPatterns.match(said, afternoon) is ActionAsk.Do)
+        }
+        // Anything that names the music acts either way.
+        for (said in listOf("pause", "stop the music", "next song", "resume the music", "continue playing", "skip this song")) {
+            assertTrue(said, ActionPatterns.match(said, afternoon, playback = false) is ActionAsk.Do)
+        }
+    }
+
+    @Test fun lateNightTimesAreTheSmallHours() {
+        val cases = mapOf(
+            "set an alarm for 12 at night" to (0 to 0),
+            "set an alarm for 12 tonight" to (0 to 0),
+            "set an alarm for 1 at night" to (1 to 0),
+            "set an alarm for 2 tonight" to (2 to 0),
+            "wake me at 4 at night" to (4 to 0),
+            "set an alarm for quarter past twelve at night" to (0 to 15),
+            "set an alarm for quarter to one at night" to (0 to 45),
+            "set an alarm for 11 at night" to (23 to 0),
+            "set an alarm for 7 tonight" to (19 to 0),
+            "set an alarm for 2 pm tonight" to (14 to 0),
+            "set an alarm for 1 tomorrow night" to (1 to 0),
+            "set an alarm for 0:30" to (0 to 30),
+            "set an alarm for 00:15" to (0 to 15),
+        )
+        for (now in listOf(afternoon, earlyMorning)) {
+            cases.forEach { (said, want) ->
+                val a = act(said, now)
+                assertEquals("$said at $now", want, a?.hour to a?.minute)
+            }
+        }
+        val style = ClockStyle(la, java.util.Locale.US, is24Hour = false)
+        val q = ActionTexts.question(act("set an alarm for 12 tonight")!!, style, afternoon)
+        assertTrue(q, q.startsWith("Set an alarm for 12:00 AM"))
+    }
 }

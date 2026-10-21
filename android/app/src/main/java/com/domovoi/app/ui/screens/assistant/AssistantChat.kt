@@ -225,6 +225,7 @@ private fun ChatPane(
                                             onSecondary = { actions.cardSecondary(index, card) },
                                             enabled = !ui.replying,
                                             atMs = m.at,
+                                            clockOpens = actions.clockOpens(card),
                                         )
                                     }
                                 },

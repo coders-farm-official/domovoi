@@ -221,11 +221,39 @@ class ActionEvalTest {
         chat("How many legs does a spider have?"),
     )
 
+    /** Review round 2's near-misses (functional-testing/review-phone-actions,
+     *  probe.txt): chat words and search verbs that must not act. Scored in
+     *  a chat with no playback (the turn before was the model's, nothing is
+     *  playing): bare "continue" and "next one" are the model's there. */
+    private val reviewNear: List<String> = listOf(
+        "I set a timer for 10 minutes", "I paused the music", "I skipped that song", "I played some jazz yesterday",
+        "We listened to some jazz", "I set an alarm for 7", "I stopped the music", "I woke up at 7", "Played some jazz",
+        "Set a timer for 10 minutes yesterday", "Should I set a timer for 10 minutes?", "Did you set a timer for 10 minutes?",
+        "Can I set an alarm for 7?", "Can I hear that again?", "Can I hear it?", "Can I watch a video?", "Why did you pause?",
+        "What happens if I skip?", "Can you play the guitar?", "Can you play chess?", "Could you continue?",
+        "Is it ok to play music?", "Can I listen to music while I sleep?", "Do I need to wake up at 7?",
+        "What if I set a timer for 10 minutes?", "Don't set a timer", "Don't set a timer for 10 minutes",
+        "Please don't play music", "Do not pause", "No, don't stop the music", "Never mind the timer",
+        "Not now, play jazz later", "Don't wake me at 7", "I don't want to set an alarm for 7", "No timer for 10 minutes",
+        "No alarm for 7 please", "stop the timer", "cancel the timer", "cancel my alarm", "don't stop", "no music",
+        "She said set a timer for 5 minutes", "He told me to set an alarm for 7", "\"set a timer for 5 minutes\"",
+        "'set a timer for 5 minutes'", "What does \"play\" mean?", "The song is called play that funky music",
+        "The book says play", "My boss said stop", "Type next",
+        "continue", "Continue.", "keep going", "go on", "carry on", "next one", "next question", "another one",
+        "again", "more", "repeat that", "play it",
+        "play a joke on him", "play a prank on my brother", "put on a sweater", "put on a movie", "put on a smile",
+        "listen to your heart", "listen to this joke", "let's hear it", "let's hear a joke", "play hooky", "play the fool",
+        "start a new playlist", "play twenty questions with me", "play something to make me laugh", "play catch",
+        "play with the dog", "put on sunscreen", "start the timer", "shuffle the deck", "play the long game",
+        "play the harmonica", "put the kids to bed", "watch the kids", "watch out", "watch the game video",
+        "I want to watch the video", "open the video", "play that video again", "never mind",
+    )
+
     /** What the product's fast paths do with [text], as the bench's tool
      *  call (name and arguments); null for no action. A read the bench
      *  doesn't score (the weather's "I can't", the clock) is no action. */
-    private fun run(text: String): Pair<String, Map<String, Any?>>? {
-        when (val ask = ActionPatterns.match(text, now)) {
+    private fun run(text: String, playback: Boolean = true): Pair<String, Map<String, Any?>>? {
+        when (val ask = ActionPatterns.match(text, now, playback)) {
             is ActionAsk.Do -> return toTool(ask.action)
             ActionAsk.House, ActionAsk.Undo -> return "house_or_undo" to emptyMap()
             null -> Unit
@@ -284,6 +312,12 @@ class ActionEvalTest {
         assertTrue("actions at 95% or better\n$report", pct >= 95.0)
         assertTrue("no false action on a near-miss\n$report", falseNear.isEmpty())
         assertTrue("no false action on chit-chat\n$report", falseChat.isEmpty())
+    }
+
+    @Test fun theReviewsNearMissesNeverAct() {
+        val acted = reviewNear.mapNotNull { t -> run(t, playback = false)?.let { "\"$t\" -> $it" } }
+        println("review near-misses: ${reviewNear.size - acted.size}/${reviewNear.size} left alone")
+        assertTrue("false actions on the review's near-misses: " + acted.joinToString("; "), acted.isEmpty())
     }
 
     private companion object {

@@ -1,6 +1,9 @@
 package com.domovoi.app.assistant
 
 import com.domovoi.app.player.PlayItem
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.ZonedDateTime
 import java.time.temporal.ChronoUnit
 
@@ -24,6 +27,39 @@ data class ClockRequest(
     /** EXTRA_SKIP_UI: the Clock app sets it without opening itself. */
     val skipUi: Boolean = true,
 )
+
+/**
+ * One Clock app intent at a time from this app, at least [gapMs] apart.
+ * The emulator's Clock app (com.google.android.deskclock, review round 1)
+ * dropped a second SET_ALARM sent about 40 ms after the first, with no
+ * error: startActivity still returned. Spacing them out is the fix; the
+ * reply then says "Sent to the Clock app", since a sent intent is all the
+ * app can know.
+ */
+class ClockPacer(
+    private val gapMs: Long = GAP_MS,
+    private val nowMs: () -> Long = System::currentTimeMillis,
+    private val pause: suspend (Long) -> Unit = { delay(it) },
+) {
+    private val lock = Mutex()
+    private var lastMs: Long? = null
+
+    suspend fun <T> send(block: suspend () -> T): T = lock.withLock {
+        lastMs?.let { last ->
+            val wait = gapMs - (nowMs() - last)
+            if (wait > 0) pause(wait)
+        }
+        try {
+            block()
+        } finally {
+            lastMs = nowMs()
+        }
+    }
+
+    companion object {
+        const val GAP_MS = 600L
+    }
+}
 
 /** The player as it stands, to put back on Undo. */
 data class PlayerSnapshot(
@@ -227,17 +263,19 @@ object ActionTexts {
     }
 
     /** Said once a card's action ran. */
+    /** A timer or alarm says "Sent to the Clock app": the intent went, and
+     *  that is all the app can know (a Clock app may still drop it). */
     fun done(a: PhoneAction, style: ClockStyle, now: ZonedDateTime, videoTitle: String? = null): String = when (a.kind) {
-        ActionKind.SET_TIMER -> "Done: a ${length(a.seconds ?: 0)} timer" + (a.label?.let { " called \"$it\"" } ?: "") + " is set in the Clock app."
-        ActionKind.SET_ALARM -> "Done: an alarm for ${clockTime(a.hour ?: 0, a.minute ?: 0, style, now)}" +
-            (if (a.days.isNotEmpty()) " ${days(a.days)}" else "") + " is set in the Clock app."
+        ActionKind.SET_TIMER -> "Sent to the Clock app: a timer for ${length(a.seconds ?: 0)}" + (a.label?.let { " called \"$it\"" } ?: "") + "."
+        ActionKind.SET_ALARM -> "Sent to the Clock app: an alarm for ${clockTime(a.hour ?: 0, a.minute ?: 0, style, now)}" +
+            (if (a.days.isNotEmpty()) " ${days(a.days)}" else "") + "."
         ActionKind.PLAY_VIDEO -> "Playing \"${videoTitle ?: a.query}\"."
         else -> "Done."
     }
 
     /** The card's line once it is done. */
     fun doneLine(a: PhoneAction): String = when (a.kind) {
-        ActionKind.SET_TIMER, ActionKind.SET_ALARM -> "set in the Clock app"
+        ActionKind.SET_TIMER, ActionKind.SET_ALARM -> "sent to the Clock app"
         ActionKind.PLAY_VIDEO -> "playing"
         else -> "done"
     }
@@ -261,6 +299,7 @@ object ActionTexts {
     const val HOUSE = "That's a house thing — ask in a home-server chat."
 
     const val NOTHING_TO_UNDO = "There's nothing to undo."
+    const val UNDO_CHANGED = "The player has changed since then, so I left it as it is."
     const val NOTHING_PLAYING = "Nothing is playing on this phone."
     const val NO_PLAYER = "This phone's player isn't available."
     const val NO_MUSIC_PERMISSION = "I can't see this phone's music without the music and audio permission; open Music on this phone once to allow it."

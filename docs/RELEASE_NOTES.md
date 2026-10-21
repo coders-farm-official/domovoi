@@ -112,15 +112,21 @@ Android app only; nothing to run on the server.
     every weekday". Each asks first ("Set a timer for 10 minutes in the
     Clock app?"), on a card or, in a voice turn, by yes or no; any "no",
     "wait" or "cancel" in the answer cancels, and only a clear yes sets it.
-    "Wake me a bit before seven" asks "How about 6:45 AM?". "Show my
-    timers" and "show my alarms" open the Clock app.
+    "Wake me a bit before seven" asks "How about 6:45 AM?"; "12 tonight"
+    and "1 at night" are the small hours. Once sent, the reply says "Sent
+    to the Clock app" (the Clock app doesn't tell the phone it took it),
+    and the card offers **open Clock**. "Show my timers" and "show my
+    alarms" open the Clock app.
   * **The phone's player**: "play some jazz", "shuffle my music", "pause",
     "resume", "next", "go back", "stop", "set a sleep timer for 20 minutes"
     (playback's sleep timer, never a Clock timer), "continue my book" (a
     book saved on the phone, at its place). These run at once with
     **Undo** under the reply for 10 seconds; saying or typing "undo" in
     the next minute works too, and puts back the queue, the song and the
-    place.
+    place. Undo is for the last action only: after a timer or an alarm,
+    after you changed the music yourself, or while the phone casts to a
+    room, it leaves the player alone. A bare "continue" or "next one"
+    right after a story or a joke is for the chat, not the player.
   * **A video saved on the phone** ("play the glacier trip video") asks
     first, then plays over the chat.
 * An action no app on the phone can do is not offered (no Clock app: the
