@@ -251,8 +251,132 @@ const ChatDocs = (() => {
     );
   };
 
+  /* The honest heads-up (documents plan D3). The server's rules decide
+   * when a card shows, from the measured weak spots; this browser keeps
+   * only its own answers to them, sent with every message: the master
+   * switch (Settings → Chat) and the kinds it said "don't warn me about
+   * this again" for. */
+  const HU_KEY = 'domovoi.chat.headsUp';
+  const HU_EVENT = 'domovoi-heads-up';
+  const headsUpPrefs = () => {
+    try {
+      const v = JSON.parse(localStorage.getItem(HU_KEY) || '{}') || {};
+      const skip = Array.isArray(v.skip) ? v.skip.filter((k) => typeof k === 'string').slice(0, 16) : [];
+      return { off: !!v.off, skip };
+    } catch { return { off: false, skip: [] }; }
+  };
+  const huWrite = (v) => {
+    try { localStorage.setItem(HU_KEY, JSON.stringify(v)); } catch { /* not kept: the default stands */ }
+    try { window.dispatchEvent(new Event(HU_EVENT)); } catch { /* no window events */ }
+  };
+  const setHeadsUpOff = (off) => huWrite({ ...headsUpPrefs(), off: !!off });
+  const neverWarn = (kind) => {
+    const v = headsUpPrefs();
+    huWrite({ ...v, skip: v.skip.includes(kind) ? v.skip : [...v.skip, kind] });
+  };
+  const warnAgain = (kind) => {
+    const v = headsUpPrefs();
+    huWrite({ ...v, skip: v.skip.filter((k) => k !== kind) });
+  };
+  const useHeadsUpPrefs = () => {
+    const [v, setV] = React.useState(headsUpPrefs);
+    React.useEffect(() => {
+      const on = () => setV(headsUpPrefs());
+      window.addEventListener(HU_EVENT, on);
+      window.addEventListener('storage', on);
+      return () => { window.removeEventListener(HU_EVENT, on); window.removeEventListener('storage', on); };
+    }, []);
+    return v;
+  };
+  // What each kind is about, for "won't warn about …" and Settings.
+  const HU_KINDS = {
+    rewrite: 'rewriting a whole document', compare: 'comparing parts of a long document',
+    calc: 'exact sums, averages and dates', long: 'long summaries that take a while',
+    scanned: 'scanned pages', language: 'languages not tested yet', blurry: 'blurry photos',
+    handwriting: 'handwriting',
+  };
+
+  /* A heads-up card: the weakness in a sentence, the options that work
+   * here, and "don't warn me about this again". Once an option is picked
+   * (here or on another device) it shows the pick. */
+  const HeadsUpCard = ({ card, onPick, busy }) => {
+    const prefs = useHeadsUpPrefs();
+    if (!card) return null;
+    const chosen = card.chosen;
+    const label = (id) => ((card.options || []).find((o) => o.id === id) || {}).label || id;
+    const silenced = prefs.skip.includes(card.kind);
+    return (
+      <div className="chat-headsup" role="group" aria-label="heads-up">
+        <div className="chat-headsup-head mono"><Icon name="alert-triangle" size={13}/> heads-up</div>
+        <div className="chat-headsup-text">{card.text}</div>
+        {chosen ? (
+          <div className="chat-headsup-chosen mono">{label(chosen)}</div>
+        ) : (
+          <div className="chat-headsup-options">
+            {(card.options || []).map((o, i) => (
+              <Button key={o.id} variant={i === 0 ? 'primary' : 'secondary'} disabled={busy || !onPick}
+                      onClick={() => onPick(o.id)}>{o.label}</Button>
+            ))}
+          </div>
+        )}
+        {!chosen && (silenced ? (
+          <span className="chat-headsup-never mono" role="status">
+            no more heads-ups about {HU_KINDS[card.kind] || 'this'} in this browser
+          </span>
+        ) : (
+          <button type="button" className="chat-headsup-link" onClick={() => neverWarn(card.kind)}>
+            {card.never_label || "don't warn me about this again"}
+          </button>
+        ))}
+      </div>
+    );
+  };
+
+  /* Settings → Chat (Chat & AI): the master switch and the kinds this
+   * browser silenced. Kept in this browser; another phone or browser
+   * keeps its own. */
+  const HeadsUpPanel = () => {
+    const prefs = useHeadsUpPrefs();
+    const ai = (typeof useAiFeatures === 'function' ? useAiFeatures : alwaysOn)();
+    return (
+      <Card title="heads-up before shaky results"
+            sub="Domovoi says first when a task is one it is measured to be weak at — a whole-document rewrite, an exact sum, scanned pages — and offers what works. In this browser.">
+        <div className="chat-headsup-settings">
+          <label className="chat-headsup-switch">
+            <input type="checkbox" checked={!prefs.off} disabled={!ai}
+                   onChange={(e) => setHeadsUpOff(!e.target.checked)}
+                   aria-label="heads-up before shaky results"/>
+            <span>{prefs.off ? 'off' : 'on'}</span>
+          </label>
+          {!ai && <div className="chat-doc-note">AI chat and questions are off for this home, so there are no heads-ups.</div>}
+          {ai && prefs.off && (
+            <div className="chat-doc-note">
+              Off: exact sums and scanned pages still get a one-line note under the answer.
+            </div>
+          )}
+          {ai && !prefs.off && prefs.skip.length > 0 && (
+            <div className="chat-headsup-skipped">
+              <div className="chat-doc-note">not warned about in this browser:</div>
+              {prefs.skip.map((k) => (
+                <div key={k} className="chat-headsup-skip-row">
+                  <span>{HU_KINDS[k] || k}</span>
+                  <Button onClick={() => warnAgain(k)}>warn again</Button>
+                </div>
+              ))}
+            </div>
+          )}
+          <a className="chat-note-link" href="#manual/good-and-not">what Domovoi is good and not so good at</a>
+        </div>
+      </Card>
+    );
+  };
+
   return { ACCEPT, READS, isPicture, upload, refusalText, fileUrl, DocChip, DocAnswer, PassageSheet,
-           AskButton, extOf, JobProgress, JobInterrupted, isLive, stopJob, resumeJob };
+           AskButton, extOf, JobProgress, JobInterrupted, isLive, stopJob, resumeJob,
+           HeadsUpCard, HeadsUpPanel, headsUpPrefs, neverWarn, warnAgain, setHeadsUpOff };
 })();
 
 window.ChatDocs = ChatDocs;
+// Settings → Chat & AI → Chat (settings.jsx's optional "chat" section).
+window.DomovoiSettingsSections = window.DomovoiSettingsSections || {};
+window.DomovoiSettingsSections.chat = { Panel: ChatDocs.HeadsUpPanel };

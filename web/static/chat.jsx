@@ -40,13 +40,15 @@ const CHAT_AI_OFF_TEXT = 'AI chat is turned off on your home server';
  * onDelta(text) per chunk and resolving with the final done payload. A
  * long document's job (chat_doc_jobs.py) sends `job` and `progress`
  * events first: onJob(view) for each. */
-const chatSendStream = async (threadId, body, onDelta, onStatus, onJob) => {
+const chatSendStream = async (threadId, body, onDelta, onStatus, onJob, path) => {
   // Streams the reply, so it needs the Response itself rather than parsed
   // JSON — apiFetchRaw, not apiFetch. Going through the helper is what
   // gets an unpaired browser the "pair this browser" prompt and one
   // replay of the message, instead of a red bubble it can do nothing
   // about; a bare fetch() sends the same headers and none of that.
-  const r = await apiFetchRaw(`/api/chat/threads/${threadId}/messages`, {
+  // path: another route that streams a reply the same way (the pick on a
+  // heads-up card, POST .../heads-up).
+  const r = await apiFetchRaw(path || `/api/chat/threads/${threadId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -56,6 +58,14 @@ const chatSendStream = async (threadId, body, onDelta, onStatus, onJob) => {
   // plainly instead of "409 Conflict" or an empty bubble.
   if (r.status === 409 && r.headers && r.headers.get && r.headers.get('X-Domovoi-Refusal') === 'ai-off') {
     throw new Error(CHAT_AI_OFF_TEXT);
+  }
+  // A refusal with a sentence (a heads-up card answered already, a newer
+  // message after it): say it, don't read it as a stream.
+  if (r.status >= 400 && r.headers && r.headers.get
+      && String(r.headers.get('content-type') || '').includes('application/json')) {
+    let detail = '';
+    try { detail = (await r.json()).detail || ''; } catch { /* no body */ }
+    throw new Error(detail || `${r.status} ${r.statusText}`);
   }
   if (!r.body) throw new Error(`${r.status} ${r.statusText}`);
   const reader = r.body.getReader();
@@ -292,7 +302,7 @@ const ChatDetailsDialog = ({ m, threadId, onCopy, onClose }) => {
 // A touch held this long opens the menu (iOS fires no contextmenu event).
 const CHAT_LONG_PRESS_MS = 500;
 
-const ChatMessage = ({ m, threadId, onCopy, admin, stoppedJob, onCarryOn }) => {
+const ChatMessage = ({ m, threadId, onCopy, admin, stoppedJob, onCarryOn, onHeadsUp, busy }) => {
   const isUser = m.role === 'user';
   const [menuAt, setMenuAt] = React.useState(null);
   const [details, setDetails] = React.useState(false);
@@ -332,6 +342,7 @@ const ChatMessage = ({ m, threadId, onCopy, admin, stoppedJob, onCarryOn }) => {
     setMenuAt({ x: isUser ? r.right - 160 : r.left, y: r.bottom + 4 });
   };
 
+  const headsUp = !isUser && m.doc && m.doc.mode === 'heads_up' ? m.doc.heads_up : null;
   const stamp = ChatDetails.stamp(m.created_at);
   const line = [stamp, !isUser && !m.pending ? m.model : null].filter(Boolean).join(' · ');
   // Who Domovoi heard, on a message said into the app's chat mic.
@@ -368,7 +379,14 @@ const ChatMessage = ({ m, threadId, onCopy, admin, stoppedJob, onCarryOn }) => {
           <span style={{ flexShrink: 0, marginTop: 3 }}><DomovoiGlyph size={14}/></span>
           <div {...bubbleEvents}
                style={{ fontSize: 13, lineHeight: 1.6, overflowWrap: 'break-word', minWidth: 0 }}>
-            <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(m.content || '') }}/>
+            {headsUp ? (
+              // A heads-up card is the reply until an option is picked
+              // (documents plan D3): its own sentence and buttons.
+              <ChatDocs.HeadsUpCard card={headsUp} busy={busy}
+                                    onPick={onHeadsUp ? (option) => onHeadsUp(m, option) : null}/>
+            ) : (
+              <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(m.content || '') }}/>
+            )}
             {m.pending && m.status === 'checking' && !m.content && (
               <span className="mono chat-doc-checking">reading the passages and checking the answer…</span>
             )}
@@ -376,7 +394,7 @@ const ChatMessage = ({ m, threadId, onCopy, admin, stoppedJob, onCarryOn }) => {
               <ChatDocs.JobProgress job={m.job} onStop={ChatDocs.isLive(m.job) ? ChatDocs.stopJob : null}/>
             )}
             {m.pending && !m.job && <span className="mono" style={{ color: 'var(--fg-faint)' }}>▍</span>}
-            {!m.pending && <ChatDocs.DocAnswer doc={m.doc} stoppedJob={stoppedJob} onCarryOn={onCarryOn}/>}
+            {!m.pending && !headsUp && <ChatDocs.DocAnswer doc={m.doc} stoppedJob={stoppedJob} onCarryOn={onCarryOn}/>}
             <ChatReplyError m={m} admin={admin}/>
           </div>
         </div>
@@ -751,8 +769,9 @@ const ChatPageMain = () => {
     ]);
     try {
       // device_id: which install sent it, for the message's details (V017).
+      // heads_up: this browser's heads-up switch and silenced kinds (D3).
       const body = { content, images, documents: docs.map((d) => ({ token: d.token })),
-                     device_id: DeviceIdentity.id() };
+                     device_id: DeviceIdentity.id(), heads_up: ChatDocs.headsUpPrefs() };
       const { done, errorDetail, errorCode, errorModel } = await chatSendStream(id, body, (delta) => {
         setMessages((cur) => cur.map((m) =>
           m.id === 'pending' ? { ...m, content: m.content + delta } : m));
@@ -782,6 +801,47 @@ const ChatPageMain = () => {
     if (id != null) {
       try { setJobs((await apiGet(`/api/chat/threads/${id}/messages`)).jobs || []); } catch { /* next open */ }
     }
+  };
+
+  // A pick on a heads-up card (documents plan D3): the card keeps it, and
+  // the question before it is answered that way, streamed like a send.
+  // "choose another" answers nothing: the paperclip opens.
+  const pickHeadsUp = async (card, option) => {
+    const id = threadId;
+    if (sending || id == null || typeof card.id !== 'number') return;
+    const body = { message_id: card.id, option, heads_up: ChatDocs.headsUpPrefs() };
+    const chose = (cur) => cur.map((m) => (m.id === card.id && m.doc && m.doc.heads_up
+      ? { ...m, doc: { ...m.doc, heads_up: { ...m.doc.heads_up, chosen: option } } } : m));
+    if (option === 'choose_another') {
+      try {
+        await apiPost(`/api/chat/threads/${id}/heads-up`, body);
+        setMessages(chose);
+        if (fileRef.current) fileRef.current.click();
+      } catch (e) { fire(ChatDocs.refusalText(e)); }
+      return;
+    }
+    setSending(true);
+    sendingRef.current = true;
+    setMessages((cur) => [...chose(cur), { id: 'pending', role: 'assistant', content: '', pending: true }]);
+    try {
+      const { done, errorDetail, errorCode, errorModel } = await chatSendStream(id, body, (delta) => {
+        setMessages((cur) => cur.map((m) => (m.id === 'pending' ? { ...m, content: m.content + delta } : m)));
+      }, (state) => {
+        setMessages((cur) => cur.map((m) => (m.id === 'pending' ? { ...m, status: state } : m)));
+      }, (job) => {
+        setMessages((cur) => cur.map((m) => (m.id === 'pending' ? { ...m, job } : m)));
+      }, `/api/chat/threads/${id}/heads-up`);
+      setMessages((cur) => cur.map((m) => (m.id === 'pending'
+        ? (done || { ...m, pending: false, error: errorDetail, error_code: errorCode, model: errorModel || m.model })
+        : m)));
+    } catch (e) {
+      // Refused (answered already, a newer message): the thread as it is.
+      setMessages((cur) => cur.filter((m) => m.id !== 'pending'));
+      fire(String(e.message || e));
+    }
+    setSending(false);
+    sendingRef.current = false;
+    loadMessages(id);
   };
 
   // A screenshot pasted into the box attaches like the paperclip's
@@ -917,6 +977,7 @@ const ChatPageMain = () => {
                      : null}/>
           ) : messages.map((m) => (
             <ChatMessage key={m.id} m={m} threadId={threadId} onCopy={copyMessage} admin={admin}
+                         onHeadsUp={pickHeadsUp} busy={sending}
                          stoppedJob={m.doc && m.doc.job && carryOnAt[m.doc.job.id] === m.id
                            ? stoppedJobs.find((j) => j.id === m.doc.job.id) : null}
                          onCarryOn={carryOn}/>
