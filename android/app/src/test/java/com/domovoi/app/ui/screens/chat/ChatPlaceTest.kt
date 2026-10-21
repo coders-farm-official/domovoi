@@ -141,6 +141,12 @@ class ChatPlaceTest {
         assertEquals("text chat with Domovoi — on this phone, or on your home server", chatSubtitle(listOf(Server, Phone)))
         assertEquals("text chat with Domovoi on this phone — no server, no internet", chatSubtitle(listOf(Phone)))
         assertEquals("text chat with Domovoi — runs on your own hardware", chatSubtitle(listOf(Server)))
+        // Built from the places that can START a chat: a phone under the
+        // memory floor lists its (no) chats but is never promised.
+        val small = home.copy(phoneCapable = false)
+        assertEquals("text chat with Domovoi — runs on your own hardware", chatSubtitle(startablePlaces(small)))
+        assertEquals("text chat with Domovoi", chatSubtitle(startablePlaces(small.copy(away = true))))
+        assertFalse(chatSubtitle(startablePlaces(small)).contains("phone"))
         assertTrue(emptyHint(listOf(Server, Phone), null)!!.contains("vision model"))
         assertTrue(emptyHint(listOf(Phone), null)!!.contains("runs on this phone"))
         assertEquals("why", emptyHint(emptyList(), "why"))

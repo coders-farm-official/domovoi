@@ -46,8 +46,12 @@ object PhoneBar {
         if (raw.isNullOrBlank()) return raw
         val names = runCatching { Json.decodeFromString(codec, raw) }.getOrNull() ?: return raw
         if (RETIRED_ASSISTANT !in names) return raw
-        val moved = names.map { if (it == RETIRED_ASSISTANT) Route.Chat.name else it }.distinct()
-        return Json.encodeToString(codec, moved)
+        val moved = if (Route.Chat.name in names) {
+            names.filter { it != RETIRED_ASSISTANT }
+        } else {
+            names.map { if (it == RETIRED_ASSISTANT) Route.Chat.name else it }
+        }
+        return Json.encodeToString(codec, moved.distinct())
     }
 
     /** A saved bar, or null (never saved, or unreadable: the default). Names

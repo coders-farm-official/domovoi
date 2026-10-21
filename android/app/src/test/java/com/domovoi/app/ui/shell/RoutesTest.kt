@@ -5,7 +5,6 @@ import com.domovoi.app.net.CAP_STATIONS
 import com.domovoi.app.net.Capabilities
 import com.domovoi.app.net.CapabilityPlugin
 import com.domovoi.app.net.FEATURE_AI
-import com.domovoi.app.net.serverChatOn
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -142,9 +141,12 @@ class RoutesTest {
     @Test fun chatStaysWhileOnePlaceWorks() {
         val aiOff = Capabilities(features = mapOf(FEATURE_AI to false))
         val aiOn = Capabilities(features = mapOf(FEATURE_AI to true))
-        assertTrue(Capabilities.EMPTY.serverChatOn())
-        assertTrue(aiOn.serverChatOn())
-        assertFalse(aiOff.serverChatOn())
+        assertTrue(Capabilities.EMPTY.aiEnabled)
+        assertTrue(aiOn.aiEnabled)
+        assertFalse(aiOff.aiEnabled)
+        assertTrue(chatAvailable(aiOff, phoneCanChat = true))
+        assertFalse(chatAvailable(aiOff, phoneCanChat = false))
+        assertTrue(chatAvailable(aiOn, phoneCanChat = false))
 
         onDeviceAssistant = { true }
         assertTrue(Route.Chat.visibleWith(aiOff))
@@ -177,5 +179,22 @@ class RoutesTest {
         assertEquals(listOf(Route.Music, Route.Videos, Route.Files), localTabs(assistant = false))
         // On the JVM there is no engine: the default asks AssistantSupport.
         assertFalse(Route.Chat in localTabs())
+    }
+
+    /** Review round 1: a 64-bit phone under the memory floor can't chat on
+     *  itself, so it adds no Chat of its own: none in the local shell, and
+     *  none in the workspace while the server's AI is off. */
+    @Test fun aPhoneThatCannotRunTheModelAddsNoChat() {
+        val small = com.domovoi.app.assistant.PhoneMemory(6L shl 30, lowRamDevice = false)
+        val big = com.domovoi.app.assistant.PhoneMemory(8L shl 30, lowRamDevice = false)
+        val lowRam = com.domovoi.app.assistant.PhoneMemory(8L shl 30, lowRamDevice = true)
+        assertFalse(com.domovoi.app.assistant.AssistantSupport.canChat(small))
+        assertFalse(com.domovoi.app.assistant.AssistantSupport.canChat(lowRam))
+        assertTrue(com.domovoi.app.assistant.AssistantSupport.canChat(big))
+        // The hook is that whole answer (engine and memory): false here.
+        onDeviceAssistant = { false }
+        assertEquals(listOf(Route.Music, Route.Videos, Route.Files), localTabs())
+        assertFalse(Route.Chat.visibleWith(Capabilities(features = mapOf(FEATURE_AI to false))))
+        assertTrue(Route.Chat.visibleWith(Capabilities.EMPTY))
     }
 }

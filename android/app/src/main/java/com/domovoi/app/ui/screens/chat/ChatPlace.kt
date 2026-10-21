@@ -83,7 +83,7 @@ data class PlaceFacts(
     /** The local shell: no home server in reach (or none paired, or the
      *  person chose this phone's media). */
     val away: Boolean,
-    /** The server allows chat ([com.domovoi.app.net.serverChatOn]: its AI
+    /** The server allows chat ([com.domovoi.app.net.Capabilities.aiEnabled]: its AI
      *  features aren't off). */
     val serverChatOn: Boolean,
     /** This install has the on-device engine (64-bit phone and APK). */

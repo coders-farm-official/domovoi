@@ -27,6 +27,10 @@ class DomovoiApplication : Application(), ImageLoaderFactory {
         // Before anything can make a request: in room mode the household
         // token goes on none (net/HouseholdLock.kt).
         HouseholdLock.roomModeActive = RoomStore.isActive(this)
+        // Whether this phone has the memory for the on-device chat model:
+        // decides whether Chat is offered where no server can chat.
+        com.domovoi.app.assistant.AssistantSupport.memory =
+            runCatching { com.domovoi.app.assistant.DeviceTiers.read(this) }.getOrNull()
         container = AppContainer(this)
         // A new network — a different default, the Wi-Fi under a VPN, new
         // addresses on the same one — means the saved server proves itself

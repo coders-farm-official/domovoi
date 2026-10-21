@@ -129,7 +129,8 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
     val toast = LocalToast.current
     val context = LocalContext.current
     val ui by assistant.state.collectAsState()
-    LaunchedEffect(assistant) { assistant.messages.collect { toast(it) } }
+    // The controller's one-line news is toasted by ChatScreen, which is
+    // always around this view (and around the list, where a delete happens).
 
     // The conversation this view is for. The controller holds one at a time
     // and switches asynchronously, so until it has switched the view shows
