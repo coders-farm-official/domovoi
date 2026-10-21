@@ -62,6 +62,15 @@ interface LlmEngine : AutoCloseable {
     /** Stops a reply in progress; a no-op when there is none. */
     fun cancel()
 
+    /**
+     * A short answer to [prompt] in a conversation of its own (a chat's
+     * title), at most [maxTokens] long, leaving the kept conversation as it
+     * is (N0, 2026-10-21: it survives one, and continues without re-reading).
+     * Cancelling the caller stops it. Null: this engine doesn't do this, or
+     * isn't loaded.
+     */
+    suspend fun oneShot(system: String, prompt: String, maxTokens: Int): String? = null
+
     /** Counters for the last finished reply, or null. */
     fun lastStats(): LlmStats? = null
 

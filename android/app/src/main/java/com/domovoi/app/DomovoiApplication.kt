@@ -5,6 +5,7 @@ import android.content.pm.ApplicationInfo
 import android.os.StrictMode
 import coil.ImageLoader
 import coil.ImageLoaderFactory
+import com.domovoi.app.alerts.HelpNotifier
 import com.domovoi.app.alerts.IncidentNotifier
 import com.domovoi.app.alerts.TimerNotifier
 import com.domovoi.app.diagnostics.Diagnostics
@@ -24,6 +25,7 @@ class DomovoiApplication : Application(), ImageLoaderFactory {
         if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) watchMainThreadIo()
         TimerNotifier.createChannel(this)
         IncidentNotifier.createChannel(this)
+        HelpNotifier.createChannel(this)
         // Before anything can make a request: in room mode the household
         // token goes on none (net/HouseholdLock.kt).
         HouseholdLock.roomModeActive = RoomStore.isActive(this)
@@ -50,6 +52,7 @@ class DomovoiApplication : Application(), ImageLoaderFactory {
             container.bus.start()
             container.alerts.start()
             container.containerAlerts.start()
+            container.helpAlerts.start()
         }
         // Earlier crashes and Android's exit history, read off the main thread.
         Diagnostics.onLaunch(this)

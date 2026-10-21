@@ -2992,7 +2992,7 @@
           "devices"
         ],
         "summary": "Android App For Household Phones",
-        "description": "Settings \u2192 Devices \u2192 \"get the Domovoi app\": the server's join page\nwithout a room code (``join_url``, ``<core>/join``, for the card's QR\ncode and link) and what that page will offer, from the core's public\n``GET /v1/android-app`` (``release`` null before the first release;\n``ready`` once the server holds a checked copy of every APK).\n\nOpen, like the page it points at: a phone that has not joined the\nhousehold yet opens it. ``join_url`` is null with ``join_problem``\nwhen this server's address is not one a phone on the home network can\nreach (a box that found no LAN address).",
+        "description": "Settings \u2192 Phones & browsers \u2192 \"get the Domovoi app\": the server's join page\nwithout a room code (``join_url``, ``<core>/join``, for the card's QR\ncode and link) and what that page will offer, from the core's public\n``GET /v1/android-app`` (``release`` null before the first release;\n``ready`` once the server holds a checked copy of every APK).\n\nOpen, like the page it points at: a phone that has not joined the\nhousehold yet opens it. ``join_url`` is null with ``join_problem``\nwhen this server's address is not one a phone on the home network can\nreach (a box that found no LAN address).",
         "operationId": "android_app_for_household_phones_api_devices_android_app_get",
         "responses": {
           "200": {
@@ -6789,7 +6789,7 @@
           "config"
         ],
         "summary": "Acoustid Key Test",
-        "description": "Settings \u2192 Configuration's \"test the key\": one AcoustID lookup with\nthe typed key, else the saved one. Proxy of the core's\n``POST /v1/admin/config/acoustid-test`` \u2192\n``{result: works|refused|unreachable|unavailable, detail,\nfingerprints}``; 409 when the internet answer is No (nothing sent),\n422 with no key to test. The key is never echoed or logged.",
+        "description": "Settings \u2192 Advanced's \"test the key\": one AcoustID lookup with\nthe typed key, else the saved one. Proxy of the core's\n``POST /v1/admin/config/acoustid-test`` \u2192\n``{result: works|refused|unreachable|unavailable, detail,\nfingerprints}``; 409 when the internet answer is No (nothing sent),\n422 with no key to test. The key is never echoed or logged.",
         "operationId": "acoustid_key_test_api_config_acoustid_test_post",
         "requestBody": {
           "content": {
@@ -6929,7 +6929,7 @@
           "config"
         ],
         "summary": "Restart Version",
-        "description": "Bounce the Domovoi services so pulled code actually loads, or just\nrestart them (Settings \u2192 Version's \"Restart Domovoi\"); where\ndomovoi-update.service is installed, start it instead: sync, migrate,\nrestart, roll back on failure, and with nothing new to apply only the\nrestart and its health check.\n\nAdmin-gated at both hops. The response comes back before the restart\nfires, so a client that then sees the connection drop should treat that\nas the restart succeeding, not as an error. Hosts without the sudoers\ngrant return ``ok: false`` with the reason instead, and so does a press\nwhile a restart or update is already under way (``in_progress: true``):\nthe client follows that one rather than reporting a failure.",
+        "description": "Bounce the Domovoi services so pulled code actually loads, or just\nrestart them (Settings \u2192 About & updates's \"Restart Domovoi\"); where\ndomovoi-update.service is installed, start it instead: sync, migrate,\nrestart, roll back on failure, and with nothing new to apply only the\nrestart and its health check.\n\nAdmin-gated at both hops. The response comes back before the restart\nfires, so a client that then sees the connection drop should treat that\nas the restart succeeding, not as an error. Hosts without the sudoers\ngrant return ``ok: false`` with the reason instead, and so does a press\nwhile a restart or update is already under way (``in_progress: true``):\nthe client follows that one rather than reporting a failure.",
         "operationId": "restart_version_api_config_version_restart_post",
         "responses": {
           "200": {
@@ -7007,7 +7007,7 @@
           "config"
         ],
         "summary": "Switch Version Channel",
-        "description": "Settings \u2192 Version's channel: follow ``stable`` (releases only) or\n``main`` (every change) from now on. HEAD never moves; the check and\nthe pull then compare with, and move to, that branch. Proxy of the\ncore's ``POST /v1/admin/version/channel`` \u2192\n``{ok, changed, channel, error}``.",
+        "description": "Settings \u2192 About & updates's channel: follow ``stable`` (releases only) or\n``main`` (every change) from now on. HEAD never moves; the check and\nthe pull then compare with, and move to, that branch. Proxy of the\ncore's ``POST /v1/admin/version/channel`` \u2192\n``{ok, changed, channel, error}``.",
         "operationId": "switch_version_channel_api_config_version_channel_post",
         "requestBody": {
           "content": {
@@ -13299,10 +13299,37 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "boolean",
-              "default": false,
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "true: the archived threads; false: the others. Without a search the default is false; a search (`q`) looks in both unless this says which.",
               "title": "Archived"
-            }
+            },
+            "description": "true: the archived threads; false: the others. Without a search the default is false; a search (`q`) looks in both unless this says which."
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Search: threads whose title or any message contains this (case ignored), newest first, at most 100, each with `match_snippet` (the words around the first match in a message).",
+              "title": "Q"
+            },
+            "description": "Search: threads whose title or any message contains this (case ignored), newest first, at most 100, each with `match_snippet` (the words around the first match in a message)."
           }
         ],
         "responses": {
@@ -13378,6 +13405,7 @@
           "chat"
         ],
         "summary": "Patch Thread",
+        "description": "Rename and/or archive a thread. A title set here is the person's\n(``title_by_user``): the model's title job never writes over it. A\nblank title is refused (400).",
         "operationId": "patch_thread_api_chat_threads__thread_id__patch",
         "parameters": [
           {
@@ -13517,7 +13545,7 @@
           "chat"
         ],
         "summary": "Send Message",
-        "description": "Persist the user turn, stream the assistant reply as SSE, persist the\nassistant turn at stream end. Events:\n\n  ``event: delta``  data: {\"text\": \"...\"}\n  ``event: done``   data: {<the persisted assistant message row>}\n  ``event: error``  data: {\"detail\": \"...\", \"code\": \"...\", \"model\": \"...\"}\n                    (also persisted on the row: ``error``, ``stats.error_code``)\n\nA message with pictures whose vision model isn't installed \u2014 or none\nis set \u2014 gets its answer up front: the user turn is kept, the reply is\nthe refusal (``vision_model_missing``) and Ollama is never asked. When\nOllama can't be asked whether the model is there, the send goes ahead\nand a failure is reported as it happens.",
+        "description": "Persist the user turn, stream the assistant reply as SSE, persist the\nassistant turn at stream end. Events:\n\n  ``event: delta``  data: {\"text\": \"...\"}\n  ``event: done``   data: {<the persisted assistant message row>}\n  ``event: error``  data: {\"detail\": \"...\", \"code\": \"...\", \"model\": \"...\"}\n                    (also persisted on the row: ``error``, ``stats.error_code``)\n\nA message with pictures whose vision model isn't installed \u2014 or none\nis set \u2014 gets its answer up front: the user turn is kept, the reply is\nthe refusal (``vision_model_missing``) and Ollama is never asked. When\nOllama can't be asked whether the model is there, the send goes ahead\nand a failure is reported as it happens.\n\nThe thread's first message titles it with its first five words\n(``domovoi/chat_titles.py``); once a reply has finished, the chat model\nwrites a better title in the background (:func:`_write_title`), unless\na person has named the thread. A title being written when the next\nmessage arrives is stopped, and written after that reply instead.\n\nHelp (``web/backend/api/help.py``, part 9): in a thread titled \"Help: \u2026\",\nor for a question about Domovoi whose answer its help holds, the model\nis given the help desk's instruction and the passages found instead of\nthe chat persona, and the reply ends with the sections it came from\n(written here, not by the model; ``stats.help``). A help thread whose\nquestion the help doesn't cover is answered \"The manual doesn't cover\nthat.\" with no model asked. A screenshot in a help turn is read by the\nvision model first (which page, what error), and that reading is\nsearched too.",
         "operationId": "send_message_api_chat_threads__thread_id__messages_post",
         "parameters": [
           {
@@ -13548,6 +13576,50 @@
                 "schema": {}
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/threads/{thread_id}/retry": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Retry Reply",
+        "description": "\"Try again\": a new reply to the thread's last question, in place of\nthe reply it got. Streams as ``POST .../messages`` does; the old row is\ndeleted and the new one written in one transaction once the new reply\nis complete (the ``done`` event says which with ``replaces``: the old\nrow's id). A retry that fails writes nothing: the thread stays as it\nwas, the stream ends with the ``error`` event and a ``done`` carrying\nthe reply that was kept (``kept: true``), and it can be tried again.\n\nOnly the chat model's reply to a typed message can be tried again\n(:func:`reply_retryable`): 409 ``not_retryable`` for a spoken turn's\nreply (the core may have set a timer with it) or another writer's, 409\n``nothing_to_retry`` when the thread doesn't end with a reply to a\nquestion, 409 ``already_retried`` when another try again is replacing\nit. The model doesn't see the reply being replaced.",
+        "operationId": "retry_reply_api_chat_threads__thread_id__retry_post",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "409": {
+            "description": "{\"detail\": \"...\", \"code\": \"...\"}: `nothing_to_retry` (the thread doesn't end with a reply to a question), `not_retryable` (a spoken turn's or another writer's reply, not the chat model's), `already_retried` (another try again on this reply is running, or has replaced it)"
           },
           "422": {
             "description": "Validation Error",
@@ -13723,6 +13795,489 @@
                   "additionalProperties": true,
                   "type": "object",
                   "title": "Response Chat Models Api Chat Models Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/documents": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Upload Document",
+        "description": "Stage one document for a chat message: stored, read in the worker,\nits parts cached. The answer is its metadata (``token`` for the send).\nStaged documents never sent go after an hour (:func:`sweep_unsent`).",
+        "operationId": "upload_document_api_chat_documents_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_document_api_chat_documents_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Upload Document Api Chat Documents Post"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Too large: {\"detail\", \"code\": \"file_too_large\", \"max_mb\": 100}"
+          },
+          "415": {
+            "description": "Not a kind Chat reads: {\"detail\", \"code\": \"unsupported_format\" | \"old_format\"}"
+          },
+          "422": {
+            "description": "Couldn't be read: {\"detail\": the reason in a sentence, \"code\": \"unreadable\"}"
+          }
+        }
+      }
+    },
+    "/api/chat/documents/extract": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Extract Document",
+        "description": "Read a document's text for a phone that can't, and keep nothing: the\nfile is read in a temporary folder that is removed before the answer\ngoes. No model is asked, so this works with AI features off.",
+        "operationId": "extract_document_api_chat_documents_extract_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_extract_document_api_chat_documents_extract_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Extract Document Api Chat Documents Extract Post"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Too large: {\"detail\", \"code\": \"file_too_large\", \"max_mb\": 100}"
+          },
+          "415": {
+            "description": "Not a kind Chat reads: {\"detail\", \"code\": \"unsupported_format\" | \"old_format\"}"
+          },
+          "422": {
+            "description": "Couldn't be read: {\"detail\": the reason in a sentence, \"code\": \"unreadable\"}"
+          }
+        }
+      }
+    },
+    "/api/chat/documents/{token}/parts": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Document Parts",
+        "operationId": "document_parts_api_chat_documents__token__parts_get",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Document Parts Api Chat Documents  Token  Parts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/documents/{token}/file": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Document File",
+        "description": "The original file: a PDF inline (the dashboard opens it at\n``#page=N``), anything else as a download. Household content, read on\nthe same tier as the thread; an ``<a href>`` carries ``?device_token=``.",
+        "operationId": "document_file_api_chat_documents__token__file_get",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/threads/{thread_id}/documents": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "List Thread Documents",
+        "operationId": "list_thread_documents_api_chat_threads__thread_id__documents_get",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Thread Documents Api Chat Threads  Thread Id  Documents Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/threads/from-document": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Thread From Document",
+        "description": "\"Ask about this document\" on the Documents page: a new chat (\"About\nlease.pdf\") with the file attached, read through the Documents routes'\nown checks (inside the library, no secret-shaped names), copied into\nthe chat's uploads so the chat doesn't change when the file does.",
+        "operationId": "thread_from_document_api_chat_threads_from_document_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FromDocument"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Thread From Document Api Chat Threads From Document Post"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Too large: {\"detail\", \"code\": \"file_too_large\", \"max_mb\": 100}"
+          },
+          "415": {
+            "description": "Not a kind Chat reads: {\"detail\", \"code\": \"unsupported_format\" | \"old_format\"}"
+          },
+          "422": {
+            "description": "Couldn't be read: {\"detail\": the reason in a sentence, \"code\": \"unreadable\"}"
+          }
+        }
+      }
+    },
+    "/api/help/search": {
+      "get": {
+        "tags": [
+          "help"
+        ],
+        "summary": "Search",
+        "description": "The help's passages for ``q``. OPEN (the manual is): nothing here is\nlive state. ``covered`` is false when nothing answers the question.",
+        "operationId": "search_api_help_search_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 500,
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 10,
+              "minimum": 1,
+              "default": 5,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Search Api Help Search Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/help/facts": {
+      "get": {
+        "tags": [
+          "help"
+        ],
+        "summary": "Facts",
+        "operationId": "facts_api_help_facts_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Facts Api Help Facts Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/help/checks": {
+      "get": {
+        "tags": [
+          "help"
+        ],
+        "summary": "Checks",
+        "operationId": "checks_api_help_checks_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Checks Api Help Checks Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/help/report": {
+      "post": {
+        "tags": [
+          "help"
+        ],
+        "summary": "Report",
+        "description": "The \"Report a problem\" summary, for the person to read, then copy or\nsave. Built on request, returned, never stored or sent.",
+        "operationId": "report_api_help_report_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Report Api Help Report Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/help/deliveries": {
+      "get": {
+        "tags": [
+          "help"
+        ],
+        "summary": "Deliveries",
+        "description": "Help steps sent by voice (V035): newest first, or after ``since_id``\noldest first. The app reads its owner's on start and after a\n``help_deliveries.changed`` event.",
+        "operationId": "deliveries_api_help_deliveries_get",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Person Id"
+            }
+          },
+          {
+            "name": "since_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Deliveries Api Help Deliveries Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -15160,6 +15715,20 @@
         ],
         "title": "AnnounceRequest"
       },
+      "Body_extract_document_api_chat_documents_extract_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_extract_document_api_chat_documents_extract_post"
+      },
       "Body_send_voice_api_chat_threads__thread_id__voice_post": {
         "properties": {
           "audio": {
@@ -15250,6 +15819,20 @@
           "files"
         ],
         "title": "Body_upload_api_files_upload_post"
+      },
+      "Body_upload_document_api_chat_documents_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_document_api_chat_documents_post"
       },
       "Body_upload_documents_api_documents_upload_post": {
         "properties": {
@@ -16365,6 +16948,18 @@
               }
             ],
             "title": "User Agent"
+          },
+          "owner_person_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Person Id"
           }
         },
         "type": "object",
@@ -16786,6 +17381,21 @@
         },
         "type": "object",
         "title": "FilesBlockCreate"
+      },
+      "FromDocument": {
+        "properties": {
+          "rel_path": {
+            "type": "string",
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Rel Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rel_path"
+        ],
+        "title": "FromDocument"
       },
       "Greeting": {
         "properties": {
@@ -20035,6 +20645,23 @@
         ],
         "title": "RenameBody"
       },
+      "ReportBody": {
+        "properties": {
+          "what_happened": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "What Happened",
+            "default": ""
+          },
+          "include_room_names": {
+            "type": "boolean",
+            "title": "Include Room Names",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "ReportBody"
+      },
       "RoomBody": {
         "properties": {
           "room_id": {
@@ -20811,8 +21438,8 @@
           "content": {
             "type": "string",
             "maxLength": 32000,
-            "minLength": 1,
-            "title": "Content"
+            "title": "Content",
+            "default": ""
           },
           "images": {
             "items": {
@@ -20824,6 +21451,17 @@
             "type": "array",
             "maxItems": 4,
             "title": "Images"
+          },
+          "documents": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "title": "Documents"
           },
           "model": {
             "anyOf": [
@@ -20851,9 +21489,6 @@
           }
         },
         "type": "object",
-        "required": [
-          "content"
-        ],
         "title": "SendBody"
       },
       "ServerVoiceBody": {
@@ -21071,7 +21706,7 @@
           "room"
         ],
         "title": "SpareDeviceEnrolRequest",
-        "description": "Settings \u2192 Satellites \u2192 Add a spare device: the room the laptop or\nphone will be, and optionally the core address it should dial when the\none this server finds for itself is not the one the LAN reaches (a\nsecond network card). The answer is the enrolment payload, the Linux\ninstall command and what the QR code carries."
+        "description": "Settings \u2192 Rooms \u2192 Add a spare device: the room the laptop or\nphone will be, and optionally the core address it should dial when the\none this server finds for itself is not the one the LAN reaches (a\nsecond network card). The answer is the enrolment payload, the Linux\ninstall command and what the QR code carries."
       },
       "SubscribeRequest": {
         "properties": {

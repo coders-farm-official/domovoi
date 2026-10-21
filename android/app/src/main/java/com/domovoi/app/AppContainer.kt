@@ -6,6 +6,7 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.domovoi.app.net.ReportUpload
+import com.domovoi.app.alerts.HelpAlerts
 import com.domovoi.app.alerts.IncidentAlerts
 import com.domovoi.app.assistant.AssistantBench
 import com.domovoi.app.assistant.AssistantController
@@ -138,6 +139,22 @@ class AppContainer(context: Context) {
      *  alert's tap, "containers" from a container incident's); AppShell
      *  navigates there and clears it. */
     val pendingRoute = MutableStateFlow<String?>(null)
+
+    /** Help steps sent by voice to this phone's owner: one notification
+     *  each (alerts/HelpAlerts.kt). Started by DomovoiApplication. */
+    val helpAlerts = HelpAlerts(context, api, bus, prefs)
+
+    /** The home-server chat a help notification's tap asked for (thread
+     *  id, title); Chat opens it and clears it. */
+    val pendingChatThread = MutableStateFlow<Pair<Long, String>?>(null)
+
+    /** A new phone chat asked for (Settings → About, "Ask Domovoi for
+     *  help" with no home-server chat to start); Chat opens one and clears it. */
+    val pendingPhoneChat = MutableStateFlow(false)
+
+    /** A chat something asked Chat to open ("Ask about this document" in
+     *  Files): Chat opens it and clears it. */
+    val pendingChat = MutableStateFlow<com.domovoi.app.ui.screens.chat.ChatOpenRequest?>(null)
 
     /** Phone files on their way to the server ("Your device" → upload),
      *  by row; they run in [scope], so leaving the page doesn't stop one. */

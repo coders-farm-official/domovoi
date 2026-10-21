@@ -331,6 +331,8 @@ const DocRow = ({ doc, selected, onToggleSelect,
                   onClick={() => downloadDoc(doc.rel_path)}>Download</Button>
         )}
         <Button icon="trash-2" title="delete" onClick={() => onDelete(doc)}>Delete</Button>
+        {/* A chat about this file (chat_documents.jsx): the kinds Chat reads. */}
+        {window.ChatDocs && <window.ChatDocs.AskButton relPath={doc.rel_path} name={doc.name + doc.ext}/>}
       </div>
     </div>
   );
@@ -727,6 +729,9 @@ const BrowserRow = ({ entry, libraryId, selected, onToggleSelect, editable, remo
         )}
         {editable && (
           <Button icon="trash-2" title="delete" onClick={onDelete}>Delete</Button>
+        )}
+        {!isDir && libraryId === 'core:documents' && window.ChatDocs && (
+          <window.ChatDocs.AskButton relPath={entry.rel} name={entry.name}/>
         )}
       </div>
     </div>

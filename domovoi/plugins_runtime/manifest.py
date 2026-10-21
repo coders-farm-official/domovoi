@@ -279,6 +279,10 @@ class PluginManifest:
     description: str
     domovoi_api: str
     homepage: str | None = None
+    # Optional help file (SDK 1.8): a short Markdown file inside the plugin
+    # that Domovoi's help desk indexes with the manual (domovoi/help_desk).
+    # Optional for third parties; required for Coders Farm's own plugins.
+    help: str | None = None
     # Optional page colour (2026-10-17): the raw values, judged by
     # plugins_runtime.accent (a bad one is a load warning, never an error).
     accent: Any = None
@@ -367,6 +371,27 @@ def nav_icon_problem(path: str) -> str | None:
     return None
 
 
+#: The most a plugin's help file may hold (the help index reads no more).
+HELP_FILE_MAX_BYTES = 32 * 1024
+
+
+def help_file_problem(path: str) -> str | None:
+    """Why ``[plugin] help`` can't be the plugin's help file, or None: a
+    relative ``.md`` path inside the plugin."""
+    rel = path.replace("\\", "/")
+    if not rel.strip():
+        return "is empty"
+    if any(ord(ch) < 32 for ch in rel):
+        return "contains a control character"
+    if rel.startswith("/") or (len(rel) > 1 and rel[1] == ":") or "://" in rel:
+        return "must be a path inside the plugin, not an absolute path or URL"
+    if any(part == ".." for part in rel.split("/")):
+        return "must stay inside the plugin (no '..')"
+    if not rel.lower().endswith(".md"):
+        return "must be a Markdown file (.md)"
+    return None
+
+
 def _str_list(table: dict, key: str, where: str) -> tuple[str, ...]:
     val = table.get(key, [])
     if not isinstance(val, list) or not all(isinstance(v, str) for v in val):
@@ -404,6 +429,11 @@ def parse_manifest(toml_text: str) -> PluginManifest:
     license_ = _req_str(plugin, "license", "plugin")
     description = _req_str(plugin, "description", "plugin")
     homepage = _opt_str(plugin, "homepage", "plugin")
+    help_file = _opt_str(plugin, "help", "plugin")
+    if help_file is not None:
+        problem = help_file_problem(help_file)
+        if problem:
+            raise ManifestError(f"plugin.help {help_file!r} {problem}")
     domovoi_api = _req_str(plugin, "domovoi_api", "plugin")
     if not api_range_satisfied(domovoi_api):
         raise ManifestError(
@@ -736,6 +766,7 @@ def parse_manifest(toml_text: str) -> PluginManifest:
         description=description,
         domovoi_api=domovoi_api,
         homepage=homepage,
+        help=help_file,
         accent=plugin.get("accent"),
         accent_dark=plugin.get("accent_dark"),
         entry_core=entry_core,
@@ -952,6 +983,23 @@ def validate_plugin_dir(root: Path, manifest: PluginManifest) -> list[str]:
                             f"direct requirement {req!r} not found at that "
                             f"version in {lock.name}"
                         )
+
+    if manifest.help:
+        hp = root / manifest.help
+        if not hp.is_file() or not _inside(root, hp):
+            errors.append(f"plugin.help {manifest.help!r} is missing or outside the plugin root")
+        else:
+            data = hp.read_bytes()
+            if len(data) > HELP_FILE_MAX_BYTES:
+                errors.append(
+                    f"plugin.help {manifest.help!r} is {len(data)} bytes, over the "
+                    f"{HELP_FILE_MAX_BYTES}-byte cap (keep it short: the manual has the rest)"
+                )
+            else:
+                try:
+                    data.decode("utf-8")
+                except UnicodeDecodeError:
+                    errors.append(f"plugin.help {manifest.help!r} is not UTF-8 text")
 
     sat = manifest.satellite
     if sat is not None:

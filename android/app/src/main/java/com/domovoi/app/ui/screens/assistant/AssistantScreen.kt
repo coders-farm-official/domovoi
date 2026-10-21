@@ -61,6 +61,7 @@ import com.domovoi.app.ui.screens.chat.ChatFrame
 import com.domovoi.app.ui.screens.chat.ChatHeader
 import com.domovoi.app.ui.screens.chat.ChatPlaceKind
 import com.domovoi.app.ui.screens.chat.NEW_CHAT
+import com.domovoi.app.ui.screens.chat.rememberExportPhoneChats
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -104,6 +105,27 @@ internal class AssistantActions(
     val cardPrimary: (Int, PhoneCard) -> Unit = { _, _ -> },
     /** A card's second button: "not now", "use the picker". */
     val cardSecondary: (Int, PhoneCard) -> Unit = { _, _ -> },
+    /** "Try again": the last reply goes, the last question is answered again. */
+    val retry: () -> Unit = {},
+    /** One message's words to the share sheet. */
+    val shareMessage: (String) -> Unit = {},
+    /** The whole chat on screen to the share sheet, as text. */
+    val shareChat: () -> Unit = {},
+    /** "Export all phone chats": Markdown plus JSON, to a file the person picks. */
+    val exportAll: () -> Unit = {},
+    /** The paperclip: attach a document (its name, and how to read it);
+     *  null where phone chats take no documents. */
+    /** Attach (name, opener, the typed question). */
+    val attachDocument: ((String, () -> java.io.InputStream, String) -> Unit)? = null,
+    /** "Ask the home server" for a PDF this phone can't read; null when no
+     *  paired home server is in reach. */
+    val askServer: ((com.domovoi.app.assistant.PendingDocument) -> Unit)? = null,
+    /** ...and it is reading one now. */
+    val askingServer: Boolean = false,
+    val dropPending: () -> Unit = {},
+    val closeDocProblem: () -> Unit = {},
+    /** The phone's own copy of a document of the conversation on screen, by id. */
+    val docFile: (String) -> java.io.File? = { null },
 )
 
 /** The phone chat's part of Chat's conversation frame: the way back to the
@@ -234,6 +256,28 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
     }
     val reportScope = rememberCoroutineScope()
     val chrome = PhoneChatChrome(onBack = frame.onBack, chip = frame.chip, picker = frame.picker)
+    // "Export all phone chats": the person picks where the zip goes.
+    val exportAll = rememberExportPhoneChats(assistant)
+    val share = { subject: String, text: String -> if (!shareText(context, subject, text)) toast("no app on this phone can share it") }
+    val shareChat = {
+        reportScope.launch {
+            val c = assistant.state.value.conversation
+            assistant.transcript(c.id)?.let { share(c.title, it) }
+        }
+        Unit
+    }
+    // A chat started from the list's "Message Domovoi…" box: its first
+    // message goes out once this view has its conversation and the model
+    // is on the phone.
+    var firstSent by remember { mutableStateOf(frame.firstMessage.isNullOrBlank()) }
+    val reached = target.reached(ui.conversation.id)
+    LaunchedEffect(reached, ui.installed) {
+        if (!firstSent && reached && ui.installed) {
+            firstSent = true
+            frame.firstMessage?.let { assistant.send(it) }
+            frame.onSent()
+        }
+    }
     if (!target.reached(ui.conversation.id)) {
         Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
             ChatHeader(NEW_CHAT, chrome.chip, ChatPlaceKind.Phone, chrome.onBack, Modifier.padding(top = 8.dp))
@@ -243,8 +287,49 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
     }
     // Saying something here makes this phone the place last used.
     val used = frame.onSent
+    // "Ask the home server" for a PDF this phone can't read the text of:
+    // only with a paired home server in reach; it reads the text and keeps
+    // nothing, and the answer is still written on this phone.
+    val choice = com.domovoi.app.ui.shell.LocalServerChoice.current
+    var asking by remember { mutableStateOf(false) }
+    val askServer: ((com.domovoi.app.assistant.PendingDocument) -> Unit)? =
+        if (choice is com.domovoi.app.ui.shell.ServerChoice.Available && !choice.needsPairing) {
+            { p ->
+                reportScope.launch {
+                    asking = true
+                    com.domovoi.app.ui.screens.chat.extractOnServer(app, assistant.pendingFile(p), p.name)
+                        .onSuccess { assistant.attachRead(p, it) }
+                        .onFailure { toast(com.domovoi.app.ui.screens.chat.docFailureText("read", it)) }
+                    asking = false
+                }
+            }
+        } else {
+            null
+        }
     val cards = rememberCardActions(assistant, ui.conversation.id)
-    AssistantContent(ui, actionsFor(assistant, download, talk, sinks, reportScope, used, cards) { toast(it) }, chrome)
+    val actions = actionsFor(assistant, download, talk, sinks, reportScope, used, askServer, asking) { toast(it) }
+    AssistantContent(
+        ui,
+        AssistantActions(
+            download = actions.download, pauseDownload = actions.pauseDownload, cancelDownload = actions.cancelDownload,
+            setAllowMobileData = actions.setAllowMobileData, deleteModel = actions.deleteModel,
+            setBackend = actions.setBackend, retryLoad = actions.retryLoad, send = actions.send, stop = actions.stop,
+            newConversation = actions.newConversation, open = actions.open, delete = actions.delete,
+            clearAll = actions.clearAll, talk = actions.talk, downloadVoice = actions.downloadVoice,
+            setSpeakTyped = actions.setSpeakTyped, draftReport = actions.draftReport, saveReport = actions.saveReport,
+            reportSinks = actions.reportSinks, deliverReport = actions.deliverReport,
+            deleteReport = actions.deleteReport, clearReports = actions.clearReports,
+            retry = assistant::retry,
+            shareMessage = { share("Domovoi", it) },
+            shareChat = shareChat,
+            exportAll = exportAll,
+            attachDocument = actions.attachDocument, askServer = actions.askServer,
+            askingServer = actions.askingServer, dropPending = actions.dropPending,
+            closeDocProblem = actions.closeDocProblem, docFile = actions.docFile,
+            cardPrimary = cards.primary, cardSecondary = cards.secondary,
+        ),
+        chrome,
+    )
 }
 
 /** A card's two buttons, with what they launch: Android's permission
@@ -352,11 +437,10 @@ private fun actionsFor(
     sinks: List<ReportSink>,
     scope: CoroutineScope,
     used: () -> Unit,
-    cards: CardActions,
+    askServer: ((com.domovoi.app.assistant.PendingDocument) -> Unit)? = null,
+    askingServer: Boolean = false,
     toast: (String) -> Unit,
 ) = AssistantActions(
-    cardPrimary = cards.primary,
-    cardSecondary = cards.secondary,
     download = download,
     pauseDownload = a::pauseDownload,
     cancelDownload = a::cancelDownload,
@@ -388,6 +472,17 @@ private fun actionsFor(
     },
     deleteReport = a::deleteReport,
     clearReports = a::clearReports,
+    attachDocument = if (a.canAttach) { name, open, question ->
+        a.attach(name, open, question)
+        used()
+    } else {
+        null
+    },
+    askServer = askServer,
+    askingServer = askingServer,
+    dropPending = a::dropPending,
+    closeDocProblem = a::closeDocProblem,
+    docFile = { id -> a.docFile(id) },
 )
 
 /** The screen for [ui], with no controller behind it (the tests render it). */

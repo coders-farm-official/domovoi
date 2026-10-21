@@ -12,6 +12,7 @@ import com.google.ai.edge.litertlm.ExperimentalFlags
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.MessageCallback
 import com.google.ai.edge.litertlm.OpenApiTool
+import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.ThinkingConfig
 import com.google.ai.edge.litertlm.ToolCall
 import com.google.ai.edge.litertlm.tool
@@ -161,6 +162,33 @@ class LiteRtLlmEngine(
         active?.let { runCatching { it.cancelProcess() } }
     }
 
+    /**
+     * A chat's title (or any short answer) in a second conversation, made
+     * and closed here; the kept one stays as it is, and [cancel] (the stop
+     * button) never reaches this one. Greedy, so the same chat gets the same
+     * title. Plain text, no `ResponseFormat`: N0's regex constraint crashed
+     * the runtime (ChatTitles.kt).
+     */
+    override suspend fun oneShot(system: String, prompt: String, maxTokens: Int): String? = withContext(Dispatchers.IO) {
+        val conv = synchronized(lock) {
+            val e = engine ?: return@withContext null
+            e.createConversation(
+                ConversationConfig(
+                    systemInstruction = Contents.of(system),
+                    samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 1.0),
+                    thinkingConfig = ThinkingConfig(enableThinking = false),
+                ),
+            )
+        }
+        try {
+            val text = StringBuilder()
+            stream(conv, Message.user(prompt), maxTokens = maxTokens, track = false).collect { text.append(it) }
+            text.toString()
+        } finally {
+            runCatching { if (conv.isAlive) conv.close() }
+        }
+    }
+
     override fun lastStats(): LlmStats? = stats
 
     override fun close() {
@@ -236,11 +264,18 @@ class LiteRtLlmEngine(
     /** The model's text deltas for [message], with any tool calls it makes
      *  added to [calls]. Collection ending early (a stop) cancels the model;
      *  nothing streamed is dropped (unbounded buffer: the native side never
-     *  waits on the collector). */
-    private fun stream(conv: Conversation, message: Message, calls: MutableList<ToolCall>?): Flow<String> = callbackFlow {
+     *  waits on the collector). [maxTokens] caps the reply; [track] false
+     *  keeps it out of reach of [cancel] (a title's one-shot). */
+    private fun stream(
+        conv: Conversation,
+        message: Message,
+        calls: MutableList<ToolCall>? = null,
+        maxTokens: Int? = null,
+        track: Boolean = true,
+    ): Flow<String> = callbackFlow {
         var finished = false
-        active = conv
-        conv.sendMessageAsync(message, object : MessageCallback {
+        if (track) active = conv
+        val callback = object : MessageCallback {
             override fun onMessage(message: Message) {
                 val text = message.contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }
                 if (text.isNotEmpty()) trySend(text)
@@ -256,7 +291,8 @@ class LiteRtLlmEngine(
                 finished = true
                 close(throwable)
             }
-        })
+        }
+        if (maxTokens == null) conv.sendMessageAsync(message, callback) else conv.sendMessageAsync(message, callback, maxOutputToken = maxTokens)
         awaitClose {
             if (!finished) runCatching { conv.cancelProcess() }
             if (active === conv) active = null

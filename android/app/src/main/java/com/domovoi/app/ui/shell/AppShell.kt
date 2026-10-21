@@ -69,6 +69,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.window.core.layout.WindowWidthSizeClass
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
+import com.domovoi.app.alerts.CHAT_ROUTE
 import com.domovoi.app.alerts.CONTAINERS_ROUTE
 import com.domovoi.app.alerts.IncidentAlerts
 import com.domovoi.app.data.ServerCredentials
@@ -322,6 +323,7 @@ private fun ShellContent(trouble: TokenTrouble?) {
     LaunchedEffect(pendingRoute) {
         val target = when (pendingRoute) {
             "home" -> Route.Home
+            CHAT_ROUTE -> Route.Chat
             CONTAINERS_ROUTE -> Route.Containers
             else -> null
         }
@@ -348,7 +350,11 @@ private fun ShellContent(trouble: TokenTrouble?) {
     // even while the live connection is down (canRegister).
     val shellServerUrl by app.prefs.serverUrl.collectAsState()
     val paired = !deviceToken.isNullOrBlank()
-    LaunchedEffect(connected, shellServerUrl, deviceToken) {
+    // ...and when "This phone belongs to" changes: the register carries it,
+    // so voice help knows whose phone this is (net/DeviceRegistry.kt).
+    val shellOwners by app.prefs.owners.collectAsState()
+    val shellOwner = ServerCredentials.ownerFor(shellOwners, shellServerUrl)
+    LaunchedEffect(connected, shellServerUrl, deviceToken, shellOwner) {
         if (shellServerUrl.isNotBlank() && canRegister(connected, paired)) registerDevice(app)
     }
     // ...and again every couple of minutes while the app is on screen, and
@@ -580,6 +586,15 @@ private fun OfflineShell(choice: ServerChoice, verdict: IdentityVerdict?) {
     val tabs = remember(shared, savedBooks) { localTabs(shared = shared, savedBooks = savedBooks) }
     var tab by rememberSaveable { mutableStateOf(0) }
     LaunchedEffect(tabs) { if (tab >= tabs.size) tab = 0 }
+    // "Ask about this document" in Files: to the Chat tab, which opens it.
+    val askedRoute by app.pendingRoute.collectAsState()
+    LaunchedEffect(askedRoute, tabs) {
+        if (askedRoute == CHAT_ROUTE) {
+            val at = tabs.indexOf(Route.Chat)
+            if (at >= 0) tab = at
+            app.pendingRoute.value = null
+        }
+    }
     // This phone's own settings (voice, problem reports, the app's version
     // and developer options): the top bar's gear opens them, with no server
     // needed.
