@@ -4,6 +4,45 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-21 — Write resumes and letters in Chat
+
+Core, dashboard and app, with one migration, **V038** (`chat_drafts`,
+`chat_draft_versions`, `chat_messages.draft`; Flyway applies it on update).
+No new dependency: ReportLab (BSD) and python-docx (MIT) were already
+there. The app and the server carry the **Liberation Sans and Serif**
+fonts (SIL Open Font License 1.1, `domovoi/drafts/fonts/`), embedded in
+the PDFs Chat writes.
+
+* **Drafts.** Ask a chat for a resume, a cover letter or a letter ("write a
+  cover letter for the warehouse job at Acme", "draft a letter to my
+  landlord about the heater"). Domovoi writes it into a fixed outline and
+  shows it as a draft card. Follow-ups ("shorter", "more formal", "mention
+  my forklift licence") make new versions; the reply says what changed
+  ("cut 120 words (380 → 260)"). Every version is kept, and each can be
+  reopened, compared with the one before, or edited by hand (a version
+  "edited by you"). Only the version being changed goes to the model.
+* **Saving.** A home-server chat saves into Documents → **From Chat**: a
+  resume or cover letter as .docx by default, a letter as PDF, the other
+  format one press away. Domovoi then reads the file back and checks every
+  word is there in order (`text readable · single column`), which is what
+  job sites' applicant tracking systems need. A phone chat saves into the
+  phone's **Chat documents** (listed in Files), with **save a copy to…**
+  and **send to home**.
+* **Printing.** "print it" in a chat, and **print** on a draft, open the
+  Print dialog with a preview; nothing prints until you press Print. The
+  phone's own drafts print with Android's print dialog. "print it" said
+  into the app's chat mic in a home-server chat asks first, like every
+  voice print.
+* **Same text from the server and the phone.** Both make a template's PDF
+  from the same template files and fonts with the same line breaking, so
+  the text is identical; NFKC is applied before drawing (the fonts have no
+  ff/ffi/ffl ligature glyphs) and every line break keeps its space.
+* **With AI chat and questions turned off,** nothing new is drafted, but
+  drafts already written can still be opened, edited, saved and printed
+  (the dashboard's Chat page lists them).
+* **Changed answer:** `POST /api/documents/upload` takes an optional
+  `folder` (`From Chat` only). A chat reply row may carry `draft`.
+
 ## 2026-10-21 — Ask about a document in Chat
 
 Core and dashboard update with one migration, **V036** (two columns on
