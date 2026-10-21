@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from domovoi.doc_qa import bm25
-from domovoi.doc_qa.text import Passage, cut_passages, normalize, sentences, tokens
+from domovoi.doc_qa.text import Passage, cut_passages, normalize, sentences, tokens, words
 
 #: What a reply says when the passages don't answer the question (the
 #: model is told to say exactly this; the app says it itself when the
@@ -119,11 +119,27 @@ def choose_mode(question: str) -> str:
     return "question"
 
 
+_FOLLOW_UP_WORDS = frozenset("it its that they them this those these he she there".split())
+
+
+def is_follow_up(question: str) -> bool:
+    """Whether ``question`` leans on the one before: it starts with "and",
+    "what about" or "how about", or it is short (at most three search
+    terms) and points back with "it", "that", "they"... "Who won the 1998
+    World Cup?" is not one, so it doesn't borrow the last question's words."""
+    w = words(question)
+    if not w:
+        return False
+    if w[0] == "and" or w[:2] in (["what", "about"], ["how", "about"]):
+        return True
+    return len(tokens(question)) <= 3 and any(x in _FOLLOW_UP_WORDS for x in w)
+
+
 def search_query(question: str, previous: str | None = None) -> list[str]:
-    """The search terms for ``question``; a follow-up ("and the deposit?")
-    also searches with the previous question's words."""
+    """The search terms for ``question``; a follow-up ("and the deposit?",
+    :func:`is_follow_up`) also searches with the previous question's words."""
     terms = tokens(question)
-    if previous:
+    if previous and is_follow_up(question):
         terms += [t for t in tokens(previous) if t not in terms]
     return terms
 
@@ -209,7 +225,7 @@ def build_prompt(question: str, given: Sequence[Given], names: Sequence[str], *,
         ">>>",
         "",
     ]
-    if previous and mode == "question":
+    if previous and mode == "question" and is_follow_up(question):
         lines.append(f"Earlier question: {previous.strip()}")
     lines.append(f"Question: {question.strip()}")
     return {"rules": RULES_SUMMARY if mode == "summary" else RULES_QUESTION,

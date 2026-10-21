@@ -120,7 +120,11 @@ const ChatDocs = (() => {
     const [open, setOpen] = React.useState(null);
     const close = React.useCallback(() => setOpen(null), []);
     if (!doc) return null;
-    const sources = (doc.sources || []).slice().sort((a, b) => (b.cited ? 1 : 0) - (a.cited ? 1 : 0));
+    // Cited first; one chip per label (two passages of one page overlap
+    // by a sentence: the cited one, else the best, stands for both).
+    const seen = new Set();
+    const sources = (doc.sources || []).slice().sort((a, b) => (b.cited ? 1 : 0) - (a.cited ? 1 : 0))
+      .filter((s) => (seen.has(s.label) ? false : (seen.add(s.label), true)));
     return (
       <div className="chat-doc-answer">
         <Notes notes={doc.notes}/>

@@ -118,6 +118,13 @@ class DocQaSharedCasesTest {
         }
     }
 
+    @Test fun followUps() {
+        cases["follow_up"]!!.jsonArray.forEach {
+            val o = it.jsonObject
+            assertEquals(o.s("in"), o["out"]!!.jsonPrimitive.booleanOrNull, DocQa.isFollowUp(o.s("in")!!))
+        }
+    }
+
     @Test fun mode() {
         cases["mode"]!!.jsonArray.forEach {
             val o = it.jsonObject

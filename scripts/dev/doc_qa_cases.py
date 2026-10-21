@@ -98,6 +98,8 @@ def main() -> int:
         ([two[0]], "rent", None, 150),
         (two, "what is the rent amount", None, answer.RETRIEVE_CHARS),
         ([two[0]], "Who won the 1998 World Cup?", None, answer.RETRIEVE_CHARS),
+        ([two[0]], "Who won the 1998 World Cup?", "How much is the rent?", answer.RETRIEVE_CHARS),
+        ([two[0]], "what about pets?", "Is smoking allowed?", answer.RETRIEVE_CHARS),
     ):
         mode = answer.choose_mode(q)
         g = answer.retrieve(docs, q, prev, mode=mode, budget=budget)
@@ -107,6 +109,9 @@ def main() -> int:
     for docs, limit in (([two[0]], answer.SINGLE_PASS_CHARS), ([two[0]], 200)):
         g = answer.retrieve(docs, "summarize this", mode="summary", single_pass=limit)
         cases["summary_retrieve"].append({"docs": docs, "single_pass": limit, "out": [x.cite for x in g]})
+    cases["follow_up"] = [{"in": s, "out": answer.is_follow_up(s)} for s in (
+        "and the deposit?", "And how much is it?", "what about pets?", "How about the fee", "is it refundable?",
+        "Who won the 1998 World Cup?", "When is the rent due?", "Does that include water and power bills?", "")]
     cases["mode"] = [{"in": s, "out": answer.choose_mode(s)} for s in (
         "Summarize this please", "Can you summarise it?", "give me an overview", "What's this about?",
         "what’s this about", "key points?", "TL;DR", "tldr pls", "What is the rent?", "sum it up",

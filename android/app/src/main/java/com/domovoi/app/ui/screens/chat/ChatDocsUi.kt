@@ -87,8 +87,11 @@ internal class SourceView(
     val pdf: (suspend () -> File?)? = null,
 )
 
-/** Cited sources first, each group in the order the app gave them. */
-internal fun orderedSources(list: List<SourceView>): List<SourceView> = list.filter { it.cited } + list.filterNot { it.cited }
+/** Cited sources first, each group in the order the app gave them; one
+ *  chip per label (two passages of one page, which overlap by a sentence,
+ *  are one "p. 4": the cited one, else the best). */
+internal fun orderedSources(list: List<SourceView>): List<SourceView> =
+    (list.filter { it.cited } + list.filterNot { it.cited }).distinctBy { it.label }
 
 /** Where [match] sits in [text] (the matched sentence to mark), or null. */
 internal fun matchRange(text: String, match: String): IntRange? {

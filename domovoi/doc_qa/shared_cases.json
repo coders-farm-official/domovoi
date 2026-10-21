@@ -849,6 +849,79 @@
    "budget": 4800,
    "mode": "question",
    "out": []
+  },
+  {
+   "docs": [
+    {
+     "name": "lease.pdf",
+     "parts": [
+      {
+       "label": "page header",
+       "text": "Residential Lease - 12 Elm Street"
+      },
+      {
+       "label": "p. 1",
+       "text": "This lease is between Alex Rivera (the landlord) and Sam Lee (the tenant). The term starts on 1 March 2026 and runs for twelve months."
+      },
+      {
+       "label": "p. 2",
+       "text": "The monthly rent is $1,200, due on the first day of each month. A late fee of $50 applies when rent is more than five days late. Rent is paid by bank transfer."
+      },
+      {
+       "label": "p. 3",
+       "text": "The security deposit is $1,500. It is returned within 30 days after the tenant moves out, less the cost of any damage beyond normal wear."
+      },
+      {
+       "label": "p. 4",
+       "text": "Pets are not allowed without written permission from the landlord. Smoking is not allowed anywhere in the building."
+      }
+     ]
+    }
+   ],
+   "question": "Who won the 1998 World Cup?",
+   "previous": "How much is the rent?",
+   "budget": 4800,
+   "mode": "question",
+   "out": []
+  },
+  {
+   "docs": [
+    {
+     "name": "lease.pdf",
+     "parts": [
+      {
+       "label": "page header",
+       "text": "Residential Lease - 12 Elm Street"
+      },
+      {
+       "label": "p. 1",
+       "text": "This lease is between Alex Rivera (the landlord) and Sam Lee (the tenant). The term starts on 1 March 2026 and runs for twelve months."
+      },
+      {
+       "label": "p. 2",
+       "text": "The monthly rent is $1,200, due on the first day of each month. A late fee of $50 applies when rent is more than five days late. Rent is paid by bank transfer."
+      },
+      {
+       "label": "p. 3",
+       "text": "The security deposit is $1,500. It is returned within 30 days after the tenant moves out, less the cost of any damage beyond normal wear."
+      },
+      {
+       "label": "p. 4",
+       "text": "Pets are not allowed without written permission from the landlord. Smoking is not allowed anywhere in the building."
+      }
+     ]
+    }
+   ],
+   "question": "what about pets?",
+   "previous": "Is smoking allowed?",
+   "budget": 4800,
+   "mode": "question",
+   "out": [
+    {
+     "cite": "p. 4",
+     "score": 5.1907
+    }
+   ]
   }
  ],
  "summary_retrieve": [
@@ -919,6 +992,44 @@
    ],
    "single_pass": 200,
    "out": []
+  }
+ ],
+ "follow_up": [
+  {
+   "in": "and the deposit?",
+   "out": true
+  },
+  {
+   "in": "And how much is it?",
+   "out": true
+  },
+  {
+   "in": "what about pets?",
+   "out": true
+  },
+  {
+   "in": "How about the fee",
+   "out": true
+  },
+  {
+   "in": "is it refundable?",
+   "out": true
+  },
+  {
+   "in": "Who won the 1998 World Cup?",
+   "out": false
+  },
+  {
+   "in": "When is the rent due?",
+   "out": false
+  },
+  {
+   "in": "Does that include water and power bills?",
+   "out": false
+  },
+  {
+   "in": "",
+   "out": false
   }
  ],
  "mode": [

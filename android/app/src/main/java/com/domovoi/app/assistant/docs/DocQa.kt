@@ -115,9 +115,22 @@ object DocQa {
         return if (SUMMARY_PHRASES.any { it in q }) "summary" else "question"
     }
 
+    private val FOLLOW_UP_WORDS = setOf("it", "its", "that", "they", "them", "this", "those", "these", "he", "she", "there")
+
+    /** Whether [question] leans on the one before: it starts with "and",
+     *  "what about" or "how about", or it is short (at most three search
+     *  terms) and points back with "it", "that", "they"... (the server's
+     *  `is_follow_up`). */
+    fun isFollowUp(question: String): Boolean {
+        val w = DocText.words(question)
+        if (w.isEmpty()) return false
+        if (w[0] == "and" || w.take(2) == listOf("what", "about") || w.take(2) == listOf("how", "about")) return true
+        return DocText.tokens(question).size <= 3 && w.any { it in FOLLOW_UP_WORDS }
+    }
+
     fun searchQuery(question: String, previous: String? = null): List<String> {
         val terms = DocText.tokens(question).toMutableList()
-        if (!previous.isNullOrEmpty()) DocText.tokens(previous).forEach { if (it !in terms) terms += it }
+        if (!previous.isNullOrEmpty() && isFollowUp(question)) DocText.tokens(previous).forEach { if (it !in terms) terms += it }
         return terms
     }
 
@@ -183,7 +196,7 @@ object DocQa {
             ">>>",
             "",
         )
-        if (!previous.isNullOrEmpty() && mode == "question") lines += "Earlier question: ${previous.trim()}"
+        if (!previous.isNullOrEmpty() && mode == "question" && isFollowUp(question)) lines += "Earlier question: ${previous.trim()}"
         lines += "Question: ${question.trim()}"
         return Prompt(if (mode == "summary") RULES_SUMMARY else RULES_QUESTION, lines.joinToString("\n"))
     }
