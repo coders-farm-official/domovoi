@@ -172,7 +172,7 @@ class DocQaSharedCasesTest {
             val q = o.s("question")!!
             val g = DocQa.retrieve(d, q)
             assertEquals(o["given"]!!.strs(), g.map { x -> x.cite })
-            val c = DocQa.checkReply(o.s("reply")!!, g, q, d.map { x -> x.name })
+            val c = DocQa.checkReply(o.s("reply")!!, g, q, d.map { x -> x.name }, o["nonce"]?.str())
             val out = o["out"]!!.jsonObject
             val label = o.s("reply")
             assertEquals(label, out.s("content"), c.content)

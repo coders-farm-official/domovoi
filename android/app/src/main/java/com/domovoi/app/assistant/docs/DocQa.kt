@@ -187,7 +187,8 @@ object DocQa {
 
     // ── Prompt ──────────────────────────────────────────────────────────
 
-    data class Prompt(val rules: String, val user: String)
+    /** [nonce]: the fence's code, never kept in the reply ([stripFence]). */
+    data class Prompt(val rules: String, val user: String, val nonce: String = "")
 
     /** Document text as it goes into the prompt: it can't write a passage
      *  label ("[p. 2]" becomes "(p. 2)") or a block marker (the server's `as_data`). */
@@ -222,7 +223,7 @@ object DocQa {
         )
         if (!previous.isNullOrEmpty() && mode == "question" && isFollowUp(question)) lines += "Earlier question: ${previous.trim()}"
         lines += "Question: ${question.trim()}"
-        return Prompt(if (mode == "summary") RULES_SUMMARY else RULES_QUESTION, lines.joinToString("\n"))
+        return Prompt(if (mode == "summary") RULES_SUMMARY else RULES_QUESTION, lines.joinToString("\n"), n)
     }
 
     // ── The check ───────────────────────────────────────────────────────
@@ -307,9 +308,29 @@ object DocQa {
         return best
     }
 
-    /** The app's check of a model's [reply] to the passages [given]. */
-    fun checkReply(reply: String, given: List<Given>, question: String = "", names: List<String> = emptyList()): Checked {
-        var text = reply
+    private val FENCE_RE = pyRegex("""(?i)(?:<<<\s*)?(?:END OF\s+)?PASSAGES\s+[0-9a-f]{8}(?:\s*>>>)?""")
+    private val CODE_BRACKET_RE = pyRegex("""(?i)\[\s*[0-9a-f]{8}\s*\]""")
+
+    /** A reply without the prompt's random fence code echoed into it (the
+     *  phone's model copied it as a citation, "[a62cf03b]", 2026-10-21): the
+     *  markers, a bracket holding a code of its shape, and, when the
+     *  prompt's [nonce] is known, the code anywhere (the server's `strip_fence`). */
+    fun stripFence(text: String, nonce: String? = null): String {
+        var t = FENCE_RE.replace(text, "")
+        if (!nonce.isNullOrEmpty()) t = pyRegex("""(?i)[\[(]?\s*""" + Regex.escape(nonce) + """\s*[\])]?""").replace(t, "")
+        return CODE_BRACKET_RE.replace(t, "")
+    }
+
+    /** The app's check of a model's [reply] to the passages [given]
+     *  ([nonce]: the prompt's fence code, never kept: [stripFence]). */
+    fun checkReply(
+        reply: String,
+        given: List<Given>,
+        question: String = "",
+        names: List<String> = emptyList(),
+        nonce: String? = null,
+    ): Checked {
+        var text = stripFence(reply, nonce)
         val cited = ArrayList<String>()
         val dropped = ArrayList<String>()
         text = BRACKET_RE.replace(text) { m ->

@@ -55,7 +55,7 @@ object DocHeadsUp {
         DocText.pySplit(DocText.normalize(text).lowercase(Locale.ROOT).replace('’', '\'').replace('‘', '\''))
             .joinToString(" ")
 
-    private fun re(p: String) = Regex("(?U)$p")
+    private fun re(p: String) = pyRegex(p)
 
     private val REWRITE_RE = re(
         """\b(rewrite|re-write|rephrase|reword|paraphrase|translate|proofread|proof-read|proof read|""" +
@@ -174,7 +174,7 @@ object DocHeadsUp {
             "który która które są ten ta już może będzie tym także lub gdy ich było jako"),
     ).mapValues { (_, v) -> v.split(' ').toSet() }
     private val LANG_ORDER = listOf("en", "es", "fr", "de", "it", "pt", "nl", "pl")
-    private val WORD_RE = re("""[^\W\d_]+""")
+    private val WORD_RE = Regex("""[\p{L}\p{Nl}\p{No}]+""")
     const val LANG_MIN_WORDS = 25
     const val LANG_MIN_SHARE = 0.12
     const val LANG_LEAD = 1.5

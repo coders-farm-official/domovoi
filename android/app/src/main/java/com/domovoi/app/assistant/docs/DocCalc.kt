@@ -44,7 +44,7 @@ object DocCalc {
         "agosto" to 8, "septiembre" to 9, "setiembre" to 9, "octubre" to 10, "noviembre" to 11, "diciembre" to 12,
     )
     private val MONTH_ALT = MONTHS.keys.sortedWith(compareByDescending<String> { it.length }).joinToString("|")
-    private fun re(p: String) = Regex("(?U)$p")
+    private fun re(p: String) = pyRegex(p)
     private val DATE_RES = listOf(
         "iso" to re("""\b(\d{4})-(\d{1,2})-(\d{1,2})\b"""),
         "us" to re("""\b(\d{1,2})/(\d{1,2})/(\d{4})\b"""),
@@ -53,7 +53,7 @@ object DocCalc {
     )
     private val NUM_RE = re("""[-$€£]?\d{1,3}(?:,\d{3})+(?:\.\d+)?%?|[-$€£]?\d+(?:\.\d+)?%?""")
     private val LINE_RE = re("""^\s*(?:[-*•]|\d+[.)])?\s*(.+?)\s*\[([^\[\]\n]{1,120})\]\s*(.*)$""")
-    private val PLAIN_NUMBER = Regex("""\d+(?:\.\d+)?""")
+    private val PLAIN_NUMBER = pyRegex("""\d+(?:\.\d+)?""")
     private val MONTH_NAMES = listOf("January", "February", "March", "April", "May", "June", "July", "August",
         "September", "October", "November", "December")
 
@@ -99,7 +99,7 @@ object DocCalc {
     fun buildPrompt(question: String, given: List<Given>, names: List<String>, op: String, nonce: String? = null): DocQa.Prompt {
         val p = DocQa.buildPrompt(question, given, names, mode = "question", nonce = nonce)
         val (what, example) = if (op == "days") "date" to "March 1, 2026" else "number" to "1,200"
-        return DocQa.Prompt(RULES.replace("{what}", what).replace("{example}", example), p.user)
+        return DocQa.Prompt(RULES.replace("{what}", what).replace("{example}", example), p.user, p.nonce)
     }
 
     data class Item(val written: String, val label: String, val what: String, val value: BigDecimal? = null,
@@ -109,8 +109,8 @@ object DocCalc {
 
     private fun stripChars(s: String, chars: String): String = s.trim { it in chars }
 
-    fun parseList(reply: String, given: List<Given>, op: String): Listed {
-        val text = reply
+    fun parseList(reply: String, given: List<Given>, op: String, nonce: String? = null): Listed {
+        val text = DocQa.stripFence(reply, nonce)
         val flat = DocText.pySplit(DocText.normalize(text).lowercase(Locale.ROOT)).joinToString(" ")
         if ("couldn't find" in flat.replace("could not", "couldn't") && "[" !in text) {
             return Listed(emptyList(), emptyList(), true)
@@ -207,8 +207,9 @@ object DocCalc {
     }
 
     /** The reply to show for a "calculate exactly" turn, as the app's check returns it. */
-    fun finish(reply: String, given: List<Given>, question: String, names: List<String>, op: String): Checked {
-        val listed = parseList(reply, given, op)
+    fun finish(reply: String, given: List<Given>, question: String, names: List<String>, op: String,
+               nonce: String? = null): Checked {
+        val listed = parseList(reply, given, op, nonce)
         if (listed.saidNotFound || listed.items.isEmpty()) {
             val c = DocQa.checkReply(DocQa.NOT_FOUND, given, question, names)
             return if (listed.dropped.isNotEmpty()) c.copy(notes = c.notes + DocNote("calc_dropped", NOTE_DROPPED)) else c

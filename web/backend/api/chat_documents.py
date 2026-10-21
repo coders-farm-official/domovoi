@@ -503,6 +503,8 @@ class DocPlan:
     #: "Calculate exactly": the model lists the numbers, the app adds them
     #: up (domovoi/doc_qa/calc.py); the calculation.
     calc_op: str | None = None
+    #: The prompt's fence code, never kept in the reply (answer.strip_fence).
+    nonce: str | None = None
 
     def doc_json(self, checked: qa.Checked | None = None) -> dict[str, Any]:
         sources = []
@@ -529,9 +531,9 @@ class DocPlan:
         "Calculate exactly": the model's list, each number checked against
         its page, added up here (:func:`domovoi.doc_qa.calc.finish`)."""
         if self.calc_op:
-            checked = qa_calc.finish(content, self.given, self.question, self.names, self.calc_op)
+            checked = qa_calc.finish(content, self.given, self.question, self.names, self.calc_op, self.nonce)
         else:
-            checked = qa.check_reply(content, self.given, self.question, self.names)
+            checked = qa.check_reply(content, self.given, self.question, self.names, self.nonce)
         return checked.content, self.doc_json(checked)
 
 
@@ -696,7 +698,7 @@ def _plan(docs: list[dict[str, Any]], question: str, new_docs: list[dict[str, An
         base.calc_op = calc_card.op
     else:
         prompt = qa.build_prompt(q, given, names, mode=mode, previous=previous if mode == "question" else None)
-    base.user, base.rules = prompt["user"], prompt["rules"]
+    base.user, base.rules, base.nonce = prompt["user"], prompt["rules"], prompt.get("nonce")
     base.notes = list(decision.notes)
     return base
 

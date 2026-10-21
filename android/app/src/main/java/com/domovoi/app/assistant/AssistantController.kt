@@ -1445,8 +1445,8 @@ class AssistantController(
             _state.update { it.copy(checking = false) }
             return finishReply(asked, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
         }
-        val checked = if (calcOp != null) DocCalc.finish(text.toString(), given, question, names, calcOp)
-        else DocQa.checkReply(text.toString(), given, question, names)
+        val checked = if (calcOp != null) DocCalc.finish(text.toString(), given, question, names, calcOp, prompt.nonce)
+        else DocQa.checkReply(text.toString(), given, question, names, prompt.nonce)
         _state.update { it.copy(checking = false) }
         // Only the checked reply is shown, and spoken in a voice turn.
         onDelta(checked.content)

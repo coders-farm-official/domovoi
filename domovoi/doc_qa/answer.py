@@ -248,7 +248,25 @@ def build_prompt(question: str, given: Sequence[Given], names: Sequence[str], *,
         lines.append(f"Earlier question: {previous.strip()}")
     lines.append(f"Question: {question.strip()}")
     return {"rules": RULES_SUMMARY if mode == "summary" else RULES_QUESTION,
-            "user": "\n".join(lines)}
+            "user": "\n".join(lines), "nonce": n}
+
+
+#: The fence's markers, echoed back ("END OF PASSAGES a62cf03b>>>").
+_FENCE_RE = re.compile(r"(?:<<<\s*)?(?:END OF\s+)?PASSAGES\s+[0-9a-f]{8}(?:\s*>>>)?", re.IGNORECASE)
+#: A citation of the fence's code ("[a62cf03b]"): its shape, 8 hex digits,
+#: is no passage's label.
+_CODE_BRACKET_RE = re.compile(r"\[\s*[0-9a-f]{8}\s*\]", re.IGNORECASE)
+
+
+def strip_fence(text: str, nonce: str | None = None) -> str:
+    """A reply without the prompt's random fence code echoed into it (a
+    small model copied it as a citation: "[a62cf03b]", 2026-10-21): the
+    markers, a bracket holding a code of its shape, and, when the prompt's
+    ``nonce`` is known, the code anywhere."""
+    t = _FENCE_RE.sub("", text or "")
+    if nonce:
+        t = re.sub(r"[\[(]?\s*" + re.escape(nonce) + r"\s*[\])]?", "", t, flags=re.IGNORECASE)
+    return _CODE_BRACKET_RE.sub("", t)
 
 
 # ─── The check ───────────────────────────────────────────────────────────
@@ -362,10 +380,11 @@ def _best_sentence(text: str, want: set[str]) -> str:
 
 
 def check_reply(reply: str, given: Sequence[Given], question: str = "",
-                names: Sequence[str] = ()) -> Checked:
+                names: Sequence[str] = (), nonce: str | None = None) -> Checked:
     """The app's check of a model's ``reply`` to the passages ``given``
-    (``names``: the documents', for the "couldn't find" note)."""
-    text = reply or ""
+    (``names``: the documents', for the "couldn't find" note; ``nonce``:
+    the prompt's fence code, never kept in the reply: :func:`strip_fence`)."""
+    text = strip_fence(reply or "", nonce)
     cited: list[str] = []
     dropped: list[str] = []
 

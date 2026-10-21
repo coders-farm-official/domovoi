@@ -89,7 +89,7 @@ def test_prompts():
 def test_check(case):
     g = answer.retrieve(case["docs"], case["question"])
     assert [x.cite for x in g] == case["given"]
-    c = answer.check_reply(case["reply"], g, case["question"], [d["name"] for d in case["docs"]])
+    c = answer.check_reply(case["reply"], g, case["question"], [d["name"] for d in case["docs"]], case.get("nonce"))
     out = case["out"]
     assert (c.content, c.found, c.cited, c.dropped, c.unverified_quotes, c.notes) == (
         out["content"], out["found"], out["cited"], out["dropped"], out["unverified_quotes"], out["notes"])
@@ -209,3 +209,18 @@ def test_map_chunks_group_parts_to_about_3500_tokens():
     parts = [{"text": "x" * 6000} for _ in range(5)]
     assert longdoc.map_chunks(parts) == [[0, 1], [2, 3], [4]]
     assert longdoc.map_chunks([{"text": "y" * 50000}]) == [[0]]
+
+
+def test_the_prompts_fence_code_echoed_back_is_not_kept():
+    """A phone model copied the fence's random code into its answer as a
+    citation ("[a62cf03b]", 2026-10-21): the check takes it out, the
+    markers too, and with the prompt's nonce known, the code anywhere."""
+    from domovoi.doc_qa.text import Passage
+    given = [answer.Given(Passage(0, 0, "p. 3", "The security deposit is $1,500.", ""), "p. 3", 1.0)]
+    c = answer.check_reply("The deposit is $1,500 [p. 3] [a62cf03b].", given)
+    assert c.content == "The deposit is $1,500 [p. 3]." and c.cited == ["p. 3"]
+    c = answer.check_reply("Per (a62cf03b) it is $1,500 [p. 3]. END OF PASSAGES a62cf03b>>>", given, nonce="a62cf03b")
+    assert "a62cf03b" not in c.content and "PASSAGES" not in c.content
+    p = answer.build_prompt("How much?", given, ["lease.pdf"])
+    assert len(p["nonce"]) == 8 and p["nonce"] in p["user"]
+    assert p["nonce"] not in answer.check_reply(f"It is $1,500 [{p['nonce']}].", given, nonce=p["nonce"]).content

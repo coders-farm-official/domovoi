@@ -126,7 +126,7 @@ def build_prompt(question: str, given: Sequence[qa.Given], names: Sequence[str],
     listing rules instead of the answering ones."""
     p = qa.build_prompt(question, given, names, mode="question", nonce=nonce)
     what, example = ("date", "March 1, 2026") if op == "days" else ("number", "1,200")
-    return {"rules": RULES.format(what=what, example=example), "user": p["user"]}
+    return {"rules": RULES.format(what=what, example=example), "user": p["user"], "nonce": p["nonce"]}
 
 
 @dataclass
@@ -147,11 +147,11 @@ class Listed:
     said_not_found: bool = False
 
 
-def parse_list(reply: str, given: Sequence[qa.Given], op: str) -> Listed:
+def parse_list(reply: str, given: Sequence[qa.Given], op: str, nonce: str | None = None) -> Listed:
     """The model's list, each line kept only when the passage it names
     shows that number (or date)."""
     out = Listed()
-    text = reply or ""
+    text = qa.strip_fence(reply or "", nonce)
     flat = " ".join(normalize(text).lower().split())
     if "couldn't find" in flat.replace("could not", "couldn't") and "[" not in text:
         out.said_not_found = True
@@ -248,10 +248,11 @@ NOTE_WORKED = "Worked out by the app from the numbers listed, not by the model."
 NOTE_DROPPED = "A number the model listed isn't on the page it named, so it was left out."
 
 
-def finish(reply: str, given: Sequence[qa.Given], question: str, names: Sequence[str], op: str) -> qa.Checked:
+def finish(reply: str, given: Sequence[qa.Given], question: str, names: Sequence[str], op: str,
+           nonce: str | None = None) -> qa.Checked:
     """The reply to show for a "calculate exactly" turn, as the app's check
     returns it (sources, cited labels, notes)."""
-    listed = parse_list(reply, given, op)
+    listed = parse_list(reply, given, op, nonce)
     if listed.said_not_found or not listed.items:
         checked = qa.check_reply(qa.NOT_FOUND, given, question, names)
         if listed.dropped:
