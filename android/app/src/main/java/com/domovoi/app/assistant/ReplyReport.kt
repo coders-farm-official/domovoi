@@ -1,10 +1,9 @@
 package com.domovoi.app.assistant
 
+import com.domovoi.app.data.AtomicFiles
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import kotlin.random.Random
@@ -224,7 +223,7 @@ class ReplyReportStore(val dir: File) {
         val target = file(report.id)
         val tmp = File(dir, "${report.id}.json.tmp")
         tmp.writeText(json.encodeToString(ReplyReport.serializer(), report))
-        Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        AtomicFiles.replace(tmp, target)
     }
 
     fun delete(id: String): Boolean = !isValidId(id) || file(id).let { !it.exists() || it.delete() }

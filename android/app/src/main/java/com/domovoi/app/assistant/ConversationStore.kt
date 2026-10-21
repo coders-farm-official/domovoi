@@ -1,13 +1,12 @@
 package com.domovoi.app.assistant
 
+import com.domovoi.app.data.AtomicFiles
 import com.domovoi.app.assistant.docs.DocNote
 import com.domovoi.app.assistant.docs.DocSource
 import com.domovoi.app.assistant.docs.StoredDocument
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import kotlin.random.Random
 
 /** Who said a message in an on-phone conversation. */
@@ -224,7 +223,7 @@ class ConversationStore(val dir: File) {
         val target = file(conversation.id)
         val tmp = File(dir, "${conversation.id}.json.tmp")
         tmp.writeText(json.encodeToString(StoredConversation.serializer(), conversation))
-        Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        AtomicFiles.replace(tmp, target)
     }
 
     fun delete(id: String): Boolean = !isValidId(id) || file(id).let { !it.exists() || it.delete() }
