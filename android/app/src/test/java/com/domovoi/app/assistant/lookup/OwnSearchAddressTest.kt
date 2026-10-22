@@ -70,4 +70,26 @@ class OwnSearchAddressTest {
             }
         }
     }
+
+    private fun dnsOf(vararg a: String) = okhttp3.Dns { _ -> a.map { java.net.InetAddress.getByName(it) } }
+
+    @Test fun aHomeLookingNameThatResolvesToAPublicAddressIsRefusedOverHttp() {
+        for (answer in listOf(arrayOf("203.0.113.5"), arrayOf("192.168.1.20", "203.0.113.5"), arrayOf("2606:4700::1111"))) {
+            assertTrue(answer.joinToString(), cleartextResolvesOffNetwork("box.lan", dnsOf(*answer)))
+            for (client in listOf(plainClient(publicOnly = false, homeDns = dnsOf(*answer)), plainClient(homeDns = dnsOf(*answer)))) {
+                try {
+                    // The address is refused before DNS for the connection or a socket is used.
+                    client.newCall(Request.Builder().url("http://box.lan:8888/search?q=x").build()).execute().close()
+                    fail("plain http to a name resolving to a public address went out")
+                } catch (e: UnknownServiceException) {
+                    assertTrue(e.message.orEmpty().startsWith(HTTPS_UNLESS_HOME))
+                }
+            }
+        }
+        for (answer in listOf(arrayOf("192.168.1.20"), arrayOf("100.100.1.2", "fd00::20"), arrayOf("127.0.0.1"))) {
+            assertTrue(!cleartextResolvesOffNetwork("box.lan", dnsOf(*answer)))
+        }
+        assertTrue(!cleartextResolvesOffNetwork("box.lan", okhttp3.Dns { throw java.net.UnknownHostException("none") }))
+        assertTrue(!cleartextResolvesOffNetwork("203.0.113.5", dnsOf("8.8.8.8")))  // a literal: judged as written
+    }
 }

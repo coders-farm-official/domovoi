@@ -423,6 +423,8 @@ class OpenWebSource:
             # Saved before the home-network rule, or written into .env by
             # hand: still never sent in the clear across the internet.
             problem = home_address.own_search_address_problem(address)
+            if not problem:
+                problem = await asyncio.to_thread(home_address.resolved_address_problem, address)
             if problem:
                 raise OwnSearchFailed(f"your SearXNG address can't be used: {problem}")
             status, items = await searxng_search(address, query, limit=limit)
@@ -713,6 +715,8 @@ async def test_own_search(kind: str, *, key: str | None = None, url: str | None 
             items = await brave_search(probe, key or "", limit=1)
         elif kind == "searxng":
             problem = home_address.own_search_address_problem(url or "")
+            if not problem:
+                problem = await asyncio.to_thread(home_address.resolved_address_problem, url or "")
             if problem:
                 return {"result": "refused", "detail": _sentence(problem) + "."}
             status, items = await searxng_search(url or "", probe, limit=1)

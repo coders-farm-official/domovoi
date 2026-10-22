@@ -143,6 +143,21 @@ internal fun refusedHost(host: String): Boolean {
     return h == "localhost" || h.endsWith(".localhost")
 }
 
+/**
+ * The second half of the plain-http rule: a home-looking name (box.lan,
+ * nas.home.arpa) passes [CleartextPolicy] as written, but if it resolves to
+ * even one address that is not a home address (an ISP's wildcard DNS, a
+ * rebinding trick), it is not on the home network. A name that does not
+ * resolve is left to fail when the connection is tried; an address written
+ * as a number was already judged as written.
+ */
+internal fun cleartextResolvesOffNetwork(host: String, dns: okhttp3.Dns): Boolean {
+    val h = host.trim().removePrefix("[").removeSuffix("]").trimEnd('.')
+    if (h.isEmpty() || ':' in h || h.all { it.isDigit() || it == '.' }) return false
+    val all = try { dns.lookup(h) } catch (_: java.net.UnknownHostException) { return false }
+    return all.any { !CleartextPolicy.cleartextPermitted(it.hostAddress) }
+}
+
 /** A client with no household token, no cookies and no https→http hop.
  *  [publicOnly]: only public addresses (everything but the person's own
  *  SearXNG, which may be on their network): names through [PublicDns], an
@@ -151,8 +166,15 @@ internal fun refusedHost(host: String): Boolean {
  *  interceptor before a byte of the request is sent. Either way plain http
  *  goes only to the home network ([CleartextPolicy], the rule the server
  *  address follows too), on the first hop and on every redirect's. */
-fun plainClient(publicOnly: Boolean = true): OkHttpClient = OkHttpClient.Builder()
+fun plainClient(publicOnly: Boolean = true, homeDns: okhttp3.Dns = okhttp3.Dns.SYSTEM): OkHttpClient = OkHttpClient.Builder()
     .addInterceptor(CleartextPolicy.interceptor)
+    .addInterceptor { chain ->
+        val url = chain.request().url
+        if (!url.isHttps && cleartextResolvesOffNetwork(url.host, homeDns)) {
+            throw java.net.UnknownServiceException("$HTTPS_UNLESS_HOME (${url.host} does not resolve to a home address)")
+        }
+        chain.proceed(chain.request())
+    }
     .apply {
         if (publicOnly) {
             dns(PublicDns)

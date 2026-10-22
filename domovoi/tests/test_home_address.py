@@ -191,6 +191,45 @@ def test_a_saved_public_http_address_is_never_used(monkeypatch):
     assert sent == ["http://192.168.1.20:8888"]
 
 
+def test_a_home_looking_name_that_resolves_to_a_public_address_is_refused(monkeypatch):
+    """The name passes the written rule (.lan), but what it resolves to is
+    judged too: one public address among the answers means it is not on the
+    home network, so plain http is refused where the address is used."""
+    sent: list[str] = []
+
+    async def fake_searxng(base, query, **_k):
+        sent.append(base)
+        return "ok", []
+
+    monkeypatch.setattr(lookup_web, "searxng_search", fake_searxng)
+    monkeypatch.setattr(settings, "lookup_own_search", "searxng")
+    monkeypatch.setattr(settings, "lookup_own_searxng_url", "http://box.lan:8888")
+    assert own_search_address_problem("http://box.lan:8888") is None  # fine as written
+
+    for answer in (["203.0.113.5"], ["192.168.1.20", "203.0.113.5"], ["::ffff:8.8.8.8"], ["2606:4700::1111"]):
+        monkeypatch.setattr(net_safety, "resolve_host", lambda h, a=answer: [ipaddress.ip_address(x) for x in a])
+        assert home_address.resolved_address_problem("http://box.lan:8888") == HTTPS_UNLESS_HOME
+        with pytest.raises(lookup_web.OwnSearchFailed) as e:
+            asyncio.run(lookup_web.OpenWebSource().search("red panda"))
+        assert "Use https:// unless the search is on your home network" in str(e.value)
+        got = asyncio.run(lookup_web.test_own_search("searxng", url="http://box.lan:8888"))
+        assert got == {"result": "refused", "detail": "Use https:// unless the search is on your home network."}
+    assert sent == []
+
+    # Resolving to home addresses (or not resolving at all) is allowed on to the connection.
+    for answer in (["192.168.1.20"], ["100.100.1.2", "fd00::20"], ["127.0.0.1"], []):
+        monkeypatch.setattr(net_safety, "resolve_host", lambda h, a=answer: [ipaddress.ip_address(x) for x in a])
+        assert home_address.resolved_address_problem("http://box.lan:8888") is None
+    asyncio.run(lookup_web.OpenWebSource().search("red panda"))
+    assert sent == ["http://box.lan:8888"]
+
+    # https and IP literals never resolve anything.
+    monkeypatch.setattr(net_safety, "resolve_host", lambda h: (_ for _ in ()).throw(AssertionError("resolved")))
+    assert home_address.resolved_address_problem("https://box.lan") is None
+    assert home_address.resolved_address_problem("http://192.168.1.20") is None
+    assert home_address.resolved_address_problem("http://[fd00::1]") is None
+
+
 # ─── The routes: the Test button and the Settings write ───────────────────
 
 
@@ -232,6 +271,7 @@ def admin(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_the_test_button_refuses_a_public_http_address(admin, monkeypatch):
     sent: list[str] = []
+    monkeypatch.setattr(net_safety, "resolve_host", lambda h: [ipaddress.ip_address("192.168.1.30")])
 
     async def fake_searxng(base, query, **_k):
         sent.append(base)

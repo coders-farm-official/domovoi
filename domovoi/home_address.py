@@ -88,3 +88,35 @@ def own_search_address_problem(url: str) -> str | None:
     if scheme == "http" and not plain_http_permitted(host):
         return HTTPS_UNLESS_HOME
     return None
+
+
+def _ip_is_home(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    nets = _PRIVATE_V4 if ip.version == 4 else _PRIVATE_V6
+    return any(ip in net for net in nets)
+
+
+def resolved_address_problem(url: str) -> str | None:
+    """The second half of the rule, for when the address is *used*: a
+    home-looking name (``box.lan``, ``nas.home.arpa``) that actually resolves
+    to a public address (an ISP's wildcard DNS, a rebinding trick) is not on
+    the home network, so plain http to it is refused. https is never
+    affected, an IP literal was already judged as written, and a name that
+    does not resolve is left to fail when the connection is tried. Blocking
+    (a name lookup): call it off the event loop."""
+    try:
+        parts = urlsplit(str(url or "").strip())
+        host = (parts.hostname or "").strip().lower().rstrip(".")
+    except ValueError:
+        return None
+    if parts.scheme.lower() != "http" or not host:
+        return None
+    try:
+        ipaddress.ip_address(host.split("%", 1)[0])
+        return None  # a literal: judged as written
+    except ValueError:
+        pass
+    from domovoi import net_safety  # late: net_safety is heavier than this rule
+
+    if any(not _ip_is_home(ip) for ip in net_safety.resolve_host(host)):
+        return HTTPS_UNLESS_HOME
+    return None
