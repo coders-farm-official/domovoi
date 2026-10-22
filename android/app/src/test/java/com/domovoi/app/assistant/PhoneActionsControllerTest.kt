@@ -211,6 +211,34 @@ class PhoneActionsControllerTest {
 
     /** Fold check 2026-10-21: "Play Outcast" (not in the library) went to
      *  the model, which said "Playing Outcast now." and nothing played. */
+    /** Fold re-check 2026-10-22: Samsung's Clock reused an unnamed timer of
+     *  the same length, so two 2-minute cards gave one timer. Every unnamed
+     *  timer is named for when it was set; a reminder keeps its own words. */
+    @Test fun anUnnamedTimerIsNamedForWhenItWasSet() {
+        val c = controller()
+        c.ask("set a timer for 2 minutes")
+        c.ask("yes")
+        nowMs += 60_000
+        c.ask("set a timer for 2 minutes")
+        c.ask("yes")
+        c.ask("Remind me in five minutes to check the oven")
+        c.ask("yes")
+        assertEquals(listOf("Timer · 3:42 PM", "Timer · 3:43 PM", "check the oven"), host.sent.map { it.label })
+    }
+
+    /** Fold re-check 2026-10-22: a misheard alarm request got "I cannot set
+     *  alarms or timers directly." from the model: not so, and the words
+     *  that do it are said instead. */
+    @Test fun theModelNeverSaysThePhoneCantSetTimers() {
+        val c = controller()
+        script = { _, emit -> emit("I cannot set alarms or timers directly. "); emit("Is there anything else?") }
+        val r = c.ask("It's set in alarm for five minutes from now")
+        assertEquals("${ClaimGuard.CLOCK_HELP_LINE} Is there anything else?", r.text)
+        script = { _, emit -> emit("I cannot set the table, but here's how to fold napkins.") }
+        assertEquals("I cannot set the table, but here's how to fold napkins.", c.ask("how do I lay a table").text)
+        assertTrue(Persona.SYSTEM_PROMPT.contains("remind me in 20 minutes"))
+    }
+
     @Test fun aModelReplyNeverClaimsToHavePlayedSomething() {
         val c = controller()
         script = { _, emit -> emit("Playing Out"); emit("cast now. "); emit("Enjoy the music!") }

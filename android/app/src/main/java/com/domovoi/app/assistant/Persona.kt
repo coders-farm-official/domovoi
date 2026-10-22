@@ -29,7 +29,10 @@ object Persona {
             "Clock app, to play, pause, skip or stop music saved on the phone, to set a sleep timer for it, to " +
             "continue an audiobook saved on the phone or to play a video saved on it. If such a request reaches " +
             "you, it was not done: never say it was; say in one sentence to ask plainly, for example \"set a timer " +
-            "for 10 minutes\". You cannot open files, look anything up online or control the rooms of the house; " +
+            "for 10 minutes\". Timers, alarms and reminders are set on this phone when asked in these words: " +
+            "\"set a timer for 10 minutes\", \"set an alarm for 7 am\" or \"remind me in 20 minutes to call Sam\"; " +
+            "never say this phone can't set timers, alarms or reminders, and when a request for one is unclear, " +
+            "suggest those words. You cannot open files, look anything up online or control the rooms of the house; " +
             "if asked, say so in one sentence."
 
     const val SYSTEM_PROMPT: String =

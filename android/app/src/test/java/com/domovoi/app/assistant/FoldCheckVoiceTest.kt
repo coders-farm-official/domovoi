@@ -222,11 +222,54 @@ class FoldCheckVoiceTest {
         c.talk()
         until("the timer was sent") { host.sent.isNotEmpty() }
         until("idle") { c.ui().voicePhase == VoicePhase.Idle && !c.ui().replying }
-        assertEquals(listOf(ClockRequest(ClockIntent.SET_TIMER, seconds = 60)), host.sent.toList())
+        assertEquals(listOf(ClockRequest(ClockIntent.SET_TIMER, seconds = 60, label = "Timer · 3:42 PM")), host.sent.toList())
         val ms = c.ui().conversation.messages
         assertEquals(CardState.DONE, ms[1].card?.state)
         assertEquals("Yes.", ms[2].text)
         assertTrue(ms[2].spoken)
+    }
+
+    /** Fold re-check (2026-10-22): a spoken "No." to a second card in the
+     *  chat, right after a voice turn, set it cancelled but the reply was the
+     *  model's. A yes or no to a card always gets the card's own reply. */
+    @Test fun aSpokenNoToASecondCardIsTheCardsOwnReply() {
+        val kit = Kit("Set a timer for 2 minutes", "Yes.", "Set a timer for 2 minutes", "No.")
+        val c = controller(kit)
+        c.talk()
+        until("the first timer") { host.sent.size == 1 }
+        until("idle") { c.ui().voicePhase == VoicePhase.Idle && !c.ui().replying }
+        c.talk()
+        until("answered no") { c.ui().voicePhase == VoicePhase.Idle && !c.ui().replying && c.ui().conversation.messages.size >= 8 }
+        val ms = c.ui().conversation.messages
+        assertEquals("No.", ms[6].text)
+        assertEquals(ActionTexts.DECLINED, ms[7].text)
+        assertEquals(CardState.DISMISSED, ms[5].card?.state)
+        assertEquals(1, host.sent.size)
+        assertTrue("no model reply", engines.all { it.replies.isEmpty() })
+    }
+
+    /** A yes or no to a card that's already answered (a tap got there
+     *  first) is still the card's reply, never the model's. */
+    @Test fun aYesOrNoToAnAnsweredCardIsNeverTheModels() {
+        val kit = Kit("x")
+        val c = controller(kit)
+        c.send("Set a timer for 2 minutes")
+        until("the card") { !c.ui().replying && c.ui().conversation.messages.lastOrNull()?.card?.state == CardState.OPEN }
+        c.actionDeclined(c.ui().conversation.id, 1)
+        until("cancelled") { c.ui().conversation.messages[1].card?.state == CardState.DISMISSED }
+        c.send("No.")
+        until("reply") { !c.ui().replying && c.ui().conversation.messages.size >= 4 }
+        assertEquals(ActionTexts.DECLINED, c.ui().conversation.messages[3].text)
+        // A yes to a card that was cancelled: answered already, still no model.
+        c.send("Set a timer for 3 minutes")
+        until("card 2") { !c.ui().replying && c.ui().conversation.messages.size >= 6 }
+        c.actionDeclined(c.ui().conversation.id, 5)
+        until("cancelled 2") { c.ui().conversation.messages[5].card?.state == CardState.DISMISSED }
+        c.send("yes")
+        until("reply 2") { !c.ui().replying && c.ui().conversation.messages.size >= 8 }
+        assertEquals(ActionTexts.ALREADY_ANSWERED, c.ui().conversation.messages[7].text)
+        assertTrue("no model reply", engines.all { it.replies.isEmpty() })
+        assertTrue(host.sent.isEmpty())
     }
 
     /** Review round 1: noise in the window (nothing a recognizer can read)

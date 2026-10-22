@@ -1539,7 +1539,9 @@ class AssistantController(
             // Only on a turn that asked to act (review round 1): a story's or
             // an explanation's sentences are never touched.
             val acting = ClaimGuard.asksToAct(asked.messages.lastOrNull { it.fromUser }?.text)
-            var guard: ClaimGuard? = if (acting) ClaimGuard() else null
+            // Every turn: a refusal to set timers or alarms is replaced with the
+            // words that set them (Fold re-check 2026-10-22).
+            var guard = ClaimGuard(claims = acting)
             while (true) try {
                 llm.reply(turn)
                     .collect { piece ->
@@ -1577,7 +1579,7 @@ class AssistantController(
             } catch (e: CancellationException) {
                 if (!again || !runtimeCancel() || text.isNotEmpty() || held.isNotEmpty() || guard?.holding == true) throw e
                 again = false
-                guard = if (acting) ClaimGuard() else null
+                guard = ClaimGuard(claims = acting)
                 Log.w(TAG, "the runtime cancelled a reply nobody stopped (${e.message}); asking once more")
                 llm.reset()
             }
@@ -2092,6 +2094,23 @@ class AssistantController(
         val pending = asked.messages.getOrNull(cardIndex)?.card
             ?.takeIf { it.kind == CardKind.ACTION && (it.state == CardState.OPEN || it.state == CardState.SENDING) }
         var isUndo = false
+        // A clear yes or no to the card just asked that is already answered
+        // (a tap, a "no" heard twice): still the card's own reply, never the
+        // model's (Fold re-check 2026-10-22: "No." got "I cannot set alarms").
+        val answered = asked.messages.getOrNull(cardIndex)?.card
+            ?.takeIf { it.kind == CardKind.ACTION && it.state != CardState.OPEN && it.state != CardState.SENDING }
+        if (pending == null && answered != null) {
+            val text = when (actionReply(question.text)) {
+                ActionReply.No -> if (answered.state == CardState.DISMISSED) ActionTexts.DECLINED else ActionTexts.ALREADY_ANSWERED
+                ActionReply.Yes -> ActionTexts.ALREADY_ANSWERED
+                else -> null
+            }
+            if (text != null) {
+                onDelta(text)
+                undoEntry = null
+                return finishReply(asked, phoneMessage(text, FAST_ACTION_YES).copy(firstTextMs = (nanos() - sent) / 1_000_000))
+            }
+        }
         val reply0 = if (pending != null) actionReply(question.text) else null
         val out: ActionOutcome? = if (pending != null && reply0 != null) actionLock.withLock {
             // A tap on the card got there first (it is SENDING or DONE):
@@ -2494,7 +2513,10 @@ class AssistantController(
                 val intent = if (a.kind == ActionKind.SET_TIMER) ClockIntent.SET_TIMER else ClockIntent.SET_ALARM
                 if (!actions.clockTakes(intent)) return false to ActionTexts.noClock(intent)
                 val request = if (a.kind == ActionKind.SET_TIMER) {
-                    ClockRequest(intent, seconds = a.seconds, label = a.label)
+                    // Every timer gets a name: Samsung's Clock reuses an unnamed
+                    // timer of the same length, so two 2-minute cards gave one
+                    // timer (Fold re-check 2026-10-22).
+                    ClockRequest(intent, seconds = a.seconds, label = a.label ?: ActionTexts.timerName(style, now))
                 } else {
                     ClockRequest(intent, hour = a.hour, minute = a.minute, days = a.days, label = a.label)
                 }
