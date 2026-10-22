@@ -99,4 +99,13 @@ class FileKindsTest {
             SendHomeWords.of("a.pdf", asUpload = false),
         )
     }
+
+    /** Review round 1: Chat documents holds only saved drafts, so Files
+     *  offers no upload, move or "add folder" there (nor as a move target). */
+    @Test fun chatDocumentsTakesNoFiles() {
+        assertEquals(false, libraryTakesFiles(CHAT_DOCS_ID))
+        assertEquals(true, libraryTakesFiles("phone:folder:abc"))
+        assertEquals(true, libraryTakesFiles("documents"))
+        assertEquals(true, libraryTakesFiles(null))
+    }
 }

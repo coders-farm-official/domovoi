@@ -114,6 +114,7 @@ from web.backend.api import chat_doc_jobs as _jobs
 from web.backend.api import chat_documents as _docs
 from web.backend.api import chat_letters as _letters
 from domovoi.doc_qa import letter as _letter
+from web.backend.api import chat_drafts as _drafts
 from web.backend.api.devices import valid_device_id
 from web.backend.db import session_scope
 from web.backend.domovoi_client import auth_forward_headers, domovoi_url
@@ -405,14 +406,14 @@ async def delete_thread(thread_id: int) -> dict[str, Any]:
 # ─── Messages ───────────────────────────────────────────────────────────────
 _MSG_COLUMNS = (
     "m.id, m.role, m.content, m.images, m.model, m.error, m.created_at, m.stats, m.device_id, "
-    "m.source, m.speaker_person_id, m.speaker_confidence, m.documents, m.doc"
+    "m.source, m.speaker_person_id, m.speaker_confidence, m.documents, m.doc, m.draft"
 )
 
 
 def _msg_dict(r: Any) -> dict[str, Any]:
     d = dict(r)
     d["created_at"] = d["created_at"].isoformat()
-    for key in ("stats", "documents", "doc"):
+    for key in ("stats", "documents", "doc", "draft"):
         if isinstance(d.get(key), str):
             d[key] = json.loads(d[key])
     if d.get("speaker_confidence") is not None:
@@ -647,6 +648,9 @@ class SendBody(BaseModel):
     # This device's heads-up switch and silenced kinds (documents plan D3,
     # chat_documents.HeadsUpBody); the rules are the server's.
     heads_up: Optional[_docs.HeadsUpBody] = None
+    # A draft card's Revise box (chat_drafts.py): the message is a revision
+    # of this draft, whatever it says.
+    revise_draft: Optional[int] = Field(None, ge=1)
 
 
 def _upload_path(token: str) -> Path | None:
@@ -969,6 +973,8 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
         raise HTTPException(status_code=422, detail="a message needs some words, or a document attached")
     # Well-formed or nothing, as every other route that reads a device id.
     device_id = valid_device_id(body.device_id)
+    if body.revise_draft is not None and not await _drafts.draft_in_thread(thread_id, body.revise_draft):
+        raise HTTPException(status_code=404, detail="draft not found in this chat")
 
     async with session_scope() as s:
         thread = (
@@ -1013,7 +1019,7 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
     return await _answer(
         thread_id, thread.person_id, has_images=bool(images), override=body.model,
         question=body.content, thread_title=thread.title, request=request,
-        documents=documents, user_row_id=user_row_id,
+        documents=documents, user_row_id=user_row_id, revise_draft=body.revise_draft, device_id=device_id,
         heads_up=body.heads_up.prefs() if body.heads_up else None,
     )
 
@@ -1200,6 +1206,8 @@ async def _answer(
     user_row_id: int | None = None,
     heads_up: Any = None,
     skip_row_id: int | None = None,
+    revise_draft: int | None = None,
+    device_id: str | None = None,
 ) -> StreamingResponse:
     """The SSE reply to the thread's last question (:func:`send_message`,
     and :func:`retry_reply` with ``replace_id``: the reply it replaces,
@@ -1218,7 +1226,15 @@ async def _answer(
     # A retry never has one: a document reply is not the chat model's to
     # write again (reply_retryable).
     plan: Any = None
-    if not has_images and replace_id is None:
+    # A draft turn (chat_drafts.py, documents plan D4): a request for a
+    # resume, cover letter or letter, a revision of the thread's draft
+    # ("shorter"), or "print it". Ahead of the documents' find-then-answer.
+    dturn: Any = None
+    if not has_images and replace_id is None and not documents:
+        dturn = await _drafts.plan_turn(thread_id, question, revise_draft=revise_draft, device_id=device_id)
+        if dturn is not None:
+            model_role = "draft"
+    if not has_images and replace_id is None and dturn is None:
         previous = await _docs.previous_question(thread_id, before_id=user_row_id)
         plan = await _docs.plan_reply(thread_id, question, documents or [], previous, heads_up)
         if plan is not None and not override:
@@ -1275,11 +1291,15 @@ async def _answer(
     # thread's earlier ones out (see _history_for_model). A turn that may
     # carry pictures is cut to the vision window, less the system message
     # (at its longest: with the pictures paragraph) and room for the reply.
-    with_images = model_role not in ("chat", "documents")
+    with_images = model_role not in ("chat", "documents", "draft")
     history: list[dict[str, Any]] = []
     window: dict[str, Any] = {}
     profile = model_system = None
-    if refusal is None and plan is not None:
+    if dturn is not None:
+        # The draft's own prompt (the one version being revised, or the
+        # request and the skeleton): no thread history, no profile.
+        history = [m for msgs in dturn.passes[:1] for m in msgs if m["role"] != "system"]
+    elif refusal is None and plan is not None:
         # Answered from the documents: the passages and the question are the
         # whole prompt (no earlier replies: an answer comes only from what
         # the app found), the rules after who is answering.
@@ -1313,7 +1333,9 @@ async def _answer(
     # A help turn: the help desk's instruction and its material instead.
     help_turn = None
     fixed_reply: str | None = None
-    if refusal is None and not override and plan is None:
+    if dturn is not None and dturn.passes:
+        system = dturn.passes[0][0]
+    if refusal is None and not override and plan is None and dturn is None:
         help_turn = await _help_turn(
             question, thread_title=thread_title, request=request, history=history,
             vision_call=vision_call, model=model,
@@ -1329,10 +1351,13 @@ async def _answer(
     if plan is not None and plan.immediate is None:
         system["content"] += "\n\n" + plan.rules
     # Lookups (part 5, W1): a plain text turn (not help, documents,
-    # pictures or a retry) is told about LOOK_UP / READ_PAGE, and a "look up
-    # …" or "what does this page say: …" needs no model to say so.
+    # pictures, a draft or a retry) is told about LOOK_UP / READ_PAGE, and a
+    # "look up …" or "what does this page say: …" needs no model to say so.
+    # A draft turn's prompt is the draft's alone (its model writes the
+    # document, never a lookup line).
     lookups_offered = (
-        refusal is None and help_turn is None and plan is None and not vision_call and replace_id is None
+        refusal is None and help_turn is None and plan is None and dturn is None and not vision_call
+        and replace_id is None
     )
     proposal: lookup_answer.Proposal | None = None
     thread_allowed = False
@@ -1393,7 +1418,36 @@ async def _answer(
         started = time.monotonic()
         first_token_ms: float | None = None
         doc: dict[str, Any] | None = None
-        if refusal is not None:
+        draft: dict[str, Any] | None = None
+        if dturn is not None and dturn.immediate is not None:
+            # "print it": the print card, with no model asked.
+            first_token_ms = 0.0
+            chunks.append(dturn.immediate)
+            draft = dturn.immediate_card()
+            yield f"event: delta\ndata: {json.dumps({'text': dturn.immediate})}\n\n"
+        elif dturn is not None:
+            # The draft streams as the model writes it; the done row is the
+            # card (its one line, and the version it wrote).
+            yield f"event: status\ndata: {json.dumps({'state': 'drafting', 'action': dturn.action})}\n\n"
+            try:
+                async for delta in dturn.stream(model=model, stats=ollama_stats):
+                    if first_token_ms is None:
+                        first_token_ms = (time.monotonic() - started) * 1000
+                    chunks.append(delta)
+                    yield f"event: delta\ndata: {json.dumps({'text': delta})}\n\n"
+            except Exception as e:  # noqa: BLE001 — surfaced as an SSE error event
+                code, error = _failure(e, model, model_role)
+                log.warning("chat draft failed (thread %s, model %s, %s): %s: %s",
+                            thread_id, model, code, type(e).__name__, str(e)[:500])
+            if error is None:
+                try:
+                    line, draft = await dturn.finish("".join(chunks))
+                    chunks = [line]
+                except ValueError:
+                    chunks = []
+            else:
+                chunks = []
+        elif refusal is not None:
             code, error = refusal
             log.info("chat refused up front (thread %s, model %r): %s", thread_id, model, code)
         elif fixed_reply is not None:
@@ -1535,14 +1589,17 @@ async def _answer(
                 await s.execute(
                     text(
                         """
-                        INSERT INTO chat_messages AS m (thread_id, role, content, model, error, stats, doc)
-                        VALUES (:t, 'assistant', :c, :m, :e, CAST(:st AS JSONB), CAST(:doc AS JSONB))
+                        INSERT INTO chat_messages AS m (thread_id, role, content, model, error, stats, doc, draft)
+                        VALUES (:t, 'assistant', :c, :m, :e, CAST(:st AS JSONB), CAST(:doc AS JSONB),
+                                CAST(:draft AS JSONB))
                         RETURNING {cols}, NULL::text AS device_name, NULL::text AS speaker_name
                         """.format(cols=_MSG_COLUMNS)
                     ),
                     {"t": thread_id, "c": content,
-                     "m": None if (fixed_reply is not None or (plan is not None and plan.immediate is not None)) else model,
-                     "e": error, "st": json.dumps(stats), "doc": json.dumps(doc) if doc is not None else None},
+                     "m": None if (fixed_reply is not None or (plan is not None and plan.immediate is not None)
+                                   or (dturn is not None and dturn.immediate is not None)) else model,
+                     "e": error, "st": json.dumps(stats), "doc": json.dumps(doc) if doc is not None else None,
+                     "draft": json.dumps(draft) if draft is not None else None},
                 )
             ).mappings().first()
             await s.execute(
@@ -2691,8 +2748,10 @@ async def chat_models() -> dict[str, Any]:
     }
 
 
-# Documents in chats (chat_documents.py): their routes ride on this router.
+# Documents in chats (chat_documents.py) and drafts (chat_drafts.py): their
+# routes ride on this router.
 router.include_router(_docs.router)
+router.include_router(_drafts.router)
 # Long documents' map/reduce jobs (chat_doc_jobs.py), and a phone's private ones.
 router.include_router(_jobs.router)
 router.include_router(_letters.router)

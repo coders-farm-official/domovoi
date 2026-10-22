@@ -346,6 +346,11 @@ SPEECH_READS: list[tuple[str, str]] = [
     ("web", "/api/chat/threads"),
     ("web", "/api/chat/threads/{thread_id}/messages"),
     ("web", "/api/chat/uploads/{token}"),
+    # chat drafts (documents plan D4): the household's letters and resumes
+    ("web", "/api/chat/drafts"),
+    ("web", "/api/chat/drafts/{draft_id}"),
+    ("web", "/api/chat/drafts/{draft_id}/export"),
+    ("web", "/api/chat/threads/{thread_id}/drafts"),
     # a recording of somebody in the house saying the wake phrase
     ("web", "/api/wake-words/{wake_word_id}/clips/{name}/audio"),
 ]

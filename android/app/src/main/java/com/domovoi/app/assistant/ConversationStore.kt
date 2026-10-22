@@ -71,6 +71,10 @@ data class StoredMessage(
     /** ...the notes under it ("couldn't find", "uncited", a quote that
      *  doesn't match). */
     val notes: List<DocNote> = emptyList(),
+    /** A draft reply (documents plan D4): the draft card's draft and the
+     *  version this turn wrote (or offered to print). [text] is the one
+     *  line of what was done, which is all the model sees of it later. */
+    val draft: com.domovoi.app.assistant.drafts.DraftRef? = null,
     /** A lookup's permission card (part 5, W1): the exact words, where
      *  they'd go and the person's answer. Not a reply: the model never
      *  sees it. */
@@ -81,9 +85,6 @@ data class StoredMessage(
     /** A summary written by a long-document job ([PhoneDocJob.id]): a
      *  stopped one offers "carry on" while the job is kept. */
     val jobId: String? = null,
-    /** A heads-up card (documents plan D3): the reply until an option is
-     *  picked, with the pick once made. */
-    val headsUp: StoredHeadsUp? = null,
     /** A question asked with a photo (N3). Only this mark is kept: the
      *  photo itself never is, on the phone or anywhere else. */
     val photo: Boolean = false,
@@ -91,6 +92,9 @@ data class StoredMessage(
     val vision: String? = null,
     /** ...and the app's peak resident memory while it was written, MB. */
     val peakMb: Int? = null,
+    /** A heads-up card (documents plan D3): the reply until an option is
+     *  picked, with the pick once made. */
+    val headsUp: StoredHeadsUp? = null,
 ) {
     val fromUser: Boolean get() = from == Speaker.USER
 }

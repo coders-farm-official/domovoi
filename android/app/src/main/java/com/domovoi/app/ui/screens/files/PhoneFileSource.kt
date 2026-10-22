@@ -11,6 +11,7 @@ import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import com.domovoi.app.assistant.drafts.ChatDocumentsLibrary
 import com.domovoi.app.data.PhoneFolder
 import com.domovoi.app.data.PhoneFolders
 import com.domovoi.app.data.Prefs
@@ -33,6 +34,14 @@ import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 import java.util.concurrent.ConcurrentHashMap
+
+/** Files' id for the phone's "Chat documents" library (saved drafts). */
+internal const val CHAT_DOCS_ID = "phone:chatdocs"
+
+/** Whether Files offers upload, move and "add folder" in [libraryId]: never
+ *  in Chat documents, which holds only the drafts chats save (it refuses
+ *  both; a control that can't do what it says isn't shown). Delete stays. */
+internal fun libraryTakesFiles(libraryId: String?): Boolean = libraryId != CHAT_DOCS_ID
 
 /** The text editor's read bound, the server's `_TEXT_MAX_BYTES`. */
 internal const val TEXT_MAX_BYTES = 2 * 1024 * 1024
@@ -88,7 +97,11 @@ internal class PhoneFileSource(
 
     override suspend fun libraries(): List<FileLibrary> = withContext(Dispatchers.IO) {
         val (folders, writable) = grantedFolders()
-        folders.map { f ->
+        // A phone chat's saved drafts (documents plan D4), once there are any.
+        val chatDocs = if (chatDocuments.files().isEmpty()) emptyList() else listOf(
+            FileLibrary(id = CHAT_DOCS_ID, label = ChatDocumentsLibrary.FOLDER, kind = "folder", icon = "file-text", editable = true),
+        )
+        chatDocs + folders.map { f ->
             FileLibrary(
                 id = PhoneFolders.libraryId(f),
                 label = f.name,
@@ -112,6 +125,26 @@ internal class PhoneFileSource(
         else Manifest.permission.READ_EXTERNAL_STORAGE
 
     override fun editsInApp(lib: FileLibrary?): Boolean = lib?.id?.startsWith(PhoneFolders.FOLDER_PREFIX) == true
+
+    // ── "Chat documents": the app's own folder of saved drafts ──────────
+
+    private val chatDocuments = ChatDocumentsLibrary(java.io.File(ctx.filesDir, ChatDocumentsLibrary.FOLDER))
+
+    private fun browseChatDocuments(req: PageRequest, q: String, foldersOnly: Boolean): FileBrowse {
+        val needle = q.trim().lowercase()
+        val all = if (foldersOnly) emptyList() else chatDocuments.files()
+            .filter { needle.isEmpty() || it.name.lowercase().contains(needle) }
+            .map { f -> FileEntry(name = f.name, rel = f.name, size = f.length(), mtime = f.lastModified() / 1000.0, kind = fileKind(f.name, false)) }
+        val page = Paging.slice(all, req)
+        return FileBrowse(
+            libraryId = CHAT_DOCS_ID, path = "", editable = true, entries = page.items, writable = true,
+            total = all.size, folderTotal = all.size, hasMore = page.hasMore,
+        )
+    }
+
+    private fun chatDocumentUri(rel: String): Uri? = chatDocuments.file(rel.substringAfterLast('/'))?.let { f ->
+        androidx.core.content.FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f)
+    }
 
     // ── tree walking ────────────────────────────────────────────────────
 
@@ -199,6 +232,7 @@ internal class PhoneFileSource(
         foldersOnly: Boolean,
     ): FileBrowse = withContext(Dispatchers.IO) {
         if (libraryId == PhoneFolders.PHOTOS_ID) return@withContext browsePhotos(path, req, q, foldersOnly)
+        if (libraryId == CHAT_DOCS_ID) return@withContext browseChatDocuments(req, q, foldersOnly)
         val tree = tree(libraryId)
         val t = tree.toString()
         val kids = listing?.takeIf { it.tree == t && it.path == path && req.offset > 0 }?.kids
@@ -325,6 +359,7 @@ internal class PhoneFileSource(
     // ── content ─────────────────────────────────────────────────────────
 
     override fun contentUri(libraryId: String, rel: String): Uri? = runCatching {
+        if (libraryId == CHAT_DOCS_ID) return chatDocumentUri(rel)
         if (libraryId == PhoneFolders.PHOTOS_ID) {
             ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, rel.substringAfterLast('/').toLong())
         } else {
@@ -338,8 +373,9 @@ internal class PhoneFileSource(
         val uri = contentUri(libraryId, entry.rel) ?: return false
         val type = resolver.getType(uri)?.takeIf { it != "application/octet-stream" } ?: mimeFor(entry.name)
         var flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
-        // A folder file can be edited in the app it opens in.
-        if (libraryId != PhoneFolders.PHOTOS_ID) flags = flags or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        // A folder file can be edited in the app it opens in (a saved draft
+        // in Chat documents is the app's own: read-only there).
+        if (libraryId != PhoneFolders.PHOTOS_ID && libraryId != CHAT_DOCS_ID) flags = flags or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, type).addFlags(flags)
         return try {
             context.startActivity(intent)
@@ -380,6 +416,7 @@ internal class PhoneFileSource(
 
     private fun fileUri(libraryId: String, rel: String): Uri {
         if (libraryId == PhoneFolders.PHOTOS_ID) throw IOException("photos are read-only here")
+        if (libraryId == CHAT_DOCS_ID) throw IOException("open it in another app, or edit the draft in its chat")
         return docUri(tree(libraryId), rel)
     }
 
@@ -450,6 +487,7 @@ internal class PhoneFileSource(
 
     override suspend fun upload(context: Context, libraryId: String, path: String, uris: List<Uri>): UploadResult =
         withContext(Dispatchers.IO) {
+            if (libraryId == CHAT_DOCS_ID) throw IOException("Chat documents holds the drafts chats save; add files to a folder")
             val tree = tree(libraryId)
             val parent = docUri(tree, path)
             var saved = 0
@@ -482,6 +520,10 @@ internal class PhoneFileSource(
     }
 
     override suspend fun delete(libraryId: String, entry: FileEntry): DeleteResult = withContext(Dispatchers.IO) {
+        if (libraryId == CHAT_DOCS_ID) {
+            if (!chatDocuments.delete(entry.rel.substringAfterLast('/'))) throw IOException("couldn't delete it")
+            return@withContext DeleteResult(deleted = 1, failed = 0, reindexTriggered = false)
+        }
         val tree = tree(libraryId)
         val uri = docUri(tree, entry.rel)
         if (!DocumentsContract.deleteDocument(resolver, uri)) throw IOException("the phone refused to delete it")
@@ -495,6 +537,9 @@ internal class PhoneFileSource(
         targetLibraryId: String,
         targetPath: String,
     ): MoveResult = withContext(Dispatchers.IO) {
+        if (sourceLibraryId == CHAT_DOCS_ID || targetLibraryId == CHAT_DOCS_ID) {
+            throw IOException("use save a copy to… in the draft to put it somewhere else")
+        }
         val srcTree = tree(sourceLibraryId)
         val dstTree = tree(targetLibraryId)
         val srcParentRel = entry.rel.substringBeforeLast('/', "")

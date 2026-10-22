@@ -251,7 +251,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
     // import need both. Delete is admin-gated server-side and this app can't
     // sign in as admin, so its button stays but the failure says so.
     val blocked = data?.writable == false
-    val canWrite = editable && !blocked
+    val canWrite = editable && !blocked && libraryTakesFiles(selectedId)
     // "Send to home" is offered only while the server can actually be used.
     val serverUsable = LocalServerChoice.current.enabled
     val canSendHome = source.onPhone && serverUsable
@@ -504,7 +504,9 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                                 Icon(Icons.Outlined.UploadFile, "add files to this folder", tint = Domovoi.colors.fgMuted)
                             }
                         }
-                        OutlinedButton(onClick = { folderPicker.launch(null) }) { Text("add folder") }
+                        if (libraryTakesFiles(selectedId)) {
+                            OutlinedButton(onClick = { folderPicker.launch(null) }) { Text("add folder") }
+                        }
                     } else {
                         if (canScanHere) {
                             OutlinedButton(onClick = { scanning = true }) { Text("scan") }

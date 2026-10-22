@@ -31,5 +31,15 @@
                 <action android:name="com.domovoi.app.debug.N2_GATE" />
             </intent-filter>
         </receiver>
+        <!-- Draft PDFs rendered from pushed markdown, for the check that a
+             template's PDF text is the server's (DebugDraftRender). -->
+        <receiver
+            android:name=".assistant.drafts.DebugDraftRender"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.domovoi.app.debug.DRAFT_RENDER" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

@@ -1346,21 +1346,39 @@ async def upload_documents(
     request: Request,
     files: list[UploadFile] = File(...),
     device_id: Optional[str] = Form(None, min_length=3, max_length=64),
+    folder: Optional[Literal["From Chat"]] = Form(
+        None, description='Where in Documents: the top (default), or "From Chat" (made when missing), where '
+                          "the app's Send to home puts a phone chat's document"),
 ) -> UploadResult:
     """Upload one or more files straight into ``documents_dir`` from the
     browser. Filenames are sanitized to a bare basename (defanging
     ``../`` / zip-slip traversal across both separators), then deduped —
     and secret-shaped names are skipped exactly as
     ``POST /api/files/upload`` skips them, so the two doors into this
-    one folder cannot be played off against each other."""
+    one folder cannot be played off against each other.
+
+    ``folder="From Chat"`` puts the files in Documents → From Chat (the
+    one folder a client may name here; it is made when missing, as a scan
+    makes Scans), where home-server chats save their drafts."""
     await _assert_files_policy(request, device_id)
-    base = _documents_dir()
+    top = _documents_dir()
     try:
-        base.mkdir(parents=True, exist_ok=True)
+        top.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         raise HTTPException(
-            status_code=500, detail=f"could not create documents_dir {base}: {e}"
+            status_code=500, detail=f"could not create documents_dir {top}: {e}"
         ) from e
+    base = top
+    if folder:
+        sub = top / folder
+        if sub.is_symlink():
+            raise HTTPException(status_code=409, detail=f"Documents/{folder} is a link; nothing is written through it")
+        sub.mkdir(exist_ok=True)
+        base = sub.resolve()
+        try:
+            base.relative_to(top)
+        except ValueError:
+            raise HTTPException(status_code=409, detail=f"Documents/{folder} leads outside Documents") from None
 
     saved: list[str] = []
     skipped: list[str] = []
@@ -1398,7 +1416,7 @@ async def upload_documents(
         except OSError as e:
             skipped.append(f"{name}: write failed ({e})")
             continue
-        saved.append(target.name)
+        saved.append(target.relative_to(top).as_posix() if folder else target.name)
 
     if saved:
         _listing_changed()

@@ -62,6 +62,54 @@ dependencies.
   the answer, and nothing shown was missing from the letter's text. See
   the manual's "What Domovoi is good and not so good at" for the limits.
 
+## 2026-10-21 — Write resumes and letters in Chat
+
+Core, dashboard and app, with one migration, **V039** (`chat_drafts`,
+`chat_draft_versions`, `chat_messages.draft`; Flyway applies it on update).
+No new dependency: ReportLab (BSD) and python-docx (MIT) were already
+there. The app and the server carry the **Liberation Sans and Serif**
+fonts (SIL Open Font License 1.1, `domovoi/drafts/fonts/`), embedded in
+the PDFs Chat writes.
+
+* **Drafts.** Ask a chat for a resume, a cover letter or a letter ("write a
+  cover letter for the warehouse job at Acme", "draft a letter to my
+  landlord about the heater"). Domovoi writes it into a fixed outline and
+  shows it as a draft card. Follow-ups ("shorter", "more formal", "mention
+  my forklift licence") make new versions; the reply says what changed
+  ("cut 120 words (380 → 260)"). Every version is kept, and each can be
+  reopened, compared with the one before, or edited by hand (a version
+  "edited by you"). Only the version being changed goes to the model.
+* **Saving.** A home-server chat saves into Documents → **From Chat**: a
+  resume or cover letter as .docx by default, a letter as PDF, the other
+  format one press away. Domovoi then reads the file back and checks every
+  word is there in order (`text readable · single column`), which is what
+  job sites' applicant tracking systems need. A phone chat saves into the
+  phone's **Chat documents** (listed in Files), with **save a copy to…**
+  and **send to home**.
+* **Printing.** "print it" in a chat, and **print** on a draft, open the
+  Print dialog with a preview; nothing prints until you press Print. The
+  phone's own drafts print with Android's print dialog. "print it" said
+  into the app's chat mic in a home-server chat asks first, like every
+  voice print.
+* **Same text from the server and the phone.** Both make a template's PDF
+  from the same template files and fonts with the same line breaking, and
+  write it the same way: each line one text string, with real spaces and
+  no kerning, in the embedded Liberation fonts (the app has its own small
+  PDF writer for this; Android's left spaces out, and some readers then
+  ran words together). Checked on eight drafts: pdfminer, pypdf, poppler
+  (`pdftotext`, default and `-raw`) and pdfium read the same text from the
+  phone's PDF as from the server's, and exactly the draft's words. The
+  files themselves aren't byte-identical (different PDF writers). NFKC is
+  applied before drawing (the fonts have no ff/ffi/ffl ligature glyphs).
+* **The phone's save check reads a PDF as written** (no space guessed
+  from a gap) as well as with Android's PDF reader, so it runs on every
+  phone, not only Android 15.
+* **With AI chat and questions turned off,** nothing new is drafted, but
+  drafts already written can still be opened, edited, saved and printed
+  (the dashboard's Chat page lists them).
+* **Changed answer:** `POST /api/documents/upload` takes an optional
+  `folder` (`From Chat` only). A chat reply row may carry `draft`.
+
 ## 2026-10-21 — App fix: asking about a document in a phone chat
 
 App only. A question about a document in a phone chat could crash the app on

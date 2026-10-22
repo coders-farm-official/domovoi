@@ -1431,7 +1431,7 @@ row's `category` tells the UI how to open it
 |---|---|---|
 | `GET /api/documents` | **Device** · `?kind=all` | List documents with `category` routing (also `/api/documents/`). Secret-shaped names are not listed. |
 | `POST /api/documents/create` | **Device** · `CreateRequest` (optional `device_id`) | Create a blank file (`doc` → .md, `sheet` → .xlsx, `drawing` → .excalidraw, `text` → verbatim name). `400` for a secret-shaped name (including one wearing a trailing dot or space), for a stream separator or a control character; `409` if it already exists. |
-| `POST /api/documents/upload` | **Device** · multipart (optional `device_id` field) · `X-Requested-With` | Upload documents. `403` without the preflight-forcing header. Secret-shaped names land in `skipped`, exactly as on `POST /api/files/upload`. |
+| `POST /api/documents/upload` | **Device** · multipart (optional `device_id` field, optional `folder`) · `X-Requested-With` | Upload documents. `403` without the preflight-forcing header. Secret-shaped names land in `skipped`, exactly as on `POST /api/files/upload`. `folder` may be `From Chat` (the one folder a client may name; made when missing): the app's "Send to home" for a phone chat's draft. `saved` then lists `From Chat/<name>`. |
 | `POST /api/documents/delete` | **Admin (mutation)** · `DeleteRequest` | Delete documents. |
 | `POST /api/documents/download-zip` | **Admin (mutation)** · `ZipRequest` | Zip + download a selection. |
 | `GET /api/documents/text/{rel_path}` | **Device** | Read a text/markdown file (415 for binary/too-large). |
@@ -1596,6 +1596,33 @@ token as `?device_token=`. The model picker (`/models`) stays **Open**. Every
 write — creating, renaming or deleting a thread, sending a message, staging an
 upload — is **Device** tier.
 
+**Drafts** (documents plan D4, `web/backend/api/chat_drafts.py`, V039). A
+message asking for a resume, a cover letter or a letter ("write a cover
+letter for the warehouse job at Acme") is a draft turn: the model writes
+markdown in the kind's skeleton (`domovoi/drafts`), it streams as `delta`
+events after a `status` event `{state: "drafting", action}`, and the `done`
+row is the draft card: `content` is one line ("First draft of your cover
+letter: 245 words.", "Version 2: cut 120 words (380 → 260)."), and `draft`
+is `{id, version, kind, title, template, words, action, change, parts,
+based_on, newer}` (`action` `create`, `revise` or `print`; `parts` when a
+long version was revised section by section; `based_on` the version a
+revision was written from, and `newer` the version that came in while it
+was written, when one did: both are kept, and the reply line says so). In
+a thread with a draft, a message is a revision only when it clearly means
+the draft: it names it ("make the letter shorter"), edits "it"/"this"
+("make it more formal", "rewrite it"), or, right after the reply that
+wrote or revised it, is an edit-only instruction ("shorter"); anything
+else is an ordinary message. `SendBody.revise_draft` (a draft id in this
+thread, `404` otherwise; the card's Revise box) makes the message a
+revision of that draft whatever it says. A revision makes the next version
+from the latest one alone (the only text the model sees), and "print it" answers with the
+print card (`action: print`) and no model asked. Every version is kept in
+`chat_drafts` / `chat_draft_versions`; only a saved version becomes a file,
+in Documents → From Chat. The drafts go with their thread. A draft row is
+not `retryable`. A phone chat said into the chat mic ("print it", "print the
+letter") prints the thread's latest version after the usual spoken
+confirmation.
+
 **Documents** (documents plan D1, `web/backend/api/chat_documents.py`, V036).
 A PDF, Word (.docx), OpenDocument (.odt), Excel (.xlsx), CSV, text or
 markdown file staged with `POST /api/chat/documents` is kept under
@@ -1721,6 +1748,14 @@ and a half-written parts file are removed by the sweep and at boot.
 | `GET /api/chat/documents/{token}/file` | — | Device read (`?device_token=` allowed). The original file: a PDF inline (`application/pdf`; the dashboard opens it at `#page=N`), any other kind as a download; `nosniff`, and a sandbox CSP on anything not shown inline. |
 | `GET /api/chat/threads/{id}/documents` | — | Device read. `{documents: [...]}`: the thread's documents in the order attached. `404` unknown thread. |
 | `POST /api/chat/threads/from-document` | `{rel_path}` | "Ask about this document" (Device, AI features on): a new thread `About <name>` about a file in the Documents library (`rel_path` relative to `documents_dir`, read through the Documents routes' containment and secret-name checks; `400` outside it, `404` missing or secret-shaped), copied into the chat's uploads and read, with the attachment and its reply already in it → `{thread, document}`. Refusals as for `/documents`. |
+| `GET /api/chat/threads/{id}/drafts` | — | Device read. `{drafts: [{id, thread_id, kind, template, title, format, kind_label, version, words, first_lines, source, created_at, updated_at}]}`: the thread's drafts, each with its latest version. `404` unknown thread. |
+| `GET /api/chat/drafts` | `?limit=` (≤ 200) | Device read. Every chat's drafts, newest first, each with its thread's `thread_title` (the Chat page lists them while AI features are off, so a draft can still be saved). |
+| `GET /api/chat/drafts/{id}` | — | Device read. `{draft, versions: [{version, body, display, instruction, author, source, model, saved, words, changes, based_on, device_id, device_name, person_id, created_at}], templates: [{id, label}], formats}`, oldest version first. `body` is the markdown; `display` the plain text the changes view shows; `changes` `[[op, text], …]` against the version before (`=` kept, `+` added, `-` removed; `null` for v1); `source` `first`, `revision` (with its `instruction`) or `edited` (`author: person`); `device_id` / `device_name` the install that made it (a client says "edited by you" only when it is its own); `saved` `[{format, rel_path, check: {ok, line, read, expected}, template, at}]`. `draft.format` is the kind's default save format (`docx` for a resume or cover letter, `pdf` for a letter). `404` unknown draft. |
+| `POST /api/chat/drafts/{id}/versions` | `{text, base_version, device_id?}` | A hand edit (characters XML can't hold are dropped), saved as the next version "edited by you" (Device; works with AI features off) → `{version: {…, change}}` (`change` the one line of what changed), or `{version, unchanged: true}` when the text is the latest version's. `409 {detail, code: "stale_version", latest}` when a newer version was written after `base_version` (two edits at once: one is saved, the other gets the `409`); `422` for a text with no words. |
+| `POST /api/chat/drafts/{id}/save` | `{version?, format?, template?, device_id?}` | Save a version (default the latest) as `docx` or `pdf` (default the kind's) into Documents → **From Chat** (made when missing), through the Documents write policy (the per-device block, `403`) and the secret-name filter; a taken name gets ` (1)`. Then the ATS self-check reads the saved file back (a PDF's text layer, a .docx's paragraph XML) and compares it word for word with the draft → `{rel_path, name, format, version, check: {ok, line, read, expected}, library_id: "core:documents"}`; `line` is `text readable · single column` when it matches, else says where it differs. Device; works with AI features off. `template` another template of the same kind (`422` otherwise). |
+| `GET /api/chat/drafts/{id}/export` | `?version=&format=&template=` | Device read (`?device_token=` allowed). The version as a file to download (`Content-Disposition: attachment`, `nosniff`); nothing is kept on the server. |
+| `POST /api/chat/drafts/{id}/print/preview` | `{version?, template?, printer_id?, options}` | The print preview of a version's PDF, the same answer as `POST /api/print/preview` (Device). |
+| `POST /api/chat/drafts/{id}/print/jobs` | `{version?, template?, printer_id?, options}` | Print a version's PDF on the home's printer, the same answer as `POST /api/print/jobs` (Device, `202`). The dashboard and the app call it from their Print dialog, after its preview; a chat's "print it" only offers that dialog. |
 | `GET /api/chat/doc-jobs/speed` | `?chars=` | Device read. This server's measured speed for documents and, with `chars`, the time a summary of that many characters would take here → `{ai, model, speed: {prefill_tps, decode_tps, chars_per_token, samples} \| null, chunk_tokens, parts, estimate_s}` (`null` until measured). What a phone compares with its own time before it offers "Use home server"; `ai: false` when the household turned AI features off. |
 | `POST /api/chat/doc-jobs` | multipart `file`, `question` | A phone's private summary job (Device, AI features on): **SSE** `job`, `progress`, `done` (the view, with `result: {content, doc}`), `error` first if it failed. Refusals as for `/documents`, and `429 busy` with 2 jobs reading in the house. |
 | `GET /api/chat/doc-jobs/{id}` | — | Device read. A job's view (a private one's, with its `result`, until it is deleted). `404` unknown. |

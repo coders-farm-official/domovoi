@@ -188,8 +188,12 @@ const PrintingNotice = ({ tone = 'warn', children }) => (
 /* Opened with {library_id, path, name}. Preview first (debounced as the
  * options change), then Print; the job's progress line polls every 2 s
  * while the dialog shows it. Closing while the job runs hands the job to
- * onClose(job) so the caller can keep watching it and say how it ended. */
-const PrintDialog = ({ library_id, path, name, onClose, fire }) => {
+ * onClose(job) so the caller can keep watching it and say how it ended.
+ * A chat draft (chat_drafts.jsx) prints through its own routes: `target`
+ * replaces {library_id, path} in the body, and `previewPath` /
+ * `submitPath` name the routes. */
+const PrintDialog = ({ library_id, path, name, onClose, fire, target = null,
+                       previewPath = '/api/print/preview', submitPath = '/api/print/jobs' }) => {
   const avail = usePrintingAvailability();
   const printers = ((avail.data && avail.data.printers) || []).filter((p) => p.can_print);
   const [printerId, setPrinterId] = React.useState(null);   // null = the server's pick
@@ -212,14 +216,14 @@ const PrintDialog = ({ library_id, path, name, onClose, fire }) => {
   if (sides) options.sides = sides;
   if (color) options.color = color;
   if (media) options.media = media;
-  const body = { library_id, path, printer_id: printerId, options };
+  const body = { ...(target || { library_id, path }), printer_id: printerId, options };
   const key = JSON.stringify(body);
   const debKey = useDebouncedValue(key, 400);
 
   React.useEffect(() => {
     const mine = ++seq.current;
     setPreviewing(true);
-    apiPost('/api/print/preview', JSON.parse(debKey))
+    apiPost(previewPath, JSON.parse(debKey))
       .then((p) => { if (mine === seq.current) { setPreview(p); setPreviewErr(null); } })
       .catch((e) => { if (mine === seq.current) { setPreview(null); setPreviewErr(printingErrorText(e)); } })
       .finally(() => { if (mine === seq.current) setPreviewing(false); });
@@ -267,7 +271,7 @@ const PrintDialog = ({ library_id, path, name, onClose, fire }) => {
   const doPrint = async () => {
     setSubmitting(true); setSubmitErr(null);
     try {
-      const j = await apiPost('/api/print/jobs', body);
+      const j = await apiPost(submitPath, body);
       setJob(j);
     } catch (e) {
       setSubmitErr(printingErrorText(e));

@@ -175,6 +175,8 @@ internal data class MessageRow(
     val documents: List<ServerDocument>? = null,
     /** How a reply answered about the chat's documents: sources and notes. */
     val doc: ServerDocReply? = null,
+    /** A draft reply (documents plan D4): the draft card's draft and version. */
+    val draft: ServerDraftRef? = null,
 )
 
 @Serializable
@@ -224,6 +226,7 @@ internal fun LiveMessage.finishWith(row: MessageRow) {
     row.error?.let { error = it }
     row.stats?.error_code?.let { errorCode = it }
     doc = row.doc
+    draft = row.draft
     retryable = row.retryable
     if (row.error == null) content = row.content
 }
@@ -249,8 +252,11 @@ internal class LiveMessage(
     /** Documents attached with a user message. */
     val documents: List<ServerDocument> = emptyList(),
     doc: ServerDocReply? = null,
+    draft: ServerDraftRef? = null,
 ) {
     var content by mutableStateOf(content)
+    /** A draft reply's draft (documents plan D4). */
+    var draft by mutableStateOf(draft)
     /** A reply's sources and notes about the chat's documents. */
     var doc by mutableStateOf(doc)
     /** A long document read in parts for this pending reply: how far. */
@@ -306,6 +312,8 @@ private suspend fun sendStreaming(
     /** "Try again" (`POST .../retry`): no body, a new reply to the last
      *  question in place of the last reply. */
     retry: Boolean = false,
+    /** A draft card's Revise box: the message revises this draft. */
+    reviseDraft: Long? = null,
     /** The answer to a lookup card (`POST .../lookups/<message id>`). */
     decision: Pair<Long, String>? = null,
     /** A pick on a heads-up card (documents plan D3): (card row id, option),
@@ -335,6 +343,7 @@ private suspend fun sendStreaming(
         if (documents.isNotEmpty()) {
             put("documents", buildJsonArray { documents.forEach { d -> add(buildJsonObject { put("token", d.token) }) } })
         }
+        if (reviseDraft != null) put("revise_draft", reviseDraft)
     }).toString().toRequestBody("application/json".toMediaType())
     val path = when {
         headsUpPick != null -> "/api/chat/threads/$threadId/heads-up"
@@ -479,6 +488,17 @@ internal fun ConversationPane(
     // "report this reply" (Play's AI-generated content policy covers the
     // server's replies too): the report sheet, over the conversation.
     var reporting by remember { mutableStateOf<ReplyReport?>(null) }
+    // The draft panel (documents plan D4), and the home's printers for its
+    // Print (the server's Print sheet, as for a file in Documents).
+    var canvas by remember { mutableStateOf<Long?>(null) }
+    var canvasVersion by remember { mutableStateOf<Int?>(null) }
+    var canvasKey by remember { mutableStateOf(0) }
+    var printDraft by remember { mutableStateOf<Pair<Long, Int>?>(null) }
+    val draftPrinters = rememberApi("printers-for-drafts") {
+        com.domovoi.app.ui.screens.printing.PrintIo(it.api).printers()
+    }.data
+    val draftDocs = remember { HashMap<Long, ServerDraftDoc>() }
+    fun draftDoc(id: Long) = draftDocs.getOrPut(id) { ServerDraftDoc(app, id) }
 
     // The thread's long-document jobs (documents plan D2).
     val jobs = remember { mutableStateListOf<ServerJobView>() }
@@ -511,6 +531,7 @@ internal fun ConversationPane(
                         retryable = it.retryable,
                         documents = it.documents.orEmpty(),
                         doc = it.doc,
+                        draft = it.draft,
                     ),
                 )
             }
@@ -708,14 +729,18 @@ internal fun ConversationPane(
         )
     }
 
-    fun send() {
-        val content = draft.trim()
-        if ((content.isBlank() && docAttachments.isEmpty()) || sending || docUploading != null) return
-        val images = attachments.toList()
-        val docs = docAttachments.toList()
-        draft = ""
-        attachments.clear()
-        docAttachments.clear()
+    /** [revise]: (draft, text) from a draft card's Revise box; else the
+     *  message box's words and attachments. */
+    fun send(revise: Pair<Long, String>? = null): Boolean {
+        val content = revise?.second?.trim() ?: draft.trim()
+        if ((content.isBlank() && (revise != null || docAttachments.isEmpty())) || sending || docUploading != null) return false
+        val images = if (revise != null) emptyList() else attachments.toList()
+        val docs = if (revise != null) emptyList() else docAttachments.toList()
+        if (revise == null) {
+            draft = ""
+            attachments.clear()
+            docAttachments.clear()
+        }
         sending = true
         following = true
         frame.onSent()
@@ -742,6 +767,7 @@ internal fun ConversationPane(
                         if (model != null) live.model = model
                     },
                     onDone = { row -> live.finishWith(row) },
+                    reviseDraft = revise?.first,
                     onJob = { live.job = it },
                 )
             }.onFailure { live.error = failureText("send", it) }
@@ -755,6 +781,7 @@ internal fun ConversationPane(
             // A long summary that was stopped can carry on: the jobs again.
             if (live.job != null) reloads++
         }
+        return true
     }
 
     // A pick on a heads-up card (documents plan D3): the card keeps it and
@@ -936,7 +963,13 @@ internal fun ConversationPane(
             })
         }
 
-        Box(Modifier.weight(1f).fillMaxWidth().then(rememberFitStretch(listState))) {
+        val openDraft = canvas
+        if (openDraft != null) Box(Modifier.weight(1f).fillMaxWidth()) {
+            DraftCanvas(
+                draftDoc(openDraft), canvasVersion, canvasKey, onClose = { canvas = null },
+                onPrint = if (draftPrinters?.hasPrinter == true) ({ v -> printDraft = openDraft to v }) else null,
+            )
+        } else Box(Modifier.weight(1f).fillMaxWidth().then(rememberFitStretch(listState))) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
@@ -974,6 +1007,17 @@ internal fun ConversationPane(
                         // A card answers only while it ends the thread.
                         onHeadsUp = if (i == transcript.lastIndex && !sending) ({ option -> pickHeadsUp(m, option) }) else null,
                         busy = sending,
+                        draftCard = m.draft?.takeIf { !m.pending }?.let { ref ->
+                            {
+                                ServerDraftCard(
+                                    ref, m.content, transcript, draftDoc(ref.id), canvasKey,
+                                    canPrint = draftPrinters?.hasPrinter == true,
+                                    onOpen = { canvas = ref.id; canvasVersion = ref.version; canvasKey++ },
+                                    onPrint = { printDraft = ref.id to ref.version },
+                                    onRevise = { text -> send(ref.id to text) },
+                                )
+                            }
+                        },
                     )
                 }
                 // A job a restart interrupted: carried on only when asked.
@@ -1051,6 +1095,15 @@ internal fun ConversationPane(
             }
         }
         openSource?.let { SourceSheet(it, onClose = { openSource = null }) }
+        val printing = printDraft
+        if (printing != null && draftPrinters != null) {
+            val title = transcript.firstNotNullOfOrNull { it.draft?.takeIf { d -> d.id == printing.first } }?.title ?: "draft"
+            com.domovoi.app.ui.screens.printing.PrintSheet(
+                libraryId = "", path = "", fileName = "$title v${printing.second}",
+                printers = draftPrinters, onDismiss = { printDraft = null },
+                target = com.domovoi.app.ui.screens.printing.PrintTarget.ChatDraft(printing.first, printing.second),
+            )
+        }
         // A new chat with nothing said yet: the place can still change.
         if (open == null && transcript.isEmpty() && !sending) frame.picker?.invoke()
 
@@ -1314,6 +1367,8 @@ internal fun MessageBubble(
     onReport: (() -> Unit)? = null,
     onRetry: (() -> Unit)? = null,
     onSource: (SourceView) -> Unit = {},
+    /** A draft reply's card (documents plan D4), in place of its text. */
+    draftCard: (@Composable () -> Unit)? = null,
     /** A stopped summary's parts still to read: "carry on" shows (null: no). */
     carryOnLeft: Int? = null,
     onCarryOn: () -> Unit = {},
@@ -1383,6 +1438,8 @@ internal fun MessageBubble(
                             style = MaterialTheme.typography.bodyMedium,
                             color = Domovoi.colors.fg,
                         )
+                    } else if (draftCard != null) {
+                        draftCard()
                     } else {
                         val job = m.job
                         if (m.pending && job != null && m.content.isEmpty()) {

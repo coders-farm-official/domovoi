@@ -2148,6 +2148,9 @@
        "text": "In [Files](route:files), the question mark on a document starts a chat about it: a file on this phone in a phone chat, a file in the home server's Documents in a home-server chat."
       },
       {
+       "text": "**Drafts** (a resume, a cover letter, a letter) work in both kinds of chat, as in [Chat](node:chat). **open** shows the draft full screen with the message box below it, so \"shorter\" works while you look at it; its bar has the versions, **changes**, **edit**, **share**, **print** and **read aloud**. In a chat **on this phone** a draft stays on the phone: **save** puts it in **Chat documents**, which [Files](route:files) lists with the phone's own files; **save a copy to…** puts a copy anywhere you pick; **send to home** (when your home server is in reach) puts it in the home server's Documents → From Chat. **print** uses the phone's own print dialog. In a chat **on home server**, save and print go through the home server, as on the dashboard."
+      },
+      {
        "text": "**Summarize a long document:** it is read in parts, with \"reading part 3 of 8 · about 1 min left\" and **stop**. Stop keeps what was read; **carry on** reads the rest. Leave Chat and it pauses at the end of the part, then carries on when you come back."
       },
       {
@@ -2652,6 +2655,31 @@
     {
      "type": "p",
      "text": "**Ask about a document:** the paperclip also takes a PDF, Word (.docx), OpenDocument (.odt), Excel (.xlsx), CSV, text or markdown file, up to 100 MB. Ask what it says. The answer names the pages or sections it came from; press one to see the passage, or to open a PDF at that page. If the document doesn't say, Domovoi answers \"I couldn't find that in the document\" instead of guessing. In [Files](route:files) → Documents, **Ask** on a file starts a chat about it."
+    },
+    {
+     "type": "p",
+     "text": "**Write a resume or a letter:** ask for one (\"write a cover letter for the warehouse job at Acme\", \"draft a letter to my landlord about the heater\"). Domovoi writes a draft, shown as a card with **open**, **save**, **download** and **print**. Then say what to change (\"make the letter shorter\", \"make it more formal\", or just \"shorter\" as your next message), or type it in the card's **revise** box: each change is a new version, and the reply says what changed. Every version is kept. A message about something else (\"turn on the kitchen lights\") is answered as usual and leaves the draft alone."
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "**open** shows the draft beside the chat on a wide screen (in its place on a narrow one), with the message box still below it. Pick **v1**, **v2** … to see any version; **changes** marks added words and strikes out removed ones."
+      },
+      {
+       "text": "**edit** lets you change it by hand; saving makes a new version \"edited by you\" (on another device it says \"edited on\" and the device's name). If a change comes in while you edit, you're told, and nothing is lost: every version stays in the version list."
+      },
+      {
+       "text": "**save** puts it in [Files](route:files) → Documents → **From Chat**: a resume or cover letter as **.docx** (best for job sites), a letter as **PDF**; the other format is one press away. After saving, Domovoi reads the file back and checks every word is there in order: **text readable · single column** means a job site's applicant tracking system can read it too."
+      },
+      {
+       "text": "**print** (or typing \"print it\") opens the Print dialog with a preview; nothing prints until you press **Print**."
+      },
+      {
+       "text": "Only the draft, not the whole chat, goes to the model for each change. With AI chat and questions turned off, nothing new is drafted, but drafts already written can still be opened, edited, saved and printed."
+      }
+     ]
     },
     {
      "type": "p",

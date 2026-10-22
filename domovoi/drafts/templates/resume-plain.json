@@ -1,0 +1,16 @@
+{
+  "id": "resume-plain",
+  "label": "Plain",
+  "kinds": ["resume"],
+  "page": {"width": 612, "height": 792, "margin": 54},
+  "fonts": {"regular": "LiberationSans-Regular", "bold": "LiberationSans-Bold"},
+  "docx_font": "Arial",
+  "styles": {
+    "title": {"font": "bold", "size": 18, "leading": 22, "before": 0, "after": 4},
+    "heading": {"font": "bold", "size": 12, "leading": 15, "before": 10, "after": 3},
+    "strong": {"font": "bold", "size": 10.5, "leading": 13.5, "before": 4, "after": 1},
+    "body": {"font": "regular", "size": 10.5, "leading": 13.5, "before": 0, "after": 4},
+    "bullet": {"font": "regular", "size": 10.5, "leading": 13.5, "before": 0, "after": 2, "indent": 14, "marker": "•"}
+  },
+  "sections": ["Summary", "Work Experience", "Education", "Skills", "Certifications", "Volunteer"]
+}
