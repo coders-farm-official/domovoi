@@ -243,9 +243,9 @@ We build Domovoi in public. Here's where it stands.
 - **The web dashboard** manages all of it, from plugins to training your own
   wake word on the server (about 20 minutes on an NVIDIA GPU, longer on the
   CPU). After you sign in as admin, reloading the page keeps you signed in
-  for an hour. Its **user manual** (in the app too) has a map of everything
-  Domovoi does, what to say for each, and a getting-set-up checklist that
-  ticks itself; a new house's Home page points into it. Song recognition
+  for an hour. Its **user manual** (in the app too, in nine topics with a
+  search box) has a map of everything Domovoi does, what to say for each,
+  and a getting-set-up checklist that ticks itself; a new house's Home page points into it. Song recognition
   takes its AcoustID key in Settings → System → Advanced, with a button to
   test it. When a server no longer accepts the household token a browser
   or phone holds (a reinstall, a new token), the dashboard and the app say
@@ -370,7 +370,9 @@ they have been tried on fewer devices than the rest, aren't yet held to
    desk, asking a chat about a document and summarizing long ones, honest
    heads-ups before shaky results, writing and saving resumes and letters,
    reading a photographed letter, reading documents aloud and taking a letter by voice,
-   looking things up from chat with your permission, a phone chat that answers about
+   looking things up from chat with your permission, a rewritten user manual
+   and a pass over every document (privacy wording, licences, the fonts),
+   a phone chat that answers about
    the phone, does things on it and looks at a photo, the Windows satellite
    Setup, a smaller (R8-shrunk) release
    build of the app, tablet and sideways-phone screens that clear the
