@@ -18,9 +18,9 @@ import com.domovoi.app.ui.theme.Domovoi
  * The privacy policy's web address, linked from Settings → About & updates (Google
  * Play wants it in the app as well as on the store listing).
  *
- * docs/PRIVACY_POLICY.md as GitHub shows it on main (Kamron's choice,
- * 2026-10-15): live once that file is pushed to main, which has to happen
- * before the store listing is submitted (android/play/PUBLISH-CHECKLIST.md).
+ * docs/PRIVACY_POLICY.md as GitHub shows it on main: live once that file is
+ * pushed to main, which has to happen before the store listing is submitted
+ * (android/play/PUBLISH-CHECKLIST.md).
  * The owner may replace it with a Coders Farm page; blank shows no link
  * (owner rule: no control that cannot do what it says). Must be https.
  */
@@ -33,32 +33,43 @@ internal fun privacyPolicyLink(url: String = PRIVACY_POLICY_URL): String? =
 /**
  * What the app keeps and where it goes, in a few sentences that hold for
  * every install. Each is backed by the app itself: the backup rules
- * (AlertsManifestTest), the assistant's no-network test (NoNetworkTest), the
+ * (AlertsManifestTest), the phone chats' no-network test (NoNetworkTest:
+ * only the model download and the lookup clients touch the network, and a
+ * lookup runs only after its allow card, PhoneLookupsTest), the hand-offs
+ * to the home server that only a tap starts ("ask the home server", "use
+ * home server", "a letter for the home server", "send to home"), the
  * dependency list (OpenSourceLicencesTest: no analytics, advertising or
- * crash-reporting library).
+ * crash-reporting library). docs/PRIVACY_POLICY.md says the same.
  */
 internal fun privacyPoints(assistant: Boolean): List<String> = listOfNotNull(
     "What the app keeps stays in its private storage on this phone, outside cloud backups and phone-to-phone " +
         "transfers, and goes when the app is uninstalled.",
     if (assistant) {
-        "The on-device assistant answers on this phone: what you ask and what it replies never leave it. Its only " +
-            "network use is the model download you start."
+        "Domovoi on this phone answers phone chats on this phone, and what you ask stays here. It goes online only " +
+            "to download its model when you start that, and for a lookup you allow: a card shows the exact words " +
+            "and where they would go first."
+    } else {
+        null
+    },
+    if (assistant) {
+        "A document, a photo of a letter or a draft goes to your home server only when you choose to send it " +
+            "there, and the photo of a letter is kept nowhere."
     } else {
         null
     },
     (if (assistant) {
-        "The assistant opens the microphone only after you tap it, and never keeps the audio: a spoken question is " +
+        "Phone chats open the microphone only after you tap it, and never keep the audio: a spoken question is " +
             "kept as its words. "
     } else {
         ""
     }) + "Room mode, which you turn on yourself, listens for its wake word all the time and says what it sends " +
         "before it starts.",
-    (if (assistant) "Conversations, reply reports and problem reports stay" else "Problem reports stay") +
-        " on this phone until you delete them; nothing is sent unless you share it yourself.",
+    (if (assistant) "Phone chats, reply reports and problem reports stay" else "Problem reports stay") +
+        " on this phone until you delete them; the app sends none of them anywhere unless you share one yourself.",
     "There is no analytics, advertising or crash-reporting service in the app.",
 )
 
-/** This install's points: the assistant's only where it is in the app
+/** This install's points: the phone chats' only where they are in the app
  *  (64-bit installs, [AssistantSupport]). */
 internal val PRIVACY_POINTS: List<String> get() = privacyPoints(AssistantSupport.available)
 
