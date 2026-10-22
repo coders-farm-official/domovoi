@@ -1362,7 +1362,8 @@ const RestartByHandHint = ({ version, style }) => {
  * `capable`); otherwise the reason and the command to run by hand, or that
  * the core is starting. Nothing at all for a viewer without the admin
  * sign-in, or while the core's loop answers. Settings → About & updates, Settings →
- * Rooms and Home's "isn't answering" row use it. */
+ * Rooms, Settings → Health (a core that is down) and Home's "isn't answering"
+ * row use it. */
 const CORE_BACK_WAIT_MS = 4 * 60 * 1000;
 const CORE_BACK_POLL_MS = 2000;
 const CORE_STATUS_POLL_MS = 5000;

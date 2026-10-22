@@ -2914,12 +2914,12 @@ const LICENCES_DOC_URL = 'https://github.com/coders-farm-official/domovoi/blob/m
 
 const AboutCard = () => (
   <Card title="About Domovoi"
-        sub="The local-first home voice assistant that runs entirely on your own hardware.">
+        sub="The home computer system that just works.">
     <div style={{ padding: '6px 16px 16px', display: 'flex', flexDirection: 'column', gap: 10,
                   fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.55, maxWidth: 680 }}>
       <div>
         <strong style={{ color: 'var(--fg)' }}>Domovoi</strong> is a household guardian spirit from
-        Slavic folklore, often taking the shape of a cat — hence the mascot. The assistant's spoken
+        Slavic folklore, often taking the shape of a cat — hence the mascot. Its spoken
         name is configurable; this dashboard manages the Domovoi server it runs on.
       </div>
       <div>
@@ -3787,7 +3787,7 @@ const HouseholdTokenCard = ({ fire }) => {
             </Button>
           </div>
           <div style={{ padding: '0 16px 14px', fontSize: 11, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
-            Sent as the <span className="mono">{header}</span> header. On a phone: Settings → Connection → Household token.
+            Sent as the <span className="mono">{header}</span> header. On a phone: Settings → Rooms & devices → Phones & browsers → Household token.
             {thisPaired
               ? ' This browser is paired with it.'
               : ' This browser is not paired with it yet — log in again or paste it into the pairing prompt.'}

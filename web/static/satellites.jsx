@@ -776,7 +776,7 @@ const SatCaptureControl = ({ s, fire, refresh }) => {
       </div>
       <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>
         {admin
-          ? `for tuning when domovoi stops listening · kept ${days} days · review in settings → recordings`
+          ? `for tuning when domovoi stops listening · kept ${days} days · review in Settings → Voice history`
           : 'admins turn this on or off · sign in to change it'}
       </div>
     </div>
