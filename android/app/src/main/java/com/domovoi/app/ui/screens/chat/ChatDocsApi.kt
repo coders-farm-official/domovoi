@@ -325,6 +325,15 @@ internal data class ServerLetterRead(
     val seconds: Double? = null,
 )
 
+/** `GET /api/chat/letters/ready`'s answer. */
+@Serializable
+internal data class ServerLettersReady(val ai: Boolean = false, val vision: Boolean? = null, val max_mb: Int = 8)
+
+/** Whether the home server can read a letter photo now (AI on, picture model installed). */
+internal suspend fun lettersReady(app: AppContainer): ServerLettersReady = withContext(Dispatchers.IO) {
+    app.api.get("/api/chat/letters/ready").decode<ServerLettersReady>()
+}
+
 /** How long the home server may take to read one letter photo: a CPU-only
  *  box takes a few minutes (the D6 eval: about 2 minutes on contended
  *  E-cores), with nothing sent meanwhile. */

@@ -1160,7 +1160,14 @@ class AssistantController(
             val firstMs = (nanos() - sent) / 1_000_000
             Log.i(TAG, "letter turn: ${if (viaServer) "read by the home server" else "read here"}, $firstMs ms, " +
                 "${explained.deadlines.size} deadlines, ${explained.amounts.size} amounts, ${explained.dropped} left out")
-            return finishReply(asked, live(explained.content).copy(notes = notes, firstTextMs = firstMs))
+            // The transcript is kept beside the answer (owner, 2026-10-21), so a
+            // follow-up can see the letter's text; it goes with the chat. The
+            // photo itself never is.
+            val kept = if (transcript.isBlank()) emptyList() else listOf(
+                com.domovoi.app.assistant.docs.DocSource(label = PhoneLetters.SOURCE_LABEL, partLabel = PhoneLetters.SOURCE_LABEL,
+                    text = transcript, cited = true),
+            )
+            return finishReply(asked, live(explained.content).copy(notes = notes, firstTextMs = firstMs, sources = kept))
         } finally {
             // Nothing of the photo outlives its reply, unless a card holds it.
             if (!hold) photo.jpeg.fill(0)
@@ -1269,8 +1276,13 @@ class AssistantController(
         // "What does this letter say?" with no photo (D6): how to send one,
         // or plainly that this phone can't read photos; no model asked.
         asked.messages.lastOrNull()?.takeIf { it.fromUser && !it.spoken && PhoneLetters.namesALetter(it.text) && asked.messages.none { m -> m.photo } }?.let {
+            // Not a word about this phone's chip until its check has run: the
+            // model loads (and the check runs) first.
+            if (_state.value.modelTakesImages && _state.value.vision == VisionProbe.UNKNOWN) {
+                runCatching { ensureEngine() }.onFailure { if (it is CancellationException) throw it }
+            }
             val ui = _state.value
-            val text = PhoneLetters.noPhotoReply(ui.modelTakesImages && ui.vision == VisionProbe.PASSED, ui.homeServerLetters)
+            val text = PhoneLetters.noPhotoReply(ui.modelTakesImages, ui.vision, ui.homeServerLetters)
             onDelta(text)
             return finishReply(asked, StoredMessage(Speaker.DOMOVOI, text, clock(), docMode = "letter"))
         }
@@ -3724,7 +3736,10 @@ fun modelTurns(messages: List<StoredMessage>): List<IndexedTurn> {
             val said = if (m.photo) PhonePhotos.historyText(m.text) else m.text
             if (said.isNotBlank()) out += IndexedTurn(i, ChatTurn(fromUser = true, text = said))
         } else if (m.text.isNotBlank()) {
-            if (lastFromUser()) out += IndexedTurn(i, ChatTurn(fromUser = false, text = m.text))
+            // A letter's explanation carries the letter's text it was made from
+            // (D6), marked as data, so a follow-up can be answered from it.
+            val said = if (m.docMode == "letter" && m.sources.isNotEmpty()) PhoneLetters.historyText(m.text, m.sources.map { it.text }) else m.text
+            if (lastFromUser()) out += IndexedTurn(i, ChatTurn(fromUser = false, text = said))
         } else if (lastFromUser()) {
             out.removeAt(out.lastIndex)
         }

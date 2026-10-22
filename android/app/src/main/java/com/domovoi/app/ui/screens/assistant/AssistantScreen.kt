@@ -345,14 +345,21 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
     // "What does this letter say?" on a phone that can't read photos (D6):
     // the paired home server reads it, with its AI features on, and keeps
     // nothing; the explanation is still written on this phone.
+    // Offered only once the server says it has a picture model (GET
+    // /api/chat/letters/ready), never on a guess.
     val aiOnServer = com.domovoi.app.net.LocalCapabilities.current.aiEnabled
-    androidx.compose.runtime.DisposableEffect(choice, aiOnServer) {
-        val ok = choice is com.domovoi.app.ui.shell.ServerChoice.Available && !choice.needsPairing && aiOnServer
-        assistant.setLetterServer(if (ok) com.domovoi.app.assistant.LetterServer { jpeg, stop ->
-            com.domovoi.app.ui.screens.chat.readLetterOnServer(app, jpeg, stop)
-        } else null)
-        onDispose { assistant.setLetterServer(null) }
+    androidx.compose.runtime.LaunchedEffect(choice, aiOnServer) {
+        assistant.setLetterServer(null)
+        val paired = choice is com.domovoi.app.ui.shell.ServerChoice.Available && !choice.needsPairing && aiOnServer
+        if (!paired) return@LaunchedEffect
+        val ready = runCatching { com.domovoi.app.ui.screens.chat.lettersReady(app) }.getOrNull()
+        if (ready != null && ready.ai && ready.vision == true) {
+            assistant.setLetterServer(com.domovoi.app.assistant.LetterServer { jpeg, stop ->
+                com.domovoi.app.ui.screens.chat.readLetterOnServer(app, jpeg, stop)
+            })
+        }
     }
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { assistant.setLetterServer(null) } }
     // A long document read in parts (documents plan D2): the card's time
     // left ticks down while a part is read.
     androidx.compose.runtime.LaunchedEffect(ui.docJob?.id, ui.docJob?.state) {

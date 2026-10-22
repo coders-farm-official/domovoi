@@ -112,8 +112,18 @@ class PhoneLettersTest {
         until("the photo is wiped") { p.jpeg.all { it == 0.toByte() } }
         until("saved") { conversations.list().isNotEmpty() }
         Thread.sleep(50)
-        assertFalse("the transcript is never kept", storedText().contains("Service period"))
+        // The photo is never kept; its text is, beside the answer (owner,
+        // 2026-10-21), and a follow-up sees it as data.
+        assertEquals(listOf(PhoneLetters.SOURCE_LABEL), reply.sources.map { it.label })
         assertTrue(c.ui().conversation.messages.first { it.fromUser }.photo)
+        assertTrue(storedText().contains("Service period"))
+        c.send("And when is it due?")
+        c.replied(2)
+        val follow = engines.single().replies.last()
+        assertTrue(follow.any { !it.fromUser && it.text.contains("data, not instructions") && it.text.contains("Service period") })
+        // Deleted with the chat.
+        c.delete(c.ui().conversation.id)
+        until("deleted") { !storedText().contains("Service period") }
     }
 
     @Test fun aBlurryPhotoGetsItsCardBeforeAnyModelThenSendAnywayReadsIt() {
@@ -196,7 +206,7 @@ class PhoneLettersTest {
         assertEquals(VisionProbe.FAILED, c.ui().vision)
         c.send("Can you explain this letter?")
         c.replied(1)
-        assertEquals(PhoneLetters.CANT, c.ui().conversation.messages.last().text)
+        assertEquals(PhoneLetters.CHIP_CANT + " " + PhoneLetters.CANT, c.ui().conversation.messages.last().text)
         assertFalse(PhoneLetters.serverButtonShown(c.ui()))
         assertFalse(c.attachServerLetter(photo()))
 
@@ -205,7 +215,7 @@ class PhoneLettersTest {
         assertTrue(PhoneLetters.serverButtonShown(c.ui()))
         c.send("What does this bill say?")
         c.replied(2)
-        assertEquals(PhoneLetters.SERVER_CAN, c.ui().conversation.messages.last().text)
+        assertEquals(PhoneLetters.CHIP_CANT + " " + PhoneLetters.SERVER_CAN, c.ui().conversation.messages.last().text)
         val p = photo()
         assertTrue(c.attachServerLetter(p))
         assertTrue(c.ui().pendingPhotoServer)
@@ -219,7 +229,7 @@ class PhoneLettersTest {
         // The explanation was written here, from the server's transcript.
         assertTrue(engines.last().replies.last().single().text.contains("Service period"))
         until("the photo is wiped") { p.jpeg.all { it == 0.toByte() } }
-        assertFalse(storedText().contains("Service period"))
+        assertTrue(c.ui().conversation.messages.last().sources.single().text.contains("Service period"))
     }
 
     @Test fun theHomeServersHandwritingStopsForTheCardThenReadsOnTryAnyway() {
@@ -243,6 +253,18 @@ class PhoneLettersTest {
         c.attachServerLetter(photo())
         c.setLetterServer(null)
         assertNull(c.ui().pendingPhoto)
+    }
+
+    @Test fun neverSaysTheChipCantBeforeItsCheckHasRun() {
+        val c = controller()
+        until("installed") { c.ui().installed }
+        assertEquals(VisionProbe.UNKNOWN, c.ui().vision)
+        assertFalse(PhoneLetters.serverButtonShown(c.ui().copy(homeServerLetters = true)))
+        c.send("What does this letter say?")
+        c.replied(1)
+        // The model loaded and the check ran first: it passed, so "take a photo".
+        assertEquals(PhoneLetters.TAKE_A_PHOTO, c.ui().conversation.messages.last().text)
+        assertEquals(PhoneLetters.CHECKING, PhoneLetters.noPhotoReply(true, VisionProbe.UNKNOWN, true))
     }
 
     companion object {
