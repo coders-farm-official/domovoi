@@ -229,6 +229,32 @@ class FoldCheckVoiceTest {
         assertTrue(ms[2].spoken)
     }
 
+    /** Review round 1: noise in the window (nothing a recognizer can read)
+     *  closes it quietly too, with no "didn't catch that". */
+    @Test fun noiseInTheAnswerWindowClosesItQuietly() {
+        val kit = Kit("Set a timer for 1 minute", "  ")
+        val c = controller(kit)
+        c.talk()
+        until("the card") { c.ui().conversation.messages.lastOrNull()?.card != null }
+        until("idle") { c.ui().voicePhase == VoicePhase.Idle && !c.ui().replying && kit.queue.isEmpty() }
+        Thread.sleep(150)
+        assertEquals(CardState.OPEN, c.ui().conversation.messages.last().card?.state)
+        assertFalse(said.toString(), said.any { it.startsWith("didn't catch that") || it.startsWith("nothing was heard") })
+        assertFalse(c.ui().voiceAnswering)
+    }
+
+    /** Only an open action card opens the mic by itself; a lookup card
+     *  waits for a tap (review round 1: internet off by default). */
+    @Test fun onlyAnActionCardOpensTheAnswerMic() {
+        val action = StoredMessage(Speaker.DOMOVOI, "Set a timer?", 0, card = PhoneCard(CardKind.ACTION, action = PhoneAction(ActionKind.SET_TIMER, seconds = 60)))
+        assertTrue(opensAnswerMic(action))
+        assertFalse(opensAnswerMic(action.copy(card = action.card!!.copy(state = CardState.DONE))))
+        val lookup = StoredMessage(Speaker.DOMOVOI, "Look this up?", 0, lookupCard = com.domovoi.app.assistant.lookup.LookupCard(query = "outkast"))
+        assertFalse(opensAnswerMic(lookup))
+        assertEquals("listening" to "say yes or no",
+            com.domovoi.app.ui.screens.assistant.voiceLine(VoicePhase.Listening, heardSpeech = false, answering = true))
+    }
+
     /** Nobody answers: the window closes quietly, the card stays open, and
      *  no "nothing was heard" is said. */
     @Test fun anUnansweredCardWindowClosesQuietly() {

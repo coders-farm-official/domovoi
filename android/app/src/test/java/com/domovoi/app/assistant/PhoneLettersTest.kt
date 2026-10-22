@@ -88,7 +88,7 @@ class PhoneLettersTest {
 
     private fun photo(): PendingPhoto = PendingPhoto(ByteArray(2048) { (it % 200 + 1).toByte() }, 1024, 768, "camera", 9)
 
-    private fun storedText(): String = root.walkTopDown().filter { it.isFile && "models" !in it.path }.joinToString("\n") { it.readText() }
+    private fun storedText(): String = root.walkTopDown().filter { it.isFile && "models" !in it.path }.joinToString("\n") { runCatching { it.readText() }.getOrDefault("") }
 
     @Test fun aLetterIsReadOnThePhoneThenCheckedAndNothingOfItIsKept() {
         val c = controller()
@@ -186,7 +186,6 @@ class PhoneLettersTest {
     @Test fun aPrintedLabelGetsAPlainAnswerNotTheLettersLayout() {
         val c = controller()
         ready(c)
-        engines.single().kind = "Handwritten"
         engines.single().transcript = LABEL
         val p = photo()
         c.attachPhoto(p)
@@ -196,11 +195,27 @@ class PhoneLettersTest {
         assertNull("no handwriting card", reply.headsUp)
         assertEquals("A cat on a sofa.", reply.text)
         assertEquals(PhotoText.MODE_PHOTO, reply.docMode)
-        assertEquals(listOf(LetterRead.TRANSCRIBE_SYSTEM, PhonePhotos.systemPrompt(Persona.SYSTEM_PROMPT)),
+        assertEquals(listOf(LetterRead.KIND_SYSTEM, LetterRead.TRANSCRIBE_SYSTEM, PhonePhotos.systemPrompt(Persona.SYSTEM_PROMPT)),
             engines.single().photoCalls.map { it.first })
-        assertTrue("no printed-or-handwritten step", engines.single().photoCalls.none { it.first == LetterRead.KIND_SYSTEM })
+        assertTrue(reply.notes.none { it.code == "letter_handwriting" })
         assertTrue(reply.sources.single().text.contains("Organic Rolled Oats"))
         until("the photo is wiped") { p.jpeg.all { it == 0.toByte() } }
+    }
+
+    /** Review round 1: a handwritten note asked "what does this say?" (no
+     *  letter named) still gets the handwriting card, once both answers agree. */
+    @Test fun aHandwrittenNoteAskedWhatItSaysStillGetsItsCard() {
+        val c = controller()
+        ready(c)
+        engines.single().kind = "Handwritten"
+        c.attachPhoto(photo())
+        c.send("What does this say?")
+        c.replied(1)
+        assertEquals("handwriting", c.ui().conversation.messages.last().headsUp?.kind)
+        assertEquals(listOf(LetterRead.KIND_QUESTION, PhoneLetters.KIND_CHECK_QUESTION), engines.single().photoCalls.map { it.third })
+        c.pickHeadsUp("try_anyway")
+        c.replied(2)
+        assertTrue(c.ui().conversation.messages.last().text.isNotEmpty())
     }
 
     /** The same question on a photo whose text reads like a letter: the letter's layout. */

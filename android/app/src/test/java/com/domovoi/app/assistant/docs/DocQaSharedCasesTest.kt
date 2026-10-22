@@ -130,6 +130,11 @@ class DocQaSharedCasesTest {
             val want = o["out"]!!.jsonArray.map { x -> x.jsonObject.s("cite") to x.jsonObject.s("text") }
             assertEquals(want, g.map { x -> x.cite to x.passage.text })
         }
+        cases["overview_sample"]!!.jsonArray.forEach {
+            val o = it.jsonObject
+            val n = o["n"]!!.jsonPrimitive.int
+            assertEquals(o["out"]!!.jsonArray.map { x -> x.jsonPrimitive.int }, DocQa.overviewSample((0 until n).toList(), o["k"]!!.jsonPrimitive.int))
+        }
         cases["opening"]!!.jsonArray.forEach {
             val o = it.jsonObject
             assertEquals(o.s("out"), DocQa.opening(o.s("in")!!, o["limit"]!!.jsonPrimitive.int))

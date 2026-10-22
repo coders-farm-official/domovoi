@@ -101,4 +101,43 @@ class ClaimGuardTest {
         assertEquals(plain, k.push(plain) + k.finish())
         assertFalse(k.replaced)
     }
+
+    /** Review round 1's 22 claims (16 of them slipped past) and 21 honest
+     *  lines (7 were mangled): quotes, reported speech and the past. */
+    private val reviewClaims = listOf(
+        "OutKast is now playing.", "Hey Ya by OutKast is playing now.", "Let me play OutKast for you.",
+        "Here's Hey Ya by OutKast.", "Enjoy Hey Ya by OutKast!", "Your 10-minute timer is set.", "Your alarm is all set for 7.",
+        "I'll put on some OutKast for you.", "Coming right up: Hey Ya!", "Okay, 10 minutes on the clock!",
+        "Got it, your timer is running.", "Timer started.", "Alarm's set for 7 AM.", "I've gone ahead and set your alarm.",
+        "Message sent!", "I've let Sam know.", "Done, Mom is on her way to the phone.", "Music is on!",
+        "Sure thing, playing it now.", "Playing \"Hey Ya\" by OutKast.", "Your reminder is ready.", "I have set the timer.",
+    )
+
+    private val reviewHonest = listOf(
+        "She said she played the piano for years.", "You played really well yesterday.", "I played chess as a kid in this story.",
+        "\"I'll call the guards!\" shouted the king.", "\"Play it again, Sam,\" is a famous misquote.",
+        "The message was sent by telegraph in 1844.", "The song was playing on the radio when they met.",
+        "The timer is set by turning the dial.", "I called out to the dragon.", "Calling all cars is a classic radio phrase.",
+        "Playing music can help you relax.", "\"I sent the letter,\" she whispered.", "I opened the letter and gasped.",
+        "Setting an alarm before bed helps.", "Your timer question is a good one.", "I'm playing devil's advocate here.",
+        "Paused games save your progress.", "I printed money in the story.", "Now, playing the guitar takes practice.",
+        "The song is on their second album.", "My son is playing outside.",
+    )
+
+    @Test fun theReviewsClaimsAreCaughtAndItsHonestLinesKept() {
+        val missed = reviewClaims.filter { s -> ClaimGuard().let { g -> g.push(s) + g.finish() } == s }
+        val changed = reviewHonest.filter { s -> ClaimGuard().let { g -> g.push(s) + g.finish() } != s }
+        println("review claims caught: ${reviewClaims.size - missed.size}/${reviewClaims.size}; honest changed: ${changed.size}/${reviewHonest.size}")
+        assertEquals(22, reviewClaims.size)
+        assertTrue("missed: $missed", missed.isEmpty())
+        assertTrue("changed: $changed", changed.isEmpty())
+    }
+
+    /** It runs only on a turn that asked to act (review round 1). */
+    @Test fun onlyATurnThatAskedToActIsGuarded() {
+        for (q in listOf("Play Outcast", "set a timer for 5 minutes", "Remind me to call mom", "text Sam", "print it", "save this"))
+            assertTrue(q, ClaimGuard.asksToAct(q))
+        for (q in listOf("Tell me a story about a king", "Who are OutKast?", "What is a telegraph?", "How do I bake bread?"))
+            assertFalse(q, ClaimGuard.asksToAct(q))
+    }
 }

@@ -97,6 +97,19 @@ def test_overview_retrieve():
         assert [{"cite": x.cite, "text": x.passage.text} for x in g] == case["out"]
     for case in CASES["opening"]:
         assert answer.opening(case["in"], case["limit"]) == case["out"]
+    for case in CASES["overview_sample"]:
+        assert answer.overview_sample(list(range(case["n"])), case["k"]) == case["out"]
+
+
+def test_a_200_page_overview_reads_pages_from_across_it():
+    """Review round 1: the first 20 pages only, while the prompt said "each
+    page". Now pages from first to last, and the prompt says so."""
+    pages = [{"label": f"p. {i}", "text": f"Page {i} covers section {i}. " * 40} for i in range(1, 201)]
+    g = answer.retrieve([{"name": "big.pdf", "parts": pages}], "What is this?", mode="overview")
+    labels = [x.cite for x in g]
+    assert labels[0] == "p. 1" and labels[-1] == "p. 200" and len(labels) == 20
+    assert "pages from across it" in answer.RULES_OVERVIEW
+    assert "in quotes exactly as the passages write it" in answer.RULES_OVERVIEW
 
 
 def test_general_questions_about_a_document_are_overviews():

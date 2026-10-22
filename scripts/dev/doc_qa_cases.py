@@ -117,10 +117,16 @@ def main() -> int:
     for docs, limit, budget in (([two[0]], answer.SINGLE_PASS_CHARS, answer.RETRIEVE_CHARS),
                                 ([two[0]], 200, answer.RETRIEVE_CHARS),
                                 ([{"name": "notes.txt", "parts": LONG}], 300, 600),
-                                (two, 100, answer.RETRIEVE_CHARS)):
+                                (two, 100, answer.RETRIEVE_CHARS),
+                                # Review round 1: more pages than the budget holds are sampled
+                                # from first to last, not the first ones only.
+                                ([{"name": "manual.pdf", "parts": [{"label": f"p. {i}", "text": f"Page {i} is about part {i} of the setup. " * 8}
+                                                                   for i in range(1, 31)]}], 300, 1200)):
         g = answer.retrieve(docs, "what is this?", mode="overview", single_pass=limit, budget=budget)
         cases["overview_retrieve"].append({"docs": docs, "single_pass": limit, "budget": budget,
                                            "out": [{"cite": x.cite, "text": x.passage.text} for x in g]})
+    cases["overview_sample"] = [{"n": n, "k": k, "out": answer.overview_sample(list(range(n)), k)}
+                                for n, k in ((5, 10), (30, 5), (200, 20), (7, 1), (10, 3))]
     cases["opening"] = [{"in": t, "limit": n, "out": answer.opening(t, n)} for t, n in (
         ("Short.", 40), ("One sentence here. Another sentence there. And a third one.", 45),
         ("Words without a full stop anywhere in this long line", 30), ("x" * 50, 20))]

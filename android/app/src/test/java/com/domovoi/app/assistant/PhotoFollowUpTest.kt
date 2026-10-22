@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.emitAll
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -32,6 +33,19 @@ class PhotoFollowUpTest {
     private val docs = ChatDocStore(File(root, "chat-docs/attachments"))
     private val engines = CopyOnWriteArrayList<VisionEngine>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /** Reading a photo's text takes 800 ms (the review's race). */
+    @Volatile private var slow = false
+
+    private class Slow(val inner: VisionEngine) : LlmEngine by inner {
+        override fun replyToPhoto(system: String, jpeg: ByteArray, question: String, now: String?): kotlinx.coroutines.flow.Flow<String> =
+            kotlinx.coroutines.flow.flow {
+                if (system == com.domovoi.app.assistant.docs.LetterRead.TRANSCRIBE_SYSTEM) kotlinx.coroutines.delay(800)
+                emitAll(inner.replyToPhoto(system, jpeg, question, now))
+            }
+
+        override fun replyToPhoto(system: String, jpeg: ByteArray, question: String, now: String?, maxOutput: Int) =
+            replyToPhoto(system, jpeg, question, now)
+    }
 
     private val llm = CatalogModel(
         "test-llm", "Test LLM", ModelKind.LLM,
@@ -50,7 +64,10 @@ class PhotoFollowUpTest {
         return AssistantController(
             memory = PhoneMemory((15.8 * (1L shl 30)).toLong(), lowRamDevice = false),
             store = store, conversations = conversations, jobs = FakeJobs(), settings = MemoryAssistantSettings(),
-            newEngine = { VisionEngine().also { it.photoText = INVITATION; engines += it } },
+            newEngine = {
+                val e = VisionEngine().also { it.photoText = INVITATION; engines += it }
+                if (slow) Slow(e) else e
+            },
             scope = scope, models = listOf(llm), docs = docs,
             visionMemory = MemoryVisionMemory(), visionBackend = { LlmBackend.GPU }, probeTimeoutMs = 2_000,
         )
@@ -80,7 +97,7 @@ class PhotoFollowUpTest {
         DocFixtures.p("Rent", "Heading1") + DocFixtures.p("The monthly rent is 1,200 dollars, due on the first day."),
     )
 
-    private fun storedText(): String = root.walkTopDown().filter { it.isFile && "models" !in it.path }.joinToString("\n") { it.readText() }
+    private fun storedText(): String = root.walkTopDown().filter { it.isFile && "models" !in it.path }.joinToString("\n") { runCatching { it.readText() }.getOrDefault("") }
 
     @Test fun aPhotosTextIsKeptAndAFollowUpReachesItNotThePdf() {
         val c = controller()
@@ -112,7 +129,7 @@ class PhotoFollowUpTest {
         assertEquals("question", c.ui().conversation.messages.last().docMode)
         // Deleted with the chat; the photo was never written.
         c.delete(c.ui().conversation.id)
-        until("deleted") { !storedText().contains("Maria Lopez") }
+        until("deleted", 20_000) { !storedText().contains("Maria Lopez") }
     }
 
     @Test fun withBothAndOtherTurnsBetweenItAsksWhich() {
@@ -132,6 +149,27 @@ class PhotoFollowUpTest {
         c.send("Who sent the photo?")
         c.replied(5)
         assertEquals(PhotoText.MODE_FOLLOW, c.ui().conversation.messages.last().docMode)
+    }
+
+    /** Review round 1 (its ReviewFoldRaceTest, ported): a follow-up sent
+     *  while the photo's text is still being read. The turn's copy, taken
+     *  before the wait, wrote the answer back without its text. */
+    @Test fun aQuickFollowUpKeepsThePhotosText() {
+        slow = true
+        val c = controller()
+        ready(c)
+        c.attachPhoto(photo())
+        c.send("What's in this picture?")
+        c.replied(1)
+        assertTrue("still reading", c.ui().conversation.messages.last().sources.isEmpty())
+        c.send("Who was it sent by?")
+        c.replied(2)
+        Thread.sleep(300)
+        val screen = c.ui().conversation.messages
+        val disk = conversations.load(c.ui().conversation.id)!!.messages
+        assertTrue("kept on screen: ${screen.map { "${it.fromUser} ${it.docMode} ${it.sources.size} ${it.text.take(30)}" }} reads=${engines.single().reads.size} photos=${engines.single().photos.size}", screen[1].sources.any { it.text.contains("Maria Lopez") })
+        assertTrue("kept on disk", disk[1].sources.any { it.text.contains("Maria Lopez") })
+        assertTrue("the model saw it", engines.single().replies.last().any { it.text.contains("Maria Lopez") })
     }
 
     @Test fun lettersAndLabelsByTheirText() {

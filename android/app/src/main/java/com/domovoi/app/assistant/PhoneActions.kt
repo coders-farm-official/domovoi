@@ -519,17 +519,21 @@ internal fun parseNumber(text: String): Int? {
 private val UNIT_SECONDS = mapOf("second" to 1, "sec" to 1, "minute" to 60, "min" to 60, "hour" to 3600, "hr" to 3600)
 private const val UNIT = "(?:second|sec|minute|min|hour|hr)"
 
+/** "a minute", "an hour": never "a second" or "a sec", which are idioms
+ *  ("remind me for a second"), not one-second timers (review round 1). */
+private const val A_UNIT = "(?:minute|min|hour|hr)"
+
 /** One duration clause: "5 minutes", "ten-minute", "an hour and a half",
  *  "half an hour", "one and a half hours", "a quarter of an hour". */
 private val CLAUSE = "(?:$NUMBER(?: and a half)?[ -]${UNIT}s?(?: and a half)?" +
-    "|an? ${UNIT}(?: and a half)?|(?:a )?half (?:an? )?$UNIT|(?:a )?quarter (?:of )?an hour|three quarters of an hour)"
+    "|an? ${A_UNIT}(?: and a half)?|(?:a )?half (?:an? )?$UNIT|(?:a )?quarter (?:of )?an hour|three quarters of an hour)"
 
 /** A spoken duration: one clause, or two joined ("1 hour and 30 minutes"). */
 internal val DURATION = "(?:$CLAUSE(?:(?:,? and |,? )$CLAUSE)?)"
 
 private val CLAUSE_RE = Regex(
     "^(?:(?<num>$NUMBER)(?<halfmid> and a half)?[ -](?<unit>$UNIT)s?(?<halfend> and a half)?" +
-        "|an? (?<aunit>$UNIT)(?<ahalf> and a half)?|(?:a )?half (?:an? )?(?<hunit>$UNIT)|(?<quarter>(?:a )?quarter (?:of )?an hour)" +
+        "|an? (?<aunit>$A_UNIT)(?<ahalf> and a half)?|(?:a )?half (?:an? )?(?<hunit>$UNIT)|(?<quarter>(?:a )?quarter (?:of )?an hour)" +
         "|(?<threeq>three quarters of an hour))$",
 )
 
@@ -576,7 +580,7 @@ private const val PART = "(?:in the morning|in the afternoon|in the evening|at n
  *  server's clock_time._RELATIVE, Fold check 2026-10-21). */
 private val RELATIVE_AMOUNT = "(?:(?:a )?quarter|half|\\d{1,2}|$NUMBER_WORD)(?: minutes?)?"
 /** What follows "alarm for" / "wake me at". */
-internal val TIME = "(?:noon|midday|midnight|$RELATIVE_AMOUNT $RELATIVE_DIR $HOUR|" +
+internal val TIME = "(?:$RELATIVE_AMOUNT $RELATIVE_DIR (?:$HOUR|noon|midday|midnight)|noon|midday|midnight|" +
     "$HOUR(?::[0-5]\\d| [0-5]\\d| (?:oh |o )?$NUMBER_WORD)?(?: ?o'? ?clock)?)(?: ?$AMPM)?(?: $PART)?"
 
 private fun hourOf(word: String): Int? = word.toIntOrNull() ?: HOUR_WORDS[word]
@@ -617,8 +621,7 @@ internal fun parseTime(text: String): SpokenTime? {
     if (t == "noon" || t == "midday") return SpokenTime(12, 0, true)
     if (t == "midnight") return SpokenTime(0, 0, false)
     RELATIVE_RE.matchEntire(t)?.let { m ->
-        val h = hourOf(m.groups["hr"]!!.value) ?: return null
-        if (h !in 1..12) return null
+        val hr = m.groups["hr"]!!.value
         val amt = m.groups["amt"]!!.value
         val minutes = when {
             amt.endsWith("quarter") -> 15
@@ -626,6 +629,16 @@ internal fun parseTime(text: String): SpokenTime? {
             else -> parseNumber(amt) ?: return null
         }
         if (minutes !in 1..59) return null
+        val before = m.groups["dir"]!!.value !in setOf("past", "after")
+        // "ten till noon" is 11:50 AM, "ten past midnight" 12:10 AM (as the
+        // server's clock_time reads them since review round 1).
+        if (hr == "noon" || hr == "midday" || hr == "midnight") {
+            val base = if (hr == "midnight") 24 * 60 else 12 * 60
+            val total = ((if (before) base - minutes else base + minutes) % (24 * 60) + 24 * 60) % (24 * 60)
+            return SpokenTime(total / 60, total % 60, total >= 12 * 60)
+        }
+        val h = hourOf(hr) ?: return null
+        if (h !in 1..12) return null
         // As clock_time.parse_when does: on a 12-hour dial, then 1-12.
         val total = when (m.groups["dir"]!!.value) {
             "past", "after" -> (h % 12) * 60 + minutes

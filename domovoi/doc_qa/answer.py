@@ -102,10 +102,10 @@ RULES_SUMMARY = (
 
 RULES_OVERVIEW = (
     "The person attached a document and asks what it is. The passages below are the document, "
-    "or, for a long one, the opening lines of each page.\n"
+    "or, for a long one, the opening lines of pages from across it.\n"
     "Rules:\n"
-    "- First say in one sentence what kind of document it is and its title, from the passages "
-    "or the file's name.\n"
+    "- First say in one sentence what kind of document it is and its title, copying the title "
+    "in quotes exactly as the passages write it; with no title in them, name the file instead.\n"
     "- Then give its main points in two to four short bullet points, only from the passages.\n"
     "- After each point, write the label of the passage it came from in square brackets, "
     "like [p. 7].\n"
@@ -241,6 +241,7 @@ def retrieve(docs: Sequence[dict[str, Any]], question: str, previous: str | None
     if mode == "overview" and not fits_one_pass(docs, single_pass):
         parts = [(i, pi, pt) for i, d in enumerate(docs) for pi, pt in enumerate(d.get("parts") or [])
                  if str(pt.get("text") or "").strip()]
+        parts = overview_sample(parts, max(1, budget // OVERVIEW_MIN_PART_CHARS))
         each = max(OVERVIEW_MIN_PART_CHARS, budget // max(1, len(parts)))
         out = []
         used = 0
@@ -281,6 +282,19 @@ def retrieve(docs: Sequence[dict[str, Any]], question: str, previous: str | None
         if len(out) >= top_k:
             break
     return out
+
+
+def overview_sample(parts: list, k: int) -> list:
+    """At most ``k`` of ``parts``, spread evenly from the first to the last
+    (review round 1: a 200-page document's overview read only its first 20
+    pages while saying "each page")."""
+    n = len(parts)
+    if n <= k:
+        return list(parts)
+    if k == 1:
+        return [parts[0]]
+    picks = sorted({(i * (n - 1) + (k - 1) // 2) // (k - 1) for i in range(k)})
+    return [parts[i] for i in picks]
 
 
 def opening(text: str, limit: int) -> str:

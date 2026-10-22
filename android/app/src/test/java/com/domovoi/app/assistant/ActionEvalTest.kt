@@ -419,6 +419,9 @@ class ActionEvalTest {
         "remind me what a timer is for", "What's a reminder?", "Can reminders go off in five minutes?",
         "Remind me later", "Remind me tomorrow", "Never mind the reminder", "No reminder in five minutes",
         "Should I set an alarm for an hour from now?", "remind me of the plot of Dune",
+        // Review round 1: "a second" and "a sec" are idioms, not one-second timers.
+        "remind me for a second", "remind me for a sec", "remind me in a sec", "remind me in a moment",
+        "wait a second", "give me a sec", "hold on a moment", "set a timer for a sec", "alarm in a second",
     )
 
     /** "Play Outcast" (Fold check): asked about OutKast, never played. */

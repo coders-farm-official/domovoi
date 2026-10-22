@@ -58,6 +58,28 @@ class ClockWordsTest {
         Triple("quarter past twelve", setOf(0, 12), 15),
         Triple("twenty past 12", setOf(0, 12), 20),
         Triple("ten to one in the afternoon", setOf(12), 50),
+        // Review round 1's 20 (clock_compare_review.py; "of" and "till noon"
+        // added to clock_time.py then).
+        Triple("quarter of seven", setOf(6, 18), 45),
+        Triple("ten of nine", setOf(8, 20), 50),
+        Triple("twenty-five to three", setOf(2, 14), 35),
+        Triple("half past one", setOf(1, 13), 30),
+        Triple("quarter to twelve", setOf(11, 23), 45),
+        Triple("a quarter till 5", setOf(4, 16), 45),
+        Triple("13 minutes past 4", setOf(4, 16), 13),
+        Triple("two minutes before 6", setOf(5, 17), 58),
+        Triple("five after 12", setOf(0, 12), 5),
+        Triple("twenty to twelve at night", setOf(23), 40),
+        Triple("half past 11 tonight", setOf(23), 30),
+        Triple("quarter past 6 in the evening", setOf(18), 15),
+        Triple("ten to 7 in the morning", setOf(6), 50),
+        Triple("eleven fifteen", setOf(11, 23), 15),
+        Triple("twelve to one", setOf(0, 12), 48),
+        Triple("fifty nine past three", setOf(3, 15), 59),
+        Triple("one to one", setOf(0, 12), 59),
+        Triple("5 to 9 pm", setOf(20), 55),
+        Triple("twenty past seven tonight", setOf(19), 20),
+        Triple("ten till noon", setOf(11), 50),
     )
 
     /** The hours a phone reading may be on a 24-hour clock. */
@@ -70,13 +92,13 @@ class ClockWordsTest {
         }
         println("clock words: ${server.size - wrong.size}/${server.size} agree with clock_time.py")
         assertTrue(wrong.joinToString("\n"), wrong.isEmpty())
-        assertEquals(34, server.size)
+        assertEquals(54, server.size)
     }
 
     @Test fun whatTimeIsTwelveToNine() {
         assertEquals("Twelve to nine is 8:48.", ClockQuestions.reading("What time is twelve to nine?", us, now))
         assertEquals("Quarter past seven pm is 7:15 PM.", ClockQuestions.reading("what's quarter past seven pm", us, now))
-        assertEquals("20 minutes to 8 is 7:40.", ClockQuestions.reading("What is 20 minutes to 8?", us, now))
+        assertEquals("20 minutes to 8 is 7:40.", ClockQuestions.reading("What time is 20 minutes to 8?", us, now))
     }
 
     /** "12 tonight" as speech to text writes it: midnight, never 11 PM. */
@@ -92,7 +114,10 @@ class ClockWordsTest {
     /** Still the clock's own answers or the model's: no reading here. */
     @Test fun otherQuestionsAreNotReadings() {
         for (q in listOf("what time is it", "What time is it in Tokyo?", "what is the time", "what is ten past",
-            "what is the capital of France", "what time is the game tonight", "what is twelve times nine")) {
+            "what is the capital of France", "what time is the game tonight", "what is twelve times nine",
+            // Review round 1: arithmetic is the model's, not a clock reading.
+            "what is half of 12", "what is a quarter of 8", "what is 10 to 1", "what is 3 to 2", "what is 5 of 10",
+            "what's half of twelve", "what is 1 to 1", "what is one to one", "when is half past nine")) {
             assertNull(q, ClockQuestions.reading(q, us, now))
         }
     }

@@ -170,6 +170,10 @@ class VoiceSession(
     private val _heardSpeech = MutableStateFlow(false)
     val heardSpeech: StateFlow<Boolean> = _heardSpeech
 
+    /** True while the mic is open for a card's yes or no. */
+    private val _answering = MutableStateFlow(false)
+    val answering: StateFlow<Boolean> = _answering
+
     private val _problems = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val problems: SharedFlow<String> = _problems
 
@@ -262,6 +266,7 @@ class VoiceSession(
         } finally {
             speaking = null
             focus.release()
+            _answering.value = false
             _phase.value = VoicePhase.Idle
         }
     }
@@ -278,6 +283,7 @@ class VoiceSession(
             if (!again) return
             windows++
             answering = true
+            _answering.value = true
             _heardSpeech.value = false
             _phase.value = VoicePhase.Listening
         }
@@ -303,9 +309,11 @@ class VoiceSession(
         val transcript = withContext(work) { transcribe(utterance.samples) }.trim()
         val heard = clock()
         if (transcript.isBlank() || transcript.none { it.isLetterOrDigit() }) {
-            problem("didn't catch that; tap the mic and ask again")
+            // Noise in a card's answer window closes it quietly.
+            if (!answering) problem("didn't catch that; tap the mic and ask again")
             return false
         }
+        _answering.value = false
         _phase.value = VoicePhase.Thinking
         // A voice that will not start still leaves the written answer.
         val spoken = openVoice()?.let { speakWith(it) }

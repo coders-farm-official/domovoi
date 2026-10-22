@@ -91,10 +91,10 @@ object DocQa {
     const val OVERVIEW_MIN_PART_CHARS = 240
 
     val RULES_OVERVIEW = "The person attached a document and asks what it is. The passages below are the document, " +
-        "or, for a long one, the opening lines of each page.\n" +
+        "or, for a long one, the opening lines of pages from across it.\n" +
         "Rules:\n" +
-        "- First say in one sentence what kind of document it is and its title, from the passages " +
-        "or the file's name.\n" +
+        "- First say in one sentence what kind of document it is and its title, copying the title " +
+        "in quotes exactly as the passages write it; with no title in them, name the file instead.\n" +
         "- Then give its main points in two to four short bullet points, only from the passages.\n" +
         "- After each point, write the label of the passage it came from in square brackets, " +
         "like [p. 7].\n" +
@@ -206,7 +206,10 @@ object DocQa {
         singlePass: Int = SINGLE_PASS_CHARS,
     ): List<Given> {
         if (mode == "overview" && !fitsOnePass(docs, singlePass)) {
-            val parts = docs.flatMapIndexed { i, d -> d.parts.mapIndexedNotNull { pi, pt -> if (pt.text.trim().isEmpty()) null else Triple(i, pi, pt) } }
+            val parts = overviewSample(
+                docs.flatMapIndexed { i, d -> d.parts.mapIndexedNotNull { pi, pt -> if (pt.text.trim().isEmpty()) null else Triple(i, pi, pt) } },
+                maxOf(1, budget / OVERVIEW_MIN_PART_CHARS),
+            )
             val each = maxOf(OVERVIEW_MIN_PART_CHARS, budget / maxOf(1, parts.size))
             val out = ArrayList<Given>()
             var used = 0
@@ -246,6 +249,16 @@ object DocQa {
             if (out.size >= topK) break
         }
         return out
+    }
+
+    /** At most [k] of [parts], spread evenly from the first to the last (the
+     *  server's `overview_sample`; review round 1: a 200-page overview read
+     *  only its first 20 pages). */
+    fun <T> overviewSample(parts: List<T>, k: Int): List<T> {
+        val n = parts.size
+        if (n <= k) return parts
+        if (k == 1) return listOf(parts[0])
+        return (0 until k).map { i -> (i * (n - 1) + (k - 1) / 2) / (k - 1) }.toSortedSet().map { parts[it] }
     }
 
     /** The first [limit] characters of [text], ended at a sentence when one

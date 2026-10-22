@@ -596,6 +596,29 @@ class PhoneActionsControllerTest {
         assertEquals(CardState.DONE, conversations.load(id)!!.messages[1].card?.state)
     }
 
+    /** Review round 1: a question sent while a tap is still going to the
+     *  Clock app carries a copy with the card open; saving it must not write
+     *  the card back to OPEN on disk. */
+    @Test fun aQuestionSentDuringATapNeverReopensTheCardOnDisk() {
+        val c = controller()
+        c.ask("set a timer for 10 minutes")
+        val id = c.state.value.conversation.id
+        host.clockDelayMs = 300
+        val before = c.state.value.conversation
+        c.actionConfirmed(id, 1)
+        until("the tap reached the Clock app") { host.sent.size == 1 }
+        until("done") { c.card(1)?.state == CardState.DONE }
+        // The turn's copy from before the tap, as a slow send would hold it.
+        script = { _, emit -> emit("Sure.") }
+        c.send("tell me something nice")
+        until("answered", 20_000) { !c.state.value.replying && c.state.value.conversation.messages.size >= before.messages.size + 2 }
+        Thread.sleep(200)
+        assertEquals(CardState.DONE, conversations.load(id)!!.messages[1].card?.state)
+        c.actionConfirmed(id, 1)
+        Thread.sleep(400)
+        assertEquals(1, host.sent.size)
+    }
+
     @Test fun aSpokenYesThenATapSendOneClockRequest() {
         val c = controller()
         c.ask("set a timer for 10 minutes")
