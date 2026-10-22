@@ -26,8 +26,11 @@
 
 #include "pins.iss"
 ; Where "Open Domovoi" lands (pins.iss, DashboardTabRoutes): Settings >
-; Configuration with the first-run admin setup open, in a dashboard that
-; has the tab addresses; Settings on its first tab in one from before them.
+; Advanced with the first-run admin setup open, in a dashboard that has the
+; tab addresses (the address keeps its first spelling, Configuration, which
+; the dashboard still accepts: build.ps1 -Pin checks the pinned commit's
+; SETUP_ROUTE); Settings on its first tab in one from before them, whose
+; last tab was still called Configuration.
 #ifdef DashboardTabRoutes
   #define DashboardRoute "settings/configuration/setup"
 #else
@@ -621,9 +624,9 @@ begin
   { Without the AI models: the 10.5-13.5 GB less the 6.4 or 9.1 GB of
     them (AiModels in windows\common\Provision.cs). }
   if AiAnswer = 'no' then
-    S := S + 'Downloads: about 4.5 GB (no AI models: you left out AI chat and questions). Ubuntu (418 MB) now; then, inside the distro, Domovoi''s code at commit {#Copy(DomovoiCommit, 1, 7)} (later updates follow the {#DomovoiChannel} channel{#ChannelWords}; you choose when, in Settings > Configuration > Version), Docker Engine, Python packages and the speech recognition model, each checked against a pinned hash.' + #13#10#13#10
+    S := S + 'Downloads: about 4.5 GB (no AI models: you left out AI chat and questions). Ubuntu (418 MB) now; then, inside the distro, Domovoi''s code at commit {#Copy(DomovoiCommit, 1, 7)} (later updates follow the {#DomovoiChannel} channel{#ChannelWords}; you choose when, in Settings > About & updates), Docker Engine, Python packages and the speech recognition model, each checked against a pinned hash.' + #13#10#13#10
   else
-    S := S + 'Downloads: about 10.5-13.5 GB (the AI models are most of it; the size depends on the models this PC''s memory gets). Ubuntu (418 MB) now; then, inside the distro, Domovoi''s code at commit {#Copy(DomovoiCommit, 1, 7)} (later updates follow the {#DomovoiChannel} channel{#ChannelWords}; you choose when, in Settings > Configuration > Version), Docker Engine, Python packages and the AI models (one of them reads pictures in chat), each checked against a pinned hash.' + #13#10#13#10;
+    S := S + 'Downloads: about 10.5-13.5 GB (the AI models are most of it; the size depends on the models this PC''s memory gets). Ubuntu (418 MB) now; then, inside the distro, Domovoi''s code at commit {#Copy(DomovoiCommit, 1, 7)} (later updates follow the {#DomovoiChannel} channel{#ChannelWords}; you choose when, in Settings > About & updates), Docker Engine, Python packages and the AI models (one of them reads pictures in chat), each checked against a pinned hash.' + #13#10#13#10;
   S := S + 'Not changed: power and sleep settings (the icon''s "Keep this PC awake" only holds Windows awake while someone is signed in), Windows Update, Smart App Control, your user accounts and files.' + #13#10#13#10;
   S := S + 'This preview is not code-signed: Windows SmartScreen may have warned before Setup started, and Windows may ask again about its programs.' + #13#10#13#10;
   S := S + 'Uninstalling never deletes files in your media folders: a media folder is removed only if it is empty.' + #13#10#13#10;
@@ -809,7 +812,7 @@ end;
 function FinishSteps: String;
 begin
 #ifdef DashboardTabRoutes
-  Result := '1. Click Open Domovoi. It copies the code and opens Settings > Configuration with "first-run admin setup" showing (if it isn''t, click "set up admin" in the Admin box).' + #13#10;
+  Result := '1. Click Open Domovoi. It copies the code and opens Settings > Advanced with "first-run admin setup" showing (if it isn''t, click "set up admin" in the Admin box).' + #13#10;
 #else
   Result := '1. Click Open Domovoi. It copies the code and opens Domovoi''s Settings. Click the Configuration tab (the last one), then "set up admin" in the Admin box.' + #13#10;
 #endif
@@ -974,7 +977,7 @@ begin
     CodeEdit.Text := SetupCodeText;
     if SetupCodeText = '' then
       WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 + 'Setup could not read the setup code. Restarting the DomovoiHost service writes a fresh one (see docs/WINDOWS_HOST.md).';
-    LanText.Caption := 'Phones and satellites reach Domovoi at http://' + LanIp + ':6369. Reserve that address for this PC in your router (DHCP reservation for ' + LanMac + '), or satellites lose Domovoi when it changes.' + #13#10 +
+    LanText.Caption := 'Phones and satellites reach Domovoi at http://' + LanIp + ':6369. If it changes, satellites look for Domovoi again by themselves; to keep it fixed, reserve it for this PC in your router (DHCP reservation for ' + LanMac + ').' + #13#10 +
       ModelsText(GpuRaw, TierText);
   end
   else
