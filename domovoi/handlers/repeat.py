@@ -70,6 +70,9 @@ _REPEAT_RE = re.compile(
     r"|please repeat(?: (?:that|it))?"
     # say that again / say it again
     r"|say (?:that|it) again"
+    # read that again / read it again (a document part read in a room is
+    # re-read by documents' own "Shall I go on?" answer, which comes first)
+    r"|read (?:that|it) (?:again|one more time)"
     # can/could/would you (please) (repeat / say that again)
     r"|(?:can|could|would) you (?:please )?(?:repeat(?: (?:that|it))?|say (?:that|it) again)"
     # what did/'d you (just) say / what'd you say

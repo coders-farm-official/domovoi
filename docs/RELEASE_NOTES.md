@@ -12,7 +12,14 @@ Core only. No migration, no new dependency, no new route.
   Documents folder aloud: PDF, Word (.docx), OpenDocument (.odt), text or
   markdown, found by its name (the same search as "print my cover
   letter": inside Documents only, hidden and secret-named files left out).
-  Two that fit: "I found two: … Which one?". Over about a page the room
+  A turn is the document's only when it's clear: the exact name ("read me
+  the house rules"), or a document word ("read me the tax document", a
+  lease, a contract, a file; "letter" when a letter in Documents fits).
+  "Read me the latest" stays the news', "read me Harry Potter" the
+  audiobooks', "read me the weather report" the Q&A model's. Two that
+  fit: "I found two: … Which one?"; something close: "Did you mean …?".
+  A question it asks ("Who's it from?", "Shall I go on?") is answered
+  only within a short time and never by a fresh wake word. Over about a page the room
   says how long it is first ("It's 2 pages, about 3 minutes. The whole
   thing, or just the start?"), then reads a page or so at a time and asks
   "Shall I go on?". **stop**, **pause**, **start again**, **read that

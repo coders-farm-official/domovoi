@@ -28,8 +28,10 @@ No model is involved: reading works with the household's AI features off.
 
 from __future__ import annotations
 
+import asyncio
 import math
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -84,12 +86,150 @@ class Spoken:
         return split_parts(list(self.sentences), size)
 
 
-def find(query: str, root: Path | None = None):
-    """Documents whose name fits ``query`` (one when it's clear, a few when
-    it isn't, none when nothing fits)."""
+# ─── Finding a document: the cached title index ─────────────────────────
+#
+# The read fast path decides at match time whether a turn is a document's
+# (handlers/documents.py), so finding must be cheap and never block the
+# event loop: the titles of Documents are walked once into memory, then
+# looked over again in a worker thread (asyncio.to_thread) when older than
+# REFRESH_SEC, and only re-walked when a folder's mtime moved. The first
+# look after start (no index yet) walks once where it is.
+
+@dataclass(frozen=True)
+class Doc:
+    rel: str
+    title: str
+    words: tuple[str, ...]
+
+
+#: How often the index is looked over (folder mtimes; a re-walk when one moved).
+REFRESH_SEC = 30.0
+_INDEX: dict = {"root": None, "docs": (), "dirs": {}, "at": 0.0, "busy": False, "warming": False}
+
+
+def _root() -> Path:
     from domovoi.printing import lookup
 
-    return lookup.find(query, root, exts=READABLE_EXTS)
+    return lookup.documents_root()
+
+
+def _walk(root: Path) -> tuple[tuple[Doc, ...], dict[str, float]]:
+    import os
+
+    from domovoi.printing import lookup
+
+    docs = tuple(Doc(rel=d.rel, title=d.title, words=tuple(lookup._words(d.title)))
+                 for d in lookup.all_documents(root, READABLE_EXTS))
+    dirs: dict[str, float] = {}
+    try:
+        real = root.resolve(strict=True)
+    except OSError:
+        return docs, dirs
+    for dirpath, dirnames, _files in os.walk(real):
+        depth = len(Path(dirpath).relative_to(real).parts)
+        dirnames[:] = [d for d in dirnames if not d.startswith(".") and depth < lookup.MAX_DEPTH]
+        try:
+            dirs[dirpath] = os.stat(dirpath).st_mtime
+        except OSError:
+            pass
+    return docs, dirs
+
+
+def _changed(dirs: dict[str, float]) -> bool:
+    import os
+
+    for path, mtime in dirs.items():
+        try:
+            if os.stat(path).st_mtime != mtime:
+                return True
+        except OSError:
+            return True
+    return False
+
+
+def _refresh(root: Path) -> None:
+    try:
+        if _INDEX["root"] == str(root) and _INDEX["dirs"] and not _changed(_INDEX["dirs"]):
+            _INDEX["at"] = time.monotonic()
+            return
+        docs, dirs = _walk(root)
+        _INDEX.update(root=str(root), docs=docs, dirs=dirs, at=time.monotonic())
+    finally:
+        _INDEX["busy"] = False
+
+
+def index() -> tuple[Doc, ...]:
+    """The readable documents in Documents, from memory."""
+    root = _root()
+    if _INDEX["root"] != str(root):
+        if _INDEX["warming"]:
+            return ()  # the start-up walk (warm) is still going: nothing yet
+        _INDEX["busy"] = True
+        _refresh(root)  # first look (or Documents moved): walk once here
+    elif time.monotonic() - _INDEX["at"] > REFRESH_SEC and not _INDEX["busy"]:
+        _INDEX["busy"] = True
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            _refresh(root)
+        else:
+            loop.create_task(asyncio.to_thread(_refresh, root))
+    return _INDEX["docs"]
+
+
+async def warm() -> None:
+    """Walk Documents once at start-up, in a worker thread, so the first
+    "read me …" never walks it on the event loop (domovoi/main.py)."""
+    _INDEX["warming"] = True
+    try:
+        await asyncio.to_thread(_refresh, _root())
+    except Exception as e:  # noqa: BLE001 — the first look walks instead
+        import logging
+
+        logging.getLogger(__name__).info("documents index: the start-up walk failed: %s", type(e).__name__)
+    finally:
+        _INDEX["warming"] = False
+
+
+def invalidate() -> None:
+    """A document was just written (a letter saved): the next look re-walks."""
+    _INDEX.update(root=None, docs=(), dirs={}, at=0.0, busy=False)
+
+
+def _docs(root: Path | None) -> tuple[Doc, ...]:
+    if root is None:
+        return index()
+    return _walk(root)[0]
+
+
+def exact(query: str, root: Path | None = None) -> list[Doc]:
+    """Documents whose name is exactly what was said (filler words aside)."""
+    from domovoi.printing import lookup
+
+    want = tuple(lookup._words(query))
+    return [d for d in _docs(root) if want and d.words == want][:3]
+
+
+def find(query: str, root: Path | None = None) -> list[Doc]:
+    """Documents whose name fits ``query`` (one when it's clear, a few when
+    it isn't, none when nothing fits): an exact name wins outright, else
+    every word said must be in the name (a word over 3 letters may be the
+    start of one)."""
+    from domovoi.printing import lookup
+
+    want = lookup._words(query)
+    if not want:
+        return []
+    docs = _docs(root)
+    hit = [d for d in docs if d.words == tuple(want)]
+    if hit:
+        return hit[:3]
+    scored = []
+    for d in docs:
+        if all(any(h == w or (len(w) > 3 and h.startswith(w)) for h in d.words) for w in want):
+            scored.append((len(d.words) - len(want), d.title.lower(), d))
+    scored.sort(key=lambda t: (t[0], t[1]))
+    return [d for _, _, d in scored[:3]]
 
 
 #: How alike a heard word and a name's word must be to be offered as "did
@@ -99,7 +239,7 @@ NEAR_RATIO = 0.7
 NEAR_HALF = 0.5
 
 
-def find_near(query: str, root: Path | None = None):
+def find_near(query: str, root: Path | None = None) -> list[Doc]:
     """Documents whose name is close to what was heard, for "Did you mean
     …?" after :func:`find` found nothing (speech recognition hears "the
     leaves" for "the lease"). Every word heard must be near one of the
@@ -112,17 +252,21 @@ def find_near(query: str, root: Path | None = None):
     want = lookup._words(query)
     if not want:
         return []
+    docs = _docs(root)
+    # Each heard word against each distinct name word once (a household's
+    # names share most words), not once per document.
+    vocab = {h for d in docs for h in d.words}
+    ratio = {w: {h: SequenceMatcher(None, w, h).ratio() for h in vocab} for w in set(want)}
     scored = []
-    for d in lookup.all_documents(root, READABLE_EXTS):
-        have = lookup._words(d.title)
-        if not have:
+    for d in docs:
+        if not d.words:
             continue
-        best = [max(SequenceMatcher(None, w, h).ratio() for h in have) for w in want]
+        best = [max(ratio[w][h] for h in d.words) for w in want]
         # Every word near, or one word exactly right and the rest at least
         # half alike ("the letter to the lionthord" for "… landlord": 0.59;
         # "the letter from the bank" against it: "bank" 0.33, not offered).
         if min(best) >= NEAR_RATIO or (max(best) == 1.0 and min(best) >= NEAR_HALF):
-            scored.append((-sum(best) / len(best), len(have), d.title.lower(), d))
+            scored.append((-sum(best) / len(best), len(d.words), d.title.lower(), d))
     scored.sort(key=lambda t: t[:3])
     return [d for *_, d in scored[:3]]
 

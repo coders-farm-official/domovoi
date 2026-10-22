@@ -963,9 +963,12 @@ press **Save**.
 
 **App:** opens text files and sheets from Files.
 
-**Read aloud, in any room:** say "read me" and a document's name.
-Domovoi finds it in Documents (PDF, Word, OpenDocument, text or markdown)
-and reads it out in that room. If two fit, it asks which one. Over about a
+**Read aloud, in any room:** say "read me" and a document's name, as it
+is in Documents ("read me the house rules"), or with "document" or
+"file" after part of it ("read me the tax document"). Domovoi finds it in
+Documents (PDF, Word, OpenDocument, text or markdown) and reads it out in
+that room. If two fit, it asks which one; if it only heard something close,
+it asks "Did you mean …?". Over about a
 page, it says how long first ("It's 2 pages, about 3 minutes") and asks
 "The whole thing, or just the start?"; then it reads about a page at a time
 and asks "Shall I go on?". Say **stop**, **pause**, **start again** or

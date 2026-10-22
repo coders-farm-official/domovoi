@@ -58,7 +58,12 @@ LETTER_MAX_TOKENS = 1800
 # ─── What starts a letter ───────────────────────────────────────────────
 
 _LEAD = r"(?:(?:i(?: want| need| would like|'d like) to|help me|let'?s|let us) )?"
-_TAKE = r"take(?: down)? (?:a |an |another )(?:new )?"
+#: "take a letter" is dictation; "I need to take a letter to the post office"
+#: is an errand (review round 1): no "need to / have to" before "take", and
+#: no post office, post box or mailbox after it.
+_LEAD_TAKE = r"(?:(?:i(?: want| would like|'d like) to|let'?s|let us) )?"
+_TAKE = (r"take(?: down)? (?:a |an |another )(?:new )?(?=(?:[a-z'-]+ ){0,3}?letter(?!s? to (?:the |a )?(?:post office"
+         r"|post|mail ?box|post ?box|letter ?box|mail|postman|mailman)\b))")
 _WRITE = (r"(?:write|draft|compose|dictate|start|begin|type up|type)(?: me| up)? (?!down\b)"
           r"(?:(?:a|an|my|the|our|another|new) )?(?:new )?")
 #: Words before "letter" that make it something else: "write a note to the
@@ -72,8 +77,8 @@ _NOT_BEFORE = (r"(?:note|notes|list|reminder|message|memo|about|to|for|on|in|of|
 #: "take a letter", "write a letter to the landlord", "draft a cover letter
 #: for the Acme job", "I want to write a letter to grandma saying …".
 LETTER_RE = re.compile(
-    r"^" + _LEAD + r"(?:" + _TAKE + r"|" + _WRITE + r")"
-    r"(?P<what>(?:(?!" + _NOT_BEFORE + r")[a-z'-]+ ){0,3}?)(?P<obj>cover letter|letter|resume|cv)"
+    r"^(?:" + _LEAD_TAKE + _TAKE + r"|" + _LEAD + _WRITE + r")"
+    r"(?P<what>(?:(?!" + _NOT_BEFORE + r")[a-z'-]+ ){0,3}?)(?P<obj>cover letter|letter(?! [a-z](?: |$))|resume|cv)"
     r"(?P<rest>(?:[ :,].*)?)$"
 )
 #: The inline content after the recipient or topic: "… saying the heating
@@ -179,9 +184,22 @@ def author_from_reply(said: str) -> tuple[str | None, bool]:
     s = re.sub(r"^(?:it'?s |it is |this is |from |it'?s from |the letter is from |that'?s |i'?m |i am |me,? |my name is "
                r"|sign it |sign it from |signed )+", "", s)
     s = re.sub(r"\b(?:please|thanks|thank you)$", "", s).strip(" .")
-    if not s or len(s) > 60 or not re.search(r"[a-z]", s):
+    words = s.split()
+    # A name or a person: one to four plain words, none of them the kind a
+    # command is made of ("what time is it", "play some jazz" are not names:
+    # they fall through to ordinary routing, review round 1).
+    if (not words or len(words) > 4 or len(s) > 60
+            or not all(re.fullmatch(r"[a-z][a-z'.-]*", w) for w in words)
+            or any(w in _NOT_A_NAME for w in words)):
         return None, False
-    return " ".join(w[:1].upper() + w[1:] for w in s.split()), False
+    return " ".join(w[:1].upper() + w[1:] for w in words), False
+
+
+_NOT_A_NAME = frozenset(
+    "what whats what's who where when why how is are was the a an it its it's this that to of in on off for at "
+    "with and or play set turn stop start pause resume timer timers time music song weather news remind reminder "
+    "read write take tell call cancel volume louder quieter up down next skip yes no okay ok hey".split()
+)
 
 
 # ─── Writing it up ──────────────────────────────────────────────────────
@@ -343,6 +361,9 @@ async def write_and_save(state: dict[str, Any]) -> Saved:
                             "It couldn't be saved into Documents; save it from here.", model=model,
                             draft=_card(draft_id, kind, title, template, words))
         raise LetterFailed(f"I wrote it, but couldn't save it into Documents. It's in Chat, in {title}") from None
+    from domovoi.voice_docs import reading
+
+    reading.invalidate()  # "read me the letter to the landlord" finds it now
     entry = {"format": fmt, "rel_path": rel, "check": check.as_json(), "template": template,
              "at": dt.datetime.now(dt.timezone.utc).isoformat()}
     async with session_scope() as s:

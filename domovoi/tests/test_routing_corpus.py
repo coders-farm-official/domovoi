@@ -45,6 +45,30 @@ from domovoi.router import (
 )
 from domovoi.tests.conftest import requires_db
 
+
+# The D7 review's fixture Documents: the read fast path claims an exact
+# name, so the corpus's document rows are routed against these names, never
+# the machine's own ~/Documents.
+_DOCS = ["Lease.pdf", "Cover letter.docx", "Harry Potter book report.docx", "Dune essay.txt",
+         "Pancake recipe.md", "House rules.txt", "Weather station manual.pdf", "Letter to the landlord v1.docx",
+         "Shopping list.txt", "The Hobbit reading notes.md", "Timer instructions.txt", "Latest invoice.pdf",
+         "Bedtime routine.md", "Calendar 2026.pdf", "Reminders.txt"]
+
+
+@pytest.fixture(autouse=True)
+def _documents_folder_of_our_own(tmp_path, monkeypatch):
+    from domovoi.config import settings
+    from domovoi.voice_docs import reading
+
+    d = tmp_path / "Documents"
+    d.mkdir()
+    for n in _DOCS:
+        (d / n).write_text("x", encoding="utf-8")
+    monkeypatch.setattr(settings, "documents_dir", str(d))
+    reading.invalidate()
+    yield d
+    reading.invalidate()
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORPUS_PATH = REPO_ROOT / "scripts" / "routing_corpus.json"
 CORPUS = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))["cases"]

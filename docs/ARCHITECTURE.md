@@ -284,7 +284,7 @@ map (from `domovoi/handlers/__init__.py`):
 | 210 | `intercom` | Before voice_notes ("tell the kitchen X") |
 | 220 | `chat_mode` | |
 | 222 | `printing` | "Print …", "scan this", ink and paper, "set up the printer"; anchored at the verb, after `chat_mode` and before `voice_notes`; "scan for new music" stays music's |
-| 225 | `documents` | "Read me the lease", "take a letter to the landlord" (documents plan D7); before `voice_notes`, whose "write …" note capture took "write a letter" as a note; its read paths need a document word and leave notes, news, books and the calendar alone |
+| 225 | `documents` | "Read me the lease", "take a letter to the landlord" (documents plan D7); before `voice_notes`, whose "write …" note capture took "write a letter" as a note; the read path claims a turn only when it will answer it: a document's exact name, a strong document word (document, file, PDF, lease, contract, …), or "letter" with a letter in Documents that fits, decided from an in-memory index of Documents' names; notes, news and its "the latest", books, podcasts, the calendar, reminders, timers and lists are never its |
 | 230 | `voice_notes` | |
 | 240 | `memory` | |
 | 250 | `homelab` | |

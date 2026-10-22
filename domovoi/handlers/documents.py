@@ -4,12 +4,16 @@ What it owns, all anchored:
 
 * **"read me the lease"**, "read my cover letter", "read the letter from the
   bank to me", "read me X from Documents": a household document read aloud
-  (:mod:`domovoi.voice_docs.reading`). Read when a household document's
-  name fits; a name with a document word in it (letter, lease, contract,
-  file, PDF, …) that fits none is answered "I couldn't find …"; anything
-  else is declined at run time and routed on as before ("read me a
-  limerick"). Notes, news, books, podcasts, the calendar, stories and
-  poems are never taken ("read my last note", "read me the headlines" and
+  (:mod:`domovoi.voice_docs.reading`). The turn is claimed only when it
+  will be answered (the router tries no later fast path after a decline):
+  a document's exact name; a strong document word (document, file, PDF,
+  lease, contract, …) — then names that fit, "Did you mean …?" for a close
+  one, or "I couldn't find …"; or "letter" when a letter in Documents fits.
+  "report", "recipe", "guide" and the like count only in an exact name.
+  The decision is made while matching, from the in-memory index of
+  Documents' names (:func:`domovoi.voice_docs.reading.index`). Notes, the
+  news (and its "the latest", "the oldest"), books, podcasts, the calendar,
+  reminders, timers, lists, stories and poems are never taken ("read my last note", "read me the headlines" and
   "read the book Dune" keep their handlers). Two documents that fit → "I
   found two: … Which one?". Over about a page →
   "It's 2 pages, about 3 minutes. The whole thing, or just the start?".
@@ -77,31 +81,95 @@ LETTER_KEY = "doc_letter"
 LAST_KEY = "doc_last"
 
 # ─── Fast-path patterns ──────────────────────────────────────────────────
+#
+# The router takes the FIRST fast path that matches and never tries a later
+# one after a decline (router.route), so the read path claims a turn only
+# when it will answer it (review round 1): its pattern (_ClaimingPattern)
+# looks at the cached title index of Documents (reading.index: memory only,
+# refreshed off the event loop) while matching.
 
-#: Words that make "read me X" a document. "note(s)" is voice_notes', "book"
-#: spoken_audio's, "news"/"headlines" the news'.
-_DOC_NOUN = (r"(?:cover letters?|letters?|documents?|docs?|files?|pdfs?|contracts?|lease|leases|agreements?|resumes?"
-             r"|cvs?|reports?|essays?|manuals?|instructions|polic(?:y|ies)|statements?|invoices?|bills?|receipts?"
-             r"|notices?|forms?|minutes|proposals?|memos?|drafts?|recipes?|certificates?|warrant(?:y|ies)"
-             r"|handbooks?|guides?)")
-#: Never ours, whatever follows "read": notes (voice_notes), the news,
-#: books and podcasts (spoken_audio), the calendar, a story or a poem (the
-#: Q&A model tells those), and "it"/"that" (read back, below).
+#: Words that say a thing is a document, on their own.
+_STRONG = (r"(?:cover letters?|documents?|docs?|files?|pdfs?|contracts?|lease|leases|agreements?|resumes?|cvs?"
+           r"|invoices?|receipts?|certificates?|warrant(?:y|ies)|polic(?:y|ies)|statements?|memos?|essays?"
+           r"|manuals?|handbooks?|minutes|proposals?|drafts?)")
+#: "letter": a document only when a letter in Documents fits ("read me a
+#: letter from santa" with none from Santa is the Q&A model's).
+_LETTER = r"letters?"
+#: Never ours, whatever follows "read": notes (voice_notes), the news and
+#: its follow-ups ("read me the latest", "the oldest", "the latest on …"),
+#: books and podcasts (spoken_audio), the calendar, reminders, timers and
+#: lists, a story or a poem (the Q&A model's), and "it"/"that" (read back).
 _NOT_OURS = (r"(?!(?:it|that|this|them)\b)"
+             r"(?!(?:the |my )?(?:latest|newest|oldest|most recent)(?: (?:on|about|in|from|for|news|stories|story"
+             r"|headlines?|ones?|episodes?|podcasts?)\b|$))"
              r"(?!.*\b(?:news|headlines?|stories|story|poems?|jokes?|notes?|book|books|audio ?books?|podcasts?"
-             r"|episodes?|chapters?|calendar|schedule|agenda|lyrics|mind|room|lips|palm)\b)")
+             r"|episodes?|chapters?|calendar|schedule|agenda|lyrics|reminders?|timers?|alarms?|lists?|mind|room"
+             r"|lips|palm)\b)")
 _READ_LEAD = r"^read(?: (?:me|us))?(?: (?:out|aloud))?(?: (?:to me|for me))?"
 _READ_TAIL = r"(?: (?:to me|for me|aloud|out loud|please))*"
-#: "read me the house rules", "read the letter from the bank to me": any
-#: name. It is read when a household document fits it; a name with a
-#: document word in it ("the tax letter") that fits none is answered "I
-#: couldn't find …"; anything else is declined at run time (not a document
-#: here) and routed on as before.
-_READ_RE = re.compile(_READ_LEAD + r" " + _NOT_OURS + r"(?P<what>.+?)" + _READ_TAIL + r"$")
-_DOC_WORD_RE = re.compile(r"\b" + _DOC_NOUN + r"\b|\b(?:from|in) (?:my |the |our )?documents$")
+_READ_SRC = _READ_LEAD + r" " + _NOT_OURS + r"(?P<what>.+?)" + _READ_TAIL + r"$"
+_STRONG_RE = re.compile(r"\b" + _STRONG + r"\b|\b(?:from|in) (?:my |the |our )?documents$")
+_LETTER_RE = re.compile(r"\b" + _LETTER + r"\b")
+_FROM_DOCS = re.compile(r" (?:from|in) (?:my |the |our )?documents$")
+
+
+def read_claim(what: str) -> tuple[str, list] | None:
+    """What "read me ``what``" is, from the title index alone (no I/O when
+    the index is warm): ("read", docs) — an exact name, or a strong document
+    word and names that fit; ("near", docs) — a strong word or a letter, and
+    names close to it ("Did you mean …?"); ("missing", []) — a strong word
+    and nothing like it; None — not a document turn (not claimed)."""
+    strong = bool(_STRONG_RE.search(what))
+    name = _FROM_DOCS.sub("", what).strip()
+    exact = reading.exact(name)
+    if exact:
+        return "read", exact
+    if not strong and not _LETTER_RE.search(name):
+        # "report", "recipe", "guide", "bills", "forms", a title's first
+        # words ("harry potter" for "Harry Potter book report"): only an
+        # exact name is claimed without a strong document word.
+        return None
+    found = reading.find(name)
+    if found:
+        return "read", found
+    near = reading.find_near(name)
+    if near:
+        return "near", near
+    return ("missing", []) if strong else None
+
+
+class _ClaimingPattern:
+    """A fast-path pattern (``match`` and ``pattern`` like ``re.Pattern``)
+    that matches a "read …" turn only when :func:`read_claim` claims it."""
+
+    def __init__(self, src: str) -> None:
+        self._re = re.compile(src)
+        self.pattern = src
+        self.flags = self._re.flags
+        self.groupindex = self._re.groupindex
+
+    def match(self, text: str, *args):
+        m = self._re.match(text, *args)
+        if m is None:
+            return None
+        try:
+            claim = read_claim((m.group("what") or "").strip())
+        except Exception:  # noqa: BLE001 — never break routing over a document lookup
+            log.exception("documents: the read claim failed")
+            return None
+        return m if claim is not None else None
+
+    def search(self, text: str, *args):
+        return self._re.search(text, *args)
+
+    def __repr__(self) -> str:
+        return f"_ClaimingPattern({self.pattern!r})"
+
+
+_READ_RE = _ClaimingPattern(_READ_SRC)
 _READ_BACK_RE = re.compile(
-    r"^(?:read (?:it|that|this)(?: (?:back|again|out|aloud))*(?: to me)?"
-    r"|read (?:back|again) (?:the |my |that )?(?:letter|document|it)(?: to me)?)$"
+    r"^(?:read (?:it|that|this) back(?: to me)?|read (?:it|that|this)(?: (?:out|aloud))*(?: to me)?"
+    r"|read back (?:the |my |that )?(?:letter|document|it)(?: to me)?)$"
 )
 _CONTINUE_RE = re.compile(
     r"^(?:(?:continue|resume|carry on|go on|keep going)(?: with)?(?: the)? reading"
@@ -132,6 +200,16 @@ def _said(text: str) -> str:
 
 def _title(name: str) -> str:
     return _said(name)[:120]
+
+
+#: How long a parked question's answer is taken (music's choices: 60 s; a
+#: spoken follow-up opens for 8 s after its reply).
+CHOICE_TTL_SEC = 30.0
+
+
+def _play_sec(words: int) -> float:
+    """About how long ``words`` take to say."""
+    return words * 60.0 / reading.WORDS_PER_MINUTE
 
 
 def _minutes(words: int) -> str:
@@ -210,7 +288,7 @@ class DocumentsHandler(Handler):
     # document it can't find.
     _CUE = re.compile(
         r"\b(?:take|write|draft|compose|dictate|type)\b.*\bletter\b|\bdictat\w*"
-        r"|\bread\b.*\b" + _DOC_NOUN + r"\b"
+        r"|\bread\b.*\b" + _STRONG + r"\b"
     )
 
     def offers_tool(self, transcript: str) -> bool:
@@ -230,8 +308,12 @@ class DocumentsHandler(Handler):
     def _reply(self, ctx: Context, text: str, *, ask: bool = False) -> Response:
         return Response(text=text, session_id=ctx.session_id, matched_handler=self.name, expect_followup=ask)
 
-    async def _park(self, ctx: Context, session: AsyncSession, kind: str, prompt: str) -> None:
-        await request_confirmation(session, ctx.session_id, kind=kind, handler=self.name, prompt=prompt[:200])
+    async def _park(self, ctx: Context, session: AsyncSession, kind: str, prompt: str, *,
+                    ttl: float | None = None) -> None:
+        """Park a question; its answer is taken for ``ttl`` seconds (review
+        round 1: "ok" or "next" much later must never resume a reading)."""
+        await request_confirmation(session, ctx.session_id, kind=kind, handler=self.name, prompt=prompt[:200],
+                                   data={"expires_at": time.time() + (CHOICE_TTL_SEC if ttl is None else ttl)})
 
     @staticmethod
     async def _get(session: AsyncSession, ctx: Context, key: str) -> Any:
@@ -264,14 +346,14 @@ class DocumentsHandler(Handler):
 
     async def _read_from_match(self, m, ctx, session):
         what = (m.group("what") or "").strip()
-        named = bool(_DOC_WORD_RE.search(what))
-        what = re.sub(r" (?:from|in) (?:my |the |our )?documents$", "", what).strip()
-        found = reading.find(what)
-        near = [] if found else reading.find_near(what)
-        if not named and not found and not near:
-            # "read me a limerick", "read the room": not a document here.
-            return None
-        return await self._read_named(what, ctx, session, found, near)
+        claim = read_claim(what)
+        if claim is None:
+            return None  # the index moved since the pattern matched
+        kind, docs = claim
+        name = _FROM_DOCS.sub("", what).strip()
+        if kind == "read":
+            return await self._read_named(name, ctx, session, docs, [])
+        return await self._read_named(name, ctx, session, [], docs if kind == "near" else [])
 
     async def _read_named(self, what: str, ctx: Context, session: AsyncSession, found=None,
                           near=None) -> Response:
@@ -354,10 +436,12 @@ class DocumentsHandler(Handler):
         if mode == "start" or ctx.session_id is None or not ctx.answerable:
             tail = " That's the start. There's about %s more: say continue reading to hear it." % _minutes(left)
             if ctx.session_id is not None and ctx.answerable:
-                await self._park(ctx, session, DOC_PAUSED, tail)
+                await self._park(ctx, session, DOC_PAUSED, tail, ttl=_play_sec(words) + CHOICE_TTL_SEC)
             return self._reply(ctx, text + tail)
         tail = " There's about %s more. Shall I go on?" % _minutes(left)
-        await self._park(ctx, session, DOC_MORE, tail)
+        # The question comes at the end of the part: its window opens once
+        # the part has played.
+        await self._park(ctx, session, DOC_MORE, tail, ttl=_play_sec(words) + CHOICE_TTL_SEC)
         return self._reply(ctx, text + tail, ask=True)
 
     async def _resume(self, state: dict, ctx: Context, session: AsyncSession, *, at: int | None = None) -> Response:
@@ -404,20 +488,12 @@ class DocumentsHandler(Handler):
             if printing is not None:
                 await self._set(session, ctx, PENDING_CONFIRMATION_KEY, None)
                 return await printing.handle_confirmation("core.scan_read", pending, True, ctx, session)
+        letter = await self._get(session, ctx, LETTER_KEY)
+        if isinstance(letter, dict) and letter.get("stage") == "writing":
+            # Being written up: never an older document instead (review r1).
+            return self._reply(ctx, "I'm still writing the letter up. I'll say when it's saved.")
         last = await self._get(session, ctx, LAST_KEY)
         if not isinstance(last, dict) or not last.get("rel"):
-            letter = await self._get(session, ctx, LETTER_KEY)
-            if isinstance(letter, dict) and letter.get("stage") == "writing":
-                return self._reply(ctx, "I'm still writing the letter up. I'll say when it's saved.")
-            if m.group(0).endswith("again"):
-                # No document here: "read that again" is "say that again".
-                from domovoi.handlers import HANDLER_BY_NAME
-                from domovoi.router import first_fast_path
-
-                repeat = HANDLER_BY_NAME.get("repeat")
-                hit = first_fast_path("say that again", [repeat]) if repeat is not None else None
-                if hit is not None:
-                    return await hit[1].method(hit[0], hit[2], ctx, session)
             return self._reply(ctx, "There's nothing to read back yet. Say read me and a document's name.")
         return await self._open(str(last["rel"]), ctx, session)
 
@@ -433,6 +509,16 @@ class DocumentsHandler(Handler):
         from domovoi.router import strip_leading_filler
 
         said = strip_leading_filler(transcript.strip()) or transcript.strip()
+        expired = time.time() > float((data or {}).get("expires_at") or float("inf"))
+        if kind != LETTER_DICTATION and (expired or ctx.trigger == "wake_word"):
+            # Asked too long ago, or a fresh wake word: a new request, routed
+            # as one. (A barge-in over a part still answers "Shall I go on?";
+            # dictation has its own rules, in _letter_reply.)
+            if kind == LETTER_AUTHOR:
+                await self._set(session, ctx, LETTER_KEY, None)
+            elif kind == DOC_PICK:
+                await self._set(session, ctx, READING_KEY, None)
+            return None
         if kind in (LETTER_AUTHOR, LETTER_DICTATION):
             return await self._letter_reply(kind, transcript, said, ctx, session)
         state = await self._get(session, ctx, READING_KEY)
@@ -554,6 +640,9 @@ class DocumentsHandler(Handler):
         if line is None:
             if first and state.get("parts"):
                 line = "Got that. Go on, or say end of letter when you're done."
+            elif first and state.get("author_id") and state.get("author"):
+                # Voice ID named the speaker: said, so a wrong guess is heard.
+                line = "Go ahead, %s. Say end of letter when you're done." % _said(str(state["author"]))
             elif first:
                 line = "Go ahead. Say end of letter when you're done."
             else:
@@ -572,15 +661,14 @@ class DocumentsHandler(Handler):
             self._disarm_idle(ctx)
             return self._reply(ctx, "Okay, I've thrown that letter away. Nothing was saved.")
         if kind == LETTER_AUTHOR:
+            from domovoi.router import first_fast_path
+
             name, skipped = letters.author_from_reply(said)
-            if name is None and not skipped:
-                if state.get("asked_author"):
-                    skipped = True
-                else:
-                    state["asked_author"] = True
-                    await self._set(session, ctx, LETTER_KEY, state)
-                    await self._park(ctx, session, LETTER_AUTHOR, "author again")
-                    return self._reply(ctx, "Sorry, who's it from? Say a name, or say nobody.", ask=True)
+            if (name is None and not skipped) or first_fast_path(said) is not None:
+                # Not a name ("what time is it"): no letter, and the turn is
+                # routed as the request it is.
+                await self._set(session, ctx, LETTER_KEY, None)
+                return None
             state["author"] = name
             line = None
             if name:

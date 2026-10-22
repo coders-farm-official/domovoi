@@ -47,7 +47,7 @@ _ADD_RE = re.compile(
 _READ_WINDOW_RE = re.compile(
     r"^(?:"
     r"what (?:did i (?:jot down|note|save|write down)|notes did i (?:take|jot|save))"
-    r"|read (?:my |the )?notes?(?: from)?"
+    r"|read (?:me |us )?(?:my |the )?notes?(?: from)?"
     r")\s*(?P<window>today|yesterday|this week|recently)?$"
 )
 

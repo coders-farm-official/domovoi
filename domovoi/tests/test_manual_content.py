@@ -36,6 +36,21 @@ import pytest
 from domovoi.handlers import HANDLER_BY_NAME
 from domovoi.router import plan_route
 
+
+@pytest.fixture(autouse=True)
+def _documents_folder_of_our_own(tmp_path, monkeypatch):
+    """The read fast path looks at Documents' names (handlers/documents.py):
+    an empty folder of the test's own, never the machine's ~/Documents."""
+    from domovoi.config import settings
+    from domovoi.voice_docs import reading
+
+    d = tmp_path / "Documents"
+    d.mkdir()
+    monkeypatch.setattr(settings, "documents_dir", str(d))
+    reading.invalidate()
+    yield d
+    reading.invalidate()
+
 REPO = Path(__file__).resolve().parents[2]
 CONTENT = REPO / "web" / "static" / "manual-content.json"
 STATIC = REPO / "web" / "static"

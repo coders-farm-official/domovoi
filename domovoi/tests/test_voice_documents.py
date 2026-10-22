@@ -78,6 +78,7 @@ def docs(tmp_path, monkeypatch):
     secret.mkdir()
     (secret / "Lease copy.md").write_text("hidden\n", encoding="utf-8")
     reading._CACHE.clear()
+    reading.invalidate()
     return d
 
 
@@ -276,8 +277,11 @@ async def test_two_that_fit_ask_which_and_none_says_so(db_session, docs):
     assert r.text == "I found two: Insurance letter and Insurance policy. Which one?" and r.expect_followup
     r = await room.say("the policy")
     assert r.text == "Cover starts on the first of March."
+    r = await room.say("read me the tax document", trigger="wake_word")
+    assert r.text.startswith("I couldn't find a document called the tax document in Documents.")
+    # "letter" alone claims a turn only when a letter in Documents fits it.
     r = await room.say("read me the tax letter", trigger="wake_word")
-    assert r.text.startswith("I couldn't find a document called the tax letter in Documents.")
+    assert r.matched_handler != "documents"
     r = await room.say("read me a document", trigger="wake_word")
     assert r.text.startswith("Which document?")
     # Hidden folders, spreadsheets: never offered.
@@ -291,14 +295,18 @@ async def test_a_misheard_name_is_asked_about_never_read_on_a_guess(db_session, 
     """The vt.py satellite run (2026-10-21): Whisper heard "read me the
     leaves" for "read me the lease"."""
     room = Room(db_session)
-    r = await room.say("read me the leaves", trigger="wake_word")
+    r = await room.say("read me the leaves document", trigger="wake_word")
     assert r.text == "Did you mean Lease?" and r.expect_followup
     r = await room.say("yes")
     assert r.text.startswith("Lease. It's ")
-    r = await room.say("read me the hose rules", trigger="wake_word")
+    r = await room.say("read me the hose rules file", trigger="wake_word")
     assert r.text == "Did you mean House rules?"
     r = await room.say("no")
     assert r.text == "Okay."
+    # Without a document word, only an exact name is claimed (review r1):
+    # a mishearing then goes on as before, never another handler's turn.
+    r = await room.say("read me the leaves", trigger="wake_word")
+    assert r.matched_handler != "documents"
     # Nothing near: not a document, routed on as before.
     r = await room.say("read me a limerick", trigger="wake_word")
     assert r.matched_handler != "documents"
@@ -362,7 +370,8 @@ async def test_take_a_letter_by_voice_is_a_saved_draft_never_sent(db_session, do
     pid = await _person("Sam Lee")
     room = Room(db_session, person_id=pid)
     r = await room.say("take a letter to the landlord", trigger="wake_word")
-    assert r.text == "Go ahead. Say end of letter when you're done." and r.expect_followup
+    # Voice ID's name is said, so a wrong guess is heard (review r1).
+    assert r.text == "Go ahead, Sam Lee. Say end of letter when you're done." and r.expect_followup
     r = await room.say("the heating in flat 3B has been broken since monday")
     assert r.text == "Go on." and r.expect_followup and r.matched_path == "confirmation"
     r = await room.say("please send someone to fix it by friday")
@@ -557,3 +566,125 @@ async def test_nothing_dictated_saves_nothing(db_session, docs, model, monkeypat
         await asyncio.sleep(0.05)
     assert announced == ["I didn't hear a letter, so nothing was saved."]
     assert not (docs / "From Chat").exists() and model.calls == []
+
+
+# ─── Review round 1: claim only what it answers; questions expire ───────
+
+_REVIEW_DOCS = ["Lease.pdf", "Cover letter.docx", "Harry Potter book report.docx", "Dune essay.txt",
+                "Pancake recipe.md", "House rules.txt", "Weather station manual.pdf", "Letter to the landlord v1.docx",
+                "Shopping list.txt", "The Hobbit reading notes.md", "Timer instructions.txt", "Latest invoice.pdf",
+                "Bedtime routine.md", "Calendar 2026.pdf", "Reminders.txt"]
+
+
+@pytest.fixture
+def review_docs(tmp_path, monkeypatch):
+    d = tmp_path / "Documents"
+    d.mkdir()
+    for n in _REVIEW_DOCS:
+        (d / n).write_text("x", encoding="utf-8")
+    monkeypatch.setattr(settings, "documents_dir", str(d))
+    reading.invalidate()
+    yield d
+    reading.invalidate()
+
+
+def _winner(said: str) -> str | None:
+    from domovoi.router import first_fast_path, normalize_transcript, strip_leading_filler
+
+    hit = first_fast_path(strip_leading_filler(normalize_transcript(said)))
+    return hit[0].name if hit else None
+
+
+@pytest.mark.parametrize("said,winner", [
+    # the news' own follow-ups, with "Latest invoice.pdf" in Documents
+    ("read me the latest", "news"), ("read me the oldest", "news"),
+    ("read me the latest on the election", "news"), ("read me the latest invoice", "documents"),
+    # no partial or near match without a strong document word
+    ("read me harry potter", None), ("read me the hobbit", None), ("read me dune", None),
+    ("read me the timers", None), ("read me the time", None), ("read me the instructions for the timer", None),
+    # weak words count only on an exact name
+    ("read me the weather report", None), ("read me the traffic report", None),
+    ("read me the recipe for pancakes", None), ("read me a recipe for banana bread", None),
+    ("read me the pancake recipe", "documents"),
+    # lists, reminders, notes: not ours
+    ("read me my shopping list", None), ("read me my reminders", None), ("read me my notes", "voice_notes"),
+    # "letter" claims only when a letter in Documents fits
+    ("read me a letter from santa", None), ("read me my cover letter", "documents"),
+    ("read me the letter to the lionthord", "documents"),
+    # exact names and strong words
+    ("read me the house rules", "documents"), ("read me my bedtime routine", "documents"),
+    ("read me the lease", "documents"), ("read me the tax file", "documents"),
+    ("read that again", "repeat"), ("read it back", "documents"),
+])
+def test_the_read_path_claims_only_what_it_answers(review_docs, said, winner):
+    assert _winner(said) == winner
+
+
+@pytest.mark.parametrize("said", ["i need to take a letter to the post office", "take a letter to the mailbox",
+                                  "write the letter a in cursive", "write the letter b"])
+def test_errands_and_the_alphabet_start_no_letter(said):
+    assert letters.LETTER_RE.match(said) is None
+
+
+def test_the_claim_is_cheap_on_a_big_folder(tmp_path, monkeypatch):
+    import time as _time
+
+    d = tmp_path / "Documents"
+    words = "annual report invoice letter bank tax return school form receipt warranty manual policy notes plan".split()
+    for i in range(20):
+        sub = d / f"folder {i}"
+        sub.mkdir(parents=True)
+        for j in range(100):
+            (sub / f"{words[j % 15]} {words[(i + j) % 15]} {i}-{j}.pdf").write_text("x")
+    monkeypatch.setattr(settings, "documents_dir", str(d))
+    reading.invalidate()
+    reading.index()  # warm (the core warms it at start-up, off the loop)
+    for said in ("read me the tax letter", "read me a limerick", "read me the annual report invoice 3-7"):
+        t = _time.perf_counter()
+        _winner(said)
+        assert _time.perf_counter() - t < 0.25, said  # ~5-25 ms measured on 4,800 files
+    reading.invalidate()
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_parked_questions_expire_and_never_take_a_later_command(db_session, docs, model, monkeypatch):
+    room = Room(db_session)
+    # "Who's it from?" unanswered; later a wake word and a command.
+    assert (await room.say("take a letter to the landlord", trigger="wake_word")).text == "Who's it from?"
+    r = await room.say("what time is it", trigger="wake_word")
+    assert r.matched_handler == "clock"
+    # An answer that isn't a name falls through, and the letter is dropped.
+    await room.say("take a letter to the landlord", trigger="wake_word")
+    r = await room.say("play some jazz")
+    assert r.matched_handler != "documents"
+    assert (await room.say("the heating is broken")).matched_handler != "documents"
+    # "Shall I go on?" then "ok" with a fresh wake word: not the lease.
+    await room.say("read me the lease", trigger="wake_word")
+    assert (await room.say("the whole thing")).text.endswith("Shall I go on?")
+    r = await room.say("ok", trigger="wake_word")
+    assert r.matched_handler != "documents"
+    # "just the start" then "next" much later: not the lease either.
+    await room.say("read me the lease", trigger="wake_word")
+    await room.say("just the start")
+    r = await room.say("next", trigger="wake_word")
+    assert r.matched_handler != "documents"
+    # A follow-up after the window: the question has expired.
+    monkeypatch.setattr(documents_handler, "CHOICE_TTL_SEC", -1000.0)
+    await room.say("read me the lease", trigger="wake_word")
+    r = await room.say("the whole thing")
+    assert r.matched_handler != "documents"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_read_it_back_while_writing_never_reads_an_older_document(db_session, docs):
+    room = Room(db_session)
+    await room.say("read me the house rules", trigger="wake_word")
+    from domovoi.db.repositories import SessionRepository
+
+    await SessionRepository(db_session).set_context_key(room.session_id, documents_handler.LETTER_KEY,
+                                                        {"stage": "writing"})
+    await db_session.commit()
+    r = await room.say("read it back", trigger="wake_word")
+    assert r.text == "I'm still writing the letter up. I'll say when it's saved."

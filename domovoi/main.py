@@ -585,6 +585,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     _sdk_speech.bind_active_sessions(lambda: app.state.active_sessions)
 
+    # "Read me …" (documents plan D7) decides from an in-memory index of
+    # Documents' titles: walk it once now, in a worker thread, so the
+    # first such turn doesn't walk the folder on the event loop.
+    from domovoi.voice_docs import reading as _doc_reading
+
+    app.state.documents_index_task = asyncio.create_task(_doc_reading.warm(), name="documents-index-warm")
+
     # Per-room external now-playing attribution lives in the generic
     # now-playing source registry (domovoi.now_playing.NOW_PLAYING,
     # design §4.7) — provider plugins stamp it via sdk.now_playing /

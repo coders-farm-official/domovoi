@@ -133,7 +133,13 @@ def test_fast_paths_are_normalized_and_compiled() -> None:
             assert isinstance(fp, FastPath), (
                 f"{h.name}: fast path {fp!r} was not normalized to FastPath"
             )
-            assert isinstance(fp.pattern, re.Pattern)
+            # A compiled regex, or (core only) documents' claiming pattern:
+            # a regex whose match also asks the cached title index whether
+            # the turn is a document's (handlers/documents.py, D7 review).
+            assert isinstance(fp.pattern, re.Pattern) or (
+                h.plugin_slug is None and type(fp.pattern).__name__ == "_ClaimingPattern"
+                and isinstance(fp.pattern.pattern, str)
+            ), (h.name, fp.pattern)
             assert callable(fp.method)
             # FastPath keeps 2-tuple unpacking sugar for tuple-style iteration.
             pattern, method = fp

@@ -80,6 +80,7 @@ def satellite(tmp_path, monkeypatch):
     (docs / "Lease.docx").write_bytes(docx_file.render(long, templates.get("letter-block"), title="Lease"))
     monkeypatch.setattr(settings, "documents_dir", str(docs))
     reading._CACHE.clear()
+    reading.invalidate()
 
     async def _accept(self, ctrl):
         self.token_authenticated = True

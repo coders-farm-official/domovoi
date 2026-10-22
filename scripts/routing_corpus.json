@@ -1151,6 +1151,310 @@
       "handler": null,
       "tags": ["qa", "documents"],
       "note": "2026-10-21 D7: the alphabet, not a letter to write; the documents tool is withheld"
+    },
+    {
+      "utterance": "read me a story",
+      "handler": null,
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "play the letter",
+      "handler": "music",
+      "path": "llm",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "play the letter by the box tops",
+      "handler": "music",
+      "path": "llm",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me harry potter",
+      "handler": "spoken_audio",
+      "path": "llm",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me the hobbit",
+      "handler": "spoken_audio",
+      "path": "llm",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me dune",
+      "handler": "spoken_audio",
+      "path": "llm",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read the audiobook dune",
+      "handler": "spoken_audio",
+      "path": "fast",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me the news",
+      "handler": "news",
+      "path": "fast",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me the latest",
+      "handler": "news",
+      "path": "fast",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me the oldest",
+      "handler": "news",
+      "path": "fast",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me the latest on the election",
+      "handler": "news",
+      "path": "fast",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me the weather report",
+      "handler": null,
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me the traffic report",
+      "handler": null,
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me the recipe for pancakes",
+      "handler": null,
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me a recipe for banana bread",
+      "handler": null,
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me my notes",
+      "handler": "voice_notes",
+      "path": "fast",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me my reminders",
+      "handler": "reminder",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1: depends on Documents' names, or no fast path owns it yet"
+    },
+    {
+      "utterance": "read me my shopping list",
+      "handler": null,
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me the calendar",
+      "handler": "calendar",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me today's schedule",
+      "handler": "calendar",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me the lyrics",
+      "handler": null,
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me the lyrics to yesterday",
+      "handler": null,
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me the time",
+      "handler": null,
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me the timers",
+      "handler": null,
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me the instructions for the timer",
+      "handler": null,
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me a poem",
+      "handler": null,
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me a letter from santa",
+      "handler": null,
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me the declaration of independence",
+      "handler": null,
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me the gettysburg address",
+      "handler": null,
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me psalm 23",
+      "handler": null,
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read me my bedtime routine",
+      "handler": "documents",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1: depends on Documents' names, or no fast path owns it yet"
+    },
+    {
+      "utterance": "read me the house rules",
+      "handler": "documents",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1: depends on Documents' names, or no fast path owns it yet"
+    },
+    {
+      "utterance": "read me the leaves",
+      "handler": "documents",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1: depends on Documents' names, or no fast path owns it yet; without a document word only an exact name is claimed"
+    },
+    {
+      "utterance": "read me the latest podcast episode",
+      "handler": null,
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "i need to take a letter to the post office",
+      "handler": null,
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "write the letter a in cursive",
+      "handler": "voice_notes",
+      "path": "fast",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1: voice_notes' 'write …' capture, as before D7 (wanted None)"
+    },
+    {
+      "utterance": "write a letter to santa",
+      "handler": "documents",
+      "path": "fast",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "write me a song about letters",
+      "handler": "voice_notes",
+      "path": "fast",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1: voice_notes' 'write …' capture, as before D7 (wanted None)"
+    },
+    {
+      "utterance": "write a poem about my letter carrier",
+      "handler": "voice_notes",
+      "path": "fast",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1: voice_notes' 'write …' capture, as before D7 (wanted None)"
+    },
+    {
+      "utterance": "take down a note",
+      "handler": "voice_notes",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1: depends on Documents' names, or no fast path owns it yet"
+    },
+    {
+      "utterance": "note that the letter from the bank came",
+      "handler": "voice_notes",
+      "path": "fast",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "what's two plus two",
+      "handler": "calculator",
+      "path": "fast",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "play the podcast",
+      "handler": "spoken_audio",
+      "path": "fast",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "continue reading",
+      "declined_by": "documents",
+      "handler": "spoken_audio",
+      "tags": ["review-d7", "documents"],
+      "note": "documents' fast path matches it only to pick up a reading paused in this room, and declines it otherwise (no later fast path wants it). 2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read it back",
+      "handler": "documents",
+      "path": "fast",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "read that again",
+      "handler": "repeat",
+      "path": "fast",
+      "tags": ["review-d7", "documents"],
+      "note": "2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "stop reading",
+      "declined_by": "documents",
+      "handler": null,
+      "tags": ["review-d7", "documents"],
+      "note": "documents' fast path stops a reading in this room, and declines it otherwise. 2026-10-21 D7 review r1"
     }
   ]
 }
