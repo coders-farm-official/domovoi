@@ -1216,7 +1216,7 @@ class AssistantController(
     private fun voiceBlocker(): String? {
         val ui = _state.value
         return when {
-            ui.tier == DeviceTier.Unsupported -> "this phone can't run the assistant"
+            ui.tier == DeviceTier.Unsupported -> "this phone can't run phone chats"
             !ui.installed -> "the model isn't on the phone yet"
             !ui.voiceReady -> "the speech files aren't on the phone yet"
             ui.replying -> "a reply is still being written; stop it first"
@@ -2443,7 +2443,7 @@ class AssistantController(
 
     private fun inputs(): PhoneAnswerInputs {
         val style = clockStyle()
-        return PhoneAnswerInputs(style.at(clock()), style, phone, chatModel.name, settings.backend)
+        return PhoneAnswerInputs(style.at(clock()), style, phone, chatModel.name, settings.backend, lookups = lookups != null)
     }
 
     /** [h] with the contact for its name when there is one person it can

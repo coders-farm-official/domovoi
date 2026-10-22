@@ -149,6 +149,16 @@ class ReplyReportPanesTest {
         assertTrue(reportsSummary(3).startsWith("3 reply reports saved"))
     }
 
+    // Phone chats take documents, photos and letters and look things up after
+    // an allow card: the Conversations card no longer says "no files, media".
+    @Test fun theConversationsCardSaysWhatTheModelSees() {
+        val s = conversationsSummary(2)
+        assertTrue(s, s.startsWith("2 kept on this phone, in the app's private storage and outside backups."))
+        assertTrue(s, s.contains("documents, photos and letters you add to it and what you let it look up"))
+        assertTrue(s, s.endsWith("Nothing else on the phone: not your other files, contacts or location."))
+        assertFalse(s, s.contains("no files, media"))
+    }
+
     @Test fun theModelSettingsListTheReportsAndOpenThem() {
         val tree = NodeTree()
         var shown = emptyList<String>()

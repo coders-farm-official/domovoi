@@ -17,6 +17,14 @@ class LicencesForAbiTest {
         assertEquals(OPEN_SOURCE_PARTS, openSourceParts(assistant = true))
     }
 
+    // One Chat: the phone's own downloads are for phone chats, not "the assistant".
+    @Test fun thePhonesDownloadsSayTheyAreForPhoneChats() {
+        val mine = OPEN_SOURCE_PARTS.filter { it.assistantOnly }
+        assertTrue(mine.isNotEmpty())
+        mine.forEach { p -> assertTrue("${p.name}: ${p.note}", p.note!!.startsWith("Downloaded for phone chats")) }
+        assertTrue(OPEN_SOURCE_PARTS.none { (it.note ?: "").contains("assistant") })
+    }
+
     @Test fun without64BitTheAssistantsDownloadsAreLeftOut() {
         val parts = openSourceParts(assistant = false)
         ModelCatalog.assistant.forEach { m -> assertTrue(m.name, parts.none { it.name == m.name }) }

@@ -136,7 +136,7 @@ fun AssistantBenchmarkCard() {
 
     val idle = ui.running == null
     DomovoiCard(Modifier.fillMaxWidth()) {
-        Text("On-device assistant benchmark", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
+        Text("Phone chat benchmark", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
         Text(
             "Runs a language model and speech entirely on this phone and measures how fast they are " +
                 "here. Nothing goes over the network except the model download you start, and the " +
@@ -338,9 +338,9 @@ internal fun assistantIn64BitAppOnly(): Boolean = !AssistantSupport.available &&
 internal fun AssistantIn64BitAppNote() {
     if (!assistantIn64BitAppOnly()) return
     DomovoiCard(Modifier.fillMaxWidth()) {
-        Text("On-device assistant", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
+        Text("Phone chats", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
         Text(
-            "This phone is running the 32-bit Domovoi app, which has no on-device assistant. The 64-bit " +
+            "This phone is running the 32-bit Domovoi app, which has no phone chats. The 64-bit " +
                 "app (the arm64-v8a download) has it; everything else works the same in both.",
             style = MaterialTheme.typography.bodySmall,
             color = Domovoi.colors.fgMuted,

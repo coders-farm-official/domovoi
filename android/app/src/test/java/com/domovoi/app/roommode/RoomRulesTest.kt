@@ -108,4 +108,12 @@ class RoomRulesTest {
         assertEquals("?voice=Lessac%20Low%26x", RoomSounds.voiceQuery("Lessac Low&x"))
         assertEquals("satellite-sounds@Ryan", RoomSounds.soundsRecord("Ryan"))
     }
+
+    // One Chat: the setup's explainer names chats, never "the assistant".
+    @Test
+    fun theExplainerSaysChatsAreLocked() {
+        val stops = EXPLAINER.toMap().getValue("What stops working")
+        assertTrue(stops, stops.contains("no files, browsing or chats, on the home server or on this phone"))
+        assertTrue(EXPLAINER.none { (t, b) -> "assistant" in t || "assistant" in b })
+    }
 }

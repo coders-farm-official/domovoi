@@ -267,7 +267,15 @@ class PhoneQuestionsTest {
 
     @Test fun theWeatherIsNotLookedUp() {
         val phone = FakePhone()
-        assertEquals("I can't check the weather from this phone: phone chats don't use the internet.", say(PhoneQuestion.WEATHER, phone))
+        assertEquals("I can't check the weather from this phone.", say(PhoneQuestion.WEATHER, phone))
+        // Phone chats look things up after an allow card: the reply says how,
+        // and never that phone chats don't use the internet.
+        val withLookups = runBlocking {
+            (PhoneQuestions.answer(PhoneQuestion.WEATHER, inputs(phone).copy(lookups = true)) as PhoneAnswer.Said).text
+        }
+        assertEquals(PhoneQuestions.WEATHER_LOOKUP, withLookups)
+        assertTrue(withLookups.contains("look up the weather") && withLookups.contains("before anything goes online"))
+        assertFalse(withLookups.contains("don't use the internet"))
         phone.serverSet = true
         assertTrue(say(PhoneQuestion.WEATHER, phone).endsWith("Your home server chats can tell you."))
         assertEquals(null, PhoneQuestion.WEATHER.permission)

@@ -25,6 +25,14 @@ class MicOwnershipTest {
     }
 
     @Test
+    fun thePhonesOwnChatIsCalledAPhoneChat() {
+        val mic = MicOwnership()
+        mic.tryAcquire(Owner.ASSISTANT)!!
+        assertEquals("The microphone is in use by a phone chat.", mic.refusal(Owner.DROP_IN))
+        assertTrue(Owner.entries.none { it.label.contains("assistant") })
+    }
+
+    @Test
     fun roomModeShutsEveryoneElseOutUntilItEnds() {
         val mic = MicOwnership()
         val room = mic.tryAcquire(Owner.ROOM_MODE)!!
