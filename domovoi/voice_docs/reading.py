@@ -92,6 +92,41 @@ def find(query: str, root: Path | None = None):
     return lookup.find(query, root, exts=READABLE_EXTS)
 
 
+#: How alike a heard word and a name's word must be to be offered as "did
+#: you mean …?" (difflib's ratio): "leaves" for "lease" is 0.73, "lease"
+#: for "least" 0.8; "limerick" against "lease" 0.31.
+NEAR_RATIO = 0.7
+
+
+def find_near(query: str, root: Path | None = None):
+    """Documents whose name is close to what was heard, for "Did you mean
+    …?" after :func:`find` found nothing (speech recognition hears "the
+    leaves" for "the lease"). Every word heard must be near one of the
+    name's words; the closest few first. Never read without asking."""
+    from difflib import SequenceMatcher
+
+    from domovoi.printing import lookup
+
+    want = lookup._words(query)
+    if not want:
+        return []
+    scored = []
+    for d in lookup.all_documents(root, READABLE_EXTS):
+        have = lookup._words(d.title)
+        if not have:
+            continue
+        best = []
+        for w in want:
+            r = max(SequenceMatcher(None, w, h).ratio() for h in have)
+            if r < NEAR_RATIO:
+                break
+            best.append(r)
+        else:
+            scored.append((-sum(best) / len(best), len(have), d.title.lower(), d))
+    scored.sort(key=lambda t: t[:3])
+    return [d for *_, d in scored[:3]]
+
+
 # ─── Making text speakable ──────────────────────────────────────────────
 
 _TABLE_RULE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$")

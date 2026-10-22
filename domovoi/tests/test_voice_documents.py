@@ -287,6 +287,25 @@ async def test_two_that_fit_ask_which_and_none_says_so(db_session, docs):
 
 @requires_db
 @pytest.mark.asyncio
+async def test_a_misheard_name_is_asked_about_never_read_on_a_guess(db_session, docs):
+    """The vt.py satellite run (2026-10-21): Whisper heard "read me the
+    leaves" for "read me the lease"."""
+    room = Room(db_session)
+    r = await room.say("read me the leaves", trigger="wake_word")
+    assert r.text == "Did you mean Lease?" and r.expect_followup
+    r = await room.say("yes")
+    assert r.text.startswith("Lease. It's ")
+    r = await room.say("read me the hose rules", trigger="wake_word")
+    assert r.text == "Did you mean House rules?"
+    r = await room.say("no")
+    assert r.text == "Okay."
+    # Nothing near: not a document, routed on as before.
+    r = await room.say("read me a limerick", trigger="wake_word")
+    assert r.matched_handler != "documents"
+
+
+@requires_db
+@pytest.mark.asyncio
 async def test_reading_works_with_ai_off(db_session, docs):
     with ai_features.override(False):
         r = await Room(db_session).say("read me the house rules", trigger="wake_word")
@@ -470,6 +489,7 @@ async def test_a_quiet_room_ends_the_letter(db_session, docs, model, monkeypatch
 
     monkeypatch.setattr(speech, "_active_sessions_provider", lambda: app.state.active_sessions)
     monkeypatch.setattr(letters, "IDLE_SEC", 0.2)
+    monkeypatch.setattr(letters, "QUIET_POLL_SEC", 0.05)
     pid = await _person("Sam Lee")
     room = Room(db_session, person_id=pid, app=app)
     await room.say("take a letter to the landlord", trigger="wake_word")
@@ -489,3 +509,38 @@ async def test_a_quiet_room_ends_the_letter(db_session, docs, model, monkeypatch
     r = await room.say("what time is it", trigger="wake_word")
     assert r.matched_handler == "clock"
     assert documents_handler._IDLE == {}
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_nothing_dictated_saves_nothing(db_session, docs, model, monkeypatch):
+    announced: list[str] = []
+
+    class _Live:
+        room_id = "kitchen"
+
+        def awaiting_reply(self):
+            return False
+
+        async def announce(self, text_, **kw):
+            announced.append(text_)
+
+    app = types.SimpleNamespace(state=types.SimpleNamespace(active_sessions={"kitchen": _Live()}))
+    from domovoi.sdk import speech
+
+    monkeypatch.setattr(speech, "_active_sessions_provider", lambda: app.state.active_sessions)
+    monkeypatch.setattr(letters, "IDLE_SEC", 0.1)
+    pid = await _person("Sam Lee")
+    room = Room(db_session, person_id=pid)
+    await room.say("take a letter to the landlord", trigger="wake_word")
+    r = await room.say("end of letter")
+    assert r.text == "There's nothing in the letter yet, so nothing was saved."
+    # The room goes quiet right after "take a letter": nothing saved either.
+    room = Room(db_session, person_id=pid, app=app)
+    await room.say("take a letter to the landlord", trigger="wake_word")
+    for _ in range(100):
+        if announced:
+            break
+        await asyncio.sleep(0.05)
+    assert announced == ["I didn't hear a letter, so nothing was saved."]
+    assert not (docs / "From Chat").exists() and model.calls == []

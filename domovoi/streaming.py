@@ -5446,6 +5446,20 @@ class StreamSession:
         stays True until the next wake word."""
         return self.utterance_active and now - self._last_audio_at < ANNOUNCE_CAPTURE_FRESH_SEC
 
+    def awaiting_reply(self, now: float | None = None) -> bool:
+        """Whether this room may still say something to the last reply: a
+        reply is being made or played, a capture is live, or the reply asked
+        a question and its follow-up window is still open. False once the
+        room has gone quiet (a "take a letter" dictation ends then,
+        domovoi/handlers/documents.py)."""
+        if now is None:
+            now = time.monotonic()
+        task = self._response_task
+        if task is not None and not task.done():
+            return True
+        return (self._capturing(now) or now < self._playout_until
+                or now < self._followup_hold_until)
+
     def _announcement_coming(self) -> bool:
         """Another announcement is on its way to this room: an `announce`
         call queued on the room's lock or still synthesizing its first

@@ -267,14 +267,31 @@ class DocumentsHandler(Handler):
         named = bool(_DOC_WORD_RE.search(what))
         what = re.sub(r" (?:from|in) (?:my |the |our )?documents$", "", what).strip()
         found = reading.find(what)
-        if not named and not found:
+        near = [] if found else reading.find_near(what)
+        if not named and not found and not near:
             # "read me a limerick", "read the room": not a document here.
             return None
-        return await self._read_named(what, ctx, session, found)
+        return await self._read_named(what, ctx, session, found, near)
 
-    async def _read_named(self, what: str, ctx: Context, session: AsyncSession, found=None) -> Response:
+    async def _read_named(self, what: str, ctx: Context, session: AsyncSession, found=None,
+                          near=None) -> Response:
         found = reading.find(what) if found is None else found
         if not found:
+            near = reading.find_near(what) if near is None else near
+            if near:
+                # Heard "the leaves", Documents has "Lease": asked, never read
+                # on a guess.
+                from domovoi.handlers.printing import _list_words
+
+                names = [_title(d.title) for d in near]
+                listed = " or ".join(names) if len(names) < 3 else _list_words(names).replace(", and ", ", or ")
+                text = "Did you mean %s?" % listed
+                if ctx.session_id is None or not ctx.answerable:
+                    return self._reply(ctx, "I couldn't find that in Documents. " + text.replace(
+                        "Did you mean", "Say read me and its name:").rstrip("?") + ".")
+                await self._set(session, ctx, READING_KEY, {"pick": [{"rel": d.rel, "title": d.title} for d in near]})
+                await self._park(ctx, session, DOC_PICK, text)
+                return self._reply(ctx, text, ask=True)
             if not [w for w in re.findall(r"[a-z0-9]+", what.lower())
                     if w not in ("a", "an", "the", "my", "our", "some", "any", "document", "documents", "file",
                                  "files", "doc", "docs", "pdf", "letter", "letters")]:
@@ -427,8 +444,11 @@ class DocumentsHandler(Handler):
                 await self._set(session, ctx, READING_KEY, None)
                 return self._reply(ctx, "Okay.")
             from domovoi.handlers.printing import _pick_from
+            from domovoi.router import _parse_yes_no
 
             i = _pick_from(said, [p["title"] for p in picks])
+            if i is None and len(picks) == 1 and _parse_yes_no(said) is True:
+                i = 0  # "Did you mean Lease?" "Yes."
             if i is None:
                 return None
             return await self._open(picks[i]["rel"], ctx, session)
@@ -602,7 +622,7 @@ class DocumentsHandler(Handler):
     async def _finish(self, state: dict, ctx: Context, session: AsyncSession, *, line: str = "",
                       background_only: bool = False) -> Response | None:
         self._disarm_idle(ctx)
-        if not letters.dictation_text(state) and not state.get("topic"):
+        if not letters.dictation_text(state):
             await self._set(session, ctx, LETTER_KEY, None)
             return None if background_only else self._reply(
                 ctx, "There's nothing in the letter yet, so nothing was saved.")
@@ -652,18 +672,15 @@ async def _idle_end(session_id: Any, room_id: str | None, seq: int, app: Any) ->
         await asyncio.sleep(letters.IDLE_SEC)
         give_up = time.monotonic() + 600.0
         while time.monotonic() < give_up:
-            # Someone speaking, or a reply still going out: not quiet yet. A
-            # satellite that went away ends the letter too (its next session
-            # is a new one): the words are written up, never dropped.
+            # A reply going out or playing, someone speaking, or the
+            # follow-up window still open: not quiet yet. A satellite that
+            # went away ends the letter too (its next session is a new one):
+            # the words are written up, never dropped.
             sessions = getattr(getattr(app, "state", None), "active_sessions", None) or {}
             live = sessions.get(room_id)
-            if live is None:
+            if live is None or not _awaiting_reply(live):
                 break
-            task = getattr(live, "_response_task", None)
-            busy = bool(getattr(live, "utterance_active", False)) or (task is not None and not task.done())
-            if not busy:
-                break
-            await asyncio.sleep(3.0)
+            await asyncio.sleep(letters.QUIET_POLL_SEC)
         async with session_scope() as s:
             repo = SessionRepository(s)
             context = await repo.get_context(session_id) or {}
@@ -674,17 +691,40 @@ async def _idle_end(session_id: Any, room_id: str | None, seq: int, app: Any) ->
             if isinstance(pending, dict) and pending.get("kind") == LETTER_DICTATION:
                 await repo.set_context_key(session_id, PENDING_CONFIRMATION_KEY, None)
             take_parked_choice(session_id)
-            if not letters.dictation_text(state) and not state.get("topic"):
+            if not letters.dictation_text(state):
+                # Nothing was dictated: nothing to write up, nothing saved.
                 await repo.set_context_key(session_id, LETTER_KEY, None)
-                return
-            state["stage"] = "writing"
-            await repo.set_context_key(session_id, LETTER_KEY, state)
+                empty = True
+            else:
+                empty = False
+            if not empty:
+                state["stage"] = "writing"
+                await repo.set_context_key(session_id, LETTER_KEY, state)
     except asyncio.CancelledError:
         return
     finally:
         if _IDLE.get(str(session_id)) is asyncio.current_task():
             _IDLE.pop(str(session_id), None)
+    if empty:
+        if room_id:
+            from domovoi.sdk.speech import SpeechAPI
+
+            try:
+                await SpeechAPI("core").announce(room_id, "I didn't hear a letter, so nothing was saved.")
+            except Exception as e:  # noqa: BLE001
+                log.info("letter by voice: the announcement failed: %s", type(e).__name__)
+        return
     await _write_up_later(state, session_id, room_id)
+
+
+def _awaiting_reply(live: Any) -> bool:
+    """The room may still answer: StreamSession.awaiting_reply, or (a
+    session without it) a capture open or a reply still being made."""
+    check = getattr(live, "awaiting_reply", None)
+    if callable(check):
+        return bool(check())
+    task = getattr(live, "_response_task", None)
+    return bool(getattr(live, "utterance_active", False)) or (task is not None and not task.done())
 
 
 async def _write_up_later(state: dict, session_id: Any, room_id: str | None) -> None:

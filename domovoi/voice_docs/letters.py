@@ -3,7 +3,9 @@
 "Take a letter to the landlord" → "Go ahead. Say end of letter when you're
 done." The room stays in follow-up listening, adding each thing said to the
 letter, until "end of letter" (or "that's it", "I'm done"), or until the
-room has been quiet for :data:`IDLE_SEC` after its last "Go on.". Then:
+room has gone quiet: the "Go on." played and its follow-up window closed
+with nothing said (``StreamSession.awaiting_reply``), checked from
+:data:`IDLE_SEC` after the turn. Nothing dictated: nothing is saved. Then:
 
 1. a home-server chat is made for it (titled "Letter to the landlord"),
    with the dictation as its first message, so the words are never lost
@@ -42,9 +44,11 @@ from sqlalchemy import text
 
 log = logging.getLogger(__name__)
 
-#: Quiet this long after the last dictation turn (the "Go on." itself, the
-#: satellite's 8-second follow-up window and some slack) ends the letter.
-IDLE_SEC = 15.0
+#: The first look at a quiet room after a dictation turn; from then on it is
+#: looked at every :data:`QUIET_POLL_SEC` until the reply has played and the
+#: follow-up window has closed (the satellite's 8 s, plus the core's hold).
+IDLE_SEC = 3.0
+QUIET_POLL_SEC = 1.0
 #: The most a letter by voice holds before it is written up anyway.
 MAX_PARTS = 60
 MAX_CHARS = 6000

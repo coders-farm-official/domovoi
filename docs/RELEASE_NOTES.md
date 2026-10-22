@@ -21,7 +21,8 @@ Core only. No migration, no new dependency, no new route.
   only in the room that asked. No model is used: it works with AI chat and
   questions off.
 * **"Take a letter to the landlord."** The room keeps listening while you
-  dictate, until "end of letter" or about 15 seconds of quiet; "scratch
+  dictate, until "end of letter" or the room goes quiet (its follow-up
+  window closes with nothing said; nothing dictated, nothing saved); "scratch
   that" and "cancel the letter" work while dictating. The language model
   writes it up as a letter, signed with the speaker's name when voice ID
   knows them (otherwise the room asks "Who's it from?"). It is saved as a
