@@ -1628,11 +1628,15 @@ class AssistantController(
      */
     private suspend fun clockReply(asked: StoredConversation, onDelta: (String) -> Unit): StoredConversation? {
         val question = asked.messages.lastOrNull()?.takeIf { it.fromUser } ?: return null
-        val kind = ClockQuestions.match(question.text) ?: return null
+        val kind = ClockQuestions.match(question.text)
         val sent = nanos()
         val text = runCatching {
             val style = clockStyle()
-            ClockQuestions.answer(kind, style.at(clock()), style)
+            if (kind != null) {
+                ClockQuestions.answer(kind, style.at(clock()), style)
+            } else {
+                ClockQuestions.reading(question.text, style, style.at(clock()))
+            }
         }.onFailure { Log.w(TAG, "the phone's clock could not be read", it) }.getOrNull() ?: return null
         onDelta(text)
         val reply = StoredMessage(Speaker.DOMOVOI, text, clock(), firstTextMs = (nanos() - sent) / 1_000_000, fromClock = true)

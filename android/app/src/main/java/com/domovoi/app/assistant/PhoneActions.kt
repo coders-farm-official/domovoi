@@ -116,6 +116,7 @@ object ActionPatterns {
     internal fun norm(text: String): String {
         var t = text.lowercase().replace(Regex("[’‘`´]"), "'").replace(Regex("[,;!?]"), " ")
             .replace(Regex("\\s+"), " ").trim().trimEnd('.', ' ')
+        t = toNight(t)
         // "o'clock" keeps its apostrophe; other dots ("a.m.") go.
         t = t.replace(Regex("\\b([ap])\\.m\\b\\.?"), "$1m")
         var before: String
@@ -571,14 +572,27 @@ private const val AMPM = "(?:am|pm|a m|p m)"
 private const val PART = "(?:in the morning|in the afternoon|in the evening|at night|tonight|tomorrow morning|this morning|this evening|" +
     "tomorrow evening|tomorrow night|tomorrow afternoon|tomorrow)"
 
+/** "half", "a quarter", "ten", "20 minutes": how far from the hour (the
+ *  server's clock_time._RELATIVE, Fold check 2026-10-21). */
+private val RELATIVE_AMOUNT = "(?:(?:a )?quarter|half|\\d{1,2}|$NUMBER_WORD)(?: minutes?)?"
 /** What follows "alarm for" / "wake me at". */
-internal val TIME = "(?:noon|midday|midnight|(?:half past|quarter past|quarter to|quarter till|quarter of|\\d{1,2} past|\\d{1,2} to|$NUMBER_WORD past|$NUMBER_WORD to) $HOUR|" +
+internal val TIME = "(?:noon|midday|midnight|$RELATIVE_AMOUNT $RELATIVE_DIR $HOUR|" +
     "$HOUR(?::[0-5]\\d| [0-5]\\d| (?:oh |o )?$NUMBER_WORD)?(?: ?o'? ?clock)?)(?: ?$AMPM)?(?: $PART)?"
 
 private fun hourOf(word: String): Int? = word.toIntOrNull() ?: HOUR_WORDS[word]
 
+private const val RELATIVE_DIR = "(?:past|after|to|till|before|of)"
+private val RELATIVE_RE = Regex("^(?<amt>(?:a )?quarter|half|\\d{1,2}|$NUMBER_WORD)(?: minutes?)? (?<dir>$RELATIVE_DIR) (?<hr>\\S+)$")
+
+/** "twelve to night" is how speech to text writes "twelve tonight" (Fold
+ *  check 2026-10-21: it was read as 11 PM). "to night" after an hour is
+ *  never a time before it: night isn't an hour. */
+private val TO_NIGHT by lazy { Regex("\\b(\\d{1,2}(?::[0-5]\\d)?|${HOUR_WORDS.keys.joinToString("|")}) to night\\b") }
+
+internal fun toNight(text: String): String = text.replace(TO_NIGHT, "$1 tonight")
+
 internal fun parseTime(text: String): SpokenTime? {
-    var t = text.trim().lowercase()
+    var t = toNight(text.trim().lowercase())
     var pm: Boolean? = null
     var night = false
     Regex(" ?($PART)$").find(t)?.let {
@@ -602,19 +616,23 @@ internal fun parseTime(text: String): SpokenTime? {
     t = t.replace(Regex(" ?o'? ?clock$"), "")
     if (t == "noon" || t == "midday") return SpokenTime(12, 0, true)
     if (t == "midnight") return SpokenTime(0, 0, false)
-    Regex("^(half past|quarter past|quarter to|quarter till|quarter of|(\\S+(?: \\S+)?) past|(\\S+(?: \\S+)?) to) (\\S+)$").matchEntire(t)?.let { m ->
-        val h = hourOf(m.groupValues[4]) ?: return null
+    RELATIVE_RE.matchEntire(t)?.let { m ->
+        val h = hourOf(m.groups["hr"]!!.value) ?: return null
         if (h !in 1..12) return null
-        val rel = m.groupValues[1]
-        val (hh, mm) = when {
-            rel == "half past" -> h to 30
-            rel == "quarter past" -> h to 15
-            rel == "quarter to" || rel == "quarter till" || rel == "quarter of" -> (if (h == 1) 12 else h - 1) to 45
-            rel.endsWith("past") -> h to (parseNumber(m.groupValues[2]) ?: return null)
-            else -> (if (h == 1) 12 else h - 1) to (60 - (parseNumber(m.groupValues[3]) ?: return null))
+        val amt = m.groups["amt"]!!.value
+        val minutes = when {
+            amt.endsWith("quarter") -> 15
+            amt == "half" -> 30
+            else -> parseNumber(amt) ?: return null
         }
-        if (mm !in 0..59) return null
-        return withMeridiem(hh, mm, meridiem(hh))
+        if (minutes !in 1..59) return null
+        // As clock_time.parse_when does: on a 12-hour dial, then 1-12.
+        val total = when (m.groups["dir"]!!.value) {
+            "past", "after" -> (h % 12) * 60 + minutes
+            else -> ((h % 12) * 60 - minutes + 720) % 720
+        }
+        val hh = (total / 60).takeIf { it > 0 } ?: 12
+        return withMeridiem(hh, total % 60, meridiem(hh))
     }
     Regex("^(\\S+?)(?::(\\d{2})| (\\d{2})| (?:oh |o )?(.+))?$").matchEntire(t)?.let { m ->
         val h = hourOf(m.groupValues[1]) ?: return null
