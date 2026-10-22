@@ -6,9 +6,11 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Acquisition** — a structured request to obtain media for the local library ("get me this song", by search text or URL). Acquisitions go into a queue table where a *fulfiller* picks them up; with no fulfiller installed they simply wait, visibly, until one is. See *media acquisition queue*.
 
-**Admin session** — the 30-day bearer token you get by logging in with the admin password. Risky operations on both the dashboard (port 6369) and the core API (port 6370) accept only this token; it's minted once against a shared table, so one login covers both.
+**Admin session** — the bearer token you get by logging in with the admin password: it lasts 30 days from its last use, and 90 days at most. Risky operations on both the dashboard (port 6369) and the core API (port 6370) accept only this token; it's minted once against a shared table, so one login covers both.
 
 **AEC (acoustic echo cancellation)** — removing the satellite's own speaker output from its microphone signal. The XVF3800 array does this on-chip, which is what makes reliable *barge-in* and open-mic *chat mode* possible; the 2-mic HAT has no AEC. (The wake greeting does not need it: the satellite plays it before it listens — see *wake acknowledgement*.)
+
+**AI features** — the household's switch for everything that asks a language model ("AI chat and questions", in Settings → Chat & AI → Models; `AI_FEATURES` in `domovoi/.env`; on by default). Off, nothing asks a model: voice commands keep working on their usual phrases, and speech recognition, the voices and the *wake word* stay. See the [FAQ](FAQ.md#is-ai-optional).
 
 **Band** — see *priority band*.
 
@@ -28,7 +30,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Dev install** — registering a plugin directory in place with `domovoi plugin dev <path>` for local development: same manifest validation as a real install, but no zip, no lockfile requirement, no trust screen. See [Plugin Development](PLUGIN_DEVELOPMENT.md).
 
-**Device** — a browser or phone that has introduced itself to the server (`POST /api/devices/register`), identified by the id it already mints for resume positions (`browser-…`, `android-…`) and carrying a human NAME you can edit. The name is what a *room queue* shows in its "added by" tag and what a *queue block* can match on. Registering and renaming take the household *device token*, so an unpaired client cannot introduce itself at all; within the household the id is still self-asserted, which is why a queue block is household policy rather than a security boundary. Not to be confused with a *satellite*, which is a room, not a client.
+**Device** — a browser or phone that has introduced itself to the server (`POST /api/devices/register`), identified by the id it already mints for resume positions (`browser-…`, `android-…`) and carrying a human NAME you can edit. The name is what a *room queue* shows in its "added by" tag and what a *queue block* can match on. Registering and renaming take the *household token*, so an unpaired client cannot introduce itself at all; within the household the id is still self-asserted, which is why a queue block is household policy rather than a security boundary. Not to be confused with a *satellite*, which is a room, not a client.
 
 **Drop-in** — a live two-way audio call into a satellite room ("drop in on the kitchen"), relayed by the core as raw audio with no STT or TTS in the path. The receiving room either auto-answers or is asked first, depending on the configured accept mode. Usually room-to-room, but the Android app can also drop in *from your phone*: it joins the room's audio bridge over `WS /v1/dropin/{room_id}` as a call peer without registering as a satellite (see [API_REFERENCE.md](API_REFERENCE.md)).
 
@@ -42,9 +44,13 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Guest** — a phone or browser holding no household credential (not paired, not signed in) on a box that has finished setup. Since 2026-10-10 a guest may change the *room queue* of a room that is playing (add, remove one at a time, reorder — no clear, and never the song playing now) and pause, resume, skip or go back there (never stop), throttled per address, until an admin bans it (a *guest ban*). `GUEST_QUEUE_EDITING` turns it off.
 
-**Guest ban** — an admin rule barring a *guest* from changing the music in every room, queue and playback alike. Matches the guest's self-asserted browser id OR its network address, and never applies to a paired device or an admin. Household policy, not a security boundary, like a *queue block*. Managed in Settings → Phones & browsers → Guests, from the guests the core recorded acting this week.
+**Guest ban** — an admin rule barring a *guest* from changing the music in every room, queue and playback alike. Matches the guest's self-asserted browser id OR its network address, and never applies to a paired device or an admin. Household policy, not a security boundary, like a *queue block*. Managed in Settings → Rooms & devices → Phones & browsers → Guests, from the guests the core recorded acting this week.
 
 **Handler** — the unit of voice functionality: a class that declares its *fast paths*, a tool schema for LLM routing, its network needs (`requires_network: no | degraded | yes`), and an offline fallback. Timers, music, intercom, news — each is a handler; plugins add more.
+
+**Help desk** — Domovoi answering questions about Domovoi, in chat or by voice, from its own user manual, FAQ, troubleshooting guide, an entry for every dashboard error and installed plugins' help. It names the section it used, or says the manual doesn't cover the question. The **?** in the dashboard's top bar opens it. With *AI features* off it is a plain search. See the [FAQ](FAQ.md#how-do-i-ask-domovoi-for-help).
+
+**Household token** — the shared secret a phone or browser presents so the server knows it belongs to the household (the `X-Device-Token` header; the API calls it the device token). An admin sees it under Settings → Rooms & devices → Phones & browsers → Household token. It is not the *admin session*: it opens everyday features, not risky ones.
 
 **ICY metadata** — the `StreamTitle` now-playing tags many internet radio streams embed. The radio plugin's ICY poller reads them as the cheap first tier of song detection, with audio sampling as the fallback.
 
@@ -55,6 +61,8 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 **Letta** — the self-hosted agent framework that backs *chat mode*, running in its own container with its own database, entirely on the local Ollama. Only conversational turns touch it; normal commands never do.
 
 **Local-first** — Domovoi's core contract: the voice pipeline (wake word, STT, routing, LLM, local TTS) runs entirely on your hardware, every handler declares its network needs, and anything that needs the internet must degrade honestly when it's absent. See the [FAQ](FAQ.md#does-it-work-offline).
+
+**Lookup** — a chat looking something up outside itself ("look up …", "what does this page say: https://…"). Domovoi's own manual and an offline library are searched first; before anything goes online, a card shows the exact words and where they go: Allow once, Allow in this chat, or Not now. See the [FAQ](FAQ.md#does-domovoi-look-things-up-online).
 
 **Manifest** — a plugin's `domovoi-plugin.toml`: identity (slug, publisher, version), entry points, declared handlers and workers, capabilities, permissions and warnings, dependencies, web pages. It's what the install preview renders and what the runtime validates.
 
@@ -70,7 +78,9 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Now-playing source** — the registry entry a feature stamps when it starts external (non-library) playback in a room, so the dashboard's now-playing card, the sweeper, and favorites all work generically. The radio plugin registers `radio`; core never learns provider vocabulary.
 
-**Ollama** — the local LLM server (port 11434). Domovoi runs two models through it: a small fast one for conversational Q&A and a larger schema-reliable one for *tool routing*.
+**Ollama** — the local LLM server (port 11434). Domovoi runs up to three models through it: a small fast one for conversational Q&A, a larger schema-reliable one for *tool routing*, and a small vision model for pictures in chat (optional). With *AI features* off it runs none of them.
+
+**One Chat** — the app's Chat: a single list that holds the chats on the home server (shared with the household) and the ones on the phone itself, each marked with where it runs. The dashboard's chat is the home server's side of it.
 
 **openWakeWord** — the on-satellite wake-word engine. Ships prebuilt models (`hey_jarvis` is Domovoi's default) and supports custom models trained from your own recorded clips.
 
@@ -86,7 +96,9 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Realtime channel** — the live-update path from database to browser: a feature fires a Postgres NOTIFY on commit, the dashboard's listener maps it to a named channel (e.g. `radio.stations`) and pushes a fresh snapshot over WebSocket. Plugins declare theirs in the manifest.
 
-**Room** — the logical unit of the household, identified by the stable `room_id` in a satellite's config. Rooms are what the intercom, drop-in, music playback, and Settings → Rooms address; each room owns one satellite and one *MPD* instance.
+**Room** — the logical unit of the household, identified by the stable `room_id` in a satellite's config. Rooms are what the intercom, drop-in, music playback, and Settings → Rooms & devices → Rooms address; each room owns one satellite and one *MPD* instance.
+
+**Room mode** — an Android phone or tablet used as a room: on its charger it listens for the *wake word*, answers, plays the room's music and takes announcements. See [Spare-device satellites](SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode).
 
 **Room queue** — the play queue a room's speaker draws from. It lives in that room's *MPD* instance, not in the database, and it is SHARED: every household client sees the same list and can add to, reorder, or clear it (a *guest* only while the room is playing, and never clear). Domovoi annotates it rather than copying it — `room_queue_items` records which *device* added each entry, keyed by MPD's songid (stable across reorders, unlike a position), which is what the "added by" tag reads. Distinct from each client's own player queue, which never leaves that device.
 
@@ -108,7 +120,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Wake acknowledgement** — what a satellite does when it hears the *wake word*, before it listens for the command: a spoken greeting from the greeting bank (the default), a short chime, or the light alone (`[wake] ack_mode`, per satellite, also in the dashboard's satellite Settings). The sound plays to its end and the mic audio under it is dropped, so the satellite cannot hear — and answer — its own greeting.
 
-**Wake word** — the phrase that opens the mic (default `hey_jarvis`). Detection runs on the satellite via *openWakeWord*; custom words ("Hey Domovoi") are recorded, trained, and pushed to rooms from the dashboard's Wake Words tab, with trained models synced into the Pi's `~/.domovoi/wake_models/` cache.
+**Wake word** — the phrase that opens the mic (default `hey_jarvis`). Detection runs on the satellite via *openWakeWord*; custom words ("Hey Domovoi") are recorded, trained, and pushed to rooms from the dashboard's Settings → Voice → Wake words, with trained models synced into the Pi's `~/.domovoi/wake_models/` cache.
 
 **Whisper** — the local speech-to-text model (`faster-whisper`): `small.en` on the CPU on a server set up by the installers, `large-v3` on CUDA by default on one set up by hand. All transcription happens on the server; no audio goes to any cloud STT.
 

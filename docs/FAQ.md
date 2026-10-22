@@ -17,6 +17,10 @@ Honest answers to the questions people actually ask. For a term you don't recogn
 - [What music sources exist out of the box?](#what-music-sources-exist-out-of-the-box)
 - [Can I save music, podcasts, or audiobooks to my phone or computer?](#can-i-save-music-podcasts-or-audiobooks-to-my-phone-or-computer)
 - [Can I send pictures in chat?](#can-i-send-pictures-in-chat)
+- [Can I ask a chat about a document?](#can-i-ask-a-chat-about-a-document)
+- [Does Domovoi look things up online?](#does-domovoi-look-things-up-online)
+- [Can Domovoi print and scan?](#can-domovoi-print-and-scan)
+- [How do I ask Domovoi for help?](#how-do-i-ask-domovoi-for-help)
 - [How long is what we say kept, and can we delete it?](#how-long-is-what-we-say-kept-and-can-we-delete-it)
 - [Where is my data?](#where-is-my-data)
 - [How do I back up and restore?](#how-do-i-back-up-and-restore)
@@ -40,24 +44,24 @@ Two honest notes, so you can decide for yourself:
 
 ## What touches the internet, and how do I turn each thing off?
 
-Every optional outbound touchpoint, sourced from the code. One answer covers all of them: **No, keep everything in the house** in Settings → Internet (`INTERNET_ACCESS=never`) refuses every one, and the online controls say "needs internet" ([INTERNET.md](INTERNET.md)). The last column is how to turn one off on its own on a server that does use the internet.
+Every optional outbound touchpoint, sourced from the code. One answer covers all of them: **No, keep everything in the house** in Settings → Privacy → Internet (`INTERNET_ACCESS=never`) refuses every one, and the online controls say "needs internet" ([INTERNET.md](INTERNET.md)). The last column is how to turn one off on its own on a server that does use the internet.
 
 | Feature | What goes out | Where | How to disable |
 |---|---|---|---|
-| Connectivity probe | A TCP connection, no payload | `1.1.1.1:443` every 30 s | Answer **No** in Settings → Internet: the probe stops dialing and the dashboard says "Turned off for this box". Otherwise **leave `CONNECTIVITY_PROBE_TARGET` on an internet address**: the failing dial is how Domovoi knows the line is down. Pointed at a LAN host (your router), it reports online when the internet isn't there, and online features fail slowly instead of saying they can't. If your network blocks `1.1.1.1`, use another public `host:443` (e.g. `9.9.9.9:443`) |
+| Connectivity probe | A TCP connection, no payload | `1.1.1.1:443` every 30 s | Answer **No** in Settings → Privacy → Internet: the probe stops dialing and the dashboard says "Turned off for this box". Otherwise **leave `CONNECTIVITY_PROBE_TARGET` on an internet address**: the failing dial is how Domovoi knows the line is down. Pointed at a LAN host (your router), it reports online when the internet isn't there, and online features fail slowly instead of saying they can't. If your network blocks `1.1.1.1`, use another public `host:443` (e.g. `9.9.9.9:443`) |
 | Model downloads | Model files, once | Hugging Face (Whisper models, Piper voices), Ollama model pulls, the fast lane's model (GitHub, only once `fastlane_mode` is `shadow`) | One-time each. Whisper loads its model from the server's own cache first and asks Hugging Face only for a model that isn't downloaded yet; under **No** it never asks (and `HF_HUB_OFFLINE=1` is set for the core), so download every model you'll use before you disconnect ([how](INTERNET.md#before-you-disconnect)) |
 | News briefings | RSS feed fetches; topic feed discovery via your local SearXNG | The feeds you configure | `NEWS_ENABLED=false` kills all background fetching (it follows the internet answer: off for **No**); `NEWS_AUTO_FETCH` (topic feeds) is already off by default |
 | "Double-check that" / web answers (weather, scores, "check that online") | Search queries; and, every time the container starts, its own fetches of the ClearURLs rule lists, a Wikidata query and the radio-browser server list | Your own SearXNG container (localhost-only, port 6888), which queries public search engines | It follows the internet answer: saving **Yes** or **Sometimes** starts it, **No** stops it (no search is sent even if it runs, but its startup fetches would be, which is why it is stopped). Not answered: it runs only if you started it (`docker compose up -d searxng`). When it isn't running Domovoi says so — "I can't search the web right now — my search helper isn't running" — instead of claiming it searched |
-| Chat lookups — **only after you allow each one** (or "Always allow internet", off by default) | A chat's search words, or the address of a page you name | Your local SearXNG (Wikipedia and Wikidata first), Wikipedia, your own SearXNG or Brave Search (with your key); a phone away from home asks Wikipedia itself | Answer **Not now** on the card, leave Settings → Chat & AI → Search → **Always allow internet** off, or answer **No** in Settings → Internet (then only the manual and an offline library are searched) |
+| Chat lookups — **only after you allow each one** (or "Always allow internet", off by default) | A chat's search words, or the address of a page you name | Your local SearXNG (Wikipedia and Wikidata first), Wikipedia, your own SearXNG or Brave Search (with your key); the page itself when you name one (the server reads it: HTTPS only, no cookies, 2 MB); a phone away from home asks Wikipedia, and reads a page you name, itself | Answer **Not now** on the card, leave Settings → Chat & AI → Search → **Always allow internet** off, or answer **No** in Settings → Privacy → Internet (then only the manual and an offline library are searched) |
 | Radio plugin: station directory | Station-name searches; an FM favorite's call sign, to find its internet stream (when you favorite it, and at startup for FM favorites that still have none) | radio-browser.info | Disable or uninstall the radio plugin from the dashboard's Plugins page |
 | Radio plugin: FCC station import | One bulk query on demand | transition.fcc.gov | Off unless you click **Import FCC FM** (or set `RADIO_FCC_IMPORT_ON_BOOT=true`) |
 | Radio plugin: song detection | Short clips of favorited radio *streams*; ICY metadata polls | Shazam; the stations themselves | `RADIO_SAMPLER_ENABLED=false`, `RADIO_ICY_POLLER_ENABLED=false` in the plugin's own file, `~/.domovoi/plugins/radio.env` (restart the core) |
-| Library enricher | Audio fingerprints of your library files (and, to AcoustID, the AcoustID key) | AcoustID (only with an AcoustID application key: Settings → Advanced → Library → **AcoustID key**, or `ACOUSTID_API_KEY`; over HTTPS) and Shazam (only with the `shazam` extra installed); metadata lookups to MusicBrainz. **test the key** beside the key sends one lookup of a made-up fingerprint, never one of your files, only when an admin presses it | `LIBRARY_ENRICHER_ENABLED=false`. With neither a key nor Shazam it sends nothing and marks nothing. Under **No** neither the enricher nor the test sends anything |
-| MusicBrainz alias lookup — **off unless your internet answer is Yes or Sometimes** | Artist names from your library — tagged artists, and the "Artist" of an untagged file whose name reads "Artist - Title" (so a home recording named "Grandma Edith - Happy Birthday" would send "Grandma Edith"): one search per artist, once, then only for artists added later (about an hour and a half the first time for ~2,000 artists); the spoken stage names that come back are kept, legal names and a person's names sharing a word with one are filtered out and never stored. A band's other names (members, "The Farriss Brothers" for INXS) can be kept | musicbrainz.org, one request a second, only while the server is online | On when the internet answer is **Yes** or **Sometimes**, off when it is **No** or not answered. Settings → Advanced → Library → "Look up other names on MusicBrainz" (`music_alias_fetch_enabled` / `MUSIC_ALIAS_FETCH_ENABLED`) overrides the answer; switching it off stops it before its next request |
-| Synced lyrics (LRCLIB) — **off unless your internet answer is Yes or Sometimes** | A song's title, artist, album and length, for songs with no timed lyrics of their own (no `.lrc` beside them, none in their tags): one lookup per song, then again after a few weeks for songs LRCLIB didn't have (several hours the first time for 5,000 songs, about a night, longer when LRCLIB asks it to slow down). The lyrics that come back stay on the server, and with "Save lyrics as .lrc files" timed ones are also saved as a `.lrc` next to the song (never over a `.lrc` you made) | lrclib.net, about one request a second, only while the server is online | On when the internet answer is **Yes** or **Sometimes**, off when it is **No** or not answered. Settings → Advanced → Library → "Synced lyrics from LRCLIB" (`lyrics_lrclib_enabled` / `LYRICS_LRCLIB_ENABLED`) overrides the answer; switching it off stops it before its next request. Lyrics from `.lrc` files and the songs' own tags never touch the internet |
+| Library enricher | Audio fingerprints of your library files (and, to AcoustID, the AcoustID key) | AcoustID (only with an AcoustID application key: Settings → System → Advanced → Library → **AcoustID key**, or `ACOUSTID_API_KEY`; over HTTPS) and Shazam (only with the `shazam` extra installed); metadata lookups to MusicBrainz. **test the key** beside the key sends one lookup of a made-up fingerprint, never one of your files, only when an admin presses it | `LIBRARY_ENRICHER_ENABLED=false`. With neither a key nor Shazam it sends nothing and marks nothing. Under **No** neither the enricher nor the test sends anything |
+| MusicBrainz alias lookup — **off unless your internet answer is Yes or Sometimes** | Artist names from your library — tagged artists, and the "Artist" of an untagged file whose name reads "Artist - Title" (so a home recording named "Grandma Edith - Happy Birthday" would send "Grandma Edith"): one search per artist, once, then only for artists added later (about an hour and a half the first time for ~2,000 artists); the spoken stage names that come back are kept, legal names and a person's names sharing a word with one are filtered out and never stored. A band's other names (members, "The Farriss Brothers" for INXS) can be kept | musicbrainz.org, one request a second, only while the server is online | On when the internet answer is **Yes** or **Sometimes**, off when it is **No** or not answered. Settings → System → Advanced → Library → "Look up other names on MusicBrainz" (`music_alias_fetch_enabled` / `MUSIC_ALIAS_FETCH_ENABLED`) overrides the answer; switching it off stops it before its next request |
+| Synced lyrics (LRCLIB) — **off unless your internet answer is Yes or Sometimes** | A song's title, artist, album and length, for songs with no timed lyrics of their own (no `.lrc` beside them, none in their tags): one lookup per song, then again after a few weeks for songs LRCLIB didn't have (several hours the first time for 5,000 songs, about a night, longer when LRCLIB asks it to slow down). The lyrics that come back stay on the server, and with "Save lyrics as .lrc files" timed ones are also saved as a `.lrc` next to the song (never over a `.lrc` you made) | lrclib.net, about one request a second, only while the server is online | On when the internet answer is **Yes** or **Sometimes**, off when it is **No** or not answered. Settings → System → Advanced → Library → "Synced lyrics from LRCLIB" (`lyrics_lrclib_enabled` / `LYRICS_LRCLIB_ENABLED`) overrides the answer; switching it off stops it before its next request. Lyrics from `.lrc` files and the songs' own tags never touch the internet |
 | Podcasts | Feed polls + episode downloads; a show's name when you subscribe by voice or search in Discover; each show's artwork, once | Feeds you subscribe to; Apple's iTunes search | Automatic downloads follow the internet answer: on for **Yes**, off for **Sometimes**, **No** and not answered (`PODCAST_FEED_POLLER_ENABLED`). Search runs only when you ask. Show artwork is downloaded **by the server** and served to your browser and phone, which never contact the publisher |
-| Extra voices | Downloads of the other two Piper voices (about 130 MB) | Hugging Face | Off once the internet question is answered (any answer), unless `SEED_VOICE_CATALOG` is set in your `domovoi/.env` — which a server installed before October 2026 has (its old template wrote `SEED_VOICE_CATALOG=true`; Settings → Internet → **follow the answer again** hands it back). Not answered, it's on unless `SEED_VOICE_CATALOG=false` |
-| Wake-word training — **off until an admin turns it on** | The trainer image's build and its training data, about 22 GB, once; a rebuild when an update changes the trainer. On a box with an NVIDIA GPU, the install and the Linux update unit also fetch the NVIDIA Container Toolkit | Docker Hub, GitHub, PyPI and Ubuntu's archive (the build); Hugging Face and Backblaze B2 (the data); NVIDIA's apt repository (the toolkit) | Don't turn it on (Settings → Wake words). Under **No** it can't be turned on, no training starts, and the update unit downloads none of it ([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#wake-word-training-the-gpu-runtime-the-trainer-image-and-what-it-downloads)) |
+| Extra voices | Downloads of the other two Piper voices (about 130 MB) | Hugging Face | Off once the internet question is answered (any answer), unless `SEED_VOICE_CATALOG` is set in your `domovoi/.env` — which a server installed before October 2026 has (its old template wrote `SEED_VOICE_CATALOG=true`; Settings → Privacy → Internet → **follow the answer again** hands it back). Not answered, it's on unless `SEED_VOICE_CATALOG=false` |
+| Wake-word training — **off until an admin turns it on** | The trainer image's build and its training data, about 22 GB, once; a rebuild when an update changes the trainer. On a box with an NVIDIA GPU, the install and the Linux update unit also fetch the NVIDIA Container Toolkit | Docker Hub, GitHub, PyPI and Ubuntu's archive (the build); Hugging Face and Backblaze B2 (the data); NVIDIA's apt repository (the toolkit) | Don't turn it on (Settings → Voice → Wake words). Under **No** it can't be turned on, no training starts, and the update unit downloads none of it ([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#wake-word-training-the-gpu-runtime-the-trainer-image-and-what-it-downloads)) |
 | A USB stick for an old computer — **only when an admin prepares one** | Debian's installer image (793 MB), once, kept for the next stick; on a server installed before October 2026, the `xorriso` package at the next update or restart | cdimage.debian.org (held to a pinned SHA-256); Ubuntu's archive | Don't press **Prepare the stick**. Under **No** it is refused unless the image is already on the server, and the update unit installs nothing. The old computer itself downloads Debian's packages and the satellite's libraries while it sets up ([SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick)) |
 | Things an admin starts | Downloads, only when an admin clicks: **Pull the latest** (and, with the update unit, Python packages and the music image's Debian packages, and the search helper's image when it starts it), plugin installs, model installs, **Refresh caches** for satellite media | GitHub; PyPI and the PyTorch CPU index; Debian's mirrors; Docker Hub; the Ollama registry; Hugging Face (a new Whisper size) | Nothing runs on its own; don't click them. Under **No** they are greyed and the server refuses them |
 
@@ -69,9 +73,9 @@ Setting up a whole server one way or the other? [Will your Domovoi have internet
 
 **The server** — one machine that stays on:
 
-- **Linux or Windows** — both supported; see [Linux or Windows for the server?](#linux-or-windows-for-the-server). Either way Docker runs Postgres and the per-room music daemons (Docker Engine on Linux, Docker Desktop on Windows).
+- **Linux or Windows** — both supported; see [Linux or Windows for the server?](#linux-or-windows-for-the-server). Either way Docker runs Postgres and the per-room music daemons (Docker Engine on Linux and inside the Windows installer's private Linux; Docker Desktop on a Windows install by hand).
 - An NVIDIA GPU is **not required**. The installers (the Linux script and the Windows installer) set the server up for its processor: Whisper `small.en` on the CPU, Qwen3 8B for routing (Qwen3 4B on a server with less than 24 GB of memory), Llama 3.2 3B for answers and Qwen3-VL 2B for pictures; Ollama uses a GPU by itself when there is one. A server set up by hand starts from defaults that want an NVIDIA GPU (Whisper `large-v3` on CUDA, a 14B tool-routing model); on a CPU-only or non-NVIDIA box, four settings get you a system that's instant for everyday commands and slower only for open-ended questions — see [CPU_HOST.md](CPU_HOST.md).
-- **~20 GB of free disk** for the software and all default models (the two Ollama models alone are ~11 GB), **plus** room for your own media library on top. The full breakdown and ways to shrink it are in the README's [Disk footprint](../README.md#disk-footprint) section.
+- **~20 GB of free disk** for the software and all default models (the two Ollama models alone are ~11 GB), **plus** room for your own media library on top (the Windows installer asks for 40 GB free on the system drive). The full breakdown and ways to shrink it are in the README's [Disk footprint](../README.md#disk-footprint) section.
 
 **Satellites** — one small box per room you want to talk to:
 
@@ -84,11 +88,11 @@ Full parts list and step-by-step setup: [Satellite Hardware](SATELLITE_HARDWARE.
 
 ## Can it run without a GPU?
 
-Yes, with tradeoffs. A server set up by the installers already runs this way: Whisper `small.en` on the processor, and the Qwen3 router sized to its memory. By hand, Whisper's device is a setting (`WHISPER_DEVICE`, choices `cuda` or `cpu` — dashboard settings gear, advanced section). On CPU you'll want a smaller Whisper model than the by-hand default `large-v3` (e.g. `small.en` or `medium`), and Ollama will run its models on CPU too, so responses get noticeably slower. The system works; it just stops feeling instant. If you're GPU-less, also prefer the fast-path voice commands (timers, music, announcements) — those never touch the LLM at all.
+Yes, with tradeoffs. A server set up by the installers already runs this way: Whisper `small.en` on the processor, and the Qwen3 router sized to its memory. By hand, Whisper's device is a setting (`WHISPER_DEVICE`, choices `cuda` or `cpu` — Settings → System → Advanced → Speech-to-text). On CPU you'll want a smaller Whisper model than the by-hand default `large-v3` (e.g. `small.en` or `medium`), and Ollama will run its models on CPU too, so responses get noticeably slower. The system works; it just stops feeling instant. If you're GPU-less, also prefer the fast-path voice commands (timers, music, announcements) — those never touch the LLM at all.
 
 ## Is AI optional?
 
-AI chat and questions are. Both installers ask "Include AI chat and questions?" (the default is Yes) and say how much it downloads: about 6.4 GB of AI models, or about 9.1 GB on a server with 24 GB of memory or more. An admin can turn them off or on later under **AI chat and questions** in Settings → Models (`AI_FEATURES=false` in `domovoi/.env` does the same).
+AI chat and questions are. Both installers ask "Include AI chat and questions?" (the default is Yes) and say how much it downloads: about 6.4 GB of AI models, or about 9.1 GB on a server with 24 GB of memory or more (a Windows PC: about 32 GB). An admin can turn them off or on later under **AI chat and questions** in Settings → Chat & AI → Models (`AI_FEATURES=false` in `domovoi/.env` does the same).
 
 With them off, Domovoi never asks a language model anything:
 
@@ -96,7 +100,7 @@ With them off, Domovoi never asks a language model anything:
 - **Stays, because voice control needs it:** speech recognition (Whisper), Domovoi's voices (Piper), the wake word and voice recognition of who is talking. These are small machine-learning models too; they run on your server and never leave it.
 - **Off:** answers to open questions and jokes, commands said in your own words that no fixed phrase matches, "are you sure?" and the weather, the personal news briefing summary, pictures in chat, background memory suggestions and voice chat mode. A question gets "I can't answer that one — I'm set up for home commands. Say 'what can you do' to hear them." Chat is hidden on the dashboard; the app keeps only the chats on the phone itself, where the phone can run its own model. Help still works: the **?** on each page searches the manual and the docs, with no model. Plugins that ask the AI models (a Kiwix summary) get a clean "AI features are turned off" and skip that step.
 
-The Ollama program stays installed either way, so turning AI on later is a switch and a download, not a reinstall: Settings → Models shows the size first, then downloads the models with a progress bar. On a box set to stay off the internet, the download has to come from a registry in the house.
+The Ollama program stays installed either way, so turning AI on later is a switch and a download, not a reinstall: Settings → Chat & AI → Models shows the size first, then downloads the models with a progress bar. On a box set to stay off the internet, the download has to come from a registry in the house.
 
 ## Does it work offline?
 
@@ -109,16 +113,16 @@ What that looks like in practice with the internet down:
 - **Says so honestly:** web-backed answers ("double-check that", news fetches) reply that they can't check right now instead of guessing. On a server answered **No** they say "I'm set to stay off the internet" instead.
 - **Satellite-side:** if a satellite loses the *server* for 30+ seconds, the next wake word plays a locally cached "having trouble reaching the network" clip instead of silence.
 
-Running with no internet at all, for good? Answer **No, keep everything in the house** in Settings → Internet: the server then contacts nothing outside your network. A few things can only be downloaded online, and the first time Domovoi needs one is usually the day the line is down, so do [Before you disconnect](INTERNET.md#before-you-disconnect) first.
+Running with no internet at all, for good? Answer **No, keep everything in the house** in Settings → Privacy → Internet: the server then contacts nothing outside your network. A few things can only be downloaded online, and the first time Domovoi needs one is usually the day the line is down, so do [Before you disconnect](INTERNET.md#before-you-disconnect) first.
 
 ### Can Domovoi run with no internet at all?
 
-Yes. After setup (which downloads the software and models), answer **No, keep everything in the house** — at the end of the first-run setup, in Settings → Internet, or `INTERNET_ACCESS=never` in `domovoi/.env`. The server then makes no connection outside your network: the internet check stops, and every feed, search, voice, download and plugin request is refused with "internet access is turned off for this box (Settings → Internet)". Music, timers, intercom, voice, the dashboard and the app keep working. What it can't switch off is outside the server: the satellites' own operating system keeps its clock with public time servers, and your browsers and phones are your browsers and phones. [INTERNET.md](INTERNET.md#internet-in-the-house-but-domovoi-shouldnt-use-it) has the details.
+Yes. After setup (which downloads the software and models), answer **No, keep everything in the house** — at the end of the first-run setup, in Settings → Privacy → Internet, or `INTERNET_ACCESS=never` in `domovoi/.env`. The server then makes no connection outside your network: the internet check stops, and every feed, search, voice, download and plugin request is refused with "internet access is turned off for this box (Settings → Privacy → Internet)". Music, timers, intercom, voice, the dashboard and the app keep working. What it can't switch off is outside the server: the satellites' own operating system keeps its clock with public time servers, and your browsers and phones are your browsers and phones. [INTERNET.md](INTERNET.md#internet-in-the-house-but-domovoi-shouldnt-use-it) has the details.
 
 ## How do I add rooms?
 
 A room *is* a satellite, and every room is added from the dashboard, as
-admin, in **Settings → Rooms**:
+admin, in **Settings → Rooms & devices → Rooms**:
 
 1. **A Raspberry Pi:** put Raspberry Pi OS Lite (64-bit) on a microSD card,
    put the card in the server's card reader, and use **prepare satellite
@@ -132,7 +136,7 @@ admin, in **Settings → Rooms**:
    approval** and press **approve**.
 3. That's it — on first connection, the server provisions that room's own
    music daemon (an MPD container with its own queue and volume) and the
-   room appears in Settings → Rooms.
+   room appears in Settings → Rooms & devices → Rooms.
 
 Room names matter: intercom ("announce in the kitchen…") and drop-in ("drop in on the kitchen") address rooms by the name you gave. The by-hand route (installing the satellite client and pointing it at `ws://<server>:6370` yourself) is in the [Satellite hardware guide](SATELLITE_HARDWARE.md) and `satellite/PROVISIONING.md`.
 
@@ -140,7 +144,7 @@ Room names matter: intercom ("announce in the kitchen…") and drop-in ("drop in
 
 Yes. A spare **Linux laptop or mini PC** (Debian or Ubuntu) or a
 **Windows 10/11 laptop or PC** can be a room: in the dashboard, as admin,
-**Settings → Rooms → add a spare device**, name the room, and run the
+**Settings → Rooms & devices → Rooms → add a spare device**, name the room, and run the
 one-line command it shows on that computer (one for Linux, one for Windows
 PowerShell). It installs the satellite, makes sure it's talking to *your*
 server, and shows an approval code to type into the dashboard. A tray
@@ -163,6 +167,12 @@ also stays on while it listens for the wake word: that is Windows telling
 you the truth. Details:
 [Windows laptops and PCs](SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs).
 
+The double-click Setup the same card offers (`DomovoiSatelliteSetup.exe`) is
+unsigned too: Windows SmartScreen says "Windows protected your PC", and
+**More info**, then **Run anyway** goes on. The same goes for the server's own
+`DomovoiSetup.exe`, and Smart App Control, if it is on, blocks that one
+outright ([Unsigned](WINDOWS_HOST.md#unsigned)).
+
 ## Can the PC that runs Domovoi also be a room?
 
 Not with the spare-device installer: it refuses on the server PC. The
@@ -177,7 +187,7 @@ Not once the real one has connected. Each satellite generates a random **pairing
 
 Strict pairing (`SATELLITE_PAIRING_STRICT=true`) is the default, and it closes the one gap left: a tokenless connection is refused, and a room's first pairing waits for you to type in the six-digit code the satellite is showing and saying. The honest caveat applies only if you turn strict pairing off: then the *first* token wins, so there's a one-time window when a room has never paired — whoever connects first claims it — and a device with no token at all can connect under any room name nobody has paired. Such a tokenless room can use itself (timers, music, voice commands) but can never drop in on another room or announce into one. An install that upgrades into this release and never set the line becomes strict at its next restart: paired rooms are unaffected, and a satellite that hasn't paired yet asks for approval once.
 
-**Re-flashed a Pi or moved a room to new hardware?** The new device has a new token that won't match, so it'll be refused. Clear the old pairing from the dashboard: Settings → Rooms → open the room → **Overview → Reset pairing** (admin login required). The next connection re-pairs. Full details: [Security & Privacy](SECURITY_PRIVACY.md#satellite-pairing-ws-auth).
+**Re-flashed a Pi or moved a room to new hardware?** The new device has a new token that won't match, so it'll be refused. Clear the old pairing from the dashboard: Settings → Rooms & devices → Rooms → open the room → **Overview → Reset pairing** (admin login required). The next connection re-pairs. Full details: [Security & Privacy](SECURITY_PRIVACY.md#satellite-pairing-ws-auth).
 
 One thing pairing does *not* do: encrypt the audio. LAN traffic is still unencrypted in v1 (TLS is on the hardening backlog), so keep satellites and the server on a network segment you control. See [Is my voice data leaving my network?](#is-my-voice-data-leaving-my-network).
 
@@ -189,8 +199,8 @@ Yes. In the Android app, open a satellite's page and tap **drop in from this pho
 
 Those are two separate things:
 
-- **The name** — what Domovoi calls itself in speech and on screen — is the `BOT_NAME` setting (dashboard settings gear → Identity, takes effect on restart). Greeting and sample clips re-render with the new name.
-- **The wake word** — the phrase that opens the mic — defaults to `hey_jarvis`, one of openWakeWord's prebuilt models. You can switch among the other built-ins in the satellite config, or **train a custom one** ("Hey Domovoi" is the natural choice) entirely from the product: dashboard → Settings → Wake words. Training runs on the server, in a Docker container. An admin turns it on once there (**Turn on wake-word training**: about 32 GB of disk, a download of about 22 GB, once, a server with 24 GB of memory; it builds the trainer and downloads its data, no shell needed). Then record positive clips *on the actual satellite* (through its real mic), press Train (about 20 minutes on an NVIDIA GPU, over an hour on the CPU, where it asks first because voice answers more slowly meanwhile), and push the model to a room. A model trained this way is for your household only: its training data's licences don't allow sharing it. Details: `scripts/wake_word/README.md`.
+- **The name** — what Domovoi calls itself in speech and on screen — is the `BOT_NAME` setting (Settings → System → Advanced → Identity, takes effect on restart). Greeting and sample clips re-render with the new name.
+- **The wake word** — the phrase that opens the mic — defaults to `hey_jarvis`, one of openWakeWord's prebuilt models. You can switch among the other built-ins in the satellite config, or **train a custom one** ("Hey Domovoi" is the natural choice) entirely from the product: dashboard → Settings → Voice → Wake words. Training runs on the server, in a Docker container. An admin turns it on once there (**Turn on wake-word training**: about 32 GB of disk, a download of about 22 GB, once, a server with 24 GB of memory; it builds the trainer and downloads its data, no shell needed). Then record positive clips *on the actual satellite* (through its real mic), press Train (about 20 minutes on an NVIDIA GPU, over an hour on the CPU, where it asks first because voice answers more slowly meanwhile), and push the model to a room. A model trained this way is for your household only: its training data's licences don't allow sharing it. Details: `scripts/wake_word/README.md`.
 
 ## Which voice does Domovoi speak with, and can I fix how it says a word?
 
@@ -199,14 +209,14 @@ LJ Speech set, trained from scratch by Bryce Beattie): **Kristin** (female,
 the default since October 2026), **Norman** (male) and **Linda** (female).
 A server still on Norman, the old default, moves to Kristin once on the
 update (pick Norman again here to keep him). Pick one under Settings →
-Voices → *Domovoi's voice*, where each has a play button; the phone app
+Voice → Voices → *Domovoi's voice*, where each has a play button; the phone app
 offers the same three. Since October 2026 the words are turned into sounds
 by Domovoi's own converter (a pronouncing dictionary, rules and a small
 model, all permissively licensed), not by espeak-ng, which is GPL; an
 update moves a server off the voices Domovoi used to offer (lessac and the
 voices built on it) to the default, and fetches it.
 
-When a word comes out wrong, add it under Settings → Voices → *Say it
+When a word comes out wrong, add it under Settings → Voice → Voices → *Say it
 like*: the word, and how it sounds in plain letters, with the stressed
 syllable in capitals (`Siobhan` = `shiv-AWN`). The play button lets you
 hear it before you save. Domovoi ships three entries, which you can change
@@ -251,11 +261,11 @@ before this existed — simply show nothing rather than a guess.
 
 Devices name themselves. A browser or phone introduces itself the first time
 it loads, with a name guessed from the platform ("Chrome on Windows", "Pixel
-8"); you can rename it in **Settings → Phones & browsers** (dashboard) or **Settings →
-Connection** (app). Renaming relabels that device's existing queue entries.
+8"); you can rename it in **Settings → Rooms & devices → Phones & browsers** (dashboard) or **Settings →
+Rooms & devices → Phones & browsers** (app). Renaming relabels that device's existing queue entries.
 
 An admin can take queue editing away from a named device — one room, or every
-room — in **Settings → Phones & browsers → Queue access**. A blocked device can still
+room — in **Settings → Rooms & devices → Phones & browsers → Queue access**. A blocked device can still
 *see* the queue and still plays its own music; it just can't change what the
 room plays. Be aware of what this is: a device tells the server who it is, and
 nothing on a trusted LAN forces it to be honest, so this reliably settles a
@@ -277,7 +287,7 @@ a paired device. (A determined guest could still empty a queue song by song;
 that's what bans and the off switch are for.) A guest's songs show "added by a guest", and
 a guest isn't shown the names of the household's devices.
 
-To stop one guest, sign in as admin and open **Settings → Phones & browsers → Guests**:
+To stop one guest, sign in as admin and open **Settings → Rooms & devices → Phones & browsers → Guests**:
 it lists the guests that changed the music this week, with a **ban** button
 (also on any queue entry a guest added). A ban covers every room, the queue
 and the playback buttons alike, and matches that phone's browser id or its
@@ -286,7 +296,7 @@ while the network gives it the same address. It never affects a paired
 device or an admin. Like a queue block, a ban is household policy rather
 than a lock: someone determined can come back as a new guest. To turn guest
 access off altogether, switch off **Guests can change the music in a playing
-room** in **Settings → Advanced → Security**; then only paired devices
+room** in **Settings → System → Advanced → Security**; then only paired devices
 and the admin can see or change a room's queue or its playback.
 
 ## Can I move files around without the command line?
@@ -311,7 +321,7 @@ same as playing music. **Deleting** is the one Files action that does need
 admin, because it's the one that destroys something; the phone app can't sign
 in as admin, so delete from the dashboard. If one device keeps filling the
 libraries with things it shouldn't, an admin can take uploading, moving and
-importing away from it in **Settings → Phones & browsers → Files access** — it can still
+importing away from it in **Settings → Rooms & devices → Phones & browsers → Files access** — it can still
 browse and download, and the Files page tells it why it can't change anything.
 The same honesty note as queue access applies: a device tells the server who it
 is, so this settles a household argument rather than stopping someone
@@ -363,13 +373,37 @@ All of this is a plain file copy from your own server — nothing goes to the in
 
 ## Can I send pictures in chat?
 
-**Yes, once the vision model is installed.** The Chat page (dashboard and Android app) takes text and pictures: PNG, JPEG, GIF, WebP or BMP, up to 4 a message and 20 MB each. No other kinds of file. A message with pictures is answered by the **vision model** (Settings → Models, the Vision row; `qwen3-vl:2b-instruct-q4_K_M` unless you picked another), because the chat model can only read text. Each picture reaches it upright and at most 1280 px on its long edge (the thread keeps the one you sent): plenty for screenshots, receipts and photos, and quick enough on a processor alone. Later text-only questions in the same chat go to the chat model with the words of the conversation, not the pictures.
+**Yes, once the vision model is installed.** The Chat page (dashboard and Android app) takes text and pictures: PNG, JPEG, GIF, WebP or BMP, up to 4 a message and 20 MB each. The paperclip also takes documents (a PDF, Word file and the like), which chat reads instead of looking at: see [Can I ask a chat about a document?](#can-i-ask-a-chat-about-a-document). A message with pictures is answered by the **vision model** (Settings → Chat & AI → Models, the Vision row; `qwen3-vl:2b-instruct-q4_K_M` unless you picked another), because the chat model can only read text. Each picture reaches it upright and at most 1280 px on its long edge (the thread keeps the one you sent): plenty for screenshots, receipts and photos, and quick enough on a processor alone. Later text-only questions in the same chat go to the chat model with the words of the conversation, not the pictures.
 
 **Phone photos in HEIC (and AVIF):** many phones save camera photos as HEIC, which the server doesn't read. The Android app converts those for you: it sends them as a JPEG, at most 2560 px on the long edge (about 1 MB), and does the same for a JPEG over the 40-megapixel limit. A converted photo carries no metadata, so its location and camera details stay on the phone; a JPEG, PNG, GIF or WebP that fits goes exactly as it is. Android 9 or newer converts HEIC (Android 12 or newer, AVIF); an older phone says so and asks for a JPEG. A browser can't convert HEIC, so the dashboard says what to do instead: send it from the app, or save it as a JPEG first.
 
-The vision model isn't installed by default (a server set up by `scripts/linux/provision.sh` has it, unless it was run with `--no-vision-model`). Until it is, the paperclip explains that instead of opening the picker ("Pictures need the vision model qwen3-vl:2b-instruct-q4_K_M, which isn't installed on this Domovoi…"), and a picture sent anyway gets that same answer straight away. An admin installs it in **Settings → Models** on the dashboard, or picks another vision-capable model there (a text-only model can't read pictures, and chat says so). The dashboard shows a signed-in admin a link straight to that tab; the Android app, which has no admin sign-in, opens the dashboard's Settings page instead. Pictures stay on your server: they are read by the model on your own hardware, like everything else in chat.
+The vision model isn't installed by default (a server set up by `scripts/linux/provision.sh` has it, unless it was run with `--no-vision-model`). Until it is, the paperclip explains that instead of opening the picker ("Pictures need the vision model qwen3-vl:2b-instruct-q4_K_M, which isn't installed on this Domovoi…"), and a picture sent anyway gets that same answer straight away. An admin installs it in **Settings → Chat & AI → Models** on the dashboard, or picks another vision-capable model there (a text-only model can't read pictures, and chat says so). The dashboard shows a signed-in admin a link straight to that tab; the Android app, which has no admin sign-in, opens the dashboard's Settings page instead. Pictures stay on your server: they are read by the model on your own hardware, like everything else in chat.
 
 The default vision model is the pick for a box without a GPU: a 1.9 GB download, about 3 GB of memory while it is loaded. With an NVIDIA GPU, `qwen2.5vl:7b` is the pick for the Vision row instead: quick on the GPU, but minutes per picture on a processor alone. A change in the Vision row reaches the dashboard's chat when the dashboard restarts.
+
+## Can I ask a chat about a document?
+
+Yes. The paperclip in Chat takes a PDF, Word (.docx), OpenDocument (.odt), Excel (.xlsx), CSV, text or markdown file, up to 100 MB, in a chat with the home server (on the dashboard and in the app) and in a chat on the phone. Ask what it says: the answer names the pages or sections it came from, a press on one shows the passage, and when the document doesn't say, the answer is "I couldn't find that in the document" rather than a guess. Files → Documents has **Ask about this document**. "Summarize" works on long documents too: Domovoi reads them in parts ("reading part 3 of 8"), **stop** keeps what was read, and every point in the summary cites a page.
+
+What it can't do yet: scanned pages (pictures of text) are listed but not read, and old .doc and .rtf files are refused with what to save them as.
+
+Where the document goes: in a home-server chat the file, and the text read from it, stay on your server (`~/.domovoi/chat_uploads/documents/`) until you delete that chat, and the models that read it run on your own hardware. A chat on the phone reads the document on the phone and keeps it in the app's private storage; a PDF the phone can't read itself goes to your home server only when you tap **ask the home server**, which reads its text and keeps nothing. Nothing goes to the internet. With AI chat and questions turned off, documents are not offered ([Is AI optional?](#is-ai-optional)).
+
+## Does Domovoi look things up online?
+
+Only when you allow it. Say "look up …", "what does this page say: https://…", or ask something Domovoi doesn't know. It searches its own manual and an offline library (the Kiwix plugin, if you installed it) first, with no question asked. Before anything goes online, a card shows the exact words and where they go: **Allow once**, **Allow in this chat** or **Not now**. Wikipedia and Wikidata come first (through the local search helper, or directly), or your own SearXNG or Brave Search key (Settings → Chat & AI → Search). The sources under an answer are listed by Domovoi, not the model, and a page's text can't make Domovoi do anything.
+
+To keep it all in the house, answer **No** in Settings → Privacy → Internet: every lookup that would leave the house is refused, and the manual and the offline library still answer. **Always allow internet** (Settings → Chat & AI → Search) starts off. A phone away from home looks up Wikipedia, and reads a page you name, by itself. What goes out, and to whom, is in [What touches the internet](#what-touches-the-internet-and-how-do-i-turn-each-thing-off).
+
+## Can Domovoi print and scan?
+
+Yes, on network printers and scanners, with no drivers: any printer that works with AirPrint, IPP Everywhere or Mopria, and any scanner that works over eSCL ("AirScan"). USB printers and printers that need a maker's driver are not supported. **Settings → Rooms & devices → Printers & scanners** finds them on your network, adds one by name or address, and prints a test page. **Print** is on PDFs, pictures, text and markdown files and spreadsheets in Files and Documents (a Word or OpenDocument file says "save it as PDF first"); **Scan** puts several pages into one PDF in Documents → Scans. By voice: "print two copies of the lease" (it says the pages and asks first), "how much ink is left", "scan this to Documents".
+
+Everything stays on your network, and printing and scanning keep working when the internet answer is **No**. Domovoi keeps a log of print jobs (which device or room, the document's title, pages, when, which printer) for 90 days; paired devices can read it and an admin can clear it. Limits an admin can change: 100 pages and 20 copies a job, 500 sheets a day for the house.
+
+## How do I ask Domovoi for help?
+
+Ask it. In chat or by voice, "how do I add a room?" is answered from Domovoi's own manual, this FAQ, the troubleshooting guide, an entry for every dashboard error and your installed plugins' help; the answer names the section it came from, and when none covers the question it says "The manual doesn't cover that." The dashboard has a **?** in the top bar of every page, **ask Domovoi about this** on an error, and **report a problem**, which builds a summary with addresses, tokens and codes taken out for you to copy and post yourself: nothing is sent anywhere. By voice, Domovoi can offer to send the steps to the phone marked as yours (the app's Settings → Rooms & devices → Phones & browsers → "This phone belongs to"). With AI chat and questions turned off, help is a plain search of the manual and the docs.
 
 ## How long is what we say kept, and can we delete it?
 
@@ -379,7 +413,7 @@ and what it answered, so the Conversations and Sessions tabs can show it
 
 - **Keep voice history**: 30 days, 90 days (the default), 1 year, or
   Forever. Anything older is deleted once a day, and right away when you
-  pick a shorter time. It's also in Settings → Advanced → Privacy.
+  pick a shorter time. It's also in Settings → System → Advanced → Privacy.
 - **Delete all voice history**: deletes everything said until now, in every
   room and on every phone, after a confirmation that lists what goes.
 
@@ -389,7 +423,9 @@ said, along with their voice and memories. A turn where someone else said their 
 stays: Domovoi goes by who was speaking, not by the words.
 
 What stays either way: memories already saved, voice samples, notes,
-timers, the music played, chat threads, and the backups the Linux updater
+timers, the music played, chat threads (with the pictures and documents
+attached to them, until the chat is deleted), the print and scan job log (90
+days), and the backups the Linux updater
 made before each update, which keep their copy until newer updates replace
 them. The details, store by store:
 [SECURITY_PRIVACY.md → Voice history](SECURITY_PRIVACY.md#voice-history-whats-kept-for-how-long).
@@ -409,7 +445,12 @@ All on machines you own:
 | Pictures (Images tab) | `PICTURES_DIR` (default `~/Pictures`) |
 | Videos (Videos tab) | `VIDEOS_DIR` (default `~/Videos`) |
 | Podcasts, audiobooks | `PODCASTS_DIR` / `AUDIOBOOKS_DIR` (default `~/.domovoi/podcasts`, `~/.domovoi/audiobooks`) |
+| Chat pictures and documents (and the text read from documents) | `~/.domovoi/chat_uploads/` on the server, removed when you delete the chat. A phone chat's documents stay in the app's own storage |
+| Scans | `Scans/` inside your documents folder |
+| Printers, and the print and scan job log (document titles, 90 days) | Postgres |
 | Satellite config & caches | `~/.domovoi/` on each Pi |
+
+**On the Windows installer,** "the server" is its private Linux: `~/.domovoi/`, the database and `domovoi/.env` live inside it, out of Explorer's reach. The media folder you chose in Setup (by default `C:\Users\Public\Domovoi`, with `Music`, `Pictures`, `Videos`, `Documents` and `Audiobooks` inside) is an ordinary Windows folder: uninstalling Domovoi never deletes a file in it.
 
 **These directories are created for you on first boot.** Every media library
 above is created (`mkdir -p`, ordinary permissions) when the dashboard starts,
@@ -446,19 +487,23 @@ There's no one-button backup tool yet — but it's three pieces, all standard:
 2. **`~/.domovoi/`** on the server — copy the folder. Trained wake-word models and recorded training clips live here and are genuinely hard to recreate; the rest (rendered sounds, caches) regenerates itself.
 3. **Your media** — `MUSIC_DIR` and friends, which you're presumably backing up anyway.
 
+**On the Windows installer** there is no backup tool yet, and no shell in its private Linux to dump the database from. Uninstalling it deletes the database, the history, the voice profiles and the server's identity (satellites must be paired again after a reinstall); keep-data uninstall comes later ([Not in this build](WINDOWS_HOST.md#not-in-this-build)). Your media is in an ordinary Windows folder: back that up like any other.
+
 On Linux with the update unit, the box keeps its own copies too: a dump of the database before every update in `/var/lib/domovoi-update/backups/` (newest 5, root only) and, after a rollback, the replaced database as `domovoi_failed_<time>` (newest one). They hold everything the database holds, so count them when you move, sell or wipe the machine ([SECURITY_PRIVACY.md → Data at rest](SECURITY_PRIVACY.md#data-at-rest)).
 
 Restore on a new machine: install Domovoi, start Postgres, restore the dump (`docker exec -i domovoi-postgres psql -U domovoi domovoi < domovoi-backup.sql`), copy `~/.domovoi/` and your media back, copy your `.env`, start the core. Returning users note: admin credentials live in the database, so a restored database keeps your password; a *fresh* database means first-run setup again (new setup code in `~/.domovoi/setup-code.txt`). Satellites reconnect on their own — their config never left the Pi.
 
 ## Linux or Windows for the server?
 
-**Either. Pick by what the box is.**
+**Either. Pick by what the box is.** There are three ways in, and the README's [First install](../README.md#first-install) has all of them.
 
-**Linux** is the better host for a dedicated always-on machine, and it's where the project is heading. A headless install leaves several GB more RAM for models, wake-word training runs on the box's own Docker Engine (turned on from the dashboard, the GPU runtime set up by the install), `ffmpeg`/`fpcalc`/`mpg123` are one `apt install`, and autostart is a systemd unit instead of a scheduled-task workaround. Setup: [LINUX_HOST.md](LINUX_HOST.md).
+**Windows 11, the installer (preview).** One download, `DomovoiSetup.exe`, sets up the same server as a Linux box, inside a private Linux (WSL2) that Windows runs for it. It is the easy way onto the household PC, which for many homes already has the best GPU in the house. It is unsigned for now (Windows asks first), and it has no backup tool or keep-data uninstall yet. Setup and what it changes: [WINDOWS_HOST.md](WINDOWS_HOST.md).
 
-**Windows** remains fully supported and is the better choice when the server is also the household's gaming PC — for many homes that machine already has the best GPU in the house, and Domovoi is built to run well on it rather than demanding a separate Linux box. It carries genuine Windows-specific engineering: CUDA DLL preloading for Whisper (`domovoi/bootstrap.py`), Docker Desktop networking, console-encoding-safe setup codes, and a SAPI voice as the last TTS fallback.
+**Linux** is the better host for a dedicated always-on machine. A headless install leaves several GB more RAM for models, speech recognition can use an NVIDIA GPU, wake-word training runs on the box's own Docker Engine (turned on from the dashboard, the GPU runtime set up by the install), and autostart is a systemd unit. On Ubuntu 26.04 one script installs it all. Setup: [LINUX_HOST.md](LINUX_HOST.md).
 
-Postgres, MPD, and SearXNG run in containers either way, and the application code is plain Python. The differences are real but small, and each one is documented rather than assumed.
+**Windows by hand** (cloning the repository and running it in Windows itself) still works. It carries genuine Windows-specific engineering: CUDA DLL preloading for Whisper (`domovoi/bootstrap.py`), Docker Desktop networking, console-encoding-safe setup codes, and a SAPI voice as the last TTS fallback.
+
+Postgres, MPD, and SearXNG run in containers in every case, and the application code is plain Python. The differences are real but small, and each one is documented rather than assumed.
 
 ---
 
