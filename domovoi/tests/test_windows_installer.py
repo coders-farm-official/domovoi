@@ -349,12 +349,47 @@ def _tab_routes_pinned() -> bool:
     return bool(re.search(r"^#define DashboardTabRoutes\s*$", PINS.read_text(encoding="ascii"), re.M))
 
 
+_SETUP_ROUTE = re.compile(r"^const SETUP_ROUTE = '([^']*)';", re.M)
+
+
+def _build_setup_routes() -> list[str]:
+    """The SETUP_ROUTE spellings build.ps1 -Pin accepts."""
+    m = re.search(r"^\s*\$setupRoutes = @\(([^)]*)\)", BUILD.read_text(encoding="ascii"), re.M)
+    assert m, "build.ps1 has no $setupRoutes list"
+    return re.findall(r"'([^']+)'", m.group(1))
+
+
+def test_the_pin_tool_knows_the_dashboards_setup_route():
+    """Docs v1 audit (2026-10-21): build.ps1 looked for the exact text
+    'settings/configuration/setup', so after Settings' regroup renamed it
+    to settings/advanced/setup a -Pin v1.0.0 would have turned the tab
+    addresses off. The routes it accepts include today's, and the address
+    Setup opens is one the dashboard still resolves to that tab: SETUP_ROUTE
+    itself, or the same tab by one of its old names (settings.jsx aliases)."""
+    jsx = (REPO_ROOT / "web" / "static" / "components.jsx").read_text(encoding="utf-8")
+    m = _SETUP_ROUTE.search(jsx)
+    assert m, "components.jsx has no SETUP_ROUTE"
+    route = m.group(1)
+    assert route in _build_setup_routes(), f"build.ps1 -Pin doesn't know SETUP_ROUTE {route!r}"
+    s = SCRIPT.read_text(encoding="ascii")
+    opened = re.search(r'#ifdef DashboardTabRoutes\n  #define DashboardRoute "([^"]+)"', s).group(1)
+    assert opened in _build_setup_routes()
+    page, tab, marker = opened.split("/")
+    want_page, want_tab, want_marker = route.split("/")
+    assert (page, marker) == (want_page, want_marker)
+    if tab != want_tab:
+        settings = (REPO_ROOT / "web" / "static" / "settings.jsx").read_text(encoding="utf-8")
+        sec = re.search(r"\{ id: '" + re.escape(want_tab) + r"', label: '[^']*', aliases: \[([^\]]*)\]", settings)
+        assert sec and f"'{tab}'" in sec.group(1), (
+            f"Setup opens #{opened}, but {tab!r} is no longer an old name of Settings' {want_tab!r} tab")
+
+
 def test_the_tab_routes_pin_matches_the_pinned_commit():
-    """"Open Domovoi" goes to #settings/configuration/setup only when the
-    dashboard at the pinned commit has that address (SETUP_ROUTE, from
-    wf/settings-deeplinks); an older one would land on Home, so it gets
-    #settings. Owner, 2026-10-12: the link must land somewhere sensible
-    until the addresses are on main."""
+    """"Open Domovoi" goes to the first-run admin setup only when the
+    dashboard at the pinned commit has the tab addresses (SETUP_ROUTE, from
+    wf/settings-deeplinks, under either spelling build.ps1 accepts); an
+    older one would land on Home, so it gets #settings. Owner, 2026-10-12:
+    the link must land somewhere sensible until the addresses are on main."""
     commit = _pins()["DomovoiCommit"]
     git = shutil.which("git")
     if not git:
@@ -365,7 +400,10 @@ def test_the_tab_routes_pin_matches_the_pinned_commit():
     )
     if proc.returncode != 0:
         pytest.skip(f"commit {commit[:7]} is not in this clone")
-    has_routes = b"const SETUP_ROUTE = 'settings/configuration/setup';" in proc.stdout
+    m = _SETUP_ROUTE.search(proc.stdout.decode("utf-8"))
+    has_routes = bool(m)
+    if m:
+        assert m.group(1) in _build_setup_routes(), f"build.ps1 -Pin would refuse {commit[:7]}'s SETUP_ROUTE"
     assert _tab_routes_pinned() == has_routes, (
         f"pins.iss DashboardTabRoutes is {'on' if _tab_routes_pinned() else 'off'}, but the dashboard at "
         f"{commit[:7]} {'has' if has_routes else 'does not have'} the tab addresses")
@@ -378,6 +416,17 @@ def _ai_choice_pinned() -> bool:
 def _takes_ai_choice(script: str) -> bool:
     # ProvisionScript.SupportsAiChoice and build.ps1 -Pin look for the same.
     return "\n  --ai-models " in script and "\n  --no-ai-models " in script
+
+
+def test_setup_asks_the_ai_question():
+    """Docs v1 audit (2026-10-21): pins.iss had ProvisionAiChoice commented
+    out, so a Setup built from main never asked "Include AI chat and
+    questions?" although README, the FAQ and the release notes say it does.
+    The pin is on (the test below holds it to the script Setup runs)."""
+    text = PINS.read_text(encoding="ascii")
+    assert re.search(r"^#define ProvisionAiChoice[ \t]*$", text, re.M), (
+        "pins.iss must define ProvisionAiChoice (uncommented): Setup asks whether to include AI")
+    assert not re.search(r"^;\s*#define ProvisionAiChoice", text, re.M)
 
 
 def test_the_ai_question_pin_matches_the_script_setup_runs():
@@ -478,15 +527,59 @@ def test_the_finish_page_walks_through_the_admin_account_by_the_dashboards_label
     f = _finish_section()
     steps = f[f.index("function FinishSteps"):f.index("function GpuNames")]
     for label in ('"first-run admin setup"', '"set up admin"', '"setup code"', '"confirm password"',
-                  '"set password"', "at least 10 characters", "Admin box", "Settings > Configuration",
+                  '"set password"', "at least 10 characters", "Admin box", "Settings > Advanced",
                   "the Configuration tab"):
         assert label in steps, label
+    # "the Configuration tab" is the fallback for a dashboard from before the
+    # tab addresses, whose last tab had that name; with them it is Advanced.
+    routed = steps[steps.index("#ifdef DashboardTabRoutes"):steps.index("#else")]
+    assert "Settings > Advanced" in routed and "Configuration" not in routed
     assert "CodeHint.Caption := FinishSteps;" in f
     # "It copies the code": Open Domovoi does, before it opens the page.
     click = f[f.index("procedure OpenDomovoiClick"):]
     click = click[: click.index("\nend;")]
     assert click.index("CopyCodeClick(Sender);") < click.index("ShellExecAsOriginalUser('open', OpenUrl,")
     assert "shown only here; it works for 24 hours" in f
+
+
+# Windows' own Settings app, which the installer's words also name.
+_WINDOWS_SETTINGS = {"Apps", "System", "User"}
+
+
+def test_the_windows_side_names_only_settings_the_dashboard_has():
+    """Docs v1 audit (2026-10-21): the tray's card wizard said "Open Settings
+    > Satellites", the consent page "Settings > Configuration > Version":
+    names Settings' regroup of 2026-10-21 retired. Every "Settings > X" in
+    windows/ is a tab or group the dashboard has now (settings.jsx), or
+    Windows' own Settings app; every #settings/... link is a tab's own
+    address (Setup's DashboardRoute keeps its first spelling on purpose:
+    test_the_pin_tool_knows_the_dashboards_setup_route)."""
+    settings = (REPO_ROOT / "web" / "static" / "settings.jsx").read_text(encoding="utf-8")
+    labels = re.findall(r"\{ id: '([a-z-]+)', label: '([^']+)'", settings)
+    assert len(labels) >= 15, labels
+    first_words = {label.split()[0] for _, label in labels}
+    ids = {i for i, _ in labels}
+    for word in ("Rooms", "Models", "Internet", "Advanced", "About"):
+        assert word in first_words, word
+    bad = []
+    for path in SOURCES:
+        text = path.read_text(encoding="ascii")
+        for m in re.finditer(r"Settings > ([A-Za-z]+)", text):
+            if m.group(1) not in first_words | _WINDOWS_SETTINGS:
+                bad.append(f"{path.name}: {m.group(0)}")
+        for m in re.finditer(r"#settings/([a-z-]+)", text):
+            if m.group(1) not in ids and not (path.name in {"DomovoiSetup.iss", "pins.iss", "build.ps1"} and m.group(1) == "configuration"):
+                bad.append(f"{path.name}: {m.group(0)}")
+    assert bad == []
+
+
+def test_the_finish_page_does_not_say_satellites_need_a_fixed_address():
+    """Satellites look for the server again when its address changes (name,
+    last address, then a sweep: satellite/discovery.py), so the last page
+    offers the DHCP reservation as a choice, not a warning."""
+    s = SCRIPT.read_text(encoding="ascii")
+    assert "satellites lose Domovoi" not in s
+    assert "satellites look for Domovoi again by themselves" in s and "DHCP reservation for ' + LanMac + '" in s
 
 
 def test_the_finish_page_claims_no_graphics_card_setup_did_not_find():

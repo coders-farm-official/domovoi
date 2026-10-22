@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit
 
-from domovoi import egress, lookup, net_safety
+from domovoi import egress, home_address, lookup, net_safety
 from domovoi.log_privacy import said
 
 log = logging.getLogger(__name__)
@@ -419,7 +419,13 @@ class OpenWebSource:
         if own == "brave":
             items = await brave_search(query, str(s.lookup_brave_key).strip(), limit=limit)
         elif own == "searxng":
-            status, items = await searxng_search(str(s.lookup_own_searxng_url).strip(), query, limit=limit)
+            address = str(s.lookup_own_searxng_url).strip()
+            # Saved before the home-network rule, or written into .env by
+            # hand: still never sent in the clear across the internet.
+            problem = home_address.own_search_address_problem(address)
+            if problem:
+                raise OwnSearchFailed(f"your SearXNG address can't be used: {problem}")
+            status, items = await searxng_search(address, query, limit=limit)
             if status == "unreachable":
                 raise OwnSearchFailed("your SearXNG didn't answer")
             if status == "refused":
@@ -706,6 +712,9 @@ async def test_own_search(kind: str, *, key: str | None = None, url: str | None 
         if kind == "brave":
             items = await brave_search(probe, key or "", limit=1)
         elif kind == "searxng":
+            problem = home_address.own_search_address_problem(url or "")
+            if problem:
+                return {"result": "refused", "detail": _sentence(problem) + "."}
             status, items = await searxng_search(url or "", probe, limit=1)
             if status in ("unreachable", "refused", "error"):
                 return {"result": "refused" if status == "refused" else status,

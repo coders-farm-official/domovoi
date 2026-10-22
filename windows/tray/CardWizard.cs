@@ -131,10 +131,10 @@ namespace Domovoi.Windows.Tray
         {
             var p = new Panel();
             p.Controls.Add(Para("1.  Flash a microSD card with Raspberry Pi OS Lite (64-bit), using Raspberry Pi Imager. When Imager offers to apply OS customisation settings, choose No: Domovoi sets the card up itself.", 0, 48));
-            p.Controls.Add(Para("2.  Build the card files in the dashboard: Settings > Satellites > prepare satellite media. Pick the board and the microphone, click Prepare, and download the files when the build is done.", 56, 48));
+            p.Controls.Add(Para("2.  Build the card files in the dashboard: Settings > Rooms > prepare satellite media. Pick the board and the microphone, click Prepare, and download the files when the build is done.", 56, 48));
             p.Controls.Add(Para("3.  The dashboard shows the card's setup network password once. Keep it on screen: this helper asks for it.", 112, 34));
-            var open = new Button { Text = "Open Settings > Satellites", AutoSize = true, Location = new Point(0, 160) };
-            open.Click += delegate { openUrl(webUrl + "/#settings/satellites/media"); };
+            var open = new Button { Text = "Open Settings > Rooms", AutoSize = true, Location = new Point(0, 160) };
+            open.Click += delegate { openUrl(webUrl + "/#settings/rooms/media"); };
             p.Controls.Add(open);
             p.Controls.Add(Para("Already have the files and the password? Click Next.", 206, 24));
             return p;
@@ -205,7 +205,7 @@ namespace Domovoi.Windows.Tray
             p.Controls.Add(pskBox);
             pskNote.SetBounds(140, 68, 420, 50);
             p.Controls.Add(pskNote);
-            p.Controls.Add(Para("Where to find it: the dashboard showed it when it built these files (Settings > Satellites > prepare satellite media > show setup details). It's ten characters: lower-case letters and the digits 2 to 9.", 130, 54));
+            p.Controls.Add(Para("Where to find it: the dashboard showed it when it built these files (Settings > Rooms > prepare satellite media > show setup details). It's ten characters: lower-case letters and the digits 2 to 9.", 130, 54));
             return p;
         }
 
@@ -233,7 +233,7 @@ namespace Domovoi.Windows.Tray
             var p = new Panel();
             doneText.SetBounds(0, 0, 560, 100);
             p.Controls.Add(doneText);
-            p.Controls.Add(Link("Open Settings > Satellites", 110, delegate { openUrl(webUrl + "/#settings/satellites"); }));
+            p.Controls.Add(Link("Open Settings > Rooms", 110, delegate { openUrl(webUrl + "/#settings/rooms"); }));
             var another = new Button { Text = "Prepare another card", AutoSize = true, Location = new Point(0, 146) };
             another.Click += delegate { written = false; chosen = null; GoTo(CardStep.Card); };
             p.Controls.Add(another);
@@ -276,8 +276,8 @@ namespace Domovoi.Windows.Tray
             if (s == CardStep.Done)
             {
                 doneText.Text = package.IsPortal
-                    ? "Put the card in the Pi and switch it on. After a few minutes it raises its own Wi-Fi, " + package.ApSsid + ": join it from your phone, with the password you typed here, and follow the page that opens. Then approve the satellite in Settings > Satellites."
-                    : "Put the card in the Pi and switch it on, then plug it into the Domovoi server's USB port and adopt it in Settings > Satellites.";
+                    ? "Put the card in the Pi and switch it on. After a few minutes it raises its own Wi-Fi, " + package.ApSsid + ": join it from your phone, with the password you typed here, and follow the page that opens. Then approve the satellite in Settings > Rooms."
+                    : "Put the card in the Pi and switch it on, then plug it into the Domovoi server's USB port and adopt it in Settings > Rooms.";
             }
             UpdateButtons();
         }

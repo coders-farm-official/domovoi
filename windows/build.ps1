@@ -125,7 +125,19 @@ function Set-Pins([string]$Ref, [string]$Channel, [string]$File) {
     $hasher = [System.Security.Cryptography.SHA256]::Create()
     $provSha = (($hasher.ComputeHash($script) | ForEach-Object { $_.ToString('x2') }) -join '')
     $jsx = [System.Text.Encoding]::UTF8.GetString((Invoke-GitBytes $git @('-C', $repo, 'cat-file', 'blob', ($sha + ':web/static/components.jsx'))))
-    $routes = $jsx.Contains("const SETUP_ROUTE = 'settings/configuration/setup';")
+    # The dashboard's SETUP_ROUTE. Setup opens #settings/configuration/setup
+    # (DomovoiSetup.iss, DashboardRoute), which reaches the first-run admin
+    # setup under either spelling the route has had: settings/configuration
+    # until Settings' regroup of 2026-10-21, settings/advanced since (the old
+    # one is an alias). A spelling not in this list stops the pin rather than
+    # quietly turning the tab addresses off; test_windows_installer.py holds
+    # the list to the dashboard's current SETUP_ROUTE.
+    $setupRoutes = @('settings/configuration/setup', 'settings/advanced/setup')
+    $routeMatch = [regex]::Match($jsx, "(?m)^const SETUP_ROUTE = '([^']*)';")
+    $routes = $routeMatch.Success
+    if ($routes -and ($setupRoutes -cnotcontains $routeMatch.Groups[1].Value)) {
+        throw ("the dashboard at $sha has SETUP_ROUTE '" + $routeMatch.Groups[1].Value + "', which build.ps1 doesn't know: check that Setup's link still lands on the admin setup, then add it to `$setupRoutes")
+    }
     # The usage lines ProvisionScript.SupportsAiChoice looks for.
     $aiChoice = $text.Contains("`n  --ai-models ") -and $text.Contains("`n  --no-ai-models ")
 
