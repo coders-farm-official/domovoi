@@ -4,6 +4,29 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-21 — Fixes before 1.0: search addresses, Windows Setup, the wordmark font
+
+Core, dashboard and the Windows Setup. No migration and no new
+dependency.
+
+* **Your own search address needs `https://`,** except on your home
+  network. Settings → Chat & AI → Search takes a plain `http://` address
+  only for a home-network address (192.168.x.x, 10.x.x.x, 172.16-31.x.x,
+  link-local, a `.local` name, or an IPv6 private or link-local address);
+  any other address must start with `https://`, and one that doesn't is
+  refused.
+* **Windows Setup asks the AI question again.** A Setup could skip
+  "Include AI chat and questions?" and download the AI models anyway; it
+  asks again.
+* **Windows Setup's Open Domovoi.** The Setup build looked for an old
+  Settings address in the dashboard, and a release build would then have
+  sent **Open Domovoi** to Settings' first page instead of the first-run
+  admin setup. It checks the current address now.
+* **The wordmark font.** The "domovoi" wordmark was set in Cash Currency,
+  which Domovoi has no licence to ship; it is removed, and the wordmark
+  now uses a display font under the SIL Open Font License
+  ([docs/LICENSES.md](LICENSES.md)).
+
 ## 2026-10-21 — "What does this letter say?" in Chat
 
 Core and dashboard update, and the app. No migration and no new
@@ -47,17 +70,16 @@ dependencies.
   on a home server without a graphics card (measured on CPU); a few
   seconds with one.
 * **Phone chats** read the letter on the phone where its GPU runs the photo
-  model (as N3's pictures do). Where the phone's check says it can't, and
-  a paired home server has AI on and its picture model installed, "+"
+  model (as it does for other pictures). Where the phone's check says it
+  can't, and a paired home server has AI on and its picture model installed, "+"
   offers "a letter for the home server": the server reads the photo (at
   most 8 MB, one per phone at a time and two in the house, after any voice
   turn; the offer is checked again whenever the app comes back to the
   front) and keeps nothing (`POST /api/chat/letters/read`), and the phone
   writes and checks the explanation. With neither, the chat says so
   plainly; it never says the phone can't before its check has run.
-* **What a phone chat keeps** (owner decision, 2026-10-21): never the
-  photo, which is wiped once answered. The text read from it is kept
-  beside the answer, as its "photo 1" source, so a follow-up question can
+* **What a phone chat keeps:** never the photo, which is wiped once
+  answered. The text read from it is kept beside the answer, as its "photo 1" source, so a follow-up question can
   see the letter; it is deleted with the chat.
 * **With AI features off**, none of this starts: the routes refuse as
   every chat send does.
@@ -225,7 +247,8 @@ dependencies.
 ## 2026-10-21 — Looking things up, with your permission
 
 Core, dashboard, app and the Kiwix plugin (1.2.6). **Run Flyway** (V037:
-`chat_threads.internet_allowed` and `used_internet`). The search helper is
+`chat_threads.internet_allowed` and `used_internet`; the update does it for
+you, by hand it is `docker compose run --rm flyway`). The search helper is
 recreated by the next update (`DOMOVOI_SEARXNG_SETTINGS_REV`), so its new
 settings take effect; a box updated by hand needs
 `docker compose up -d searxng` once.
@@ -333,7 +356,7 @@ App only; no server change.
   time a phone chat opens after an update, the app tries it once with a
   test picture and remembers the answer for that model file and app build.
   Phones where it fails (or where the encoder only runs on the CPU, which
-  was too slow and used too much memory on the owner's test phone) get no
+  was too slow and used too much memory in our tests) get no
   buttons; if the app crashes during that try, the next start treats it
   as a failure and doesn't try again until the next update. The same guard
   covers every photo: if the app crashes while reading one, photos turn
@@ -377,7 +400,7 @@ Core and dashboard update with one migration, **V036** (two columns on
 ## 2026-10-21 — Domovoi as its own help desk
 
 Core, dashboard and app. **Run Flyway** (V035: `devices.owner_person_id`,
-`help_deliveries`); without it help still answers, and voice help says no
+`help_deliveries`; the update does it for you); without it help still answers, and voice help says no
 phone is marked as yours.
 
 * **Ask Domovoi about Domovoi.** Chat and voice answer questions about
@@ -404,7 +427,7 @@ phone is marked as yours.
 * **Voice "how do I…"** ("how do I add a room?") gives a short answer from
   the manual, then asks "Want me to send the steps to your phone?". Yes
   sends them to the asker only: the phones marked "This phone belongs to"
-  them (the app's Settings → Connection), as a chat "Help: …" and a
+  them (the app's Settings → Rooms & devices → Phones & browsers), as a chat "Help: …" and a
   notification. A voice Domovoi doesn't know is asked "Who should I send it
   to?"; no answer sends nothing. It never sends to every phone. A how-to
   question the help doesn't hold ("how do I make pancakes") is answered
@@ -446,7 +469,7 @@ phone is marked as yours.
 Android app only; nothing to run on the server.
 
 * A chat **on this phone** now acts, from the app's own patterns (never a
-  model's guess: on the test phone the model alone acted on 28.6% of
+  model's guess: in our tests the model alone acted on 28.6% of
   sentences that only mentioned a timer or music):
   * **Timers and alarms in the Clock app**: "set a timer for 10 minutes
     for the pasta", "wake me at 6:30", "set an alarm for quarter to seven
@@ -498,7 +521,7 @@ Android app only; nothing to run on the server.
   timer, whether the home server is connected and the listener's first
   name, and mentions none of it unless asked. (The
   model's own read tools stay off for Gemma 4 E2B, which called them on
-  too many near-miss questions on a test phone.)
+  too many near-miss questions in our tests.)
 * **Hand-offs**: "text Sam", "call Mom", "email Alex", "directions to…",
   "add … to my calendar", "open example.org", "share this" show a card;
   a tap opens the dialer, Messages, the email app, Maps, the calendar
@@ -510,15 +533,15 @@ Android app only; nothing to run on the server.
   contacts (calling by name; the contact picker works without it), the
   calendar (reading the phone's own). A refusal is kept and never asked
   again. Never: texts, the call log, notifications.
-* **Each place answers from its own world** (owner's strict rule): a
+* **Each place answers from its own world** (a strict rule): a
   phone chat answers about the phone only. It never reads the household
   calendar, the house timers (the copy this phone keeps only rings them)
   or the rooms, and never names a room; asked, it says in one line that
   those are in your home server chats.
 
 What an operator should know: the app's install screen on Google Play
-will list location, contacts and calendar; the Play Console's Data safety
-form needs a check at v1 (`android/play/DATA_SAFETY.md`, owner note).
+will list location, contacts and calendar (all optional, each asked when
+first needed).
 
 ## 2026-10-21 — Printing and scanning
 
@@ -604,12 +627,12 @@ keeps AI on, exactly as before.
   models (`POST /api/models/ai`, progress on the page).
 * **Both installers ask "Include AI chat and questions?"** (default Yes,
   with the size: about 6.4 GB, or 9.1 GB on a box with 24 GB of memory or
-  more). No skips the chat, router and vision models, keeps Whisper and
+  more, about 32 GB on a Windows PC). No skips the chat, router and vision models, keeps Whisper and
   the wake word, and writes `AI_FEATURES=false`; Ollama itself is still
   installed, so turning AI on later needs no reinstall.
   `provision.sh --no-ai-models` / `--ai-models` (no flag: asks on a
-  terminal, else Yes); Windows Setup has a page for it and `/ai=no`, shown
-  once the release build re-pins to a `provision.sh` with the options.
+  terminal, else Yes); Windows Setup has a page for it and `/ai=no`, which
+  the release build of Setup shows.
 * **No more "waking up my language model" for a model that was never
   downloaded.** The router model is skipped, and a question hears that the
   question-answering model isn't installed and where to add it.
@@ -690,7 +713,7 @@ back), and the bundle carries it for Play.
 ## 2026-10-21 — Windows satellites: a Setup to double-click
 
 A spare Windows laptop or PC becomes a room with `DomovoiSatelliteSetup.exe`
-instead of a PowerShell command. **Settings → Rooms → add a spare
+instead of a PowerShell command. **Settings → Rooms & devices → Rooms → add a spare
 device → make the code**: when the server holds the Setup, the Windows
 column shows a setup code (24 hours, not a password) and **Download the
 Windows Setup**, whose file name carries the code and the server, so
