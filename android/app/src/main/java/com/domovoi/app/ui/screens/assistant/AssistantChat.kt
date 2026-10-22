@@ -787,8 +787,7 @@ private fun ModelPane(ui: AssistantUi, actions: AssistantActions, onClose: () ->
         DomovoiCard(Modifier.fillMaxWidth()) {
             Text("Conversations", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg, modifier = Modifier.asHeading())
             Text(
-                "${ui.history.size} kept on this phone, in the app's private storage and outside backups. The model " +
-                    "sees the conversation you are in and nothing else on the phone: no files, media, contacts or location.",
+                conversationsSummary(ui.history.size),
                 style = MaterialTheme.typography.bodySmall,
                 color = Domovoi.colors.fgMuted,
             )
@@ -811,7 +810,7 @@ private fun ModelPane(ui: AssistantUi, actions: AssistantActions, onClose: () ->
         ConfirmDialog(
             title = "delete the model?",
             body = "Frees ${fmtBytes(ui.totalBytes)} on this phone (the language model and the speech files). The " +
-                "assistant can't answer without them; you can download them again. Your conversations stay.",
+                "phone chats can't answer without them; you can download them again. Your conversations stay.",
             confirmLabel = "delete model",
             destructive = true,
             onConfirm = actions.deleteModel,
@@ -841,6 +840,17 @@ internal fun PaneTitle(title: String, onBack: () -> Unit) {
 }
 
 /** The model settings' reports card: how many, and what they are. */
+/** The Conversations card: where phone chats are kept, and what the model
+ *  sees (Persona's system prompt, PhoneFacts' line, a chat's documents,
+ *  photos and letters, and pages looked up only after an allow card). The
+ *  phone's own answers (battery, calendar, location) are the app's, asked
+ *  for by permission, and land in the chat as replies. */
+internal fun conversationsSummary(count: Int): String =
+    "$count kept on this phone, in the app's private storage and outside backups. The model sees the chat " +
+        "you are in, with the documents, photos and letters you add to it and what you let it look up, plus " +
+        "the time, what's playing and your first name. Nothing else on the phone: not your other files, " +
+        "contacts or location."
+
 internal fun reportsSummary(count: Int): String = when (count) {
     0 -> "None saved. To report an offensive, harmful or wrong reply, long-press it and choose report this reply."
     1 -> "1 reply report saved on this phone, outside backups. It goes nowhere unless you share it."
@@ -864,7 +874,7 @@ internal fun speechSummary(ui: AssistantUi): String {
 }
 
 internal fun engineSummary(engine: EngineState): String = when (engine) {
-    EngineState.Unloaded -> "Not in memory now; it loads when you open the assistant."
+    EngineState.Unloaded -> "Not in memory now; it loads when you open a phone chat."
     is EngineState.Loading -> "Loading on the ${engine.backend.name}…"
     is EngineState.Ready -> String.format(Locale.US, "In memory, on the %s; loaded in %.1f s.", engine.backend.name, engine.loadMs / 1000.0)
     is EngineState.Failed -> "Could not start on the ${engine.backend.name}: ${engine.reason}"

@@ -19,8 +19,8 @@ FAQ, the troubleshooting guide, plugins' help files —
      free-text choice); a name the household knows sends it there, and
      anything else, or no answer at all, sends nothing;
    * recognised but no phone marked as theirs → said plainly, with where
-     to set it (the app's Settings → Connection → "This phone belongs
-     to"); nothing is guessed;
+     to set it (the app's Settings → Rooms & devices → Phones & browsers →
+     "This phone belongs to"); nothing is guessed;
    * never a broadcast: there is no "everyone" here.
 
 **Not poaching, not poached.** The fast path is "how do/can/should I …",
@@ -88,12 +88,16 @@ _DOMOVOI_WORDS = re.compile(
     r"alarm|music|playlist|podcast|podcasts|audiobook|audiobooks|radio|station|calendar|files?|"
     r"household|admin|pair|token|phone|internet|model|models|backup|restart|guest|people|news|"
     r"videos?|intercom|drop in|lyrics|greeting|wi-?fi|speaker|microphone|mic|room mode|queue|"
-    r"notes?|profile|password)\b"
+    r"notes?|profile|password|"
+    # Printing and scanning, documents and letters in chat, drafts, the
+    # Health page, the AI switch and lookups: the manual's newer pieces.
+    r"printers?|print|printing|scan|scans|scanning|scanners?|documents?|letters?|drafts?|"
+    r"health|ai|lookups?|look (?:things |it |that )?up|photos?|pictures?|containers?)\b"
 )
 
 NO_PHONE_TEXT = (
     "There's no phone marked as {who} yet, so I haven't sent anything. In the Domovoi app, "
-    "open Settings, then Connection, and set This phone belongs to."
+    "open Settings, then Rooms and devices, then Phones and browsers, and set This phone belongs to."
 )
 
 

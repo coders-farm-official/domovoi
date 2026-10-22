@@ -128,9 +128,12 @@ const ChatDetails = (() => {
    * Worded like web/backend/api/chat.py (vision_missing_text) and the
    * Android app's ChatErrors.kt. */
 
-  // What the paperclip takes (the upload's own allowlist, chat.py).
-  const ACCEPTS = 'Chat takes text and pictures: PNG, JPEG, GIF, WebP or BMP, '
-    + 'up to 4 a message. No other files.';
+  // What the paperclip takes: pictures (the upload's own allowlist,
+  // chat.py) and documents (doc_extract ACCEPTS, chat_documents.py), up
+  // to 4 of each a message.
+  const ACCEPTS = 'Chat takes text, pictures (PNG, JPEG, GIF, WebP or BMP) and documents '
+    + '(PDF, Word (.docx), OpenDocument (.odt), Excel (.xlsx), CSV, text or markdown), '
+    + 'up to 4 of each a message.';
 
   const visionMissingText = (model) => (String(model || '').trim()
     ? `Pictures need the vision model ${model}, which isn't installed on this Domovoi. `

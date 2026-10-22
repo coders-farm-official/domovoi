@@ -23,7 +23,7 @@ carries only its own native libraries. A published release
 (`android/release.json`, android/README.md "Publishing a release") carries
 the two phones need, `domovoi-<version>-arm64-v8a.apk` and
 `domovoi-<version>-armeabi-v7a.apk`, and your Domovoi server's join page
-(the spare-device QR code, or Settings → Phones & browsers → get the Domovoi app)
+(the spare-device QR code, or Settings → Rooms & devices → Phones & browsers → get the Domovoi app)
 offers them as "the app" for most phones and "the 32-bit app" for older
 or cheaper ones. A browser on plain HTTP can't tell a phone's processor
 honestly, so the page puts the 64-bit one first unless the browser itself
@@ -39,7 +39,7 @@ reports a 32-bit system (`armv7l`).
 If Android answers the arm64-v8a APK with "App not installed" (from a
 computer, `adb install` says `INSTALL_FAILED_NO_MATCHING_ABIS`), the phone
 is 32-bit: install the armeabi-v7a APK. A 64-bit phone also runs the
-32-bit APK, without the assistant; Settings → About then says the 64-bit
+32-bit APK, without the assistant; Settings → System → About & updates then says the 64-bit
 app has it.
 
 The app installed from an **App Bundle** (Google Play, or `bundletool`)
@@ -62,14 +62,17 @@ version from 8.0.
 | Music from the server on the phone, media notification | works | works | works | works | works | works |
 | Video feed (server and phone): pause on leaving, screen kept on | works | works | works | works | works | works |
 | Chat (text) | works | works | works | works | works | works |
+| Chat "on this phone" (the on-device assistant, a preview; needs the 64-bit app and a phone sold with 8 GB of memory or more) | works | works | works | works | works | **hidden** |
+| A PDF attached to a phone chat (its text is read on the phone) | not read: Chat says so and offers to ask the home server | as 8 | as 8 | only with Google's PDF update (the PDF module at extension level 13); otherwise as 8 | works on 15 and later; on 13 and 14 only with the PDF update | no phone chats |
+| Drafts in a phone chat (a PDF or Word file the app writes itself, shared through Android's share sheet) | works | works | works | works | works | no phone chats |
 | Chat photos: HEIC / AVIF converted to JPEG before sending | degraded: JPEG, PNG, GIF, WebP and BMP only; a HEIC photo gets "this phone can't convert HEIC photos" | works; AVIF as 8 | as 9 | works | works | as the Android version |
 | Chat mic (hold to talk) | works; mic prompt Allow / Deny | works; Allow / Deny | works; "While using the app" / "Only this time" | as 11 | as 11 | works |
 | Chat mic haptics | degraded: plain key / long-press feedback | degraded: as 8 | works: confirm / reject | works | works | as the Android version |
-| Settings → Voice: the phone's own voice, sample clips | works | works | works | works | works | works (ONNX Runtime has 32-bit builds) |
+| Settings → Voice → Voices: the phone's own voice, sample clips | works | works | works | works | works | works (ONNX Runtime has 32-bit builds) |
 | Timer and reminder alerts | works; exact alarms with no permission | works | works | works; exact alarms need "Alarms & reminders" (on by default; inexact if revoked) | works | works |
 | Notifications | on, no prompt | on, no prompt | on, no prompt | on, no prompt | asked at first start | as the Android version |
 | Problem reports | degraded: crashes and freezes; no "not responding" closes, and the card says so | degraded: as 8 | works: crashes, freezes, "not responding" closes | works | works | works |
-| On-device assistant benchmark (Settings → About → developer options: tap the app version seven times) | works; its results lack the thermal status and name the board, not the chip | works; thermal status from 10 | works | works; chip name from 12 | works | **hidden** |
+| On-device assistant benchmark (Settings → System → About & updates → developer options: tap the app version seven times) | works; its results lack the thermal status and name the board, not the chip | works; thermal status from 10 | works | works; chip name from 12 | works | **hidden** |
 | Room mode (this device as a room) | works; the mic service starts from the room screen | works | works; mic only "while using the app": the service starts from the room screen, and after a restart needs one tap | works; the mic privacy toggle shows as **mic blocked**; the notification's Stop asks for the unlock | works; notifications asked for in the explainer; Android 14+ declares the microphone service type | works (ONNX Runtime only) |
 | Documents "download all" (zip) | degraded: lands in the app's own folder (Android/data/…/Download) | degraded on 9: as 8; works on 10 (public Downloads) | works | works | works | as the Android version |
 
@@ -97,11 +100,20 @@ Notes:
   benchmark card they hold is not shown), and the licences list leaves out
   the models only the assistant downloads.
 
+- **Phone chat extras and permissions.** Pictures in a phone chat show only on
+  a phone whose GPU can run the model's photo reader (the app tries it once
+  and remembers), whatever the Android version. A phone chat can also ask,
+  when needed and always optionally, for approximate location, precise
+  location (only for the Wi-Fi network's name), contacts, the calendar and the
+  camera; on every supported Android version these are asked at the time, and
+  a refusal is remembered. Timers and alarms go to the Clock app (the
+  install-time `SET_ALARM` permission, no prompt).
 - **Room mode** runs openWakeWord and the Silero voice detector on ONNX
   Runtime, the runtime the phone's voice already ships for all four ABIs,
   and loads nothing of the on-device assistant's (LiteRT-LM,
-  sherpa-onnx). The QR scanner (CameraX) is asked for only when "Scan" is
-  pressed, and the camera is not required to install. Drop-ins need the
+  sherpa-onnx). The camera is asked for only when "Scan" is pressed (the room
+  code's QR scanner, CameraX) or when a picture is taken for a phone chat, and
+  it is not required to install. Drop-ins need the
   phone's echo canceller (`AcousticEchoCanceler.isAvailable()`); a phone
   without one is a room without drop-ins (the emulator images have none).
 
@@ -141,6 +153,11 @@ app does (`TargetApi36Test` holds the code to it):
 
 ## What was tested
 
+Every run below used a debug build. The release build is shrunk by R8 and
+was not part of these runs. The runs also pre-date the phone chat's
+documents (drafts, letter photos, "calculate exactly"), so those have no
+per-version evidence on this page.
+
 2026-10-12, debug APKs from `wf/android-old-devices`, on the Android
 emulator (Google APIs images, x86_64 unless noted), one image at a time,
 against a throwaway Domovoi (core + dashboard, a stub language model):
@@ -161,7 +178,7 @@ the media notification, the phone's video feed (and its pause / resume /
 screen-on checks), the Files tab, the local Settings screen, connect and
 pair, Home, a server song played on the phone, the server's video feed, a
 chat message and its answer, the chat mic view (open, cancel), Settings →
-Voice → play a sample, Settings → About, and a timer going off in the
+Voices → play a sample, Settings → System → About & updates, and a timer going off in the
 house (its notification).
 
 **Heap note (Android 10 image only):** the `android-29` Google APIs x86_64
@@ -209,7 +226,7 @@ words for a screen reader or under 48 dp):
 
 What the scan flagged on the first API 36 pass was fixed the same day and
 scanned again: the licences' notice links (19 dp tall) and two "allow
-mobile data" switches (Settings → Voice, the benchmark card: an
+mobile data" switches (Settings → Voice → Voices, the benchmark card: an
 unlabelled switch beside its words). The rescan found nothing else
 (only rows cut off at the screen's edge, which measure short).
 

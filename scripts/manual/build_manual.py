@@ -81,22 +81,27 @@ ROUTES: dict[str, dict] = {
 # Level 1: the topics around "Domovoi". The centre opens "How it works".
 # Level 2: a topic's pieces (at most 7 each). Level 3: a piece's page.
 TOPICS: list[dict] = [
-    {"id": "how-it-works", "title": "How it works", "subtitle": "your home's own assistant", "centre": True,
+    {"id": "how-it-works", "title": "How it works", "subtitle": "your home's own system", "centre": True,
      "keywords": ["how does it work", "technical", "architecture", "server", "models", "privacy", "offline"]},
     {"id": "things-to-say", "title": "Things to say", "subtitle": "talk to any room",
      "keywords": ["voice", "commands", "what can I say", "phrases", "talk", "ask"]},
-    {"id": "rooms-and-devices", "title": "Rooms and devices", "subtitle": "the speakers that listen",
-     "keywords": ["satellite", "room", "speaker", "raspberry pi", "microphone", "device"]},
-    {"id": "your-phone", "title": "Your phone", "subtitle": "the Domovoi app",
-     "keywords": ["android", "app", "phone", "tablet", "mobile"]},
     {"id": "music-and-media", "title": "Music and media", "subtitle": "music, podcasts, books, videos, news",
      "keywords": ["listen", "watch", "media", "library"]},
-    {"id": "chat-files-calendar", "title": "Chat, files and calendar", "subtitle": "your household's pages",
-     "keywords": ["chat", "files", "documents", "calendar", "photos"]},
+    {"id": "chat-and-help", "title": "Chat and help", "subtitle": "type to Domovoi, ask it anything",
+     "keywords": ["chat", "ask", "question", "help", "look up", "search", "internet", "ai", "ai off", "trust"]},
+    {"id": "documents-and-letters", "title": "Documents and letters", "subtitle": "ask about a file, write a letter",
+     "keywords": ["document", "pdf", "word", "summary", "letter", "bill", "draft", "write", "read aloud", "print"]},
+    # The id predates the title (the clients' topic icons key on it).
+    {"id": "chat-files-calendar", "title": "Files, printing and calendar", "subtitle": "your household's files",
+     "keywords": ["files", "photos", "documents", "calendar", "print", "scan"]},
+    {"id": "your-phone", "title": "Your phone", "subtitle": "the Domovoi app",
+     "keywords": ["android", "app", "phone", "tablet", "mobile"]},
+    {"id": "rooms-and-devices", "title": "Rooms and devices", "subtitle": "the speakers that listen",
+     "keywords": ["satellite", "room", "speaker", "raspberry pi", "microphone", "device"]},
     {"id": "people-and-privacy", "title": "People and privacy", "subtitle": "who's who, and what's kept",
      "keywords": ["privacy", "people", "admin", "guest", "data", "internet", "security"]},
-    {"id": "keeping-it-running", "title": "Keeping it running", "subtitle": "updates, restarts, backups, plugins",
-     "keywords": ["maintenance", "update", "restart", "backup", "plugin", "problem", "help"]},
+    {"id": "keeping-it-running", "title": "Keeping it running", "subtitle": "updates, health, restarts, backups, plugins",
+     "keywords": ["maintenance", "update", "health", "restart", "backup", "plugin", "problem", "help"]},
 ]
 
 # "### title" → (id, subtitle, search words, extras). Extras: live (a live
@@ -119,21 +124,6 @@ PIECES: dict[str, tuple] = {
     "Notes and memory": ("notes", "jot it down, remember it", ["note", "jot", "remember", "memory", "favorite"], {}),
     "Everything it can do": ("everything", "every installed feature", ["what can you do", "features", "capabilities", "list", "help", "plugins"], {"live": "things-to-say"}),
     "When it mishears": ("mishears", "repeat, never mind, try again", ["repeat", "never mind", "misheard", "wake word not working", "doesn't hear", "sensitivity"], {}),
-    # Rooms and devices
-    "Your rooms": ("rooms", "online, playing, last heard", ["satellites", "rooms", "offline", "wifi", "restart satellite", "upgrade", "reset pairing"], {"live": "rooms"}),
-    "A Raspberry Pi room": ("pi-room", "the usual room", ["raspberry pi", "pi", "sd card", "add a room", "setup wifi", "approve", "respeaker", "xvf3800"], {}),
-    "A spare laptop or PC": ("laptop-room", "Linux or Windows", ["laptop", "pc", "linux", "windows", "spare device", "old laptop"], {}),
-    "An old phone or tablet as a room": ("phone-room", "room mode", ["room mode", "old phone", "tablet", "domovoi room", "qr code"], {}),
-    "An old computer, from a USB stick": ("usb-room", "the stick sets it up", ["usb stick", "old computer", "old pc", "mac", "debian", "erase"], {}),
-    "Wake word and greeting": ("wake-word", "the word a room wakes to", ["wake word", "hey jarvis", "train", "training", "custom wake word", "greeting", "chime"], {"live": "wake-word"}),
-    "Domovoi's voice": ("voice", "pick it, fix a word", ["voice", "say it like", "pronunciation", "kristin", "norman", "linda", "piper"], {}),
-    # Your phone
-    "Get the app and connect": ("connect", "from your own server", ["install", "apk", "connect", "pair", "household token", "server", "qr"], {}),
-    "Music on the phone": ("phone-music", "here or in a room, saved offline", ["offline", "download", "save to device", "player", "your device", "add folder"], {}),
-    "Chat and the chat mic": ("phone-chat", "type, talk, send photos and documents", ["chat mic", "talk", "push to talk", "photo", "heic", "picture", "document", "pdf"], {}),
-    "The assistant": ("assistant", "no server needed", ["assistant", "offline", "no server", "airplane"], {}),
-    "This phone as a room": ("phone-as-room", "room mode, on this phone", ["room mode", "this phone"], {"alias_of": "phone-room"}),
-    "App settings and updates": ("app-settings", "bar, voice, new versions", ["settings", "phone bar", "update", "new version", "privacy", "about"], {}),
     # Music and media
     "Music and room queues": ("music", "the library, every room", ["music", "queue", "playlist", "upload", "library", "favorites"], {}),
     "Lyrics": ("lyrics", "see the words, find a song", ["lyrics", "words", "song that goes", "lrclib"], {}),
@@ -142,13 +132,39 @@ PIECES: dict[str, tuple] = {
     "Videos": ("videos", "resume where you left off", ["video", "movie", "watch"], {}),
     "News": ("news", "briefings and topics", ["news", "headlines", "briefing", "topics", "feeds"], {}),
     "Radio": ("radio", "stations you star", ["radio", "station", "fm", "stream"], {"plugin": "radio"}),
-    # Chat, files and calendar
-    "Chat": ("chat", "type to Domovoi, pictures and documents too", ["chat", "text", "pictures", "vision", "images", "document", "pdf", "word", "ask about"], {}),
+    # Chat and help
+    "Chat": ("chat", "type to Domovoi, at home or on the phone", ["chat", "text", "pictures", "vision", "images", "screenshot", "new chat", "rename", "archive"], {}),
+    "Look things up": ("lookups", "online only when you say yes", ["look up", "search", "internet", "wikipedia", "web", "allow once", "always allow internet", "searxng", "brave", "sources", "kiwix"], {}),
     "What Domovoi is good and not so good at": ("good-and-not", "where to trust the answers, and where to check", ["trust", "accurate", "accuracy", "reliable", "wrong", "mistakes", "heads-up", "warning", "limits", "good at", "bad at", "weak"], {}),
-    "Files and photos": ("files", "every library, one place", ["files", "upload", "photos", "pictures", "move", "delete", "usb drive"], {}),
-    "Documents, sheets and drawings": ("documents", "write, edit, read aloud", ["document", "spreadsheet", "sheet", "drawing", "text file", "markdown", "xlsx", "read aloud", "read me", "take a letter", "dictate", "letter"], {}),
+    "When AI is off": ("ai-off", "what still works without the AI models", ["ai off", "no ai", "without ai", "turn off ai", "ai features", "optional", "commands only", "set up for home commands"], {}),
+    "Asking Domovoi for help": ("help-desk", "ask it, show it, report it", ["help", "how do i", "ask domovoi", "screenshot", "report a problem", "diagnostics", "send the steps", "question mark"], {}),
+    # Documents and letters
+    "Ask about a document": ("ask-document", "attach a file, ask what it says", ["document", "pdf", "word", "docx", "odt", "excel", "csv", "attach a document", "ask about", "sources", "pages", "couldn't find"], {}),
+    "Summaries of long documents": ("long-documents", "read in parts, with stop", ["summary", "summarize", "long document", "progress", "carry on", "stop", "use home server"], {}),
+    "Write a draft": ("drafts", "versions, changes, save, print", ["draft", "write", "revise", "version", "changes", "edit", "docx", "pdf", "save", "from chat", "print it", "resume", "cover letter"], {}),
+    "Letters": ("letters", "explain one, or take one by voice", ["letter", "bill", "what does this letter say", "photo of a letter", "take a letter", "dictate", "landlord", "end of letter"], {}),
+    "Read it to me": ("read-aloud", "a document read out in a room", ["read me", "read aloud", "read it back", "continue reading", "stop reading", "lease"], {}),
+    # Files, printing and calendar
+    "Files and photos": ("files", "every library, one place", ["files", "upload", "photos", "pictures", "move", "delete", "usb drive", "from chat", "scans"], {}),
+    "Documents, sheets and drawings": ("documents", "write and edit in the browser", ["document", "spreadsheet", "sheet", "drawing", "text file", "markdown", "xlsx", "editor"], {}),
+    "Printers and scanners": ("printers", "print and scan, by voice too", ["print", "printer", "scan", "scanner", "ink", "toner", "paper", "airprint", "mopria", "test page", "print a draft", "print it"], {}),
     "Calendar": ("calendar", "the household's events", ["calendar", "event", "appointment", "what's on"], {}),
-    "Printers and scanners": ("printers", "print and scan, by voice too", ["print", "printer", "scan", "scanner", "ink", "toner", "paper", "airprint", "mopria", "test page"], {}),
+    # Your phone
+    "Get the app and connect": ("connect", "from your own server", ["install", "apk", "connect", "pair", "household token", "server", "qr"], {}),
+    "Music on the phone": ("phone-music", "here or in a room, saved offline", ["offline", "download", "save to device", "player", "your device", "add folder"], {}),
+    "Chat on the phone": ("phone-chat", "one list, typed or spoken", ["chat mic", "talk", "push to talk", "photo", "heic", "picture", "document", "pdf", "phone chat"], {}),
+    "Domovoi on this phone": ("assistant", "a chat with no server", ["assistant", "offline", "no server", "airplane", "phone chat", "on this phone", "set up"], {}),
+    "Doing things from a phone chat": ("phone-actions", "timers, alarms, music, undo", ["clock", "alarm", "timer", "wake me", "undo", "sleep timer", "text", "call", "directions", "share"], {}),
+    "Photos in a phone chat": ("phone-pictures", "one photo, read on the phone", ["photo", "camera", "picture", "gallery", "what's in this photo"], {}),
+    "App settings and updates": ("app-settings", "bar, voice, new versions", ["settings", "phone bar", "update", "new version", "privacy", "about"], {}),
+    # Rooms and devices
+    "Your rooms":("rooms", "online, playing, last heard", ["satellites", "rooms", "offline", "wifi", "restart satellite", "upgrade", "reset pairing"], {"live": "rooms"}),
+    "A Raspberry Pi room": ("pi-room", "the usual room", ["raspberry pi", "pi", "sd card", "add a room", "setup wifi", "approve", "respeaker", "xvf3800"], {}),
+    "A spare laptop or PC": ("laptop-room", "Linux or Windows", ["laptop", "pc", "linux", "windows", "spare device", "old laptop"], {}),
+    "An old phone or tablet as a room": ("phone-room", "room mode", ["room mode", "old phone", "tablet", "domovoi room", "qr code"], {}),
+    "An old computer, from a USB stick": ("usb-room", "the stick sets it up", ["usb stick", "old computer", "old pc", "mac", "debian", "erase"], {}),
+    "Wake word and greeting": ("wake-word", "the word a room wakes to", ["wake word", "hey jarvis", "train", "training", "custom wake word", "greeting", "chime"], {"live": "wake-word"}),
+    "Domovoi's voice": ("voice", "pick it, fix a word", ["voice", "say it like", "pronunciation", "kristin", "norman", "linda", "piper"], {}),
     # People and privacy
     "People and voices": ("people", "Domovoi learns who's talking", ["people", "voice id", "who am i", "my name is", "forget me", "profile"], {}),
     "Guests, household and admin": ("guests", "who can change what", ["admin", "password", "guest", "sign in", "setup code", "household token", "paired"], {}),
@@ -157,11 +173,11 @@ PIECES: dict[str, tuple] = {
     "Internet: yes, sometimes, no": ("internet", "your choice, any time", ["internet", "offline", "no internet", "online", "go dark"], {}),
     # Keeping it running
     "Updates": ("updates", "releases, channels, the app", ["update", "upgrade", "version", "release", "stable", "main", "channel"], {}),
+    "Health": ("health", "every check, green or not", ["health", "status", "problems", "needs attention", "containers", "guard", "disk", "checks"], {}),
     "Restarting": ("restart", "when the server isn't answering", ["restart", "frozen", "not answering", "offline", "core"], {}),
     "Backups and moving": ("backups", "what to keep safe", ["backup", "restore", "move", "new computer", "reinstall"], {}),
     "Plugins": ("plugins", "add features", ["plugin", "install", "add feature", "github", "zip"], {"live": "plugins"}),
     "Models": ("models", "speech, answers, pictures", ["models", "vision", "whisper", "ollama", "speech-to-text"], {}),
-    "Asking Domovoi for help": ("help-desk", "ask it, show it, report it", ["help", "how do i", "ask domovoi", "screenshot", "report a problem", "diagnostics", "send the steps", "question mark"], {}),
     "Troubleshooting": ("troubleshooting", "the common fixes", ["problem", "not working", "help", "fix", "error", "broken"], {}),
 }
 
@@ -175,7 +191,7 @@ CHECKLIST: list[dict] = [
     {"id": "introduce", "done_when": "people", "platforms": ["dashboard", "app"]},
     {"id": "music", "done_when": "music", "platforms": ["dashboard", "app"]},
     {"id": "app", "done_when": "phone_app", "platforms": ["dashboard"],
-     "app_text": "**Pair this phone**: [Settings → Phones & browsers](#app/connection) → **Household token**.",
+     "app_text": "**Pair this phone**: [Settings → Rooms & devices → Phones & browsers](#app/connection) → **Household token**.",
      "app_done_when": "this_phone_paired"},
 ]
 
@@ -276,6 +292,9 @@ PHRASES: dict[str, tuple] = {
     "stop printing": ("printing", "fast", {}),
     "read me the lease": ("documents", "fast", {}),
     "read it back": ("documents", "fast", {}),
+    "continue reading": ("documents", "fast", {}),
+    "stop reading": ("documents", "fast", {}),
+    "how do I add a printer": ("help_desk", "fast", {}),
     # Reading needs no model; writing the letter up does.
     "take a letter to the landlord": ("documents", "fast", {"needs": "ai"}),
 }

@@ -145,7 +145,7 @@ class ChatHomeTest {
         val phoneOnly = listOf(FakePlace(Phone))
         val shots = run(phoneOnly, awayLine = AWAY_LINE, steps = arrayOf({ textButton("new chat").click() }))
         assertTrue(shots[0].toString(), AWAY_LINE in shots[0])
-        assertTrue("text chat with Domovoi on this phone — no server, no internet" in shots[0])
+        assertTrue("text chat with Domovoi on this phone — no server needed" in shots[0])
         // One place: the picker is that place's chip alone, no choice.
         val chat = shots[1]
         assertTrue(chat.toString(), "conversation phone new" in chat && "runs" in chat)

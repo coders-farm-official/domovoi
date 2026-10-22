@@ -67,7 +67,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Callable, Literal
 
 from domovoi.config import (
     HOME_PROBLEMS_VISIBILITY_CHOICES,
@@ -75,6 +75,7 @@ from domovoi.config import (
     VOICE_HISTORY_KEEP_CHOICES,
     VOICE_HISTORY_KEEP_LABELS,
 )
+from domovoi.home_address import own_search_address_problem
 
 Tier = Literal["hot", "reapply", "restart"]
 Section = Literal["common", "advanced"]
@@ -100,6 +101,9 @@ class FieldSpec:
     unit: str | None = None
     pattern: str | None = None      # str fields: full-match regex the value must satisfy
     pattern_help: str | None = None  # the user-facing "expected ..." when it doesn't
+    # str fields: a further rule a pattern can't say; returns the sentence
+    # to show when a non-empty value breaks it, None when it is fine.
+    check: Callable[[str], str | None] | None = None
     # Greyed with "needs internet" in the dashboard when the internet
     # answer is "never": the whole field, or only these choice values.
     needs_internet: bool = False
@@ -502,10 +506,13 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "lookup_own_searxng_url", "Your SearXNG address", "Search",
         "The address of a SearXNG you run, with its JSON output turned on "
         "(search.formats: json), for example http://192.168.1.20:8888. "
+        "Plain http:// only for an address on your home network; anywhere "
+        "else it must be https://. "
         "Used when 'Use your own search' is Your own SearXNG.",
         "str", tier="hot", needs_internet=True,
         pattern=r"(https?://[^\s]{1,300})?",
         pattern_help="expected an address starting with http:// or https://",
+        check=own_search_address_problem,
     ),
     FieldSpec(
         "lookup_brave_key", "Brave Search key", "Search",
@@ -757,8 +764,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     # docstring); "Turn on wake-word training" writes it.
     FieldSpec(
         "wake_word_trainer_enabled", "Wake-word training", "Wake words",
-        "Train the wake words recorded in Settings → Wake words. Turn it on "
-        "with Settings → Wake words → \"Turn on wake-word training\", which "
+        "Train the wake words recorded in Settings → Voice → Wake words. Turn it on "
+        "with Settings → Voice → Wake words → \"Turn on wake-word training\", which "
         "builds the trainer and downloads its training data first; switched "
         "on here without that, every training fails with \"image not "
         "found\". Off: no new training starts (one already running "
@@ -1175,6 +1182,10 @@ def coerce_and_validate(spec: FieldSpec, value: object) -> object:
         raise ValueError(f"must be one of: {', '.join(spec.choices)}")
     if t == "str" and spec.pattern and not re.fullmatch(spec.pattern, coerced):  # type: ignore[arg-type]
         raise ValueError(spec.pattern_help or "does not match the expected format")
+    if t == "str" and spec.check is not None and coerced:
+        problem = spec.check(coerced)  # type: ignore[arg-type]
+        if problem:
+            raise ValueError(problem)
     if spec.min is not None and coerced < spec.min:  # type: ignore[operator]
         raise ValueError(f"must be at least {spec.min}")
     if spec.max is not None and coerced > spec.max:  # type: ignore[operator]

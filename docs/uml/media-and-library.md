@@ -1,7 +1,8 @@
 # Media: library, playlists, MPD, and the acquisition queue
 
 How Domovoi stores music, plays it in a room, and obtains new media. Sources
-of truth: `domovoi/db/migrations/V001__baseline.sql` (tables),
+of truth: `domovoi/db/migrations/V001__baseline.sql` and `V010__devices_and_queue_control.sql`
+(the tables shown),
 `domovoi/mpd_provisioner.py`, `domovoi/acquisitions.py`,
 `domovoi/streaming.py` (the music handshake), `domovoi/now_playing.py`.
 
@@ -245,6 +246,14 @@ sequenceDiagram
 
 Around that path:
 
+* **Guests.** A caller with no household credential at all may read, add to,
+  remove from and move entries in a room's queue, and pause, resume, skip and
+  go back, but only while that room is actively playing (MPD `play` or
+  `pause` with a current song); never start or stop one, never clear a
+  queue, never on an idle room. An admin can ban a guest, and
+  `GUEST_QUEUE_EDITING=false` turns it off. The core decides, because only it
+  sees MPD (`domovoi/guest_queue.py`); the web hop passes a guest through
+  after the queue blocks and its own throttle.
 * **The read is never blocked.** A blocked device still sees what's on; it
   gets `editable:false` and a `blocked_reason` so the UI can disable its own
   controls and explain, rather than discovering a 403 on first click. The

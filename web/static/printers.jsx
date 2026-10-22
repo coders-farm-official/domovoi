@@ -85,7 +85,7 @@ const printingKindFor = (printable, name) => {
  * sign-in / pair prompt already owns the story. */
 const printingErrorText = (e) => {
   const blocked = deviceBlockReason(e);
-  if (blocked) return `${blocked}. An admin lifts the block in Settings → Devices.`;
+  if (blocked) return `${blocked}. An admin lifts the block in Settings → Phones & browsers.`;
   if (e && e.authCancelled) return e.deviceTokenRequired ? 'canceled — this browser is not paired' : 'canceled — not signed in';
   if (isAuthFailure(e)) return null;
   return apiErrorText(e, 0);

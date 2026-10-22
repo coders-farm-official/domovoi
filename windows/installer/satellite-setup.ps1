@@ -457,7 +457,7 @@ function Resolve-Code([string]$Base, [string]$SetupCode) {
     # The proof: this payload is the one the code is for, and the server
     # holds the key its fingerprint names, signing this run's challenge.
     $notOurs = ("the server at $Base did not prove it is the Domovoi server this code was made on, so nothing " +
-                'was installed. Check the address and the code on the dashboard (Settings > Satellites); if ' +
+                'was installed. Check the address and the code on the dashboard (Settings > Rooms); if ' +
                 'they are right, something on your network is answering in its place.')
     if ([DomovoiSatelliteSetup.Proof]::CodeFor($payload) -ne $SetupCode) { Fail $notOurs 3 }
     $m = [regex]::Match($payload, '[?&]fp=([^&#]*)')

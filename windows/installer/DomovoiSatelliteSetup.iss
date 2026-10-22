@@ -240,7 +240,7 @@ begin
   Result := False;
   if (Clean(CodePage.Values[0]) = '') or (Clean(CodePage.Values[1]) = '') then
   begin
-    SuppressibleMsgBox('Type your Domovoi server''s address and the setup code, both as the dashboard shows them (Settings > Satellites > add a spare device).', mbError, MB_OK, IDOK);
+    SuppressibleMsgBox('Type your Domovoi server''s address and the setup code, both as the dashboard shows them (Settings > Rooms > add a spare device).', mbError, MB_OK, IDOK);
     Exit;
   end;
   if not RunWorker('-Resolve ' + TargetArgs, False, Res, Code) then
@@ -444,9 +444,9 @@ begin
   if Approved then
     WizardForm.FinishedLabel.Caption := 'It is approved and listening. Say the wake word to try it.'
   else if ApprovalCode <> '' then
-    WizardForm.FinishedLabel.Caption := 'One last step: approve it. On the dashboard, open Settings > Satellites. Under "waiting for approval", type this code and press approve:'
+    WizardForm.FinishedLabel.Caption := 'One last step: approve it. On the dashboard, open Settings > Rooms. Under "waiting for approval", type this code and press approve:'
   else
-    WizardForm.FinishedLabel.Caption := 'One last step: approve it. Its six-digit code is in the notification Windows shows, and in the menu of Domovoi''s icon near the clock. On the dashboard, open Settings > Satellites and type it under "waiting for approval".';
+    WizardForm.FinishedLabel.Caption := 'One last step: approve it. Its six-digit code is in the notification Windows shows, and in the menu of Domovoi''s icon near the clock. On the dashboard, open Settings > Rooms and type it under "waiting for approval".';
   WizardForm.AdjustLabelHeight(WizardForm.FinishedLabel);
   Y := WizardForm.FinishedLabel.Top + WizardForm.FinishedLabel.Height + ScaleY(12);
   CodeLabel.Visible := (ApprovalCode <> '') and not Approved;
@@ -507,8 +507,8 @@ begin
   WizardForm.WelcomeLabel2.Caption :=
     'Setup makes this PC a room of your Domovoi: it listens for the wake word, answers, plays the room''s music and takes announcements.' + #13#10#13#10 +
     'It installs for the account signed in now (' + GetUserNameString + ') only, needs no administrator rights, and runs while this account is signed in. Not on the PC that runs your Domovoi server: Setup stops there.' + #13#10#13#10 +
-    'You need the setup code shown on the dashboard: Settings > Satellites > add a spare device.';
-  CodePage := CreateInputQueryPage(wpWelcome, 'Your setup code', 'From the dashboard: Settings > Satellites > add a spare device > windows laptop or pc.',
+    'You need the setup code shown on the dashboard: Settings > Rooms > add a spare device.';
+  CodePage := CreateInputQueryPage(wpWelcome, 'Your setup code', 'From the dashboard: Settings > Rooms > add a spare device > windows laptop or pc.',
     'Type both as the dashboard shows them. A Setup downloaded from the dashboard''s link has them filled in already: just click Next.');
   CodePage.Add('Domovoi server (for example 192.168.1.20):', False);
   CodePage.Add('Setup code (for example K7M4-QX2P-9TRA):', False);

@@ -2,10 +2,12 @@
 
 The app mirrors the web dashboard (`web/static/*.jsx`) feature-for-feature,
 with one deliberate exception: server administration (the dashboard's
-Greetings / Voices / Wake Words / Models / Configuration settings tabs) is
-not mirrored, because the app has no admin session — Settings keeps only
-Connection and About and hands off to the dashboard. Do not add admin
-panels to the app.
+Wake words, Greetings, Models, Internet, Voice history and Advanced
+settings sections) is not mirrored, because the app has no admin session.
+Settings has the dashboard's five groups; the sections about this phone have
+a panel of their own (Rooms, Phones & browsers, Printers & scanners, App
+layout, Voices, Chat, About & updates, Health), and each admin-only section says so
+and opens the dashboard. Do not add admin panels to the app.
 Read these core files before writing a screen:
 
 - `app/src/main/java/com/domovoi/app/AppContainer.kt` — `LocalApp` (api, bus, prefs, player), `LocalToast`
@@ -19,9 +21,9 @@ Read these core files before writing a screen:
 
 ## Rules
 
-1. **Screens live in `ui/screens/<domain>/`** and only write files there. The
-   entry composable is `<Domain>Screen()` — keep the existing signature from
-   the stub. Split big screens into multiple files in the same package.
+1. **Screens live in `ui/screens/<domain>/`.** The entry composable is
+   `<Domain>Screen()`; keep its existing signature. Split big screens into
+   multiple files in the same package.
 2. **Models**: define `@Serializable` data classes for your domain inside your
    package (e.g. `ui/screens/music/MusicModels.kt`). Decode with
    `DomovoiJson.decodeFromJsonElement(serializer(), element)` or the
@@ -39,7 +41,7 @@ Read these core files before writing a screen:
    server's message for a non-2xx and only says "(offline?)" for a real
    transport failure.
 5. **Destructive actions** get a `ConfirmDialog` (web `window.confirm`).
-6. **Design rules** (from the domovoi-design skill): one amber accent
+6. **Design rules** (`docs/design/README.md`): one amber accent
    (`Domovoi.colors.brand`) — never introduce a second accent. No emoji. Live
    things pulse (`StatusDot(tone, live=true)` / `Pill(live=true)`).
    Lowercase chrome labels ("now playing", "online"); sentence case content.

@@ -51,7 +51,9 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Circle
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Map
@@ -173,6 +175,8 @@ private val TOPIC_ICONS: Map<String, ImageVector> = mapOf(
     "your-phone" to Icons.Outlined.Smartphone,
     "music-and-media" to Icons.Outlined.MusicNote,
     "chat-files-calendar" to Icons.Outlined.Folder,
+    "chat-and-help" to Icons.Outlined.Forum,
+    "documents-and-letters" to Icons.Outlined.Description,
     "people-and-privacy" to Icons.Outlined.Groups,
     "keeping-it-running" to Icons.Outlined.Build,
 )

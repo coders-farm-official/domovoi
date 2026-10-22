@@ -64,6 +64,49 @@ def test_no_other_handlers_phrase_reaches_it() -> None:
     assert not poached, poached
 
 
+@pytest.mark.parametrize(
+    "word",
+    ["printer", "printers", "print", "printing", "scan", "scanner", "scanning", "document", "documents",
+     "letter", "letters", "draft", "drafts", "health", "ai", "lookups", "look things up", "photos"],
+)
+def test_the_newer_pieces_words_are_domovoi_words(word) -> None:
+    """Printing, scanning, documents, letters, drafts, Health and the AI
+    switch are Domovoi's too: a how-to naming one gets past the first gate
+    (the second is the help index, ``answer.is_about_domovoi``)."""
+    from domovoi.handlers.help_desk import _DOMOVOI_WORDS
+
+    assert _DOMOVOI_WORDS.search(f"how do i use the {word} here")
+    assert not _DOMOVOI_WORDS.search("how do i make pancakes")
+    assert not _DOMOVOI_WORDS.search("how do i paint a fence")  # "ai" only as a word
+
+
+@pytest.mark.parametrize("said", ["how do i add a printer", "how do i add a scanner", "how do i scan a document",
+                                  "how do i turn the ai off", "how do i take a letter"])
+def test_a_how_to_about_printers_scanners_letters_or_ai_is_a_help_question(said) -> None:
+    from domovoi.handlers.help_desk import looks_like_domovoi
+
+    assert fast_path_winner(said) == "help_desk"
+    assert looks_like_domovoi(said)
+
+
+@pytest.mark.parametrize("said", ["how do i make pancakes", "how can i restart my router", "how do i learn ai",
+                                  "how do i improve my health", "how do i scan a qr code",
+                                  "how do i print from my iphone", "how do i fix a paper jam in my printer"])
+def test_the_new_words_poach_no_other_how_to(said) -> None:
+    from domovoi.handlers.help_desk import looks_like_domovoi
+
+    assert not looks_like_domovoi(said)
+
+
+@pytest.mark.parametrize(
+    ("said", "handler"),
+    [("print my cover letter", "printing"), ("scan this to Documents", "printing"),
+     ("take a letter to the landlord", "documents")],  # "read me the lease": the corpus, with its Documents
+)
+def test_the_commands_keep_their_handlers(said, handler) -> None:
+    assert fast_path_winner(said) == handler
+
+
 def test_help_keeps_how_do_i_use_you() -> None:
     assert fast_path_winner("how do I use you") == "help"
     assert not _matches("how do i use you")
@@ -180,6 +223,8 @@ async def test_no_phone_linked_is_said_plainly(voice) -> None:
     await voice("how do I change the wake word", person=sarah)
     r = await voice("yes", person=sarah)
     assert "no phone marked as yours" in r.text and "This phone belongs to" in r.text
+    # The app's section since the Settings regroup (SettingsScreen.kt).
+    assert "Phones and browsers" in r.text and "Connection" not in r.text
     assert await voice.deliveries() == []
 
 

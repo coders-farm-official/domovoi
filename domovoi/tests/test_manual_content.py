@@ -244,7 +244,24 @@ def test_every_settings_tab_a_link_names_is_one_the_dashboard_has() -> None:
     app_src = (ANDROID / "ui" / "screens" / "settings" / "SettingsScreen.kt").read_text(encoding="utf-8")
     app_block = re.search(r"enum class SettingsSection\(.*?\) \{(.*?)\n\}", app_src, re.S).group(1)
     app_label = dict(re.findall(r"^\s+\w+\(\"([\w-]+)\", \"([^\"]+)\"", app_block, re.M))
+    # A path names the Settings group first ("Settings → Chat & AI → Models"):
+    # the group must be the one that holds the tab (SETTINGS_GROUPS).
+    groups = re.search(r"const SETTINGS_GROUPS = \[(.*?)\n\];", src, re.S).group(1)
+    group_of = {sec: g_label
+                for g_label, secs in re.findall(r"label: '([^']+)'.*?sections: \[([^\]]*)\]", groups, re.S)
+                for sec in re.findall(r"'([\w-]+)'", secs)}
+    for group, label, rid in re.findall(
+            r"\[Settings → ([^\]→]+?) → ([^\]→]+?)(?: →[^\]]*)?\]\(route:([a-z0-9/-]+)\)", _all_text()):
+        r = DOC["routes"][rid]
+        tab = rid.split("/", 1)[1] if rid.startswith("settings/") else r["app"]["tab"]
+        if group not in set(group_of.values()):
+            continue  # no group named: the loop below checks the tab
+        assert group_of[tab] == group, (group, label, rid)
+        want = label_of[tab] if rid.startswith("settings/") else app_label[tab]
+        assert want == label, (label, rid)
     for label, rid in re.findall(r"\[Settings → ([^\]→]+?)(?: →[^\]]*)?\]\(route:([a-z0-9/-]+)\)", _all_text()):
+        if label in set(group_of.values()):
+            continue  # the group; checked above, the tab is the next step
         r = DOC["routes"][rid]
         if rid.startswith("settings/"):
             assert label_of[rid.split("/", 1)[1]] == label, (label, rid)

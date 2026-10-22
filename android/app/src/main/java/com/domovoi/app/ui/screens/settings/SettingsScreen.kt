@@ -476,7 +476,7 @@ private fun AboutPanel(navigate: (Route) -> Unit) {
         item {
             PanelCard(
                 "About Domovoi",
-                "The local-first home voice assistant that runs entirely on your own hardware.",
+                "The home computer system that just works.",
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
@@ -484,8 +484,8 @@ private fun AboutPanel(navigate: (Route) -> Unit) {
                             withStyle(strong) { append("Domovoi") }
                             append(
                                 " is named for the Slavic household guardian spirit — often a cat, " +
-                                    "which is why one lives in the UI. The wake name you call the " +
-                                    "assistant is configurable.",
+                                    "which is why one lives in the UI. The wake name you call it " +
+                                    "by is configurable.",
                             )
                         },
                         style = MaterialTheme.typography.bodyMedium,

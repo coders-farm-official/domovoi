@@ -722,6 +722,12 @@ class AssistantController(
             say("that isn't a Brave Search key (letters, digits, - and _ only): paste it again")
             return
         }
+        if (own?.kind == OwnSearch.SEARXNG) {
+            com.domovoi.app.assistant.lookup.ownSearchAddressProblem(own.url)?.let {
+                say(it.replaceFirstChar { c -> c.lowercase() })
+                return
+            }
+        }
         store.own = own
         _state.update { it.copy(ownSearchKind = own?.kind, ownSearchUrl = own?.url.orEmpty()) }
         say(if (own == null) "lookups away from home use Wikipedia" else "your own search is saved on this phone")
@@ -1216,7 +1222,7 @@ class AssistantController(
     private fun voiceBlocker(): String? {
         val ui = _state.value
         return when {
-            ui.tier == DeviceTier.Unsupported -> "this phone can't run the assistant"
+            ui.tier == DeviceTier.Unsupported -> "this phone can't run phone chats"
             !ui.installed -> "the model isn't on the phone yet"
             !ui.voiceReady -> "the speech files aren't on the phone yet"
             ui.replying -> "a reply is still being written; stop it first"
@@ -2443,7 +2449,7 @@ class AssistantController(
 
     private fun inputs(): PhoneAnswerInputs {
         val style = clockStyle()
-        return PhoneAnswerInputs(style.at(clock()), style, phone, chatModel.name, settings.backend)
+        return PhoneAnswerInputs(style.at(clock()), style, phone, chatModel.name, settings.backend, lookups = lookups != null)
     }
 
     /** [h] with the contact for its name when there is one person it can

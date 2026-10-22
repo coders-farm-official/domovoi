@@ -11,7 +11,7 @@
      - Inter variable (@fontsource-variable/inter 5.2.8) — the
        `wght` variable axis, exposed under BOTH family names the
        tokens reference: 'Inter var' (primary in --ff-sans) and
-       'Inter' (fallback / --ff-display). latin + latin-ext subsets.
+       'Inter' (fallback). latin + latin-ext subsets.
      - JetBrains Mono (@fontsource/jetbrains-mono 5.2.8) — weights
        400/500/600, latin + latin-ext subsets. Family 'JetBrains Mono'
        matches --ff-mono.
@@ -35,7 +35,7 @@
   src: url('/vendor/fonts/inter-latin-ext-wght-normal.woff2') format('woff2');
   unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
 }
-/* Inter variable — 'Inter' (fallback token name / --ff-display) */
+/* Inter variable — 'Inter' (fallback token name) */
 @font-face {
   font-family: 'Inter';
   font-style: normal;
@@ -103,15 +103,16 @@
   unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
 }
 
-/* Brand-uploaded face. Cash Currency is a decorative display face — it does
-   NOT match Inter (body) or JetBrains Mono (mono), so it has been wired up
-   as a separate --ff-display slot rather than swapped in. Use it for one-off
-   marquee numerals (e.g. big stat values) where a more characterful glyph
-   set is wanted. */
+/* Display face: Playfair Display SC Bold (SIL Open Font License 1.1, the
+   licence text is fonts/OFL-PlayfairDisplaySC.txt). A decorative display
+   face that does NOT match Inter (body) or JetBrains Mono (mono), so it is
+   a separate --ff-display slot rather than swapped in. Use it for one-off
+   marquee lines where a more characterful face is wanted; nothing in the
+   dashboard uses it today (the wordmark is set in Inter). */
 @font-face {
-  font-family: 'Cash Currency';
-  src: url('fonts/Cash_Currency.ttf') format('truetype');
-  font-weight: 400;
+  font-family: 'Playfair Display SC';
+  src: url('fonts/PlayfairDisplaySC-Bold.ttf') format('truetype');
+  font-weight: 700;
   font-style: normal;
   font-display: swap;
 }
@@ -210,7 +211,7 @@
   /* Type families */
   --ff-sans: 'Inter var', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --ff-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  --ff-display: 'Cash Currency', 'Inter var', 'Inter', sans-serif; /* uploaded brand face */
+  --ff-display: 'Playfair Display SC', Georgia, serif; /* OFL display face, bold only */
 
   /* Type scale */
   --t-xs:   11px;

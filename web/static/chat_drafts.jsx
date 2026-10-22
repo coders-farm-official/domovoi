@@ -94,7 +94,7 @@ const ChatDrafts = (() => {
 
   const saveErrorText = (e) => {
     const blocked = typeof deviceBlockReason === 'function' ? deviceBlockReason(e) : null;
-    if (blocked) return `${blocked}. An admin lifts the block in Settings → Devices.`;
+    if (blocked) return `${blocked}. An admin lifts the block in Settings → Phones & browsers.`;
     return (typeof apiErrorText === 'function' ? apiErrorText(e, 0) : null) || 'save failed';
   };
 

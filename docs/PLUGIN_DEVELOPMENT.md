@@ -36,7 +36,7 @@ extend every plane of the system:
 | **HTTP (core)** | a FastAPI router mounted at `/v1/plugins/<slug>/...`, admin-gated for mutations by default | core process |
 | **Web dashboard** | a second entry module, `web.py`, with its own router at `/api/plugins/<slug>/...`, zero-build JSX pages, sidebar nav entries, badges, and browser-player sources | **separate** web process (`:6369`) |
 | **Realtime** | manifest-declared Postgres NOTIFY channels mapped to dashboard websocket channels, with snapshot functions | both |
-| **Config** | a pydantic `BaseSettings` model + `FieldSpec` rows that render in the dashboard's Settings page and persist to `~/.domovoi/plugins/<slug>.env` | core process |
+| **Config** | a pydantic `BaseSettings` model + `FieldSpec` rows that the core's settings API lists and saves (values persist to `~/.domovoi/plugins/<slug>.env`); the dashboard has no screen for them yet, so a person edits that file and restarts | core process |
 | **Capabilities** | `provides` / `consumes` declarations — the seam that lets plugins offer services to core (and to each other) without imports | core process |
 | **Events** | subscribe to the `core.*` event catalog; emit your own under `plugin.<slug>.*` | core process |
 | **Sounds & assets** | canned TTS clips rendered in the household's voice and mirrored to satellites; static web assets served from `web/static/` | core + web |
@@ -547,8 +547,10 @@ warnings = [
 ]
 ```
 
-Four booleans (`network`, `subprocess`, `hardware`,
-`filesystem_outside_data`, all default `false`) plus free-text `warnings`.
+Five booleans (`network`, `subprocess`, `hardware`,
+`filesystem_outside_data` and `satellite_root`, all default `false`) plus
+free-text `warnings`. `satellite_root` is for a `[satellite]` payload that
+installs packages or runs a script as root (see `[satellite]` below).
 These are **not** a sandbox — an installed plugin runs with full access to
 the server (the install preview says exactly that). They are the trust
 screen: write them as if the user's trust depends on them, because it does.
@@ -592,9 +594,14 @@ stream_url_template = "/api/plugins/radio/stations/{id}/stream"
   nobody pressed (a background sync of your own) can pass `noPrompt: true`
   to `apiFetch` for the same promise; the dashboard's own device
   registration is sent that way.
-* `[[web.pages]]` — sidebar entries. `page` names a key in that registry;
-  `nav_order` slots among core pages (core publishes its own orders; default
-  50); `badge` polls an endpoint and renders `payload[key]` as a count.
+* `[[web.pages]]` — sidebar entries. `route` is lowercase letters, digits,
+  `_` and `-` (it becomes `#<route>`), and may not be one a core page owns
+  (`home`, `chat`, `music`, `podcasts`, `audiobooks`, `videos`, `news`,
+  `people`, `satellites`, `calendar`, `files`, `plugins`, `settings`,
+  `manual`, `containers`): the load refuses it. `page` names a key in that
+  registry; `nav_order` slots among core pages (core publishes its own
+  orders; default 50); `badge` polls an endpoint and renders `payload[key]`
+  as a count.
 * `nav_icon` — the page's icon in the sidebar, the phone bar and Home's
   grid: a file under `web/static/` (a path outside it, `..` or a URL is
   ignored, with a warning in the load log). Draw it like the dashboard's
@@ -727,7 +734,7 @@ icon       = "puzzle"        # optional lucide glyph (default "puzzle")
 base       = "config"        # install_dir | data_dir | music_dir | absolute | config
 path       = "library_dir"   # base=config → the config KEY; otherwise a rel/abs path
 separator  = ";"             # base=config only: split a multi-path value into siblings
-read_only  = false           # false → editable + importable; true → browse/download only
+read_only  = false           # default true (browse/download only); false → editable + importable
 extensions = []              # optional listing filter ([] = all)
 ```
 
@@ -1001,7 +1008,7 @@ class Handler(ABC):
 * **Tool arguments**: describe every parameter in `tool_schema` — a small
   tool model files a number under the best-named field it is shown, so an
   undescribed `value` next to a self-explanatory `amount` gets the quantity
-  under `amount` (F-V012: four unit conversions answered "That's 0.00
+  under `amount` (once, four unit conversions answered "That's 0.00
   ounces."). Function-calling JSON has one flat `required` list, so state
   per-action requirements in the `action` description. In
   `execute_from_tool`, treat a missing required argument as a question back
@@ -1330,7 +1337,7 @@ is `auto`, which the core resolves to its current LAN address.
   `<slug>_<key>.mp3` and ride the `/v1/sounds` manifest channel to
   satellites. Keys are `[a-z0-9_]`.
 * `sdk.http.client(**httpx_kwargs)` — an `httpx.AsyncClient` with the product
-  User-Agent preset (`domovoi/<version> (+github.com/coders-farm-official/domovoi)`)
+  User-Agent preset (`domovoi/<version> (+https://github.com/coders-farm-official/domovoi)`)
   and a 15 s default timeout. Use it for all outbound HTTP — several
   upstream services require a descriptive UA. **It honours the household's
   internet answer** (SDK 1.4): when the server is answered `never`, every
@@ -1706,8 +1713,10 @@ def register(ctx):
   Search; that changes which passages are read first, never whether a
   source asks before it is used.
 * **"local" is the core's decision.** Only allowlisted plugins
-  (`domovoi.lookup.LOCAL_PLUGINS`) are local; a local source must never
-  leave the box (Kiwix answers only while its server is on this network).
+  (`domovoi.lookup.LOCAL_PLUGINS`) are local; any other plugin that
+  claims `local` is registered as `web`, so it is asked only after the
+  person allows it. A local source must never leave the box (Kiwix
+  answers only while its server is on this network).
 
 ## 5. Worked example — the bundled radio plugin
 
@@ -1723,9 +1732,10 @@ story. Here is the developer's tour, file by file.
 * **Capabilities**: provides `now-playing-source:radio` and
   `now-playing-matcher` (both registered by dedicated SDK calls in
   `core.py`, so the contract cross-check passes); consumes
-  `media-acquisition-queue` — a core service, always satisfied. Nothing in
-  `consumes_optional`: detection→download simply degrades when no fulfiller
-  is enabled.
+  `media-acquisition-queue` — a core service, always satisfied. Radio
+  declares it but does not use it today: it only records detections and
+  publishes them on the event bus (§5.4), and never writes to the queue.
+  Nothing in `consumes_optional`.
 * **Requirements**: system tools only — `ffmpeg` (required — missing ⇒
   plugin loads *degraded*) and `rtl_fm` (optional hardware). It declares
   **no `python` pins and ships no lockfile**, and that is particular to a
@@ -1745,7 +1755,7 @@ story. Here is the developer's tour, file by file.
   handler's greedy `^play (.+)$` at 300 so "play 97.5 fm" is claimed first.
   `requires_network = "degraded"`, `chat_exposed = true`, corpus
   `["play 97.5 fm", "tune to the news station"]`.
-* **SDK range** `domovoi_api = ">=1.4,<2.0"` (version 1.3.0): it reads
+* **SDK range** `domovoi_api = ">=1.4,<2.0"` (version 1.4.0): it reads
   `sdk.connectivity.policy` and uses `sdk.egress`. It ships inside the
   core, so the range can never be unmet.
 * **Six `[[workers]]`**: four `poll` (`radio_sampler`, `radio_icy_poller`,
@@ -1754,8 +1764,9 @@ story. Here is the developer's tour, file by file.
   against named startup hooks, not Worker classes.
 * **Honest permissions**: `network`, `subprocess`, `hardware` all `true`,
   with four plain-English warnings (audio clips can go to an online
-  song-identification service; it can request downloads; it queries external
-  directories; it runs ffmpeg/rtl_fm).
+  song-identification service; it only notes which songs it heard and never
+  downloads; it queries external directories; it runs
+  ffmpeg/rtl_fm, and SDR hardware is optional).
 * **Web**: one script (`stations.jsx`), one page (`StationsPage`, nav label
   "Stations", a favorites-count badge), one player source (`kind = "radio"`
   with a stream proxy template).
@@ -1790,7 +1801,8 @@ story. Here is the developer's tour, file by file.
 4. **Workers**: four `ctx.add_worker(...)` calls. Each worker binds its
    cadence and kill-switch to settings fields
    (`interval_setting = "sampler_inner_loop_sec"`,
-   `enabled_setting = "sampler_enabled"`), so dashboard edits apply live.
+   `enabled_setting = "sampler_enabled"`), so a saved change applies on the
+   next tick, with no restart.
    The reaper sets `enabled_setting = None` — its reconciliation-sweep half
    must always run.
 5. **Startup hooks**: `fcc_import` and `simulcast_backfill`, both
@@ -1907,7 +1919,7 @@ items against the manifest's `player_sources` template.
 
 ### 5.7 Tests (`tests/`)
 
-A dozen test files spanning every tier: pure parsers (no fixtures), handler
+Over a dozen test files spanning every tier: pure parsers (no fixtures), handler
 tests on `stub_sdk`, worker ticks with stubbed I/O, migration + manifest +
 loader contract tests, the now-playing matcher against the test DB, and web
 API tests against a mounted router with a fake web context. The plugin's

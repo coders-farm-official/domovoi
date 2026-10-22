@@ -166,7 +166,7 @@ internal fun LookupSettingsCard(ui: AssistantUi, actions: AssistantActions) {
             }
         if (choice == OwnSearch.SEARXNG) {
             LocalComposerField.current(url, { url = it; result = null }, Modifier.fillMaxWidth())
-            Text("Its address, with JSON output on (search.formats: json).", style = MaterialTheme.typography.bodySmall,
+            Text("Its address, with JSON output on (search.formats: json). Plain http:// only for an address on your home network; anywhere else https://.", style = MaterialTheme.typography.bodySmall,
                 color = Domovoi.colors.fgMuted)
         }
         if (choice == OwnSearch.BRAVE) {
@@ -181,14 +181,19 @@ internal fun LookupSettingsCard(ui: AssistantUi, actions: AssistantActions) {
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = {
+                val addressProblem = if (choice == OwnSearch.SEARXNG) {
+                    com.domovoi.app.assistant.lookup.ownSearchAddressProblem(url)
+                } else null
                 val own = when (choice) {
-                    OwnSearch.SEARXNG -> url.trim().takeIf { it.startsWith("http://") || it.startsWith("https://") }
+                    OwnSearch.SEARXNG -> url.trim().takeIf { addressProblem == null }
                         ?.let { OwnSearch(OwnSearch.SEARXNG, url = it) }
                     OwnSearch.BRAVE -> key.trim().takeIf { it.isNotEmpty() }?.let { OwnSearch(OwnSearch.BRAVE, key = it) }
                     else -> null
                 }
                 if (own?.kind == OwnSearch.BRAVE && !com.domovoi.app.assistant.lookup.BRAVE_KEY.matches(own.key)) {
                     result = "That isn't a Brave Search key (letters, digits, - and _ only). Paste it again."
+                } else if (addressProblem != null && url.isNotBlank()) {
+                    result = "$addressProblem."
                 } else if (choice.isNotEmpty() && own == null && !(choice == OwnSearch.BRAVE && ui.ownSearchKind == OwnSearch.BRAVE)) {
                     result = if (choice == OwnSearch.BRAVE) "Paste your Brave Search key first." else "Type an address starting with http:// or https://."
                 } else if (own != null || choice.isEmpty()) {

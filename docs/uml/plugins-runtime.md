@@ -24,12 +24,14 @@ classDiagram
         +requires_network : no or degraded or yes
         +display : HandlerDisplay
         +confirmation_kinds : tuple
+        +choice_kinds : tuple
         +plugin_slug : str or None
         +chat_exposed : bool
         +execute(intent, ctx, session)* Response
         +execute_from_tool(args, ctx, session) Response
         +fallback_offline(intent, ctx, session) Response
         +handle_confirmation(kind, data, affirmative, ctx, session) Response
+        +offers_tool(transcript) bool
     }
     class FastPath {
         <<frozen dataclass>>
@@ -71,6 +73,11 @@ Contract notes, all enforced by tests or install-time contract checks:
 * `chat_exposed` opts a handler's tool into conversational chat mode via the
   Letta proxy-tool bridge (requires a usable `tool_schema` +
   `execute_from_tool`).
+* `ctx.add_lookup_source(source)` offers a plugin's search to chat lookups.
+  The core, not the plugin, decides the source's class when it registers:
+  only an allowlisted plugin (`domovoi.lookup.LOCAL_PLUGINS`) may count as
+  local, any other plugin's "local" claim is treated as "web", so the person
+  is asked before it is used.
 
 ## Workers — the background plane
 
@@ -144,6 +151,11 @@ classDiagram
         +add_startup_hook(fn, name, requires_online, after)
         +add_router(router) mounted under v1 plugins slug
         +add_capability(name, impl)
+        +add_lookup_source(source)
+        +add_container(container_id, resolve)
+        +add_config(model, fields)
+        +on_reapply(field_name, cb)
+        +on_disable(cb)
     }
     class PluginSDK {
         +slug : str
@@ -160,6 +172,7 @@ classDiagram
         +connectivity : ConnectivityView
         +capabilities : CapabilityRegistry
         +playback : PlaybackAPI
+        +speech : SpeechAPI
         +library : LibraryAPI
         +realtime : RealtimeAPI
         +assets : AssetAPI

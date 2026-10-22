@@ -17,25 +17,27 @@
 ; release build pins its release tag's commit (design-notes
 ; V1-RELEASE-PLAN 1.5: the tag is the commit households run).
 #define DomovoiRepoUrl "https://github.com/coders-farm-official/domovoi"
-#define DomovoiCommit "606829ce49622b19ec7494093ab239297d16faf3"
+#define DomovoiCommit "f9b754b0f6d111abad7ea79f26a467700c23df9b"
 
 ; The release channel the install then follows for updates (provision.sh
 ; --track-branch; docs/LINUX_HOST.md, Release channels): "stable" for a
 ; release build, so the household gets releases only and can switch to
-; main in Settings > Version. "main" only while DomovoiCommit is not a
-; release's commit, as here (provision.sh at this commit predates the
-; channels: with stable it would stop for want of the branch); the test
-; holds "stable" to a commit a v* tag names. build.ps1 -Pin sets stable
-; unless given -Channel main.
+; main in Settings > About & updates. "main" only while DomovoiCommit is not a
+; release's commit, as here (a commit on main that no v* tag names yet, so
+; the stable channel would not hold it); the test holds "stable" to a
+; commit a v* tag names. build.ps1 -Pin sets stable unless given -Channel
+; main.
 #define DomovoiChannel "main"
 
 ; Does the dashboard at that commit give each Settings tab its own address
-; (#settings/configuration/setup: Settings > Configuration with the
-; first-run admin setup open; wf/settings-deeplinks, SETUP_ROUTE in
-; web/static/components.jsx)? Then "Open Domovoi" opens it and the last
-; page's steps start there. Without them it opens #settings, Settings on its
-; first tab, and the steps say to click Configuration. build.ps1 -Pin sets
-; it from the commit; domovoi/tests/test_windows_installer.py checks it.
+; (SETUP_ROUTE in web/static/components.jsx: settings/advanced/setup, before
+; Settings' regroup of 2026-10-21 settings/configuration/setup, which still
+; works)? Then "Open Domovoi" opens #settings/configuration/setup, Settings >
+; Advanced with the first-run admin setup open, and the last page's steps
+; start there. Without them it opens #settings, Settings on its first tab,
+; and the steps say to click Configuration, that dashboard's last tab.
+; build.ps1 -Pin sets it from the commit; domovoi/tests/test_windows_installer.py
+; checks it.
 #define DashboardTabRoutes
 
 ; Does provision.sh at that commit take --ai-models / --no-ai-models (AI
@@ -47,7 +49,7 @@
 ; Ubuntu download were done. build.ps1 -Pin sets it from the commit's
 ; provision.sh (the bundled one, with ProvisionBundled: set it by hand);
 ; domovoi/tests/test_windows_installer.py checks it.
-; #define ProvisionAiChoice
+#define ProvisionAiChoice
 
 ; provision.sh, the one script Setup runs inside the distro (as root); it
 ; then clones the repository at DomovoiCommit and reads every other pin
@@ -65,7 +67,7 @@
 ; #define ProvisionBundled
 #define ProvisionSource "..\..\scripts\linux\provision.sh"
 #define ProvisionUrl "https://raw.githubusercontent.com/coders-farm-official/domovoi/" + DomovoiCommit + "/scripts/linux/provision.sh"
-#define ProvisionSha256 "0d2e56a6c80c1a9e9b3150a5c713df7e1cdd8e09b9d78c7778ce22336a002204"
+#define ProvisionSha256 "4fdb688e4a5f401ddca67e46ddb3a4f9f46ccb568d79d5d80b33be9319917a84"
 
 ; Ubuntu 26.04.1's official WSL image, 418,495,746 bytes ([verified]
 ; SHA256SUMS 2026-09-24, PLAN 4.13; matched again 2026-10-11).

@@ -1,9 +1,10 @@
 # Domovoi Web
 
-Local-network management dashboard for the Domovoi voice assistant.
-Browse and edit everything the core owns — music library, playlists,
-satellites, people, calendar, news, documents, plugins — without
-writing SQL. Separate FastAPI process on port **6369**; the core voice
+The dashboard for Domovoi, the home computer system that just works: a
+local-network web app for your music, files, rooms and phones, with voice
+and chat beside them. Browse and edit everything the core owns — music
+library, playlists, rooms, people, calendar, news, documents, plugins —
+without writing SQL. Separate FastAPI process on port **6369**; the core
 service runs on **6370**.
 
 ---
@@ -12,8 +13,10 @@ service runs on **6370**.
 
 Both processes run from the **repo root** (where `pyproject.toml`
 lives). After `pip install -e ".[dev]"` and starting Postgres
-(`docker compose -f domovoi/docker-compose.yml up -d postgres`, host
-port 6432) with migrations applied:
+(`python -m domovoi.env_bootstrap` once to make `domovoi/.env`, then
+`docker compose -f domovoi/docker-compose.yml up -d postgres`, host
+port 6432) with migrations applied (`./domovoi/scripts/dev.sh` or
+`dev.ps1` does all of this; see `docs/CONTRIBUTING.md`):
 
 ```powershell
 # Terminal 1 — core voice service (port 6370)
@@ -25,8 +28,12 @@ python -m web.backend.main
 
 Open `http://localhost:6369/` (or `http://<server>:6369/` from any
 device on the LAN). Hash routing, so deep links like `#music` and
-`#plugins` work; `#settings/rooms`, from before Satellites became a
-Settings tab, still opens Settings → Rooms.
+`#plugins` work. Settings has an address per section, `#settings/<section>`
+(for example `#settings/rooms`, `#settings/internet`); the names sections
+had before the 1.0 regroup still work (`#satellites` and
+`#settings/satellites` open Settings → Rooms, `#settings/devices` opens
+Phones & browsers, `#settings/configuration` opens Advanced, `#settings/recordings`
+opens Voice history).
 
 The web backend runs on its own — read pages still render straight
 from Postgres with the core down. Anything needing live core state
@@ -43,7 +50,8 @@ web/
 │   ├── domovoi_client.py     # best-effort HTTP client for core /v1/admin/*
 │   ├── realtime.py           # poll loop + LISTEN/NOTIFY → /ws/state fanout
 │   ├── plugin_host.py        # plugin web-module loading (see below)
-│   └── api/                  # one module per resource (music, people, …)
+│   ├── middleware.py         # body limits, requested-with check, response headers
+│   └── api/                  # one module per resource (music, people, chat, help, printers, …)
 │       ├── plugins.py        # install/enable/disable/uninstall/upgrade proxy
 │       ├── capabilities.py   # /api/capabilities (+/manual) for Android/manual
 │       └── acquisitions.py   # generic media-acquisition queue readout
@@ -53,11 +61,27 @@ web/
 │   ├── components.jsx        # UI kit + data-driven Sidebar/Topbar
 │   ├── plugins.jsx           # Plugins admin page (two-phase install + trust UX)
 │   ├── player.jsx            # in-browser player + plugin player-source registry
-│   └── <page>.jsx            # one file per core page
+│   ├── settings.jsx          # Settings: the groups, sections and search (below)
+│   └── <page>.jsx            # one file per core page (chat, help, health, printers, …)
 ├── samples/                  # illustrative API payloads (docs, not fixtures)
 ├── scripts/dump_openapi.py   # writes web/openapi.json from the live app
 └── openapi.json              # generated — python -m web.scripts.dump_openapi
 ```
+
+## Settings
+
+`static/settings.jsx` builds Settings from `SETTINGS_GROUPS`: Rooms &
+devices (Rooms, Phones & browsers, Printers & scanners, App layout), Voice
+(Wake words, Voices, Greetings), Chat & AI (Models, Search, Chat), Privacy
+(Internet, Voice history) and System (About & updates, Health, Advanced).
+A search box at the top finds sections and cards inside them. Every
+section's address is `#settings/<id>`; an id is never renamed (a rename
+adds an alias, so old links keep working).
+
+A section marked `optional` (Printers & scanners, Search, Chat, Health)
+appears only when its page script registers a panel in
+`window.DomovoiSettingsSections` (`{ <id>: { Panel } }`), so Settings never
+shows a section that can't do anything yet.
 
 ## Conventions
 
@@ -69,10 +93,13 @@ web/
   LISTEN/NOTIFY accelerates specific channels to ~50 ms. Clients get a
   single WebSocket at `/ws/state` (see `realtime.py`'s docstring for
   the channel list). Plugin channels register from manifests.
-* **Auth (design §7)**: everyday reads and playback are open on the
-  LAN. Admin actions — plugin management, config, satellite pushes —
+* **Auth** (tiers in `docs/SECURITY_PRIVACY.md`): reads of household
+  state are open on the LAN. Everyday actions — playback, queues,
+  saving a document, chat — need the household device token
+  (`X-Device-Token`; every paired browser and phone sends it). Admin
+  actions — plugin management, config, satellite pushes —
   need an admin session: `POST /api/auth/login` returns a Bearer token
-  (argon2id password, sha256-stored sessions). Mutations accept ONLY
+  (argon2id password, sha256-stored sessions). Admin mutations accept ONLY
   `Authorization: Bearer`; the SameSite=Strict cookie (a secret of its
   own, never the token) lets GET page loads render authenticated state,
   and for `ADMIN_RELOAD_WINDOW_MIN`
@@ -86,10 +113,10 @@ web/
   hooks via `React.useState` etc. outside `components.jsx`, and expose
   cross-file symbols via `Object.assign(window, {...})`.
 * **Vocabulary**: the core surface is provider-agnostic. Media
-  fetching is an "acquisition" (`/api/acquisitions`, design §4.8);
+  fetching is an "acquisition" (`/api/acquisitions`);
   provider-specific search/download UIs belong to plugin pages.
 
-## How plugin pages mount (design §5)
+## How plugin pages mount
 
 The web process discovers plugins from the `plugins` registry table —
 it never imports plugin core code, and a `sys.meta_path` guard
@@ -101,8 +128,8 @@ For each enabled plugin whose manifest declares a `web` entry point:
 1. `install_dir` goes on `sys.path`; `domovoi_plugin_<slug>.web` is
    imported and `register_web(ctx)` is called with a
    `WebPluginContext` (logger, httpx factory, plugin-schema-scoped DB
-   sessions, a `CoreClient` that forwards the caller's admin
-   credentials to core).
+   sessions, a `CoreClient` that forwards the caller's credentials
+   (admin Bearer, cookie and household token) to core).
 2. Routers mount at `/api/plugins/<slug>/...` behind a per-slug gate
    that 404s while the plugin is disabled. Static assets serve from
    `<install_dir>/web/static` at `/plugins/<slug>/static/...`.
@@ -122,7 +149,7 @@ pages" toast; upgraded plugin *web code* needs a web-process restart
 (Python can't re-import a loaded module safely).
 
 Plugin installs go through the two-phase flow proxied to the core:
-stage & validate → preview → an **unskippable trust screen** (§7.5)
+stage & validate → preview → an **unskippable trust screen**
 → confirm. See the Plugins page (`static/plugins.jsx`).
 
 ## OpenAPI

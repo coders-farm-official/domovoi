@@ -20,6 +20,13 @@ Derived from `domovoi-icon.png`:
   central 80% a maskable icon may keep), `apple-touch-icon.png` (180×180, no
   transparency) and `favicon-32.png`.
 
+* **Windows Setup** (`windows/installer/art/`): `domovoi.ico` and the wizard
+  pictures, made from the icon by `make_art.py` (`--check` says whether they
+  have drifted).
+* **Play Store listing graphics** (`android/play/graphics/`): made by
+  `android/play/make_graphics.py` from the icon, the launcher background
+  color and the app's theme colors.
+
 The cat glyph inside the dashboard itself stays the line-art
 `web/static/assets/domovoi.svg` (see [`docs/design/`](../design/README.md)).
 

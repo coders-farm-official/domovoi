@@ -1,4 +1,4 @@
-// The card files the dashboard builds (Settings > Satellites > prepare
+// The card files the dashboard builds (Settings > Rooms > prepare
 // satellite media > the zip download), read and checked before anything
 // goes near a card. The server writes the zip in
 // domovoi/satellite_media/builder.py: README.txt, config.txt and
@@ -182,7 +182,7 @@ namespace Domovoi.Windows.Tray
                 }
                 foreach (string req in new[] { "domovoi/build-info.json", "domovoi/payload.sha256", "domovoi/payload.tar.gz", "domovoi/firstrun.sh", "domovoi/device-info.json", "config.txt", "cmdline.txt" })
                     if (!entries.ContainsKey(req))
-                        throw new CardZipException("This isn't a Domovoi satellite card zip (it has no " + req + "). Download it from the dashboard: Settings > Satellites > prepare satellite media.");
+                        throw new CardZipException("This isn't a Domovoi satellite card zip (it has no " + req + "). Download it from the dashboard: Settings > Rooms > prepare satellite media.");
 
                 var pkg = new CardPackage();
                 pkg.ZipPath = Path.GetFullPath(path);

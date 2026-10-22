@@ -12,6 +12,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import com.domovoi.app.net.CleartextPolicy
 import okhttp3.CookieJar
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -147,8 +148,11 @@ internal fun refusedHost(host: String): Boolean {
  *  SearXNG, which may be on their network): names through [PublicDns], an
  *  address written in the URL through [refusedHost] (in [fetch], on every
  *  hop), and the address actually connected to checked again by a network
- *  interceptor before a byte of the request is sent. */
+ *  interceptor before a byte of the request is sent. Either way plain http
+ *  goes only to the home network ([CleartextPolicy], the rule the server
+ *  address follows too), on the first hop and on every redirect's. */
 fun plainClient(publicOnly: Boolean = true): OkHttpClient = OkHttpClient.Builder()
+    .addInterceptor(CleartextPolicy.interceptor)
     .apply {
         if (publicOnly) {
             dns(PublicDns)
@@ -404,6 +408,8 @@ class OwnSearchLookup(
                 LookupResult(clean(r.s("title"), 200), url, siteOf(url), clean(r.s("description"), 600), "", "Brave Search", "web")
             }
         } else {
+            // Saved before the home-network rule: still never sent in the clear across the internet.
+            ownSearchAddressProblem(own.url)?.let { throw OwnSearchError(it) }
             val (status, body, _) = try {
                 fetch(lanHttp, "${own.url.trimEnd('/')}/search?q=$q&format=json", appAgent(version), API_MAX_BYTES)
             } catch (e: IOException) { throw OwnSearchError("Your SearXNG didn't answer") }
@@ -424,6 +430,26 @@ class OwnSearchLookup(
     )
 
     override suspend fun read(url: String): LookupOutcome = PageReader(http, version).read(url)
+}
+
+/** What a refused own-SearXNG address is told, in plain words (the
+ *  server's domovoi/home_address.py says the same). */
+const val HTTPS_UNLESS_HOME = "Use https:// unless the search is on your home network"
+
+/** Whether [url] may be the person's own SearXNG address: https anywhere,
+ *  plain http only to a home-network address as written
+ *  ([CleartextPolicy.cleartextPermitted]: RFC 1918, link-local, loopback,
+ *  100.64/10, IPv6 unique-local and link-local, .local and the other home
+ *  names; a name is never resolved). Null when it may; otherwise the
+ *  sentence to show. */
+fun ownSearchAddressProblem(url: String): String? {
+    val text = url.trim()
+    val u = text.toHttpUrlOrNull()
+    if (u == null || !(text.startsWith("http://", ignoreCase = true) || text.startsWith("https://", ignoreCase = true))) {
+        return "Type an address starting with http:// or https://"
+    }
+    if (!u.isHttps && !CleartextPolicy.cleartextPermitted(u.host)) return HTTPS_UNLESS_HOME
+    return null
 }
 
 /** The person's own search, as the keystore keeps it. */

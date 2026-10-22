@@ -13,7 +13,7 @@ Training runs openWakeWord's recipe in a Linux container on the server:
 Docker Engine on a Linux server and inside the Windows install's WSL
 distro, Docker Desktop on a development PC. It needs a 12 GB image and
 18 GB of training data, so it is off until an admin asks for it:
-**Settings → Wake words → Wake-word training → Turn on wake-word training**.
+**Settings → Voice → Wake words → Wake-word training → Turn on wake-word training**.
 
 Before it starts, the card says what training needs and what this server
 has:
@@ -29,7 +29,7 @@ has:
 The card refuses with the reason, instead of offering a button that can't
 work, when:
 
-- **internet access is turned off** (Settings → Internet → No): turning
+- **internet access is turned off** (Settings → Privacy → Internet → No): turning
   it on downloads about 22 GB, once;
 - **too little disk** is free (the need above plus 5 GB). On the Windows
   install Domovoi can't see the Windows drive, so the card shows no free
@@ -48,7 +48,8 @@ core runs one background job, as its own service user:
    labelled `org.domovoi.wake-trainer.src=<git tree id of that folder>`.
    About 8 minutes the first time with the base image download, about 3
    with the base image already there.
-2. **Check the GPU**, only when the server has an NVIDIA card: a short
+2. **Check the GPU**, only when the server has an NVIDIA card (an AMD or
+   Intel graphics chip is not used; such a server trains on the CPU): a short
    torch check in the image with `--gpus all`. When Docker can't reach the
    card, the job stops and says so, with the CPU estimate and a **Use the
    CPU** button, instead of quietly training on the CPU. On a Linux server
@@ -87,7 +88,7 @@ reuses what was done (Docker's build cache, the data already downloaded).
   them (the image, Docker's build cache for it, the `domovoi_oww_cache`
   volume with every word's training files). Trained wake words and their
   recordings stay; turning training on again downloads it all again.
-- Answering **No** in Settings → Internet while the job builds or
+- Answering **No** in Settings → Privacy → Internet while the job builds or
   downloads stops it ("Stopped: internet access was turned off"), and stops
   a rebuild an update left running too.
 
@@ -97,7 +98,7 @@ On a Linux server or the Windows install, an update that changes
 
 ## 2. Train a wake word
 
-1. **Create a wake word** (Settings → Wake words): a name and the phrase,
+1. **Create a wake word** (Settings → Voice → Wake words): a name and the phrase,
    e.g. "Hey Domovoi".
 2. **Record clips on a satellite**, through the board that satellite
    listens with. Training needs at least 15 selected clips. For an
@@ -133,7 +134,7 @@ are kept and reused.
 
 ## 3. Settings
 
-**Settings → Advanced → Wake words** (the advanced section, admin).
+**Settings → System → Advanced → Wake words** (admin only).
 Each one applies to the next training; none needs a restart.
 
 | Setting (`.env` key) | Default | What it does |
@@ -194,7 +195,8 @@ systemd drop-in is no longer needed. Every knob:
   failed, stopped, timed out or cut off by a restart (the container gets a
   stop signal and a 10 s grace first). A run killed outright is scrubbed by
   the next stop, run or start. Deleting a wake word removes its training
-  files from the volume too.
+  files from the volume too. It also deletes the word's model and its
+  recorded clips from the server.
 - **Live voice keeps priority.** The container gets `--cpus` (all but a
   quarter of the CPUs, at least two left), `--cpu-shares 128` (voice wins
   every contended slice), `--memory 12g` with no swap (never more than the
@@ -207,7 +209,7 @@ systemd drop-in is no longer needed. Every knob:
 - **How the words are said.** The core sends the phrase's pronunciations
   (`WAKE_PRONUNCIATIONS`, ARPAbet) from Domovoi's own phonemizer
   (`domovoi/phonemizer/`, MIT): the "say it like" list first (Settings →
-  Voices → Say it like; the shipped list says Domovoi = DOH-moe-voy), and
+  Voice → Voices → Say it like; the shipped list says Domovoi = DOH-moe-voy), and
   its own guess for a word its dictionary lacks. The synthetic clips are
   spoken from the same pronunciations (`WAKE_SYNTH_IPA`, IPA): "Domovoi"
   as DOH-moe-voy, not espeak-ng's DOM-oo-voy, for every word on the list.
@@ -233,10 +235,16 @@ training data is not licensed for that:
 - the MIT room impulse responses state no licence at all.
 
 openWakeWord's own pre-trained models are CC BY-NC-SA 4.0 for the same
-reason. Domovoi's code stays MIT, and nothing GPL or LGPL is bundled with
-it: espeak-ng is only inside the trainer image, as a separate program, and
-the NVIDIA Container Toolkit is an Apache-2.0 operating-system package
-installed from NVIDIA's repository. A default Domovoi could ship would need
+reason. Domovoi's code stays MIT, and Domovoi bundles nothing GPL or LGPL.
+The trainer image does hold some: espeak-ng (GPL-3.0), the Linux
+distribution's own ffmpeg package (Ubuntu's in the default image, Debian's
+with a `python:3.11-slim` base; both are built with their GPL parts
+turned on), the mutagen library (GPL-2.0-or-later) and libsndfile
+(LGPL-2.1-or-later). They live only inside that image, which your own
+server builds from the Dockerfile in `scripts/wake_word/docker`; Domovoi
+doesn't distribute the image. The NVIDIA Container Toolkit is an
+Apache-2.0 operating-system package installed from NVIDIA's repository.
+A default Domovoi could ship would need
 training data with permissive licences throughout.
 
 ## 6. When the model isn't good enough
@@ -255,7 +263,7 @@ training data with permissive licences throughout.
   satellite's own board (HAT or XVF3800) and train again.
 - **Score the recorded clips** against the trained model:
   `python scripts/wake_word/score_clips.py <slug>` from the repo root, or
-  the score button on the word's row in Settings → Wake words.
+  the score button on the word's row in Settings → Voice → Wake words.
 
 More: [docs/TROUBLESHOOTING.md, Wake-word training](../../docs/TROUBLESHOOTING.md#wake-word-training).
 
@@ -288,7 +296,7 @@ argument either way; the quotes keep the template itself splitting the
 same way on every platform. `python` must be the core's own interpreter
 (the command runs with no shell, on the core's PATH). The time limit is
 the setting above, and the `WAKE_TRAINER_*` knobs reach the wrapper from
-`domovoi/.env` or Settings → Advanced. Build the image first
+`domovoi/.env` or Settings → System → Advanced. Build the image first
 ([DOCKER_TRAINER.md](DOCKER_TRAINER.md#build-or-pull)), or the first
 training fails with "image not found".
 

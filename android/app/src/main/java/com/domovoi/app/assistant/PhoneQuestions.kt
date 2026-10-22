@@ -67,6 +67,8 @@ data class PhoneAnswerInputs(
     /** The model answering, for "which model are you": "Gemma 4 E2B". */
     val modelName: String,
     val backend: LlmBackend,
+    /** Phone chats can look things up here (after an allow card). */
+    val lookups: Boolean = false,
 )
 
 /**
@@ -297,7 +299,8 @@ object PhoneQuestions {
                     else -> names.dropLast(1).joinToString(", ") + " and ${names.last()} are connected."
                 }
             } ?: "I can't read which headphones are connected on this phone."
-            PhoneQuestion.WEATHER -> "I can't check the weather from this phone: phone chats don't use the internet." +
+            // Never looked up by itself: a lookup is asked for, then allowed.
+            PhoneQuestion.WEATHER -> (if (inputs.lookups) WEATHER_LOOKUP else WEATHER_NONE) +
                 if (inputs.phone.serverKnown()) " Your home server chats can tell you." else ""
         }
     }
@@ -414,6 +417,9 @@ object PhoneQuestions {
     const val HOUSEHOLD_CALENDAR = "The household calendar is in your home server chats."
     const val HOUSE_TIMERS = "House timers are in your home server chats."
     const val HOUSE_THINGS = "Those are in your home server chats."
+    const val WEATHER_NONE = "I can't check the weather from this phone."
+    const val WEATHER_LOOKUP = "This phone has no weather of its own to read. Ask me to look up the weather " +
+        "in your town, and I'll ask before anything goes online."
 
     private const val MAX_EVENTS = 5
     private const val NEXT_EVENT_DAYS = 7L

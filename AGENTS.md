@@ -18,7 +18,8 @@ this file, and copies drift.
 
 ## What this repo is
 
-**Domovoi** — a local-first home voice assistant published by Coders Farm
+**Domovoi** — the home computer system that just works (media, files, rooms,
+voice and optional AI, all at home), published by Coders Farm
 (github.com/coders-farm-official/domovoi). A domovoi is a Slavic household
 guardian spirit, often taking the form of a cat; the cat mascot appears
 throughout the UI. The system runs on the user's own hardware: a central

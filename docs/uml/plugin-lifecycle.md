@@ -12,7 +12,9 @@ Every mutating endpoint below requires an admin Bearer session
 setup has created an admin password** — installing a plugin is code
 execution, so there is no pre-setup grace here (see [auth.md](auth.md)).
 Local development uses the `domovoi plugin dev` CLI instead, which never
-crosses HTTP.
+crosses HTTP. While the container guard has a tamper incident open, install,
+confirm, upgrade and enable answer `423` until an admin has cleared it
+([../CONTAINER_GUARD.md](../CONTAINER_GUARD.md)).
 
 ## States
 
@@ -43,7 +45,7 @@ stateDiagram-v2
 
     LoadError --> EnabledOk: fix, then enable again
     EnabledOk --> Upgrading: upgrade (stage new version, then confirm)
-    Upgrading --> EnabledOk: confirm pipeline succeeds, or rollback restores the old version
+    Upgrading --> EnabledOk: confirm pipeline succeeds (live after the next core restart), or rollback restores the old version
 
     EnabledOk --> Uninstalled: uninstall (data keep or purge)
     Disabled --> Uninstalled: uninstall
@@ -136,6 +138,16 @@ contract-check step does **not** roll back: the plugin lands as
     the running old version are restored. Migrations that already applied
     **stay applied**, logged loudly: a plugin's previous version must be
     one-version backward compatible with its own schema.
+* **A plugin this process has already imported is not hot-loaded again.**
+  Python would hand back the cached old module, so `register()` would run old
+  code against the new manifest. An upgrade of a running plugin (the usual
+  case), and a reinstall of one uninstalled since the last restart, therefore
+  does everything but the load: migrations are applied, the files swapped and
+  the registry row written, the answer carries `restart_required: true`, and
+  `/v1/plugins` and `/v1/admin/version` report the pending restart until the
+  Domovoi services restart. Enabling such a plugin sets `enabled=true` and
+  answers the same way. A first install of a slug this process never imported
+  loads at once.
 * **Dev-mode plugins** (`install_source="dev"`) refuse the upgrade endpoint —
   just restart the core.
 

@@ -231,7 +231,7 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
         val manager = applicationContext.getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && manager.getNotificationChannel(CHANNEL) == null) {
             manager.createNotificationChannel(
-                NotificationChannel(CHANNEL, "assistant model download", NotificationManager.IMPORTANCE_LOW),
+                NotificationChannel(CHANNEL, "phone chat model download", NotificationManager.IMPORTANCE_LOW),
             )
         }
         val current = models.firstOrNull { it.id == p?.modelId }
@@ -246,7 +246,7 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
             ?.let { PendingIntent.getActivity(applicationContext, 0, it, PendingIntent.FLAG_IMMUTABLE) }
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle(if (voice) "Downloading the voice" else "Downloading the on-device assistant")
+            .setContentTitle(if (voice) "Downloading the voice" else "Downloading the model for this phone")
             .setContentText(text)
             .setProgress(100, percent, p == null)
             .setOngoing(true)

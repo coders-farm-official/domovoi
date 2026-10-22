@@ -45,7 +45,7 @@ ERROR_CODES: dict[str, ErrorHelp] = {
     # ── refusals every page can meet ─────────────────────────────────────
     "ai-off": _e(
         "AI features are turned off",
-        "The household turned AI chat and questions off (Settings → Models → AI chat and "
+        "The household turned AI chat and questions off (Settings → Chat & AI → Models → AI chat and "
         "questions). Chat and picture reading stay off until an admin turns it on; voice "
         "commands, the manual and its search keep working.",
         "models",
@@ -60,7 +60,7 @@ ERROR_CODES: dict[str, ErrorHelp] = {
     "model_missing": _e(
         "The chat model isn't installed",
         "The model that answers chat isn't on this server yet. An admin installs it from "
-        "Settings → Models.",
+        "Settings → Chat & AI → Models.",
         "models",
     ),
     "model_unreachable": _e(
@@ -78,13 +78,13 @@ ERROR_CODES: dict[str, ErrorHelp] = {
     "model_memory": _e(
         "Not enough memory for the model",
         "The server ran out of memory loading the model. Close other heavy programs on it, or an "
-        "admin can pick a smaller model in Settings → Models.",
+        "admin can pick a smaller model in Settings → Chat & AI → Models.",
         "models",
     ),
     "model_error": _e(
         "The model failed",
         "The model service returned an error for this message. Send it again; if it keeps "
-        "happening, check Settings → Models and use Report a problem.",
+        "happening, check Settings → Chat & AI → Models and use Report a problem.",
         "models",
     ),
     "empty_reply": _e(
@@ -96,13 +96,13 @@ ERROR_CODES: dict[str, ErrorHelp] = {
     "vision_model_missing": _e(
         "Pictures need the vision model",
         "Reading pictures and screenshots needs the vision model, which isn't installed (or none "
-        "is set). An admin adds it in Settings → Models.",
+        "is set). An admin adds it in Settings → Chat & AI → Models.",
         "models",
     ),
     "vision_unsupported": _e(
         "This model can't read pictures",
         "The model chosen for pictures can't take images. An admin picks a vision model in "
-        "Settings → Models.",
+        "Settings → Chat & AI → Models.",
         "models",
     ),
     # ── chat picture uploads ─────────────────────────────────────────────
@@ -129,19 +129,19 @@ ERROR_CODES: dict[str, ErrorHelp] = {
         "Domovoi couldn't read the file you attached: it may be damaged, password-protected, "
         "scanned pages with no text, or a format chat doesn't take (old .doc and .rtf files: "
         "save them as .docx or PDF first). The message says which.",
-        "chat",
+        "ask-document",
     ),
     "missing": _e(
         "The attached document is gone",
         "The document a chat was asked about is no longer on this Domovoi (it was removed or the "
         "attachment expired). Attach it again to ask more about it.",
-        "chat",
+        "ask-document",
     ),
     "not_found": _e(
         "Domovoi couldn't find that in the document",
         "The passages Domovoi found don't answer the question, so it says so instead of guessing. "
         "Ask with words the document uses, or attach the right file.",
-        "chat",
+        "ask-document",
     ),
     "already_retried": _e(
         "That reply is already being tried again",
@@ -175,12 +175,12 @@ ERROR_CODES: dict[str, ErrorHelp] = {
         "Read from a blurry photo",
         "You sent a letter photo past its blurry heads-up, so some words may be guessed. Check the dates and "
         "amounts on the letter, or take the photo again in good light.",
-        "good-and-not",
+        "letters",
     ),
     "letter_handwriting": _e(
         "Read from handwriting",
         "Handwriting is hard for Domovoi's picture model. Check every name, date and number against the letter.",
-        "good-and-not",
+        "letters",
     ),
     "not_a_card": _e(
         "That message is no heads-up card",
@@ -193,7 +193,7 @@ ERROR_CODES: dict[str, ErrorHelp] = {
         "asked for in the chat) saved a newer version, so your edit wasn't saved over it. Your text "
         "is still in the editor: copy it if you need it, open the newest version from the version "
         "picker, and make your change there.",
-        "chat",
+        "drafts",
     ),
     # ── the app's chat mic ───────────────────────────────────────────────
     "core_timeout": _e(
@@ -207,13 +207,13 @@ ERROR_CODES: dict[str, ErrorHelp] = {
         "The lookup took too long",
         "Looking it up didn't finish in time: the search helper, Wikipedia or the page was slow. "
         "Try again, or ask in other words.",
-        "chat",
+        "lookups",
     ),
     "too_many": _e(
         "Too many lookups this minute",
         "Domovoi limits how many lookups it makes a minute, per device and for the whole house. "
         "Wait a minute and try again.",
-        "chat",
+        "lookups",
     ),
     "core_unreachable": _e(
         "Domovoi's voice service isn't answering",

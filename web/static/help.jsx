@@ -44,15 +44,23 @@ const HelpHandoff = (() => {
   };
 })();
 
-/* The current page's name, the way the top bar says it. */
+/* The current page's name, the way the top bar says it. An old address
+ * (#satellites, #containers) is the Settings section it became
+ * (resolveRoute), and a Settings section is named by its label
+ * ("Settings → Phones & browsers"). */
 const helpPageName = () => {
-  const route = String((window.location.hash || '#home').slice(1)).split('/')[0] || 'home';
+  const raw = String(window.location.hash || '#home').slice(1);
+  const parts = String(typeof resolveRoute === 'function' ? resolveRoute(raw) : raw).split('/');
+  const route = parts[0] || 'home';
   const labels = { home: 'Home', chat: 'Chat', music: 'Music', podcasts: 'Podcasts', audiobooks: 'Audiobooks',
-    videos: 'Videos', news: 'News', people: 'People', satellites: 'Satellites', calendar: 'Calendar',
-    plugins: 'Plugins', settings: 'Settings', files: 'Files', manual: 'User Manual', containers: 'Containers' };
+    videos: 'Videos', news: 'News', people: 'People', calendar: 'Calendar',
+    plugins: 'Plugins', settings: 'Settings', files: 'Files', manual: 'User Manual' };
   if (labels[route]) {
-    const tab = String(window.location.hash || '').slice(1).split('/')[1];
-    return route === 'settings' && tab ? `Settings → ${tab.replace(/-/g, ' ')}` : labels[route];
+    const tab = parts[1];
+    if (route !== 'settings' || !tab) return labels[route];
+    const all = [...(window.SETTINGS_SECTIONS || []), ...(window.SETTINGS_GROUPS || [])];
+    const known = all.find((s) => s.id === tab || (s.aliases || []).includes(tab));
+    return `Settings → ${known ? known.label : tab.replace(/-/g, ' ')}`;
   }
   const manifest = window.DomovoiPluginManifest || { plugins: [] };
   for (const p of manifest.plugins || []) {

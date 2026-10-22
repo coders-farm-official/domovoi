@@ -255,7 +255,7 @@
       "eval": "D0 bench",
       "date": "2026-10-21",
       "device": "Galaxy Z Fold (Gemma 4 E2B)",
-      "manual": "Long documents on a phone's CPU: one part took 24 s at about 2,000 tokens and 69 s at about 6,000, so a 30-page summary takes a few minutes. The heads-up comes when a summary will take over {long_wait} here, or when your home server would be faster."
+      "manual": "Long documents on a phone's CPU: one part took 24 s at about 2,000 tokens and 69 s at about 6,000, so a 30-page summary takes a few minutes. The heads-up comes when a summary will take over {long_wait} here."
     },
     {
       "kind": "long",
@@ -469,7 +469,7 @@
       "lookup": "Questions about a document",
       "citations": "Sources and pages",
       "rewrite": "Rewriting a whole document",
-      "compare": "Comparing parts of a long document",
+      "compare": "Comparing parts of a document",
       "calc": "Exact sums, averages and dates",
       "long": "Long documents",
       "scanned": "Scanned pages",

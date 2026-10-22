@@ -21,16 +21,18 @@ Checked and **not** a problem:
 
 | Item | Finding |
 |---|---|
-| `QUERY_ALL_PACKAGES` | Not declared (merged release manifest checked). The `<queries>` entries are the text-to-speech service intent and, since N1, the phone chat's hand-offs (dial, SMS and mail `SENDTO`, `geo:`, calendar `INSERT`, https `VIEW`, text `SEND`, the contact picker), and since N2 the Clock app's `SET_TIMER`, `SET_ALARM`, `SHOW_TIMERS` and `SHOW_ALARMS`: intent-scoped visibility, which needs no declaration. |
-| `com.android.alarm.permission.SET_ALARM` | **Since N2 (2026-10-21).** A normal (install-time) permission, which Android requires to send `AlarmClock.ACTION_SET_TIMER` / `ACTION_SET_ALARM` to the Clock app. The Clock app sets the timer or alarm; the app itself schedules nothing new, so it needs no exact-alarm grant and no declaration *(none exists for a normal permission)*. Each timer and alarm is asked first in the chat. |
+| `QUERY_ALL_PACKAGES` | Not declared (merged release manifest checked). The `<queries>` entries are the text-to-speech service intent and, since 2026-10-21, the phone chat's hand-offs (dial, SMS and mail `SENDTO`, `geo:`, calendar `INSERT`, https `VIEW`, text `SEND`, the contact picker) and the Clock app's `SET_TIMER`, `SET_ALARM`, `SHOW_TIMERS` and `SHOW_ALARMS`: intent-scoped visibility, which needs no declaration. |
+| `com.android.alarm.permission.SET_ALARM` | **Since 2026-10-21.** A normal (install-time) permission, which Android requires to send `AlarmClock.ACTION_SET_TIMER` / `ACTION_SET_ALARM` to the Clock app. The Clock app sets the timer or alarm; the app itself schedules nothing new, so it needs no exact-alarm grant and no declaration *(none exists for a normal permission)*. Each timer and alarm is asked first in the chat. |
 | `REQUEST_INSTALL_PACKAGES` | Not declared. The app never installs APKs; the household server hands the APK to the browser. |
-| Location (fine, coarse, background) | **Fine and coarse since N1 (2026-10-21), foreground only**, asked in a phone chat the first time someone asks "where am I" or the Wi-Fi network's name, after the app's one-line reason; optional. No background location (`ACCESS_BACKGROUND_LOCATION` is not declared), so no location declaration form applies *(unverified that none exists for foreground-only; none was found)*. Room mode still reads Wi-Fi names only where Android allows without it. |
-| Contacts, calendar (read) | **Since N1, optional**: `READ_CONTACTS` to call or text someone by name from a phone chat (the contact picker works without it), `READ_CALENDAR` to read the phone's own calendar. Neither is a restricted permission with a declaration form *(unverified)*; both are read on the phone only and never sent (Data safety: not collected). Owner, at v1: check the Play Console's "Sensitive app permissions" page lists nothing for them. |
+| Location (fine, coarse, background) | **Fine and coarse since 2026-10-21, foreground only**, asked in a phone chat the first time someone asks "where am I" or the Wi-Fi network's name, after the app's one-line reason; optional. No background location (`ACCESS_BACKGROUND_LOCATION` is not declared), so no location declaration form applies *(unverified that none exists for foreground-only; none was found)*. Room mode still reads Wi-Fi names only where Android allows without it. |
+| Contacts, calendar (read) | **Since 2026-10-21, optional**: `READ_CONTACTS` to call or text someone by name from a phone chat (the contact picker works without it), `READ_CALENDAR` to read the phone's own calendar. Neither is a restricted permission with a declaration form *(unverified)*; both are read on the phone only and never sent (Data safety: not collected). Owner, at v1: check the Play Console's "Sensitive app permissions" page lists nothing for them. |
 | `SYSTEM_ALERT_WINDOW`, `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, accessibility, SMS, call log, notification access, usage stats | None (owner rule for the phone assistant: never texts, the call log, notifications, screen-time or accessibility). Room mode only opens the system's battery settings for the person. |
-| `CAMERA` | For scanning room mode's room code (asked when "Scan" is pressed) and, since N3, for taking one photo for a question in a chat on the phone (asked on the first tap of "take a photo", after the app's own one-line reason; in-app CameraX, the photo is held in memory and discarded from memory after the reply, never saved or sent; once Android won't ask again, the tap opens the app's own "the camera is off" note with a way to the settings). `uses-feature` not required. No declaration exists for camera; the Data safety form treats both as processed on the device. The phone chat's "choose a photo" uses the system Photo Picker, which needs no permission. |
+| `CAMERA` | For scanning room mode's room code (asked when "Scan" is pressed) and for taking one photo for a question in a chat on the phone (asked on the first tap of "take a photo", after the app's own one-line reason; in-app CameraX, the photo is held in memory and discarded from memory after the reply, never saved, and never sent except a letter the person chooses to have their own home server read; once Android won't ask again, the tap opens the app's own "the camera is off" note with a way to the settings). `uses-feature` not required. No declaration exists for camera; the Data safety form treats both as processed on the device. The phone chat's "choose a photo" uses the system Photo Picker, which needs no permission. |
 | `RECORD_AUDIO` | Asked at the first mic tap with the app's own reason first (`MicPermission.kt`), and by room mode after its explainer. Prominent disclosure: room mode's explainer screen, read to the end before "Start room mode". |
 | `RECEIVE_BOOT_COMPLETED` | Re-arms timer alarms, and room mode posts "tap to resume". No microphone or media service is started from boot (Android 15 forbids it; `RoomLockRules`). |
-| Cleartext HTTP | `network_security_config.xml` allows it, and `net/CleartextPolicy.kt` enforces it **only** to private addresses and local names (RFC 1918, loopback, link-local, `.local`, `.home.arpa`, `.lan`…): the household server on the LAN has no public certificate. Everything on the internet must be HTTPS. No Play policy found against this; justification for any reviewer question: "Domovoi is self-hosted; the app talks to the household's own server on the home network, which has no publicly trusted certificate; all internet traffic is HTTPS." |
+| Cleartext HTTP | `network_security_config.xml` allows it, and `net/CleartextPolicy.kt` enforces it **only** to private addresses and local names (RFC 1918, loopback, link-local, `.local`, `.home.arpa`, `.lan`…): the household server on the LAN has no public certificate. Everything on the internet must be HTTPS, and the person's own search address for phone-chat lookups follows the same rule (plain `http://` only for a home-network address). No Play policy found against this; justification for any reviewer question: "Domovoi is self-hosted; the app talks to the household's own server on the home network, which has no publicly trusted certificate; all internet traffic is HTTPS." |
+| `FileProvider` (`${applicationId}.files`) | Not exported; it grants one file at a time, read-only, to an app the person picks when they share or open a saved draft (paths: the app's "Chat documents" folder and a share cache, `res/xml/shared_files.xml`). No declaration exists for it, and it needs no permission. |
+| `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, `WAKE_LOCK`, `MODIFY_AUDIO_SETTINGS`, `WRITE_EXTERNAL_STORAGE` (Android 9 and older only) | Normal permissions, or one limited to old Android versions; no declaration. |
 | Ads, analytics, crash reporting | None; `OpenSourceLicencesTest` fails the build if such a library appears. |
 | 32-bit / ABIs | The AAB carries arm64-v8a, armeabi-v7a, x86_64 and x86; Play serves each phone its own split. The 32-bit splits have no on-device assistant engine, and the app hides the assistant there. |
 | minSdk 26 | Fine for Play. The assistant needs 8 GB of memory; no device-catalog exclusion is wanted, because the rest of the app (and room mode on old phones) works everywhere. |
@@ -84,7 +86,7 @@ on Google's video site); paste the link.
 ### dataSync (WorkManager's `SystemForegroundService`, used by `assistant/ModelDownloadWork.kt` and `audiobooks/BookDownloads.kt`)
 
 - **Feature description:** When the user taps "download" for the on-device
-  assistant's models (about 2.5 GB, once) or a phone voice (about 60 MB),
+  assistant's models (about 2.6 GB, once) or a phone voice (about 60 MB),
   the app downloads the files over HTTPS from pinned addresses, resumably,
   with a progress notification that has a pause button. Wi-Fi only unless
   the user allows mobile data. Since 1.0.0-rc3, "Save to phone" on an
@@ -93,7 +95,7 @@ on Google's video site); paste the link.
   reach, the download pauses and finishes when it's back. Play's form for
   this type takes only the task kind ("Network processing → Other") and a
   video, so the existing entry covers it; nothing to change there.
-- **User impact if deferred or interrupted:** A 2.5 GB download takes many
+- **User impact if deferred or interrupted:** A 2.6 GB download takes many
   minutes; if it stopped when the user left the app, the assistant could
   not be set up without keeping the screen on for the whole download.
 - **Use case:** Network transfer: upload or download (user-initiated).
@@ -117,14 +119,15 @@ What the policy asks and what the app does:
 - **Prevent restricted content:** the model's own safety tuning, a fixed
   system prompt (`assistant/Persona.kt`) asking for short spoken answers, a
   4,096-token limit on prompt plus reply (`LiteRtLlmEngine.DEFAULT_MAX_TOKENS`), and
-  since N1 at most read-only tools the app runs itself, and none for the
+  since 2026-10-21 at most read-only tools the app runs itself, and none for the
   shipped model (Gemma 4 E2B answers phone questions from the app's own
   patterns) (finding a song, video
   or saved book, the timers, the phone's status: `assistant/PhoneTools.kt`);
   the model can't change anything, reach files or contacts, or the network
-  (`NoNetworkTest`). Calls, texts and the other hand-offs are the app's own
-  patterns, shown as a card the person taps, never the model's. Since N2
-  the phone's actions (Clock timers and alarms, the player, saved books and
+  (`NoNetworkTest`). A lookup is the app's own client, run only after the
+  person's allow card (`assistant/lookup/`; Data safety, "Lookups in phone
+  chats"); the model only proposes the words. Calls, texts and the other hand-offs are the app's own
+  patterns, shown as a card the person taps, never the model's. The phone's actions (Clock timers and alarms, the player, saved books and
   videos) are also the app's own patterns (`assistant/PhoneActions.kt`),
   never a model tool call for the shipped model; timers, alarms and videos
   are asked first, playback can be undone.
@@ -180,7 +183,7 @@ instructions (no credentials exist):
 > everything there can be reviewed: open the app, allow media access to
 > see Music, Videos and Files from the device, and open the Assistant tab
 > (64-bit device with 8 GB of memory or more; it downloads its model, about
-> 2.5 GB, on Wi-Fi) to chat with the on-device model, by text or the mic.
+> 2.6 GB, on Wi-Fi) to chat with the on-device model, by text or the mic.
 > Room mode ("Domovoi Room" icon) can be reviewed up to its room code
 > screen; the demo videos linked in the foreground service declaration show
 > it running. Server setup: github.com/coders-farm-official/domovoi.
