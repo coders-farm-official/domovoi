@@ -534,3 +534,45 @@ def test_chat_models_endpoint(tags, monkeypatch):
         tags.models = None
         r = c.get("/api/chat/models").json()
         assert r["vision_installed"] is None and r["installed"] == []
+
+
+# ─── A staged picture no message took ───────────────────────────────────────
+@requires_db
+def test_staged_pictures_never_sent_go_after_an_hour(uploads_dir, stub_stream, tags, monkeypatch):
+    """Found in the docs v1 pass: a picture staged in the composer and never
+    sent stayed on the disk for good. Now it goes after an hour (the same
+    time a staged document gets); a picture a message carries stays, and
+    goes with its chat."""
+    import asyncio
+    import os
+    import time
+
+    monkeypatch.setattr(chat_api.core_settings, "ollama_vision_model", "qwen2.5vl:7b")
+    tags.models = ["llama3.2:3b"]           # no vision model: the turn is stored without a model call
+    with _client() as c:
+        sent, unsent, fresh = _upload(c), _upload(c), _upload(c)
+        t = c.post("/api/chat/threads", json={}).json()
+        r = c.post(f"/api/chat/threads/{t['id']}/messages",
+                   json={"content": "what is this?", "images": [{"token": sent, "name": "cat.png"}]})
+        assert r.status_code == 200
+        # The copy the model was sent lives beside the upload; it goes with it.
+        (uploads_dir / f"{unsent}-1280.png").write_bytes(b"copy")
+        old = time.time() - 2 * chat_api.UNSENT_PICTURE_TTL_SEC
+        for tok in (sent, unsent):
+            for f in uploads_dir.glob(f"{tok}*"):
+                os.utime(f, (old, old))
+        assert asyncio.run(chat_api.sweep_unsent_pictures()) == 1
+        assert not any(uploads_dir.glob(f"{unsent}*"))
+        assert any(uploads_dir.glob(f"{sent}.*")) and any(uploads_dir.glob(f"{fresh}.*"))
+        assert asyncio.run(chat_api.sweep_unsent_pictures()) == 0
+
+        # The next upload sweeps too, so a quiet house is tidied by use.
+        stale = _upload(c)
+        for f in uploads_dir.glob(f"{stale}*"):
+            os.utime(f, (old, old))
+        _upload(c)
+        assert not any(uploads_dir.glob(f"{stale}*"))
+
+        # Deleting the chat removes the picture it carried.
+        assert c.delete(f"/api/chat/threads/{t['id']}").status_code == 200
+        assert not any(uploads_dir.glob(f"{sent}*"))

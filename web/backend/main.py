@@ -232,6 +232,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     chat_doc_jobs.boot()
     chat_doc_jobs.start_sweeper()
+    from web.backend.api import chat as chat_api
+    chat_api.start_unsent_sweeper()
 
     broadcaster = StateBroadcaster()
     poll_loop = StatePollLoop(broadcaster, interval_sec=_POLL_INTERVAL)
@@ -277,6 +279,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await chat_doc_jobs.shutdown()
+        await chat_api.stop_unsent_sweeper()
         await listen_task.stop()
         await poll_loop.stop()
         # Uninstall the import guard on shutdown. Irrelevant for a real

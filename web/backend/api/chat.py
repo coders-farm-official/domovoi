@@ -2613,10 +2613,83 @@ async def upload(file: UploadFile = File(...)) -> dict[str, Any]:
                 max_megapixels=image_safety.MAX_IMAGE_PIXELS // 1_000_000,
             )
         return _unsupported(data)
+    try:
+        await sweep_unsent_pictures()
+    except Exception as e:  # noqa: BLE001 — tidying never stops an upload
+        log.warning("chat uploads: the unsent sweep failed: %s", type(e).__name__)
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     token = uuid.uuid4().hex
     (UPLOADS_DIR / f"{token}{ext}").write_bytes(data)
     return {"token": token, "name": file.filename or f"image{ext}"}
+
+
+#: A staged picture no message took (picked in the composer, never sent) is
+#: removed after this long, the same hour a staged document gets
+#: (chat_documents.UNSENT_TTL_SEC). A picture a message carries goes with
+#: its chat (:func:`delete_thread`).
+UNSENT_PICTURE_TTL_SEC = 3600
+_UNSENT_SWEEP_EVERY_SEC = 600
+
+
+async def sweep_unsent_pictures(now: float | None = None) -> int:
+    """Remove staged pictures older than :data:`UNSENT_PICTURE_TTL_SEC` that
+    no message refers to, and the copy the model was sent, if any. Returns
+    how many went. Run at each upload and every ten minutes while the web
+    process does, so a picture staged and abandoned doesn't stay on the
+    disk."""
+    if not UPLOADS_DIR.is_dir():
+        return 0
+    now = time.time() if now is None else now
+    old: dict[str, list[Path]] = {}
+    for p in UPLOADS_DIR.iterdir():
+        # The staged file itself is <token>.<ext>; <token>-1280.* is the copy.
+        token = p.name[:32]
+        try:
+            if _TOKEN_RE.match(token) and p.is_file() and now - p.stat().st_mtime > UNSENT_PICTURE_TTL_SEC:
+                old.setdefault(token, []).append(p)
+        except OSError:
+            continue
+    if not old:
+        return 0
+    async with session_scope() as s:
+        used = set((await s.execute(text(
+            "SELECT jsonb_array_elements(images)->>'token' FROM chat_messages WHERE images IS NOT NULL"
+        ))).scalars().all())
+    gone = 0
+    for token, files in old.items():
+        if token in used:
+            continue
+        for p in [*UPLOADS_DIR.glob(f"{token}.*"), *UPLOADS_DIR.glob(f"{token}-*")]:
+            p.unlink(missing_ok=True)
+        gone += 1
+    return gone
+
+
+_unsent_sweeper: asyncio.Task | None = None
+
+
+async def _sweep_unsent_forever() -> None:
+    while True:
+        await asyncio.sleep(_UNSENT_SWEEP_EVERY_SEC)
+        try:
+            await sweep_unsent_pictures()
+        except Exception as e:  # noqa: BLE001 — the next round tries again
+            log.warning("chat uploads: the unsent sweep failed: %s", type(e).__name__)
+
+
+def start_unsent_sweeper() -> None:
+    """The picture sweep every ten minutes while the web process runs."""
+    global _unsent_sweeper
+    if _unsent_sweeper is None or _unsent_sweeper.done():
+        _unsent_sweeper = asyncio.get_running_loop().create_task(
+            _sweep_unsent_forever(), name="chat-unsent-pictures-sweep")
+
+
+async def stop_unsent_sweeper() -> None:
+    global _unsent_sweeper
+    if _unsent_sweeper is not None:
+        _unsent_sweeper.cancel()
+        _unsent_sweeper = None
 
 
 #: The picture is measured at this size (longest side, grey): the same as
