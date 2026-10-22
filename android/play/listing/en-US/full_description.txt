@@ -23,11 +23,11 @@ ON ITS OWN, WITH NO SERVER
 • Chat with the on-phone AI, by voice or text.
 
 WHEN YOU WANT IT: A PRIVATE ASSISTANT
-Domovoi can also answer questions, by voice or text. At home your server answers. On the phone, a language model running on the phone itself writes the answer and reads it aloud. After a one-time download it works in airplane mode, and what you ask never leaves the phone. It needs a 64-bit phone with 8 GB of memory or more and about 3 GB of free space. If an answer is offensive or wrong, long-press it to report it: you see exactly what the report holds before anything is sent.
+Domovoi can also answer questions, by voice or text. At home your server answers. On the phone, a language model running on the phone itself writes the answer and reads it aloud. After a one-time download it works in airplane mode, and what you ask stays on the phone unless you allow a lookup (it shows exactly what would be sent, and where, and sends it only if you say yes) or choose to hand a document or a letter to your home server. It needs a 64-bit phone with 8 GB of memory or more and about 3 GB of free space. If an answer is offensive or wrong, long-press it to report it: you see exactly what the report holds before anything is sent.
 
 PRIVATE BY DESIGN
 • The app talks to your own Domovoi server on your home network, and to nothing run by us.
-• The phone's assistant processes your voice on the phone and never stores audio.
+• Phone chats turn your voice into text on the phone and never store audio.
 • Plain connections are allowed only to addresses on your home network; anything on the internet must use HTTPS.
 • Your household pairing is sealed with a key in the phone's keystore and left out of cloud backups.
 • No analytics, advertising or crash-reporting services.

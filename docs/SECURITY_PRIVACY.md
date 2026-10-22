@@ -1,7 +1,7 @@
 # Security & Privacy
 
-Domovoi is a house guardian, so let's be straight about what it actually
-guards — and what it doesn't. This page is the threat model in plain words,
+Domovoi is the home computer system that keeps it in the house, so let's
+be straight about what it actually guards — and what it doesn't. This page is the threat model in plain words,
 what the admin password really protects, exactly what data lives where,
 what leaves your network (and how to turn each thing off), and an honest
 list of the hardening work that was **deliberately deferred** in v1.
@@ -404,7 +404,7 @@ device tier already admits. Read-only — nothing is added, moved or deleted
 by voice — and every voice reads the one household calendar (events carry
 no owner).
 
-**Documents by voice (2026-10-21, documents plan D7).** "Read me the
+**Documents by voice (2026-10-21).** "Read me the
 lease" reads a file from the household's Documents folder aloud in the
 room that asked: the same tier that can already open everything there
 (`require_device_read`; a satellite's turn is a household device, and a
@@ -414,9 +414,12 @@ that lead out skipped, no hidden folders, the Files tab's secret-name
 filter. Never a phone's own files, never another room. "Take a letter"
 writes one new file into `Documents/From Chat/` (through the same writer
 as the chat's Save, which refuses a `From Chat` link that leads elsewhere)
-and a chat holding the dictation; nothing is sent anywhere. Like "scan
-this to Documents" by voice, a voice turn names no device, so Settings →
-Devices' per-device file block (keyed on a device's id or name) has
+and a home-server chat holding the dictation as its first message and the
+letter as a draft (kept like any chat, until the chat is deleted; the file
+in `From Chat` stays until someone deletes it); nothing is sent anywhere.
+Like "scan this to Documents" by voice, a voice turn names no device, so
+the per-device file block (Settings → Phones & browsers, keyed on a
+device's id or name) has
 nothing to match; a phone's chat mic is pointed at its own chat instead.
 The room's "saved" line names the title, never the letter's words.
 
@@ -499,7 +502,7 @@ request is replayed), and an admin login pairs the browser without a prompt
 by reading `GET /api/auth/device-token`. An admin sees the token
 under **Settings → Phones & browsers → Household token**, with copy, `set…` and
 rotate.
-The Android app asks for it once under **Settings → Connection**, keeps it
+The Android app asks for it once under **Settings → Phones & browsers**, keeps it
 sealed with AES-256-GCM under a key that never leaves the Android Keystore
 (`data/TokenVault.kt`; a token an older build kept in the plain DataStore
 is moved across at the first start, the plain copy going only once the
@@ -511,10 +514,11 @@ nothing addressed anywhere else (`net/TokenScope.kt`; before 2026-10-08 the
 shared HTTP client put it on every request it made). A refusal returns the
 app to that pairing screen. Rotating the token from either surface
 invalidates the old one everywhere: every browser and phone has to be
-paired again. The CI's distributable build is a debuggable APK, and on a
-debuggable build anyone with USB debugging authorised can drive the app's
-own process to decrypt — the Keystore protects the file, not a debugger;
-only a release build closes that (android/README.md).
+paired again. The CI's build is a debuggable APK, and on a debuggable
+build anyone with USB debugging authorised can drive the app's own process
+to decrypt — the Keystore protects the file, not a debugger. The signed
+release build a server hands out through its join page is not debuggable,
+which closes that (android/README.md).
 
 ### Trusting a server before talking to it
 
@@ -541,7 +545,7 @@ person says yes, so the first proof has to match that key and not whoever
 answers first on some network; a server trusted by a build from before
 this is pinned the first time it proves one, and a server trusted while it
 offered none is never pinned behind the person's back (the topbar says
-"unverified", and **Settings → Connection** shows the key it proves now
+"unverified", and **Settings → Phones & browsers** shows the key it proves now
 with a button to pin it). The proof is demanded before the first request
 that would carry the household token on every network — each verdict is
 keyed to a fingerprint of every network the phone could reach the server
@@ -558,7 +562,7 @@ paired with. A web backend whose core is not answering
 (`domovoi_reachable` false) is not an impostor: the token is held, nothing
 is cached, and the shell says the server is not fully up. The pinned
 fingerprint and every trusted server are listed under **Settings →
-Connection**, each with a forget button — the server in use included,
+Phones & browsers**, each with a forget button — the server in use included,
 after a confirmation that shows the pinned key next to the one it proves
 now, which is how a phone re-pairs after a reinstalled or replaced
 server — and a server switch drops trust (only the trust) that is no
@@ -573,7 +577,7 @@ not lowercased) and pins by `scheme://host:port`, so a second saved
 spelling of the same server (a host-name case variant, say) would keep its
 old token under the new pin. That takes two saved spellings of one server,
 which is unlikely in practice; forgetting a spelling under **Settings →
-Connection** drops its token. This is the pre-TLS interim, and the
+Phones & browsers** drops its token. This is the pre-TLS interim, and the
 proof is a signed nonce with no address bound to it: a relay that can reach
 the real core from a hostile network (a port-forward, an overlay network)
 would still pass it. TLS with a pinned certificate closes that and stays on
@@ -589,7 +593,7 @@ same-origin — so CORS never sees it, and nothing but the `Host` header can
 tell the difference.
 
 What passes: a private, loopback or link-local IP; a single-label name
-(`localhost`, `beelink`, a container name — a bare label cannot be bought,
+(`localhost`, `domovoi`, a container name — a bare label cannot be bought,
 because public DNS names always contain a dot); anything under `.local`,
 `.lan`, `.home.arpa`, `.internal`; and anything the operator lists in
 `TRUSTED_HOSTS`. A request with no `Host` at all passes, because rebinding
@@ -1165,9 +1169,14 @@ router lists. Neither is new exposure: avahi publishes both host names on
 any stock install, and a name is only ever a hint the identity check
 settles (see *Server identity*).
 
-Only three kinds of port face the LAN: the core (`6370`), the dashboard
-(`6369`) and each room's MPD **stream** port (`8050`, `8051`, …) that the
-satellites fetch audio from. Everything else the stack runs — Postgres
+Only three kinds of port face the LAN from Domovoi's own stack: the core
+(`6370`), the dashboard (`6369`) and each room's MPD **stream** port
+(`8050`, `8051`, …) that the satellites fetch audio from. (A plugin that
+runs a server in a container, such as Jellyfin, RomM or Kiwix, publishes
+that server's own port too. Looking for printers binds UDP 5353 for a few
+seconds and answers no one. On the Windows install, the firewall rules that
+let the LAN in name Domovoi's ports and your home subnet only.) Everything
+else the stack runs — Postgres
 (`6432`), Letta (`6283`), SearXNG (`6888`) and each room's MPD **control**
 port (`6650`, `6651`, …) — is published on `127.0.0.1` only, so a device
 on your Wi-Fi cannot open the database, drive the chat agent or control a
@@ -1210,7 +1219,7 @@ hash-checked, said plainly (OPS-9, a documented limit for 1.0):
   rather than in the installer's distro), pip's resolver installs
   whatever the index serves within the floors. On a box that opted in,
   the update unit records that re-sync as a `warn` step and Settings →
-  Version shows **lock not applied: <reason>**, so the opt-in never turns
+  About & updates shows **lock not applied: <reason>**, so the opt-in never turns
   itself off silently.
 - **Extras outside the lock** (`cuda`, `fastlane`, `shazam`, `chat`,
   `signing`) go through the resolver too, when you add them.
@@ -1717,14 +1726,16 @@ All of it on hardware you own. Locations, verified against the code:
 | **Postgres: rolled-back databases** (Linux update unit only) | When a rollback restores the pre-update dump, the database it replaced is renamed `domovoi_failed_<UTC time>` (and `domovoi_test_failed_<UTC time>`) and kept for inspection: a full copy of everything the row above lists. Only the newest one of each is kept (`DOMOVOI_UPDATE_KEEP_FAILED_DBS`, default 1); older ones are dropped at the next restore. Same credential as the live database. **Voice history in it is as old as the copy**: "Keep voice history", "Delete all voice history" and forgetting a person act on the live database only, so this copy keeps what was said until it is dropped (`DROP DATABASE` it by hand to be rid of it sooner). |
 | **`/var/lib/domovoi-update/` on the server** (Linux update unit only) | `backups/pre-<sha>-<UTC time>.dump` and `.test.dump`: a `pg_dump` of `domovoi` and `domovoi_test` taken before every full update, so **everything the database holds** — transcripts, voice embeddings, the admin password hash, session token hashes and the household device token, in plain text inside the dump. Directory 0700 and files 0600, root only; the newest 5 of each are kept (`DOMOVOI_UPDATE_KEEP_BACKUPS`). **They keep the voice history they were taken with**: a shorter "Keep voice history", "Delete all voice history" or forgetting a person doesn't reach them, so older history lasts until five more full updates have replaced them (delete the files as root to be rid of it sooner; a rollback then has nothing to restore). Also `last-result.json` (the last run's steps, with the tail of each failed command's output; mode 0640, readable by root and the service user's group, which is how the core reads it), `pip-freeze-pre.txt` (package versions) and the applied / bad commit SHAs. |
 | **The systemd journal on the server** (Linux; the Windows install keeps one inside its WSL distro) | What the core and the dashboard print to stdout: start-ups and shut-downs, warnings and errors, the loop watchdog's stall reports, one line per HTTP request but the routine polls (method, path, status, the caller's address), which room a turn came from and which handler answered it, and voice identification's scores (person ids and numbers). **Since 2026-10-16 no line holds a credential or what was said** at the default level: both processes blank the value of every credential-named parameter in every log line, whatever logger wrote it (`?device_token=` in the URLs the dashboard builds, a WebSocket's `?token=`, a Bearer: `device_token=***`, `domovoi/log_privacy.py`), and a transcript, a search, an announcement or a reply appears only as a word count (`<5 words>`); with `LOG_LEVEL=DEBUG` the words are written too, for as long as it is set. Kept **on disk** (`Storage=persistent`, installed by `provision.sh` and every update so a freeze's record survives a power cycle, [LINUX_HOST.md](LINUX_HOST.md#the-loop-watchdog)) within journald's own limits: by default at most 10% of the file system, capped at 4 GB, with **no time limit** — the oldest entries go only when the cap is reached, which on a quiet box can be months. Readable by root and members of `adm` / `systemd-journal`. **"Forget me", deleting a person or a chat conversation, "Keep voice history", "Delete all voice history" and "never save my voice" do not reach it**: lines already written stay until journald rotates them out. To remove them sooner, as root: `journalctl --vacuum-time=7d` (or set `MaxRetentionSec=` in a drop-in of your own). A journal from before 2026-10-16 can hold the household token (the dashboard's access log printed `?device_token=` URLs) and transcripts (the core logged some at INFO) until it rotates: rotate the household token (Settings → Phones & browsers) and vacuum the journal if that matters to you. Setup's **Copy logs** on Windows copies the last 200 journal lines of a failed start into `provision.log`, with `device_token=` blanked there too (`Redact.KeyValue`). |
-| **Media directories on the server** | Your music (`~/Music` by default) and documents (`~/Documents` by default), plus flat podcast and audiobook directories under the config dir (`~/.domovoi/podcasts` and `~/.domovoi/audiobooks` by default; all paths configurable). |
+| **Media directories on the server** | Your music (`~/Music` by default) and documents (`~/Documents` by default), plus flat podcast and audiobook directories under the config dir (`~/.domovoi/podcasts` and `~/.domovoi/audiobooks` by default; all paths configurable). A page scanned through Domovoi is saved as a PDF in `Documents/Scans/`; a draft saved from a chat, a draft a phone sent home and a letter taken by voice are saved as files in `Documents/From Chat/`, and stay there until someone deletes them (deleting the chat does not). |
+| **Postgres: chat** (`chat_threads`, `chat_messages`, V034–V039; `help_deliveries`, V035) | The home-server chats of the dashboard and the app: each thread's title, whether you or the chat model named it, whether it is archived, and every message (what was typed or, for a chat-mic turn, transcribed; the dictation of a letter taken by voice; the reply; the model; the device it came from; who the voice was recognized as). A reply that looked something up keeps the search words or page address, the sources shown under it and whether the internet was used, and the thread keeps whether "Allow in this chat" is on. A message that carried documents keeps a one-line summary of each (name, kind, pages, word count, notes); a reply answered from documents keeps the passages the model was given, with their text; a reply about a letter photo keeps the text read from the photo beside it. A long summary's per-part notes (`chat_doc_jobs`, V038) are kept only until the summary is finished, or while a stopped one waits to carry on. Drafts (`chat_drafts`, `chat_draft_versions`, V039) keep every version of a letter or other document the chat wrote: the text, the instruction that produced it, whether the model or a person wrote it, the model, the files saved from it, and the device (and person, when known) that made it. A "send the steps to my phone" leaves a `help_deliveries` row: the person, the chat and its title, no text. **Kept until the thread is deleted** (any paired device can delete one): there is no age limit, and "Keep voice history" does not touch chat. Deleting a thread removes its messages, document jobs, drafts and delivery rows; copies in the pre-update database dumps and in a rolled-back database (the rows above) stay until those are replaced. |
+| **`~/.domovoi/chat_uploads/` on the server** | Pictures sent into a home-server chat, letter photos included (the upload and the smaller copy the vision model was sent; up to 20 MB each and 4 a message) and, under `documents/`, the documents attached to a chat or copied in by "Ask about this document" (PDF, Word, OpenDocument, Excel, CSV, text or markdown; up to 100 MB each and 4 a message): the original as `<token><ext>` and the text read from it as `<token>-parts.json`, under random names. They go with the thread they belong to; a document picked in the composer and never sent is cleared out after an hour. Readable by a paired device only. See [Documents in chat](#documents-in-chat). |
 | **`domovoi/.env` in the repo checkout** | Settings changed from the dashboard's Settings page, persisted as plain text — **including secrets** (e.g. `ACOUSTID_API_KEY`, which the dashboard writes and never reads back: Settings → Advanced shows an admin only whether one is set). Protect it like `~/.domovoi/plugins/`. No value written there may hold a newline or another control character (the configuration page refuses it, and the writer refuses it for every key): the core reads a quoted newline as part of the value, but a line-based reader would see a second setting, which a value could smuggle past the core. The update unit (root) reads it through the checkout's own reader, as the core does. |
 | **Postgres: guests** (V023 `guests_seen`, `guest_bans`, `room_queue_items.guest_*`, 2026-10-10) | `guests_seen`: one row per (self-asserted browser id, source address) that a GUEST (no household credential) changed the music from — the id, the address, the user agent, the room, the last action, first and last seen. Written by the core each time it lets a guest act; at most 10 rows per address (newest kept), and a row not seen for 30 days is deleted by the core's hourly `guests_seen_pruner` worker. `guest_bans`: the admin's bans (an id and/or an address, an optional note), kept until lifted. `room_queue_items.guest_device_id` / `guest_source`: which guest queued an entry, gone with the entry's provenance row. All three are read only by an admin (`GET /api/music/guests`, `/api/music/guest-bans`, the admin's queue read); a guest never sees them. No transcript, no recording. |
 | **Postgres: satellite health** (V022 `satellite_health`, `satellite_outages`, 2026-10-09) | One row per health sample a satellite sends (about one a minute: its memory, fds, CPU, temperature and throttle flags, uptime, mic frames/s, queue depths, link rate and SSID, NetworkManager state, whether its gateway and this core answered; a spare laptop or phone may add its battery level and charging state and whether its mic is blocked), pruned to 24 h per room; and the last 20 outage reports per room (what the satellite's previous process life wrote down before it died: its last sample, the failed connects it saw, the self-check actions it took, why it exited). Numbers and short strings — never a transcript, a recording or a person. Household data on the device-read tier (`GET /v1/admin/satellite/{room}/health`): a paired device learns the room's SSID, uptime, whether a turn or call is open right now, and whether anyone has been reconnecting it, nothing more. The Open `/v1/admin/snapshot` carries only when the latest sample and report arrived, never their content. Written only from a session whose `hello` matched the room's pairing token. |
 | **`~/.domovoi/satellite-logs/` on the server** (`satellite_logs_dir`, 2026-10-09) | The log lines each satellite pushes (`log_push`): what it spooled while it was disconnected and the last 30 s of its ring every 30 s, one file per room (`<room>.log`, 1 MB plus one `.log.1` rotation; a room id that is not plain letters, digits, `.`, `_`, `-` — or a Windows device name — gets a hash of the full id in its file name, so the name never leaves the directory and two rooms never share a file), each line prefixed with the server's receive time, and written only from the room's own token-authenticated session. **The same content as the Pi's ring** — a `heard: <transcript>` line for every utterance and the text of every reply and announcement — so it is served only through the admin-read logs route, like the live ring, and nothing else reads the directory. Lines older than "Keep voice history" are removed with the rest of the voice history every day, and "Delete all voice history" removes every line written until then. Delete a room's file to forget it. |
 | **`~/.domovoi/` on each Pi** | `config.toml`, synced sound clips, synced wake models, small state sidecars (`voice`, `wake`, last-synced version, and the `pairing_token` WS-auth secret — mode 0600), a tarball backup of the previous satellite code kept for upgrade rollback, and since 2026-10-09 two small diagnostic files: `last-health.json` (the satellite's last health sample, the failed connects it saw while disconnected, the self-check actions it took and why it exited — written every 10 minutes and before anything it does to itself; carried to the core in its next `hello` and deleted once acknowledged) `log-spool.txt` (a 256 KB ring file of the log lines written while disconnected — transcripts included, as in the ring — pushed to the core on reconnect and cleared), and `self-restarts.json` (when the client last exited or rebooted itself for a self-check, and why: the restart budget, at most 3 an hour). Both stay on the SD card only while the unit is away from its core. |
 | **RAM on each Pi** (not on disk) | The satellite's last 10 MB of its own log output, which **includes a `heard: <transcript>` line for every utterance** and the text of every reply and announcement it spoke — since 2026-09-30 that is **every room's timers and reminders** it announced, a reminder's words included (see [Timers and reminders](#timers-and-reminders-house-wide)) — so it holds recent spoken content. Kept in memory only (a log ring is the write pattern that kills SD cards) and lost on restart. Readable through the dashboard's per-satellite **Logs** tab, gated at the same admin-read tier as a config read for exactly that reason. Journald on the Pi keeps its own durable copy, subject to your `systemd` retention. |
-| **The Android app's private storage** (on each phone; excluded from cloud backup and device-to-device transfer by `dataExtractionRules`) | The saved servers and the household token for each, the timer alerts' alarm mirror (a reminder's words included, see [Timers and reminders](#timers-and-reminders-house-wide)), and since 2026-09-30 the app's own **problem log** (`files/diagnostics/`): the last 10 crashes, "not responding" closes and main-thread freezes on that phone, each with a trimmed stack trace and Android's description of the exit. A stack can carry an exception message, which may name the server's address. The log is never uploaded and never shown on the lock screen; the owner reads, copies, shares or clears it under Settings → About → Problem reports. Since 2026-10-13, on a phone that uses the **on-device assistant**: its language model (`files/models/`, about 2.4 GB, downloaded once from a pinned upstream URL and checked against its SHA-256 before use; "delete model" in the assistant frees it), the **conversations with it** (`files/assistant/`, one JSON file per conversation holding every question and reply as typed or, for a spoken question, as transcribed, with each reply's timing; the audio itself is never written anywhere), and its few choices (`shared_prefs/assistant.xml`: CPU or GPU, Wi-Fi only, whether typed replies are read aloud, which conversation is on screen). The conversations are never uploaded and never sent to a Domovoi server (and the server's chat history never comes to the phone); the model reads only the conversation it is in. The owner deletes one, or all with "clear all conversations", in the assistant; uninstalling removes everything. Since 2026-10-15, the **reply reports** the owner chose to make ("report this reply", `files/assistant-reports/`, one JSON file each): the reported reply, the question before it, the model, when, the app version and the owner's note, nothing else. They stay on the phone, apart from the conversations (clearing those keeps a report), until deleted in the assistant's model settings; "email draft to coders farm" opens the owner's email app with one addressed to info@codersfarm.org and "share as text" hands one to Android's share menu; nothing leaves the phone unless the owner sends it from there. Since 2026-10-21 (One Chat) a home-server chat's reply can be reported the same way; such a report is handed on (email draft or share) and never saved on the phone, and it holds the same fields with `place: "home server"` and the server's model name, no thread id or household detail. No report is sent anywhere by the app itself (`REPORT_DESTINATION`; the HTTPS option, when chosen, sends only the report's own fields, without the household token). |
+| **The Android app's private storage** (on each phone; excluded from cloud backup and device-to-device transfer by `dataExtractionRules`) | The saved servers and the household token for each, the timer alerts' alarm mirror (a reminder's words included, see [Timers and reminders](#timers-and-reminders-house-wide)), and since 2026-09-30 the app's own **problem log** (`files/diagnostics/`): the last 10 crashes, "not responding" closes and main-thread freezes on that phone, each with a trimmed stack trace and Android's description of the exit. A stack can carry an exception message, which may name the server's address. The log is never uploaded and never shown on the lock screen; the owner reads, copies, shares or clears it under Settings → About & updates → Problem reports. Since 2026-10-13, on a phone with **phone chats** (Domovoi on this phone): its language model (`files/models/`, about 2.4 GB, downloaded once from a pinned upstream URL and checked against its SHA-256 before use; "delete model" frees it), the **phone chats** (`files/assistant/`, one JSON file per conversation holding every question and reply as typed or, for a spoken question, as transcribed, with each reply's timing; a lookup's words, where it went and the titles and addresses of its sources; the text read from a letter photo, beside its answer; the audio itself is never written anywhere, and a photo asked about is not either: the conversation keeps a "photo" mark), the documents attached to a phone chat and the text read from them (`files/chat-docs/attachments/<conversation>/`) and its drafts with every version (`files/chat-docs/drafts/<conversation>/`), all deleted with the chat; drafts saved as files (`files/Chat documents/`, kept until deleted there); the own search for lookups, if one is set (the SearXNG address or Brave key, sealed with a Keystore key); and its few choices (`shared_prefs/assistant.xml`: CPU or GPU, Wi-Fi only, whether typed replies are read aloud, which conversation is on screen). A phone chat is never uploaded or copied to a Domovoi server as a whole (and the server's chat history never comes to the phone); the model reads only the conversation it is in. What leaves the phone from a phone chat is only what the person allows or picks, each time: a lookup's words ([Looking things up](#looking-things-up-chat-lookups); at home a search's words first go to the home server's own sources, which stay in the house, and the allow card comes before anything goes to the internet), a document or letter photo handed to the home server, or a draft sent home ([Documents in chat](#documents-in-chat)). The owner deletes one, or all with "clear all conversations", in the assistant; uninstalling removes everything. Since 2026-10-15, the **reply reports** the owner chose to make ("report this reply", `files/assistant-reports/`, one JSON file each): the reported reply, the question before it, the model, when, the app version and the owner's note, nothing else. They stay on the phone, apart from the conversations (clearing those keeps a report), until deleted in the assistant's model settings; "email draft to coders farm" opens the owner's email app with one addressed to info@codersfarm.org and "share as text" hands one to Android's share menu; nothing leaves the phone unless the owner sends it from there. Since 2026-10-21 (One Chat) a home-server chat's reply can be reported the same way; such a report is handed on (email draft or share) and never saved on the phone, and it holds the same fields with `place: "home server"` and the server's model name, no thread id or household detail. No report is sent anywhere by the app itself (`REPORT_DESTINATION`; the HTTPS option, when chosen, sends only the report's own fields, without the household token). |
 
 Nothing is stored anywhere else. Backup story = back up Postgres, the
 directory trees above, and `domovoi/.env` — see the
@@ -1737,7 +1748,10 @@ limit, forgetting a person only took their name off it, and there was no
 delete. Now there is a limit, a delete, and forgetting someone removes what
 they said. Everything below is `domovoi/voice_history.py`,
 `domovoi/workers/voice_history_pruner.py`, V030 and People → **Voice
-history** on the dashboard.
+history** on the dashboard (the same "Keep voice history" setting is also
+under Settings → Advanced → Privacy; Settings → Privacy → Voice history is
+the page for command recordings, below). Chat is not voice history: a
+home-server chat is kept until it is deleted (see [Data at rest](#data-at-rest)).
 
 | | |
 |---|---|
@@ -1766,7 +1780,7 @@ is `domovoi/command_captures.py`, `web/backend/api/captures.py` and V016.
 | **What is never kept** | Wake-word **training clips** (their own pipeline, never routed). **Chat-mode** turns (open conversation, not commands; the design never ends those early). **Barge-ins** (the capture opens while the satellite is still talking, so it carries the reply's own audio). **Push-to-talk** (a button ends it, not silence). Any command captured **during a drop-in call**, judged over the whole capture: a call live when it opened, one that started while it was open, or one hung up before it closed (the speaker was playing the other room, whose people never opted in). A blank capture, a self-echo, a turn that was only the wake greeting coming back through the mic, or a turn whose speech-to-text is down. |
 | **Where** | `COMMAND_CAPTURES_DIR`, default `~/.domovoi/captures/<room>/` on the Domovoi server; files `0600` in `0700` directories on Linux. **No web file route serves it**: the only reader is the admin API below. The core refuses to write at all (and the dashboard refuses to turn a room on) when the directory is inside, or around, a media library, the sounds / wake-model / wake-clip channels, the plugin directory, the repo, the home or config directory itself, and when the setting is not an absolute path (the core writes and the dashboard deletes, each from its own working directory). The Files surface refuses any path into `~/.domovoi` except its media subdirectories, even through a library rooted above it, and any path into `COMMAND_CAPTURES_DIR` wherever it points (a removable drive or a plugin's library root included); a folder listing, a folder zip and an import copy leave both out of what they walk. |
 | **How long** | 14 days (`COMMAND_CAPTURE_RETENTION_DAYS` may shorten it, never lengthen it), swept hourly by the core's `command_capture_pruner` and, at most as often, on the write path too (so a core running without workers still forgets); recordings past it are hidden from the list and refused by the audio route immediately. Disk cap `COMMAND_CAPTURE_MAX_MB` (500 MB) for all rooms together, oldest first, enforced on every write. |
-| **Who can read it** | An admin: `GET /api/captures` (list, with transcripts) and `GET /api/captures/clips/{room}/{id}/audio`, with the admin Bearer only (not the dashboard cookie alone), **501 before setup**. Not the household token and not `?device_token=` — the rest of the household's speech is readable by any paired device; this is not. Settings → *Recordings* plays, labels ("cut off too early" / "fine" / "waited too long") and deletes them. |
+| **Who can read it** | An admin: `GET /api/captures` (list, with transcripts) and `GET /api/captures/clips/{room}/{id}/audio`, with the admin Bearer only (not the dashboard cookie alone), **501 before setup**. Not the household token and not `?device_token=` — the rest of the household's speech is readable by any paired device; this is not. Settings → Voice history plays, labels ("cut off too early" / "fine" / "waited too long") and deletes them. |
 | **Who can see that it is on** | Everyone. The open satellites list carries `capture_commands` / `capture_since` (true exactly when the core would keep that room's commands: opted in and an admin credential exists, so a room `--reset-admin` paused reads as off), and the dashboard marks the room *recording commands for tuning* on its satellite card, in its drawer and on Home's room row. |
 | **How it goes away** | Turning a room off deletes its row and then every recording it kept, in the same request (the core re-checks the opt-in after each write, and the pruner sweeps any room with files but no row, so a write that raced the opt-out does not survive it). Retiring a room does the same. An admin can delete one at a time. Deletion only ever touches capture-shaped names. Moving `COMMAND_CAPTURES_DIR` leaves the old directory to the operator. |
 | **What it sends anywhere** | Nothing. The files stay on the Domovoi server; the log line for a kept recording carries the room, the id, the length and the end reason, never the words. |
@@ -1824,17 +1838,12 @@ and from the system's own state (`domovoi/help_desk`, `/api/help`).
   `~/.domovoi/chat_uploads` like every other, read by the vision model on
   this server, shown to the household like the rest of the chat, deleted
   with the chat. Nothing about it leaves the network. With AI features off
-  no screenshot is read at all. A chat on the phone can't read pictures;
-  it offers a home-server chat instead and sends nothing by itself.
-* **Letter photos (documents plan D6).** In a home-server chat the photo
-  and the text read from it are kept with the thread, like any chat
-  picture. In a phone chat the photo is never kept; the text read from it
-  is kept beside the answer in the phone's own chat storage (deleted with
-  the chat). A phone that can't read photos itself may send one photo to
-  the paired home server (`POST /api/chat/letters/read`: device tier, AI
-  features on, at most 8 MB read into memory after the device check, one
-  per phone and two per house); the server writes nothing and logs only
-  the time it took.
+  no screenshot is read at all. A chat on the phone can't read a
+  screenshot for the help desk; it offers a home-server chat instead and
+  sends nothing by itself. (A phone chat can answer about one photo you
+  take or pick, on a phone fast enough for it: the photo is read on the
+  phone, held in memory only and never saved. Letter photos are in
+  [Documents in chat](#documents-in-chat).)
 * **The records help reads are summaries, and redacted.** Troubleshooting
   picks named fields from the rooms' health samples and outage reports,
   the update record, plugins' status and the container guard's household
@@ -1884,10 +1893,87 @@ and from the system's own state (`domovoi/help_desk`, `/api/help`).
   (household-shared, like every server chat); the delivery row holds only
   the person, the chat and its title.
 
+## Documents in chat
+
+A home-server chat can take a PDF, Word, OpenDocument, Excel, CSV, text or
+markdown file and answer questions about it ("Ask about this document" on a
+file in Documents starts the same chat). It can also read a photo of a
+letter and write drafts. Who may, where it lives, and what can't happen:
+
+* **Who.** Sending a document is a household action (device tier) and needs
+  AI features on: with them off the server takes no document and no picture.
+  Reading one back (the list, the page a citation points to, the original
+  file) is the same read as the thread itself: a paired device or an admin
+  session. The original opens in a tab only as a PDF; anything else
+  downloads, with `nosniff` and a sandbox policy like any stored file
+  ([Stored files are data](#stored-files-are-data-never-pages-of-the-dashboard)).
+* **Where, and for how long.** On the server only. The original and the text
+  read from it sit in `~/.domovoi/chat_uploads/documents/` under a random
+  name; the chat keeps a one-line summary of each file and, with a reply,
+  the passages the model was given. All of it goes when the chat is deleted,
+  and a file picked in the composer and never sent is cleared out after an
+  hour. The text goes to the server's language model (Settings → Models) and
+  nowhere else; a model that runs off the box (an `OLLAMA_URL` elsewhere,
+  or a cloud model) takes the passages with it, the case the internet
+  switch warns about. Documents are outside "Keep voice history", and the
+  copies in the update unit's database dumps ([Data at rest](#data-at-rest))
+  keep what a chat held until they are replaced.
+* **Reading happens in a box of its own.** Each file is read by a separate,
+  short-lived process with a memory cap (2 GiB, or a third of the machine's
+  memory on a small one), a 120-second limit, and one or two at a time. A
+  Word, OpenDocument or Excel file is refused before it is inflated when it
+  holds more than 5,000 parts, more than 200 MiB in all, a part over 64 MiB,
+  or a part that inflates to more than 200 times its size; an XML entity
+  that would name a file or an address is refused. The reader opens no
+  network connection and follows no link in a file. About the first 4
+  million characters are read; scanned pages are listed, not read.
+* **Text from a file is data, never instructions.** It reaches the model
+  inside a marked block, and the app checks the reply: only citations of
+  passages the app gave are kept, and when the passages do not answer, the
+  reply is "I couldn't find that in the document".
+* **Long documents.** A summary of a document longer than one pass is read
+  in parts. Each part's notes are saved in the database so a restart carries
+  on; the row is deleted when the summary is finished, and goes with the
+  chat otherwise. At most two are read at once in the house, and a voice
+  turn is answered first.
+* **Letter photos.** In a home-server chat the photo is kept with the
+  thread like any chat picture, and the text read from it is kept beside
+  the answer; both go when the chat is deleted. In a phone chat the photo
+  is never kept (it is held in memory and wiped once the answer is done);
+  the text read from it is kept beside the answer in the phone's own chat
+  storage and deleted with the chat. A phone that can't read photos itself
+  may send one photo to the paired home server, only when the person picks
+  "a letter for the home server" (`POST /api/chat/letters/read`: device
+  tier, AI features on, at most 8 MB read into memory after the device
+  check, one per phone and two per house); the server writes nothing, sends
+  back only the text it read (and whether the photo is blurred or
+  handwritten), and logs only the time it took.
+* **Drafts.** A home-server chat keeps every version of a draft it wrote
+  (see the chat row in [Data at rest](#data-at-rest)), deleted with the
+  chat. Saving a version writes a .docx or PDF into `Documents/From Chat/`
+  through the Documents write policy and the secret-name filter (device
+  tier); printing goes through the printing API and its preview. Only the
+  version being revised goes to the model, never the others. Saving or
+  printing an existing draft needs no model, so it works with AI features
+  off. A phone chat keeps its drafts on the phone; **send to home**, a tap
+  offered only when the home server is paired, uploads that one file into
+  `Documents/From Chat/` on the home server, and nothing else of the chat.
+* **Phones.** A phone chat reads a document on the phone and keeps it there.
+  A phone that cannot read a PDF's text itself can ask the home server to,
+  when the person taps "ask the home server": the file is read in a
+  temporary folder that is removed before the answer goes back, and the
+  server keeps nothing (this needs no model, so it works with AI features
+  off). "Use home server" for a long summary is private in the same way:
+  the upload is deleted as soon as it has been read, its text and the
+  summary stay in the server's memory only until the phone takes the
+  summary or deletes the job (24 hours at most, 10 minutes once it is done
+  with no phone watching, and a restart forgets them), and nothing is
+  written to the database.
+
 ## Looking things up (chat lookups)
 
-A chat may look things up (assistant plan part 5, milestone W1). Who
-decides, what goes where, and what can't happen:
+A chat may look things up. Who decides, what goes where, and what can't
+happen:
 
 * **The app asks, not the model.** The model may only *propose* a lookup
   (`LOOK_UP: <words>` or `READ_PAGE: <https address>`, or the person's own
@@ -1913,7 +1999,8 @@ decides, what goes where, and what can't happen:
   isn't counted. A page's HTML is read in a short-lived child process
   (`domovoi/page_worker.py`: at most 256 KB, 5 s, then killed; two at a
   time from its own pool), so a hostile page can't keep a core busy.
-  The log names the source and the count, never the words.
+  The log names the source and the count (and the site of a page you
+  named), never the words.
 * **Fetched text is data, never instructions.** It reaches the model in a
   block fenced by a random marker made for that call (a page's own copy
   of a marker is defused), with the rule to answer only from it; the
@@ -1931,9 +2018,13 @@ decides, what goes where, and what can't happen:
   Android keystore.
 * **Phones:** a phone chat's lookups use the same rules. At home they go
   to the home server's route (and a server set to `never` is respected:
-  the phone doesn't go around it); away, to Wikipedia directly
-  (`DomovoiApp/<version>`, which Wikimedia asks for) or the person's own
-  search. Those clients carry no household token and no cookies, never
+  the phone doesn't go around it); away (or when the home server can't be reached), to Wikipedia directly
+  (`DomovoiApp/<version>`, which Wikimedia asks for) and, when the person
+  set their own search in the phone's model settings, to that too
+  (Wikipedia first, then their SearXNG or Brave Search). The own SearXNG
+  address must be `https://`, except a private home-network address
+  (RFC 1918, link-local, a `.local` name, an IPv6 unique-local or
+  link-local address), which may be plain `http://`. Those clients carry no household token and no cookies, never
   re-send a key on a redirect, and ask only public addresses: a name
   through their DNS check, an address written in the URL (any spelling:
   bracketed IPv6, IPv4-mapped, integer, octal or hex forms) before each
@@ -1964,7 +2055,7 @@ admin reviews them (docs/CONTAINER_GUARD.md). Migration V024
 |---|---|
 | **What it detects** | An expected container missing, stopped, crash-looping or unhealthy, and Docker not answering (only where the database isn't in that Docker — below). A compose or plugin container on another registry image of its own repository than its pin: a failure, "recreate it". As tampering: any running Domovoi container — expected right now or not, a one-off `compose run` included — on an image from another repository than its pin or with no registry provenance (compose services and plugins that pin by digest; a disabled plugin's container against its declared repository), a different repository:tag (plugins that pin only a tag; another tag of the same repository from the registry is "outdated", a failure), or a different image ID than the music player image the core built. An unknown running container wearing the compose project's label or the music player prefix. Privileged mode, the host's network or process namespace, or a bind mount of the Docker socket or the host's root (`/`, or the system drive on Windows — not another drive's root) on any container that is Domovoi's, when its declaration allows none of it. The pins are read from the committed compose file (`git show HEAD:…`), so editing the file on disk doesn't move them. |
 | **What it does not detect** | **Anything a root user on the host does.** The guard asks the Docker daemon what is running; root (or anyone in the `docker` group, which is root-equivalent) controls the daemon, the images, the database the incidents live in and the core itself, and can make all of them say whatever it likes. The guard is a tripwire for an unexpected change, not a defence against the host's own administrator. Nor does it see: a different image retagged under a tag a plugin pins by tag only; what happens INSIDE a container that runs the right image (a compromised process, changed files in a volume); a change made and undone between two checks (30 s); containers of plugins that declare none (older Jellyfin, RomM and Kiwix — their Plugins card says "containers not watched"); containers that only look like Domovoi's (`domovoi-…`) but nothing claims, which it lists and never alarms on; a host that doesn't run the compose stack (`CONTAINER_GUARD_COMPOSE`). **Docker or the database being down on a compose install**: the incidents live in the compose Postgres, so nothing can be recorded — Home's "the database isn't answering" row is what shows. The first music player image it sees is trusted (no record exists before it), and so is a new one the installer or the update unit recorded building (root-owned records under `/var/lib`), and a new one found at start on a host whose update unit's record is missing or unreadable (adopted "unverified", logged and shown on Settings → Health): only root can remove that record, and only someone with Docker access — root-equivalent — can replace the image. The installer's record (`/var/lib/domovoi-provision/mpd-image.json`) vouches for whatever its `docker build` produced, from the checkout's `Dockerfile.mpd` and Docker's build cache: the service user can edit that file before a repair, and anyone in the `docker` group can poison the build cache, and either gets the result vouched for. Both are root-equivalent through the `docker` group, so the guard does not claim to catch them. A plugin container whose resolver keeps raising is checked only for its repository and settings after 30 minutes. |
-| **What freezes** | While a tamper incident is open: plugin install, upgrade and enable; satellite code upgrades and the code and plugin payload channels; satellite media preparation; the update pull, and a restart that would load new code. `423`, naming the incident to a caller who passed the route's own gate; the open satellite channels say only that they are paused. The freeze is in the database, so a restart doesn't lift it; turning the guard off doesn't either. |
+| **What freezes** | While a tamper incident is open: plugin install, upgrade and enable; satellite code upgrades and the code and plugin payload channels; satellite media preparation; handing out the Android app (the join page's download, and the admin's fetch and upload); the update pull, switching the update channel, and a restart that would load new code. `423`, naming the incident to a caller who passed the route's own gate; the open satellite channels say only that they are paused. The freeze is in the database, so a restart doesn't lift it; turning the guard off doesn't either. |
 | **Who sees what** | Anyone (no credential): only "Something needs an admin's attention." and its colour, over the open `GET /api/containers/summary` — never a container, an image or what failed; a shared screen shows the same. The household tier: what failed in plain words, when, and whether it is acknowledged or cleared (the banner, Home, Settings → Health, Android notifications, the `containers` realtime event). Admins: also the expected and found image references, digests and IDs, settings and exit codes, and who acknowledged or cleared what. |
 | **Who acts** | Acknowledging a failure and clearing a tamper incident are admin mutations (Bearer), recorded with the admin's source address and an optional note. A household device can do neither, nor can the Android app (it holds no admin credential). |
 | **What it stores** | Container names, image references and IDs, exit codes and timestamps — nothing about a person. Resolved incidents are kept 90 days, then pruned; open incidents and cleared findings still accepted are kept until they end. |
@@ -2034,7 +2125,7 @@ parts:
 shown as a link for the person's browser, only when it points at the
 printer itself, and never fetched by the server.
 
-**Discovery.** One 3-second mDNS look when Settings → Printers opens, on
+**Discovery.** One 3-second mDNS look when Settings → Printers & scanners opens, on
 "Look again", and for "set up the printer". It binds UDP 5353 with
 `SO_REUSEADDR` beside any other responder and joins 224.0.0.251 on the LAN
 interface, and also sends a legacy-unicast query from an ephemeral port.
@@ -2081,8 +2172,8 @@ options, when, which printer and the result. Titles can be personal
 
 **Scans** are written by the core into `Documents/Scans/` under a name it
 makes ("Scan 2026-10-21 15.40.pdf"), inside the Documents folder (a
-`Scans` link that leads elsewhere is refused). Settings → Devices'
-per-device file block applies on both doors: the web's, and the core's own
+`Scans` link that leads elsewhere is refused). The per-device file block
+(Settings → Phones & browsers) applies on both doors: the web's, and the core's own
 `/v1/scan` routes (for the device the request names); the dashboard and the
 app don't offer Scan where the device can't write. Pages are spooled to a
 private temporary folder, not held in memory, and a page that isn't a
@@ -2135,17 +2226,32 @@ outbound traffic, each with its own off switch:
 | **Plugins** — a plugin's own requests | Whatever the plugin does; its install screen says | Requests made through the SDK's HTTP client (`sdk.http`, or the web host's `http()`) and streams played through `sdk.playback` are refused under `never`; a plugin that opens its own connections (raw HTTP, its own downloads, `docker pull`) is outside the switch. Settings → Internet lists every enabled plugin whose manifest asks for the network. |
 | **Satellite plugin payloads** — a plugin's `[satellite]` system packages, installed by the satellite's root helper | When an enabled plugin declares `apt_packages` (none of the bundled ones do) | Under `never` the payload manifest marks each plugin `offline` and the helper installs from the satellite's local package caches only (`apt-get --no-download`); a satellite whose helper predates that leaves the apt work for later. |
 
-Turn off news and the enricher, leave the MusicBrainz alias
-lookup off, skip provider plugins, and
+Turn off news and the enricher, leave the MusicBrainz alias lookup and
+the LRCLIB lyrics lookup off (both are on for **Yes** and **Sometimes**),
+turn the podcast poller off or don't subscribe to podcasts (it is on for
+**Yes**), skip provider plugins, and
 Domovoi's steady-state outbound traffic is **zero**, apart from the
 connectivity probe (a TCP connection with no payload to
 `CONNECTIVITY_PROBE_TARGET` every 30 s) and the radio plugin's detectors
-while you have favorited internet stations. Answer **No** and it is zero,
-probe included. The
+while you have favorited internet stations. A chat looks something up only
+after a person allows it, so it adds nothing on its own. Answer **No** and
+it is zero, probe included. The
 [FAQ table](FAQ.md#what-touches-the-internet-and-how-do-i-turn-each-thing-off)
 lists every outbound touchpoint, and [INTERNET.md](INTERNET.md) covers a
 server that has internet, one that only sometimes does, and one that never
 does.
+
+**If you turn AI features off** (Settings → Models), nothing in Domovoi
+asks a language model. Chat takes no new text, picture or document; a
+question no command answers gets a fixed line; the web-answer row above
+("check that online", the weather) says "I can't look that up with AI
+turned off" instead of searching; the news briefing is read as headlines,
+not summarised; and the memory extractor does not read conversations.
+Voice commands, speech recognition, the voices and the wake word keep
+working, and none of those sends anything out. Things that need no model
+keep working too: saving or printing a draft a chat already wrote, a
+phone's "ask the home server" for a PDF's text, and chat lookups (the
+lookup route doesn't follow the AI switch).
 
 ### The internet switch: what it closes and what it can't
 
@@ -2195,7 +2301,7 @@ network:
 
 **What `never` can't see:** a language model server (`OLLAMA_URL`) that
 isn't on your network, or an Ollama cloud model (a name ending in
-`-cloud`), which Settings → Internet warns about; and a plugin's own
+`-cloud` or `:cloud`), which Settings → Internet warns about; and a plugin's own
 connections that bypass the SDK.
 
 A refusal is never recorded as "this is broken": no feed is marked
@@ -2220,12 +2326,15 @@ Switching the answer back picks everything up where it was.
 
 - **browsers and phones** — they reach Domovoi on your network, but a link
   someone opens, or a picture pasted into a document from a website, loads
-  from wherever it points;
+  from wherever it points. A phone chat away from home (or when the home
+  server can't be reached) can look things up on Wikipedia, or the
+  person's own search, by itself, after its own allow card; at home it
+  respects `never` and doesn't go around it;
 - **the satellites' operating system** (Raspberry Pi OS): time
   synchronisation with public NTP servers, and the package install a
   satellite runs on its second boot while it is being set up. The Domovoi
   client on it talks only to the server;
-- **Docker Desktop, Ollama and the host operating system**, which check for
+- **Docker, Ollama and the host operating system**, which check for
   their own updates;
 - **a plugin that opens its own connections** instead of using the SDK's
   client (its install screen lists what it does).
@@ -3120,7 +3229,7 @@ home LAN that window is normally the moment you provision the Pi.
 **Strict mode (the default).** `SATELLITE_PAIRING_STRICT` defaults to
 `true` in the code, is written as `true` into a FRESH `.env` (from
 `domovoi/.env.example`) so the file says so, and is editable from the
-dashboard's satellite Settings → Security (restart-tier). It does two
+dashboard's Settings → Advanced → Security (restart-tier). It does two
 things:
 
 * a tokenless `hello` is refused, for every room;
@@ -3504,7 +3613,7 @@ of it stays there). A room the phone was casting to plays on: the phone
 detaches, it does not stop another room's music.
 
 **One microphone owner:** room mode, the phone drop-in call, the chat mic
-and the on-device assistant ask `audio/MicArbiter` first; while room mode
+and phone chats (Domovoi on this phone) ask `audio/MicArbiter` first; while room mode
 is on the others are refused with words, not silenced by Android.
 
 **Debug builds only:** a test feed (`src/debug`, `DebugFeedReceiver`) can
@@ -3678,7 +3787,7 @@ the emulator host, and names under `.local`, `.home.arpa`, `.internal`,
 `.lan` and `.home`; any other server address must be `https://`, and a
 plain-http address outside that set is refused before a connection is
 attempted, with a message that says so — in the picker, in **Settings →
-Connection** (which until 2026-10-08 saved any string unchecked) and for
+Phones & browsers** (which until 2026-10-08 saved any string unchecked) and for
 the save-to-device downloads, which go through the system `DownloadManager`,
 a separate HTTP stack the app's client never sees, and are refused before
 they are queued. That stack keeps every request header in its own database
@@ -3705,20 +3814,26 @@ controllers and Android Auto, and takes no media item from any of them
 player fetch a URL of its choosing. The app also opts out of device
 backups (`allowBackup="false"`, `dataExtractionRules`), so nothing it stores
 — server address, device id, the pinned server identity and the sealed
-pairing token, and the on-device assistant's model and conversations — is
+pairing token, and the phone chats' model and conversations — is
 copied to a cloud or `adb` backup or moved in a device-to-device transfer.
 
-The **on-device assistant** (android/README.md, "On-device assistant") makes
-one kind of network request: the model download its owner starts, over
-HTTPS to a URL pinned to one Hugging Face commit, through the app's client
-without the household token (the redirect rules above apply), Wi-Fi only
-unless the owner allows mobile data, and the file is used only once its
-SHA-256 matches the one compiled into the app. Asking it something sends
-nothing anywhere: a unit test holds that only the downloader in its code
-names an HTTP client, and that LiteRT-LM's and sherpa-onnx's Java layers
-name no networking class; the M0 runs measured 0 bytes in and out while it
-answered. Asking it by voice adds the **microphone**: it opens only on a
-tap of the assistant's mic (the permission is asked then), one owner at a
+**Phone chats** (Domovoi on this phone; android/README.md) answer on the
+phone. Their own network requests are few, and each is started by the
+person: the model download its owner starts, over HTTPS to a URL pinned
+to one Hugging Face commit, through the app's client without the
+household token (the redirect rules above apply), Wi-Fi only unless the
+owner allows mobile data, and the file is used only once its SHA-256
+matches the one compiled into the app; a lookup after its allow card
+([Looking things up](#looking-things-up-chat-lookups)); and, when the
+person picks it, a document, a letter photo or a draft handed to the
+paired home server ([Documents in chat](#documents-in-chat)). The model
+itself reaches nothing: a unit test holds that, in the phone chat's code,
+only the downloader and the lookup clients name an HTTP client (the
+home-server hand-offs are made by the chat screens, on a tap), and that
+LiteRT-LM's and sherpa-onnx's Java layers name no networking class; the
+first measured runs, before lookups existed, were 0 bytes in and out while
+it answered. Asking it by voice adds the **microphone**: it opens only on a
+tap of the chat's mic (the permission is asked then), one owner at a
 time (`audio/MicArbiter.kt`), and closes at the end of speech, on stop, or
 when the assistant leaves the screen; the audio stays in memory and is
 dropped once transcribed on the phone, and only the transcript is kept, as

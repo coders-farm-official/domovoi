@@ -1,8 +1,9 @@
 # Will your Domovoi have internet?
 
 Installing Domovoi needs the internet: Python packages, Docker images, the
-language models and the speech models all download during setup. After
-that it is your choice, and Domovoi asks you once:
+speech models and, unless you leave AI out of setup, the language models
+all download during setup. After that it is your choice, and Domovoi asks
+you once:
 
 > **Will this Domovoi have internet?**
 > **Yes, always** · **Sometimes** · **No, keep everything in the house**
@@ -19,6 +20,7 @@ defaults.
 - [Sometimes](#sometimes)
 - [Running Domovoi with no internet](#running-domovoi-with-no-internet)
 - [Internet in the house, but Domovoi shouldn't use it](#internet-in-the-house-but-domovoi-shouldnt-use-it)
+- [Lookups in Chat](#lookups-in-chat)
 - [Changing it later](#changing-it-later)
 - [What goes out](#what-goes-out)
 
@@ -193,8 +195,10 @@ stays yours to do:
    Python wheels, system packages and wake-word models, so a new satellite
    sets itself up from the card instead of from the internet.
 
-5. **One-click updates (Linux):** install the update unit,
-   [LINUX_HOST.md → Updates from the dashboard](LINUX_HOST.md#updates-from-the-dashboard).
+5. **One-click updates (Linux, and the Windows install):** on a Linux
+   server, install the update unit,
+   [LINUX_HOST.md → Updates from the dashboard](LINUX_HOST.md#updates-from-the-dashboard);
+   the Windows install runs the same update unit inside its own distro.
 
    *Why:* **Pull the latest** and **Restart to apply changes** (Settings →
    About & updates) then also re-sync dependencies, run
@@ -215,7 +219,8 @@ stays yours to do:
   failed or timed out. If it isn't running, Domovoi says so ("I can't
   search the web right now — my search helper isn't running") instead of
   pretending it searched; by hand, from `domovoi/`:
-  `docker compose up -d searxng`.
+  `docker compose up -d searxng`. Chat's lookups use it too, after asking
+  (see [Lookups in Chat](#lookups-in-chat)).
 - **Other names for artists** from MusicBrainz, so "play suicide boys"
   finds `$uicideboy$`. It sends your library's artist names to
   musicbrainz.org, one a second (about an hour and a half the first time
@@ -305,8 +310,9 @@ needs something it can only download is usually the day the line is down.
       [`satellite/PROVISIONING.md`](../satellite/PROVISIONING.md) installs
       over the Pi's own connection, so build those satellites while the
       house is online.
-- [ ] **Set the time zone:** `sudo timedatectl set-timezone <Area/City>`.
-      Without internet the server can't reach public time servers. If your
+- [ ] **Set the time zone (Linux server):** `sudo timedatectl set-timezone <Area/City>`.
+      On the Windows install, check the PC's own clock and time zone in
+      Windows. Without internet the server can't reach public time servers. If your
       router or another box on the LAN serves NTP, point the server at it
       (`NTP=<its address>` in `/etc/systemd/timesyncd.conf`, then
       `sudo systemctl restart systemd-timesyncd`). The satellites set their
@@ -365,12 +371,15 @@ your router, it would tell Domovoi the internet is up when it isn't.
   nothing is fetched until the answer changes.
 - General questions, answered from what the local language model already
   knows.
+- Asking Domovoi how Domovoi works (the help desk answers from the manual
+  that comes with it).
 
 ### What doesn't
 
 - Web answers: the weather, scores, prices, current events, "double-check
   that". Domovoi says why: "I'm set to stay off the internet, so I can't
-  check that."
+  check that." Chat's lookups on Wikipedia and the web are refused the same
+  way; its manual and offline library still answer.
 - Fresh news. The briefing reads whatever was fetched last.
 - Internet radio and station search.
 - Podcast search, and new episodes.
@@ -425,7 +434,9 @@ What the answer can't reach, because it isn't the server:
 - **The browsers and phones** in the house. They talk to Domovoi on your
   network; podcast artwork comes from the server too. But a link you open,
   or a picture someone pasted into a document from a website, loads from
-  wherever it points.
+  wherever it points. The Android app's chat on the phone can also look
+  things up by itself, only after you allow it on a card
+  ([Lookups in Chat](#lookups-in-chat)).
 - **The satellites' own system** (Raspberry Pi OS): it keeps its clock with
   public time servers, and a satellite being set up installs packages
   over its own connection on its second boot. The Domovoi part of the
@@ -433,8 +444,9 @@ What the answer can't reach, because it isn't the server:
   packages come from the satellite's local package cache only), and the
   video satellite's kiosk browser is started with its background traffic
   switched off.
-- **Docker Desktop and Ollama themselves** check for their own updates; so
-  does the server's operating system.
+- **Docker and Ollama themselves** (Docker Desktop and Ollama for Windows
+  too, if you run your own) check for their own updates; so does the
+  server's operating system, and on the Windows install, Windows and WSL.
 - **A plugin that makes its own connections** without the SDK (raw
   `httpx`, its own downloads, a `docker pull`) is its author's
   responsibility; its install screen lists what it does, and Settings →
@@ -452,6 +464,44 @@ What the answer can't reach, because it isn't the server:
 
 If nothing in the house should reach out at all, block the server, and the
 satellites once they are set up, at your router as well.
+
+---
+
+## Lookups in Chat
+
+Chat can look something up when your own sources don't have the answer,
+and it always asks first. Before anything leaves the house, the chat shows
+a card with the exact words (or the page address) and where they would go:
+**Allow once**, **Allow in this chat** or **Not now**. A chat that was
+allowed has a chip in its header that turns the permission off again, and
+the history list marks a chat that went online with a globe.
+
+- **The order:** Domovoi's own manual and an offline library (Kiwix, if
+  installed) come first. They never leave the house and work under **No**.
+  Then Wikipedia and Wikidata, through the search helper (straight to
+  Wikipedia if the helper doesn't answer). Then the open web, or the
+  search you chose.
+- **Settings → Chat & AI → Search** (admin): **Always allow internet**
+  (off by default; while it is off every chat asks first), the order of
+  the sources, and **Use your own search**: this server's helper, your own
+  SearXNG address, or Brave Search with your own key (the key is never
+  shown again and goes only to Brave).
+- **A page you name** is fetched only if its address starts with
+  `https://`, with no cookies and no scripts. Its main text is read, up to
+  2 MB.
+- **Under No**, only the manual and the offline library answer; the rest
+  is refused. **Sometimes** and **Yes** allow the rest, with the card.
+- **What stays:** the server's log names the source and the outcome, never
+  the words. The chat keeps its answer, with the titles and links of what
+  it read, until you delete the chat.
+- **On a phone:** a chat on the Android app does the same at home, through
+  your server, which follows your answer; a server set to **No** is not
+  gone around. Away from home, or when your server doesn't answer, the
+  phone itself asks Wikipedia and, if you set one in the app's model
+  settings, your own search too, after the same card. Those requests don't
+  pass through your server. Your own SearXNG address must start with
+  `https://`, unless it is on your home network (a private address such as
+  192.168.x.x, or a `.local` name), where `http://` is accepted.
 
 ---
 
@@ -506,6 +556,13 @@ allowed, they send short text:
   raw.githubusercontent.com), a Wikidata query, and the radio-browser
   server list. That is why **No** stops the container instead of just not
   searching;
+- the words of a Chat lookup you allowed: to Wikipedia and Wikidata
+  (through the search helper, or straight to Wikipedia if it doesn't
+  answer), then to the search engines the helper asks, or to your own
+  SearXNG, or to Brave Search with your own key; and the address of a page
+  you asked Chat to read, to that page's site ([Lookups in
+  Chat](#lookups-in-chat)). A phone chat away from home sends its words to
+  Wikipedia, and to your own search if you set one, itself;
 - your library's artist names, to musicbrainz.org (the artist-names
   extra);
 - a song's title, artist, album and length, to lrclib.net (synced

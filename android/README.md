@@ -34,6 +34,33 @@ cd android
 # APK lands in app/build/outputs/apk/debug/
 ```
 
+### The release build is shrunk (R8)
+
+`assembleRelease` and `bundleRelease` run R8 (`isMinifyEnabled` and
+`isShrinkResources` in `app/build.gradle.kts`): it shrinks, optimises and
+renames the code and drops resources nothing uses. A debug build is not
+shrunk, so passing on a debug build does not show that the release works.
+
+- **Keep rules** are in `app/proguard-rules.pro`, each with the reason it is
+  there. The libraries bring most of their own; the file keeps what nothing
+  else does: LiteRT-LM, ONNX Runtime and sherpa-onnx (their native code finds
+  Java and Kotlin classes and fields by name), one player listener method
+  that is found by name, and the line numbers in stack traces. A rule goes in
+  only when a release build shows it is needed (a crash, a failed native
+  lookup). After adding a library that uses native code or reflection, run
+  the release build before trusting it.
+- **The mapping.** Every release build writes
+  `app/build/outputs/mapping/release/mapping.txt`, which turns an obfuscated
+  stack trace (from Google Play, or a problem report copied from Settings →
+  About & updates) back into names with R8's retrace. The App Bundle carries
+  it for Play. `release.ps1` / `release.sh` stop if the build wrote none and
+  keep a copy beside the signed files as `domovoi-<version>-mapping.txt`;
+  `play-bundle.ps1` / `.sh` check that the bundle carries it and keep a copy
+  too. It is not attached to the GitHub release.
+- **Testing it.** Run the release APK on a phone or the emulator before a
+  release. The release scripts' `-NoPublish` (`--no-publish`) run (below)
+  builds, signs and checks the APKs without publishing anything.
+
 ### ABIs and APKs
 
 Every native library the app ships has builds for all four Android ABIs
@@ -119,7 +146,7 @@ serves an APK it verifies the file's own v2/v3 signature and requires that
 certificate (`domovoi/android_app.py`, `domovoi/apk_signature.py`). It gets
 the files from this repo's GitHub release only when an admin presses
 **Download the app to this server** (on the spare-device card or Settings →
-Devices; never by itself), or from an admin's upload when internet access
+Phones & browsers; never by itself), or from an admin's upload when internet access
 is off. `release` is `null` until the first release, and
 every page says "no app release yet".
 
@@ -169,14 +196,13 @@ uninstalls it once before the first release build goes on.
    server's own check (`python -m domovoi.android_app check`). Then it
    writes `android/release.json`, commits it (`android: release <v> [skip
    ci]`) and pushes it, and publishes the GitHub release `v<versionName>`
-   (the project-wide tag, e.g. `v1.0.0-rc2`) on
+   (the project-wide tag, e.g. `v1.0.0-rc3`) on
    `coders-farm-official/domovoi` with `gh`, **tagged at that commit**: the
    tag holds the manifest naming its own APKs, so a server installed at
    the tag hands them out. The release carries the two APKs and an
    APK-only `SHA256SUMS`, with the certificate's SHA-256 in the notes.
    Every release is a full one, marked Latest, release candidates
-   (`1.0.0-rc2`) included: the suffix says what it is (owner decision
-   2026-10-15). `-Prerelease` / `--prerelease` makes one a pre-release.
+   (`1.0.0-rc3`) included: the suffix says what it is. `-Prerelease` / `--prerelease` makes one a pre-release.
    Last it checks the tag is that commit and downloads
    each file back by the URL the manifest names.
 
@@ -227,7 +253,7 @@ proved, after connecting and then every six hours.
   `versionCode`.
 - **Never for a Google Play install** (installer `com.android.vending`,
   from `getInstallSourceInfo`): Play updates it. **Never for a debug
-  build** (`FLAG_DEBUGGABLE`): Settings → About says "Debug build" and the
+  build** (`FLAG_DEBUGGABLE`): Settings → About & updates says "Debug build" and the
   server isn't asked. Never when the release's `cert_sha256` is not one of
   this install's signing certificates (a self-built copy): About says why.
 - **Which APK:** the first of the phone's own ABIs (`Build.SUPPORTED_ABIS`,
@@ -242,7 +268,7 @@ proved, after connecting and then every six hours.
   this phone yet, the card says an admin can press **Download the app to
   this server** (Settings → Phones & browsers) and has no button.
 - **Dismiss** hides it until a newer release; a "not on the server yet"
-  card dismissed comes back once, when the file arrives. Settings → About →
+  card dismissed comes back once, when the file arrives. Settings → About & updates →
   App updates always shows where things stand.
 - **Room mode:** a faint line at the foot of the room screen, never a
   dialog: **update** (after the phone's unlock when the room shows over
@@ -258,7 +284,7 @@ plus a **Chat** tab on a 64-bit install, with the chats kept on this
 phone (the on-device assistant, below). A `connect` chip opens the discovery screen — the web backend on
 your LAN, e.g. `http://192.168.1.20:6369`, health-checked via
 `/api/health` before accepting. Change it later under Settings →
-Connection. Traffic is plain HTTP on your LAN (same trust model as the
+Phones & browsers. Traffic is plain HTTP on your LAN (same trust model as the
 web dashboard), and plain HTTP is accepted **only** towards the home
 network: RFC 1918 addresses, loopback, link-local, the emulator host
 `10.0.2.2`, and names under `.local` / `.home.arpa` / `.internal` /
@@ -267,12 +293,36 @@ half of that rule is `res/xml/network_security_config.xml` (referenced
 from the manifest, system trust store only); because Android cannot
 express an IP range there, `net/CleartextPolicy.kt` enforces the whole
 rule on the app's single `OkHttpClient`, which the API, both WebSockets,
-media3 and Coil share; the same rule is applied in Settings → Connection
+media3 and Coil share; the same rule is applied in Settings → Phones & browsers
 and, by hand, to every save-to-device download (`DownloadManager` is its
 own HTTP stack). Backups are off (`allowBackup="false"`,
 `dataExtractionRules`), so the server address, device id, pinned server
 identities and the sealed pairing token never leave the device in a cloud
 or `adb` backup or a device-to-device transfer.
+
+## Permissions
+
+What `AndroidManifest.xml` asks for, and why. Android grants the normal ones
+at install; the sensitive ones (microphone, camera, location, contacts,
+calendar, media, and notifications on Android 13 and later) are asked when
+the feature is first used.
+
+| Permission | Why |
+|---|---|
+| `INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE` | Reach the Domovoi server; tell Wi-Fi from mobile data; room mode's Wi-Fi link facts |
+| `READ_MEDIA_AUDIO`, `READ_MEDIA_VIDEO`, `READ_MEDIA_IMAGES` (Android 13+), `READ_EXTERNAL_STORAGE` (up to Android 12L), `WRITE_EXTERNAL_STORAGE` (up to Android 9) | The phone's own Music, Videos and Files tabs; saving downloads. Folders in Files come through the system picker, never an all-files permission |
+| `POST_NOTIFICATIONS` (Android 13+) | Timer and reminder alerts, downloads, room mode |
+| `RECORD_AUDIO`, `MODIFY_AUDIO_SETTINGS` | The chat mic, drop-ins and room mode; asked on first use |
+| `CAMERA` (optional hardware) | Scanning a room code; taking a picture for a phone chat; asked on first use |
+| `FOREGROUND_SERVICE` with `MEDIA_PLAYBACK`, `DATA_SYNC`, `MICROPHONE` | Music playback; the model download; room mode's microphone |
+| `WAKE_LOCK` | Keeps playback, downloads and a room awake |
+| `SCHEDULE_EXACT_ALARM`, `RECEIVE_BOOT_COMPLETED` | Timers ring on time with the app closed; re-armed after a restart. The person's own "Alarms & reminders" grant on Android 12 and later |
+| `ACCESS_COARSE_LOCATION`, `ACCESS_FINE_LOCATION` | A phone chat's "where am I" (approximate) and the Wi-Fi network's name (precise); optional, asked on first use |
+| `READ_CONTACTS`, `READ_CALENDAR` | A phone chat calling or texting by name; reading the phone's own calendar; optional, asked on first use |
+| `com.android.alarm.permission.SET_ALARM` | A phone chat's timers and alarms in the Clock app; a normal permission, no prompt |
+
+It does not ask for texts, the call log, an all-files grant, usage stats or
+accessibility.
 
 ## Security: what the phone holds and where it sends it
 
@@ -309,17 +359,18 @@ one credential the app has. The rules, all unit-tested under
     stands at most ten minutes on one network, is taken again whenever
     the app comes back to the foreground after a spell away, and a proof
     that straddled a network change is thrown away. The Wi-Fi SSID/BSSID
-    join the fingerprint only where the app may read them (it asks for
-    no location permission).
+    join the fingerprint only where the app may read them (the network
+    check never asks for location; a phone chat's optional Wi-Fi-name
+    permission, below, is a separate question).
   - **The pin is the trust decision:** the picker's dialog shows the key
     the server advertises (compare it with the dashboard's Settings →
-    About) and pins it when you say yes, so the first proof has to match
+    About & updates) and pins it when you say yes, so the first proof has to match
     that key, not whoever answers first on some network; Settings →
-    Connection probes a typed address the same way before saving it. A
+    Phones & browsers probes a typed address the same way before saving it. A
     server trusted by a build from before this is pinned the first time it
     proves a key. A server trusted while it offered none is never pinned
     behind your back: the token goes out as it always did for it, the
-    topbar says "unverified", and Settings → Connection shows the key it
+    topbar says "unverified", and Settings → Phones & browsers shows the key it
     proves now with a "pin this identity" button.
   - **Core down is not an impostor:** a web backend that answers but
     could not ask its core (`domovoi_reachable` false — a restart, an
@@ -327,7 +378,7 @@ one credential the app has. The rules, all unit-tested under
     cached, the next request asks again, and the local-media shell says
     so. Only a different key, or a bad or missing proof where one is
     pinned, is "did not prove it is your Domovoi".
-  - **Forgetting:** the pin shows under Settings → Connection next to the
+  - **Forgetting:** the pin shows under Settings → Phones & browsers next to the
     server, with every other trusted server and a forget button each —
     the server in use included, in Settings and in the server list, after
     a confirmation that shows the pinned key beside the one the server
@@ -344,7 +395,7 @@ one credential the app has. The rules, all unit-tested under
     goes to the new key. The pairing screen follows. Nothing is re-trusted
     without that yes.
 - **A pasted token is checked first** (`ApiClient.checkDeviceToken`,
-  `CheckedPairingField`): the pairing screen, Settings → Connection
+  `CheckedPairingField`): the pairing screen, Settings → Phones & browsers
   (**pair** / **replace**) and the refused-token card each make ONE
   device-tier read (`GET /api/satellites`) carrying the candidate alone,
   after the identity gate admits the server and never during the server's
@@ -419,29 +470,35 @@ one credential the app has. The rules, all unit-tested under
 
 ## On-device assistant
 
-**A preview** in Domovoi 1.0 (owner decision 2026-10-16): the setup card
-says so beside the download (`PreviewLabel`, `ui/components/Kit.kt`).
+Phone chats: **Domovoi on this phone**. **A preview** in Domovoi 1.0: the
+setup card says so beside the download (`PreviewLabel`, `ui/components/Kit.kt`).
 
 Domovoi can answer **on the phone itself**, with no server and, once its
-model is downloaded, no internet: a language model (Gemma 4 E2B, run by
-LiteRT-LM) on the phone's CPU, by text or by push-to-talk voice. The
-model sees the system prompt, the conversation, the phone's clock and a
-few phone facts, and what its read-only tools return; nothing else.
+model is downloaded, no internet (a lookup is the one exception, and it
+asks first: see *Documents, pictures, lookups and actions*): a language model
+(Gemma 4 E2B, run by LiteRT-LM) on the phone's CPU, by text or by
+push-to-talk voice. The model sees the system prompt, the conversation, the
+phone's clock and a few phone facts, what its read-only tools return, and
+what the person attaches to the chat (a document's matching passages, one
+picture, a page that was looked up); nothing else.
 
-**What a phone chat knows** (N1, 2026-10-21). Each place answers from its own world: a phone chat reads the phone, never
-the home server (`NoNetworkTest.aPhoneChatNeverReachesTheServer`: the
-phone chat's classes name no server client). All of it is read on the
-phone when asked and goes nowhere but the model's context and the saved
-conversation (app-private, outside backups); "report this reply" shows
-exactly what it sends, and the facts and tool results are not in it.
+**What a phone chat knows.** Each place answers from its own world: a phone
+chat reads the phone, and never the household's data on the home server (its
+calendar, timers, rooms or chats; `NoNetworkTest.aPhoneChatNeverReachesTheServer`:
+the classes that read the phone name no server client). The phone facts below
+are read on the phone when asked and go nowhere but the model's context and the
+saved conversation (app-private, outside backups); "report this reply" shows
+exactly what it sends, and the facts and tool results are not in it. The few
+times a phone chat does use the network are listed under *What leaves the
+phone*.
 
 - **Prompt facts** (`assistant/PhoneFacts.kt`, under about 60 tokens,
   told like the clock: a kept conversation hears a line again only when it
   changed): what's playing (on this phone, or on a room speaker it cast
   to, never named), the playback sleep timer, whether the home server is
   connected, the listener's first name (`data/HouseholdNames.kt`). No room
-  names and no house timers: phone chats answer about the phone only
-  (owner, 2026-10-21); asked about rooms or house timers they say those
+  names and no house timers: phone chats answer about the phone only;
+  asked about rooms or house timers they say those
   are in the home server chats. The persona says to
   use them only when asked, never to mention them otherwise. The position
   is left out on purpose (it changes every second).
@@ -461,8 +518,8 @@ exactly what it sends, and the facts and tool results are not in it.
   manual mode (the app runs each call; constrained decoding; on the CPU
   only): `find_music`, `find_video`, `find_book`,
   `phone_status`. They only read. **Offered only to a model whose catalog
-  entry sets `readTools`, which Gemma 4 E2B doesn't**: on the owner's Fold
-  (N0, 2026-10-21) E2B called a tool for 26.7% of near-miss phrases ("why
+  entry sets `readTools`, which Gemma 4 E2B doesn't**: on a foldable phone in
+  testing, E2B called a tool for 26.7% of near-miss phrases ("why
   does my battery drain so fast?") and the descriptions cost +1.6 s to a
   fresh conversation's first word, so on E2B the facts come from the fast
   paths only. Meant for E4B once it is in the catalog and measured.
@@ -474,18 +531,104 @@ exactly what it sends, and the facts and tool results are not in it.
   (https only), the share sheet with the last reply. Each is a card first
   ("Text Sam?") and launches only on a tap; one no app takes is never
   offered (`resolveActivity`, with the manifest's `<queries>`). Timers and
-  alarms through the Clock app are N2's, asked first the same way.
+  alarms through the Clock app work the same way (see *Actions*, below).
 - **Permissions, asked on first use, always optional**: approximate
   location (where am I), precise location (only for the Wi-Fi name, with
   its own reason), contacts (calling or texting by name), the
-  calendar (reading it). The chat's card gives the one-line reason, then
+  calendar (reading it), the camera (taking a picture for a chat; the room-code
+  scanner asks for it too). The chat's card gives the one-line reason, then
   Android's dialog; "not now" or a refusal is kept
   (`AssistantSettings.declinedPermissions`) and the feature says it can't,
-  pointing to Android's settings, without asking again. Never: texts, the
-  call log, notifications, usage stats, accessibility.
+  pointing to Android's settings, without asking again. Setting a timer or
+  alarm uses the Clock app's own intents and the install-time `SET_ALARM`
+  permission (a normal permission: no prompt, and the app sets nothing
+  itself). Never: texts, the call log, notifications, usage stats,
+  accessibility.
 - **The gate** (debug builds): `N1GateReceiver` runs the 20 scripted and
   30 general questions through a phone chat with pinned facts and writes
   `files/n1-gate.txt` (its comment has the adb lines).
+
+**Documents, pictures, lookups and actions** (a phone chat's extras; each
+is something the person asks for):
+
+- **Documents** (`assistant/docs/`). The paperclip attaches a PDF, Word
+  (.docx), OpenDocument (.odt), Excel (.xlsx), CSV, text or markdown file
+  (up to 100 MB), and Files' "Ask about this document" starts a chat on
+  one. The text is read on the phone; the file is copied to
+  `filesDir/chat-docs/attachments/<conversation>/` (app-private, outside
+  backups, deleted with the conversation). A question is answered from the
+  few passages that match it, the sources are listed under the reply, and
+  what the document doesn't say gets "I couldn't find that in the
+  document." A long document's summary is read in parts by a job that
+  survives leaving the screen. **Reading a PDF's text needs Android 15, or
+  Android 12 to 14 with Google's PDF update** (`PhonePdfText`); on another
+  phone Chat says so and offers **Ask the home server**, which sends that
+  one PDF to the home server, takes the text back and keeps nothing there.
+  A long summary can likewise be handed to a private job on the home
+  server (**Use home server**): the upload is deleted once read, and the
+  text and summary stay only in the server's memory until the phone takes
+  the summary (24 hours at most, 10 minutes once done with no phone
+  watching).
+- **Pictures** (`assistant/PhoneVision.kt`). A phone chat can be asked about
+  one photo, from the camera or the gallery. The photo buttons show only on
+  a phone whose GPU runs the model's photo reader, which the app finds out
+  once by trying it and remembers (on the CPU it is too slow and heavy). The
+  photo is shrunk to 1,024 pixels on its long side and made into a JPEG with
+  no metadata, all in memory: it is never written to storage, not even the
+  cache, and the conversation keeps a "photo" marker, not the picture.
+  **Letters** (`assistant/PhoneLetters.kt`): asked what a letter says, the
+  chat reads the photo's text and explains it, and keeps that text beside
+  the answer (deleted with the chat) so follow-up questions can use it; the
+  photo itself is still never kept. On a phone that can't read photos
+  itself, the "+" offers **a letter for the home server** when a paired
+  server can read letters: that one photo goes to the home server
+  (`POST /api/chat/letters/read`), which reads it in memory, keeps nothing
+  and sends back only the text; the explanation is written on the phone.
+- **Drafts** (`assistant/drafts/`). A phone chat can write a letter or
+  other document as a draft, kept with the conversation
+  (`filesDir/chat-docs/drafts/<conversation>/`, every version, deleted with
+  it). **Save** writes a Word or PDF file into the app's "Chat documents"
+  folder (shown in Files); **Share** or **Save a copy to…** hands one file
+  to the app or place the person picks, through a `FileProvider` that is
+  not exported; **send to home**, offered when a home server is paired,
+  uploads that one file into the server's Documents → From Chat. The PDFs
+  embed the bundled Liberation fonts.
+- **Looking things up** (`assistant/lookup/`). The model may propose a
+  lookup; nothing goes online until the person answers a card that shows
+  the exact words and where they would go: **Allow once**, **Allow in this
+  chat** or **Not now**. The chat's "internet" chip shows and changes that
+  chat's setting, and the chat's **model settings** hold **Always allow
+  internet** and **Use your own search**. At home the lookup goes to the
+  home server's own search (its manual and offline library first, then
+  Wikipedia and Wikidata, then the web), and the server's internet answer
+  "never" is respected. Away from home (or when the home server doesn't
+  answer) it goes to Wikipedia directly and, when the person set their own
+  search, to their SearXNG address or Brave Search key too (kept sealed in
+  the Android keystore; Wikipedia first, then theirs, and Wikipedia alone
+  if theirs fails). The own SearXNG address must be `https://`, except a
+  home-network address (RFC 1918, link-local, a `.local` name, an IPv6
+  unique-local or link-local address), which may be `http://`. A page the
+  person names is fetched over https only, with no cookies and no scripts,
+  2 MB at most. Nothing carries the household token except the request to
+  the home server, and the answer lists its sources. Wikipedia is told the
+  app's name and version and the project's GitHub address, as its rules ask.
+- **Actions** (`assistant/PhoneActions.kt`, `ActionHost.kt`). Narrow phrases
+  the app itself recognises, not the model (in testing the model made false
+  actions): a timer or alarm goes to the Clock app after a card asks first;
+  the phone's own player (play saved music, pause, resume, next, previous,
+  stop, a sleep timer, a saved book) acts at once with an **Undo**; a saved
+  video asks first. They are the phone's own: a house timer is a home server
+  chat's.
+
+**What leaves the phone.** Only these, each on the person's own action: the
+downloads of models and voices (from Hugging Face; Wi-Fi only by default); an
+allowed lookup (the search words or page address, to the place the card
+names; at home a search is first checked against the home server's own
+sources, which stay in the house); a PDF or long document, a letter photo
+or a draft the person hands to the home server; and a reply report or a
+draft the person shares or emails. The conversation as a whole and the
+audio are never sent, and no picture is sent except a letter the person
+chooses to have the home server read.
 
 **Where it is: in Chat** (One Chat, 2026-10-21; there is no separate
 Assistant tab any more). Chat has one history list and one conversation
@@ -525,7 +668,8 @@ it, or one Android calls low-RAM, gets a plain "this phone can't run the
 assistant" and no controls.
 
 **The model download** (`assistant/ModelCatalog.kt`, `ModelDownloadWork.kt`,
-`ModelDownloader.kt`), the assistant's only network use:
+`ModelDownloader.kt`), the assistant's only large download (its other
+network uses are under *What leaves the phone*):
 
 - Three models, 2.45 GiB in all, each file from its upstream Hugging Face
   repo pinned to one commit (`resolve/<commit>/`, never `main`) with its
@@ -569,7 +713,7 @@ silence), Moonshine turns it into text on the phone, and the transcript
 becomes the question, marked "spoken". The reply streams as a typed one does
 and is read aloud sentence by sentence, the first while the model is still
 writing the rest (`SentenceSplitter` strips Markdown first), in the phone's
-own voice: Domovoi's Piper voice picked in Settings → Voice once it is
+own voice: Domovoi's Piper voice picked in Settings → Voices once it is
 downloaded (the chat mic's replies use the same pick; Kristin unless
 another is chosen), Android's own text-to-speech voice until then. The one
 button follows the turn: while it listens and has heard you it sends what
@@ -577,7 +721,7 @@ you said (or just stop talking); otherwise it stops everything at once,
 the voice silenced and the model stopped, what was written kept.
 
 - **Replies to typed questions stay silent** unless "read typed replies
-  aloud too" is on in the model settings (plan decision 7).
+  aloud too" is on in the model settings.
 - **Audio is never written anywhere**: it is heard in memory and dropped;
   only the transcript is kept, as the question.
 - **One mic owner at a time** (`audio/MicArbiter.kt`): the assistant asks
@@ -588,7 +732,7 @@ the voice silenced and the model stopped, what was written kept.
   ducks under the reply.
 - With developer options on (below), the long-press on a spoken turn's
   reply shows the voice numbers: end of speech to the first spoken word
-  (the plan's target is 3 s or less; the detector's half-second silence
+  (the target is 3 s or less; the detector's half-second silence
   wait is shown beside it), and how long speech to text took. The model
   settings show the last stop's tap to silence.
 - **Debug builds only** (`app/src/debug`): a test can queue WAV files in the
@@ -598,12 +742,17 @@ the voice silenced and the model stopped, what was written kept.
 
 **Conversations** stay on the phone: one JSON file per conversation in
 `filesDir/assistant/` (app-private, outside backups and device-to-device
-transfer), never sent to a server. The history lists them; each can be
-deleted, and **clear all conversations** deletes every one. With developer
+transfer), never sent to a server (a lookup sends only its search words or
+page address, and a document, a letter photo or a draft goes to the home
+server only when the person asks it to). A conversation keeps a lookup's
+sources and the text read from a letter photo; its attached documents are
+kept beside it in `filesDir/chat-docs/attachments/` and its drafts in
+`filesDir/chat-docs/drafts/`, and they go when it does. The history lists
+them; each can be deleted, and **clear all conversations** deletes every one. With developer
 options on, a reply's long-press also shows how it went (time to first
 words, tokens a second, CPU or GPU).
 
-**The benchmark** (Settings → About → developer options) stays as a
+**The benchmark** (Settings → About & updates → developer options) stays as a
 measuring tool: load time, time to first words, decode speed, voice turns,
 memory, network use and the 10-minute heat loop, with results to copy. It
 shares the model files with the assistant, and each frees the other's copy
@@ -614,7 +763,7 @@ of the model before loading its own.
 the measuring tools out of a household's way: the benchmark, a reply's
 timings in its long-press menu and the last stop's timing in the model
 settings show only while they are on. Tap **app version** (Settings →
-About, or the no-server settings' **About this app**) seven times, as on
+About & updates, or the no-server settings' **About this app**) seven times, as on
 Android's own build number: from the third tap a toast counts down ("You
 are now 3 steps away from developer options"), the seventh says
 "Developer options on", and a **Developer options** section appears at the
@@ -636,7 +785,7 @@ app-private, outside backups, apart from the conversations so clearing
 those keeps a report); the model settings' **Reports** card lists them, to
 send on or delete one or all. **Email draft to coders farm** opens the
 person's email app with the report addressed to info@codersfarm.org
-(Kamron's choice, 2026-10-15); it is sent only when they press send there.
+(the project's address); it is sent only when they press send there.
 **Share as text** opens Android's share menu with the report as plain
 text. Where reports go is one line, `REPORT_DESTINATION` in
 `assistant/ReplyReport.kt`, behind `ReportSink`: `ReportDestination.Email`,
@@ -653,12 +802,17 @@ question…", `ui/screens/assistant/MicPermission.kt`); after a refusal
 Android won't ask about again, the tap shows the way to the app's settings
 instead of doing nothing.
 
-**Privacy.** Settings → About (and the local shell's settings) has a
+**Privacy.** Settings → About & updates (and the local shell's settings) has a
 **Privacy** card: what the app keeps and where it goes, and the privacy
 policy's link from `PRIVACY_POLICY_URL`
 (`ui/screens/settings/PrivacyCard.kt`): `docs/PRIVACY_POLICY.md` as
 GitHub shows it on main (live once pushed; the owner may replace it with
-a Coders Farm page). Blank shows no link; it must be https.
+a Coders Farm page). Blank shows no link; it must be https. The card's
+points say what holds on every install: storage stays private, a phone
+chat goes online only for a lookup you allow and hands a document, letter
+or draft to the home server only when you choose, the audio is never kept,
+and there is no analytics, advertising or crash reporting (`PrivacyCardTest`
+holds the card to that).
 
 **TalkBack.** Titles are headings; the voice turn's state (listening,
 thinking, speaking) and the engine's loading or failing are live regions,
@@ -669,7 +823,8 @@ control; every icon button and link says what it does
 control).
 
 **Open-source parts** of the assistant (the licences card in Settings →
-About lists them with their notices; nothing GPL):
+About & updates lists them with their notices; nothing GPL; fonts under the
+SIL Open Font License):
 
 | Part | Licence | How it gets here |
 |---|---|---|
@@ -681,7 +836,8 @@ About lists them with their notices; nothing GPL):
 | Moonshine tiny, English (speech to text) | MIT | downloaded by the assistant |
 | Moonshine base, English (speech to text, larger) | MIT | downloaded by the benchmark (developer options) |
 | Silero VAD v4 (voice detection) | MIT | downloaded by the assistant |
-| Piper voices Norman, Kristin, Linda | public domain | downloaded from Settings → Voice; speak the assistant's replies |
+| Piper voices Norman, Kristin, Linda | public domain | downloaded from Settings → Voices; speak the assistant's replies |
+| Liberation Sans and Liberation Serif 2.1.5 | OFL-1.1 | in every APK; embedded in the PDFs a phone chat's drafts are saved as, the same files as the server's |
 
 Under those parts the licences card lists **every library in the build**,
 from the variant's own dependency graph (`app/build.gradle.kts`
@@ -703,8 +859,12 @@ The app's Settings has the dashboard's five groups and plain names
 search box and the groups, then a group's sections, then the section; Back
 steps out one level. What belongs to the phone has its panel here:
 **Rooms** (the satellites), **Phones & browsers** (which server, theme,
-this device's name, "listening as"), **App layout** (the bottom bar),
-**Voices** (how this phone speaks), **About & updates** (with the app's
+this device's name, "listening as"), **Printers & scanners** (the printers
+and scanners your home server prints and scans with: status, ink, defaults;
+renaming and removing are admin-only, so it says where), **App layout** (the
+bottom bar),
+**Voices** (how this phone speaks), **Chat** (Chat & AI: a heads-up
+before shaky results, on this phone), **About & updates** (with the app's
 version, and the developer options it turns on: "On-device assistant",
 above) and **Health** (the checks Home's problem rows come from, and the
 container guard's details). The sections only an admin changes on the
@@ -752,21 +912,33 @@ session to its 30-day expiry; docs/SECURITY_PRIVACY.md).
 ```
 app/src/main/java/com/domovoi/app/
 ├── AppContainer.kt        # singleton graph: prefs, api, bus, player, alerts, assistant
-├── assistant/             # on-device assistant: model catalog, store, download job, engine, conversations
+├── assistant/             # on-device assistant: model catalog, store, download job, engine, conversations,
+│   │                      #   phone facts and questions, actions, hand-offs, pictures, reply reports
+│   ├── docs/              # documents in phone chats: text extraction, passages, long-document jobs
+│   ├── drafts/            # drafts in phone chats: store, Word and PDF writers, the "Chat documents" folder
+│   └── lookup/            # looking things up: the rules, and the clients (the only network code here)
 ├── audiobooks/            # books saved to the phone: store, resumable download job, one place per book
 ├── net/                   # ApiClient (data.js analog), StateBus (/ws/state), rememberApi hooks
-├── alerts/                # timer/reminder notifications + the local alarm mirror (process-wide)
+├── alerts/                # timer/reminder notifications + the local alarm mirror, container-guard and help notifications
 ├── audio/MicArbiter.kt    # one microphone owner: room mode, drop-in, chat mic, assistant
+├── diagnostics/           # the phone's own crash and freeze record (Settings → About & updates)
+├── dropin/                # the phone side of a drop-in call
+├── phonemizer/            # text to phonemes for the phone's own Piper voice
 ├── roommode/              # this device as a room satellite (see "Room mode")
+├── update/                # "a newer app is available from your server"
+├── voice/                 # the chat mic and the phone's own voice
 ├── data/Prefs.kt          # DataStore-backed settings
 ├── player/                # PlayItem, PlayerController (player.jsx analog), PlaybackService
 └── ui/
     ├── theme/             # domovoi design tokens (oklch → sRGB), light/dark
     ├── components/        # Pill, StatusDot, cards, dialogs, Domovoi glyphs, fmt helpers
     ├── shell/             # adaptive nav: bottom bar (phone) / rail (medium) / sidebar (tablet)
-    └── screens/           # home, chat, music, podcasts, audiobooks, videos, images,
-                           # news, people, satellites (a Settings tab), calendar, stations, documents,
-                           # local (offline MediaStore music+videos), assistant (on-device), settings, manual
+    └── screens/           # home, chat (One Chat: both places, history, documents, pictures), music,
+                           # podcasts, audiobooks, videos, images, news, people, satellites (a Settings
+                           # tab), calendar, stations, files, documents, printing (print and scan
+                           # sheets, Printers & scanners), containers (Settings → Health), local
+                           # (offline MediaStore music+videos), assistant (the phone chat's screens),
+                           # settings, manual
 ```
 
 The app opens on **Home**, as the dashboard opens on `#home`: the house
@@ -778,9 +950,9 @@ leads back to it: the "domovoi" crumb in the topbar, the rail's glyph,
 the drawer's brand row.
 
 Responsive behavior: compact widths get the web phone strip as a bottom
-bar — the phone bar, Home / Music / Videos / Chat until someone picks two
-to five others for that phone in Settings → App layout (Home is always
-first; kept in the app's Prefs, so each phone has its own; a shared screen
+bar — the phone bar, Home / Music / Videos / Chat until someone picks their
+own two to five tabs for that phone in Settings → App layout (Home is always
+first and counts as one; kept in the app's Prefs, so each phone has its own; a shared screen
 never shows its personal screens there). Every other screen, Settings and
 the manual included, is a tile on Home's "everything" grid (whose "edit
 the bar" link opens that editor), and the home tab stays lit while one of
@@ -878,6 +1050,10 @@ leaves the home network). What the phone does, exactly:
 - The two paths post one timer once (a small dedupe book keyed by
   server and timer id), into the same notification; a background check
   that finds a fire already posted by either posts nothing new.
+- Two other kinds of notification ride the same live socket while the app is
+  running, each on its own channel: the container guard's incidents
+  (`alerts/IncidentAlerts.kt`, for an admin) and voice help's deliveries
+  (`alerts/HelpAlerts.kt`). Neither is part of the timer machinery above.
 - **Privacy:** a shared screen never shows the words, locked or not. On
   any other phone the lock screen shows only the kind and the room
   ("Reminder · garage") **when the phone is set to hide sensitive

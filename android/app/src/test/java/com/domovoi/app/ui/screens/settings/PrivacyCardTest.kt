@@ -57,17 +57,39 @@ class PrivacyCardTest {
         assertEquals(PRIVACY_POLICY_URL.isNotBlank(), "read the privacy policy" in shown)
     }
 
-    /** Where the assistant is not in the install (a 32-bit phone or APK),
-     *  the card says nothing about it. */
-    @Test fun theAssistantsPointsOnlyWhereItIs() {
+    /** Where phone chats are not in the install (a 32-bit phone or APK),
+     *  the card says nothing about them. */
+    @Test fun thePhoneChatsPointsOnlyWhereTheyAre() {
         val with = privacyPoints(assistant = true)
         val without = privacyPoints(assistant = false)
-        assertEquals(5, with.size)
+        assertEquals(6, with.size)
         assertEquals(4, without.size)
-        assertTrue(without.none { it.contains("assistant") || it.contains("Conversations") })
+        assertTrue(without.none { it.contains("phone chat", ignoreCase = true) || it.contains("home server") || it.contains("lookup") })
         assertTrue(without.any { it.startsWith("Room mode, which you turn on yourself") })
-        assertTrue(with.any { it.startsWith("The assistant opens the microphone only after you tap it") })
-        assertTrue(with.any { it.startsWith("Conversations, reply reports and problem reports stay on this phone") })
+        assertTrue(with.any { it.startsWith("Phone chats open the microphone only after you tap it") })
+        assertTrue(with.any { it.startsWith("Phone chats, reply reports and problem reports stay on this phone") })
+    }
+
+    /** The card must not promise what the app no longer does: phone chats go
+     *  online for a lookup only after its allow card, and hand a document, a
+     *  letter or a draft to the home server only when the person sends it
+     *  (docs/PRIVACY_POLICY.md, "Lookups you allow" and "Documents, letters
+     *  and drafts"). The old "never leave it" / "only network use" wording
+     *  stays gone, and the One Chat names replace "on-device assistant". */
+    @Test fun theCardSaysLookupsAskFirstAndTheHomeServerHandOffIsAChoice() {
+        val points = privacyPoints(assistant = true)
+        val lookup = points.single { it.contains("lookup you allow") }
+        assertTrue(lookup, lookup.startsWith("Domovoi on this phone answers phone chats on this phone"))
+        assertTrue(lookup, "card shows the exact words" in lookup && "first" in lookup)
+        assertTrue(lookup, "model" in lookup)
+        val handOff = points.single { it.contains("home server") }
+        assertTrue(handOff, "document" in handOff && "letter" in handOff && "draft" in handOff)
+        assertTrue(handOff, "only when you choose" in handOff)
+        assertTrue(handOff, "kept nowhere" in handOff)
+        val all = points.joinToString(" ")
+        listOf("never leave", "only network use", "on-device assistant", "The assistant").forEach {
+            assertTrue("the card still says '$it'", it !in all)
+        }
     }
 
     @Test fun aboutAndTheLocalSettingsBothShowIt() {
