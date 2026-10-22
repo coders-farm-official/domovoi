@@ -84,8 +84,10 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now domovoi-satellite domovoi-kiosk
 ```
 
-(If your checkout predates the in-repo `domovoi-satellite.service`, use
-the PROVISIONING.md §8 heredoc for that one.)
+(`sudo -E sh ~/domovoi/satellite/scripts/install-service.sh --with-kiosk`
+does the same in one step, and only enables the units; start them with
+`sudo systemctl start domovoi-satellite domovoi-kiosk`. See PROVISIONING.md
+§8.)
 
 Both units run under `ProtectSystem=strict`. The kiosk's writable set is
 the home directory (Chromium's profile under `~/.domovoi/kiosk-profile`
@@ -117,8 +119,8 @@ takes it back out of the address:
 kiosk_url = "http://<server>:6369/display.html?room=<room_id>&device_token=<household token>"
 ```
 
-The household token is under Settings → Phones & browsers → Household token on an
-admin's dashboard; percent-encode it if an admin chose one with spaces or
+The household token is under Settings → Rooms & devices → Phones & browsers →
+Household token on an admin's dashboard; percent-encode it if an admin chose one with spaces or
 `&`. Without it the screen shows what was playing when the page loaded and
 then stops updating — the live push refuses an unpaired screen, so no
 change reaches it — with the room id for a name, the clock for idle and
@@ -131,16 +133,17 @@ a wrong token cannot unpair a browser that is already paired.
 
 ## 5. What you get
 
-- The dashboard's Settings → Rooms shows a `video` chip on the card; the
-  drawer gains a **display** block (screen on/off, restart kiosk,
-  kiosk-alive pill) and transport buttons on the now-playing row.
+- The dashboard's Settings → Rooms & devices → Rooms shows a `video` chip
+  on the card; the drawer gains a **display** block (screen on/off,
+  **Restart kiosk**, a *kiosk running* or *kiosk dead* pill) and transport
+  buttons on the now-playing row.
 - The screen shows cover art (library tracks; streams get the gradient),
   title/artist/album, a live progress bar, and touch transport. Idle =
   clock / blank / last art per `[display] idle_mode`.
 - "Play music in <room>" through any voice satellite — or the dashboard —
   targets this satellite's own room id like any other satellite. Each
   satellite has its OWN music pipe (per-satellite MPD); group satellites
-  sharing a physical room with a room label in Settings → Rooms.
+  sharing a physical room with a room label in Settings → Rooms & devices → Rooms.
 
 ## 6. Troubleshooting
 
