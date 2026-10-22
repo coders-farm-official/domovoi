@@ -304,6 +304,19 @@ async def test_a_misheard_name_is_asked_about_never_read_on_a_guess(db_session, 
     assert r.matched_handler != "documents"
 
 
+def test_near_names(tmp_path):
+    d = tmp_path / "Documents"
+    (d / "From Chat").mkdir(parents=True)
+    (d / "From Chat" / "Letter to the landlord v1.docx").write_bytes(b"PK")
+    (d / "Lease.md").write_text("x", encoding="utf-8")
+    near = lambda q: [x.title for x in reading.find_near(q, d)]  # noqa: E731
+    assert near("the leaves") == ["Lease"]
+    # The vt.py run: Whisper heard "lionthord" for "landlord".
+    assert near("the letter to the lionthord") == ["Letter to the landlord v1"]
+    assert near("the letter from the bank") == []
+    assert near("a limerick") == []
+
+
 @requires_db
 @pytest.mark.asyncio
 async def test_reading_works_with_ai_off(db_session, docs):

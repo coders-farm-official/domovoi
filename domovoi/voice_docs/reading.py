@@ -96,13 +96,15 @@ def find(query: str, root: Path | None = None):
 #: you mean …?" (difflib's ratio): "leaves" for "lease" is 0.73, "lease"
 #: for "least" 0.8; "limerick" against "lease" 0.31.
 NEAR_RATIO = 0.7
+NEAR_HALF = 0.5
 
 
 def find_near(query: str, root: Path | None = None):
     """Documents whose name is close to what was heard, for "Did you mean
     …?" after :func:`find` found nothing (speech recognition hears "the
     leaves" for "the lease"). Every word heard must be near one of the
-    name's words; the closest few first. Never read without asking."""
+    name's words, or one exactly right and the rest half alike; the
+    closest few first. Never read without asking."""
     from difflib import SequenceMatcher
 
     from domovoi.printing import lookup
@@ -115,13 +117,11 @@ def find_near(query: str, root: Path | None = None):
         have = lookup._words(d.title)
         if not have:
             continue
-        best = []
-        for w in want:
-            r = max(SequenceMatcher(None, w, h).ratio() for h in have)
-            if r < NEAR_RATIO:
-                break
-            best.append(r)
-        else:
+        best = [max(SequenceMatcher(None, w, h).ratio() for h in have) for w in want]
+        # Every word near, or one word exactly right and the rest at least
+        # half alike ("the letter to the lionthord" for "… landlord": 0.59;
+        # "the letter from the bank" against it: "bank" 0.33, not offered).
+        if min(best) >= NEAR_RATIO or (max(best) == 1.0 and min(best) >= NEAR_HALF):
             scored.append((-sum(best) / len(best), len(have), d.title.lower(), d))
     scored.sort(key=lambda t: t[:3])
     return [d for *_, d in scored[:3]]
