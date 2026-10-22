@@ -185,8 +185,9 @@ We build Domovoi in public. Here's where it stands.
   who it is from, what it is about and what to do. Every date and amount is
   shown inside the letter's own sentence, quoted as the picture model read
   it; the model's own sentences carry no figures. A blurry or handwritten
-  photo gets its heads-up card first. The phone never keeps the photo, and
-  the text read from it stays with that chat only.
+  photo gets its heads-up card first. The phone never keeps the photo; the
+  text read from it stays with that chat only, so you can ask about it
+  afterwards.
 - **Read documents aloud, and take a letter, by voice.** "Read me the
   lease" reads a PDF, Word, OpenDocument, text or markdown file from the
   household's Documents folder aloud in any room, a page or so at a time
@@ -311,8 +312,10 @@ they have been tried on fewer devices than the rest, aren't yet held to
   or mobile data, its music, videos and saved books) from what the phone
   reads at that moment; the house's rooms and calendar stay in home-server
   chats. It also acts on the phone after a card or a yes: timers and alarms
-  in the Clock app, the phone's player (with undo), a saved audiobook or
-  video. With a photo it can answer about a picture, on phones whose GPU
+  in the Clock app ("remind me in 2 minutes to check the oven" becomes a
+  timer card with that label), the phone's player (with undo, and a
+  "did you mean" for a near spelling of an artist, never a guess played), a
+  saved audiobook or video. With a photo it can answer about a picture, on phones whose GPU
   runs the model's photo encoder (the buttons show only there). A bad reply
   can be reported (an email draft you send yourself), and its controls,
   like room mode's, are labelled for screen readers.
@@ -370,7 +373,9 @@ they have been tried on fewer devices than the rest, aren't yet held to
    desk, asking a chat about a document and summarizing long ones, honest
    heads-ups before shaky results, writing and saving resumes and letters,
    reading a photographed letter, reading documents aloud and taking a letter by voice,
-   looking things up from chat with your permission, a rewritten user manual
+   looking things up from chat with your permission, "what is this?" on an
+   attached document answered with a short overview, the phone's clock
+   words ("twelve to nine") and reminders as timers read right, a rewritten user manual
    and a pass over every document (privacy wording, licences, the fonts),
    a phone chat that answers about
    the phone, does things on it and looks at a photo, the Windows satellite
