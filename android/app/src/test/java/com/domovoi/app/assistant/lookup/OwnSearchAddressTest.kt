@@ -71,7 +71,9 @@ class OwnSearchAddressTest {
         }
     }
 
-    private fun dnsOf(vararg a: String) = okhttp3.Dns { _ -> a.map { java.net.InetAddress.getByName(it) } }
+    private fun dnsOf(vararg a: String) = object : okhttp3.Dns {
+        override fun lookup(hostname: String) = a.map { java.net.InetAddress.getByName(it) }
+    }
 
     @Test fun aHomeLookingNameThatResolvesToAPublicAddressIsRefusedOverHttp() {
         for (answer in listOf(arrayOf("203.0.113.5"), arrayOf("192.168.1.20", "203.0.113.5"), arrayOf("2606:4700::1111"))) {
@@ -89,7 +91,9 @@ class OwnSearchAddressTest {
         for (answer in listOf(arrayOf("192.168.1.20"), arrayOf("100.100.1.2", "fd00::20"), arrayOf("127.0.0.1"))) {
             assertTrue(!cleartextResolvesOffNetwork("box.lan", dnsOf(*answer)))
         }
-        assertTrue(!cleartextResolvesOffNetwork("box.lan", okhttp3.Dns { throw java.net.UnknownHostException("none") }))
+        assertTrue(!cleartextResolvesOffNetwork("box.lan", object : okhttp3.Dns {
+            override fun lookup(hostname: String): List<java.net.InetAddress> = throw java.net.UnknownHostException("none")
+        }))
         assertTrue(!cleartextResolvesOffNetwork("203.0.113.5", dnsOf("8.8.8.8")))  // a literal: judged as written
     }
 }
