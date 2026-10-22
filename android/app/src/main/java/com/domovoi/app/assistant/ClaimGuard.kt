@@ -19,7 +19,11 @@ package com.domovoi.app.assistant
  * Streamed: [push] each delta and get back whole sentences, checked;
  * [finish] the rest. A reply with no claim reads exactly as it was written.
  */
-class ClaimGuard {
+class ClaimGuard(
+    /** Claims of actions are checked (a turn that asked to act); false:
+     *  only a refusal to set timers or alarms is ([refusesClock]). */
+    private val claims: Boolean = true,
+) {
     private val pending = StringBuilder()
     private val said = mutableSetOf<Claim>()
 
@@ -27,7 +31,13 @@ class ClaimGuard {
     val replaced: Boolean get() = said.isNotEmpty()
 
     /** Text pushed and not yet given back (an unfinished sentence). */
-    val holding: Boolean get() = pending.isNotEmpty()
+    val holding: Boolean get() = pending.length > given
+
+    /** On a turn that only checks refusals: the sentence being written
+     *  can't be one (its first word says so) and streams through as it comes. */
+    private var free = false
+    /** How much of [pending] has already been given back (a free sentence). */
+    private var given = 0
 
     fun push(delta: String): String {
         pending.append(delta)
@@ -39,23 +49,52 @@ class ClaimGuard {
                 var j = e
                 while (j < pending.length && pending[j].isWhitespace()) j++
                 j
-            } ?: break
-            out.append(checked(pending.substring(0, end)))
+            }
+            if (end == null) {
+                if (!claims && !free && cannotRefuse(pending)) free = true
+                if (free) {
+                    out.append(pending, given, pending.length)
+                    given = pending.length
+                }
+                break
+            }
+            if (free) out.append(pending, given, end) else out.append(checked(pending.substring(0, end)))
             pending.delete(0, end)
+            given = 0
+            free = false
         }
         return out.toString()
     }
 
     fun finish(): String {
         val whole = pending.toString()
+        val rest = pending.substring(given)
+        val wasFree = free
         pending.setLength(0)
-        return if (whole.isEmpty()) "" else checked(whole)
+        given = 0
+        free = false
+        return when {
+            whole.isEmpty() -> ""
+            wasFree -> rest
+            else -> checked(whole)
+        }
+    }
+
+    /** A sentence opening with [start] can't be a refusal to set a timer:
+     *  its first word (or what of it is written) begins none of a refusal's
+     *  openings ("I", "Sorry", "Unfortunately"...). */
+    private fun cannotRefuse(start: CharSequence): Boolean {
+        val t = start.toString().trimStart()
+        val words = plain(t).split(" ").filter { it.isNotEmpty() }
+        val first = words.firstOrNull() ?: return false
+        val complete = words.size > 1 || (t.isNotEmpty() && !t.last().isLetterOrDigit() && t.last() != '\'')
+        return if (complete) first !in REFUSAL_STARTS else REFUSAL_STARTS.none { it.startsWith(first) }
     }
 
     /** [raw] (one sentence, with its spacing) or its honest line; a second
      *  claim of the same kind adds nothing. */
     private fun checked(raw: String): String {
-        val claim = claimIn(raw) ?: return raw
+        val claim = (if (refusesClock(raw)) Claim.CLOCK_HELP else if (claims) claimIn(raw) else null) ?: return raw
         val lead = raw.takeWhile { it.isWhitespace() }
         val tail = raw.takeLastWhile { it.isWhitespace() }
         if (!said.add(claim)) return lead.takeIf { it.contains('\n') }.orEmpty()
@@ -67,10 +106,27 @@ class ClaimGuard {
         CLOCK(CLOCK_LINE),
         CONTACT(CONTACT_LINE),
         OTHER(CANT_LINE),
+        CLOCK_HELP(CLOCK_HELP_LINE),
     }
 
     companion object {
+        /** The words a refusal to set a timer can open with. */
+        private val REFUSAL_STARTS = setOf(
+            "i", "i'm", "i've", "we", "sorry", "unfortunately", "but", "however", "as", "ok", "okay", "oh", "well",
+            "actually", "i'd", "while", "although", "no", "hmm", "right",
+        )
+
         const val CANT_LINE = "I can't do that from this chat."
+        const val CLOCK_HELP_LINE = "This phone can set it: say \"set a timer for 10 minutes\", \"set an alarm for 7 am\" " +
+            "or \"remind me in 20 minutes\", and I'll ask before sending it to the Clock app."
+
+        /** "I can't set timers", "I cannot set alarms or timers directly",
+         *  "I'm not able to create reminders". */
+        private val REFUSES_CLOCK = Regex(
+            "\\b(?:i|we) (?:can't|cannot|can not|am not able to|am unable to|'m not able to|'m unable to|don't have the ability to|" +
+                "do not have the ability to|have no way to|don't have a way to)(?: actually| directly| really)? " +
+                "(?:set|create|start|make|schedule|add)\\b.{0,40}\\b(?:timers?|alarms?|reminders?|countdowns?)\\b",
+        )
         const val PLAY_LINE = "I can't play that from this chat. To play music saved on this phone, say \"play\" and the song, artist or album."
         const val CLOCK_LINE = "I can't set that from this chat. Say \"set a timer for 10 minutes\" or \"set an alarm for 7 am\" and I'll ask before sending it to the Clock app."
         const val CONTACT_LINE = "I can't do that from this chat. Say \"call\" or \"text\" and a name, and I'll open the app for you to finish it."
@@ -162,6 +218,10 @@ class ClaimGuard {
             .replace(Regex("[^a-z0-9' ]+"), " ").replace(Regex("\\s+"), " ").trim()
 
         /** What [sentence] claims to have done (or to be doing), or null. */
+        /** "I cannot set alarms or timers directly.": not so, this phone
+         *  can (Fold re-check 2026-10-22); said with the words that do it. */
+        fun refusesClock(sentence: String): Boolean = REFUSES_CLOCK.containsMatchIn(plain(QUOTED.replace(sentence, " ")))
+
         fun claimIn(sentence: String): Claim? {
             if (sentence.trimEnd().trimEnd('"', '\'', ')', '”').endsWith("?")) return null
             val unquoted = QUOTED.replace(sentence, " ")

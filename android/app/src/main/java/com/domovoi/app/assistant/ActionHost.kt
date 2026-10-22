@@ -211,6 +211,10 @@ object ActionTexts {
         return parts.joinToString(" ").ifEmpty { "0 seconds" }
     }
 
+    /** An unnamed timer's name in the Clock app: when it was set, as the
+     *  phone shows the time ("Timer · 2:31 PM"). */
+    fun timerName(style: ClockStyle, now: ZonedDateTime): String = "Timer · " + style.time(now)
+
     /** "7:00 AM" as the phone shows the time. */
     fun clockTime(hour: Int, minute: Int, style: ClockStyle, now: ZonedDateTime): String =
         style.time(now.withHour(hour).withMinute(minute).withSecond(0).withNano(0))
