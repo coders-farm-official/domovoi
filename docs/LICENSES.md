@@ -3,8 +3,10 @@
 Domovoi's own code is [MIT](../LICENSE). Your server, the Android app and
 the wake-word trainer also download models, voices and data that are not
 Domovoi's. Each one comes from its publisher, under its publisher's
-licence. Your server downloads it; Domovoi doesn't ship it. This page lists
-each one with its licence, and says what the licence means:
+licence. Your server downloads these; Domovoi doesn't ship them. This page
+lists each one with its licence, and says what the licence means. The
+libraries and fonts that do come with Domovoi are listed after the models,
+under "Not downloaded". For the downloads:
 
 - for a **household** running Domovoi at home;
 - for a **redistributor**: anyone who passes these files on (a box or a
@@ -26,6 +28,9 @@ is what counts.
   a permissive licence exists for either yet.
 - **Everything else a server downloads by default** is under MIT or
   Apache-2.0, or is public domain.
+- **AI is optional.** If you leave AI chat and questions out when you set
+  up a server, the Llama, Qwen and picture-describing models below are not
+  downloaded at all.
 - **A wake word you train at home is for your household only**, because
   the training data's licences don't allow sharing it
   ([why](../scripts/wake_word/README.md#5-licence-a-model-trained-here-is-for-this-household)).
@@ -93,7 +98,7 @@ Any other model you pull by name has its own licence: its page in the
 | The wake-word models (room mode, preview) | A phone as a room | **Your own server**, not the internet: the openWakeWord files above | As above (`hey_jarvis`: CC BY-NC-SA 4.0). That's why the app doesn't bundle them | When room mode starts |
 
 The app's own parts and libraries, with their licence texts, are in the
-app under Settings, About, open-source licences.
+app under Settings → About & updates → Open-source licences.
 
 ## The wake-word trainer
 
@@ -112,6 +117,7 @@ household.
 | MIT's room impulse responses (`davidscripka/MIT_environmental_impulse_responses`) | No licence stated at all |
 | The background clips (FMA and FSD50K samples) | Include clips under non-commercial licences |
 | espeak-ng | GPL-3.0. It runs only inside the trainer's image, as a separate program; Domovoi doesn't include or ship it |
+| ffmpeg (the Linux distribution's own package), the mutagen library, libsndfile | ffmpeg as the distribution builds it, with its GPL parts turned on; mutagen GPL-2.0-or-later; libsndfile LGPL-2.1-or-later. Like espeak-ng, only inside the trainer's image |
 | The image's base, `pytorch/pytorch` with CUDA | PyTorch is BSD-3-Clause; NVIDIA's CUDA and cuDNN libraries are under NVIDIA's own licence |
 
 ## Not downloaded: these come with Domovoi
@@ -127,10 +133,35 @@ household.
   (MIT). Its copyright notice and licence text are in that file and inside
   `DomovoiTray.exe`. Nothing else is bundled into the Windows programs:
   they use only .NET Framework 4.8.1, which is part of Windows.
+- **pypdfium2** (reads PDFs in Chat, draws pages for printing): Apache-2.0
+  or BSD-3-Clause. Its wheel carries PDFium (BSD-3-Clause and Apache-2.0)
+  and the libraries PDFium is built with: FreeType (under the FreeType
+  licence), libjpeg-turbo (IJG and BSD), libpng, zlib, Little CMS (MIT),
+  OpenJPEG (BSD), ICU (the Unicode licence), Abseil (Apache-2.0) and a few
+  smaller permissive ones. Their licence texts come inside the wheel
+  (`pypdfium2-*.dist-info/licenses/`). The FreeType licence asks for this
+  credit: *Portions of this software are copyright © The FreeType Project
+  (www.freetype.org). All rights reserved.*
+- **ReportLab** (test pages, text and table printouts, scan PDFs): BSD.
+- **The dashboard's libraries**, served by the server itself so the
+  dashboard makes no outside requests (`web/static/vendor/`): React and
+  ReactDOM 18.3.1 (MIT), Babel standalone 7.29.0 (MIT), Lucide 1.22.0
+  (ISC), marked 12.0.2 (MIT), x-spreadsheet (MIT), qrcode-generator 1.4.4
+  by Kazuhiko Arase (MIT) and Excalidraw 0.17.6 (MIT; it carries DOMPurify
+  3.0.3 under Apache-2.0 or MPL-2.0, used here under Apache-2.0).
+- **The dashboard's fonts**, all under the SIL Open Font License 1.1, each
+  with its licence text beside it: Inter and JetBrains Mono (through
+  fontsource 5.2.8, in `web/static/vendor/fonts/`), the three fonts
+  Excalidraw carries (Virgil, Cascadia Code and Assistant, in
+  `web/static/vendor/excalidraw/`), and Playfair Display SC, the display
+  face (`web/static/fonts/`, also in `docs/design/fonts/`).
+- **Liberation Sans and Liberation Serif** 2.1.5 (SIL Open Font License
+  1.1), embedded in the PDFs Chat writes. The same files are in the server
+  (`domovoi/drafts/fonts/`, with `LICENSE-OFL.txt`) and in the app.
 
 ## What the licences mean
 
-**MIT, Apache-2.0, BSD-3-Clause, public domain.** Use them at home or in a
+**MIT, ISC, Apache-2.0, BSD-3-Clause, public domain.** Use them at home or in a
 business, change them, and pass them on.
 - *Household:* nothing to do.
 - *Redistributor:* keep the copyright notice and the licence text with the
@@ -176,6 +207,14 @@ licence. For ordinary use, pick another model.
 **CC BY 4.0:** the fast lane's NVIDIA model, and LibriTTS-R. Use them for
 anything, but credit the author (NVIDIA; LibriTTS-R's authors) when you
 pass them on.
+
+**SIL Open Font License 1.1:** the dashboard's fonts and the Liberation
+fonts.
+- *Household:* nothing to do.
+- *Redistributor:* use, copy and pass the fonts on, in a product you sell
+  too, but not the font files on their own for money; keep the copyright
+  notice and the licence text with them; a changed font can't keep the
+  original name.
 
 **"No licence stated" and "educational use only":** MIT's impulse
 responses, and MUSDB18 inside the validation features. Without a licence,

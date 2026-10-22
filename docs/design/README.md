@@ -1,18 +1,19 @@
 # Domovoi design system
 
-Design system for **Domovoi** — a local-first home voice assistant. A domovoi is a Slavic household guardian spirit, often taking the form of a cat; the brand mascot is **the domovoi**, a line-art cat house-spirit. It has no personal name — it's just "the domovoi", lowercase in chrome.
+Design system for **Domovoi** — the home computer system that just works: media, files, rooms and your phone first, with voice and an optional, private AI on top. A domovoi is a Slavic household guardian spirit, often taking the form of a cat; the brand mascot is **the domovoi**, a line-art cat house-spirit. It has no personal name — it's just "the domovoi", lowercase in chrome.
 
-This is a tech-forward management UI you'd reach from a laptop or a phone on the same Wi-Fi as your Pi satellites. The dashboard (web backend, port `6369`) currently ships these core surfaces, plus routes that installed plugins contribute:
+This is a tech-forward management UI you'd reach from a laptop or a phone on the same Wi-Fi as your room satellites. The dashboard (web backend, port `6369`) currently ships these core surfaces, plus routes that installed plugins contribute:
 
 - **Home** — the default page (`#home`): the house at a glance, and on a phone the "everything" grid behind the phone bar (home · music · videos · chat by default; each device picks its own two to five tabs in Settings → App layout)
-- **Chat** — threaded text chat with the local models (vision-capable when a message carries images); the cat glyph marks assistant lines
+- **Chat** — threaded text chat with the local models (vision-capable when a message carries images; documents can be attached and asked about; hidden when AI features are off); the cat glyph marks Domovoi's replies
+- **Help** — the "?" in the top bar opens Domovoi's help desk about the page you are on (the manual, FAQ and troubleshooting, no model needed)
 - **Music / Podcasts / Audiobooks / Videos / News** — library, acquisitions, now-playing across rooms, video playback with resume (image browsing lives in Files; the Images generation page comes from the Image Generation plugin)
 - **People** — recognized voices, last-heard timestamps, presence tiers
 - **Settings** — five groups (Rooms & devices, Voice, Chat & AI, Privacy, System) with a search box at the top; a desktop shows the groups and their sections in a left column and the section on the right, a phone the groups, then a group's sections, then the section. Section names are plain words (Rooms, Phones & browsers, App layout, Voice history, About & updates, Health, Advanced); Advanced opens folded. Old addresses (`#settings/configuration`, `#settings/satellites`, `#satellites`, `#containers`) still land on their section
 - **Settings → Rooms** — per-room Pi status (online/offline, Wi-Fi rx/tx, version); a Settings section, not a nav page (the old `#satellites` opens it)
 - **Settings → Health** — every check on the server, green or not (server, updates, rooms, plugins, internet, containers); Home's "needs attention" list is the problems among the same checks, each linking to its part of Health
 - **Calendar** — local + synced events, timers, reminders
-- **Documents**, **Plugins**, and plugin-supplied pages (the sidebar interleaves core and plugin nav items by `nav_order`)
+- **Files** (its Documents library opens the editors and can start a chat about a file), **Plugins**, and plugin-supplied pages (the sidebar interleaves core and plugin nav items by `nav_order`)
 
 ## Hard rules
 
@@ -20,7 +21,7 @@ This is a tech-forward management UI you'd reach from a laptop or a phone on the
 - No emoji. Status uses `<StatusDot/>`, not a colored-circle character.
 - Live things pulse (`domovoi-pulse`). Idle things don't.
 - Lowercase chrome (`now playing`, `online`, `failed`). Sentence case for content.
-- Cat glyph in three places only: top-left wordmark, next to assistant-attributed lines in feeds, empty states.
+- Cat glyph in three places only: top-left wordmark, next to Domovoi's own lines in feeds, empty states.
 - Media acquisition UI speaks generically: "provider plugin", "source", "acquisition". Never name a specific external media platform or downloader tool anywhere in UI copy, sample data, or code (banned patterns, any case: `yout[u]be`, `yt[-_]?d[l]p` — written bracket-split here so this file itself passes the repo's vocabulary gate).
 - Likewise these reserved token patterns must never appear anywhere (any case): `har[l]ey`, `ric[h]ard`, `orche[s]trator`. The only product name is Domovoi; the mascot is just "the domovoi".
 - Reuse the primitives in `web/static/components.jsx`; don't fork copies of them.
@@ -42,7 +43,7 @@ A modern technical dashboard, in the lineage of Linear / Vercel / Tailscale admi
 
 ## Why amber and not blue
 
-Linear is iris-purple, Vercel is monochrome, Tailscale is teal — picking a cool blue would make Domovoi a fourth knock-off in that lineup. Amber gives the product a distinct, slightly domestic feel (it's a *home* assistant — hearth-colored suits a house spirit), reads well on both near-white and near-black canvases, and pairs naturally with the cat motif. It's used **sparingly** — primary buttons, the active nav indicator, link color, and "live" pulses. Status colors (green / amber / red / gray) follow standard convention; the brand amber is a slightly different, deeper amber than the warning amber so they don't collide.
+Linear is iris-purple, Vercel is monochrome, Tailscale is teal — picking a cool blue would make Domovoi a fourth knock-off in that lineup. Amber gives the product a distinct, slightly domestic feel (it's a *home* product — hearth-colored suits a house spirit), reads well on both near-white and near-black canvases, and pairs naturally with the cat motif. It's used **sparingly** — primary buttons, the active nav indicator, link color, and "live" pulses. Status colors (green / amber / red / gray) follow standard convention; the brand amber is a slightly different, deeper amber than the warning amber so they don't collide.
 
 ---
 
@@ -87,7 +88,8 @@ The product talks like a competent, slightly dry sysadmin who knows you personal
 ### Type
 - **Inter Variable** for everything UI. Geometric grotesque, optical-sized, reads well at 11–13 px.
 - **JetBrains Mono** for any value that's structurally code-shaped: file paths, IDs, durations like `3:58`, IP addresses, transfer rates. Tabular numerals on by default for monospace.
-- **Cash Currency** (`fonts/Cash_Currency.ttf`, also vendored in `web/static/fonts/`) is the display/brand face used by the wordmark lockup only.
+- **Playfair Display SC** Bold (`fonts/PlayfairDisplaySC-Bold.ttf`, also in `web/static/fonts/`; SIL Open Font License 1.1, its licence text `OFL-PlayfairDisplaySC.txt` beside it) is the `--ff-display` token: a display face for one-off marquee lines. Nothing in the dashboard uses it today.
+- **The wordmark** (`web/static/assets/wordmark.svg`) is the cat glyph plus "domovoi" set as SVG text in Inter 600 (and "/ web 0.1" in JetBrains Mono), not outlined paths, so it draws in Inter wherever Inter is loaded. It never used the display face.
 - Numbers in Inter use `font-variant-numeric: tabular-nums` so columns of `Mbit` values, durations, and counts line up.
 - One-step type scale: 32 / 24 / 18 / 15 / 13 / 11. No 14, no 16. The whole system runs on a 13-px body.
 
@@ -151,7 +153,7 @@ The product talks like a competent, slightly dry sysadmin who knows you personal
 ## Iconography
 
 - **Lucide** is the default icon set. 16 px stroke-1.5 inside chrome (sidebar, buttons, table cells); 18 px stroke-1.5 in headers; 20 px stroke-1.5 only in empty-state illustrations and the play/pause transport. Stroke color follows the surrounding text color. Plugin pages may supply their own nav icon SVG via the manifest; it renders at the same size and inherits the same stroke color.
-- The only custom icon in the system is the **domovoi cat glyph** (`web/static/assets/domovoi.svg` and `domovoi-sleeping.svg`). It appears in exactly three places: the top-left wordmark, next to assistant-attributed lines in conversation feeds (the "from the domovoi" mark, 12 px), and in empty-state illustrations. **Nowhere else.**
+- The only custom icon in the system is the **domovoi cat glyph** (`web/static/assets/domovoi.svg` and `domovoi-sleeping.svg`). It appears in exactly three places: the top-left wordmark, next to Domovoi's own lines in conversation feeds (the "from the domovoi" mark, 12 px), and in empty-state illustrations. **Nowhere else.**
 - No emoji. No Unicode glyphs as icons. Status is communicated by the `<StatusDot/>` component, never by an emoji circle.
 - Album / artist artwork, when present, is treated as user-content imagery, not iconography — see the Cards rules.
 
@@ -164,7 +166,8 @@ README.md                     ← you are here (this folder is docs/design/)
 colors_and_type.css           ← standalone token file for out-of-repo prototypes
                                  (canonical: web/static/colors_and_type.css)
 fonts/
-  Cash_Currency.ttf           ← wordmark display face
+  PlayfairDisplaySC-Bold.ttf  ← display face (--ff-display; not used in the UI)
+  OFL-PlayfairDisplaySC.txt   ← its licence (SIL Open Font License 1.1)
 preview/
   type-*.html                 ← typography specimen cards
   color-*.html                ← color scale cards
