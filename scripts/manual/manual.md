@@ -688,8 +688,8 @@ your gallery, and is gone once Domovoi has answered: the chat keeps only
 a **photo (not kept)** mark. The camera asks for its permission the first
 time. Phones without the buttons can't do it quickly enough; a home-server
 chat's **attach image** still works there. **A letter or a bill:** ask "what does this letter say?" with a photo of
-it, and the answer explains it, with its dates and amounts checked against
-the text read from the photo. The photo isn't kept; the text read from it
+it, and the answer explains it in plain words, with its dates and amounts
+quoted straight from the letter. The photo isn't kept; the text read from it
 is kept with the answer, so you can ask about the letter again, and goes
 when you delete the chat. On a phone that can't read photos itself, **+**
 offers **a letter for the home server: take a photo** or **choose a
@@ -905,11 +905,12 @@ per chat, and two in the house.
 **What does this letter say?** Attach a photo of a letter or a bill (one
 page per photo) and ask "what does this letter say?" or "what do I need
 to do?". The answer says who it's from, what it's about, the deadlines,
-the amounts, the reference numbers and what to do next. Its dates,
-amounts and numbers are checked against the text Domovoi read from the
-photo; anything it can't find there is left out, and a note says so. A
-photo that was misread to begin with can still be wrong, so check what
-matters on the letter itself. Press
+the amounts, the reference numbers and what to do next. Dates and amounts
+are quoted straight from the letter: under **Dates in this letter** and
+**Amounts in this letter**, each is shown inside the letter's own
+sentence, as Domovoi read it from the photo, with the figure in bold.
+Domovoi's own words never give a figure. A photo that was misread to begin
+with can still be wrong, so check what matters on the letter itself. Press
 **photo 1** under the answer to see the text Domovoi read. A blurry photo
 or handwriting gets a heads-up first. If a letter has text aimed at an AI
 assistant ("ignore previous instructions…"), Domovoi doesn't follow it
@@ -939,9 +940,9 @@ HEIC photos. See [Chat and the chat mic](#node:phone-chat).
   Search](#settings/search); the answer came from Wikipedia meanwhile.
 - "Points that span parts may be missed": a long summary is made part by
   part. Ask about the specific thing to have it found wherever it is.
-- "Domovoi left out a date or amount that isn't in the letter's text":
-  the explanation named one the letter doesn't have, so it isn't shown.
-  Check the letter itself, or take the photo again in good light.
+- "Domovoi left out a sentence of its own that named a date, an amount
+  or a number": Domovoi's explanation never gives figures itself; look for
+  them in the letter's sentences quoted below it.
 
 **Also:** voice chat mode, a spoken conversation in a room, is an early
 experiment and off unless whoever set up Domovoi turned it on.

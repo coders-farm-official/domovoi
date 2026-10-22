@@ -352,8 +352,9 @@ internal suspend fun readLetterOnServer(app: AppContainer, jpeg: ByteArray, stop
         .addFormDataPart("file", "letter.jpg", jpeg.toRequestBody("image/jpeg".toMediaType()))
         .addFormDataPart("stop_if_handwritten", if (stopIfHandwritten) "true" else "false")
         .build()
+    // The device id keys the server's one-read-per-phone slot.
     val req = Request.Builder().url(app.api.absolute("/api/chat/letters/read"))
-        .header("X-Requested-With", "DomovoiApp").post(body).build()
+        .header("X-Requested-With", "DomovoiApp").header("X-Device-Id", app.prefs.deviceId).post(body).build()
     val client = app.api.http.newBuilder()
         .readTimeout(LETTER_READ_TIMEOUT_MIN, java.util.concurrent.TimeUnit.MINUTES)
         .callTimeout(LETTER_READ_TIMEOUT_MIN + 1, java.util.concurrent.TimeUnit.MINUTES)

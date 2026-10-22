@@ -10,22 +10,23 @@ Core and dashboard update, and the app. No migration and no new
 dependencies.
 
 * **Photograph a letter or a bill and ask what it says or what to do.**
-  The answer explains it plainly in a fixed shape: who it's from, what it's
-  about, the deadlines, the amounts, the reference numbers, what to do
-  next and what was unclear.
-* **Dates and amounts are checked against the text read from the photo.**
-  The picture model transcribes the photo; the chat model explains the
-  transcript; then the app scans everything it would show for anything
-  that looks like a date, an amount, a number, a percentage or a
-  reference (digits, currency signs and words, month names, ordinals,
-  weekdays, "tomorrow", numbers in words) and keeps a clause only when
-  every one of them is in the transcript exactly; a date whose day and
-  month could be read either way is refused. A dropped clause is counted
-  in a note under the answer. Deadlines and amounts due the model missed
-  are added from the letter's own sentences. The check is against what
-  was read: a photo misread in the first place (blur, glare, handwriting)
-  can still give a wrong date or amount, so the note says to check
-  anything important on the letter itself.
+  The answer says in plain words who it's from, what it's about and what
+  to do, then lists **Dates in this letter** and **Amounts in this
+  letter**, and the reference numbers.
+* **Dates and amounts are quoted straight from the letter.** Each one is
+  shown inside the letter's own sentence, quoted exactly as the picture
+  model read it from that photo, with the date or amount in bold: every
+  sentence of the letter that holds a date, a period or an amount, under
+  its own photo when there are several. The model only chooses which
+  matter most and adds a few words ("due date", "late fee"); it never
+  writes a figure. Its own sentences name none either: one that names a
+  date, an amount, a number, a period or a reference (in digits or in
+  words, a month, a holiday, "next Friday", "a fortnight", "dentro de
+  quince días") is left out, and a note says so. A reference number is
+  shown only as the letter writes it. What is quoted is what was read: a
+  photo misread in the first place (blur, glare, handwriting) can still
+  give a wrong figure, so the note says to check anything important on the
+  letter itself.
 * **Heads-up first.** A blurry photo gets its card before anything is
   sent to a model (as before, now for letter questions too: "what do I
   need to do about this bill?"). Handwriting now has its card too: the
@@ -34,10 +35,13 @@ dependencies.
   transcribed, once a chat. **Real handwriting is not measured yet**: the
   test notes were drawn in a script font.
 * **Text in a letter is data, never instructions.** It reaches the model
-  in a marked block it can't close; lines that talk to an AI assistant
-  ("ignore previous instructions…", "Assistant: …", "To whoever
-  summarizes this…") or are dressed as one of the reply's labels are
-  named in a note, and nothing from them is shown as a fact.
+  in a marked block it can't close, and lines that look like the reply's
+  own labels are marked as the letter's. A line addressed to an AI
+  assistant ("Assistant: …", "ChatGPT, …", "Ignore the above", "Note to
+  automated summarizers", "To whoever summarizes this", read through
+  lookalike letters and hidden characters) is left out of the quotes and
+  named in a note. Since the model writes no figures and the figures are
+  quotes, a letter can only change the wording.
 * **Home-server chats** keep the transcript with the thread (as the photo
   already is), under the answer as "photo 1". About **2 minutes a letter**
   on a home server without a graphics card (measured on CPU); a few
@@ -47,7 +51,8 @@ dependencies.
   a paired home server has AI on and its picture model installed, "+"
   offers "a letter for the home server": the server reads the photo (at
   most 8 MB, one per phone at a time and two in the house, after any voice
-  turn) and keeps nothing (`POST /api/chat/letters/read`), and the phone
+  turn; the offer is checked again whenever the app comes back to the
+  front) and keeps nothing (`POST /api/chat/letters/read`), and the phone
   writes and checks the explanation. With neither, the chat says so
   plainly; it never says the phone can't before its check has run.
 * **What a phone chat keeps** (owner decision, 2026-10-21): never the
@@ -58,9 +63,9 @@ dependencies.
   every chat send does.
 * **Measured** on 12 synthetic phone photos (our own letters, including a
   Spanish one; blur, tilt, shadow, JPEG) with the default server models on
-  CPU: on the 9 printed letters every deadline and amount we keyed was in
-  the answer, and nothing shown was missing from the letter's text. See
-  the manual's "What Domovoi is good and not so good at" for the limits.
+  CPU: on the 9 printed letters every deadline and amount we keyed was
+  among the quoted sentences. See the manual's "What Domovoi is good and
+  not so good at" for the limits.
 
 ## 2026-10-21 — Write resumes and letters in Chat
 

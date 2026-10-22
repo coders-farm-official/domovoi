@@ -355,7 +355,11 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
     // Offered only once the server says it has a picture model (GET
     // /api/chat/letters/ready), never on a guess.
     val aiOnServer = com.domovoi.app.net.LocalCapabilities.current.aiEnabled
-    androidx.compose.runtime.LaunchedEffect(choice, aiOnServer) {
+    // Asked again each time the app comes back to the front: the server's
+    // picture model or AI switch may have changed meanwhile.
+    var resumed by remember { mutableStateOf(0) }
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) { resumed++ }
+    androidx.compose.runtime.LaunchedEffect(choice, aiOnServer, resumed) {
         assistant.setLetterServer(null)
         val paired = choice is com.domovoi.app.ui.shell.ServerChoice.Available && !choice.needsPairing && aiOnServer
         if (!paired) return@LaunchedEffect

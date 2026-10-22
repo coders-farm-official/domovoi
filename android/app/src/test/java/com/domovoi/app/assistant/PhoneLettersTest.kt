@@ -272,8 +272,8 @@ class PhoneLettersTest {
             "Service period: August 30, 2026 to September 29, 2026\nAmount due: \$142.17\n" +
             "Please pay by: November 15, 2026"
         val EXPLAINED = "FROM: Riverside Electric Cooperative\nABOUT: Your electricity bill.\n" +
-            "DEADLINE: November 15, 2026 | pay\nAMOUNT: \$142.17 | amount due\nAMOUNT: \$99.00 | invented\n" +
-            "REFERENCE: Account number | 4471-2290-18\nTODO: Pay it.\nUNCLEAR: nothing"
+            "DATE: D2 | due date\nAMOUNT: A1 | amount due\nAMOUNT: \$99.00 | invented\n" +
+            "REFERENCE: Account number | 4471-2290-18\nTODO: Pay it. Pay \$99.00 today.\nUNCLEAR: nothing"
     }
 }
 

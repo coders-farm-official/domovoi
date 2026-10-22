@@ -387,12 +387,12 @@
       "verdict": "good",
       "pass": 1.0,
       "n": 9,
-      "measure": "synthetic printed letter photos (tilt, shadow, JPEG; one in Spanish, one with text aimed at an AI) whose keyed deadlines and amounts were all in the answer",
+      "measure": "synthetic printed letter photos (tilt, shadow, JPEG; one in Spanish, one with text aimed at an AI) whose keyed deadlines and amounts were all among the quoted sentences",
       "source": "eval",
       "eval": "D6 letter photos",
       "date": "2026-10-21",
       "device": "home server CPU (qwen3-vl 2B, llama3.2 3B)",
-      "manual": "Explaining a photo of a printed letter: in {pct} of our 9 synthetic test letters (13 deadlines, 9 amounts) every keyed deadline and amount was in the answer. Dates and amounts are checked against the text read from the photo, not the paper, so a misread photo can still be wrong: check what matters on the letter. About 2 minutes a letter on a home server without a graphics card. Not measured on a phone, or on real handwriting, yet."
+      "manual": "Explaining a photo of a printed letter: dates and amounts are quoted straight from the letter, inside its own sentences as read from the photo; in {pct} of our 9 synthetic test letters (13 deadlines, 9 amounts) every keyed deadline and amount was among them. A misread photo can still be wrong: check what matters on the letter. About 2 minutes a letter on a home server without a graphics card. Not measured on a phone, or on real handwriting, yet."
     },
     {
       "kind": "actions",

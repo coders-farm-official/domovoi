@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Sequence
 
 from fastapi import APIRouter, Depends, Request
+from starlette.requests import ClientDisconnect
 from fastapi.responses import JSONResponse
 
 from domovoi import ai_features, executors, image_safety
@@ -234,7 +235,7 @@ async def letter_events(
         notes.append({"code": "letter_handwriting", "text": _letter.NOTE_HANDWRITING})
     if chosen is not None and chosen[0] == "blurry":
         notes.append({"code": "letter_blurry", "text": NOTE_BLURRY})
-    doc = {"mode": "letter", "found": bool(explained.deadlines or explained.amounts or explained.shaped),
+    doc = {"mode": "letter", "found": bool(explained.dates or explained.amounts or explained.shaped),
            "sources": _letter.sources(transcripts), "notes": notes,
            "letter": explained.facts_json() | {"kind": "handwritten" if handwritten else "printed",
                                                "photos": len(images)}}
@@ -281,11 +282,18 @@ BUSY_HOUSE = "The home server is already reading two letters. Try again in a min
 
 
 def _caller(request: Request) -> str:
-    """Who is asking, for one-at-a-time: the household token (hashed: it
-    is never kept) and the address it came from."""
+    """Who is asking, for one-at-a-time: the phone's device id
+    (``X-Device-Id``, the id it sends with its chat messages); a caller
+    that names none falls back to its token (hashed: never kept) and
+    address."""
+    from web.backend.api.devices import valid_device_id
+
+    device = valid_device_id(request.headers.get("x-device-id"))
+    if device:
+        return "device:" + device
     token = request.headers.get("x-device-token") or request.headers.get("authorization") or ""
     host = request.client.host if request.client else ""
-    return hashlib.sha256(f"{token}|{host}".encode()).hexdigest()[:16]
+    return "anon:" + hashlib.sha256(f"{token}|{host}".encode()).hexdigest()[:16]
 
 
 _pause = asyncio.sleep
@@ -306,10 +314,14 @@ async def _read_body(request: Request, cap: int) -> bytes | None:
     """The request body, in memory, or None once it passes ``cap`` (it is
     never spooled to disk: no form parser touches it)."""
     buf = bytearray()
-    async for chunk in request.stream():
-        buf += chunk
-        if len(buf) > cap:
-            return None
+    try:
+        async for chunk in request.stream():
+            buf += chunk
+            if len(buf) > cap:
+                return None
+    except ClientDisconnect:
+        # The transport guard cut the body off and answered 413 itself.
+        return None
     return bytes(buf)
 
 
@@ -345,6 +357,9 @@ async def letters_ready() -> dict[str, Any]:
     ai = not ai_features.turned_off()
     vision = _vision_model()
     installed: bool | None = False
+    if not ai:
+        # AI off: nothing would read it; Ollama isn't asked.
+        return {"ai": False, "vision": False, "max_mb": MAX_PHOTO_BYTES // (1024 * 1024)}
     if vision:
         tags = await ollama_client.tags_or_none()
         installed = None if tags is None else ollama_client.model_installed(vision, tags)

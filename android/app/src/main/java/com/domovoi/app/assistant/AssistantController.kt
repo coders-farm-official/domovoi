@@ -1189,7 +1189,7 @@ class AssistantController(
             onDelta(explained.content)
             val firstMs = (nanos() - sent) / 1_000_000
             Log.i(TAG, "letter turn: ${if (viaServer) "read by the home server" else "read here"}, $firstMs ms, " +
-                "${explained.deadlines.size} deadlines, ${explained.amounts.size} amounts, ${explained.dropped} left out")
+                "${explained.dates.size} date sentences, ${explained.amounts.size} amount sentences, ${explained.dropped} left out")
             // The transcript is kept beside the answer (owner, 2026-10-21), so a
             // follow-up can see the letter's text; it goes with the chat. The
             // photo itself never is.

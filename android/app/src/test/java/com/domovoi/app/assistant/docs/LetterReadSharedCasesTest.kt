@@ -11,16 +11,17 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 
 /**
- * The server's letter check and the phone's are one set of rules:
+ * The server's letter replies and the phone's are one set of rules:
  * domovoi/doc_qa/letter_cases.json (written from the Python by
  * scripts/dev/letter_cases.py) is read here and every section checked
- * against [LetterRead] (documents plan D6).
+ * against [LetterRead] (documents plan D6), the review rounds' replies and
+ * hostile lines included, with the guarantee ([LetterRead.shownProblems])
+ * on every reply.
  */
 class LetterReadSharedCasesTest {
     private fun repoFile(rel: String): File =
@@ -87,52 +88,62 @@ class LetterReadSharedCasesTest {
     }
 
     @Test
-    fun finish() {
-        for (c in list("finish")) {
-            val name = c["name"].str()
-            val e = LetterRead.finish(c["reply"].str(), strings(c["transcripts"]), c["nonce"].str())
-            assertEquals(name, c["content"].str(), e.content)
-            val notes = c.getValue("notes").jsonArray.map { it.jsonObject }
-            assertEquals(name, notes.map { it["code"].str() to it["text"].str() }, e.notes.map { it.code to it.text })
-            val f = c.getValue("facts").jsonObject
-            fun pairs(k: String) = f.getValue(k).jsonArray.map { p -> p.jsonArray.let { it[0].jsonPrimitive.content to it[1].jsonPrimitive.content } }
-            assertEquals(name, pairs("deadlines"), e.deadlines)
-            assertEquals(name, pairs("amounts"), e.amounts)
-            assertEquals(name, pairs("references"), e.references)
-            assertEquals(name, f.getValue("dropped").jsonPrimitive.int, e.dropped)
-            assertEquals(name, f.getValue("shaped").jsonPrimitive.boolean, e.shaped)
-            assertEquals(name, f.getValue("injection").jsonPrimitive.boolean, e.injection != null)
-        }
-    }
-
-    @Test
-    fun clauses() {
-        for (c in list("clauses")) {
-            val lt = LetterRead.LetterText.of(listOf(c["letter"].str()!!))
-            assertEquals(c["text"].str(), c["problem"].str(), LetterRead.clauseProblem(c["text"].str()!!, lt))
-        }
-    }
-
-    @Test
-    fun sentencesAndAsData() {
+    fun proseAndSentencesAndAsData() {
+        for (c in list("prose")) assertEquals(c["text"].str(), c["problem"].str(), LetterRead.proseProblem(c["text"].str()))
         for (c in list("sentences")) assertEquals(strings(c["sentences"]), LetterRead.sentences(c["text"].str()))
         for (c in list("as_data")) assertEquals(c["out"].str(), LetterRead.asData(c["text"].str()!!))
     }
 
-    @Test
-    fun nothingShownNamesWhatTheLetterLacks() {
-        for (c in list("finish")) {
-            val e = LetterRead.finish(c["reply"].str(), strings(c["transcripts"]), c["nonce"].str())
-            assertEquals(c["name"].str(), emptyList<String>(), LetterRead.shownProblems(e.content, strings(c["transcripts"])))
-        }
+    private fun shownJson(s: LetterRead.Shown) =
+        listOf(s.fact.photo.toString(), s.fact.sentence, s.fact.spans.joinToString(";") { "${it.first},${it.second}" }, s.label)
+
+    private fun wantJson(e: JsonElement) = e.jsonObject.let { o ->
+        listOf(o.getValue("photo").jsonPrimitive.int.toString(), o["sentence"].str()!!,
+            o.getValue("figures").jsonArray.joinToString(";") { f -> f.jsonArray.let { "${it[0].jsonPrimitive.int},${it[1].jsonPrimitive.int}" } },
+            o["label"].str()!!)
+    }
+
+    private fun checkReply(name: String?, c: JsonObject, nonce: String?) {
+        val ts = strings(c["transcripts"])
+        val e = LetterRead.finish(c["reply"].str(), ts, nonce)
+        assertEquals(name, c["content"].str(), e.content)
+        val notes = c.getValue("notes").jsonArray.map { it.jsonObject }
+        assertEquals(name, notes.map { it["code"].str() to it["text"].str() }, e.notes.map { it.code to it.text })
+        val f = c.getValue("facts").jsonObject
+        assertEquals(name, f.getValue("dates").jsonArray.map { wantJson(it) }, e.dates.map { shownJson(it) })
+        assertEquals(name, f.getValue("amounts").jsonArray.map { wantJson(it) }, e.amounts.map { shownJson(it) })
+        assertEquals(name, f.getValue("references").jsonArray.map { r -> r.jsonArray.map { it.jsonPrimitive.content } },
+            e.references.map { listOf(it.first.toString(), it.second, it.third) })
+        assertEquals(name, f.getValue("dropped").jsonPrimitive.int, e.dropped)
+        assertEquals(name, f.getValue("shaped").jsonPrimitive.boolean, e.shaped)
+        assertEquals(name, f.getValue("injection").jsonPrimitive.boolean, e.injection != null)
+        assertEquals(name, emptyList<String>(), LetterRead.shownProblems(e.content, ts))
     }
 
     @Test
-    fun aLetterThatTalksToTheAssistantNeverSuppliesAFact() {
-        val c = list("finish").first { it["name"].str() == "injection noted" }
-        val e = LetterRead.finish(c["reply"].str(), strings(c["transcripts"]), c["nonce"].str())
-        assertFalse(e.content.contains("49.99"))
-        assertFalse(e.content.contains("official government"))
-        assertTrue(e.notes.any { it.code == "letter_injection" })
+    fun finish() {
+        for (c in list("finish")) checkReply(c["name"].str(), c, c["nonce"].str())
+    }
+
+    @Test
+    fun reviewRoundTwoReplies() {
+        val all = list("review2")
+        assertTrue(all.size >= 69)
+        for (c in all) checkReply(c["name"].str(), c, null)
+    }
+
+    @Test
+    fun hostileLines() {
+        val follow = cases.getValue("hostile_follow").jsonPrimitive.content
+        for (c in list("hostile")) {
+            val t = c["text"].str()!!
+            val name = c["name"].str()
+            assertEquals(name, strings(c["lines"]), LetterRead.injectionLines(t))
+            assertEquals(name, c["snippet"].str(), LetterRead.injectionSnippet(t))
+            assertEquals(name, c["as_data"].str(), LetterRead.asData(t))
+            val e = LetterRead.finish(follow, listOf(t), "cafe0123")
+            assertEquals(name, c["content"].str(), e.content)
+            assertEquals(name, emptyList<String>(), LetterRead.shownProblems(e.content, listOf(t)))
+        }
     }
 }
