@@ -102,7 +102,12 @@ choosing a photo uses Android's photo picker and needs no permission. The
 photo is shrunk and read by the model on the phone, in memory: it isn't
 saved to your gallery or the app's storage, it isn't sent anywhere (to us,
 your home server or anyone else), and it is discarded from memory once
-Domovoi has answered. The chat keeps a "photo" mark, not the photo.
+Domovoi has answered. The chat keeps a "photo" mark, not the photo. When
+you ask what a letter says, the text read from the photo is kept beside
+the answer in that chat on the phone, so you can ask about it again; it is
+deleted when you delete the chat. On a phone that can't read photos
+itself, you can choose "a letter for the home server": that photo goes to
+your own home server only, is read there in memory and isn't kept there.
 
 ## Photos, music, videos and files on the phone
 

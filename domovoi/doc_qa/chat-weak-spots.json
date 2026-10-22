@@ -356,15 +356,15 @@
       "kind": "blurry",
       "where": "both",
       "band": "blurry",
-      "verdict": "not_measured",
-      "pass": null,
-      "n": null,
-      "measure": "pictures blurrier than the scan the vision model read word for word",
+      "verdict": "not_reliable",
+      "pass": 0.0,
+      "n": 2,
+      "measure": "letter photos below the blur threshold whose deadlines and amounts were read right (one photo, run twice)",
       "source": "eval",
-      "eval": "E-HEADSUP (blur)",
+      "eval": "D6 letter photos",
       "date": "2026-10-21",
-      "device": "home server",
-      "manual": "Blurry photos in home-server chats: a photo blurrier than our test scan (which the home server's vision model read word for word) gets a heads-up before it is sent. How much a blurry photo gets wrong is not measured yet."
+      "device": "home server CPU (qwen3-vl 2B, llama3.2 3B)",
+      "manual": "Blurry photos: our blurry test bill was misread both times (77% and 0% of its characters; its amount and due date wrong or missing), against 99.8-100% for the 9 sharp ones. A photo blurrier than the threshold gets a heads-up before anything is sent to a model, on the phone and the home server."
     },
     {
       "kind": "handwriting",
@@ -373,12 +373,26 @@
       "verdict": "not_measured",
       "pass": null,
       "n": null,
-      "measure": "handwritten letters",
+      "measure": "real handwriting (the test notes were a script font, read 100%)",
       "source": "design",
-      "eval": "documents plan D6",
+      "eval": "D6 letter photos",
       "date": "2026-10-21",
-      "device": "phone and home server",
-      "manual": "Handwriting: not tested yet. Expect mistakes, and check names, dates and numbers. There is no heads-up for it yet: telling handwriting from print needs a step that isn't built."
+      "device": "home server CPU (qwen3-vl 2B)",
+      "manual": "Handwriting: not measured on real handwriting yet (our two test notes were drawn in a script font, which the picture model read word for word). Domovoi asks the picture model one word first, printed or handwritten (right on 12 of 12 test photos), and a handwritten letter gets a heads-up before it is read. Check every name, date and number."
+    },
+    {
+      "kind": "letters",
+      "where": "server",
+      "band": "printed_photos",
+      "verdict": "good",
+      "pass": 1.0,
+      "n": 9,
+      "measure": "synthetic printed letter photos (tilt, shadow, JPEG; one in Spanish, one with text aimed at an AI) whose keyed deadlines and amounts were all among the quoted sentences",
+      "source": "eval",
+      "eval": "D6 letter photos",
+      "date": "2026-10-21",
+      "device": "home server CPU (qwen3-vl 2B, llama3.2 3B)",
+      "manual": "Explaining a photo of a printed letter: dates and amounts are quoted straight from the letter, inside its own sentences as read from the photo; in {pct} of our 9 synthetic test letters (13 deadlines, 9 amounts) every keyed deadline and amount was among them. A misread photo can still be wrong: check what matters on the letter. About 2 minutes a letter on a home server without a graphics card. Not measured on a phone, or on real handwriting, yet."
     },
     {
       "kind": "actions",
@@ -409,7 +423,7 @@
       "eval": "N0 bench (S-PIC)",
       "date": "2026-10-21",
       "device": "Galaxy Z Fold (Gemma 4 E2B)",
-      "manual": "Pictures on a phone's CPU: too slow and too big (6.8 s, 2.76 GB). On the phone's GPU: 2.5 s, 4 of 4 useful. Phone chats don't take pictures yet; when they do, it will be where the GPU can read them."
+      "manual": "Pictures on a phone's CPU: too slow and too big (6.8 s, 2.76 GB). On the phone's GPU: 2.5 s, 4 of 4 useful, so phone chats take photos only where the GPU reads them."
     },
     {
       "kind": "speed",
@@ -464,7 +478,8 @@
       "handwriting": "Handwriting",
       "actions": "Doing things from the phone's chat",
       "pictures": "Pictures on the phone",
-      "speed": "Writing speed"
+      "speed": "Writing speed",
+      "letters": "Letters and bills"
     },
     "order": [
       "lookup",
@@ -477,6 +492,7 @@
       "language",
       "blurry",
       "handwriting",
+      "letters",
       "actions",
       "pictures",
       "speed"

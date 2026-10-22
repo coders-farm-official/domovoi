@@ -1,5 +1,7 @@
 package com.domovoi.app.ui.screens.assistant
 
+import com.domovoi.app.assistant.PhoneLetters
+
 import androidx.activity.compose.BackHandler
 import com.domovoi.app.assistant.docs.PDF_NO_API
 import com.domovoi.app.assistant.StoredConversation
@@ -316,7 +318,7 @@ private fun ChatPane(
         }
         ui.docProblem?.let { DocProblemNote(it, onClose = actions.closeDocProblem) }
         photoProblem?.let { DocProblemNote(it, onClose = { photoProblem = null }) }
-        ui.pendingPhoto?.let { p -> PendingPhotoCard(p, onRemove = actions.dropPhoto) }
+        ui.pendingPhoto?.let { p -> PendingPhotoCard(p, onRemove = actions.dropPhoto, forServer = ui.pendingPhotoServer) }
         ui.pendingPdf?.let { p ->
             PendingPdfCard(
                 p.name, PDF_NO_API, canAskServer = actions.askServer != null, busy = actions.askingServer,
@@ -354,6 +356,11 @@ private fun ChatPane(
                     },
                     onProblem = { photoProblem = it },
                     onToast = { toast(it) },
+                    serverLetter = actions.attachServerLetter != null && PhoneLetters.serverButtonShown(ui),
+                    onServerLetter = { p ->
+                        photoProblem = null
+                        actions.attachServerLetter?.invoke(p)
+                    },
                 )
             }
             LocalComposerField.current(draft, { draft = it }, Modifier.weight(1f))
@@ -462,7 +469,11 @@ private fun EngineLine(ui: AssistantUi, actions: AssistantActions, onModel: () -
         }
         else -> if (ui.checking) {
             Row(Modifier.padding(top = 6.dp).semantics { liveRegion = LiveRegionMode.Polite }) {
-                Pill("reading the passages and checking the answer", Tone.Brand, live = true)
+                Pill(
+                    if (ui.conversation.messages.lastOrNull()?.docMode == "letter") "reading the letter and checking its dates and amounts"
+                    else "reading the passages and checking the answer",
+                    Tone.Brand, live = true,
+                )
             }
         } else if (ui.thinking) {
             Row(Modifier.padding(top = 6.dp).semantics { liveRegion = LiveRegionMode.Polite }) { Pill("thinking", Tone.Brand, live = true) }

@@ -22,6 +22,7 @@ import com.domovoi.app.assistant.docs.HeadsUpFacts
 import com.domovoi.app.assistant.docs.HeadsUpPrefs
 import com.domovoi.app.assistant.docs.HeadsUpRequest
 import com.domovoi.app.assistant.docs.HeadsUpStore
+import com.domovoi.app.assistant.docs.LetterRead
 import com.domovoi.app.assistant.docs.WeakSpots
 import com.domovoi.app.assistant.docs.DocLong
 import com.domovoi.app.assistant.docs.DocSource
@@ -171,6 +172,11 @@ data class AssistantUi(
     val vision: VisionProbe = VisionProbe.UNKNOWN,
     /** The photo waiting for its question (one per question), in memory. */
     val pendingPhoto: PendingPhoto? = null,
+    /** ...a letter's, for the home server to read (D6: no photos on this
+     *  phone's GPU); it goes as a letter whatever is asked. */
+    val pendingPhotoServer: Boolean = false,
+    /** A paired home server reads letters for this phone (AI on there). */
+    val homeServerLetters: Boolean = false,
     /** A video a phone chat was asked to play (N2), shown over the chat
      *  until it is closed. */
     val playingVideo: VideoChoice? = null,
@@ -330,6 +336,9 @@ class AssistantController(
     /** What a phone chat's actions run on (N2): the Clock app, the player,
      *  the saved books and videos. [PhoneActionHost.NONE]: none offered. */
     private val actions: PhoneActionHost = PhoneActionHost.NONE,
+    /** A photo's blur (the variance of the Laplacian of its grey thumbnail,
+     *  PhoneBlur); null when it can't be measured (no card then). */
+    private val blurOf: (ByteArray) -> Double? = { null },
     /** This phone's heads-up switch and the kinds it silenced (documents
      *  plan D3); the same store the app's home-server chats send from. */
     private val headsUp: HeadsUpStore = HeadsUpStore.memory(),
@@ -884,7 +893,11 @@ class AssistantController(
             // A first try under way isn't an answer yet.
             if (it == VisionProbe.PASSED || !check.running()) it else VisionProbe.UNKNOWN
         }
-        _state.update { it.copy(vision = v, pendingPhoto = if (v == VisionProbe.PASSED) it.pendingPhoto else null) }
+        _state.update {
+            // A letter for the home server stays: it isn't read here (D6).
+            val keep = v == VisionProbe.PASSED || it.pendingPhotoServer
+            it.copy(vision = v, pendingPhoto = if (keep) it.pendingPhoto else null, pendingPhotoServer = keep && it.pendingPhotoServer)
+        }
     }
 
     private suspend fun closeEngine() {
@@ -984,18 +997,19 @@ class AssistantController(
         val said = text.trim()
         val ui = _state.value
         val photo = ui.pendingPhoto
+        val viaServer = photo != null && ui.pendingPhotoServer
         if ((said.isEmpty() && photo == null) || ui.replying || !ui.installed || voice?.active == true) return
         val now = clock()
         val asked = ui.conversation.let {
             it.copy(updated = now, messages = it.messages + StoredMessage(Speaker.USER, said, now, photo = photo != null))
         }
         // The photo leaves the screen's state now; only this turn holds it.
-        _state.update { it.copy(conversation = asked, replying = true, thinking = true, pendingPhoto = null) }
+        _state.update { it.copy(conversation = asked, replying = true, thinking = true, pendingPhoto = null, pendingPhotoServer = false) }
         val v = voice
         if (settings.speakTyped && v != null && ui.voiceReady) {
-            v.answerAloud { onDelta -> reply(asked, onDelta, photo) }
+            v.answerAloud { onDelta -> reply(asked, onDelta, photo, viaServer) }
         } else {
-            replyJob = scope.launch { reply(asked, photo = photo) }
+            replyJob = scope.launch { reply(asked, photo = photo, viaServer = viaServer) }
         }
     }
 
@@ -1015,7 +1029,179 @@ class AssistantController(
 
     /** The waiting photo goes, unsent. */
     fun dropPhoto() {
-        _state.update { it.copy(pendingPhoto = null) }
+        _state.update { it.copy(pendingPhoto = null, pendingPhotoServer = false) }
+    }
+
+    // ── Letters (documents plan D6) ─────────────────────────────────────
+
+    /** The home server's letter reader, or null (the screen sets it while a
+     *  home server is paired and its AI features are on). */
+    @Volatile private var letterServer: LetterServer? = null
+
+    fun setLetterServer(server: LetterServer?) {
+        letterServer = server
+        _state.update { it.copy(homeServerLetters = server != null, pendingPhotoServer = it.pendingPhotoServer && server != null,
+            pendingPhoto = if (it.pendingPhotoServer && server == null) null else it.pendingPhoto) }
+    }
+
+    /** A letter's photo for the home server to read ([PhoneLetters.serverButtonShown]). */
+    fun attachServerLetter(photo: PendingPhoto): Boolean {
+        if (!PhoneLetters.serverButtonShown(_state.value) || voice?.active == true) return false
+        _state.update { it.copy(pendingPhoto = photo, pendingPhotoServer = true) }
+        return true
+    }
+
+    /** A letter photo held while its heads-up card waits for a pick: in
+     *  memory only, wiped at the pick, a new chat or another one opened. */
+    private class HeldLetter(val conversation: String, val photo: PendingPhoto, val viaServer: Boolean)
+
+    @Volatile private var heldLetter: HeldLetter? = null
+
+    private fun dropHeldLetter() {
+        heldLetter?.photo?.jpeg?.fill(0)
+        heldLetter = null
+    }
+
+    /**
+     * A letter photo and its question (D6, [PhoneLetters]): the blurry card
+     * first (measured here, no model); printed or handwritten (on this
+     * phone's GPU, or by the home server for [viaServer]) and the
+     * handwriting card; the transcription; then this phone's model explains
+     * it and the app checks it ([LetterRead.finish]) before anything is
+     * shown or spoken. [chosen]: the pick on this question's card.
+     */
+    private suspend fun letterReply(
+        asked: StoredConversation,
+        photo: PendingPhoto,
+        onDelta: (String) -> Unit,
+        chosen: Pair<String, String>? = null,
+        viaServer: Boolean = false,
+    ): StoredConversation {
+        var hold = false
+        try {
+            val lastUser = asked.messages.indexOfLast { it.fromUser }
+            val question = asked.messages.getOrNull(lastUser)?.text?.trim().orEmpty().ifEmpty { PhoneLetters.DEFAULT_QUESTION }
+            val t = table
+            val prefs = headsUp.prefs
+            val shown = asked.messages.mapNotNull { it.headsUp?.kind }.toSet()
+            fun decide(found: List<HeadsUpCard>) = DocHeadsUp.decide(found, shown, prefs.skip, prefs.off, chosen)
+            suspend fun card(c: HeadsUpCard): StoredConversation {
+                hold = true
+                dropHeldLetter()
+                heldLetter = HeldLetter(asked.id, photo, viaServer)
+                onDelta(c.text)
+                return finishReply(asked, StoredMessage(Speaker.DOMOVOI, c.text, clock(), docMode = "heads_up", headsUp = t!!.stored(c)))
+            }
+            // 1. Blurry: before any model or upload.
+            if (chosen == null && t != null) {
+                val blur = runCatching { blurOf(photo.jpeg) }.getOrNull()
+                decide(DocHeadsUp.findings(HeadsUpRequest("picture", question, "phone", blur = blur), t)).card?.let { return card(it) }
+            }
+            fun live(text: String = ""): StoredMessage =
+                StoredMessage(Speaker.DOMOVOI, text, clock(), backend = settings.backend.label, docMode = "letter",
+                    vision = if (viaServer) "home server" else visionBackend().label)
+            _state.update { it.copy(checking = true, conversation = asked.withMetaOf(it.conversation).copy(messages = asked.messages + live())) }
+            val handwrittenPick = chosen?.first == "handwriting"
+            var handwritten = handwrittenPick
+            val transcript: String
+            val sent = nanos()
+            val llm: LlmEngine
+            try {
+                val loaded = ensureEngine()
+                if (loaded == null) {
+                    val why = (_state.value.engine as? EngineState.Failed)?.reason ?: "the model did not load"
+                    _state.update { it.copy(checking = false) }
+                    return finishReply(asked, live().copy(error = "The model could not start: $why"))
+                }
+                llm = loaded
+                if (viaServer) {
+                    val server = letterServer
+                    if (server == null) {
+                        _state.update { it.copy(checking = false) }
+                        return finishReply(asked, live().copy(error = "The home server isn't in reach. Try again at home."))
+                    }
+                    // Stopped at handwriting only when its card would show.
+                    val cardCanShow = chosen == null && !prefs.off && "handwriting" !in prefs.skip && "handwriting" !in shown
+                    var read = server.read(photo.jpeg, stopIfHandwritten = cardCanShow)
+                    if (read.kind == "handwritten") handwritten = true
+                    if (chosen == null && read.kind == "handwritten" && t != null) {
+                        decide(DocHeadsUp.findings(HeadsUpRequest("picture", question, "phone", handwritten = true), t))
+                            .card?.let { _state.update { it.copy(checking = false) }; return card(it) }
+                    }
+                    if (read.stopped || read.text == null) read = server.read(photo.jpeg, stopIfHandwritten = false)
+                    transcript = read.text.orEmpty()
+                } else {
+                    if (!llm.seesPhotos) {
+                        _state.update { it.copy(checking = false) }
+                        return finishReply(asked, live().copy(error = PHOTO_UNAVAILABLE))
+                    }
+                    val guard = visionCheck().also { it.begin(clock()) }
+                    try {
+                        if (!handwrittenPick) {
+                            val word = StringBuilder()
+                            llm.replyToPhoto(LetterRead.KIND_SYSTEM, photo.jpeg, LetterRead.KIND_QUESTION, null, LetterRead.KIND_TOKENS)
+                                .collect { word.append(it) }
+                            handwritten = LetterRead.parseKind(word.toString()) == "handwritten"
+                            if (handwritten && chosen == null && t != null) {
+                                decide(DocHeadsUp.findings(HeadsUpRequest("picture", question, "phone", handwritten = true), t))
+                                    .card?.let { guard.end(); _state.update { it.copy(checking = false) }; return card(it) }
+                            }
+                        }
+                        val raw = StringBuilder()
+                        llm.replyToPhoto(LetterRead.TRANSCRIBE_SYSTEM, photo.jpeg, LetterRead.TRANSCRIBE_QUESTION, null, LetterRead.TRANSCRIBE_TOKENS)
+                            .collect { raw.append(it) }
+                        transcript = LetterRead.cleanTranscript(raw.toString())
+                    } finally {
+                        guard.end()
+                    }
+                }
+            } catch (e: CancellationException) {
+                _state.update { it.copy(checking = false) }
+                finishReply(asked, live().copy(stopped = true, stopMs = voice?.lastStopMs))
+                throw e
+            } catch (e: Throwable) {
+                _state.update { it.copy(checking = false) }
+                val who = if (viaServer) "The home server couldn't read it" else "The model stopped"
+                return finishReply(asked, live().copy(error = "$who: ${plainReason(e)}"))
+            }
+            // 3. The explanation, from the transcript only, checked before it is shown.
+            val explained = if (transcript.isBlank()) {
+                LetterRead.finish("", listOf(transcript))
+            } else {
+                val prompt = LetterRead.buildPrompt(question, listOf(transcript))
+                val words = StringBuilder()
+                try {
+                    llm.reply(prompt.rules, listOf(ChatTurn(fromUser = true, text = prompt.user)), null).collect { words.append(it) }
+                } catch (e: CancellationException) {
+                    _state.update { it.copy(checking = false) }
+                    finishReply(asked, live().copy(stopped = true, stopMs = voice?.lastStopMs))
+                    throw e
+                } catch (e: Throwable) {
+                    _state.update { it.copy(checking = false) }
+                    return finishReply(asked, live().copy(error = "The model stopped: ${plainReason(e)}"))
+                }
+                LetterRead.finish(words.toString(), listOf(transcript), prompt.nonce)
+            }
+            _state.update { it.copy(checking = false) }
+            val notes = explained.notes.toMutableList()
+            if (handwritten) notes += DocNote("letter_handwriting", LetterRead.NOTE_HANDWRITING)
+            if (chosen?.first == "blurry") notes += DocNote("letter_blurry", LetterRead.NOTE_BLURRY)
+            onDelta(explained.content)
+            val firstMs = (nanos() - sent) / 1_000_000
+            Log.i(TAG, "letter turn: ${if (viaServer) "read by the home server" else "read here"}, $firstMs ms, " +
+                "${explained.dates.size} date sentences, ${explained.amounts.size} amount sentences, ${explained.dropped} left out")
+            // The transcript is kept beside the answer (owner, 2026-10-21), so a
+            // follow-up can see the letter's text; it goes with the chat. The
+            // photo itself never is.
+            val kept = if (transcript.isBlank()) emptyList() else listOf(
+                com.domovoi.app.assistant.docs.DocSource(label = PhoneLetters.SOURCE_LABEL, partLabel = PhoneLetters.SOURCE_LABEL,
+                    text = transcript, cited = true),
+            )
+            return finishReply(asked, live(explained.content).copy(notes = notes, firstTextMs = firstMs, sources = kept))
+        } finally {
+            // Nothing of the photo outlives its reply, unless a card holds it.
+            if (!hold) photo.jpeg.fill(0)
+        }
     }
 
     // ── Voice ───────────────────────────────────────────────────────────
@@ -1087,6 +1273,7 @@ class AssistantController(
         question: StoredConversation,
         onDelta: (String) -> Unit = {},
         photo: PendingPhoto? = null,
+        viaServer: Boolean = false,
     ): StoredConversation {
         // A Revise-box turn is this turn's and only this one's (review round
         // 2: left set, it rewrote the draft at the next ordinary message),
@@ -1102,7 +1289,14 @@ class AssistantController(
         if (retryingFrom == null) save(asked)
         // A photo question goes to the model with its photo: no fast path
         // answers "what time is it on this sign?".
-        if (photo != null) { undoEntry = null; return photoReply(asked, photo, onDelta) }
+        if (photo != null) {
+            undoEntry = null
+            // A letter for the home server (D6), or a letter question with a
+            // photo this phone reads: read, explained and checked.
+            val typed = asked.messages.last().text
+            if (viaServer || LetterRead.letterRequest(typed)) return letterReply(asked, photo, onDelta, viaServer = viaServer)
+            return photoReply(asked, photo, onDelta)
+        }
         // A Revise-box turn is always a revision of its draft (D4): no clock or
         // other fast path takes it.
         if (forced != null) draftReply(asked, onDelta, forced)?.let { undoEntry = null; return it }
@@ -1121,6 +1315,19 @@ class AssistantController(
         actionTurn(asked, onDelta)?.let { return it }
         undoEntry = null
         phoneReply(asked, onDelta)?.let { return it }
+        // "What does this letter say?" with no photo (D6): how to send one,
+        // or plainly that this phone can't read photos; no model asked.
+        asked.messages.lastOrNull()?.takeIf { it.fromUser && !it.spoken && PhoneLetters.namesALetter(it.text) && asked.messages.none { m -> m.photo } }?.let {
+            // Not a word about this phone's chip until its check has run: the
+            // model loads (and the check runs) first.
+            if (_state.value.modelTakesImages && _state.value.vision == VisionProbe.UNKNOWN) {
+                runCatching { ensureEngine() }.onFailure { if (it is CancellationException) throw it }
+            }
+            val ui = _state.value
+            val text = PhoneLetters.noPhotoReply(ui.modelTakesImages, ui.vision, ui.homeServerLetters)
+            onDelta(text)
+            return finishReply(asked, StoredMessage(Speaker.DOMOVOI, text, clock(), docMode = "letter"))
+        }
         // A question about Domovoi: the manual on the phone (LocalHelp).
         val help = helpTurn(asked)
         if (help != null && help.passages.isEmpty()) return notCoveredReply(asked, help, onDelta)
@@ -2381,7 +2588,8 @@ class AssistantController(
         scope.launch {
             stopReply()
             settings.currentConversation = null
-            _state.update { it.copy(conversation = conversations.create(clock()), docJob = null, pendingPhoto = null) }
+            dropHeldLetter()
+            _state.update { it.copy(conversation = conversations.create(clock()), docJob = null, pendingPhoto = null, pendingPhotoServer = false) }
         }
     }
 
@@ -2394,7 +2602,12 @@ class AssistantController(
                 return@launch
             }
             settings.currentConversation = loaded.id
-            _state.update { it.copy(conversation = loaded, docJob = null, pendingPhoto = it.pendingPhoto.takeIf { _ -> it.conversation.id == loaded.id }) }
+            if (heldLetter?.conversation != loaded.id) dropHeldLetter()
+            _state.update {
+                val same = it.conversation.id == loaded.id
+                it.copy(conversation = loaded, docJob = null, pendingPhoto = it.pendingPhoto.takeIf { _ -> same },
+                    pendingPhotoServer = same && it.pendingPhotoServer)
+            }
             resumeJobIfAny()
         }
     }
@@ -3064,6 +3277,28 @@ class AssistantController(
         val card = last.headsUp ?: return
         if (card.chosen != null || card.options.none { it.firstOrNull() == option }) return
         val picked = c.copy(messages = c.messages.dropLast(1) + last.copy(headsUp = card.copy(chosen = option)))
+        if (card.kind in DocHeadsUp.PICTURE_KINDS) {
+            // A letter photo's card (D6): the photo it holds, if it is still here.
+            val held = heldLetter?.takeIf { it.conversation == c.id }
+            heldLetter = null
+            if (option == "choose_another" || held == null) {
+                held?.photo?.jpeg?.fill(0)
+                val gone = if (held == null && option != "choose_another") {
+                    StoredMessage(Speaker.DOMOVOI, PhoneLetters.PHOTO_GONE, clock(), docMode = "letter")
+                } else null
+                val after = if (gone != null) picked.copy(messages = picked.messages + gone) else picked
+                _state.update { it.copy(conversation = after) }
+                scope.launch { withContext(NonCancellable) { save(after) } }
+                return
+            }
+            _state.update { it.copy(conversation = picked, replying = true, thinking = true) }
+            replyJob = scope.launch {
+                pauseTitle()
+                withContext(NonCancellable) { save(picked) }
+                letterReply(picked, held.photo, {}, card.kind to option, held.viaServer)
+            }
+            return
+        }
         _state.update { it.copy(conversation = picked, replying = true, thinking = true) }
         replyJob = scope.launch {
             pauseTitle()
@@ -3646,6 +3881,7 @@ class AssistantController(
                 exitReasons = AndroidExitReasons(app),
                 residentKb = { runCatching { parseProcStatus(File("/proc/self/status").readText()).second }.getOrNull() },
                 actions = actions(),
+                blurOf = { PhoneBlur.variance(it) },
                 headsUp = headsUp,
                 weakSpots = { app.assets.open(WeakSpots.ASSET).bufferedReader().use { WeakSpots.parse(it.readText()) } },
             ).also { it.attach(app) }
@@ -3716,7 +3952,10 @@ fun modelTurns(messages: List<StoredMessage>): List<IndexedTurn> {
             val said = if (m.photo) PhonePhotos.historyText(m.text) else m.text
             if (said.isNotBlank()) out += IndexedTurn(i, ChatTurn(fromUser = true, text = said))
         } else if (m.text.isNotBlank()) {
-            if (lastFromUser()) out += IndexedTurn(i, ChatTurn(fromUser = false, text = m.text))
+            // A letter's explanation carries the letter's text it was made from
+            // (D6), marked as data, so a follow-up can be answered from it.
+            val said = if (m.docMode == "letter" && m.sources.isNotEmpty()) PhoneLetters.historyText(m.text, m.sources.map { it.text }) else m.text
+            if (lastFromUser()) out += IndexedTurn(i, ChatTurn(fromUser = false, text = said))
         } else if (lastFromUser()) {
             out.removeAt(out.lastIndex)
         }

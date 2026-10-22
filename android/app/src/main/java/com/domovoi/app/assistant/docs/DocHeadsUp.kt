@@ -116,6 +116,10 @@ object DocHeadsUp {
 
     fun readingRequest(question: String): Boolean = READING_RE.containsMatchIn(q(question))
 
+    /** A picture message whose words matter: [readingRequest], or a letter
+     *  to explain (documents plan D6, [LetterRead.letterRequest]). */
+    fun wantsReading(question: String): Boolean = readingRequest(question) || LetterRead.letterRequest(question)
+
     fun rewriteRequest(question: String): Boolean {
         val s = q(question)
         return REWRITE_RE.containsMatchIn(s) && !PART_RE.containsMatchIn(s)
@@ -292,7 +296,7 @@ object DocHeadsUp {
         val out = ArrayList<HeadsUpCard>()
         if (req.mode == "picture") {
             val blur = req.blur
-            if (blur != null && blur < t.threshold("blur_variance", 0.0) && readingRequest(req.question) &&
+            if (blur != null && blur < t.threshold("blur_variance", 0.0) && wantsReading(req.question) &&
                 t.fires("blurry", "blurry", req.where)
             ) {
                 val k = t.kind("blurry")

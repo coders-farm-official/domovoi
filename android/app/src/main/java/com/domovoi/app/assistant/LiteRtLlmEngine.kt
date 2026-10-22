@@ -137,7 +137,7 @@ class LiteRtLlmEngine(
     override fun replyToPhoto(system: String, jpeg: ByteArray, question: String, now: String?): Flow<String> =
         replyToPhoto(system, jpeg, question, now, PhonePhotos.MAX_ANSWER_TOKENS)
 
-    private fun replyToPhoto(system: String, jpeg: ByteArray, question: String, now: String?, maxOutput: Int): Flow<String> = flow {
+    override fun replyToPhoto(system: String, jpeg: ByteArray, question: String, now: String?, maxOutput: Int): Flow<String> = flow {
         check(seesPhotos) { "this engine was loaded without its photo encoder" }
         val conv = synchronized(lock) {
             // The kept text conversation goes: the next text turn rebuilds

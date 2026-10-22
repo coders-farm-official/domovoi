@@ -136,6 +136,9 @@ internal class AssistantActions(
     /** A photo for the next question (N3); null where phone chats take no
      *  photos (the buttons also need the GPU probe to have passed). */
     val attachPhoto: ((com.domovoi.app.assistant.PendingPhoto) -> Unit)? = null,
+    /** A letter's photo for the home server to read (D6: this phone can't
+     *  read photos); null where none is paired. */
+    val attachServerLetter: ((com.domovoi.app.assistant.PendingPhoto) -> Unit)? = null,
     /** The waiting photo goes, unsent. */
     val dropPhoto: () -> Unit = {},
     /** The phone's own copy of a document of the conversation on screen, by id. */
@@ -346,6 +349,28 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
         } else {
             null
         }
+    // "What does this letter say?" on a phone that can't read photos (D6):
+    // the paired home server reads it, with its AI features on, and keeps
+    // nothing; the explanation is still written on this phone.
+    // Offered only once the server says it has a picture model (GET
+    // /api/chat/letters/ready), never on a guess.
+    val aiOnServer = com.domovoi.app.net.LocalCapabilities.current.aiEnabled
+    // Asked again each time the app comes back to the front: the server's
+    // picture model or AI switch may have changed meanwhile.
+    var resumed by remember { mutableStateOf(0) }
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) { resumed++ }
+    androidx.compose.runtime.LaunchedEffect(choice, aiOnServer, resumed) {
+        assistant.setLetterServer(null)
+        val paired = choice is com.domovoi.app.ui.shell.ServerChoice.Available && !choice.needsPairing && aiOnServer
+        if (!paired) return@LaunchedEffect
+        val ready = runCatching { com.domovoi.app.ui.screens.chat.lettersReady(app) }.getOrNull()
+        if (ready != null && ready.ai && ready.vision == true) {
+            assistant.setLetterServer(com.domovoi.app.assistant.LetterServer { jpeg, stop ->
+                com.domovoi.app.ui.screens.chat.readLetterOnServer(app, jpeg, stop)
+            })
+        }
+    }
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { assistant.setLetterServer(null) } }
     // A long document read in parts (documents plan D2): the card's time
     // left ticks down while a part is read.
     androidx.compose.runtime.LaunchedEffect(ui.docJob?.id, ui.docJob?.state) {
@@ -502,6 +527,7 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
             carryOn = actions.carryOn, serverOffer = offerS, useServer = useServer, stopServer = stopServer,
             cardPrimary = cards.primary, cardSecondary = cards.secondary,
             attachPhoto = actions.attachPhoto, dropPhoto = actions.dropPhoto,
+            attachServerLetter = actions.attachServerLetter,
             closeVideo = assistant::videoClosed,
             clockOpens = assistant::clockOpens,
             pickHeadsUp = actions.pickHeadsUp, neverWarn = actions.neverWarn, headsUpSkip = headsUpPrefs.skip,
@@ -689,6 +715,9 @@ private fun actionsFor(
     closeDocProblem = a::closeDocProblem,
     attachPhoto = { photo ->
         if (!a.attachPhoto(photo)) toast("one photo per question: send or remove the one waiting first")
+    },
+    attachServerLetter = { photo ->
+        if (!a.attachServerLetter(photo)) toast("one photo per question: send or remove the one waiting first")
     },
     dropPhoto = a::dropPhoto,
     docFile = { id -> a.docFile(id) },

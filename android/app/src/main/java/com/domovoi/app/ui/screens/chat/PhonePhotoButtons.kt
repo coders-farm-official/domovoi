@@ -111,15 +111,25 @@ internal const val DOCUMENT_LABEL = "a document"
 internal const val CAMERA_LABEL = "take a photo"
 internal const val GALLERY_LABEL = "choose a photo"
 
+/** Where this phone can't read photos but the home server can (D6): a
+ *  letter's photo for the home server, which reads it and keeps nothing. */
+internal const val LETTER_CAMERA_LABEL = "a letter for the home server: take a photo"
+internal const val LETTER_GALLERY_LABEL = "a letter for the home server: choose a photo"
+
+/** The waiting letter's line in the composer. */
+internal const val SERVER_LETTER_LINE = "a letter for your home server to read · nothing is kept there"
+
 internal enum class CameraAsk { Reason, Refused }
 
 /** The "+" menu's items, in order: a document where the chat takes them;
  *  the photo items only where photos are offered (the camera one only with
  *  a back camera). Nothing is ever listed greyed out. */
-internal fun addMenuItems(documents: Boolean, photos: Boolean, backCamera: Boolean): List<String> = listOfNotNull(
+internal fun addMenuItems(documents: Boolean, photos: Boolean, backCamera: Boolean, serverLetter: Boolean = false): List<String> = listOfNotNull(
     DOCUMENT_LABEL.takeIf { documents },
     CAMERA_LABEL.takeIf { photos && backCamera },
     GALLERY_LABEL.takeIf { photos },
+    LETTER_CAMERA_LABEL.takeIf { serverLetter && !photos && backCamera },
+    LETTER_GALLERY_LABEL.takeIf { serverLetter && !photos },
 )
 
 /**
@@ -152,6 +162,8 @@ internal fun PhoneAddButton(
     onPhoto: (PendingPhoto) -> Unit,
     onProblem: (String) -> Unit,
     onToast: (String) -> Unit,
+    serverLetter: Boolean = false,
+    onServerLetter: (PendingPhoto) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -160,7 +172,9 @@ internal fun PhoneAddButton(
     var camera by remember { mutableStateOf(false) }
     var ask by remember { mutableStateOf<CameraAsk?>(null) }
     val backCamera = remember { runCatching { context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA) }.getOrDefault(true) }
-    val items = addMenuItems(onDocument != null, photos, backCamera)
+    val items = addMenuItems(onDocument != null, photos, backCamera, serverLetter)
+    // The photo being taken or chosen is a letter for the home server.
+    var forServer by remember { mutableStateOf(false) }
     if (items.isEmpty()) return
 
     fun prepare(source: String, rotation: Int, raw: RawPhoto) {
@@ -178,7 +192,7 @@ internal fun PhoneAddButton(
                 }
             }
             busy = false
-            result.onSuccess { p -> p?.let(onPhoto) }
+            result.onSuccess { p -> p?.let { if (forServer) onServerLetter(it) else onPhoto(it) } }
                 .onFailure { e -> onProblem(phonePhotoProblem(e, Build.VERSION.SDK_INT)) }
         }
     }
@@ -229,7 +243,7 @@ internal fun PhoneAddButton(
                         Icon(
                             when (label) {
                                 DOCUMENT_LABEL -> Icons.Outlined.Description
-                                CAMERA_LABEL -> Icons.Outlined.PhotoCamera
+                                CAMERA_LABEL, LETTER_CAMERA_LABEL -> Icons.Outlined.PhotoCamera
                                 else -> Icons.Outlined.PhotoLibrary
                             },
                             contentDescription = null,
@@ -237,9 +251,10 @@ internal fun PhoneAddButton(
                     },
                     onClick = {
                         menu = false
+                        forServer = label == LETTER_CAMERA_LABEL || label == LETTER_GALLERY_LABEL
                         when (label) {
                             DOCUMENT_LABEL -> onDocument?.invoke()
-                            CAMERA_LABEL -> takePhoto()
+                            CAMERA_LABEL, LETTER_CAMERA_LABEL -> takePhoto()
                             else -> pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                         }
                     },
@@ -405,7 +420,7 @@ private fun CameraCapture(onPhoto: (RawPhoto, Int) -> Unit, onError: (String) ->
  * loader, so no cache of it anywhere).
  */
 @Composable
-internal fun PendingPhotoCard(photo: PendingPhoto, onRemove: () -> Unit, modifier: Modifier = Modifier) {
+internal fun PendingPhotoCard(photo: PendingPhoto, onRemove: () -> Unit, modifier: Modifier = Modifier, forServer: Boolean = false) {
     val thumb = remember(photo.id) {
         runCatching {
             BitmapFactory.decodeByteArray(photo.jpeg, 0, photo.jpeg.size, BitmapFactory.Options().apply { inSampleSize = 8 })
@@ -423,7 +438,7 @@ internal fun PendingPhotoCard(photo: PendingPhoto, onRemove: () -> Unit, modifie
             Image(thumb, contentDescription = "the photo", contentScale = ContentScale.Crop,
                 modifier = Modifier.size(48.dp).clip(RoundedCornerShape(6.dp)))
         }
-        Text(pendingPhotoLine(photo), style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted,
+        Text(if (forServer) SERVER_LETTER_LINE else pendingPhotoLine(photo), style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted,
             modifier = Modifier.weight(1f))
         IconButton(onClick = onRemove) {
             Icon(Icons.Outlined.Close, contentDescription = "remove the photo", tint = Domovoi.colors.fgMuted)

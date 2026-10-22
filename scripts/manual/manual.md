@@ -687,7 +687,15 @@ and **choose a photo** (and **a document**). One photo per question; type a ques
 your gallery, and is gone once Domovoi has answered: the chat keeps only
 a **photo (not kept)** mark. The camera asks for its permission the first
 time. Phones without the buttons can't do it quickly enough; a home-server
-chat's **attach image** still works there. **Export all phone chats** (in a phone chat, the
+chat's **attach image** still works there. **A letter or a bill:** ask "what does this letter say?" with a photo of
+it, and the answer explains it in plain words, with its dates and amounts
+quoted straight from the letter. The photo isn't kept; the text read from it
+is kept with the answer, so you can ask about the letter again, and goes
+when you delete the chat. On a phone that can't read photos itself, **+**
+offers **a letter for the home server: take a photo** or **choose a
+photo** when a paired home server has its picture model: your home server
+reads the photo and keeps nothing, and the explanation is written on this
+phone. **Export all phone chats** (in a phone chat, the
 model settings button) saves them as Markdown and JSON where you pick. Its chats stay on the phone, marked **on this
 phone**; away from home they are the only ones Chat lists. They never mix
 with your home server's chats.
@@ -894,6 +902,23 @@ cite anything from is named under the summary. After a server restart the
 chat asks "carry on?" before it reads any more. One summary reads at a time
 per chat, and two in the house.
 
+**What does this letter say?** Attach a photo of a letter or a bill (one
+page per photo) and ask "what does this letter say?" or "what do I need
+to do?". The answer says who it's from, what it's about, the deadlines,
+the amounts, the reference numbers and what to do next. Dates and amounts
+are quoted straight from the letter: under **Dates in this letter** and
+**Amounts in this letter**, each is shown inside the letter's own
+sentence, as Domovoi read it from the photo, with the figure in bold.
+Domovoi's own words never give a figure. A photo that was misread to begin
+with can still be wrong, so check what matters on the letter itself. Press
+**photo 1** under the answer to see the text Domovoi read. A blurry photo
+or handwriting gets a heads-up first. If a letter has text aimed at an AI
+assistant ("ignore previous instructions…"), Domovoi doesn't follow it
+and says so: genuine letters don't do this. Everyone in the house can see
+a home-server chat, so a phone chat is the private place for personal
+mail. Real handwriting hasn't been measured yet, and on a home server
+without a graphics card a letter takes about 2 minutes.
+
 **App:** the picture button is **attach image**, and the app also takes
 HEIC photos. See [Chat and the chat mic](#node:phone-chat).
 
@@ -915,6 +940,9 @@ HEIC photos. See [Chat and the chat mic](#node:phone-chat).
   Search](#settings/search); the answer came from Wikipedia meanwhile.
 - "Points that span parts may be missed": a long summary is made part by
   part. Ask about the specific thing to have it found wherever it is.
+- "Domovoi left out a sentence of its own that named a date, an amount
+  or a number": Domovoi's explanation never gives figures itself; look for
+  them in the letter's sentences quoted below it.
 
 **Also:** voice chat mode, a spoken conversation in a room, is an early
 experiment and off unless whoever set up Domovoi turned it on.

@@ -112,6 +112,8 @@ from domovoi.voice_identifier import speaker_is_confident
 from domovoi.doc_qa import headsup as _headsup
 from web.backend.api import chat_doc_jobs as _jobs
 from web.backend.api import chat_documents as _docs
+from web.backend.api import chat_letters as _letters
+from domovoi.doc_qa import letter as _letter
 from web.backend.api import chat_drafts as _drafts
 from web.backend.api.devices import valid_device_id
 from web.backend.db import session_scope
@@ -1280,6 +1282,10 @@ async def _answer(
         card_plan = await _picture_heads_up(thread_id, user_row_id, question, heads_up)
         if card_plan is not None:
             plan, model_role = card_plan, "heads_up"
+        elif user_row_id is not None and _letter.letter_request(question):
+            # "What does this letter say?" (documents plan D6): read, then
+            # explained and checked (chat_letters.py).
+            return await _letter_reply(thread_id, user_row_id, question, heads_up)
 
     # The text model can't read pictures, so a text turn leaves the
     # thread's earlier ones out (see _history_for_model). A turn that may
@@ -1679,7 +1685,7 @@ async def _answer(
 
 async def _insert_assistant_row(
     thread_id: int, *, content: str, model: str | None, error: str | None, stats: dict[str, Any],
-    used_internet: bool = False,
+    used_internet: bool = False, doc: dict[str, Any] | None = None,
 ) -> Any:
     """Write one assistant row (and touch the thread), returning it as the
     message reads (``_MSG_COLUMNS``)."""
@@ -1688,12 +1694,13 @@ async def _insert_assistant_row(
             await s.execute(
                 text(
                     """
-                    INSERT INTO chat_messages AS m (thread_id, role, content, model, error, stats)
-                    VALUES (:t, 'assistant', :c, :m, :e, CAST(:st AS JSONB))
+                    INSERT INTO chat_messages AS m (thread_id, role, content, model, error, stats, doc)
+                    VALUES (:t, 'assistant', :c, :m, :e, CAST(:st AS JSONB), CAST(:doc AS JSONB))
                     RETURNING {cols}, NULL::text AS device_name, NULL::text AS speaker_name
                     """.format(cols=_MSG_COLUMNS)
                 ),
-                {"t": thread_id, "c": content, "m": model, "e": error, "st": json.dumps(stats)},
+                {"t": thread_id, "c": content, "m": model, "e": error, "st": json.dumps(stats),
+                 "doc": json.dumps(doc) if doc is not None else None},
             )
         ).mappings().first()
         await s.execute(
@@ -2634,11 +2641,42 @@ def _picture_blur(path: Path) -> float | None:
     return None if v == float("inf") else v
 
 
+async def _letter_reply(thread_id: int, user_row_id: int, question: str, prefs: Any) -> StreamingResponse:
+    """A letter turn (chat_letters.letter_events): the photos of the
+    message being answered, read, explained and checked, streamed as a
+    send streams."""
+    async with session_scope() as s:
+        imgs = (await s.execute(text("SELECT images FROM chat_messages WHERE id = :id"),
+                                {"id": user_row_id})).scalar_one_or_none()
+    if isinstance(imgs, str):
+        imgs = json.loads(imgs)
+    pictures = [p for p in (_upload_path((i or {}).get("token", "")) for i in imgs or []) if p is not None]
+    shown = await _docs.shown_kinds(thread_id)
+
+    async def write(**kw: Any) -> Any:
+        return await _insert_assistant_row(thread_id, **kw)
+
+    async def sse() -> AsyncIterator[str]:
+        _reply_started()
+        try:
+            async for event in _letters.letter_events(
+                thread_id=thread_id, question=question, pictures=pictures, prefs=prefs or _docs.HeadsUpPrefs(),
+                shown=shown, write=write, fail=_failure, msg=_msg_dict,
+            ):
+                yield event
+        finally:
+            _reply_finished()
+        schedule_title_job(thread_id)
+
+    return StreamingResponse(sse(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 async def _picture_heads_up(thread_id: int, user_row_id: int | None, question: str, prefs: Any) -> Any:
     """A message with pictures that asks to read them ("what does this
     letter say?"): the heads-up card when one is measured too blurry
     (documents plan D3), or None. Measured here, never judged by a model."""
-    if user_row_id is None or not _headsup.reading_request(question):
+    if user_row_id is None or not _headsup.wants_reading(question):
         return None
     async with session_scope() as s:
         imgs = (await s.execute(text("SELECT images FROM chat_messages WHERE id = :id"),
@@ -2716,3 +2754,4 @@ router.include_router(_docs.router)
 router.include_router(_drafts.router)
 # Long documents' map/reduce jobs (chat_doc_jobs.py), and a phone's private ones.
 router.include_router(_jobs.router)
+router.include_router(_letters.router)

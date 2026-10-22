@@ -179,6 +179,15 @@ def reading_request(question: str) -> bool:
     return bool(_READING_RE.search(_q(question)))
 
 
+def wants_reading(question: str) -> bool:
+    """A picture message whose words matter: a request to read them
+    (:func:`reading_request`), or a letter to explain ("what do I need to
+    do about this bill?", documents plan D6: ``letter.letter_request``)."""
+    from domovoi.doc_qa import letter as _letter
+
+    return reading_request(question) or _letter.letter_request(question)
+
+
 def rewrite_request(question: str) -> bool:
     """A rewrite, translation, proofread or reformat aimed at the whole
     document ("rewrite the second paragraph" is aimed at a part)."""
@@ -443,7 +452,7 @@ def findings(req: Request, table: dict[str, Any] | None = None) -> list[Card]:
     out: list[Card] = []
     if req.mode == "picture":
         blur = req.picture.get("blur")
-        if (blur is not None and float(blur) < float(th.get("blur_variance", 0)) and reading_request(req.question)
+        if (blur is not None and float(blur) < float(th.get("blur_variance", 0)) and wants_reading(req.question)
                 and fires(t, "blurry", "blurry", req.where)):
             k = kinds["blurry"]
             out.append(Card("blurry", k["card"], _options(k["options"], req.can)))

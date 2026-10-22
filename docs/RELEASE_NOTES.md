@@ -4,6 +4,69 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-21 — "What does this letter say?" in Chat
+
+Core and dashboard update, and the app. No migration and no new
+dependencies.
+
+* **Photograph a letter or a bill and ask what it says or what to do.**
+  The answer says in plain words who it's from, what it's about and what
+  to do, then lists **Dates in this letter** and **Amounts in this
+  letter**, and the reference numbers.
+* **Dates and amounts are quoted straight from the letter.** Each one is
+  shown inside the letter's own sentence, quoted exactly as the picture
+  model read it from that photo, with the date or amount in bold: every
+  sentence of the letter that holds a date, a period or an amount, under
+  its own photo when there are several. The model only chooses which
+  matter most and adds a few words ("due date", "late fee"); it never
+  writes a figure. Its own sentences name none either: one that names a
+  date, an amount, a number, a period or a reference (in digits or in
+  words, a month, a holiday, "next Friday", "a fortnight", "dentro de
+  quince días") is left out, and a note says so. A reference number is
+  shown only as the letter writes it. What is quoted is what was read: a
+  photo misread in the first place (blur, glare, handwriting) can still
+  give a wrong figure, so the note says to check anything important on the
+  letter itself.
+* **Heads-up first.** A blurry photo gets its card before anything is
+  sent to a model (as before, now for letter questions too: "what do I
+  need to do about this bill?"). Handwriting now has its card too: the
+  picture model is asked one word first, printed or handwritten, and a
+  handwritten letter gets "Handwriting is hard for Domovoi" before it is
+  transcribed, once a chat. **Real handwriting is not measured yet**: the
+  test notes were drawn in a script font.
+* **Text in a letter is data, never instructions.** It reaches the model
+  in a marked block it can't close, and lines that look like the reply's
+  own labels are marked as the letter's. A line addressed to an AI
+  assistant ("Assistant: …", "ChatGPT, …", "Ignore the above", "Note to
+  automated summarizers", "To whoever summarizes this", read through
+  lookalike letters and hidden characters) is left out of the quotes and
+  named in a note. Since the model writes no figures and the figures are
+  quotes, a letter can only change the wording.
+* **Home-server chats** keep the transcript with the thread (as the photo
+  already is), under the answer as "photo 1". About **2 minutes a letter**
+  on a home server without a graphics card (measured on CPU); a few
+  seconds with one.
+* **Phone chats** read the letter on the phone where its GPU runs the photo
+  model (as N3's pictures do). Where the phone's check says it can't, and
+  a paired home server has AI on and its picture model installed, "+"
+  offers "a letter for the home server": the server reads the photo (at
+  most 8 MB, one per phone at a time and two in the house, after any voice
+  turn; the offer is checked again whenever the app comes back to the
+  front) and keeps nothing (`POST /api/chat/letters/read`), and the phone
+  writes and checks the explanation. With neither, the chat says so
+  plainly; it never says the phone can't before its check has run.
+* **What a phone chat keeps** (owner decision, 2026-10-21): never the
+  photo, which is wiped once answered. The text read from it is kept
+  beside the answer, as its "photo 1" source, so a follow-up question can
+  see the letter; it is deleted with the chat.
+* **With AI features off**, none of this starts: the routes refuse as
+  every chat send does.
+* **Measured** on 12 synthetic phone photos (our own letters, including a
+  Spanish one; blur, tilt, shadow, JPEG) with the default server models on
+  CPU: on the 9 printed letters every deadline and amount we keyed was
+  among the quoted sentences. See the manual's "What Domovoi is good and
+  not so good at" for the limits.
+
 ## 2026-10-21 — Write resumes and letters in Chat
 
 Core, dashboard and app, with one migration, **V039** (`chat_drafts`,

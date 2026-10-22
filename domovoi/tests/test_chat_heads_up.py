@@ -282,7 +282,9 @@ def test_a_blurry_picture_to_read_gets_its_card(model, monkeypatch):
         up = c.post("/api/chat/uploads", files={"file": ("letter.png", io.BytesIO(buf.getvalue()), "image/png")})
         assert up.status_code == 200, up.text
         tid = c.post("/api/chat/threads", json={}).json()["id"]
-        card = _send(c, tid, "What does this letter say?", images=[up.json()["token"]])
+        # (A letter question goes to the letter turn after its card, D6:
+        # test_chat_letters.py; a receipt to read is a plain picture turn.)
+        card = _send(c, tid, "Read this receipt to me", images=[up.json()["token"]])
         hu = card["doc"]["heads_up"]
         assert hu["kind"] == "blurry" and [o["id"] for o in hu["options"]] == ["choose_another", "send_anyway"]
         assert model.calls == []

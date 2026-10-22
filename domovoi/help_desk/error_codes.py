@@ -165,6 +165,23 @@ ERROR_CODES: dict[str, ErrorHelp] = {
         "Pick one of the buttons on the card. Reload the chat if they look out of date.",
         "good-and-not",
     ),
+    "busy": _e(
+        "The home server is busy reading",
+        "It reads one letter per phone at a time, and two letters or two long documents in the house. Wait for "
+        "the one under way to finish, then try again.",
+        "good-and-not",
+    ),
+    "letter_blurry": _e(
+        "Read from a blurry photo",
+        "You sent a letter photo past its blurry heads-up, so some words may be guessed. Check the dates and "
+        "amounts on the letter, or take the photo again in good light.",
+        "good-and-not",
+    ),
+    "letter_handwriting": _e(
+        "Read from handwriting",
+        "Handwriting is hard for Domovoi's picture model. Check every name, date and number against the letter.",
+        "good-and-not",
+    ),
     "not_a_card": _e(
         "That message is no heads-up card",
         "Only a heads-up card has options to pick. Reload the chat.",
