@@ -32,17 +32,15 @@ def _page() -> dict:
 
 
 def _items() -> list[str]:
-    out = []
-    for b in _page()["blocks"]:
-        if b["type"] == "list":
-            out += [i["text"] if isinstance(i, dict) else i for i in b["items"]]
-    return out
+    # The generated list is the page's first list; the how-to lists follow it.
+    b = next(b for b in _page()["blocks"] if b["type"] == "list")
+    return [i["text"] if isinstance(i, dict) else i for i in b["items"]]
 
 
-def test_the_page_is_in_chat_files_and_calendar():
+def test_the_page_is_in_chat_and_help():
     page = _page()
     assert page["title"] == "What Domovoi is good and not so good at"
-    assert page["topic"] == "chat-files-calendar"
+    assert page["topic"] == "chat-and-help"
 
 
 def test_one_bullet_per_cell_in_the_tables_order():

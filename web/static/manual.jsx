@@ -38,6 +38,7 @@ const UM_TOKEN_RE = /(\*\*[^*]+\*\*|\*[^*\s][^*]*\*|`[^`]+`|\[[^\]]+\]\((?:route
 const UM_TOPIC_ICONS = {
   'how-it-works': 'cpu', 'things-to-say': 'message-circle', 'rooms-and-devices': 'radio-tower',
   'your-phone': 'smartphone', 'music-and-media': 'music', 'chat-files-calendar': 'folder',
+  'chat-and-help': 'message-square', 'documents-and-letters': 'file-text',
   'people-and-privacy': 'users', 'keeping-it-running': 'wrench',
 };
 

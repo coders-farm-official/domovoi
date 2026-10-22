@@ -277,7 +277,7 @@
   "blocks": [
    {
     "type": "p",
-    "text": "**Domovoi is your home's own voice assistant.** It runs on a computer in your house, the Domovoi server. Small speakers with microphones put it in every room. Your voice never leaves your home network."
+    "text": "**Domovoi is your home's own computer system.** It runs on a computer in your house, the Domovoi server. Your music, videos, books and files live there, and play in every room and on your phone. Small speakers with microphones put it in every room, so you can talk to it. AI chat is there if you want it, and it runs at home too. Your voice never leaves your home network."
    },
    {
     "type": "label",
@@ -295,7 +295,7 @@
       "text": "**The dashboard.** Open it in any browser on your Wi-Fi, at the address whoever set up Domovoi gave you (it ends in `:6369`). You can manage music, files, chat, people and settings there."
      },
      {
-      "text": "**The Domovoi app** on Android phones. It has the everyday pages, a music player and chat, and it plays the phone's own music when there is no server."
+      "text": "**The Domovoi app** on Android phones. It has the everyday pages, a music player and Chat. With no server in reach it still plays the phone's own music, and a chat on the phone can run on the phone itself."
      }
     ]
    },
@@ -352,7 +352,7 @@
     "platforms": [
      "dashboard"
     ],
-    "text": "**Claim the admin account** {admin}: [Settings → Advanced](route:settings/advanced), **set up admin**. Type the 8-word setup code and choose a password. Where the code is: the Windows installer shows it on its last page; on Linux it is in a file on the server. [More detail](doc:README.md#2-claim-the-admin-account)"
+    "text": "**Claim the admin account** {admin}: [Settings → System → Advanced](route:settings/advanced), **set up admin**. Type the 8-word setup code and choose a password. Where the code is: the Windows installer shows it on its last page; on Linux it is in a file on the server. [More detail](doc:README.md#2-claim-the-admin-account)"
    },
    {
     "id": "internet",
@@ -360,7 +360,7 @@
     "platforms": [
      "dashboard"
     ],
-    "text": "**Answer the internet question**: Yes, Sometimes or No. You can change it later in [Settings → Internet](route:settings/internet)."
+    "text": "**Answer the internet question**: Yes, Sometimes or No. You can change it later in [Settings → Privacy → Internet](route:settings/internet)."
    },
    {
     "id": "first-room",
@@ -369,7 +369,7 @@
      "dashboard",
      "app"
     ],
-    "text": "**Add your first room**: [Settings → Rooms](route:settings/rooms). See [A Raspberry Pi room](node:pi-room)."
+    "text": "**Add your first room**: [Settings → Rooms & devices → Rooms](route:settings/rooms). See [A Raspberry Pi room](node:pi-room)."
    },
    {
     "id": "wake-word",
@@ -404,9 +404,9 @@
     "platforms": [
      "dashboard"
     ],
-    "app_text": "**Pair this phone**: [Settings → Phones & browsers](route:app/connection) → **Household token**.",
+    "app_text": "**Pair this phone**: [Settings → Rooms & devices → Phones & browsers](route:app/connection) → **Household token**.",
     "app_done_when": "this_phone_paired",
-    "text": "**Put the app on your phones**: [Settings → Phones & browsers → Get the Domovoi app](route:settings/phones-and-browsers)."
+    "text": "**Put the app on your phones**: [Settings → Rooms & devices → Phones & browsers → Get the Domovoi app](route:settings/phones-and-browsers)."
    }
   ]
  },
@@ -414,7 +414,7 @@
   {
    "id": "how-it-works",
    "title": "How it works",
-   "subtitle": "your home's own assistant",
+   "subtitle": "your home's own system",
    "keywords": [
     "how does it work",
     "technical",
@@ -459,48 +459,6 @@
    ]
   },
   {
-   "id": "rooms-and-devices",
-   "title": "Rooms and devices",
-   "subtitle": "the speakers that listen",
-   "keywords": [
-    "satellite",
-    "room",
-    "speaker",
-    "raspberry pi",
-    "microphone",
-    "device"
-   ],
-   "pieces": [
-    "rooms",
-    "pi-room",
-    "laptop-room",
-    "phone-room",
-    "usb-room",
-    "wake-word",
-    "voice"
-   ]
-  },
-  {
-   "id": "your-phone",
-   "title": "Your phone",
-   "subtitle": "the Domovoi app",
-   "keywords": [
-    "android",
-    "app",
-    "phone",
-    "tablet",
-    "mobile"
-   ],
-   "pieces": [
-    "connect",
-    "phone-music",
-    "phone-chat",
-    "assistant",
-    "phone-as-room",
-    "app-settings"
-   ]
-  },
-  {
    "id": "music-and-media",
    "title": "Music and media",
    "subtitle": "music, podcasts, books, videos, news",
@@ -521,23 +479,115 @@
    ]
   },
   {
-   "id": "chat-files-calendar",
-   "title": "Chat, files and calendar",
-   "subtitle": "your household's pages",
+   "id": "chat-and-help",
+   "title": "Chat and help",
+   "subtitle": "type to Domovoi, ask it anything",
    "keywords": [
     "chat",
-    "files",
-    "documents",
-    "calendar",
-    "photos"
+    "ask",
+    "question",
+    "help",
+    "look up",
+    "search",
+    "internet",
+    "ai",
+    "ai off",
+    "trust"
    ],
    "pieces": [
     "chat",
+    "lookups",
     "good-and-not",
+    "ai-off",
+    "help-desk"
+   ],
+   "intro": "Type to Domovoi on the dashboard or in the app. A chat on your home server is shared with the household; a chat on the phone stays on the phone. Domovoi asks before anything goes online, and it answers questions about itself."
+  },
+  {
+   "id": "documents-and-letters",
+   "title": "Documents and letters",
+   "subtitle": "ask about a file, write a letter",
+   "keywords": [
+    "document",
+    "pdf",
+    "word",
+    "summary",
+    "letter",
+    "bill",
+    "draft",
+    "write",
+    "read aloud",
+    "print"
+   ],
+   "pieces": [
+    "ask-document",
+    "long-documents",
+    "drafts",
+    "letters",
+    "read-aloud"
+   ],
+   "intro": "Ask Domovoi about a document, have it summarize a long one, write a letter with it, or have a room read one out. It reads and writes on your home server, or on the phone in a phone chat. Nothing is ever sent for you."
+  },
+  {
+   "id": "chat-files-calendar",
+   "title": "Files, printing and calendar",
+   "subtitle": "your household's files",
+   "keywords": [
     "files",
+    "photos",
     "documents",
     "calendar",
-    "printers"
+    "print",
+    "scan"
+   ],
+   "pieces": [
+    "files",
+    "documents",
+    "printers",
+    "calendar"
+   ]
+  },
+  {
+   "id": "your-phone",
+   "title": "Your phone",
+   "subtitle": "the Domovoi app",
+   "keywords": [
+    "android",
+    "app",
+    "phone",
+    "tablet",
+    "mobile"
+   ],
+   "pieces": [
+    "connect",
+    "phone-music",
+    "phone-chat",
+    "assistant",
+    "phone-actions",
+    "phone-pictures",
+    "app-settings"
+   ]
+  },
+  {
+   "id": "rooms-and-devices",
+   "title": "Rooms and devices",
+   "subtitle": "the speakers that listen",
+   "keywords": [
+    "satellite",
+    "room",
+    "speaker",
+    "raspberry pi",
+    "microphone",
+    "device"
+   ],
+   "pieces": [
+    "rooms",
+    "pi-room",
+    "laptop-room",
+    "phone-room",
+    "usb-room",
+    "wake-word",
+    "voice"
    ]
   },
   {
@@ -564,10 +614,11 @@
   {
    "id": "keeping-it-running",
    "title": "Keeping it running",
-   "subtitle": "updates, restarts, backups, plugins",
+   "subtitle": "updates, health, restarts, backups, plugins",
    "keywords": [
     "maintenance",
     "update",
+    "health",
     "restart",
     "backup",
     "plugin",
@@ -576,11 +627,11 @@
    ],
    "pieces": [
     "updates",
+    "health",
     "restart",
     "backups",
     "plugins",
     "models",
-    "help-desk",
     "troubleshooting"
    ]
   }
@@ -674,11 +725,11 @@
     },
     {
      "type": "p",
-     "text": "An NVIDIA graphics card makes them faster: Ollama uses it by itself, on Linux and on Windows. An admin can change models in [Settings → Models](route:settings/models)."
+     "text": "An NVIDIA graphics card makes them faster: Ollama uses it by itself, on Linux and on Windows. An admin can change models in [Settings → Chat & AI → Models](route:settings/models)."
     },
     {
      "type": "p",
-     "text": "**AI chat and questions are optional.** The installers ask whether to include them, and an admin can turn them off or on at any time under **AI chat and questions** in [Settings → Models](route:settings/models). Off, no routing, answer or vision model is used: voice commands still work on their usual phrases, and so do speech recognition, the voices and the wake word. A question then gets \"I'm set up for home commands\", and Chat is hidden. Turning them on shows the download size first, then downloads the models."
+     "text": "**AI chat and questions are optional.** The installers ask whether to include them, and an admin can turn them off or on at any time under **AI chat and questions** in [Settings → Chat & AI → Models](route:settings/models). Off, no routing, answer or vision model is used: voice commands still work on their usual phrases, and so do speech recognition, the voices and the wake word. See [When AI is off](node:ai-off)."
     }
    ],
    "more": {
@@ -833,10 +884,13 @@
      "ordered": false,
      "items": [
       {
-       "text": "The **dashboard** is the web page where you manage everything; it's the only place to install plugins and change server settings."
+       "text": "The **dashboard** is the web page where you manage everything. It's the only place to install plugins and change server settings."
       },
       {
-       "text": "The **app** brings the everyday pages to your phone, plus its own player, chat mic and offline assistant."
+       "text": "The **app** brings the everyday pages to your phone, with its own music player and Chat. Chat holds your chats on the home server and chats that run on the phone itself, with no server."
+      },
+      {
+       "text": "**Settings** is in five groups: Rooms & devices, Voice, Chat & AI, Privacy, and System. The search box at the top finds a setting by name: try \"wake\", \"voice history\" or \"token\"."
       }
      ]
     }
@@ -938,7 +992,7 @@
     },
     {
      "type": "p",
-     "text": "Your timers show on [Home](route:home) and in each room's **Timers** tab ([Settings → Rooms](route:settings/rooms))."
+     "text": "Your timers show on [Home](route:home) and in each room's **Timers** tab ([Settings → Rooms & devices → Rooms](route:settings/rooms))."
     },
     {
      "type": "p",
@@ -1067,13 +1121,13 @@
      "ordered": false,
      "items": [
       {
-       "text": "\"I'm set to stay off the internet\": your household chose No in [Settings → Internet](route:settings/internet)."
+       "text": "\"I'm set to stay off the internet\": your household chose No in [Settings → Privacy → Internet](route:settings/internet)."
       },
       {
-       "text": "\"I'm set up for home commands\" or \"I can't look that up with AI turned off\": AI chat and questions are off for your home. Commands still work; an admin can turn AI on in [Settings → Models](route:settings/models)."
+       "text": "\"I'm set up for home commands\" or \"I can't look that up with AI turned off\": AI chat and questions are off for your home. Commands still work. See [When AI is off](node:ai-off)."
       },
       {
-       "text": "\"My question-answering model isn't installed yet\": AI is on but its model hasn't been downloaded. An admin can download it in [Settings → Models](route:settings/models)."
+       "text": "\"My question-answering model isn't installed yet\": AI is on but its model hasn't been downloaded. An admin can download it in [Settings → Chat & AI → Models](route:settings/models)."
       },
       {
        "text": "\"My search helper isn't running\": ask whoever set up Domovoi."
@@ -1263,8 +1317,16 @@
      "text": "If something's wrong"
     },
     {
-     "type": "p",
-     "text": "Drop-ins need a room with an echo-cancelling microphone (the XVF3800 board, or most phones in room mode). A room may be set to ask before it answers: [Settings → Advanced](route:settings/advanced), **Drop-in** {admin}."
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "Drop-ins need a room with an echo-cancelling microphone: the XVF3800 board, or most phones in room mode."
+      },
+      {
+       "text": "Whether a room picks up a drop-in by itself, asks first or rings is one setting for the whole house {admin}: [Settings → System → Advanced](route:settings/advanced), **show the settings**, **Drop-in**, **Accept mode**."
+      }
+     ]
     }
    ],
    "more": {
@@ -1341,7 +1403,7 @@
     },
     {
      "type": "p",
-     "text": "Notes show in each room's **Notes** tab ([Settings → Rooms](route:settings/rooms)). Memories show on [People](route:people), under each person's **Memory** tab."
+     "text": "Notes show in each room's **Notes** tab ([Settings → Rooms & devices → Rooms](route:settings/rooms)). Memories show on [People](route:people), under each person's **Memory** tab."
     }
    ],
    "more": {
@@ -1463,815 +1525,6 @@
    }
   },
   {
-   "id": "rooms",
-   "topic": "rooms-and-devices",
-   "title": "Your rooms",
-   "subtitle": "online, playing, last heard",
-   "keywords": [
-    "satellites",
-    "rooms",
-    "offline",
-    "wifi",
-    "restart satellite",
-    "upgrade",
-    "reset pairing"
-   ],
-   "live": "rooms",
-   "blocks": [
-    {
-     "type": "live",
-     "slot": "rooms"
-    },
-    {
-     "type": "p",
-     "text": "Each room is one listening device: a Raspberry Pi, a spare laptop or a phone. [Settings → Rooms](route:settings/rooms) lists them. Each card shows:"
-    },
-    {
-     "type": "list",
-     "ordered": false,
-     "items": [
-      {
-       "text": "online or offline;"
-      },
-      {
-       "text": "what's playing;"
-      },
-      {
-       "text": "its Wi-Fi signal;"
-      },
-      {
-       "text": "when it last heard someone."
-      }
-     ]
-    },
-    {
-     "type": "p",
-     "text": "Open a room for its tabs. They are the icons along the top: **Overview** (the \"i\"), **Sessions**, **Conversations**, **Recently played**, **Notes**, **Timers**, **Logs**, and **Settings** (the gear).",
-     "only": "dashboard"
-    },
-    {
-     "type": "label",
-     "role": "how",
-     "text": "How to",
-     "admin": true
-    },
-    {
-     "type": "list",
-     "ordered": false,
-     "items": [
-      {
-       "text": "Make a room hear the wake word more or less easily, swap its greeting for a chime, or make its voice louder: its **Settings** tab, **Wake sensitivity**, **Wake acknowledgement**, **Voice loudness boost**."
-      },
-      {
-       "text": "A Pi or spare computer acting up: **Restart satellite**. Updating it: **Upgrade satellite**."
-      },
-      {
-       "text": "A room moved to new hardware: **Reset pairing**, then approve the new device."
-      }
-     ]
-    },
-    {
-     "type": "p",
-     "text": "[Settings → Rooms](route:settings/rooms) shows the same rooms.",
-     "only": "app"
-    },
-    {
-     "type": "label",
-     "role": "say",
-     "text": "Try saying",
-     "note": "in the room itself"
-    },
-    {
-     "type": "say",
-     "phrases": [
-      {
-       "text": "how's the wifi",
-       "handler": "wifi",
-       "path": "fast"
-      },
-      {
-       "text": "fix the wifi",
-       "handler": "wifi",
-       "path": "fast"
-      }
-     ]
-    },
-    {
-     "type": "label",
-     "role": "wrong",
-     "text": "If something's wrong"
-    },
-    {
-     "type": "list",
-     "ordered": false,
-     "items": [
-      {
-       "text": "*offline*: power and Wi-Fi first. If **every** room says *can't connect*, see [Restarting](node:restart)."
-      },
-      {
-       "text": "The Wi-Fi bar is amber or red: move the room device or the router closer."
-      },
-      {
-       "text": "A room says \"having trouble reaching the network\": it has lost the server."
-      }
-     ]
-    }
-   ],
-   "more": {
-    "text": "More detail",
-    "target": "doc:docs/TROUBLESHOOTING.md#satellite-wont-connect"
-   }
-  },
-  {
-   "id": "pi-room",
-   "topic": "rooms-and-devices",
-   "title": "A Raspberry Pi room",
-   "subtitle": "the usual room",
-   "keywords": [
-    "raspberry pi",
-    "pi",
-    "sd card",
-    "add a room",
-    "setup wifi",
-    "approve",
-    "respeaker",
-    "xvf3800"
-   ],
-   "blocks": [
-    {
-     "type": "p",
-     "text": "The usual room: a Raspberry Pi with a microphone board and a speaker. About the price of a smart speaker. [Parts list](doc:docs/SATELLITE_HARDWARE.md)"
-    },
-    {
-     "type": "label",
-     "role": "how",
-     "text": "How to",
-     "admin": true
-    },
-    {
-     "type": "list",
-     "ordered": true,
-     "items": [
-      {
-       "text": "Put Raspberry Pi OS Lite (64-bit) on a microSD card, and put the card in the server's card reader."
-      },
-      {
-       "text": "[Settings → Rooms](route:settings/rooms) → **prepare satellite media** → **wi-fi setup portal** → **Prepare**. On the Windows install, which can't see SD cards, **download overlay zip** and unzip it onto the card."
-      },
-      {
-       "text": "Start the Pi with the card. It makes its own Wi-Fi network, `Domovoi-Setup-<id>`. Join it from your phone, pick your home Wi-Fi and name the room."
-      },
-      {
-       "text": "The Pi says a six-digit code. Under **waiting for approval**, type it and press **approve**."
-      }
-     ]
-    },
-    {
-     "type": "label",
-     "role": "wrong",
-     "text": "If something's wrong"
-    },
-    {
-     "type": "p",
-     "text": "**show setup details** on the card lists the setup network and its page."
-    }
-   ],
-   "more": {
-    "text": "More detail",
-    "target": "doc:README.md#3-add-your-first-satellite"
-   }
-  },
-  {
-   "id": "laptop-room",
-   "topic": "rooms-and-devices",
-   "title": "A spare laptop or PC",
-   "subtitle": "Linux or Windows",
-   "keywords": [
-    "laptop",
-    "pc",
-    "linux",
-    "windows",
-    "spare device",
-    "old laptop"
-   ],
-   "preview": true,
-   "blocks": [
-    {
-     "type": "p",
-     "text": "A Linux or Windows 10/11 laptop or PC can be a room. Use one that stays plugged in, with sleep turned off. Not the computer that runs Domovoi."
-    },
-    {
-     "type": "label",
-     "role": "how",
-     "text": "How to",
-     "admin": true
-    },
-    {
-     "type": "list",
-     "ordered": true,
-     "items": [
-      {
-       "text": "[Settings → Rooms](route:settings/rooms) → **add a spare device**. Type the room's name, press **make the code**."
-      },
-      {
-       "text": "**Linux:** press **copy the command** and run it on that computer, signed in as the account it should use."
-      },
-      {
-       "text": "**Windows:** on that PC, signed in as the account it should use, press **Download the Windows Setup** (or type the short address the card shows into its browser) and open the file. The setup code is in its name, so there is nothing to type. If the card shows only a command, paste that into PowerShell on the PC instead (a Linux server may offer **get the Windows Setup** first)."
-      },
-      {
-       "text": "Windows says **\"Windows protected your PC\"**: click **More info**, then **Run anyway**. Domovoi isn't signed by Microsoft yet; the file comes from your own server."
-      },
-      {
-       "text": "The computer shows a six-digit code. Approve it under **waiting for approval**."
-      }
-     ]
-    },
-    {
-     "type": "p",
-     "text": "A tray icon shows when the microphone is live, and mutes it. The PowerShell command is still there for Windows, under **advanced**."
-    },
-    {
-     "type": "label",
-     "role": "wrong",
-     "text": "If something's wrong"
-    },
-    {
-     "type": "p",
-     "text": "A processor from before about 2009 is refused. A setup code lasts 24 hours: make a new one if Setup says it's unknown."
-    }
-   ],
-   "more": {
-    "text": "More detail",
-    "target": "doc:docs/SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs"
-   }
-  },
-  {
-   "id": "phone-room",
-   "topic": "rooms-and-devices",
-   "title": "An old phone or tablet as a room",
-   "subtitle": "room mode",
-   "keywords": [
-    "room mode",
-    "old phone",
-    "tablet",
-    "domovoi room",
-    "qr code"
-   ],
-   "preview": true,
-   "blocks": [
-    {
-     "type": "p",
-     "text": "An Android 8 or newer phone on its charger becomes a room (\"room mode\"): it hears the wake word, answers, plays the room's music, and takes announcements."
-    },
-    {
-     "type": "label",
-     "role": "how",
-     "text": "How to"
-    },
-    {
-     "type": "list",
-     "ordered": true,
-     "items": [
-      {
-       "text": "{admin} once: [Settings → Rooms](route:settings/rooms) → **prepare satellite media** → **Refresh caches**. This gives phones the wake word."
-      },
-      {
-       "text": "{admin} **add a spare device**, name the room, **make the code**. A QR code appears."
-      },
-      {
-       "text": "Scan it with the phone's camera. The page installs the Domovoi app (press **Download the app to this server** there once first) and opens it as that room."
-      },
-      {
-       "text": "Read the explainer, press **Start room mode**, allow the microphone, press **Become this room**."
-      },
-      {
-       "text": "Approve the six-digit code on the dashboard."
-      }
-     ]
-    },
-    {
-     "type": "p",
-     "text": "A phone that already has the app can do this from [Settings → Rooms](route:settings/rooms) → **Use this device as a room**, or from the **Domovoi Room** icon.",
-     "only": "app"
-    },
-    {
-     "type": "p",
-     "text": "To leave, hold **exit room mode**, unlock, then choose **Keep this room** or **Forget this room**."
-    },
-    {
-     "type": "label",
-     "role": "wrong",
-     "text": "If something's wrong"
-    },
-    {
-     "type": "list",
-     "ordered": false,
-     "items": [
-      {
-       "text": "*mic blocked*: turn the microphone back on in quick settings."
-      },
-      {
-       "text": "After a restart: tap the notification to resume."
-      },
-      {
-       "text": "Turn off battery optimisation for Domovoi."
-      }
-     ]
-    }
-   ],
-   "more": {
-    "text": "More detail",
-    "target": "doc:docs/SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode"
-   }
-  },
-  {
-   "id": "usb-room",
-   "topic": "rooms-and-devices",
-   "title": "An old computer, from a USB stick",
-   "subtitle": "the stick sets it up",
-   "keywords": [
-    "usb stick",
-    "old computer",
-    "old pc",
-    "mac",
-    "debian",
-    "erase"
-   ],
-   "preview": true,
-   "blocks": [
-    {
-     "type": "p",
-     "text": "The server makes a USB stick. An old 64-bit PC, laptop or 2012–2017 Intel Mac starts from it and becomes a room that does nothing else. **This erases that computer's disk.** It needs a network cable while it sets up."
-    },
-    {
-     "type": "label",
-     "role": "how",
-     "text": "How to",
-     "admin": true
-    },
-    {
-     "type": "list",
-     "ordered": true,
-     "items": [
-      {
-       "text": "**add a spare device** → name the room → **make the code** → under **old computer (usb stick)**, **Prepare the stick**."
-      },
-      {
-       "text": "**Open in Raspberry Pi Imager** to write it to a USB stick (2 GB or more)."
-      },
-      {
-       "text": "Start the old computer from the stick (its boot-menu key, often F12), type **ERASE** when asked, and wait about half an hour."
-      },
-      {
-       "text": "Approve the code it shows."
-      }
-     ]
-    }
-   ],
-   "more": {
-    "text": "More detail",
-    "target": "doc:docs/SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick"
-   }
-  },
-  {
-   "id": "wake-word",
-   "topic": "rooms-and-devices",
-   "title": "Wake word and greeting",
-   "subtitle": "the word a room wakes to",
-   "keywords": [
-    "wake word",
-    "hey jarvis",
-    "train",
-    "training",
-    "custom wake word",
-    "greeting",
-    "chime"
-   ],
-   "live": "wake-word",
-   "blocks": [
-    {
-     "type": "p",
-     "text": "A new room wakes to {wake}. After waking, it greets you or chimes, then listens."
-    },
-    {
-     "type": "live",
-     "slot": "wake-word"
-    },
-    {
-     "type": "label",
-     "role": "how",
-     "text": "Train your own wake word",
-     "admin": true
-    },
-    {
-     "type": "list",
-     "ordered": false,
-     "items": [
-      {
-       "text": "Where: [Settings → Wake words](route:settings/wake-words). The admin turns training on once, with **Turn on wake-word training**."
-      },
-      {
-       "text": "What it needs: a server with 24 GB of memory, about 22 GB of downloads and about 32 GB of disk. A word takes about 20 minutes to train with an NVIDIA graphics card, and over an hour on the processor."
-      },
-      {
-       "text": "The steps: **Create** the word, **Record** 15 or more clips on a satellite in the room itself, press **Train**, then **Push to room**."
-      },
-      {
-       "text": "A wake word trained at home is for your household only ([why](doc:docs/LICENSES.md#the-wake-word-trainer))."
-      }
-     ]
-    },
-    {
-     "type": "label",
-     "role": "how",
-     "text": "Greetings",
-     "admin": true
-    },
-    {
-     "type": "list",
-     "ordered": false,
-     "items": [
-      {
-       "text": "What a room says when it wakes: [Settings → Greetings](route:settings/greetings)."
-      },
-      {
-       "text": "A chime or a light instead: the room's **Settings** tab, **Wake acknowledgement**."
-      }
-     ]
-    }
-   ],
-   "more": {
-    "text": "More detail",
-    "target": "doc:scripts/wake_word/README.md"
-   }
-  },
-  {
-   "id": "voice",
-   "topic": "rooms-and-devices",
-   "title": "Domovoi's voice",
-   "subtitle": "pick it, fix a word",
-   "keywords": [
-    "voice",
-    "say it like",
-    "pronunciation",
-    "kristin",
-    "norman",
-    "linda",
-    "piper"
-   ],
-   "blocks": [
-    {
-     "type": "p",
-     "text": "Three voices, all on the server: **Kristin** (default), **Norman** and **Linda**."
-    },
-    {
-     "type": "label",
-     "role": "how",
-     "text": "How to"
-    },
-    {
-     "type": "list",
-     "ordered": false,
-     "items": [
-      {
-       "text": "Pick one: [Settings → Voices](route:settings/voices) → **Domovoi's voice** → play a sample, **use this voice** {admin}."
-      },
-      {
-       "text": "A word said wrong? **Say it like**: type the word and how it sounds, the stressed part in capitals (Siobhan = shiv-AWN). Press play to hear it first."
-      },
-      {
-       "text": "How *this phone* speaks: [Settings → Voices](route:app/voice): \"Same as the server\" or one of the three (about 64 MB, downloaded once).",
-       "only": "app"
-      }
-     ]
-    },
-    {
-     "type": "label",
-     "role": "say",
-     "text": "Try saying"
-    },
-    {
-     "type": "say",
-     "phrases": [
-      {
-       "text": "what voices are there",
-       "handler": "voice",
-       "path": "fast"
-      },
-      {
-       "text": "let me hear Norman's voice",
-       "handler": "voice",
-       "path": "fast"
-      },
-      {
-       "text": "switch to Norman's voice",
-       "handler": "voice",
-       "path": "fast",
-       "note": "changes this room's voice"
-      }
-     ]
-    }
-   ],
-   "more": {
-    "text": "More detail",
-    "target": "doc:docs/FAQ.md#which-voice-does-domovoi-speak-with-and-can-i-fix-how-it-says-a-word"
-   }
-  },
-  {
-   "id": "connect",
-   "topic": "your-phone",
-   "title": "Get the app and connect",
-   "subtitle": "from your own server",
-   "keywords": [
-    "install",
-    "apk",
-    "connect",
-    "pair",
-    "household token",
-    "server",
-    "qr"
-   ],
-   "blocks": [
-    {
-     "type": "p",
-     "text": "The Domovoi app runs on Android 8.0 or newer, older 32-bit phones included. It comes from your own server; no store is needed."
-    },
-    {
-     "type": "label",
-     "role": "how",
-     "text": "How to"
-    },
-    {
-     "type": "list",
-     "ordered": true,
-     "items": [
-      {
-       "text": "On the dashboard, [Settings → Phones & browsers → Get the Domovoi app](route:settings/phones-and-browsers) shows a QR code. If it says the app isn't on the server yet, ask whoever set up Domovoi to press **Download the app to this server**."
-      },
-      {
-       "text": "Scan the code with the phone's camera and install. Android asks you to allow installs from your browser once."
-      },
-      {
-       "text": "Open Domovoi. Tap **connect** at the top, pick your server (it scans your Wi-Fi), and press **trust this server**. Can't see it? Use **add manually** with the dashboard's address."
-      },
-      {
-       "text": "**pair this phone**: type the household token. An admin finds it in [Settings → Phones & browsers → Household token](route:settings/phones-and-browsers)."
-      }
-     ]
-    },
-    {
-     "type": "p",
-     "text": "Switch or forget a server from the server name at the top, or in [Settings → Phones & browsers](route:app/connection).",
-     "only": "app"
-    },
-    {
-     "type": "label",
-     "role": "wrong",
-     "text": "If something's wrong"
-    },
-    {
-     "type": "p",
-     "text": "\"App not installed\" means a 32-bit phone; take the 32-bit app from the same page."
-    }
-   ],
-   "more": {
-    "text": "More detail",
-    "target": "doc:docs/ANDROID_COMPATIBILITY.md"
-   }
-  },
-  {
-   "id": "phone-music",
-   "topic": "your-phone",
-   "title": "Music on the phone",
-   "subtitle": "here or in a room, saved offline",
-   "keywords": [
-    "offline",
-    "download",
-    "save to device",
-    "player",
-    "your device",
-    "add folder"
-   ],
-   "blocks": [
-    {
-     "type": "p",
-     "text": "**Play here** plays on the phone; **play in room** plays in a room."
-    },
-    {
-     "type": "label",
-     "role": "how",
-     "text": "How to"
-    },
-    {
-     "type": "list",
-     "ordered": false,
-     "items": [
-      {
-       "text": "Save a song, episode or video to the phone with **save to device** (or **save**). Files go to Downloads/Domovoi and play with no server."
-      },
-      {
-       "text": "Save a book with **save to phone** on its page. The size shows first. Books stay inside the app, play with their chapters with no server, and keep one place in step with the server. A save that stops when you leave home finishes by itself when the server is in reach again."
-      },
-      {
-       "text": "Music, Videos, Audiobooks and Files switch between the server and **your device**. From your device you can upload to the server. In Files, **add folder** shows a folder of the phone's own."
-      }
-     ]
-    }
-   ],
-   "more": {
-    "text": "More detail",
-    "target": "doc:docs/FAQ.md#can-i-save-music-podcasts-or-audiobooks-to-my-phone-or-computer"
-   }
-  },
-  {
-   "id": "phone-chat",
-   "topic": "your-phone",
-   "title": "Chat and the chat mic",
-   "subtitle": "type, talk, send photos and documents",
-   "keywords": [
-    "chat mic",
-    "talk",
-    "push to talk",
-    "photo",
-    "heic",
-    "picture",
-    "document",
-    "pdf"
-   ],
-   "blocks": [
-    {
-     "type": "p",
-     "text": "**Chat** holds your chats with Domovoi: those **on home server** (see [Chat](node:chat)), shared with the household, and those **on this phone** (the assistant, below). Each chat shows where it runs, and a new one starts where you chatted last."
-    },
-    {
-     "type": "p",
-     "text": "Chat opens on your chats, pinned ones first, then the most recent; type in **Message Domovoi…** at the bottom to start a new one. A chat is named by its first words, then Domovoi gives it a short title after the first reply; a name you give it stays."
-    },
-    {
-     "type": "label",
-     "role": "how",
-     "text": "How to"
-    },
-    {
-     "type": "list",
-     "ordered": false,
-     "items": [
-      {
-       "text": "Long-press a chat (or its **chat actions** button) to **rename**, **pin** (pins stay on this phone), **archive**, **share** or **delete** it; swipe to archive. Archived chats are under **archived** at the end of the list."
-      },
-      {
-       "text": "**search chats** finds words in titles and messages, in both kinds of chat."
-      },
-      {
-       "text": "Long-press a reply to **copy**, **share** or **try again**."
-      },
-      {
-       "text": "A line saying **earlier messages are beyond what Domovoi can keep in mind** marks where the model stops seeing the older part of a long chat."
-      },
-      {
-       "text": "Tap **talk** to speak a message: **hold to talk**, release to send, slide away to cancel. Up to 30 seconds."
-      },
-      {
-       "text": "\"my name is …\" in the chat mic teaches Domovoi your voice from this phone."
-      },
-      {
-       "text": "**attach image**: up to 4 pictures. Phone photos in HEIC are turned into a JPEG on the phone first (Android 9 or newer), without their location."
-      },
-      {
-       "text": "**attach a document** (in a chat on this phone, under **+**): a PDF, Word, OpenDocument, Excel, CSV, text or markdown file, then ask about it. In a chat **on this phone** it is read on the phone and stays there. The answer lists the pages it came from; tap one to see the passage (a PDF shows the page itself)."
-      },
-      {
-       "text": "A PDF needs Android 15 (or 12 to 14 with the PDF update) to be read on the phone. Otherwise **ask the home server** reads its text and sends it back; nothing is kept there."
-      },
-      {
-       "text": "In [Files](route:files), the question mark on a document starts a chat about it: a file on this phone in a phone chat, a file in the home server's Documents in a home-server chat."
-      },
-      {
-       "text": "**Drafts** (a resume, a cover letter, a letter) work in both kinds of chat, as in [Chat](node:chat). **open** shows the draft full screen with the message box below it, so \"shorter\" works while you look at it; its bar has the versions, **changes**, **edit**, **share**, **print** and **read aloud**. In a chat **on this phone** a draft stays on the phone: **save** puts it in **Chat documents**, which [Files](route:files) lists with the phone's own files; **save a copy to…** puts a copy anywhere you pick; **send to home** (when your home server is in reach) puts it in the home server's Documents → From Chat. **print** uses the phone's own print dialog. In a chat **on home server**, save and print go through the home server, as on the dashboard."
-      },
-      {
-       "text": "**Summarize a long document:** it is read in parts, with \"reading part 3 of 8 · about 1 min left\" and **stop**. Stop keeps what was read; **carry on** reads the rest. Leave Chat and it pauses at the end of the part, then carries on when you come back."
-      },
-      {
-       "text": "**use home server** appears only when your home server is measured to be faster than this phone for that document (reading all of it, plus sending it). It sends the file to be read there; nothing is kept there. If the server can't finish, Chat says so and offers **read it on this phone**."
-      }
-     ]
-    }
-   ],
-   "more": {
-    "text": "More detail",
-    "target": "doc:docs/FAQ.md#can-i-send-pictures-in-chat"
-   }
-  },
-  {
-   "id": "assistant",
-   "topic": "your-phone",
-   "title": "The assistant",
-   "subtitle": "no server needed",
-   "keywords": [
-    "assistant",
-    "offline",
-    "no server",
-    "airplane"
-   ],
-   "preview": true,
-   "blocks": [
-    {
-     "type": "p",
-     "text": "A Domovoi that runs on the phone itself: type or talk, in airplane mode too. It knows the time and date, and it answers questions. It also knows the phone: what's playing, the battery, free space, Wi-Fi or mobile data, your next alarm, Do Not Disturb, which phone and Android this is, and which songs, videos and saved books are on it. It can't look things up online. House things (rooms, house timers, the household calendar) are in your home server chats."
-    },
-    {
-     "type": "p",
-     "text": "It also does things on the phone. \"Set a timer for 10 minutes\", \"wake me at 6:30\" or \"set an alarm for 7 every weekday\" go to the phone's Clock app, and it asks first: tap **set**, or in a voice chat say yes (any \"no\", \"wait\" or \"cancel\" stops it). \"Show my timers\" opens the Clock app. \"Play some jazz\", \"shuffle my music\", \"pause\", \"next\", \"go back\", \"stop\", \"set a sleep timer for 20 minutes\" and \"continue my book\" happen at once, with **undo** under the reply for a few seconds; saying \"undo\" works too. \"Play the beach video\" asks first, then plays it. Music in the house's rooms and the house's timers are in your home server chats."
-    },
-    {
-     "type": "p",
-     "text": "\"Text Sam\", \"call Mom\", \"email Alex\", \"directions to the station\", \"add lunch tomorrow at noon to my calendar\", \"open a link\" and \"share this\" show a card first; a tap opens the app that does it, and you finish there. Your calendar, where you are and calling people by name each ask for permission the first time, with the reason; say no and it simply says it can't, and never asks again. Everything is read on the phone and never sent anywhere; a phone chat never asks your home server."
-    },
-    {
-     "type": "label",
-     "role": "how",
-     "text": "How to"
-    },
-    {
-     "type": "p",
-     "text": "**Chat** → **new chat** → **on this phone** → **Set up the assistant on this phone** → **download** (the button shows the size, about 2.6 GB). It waits for Wi-Fi unless you **allow mobile data**."
-    },
-    {
-     "type": "p",
-     "text": "It needs a 64-bit phone with 8 GB of memory or more. To report a bad reply, long-press it."
-    },
-    {
-     "type": "p",
-     "text": "**Ask about a photo:** on phones whose graphics chip can run the model's photo reader, the **+** left of the message box offers **take a photo** and **choose a photo** (and **a document**). One photo per question; type a question or just send it (\"what's in this photo?\"). The photo is read on the phone, isn't saved to your gallery, and is gone once Domovoi has answered: the chat keeps only a **photo (not kept)** mark. The camera asks for its permission the first time. Phones without the buttons can't do it quickly enough; a home-server chat's **attach image** still works there. **A letter or a bill:** ask \"what does this letter say?\" with a photo of it, and the answer explains it in plain words, with its dates and amounts quoted straight from the letter. The photo isn't kept; the text read from it is kept with the answer, so you can ask about the letter again, and goes when you delete the chat. On a phone that can't read photos itself, **+** offers **a letter for the home server: take a photo** or **choose a photo** when a paired home server has its picture model: your home server reads the photo and keeps nothing, and the explanation is written on this phone. **Export all phone chats** (in a phone chat, the model settings button) saves them as Markdown and JSON where you pick. Its chats stay on the phone, marked **on this phone**; away from home they are the only ones Chat lists. They never mix with your home server's chats."
-    }
-   ],
-   "more": {
-    "text": "More detail",
-    "target": "doc:android/README.md#on-device-assistant"
-   }
-  },
-  {
-   "id": "phone-as-room",
-   "topic": "your-phone",
-   "title": "This phone as a room",
-   "subtitle": "room mode, on this phone",
-   "keywords": [
-    "room mode",
-    "this phone"
-   ],
-   "preview": true,
-   "alias_of": "phone-room",
-   "blocks": [
-    {
-     "type": "p",
-     "text": "See [An old phone or tablet as a room](node:phone-room). A phone you also use every day needs a screen lock. While it is a room, the rest of the app is locked."
-    }
-   ]
-  },
-  {
-   "id": "app-settings",
-   "topic": "your-phone",
-   "title": "App settings and updates",
-   "subtitle": "bar, voice, new versions",
-   "keywords": [
-    "settings",
-    "phone bar",
-    "update",
-    "new version",
-    "privacy",
-    "about"
-   ],
-   "blocks": [
-    {
-     "type": "list",
-     "ordered": false,
-     "items": [
-      {
-       "text": "[Settings → App layout](route:settings/app-layout): pick 2 to 5 tabs for the bottom of the screen. Home always comes first."
-      },
-      {
-       "text": "[Settings → Voices](route:app/voice): how this phone speaks."
-      },
-      {
-       "text": "The app's Settings has the dashboard's groups and names. What only the dashboard can change (greetings, wake words, models, Advanced, …) says so there, with **Open on the dashboard**."
-      },
-      {
-       "text": "**Updates:** when your server has a newer app, Home shows \"Domovoi … is available from your server\". Tap **get the update**. [Settings → About & updates](route:settings/about) → **App updates** says which version you have. A Google Play install updates itself."
-      },
-      {
-       "text": "[Settings → About & updates](route:settings/about) → **Privacy** says what the app keeps."
-      }
-     ]
-    }
-   ],
-   "more": {
-    "text": "More detail",
-    "target": "doc:docs/PRIVACY_POLICY.md"
-   }
-  },
-  {
    "id": "music",
    "topic": "music-and-media",
    "title": "Music and room queues",
@@ -2309,7 +1562,7 @@
        "only": "dashboard"
       },
       {
-       "text": "[Music](route:music/queue) → **room queue**: **play next**, **move up** and **move down** on each song.",
+       "text": "[Music](route:music/queue) → **room queue**: **move up**, **move down** and **remove from queue** on each song. **play next** on a song in the library puts it next in the room's queue.",
        "only": "app"
       },
       {
@@ -2412,7 +1665,7 @@
     },
     {
      "type": "p",
-     "text": "[Podcasts](route:podcasts) → **subscribe**: search by name, or paste a feed (**by RSS URL**). New episodes download by themselves only if your internet answer is Yes."
+     "text": "[Podcasts](route:podcasts) → **subscribe**: search by name, or paste a feed (**by RSS URL**). New episodes download by themselves only if your internet answer is Yes. **App:** an episode's **save to this device** keeps it on the phone."
     },
     {
      "type": "label",
@@ -2477,7 +1730,7 @@
     },
     {
      "type": "p",
-     "text": "[Audiobooks](route:audiobooks) → **play**; **reindex** after adding books. In the app, open a book for its chapters and **save to phone**; **add** sends books from the phone to the server."
+     "text": "[Audiobooks](route:audiobooks) → **play**; **reindex** after adding books. In the app, open a book for its chapters and **save to phone**; the upload button (**add to server**) sends books from the phone to the server."
     },
     {
      "type": "label",
@@ -2624,24 +1877,24 @@
   },
   {
    "id": "chat",
-   "topic": "chat-files-calendar",
+   "topic": "chat-and-help",
    "title": "Chat",
-   "subtitle": "type to Domovoi, pictures and documents too",
+   "subtitle": "type to Domovoi, at home or on the phone",
    "keywords": [
     "chat",
     "text",
     "pictures",
     "vision",
     "images",
-    "document",
-    "pdf",
-    "word",
-    "ask about"
+    "screenshot",
+    "new chat",
+    "rename",
+    "archive"
    ],
    "blocks": [
     {
      "type": "p",
-     "text": "Type to Domovoi. Answers come from the models on your server."
+     "text": "Type to Domovoi in [Chat](route:chat). A chat on the dashboard runs on your home server, with its models, and everyone in the household can see it. The app also has chats that run on the phone itself: see [Chat on the phone](node:phone-chat)."
     },
     {
      "type": "label",
@@ -2649,54 +1902,32 @@
      "text": "How to"
     },
     {
-     "type": "p",
-     "text": "[Chat](route:chat) → **new chat**. Press the paperclip to add up to 4 pictures (PNG, JPEG, GIF, WebP or BMP, 20 MB each). Beside each chat in the list: rename, archive and delete; **search chats** above the list, and **archived** at its end."
-    },
-    {
-     "type": "p",
-     "text": "**Ask about a document:** the paperclip also takes a PDF, Word (.docx), OpenDocument (.odt), Excel (.xlsx), CSV, text or markdown file, up to 100 MB. Ask what it says. The answer names the pages or sections it came from; press one to see the passage, or to open a PDF at that page. If the document doesn't say, Domovoi answers \"I couldn't find that in the document\" instead of guessing. In [Files](route:files) → Documents, **Ask** on a file starts a chat about it."
-    },
-    {
-     "type": "p",
-     "text": "**Write a resume or a letter:** ask for one (\"write a cover letter for the warehouse job at Acme\", \"draft a letter to my landlord about the heater\"). Domovoi writes a draft, shown as a card with **open**, **save**, **download** and **print**. Then say what to change (\"make the letter shorter\", \"make it more formal\", or just \"shorter\" as your next message), or type it in the card's **revise** box: each change is a new version, and the reply says what changed. Every version is kept. A message about something else (\"turn on the kitchen lights\") is answered as usual and leaves the draft alone. A letter taken by voice in a room (\"take a letter to the landlord\", see [Documents, sheets and drawings](node:documents)) is here too, as its own chat."
-    },
-    {
      "type": "list",
      "ordered": false,
      "items": [
       {
-       "text": "**open** shows the draft beside the chat on a wide screen (in its place on a narrow one), with the message box still below it. Pick **v1**, **v2** … to see any version; **changes** marks added words and strikes out removed ones."
+       "text": "[Chat](route:chat) → **new chat**, then type. A chat is named by its first words. After the first reply Domovoi gives it a short title; a name you give it stays."
       },
       {
-       "text": "**edit** lets you change it by hand; saving makes a new version \"edited by you\" (on another device it says \"edited on\" and the device's name). If a change comes in while you edit, you're told, and nothing is lost: every version stays in the version list."
+       "text": "Beside each chat: **rename**, **archive** and **delete** (the bin). **search chats** is above the list, and **archived** is at its end."
       },
       {
-       "text": "**save** puts it in [Files](route:files) → Documents → **From Chat**: a resume or cover letter as **.docx** (best for job sites), a letter as **PDF**; the other format is one press away. After saving, Domovoi reads the file back and checks every word is there in order: **text readable · single column** means a job site's applicant tracking system can read it too."
+       "text": "**Pictures:** the paperclip adds up to 4 to a message (PNG, JPEG, GIF, WebP or BMP, 20 MB each). You can paste a screenshot too. The vision model reads them on your server."
       },
       {
-       "text": "**print** (or typing \"print it\") opens the Print dialog with a preview; nothing prints until you press **Print**."
+       "text": "**Documents:** the paperclip takes those too, up to 4 a message. See [Ask about a document](node:ask-document)."
       },
       {
-       "text": "Only the draft, not the whole chat, goes to the model for each change. With AI chat and questions turned off, nothing new is drafted, but drafts already written can still be opened, edited, saved and printed."
+       "text": "**Drafts and letters:** Chat can write drafts for you. Read them before you send them; it can get details wrong. See [Write a draft](node:drafts) and [Letters](node:letters)."
+      },
+      {
+       "text": "**Online:** Domovoi can look things up, after asking. See [Look things up](node:lookups)."
+      },
+      {
+       "text": "A home-server chat's paperclip offers **a picture** and **a document (PDF, Word, sheet, text)**. The app turns HEIC phone photos into JPEG first.",
+       "only": "app"
       }
      ]
-    },
-    {
-     "type": "p",
-     "text": "**Look things up:** say \"look up …\", \"what does this page say: https://…\", or ask something Domovoi doesn't know. It searches its own manual and your offline library first, without asking. Before anything goes online it shows a card with the exact words and where they go: **Allow once**, **Allow in this chat** or **Not now**. The chip at the top of a chat says whether it may go online; chats that did show a globe. The answer lists what it read (Wikipedia's with \"CC BY-SA 4.0\"), and says \"I couldn't find that\" when what it read doesn't say. [Settings → Search](route:settings/search) {admin} has **Always allow internet** (off to start), the order of the sources, and **Use your own search** (your own SearXNG, or a Brave Search key)."
-    },
-    {
-     "type": "p",
-     "text": "**Summarize a long document:** ask for a summary and Domovoi reads it in parts, then combines them. The reply's place shows \"reading part 3 of 8 · about 1 min left\" (the time comes from how fast your server has been) with **stop**. Stop keeps what was read (\"Summary of pages 1-9 (stopped)\"), and **carry on** reads the rest. You can leave the page: the summary is there when you come back. A question asked by voice while it reads goes next, after the part being read (a few seconds on a GPU, up to about a minute on a server without one). Each point cites a page; a part Domovoi couldn't cite anything from is named under the summary. After a server restart the chat asks \"carry on?\" before it reads any more. One summary reads at a time per chat, and two in the house."
-    },
-    {
-     "type": "p",
-     "text": "**What does this letter say?** Attach a photo of a letter or a bill (one page per photo) and ask \"what does this letter say?\" or \"what do I need to do?\". The answer says who it's from, what it's about, the deadlines, the amounts, the reference numbers and what to do next. Dates and amounts are quoted straight from the letter: under **Dates in this letter** and **Amounts in this letter**, each is shown inside the letter's own sentence, as Domovoi read it from the photo, with the figure in bold. Domovoi's own words never give a figure. A photo that was misread to begin with can still be wrong, so check what matters on the letter itself. Press **photo 1** under the answer to see the text Domovoi read. A blurry photo or handwriting gets a heads-up first. If a letter has text aimed at an AI assistant (\"ignore previous instructions…\"), Domovoi doesn't follow it and says so: genuine letters don't do this. Everyone in the house can see a home-server chat, so a phone chat is the private place for personal mail. Real handwriting hasn't been measured yet, and on a home server without a graphics card a letter takes about 2 minutes."
-    },
-    {
-     "type": "p",
-     "text": "The picture button is **attach image**, and the app also takes HEIC photos. See [Chat and the chat mic](node:phone-chat).",
-     "only": "app"
     },
     {
      "type": "label",
@@ -2708,31 +1939,13 @@
      "ordered": false,
      "items": [
       {
-       "text": "\"Pictures need the vision model\": ask whoever set up Domovoi to install it in [Settings → Models](route:settings/models)."
+       "text": "\"Pictures need the vision model\": an admin can install it in [Settings → Chat & AI → Models](route:settings/models)."
       },
       {
-       "text": "Chat isn't there, or says \"chat is off\": AI chat and questions are off for your home. An admin can turn them on in [Settings → Models](route:settings/models)."
+       "text": "Chat isn't there, or says \"chat is off\": AI chat and questions are off for your home. See [When AI is off](node:ai-off)."
       },
       {
-       "text": "A HEIC phone photo is refused on the dashboard: send it from the app, which converts it."
-      },
-      {
-       "text": "An old .doc or .rtf file: save it as .docx or PDF, then attach it again."
-      },
-      {
-       "text": "\"pictures of text (scanned)\": scanned pages aren't searched yet."
-      },
-      {
-       "text": "\"set to stay off the internet\": your home's internet answer is No ([Settings → Internet](route:settings/internet)); only the manual and the offline library are searched."
-      },
-      {
-       "text": "\"Brave Search refused your key\": check the key in [Settings → Search](route:settings/search); the answer came from Wikipedia meanwhile."
-      },
-      {
-       "text": "\"Points that span parts may be missed\": a long summary is made part by part. Ask about the specific thing to have it found wherever it is."
-      },
-      {
-       "text": "\"Domovoi left out a sentence of its own that named a date, an amount or a number\": Domovoi's explanation never gives figures itself; look for them in the letter's sentences quoted below it."
+       "text": "The dashboard refuses a HEIC phone photo: send it from the app, which converts it."
       }
      ]
     },
@@ -2743,7 +1956,7 @@
     },
     {
      "type": "p",
-     "text": "Voice chat mode, a spoken conversation in a room, is an early experiment and off unless whoever set up Domovoi turned it on."
+     "text": "Voice chat mode, a spoken conversation in a room, is an early experiment. It is off unless whoever set up Domovoi turned it on."
     },
     {
      "type": "label",
@@ -2769,8 +1982,96 @@
    }
   },
   {
+   "id": "lookups",
+   "topic": "chat-and-help",
+   "title": "Look things up",
+   "subtitle": "online only when you say yes",
+   "keywords": [
+    "look up",
+    "search",
+    "internet",
+    "wikipedia",
+    "web",
+    "allow once",
+    "always allow internet",
+    "searxng",
+    "brave",
+    "sources",
+    "kiwix"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "Domovoi can look up what its own models don't know. It asks before anything leaves your home."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "In a chat, ask \"look up …\", \"what does this page say: https://…\", or a question Domovoi doesn't know."
+      },
+      {
+       "text": "It searches its own manual and your offline library first (the Kiwix plugin, if it's installed), without asking."
+      },
+      {
+       "text": "Before anything goes online, a card shows the exact words and where they go: **Allow once**, **Allow in this chat** or **Not now**."
+      },
+      {
+       "text": "The chip at the top of a chat says **internet off**, **internet on for this chat** or **internet always on**. Chats that went online show a globe in the list."
+      },
+      {
+       "text": "Under the answer, Domovoi lists what it read, by title and site. Wikipedia's carry \"CC BY-SA 4.0\". When what it read doesn't say, the answer is \"I couldn't find that\"."
+      },
+      {
+       "text": "A page's words can't make Domovoi do anything. It reads them as text only."
+      },
+      {
+       "text": "{admin} [Settings → Chat & AI → Search](route:settings/search) has **Always allow internet** (off to start; on, chats don't ask), **Where Domovoi looks** (the order of the sources), and **Use your own search**: your own SearXNG, or a Brave Search key. Brave charges after a free monthly allowance. A saved key is never shown again. Your own SearXNG's address must start with `https://`, unless it is on your home network."
+      },
+      {
+       "text": "A phone chat asks the same way. At home it looks things up through your home server. Away from home it asks Wikipedia itself, or your own search. A phone chat's **model settings** has these under **Looking things up**.",
+       "only": "app"
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "wrong",
+     "text": "If something's wrong"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "\"set to stay off the internet\": your home's internet answer is No ([Settings → Privacy → Internet](route:settings/internet)). Only the manual and the offline library answer."
+      },
+      {
+       "text": "\"Brave Search refused your key\": check the key in [Settings → Chat & AI → Search](route:settings/search). Wikipedia answered meanwhile."
+      },
+      {
+       "text": "\"Use https:// unless the search is on your home network\": your own search's address is on the internet, so it needs `https://`."
+      },
+      {
+       "text": "By voice, \"I can't look that up with AI turned off\": see [When AI is off](node:ai-off)."
+      }
+     ]
+    }
+   ],
+   "more": {
+    "text": "More detail",
+    "target": "doc:docs/INTERNET.md"
+   }
+  },
+  {
    "id": "good-and-not",
-   "topic": "chat-files-calendar",
+   "topic": "chat-and-help",
    "title": "What Domovoi is good and not so good at",
    "subtitle": "where to trust the answers, and where to check",
    "keywords": [
@@ -2812,10 +2113,10 @@
        "text": "**Rewriting a whole document** (not reliable): Rewriting, translating or proofreading a longer document: the model sees at most about 4,800 characters of it in one reply, so a whole-document rewrite leaves most of it out. Domovoi gives a heads-up first. Instead: Ask for one part at a time (\"rewrite the second paragraph\"). *(E-HEADSUP (retrieval), 2026-10-21, the app's own search, on our test documents)*"
       },
       {
-       "text": "**Comparing parts of a long document** (okay): Comparing parts of a short document: all of it fits in what Domovoi reads for one question. *(documents plan D1, 2026-10-21, phone and home server)*"
+       "text": "**Comparing parts of a document** (okay): Comparing parts of a short document: all of it fits in what Domovoi reads for one question. *(documents plan D1, 2026-10-21, phone and home server)*"
       },
       {
-       "text": "**Comparing parts of a long document** (good): Comparing far-apart parts of a long document: both parts were among the passages Domovoi read in 93% of our test questions. *(E-HEADSUP (retrieval), 2026-10-21, the app's own search, on our test documents)*"
+       "text": "**Comparing parts of a document** (good): Comparing far-apart parts of a long document: both parts were among the passages Domovoi read in 93% of our test questions. *(E-HEADSUP (retrieval), 2026-10-21, the app's own search, on our test documents)*"
       },
       {
        "text": "**Exact sums, averages and dates** (okay): A total or average the document states (a spreadsheet's column totals are worked out by Domovoi when it reads the file) is quoted, not calculated. *(documents plan D1, 2026-10-21, phone and home server)*"
@@ -2824,7 +2125,7 @@
        "text": "**Exact sums, averages and dates** (not tested yet): Adding up, averaging or counting days between numbers spread over a document: the model's arithmetic isn't checked. With calculate exactly, the model only lists the numbers with their pages; the app checks each one is on its page as that whole number, reads it only in forms it knows for certain (a sign, a currency from a short list, the document's own separators, a scale like \"1.2k\" or \"1.2 million\"), and does the sum from the entries it found. When a number isn't on its page as listed, or it, its unit or a date's day and month can't be read for certain (a footnote mark, \"per month\", a range, an unknown currency), it names it and works nothing out. Domovoi gives a heads-up first. Instead: Use calculate exactly: the model lists the numbers with their pages and the app adds them up. *(documents plan D3, 2026-10-21, phone and home server)*"
       },
       {
-       "text": "**Long documents** (slow): Long documents on a phone's CPU: one part took 24 s at about 2,000 tokens and 69 s at about 6,000, so a 30-page summary takes a few minutes. The heads-up comes when a summary will take over 3 minutes here, or when your home server would be faster. Instead: Ask about the specific thing you need: it is found in seconds, wherever it is. *(D0 bench, 2026-10-21, Galaxy Z Fold (Gemma 4 E2B))*"
+       "text": "**Long documents** (slow): Long documents on a phone's CPU: one part took 24 s at about 2,000 tokens and 69 s at about 6,000, so a 30-page summary takes a few minutes. The heads-up comes when a summary will take over 3 minutes here. Instead: Ask about the specific thing you need: it is found in seconds, wherever it is. *(D0 bench, 2026-10-21, Galaxy Z Fold (Gemma 4 E2B))*"
       },
       {
        "text": "**Long documents** (okay): Long documents on a phone's GPU: one part took 7.1 s at about 2,000 tokens and 13 s at about 6,000. *(D0 bench, 2026-10-21, Galaxy Z Fold (Gemma 4 E2B))*"
@@ -2873,8 +2174,741 @@
      "text": "How to"
     },
     {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "A **heads-up** is a short card that comes before an answer Domovoi has been measured to be weak at. It names the weakness and offers what works there: - rewriting, translating or proofreading a document over about two pages: **try anyway**, or ask for one part at a time; - a sum, an average, a difference, or the days between two dates, from numbers spread through a document: **calculate exactly** or **try anyway**; - a summary that will take more than 3 minutes here: **go ahead**; - a summary of a document with scanned pages: **go ahead**; - a document in a language other than English or Spanish: **try anyway**; - a blurry photo in a home-server chat: **choose another** or **send anyway**."
+      },
+      {
+       "text": "Each kind shows once per chat. **don't warn me about this again** silences that kind on this browser or phone."
+      },
+      {
+       "text": "[Settings → Chat & AI → Chat](route:settings/chat), **heads-up before shaky results**, turns them all off on this browser or phone. **warn again** brings back one you silenced. With heads-ups off, exact sums and scanned pages still get a one-line note under the answer."
+      }
+     ]
+    },
+    {
      "type": "p",
-     "text": "A heads-up names the weakness and offers what works here: **calculate exactly** (the app adds up the numbers the model lists, each checked against its page, and says so plainly when it can't read one for certain), **go ahead** or **try anyway**. **don't warn me about this again** silences that kind on this device; [Settings → Chat](route:settings/chat) (under Chat & AI) turns them all off. With them off, the two that guard against a wrong answer you can't see coming (exact sums and scanned pages) become a one-line note under the answer instead."
+     "text": "**Calculate exactly**"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "The model only lists the numbers it found, with their pages. Domovoi checks each one on its page and does the sum itself. The answer says so: \"Worked out by the app from the numbers listed, not by the model.\""
+      },
+      {
+       "text": "It works out only what it found for your question, and says how many (\"from the 3 entries I found\"). Check that's all of them."
+      },
+      {
+       "text": "**It refuses rather than guesses.** It works nothing out, and says why in one sentence, when: - it can't be sure how to read a number; - a number isn't on its page exactly as listed; - one number may have been listed twice from the same place; - a date's day and month could be either way round; - the numbers are in different units or currencies."
+      },
+      {
+       "text": "A total the document states itself, such as a bill's \"amount due\", is quoted, not calculated."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "ai-off",
+   "topic": "chat-and-help",
+   "title": "When AI is off",
+   "subtitle": "what still works without the AI models",
+   "keywords": [
+    "ai off",
+    "no ai",
+    "without ai",
+    "turn off ai",
+    "ai features",
+    "optional",
+    "commands only",
+    "set up for home commands"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "**AI chat and questions are optional.** An admin can turn them off for the whole home. Off, nothing in Domovoi asks a language model."
+    },
+    {
+     "type": "p",
+     "text": "**Still works**"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "Voice commands, said the usual way: timers, reminders and alarms, the clock and the calendar, music in every room, podcasts and audiobooks, announcements and drop-ins, notes and \"remember that …\", the news headlines, the Wi-Fi check, printing and scanning."
+      },
+      {
+       "text": "Hearing you, the voices, the wake word, and knowing who's speaking."
+      },
+      {
+       "text": "The calculator, for the phrasings it knows (\"what's 15 percent of 80\")."
+      },
+      {
+       "text": "Every page of the dashboard and the app except home-server Chat: music, files, documents, the calendar, people, settings."
+      },
+      {
+       "text": "Help: the **?** panel and \"how do I …?\" answer from this manual, with no model."
+      },
+      {
+       "text": "Chats on a phone that can run its own model: they don't use the server's."
+      },
+      {
+       "text": "An offline library (the Kiwix plugin) still answers by voice, from the article's first sentences."
+      },
+      {
+       "text": "Drafts already written can be opened, edited, saved and printed."
+      },
+      {
+       "text": "\"read me the lease\": reading a document aloud needs no model."
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "**Stops**"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "Questions, jokes and stories. Domovoi says \"I'm set up for home commands\" and suggests \"what can you do\"."
+      },
+      {
+       "text": "Weather, scores, prices and \"are you sure?\": \"I can't look that up with AI turned off.\""
+      },
+      {
+       "text": "A command said an unusual way (\"could you start a five minute countdown for me\"). Say it the usual way: \"set a timer for 5 minutes\"."
+      },
+      {
+       "text": "Chat on the dashboard, and home-server chats in the app. No pictures, screenshots, documents or letters are read there. A long summary stops at its next part, keeping what it read."
+      },
+      {
+       "text": "The news briefing's summary (the headlines are still read), memory suggestions, titles for new chats, heads-ups, and voice chat mode."
+      },
+      {
+       "text": "New drafts. \"take a letter\" says it needs the AI features, before you start."
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to",
+     "admin": true
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "Turn it off or on: [Settings → Chat & AI → Models](route:settings/models), **AI chat and questions**. Turning it on shows the download size first (about 6.4 GB, or 9.1 GB on a server with 24 GB of memory or more), then downloads the models."
+      },
+      {
+       "text": "Both installers ask \"Include AI chat and questions?\". No skips those downloads, and turning it on later needs no reinstall."
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "what can you do",
+       "handler": "help",
+       "path": "fast"
+      }
+     ]
+    }
+   ],
+   "more": {
+    "text": "More detail",
+    "target": "doc:docs/CPU_HOST.md#the-short-version"
+   }
+  },
+  {
+   "id": "help-desk",
+   "topic": "chat-and-help",
+   "title": "Asking Domovoi for help",
+   "subtitle": "ask it, show it, report it",
+   "keywords": [
+    "help",
+    "how do i",
+    "ask domovoi",
+    "screenshot",
+    "report a problem",
+    "diagnostics",
+    "send the steps",
+    "question mark"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "Domovoi answers questions about itself: from this manual, its FAQ and troubleshooting guide, and the help of the plugins you installed. It answers only from what it finds. When nothing covers the question, it says \"The manual doesn't cover that.\" rather than guessing."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "Press **?** at the top of any page. Search the help, or press **ask Domovoi** to start a chat called \"Help: …\".",
+       "only": "dashboard"
+      },
+      {
+       "text": "An error message has **ask Domovoi about this**: the help opens with the error's code and the page you were on.",
+       "only": "dashboard"
+      },
+      {
+       "text": "In a chat, ask \"how do I …?\" or \"why is the kitchen offline?\". Domovoi also reads what its own checks show: rooms that are offline and why, plugins, its containers, and the last update (its details only for an admin)."
+      },
+      {
+       "text": "**Something on your screen?** Paste or attach a screenshot in a chat on the home server. The vision model reads it on your server; it never leaves your home."
+      },
+      {
+       "text": "A chat on this phone answers from the app's own copy of the manual, offline. It can't read screenshots: use a home-server chat for those.",
+       "only": "app"
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "how do I add a room",
+       "handler": "help_desk",
+       "path": "fast"
+      },
+      {
+       "text": "how do I change the wake word",
+       "handler": "help_desk",
+       "path": "fast"
+      },
+      {
+       "text": "how do I add a printer",
+       "handler": "help_desk",
+       "path": "fast"
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "After the short answer, Domovoi asks \"Want me to send the steps to your phone?\" Say yes, and they arrive as a chat called \"Help: …\" on the phones marked as yours ([Settings → Rooms & devices → Phones & browsers](route:app/connection), **This phone belongs to**, in the app). If Domovoi doesn't know your voice, it asks who to send them to. It never sends them to every phone."
+    },
+    {
+     "type": "label",
+     "role": "wrong",
+     "text": "If something's wrong"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "**AI chat and questions are off**: help still searches the manual and the docs, with no model, and screenshots can't be read. See [When AI is off](node:ai-off)."
+      },
+      {
+       "text": "**Help can't solve it**: **report a problem**, in the **?** panel, builds a summary of your Domovoi with no passwords, codes, addresses or names. Read it, then copy or save it and post it yourself, on GitHub Discussions or Discord. Nothing is sent for you."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "ask-document",
+   "topic": "documents-and-letters",
+   "title": "Ask about a document",
+   "subtitle": "attach a file, ask what it says",
+   "keywords": [
+    "document",
+    "pdf",
+    "word",
+    "docx",
+    "odt",
+    "excel",
+    "csv",
+    "attach a document",
+    "ask about",
+    "sources",
+    "pages",
+    "couldn't find"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "Attach a document to a chat and ask what it says. Domovoi answers from the document, and shows you where."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "In a chat, the paperclip takes a PDF, Word (.docx), OpenDocument (.odt), Excel (.xlsx), CSV, text or markdown file: up to 100 MB each, and up to 4 a message."
+      },
+      {
+       "text": "In a home-server chat, the paperclip's **a document (PDF, Word, sheet, text)**; in a phone chat, **a document** under **+**.",
+       "only": "app"
+      },
+      {
+       "text": "Ask what you want to know. The answer names the pages or sections it came from; press one to see the passage, or to open a PDF at that page."
+      },
+      {
+       "text": "When the document doesn't say, Domovoi answers \"I couldn't find that in the document.\" It doesn't guess."
+      },
+      {
+       "text": "In [Files](route:files) → Documents, **Ask** on a document starts a chat about it.",
+       "only": "dashboard"
+      },
+      {
+       "text": "In [Files](route:files), the speech-bubble button on a document (**ask about this document**) does the same. A file on this phone opens a phone chat; a file in the home server's Documents opens a home-server chat.",
+       "only": "app"
+      },
+      {
+       "text": "A very large file: about the first 4 million characters (roughly 1,000 pages) are read, and the attachment says how far it got."
+      },
+      {
+       "text": "In a chat **on this phone**, the document is read on the phone and stays there. Reading a PDF on the phone needs Android 15, or 12 to 14 with the PDF update. Otherwise **ask the home server** reads its text and sends it back, and nothing is kept there.",
+       "only": "app"
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "**In a chat, type**"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "\"when does the lease end?\""
+      },
+      {
+       "text": "\"what does it say about pets?\""
+      },
+      {
+       "text": "\"summarize this\""
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "wrong",
+     "text": "If something's wrong"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "An old .doc or .rtf file: save it as .docx or PDF, then attach it again."
+      },
+      {
+       "text": "\"pictures of text (scanned)\": some pages are scans, and Domovoi can't read those yet. The answer names the pages it skipped. A PDF that is all scan is refused (\"pictures of text (a scan)\"). Save the document from its own program as a PDF with text, or type the part you need."
+      },
+      {
+       "text": "A file that isn't what its name says, or is built to overwhelm a reader, is refused, with a sentence saying why."
+      },
+      {
+       "text": "Documents can't be added while AI chat and questions are off."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "long-documents",
+   "topic": "documents-and-letters",
+   "title": "Summaries of long documents",
+   "subtitle": "read in parts, with stop",
+   "keywords": [
+    "summary",
+    "summarize",
+    "long document",
+    "progress",
+    "carry on",
+    "stop",
+    "use home server"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "Ask for a summary, and Domovoi reads a long document in parts, then puts the parts together."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "Attach the document and ask for a summary."
+      },
+      {
+       "text": "While it reads, the reply shows \"reading part 3 of 8 · about 1 min left\", with **stop**. The time comes from how fast this server or phone has been; until it knows, it shows only the part."
+      },
+      {
+       "text": "**stop** keeps what was read: \"Summary of pages 1-9 (stopped)\". **carry on** reads the rest."
+      },
+      {
+       "text": "Each point names its page. A part Domovoi couldn't cite anything from is named under the summary."
+      },
+      {
+       "text": "You can leave the page; the summary is there when you come back. After a server restart, the chat asks \"carry on?\" before it reads any more. One summary reads at a time in a chat, and two in the house.",
+       "only": "dashboard"
+      },
+      {
+       "text": "A phone chat reads while Chat is open. Leave Chat and it pauses at the end of the part, then carries on when you come back.",
+       "only": "app"
+      },
+      {
+       "text": "**use home server (about N min)** appears only when your home server has been measured faster than this phone for that document, sending it included. The file is read there and deleted once it's read; the summary waits in the server's memory until the phone takes it, and nothing is kept. If the server can't finish, Chat says so and offers **read it on this phone**.",
+       "only": "app"
+      },
+      {
+       "text": "A question asked in a room while a summary reads goes first, after the part being read: a few seconds on a server with a graphics card, up to about a minute on one without."
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "wrong",
+     "text": "If something's wrong"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "\"Points that span parts may be missed\": a long summary is made part by part. Ask about the specific thing, and Domovoi finds it wherever it is."
+      },
+      {
+       "text": "A summary that will take more than 3 minutes gets a heads-up first. See [What Domovoi is good and not so good at](node:good-and-not)."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "drafts",
+   "topic": "documents-and-letters",
+   "title": "Write a draft",
+   "subtitle": "versions, changes, save, print",
+   "keywords": [
+    "draft",
+    "write",
+    "revise",
+    "version",
+    "changes",
+    "edit",
+    "docx",
+    "pdf",
+    "save",
+    "from chat",
+    "print it",
+    "resume",
+    "cover letter"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "Chat can write drafts for you. Read them before you send them; it can get details wrong."
+    },
+    {
+     "type": "p",
+     "text": "Ask for a resume, a cover letter or a letter, and Domovoi shows a draft you change until it's right. Nothing is ever sent: you save it or print it, and send it yourself."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "Ask in a chat: \"write a cover letter for the warehouse job at Acme\", or \"draft a letter to my landlord about the heater\"."
+      },
+      {
+       "text": "The draft shows as a card with **open**, **save** and **download**, and **print** when a printer is set up. **App:** **open**, **save**, **share** and **print**."
+      },
+      {
+       "text": "To change it, say what to change as your next message (\"make it shorter\", \"more formal\", \"mention my forklift licence\"), or type it in the card's box (**change this draft…**) and press **revise**. Each change is a new version, and the reply says what changed. A message about something else is answered as usual and leaves the draft alone."
+      },
+      {
+       "text": "**open** shows the draft beside the chat (full screen on a phone), with the message box still below it. Pick **v1**, **v2** … to see any version. **changes** marks added words and strikes out removed ones."
+      },
+      {
+       "text": "**edit** changes it by hand. **save as v3** keeps that as a new version, marked \"edited by you\". If a change comes in while you're editing, you're told, and nothing is lost."
+      },
+      {
+       "text": "When you ask for a change, a draft keeps its date, address, \"Dear …\" line, sign-off and sections. To change those, say so: \"sign it Alex Smith\", \"address it to the property manager\"."
+      },
+      {
+       "text": "**save** puts it in [Files](route:files) → Documents → **From Chat**. A resume or cover letter saves as .docx (best for job sites), and a letter as PDF; the other format is one press away. Domovoi then reads the file back and checks every word is there, in order. **text readable · single column** means a job site's system can read it too."
+      },
+      {
+       "text": "**print**, or typing \"print it\", shows a card with **Print**, which opens the Print dialog with a preview. Nothing prints until you press **Print** there. See [Printers and scanners](node:printers)."
+      },
+      {
+       "text": "In a chat **on this phone**, the draft stays on the phone. **save** puts it in **Chat documents**, which [Files](route:files) shows once it holds one. In **open**, the **more** menu has **save a copy to…** (anywhere you pick), **send to home** (the home server's Documents → From Chat, when it's in reach), **print** (the phone's own print dialog) and **read aloud**.",
+       "only": "app"
+      },
+      {
+       "text": "Only the draft, not the whole chat, goes to the model for each change."
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "wrong",
+     "text": "If something's wrong"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "Read every draft before you use it: names, dates, numbers and anything it says about you. Change what's wrong with **edit**."
+      },
+      {
+       "text": "After \"shorter\", look at **changes**: a shorter version can leave out something you gave."
+      },
+      {
+       "text": "With AI chat and questions off, nothing new is drafted. Drafts already written can still be opened, edited, saved and printed."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "letters",
+   "topic": "documents-and-letters",
+   "title": "Letters",
+   "subtitle": "explain one, or take one by voice",
+   "keywords": [
+    "letter",
+    "bill",
+    "what does this letter say",
+    "photo of a letter",
+    "take a letter",
+    "dictate",
+    "landlord",
+    "end of letter"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "Domovoi can explain a letter or a bill from a photo, or take a letter you say out loud in a room."
+    },
+    {
+     "type": "p",
+     "text": "**What does this letter say?**"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "Attach a photo of a letter or a bill (one page per photo) and ask \"what does this letter say?\" or \"what do I need to do?\"."
+      },
+      {
+       "text": "The answer says who it's from, what it's about, the deadlines, the amounts, the reference numbers and what to do next."
+      },
+      {
+       "text": "Dates and amounts are quoted straight from the letter: under **Dates in this letter** and **Amounts in this letter**, each is shown inside the letter's own sentence, as Domovoi read it from the photo, with the figure in bold. Domovoi's own words never give a figure."
+      },
+      {
+       "text": "A photo that was misread to begin with can still be wrong, so check what matters on the letter itself. Press **photo 1** under the answer to see the text Domovoi read."
+      },
+      {
+       "text": "A blurry photo or handwriting gets a heads-up first. Real handwriting hasn't been measured yet."
+      },
+      {
+       "text": "If a letter has text aimed at an AI assistant (\"ignore previous instructions…\"), Domovoi doesn't follow it and says so: genuine letters don't do this."
+      },
+      {
+       "text": "Everyone in the house can see a home-server chat, so a phone chat is the private place for personal mail. On a home server without a graphics card a letter takes about 2 minutes."
+      },
+      {
+       "text": "In a phone chat, **+** → **take a photo** or **choose a photo** on phones that read photos themselves. The photo isn't kept; the text read from it stays with the answer, so you can ask about the letter again, and goes when you delete the chat. On a phone that can't read photos itself, **+** offers **a letter for the home server: take a photo** or **choose a photo** when a paired home server has its picture model: your home server reads the photo and keeps nothing, and the explanation is written on this phone.",
+       "only": "app"
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "**Take a letter by voice**"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "In any room, say \"take a letter to the landlord\". The room says \"Go ahead. Say end of letter when you're done.\""
+      },
+      {
+       "text": "Say what the letter should say. \"scratch that\" takes out the last thing you said. Say \"end of letter\" to finish, or just stop talking."
+      },
+      {
+       "text": "Domovoi writes it up as a proper letter, signed with your name if it knows your voice (otherwise it asks \"Who's it from?\"). It saves it as a Word file in Documents → **From Chat**, and puts it in a home-server chat called \"Letter to the landlord\", where you can change it, save it as PDF or print it."
+      },
+      {
+       "text": "It's never sent anywhere. The room tells you where it saved it, and \"read it back\" reads it to you."
+      },
+      {
+       "text": "\"cancel the letter\" throws it away. Nothing said: nothing is saved."
+      },
+      {
+       "text": "Writing it up needs AI chat and questions on."
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "take a letter to the landlord",
+       "handler": "documents",
+       "path": "fast",
+       "needs": "ai"
+      },
+      {
+       "text": "read it back",
+       "handler": "documents",
+       "path": "fast"
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "wrong",
+     "text": "If something's wrong"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "\"Domovoi left out a sentence of its own that named a date, an amount or a number\": Domovoi's explanation never gives figures itself; look for them in the letter's sentences quoted below it."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "read-aloud",
+   "topic": "documents-and-letters",
+   "title": "Read it to me",
+   "subtitle": "a document read out in a room",
+   "keywords": [
+    "read me",
+    "read aloud",
+    "read it back",
+    "continue reading",
+    "stop reading",
+    "lease"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "Any room can read a document from your household's Documents out loud."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "Say \"read me\" and a document's name, as it is in Documents (\"read me the house rules\"), or with \"document\" or \"file\" after part of it (\"read me the tax document\"). Domovoi finds it in Documents (PDF, Word, OpenDocument, text or markdown) and reads it out in that room."
+      },
+      {
+       "text": "If two fit, it asks which one; if it only heard something close, it asks \"Did you mean …?\"."
+      },
+      {
+       "text": "Over about a page, it says how long first (\"It's 2 pages, about 3 minutes\") and asks \"The whole thing, or just the start?\". Then it reads about a page at a time and asks \"Shall I go on?\"."
+      },
+      {
+       "text": "Say **stop**, **pause**, **start again** or **read that again**. Later, \"continue reading\" picks up where it stopped."
+      },
+      {
+       "text": "It reads only what's in the household's Documents, never a phone's own files, and only in the room that asked. It works with AI chat and questions off."
+      },
+      {
+       "text": "A phone chat's draft has **read aloud** in its **more** menu.",
+       "only": "app"
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "read me the lease",
+       "handler": "documents",
+       "path": "fast"
+      },
+      {
+       "text": "continue reading",
+       "handler": "documents",
+       "path": "fast",
+       "note": "in the room where a reading stopped"
+      },
+      {
+       "text": "stop reading",
+       "handler": "documents",
+       "path": "fast",
+       "note": "while it reads"
+      },
+      {
+       "text": "read it back",
+       "handler": "documents",
+       "path": "fast",
+       "note": "the last document read or saved"
+      }
+     ]
     }
    ]
   },
@@ -2890,7 +2924,9 @@
     "pictures",
     "move",
     "delete",
-    "usb drive"
+    "usb drive",
+    "from chat",
+    "scans"
    ],
    "blocks": [
     {
@@ -2927,6 +2963,24 @@
        "text": "Something changed on disk and isn't showing? Press **Rescan**."
       }
      ]
+    },
+    {
+     "type": "label",
+     "role": "also",
+     "text": "Also"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "Domovoi keeps two folders of its own in Documents: **Scans**, from the scanner, named by date, and **From Chat**, for drafts and letters saved from Chat."
+      },
+      {
+       "text": "**Chat documents** holds drafts saved in a phone chat. Files shows it once it holds one.",
+       "only": "app"
+      }
+     ]
     }
    ],
    "more": {
@@ -2938,7 +2992,7 @@
    "id": "documents",
    "topic": "chat-files-calendar",
    "title": "Documents, sheets and drawings",
-   "subtitle": "write, edit, read aloud",
+   "subtitle": "write and edit in the browser",
    "keywords": [
     "document",
     "spreadsheet",
@@ -2947,11 +3001,7 @@
     "text file",
     "markdown",
     "xlsx",
-    "read aloud",
-    "read me",
-    "take a letter",
-    "dictate",
-    "letter"
+    "editor"
    ],
    "blocks": [
     {
@@ -2969,85 +3019,13 @@
      "only": "app"
     },
     {
-     "type": "p",
-     "text": "**Read aloud, in any room:** say \"read me\" and a document's name, as it is in Documents (\"read me the house rules\"), or with \"document\" or \"file\" after part of it (\"read me the tax document\"). Domovoi finds it in Documents (PDF, Word, OpenDocument, text or markdown) and reads it out in that room. If two fit, it asks which one; if it only heard something close, it asks \"Did you mean …?\". Over about a page, it says how long first (\"It's 2 pages, about 3 minutes\") and asks \"The whole thing, or just the start?\"; then it reads about a page at a time and asks \"Shall I go on?\". Say **stop**, **pause**, **start again** or **read that again**, and \"continue reading\" picks up later. It reads only what's in the household's Documents, never a phone's own files. Reading works with AI chat and questions off."
-    },
-    {
-     "type": "p",
-     "text": "**Take a letter:** say \"take a letter to the landlord\", say what it should say, then \"end of letter\" (or just stop talking). \"scratch that\" takes out the last thing you said; \"cancel the letter\" throws it away. Domovoi writes it up as a proper letter, signed with your name if it knows your voice (otherwise it asks who it's from), and says where it saved it: Documents → **From Chat**, as a Word file. It's also a chat in [Chat](route:chat), where you can change it, save it as PDF or print it. Nothing is ever sent anywhere. Writing it up needs AI chat and questions on."
-    },
-    {
      "type": "label",
-     "role": "say",
-     "text": "Try saying"
-    },
-    {
-     "type": "say",
-     "phrases": [
-      {
-       "text": "read me the lease",
-       "handler": "documents",
-       "path": "fast"
-      },
-      {
-       "text": "read it back",
-       "handler": "documents",
-       "path": "fast"
-      },
-      {
-       "text": "take a letter to the landlord",
-       "handler": "documents",
-       "path": "fast",
-       "needs": "ai"
-      }
-     ]
-    }
-   ]
-  },
-  {
-   "id": "calendar",
-   "topic": "chat-files-calendar",
-   "title": "Calendar",
-   "subtitle": "the household's events",
-   "keywords": [
-    "calendar",
-    "event",
-    "appointment",
-    "what's on"
-   ],
-   "blocks": [
-    {
-     "type": "p",
-     "text": "The household's events. [Calendar](route:calendar) → **new event**; switch between **month**, **week** and **day**."
+     "role": "also",
+     "text": "Also"
     },
     {
      "type": "p",
-     "text": "Domovoi reads this calendar out loud, with no internet needed. Add and change events here: by voice it only reads."
-    },
-    {
-     "type": "label",
-     "role": "say",
-     "text": "Try saying"
-    },
-    {
-     "type": "say",
-     "phrases": [
-      {
-       "text": "what's on my calendar today",
-       "handler": "calendar",
-       "path": "fast"
-      },
-      {
-       "text": "what's next on my calendar",
-       "handler": "calendar",
-       "path": "fast"
-      },
-      {
-       "text": "do I have anything on Friday",
-       "handler": "calendar",
-       "path": "fast"
-      }
-     ]
+     "text": "To ask about a document, see [Ask about a document](node:ask-document); to have a room read one out, see [Read it to me](node:read-aloud)."
     }
    ]
   },
@@ -3066,12 +3044,14 @@
     "paper",
     "airprint",
     "mopria",
-    "test page"
+    "test page",
+    "print a draft",
+    "print it"
    ],
    "blocks": [
     {
      "type": "p",
-     "text": "Domovoi prints to and scans from **network printers**: ones on your Wi-Fi or plugged into your router that work with **AirPrint**, **IPP Everywhere** or **Mopria**. That's almost every network printer from the last ten years; if your phone can print to it with no app, Domovoi can too. USB printers, and older printers that need a driver from the maker, don't work. Scanning needs a printer whose scanner works over AirPrint too (often called AirScan or eSCL)."
+     "text": "Domovoi prints to and scans from **network printers**: ones on your Wi-Fi, or plugged into your router, that work with **AirPrint**, **IPP Everywhere** or **Mopria**. That's almost every network printer from the last ten years: if your phone can print to it with no app, Domovoi can too. USB printers, and older printers that need a driver from the maker, don't work. Scanning needs a printer whose scanner works over AirPrint too (often called AirScan or eSCL)."
     },
     {
      "type": "label",
@@ -3083,25 +3063,28 @@
      "ordered": false,
      "items": [
       {
-       "text": "[Settings → Printers & scanners](route:settings/printers) shows the printers Domovoi can see. Press **Add** on yours, name it, then **Test page**. Not listed? Press **Look again**, or type its address under **Add by address** (on the printer's own screen or settings page)."
+       "text": "[Settings → Rooms & devices → Printers & scanners](route:settings/printers) shows the printers Domovoi can see. Press **Add** on yours, name it, then **Test page**. Not listed? Press **Look for printers** (**Look again** once it has looked), or type its address under **Add by address**. The address is on the printer's own screen or settings page."
       },
       {
-       "text": "One printer is the house's **Default**. A room can have its own default (**Default in rooms**): voice from that room prints there."
+       "text": "**Default for the house** makes one printer the house's. A room can have its own (**Default in rooms**): voice from that room prints there."
       },
       {
-       "text": "**Two-sided** and **Colour** follow the printer's own settings unless you switch them per printer."
+       "text": "**Two-sided by default** and **Colour by default** follow the printer's own settings unless you set them per printer."
       },
       {
-       "text": "**Print** sits on files in [Files](route:files) and Documents when a printer is set up: PDFs, pictures, text and markdown files, and spreadsheets (printed as a plain table). You pick the pages, copies, two-sided, colour and paper, and see a preview first."
+       "text": "**Print** sits on files in [Files](route:files) and Documents when a printer is set up. It prints PDFs, pictures, text and markdown files, and spreadsheets (as a plain table). You pick the pages, copies, two-sided, colour and paper size, and see a preview first."
       },
       {
-       "text": "Word and OpenDocument files don't print here: save them as PDF in Word or Docs first, then print the PDF."
+       "text": "Word and OpenDocument files don't print here. Save them as PDF in Word or Docs first, then print the PDF."
+      },
+      {
+       "text": "**A draft from Chat:** **print** on the draft, or type \"print it\". You see the preview first."
       },
       {
        "text": "**Scan** sits at the top of Documents when a scanner is set up. Scans are saved as one PDF in **Documents → Scans**, named by date."
       },
       {
-       "text": "Removing or renaming a printer needs the admin password {admin}."
+       "text": "Renaming or removing a printer needs the admin password {admin}."
       }
      ]
     },
@@ -3159,13 +3142,13 @@
        "text": "**Out of paper, jammed, cover open:** the printer's row says so in plain words, and a voice print that fails is said once in the room that asked. Fix it at the printer; the job carries on."
       },
       {
-       "text": "**\"Level not reported\":** some printers don't share their ink or toner levels. Check the printer's own screen."
+       "text": "**\"level not reported\":** some printers don't share their ink or toner levels. Check the printer's own screen."
       },
       {
-       "text": "**\"Isn't answering\":** the printer is off or asleep, or moved to a different network. Press **Look again**."
+       "text": "**\"isn't answering\":** the printer is off or asleep, or it moved to a different network. Press **Look again**."
       },
       {
-       "text": "**\"Security certificate changed\":** usually a printer update or reset. An admin checks it and presses **Trust the new certificate**."
+       "text": "**\"security certificate changed\":** usually a printer update or reset. An admin checks it, then presses **Trust the new certificate**; others see \"sign in as an admin to trust it\"."
       },
       {
        "text": "Each job is limited to 100 pages and 20 copies, and the house to 500 sheets a day; an admin can change the limits. The list of recent jobs is kept 90 days, and an admin can clear it."
@@ -3173,6 +3156,1063 @@
      ]
     }
    ]
+  },
+  {
+   "id": "calendar",
+   "topic": "chat-files-calendar",
+   "title": "Calendar",
+   "subtitle": "the household's events",
+   "keywords": [
+    "calendar",
+    "event",
+    "appointment",
+    "what's on"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "The household's events. [Calendar](route:calendar) → **new event**; switch between **month**, **week** and **day**."
+    },
+    {
+     "type": "p",
+     "text": "Domovoi reads this calendar out loud, with no internet needed. Add and change events here: by voice it only reads."
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "what's on my calendar today",
+       "handler": "calendar",
+       "path": "fast"
+      },
+      {
+       "text": "what's next on my calendar",
+       "handler": "calendar",
+       "path": "fast"
+      },
+      {
+       "text": "do I have anything on Friday",
+       "handler": "calendar",
+       "path": "fast"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "connect",
+   "topic": "your-phone",
+   "title": "Get the app and connect",
+   "subtitle": "from your own server",
+   "keywords": [
+    "install",
+    "apk",
+    "connect",
+    "pair",
+    "household token",
+    "server",
+    "qr"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "The Domovoi app runs on Android 8.0 or newer, older 32-bit phones included. It comes from your own server; no store is needed."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": true,
+     "items": [
+      {
+       "text": "On the dashboard, [Settings → Rooms & devices → Phones & browsers → Get the Domovoi app](route:settings/phones-and-browsers) shows a QR code. If it says the app isn't on the server yet, ask whoever set up Domovoi to press **Download the app to this server**."
+      },
+      {
+       "text": "Scan the code with the phone's camera and install. Android asks you to allow installs from your browser once."
+      },
+      {
+       "text": "Open Domovoi. Tap **connect** at the top, pick your server (it scans your Wi-Fi), and press **trust this server**. Can't see it? Use **add manually** with the dashboard's address."
+      },
+      {
+       "text": "**pair this phone**: type the household token. An admin finds it in [Settings → Rooms & devices → Phones & browsers → Household token](route:settings/phones-and-browsers)."
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "Switch or forget a server from the server name at the top, or in [Settings → Rooms & devices → Phones & browsers](route:app/connection).",
+     "only": "app"
+    },
+    {
+     "type": "label",
+     "role": "wrong",
+     "text": "If something's wrong"
+    },
+    {
+     "type": "p",
+     "text": "\"App not installed\" means a 32-bit phone; take the 32-bit app from the same page."
+    }
+   ],
+   "more": {
+    "text": "More detail",
+    "target": "doc:docs/ANDROID_COMPATIBILITY.md"
+   }
+  },
+  {
+   "id": "phone-music",
+   "topic": "your-phone",
+   "title": "Music on the phone",
+   "subtitle": "here or in a room, saved offline",
+   "keywords": [
+    "offline",
+    "download",
+    "save to device",
+    "player",
+    "your device",
+    "add folder"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "**Play here** plays on the phone; **play in room** plays in a room."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "Save a song, episode or video to the phone with **save to device** (or **save**). Files go to Downloads/Domovoi and play with no server."
+      },
+      {
+       "text": "Save a book with **save to phone** on its page. The size shows first. Books stay inside the app, play with their chapters with no server, and keep one place in step with the server. A save that stops when you leave home finishes by itself when the server is in reach again."
+      },
+      {
+       "text": "Music, Videos, Audiobooks and Files switch between the server and **your device**. From your device you can upload to the server. In Files, **add folder** shows a folder of the phone's own."
+      }
+     ]
+    }
+   ],
+   "more": {
+    "text": "More detail",
+    "target": "doc:docs/FAQ.md#can-i-save-music-podcasts-or-audiobooks-to-my-phone-or-computer"
+   }
+  },
+  {
+   "id": "phone-chat",
+   "topic": "your-phone",
+   "title": "Chat on the phone",
+   "subtitle": "one list, typed or spoken",
+   "keywords": [
+    "chat mic",
+    "talk",
+    "push to talk",
+    "photo",
+    "heic",
+    "picture",
+    "document",
+    "pdf",
+    "phone chat"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "**Chat** holds all your chats with Domovoi in one list. Each one is marked with where it runs:"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "**on home server**: answered by your home server, and shared with the household. See [Chat](node:chat)."
+      },
+      {
+       "text": "**on this phone**: answered by the phone itself, with no server, and kept only on this phone. See [Domovoi on this phone](node:assistant)."
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "A new chat starts where you chatted last. Until you send something, you can move it to the other place. Away from home, Chat lists this phone's chats only (\"home server chats show when you're home\")."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "Type in **Message Domovoi…** at the bottom to start a new chat. Pinned chats come first, then the most recent."
+      },
+      {
+       "text": "Long-press a chat (or its **chat actions** button) to **rename**, **pin** (pins stay on this phone), **archive**, **share** or **delete** it; swipe to archive. Archived chats are under **archived** at the end of the list."
+      },
+      {
+       "text": "**search chats** finds words in titles and messages, in both kinds of chat."
+      },
+      {
+       "text": "Long-press a reply to **copy**, **share**, **try again**, see its **details**, or **report this reply**."
+      },
+      {
+       "text": "A line saying **earlier messages are beyond what Domovoi can keep in mind** marks where the model stops seeing the older part of a long chat."
+      },
+      {
+       "text": "**talk**: **hold to talk**, release to send, slide away to cancel. Up to 30 seconds. \"my name is …\" in the chat mic teaches Domovoi your voice from this phone."
+      },
+      {
+       "text": "**Attaching.** In a home-server chat, the paperclip offers **a picture** (up to 4) and **a document**. HEIC photos are turned into JPEG on the phone first, without their location (Android 9 or newer). In a phone chat, the **+** left of the message box offers **a document**, and on phones that can, **take a photo** and **choose a photo**."
+      },
+      {
+       "text": "Chat can write drafts for you. Read them before you send them; it can get details wrong."
+      },
+      {
+       "text": "More: [Ask about a document](node:ask-document), [Summaries of long documents](node:long-documents), [Write a draft](node:drafts), [Letters](node:letters), [Photos in a phone chat](node:phone-pictures)."
+      }
+     ]
+    }
+   ],
+   "more": {
+    "text": "More detail",
+    "target": "doc:docs/FAQ.md#can-i-send-pictures-in-chat"
+   }
+  },
+  {
+   "id": "assistant",
+   "topic": "your-phone",
+   "title": "Domovoi on this phone",
+   "subtitle": "a chat with no server",
+   "keywords": [
+    "assistant",
+    "offline",
+    "no server",
+    "airplane",
+    "phone chat",
+    "on this phone",
+    "set up"
+   ],
+   "preview": true,
+   "blocks": [
+    {
+     "type": "p",
+     "text": "A chat **on this phone** runs on the phone itself: type or talk, in airplane mode too. It needs a 64-bit phone with 8 GB of memory or more."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "**Set it up:** **Chat** → **new chat** → **on this phone** → **Set up Domovoi on this phone** → **download** (the button shows the size, about 2.5 GB). It waits for Wi-Fi unless you **allow mobile data**. To talk to it, it also downloads its speech files once."
+      },
+      {
+       "text": "**What it knows, at once:** what's playing and the sleep timer; the battery and whether it's charging; free space and memory; Wi-Fi or mobile data; the next alarm; Do Not Disturb and the ringer; which phone and Android this is, and which model is answering; connected headphones; and the songs, videos and saved books on the phone. \"who am I\" answers with the person set in **This phone belongs to**."
+      },
+      {
+       "text": "**With your permission**, asked the first time, with the reason: the phone's own calendar (\"what's on my calendar today\"), roughly where you are (\"where am I\"), and the Wi-Fi network's name, which needs precise location. Say no and it says it can't, and doesn't ask again."
+      },
+      {
+       "text": "**It does things on the phone:** see [Doing things from a phone chat](node:phone-actions). **Photos:** see [Photos in a phone chat](node:phone-pictures)."
+      },
+      {
+       "text": "**Looking things up:** it asks first, like a home-server chat. See [Look things up](node:lookups)."
+      },
+      {
+       "text": "**Help:** \"how do I …?\" answers from the app's own copy of this manual, offline."
+      },
+      {
+       "text": "**model settings**, in a phone chat: where it runs (**cpu** or **gpu**), **read typed replies aloud too**, **Looking things up**, **export all phone chats** (Markdown and JSON, saved where you pick), **clear all conversations**, and **delete model**."
+      },
+      {
+       "text": "To report a bad reply, long-press it → **report this reply**. You see exactly what the report holds, and you send it yourself. A reply the phone answered from its own data can't be reported."
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "**What it won't do**"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "**House things.** A phone chat answers about the phone only. It never reads the household calendar, the house's timers or the rooms, and it doesn't play music in a room. Ask, and it says \"Those are in your home server chats.\" Your home-server chats do them."
+      },
+      {
+       "text": "**Mix the two kinds of chat.** Phone chats stay on the phone; they're never copied to the home server. Anything else that leaves the phone, you choose each time: a lookup you allow (through your home server, when you're at home), or a document, a letter photo or a draft you send to the home server."
+      },
+      {
+       "text": "See timers already in the Clock app, or read screenshots. Use a home-server chat for screenshots."
+      }
+     ]
+    }
+   ],
+   "more": {
+    "text": "More detail",
+    "target": "doc:android/README.md#on-device-assistant"
+   }
+  },
+  {
+   "id": "phone-actions",
+   "topic": "your-phone",
+   "title": "Doing things from a phone chat",
+   "subtitle": "timers, alarms, music, undo",
+   "keywords": [
+    "clock",
+    "alarm",
+    "timer",
+    "wake me",
+    "undo",
+    "sleep timer",
+    "text",
+    "call",
+    "directions",
+    "share"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "A phone chat can do some things on the phone. It acts only on phrases it knows, never on the model's guess, and it asks before it sets an alarm."
+    },
+    {
+     "type": "p",
+     "text": "**Timers and alarms**, in the phone's Clock app:"
+    },
+    {
+     "type": "p",
+     "text": "**In a phone chat, type or say**"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "\"set a timer for 10 minutes for the pasta\""
+      },
+      {
+       "text": "\"wake me at 6:30\""
+      },
+      {
+       "text": "\"set an alarm for quarter to seven every weekday\""
+      },
+      {
+       "text": "\"show my timers\", or \"show my alarms\" (opens the Clock app)"
+      }
+     ]
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "A card asks first: **set timer** or **set alarm**, or **cancel**. In a spoken chat, say yes; any \"no\", \"wait\" or \"cancel\" stops it. Then the reply says \"Sent to the Clock app\", with **open Clock**. (The Clock app doesn't tell Domovoi it took it.)"
+      },
+      {
+       "text": "\"wake me a bit before seven\" asks \"How about 6:45 AM?\". A time with no am or pm is the next one to come. Check the card before you tap."
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "**Music, books and videos on the phone**"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "\"play some jazz\", \"shuffle my music\", \"pause\", \"resume\", \"next\", \"go back\", \"stop\", \"set a sleep timer for 20 minutes\" and \"continue my book\" happen at once."
+      },
+      {
+       "text": "**undo** shows under the reply for 10 seconds, and saying or typing \"undo\" works for a minute. It puts back the song, the queue and the place. Undo is for the last action only. It leaves the player alone after a timer or an alarm, after you changed the music yourself, or while the phone plays to a room."
+      },
+      {
+       "text": "\"play …\" plays only what's on the phone. A video saved on the phone (\"play the beach video\") asks first, then plays."
+      },
+      {
+       "text": "There's no volume action: use the phone's buttons."
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "**Calls, messages and more**"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "\"text Sam\", \"call Mom\", \"email Alex\", \"directions to the station\", \"add lunch tomorrow at noon to my calendar\", \"open example.org\" and \"share this\" show a card. A tap opens the app that does it, and you finish there. Domovoi sends nothing itself."
+      },
+      {
+       "text": "Calling someone by name asks for your contacts the first time. Say no, and **use the picker** lets you choose from your contacts each time instead."
+      },
+      {
+       "text": "If no app on the phone can do it, it isn't offered."
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "**What it won't do:** music in a room, or the house's timers (\"cancel the kitchen timer\"). It says \"Those are in your home server chats.\" It never reads your texts, your call log or your notifications."
+    }
+   ]
+  },
+  {
+   "id": "phone-pictures",
+   "topic": "your-phone",
+   "title": "Photos in a phone chat",
+   "subtitle": "one photo, read on the phone",
+   "keywords": [
+    "photo",
+    "camera",
+    "picture",
+    "gallery",
+    "what's in this photo"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "On phones whose graphics chip can run the model's photo reader, a phone chat can answer about a photo, in airplane mode too."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "Press the **+** left of the message box, then **take a photo** (on phones with a back camera) or **choose a photo**. One photo per question. Type a question, or just send it (\"what's in this photo?\")."
+      },
+      {
+       "text": "The camera asks for permission the first time, after a one-line reason. Choosing a photo needs no permission."
+      },
+      {
+       "text": "The photo is read on the phone and never leaves it. It isn't saved to your gallery, and it's gone once Domovoi has answered: the chat keeps a **photo (not kept)** mark instead, so a photo question has no **try again**. While a photo waits to be sent, the screen is kept out of screenshots."
+      },
+      {
+       "text": "A photo of a letter or a bill: see [Letters](node:letters)."
+      },
+      {
+       "text": "After an install or an update, the first question takes a few seconds longer while the app tries the photo reader once."
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "wrong",
+     "text": "If something's wrong"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "No photo buttons: this phone can't read photos quickly enough (the photo reader needs its graphics chip). A home-server chat's paperclip (**a picture**) still works."
+      },
+      {
+       "text": "Photos turned themselves off: if the app closed while reading a photo, photos stay off until the next app update, and **model settings** says why. Deleting the model and downloading it again resets this."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "app-settings",
+   "topic": "your-phone",
+   "title": "App settings and updates",
+   "subtitle": "bar, voice, new versions",
+   "keywords": [
+    "settings",
+    "phone bar",
+    "update",
+    "new version",
+    "privacy",
+    "about"
+   ],
+   "blocks": [
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "[Settings → Rooms & devices → App layout](route:settings/app-layout): pick 2 to 5 tabs for the bottom of the screen. Home always comes first."
+      },
+      {
+       "text": "[Settings → Voice → Voices](route:app/voice): how this phone speaks."
+      },
+      {
+       "text": "The app's Settings has the dashboard's groups and names. What only the dashboard can change (greetings, wake words, models, Advanced, …) says so there, with **Open on the dashboard**."
+      },
+      {
+       "text": "**Updates:** when your server has a newer app, Home shows \"Domovoi … is available from your server\". Tap **get the update**. [Settings → System → About & updates](route:settings/about) → **App updates** says which version you have. A Google Play install updates itself."
+      },
+      {
+       "text": "[Settings → System → About & updates](route:settings/about) → **Privacy** says what the app keeps and what can leave the phone."
+      }
+     ]
+    }
+   ],
+   "more": {
+    "text": "More detail",
+    "target": "doc:docs/PRIVACY_POLICY.md"
+   }
+  },
+  {
+   "id": "rooms",
+   "topic": "rooms-and-devices",
+   "title": "Your rooms",
+   "subtitle": "online, playing, last heard",
+   "keywords": [
+    "satellites",
+    "rooms",
+    "offline",
+    "wifi",
+    "restart satellite",
+    "upgrade",
+    "reset pairing"
+   ],
+   "live": "rooms",
+   "blocks": [
+    {
+     "type": "live",
+     "slot": "rooms"
+    },
+    {
+     "type": "p",
+     "text": "Each room is one listening device: a Raspberry Pi, a spare laptop, or a phone. [Settings → Rooms & devices → Rooms](route:settings/rooms) lists them. Each card shows:"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "online or offline;"
+      },
+      {
+       "text": "what's playing;"
+      },
+      {
+       "text": "its Wi-Fi signal;"
+      },
+      {
+       "text": "when the server last heard from it."
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "Open a room for its tabs. They are the icons along the top: **Overview** (the \"i\"), **Sessions**, **Conversations**, **Recently played**, **Notes**, **Timers**, **Logs**, and **Settings** (the gear).",
+     "only": "dashboard"
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to",
+     "admin": true
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "Make a room hear the wake word more or less easily, swap its greeting for a chime, or make its voice louder: its **Settings** tab, **Wake sensitivity**, **Wake acknowledgement**, **Voice loudness boost**."
+      },
+      {
+       "text": "A Pi or spare computer acting up: its **Overview** tab, under **maintenance**, **Restart satellite**. Updating it: **Upgrade satellite**, in the same place."
+      },
+      {
+       "text": "A room moved to new hardware: **Reset pairing** (also under **maintenance**), then approve the new device."
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "[Settings → Rooms & devices → Rooms](route:settings/rooms) shows the same rooms.",
+     "only": "app"
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying",
+     "note": "in the room itself"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "how's the wifi",
+       "handler": "wifi",
+       "path": "fast"
+      },
+      {
+       "text": "fix the wifi",
+       "handler": "wifi",
+       "path": "fast"
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "wrong",
+     "text": "If something's wrong"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "*offline*: power and Wi-Fi first. If **every** room says *can't connect*, see [Restarting](node:restart)."
+      },
+      {
+       "text": "The Wi-Fi bar is amber or red: move the room device or the router closer."
+      },
+      {
+       "text": "A room says \"having trouble reaching the network\": it has lost the server."
+      },
+      {
+       "text": "[Health](node:health) lists rooms that are offline, or were set up but never connected."
+      }
+     ]
+    }
+   ],
+   "more": {
+    "text": "More detail",
+    "target": "doc:docs/TROUBLESHOOTING.md#satellite-wont-connect"
+   }
+  },
+  {
+   "id": "pi-room",
+   "topic": "rooms-and-devices",
+   "title": "A Raspberry Pi room",
+   "subtitle": "the usual room",
+   "keywords": [
+    "raspberry pi",
+    "pi",
+    "sd card",
+    "add a room",
+    "setup wifi",
+    "approve",
+    "respeaker",
+    "xvf3800"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "The usual room: a Raspberry Pi with a microphone board and a speaker. About the price of a smart speaker. [Parts list](doc:docs/SATELLITE_HARDWARE.md)"
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to",
+     "admin": true
+    },
+    {
+     "type": "list",
+     "ordered": true,
+     "items": [
+      {
+       "text": "Put Raspberry Pi OS Lite (64-bit) on a microSD card, and put the card in the server's card reader."
+      },
+      {
+       "text": "[Settings → Rooms & devices → Rooms](route:settings/rooms) → **prepare satellite media**. Choose **wi-fi setup portal**, then **write to** the card's drive, and press **Prepare**."
+      },
+      {
+       "text": "**On the Windows install**, which can't see SD cards: choose **download for the card helper**, then write the card with the tray icon's **Prepare a satellite card**."
+      },
+      {
+       "text": "Start the Pi with the card. It makes its own Wi-Fi network, `Domovoi-Setup-<id>`. Join it from your phone, pick your home Wi-Fi and name the room."
+      },
+      {
+       "text": "The Pi says a six-digit code. Under **waiting for approval**, type it and press **approve**."
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "wrong",
+     "text": "If something's wrong"
+    },
+    {
+     "type": "p",
+     "text": "**show setup details** on the card lists the setup network and its page."
+    }
+   ],
+   "more": {
+    "text": "More detail",
+    "target": "doc:README.md#3-add-your-first-satellite"
+   }
+  },
+  {
+   "id": "laptop-room",
+   "topic": "rooms-and-devices",
+   "title": "A spare laptop or PC",
+   "subtitle": "Linux or Windows",
+   "keywords": [
+    "laptop",
+    "pc",
+    "linux",
+    "windows",
+    "spare device",
+    "old laptop"
+   ],
+   "preview": true,
+   "blocks": [
+    {
+     "type": "p",
+     "text": "A Windows 10 or 11, or Linux, laptop or PC can be a room. Use one that stays plugged in, with sleep turned off, and not the computer that runs Domovoi."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to",
+     "admin": true
+    },
+    {
+     "type": "list",
+     "ordered": true,
+     "items": [
+      {
+       "text": "[Settings → Rooms & devices → Rooms](route:settings/rooms) → **add a spare device**. Type the room's name, then press **make the code**."
+      },
+      {
+       "text": "**Windows:** on that PC, signed in as the account it should use, press **Download the Windows Setup** (or type the short address the card shows into that PC's browser). The setup code and your server are in the file's name, so there is nothing to type."
+      },
+      {
+       "text": "Open the file. If Windows says **\"Windows protected your PC\"**, click **More info**, then **Run anyway**. The Setup isn't signed by Microsoft yet. It comes from your own server, and it checks that it's talking to that same server before it downloads anything."
+      },
+      {
+       "text": "**Linux:** press **copy the command** and run it on that computer, signed in as the account it should use."
+      },
+      {
+       "text": "The computer shows a six-digit code. Approve it under **waiting for approval**."
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "A tray icon on Windows shows when the microphone is live, and mutes it."
+    },
+    {
+     "type": "label",
+     "role": "wrong",
+     "text": "If something's wrong"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "No **Download the Windows Setup** on the card: a Linux server fetches it once from Domovoi's releases when an admin presses **get the Windows Setup**. Until then, or instead, open **advanced: the PowerShell command instead of the Setup**, press **copy the Windows command**, and paste it into PowerShell on the PC."
+      },
+      {
+       "text": "Setup says the code is unknown: a code lasts 24 hours, and a server restart clears it. Make a new one."
+      },
+      {
+       "text": "A processor from before about 2009 is refused."
+      }
+     ]
+    }
+   ],
+   "more": {
+    "text": "More detail",
+    "target": "doc:docs/SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs"
+   }
+  },
+  {
+   "id": "phone-room",
+   "topic": "rooms-and-devices",
+   "title": "An old phone or tablet as a room",
+   "subtitle": "room mode",
+   "keywords": [
+    "room mode",
+    "old phone",
+    "tablet",
+    "domovoi room",
+    "qr code"
+   ],
+   "preview": true,
+   "blocks": [
+    {
+     "type": "p",
+     "text": "An Android 8 or newer phone on its charger becomes a room (\"room mode\"). It hears the wake word, answers, plays the room's music, and takes announcements."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": true,
+     "items": [
+      {
+       "text": "{admin} once: [Settings → Rooms & devices → Rooms](route:settings/rooms) → **prepare satellite media** → **Refresh caches**. This gives phones the wake word."
+      },
+      {
+       "text": "{admin} **add a spare device**, name the room, then **make the code**. A QR code appears. If the card says the app isn't on the server yet, press **Download the app to this server** on that card first."
+      },
+      {
+       "text": "Scan the QR code with the phone's camera. The page installs the Domovoi app and opens it as that room."
+      },
+      {
+       "text": "Read the explainer, press **Start room mode**, allow the microphone, then press **Become this room**."
+      },
+      {
+       "text": "Approve the six-digit code on the dashboard."
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "A phone that already has the app can do this from [Settings → Rooms & devices → Rooms](route:settings/rooms) → **Use this device as a room**, or from the **Domovoi Room** icon. A phone you also use every day needs a screen lock, and while it's a room, the rest of the app is locked.",
+     "only": "app"
+    },
+    {
+     "type": "p",
+     "text": "To leave, hold **exit room mode**, unlock, then choose **Keep this room** or **Forget this room**."
+    },
+    {
+     "type": "label",
+     "role": "wrong",
+     "text": "If something's wrong"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "*mic blocked*: turn the microphone back on in quick settings."
+      },
+      {
+       "text": "After a restart: tap the notification to resume."
+      },
+      {
+       "text": "Turn off battery optimisation for Domovoi."
+      }
+     ]
+    }
+   ],
+   "more": {
+    "text": "More detail",
+    "target": "doc:docs/SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode"
+   }
+  },
+  {
+   "id": "usb-room",
+   "topic": "rooms-and-devices",
+   "title": "An old computer, from a USB stick",
+   "subtitle": "the stick sets it up",
+   "keywords": [
+    "usb stick",
+    "old computer",
+    "old pc",
+    "mac",
+    "debian",
+    "erase"
+   ],
+   "preview": true,
+   "blocks": [
+    {
+     "type": "p",
+     "text": "The server makes a USB stick. An old 64-bit PC, laptop or 2012–2017 Intel Mac starts from it and becomes a room that does nothing else. **This erases that computer's disk.** It needs a network cable while it sets up."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to",
+     "admin": true
+    },
+    {
+     "type": "list",
+     "ordered": true,
+     "items": [
+      {
+       "text": "**add a spare device** → name the room → **make the code** → under **old computer (usb stick)**, **Prepare the stick**."
+      },
+      {
+       "text": "**Open in Raspberry Pi Imager** to write it to a USB stick (2 GB or more)."
+      },
+      {
+       "text": "Start the old computer from the stick (its boot-menu key, often F12), type **ERASE** when asked, and wait about half an hour."
+      },
+      {
+       "text": "Approve the code it shows."
+      }
+     ]
+    }
+   ],
+   "more": {
+    "text": "More detail",
+    "target": "doc:docs/SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick"
+   }
+  },
+  {
+   "id": "wake-word",
+   "topic": "rooms-and-devices",
+   "title": "Wake word and greeting",
+   "subtitle": "the word a room wakes to",
+   "keywords": [
+    "wake word",
+    "hey jarvis",
+    "train",
+    "training",
+    "custom wake word",
+    "greeting",
+    "chime"
+   ],
+   "live": "wake-word",
+   "blocks": [
+    {
+     "type": "p",
+     "text": "A new room wakes to {wake}. After waking, it greets you or chimes, then listens."
+    },
+    {
+     "type": "live",
+     "slot": "wake-word"
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "Train your own wake word",
+     "admin": true
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "Where: [Settings → Voice → Wake words](route:settings/wake-words). The admin turns training on once, with **Turn on wake-word training**."
+      },
+      {
+       "text": "What it needs: a server with 24 GB of memory, about 22 GB of downloads and about 32 GB of disk. A word takes about 20 minutes to train with an NVIDIA graphics card, and over an hour on the processor."
+      },
+      {
+       "text": "The steps: **Create** the word, **Record** 15 or more clips on a satellite in the room itself, press **Train**, then **Push to room**."
+      },
+      {
+       "text": "A wake word trained at home is for your household only ([why](doc:docs/LICENSES.md#the-wake-word-trainer))."
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "Greetings",
+     "admin": true
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "What a room says when it wakes: [Settings → Voice → Greetings](route:settings/greetings)."
+      },
+      {
+       "text": "A chime or a light instead: the room's **Settings** tab, **Wake acknowledgement**."
+      }
+     ]
+    }
+   ],
+   "more": {
+    "text": "More detail",
+    "target": "doc:scripts/wake_word/README.md"
+   }
+  },
+  {
+   "id": "voice",
+   "topic": "rooms-and-devices",
+   "title": "Domovoi's voice",
+   "subtitle": "pick it, fix a word",
+   "keywords": [
+    "voice",
+    "say it like",
+    "pronunciation",
+    "kristin",
+    "norman",
+    "linda",
+    "piper"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "Three voices, all on the server: **Kristin** (default), **Norman** and **Linda**."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "Pick one: [Settings → Voice → Voices](route:settings/voices) → **Domovoi's voice** → play a sample, **use this voice** {admin}."
+      },
+      {
+       "text": "A word said wrong? **Say it like**: type the word and how it sounds, the stressed part in capitals (Siobhan = shiv-AWN). Press play to hear it first."
+      },
+      {
+       "text": "How *this phone* speaks: [Settings → Voice → Voices](route:app/voice): \"Same as the server\" or one of the three (about 64 MB, downloaded once).",
+       "only": "app"
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "what voices are there",
+       "handler": "voice",
+       "path": "fast"
+      },
+      {
+       "text": "let me hear Norman's voice",
+       "handler": "voice",
+       "path": "fast"
+      },
+      {
+       "text": "switch to Norman's voice",
+       "handler": "voice",
+       "path": "fast",
+       "note": "changes this room's voice"
+      }
+     ]
+    }
+   ],
+   "more": {
+    "text": "More detail",
+    "target": "doc:docs/FAQ.md#which-voice-does-domovoi-speak-with-and-can-i-fix-how-it-says-a-word"
+   }
   },
   {
    "id": "people",
@@ -3303,10 +4343,13 @@
      "ordered": false,
      "items": [
       {
-       "text": "Sign in: [Settings → Advanced](route:settings/advanced) → **sign in**. A reload in that browser keeps you signed in for 60 minutes after you signed in; **sign out** ends it at once. Change the minutes in [Settings → Advanced](route:settings/advanced) → **Security** → **Stay signed in after a reload**."
+       "text": "Sign in: [Settings → System → Advanced](route:settings/advanced), the **Admin** card at the top, **sign in**. A reload in that browser keeps you signed in for 60 minutes after you signed in; **sign out** ends it at once."
       },
       {
-       "text": "Turn guest music control off: same place, **Guests can change the music in a playing room**."
+       "text": "Change those minutes: on the same page, **show the settings**, then **Security** → **Stay signed in after a reload**."
+      },
+      {
+       "text": "Turn guest music control off: same group, **Guests can change the music in a playing room**."
       },
       {
        "text": "The app never signs in as admin; it opens the dashboard for that."
@@ -3344,7 +4387,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "[Settings → Phones & browsers](route:settings/phones-and-browsers):"
+     "text": "[Settings → Rooms & devices → Phones & browsers](route:settings/phones-and-browsers):"
     },
     {
      "type": "list",
@@ -3393,7 +4436,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "Everything stays on your server."
+     "text": "Everything stays on your server, or on your phone."
     },
     {
      "type": "table",
@@ -3407,8 +4450,28 @@
        "90 days, or what **Keep voice history** says"
       ],
       [
-       "Text chats",
+       "Chats on the home server, with the pictures, documents and letter photos attached",
        "until you delete the chat"
+      ],
+      [
+       "Every version of a draft in a chat",
+       "until you delete the chat"
+      ],
+      [
+       "A draft or a letter you saved",
+       "a file in Documents → From Chat, until you delete it"
+      ],
+      [
+       "Chats on a phone, with the text read from a letter",
+       "on that phone only, until you delete them"
+      ],
+      [
+       "A photo in a phone chat",
+       "never kept"
+      ],
+      [
+       "A document or a letter photo sent with **ask the home server** or **use home server**",
+       "nothing kept: it's deleted once it's read, and a summary waits in the server's memory only until the phone takes it"
       ],
       [
        "Timers and reminders that went off",
@@ -3421,6 +4484,10 @@
       [
        "Play history",
        "90 days"
+      ],
+      [
+       "The list of recent print jobs",
+       "90 days (an admin can clear it)"
       ],
       [
        "News stories",
@@ -3449,7 +4516,7 @@
        "text": "\"forget me\", in your own voice: deletes your profile, voice samples, memories and everything you said to Domovoi."
       },
       {
-       "text": "{admin} [People](route:people) → **Voice history** → **Keep voice history**: 30 days, 90 days (the default), 1 year or Forever. Older turns are deleted every day. It's also in [Settings → Advanced](route:settings/advanced) → **Privacy**."
+       "text": "{admin} [People](route:people) → **Voice history** → **Keep voice history**: 30 days, 90 days (the default), 1 year or Forever. Older turns are deleted every day. It's also in [Settings → System → Advanced](route:settings/advanced) → **show the settings** → **Privacy**."
       },
       {
        "text": "{admin} **Delete all voice history**, on the same page, deletes it all at once. People, voice samples, memories, notes, timers and chats stay."
@@ -3461,19 +4528,19 @@
        "text": "\"never save my voice\": Domovoi stops learning it."
       },
       {
-       "text": "Delete a chat: the bin icon in [Chat](route:chat)."
+       "text": "Delete a chat: the bin icon in [Chat](route:chat). Its pictures, documents, letters and draft versions go with it."
       },
       {
-       "text": "{admin} turn recordings off in a room's **Overview** (**Stop and delete**); the commands kept so far are in [Settings → Voice history](route:settings/voice-history)."
+       "text": "{admin} turn recordings off in a room's **Overview** (**Stop and delete**); the commands kept so far are in [Settings → Privacy → Voice history](route:settings/voice-history)."
       },
       {
-       "text": "{admin} listen to a room's command recordings, mark whether each one ended at the right moment, and delete them: [Settings → Voice history](route:settings/voice-history). A room keeps them only while an admin has turned them on for it."
+       "text": "{admin} listen to a room's command recordings, mark whether each one ended at the right moment, and delete them: [Settings → Privacy → Voice history](route:settings/voice-history). A room keeps them only while an admin has turned them on for it."
       }
      ]
     },
     {
      "type": "p",
-     "text": "An admin can change play history, news and timer history in [Settings → Advanced](route:settings/advanced)."
+     "text": "An admin can change play history, news and timer history in [Settings → System → Advanced](route:settings/advanced)."
     }
    ],
    "more": {
@@ -3503,15 +4570,23 @@
      "ordered": false,
      "items": [
       {
-       "text": "**Yes, always**: web answers, lyrics lookups, artists' other names, podcast downloads."
+       "text": "**Yes, always**: web answers, lyrics lookups, artists' other names, podcast downloads, and Chat lookups when you allow them."
       },
       {
        "text": "**Sometimes**: the same, without automatic podcast downloads."
       },
       {
-       "text": "**No, keep everything in the house**: nothing goes out. Online buttons show \"needs internet\"."
+       "text": "**No, keep everything in the house**: nothing goes out. Online buttons show \"needs internet\", and Chat can't look anything up online. The manual and an offline library still answer."
       }
      ]
+    },
+    {
+     "type": "p",
+     "text": "Even with Yes, a chat asks before each lookup, unless an admin turns on **Always allow internet** in [Settings → Chat & AI → Search](route:settings/search). See [Look things up](node:lookups)."
+    },
+    {
+     "type": "p",
+     "text": "A phone away from home looks things up itself, after asking. Your home's answer doesn't reach it there."
     },
     {
      "type": "label",
@@ -3520,7 +4595,7 @@
     },
     {
      "type": "p",
-     "text": "[Settings → Internet](route:settings/internet) {admin}. Download what you need before choosing No."
+     "text": "[Settings → Privacy → Internet](route:settings/internet) {admin}. Download what you need before choosing No."
     }
    ],
    "more": {
@@ -3545,7 +4620,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "[Settings → About & updates](route:settings/about) shows the release you run."
+     "text": "[Settings → System → About & updates](route:settings/about) shows the release you run."
     },
     {
      "type": "label",
@@ -3584,6 +4659,98 @@
    }
   },
   {
+   "id": "health",
+   "topic": "keeping-it-running",
+   "title": "Health",
+   "subtitle": "every check, green or not",
+   "keywords": [
+    "health",
+    "status",
+    "problems",
+    "needs attention",
+    "containers",
+    "guard",
+    "disk",
+    "checks"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "[Settings → System → Health](route:settings/health) shows every check on your Domovoi, green or not. Home's \"needs attention\" rows are the problems among them, and each opens its part of Health."
+    },
+    {
+     "type": "p",
+     "text": "**What it checks**"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "**Server:** the admin account, the Domovoi server, the database, speech recognition, and disk space {admin}."
+      },
+      {
+       "text": "**Updates** {admin}: the version and channel, the last update, and whether a restart is waiting."
+      },
+      {
+       "text": "**Rooms:** how many are online, which are offline, rooms set up but not connected yet, screens, and rooms waiting for approval {admin}."
+      },
+      {
+       "text": "**Plugins:** whether each one loaded, and media requests no plugin can fill."
+      },
+      {
+       "text": "**Internet:** your answer, and whether the connection works {admin}."
+      },
+      {
+       "text": "**Containers:** whether the containers Domovoi runs look as they should."
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "A problem row says what's wrong in a sentence, and links to the page that fixes it (\"open rooms\")."
+      },
+      {
+       "text": "\"the Domovoi server isn't answering\": an admin presses **Restart the core** on that row. See [Restarting](node:restart)."
+      },
+      {
+       "text": "**Containers:** Domovoi watches the containers it runs. If one goes missing, stops, or is replaced from outside Domovoi, it opens an incident and shows a banner. A sign of tampering pauses risky changes (plugin installs, updates, satellite upgrades, preparing media) until an admin reviews it; everything else keeps working."
+      },
+      {
+       "text": "{admin} **acknowledge** hides the banner. **clear after review** ends the incident, once you know why it happened. **behind the scenes** shows what is watched, with **check now** and **rebuild the music player image**."
+      },
+      {
+       "text": "An admin sees every detail. A shared screen, and other devices (as set by **Problems on Home** in [Settings → System → Advanced](route:settings/advanced), under **show the settings**), may see only how many things need attention."
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "how's domovoi doing",
+       "handler": "homelab",
+       "path": "fast",
+       "note": "the server's processor, memory and disk"
+      }
+     ]
+    }
+   ]
+  },
+  {
    "id": "restart",
    "topic": "keeping-it-running",
    "title": "Restarting",
@@ -3598,11 +4765,11 @@
    "blocks": [
     {
      "type": "p",
-     "text": "Some settings apply only after a restart: [Settings → About & updates](route:settings/about) → **Restart Domovoi** {admin}."
+     "text": "Some settings apply only after a restart: [Settings → System → About & updates](route:settings/about) → **Restart Domovoi** {admin}."
     },
     {
      "type": "p",
-     "text": "**If every room is offline but the dashboard opens**, the server's core has stopped answering. It restarts itself within about a minute. If it doesn't, an admin presses **Restart the core** (on [Home](route:home), [Settings → Rooms](route:settings/rooms) or [Settings → Health](route:settings/health)). The app says the core isn't answering, and reconnects by itself."
+     "text": "**If every room is offline but the dashboard opens**, the server's core has stopped answering. It restarts itself within about a minute. If it doesn't, an admin presses **Restart the core**. It's on [Home](route:home), on [Settings → Rooms & devices → Rooms](route:settings/rooms), on [Settings → System → About & updates](route:settings/about), and on the Domovoi server row of [Settings → System → Health](route:settings/health). The app says the core isn't answering, and reconnects by itself."
     },
     {
      "type": "label",
@@ -3725,7 +4892,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "[Settings → Models](route:settings/models) shows the models in use:"
+     "text": "[Settings → Chat & AI → Models](route:settings/models) shows the models in use:"
     },
     {
      "type": "list",
@@ -3751,105 +4918,13 @@
     },
     {
      "type": "p",
-     "text": "{admin} **AI chat and questions** at the top turns the AI models off or on for the whole home. Off keeps speech-to-text and hides the rest of the model rows. On says how much it will download (about 6.4 GB, or 9.1 GB on a server with 24 GB of memory or more) before it starts."
+     "text": "{admin} **AI chat and questions** at the top turns the AI models off or on for the whole home. Off keeps speech-to-text and hides the rest of the model rows. On says how much it will download (about 6.4 GB, or 9.1 GB on a server with 24 GB of memory or more) before it starts. See [When AI is off](node:ai-off)."
     }
    ],
    "more": {
     "text": "More detail",
     "target": "doc:docs/CPU_HOST.md#the-short-version"
    }
-  },
-  {
-   "id": "help-desk",
-   "topic": "keeping-it-running",
-   "title": "Asking Domovoi for help",
-   "subtitle": "ask it, show it, report it",
-   "keywords": [
-    "help",
-    "how do i",
-    "ask domovoi",
-    "screenshot",
-    "report a problem",
-    "diagnostics",
-    "send the steps",
-    "question mark"
-   ],
-   "blocks": [
-    {
-     "type": "p",
-     "text": "Domovoi answers questions about itself: from this manual, its FAQ and troubleshooting guide, and the help of the plugins you installed. It answers only from what it finds. When nothing covers the question, it says \"The manual doesn't cover that.\" rather than guessing."
-    },
-    {
-     "type": "label",
-     "role": "how",
-     "text": "How to"
-    },
-    {
-     "type": "list",
-     "ordered": false,
-     "items": [
-      {
-       "text": "Press **?** at the top of any page. Search the help, or press **ask Domovoi** to start a chat called \"Help: …\".",
-       "only": "dashboard"
-      },
-      {
-       "text": "An error message has **ask Domovoi about this**: the help opens with the error's code and the page you were on.",
-       "only": "dashboard"
-      },
-      {
-       "text": "In a chat, ask \"how do I …?\" or \"why is the kitchen offline?\". Domovoi also reads what its own checks show: rooms that are offline and why, plugins, its containers, and the last update (its details only for an admin)."
-      },
-      {
-       "text": "**Something on your screen?** Paste or attach a screenshot in a chat on the home server. The vision model reads it on your server; it never leaves your home."
-      },
-      {
-       "text": "A chat on this phone answers from the app's own copy of the manual, offline. It can't read screenshots yet: use a home-server chat for those.",
-       "only": "app"
-      }
-     ]
-    },
-    {
-     "type": "label",
-     "role": "say",
-     "text": "Try saying"
-    },
-    {
-     "type": "say",
-     "phrases": [
-      {
-       "text": "how do I add a room",
-       "handler": "help_desk",
-       "path": "fast"
-      },
-      {
-       "text": "how do I change the wake word",
-       "handler": "help_desk",
-       "path": "fast"
-      }
-     ]
-    },
-    {
-     "type": "p",
-     "text": "After the short answer, Domovoi asks \"Want me to send the steps to your phone?\" Say yes, and they arrive as a chat called \"Help: …\" on the phones marked as yours ([Settings → Phones & browsers](route:app/connection), **This phone belongs to**, in the app). If Domovoi doesn't know your voice, it asks who to send them to. It never sends them to every phone."
-    },
-    {
-     "type": "label",
-     "role": "wrong",
-     "text": "If something's wrong"
-    },
-    {
-     "type": "list",
-     "ordered": false,
-     "items": [
-      {
-       "text": "**AI chat and questions are off**: help still searches the manual and the docs, with no model, and screenshots can't be read. See [Models](node:models)."
-      },
-      {
-       "text": "**Help can't solve it**: **report a problem**, in the **?** panel, builds a summary of your Domovoi with no passwords, codes, addresses or names. Read it, then copy or save it and post it yourself, on GitHub Discussions or Discord. Nothing is sent for you."
-      }
-     ]
-    }
-   ]
   },
   {
    "id": "troubleshooting",
@@ -3870,6 +4945,9 @@
      "ordered": false,
      "items": [
       {
+       "text": "**Something needs attention on Home**: it opens [Health](node:health)."
+      },
+      {
        "text": "**A room doesn't answer**: see [Your rooms](node:rooms)."
       },
       {
@@ -3877,6 +4955,9 @@
       },
       {
        "text": "**\"Just a moment, I'm waking up my language model\"**: normal once after a restart."
+      },
+      {
+       "text": "**\"I'm set up for home commands\"**: AI chat and questions are off. See [When AI is off](node:ai-off)."
       },
       {
        "text": "**The dashboard looks old after an update**: reload the page once."
@@ -3888,13 +4969,16 @@
        "text": "**Chat says pictures need the vision model**: [Models](node:models)."
       },
       {
-       "text": "**Something is greyed with \"needs internet\"**: [Internet](node:internet)."
+       "text": "**Something is greyed with \"needs internet\"**, or Chat can't look something up: [Internet](node:internet)."
+      },
+      {
+       "text": "**A draft got a detail wrong**: change it with **edit**. See [Write a draft](node:drafts)."
       },
       {
        "text": "**Not sure where to look**: ask Domovoi: [Asking Domovoi for help](node:help-desk)."
       },
       {
-       "text": "**App: can't find the server**: same Wi-Fi as the server? **add manually** with the dashboard's address."
+       "text": "**App: can't find the server**: is the phone on the same Wi-Fi as the server? Use **add manually** with the dashboard's address."
       }
      ]
     }
