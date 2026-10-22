@@ -25,7 +25,7 @@ sequenceDiagram
     Pi->>S: (WS connect /v1/stream/kitchen)
     Note over S: hello gate — nothing is provisioned, registered<br/>or acknowledged until an accepted hello arrives.<br/>No hello within SATELLITE_HELLO_TIMEOUT_SEC (5 s) → close
     Pi->>S: hello {room_id, wake_word, synced_sha,<br/>supports_full_duplex, pairing_token,<br/>sat_type?, mic_enabled?, speech_pause?,<br/>capture_control?, announce_after_session_end?,<br/>supports?, board?}
-    Note over S: pairing check (V002): a matching token is accepted;<br/>a first-time token is parked for approval (the default)<br/>or claims the room when SATELLITE_PAIRING_STRICT is off.<br/>Mismatch / missing token → error + close.
+    Note over S: pairing check (V002): a matching token is accepted,<br/>a first-time token is parked for approval (the default)<br/>or claims the room when SATELLITE_PAIRING_STRICT is off.<br/>Mismatch / missing token → error + close.
     Note over S: ensure_room("kitchen") — lazily provisions<br/>this room's MPD container, then registers the session
     S-->>Pi: ready {protocol_version:"0.1", room_id,<br/>bot_name, audio_sample_rate_in:16000, features}
     Pi->>S: config_status {config}          — cached per room

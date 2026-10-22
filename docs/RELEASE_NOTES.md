@@ -22,10 +22,11 @@ dependency.
   Settings address in the dashboard, and a release build would then have
   sent **Open Domovoi** to Settings' first page instead of the first-run
   admin setup. It checks the current address now.
-* **The wordmark font.** The "domovoi" wordmark was set in Cash Currency,
-  which Domovoi has no licence to ship; it is removed, and the wordmark
-  now uses a display font under the SIL Open Font License
-  ([docs/LICENSES.md](LICENSES.md)).
+* **The design kit's display font.** Domovoi had no licence to ship the
+  old display font, so it is removed. The design kit's display face is
+  now Playfair Display SC, under the SIL Open Font License
+  ([docs/LICENSES.md](LICENSES.md)). The dashboard's wordmark, set in
+  Inter, is unchanged.
 
 ## 2026-10-21 — "What does this letter say?" in Chat
 

@@ -139,7 +139,7 @@ class ChatPlaceTest {
 
     @Test fun theListSaysWhatItHolds() {
         assertEquals("text chat with Domovoi — on this phone, or on your home server", chatSubtitle(listOf(Server, Phone)))
-        assertEquals("text chat with Domovoi on this phone — no server, no internet", chatSubtitle(listOf(Phone)))
+        assertEquals("text chat with Domovoi on this phone — no server needed", chatSubtitle(listOf(Phone)))
         assertEquals("text chat with Domovoi — runs on your own hardware", chatSubtitle(listOf(Server)))
         // Built from the places that can START a chat: a phone under the
         // memory floor lists its (no) chats but is never promised.

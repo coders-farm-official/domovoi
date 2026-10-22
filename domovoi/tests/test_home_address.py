@@ -144,7 +144,7 @@ def test_a_name_is_judged_as_written_never_resolved(monkeypatch):
 
 
 def test_the_hosts_the_rule_knows():
-    for host in ("192.168.0.1", "10.255.255.255", "172.16.0.0", "169.254.169.254", "127.0.0.1",
+    for host in ("192.168.1.1", "10.255.255.255", "172.16.0.0", "169.254.169.254", "127.0.0.1",
                  "100.64.0.1", "100.127.255.255", "::1", "fc00::", "fdff::1", "fe80::", "febf::1",
                  "[fd00::1]", "localhost", "LOCALHOST.", "printer.local", "x.home.arpa", "x.localhost"):
         assert plain_http_permitted(host), host

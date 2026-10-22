@@ -83,13 +83,14 @@ def test_a_plugin_page_is_in_only_while_the_plugin_is() -> None:
 
 
 def test_plugin_help_is_indexed_with_the_manual() -> None:
-    helps = [PluginHelp("printing", "Printing", "## How do I add a printer?\n\nOpen Printers and press add.\n",
-                        "#printers")]
+    # A topic no core doc covers, so the plugin's page is the best match.
+    helps = [PluginHelp("theremin", "Theremin", "## How do I tune the theremin?\n\nOpen Theremin and press tune.\n",
+                        "#theremin")]
     ix = build_index(manual={}, plugin_helps=helps)
-    hit = ix.search("how do I add a printer")[0]
+    hit = ix.search("how do I tune the theremin")[0]
     assert hit.confident() and hit.passage.kind == "plugin"
-    assert hit.passage.section == "Printing plugin → How do I add a printer?"
-    assert hit.passage.link == "#printers"
+    assert hit.passage.section == "Theremin plugin → How do I tune the theremin?"
+    assert hit.passage.link == "#theremin"
     # A file with no headings is one section, named after the plugin.
     flat = plugin_passages([PluginHelp("x", "Xylo", "Play the xylophone loudly.", None)])
     assert flat[0].section == "Xylo plugin → Xylo"

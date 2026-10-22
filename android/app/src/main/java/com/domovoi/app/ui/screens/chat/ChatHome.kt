@@ -171,7 +171,7 @@ fun ChatScreen(away: Boolean = false, awayLine: String? = null) {
 internal fun chatSubtitle(startable: List<ChatPlaceKind>): String = when {
     ChatPlaceKind.Server in startable && ChatPlaceKind.Phone in startable ->
         "text chat with Domovoi — on this phone, or on your home server"
-    ChatPlaceKind.Phone in startable -> "text chat with Domovoi on this phone — no server, no internet"
+    ChatPlaceKind.Phone in startable -> "text chat with Domovoi on this phone — no server needed"
     ChatPlaceKind.Server in startable -> "text chat with Domovoi — runs on your own hardware"
     else -> "text chat with Domovoi"
 }

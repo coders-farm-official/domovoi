@@ -764,8 +764,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     # docstring); "Turn on wake-word training" writes it.
     FieldSpec(
         "wake_word_trainer_enabled", "Wake-word training", "Wake words",
-        "Train the wake words recorded in Settings → Wake words. Turn it on "
-        "with Settings → Wake words → \"Turn on wake-word training\", which "
+        "Train the wake words recorded in Settings → Voice → Wake words. Turn it on "
+        "with Settings → Voice → Wake words → \"Turn on wake-word training\", which "
         "builds the trainer and downloads its training data first; switched "
         "on here without that, every training fails with \"image not "
         "found\". Off: no new training starts (one already running "
