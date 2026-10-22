@@ -360,14 +360,21 @@ internal fun PhoneChat(assistant: AssistantController, openId: String?, frame: C
     var resumed by remember { mutableStateOf(0) }
     androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) { resumed++ }
     androidx.compose.runtime.LaunchedEffect(choice, aiOnServer, resumed) {
-        assistant.setLetterServer(null)
+        // Not nulled first: the photo picker and the camera resume the app, and
+        // dropping the reader here would drop the letter photo just chosen
+        // (it is only cleared once the server is known not to be ready).
         val paired = choice is com.domovoi.app.ui.shell.ServerChoice.Available && !choice.needsPairing && aiOnServer
-        if (!paired) return@LaunchedEffect
+        if (!paired) {
+            assistant.setLetterServer(null)
+            return@LaunchedEffect
+        }
         val ready = runCatching { com.domovoi.app.ui.screens.chat.lettersReady(app) }.getOrNull()
         if (ready != null && ready.ai && ready.vision == true) {
             assistant.setLetterServer(com.domovoi.app.assistant.LetterServer { jpeg, stop ->
                 com.domovoi.app.ui.screens.chat.readLetterOnServer(app, jpeg, stop)
             })
+        } else {
+            assistant.setLetterServer(null)
         }
     }
     androidx.compose.runtime.DisposableEffect(Unit) { onDispose { assistant.setLetterServer(null) } }
