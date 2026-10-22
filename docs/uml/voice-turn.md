@@ -18,12 +18,12 @@ sequenceDiagram
     autonumber
     participant Pi as Satellite Pi<br/>(room "kitchen")
     participant WS as StreamSession<br/>(core :6370)
-    participant STT as Whisper client<br/>(CUDA, in-process)
+    participant STT as Whisper client<br/>(CUDA or CPU, in-process)
     participant VID as Voice identifier
     participant R as Router<br/>(domovoi/router.py)
     participant H as Matched handler
     participant DB as Postgres
-    participant TTS as TTS chain<br/>edge → piper → system
+    participant TTS as TTS chain<br/>piper → system
 
     Note over Pi: wake word detected<br/>(openWakeWord, on-Pi)
     Note over Pi: acknowledge ([wake] ack_mode): the greeting<br/>or chime plays to the end, the mic audio<br/>under it is dropped, then listen
@@ -129,3 +129,15 @@ for an answer or fire a side effect.
   denylisted), the turn's embedding is buffered so a later "that was Sarah"
   introduction can enroll them — see the third-party-introduction hooks in
   `domovoi/handlers/voice_profile.py`.
+* **AI features off.** After the fast paths, a turn nothing took is answered
+  with a fixed "I can't answer that one" line instead of going to the tool
+  model or the Q&A model (`domovoi/ai_features.py`); nothing asks Ollama.
+* **Not only satellites.** The app's chat mic takes the same road
+  (speech-to-text, voice identification, the router, text-to-speech) through
+  `POST /v1/phone/voice` (`domovoi/phone_voice.py`), without a satellite
+  session or a room's player; both turns are written into the chat thread.
+* **Documents by voice.** "Read me the lease" and "take a letter to the
+  landlord" are ordinary fast-path handlers (`documents`, band 225,
+  `domovoi/handlers/documents.py`) and add no stage. Reading needs no model; a
+  letter keeps the room listening until "end of letter", then saves a draft
+  into Documents → From Chat and sends it nowhere.

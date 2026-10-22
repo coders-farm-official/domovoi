@@ -24,14 +24,18 @@ conflict, and Home Assistant can make Domovoi speak.
 
 Home Assistant's `rest_command` can call Domovoi's announce endpoint to
 speak a message on one satellite, or on every satellite if `room_id` is
-omitted. A satellite that is mid-response is skipped rather than cut off,
+left out of the request. An empty `room_id` is not the same as leaving it
+out: Domovoi answers it with "room '' not connected" (404). The example below
+always names a room; to announce everywhere, make a second `rest_command`
+whose payload has only `message`. A satellite that is mid-response is skipped rather than cut off,
 and music resumes after the announcement.
 
 The endpoint is on Domovoi's device tier (see
 [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#the-tiers)), so it needs the
-household device token. Read it from the dashboard (Settings) or from
-`~/.domovoi/device-token.txt` on the server, and keep it in Home Assistant's
-`secrets.yaml` as `domovoi_device_token`. If you rotate it in Domovoi,
+household device token. An admin can read it on the dashboard (Settings → Phones & browsers) or in
+`~/.domovoi/device-token.txt` on the server (on a Windows install the file is
+inside Domovoi's private distro, so use the dashboard). Keep it in Home
+Assistant's `secrets.yaml` as `domovoi_device_token`. If you rotate it in Domovoi,
 update it here too.
 
 A household token an admin chose may hold any printable ASCII, so **quote

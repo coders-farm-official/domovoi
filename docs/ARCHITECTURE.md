@@ -27,8 +27,11 @@ Related reading: [API_REFERENCE.md](API_REFERENCE.md) for endpoint details,
 
 ## 1. Processes and ports
 
-Domovoi is a small constellation of processes on one server (Windows-first,
-CUDA for speech-to-text), plus Raspberry Pi satellites around the house.
+Domovoi is a small constellation of processes on one home server, plus
+satellites (Raspberry Pi boards, spare computers, phones) around the house.
+The server is a Linux box, a Windows PC set up with the one-click installer
+(the same stack inside a private WSL2 distro), or a native Windows install.
+A GPU makes speech-to-text and the AI models faster; none is required.
 
 ```mermaid
 flowchart LR
@@ -42,8 +45,9 @@ flowchart LR
         CORE["Core voice service<br/>domovoi/ — FastAPI<br/>:6370"]
         WEB["Web dashboard backend<br/>web/ — FastAPI<br/>:6369"]
         PG[("Postgres (docker)<br/>host :6432 → 5432<br/>DBs: domovoi, domovoi_test")]
-        OLLAMA["Ollama<br/>:11434<br/>two models"]
+        OLLAMA["Ollama<br/>:11434<br/>chat, tool and<br/>vision models"]
         SEARX["SearXNG<br/>:6888"]
+        LETTA["Letta (optional)<br/>host :6283"]
         MPD1["MPD container<br/>domovoi-mpd-kitchen<br/>ctrl 6650+N / http 8050+N"]
         MPD2["MPD container<br/>domovoi-mpd-office<br/>ctrl 6650+M / http 8050+M"]
     end
@@ -58,23 +62,27 @@ flowchart LR
     CORE --> PG
     CORE --> OLLAMA
     CORE --> SEARX
+    CORE -.-> LETTA
     CORE -->|"provisions + controls"| MPD1
     CORE --> MPD2
 ```
 
 | Process | Port | What it is |
 |---|---|---|
-| **Core voice service** (`python -m domovoi.main`) | **6370** | FastAPI app. STT → intent routing → handlers → TTS, the satellite WebSocket endpoint, background workers, the plugin runtime, admin endpoints. Whisper (faster-whisper, CUDA) runs in-process. |
+| **Core voice service** (`python -m domovoi.main`) | **6370** | FastAPI app. STT → intent routing → handlers → TTS, the satellite WebSocket endpoint, background workers, the plugin runtime, admin endpoints. Whisper (faster-whisper; CUDA when there is an NVIDIA GPU, otherwise the CPU) runs in-process. |
 | **Web dashboard** (`python -m web.backend.main`) | **6369** | A separate FastAPI process. Reads the same Postgres directly; anything touching *live* state (connected satellites, now playing) is proxied to core admin endpoints. Serves the no-build React frontend. **Never imports the plugin runtime.** |
 | **Postgres** (docker compose, `domovoi/docker-compose.yml`) | **6432** (host) → 5432 (container) | Databases `domovoi` and `domovoi_test`. The non-default host port lets Domovoi coexist with any Postgres already on 5432. |
 | **Per-room MPD** (docker, lazy) | control **6650+N**, http-stream **8050+N** | One MPD daemon per satellite room so queues/volume are independent. Provisioned on first WebSocket connect for an unknown `room_id` by `domovoi/mpd_provisioner.py`; **not** in the compose file. Container `domovoi-mpd-<room>` maps host ports onto in-container 6600/8001. Assignments persist in the `mpd_rooms` table (allocation is `max + 1` from the bases, serialized by a Postgres advisory lock). |
 | **Ollama** | 11434 | Two model slots — see below. |
-| **SearXNG** | 6888 (default `SEARXNG_URL`) | Local metasearch for the "want me to check that online?" flows. |
+| **SearXNG** | 6888 (default `SEARXNG_URL`) | Local metasearch for the "want me to check that online?" flows and for chat lookups ([§6](#chat-documents-lookups-and-help)). |
+| **Letta** (docker, optional `chat` profile) | **6283** (host) → 8283 | The stateful agent behind spoken chat mode only (§2 step 4). The dashboard's Chat does not use it. It runs only under the `chat` compose profile; `LETTA_BASE_URL` points at it. |
 
-**Two Ollama models, not one.** `OLLAMA_MODEL` (default `llama3.2:3b`) answers
+**Two main Ollama models, not one.** `OLLAMA_MODEL` (default `llama3.2:3b`) answers
 conversational Q&A — fast and cheap matters. `OLLAMA_TOOL_MODEL` (default
 `qwen2.5:14b`) routes tool-call dispatch — schema adherence matters. They are
-deliberately separate knobs.
+deliberately separate knobs. A third, `OLLAMA_VISION_MODEL`, answers chat
+messages that carry a picture. With AI features off (§2) Ollama is not asked
+at all.
 
 Core settings load from environment variables and `domovoi/.env` in the repo
 checkout — dashboard edits persist back to that file (see
@@ -222,7 +230,12 @@ same switch, and plugins' `sdk.http` clients refuse model requests.
 **Every routed turn is persisted** by `router._persist_turn`: one `intents_log`
 row (routing decision, latency, presence), one `conversation_log` row (full
 user/assistant text), and an append to the session's `recent_turns`. This is
-centralized and non-optional — see [Invariants](#9-invariants).
+centralized and non-optional — see [Invariants](#9-invariants). What those
+rows hold is the household's "keep voice history" choice (30, 90 or 365 days,
+or forever; 90 by default): the core's `voice_history_pruner` deletes
+everything older once a day, from both logs, the rooms' short-term
+conversations and the satellite logs kept on the server (V030,
+`domovoi/voice_history.py`).
 
 A turn spoken to a satellite also carries a per-stage stopwatch
 (`domovoi/turn_timings.py`, on `Context.timings`): capture length, the
@@ -270,6 +283,7 @@ map (from `domovoi/handlers/__init__.py`):
 |---|---|---|
 | 100 | `dismiss` | Brush-offs win before anything acts |
 | 105 | `help` | "What can you do" / "help": whole closed questions, answered from the live handler list |
+| 106 | `help_desk` | "How do I …" about Domovoi itself, answered from its own manual (§6, "The help desk"); no earlier band has a "how do I" pattern |
 | 110 | `voice_profile` | "I'm Sarah" before any greedy capture |
 | 120 | `wifi` | "Fix the wifi" wins over any future "fix" |
 | 130 | `voice` | Device-control cluster near the top |
@@ -342,7 +356,8 @@ exactly one process and one loop that mutate them.
 Core's own workers live in `domovoi/workers/`: the timer watcher, library
 indexer + enricher, playback-state sweeper, media-plays pruner, news fetcher,
 podcast feed poller, audiobook indexer, memory extractor, wake-word trainer,
-document lock sweeper, the MusicBrainz alias fetch, the three lyrics
+the pruners for command recordings, guest sightings and voice history, the
+per-room audiobook positions, the MusicBrainz alias fetch, the three lyrics
 workers (`lyrics_scan`, `lyrics_fetch`, `lyrics_index` — §6 "Lyrics"), the
 three printing workers (§6 "Printing and scanning"), and the container guard (`container_guard`, `domovoi/container_guard/`): every
 30 s it compares the Docker containers the core expects — the compose
@@ -589,8 +604,9 @@ MPD text search that was always there.
   rule. The web writes plain rows; the core sees them through the
   fingerprint. Open reads name the device that added a name only to a
   caller on the device tier.
-* **MusicBrainz aliases** (`workers/library_alias_fetch.py`): OFF by default
-  (`music_alias_fetch_enabled`, switchable without a restart), online only,
+* **MusicBrainz aliases** (`workers/library_alias_fetch.py`): off until the
+  internet answer is "always" or "sometimes" (`music_alias_fetch_enabled`
+  follows it; switchable without a restart), online only,
   through the shared 1 request/s MusicBrainz client. A hit must name the
   library's spelling; a strict filter drops legal names, non-English and
   non-Latin forms, and for people any alias sharing a word with their legal
@@ -783,7 +799,7 @@ proxies its routes (`/v1/printers`, `/v1/print`, `/v1/scan` →
 | `raster.py` | PWG Raster and URF encoders, back sides per `sheet-back`, and an independent strict reader |
 | `render.py`, `render_worker.py`, `templates.py` | Page drawing in a short-lived worker process with a time limit: pypdfium2 for PDFs, ReportLab for the test page, text, tables, pictures and scan PDFs (DeviceRGB only) |
 | `jobs.py`, `store.py` | Preview, limits, send, follow, cancel, the job log (V033) and spoken failures |
-| `escl.py`, `scans.py` | The eSCL client and scan sessions into `Documents/Scans/`; `register_reader` is the seam the documents work fills for "what does this letter say?" |
+| `escl.py`, `scans.py` | The eSCL client and scan sessions into `Documents/Scans/`; `register_reader` is the seam for reading a scanned page's text; nothing registers a reader yet (letters from photos go through Chat, below) |
 | `routes.py` | The tiers: device read, device, admin |
 
 The `printing` handler (band 222) owns "print …", "scan this", the ink and
@@ -795,6 +811,135 @@ Three core workers (`workers/printing.py`): printer status every 10
 minutes, jobs in flight every 15 seconds, and the 90-day job log plus
 forgotten scan sessions.
 
+### Chat, documents, lookups and help
+
+Source: `web/backend/api/chat*.py`, `domovoi/doc_extract/`, `domovoi/doc_qa/`,
+`domovoi/lookup*.py`, `domovoi/help_desk/`. Chat is a feature of the **web process**, not of the voice router. The
+app's One Chat has two places a chat can run: **on this phone** (an on-device
+model that never calls the server) and **on home server**, the threads
+described here, which every paired device shares.
+
+* **Threads.** `web/backend/api/chat.py` (`/api/chat`) keeps `chat_threads`
+  and `chat_messages` (V007) in Postgres and streams each reply as
+  server-sent events straight from the local Ollama: the chat model, or the
+  vision model when the message carries pictures (stored under
+  `~/.domovoi/chat_uploads/`, shown to no other model). A title is the first
+  five words of the first message, then a title of at most five words the
+  chat model writes in the background after the first reply; a name a person
+  gave is never written over (V034, `domovoi/chat_titles.py`). Rename,
+  archive and search (`GET /api/chat/threads?q=`) are thread calls; pinning
+  is kept on each phone. Deleting a thread deletes its pictures and
+  documents. With AI features off, sending is refused and the Chat page is
+  hidden. The household's conversations are read at the device-read tier.
+* **Voice in a thread.** The app's chat mic posts a recording to the core's
+  `POST /v1/phone/voice` (`domovoi/phone_voice.py`), which answers it like a
+  satellite turn (speech-to-text, voice identification, the same router,
+  text-to-speech) without registering a satellite session, and writes both
+  rows into the thread with `source = 'voice'` (V025). Spoken chat mode (§2,
+  step 4) is a separate path through the Letta agent.
+* **What a send does, in order** (`_answer`): a request to write a resume,
+  cover letter or letter, to revise the chat's draft, or to print it is a
+  draft turn (below); a thread with documents is answered from them; photos
+  that ask what a letter says go to the letter reader (below); a question
+  about Domovoi that the help desk holds an answer for is answered from the
+  help; a lookup request goes to the lookup flow; anything else goes to the
+  model.
+* **Documents (V036, V038).** A chat takes a PDF, Word (.docx),
+  OpenDocument (.odt), Excel (.xlsx), CSV, text or markdown file.
+  `domovoi/doc_extract/` reads it in a short-lived worker process with a time
+  and memory cap into labelled parts (a page, a section, 40 spreadsheet
+  rows); the file is somebody else's bytes, so zips and XML are screened and
+  nothing opens a network connection. `domovoi/doc_qa/` cuts the parts into
+  passages, ranks them with a BM25 of its own and builds a prompt in which
+  the passages are a marked block of data, never instructions; the reply is
+  then checked, so only citations of passages that were given survive, and
+  "I couldn't find that in the document" is recognized. A summary of a
+  document longer than one pass is a **job** (`chat_doc_jobs`,
+  `web/backend/api/chat_doc_jobs.py`): it reads the document part by part,
+  waits while a voice turn is being answered (`GET /v1/voice/activity`),
+  keeps its notes as it goes, and can be stopped and carried on. The
+  attachment and the text read from it stay on the server
+  (`~/.domovoi/chat_uploads/documents/`) with the chat. A phone can ask the
+  server only to read a PDF's text (`POST /api/chat/documents/extract`,
+  nothing kept) or to run a private summary job that lives in the web
+  process's memory and is deleted when it ends.
+* **Exact sums and heads-ups.** The model is not asked to add up numbers it
+  was given. For "calculate exactly" over a spreadsheet or a long document it
+  only lists the numbers or dates the question needs, each with the passage
+  it came from; the app reads them under a strict allowlist, checks each
+  against its page, and does the sum, average, difference or days-between
+  itself (`domovoi/doc_qa/calc.py`). Anything it cannot read with certainty
+  refuses the whole calculation in a fixed sentence that names the entry.
+  Before a result the app knows is shaky (a scanned page, another language, a
+  sum spread through a long document, a rewrite of the whole thing, a blurry
+  or handwritten photo) a short heads-up card says so, decided from the
+  wording and the documents by code, never by the model, and from a measured
+  table (`domovoi/doc_qa/headsup.py`, `chat-weak-spots.json`); the card shows
+  once per chat per kind and can be silenced on each device.
+* **Drafts (V039).** A home-server chat can write a resume, a cover letter or
+  a letter when asked, and revise it ("shorter"). The model writes markdown
+  in a fixed skeleton for the kind; it never lays anything out. Our own
+  template code (`domovoi/drafts/`: templates, line breaking and pagination,
+  a PDF writer on ReportLab and a .docx writer on python-docx, and a
+  word-level diff between versions) turns a version into a file, and the same
+  rules run on the phone. `web/backend/api/chat_drafts.py` keeps every
+  version in `chat_drafts` and `chat_draft_versions`, which are deleted with
+  the chat. A file exists only when a version is saved: into Documents →
+  From Chat, through the Documents write policy (the per-device block and the
+  secret-name filter), then read back and compared with the draft; "print it"
+  goes through the printing preview. The Liberation fonts (SIL Open Font
+  License 1.1) sit in `domovoi/drafts/fonts/` beside their licence text.
+  Nothing is sent anywhere. These routes need no model, so saving works with
+  AI features off.
+* **Letters from photos.** Photos in a home-server chat that ask what a
+  letter says or what to do about it (`domovoi/doc_qa/letter.py`,
+  `web/backend/api/chat_letters.py`) are read in steps: the vision model says
+  printed or handwritten, transcribes each photo, and the chat model explains
+  the transcript in plain words that name no figure. Every date and amount
+  shown is a sentence quoted from the letter's own transcript, under its
+  photo, and a reference number is shown only character for character, so a
+  wrong figure cannot be displayed. The chat keeps the transcript (the
+  household's own chat, which already holds the photo) and deletes it with the
+  chat. A phone whose own model cannot read photos sends one to
+  `POST /api/chat/letters/read`, which reads it in memory and keeps nothing.
+* **Lookups (V037).** A chat may look things up, with permission. The model
+  can only propose one (`LOOK_UP: <words>` or `READ_PAGE: <https address>`;
+  common phrasings such as "look up …" skip the model) and the chat decides
+  what happens. Sources register under the `lookup-source` capability
+  (`domovoi/lookup.py`; `ctx.add_lookup_source` for a plugin) in three
+  classes, asked in this order: **local** (Domovoi's own help and an
+  allowlisted offline library such as Kiwix; they never leave the box, so
+  they need no permission and work with the internet answer "never"),
+  **api** (Wikipedia and Wikidata) and **web** (the other search engines, or
+  the household's own search). The core fixes a source's class when it
+  registers, so a plugin cannot move itself up. Anything that would leave the
+  house shows a permission card first (allow once, allow in this chat, not
+  now; `chat_threads.internet_allowed`, or the household's "always allow"),
+  and every byte that does leave goes through `domovoi/egress.py`. Results
+  are data: the model is given at most three passages in a fenced block, told
+  to answer only from them, and the sources line under the reply is written
+  by code. The query words are not logged. `domovoi/lookup_web.py` holds the
+  internet sources; the phone app follows the same rules and reaches them
+  through `POST /api/chat/lookup`. See
+  [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#looking-things-up-chat-lookups).
+* **The help desk** (`domovoi/help_desk/`, V035). Domovoi answers questions
+  about Domovoi from what it knows for certain: the manual, `FAQ.md`,
+  `TROUBLESHOOTING.md`, the dashboard's error-code entries and the help
+  file an installed plugin names in its manifest, cut into passages and
+  searched with a small BM25 of its own. It is a local lookup source, so it
+  needs no permission and works with AI features off.
+  `GET /api/help/search` (the "?" in the top bar) is that search alone, with
+  no model. In chat, a question about Domovoi whose answer the help holds
+  (and any thread titled "Help: …") is answered from the passages found and
+  ends with the sections they came from, written by code; when the help
+  does not cover it the reply is "The manual doesn't cover that." Live facts
+  (version, rooms, the internet answer, plugins) and redacted, read-only
+  summaries of the system's own records back "what is wrong?" questions, and
+  "Report a problem" builds a summary the person reads and copies: nothing is
+  sent or kept. By voice, the `help_desk` handler (band 106) speaks the best
+  passage's first sentences and offers to send the steps to the asker's
+  phone as a "Help: …" chat (`help_deliveries`): only to phones marked as
+  theirs, never to everyone.
 
 ---
 
@@ -818,8 +963,9 @@ never produces a phantom event.
 Core channels map NOTIFY → realtime like `acquisitions_changed →
 acquisitions`, `playlists_changed → playlists`, `library_changed →
 library.indexer`, `wake_words_changed → wake_words`, `timers_changed →
-timers` (a timer set, cancelled or fired), `plugins_changed` (the plugin
-registry), and more. One channel has no NOTIFY: `files` (the filesystem
+timers` (a timer set, cancelled or fired), `chat_changed → chat.changed` (a
+thread or message written, so a second open dashboard's list stays fresh),
+`plugins_changed` (the plugin registry), and more. One channel has no NOTIFY: `files` (the filesystem
 libraries, which have no DB index) counts the web's own writes and, on the
 poll tick, folder-mtime changes under listings someone is viewing
 (`web/backend/api/listing_cache.py`). Enabled plugins add their own pairs via manifest

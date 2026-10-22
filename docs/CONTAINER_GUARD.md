@@ -274,8 +274,8 @@ conservative about what counts and loud about what does
   has lasted 2 minutes** (`CONTAINER_GUARD_FAILURE_GRACE_SEC`): a `docker
   restart`, or a crash that `restart: unless-stopped` heals in seconds,
   never pages anyone. Docker itself not answering needs **5 minutes**
-  (`CONTAINER_GUARD_DAEMON_GRACE_SEC`): Docker Desktop restarting is not an
-  outage.
+  (`CONTAINER_GUARD_DAEMON_GRACE_SEC`): Docker restarting (Docker Desktop, or
+  the engine in the Windows install's distro) is not an outage.
 * **Tampering** opens after two checks in a row at least 25 seconds apart
   (`CONTAINER_GUARD_TAMPER_CONFIRM_SEC`).
 * A failure **resolves** after two clean checks in a row, or at once when
@@ -398,7 +398,9 @@ event on the dashboard's state socket.
 ## Reviewing and clearing a tamper incident
 
 Open Settings → Health, signed in as the admin. Each incident shows what
-Domovoi expected and what it found. Then, on the Domovoi server:
+Domovoi expected and what it found. Then, on the Domovoi server (on the
+Windows install, inside its private WSL2 distro: see
+[WINDOWS_HOST.md](WINDOWS_HOST.md)):
 
 1. **A different image.** `docker inspect <container>` shows the image it
    runs (`.Image`, `.Config.Image`). If you changed it yourself (an
