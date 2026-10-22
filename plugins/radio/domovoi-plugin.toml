@@ -79,7 +79,7 @@ subprocess = true
 hardware = true
 warnings = [
   "Samples short clips of whatever station is tuned and can send them to an online song-identification service (Shazam).",
-  "Can automatically request downloads of detected songs.",
+  "Notes which songs it heard, and whether you already own them. It never queues or downloads anything.",
   "Queries external station directories (radio-browser.info, FCC) over the network.",
   "Runs ffmpeg (and rtl_fm when SDR hardware is enabled) on your machine. SDR hardware is optional.",
 ]
