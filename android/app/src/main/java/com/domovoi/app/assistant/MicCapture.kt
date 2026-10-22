@@ -94,10 +94,13 @@ class MicCapture(
         stopRequested = true
     }
 
-    /** Null when no speech was heard at all. */
+    /** Null when no speech was heard at all. [giveUpAfterS]: with no
+     *  speech heard by then, the mic closes and null comes back (a card's
+     *  yes-or-no window, which nobody may answer). */
     suspend fun listen(
         detector: SpeechDetector,
         maxSeconds: Double = 15.0,
+        giveUpAfterS: Double? = null,
         onSpeechStart: () -> Unit = {},
     ): Utterance? = withContext(Dispatchers.IO) {
         stopRequested = false
@@ -131,6 +134,9 @@ class MicCapture(
                     onSpeechStart()
                 }
                 if (finished != null) return@withContext Utterance(finished, speechStart, clock(), EndedBy.SILENCE)
+                if (speechStart == null && giveUpAfterS != null && heard >= (giveUpAfterS * SPEECH_SAMPLE_RATE).toLong()) {
+                    return@withContext null
+                }
                 if (heard >= (maxSeconds * SPEECH_SAMPLE_RATE).toLong()) {
                     return@withContext detector.flush()?.let { Utterance(it, speechStart, clock(), EndedBy.LENGTH_CAP) }
                 }

@@ -53,6 +53,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -418,11 +420,33 @@ class AssistantController(
             transcribe = { kit.recognizer().transcribe(it) },
             answer = ::answerSpoken,
             voice = { kit.speech().also { _state.update { s -> s.copy(voiceName = kit.voiceName) } } },
-            stopModel = { engine?.cancel() },
+            stopModel = {
+                stopAsked = true
+                engine?.cancel()
+            },
             focus = focus,
             work = io,
             clock = nanos,
+            awaitsAnswer = ::awaitsSpokenAnswer,
+            listenForAnswer = { onSpeech ->
+                kit.mic.listen(kit.detector(), onSpeechStart = onSpeech, giveUpAfterS = VoiceSession.ANSWER_WAIT_S)
+            },
         )
+    }
+
+    /** The person asked for the reply to stop (stop, a new chat, the mic's
+     *  stop): a cancel then is theirs. Any other cancel of a reply came from
+     *  the runtime by itself and is never shown as "stopped". */
+    @Volatile private var stopAsked = false
+
+    /** The reply just spoken ends in a question a yes or no answers: an
+     *  open asked-first card, or a lookup card. */
+    private fun awaitsSpokenAnswer(): Boolean {
+        val last = _state.value.conversation.messages.lastOrNull() ?: return false
+        if (last.fromUser || _state.value.replying) return false
+        val card = last.card
+        if (card != null && card.kind == CardKind.ACTION && card.state == CardState.OPEN) return true
+        return last.lookupCard?.state == com.domovoi.app.assistant.lookup.LookupCard.PENDING
     }
 
     init {
@@ -1009,6 +1033,7 @@ class AssistantController(
         val asked = ui.conversation.let {
             it.copy(updated = now, messages = it.messages + StoredMessage(Speaker.USER, said, now, photo = photo != null))
         }
+        stopAsked = false
         // The photo leaves the screen's state now; only this turn holds it.
         _state.update { it.copy(conversation = asked, replying = true, thinking = true, pendingPhoto = null, pendingPhotoServer = false) }
         val v = voice
@@ -1239,6 +1264,7 @@ class AssistantController(
         val asked = _state.value.conversation.let {
             it.copy(updated = now, messages = it.messages + StoredMessage(Speaker.USER, transcript, now, spoken = true))
         }
+        stopAsked = false
         _state.update { it.copy(conversation = asked, replying = true, thinking = true) }
         val done = reply(asked, onDelta)
         return { timing -> fileTiming(done, timing) }
@@ -1257,21 +1283,32 @@ class AssistantController(
             "silence wait), speech to text ${timing.sttMs} ms, first text ${timing.firstTextMs} ms")
         val index = done.messages.lastIndex
         if (index < 0 || done.messages[index].fromUser) return
-        val timed = done.messages[index].copy(
-            voiceMs = timing.toFirstWordMs, silenceWaitMs = timing.silenceWaitMs, sttMs = timing.sttMs,
-        )
-        updateMessage(done.id, index, timed)
+        // Only the timing goes onto the reply as it is NOW (Fold check
+        // 2026-10-21): this turn's copy still had its card OPEN, and writing
+        // that copy back after the voice finished reopened a card the person
+        // had already tapped, so a second tap set a second Clock timer.
+        updateMessage(done.id, index) {
+            it.copy(voiceMs = timing.toFirstWordMs, silenceWaitMs = timing.silenceWaitMs, sttMs = timing.sttMs)
+        }
     }
 
-    /** Replaces message [index] of conversation [id], on screen and on disk. */
-    private fun updateMessage(id: String, index: Int, message: StoredMessage) {
+    /** Changes message [index] of conversation [id] with [change], applied
+     *  to the screen's copy and the disk's as each stands at that moment
+     *  (never a copy read earlier: a card tapped meanwhile keeps its state). */
+    private fun updateMessage(id: String, index: Int, change: (StoredMessage) -> StoredMessage) {
         scope.launch {
-            val current = _state.value.conversation.takeIf { it.id == id }
-                ?: withContext(io) { conversations.load(id) } ?: return@launch
-            if (index !in current.messages.indices) return@launch
-            val changed = current.copy(messages = current.messages.toMutableList().also { it[index] = message })
-            _state.update { if (it.conversation.id == id) it.copy(conversation = changed) else it }
-            withContext(NonCancellable) { save(changed) }
+            _state.update { ui ->
+                val c = ui.conversation.takeIf { it.id == id } ?: return@update ui
+                if (index !in c.messages.indices) return@update ui
+                ui.copy(conversation = c.copy(messages = c.messages.toMutableList().also { it[index] = change(it[index]) }))
+            }
+            withContext(NonCancellable) {
+                diskLock.withLock {
+                    val disk = withContext(io) { conversations.load(id) } ?: return@withLock
+                    if (index !in disk.messages.indices) return@withLock
+                    save(disk.copy(messages = disk.messages.toMutableList().also { it[index] = change(it[index]) }), makeCurrent = false)
+                }
+            }
         }
     }
 
@@ -1419,7 +1456,11 @@ class AssistantController(
             val held = StringBuilder()
             var holding = offered
             var proposing = false
-            try {
+            // A cancel the person didn't ask for (the runtime's own, Fold
+            // check 2026-10-21) before any words: once more, on a fresh
+            // conversation, so it is never shown as "stopped".
+            var again = true
+            while (true) try {
                 llm.reply(turn)
                     .collect { piece ->
                         if (firstMs == null && piece.isNotBlank()) firstMs = (nanos() - sent) / 1_000_000
@@ -1447,8 +1488,15 @@ class AssistantController(
                             )
                         }
                     }
+                break
             } catch (_: ProposalLine) {
                 llm.cancel()
+                break
+            } catch (e: CancellationException) {
+                if (!again || !runtimeCancel() || text.isNotEmpty() || held.isNotEmpty()) throw e
+                again = false
+                Log.w(TAG, "the runtime cancelled a reply nobody stopped (${e.message}); asking once more")
+                llm.reset()
             }
             if (held.isNotEmpty()) {
                 val proposal = if (proposing) LookupRules.parseProposal(held.toString()) else null
@@ -1470,12 +1518,24 @@ class AssistantController(
                 live().copy(text = said, firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }, card = card),
             )
         } catch (e: CancellationException) {
+            if (runtimeCancel()) {
+                // Not the person's stop: said as what it is, never "stopped".
+                Log.w(TAG, "the runtime cancelled a reply nobody stopped: ${e.message}")
+                llm.reset()
+                return finishReply(viewed, live().copy(error = CUT_OFF, firstTextMs = firstMs))
+            }
+            Log.i(TAG, "reply stopped (asked: $stopAsked)")
             finishReply(viewed, live().copy(stopped = true, firstTextMs = firstMs, stopMs = voice?.lastStopMs))
             throw e
         } catch (e: Throwable) {
             return finishReply(viewed, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
         }
     }
+
+    /** A cancel now is the runtime's own: nobody asked to stop, and this
+     *  coroutine itself is still running (LiteRT-LM reports its CANCELLED
+     *  as a java.util.concurrent.CancellationException). */
+    private suspend fun runtimeCancel(): Boolean = !stopAsked && currentCoroutineContext().isActive
 
     /**
      * A photo and its question (N3): the model on the phone looks at the
@@ -1873,6 +1933,10 @@ class AssistantController(
             if (now != null && now.state != CardState.OPEN) {
                 return@withLock ActionOutcome(ActionTexts.ALREADY_ANSWERED, FAST_ACTION_YES, mark = cardIndex to now.state)
             }
+            if (!cardOpenEverywhere(asked.id, cardIndex)) {
+                val disk = withContext(io) { conversations.load(asked.id) }?.messages?.getOrNull(cardIndex)?.card
+                return@withLock ActionOutcome(ActionTexts.ALREADY_ANSWERED, FAST_ACTION_YES, mark = disk?.let { cardIndex to it.state })
+            }
             when (reply0) {
                 ActionReply.Yes -> {
                     markCard(asked.id, cardIndex, CardState.SENDING)
@@ -2251,8 +2315,9 @@ class AssistantController(
                 ?.takeIf { it.kind == CardKind.ACTION && it.state == CardState.OPEN } ?: return@launch
             val (ran, line) = actionLock.withLock {
                 // Answered meanwhile (a spoken yes, a no, a second tap):
-                // nothing runs twice.
-                if (cardNow(conversationId, index)?.state != CardState.OPEN) return@launch
+                // nothing runs twice. Open means open on screen AND on disk
+                // (Fold check: one copy said OPEN after the other said DONE).
+                if (!cardOpenEverywhere(conversationId, index)) return@launch
                 // SENDING, on screen and on disk, before the Clock call: a
                 // reply finishing meanwhile, a "hmm", a "no" or a new chat
                 // all see it taken.
@@ -2263,6 +2328,16 @@ class AssistantController(
             }
             if (!ran) say(line.lowercase().removeSuffix("."))
         }
+    }
+
+    /** Whether card [index] of [conversationId] is still OPEN in every copy
+     *  there is: the screen's (when it shows that chat) and the disk's. */
+    private suspend fun cardOpenEverywhere(conversationId: String, index: Int): Boolean {
+        val screen = _state.value.conversation.takeIf { it.id == conversationId }?.messages?.getOrNull(index)?.card
+        if (screen != null && screen.state != CardState.OPEN) return false
+        val disk = withContext(io) { conversations.load(conversationId) }?.messages?.getOrNull(index)?.card
+        if (disk != null && disk.state != CardState.OPEN) return false
+        return screen != null || disk != null
     }
 
     /** Card [index] of conversation [conversationId] as it stands now: the
@@ -2528,15 +2603,9 @@ class AssistantController(
     }
 
     private fun editCard(conversationId: String, index: Int, change: (PhoneCard) -> PhoneCard) {
-        scope.launch {
-            val current = _state.value.conversation.takeIf { it.id == conversationId }
-                ?: withContext(io) { conversations.load(conversationId) } ?: return@launch
-            val message = current.messages.getOrNull(index) ?: return@launch
-            val card = message.card ?: return@launch
-            val changed = current.copy(messages = current.messages.toMutableList().also { it[index] = message.copy(card = change(card)) })
-            _state.update { if (it.conversation.id == conversationId) it.copy(conversation = changed) else it }
-            withContext(NonCancellable) { save(changed) }
-        }
+        // Applied to each copy as it stands (updateMessage): never a copy
+        // read before a tap or a spoken yes moved the card on.
+        updateMessage(conversationId, index) { m -> m.card?.let { m.copy(card = change(it)) } ?: m }
     }
 
     private suspend fun finishReply(asked: StoredConversation, reply: StoredMessage): StoredConversation {
@@ -2575,6 +2644,7 @@ class AssistantController(
     /** Stops the reply being written and any voice: what it has so far stays. */
     fun stop() {
         if (_state.value.docJob != null && _state.value.replying) jobStopping = true
+        stopAsked = true
         voice?.stop()
         engine?.cancel()
         replyJob?.cancel()
@@ -2582,6 +2652,7 @@ class AssistantController(
     }
 
     private suspend fun stopReply() {
+        stopAsked = true
         voice?.stopAndWait()
         val job = replyJob ?: return
         engine?.cancel()
@@ -2719,6 +2790,7 @@ class AssistantController(
         if (!canRetry(ui)) return
         val asked = retryBase(ui.conversation) ?: return
         retryingFrom = ui.conversation.messages.last()
+        stopAsked = false
         _state.update { it.copy(conversation = asked, replying = true, thinking = true) }
         replyJob = scope.launch { reply(asked) }
     }
@@ -3792,6 +3864,9 @@ class AssistantController(
         /** Unload the model this long after the assistant leaves the screen. */
         const val UNLOAD_AFTER_MS = 5 * 60 * 1000L
         const val TITLE_DELAY_MS = 1_500L
+
+        /** A reply the runtime cut off by itself, part-way. */
+        const val CUT_OFF = "The reply was cut off on this phone. Tap try again."
         private const val TITLE_POLL_MS = 500L
         /** The longest name a chat can be given. */
         const val RENAME_MAX_CHARS = 200

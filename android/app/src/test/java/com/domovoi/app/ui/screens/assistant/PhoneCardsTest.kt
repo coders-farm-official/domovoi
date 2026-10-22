@@ -59,4 +59,15 @@ class PhoneCardsTest {
         assertEquals(CardFace("", "undo", "", null), cardFace(undo))
         assertEquals("undone", cardFace(undo.copy(state = CardState.DONE))!!.doneLine)
     }
+
+    /** Fold check 2026-10-21: the first tap takes the buttons away at once
+     *  ("sending…"), before the controller's state reaches the screen. */
+    @Test fun aTappedActionCardHasNoButtonsLeft() {
+        val card = PhoneCard(CardKind.ACTION, action = PhoneAction(ActionKind.SET_TIMER, seconds = 60), title = "Timer: 1 minute")
+        assertNull(cardFace(card)!!.doneLine)
+        assertEquals(TAPPED_LINE, cardFace(card, tapped = true)!!.doneLine)
+        assertEquals("sending…", TAPPED_LINE)
+        // Once its state arrives, the state's own line.
+        assertEquals(cardFace(card.copy(state = CardState.DONE))!!.doneLine, cardFace(card.copy(state = CardState.DONE), tapped = true)!!.doneLine)
+    }
 }
