@@ -174,8 +174,20 @@ def test_the_picture_refusal_reads_like_the_server(out) -> None:
     assert out["vision_text"] == chat_api.vision_missing_text("qwen2.5vl:7b")
     assert out["vision_text_unset"] == chat_api.vision_missing_text("")
     assert out["accepts"] == (
-        "Chat takes text and pictures: PNG, JPEG, GIF, WebP or BMP, up to 4 a message. No other files."
+        "Chat takes text, pictures (PNG, JPEG, GIF, WebP or BMP) and documents "
+        "(PDF, Word (.docx), OpenDocument (.odt), Excel (.xlsx), CSV, text or markdown), "
+        "up to 4 of each a message."
     )
+
+
+def test_the_accepted_documents_and_limits_are_the_servers(out) -> None:
+    import web.backend.api.chat as chat_api
+    import web.backend.api.chat_documents as docs_api
+    from domovoi import doc_extract
+
+    assert doc_extract.ACCEPTS in out["accepts"]
+    assert docs_api.MAX_DOCUMENTS_PER_MESSAGE == chat_api._MAX_IMAGES_PER_MESSAGE == 4
+    assert "No other files" not in out["accepts"]
 
 
 def test_the_accepted_types_are_the_uploads_own(out) -> None:
