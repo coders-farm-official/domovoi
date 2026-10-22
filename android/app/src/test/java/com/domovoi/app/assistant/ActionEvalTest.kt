@@ -291,6 +291,7 @@ class ActionEvalTest {
         Triple("Play That Funky Music", "Wild Cherry", null), Triple("Games People Play", "Joe South", null),
         Triple("Home", "Michael Bublé", null), Triple("To Build a Home", "The Cinematic Orchestra", null),
         Triple("New Rules", "Dua Lipa", null), Triple("Kids in America", "Kim Wilde", null), Triple("Happy", "Pharrell Williams", null),
+        Triple("Hey Ya!", "OutKast", "Speakerboxxx/The Love Below"),
     )
     private val genres = listOf("Jazz", "Classical", "Rock", "Lo-Fi Beats", "Pop")
 
@@ -305,7 +306,14 @@ class ActionEvalTest {
     private fun run(text: String, playback: Boolean = true): Pair<String, Map<String, Any?>>? {
         when (val ask = ActionPatterns.match(text, now, playback)) {
             // Not in the library: the controller hands it to the model.
-            is ActionAsk.Do -> if (ask.action.kind != ActionKind.PLAY_MUSIC || inLibrary(ask.action)) return toTool(ask.action) else return null
+            is ActionAsk.Do -> {
+                if (ask.action.kind != ActionKind.PLAY_MUSIC || inLibrary(ask.action)) return toTool(ask.action)
+                // Not in the library: a near spelling of one name is a
+                // "Did you mean …?" card (scored as an action, so a
+                // near-miss that raised one would count as a false one).
+                val names = library.flatMap { listOfNotNull(it.first, it.second, it.third) }
+                return MusicNearMatch.best(ask.action.query.orEmpty(), names)?.let { "did_you_mean" to mapOf("name" to it) }
+            }
             ActionAsk.House, ActionAsk.Undo -> return "house_or_undo" to emptyMap()
             null -> Unit
         }
@@ -412,6 +420,17 @@ class ActionEvalTest {
         "Remind me later", "Remind me tomorrow", "Never mind the reminder", "No reminder in five minutes",
         "Should I set an alarm for an hour from now?", "remind me of the plot of Dune",
     )
+
+    /** "Play Outcast" (Fold check): asked about OutKast, never played. */
+    @Test fun aNearSpellingIsAskedAboutAndNearMissesStayQuiet() {
+        assertEquals("did_you_mean" to mapOf("name" to "OutKast"), run("Play Outcast"))
+        assertEquals("did_you_mean" to mapOf("name" to "The Beatles"), run("play the beatls"))
+        assertEquals("did_you_mean" to mapOf("name" to "Survivor"), run("play survivour"))
+        // Everything the eval already scores stays as it was (the gate
+        // tests above run through the same near-spelling check).
+        val acted = (foldNear + reviewNear + reviewNear2).mapNotNull { t -> run(t, playback = false)?.takeIf { it.first == "did_you_mean" }?.let { "\"$t\" -> $it" } }
+        assertTrue("near spellings on near-misses: " + acted.joinToString("; "), acted.isEmpty())
+    }
 
     @Test fun theFoldChecksRemindersAndRelativeAlarmsGetACard() {
         val wrong = foldActions.map { it to score(it) }.filter { it.second != Outcome.RIGHT }

@@ -96,7 +96,7 @@ internal fun cardFace(card: PhoneCard, clockOpens: Boolean = false, tapped: Bool
         CardFace(
             title = card.title.orEmpty(),
             primary = ActionTexts.confirmLabel(a),
-            secondary = "cancel",
+            secondary = if (a.kind == ActionKind.PLAY_MUSIC) "no" else "cancel",
             doneLine = when (card.state) {
                 // Tapped once (Fold check 2026-10-21): the buttons go at once,
                 // before the controller's state reaches the screen, so a
@@ -106,7 +106,7 @@ internal fun cardFace(card: PhoneCard, clockOpens: Boolean = false, tapped: Bool
                 CardState.DISMISSED -> ActionTexts.DECLINED_LINE
                 CardState.REPLACED -> "asked again below"
                 CardState.SENDING -> ActionTexts.SENDING_LINE
-                CardState.FAILED -> if (a.kind == ActionKind.PLAY_VIDEO) "couldn't play it" else "the Clock app didn't take it"
+                CardState.FAILED -> if (a.kind == ActionKind.PLAY_VIDEO || a.kind == ActionKind.PLAY_MUSIC) "couldn't play it" else "the Clock app didn't take it"
             },
             doneButton = OPEN_CLOCK.takeIf {
                 clockOpens && card.state == CardState.DONE && (a.kind == ActionKind.SET_TIMER || a.kind == ActionKind.SET_ALARM)

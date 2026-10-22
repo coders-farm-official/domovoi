@@ -252,6 +252,7 @@ object ActionTexts {
             "${lead}Set an alarm for $at $whenText" + (a.label?.let { " called \"$it\"" } ?: "") + " in the Clock app?$note"
         }
         ActionKind.PLAY_VIDEO -> "Play \"${videoTitle ?: a.query}\" from this phone's videos?"
+        ActionKind.PLAY_MUSIC -> "Did you mean ${a.query}?"
         else -> ""
     }
 
@@ -261,6 +262,7 @@ object ActionTexts {
         ActionKind.SET_ALARM -> "Alarm: ${clockTime(a.hour ?: 0, a.minute ?: 0, style, now)}" +
             (if (a.days.isNotEmpty()) ", ${days(a.days)}" else "") + (a.label?.let { ", $it" } ?: "")
         ActionKind.PLAY_VIDEO -> "Video: ${videoTitle ?: a.query}"
+        ActionKind.PLAY_MUSIC -> "Did you mean ${a.query}?"
         else -> ""
     }
 
@@ -268,6 +270,7 @@ object ActionTexts {
         ActionKind.SET_TIMER -> "set timer"
         ActionKind.SET_ALARM -> "set alarm"
         ActionKind.PLAY_VIDEO -> "play"
+        ActionKind.PLAY_MUSIC -> "yes, play it"
         else -> "yes"
     }
 
@@ -285,7 +288,7 @@ object ActionTexts {
     /** The card's line once it is done. */
     fun doneLine(a: PhoneAction): String = when (a.kind) {
         ActionKind.SET_TIMER, ActionKind.SET_ALARM -> "sent to the Clock app"
-        ActionKind.PLAY_VIDEO -> "playing"
+        ActionKind.PLAY_VIDEO, ActionKind.PLAY_MUSIC -> "playing"
         else -> "done"
     }
 

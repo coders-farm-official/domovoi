@@ -221,6 +221,33 @@ class PhoneActionsControllerTest {
         assertEquals("OutKast is a hip hop duo from Atlanta.", c.ask("who are outkast").text)
     }
 
+    /** Fold check 2026-10-21: he meant OutKast. A near spelling is asked
+     *  about; yes plays it, no does nothing; a guess never plays by itself. */
+    @Test fun aNearSpellingIsAskedAndOnlyAYesPlaysIt() {
+        host.songs = listOf(song(1, "Hey Ya!", "OutKast"), song(2, "Roses", "OutKast"), song(3, "Let It Be", "The Beatles"))
+        val c = controller()
+        val q = c.ask("Play Outcast")
+        assertEquals("Did you mean OutKast?", q.text)
+        assertEquals(CardKind.ACTION, q.card?.kind)
+        assertTrue("nothing played on a guess", player.calls.isEmpty())
+        assertTrue("no model", engines.isEmpty())
+        val yes = c.ask("yes")
+        assertTrue(yes.text, yes.text.startsWith("Playing \"Hey Ya!\" by OutKast"))
+        assertEquals(listOf("play:2@0+0"), player.calls.toList())
+        assertEquals(CardState.DONE, c.card(1)?.state)
+        // No: nothing.
+        player.calls.clear()
+        c.ask("play the beatls")
+        assertEquals(ActionTexts.DECLINED, c.ask("no").text)
+        assertTrue(player.calls.isEmpty())
+        // The button.
+        c.ask("play outcast")
+        val i = c.state.value.conversation.messages.lastIndex
+        c.actionConfirmed(c.state.value.conversation.id, i)
+        until("played by the button") { player.calls.isNotEmpty() }
+        until("the card is done") { c.card(i)?.state == CardState.DONE }
+    }
+
     @Test fun anyNoWordCancelsAndAnUnclearReplyAsksAgain() {
         val c = controller()
         c.ask("wake me at 6:30")

@@ -2093,7 +2093,12 @@ class AssistantController(
         // "put on my shoes", "listen to the kids": a "play" acts only on
         // what the library holds (MusicEvidence), before anything else.
         val songs = if (a.kind == ActionKind.PLAY_MUSIC) musicFor(a) else null
-        if (songs is MusicPick.NotMusic) return ActionOutcome("", fp, notAnAction = true)
+        if (songs is MusicPick.NotMusic) {
+            // A near spelling of one name in the library ("Outcast" for
+            // OutKast, Fold check 2026-10-21): asked, never played on a guess.
+            nearMusic(a)?.let { name -> return didYouMean(a, name, fp) }
+            return ActionOutcome("", fp, notAnAction = true)
+        }
         if (player.castingTo() != null) return ActionOutcome(PhoneQuestions.HOUSE_THINGS, FAST_ACTION_HOUSE)
         val before = player.snapshot()
         fun said(text: String) = ActionOutcome(text, fp)
@@ -2240,6 +2245,24 @@ class AssistantController(
         return MusicPick.NotMusic
     }
 
+    /** The one artist, album or title in the library that [a]'s words are a
+     *  near spelling of ([MusicNearMatch]), or null. */
+    private suspend fun nearMusic(a: PhoneAction): String? {
+        val q = a.query?.trim().orEmpty()
+        if (q.isEmpty()) return null
+        val library = runCatching { actions.songs("", NEAR_SCAN) }.getOrNull() ?: return null
+        val names = library.flatMap { listOfNotNull(it.title, it.artist, it.album) }
+        return MusicNearMatch.best(q, names)
+    }
+
+    /** "Did you mean OutKast?": a card; its yes plays [name], its no does nothing. */
+    private fun didYouMean(a: PhoneAction, name: String, fp: String): ActionOutcome {
+        val guess = PhoneAction(ActionKind.PLAY_MUSIC, query = name, phrase = name, shuffle = a.shuffle)
+        val q = "Did you mean $name?"
+        val card = PhoneCard(CardKind.ACTION, action = guess, title = q, question = a.phrase ?: a.query)
+        return ActionOutcome(q, fp, card, spoken = "$q ${ActionTexts.SAY_YES_OR_NO}")
+    }
+
     /** The phone's videos for [q] (as written, then every word: "glacier
      *  trip" finds "glacier-trip.mp4"). Null: no permission. */
     private suspend fun findVideos(q: String): List<VideoChoice>? {
@@ -2312,6 +2335,11 @@ class AssistantController(
                 }
                 val ok = runCatching { actions.clock(request) }.getOrDefault(false)
                 ok to if (ok) ActionTexts.done(a, style, now) else ActionTexts.CLOCK_FAILED
+            }
+            ActionKind.PLAY_MUSIC -> {
+                // A "Did you mean …?" card's yes: the name it offered, from the library.
+                val out = playback(a, "action_play_music")
+                (out.card?.kind == CardKind.UNDO) to out.text.ifEmpty { "I can't find that on this phone any more." }
             }
             ActionKind.PLAY_VIDEO -> {
                 val uri = card.videoUri ?: return false to "That video isn't on this phone any more."
@@ -3916,6 +3944,9 @@ class AssistantController(
 
         /** Songs one "play" queues. */
         const val MUSIC_LIMIT = 200
+
+        /** Songs read for a near spelling's names (artist, album, title). */
+        const val NEAR_SCAN = 5_000
         private const val VIDEO_LIMIT = 5
 
         /** Undo shows under a reply this long (plan part 2: 10 s). */
