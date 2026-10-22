@@ -428,7 +428,17 @@ class VisionEngine : LlmEngine {
         if (hangProbe) awaitCancellation()
     }
 
+    /** What reading a photo's text gives (the follow-ups' copy, owner
+     *  2026-10-22); "" by default: a photo with no words, nothing kept. */
+    @Volatile var photoText: String = ""
+    val reads = CopyOnWriteArrayList<ByteArray>()
+
     override fun replyToPhoto(system: String, jpeg: ByteArray, question: String, now: String?): Flow<String> = flow {
+        if (system == com.domovoi.app.assistant.docs.LetterRead.TRANSCRIBE_SYSTEM) {
+            reads += jpeg.copyOf()
+            if (photoText.isNotEmpty()) emit(photoText)
+            return@flow
+        }
         photos += Triple(system, jpeg.copyOf(), question)
         emit("A cat")
         if (photoGate) awaitCancellation()

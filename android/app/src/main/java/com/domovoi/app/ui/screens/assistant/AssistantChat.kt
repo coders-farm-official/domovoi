@@ -423,7 +423,7 @@ private fun SpeechFilesDialog(ui: AssistantUi, actions: AssistantActions, onDism
 /** Above the composer during a spoken turn: what it is doing now. */
 @Composable
 private fun VoiceLine(ui: AssistantUi) {
-    val (pill, hint) = voiceLine(ui.voicePhase, ui.heardSpeech)
+    val (pill, hint) = voiceLine(ui.voicePhase, ui.heardSpeech, ui.voiceAnswering)
     // Read out as it changes (listening, transcribing, thinking, speaking):
     // a screen reader user hears where the turn is without looking.
     Row(
@@ -437,8 +437,13 @@ private fun VoiceLine(ui: AssistantUi) {
 }
 
 /** The pill and the hint for a phase. */
-internal fun voiceLine(phase: VoicePhase, heardSpeech: Boolean): Pair<String, String?> = when (phase) {
-    VoicePhase.Listening -> if (heardSpeech) "hearing you" to "stop talking, or tap done" else "listening" to "ask your question"
+internal fun voiceLine(phase: VoicePhase, heardSpeech: Boolean, answering: Boolean = false): Pair<String, String?> = when (phase) {
+    VoicePhase.Listening -> when {
+        heardSpeech -> "hearing you" to "stop talking, or tap done"
+        // The card's answer window (review round 1).
+        answering -> "listening" to "say yes or no"
+        else -> "listening" to "ask your question"
+    }
     VoicePhase.Transcribing -> "transcribing" to null
     VoicePhase.Thinking -> "thinking" to "tap stop to cancel"
     VoicePhase.Speaking -> "speaking" to "tap stop to silence it"
@@ -470,8 +475,11 @@ private fun EngineLine(ui: AssistantUi, actions: AssistantActions, onModel: () -
         else -> if (ui.checking) {
             Row(Modifier.padding(top = 6.dp).semantics { liveRegion = LiveRegionMode.Polite }) {
                 Pill(
-                    if (ui.conversation.messages.lastOrNull()?.docMode == "letter") "reading the letter and checking its dates and amounts"
-                    else "reading the passages and checking the answer",
+                    when (ui.conversation.messages.lastOrNull()?.docMode) {
+                        "letter" -> "reading the letter and checking its dates and amounts"
+                        com.domovoi.app.assistant.PhotoText.MODE_PHOTO -> "reading the photo"
+                        else -> null
+                    } ?: "reading the passages and checking the answer" + (ui.checkingEtaS?.let { " · about $it s" } ?: ""),
                     Tone.Brand, live = true,
                 )
             }

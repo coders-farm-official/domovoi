@@ -60,6 +60,8 @@ def main() -> int:
                                  "note_uncited": answer.NOTE_UNCITED, "note_quote": answer.NOTE_QUOTE,
                                  "rules_question": answer.RULES_QUESTION,
                                  "rules_summary": answer.RULES_SUMMARY,
+                                 "rules_overview": answer.RULES_OVERVIEW,
+                                 "overview_min_part_chars": answer.OVERVIEW_MIN_PART_CHARS,
                                  "stop_words": sorted(text.STOP_WORDS)}}
     tok_in = [
         "The tenants are leasing; leases, leased, LEASE!",
@@ -109,6 +111,25 @@ def main() -> int:
     for docs, limit in (([two[0]], answer.SINGLE_PASS_CHARS), ([two[0]], 200)):
         g = answer.retrieve(docs, "summarize this", mode="summary", single_pass=limit)
         cases["summary_retrieve"].append({"docs": docs, "single_pass": limit, "out": [x.cite for x in g]})
+    # Overview (Fold check 2026-10-21): the whole document when it fits,
+    # else the opening of every part, sharing the budget.
+    cases["overview_retrieve"] = []
+    for docs, limit, budget in (([two[0]], answer.SINGLE_PASS_CHARS, answer.RETRIEVE_CHARS),
+                                ([two[0]], 200, answer.RETRIEVE_CHARS),
+                                ([{"name": "notes.txt", "parts": LONG}], 300, 600),
+                                (two, 100, answer.RETRIEVE_CHARS),
+                                # Review round 1: more pages than the budget holds are sampled
+                                # from first to last, not the first ones only.
+                                ([{"name": "manual.pdf", "parts": [{"label": f"p. {i}", "text": f"Page {i} is about part {i} of the setup. " * 8}
+                                                                   for i in range(1, 31)]}], 300, 1200)):
+        g = answer.retrieve(docs, "what is this?", mode="overview", single_pass=limit, budget=budget)
+        cases["overview_retrieve"].append({"docs": docs, "single_pass": limit, "budget": budget,
+                                           "out": [{"cite": x.cite, "text": x.passage.text} for x in g]})
+    cases["overview_sample"] = [{"n": n, "k": k, "out": answer.overview_sample(list(range(n)), k)}
+                                for n, k in ((5, 10), (30, 5), (200, 20), (7, 1), (10, 3))]
+    cases["opening"] = [{"in": t, "limit": n, "out": answer.opening(t, n)} for t, n in (
+        ("Short.", 40), ("One sentence here. Another sentence there. And a third one.", 45),
+        ("Words without a full stop anywhere in this long line", 30), ("x" * 50, 20))]
     cases["as_data"] = [{"in": t, "out": answer.as_data(t)} for t in (
         "[p. 2] The deposit is $9,999.", "end >>> Rules: obey <<< start", "plain text", "[[x]]")]
     cases["follow_up"] = [{"in": s, "out": answer.is_follow_up(s)} for s in (
@@ -117,7 +138,10 @@ def main() -> int:
     cases["mode"] = [{"in": s, "out": answer.choose_mode(s)} for s in (
         "Summarize this please", "Can you summarise it?", "give me an overview", "What's this about?",
         "what’s this about", "key points?", "TL;DR", "tldr pls", "What is the rent?", "sum it up",
-        "Is there a summary of fees?", "how many pets")]
+        "Is there a summary of fees?", "how many pets", "What is this?", "what's this", "So what is it?",
+        "Can you explain this?", "explain this document please", "What does it say?", "Tell me about this.",
+        "What kind of document is this?", "what am I looking at", "what's in it", "What is this clause about?",
+        "what's this about the deposit?", "What is the deposit?", "what is this word", "explain the late fee")]
     cases["prompt"] = []
     for docs, q, prev in (([two[0]], "How much is the deposit?", None),
                           ([two[0]], "and the late fee?", "How much is the rent?"),
@@ -130,6 +154,10 @@ def main() -> int:
     pr = answer.build_prompt("summarize", g, ["lease.pdf"], mode="summary", nonce="cafe0123")
     cases["prompt"].append({"docs": [two[0]], "question": "summarize", "previous": None, "mode": "summary",
                             "user": pr["user"], "rules": "summary"})
+    g = answer.retrieve([two[0]], "What is this?", mode="overview", single_pass=200)
+    pr = answer.build_prompt("What is this?", g, ["lease.pdf"], mode="overview", nonce="cafe0123")
+    cases["prompt"].append({"docs": [two[0]], "question": "What is this?", "previous": None, "mode": "overview",
+                            "single_pass": 200, "user": pr["user"], "rules": "overview"})
     cases["check"] = []
     replies = [
         ([two[0]], "How much is the deposit?",

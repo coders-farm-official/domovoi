@@ -92,6 +92,10 @@ interface LlmEngine : AutoCloseable {
     /** Stops a reply in progress; a no-op when there is none. */
     fun cancel()
 
+    /** Forgets the kept conversation: the next reply builds a fresh one
+     *  from its history (after the runtime cancelled a reply by itself). */
+    fun reset() {}
+
     /**
      * A short answer to [prompt] in a conversation of its own (a chat's
      * title), at most [maxTokens] long, leaving the kept conversation as it

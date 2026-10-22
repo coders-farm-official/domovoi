@@ -79,7 +79,7 @@ _DIGIT_HOUR = r"(?:[01]?\d|2[0-3])(?!\d)"
 # "half past six", "quarter to seven", "ten past six", "20 minutes to 8".
 _RELATIVE = (
     rf"(?:(?:a )?quarter|half|(?:\d{{1,2}}|{_MINUTE_WORD}|{'|'.join(_ONES)})(?: minutes?)?)"
-    rf" (?:past|after|to|till|before) (?:{_DIGIT_HOUR}|{_HOUR_WORD})"
+    rf" (?:past|after|to|till|before|of) (?:{_DIGIT_HOUR}|{_HOUR_WORD}|noon|midday|midnight)"
 )
 _DIGIT_TIME = rf"{_DIGIT_HOUR}(?:[:.][0-5]\d)?(?: {_OCLOCK})?(?: ?{_AMPM})?"
 _WORD_TIME = (
@@ -193,7 +193,7 @@ _DAY_SEARCH = re.compile(
 )
 _RELATIVE_SEARCH = re.compile(
     rf"(?P<amt>(?:a )?quarter|half|\d{{1,2}}|{_MINUTE_WORD}|{'|'.join(_ONES)})(?: minutes?)?"
-    rf" (?P<dir>past|after|to|till|before) (?P<hr>\d{{1,2}}|{_HOUR_WORD})\b"
+    rf" (?P<dir>past|after|to|till|before|of) (?P<hr>\d{{1,2}}|{_HOUR_WORD}|noon|midday|midnight)\b"
 )
 _DIGIT_SEARCH = re.compile(r"(?<![\d:.])(?P<h>\d{1,2})(?:[:.](?P<m>[0-5]\d))?(?!\d)")
 _WORD_SEARCH = re.compile(
@@ -237,7 +237,17 @@ def parse_when(text: str) -> SpokenWhen | None:
     tt = _time_text(t)
     sm = _SPECIAL_SEARCH.search(tt)
     rm = _RELATIVE_SEARCH.search(tt)
-    if sm:
+    if rm and rm.group("hr") in ("noon", "midday", "midnight"):
+        # "ten till noon" is 11:50, "ten past midnight" 0:10: a 24-hour
+        # reading ("of" is "to", as in "quarter of seven").
+        amt = rm.group("amt")
+        minutes = 15 if "quarter" in amt else 30 if amt == "half" else _number(amt)
+        if minutes is None or minutes >= 60:
+            return None
+        base = 24 * 60 if rm.group("hr") == "midnight" else 12 * 60
+        total = (base + (minutes if rm.group("dir") in ("past", "after") else -minutes)) % (24 * 60)
+        fields.update(hour=total // 60, minute=total % 60, h24=True)
+    elif sm:
         if sm.group("s") == "midnight":
             fields.update(hour=0, minute=0, h24=True, midnight=True)
         else:

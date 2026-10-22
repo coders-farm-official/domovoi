@@ -88,7 +88,7 @@ class PhoneLettersTest {
 
     private fun photo(): PendingPhoto = PendingPhoto(ByteArray(2048) { (it % 200 + 1).toByte() }, 1024, 768, "camera", 9)
 
-    private fun storedText(): String = root.walkTopDown().filter { it.isFile && "models" !in it.path }.joinToString("\n") { it.readText() }
+    private fun storedText(): String = root.walkTopDown().filter { it.isFile && "models" !in it.path }.joinToString("\n") { runCatching { it.readText() }.getOrDefault("") }
 
     @Test fun aLetterIsReadOnThePhoneThenCheckedAndNothingOfItIsKept() {
         val c = controller()
@@ -169,12 +169,80 @@ class PhoneLettersTest {
         c.send("What does this note say?")
         c.replied(1)
         assertEquals("handwriting", c.ui().conversation.messages.last().headsUp?.kind)
-        assertEquals(listOf(LetterRead.KIND_SYSTEM), engines.single().photoCalls.map { it.first })
+        // Two signals agreed (Fold check 2026-10-21): asked, then asked the other way round.
+        assertEquals(listOf(LetterRead.KIND_QUESTION, PhoneLetters.KIND_CHECK_QUESTION), engines.single().photoCalls.map { it.third })
         c.pickHeadsUp("try_anyway")
         c.replied(2)
         // Not asked again: the pick says it is handwriting.
-        assertEquals(listOf(LetterRead.KIND_SYSTEM, LetterRead.TRANSCRIBE_SYSTEM), engines.single().photoCalls.map { it.first })
+        assertEquals(listOf(LetterRead.KIND_SYSTEM, LetterRead.KIND_SYSTEM, LetterRead.TRANSCRIBE_SYSTEM), engines.single().photoCalls.map { it.first })
         assertTrue(c.ui().conversation.messages.last().notes.any { it.code == "letter_handwriting" })
+    }
+
+    /** Fold check 2026-10-21: a printed label asked "What does this say?"
+     *  got the letter's layout and a handwriting heads-up. A question that
+     *  doesn't name a letter is read first; text that doesn't read like a
+     *  letter gets a plain answer, no printed-or-handwritten step, and its
+     *  text is kept for follow-ups. */
+    @Test fun aPrintedLabelGetsAPlainAnswerNotTheLettersLayout() {
+        val c = controller()
+        ready(c)
+        engines.single().transcript = LABEL
+        val p = photo()
+        c.attachPhoto(p)
+        c.send("What does this say?")
+        c.replied(1)
+        val reply = c.ui().conversation.messages.last()
+        assertNull("no handwriting card", reply.headsUp)
+        assertEquals("A cat on a sofa.", reply.text)
+        assertEquals(PhotoText.MODE_PHOTO, reply.docMode)
+        assertEquals(listOf(LetterRead.KIND_SYSTEM, LetterRead.TRANSCRIBE_SYSTEM, PhonePhotos.systemPrompt(Persona.SYSTEM_PROMPT)),
+            engines.single().photoCalls.map { it.first })
+        assertTrue(reply.notes.none { it.code == "letter_handwriting" })
+        assertTrue(reply.sources.single().text.contains("Organic Rolled Oats"))
+        until("the photo is wiped") { p.jpeg.all { it == 0.toByte() } }
+    }
+
+    /** Review round 1: a handwritten note asked "what does this say?" (no
+     *  letter named) still gets the handwriting card, once both answers agree. */
+    @Test fun aHandwrittenNoteAskedWhatItSaysStillGetsItsCard() {
+        val c = controller()
+        ready(c)
+        engines.single().kind = "Handwritten"
+        c.attachPhoto(photo())
+        c.send("What does this say?")
+        c.replied(1)
+        assertEquals("handwriting", c.ui().conversation.messages.last().headsUp?.kind)
+        assertEquals(listOf(LetterRead.KIND_QUESTION, PhoneLetters.KIND_CHECK_QUESTION), engines.single().photoCalls.map { it.third })
+        c.pickHeadsUp("try_anyway")
+        c.replied(2)
+        assertTrue(c.ui().conversation.messages.last().text.isNotEmpty())
+    }
+
+    /** The same question on a photo whose text reads like a letter: the letter's layout. */
+    @Test fun whatDoesThisSayOnALetterGetsTheLettersLayout() {
+        val c = controller()
+        ready(c)
+        c.attachPhoto(photo())
+        c.send("What does this say?")
+        c.replied(1)
+        val reply = c.ui().conversation.messages.last()
+        assertEquals("letter", reply.docMode)
+        assertTrue(reply.text, reply.text.contains("**\$142.17**"))
+    }
+
+    /** One "handwritten" isn't enough: asked the other way round, it must agree. */
+    @Test fun oneHandwrittenAnswerAloneShowsNoCard() {
+        val c = controller()
+        ready(c)
+        engines.single().kind = "Handwritten"
+        engines.single().kindAgain = "Printer"
+        c.attachPhoto(photo())
+        c.send("What does this letter say?")
+        c.replied(1)
+        val reply = c.ui().conversation.messages.last()
+        assertNull(reply.headsUp)
+        assertEquals("letter", reply.docMode)
+        assertTrue(reply.notes.none { it.code == "letter_handwriting" })
     }
 
     @Test fun aPhotoThatIsntALetterIsAnOrdinaryPhotoTurn() {
@@ -268,6 +336,8 @@ class PhoneLettersTest {
     }
 
     companion object {
+        /** A printed food label: a price, a weight, a date, no letter. */
+        val LABEL = "Organic Rolled Oats\nNet Wt 18 oz (510 g)\nBest before 01 NOV 2026\n\$3.99\nKeep in a cool, dry place."
         val BILL = "RIVERSIDE ELECTRIC COOPERATIVE\nAccount number: 4471-2290-18\n" +
             "Service period: August 30, 2026 to September 29, 2026\nAmount due: \$142.17\n" +
             "Please pay by: November 15, 2026"
@@ -284,6 +354,10 @@ class LetterEngine(private val failProbe: Boolean) : LlmEngine {
     val replies = CopyOnWriteArrayList<List<ChatTurn>>()
     val systems = CopyOnWriteArrayList<String>()
     @Volatile var kind = "printed"
+    /** The other-way-round kind question's answer (null: as [kind]). */
+    @Volatile var kindAgain: String? = null
+    /** What the transcription reads. */
+    @Volatile var transcript: String = PhoneLettersTest.BILL
     @Volatile override var isLoaded = false
     @Volatile private var vision: LlmBackend? = null
 
@@ -306,8 +380,8 @@ class LetterEngine(private val failProbe: Boolean) : LlmEngine {
     override fun replyToPhoto(system: String, jpeg: ByteArray, question: String, now: String?, maxOutput: Int): Flow<String> = flow {
         photoCalls += Triple(system, maxOutput, question)
         when (system) {
-            LetterRead.KIND_SYSTEM -> emit(kind)
-            LetterRead.TRANSCRIBE_SYSTEM -> PhoneLettersTest.BILL.chunked(13).forEach { emit(it) }
+            LetterRead.KIND_SYSTEM -> emit(if (question == PhoneLetters.KIND_CHECK_QUESTION) kindAgain ?: kind else kind)
+            LetterRead.TRANSCRIBE_SYSTEM -> transcript.chunked(13).forEach { emit(it) }
             else -> { emit("A cat"); emit(" on a sofa.") }
         }
     }

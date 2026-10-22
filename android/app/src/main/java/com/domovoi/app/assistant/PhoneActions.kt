@@ -116,6 +116,7 @@ object ActionPatterns {
     internal fun norm(text: String): String {
         var t = text.lowercase().replace(Regex("[’‘`´]"), "'").replace(Regex("[,;!?]"), " ")
             .replace(Regex("\\s+"), " ").trim().trimEnd('.', ' ')
+        t = toNight(t)
         // "o'clock" keeps its apostrophe; other dots ("a.m.") go.
         t = t.replace(Regex("\\b([ap])\\.m\\b\\.?"), "$1m")
         var before: String
@@ -150,6 +151,22 @@ object ActionPatterns {
     private const val VAGUE = "(?<vague>(?:a (?:little )?bit|a little|just|shortly|slightly|a few minutes|a couple of minutes) (?<rel>before|after)|(?<about>around|about|roughly|sometime around))"
 
     private val alarm = Regex("^(?<wake>$WAKE|$ALARM)(?: (?:for|at|by|on))?(?: (?<tom1>tomorrow)(?: (?:at|for|by))?)? (?:$VAGUE )?(?<time>$TIME)$REPEAT?$")
+
+    // Durations said as alarms or reminders (Fold check 2026-10-21): the
+    // Clock app has no reminders, and "an alarm for five minutes from now"
+    // is a countdown, so both are a Clock timer for that long, named for
+    // what to do when it was said. A reminder at a clock time is an alarm.
+    // norm() has already taken a closing "now" off ("five minutes from").
+    private const val LATER = "(?: from now| from right now| from right| from| later)?"
+    private const val TODO = "(?<label>[a-z0-9][a-z0-9' -]{0,60})"
+    private const val REMIND = "(?:remind me|set (?:a |me a )?reminder|make (?:a |me a )?reminder|give me a reminder|i need a reminder)"
+    private val alarmIn = Regex("^(?:$ALARM|$WAKE) (?:in|for|after) (?<dur>$DURATION)$LATER(?: (?:to|so i can|for) $TODO)?$")
+    private val alarmFromNow = Regex("^(?:$ALARM|$WAKE)(?: for)? (?<dur>$DURATION) from(?: right)?(?: now)?(?: (?:to|so i can|for) $TODO)?$")
+    private val remindIn = Regex("^$REMIND (?:in|after|for) (?<dur>$DURATION)$LATER(?: (?:to|that|about|of) $TODO)?$")
+    private val remindToIn = Regex("^$REMIND (?:to|about|of) $TODO (?:in|after) (?<dur>$DURATION)$LATER$")
+    private val inRemind = Regex("^in (?<dur>$DURATION) $REMIND (?:to|about|of) $TODO$")
+    private val remindAt = Regex("^$REMIND (?:at|for|by) (?<time>$TIME)(?: (?:to|that|about|of) $TODO)?$")
+    private val remindToAt = Regex("^$REMIND (?:to|about|of) $TODO (?:at|by) (?<time>$TIME)$")
 
     private val pause = Regex("^(?:pause|pause (?:the |my |this )?(?:music|song|track|audio|playback|book|audiobook|podcast|it|this|player)|pause it for a (?:sec|second|moment|minute|bit)|pause for a (?:sec|second|moment|bit)|hold the music|pause playback)$")
     private val resume = Regex("^(?:resume|resume (?:the |my )?(?:music|playback|playing|song|it)|continue|continue (?:the |my )?(?:music|playing|playback|song)|continue playing|unpause|un pause|keep (?:playing|going)|keep the music going|start (?:the music|playing) again|play again|carry on|press play|play|play it)$")
@@ -236,7 +253,36 @@ object ActionPatterns {
         if (!playback && t in BARE) return null
         if (undo.matches(t)) return ActionAsk.Undo
         if (isHouse(t)) return ActionAsk.House
-        return action(t, now)?.let { ActionAsk.Do(it) }
+        return action(t, now)?.let { a -> ActionAsk.Do(a.copy(label = a.label?.let { asSaid(it, text) })) }
+    }
+
+    /** [label] (lower case, from the normalized text) as [text] spelled it:
+     *  "check Dome of War", not "check dome of war". */
+    internal fun asSaid(label: String, text: String): String {
+        val i = text.lowercase().replace(Regex("[’‘`´]"), "'").indexOf(label)
+        return if (i >= 0) text.substring(i, i + label.length) else label
+    }
+
+    /** A reminder's or an alarm's "to …", as a Clock label. */
+    private fun todo(m: MatchResult): String? = runCatching { m.groups["label"]?.value }.getOrNull()?.trim()
+        ?.removePrefix("to ")?.trim()?.takeIf { it.isNotBlank() && it !in NOT_LABELS }
+
+    private fun reminder(t: String, now: ZonedDateTime): PhoneAction? {
+        for (re in listOf(alarmIn, alarmFromNow, remindIn, remindToIn, inRemind)) {
+            val m = re.matchEntire(t) ?: continue
+            val secs = parseDurationSeconds(m.groups["dur"]!!.value) ?: return null
+            if (secs <= 0) return null
+            return PhoneAction(ActionKind.SET_TIMER, seconds = secs, label = todo(m))
+        }
+        for (re in listOf(remindAt, remindToAt)) {
+            val m = re.matchEntire(t) ?: continue
+            val raw = m.groups["time"]!!.value
+            val spoken = parseTime(raw) ?: return null
+            val tomorrow = raw.contains("tomorrow")
+            val (hour, minute) = resolveHour(spoken, tomorrow, now)
+            return PhoneAction(ActionKind.SET_ALARM, hour = hour, minute = minute, tomorrow = tomorrow, label = todo(m))
+        }
+        return null
     }
 
     private fun isHouse(t: String): Boolean {
@@ -263,6 +309,7 @@ object ActionPatterns {
             return PhoneAction(ActionKind.SLEEP, minutes = min)
         }
         if (cancelSleep.matches(t)) return PhoneAction(ActionKind.CANCEL_SLEEP)
+        reminder(t, now)?.let { return it }
         for (re in listOf(timerFor, durationTimer, namedTimer, countDown, timerLabelled)) {
             val m = re.matchEntire(t) ?: continue
             val secs = parseDurationSeconds(m.groups["dur"]!!.value) ?: return null
@@ -472,17 +519,21 @@ internal fun parseNumber(text: String): Int? {
 private val UNIT_SECONDS = mapOf("second" to 1, "sec" to 1, "minute" to 60, "min" to 60, "hour" to 3600, "hr" to 3600)
 private const val UNIT = "(?:second|sec|minute|min|hour|hr)"
 
+/** "a minute", "an hour": never "a second" or "a sec", which are idioms
+ *  ("remind me for a second"), not one-second timers (review round 1). */
+private const val A_UNIT = "(?:minute|min|hour|hr)"
+
 /** One duration clause: "5 minutes", "ten-minute", "an hour and a half",
  *  "half an hour", "one and a half hours", "a quarter of an hour". */
 private val CLAUSE = "(?:$NUMBER(?: and a half)?[ -]${UNIT}s?(?: and a half)?" +
-    "|an? ${UNIT}(?: and a half)?|(?:a )?half (?:an? )?$UNIT|(?:a )?quarter (?:of )?an hour|three quarters of an hour)"
+    "|an? ${A_UNIT}(?: and a half)?|(?:a )?half (?:an? )?$UNIT|(?:a )?quarter (?:of )?an hour|three quarters of an hour)"
 
 /** A spoken duration: one clause, or two joined ("1 hour and 30 minutes"). */
 internal val DURATION = "(?:$CLAUSE(?:(?:,? and |,? )$CLAUSE)?)"
 
 private val CLAUSE_RE = Regex(
     "^(?:(?<num>$NUMBER)(?<halfmid> and a half)?[ -](?<unit>$UNIT)s?(?<halfend> and a half)?" +
-        "|an? (?<aunit>$UNIT)(?<ahalf> and a half)?|(?:a )?half (?:an? )?(?<hunit>$UNIT)|(?<quarter>(?:a )?quarter (?:of )?an hour)" +
+        "|an? (?<aunit>$A_UNIT)(?<ahalf> and a half)?|(?:a )?half (?:an? )?(?<hunit>$UNIT)|(?<quarter>(?:a )?quarter (?:of )?an hour)" +
         "|(?<threeq>three quarters of an hour))$",
 )
 
@@ -525,14 +576,27 @@ private const val AMPM = "(?:am|pm|a m|p m)"
 private const val PART = "(?:in the morning|in the afternoon|in the evening|at night|tonight|tomorrow morning|this morning|this evening|" +
     "tomorrow evening|tomorrow night|tomorrow afternoon|tomorrow)"
 
+/** "half", "a quarter", "ten", "20 minutes": how far from the hour (the
+ *  server's clock_time._RELATIVE, Fold check 2026-10-21). */
+private val RELATIVE_AMOUNT = "(?:(?:a )?quarter|half|\\d{1,2}|$NUMBER_WORD)(?: minutes?)?"
 /** What follows "alarm for" / "wake me at". */
-internal val TIME = "(?:noon|midday|midnight|(?:half past|quarter past|quarter to|quarter till|quarter of|\\d{1,2} past|\\d{1,2} to|$NUMBER_WORD past|$NUMBER_WORD to) $HOUR|" +
+internal val TIME = "(?:$RELATIVE_AMOUNT $RELATIVE_DIR (?:$HOUR|noon|midday|midnight)|noon|midday|midnight|" +
     "$HOUR(?::[0-5]\\d| [0-5]\\d| (?:oh |o )?$NUMBER_WORD)?(?: ?o'? ?clock)?)(?: ?$AMPM)?(?: $PART)?"
 
 private fun hourOf(word: String): Int? = word.toIntOrNull() ?: HOUR_WORDS[word]
 
+private const val RELATIVE_DIR = "(?:past|after|to|till|before|of)"
+private val RELATIVE_RE = Regex("^(?<amt>(?:a )?quarter|half|\\d{1,2}|$NUMBER_WORD)(?: minutes?)? (?<dir>$RELATIVE_DIR) (?<hr>\\S+)$")
+
+/** "twelve to night" is how speech to text writes "twelve tonight" (Fold
+ *  check 2026-10-21: it was read as 11 PM). "to night" after an hour is
+ *  never a time before it: night isn't an hour. */
+private val TO_NIGHT by lazy { Regex("\\b(\\d{1,2}(?::[0-5]\\d)?|${HOUR_WORDS.keys.joinToString("|")}) to night\\b") }
+
+internal fun toNight(text: String): String = text.replace(TO_NIGHT, "$1 tonight")
+
 internal fun parseTime(text: String): SpokenTime? {
-    var t = text.trim().lowercase()
+    var t = toNight(text.trim().lowercase())
     var pm: Boolean? = null
     var night = false
     Regex(" ?($PART)$").find(t)?.let {
@@ -556,19 +620,32 @@ internal fun parseTime(text: String): SpokenTime? {
     t = t.replace(Regex(" ?o'? ?clock$"), "")
     if (t == "noon" || t == "midday") return SpokenTime(12, 0, true)
     if (t == "midnight") return SpokenTime(0, 0, false)
-    Regex("^(half past|quarter past|quarter to|quarter till|quarter of|(\\S+(?: \\S+)?) past|(\\S+(?: \\S+)?) to) (\\S+)$").matchEntire(t)?.let { m ->
-        val h = hourOf(m.groupValues[4]) ?: return null
-        if (h !in 1..12) return null
-        val rel = m.groupValues[1]
-        val (hh, mm) = when {
-            rel == "half past" -> h to 30
-            rel == "quarter past" -> h to 15
-            rel == "quarter to" || rel == "quarter till" || rel == "quarter of" -> (if (h == 1) 12 else h - 1) to 45
-            rel.endsWith("past") -> h to (parseNumber(m.groupValues[2]) ?: return null)
-            else -> (if (h == 1) 12 else h - 1) to (60 - (parseNumber(m.groupValues[3]) ?: return null))
+    RELATIVE_RE.matchEntire(t)?.let { m ->
+        val hr = m.groups["hr"]!!.value
+        val amt = m.groups["amt"]!!.value
+        val minutes = when {
+            amt.endsWith("quarter") -> 15
+            amt == "half" -> 30
+            else -> parseNumber(amt) ?: return null
         }
-        if (mm !in 0..59) return null
-        return withMeridiem(hh, mm, meridiem(hh))
+        if (minutes !in 1..59) return null
+        val before = m.groups["dir"]!!.value !in setOf("past", "after")
+        // "ten till noon" is 11:50 AM, "ten past midnight" 12:10 AM (as the
+        // server's clock_time reads them since review round 1).
+        if (hr == "noon" || hr == "midday" || hr == "midnight") {
+            val base = if (hr == "midnight") 24 * 60 else 12 * 60
+            val total = ((if (before) base - minutes else base + minutes) % (24 * 60) + 24 * 60) % (24 * 60)
+            return SpokenTime(total / 60, total % 60, total >= 12 * 60)
+        }
+        val h = hourOf(hr) ?: return null
+        if (h !in 1..12) return null
+        // As clock_time.parse_when does: on a 12-hour dial, then 1-12.
+        val total = when (m.groups["dir"]!!.value) {
+            "past", "after" -> (h % 12) * 60 + minutes
+            else -> ((h % 12) * 60 - minutes + 720) % 720
+        }
+        val hh = (total / 60).takeIf { it > 0 } ?: 12
+        return withMeridiem(hh, total % 60, meridiem(hh))
     }
     Regex("^(\\S+?)(?::(\\d{2})| (\\d{2})| (?:oh |o )?(.+))?$").matchEntire(t)?.let { m ->
         val h = hourOf(m.groupValues[1]) ?: return null

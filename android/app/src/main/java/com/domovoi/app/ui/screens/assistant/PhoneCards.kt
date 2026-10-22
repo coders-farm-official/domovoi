@@ -48,6 +48,13 @@ internal data class CardFace(
 
 internal const val OPEN_CLOCK = "open Clock"
 
+/** An action card's line from the first tap until its state arrives. */
+internal const val TAPPED_LINE = "sending…"
+
+/** How long a tapped card waits for its state before its buttons come back
+ *  (the tap reached nothing: another chat on screen, say). */
+internal const val TAPPED_WAIT_MS = 5_000L
+
 /** Whether an Undo card still shows its button: for [AssistantController.UNDO_SHOWN_MS]
  *  after its reply ([atMs]), and only while it is open. */
 internal fun undoShowing(card: PhoneCard, atMs: Long, nowMs: Long): Boolean =
@@ -55,7 +62,7 @@ internal fun undoShowing(card: PhoneCard, atMs: Long, nowMs: Long): Boolean =
 
 /** [clockOpens]: some app opens the Clock app's timers or alarms
  *  (AssistantController.clockOpens); no button otherwise. */
-internal fun cardFace(card: PhoneCard, clockOpens: Boolean = false): CardFace? = when (card.kind) {
+internal fun cardFace(card: PhoneCard, clockOpens: Boolean = false, tapped: Boolean = false): CardFace? = when (card.kind) {
     CardKind.HANDOFF -> card.handOff?.takeIf { it.kind != HandOffKind.OTHER }?.let { h ->
         CardFace(
             title = HandOffs.cardTitle(h),
@@ -89,14 +96,17 @@ internal fun cardFace(card: PhoneCard, clockOpens: Boolean = false): CardFace? =
         CardFace(
             title = card.title.orEmpty(),
             primary = ActionTexts.confirmLabel(a),
-            secondary = "cancel",
+            secondary = if (a.kind == ActionKind.PLAY_MUSIC) "no" else "cancel",
             doneLine = when (card.state) {
-                CardState.OPEN -> null
+                // Tapped once (Fold check 2026-10-21): the buttons go at once,
+                // before the controller's state reaches the screen, so a
+                // second tap has nothing to land on.
+                CardState.OPEN -> if (tapped) TAPPED_LINE else null
                 CardState.DONE -> ActionTexts.doneLine(a)
                 CardState.DISMISSED -> ActionTexts.DECLINED_LINE
                 CardState.REPLACED -> "asked again below"
                 CardState.SENDING -> ActionTexts.SENDING_LINE
-                CardState.FAILED -> if (a.kind == ActionKind.PLAY_VIDEO) "couldn't play it" else "the Clock app didn't take it"
+                CardState.FAILED -> if (a.kind == ActionKind.PLAY_VIDEO || a.kind == ActionKind.PLAY_MUSIC) "couldn't play it" else "the Clock app didn't take it"
             },
             doneButton = OPEN_CLOCK.takeIf {
                 clockOpens && card.state == CardState.DONE && (a.kind == ActionKind.SET_TIMER || a.kind == ActionKind.SET_ALARM)
@@ -126,16 +136,34 @@ internal fun PhoneCardView(
     atMs: Long = 0L,
     clockOpens: Boolean = false,
 ) {
-    val face = cardFace(card, clockOpens) ?: return
+    // One tap per card: the first disables it here and now.
+    var tapped by remember(card) { mutableStateOf(false) }
+    LaunchedEffect(card, tapped) {
+        if (tapped) {
+            delay(TAPPED_WAIT_MS)
+            tapped = false
+        }
+    }
+    val face = cardFace(card, clockOpens, tapped) ?: return
     if (card.kind == CardKind.UNDO) return UndoChip(card, face, atMs, onPrimary, enabled)
+    val primary = {
+        if (card.kind == CardKind.ACTION && card.state == CardState.OPEN) {
+            if (!tapped) {
+                tapped = true
+                onPrimary()
+            }
+        } else {
+            onPrimary()
+        }
+    }
     DomovoiCard(Modifier.widthIn(max = 480.dp).padding(top = 6.dp)) {
         Text(face.title, style = MaterialTheme.typography.titleSmall, color = Domovoi.colors.fg, modifier = Modifier.asHeading())
         val done = face.doneLine
         if (done == null) {
             Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onPrimary, enabled = enabled) { Text(face.primary, color = Domovoi.colors.brand) }
+                OutlinedButton(onClick = primary, enabled = enabled && !tapped) { Text(face.primary, color = Domovoi.colors.brand) }
                 if (face.secondary.isNotEmpty()) {
-                    TextButton(onClick = onSecondary, enabled = enabled) { Text(face.secondary, color = Domovoi.colors.fgMuted) }
+                    TextButton(onClick = onSecondary, enabled = enabled && !tapped) { Text(face.secondary, color = Domovoi.colors.fgMuted) }
                 }
             }
         } else {

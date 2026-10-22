@@ -59,6 +59,8 @@ class DocQaSharedCasesTest {
         assertEquals(c.s("note_quote"), DocQa.NOTE_QUOTE)
         assertEquals(c.s("rules_question"), DocQa.RULES_QUESTION)
         assertEquals(c.s("rules_summary"), DocQa.RULES_SUMMARY)
+        assertEquals(c.s("rules_overview"), DocQa.RULES_OVERVIEW)
+        assertEquals(c["overview_min_part_chars"]!!.jsonPrimitive.int, DocQa.OVERVIEW_MIN_PART_CHARS)
         assertEquals(c["stop_words"]!!.strs(), DocText.STOP_WORDS.sorted())
     }
 
@@ -118,6 +120,27 @@ class DocQaSharedCasesTest {
         }
     }
 
+    /** Fold check 2026-10-21: "What is this?" is an overview (the server's
+     *  rules, case for case). */
+    @Test fun overviews() {
+        cases["overview_retrieve"]!!.jsonArray.forEach {
+            val o = it.jsonObject
+            val g = DocQa.retrieve(docs(o["docs"]!!), "what is this?", mode = "overview",
+                singlePass = o["single_pass"]!!.jsonPrimitive.int, budget = o["budget"]!!.jsonPrimitive.int)
+            val want = o["out"]!!.jsonArray.map { x -> x.jsonObject.s("cite") to x.jsonObject.s("text") }
+            assertEquals(want, g.map { x -> x.cite to x.passage.text })
+        }
+        cases["overview_sample"]!!.jsonArray.forEach {
+            val o = it.jsonObject
+            val n = o["n"]!!.jsonPrimitive.int
+            assertEquals(o["out"]!!.jsonArray.map { x -> x.jsonPrimitive.int }, DocQa.overviewSample((0 until n).toList(), o["k"]!!.jsonPrimitive.int))
+        }
+        cases["opening"]!!.jsonArray.forEach {
+            val o = it.jsonObject
+            assertEquals(o.s("out"), DocQa.opening(o.s("in")!!, o["limit"]!!.jsonPrimitive.int))
+        }
+    }
+
     @Test fun followUps() {
         cases["follow_up"]!!.jsonArray.forEach {
             val o = it.jsonObject
@@ -138,10 +161,16 @@ class DocQaSharedCasesTest {
             val d = docs(o["docs"]!!)
             val mode = o.s("mode")!!
             val prev = o["previous"]?.str()
-            val g = DocQa.retrieve(d, o.s("question")!!, prev, mode = mode)
+            val single = o["single_pass"]?.jsonPrimitive?.int ?: DocQa.SINGLE_PASS_CHARS
+            val g = DocQa.retrieve(d, o.s("question")!!, prev, mode = mode, singlePass = single)
             val p = DocQa.buildPrompt(o.s("question")!!, g, d.map { x -> x.name }, mode = mode, previous = prev, nonce = "cafe0123")
             assertEquals(o.s("user"), p.user)
-            assertEquals(if (o.s("rules") == "summary") DocQa.RULES_SUMMARY else DocQa.RULES_QUESTION, p.rules)
+            val rules = when (o.s("rules")) {
+                "summary" -> DocQa.RULES_SUMMARY
+                "overview" -> DocQa.RULES_OVERVIEW
+                else -> DocQa.RULES_QUESTION
+            }
+            assertEquals(rules, p.rules)
         }
     }
 

@@ -53,6 +53,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -136,6 +138,8 @@ data class AssistantUi(
     val voicePhase: VoicePhase = VoicePhase.Idle,
     /** The mic has heard speech in this turn (a tap now sends it). */
     val heardSpeech: Boolean = false,
+    /** The mic is open for a card's yes or no (the answer window). */
+    val voiceAnswering: Boolean = false,
     /** Typed questions' replies are read aloud too (plan decision 7: off). */
     val speakTyped: Boolean = false,
     /** Phone chats may look things up (this install has the lookup clients). */
@@ -157,6 +161,10 @@ data class AssistantUi(
     /** A reply about documents is being checked against them before it is
      *  shown (the model's own words are never shown unchecked). */
     val checking: Boolean = false,
+    /** How long that check's reply should take on this phone, seconds
+     *  (its measured speed): a document answer shows nothing until it is
+     *  checked, so the wait is said (Fold check 2026-10-21: "unresponsive"). */
+    val checkingEtaS: Int? = null,
     /** A PDF this phone can't read the text of, waiting for "Ask the home
      *  server" or to be dropped. */
     val pendingPdf: PendingDocument? = null,
@@ -418,17 +426,35 @@ class AssistantController(
             transcribe = { kit.recognizer().transcribe(it) },
             answer = ::answerSpoken,
             voice = { kit.speech().also { _state.update { s -> s.copy(voiceName = kit.voiceName) } } },
-            stopModel = { engine?.cancel() },
+            stopModel = {
+                stopAsked = true
+                engine?.cancel()
+            },
             focus = focus,
             work = io,
             clock = nanos,
+            awaitsAnswer = ::awaitsSpokenAnswer,
+            listenForAnswer = { onSpeech ->
+                kit.mic.listen(kit.detector(), onSpeechStart = onSpeech, giveUpAfterS = VoiceSession.ANSWER_WAIT_S)
+            },
         )
     }
+
+    /** The person asked for the reply to stop (stop, a new chat, the mic's
+     *  stop): a cancel then is theirs. Any other cancel of a reply came from
+     *  the runtime by itself and is never shown as "stopped". */
+    @Volatile private var stopAsked = false
+
+    /** The reply just spoken ends in a question a yes or no answers: an
+     *  open asked-first card, or a lookup card. */
+    private fun awaitsSpokenAnswer(): Boolean =
+        !_state.value.replying && opensAnswerMic(_state.value.conversation.messages.lastOrNull())
 
     init {
         voice?.let { v ->
             scope.launch { v.phase.collect { p -> _state.update { it.copy(voicePhase = p) } } }
             scope.launch { v.heardSpeech.collect { h -> _state.update { it.copy(heardSpeech = h) } } }
+            scope.launch { v.answering.collect { a -> _state.update { it.copy(voiceAnswering = a) } } }
             scope.launch { v.problems.collect { say(it) } }
         }
         scope.launch {
@@ -1009,6 +1035,7 @@ class AssistantController(
         val asked = ui.conversation.let {
             it.copy(updated = now, messages = it.messages + StoredMessage(Speaker.USER, said, now, photo = photo != null))
         }
+        stopAsked = false
         // The photo leaves the screen's state now; only this turn holds it.
         _state.update { it.copy(conversation = asked, replying = true, thinking = true, pendingPhoto = null, pendingPhotoServer = false) }
         val v = voice
@@ -1059,7 +1086,7 @@ class AssistantController(
 
     /** A letter photo held while its heads-up card waits for a pick: in
      *  memory only, wiped at the pick, a new chat or another one opened. */
-    private class HeldLetter(val conversation: String, val photo: PendingPhoto, val viaServer: Boolean)
+    private class HeldLetter(val conversation: String, val photo: PendingPhoto, val viaServer: Boolean, val byText: Boolean = false)
 
     @Volatile private var heldLetter: HeldLetter? = null
 
@@ -1082,6 +1109,11 @@ class AssistantController(
         onDelta: (String) -> Unit,
         chosen: Pair<String, String>? = null,
         viaServer: Boolean = false,
+        /** The question didn't name a letter ("what does this say?"): the
+         *  text is read first, with no printed-or-handwritten step, and only
+         *  a text that reads like a letter gets the letter's layout; any
+         *  other gets a plain photo answer ([photoReply]). */
+        byText: Boolean = false,
     ): StoredConversation {
         var hold = false
         try {
@@ -1094,7 +1126,7 @@ class AssistantController(
             suspend fun card(c: HeadsUpCard): StoredConversation {
                 hold = true
                 dropHeldLetter()
-                heldLetter = HeldLetter(asked.id, photo, viaServer)
+                heldLetter = HeldLetter(asked.id, photo, viaServer, byText)
                 onDelta(c.text)
                 return finishReply(asked, StoredMessage(Speaker.DOMOVOI, c.text, clock(), docMode = "heads_up", headsUp = t!!.stored(c)))
             }
@@ -1106,7 +1138,8 @@ class AssistantController(
             fun live(text: String = ""): StoredMessage =
                 StoredMessage(Speaker.DOMOVOI, text, clock(), backend = settings.backend.label, docMode = "letter",
                     vision = if (viaServer) "home server" else visionBackend().label)
-            _state.update { it.copy(checking = true, conversation = asked.withMetaOf(it.conversation).copy(messages = asked.messages + live())) }
+            val reading = if (byText) live().copy(docMode = PhotoText.MODE_PHOTO) else live()
+            _state.update { it.copy(checking = true, conversation = asked.withMetaOf(it.conversation).copy(messages = asked.messages + reading)) }
             val handwrittenPick = chosen?.first == "handwriting"
             var handwritten = handwrittenPick
             val transcript: String
@@ -1143,11 +1176,25 @@ class AssistantController(
                     }
                     val guard = visionCheck().also { it.begin(clock()) }
                     try {
+                        // Any reading request about a photo (review round 1:
+                        // a handwritten note asked "what does this say?"
+                        // must still get its card).
                         if (!handwrittenPick) {
                             val word = StringBuilder()
                             llm.replyToPhoto(LetterRead.KIND_SYSTEM, photo.jpeg, LetterRead.KIND_QUESTION, null, LetterRead.KIND_TOKENS)
                                 .collect { word.append(it) }
                             handwritten = LetterRead.parseKind(word.toString()) == "handwritten"
+                            // Two signals before the handwriting card (Fold
+                            // check 2026-10-21: a printed label was called
+                            // handwritten): the question asked again, the
+                            // other way round, must agree.
+                            if (handwritten) {
+                                val again = StringBuilder()
+                                llm.replyToPhoto(LetterRead.KIND_SYSTEM, photo.jpeg, PhoneLetters.KIND_CHECK_QUESTION, null, LetterRead.KIND_TOKENS)
+                                    .collect { again.append(it) }
+                                handwritten = PhoneLetters.handwrittenAgain(again.toString())
+                                Log.i(TAG, "letter kind: handwritten, checked again: ${if (handwritten) "handwritten" else "not handwritten"}")
+                            }
                             if (handwritten && chosen == null && t != null) {
                                 decide(DocHeadsUp.findings(HeadsUpRequest("picture", question, "phone", handwritten = true), t))
                                     .card?.let { guard.end(); _state.update { it.copy(checking = false) }; return card(it) }
@@ -1163,12 +1210,20 @@ class AssistantController(
                 }
             } catch (e: CancellationException) {
                 _state.update { it.copy(checking = false) }
-                finishReply(asked, live().copy(stopped = true, stopMs = voice?.lastStopMs))
+                finishReply(asked, (live().copy(stopMs = voice?.lastStopMs)).ended())
                 throw e
             } catch (e: Throwable) {
                 _state.update { it.copy(checking = false) }
                 val who = if (viaServer) "The home server couldn't read it" else "The model stopped"
                 return finishReply(asked, live().copy(error = "$who: ${plainReason(e)}"))
+            }
+            // Not named as a letter, and its text doesn't read like one: a
+            // plain answer about the photo, with the text kept for follow-ups.
+            if (byText && !PhotoText.looksLikeLetter(transcript)) {
+                _state.update { it.copy(checking = false) }
+                hold = true
+                Log.i(TAG, "photo turn: \"${question.take(40)}\" read as plain text (signals ${PhotoText.letterSignals(transcript)})")
+                return photoReply(asked, photo, onDelta, readText = PhotoText.cleaned(transcript))
             }
             // 3. The explanation, from the transcript only, checked before it is shown.
             val explained = if (transcript.isBlank()) {
@@ -1180,7 +1235,7 @@ class AssistantController(
                     llm.reply(prompt.rules, listOf(ChatTurn(fromUser = true, text = prompt.user)), null).collect { words.append(it) }
                 } catch (e: CancellationException) {
                     _state.update { it.copy(checking = false) }
-                    finishReply(asked, live().copy(stopped = true, stopMs = voice?.lastStopMs))
+                    finishReply(asked, (live().copy(stopMs = voice?.lastStopMs)).ended())
                     throw e
                 } catch (e: Throwable) {
                     _state.update { it.copy(checking = false) }
@@ -1239,6 +1294,7 @@ class AssistantController(
         val asked = _state.value.conversation.let {
             it.copy(updated = now, messages = it.messages + StoredMessage(Speaker.USER, transcript, now, spoken = true))
         }
+        stopAsked = false
         _state.update { it.copy(conversation = asked, replying = true, thinking = true) }
         val done = reply(asked, onDelta)
         return { timing -> fileTiming(done, timing) }
@@ -1257,21 +1313,39 @@ class AssistantController(
             "silence wait), speech to text ${timing.sttMs} ms, first text ${timing.firstTextMs} ms")
         val index = done.messages.lastIndex
         if (index < 0 || done.messages[index].fromUser) return
-        val timed = done.messages[index].copy(
-            voiceMs = timing.toFirstWordMs, silenceWaitMs = timing.silenceWaitMs, sttMs = timing.sttMs,
-        )
-        updateMessage(done.id, index, timed)
+        // Only the timing goes onto the reply as it is NOW (Fold check
+        // 2026-10-21): this turn's copy still had its card OPEN, and writing
+        // that copy back after the voice finished reopened a card the person
+        // had already tapped, so a second tap set a second Clock timer.
+        updateMessage(done.id, index) {
+            it.copy(voiceMs = timing.toFirstWordMs, silenceWaitMs = timing.silenceWaitMs, sttMs = timing.sttMs)
+        }
     }
 
-    /** Replaces message [index] of conversation [id], on screen and on disk. */
-    private fun updateMessage(id: String, index: Int, message: StoredMessage) {
-        scope.launch {
-            val current = _state.value.conversation.takeIf { it.id == id }
-                ?: withContext(io) { conversations.load(id) } ?: return@launch
-            if (index !in current.messages.indices) return@launch
-            val changed = current.copy(messages = current.messages.toMutableList().also { it[index] = message })
-            _state.update { if (it.conversation.id == id) it.copy(conversation = changed) else it }
-            withContext(NonCancellable) { save(changed) }
+    /** Changes message [index] of conversation [id] with [change], applied
+     *  to the screen's copy and the disk's as each stands at that moment
+     *  (never a copy read earlier: a card tapped meanwhile keeps its state). */
+    private fun updateMessage(id: String, index: Int, change: (StoredMessage) -> StoredMessage) {
+        scope.launch { applyMessage(id, index, change) }
+    }
+
+    /** [updateMessage], here and now: the screen's copy, then the disk's
+     *  under the disk lock, and only while the chat is still on disk (a
+     *  chat deleted meanwhile never comes back). */
+    private suspend fun applyMessage(id: String, index: Int, change: (StoredMessage) -> StoredMessage) {
+        run {
+            _state.update { ui ->
+                val c = ui.conversation.takeIf { it.id == id } ?: return@update ui
+                if (index !in c.messages.indices) return@update ui
+                ui.copy(conversation = c.copy(messages = c.messages.toMutableList().also { it[index] = change(it[index]) }))
+            }
+            withContext(NonCancellable) {
+                diskLock.withLock {
+                    val disk = withContext(io) { conversations.load(id) } ?: return@withLock
+                    if (index !in disk.messages.indices) return@withLock
+                    save(disk.copy(messages = disk.messages.toMutableList().also { it[index] = change(it[index]) }), makeCurrent = false)
+                }
+            }
         }
     }
 
@@ -1289,18 +1363,38 @@ class AssistantController(
         // runs again once this reply is done), and whatever it wrote, or a
         // rename meanwhile, is kept.
         pauseTitle()
-        val asked = question.withMetaOf(_state.value.conversation)
+        // The text still being read from the last photo comes first: this
+        // question may be about it.
+        photoTextJob?.join()
+        // Built from the conversation as it stands now (review round 1: the
+        // copy taken before the wait lacked the photo's text, and saving it
+        // wrote the answer back without it), with every card as far along
+        // as any copy has it.
+        val asked = current(question)
         // A retry's question is already on disk with the reply it may
         // replace: that copy stays until the new reply is finished.
-        if (retryingFrom == null) save(asked)
+        if (retryingFrom == null) {
+            withContext(NonCancellable) {
+                diskLock.withLock {
+                    val disk = withContext(io) { conversations.load(asked.id) }
+                    save(asked.keepingCards(disk))
+                }
+            }
+        }
         // A photo question goes to the model with its photo: no fast path
         // answers "what time is it on this sign?".
         if (photo != null) {
             undoEntry = null
-            // A letter for the home server (D6), or a letter question with a
-            // photo this phone reads: read, explained and checked.
+            // A letter for the home server (D6), or a question that names a
+            // letter, a bill or a notice: read, explained and checked.
             val typed = asked.messages.last().text
-            if (viaServer || LetterRead.letterRequest(typed)) return letterReply(asked, photo, onDelta, viaServer = viaServer)
+            if (viaServer || PhotoText.namesALetterKind(typed) && LetterRead.letterRequest(typed)) {
+                return letterReply(asked, photo, onDelta, viaServer = viaServer)
+            }
+            // "What does this say?" (a label asks it too, Fold check
+            // 2026-10-21): read first; the letter's layout only when the
+            // text reads like a letter, else a plain answer.
+            if (LetterRead.letterRequest(typed)) return letterReply(asked, photo, onDelta, byText = true)
             return photoReply(asked, photo, onDelta)
         }
         // A Revise-box turn is always a revision of its draft (D4): no clock or
@@ -1317,7 +1411,24 @@ class AssistantController(
         // An attachment is the clearest sign of intent: with a document in
         // the chat, "what's the total?" never reaches the actions or the
         // phone's facts.
-        if (asked.documents.isNotEmpty()) { undoEntry = null; return docReply(asked, onDelta) }
+        // With a photo's text in the chat too (owner, 2026-10-22), the
+        // question goes to the subject it names, or the most recent one;
+        // Domovoi asks which when it can't tell.
+        var photoFollow = false
+        if (asked.documents.isNotEmpty()) {
+            undoEntry = null
+            when (PhotoText.subject(asked)) {
+                PhotoText.Subject.DOCUMENTS -> return docReply(asked, onDelta)
+                PhotoText.Subject.ASK -> {
+                    val text = PhotoText.askWhich(asked.documents.map { it.name })
+                    onDelta(text)
+                    return finishReply(asked, StoredMessage(Speaker.DOMOVOI, text, clock(), fastPath = FAST_WHICH_SUBJECT))
+                }
+                PhotoText.Subject.PHOTO -> photoFollow = true
+            }
+        }
+        // A photo follow-up goes on as any question: the photo's text is in
+        // the history the model is given (modelTurns).
         actionTurn(asked, onDelta)?.let { return it }
         undoEntry = null
         phoneReply(asked, onDelta)?.let { return it }
@@ -1377,7 +1488,7 @@ class AssistantController(
         val llm = try {
             ensureEngine()
         } catch (e: CancellationException) {
-            finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), stopped = true))
+            finishReply(asked, (StoredMessage(Speaker.DOMOVOI, "", clock())).ended())
             throw e
         }
         if (llm == null) {
@@ -1419,7 +1530,17 @@ class AssistantController(
             val held = StringBuilder()
             var holding = offered
             var proposing = false
-            try {
+            // A cancel the person didn't ask for (the runtime's own, Fold
+            // check 2026-10-21) before any words: once more, on a fresh
+            // conversation, so it is never shown as "stopped".
+            var again = true
+            // No sentence claims an action the model can't do (Fold check
+            // 2026-10-21: "Playing Outcast now.", and nothing played).
+            // Only on a turn that asked to act (review round 1): a story's or
+            // an explanation's sentences are never touched.
+            val acting = ClaimGuard.asksToAct(asked.messages.lastOrNull { it.fromUser }?.text)
+            var guard: ClaimGuard? = if (acting) ClaimGuard() else null
+            while (true) try {
                 llm.reply(turn)
                     .collect { piece ->
                         if (firstMs == null && piece.isNotBlank()) firstMs = (nanos() - sent) / 1_000_000
@@ -1438,6 +1559,8 @@ class AssistantController(
                             delta = held.toString()
                             held.clear()
                         }
+                        delta = guard?.push(delta) ?: delta
+                        if (delta.isEmpty()) return@collect
                         text.append(delta)
                         onDelta(delta)
                         _state.update { ui ->
@@ -1447,15 +1570,29 @@ class AssistantController(
                             )
                         }
                     }
+                break
             } catch (_: ProposalLine) {
                 llm.cancel()
+                break
+            } catch (e: CancellationException) {
+                if (!again || !runtimeCancel() || text.isNotEmpty() || held.isNotEmpty() || guard?.holding == true) throw e
+                again = false
+                guard = if (acting) ClaimGuard() else null
+                Log.w(TAG, "the runtime cancelled a reply nobody stopped (${e.message}); asking once more")
+                llm.reset()
             }
             if (held.isNotEmpty()) {
                 val proposal = if (proposing) LookupRules.parseProposal(held.toString()) else null
                 if (proposal != null) return lookupReply(viewed, proposal, onDelta)
-                text.append(held)
-                onDelta(held.toString())
+                val rest = guard?.push(held.toString()) ?: held.toString()
+                text.append(rest)
+                onDelta(rest)
             }
+            guard?.finish()?.takeIf { it.isNotEmpty() }?.let {
+                text.append(it)
+                onDelta(it)
+            }
+            if (guard?.replaced == true) Log.i(TAG, "a model sentence claiming an action was replaced")
             val stats = llm.lastStats()
             recordSpeed(backend, stats, Persona.SYSTEM_PROMPT.length + sentTurns.sumOf { it.text.length })
             // A turn that ended in a tool call written as text (kept off the
@@ -1467,15 +1604,33 @@ class AssistantController(
             val card = proposed.firstOrNull()?.let { proposalCard(it) }
             return finishReply(
                 viewed,
-                live().copy(text = said, firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }, card = card),
+                live().copy(text = said, firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }, card = card,
+                    docMode = if (photoFollow) PhotoText.MODE_FOLLOW else null),
             )
         } catch (e: CancellationException) {
-            finishReply(viewed, live().copy(stopped = true, firstTextMs = firstMs, stopMs = voice?.lastStopMs))
+            if (runtimeCancel()) {
+                // Not the person's stop: said as what it is, never "stopped".
+                Log.w(TAG, "the runtime cancelled a reply nobody stopped: ${e.message}")
+                llm.reset()
+                return finishReply(viewed, live().copy(error = CUT_OFF, firstTextMs = firstMs))
+            }
+            Log.i(TAG, "reply stopped (asked: $stopAsked)")
+            finishReply(viewed, (live().copy(firstTextMs = firstMs, stopMs = voice?.lastStopMs)).ended())
             throw e
         } catch (e: Throwable) {
             return finishReply(viewed, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
         }
     }
+
+    /** How a reply that a cancel ended reads: "stopped" when the person
+     *  stopped it, else "cut off" (the runtime's own, never shown as a stop). */
+    private suspend fun StoredMessage.ended(): StoredMessage =
+        if (runtimeCancel()) copy(error = CUT_OFF).also { Log.w(TAG, "the runtime cancelled a reply nobody stopped") } else copy(stopped = true)
+
+    /** A cancel now is the runtime's own: nobody asked to stop, and this
+     *  coroutine itself is still running (LiteRT-LM reports its CANCELLED
+     *  as a java.util.concurrent.CancellationException). */
+    private suspend fun runtimeCancel(): Boolean = !stopAsked && currentCoroutineContext().isActive
 
     /**
      * A photo and its question (N3): the model on the phone looks at the
@@ -1485,13 +1640,23 @@ class AssistantController(
      * the conversation keeps the "photo" marker on the question. The app's
      * peak memory over the reply is written on it (developer details).
      */
-    private suspend fun photoReply(asked: StoredConversation, photo: PendingPhoto, onDelta: (String) -> Unit): StoredConversation {
+    private suspend fun photoReply(
+        asked: StoredConversation,
+        photo: PendingPhoto,
+        onDelta: (String) -> Unit,
+        /** The photo's text, already read (a "what does this say?" photo
+         *  that didn't read like a letter): kept with the answer. */
+        readText: String? = null,
+    ): StoredConversation {
+        // The photo goes to the job that reads its text (handed on), or is
+        // wiped when this reply ends.
+        var handedOn = false
         try {
             val backend = settings.backend
             val llm = try {
                 ensureEngine()
             } catch (e: CancellationException) {
-                finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), stopped = true))
+                finishReply(asked, (StoredMessage(Speaker.DOMOVOI, "", clock())).ended())
                 throw e
             }
             if (llm == null) {
@@ -1542,11 +1707,25 @@ class AssistantController(
                 val stats = llm.lastStats()
                 Log.i(TAG, "photo turn: first word $firstMs ms, peak ${peakKb()?.div(1024)} MB, " +
                     "${photo.width}x${photo.height} (${photo.source}) prepared in ${photo.prepMs} ms")
-                return finishReply(asked, live().copy(firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }))
+                val answered = live().copy(firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 })
+                if (readText != null) {
+                    return finishReply(asked, answered.copy(docMode = PhotoText.MODE_PHOTO, sources = PhotoText.sources(readText)))
+                }
+                // The text job is in place before the answer is finished (review
+                // round 1: a question sent the moment the answer shows must
+                // find it and wait for it); it writes once the answer is saved.
+                val saved = kotlinx.coroutines.CompletableDeferred<Unit>()
+                handedOn = true
+                keepPhotoText(asked.id, asked.messages.size, photo, saved)
+                try {
+                    return finishReply(asked, answered)
+                } finally {
+                    saved.complete(Unit)
+                }
             } catch (e: CancellationException) {
                 sampler.cancel()
                 guard.end()
-                finishReply(asked, live().copy(stopped = true, firstTextMs = firstMs, stopMs = voice?.lastStopMs))
+                finishReply(asked, (live().copy(firstTextMs = firstMs, stopMs = voice?.lastStopMs)).ended())
                 throw e
             } catch (e: Throwable) {
                 sampler.cancel()
@@ -1554,8 +1733,49 @@ class AssistantController(
                 return finishReply(asked, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
             }
         } finally {
-            // Nothing of the photo outlives its reply.
-            photo.jpeg.fill(0)
+            // Nothing of the photo outlives its reply (or the reading of its
+            // text, just after).
+            if (!handedOn) photo.jpeg.fill(0)
+        }
+    }
+
+    /**
+     * After a photo's answer: its text is read (the transcription step, at
+     * most [PhotoText.READ_TOKENS]) and kept beside the answer, so a
+     * follow-up can reach it (owner, 2026-10-22); the photo itself is wiped
+     * when this ends, however it ends. The next question waits for it.
+     */
+    private fun keepPhotoText(id: String, index: Int, photo: PendingPhoto, saved: kotlinx.coroutines.Deferred<Unit>) {
+        photoTextJob = scope.launch {
+            try {
+                val raw = StringBuilder()
+                engineLock.withLock {
+                    val llm = engine?.takeIf { it.isLoaded && it.seesPhotos } ?: return@launch
+                    val guard = visionCheck().also { it.begin(clock()) }
+                    try {
+                        llm.replyToPhoto(LetterRead.TRANSCRIBE_SYSTEM, photo.jpeg, LetterRead.TRANSCRIBE_QUESTION, null, PhotoText.READ_TOKENS)
+                            .collect { raw.append(it) }
+                    } finally {
+                        guard.end()
+                    }
+                }
+                val text = PhotoText.cleaned(raw.toString())
+                Log.i(TAG, "photo text kept: ${text.length} chars")
+                if (text.isNotEmpty()) {
+                    // Written before this job ends: the next question, which
+                    // waits for it, sees the text.
+                    saved.await()
+                    applyMessage(id, index) { m ->
+                        if (m.fromUser) m else m.copy(docMode = m.docMode ?: PhotoText.MODE_PHOTO, sources = PhotoText.sources(text))
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Log.w(TAG, "the photo's text wasn't read: ${plainReason(e)}")
+            } finally {
+                photo.jpeg.fill(0)
+            }
         }
     }
 
@@ -1568,11 +1788,15 @@ class AssistantController(
      */
     private suspend fun clockReply(asked: StoredConversation, onDelta: (String) -> Unit): StoredConversation? {
         val question = asked.messages.lastOrNull()?.takeIf { it.fromUser } ?: return null
-        val kind = ClockQuestions.match(question.text) ?: return null
+        val kind = ClockQuestions.match(question.text)
         val sent = nanos()
         val text = runCatching {
             val style = clockStyle()
-            ClockQuestions.answer(kind, style.at(clock()), style)
+            if (kind != null) {
+                ClockQuestions.answer(kind, style.at(clock()), style)
+            } else {
+                ClockQuestions.reading(question.text, style, style.at(clock()))
+            }
         }.onFailure { Log.w(TAG, "the phone's clock could not be read", it) }.getOrNull() ?: return null
         onDelta(text)
         val reply = StoredMessage(Speaker.DOMOVOI, text, clock(), firstTextMs = (nanos() - sent) / 1_000_000, fromClock = true)
@@ -1724,7 +1948,7 @@ class AssistantController(
                     }
                 }
         } catch (e: CancellationException) {
-            finishReply(base, live().copy(stopped = true, firstTextMs = firstMs, lookupSources = sources))
+            finishReply(base, (live().copy(firstTextMs = firstMs, lookupSources = sources)).ended())
             throw e
         } catch (e: Throwable) {
             return finishReply(base, live().copy(error = "The model stopped: ${plainReason(e)}", lookupSources = sources))
@@ -1774,7 +1998,7 @@ class AssistantController(
                 _state.update { it.copy(thinking = text.isBlank(), conversation = asked.copy(messages = asked.messages + live())) }
             }
         } catch (e: CancellationException) {
-            finishReply(asked, live().copy(stopped = true))
+            finishReply(asked, (live().copy()).ended())
             throw e
         } catch (e: Throwable) {
             return finishReply(asked, live().copy(error = "The model stopped: ${plainReason(e)}"))
@@ -1841,6 +2065,10 @@ class AssistantController(
 
     @Volatile private var undoEntry: UndoEntry? = null
 
+    /** The text being read from the last photo after its answer, for
+     *  follow-ups (owner, 2026-10-22); the photo lives until it ends. */
+    @Volatile private var photoTextJob: Job? = null
+
     /** One action at a time: a tap and a spoken yes can't both run a card. */
     private val actionLock = Mutex()
 
@@ -1872,6 +2100,10 @@ class AssistantController(
             val now = cardNow(asked.id, cardIndex)
             if (now != null && now.state != CardState.OPEN) {
                 return@withLock ActionOutcome(ActionTexts.ALREADY_ANSWERED, FAST_ACTION_YES, mark = cardIndex to now.state)
+            }
+            if (!cardOpenEverywhere(asked.id, cardIndex)) {
+                val disk = withContext(io) { conversations.load(asked.id) }?.messages?.getOrNull(cardIndex)?.card
+                return@withLock ActionOutcome(ActionTexts.ALREADY_ANSWERED, FAST_ACTION_YES, mark = disk?.let { cardIndex to it.state })
             }
             when (reply0) {
                 ActionReply.Yes -> {
@@ -1938,6 +2170,19 @@ class AssistantController(
             undoEntry = null
         }
         return finishReply(base, reply)
+    }
+
+    /** [question] (a turn's copy: the conversation when it was asked, plus
+     *  its question) brought up to date with the screen's copy: each earlier
+     *  message as it stands now (a photo's text written meanwhile, a card a
+     *  tap moved on), the question last. */
+    private fun current(question: StoredConversation): StoredConversation {
+        val screen = _state.value.conversation.takeIf { it.id == question.id } ?: return question.withMetaOf(_state.value.conversation)
+        val merged = question.messages.mapIndexed { i, m ->
+            val now = screen.messages.getOrNull(i)
+            if (now != null && i < question.messages.lastIndex && now.at == m.at && now.fromUser == m.fromUser) now else m
+        }
+        return question.withMetaOf(screen).copy(messages = merged).keepingCards(screen)
     }
 
     /** This conversation with each card at least as far along as in [other]. */
@@ -2013,7 +2258,12 @@ class AssistantController(
         // "put on my shoes", "listen to the kids": a "play" acts only on
         // what the library holds (MusicEvidence), before anything else.
         val songs = if (a.kind == ActionKind.PLAY_MUSIC) musicFor(a) else null
-        if (songs is MusicPick.NotMusic) return ActionOutcome("", fp, notAnAction = true)
+        if (songs is MusicPick.NotMusic) {
+            // A near spelling of one name in the library ("Outcast" for
+            // OutKast, Fold check 2026-10-21): asked, never played on a guess.
+            nearMusic(a)?.let { name -> return didYouMean(a, name, fp) }
+            return ActionOutcome("", fp, notAnAction = true)
+        }
         if (player.castingTo() != null) return ActionOutcome(PhoneQuestions.HOUSE_THINGS, FAST_ACTION_HOUSE)
         val before = player.snapshot()
         fun said(text: String) = ActionOutcome(text, fp)
@@ -2160,6 +2410,24 @@ class AssistantController(
         return MusicPick.NotMusic
     }
 
+    /** The one artist, album or title in the library that [a]'s words are a
+     *  near spelling of ([MusicNearMatch]), or null. */
+    private suspend fun nearMusic(a: PhoneAction): String? {
+        val q = a.query?.trim().orEmpty()
+        if (q.isEmpty()) return null
+        val library = runCatching { actions.songs("", NEAR_SCAN) }.getOrNull() ?: return null
+        val names = library.flatMap { listOfNotNull(it.title, it.artist, it.album) }
+        return MusicNearMatch.best(q, names)
+    }
+
+    /** "Did you mean OutKast?": a card; its yes plays [name], its no does nothing. */
+    private fun didYouMean(a: PhoneAction, name: String, fp: String): ActionOutcome {
+        val guess = PhoneAction(ActionKind.PLAY_MUSIC, query = name, phrase = name, shuffle = a.shuffle)
+        val q = "Did you mean $name?"
+        val card = PhoneCard(CardKind.ACTION, action = guess, title = q, question = a.phrase ?: a.query)
+        return ActionOutcome(q, fp, card, spoken = "$q ${ActionTexts.SAY_YES_OR_NO}")
+    }
+
     /** The phone's videos for [q] (as written, then every word: "glacier
      *  trip" finds "glacier-trip.mp4"). Null: no permission. */
     private suspend fun findVideos(q: String): List<VideoChoice>? {
@@ -2233,6 +2501,11 @@ class AssistantController(
                 val ok = runCatching { actions.clock(request) }.getOrDefault(false)
                 ok to if (ok) ActionTexts.done(a, style, now) else ActionTexts.CLOCK_FAILED
             }
+            ActionKind.PLAY_MUSIC -> {
+                // A "Did you mean …?" card's yes: the name it offered, from the library.
+                val out = playback(a, "action_play_music")
+                (out.card?.kind == CardKind.UNDO) to out.text.ifEmpty { "I can't find that on this phone any more." }
+            }
             ActionKind.PLAY_VIDEO -> {
                 val uri = card.videoUri ?: return false to "That video isn't on this phone any more."
                 val title = card.videoTitle ?: a.query.orEmpty()
@@ -2251,8 +2524,9 @@ class AssistantController(
                 ?.takeIf { it.kind == CardKind.ACTION && it.state == CardState.OPEN } ?: return@launch
             val (ran, line) = actionLock.withLock {
                 // Answered meanwhile (a spoken yes, a no, a second tap):
-                // nothing runs twice.
-                if (cardNow(conversationId, index)?.state != CardState.OPEN) return@launch
+                // nothing runs twice. Open means open on screen AND on disk
+                // (Fold check: one copy said OPEN after the other said DONE).
+                if (!cardOpenEverywhere(conversationId, index)) return@launch
                 // SENDING, on screen and on disk, before the Clock call: a
                 // reply finishing meanwhile, a "hmm", a "no" or a new chat
                 // all see it taken.
@@ -2263,6 +2537,16 @@ class AssistantController(
             }
             if (!ran) say(line.lowercase().removeSuffix("."))
         }
+    }
+
+    /** Whether card [index] of [conversationId] is still OPEN in every copy
+     *  there is: the screen's (when it shows that chat) and the disk's. */
+    private suspend fun cardOpenEverywhere(conversationId: String, index: Int): Boolean {
+        val screen = _state.value.conversation.takeIf { it.id == conversationId }?.messages?.getOrNull(index)?.card
+        if (screen != null && screen.state != CardState.OPEN) return false
+        val disk = withContext(io) { conversations.load(conversationId) }?.messages?.getOrNull(index)?.card
+        if (disk != null && disk.state != CardState.OPEN) return false
+        return screen != null || disk != null
     }
 
     /** Card [index] of conversation [conversationId] as it stands now: the
@@ -2528,15 +2812,9 @@ class AssistantController(
     }
 
     private fun editCard(conversationId: String, index: Int, change: (PhoneCard) -> PhoneCard) {
-        scope.launch {
-            val current = _state.value.conversation.takeIf { it.id == conversationId }
-                ?: withContext(io) { conversations.load(conversationId) } ?: return@launch
-            val message = current.messages.getOrNull(index) ?: return@launch
-            val card = message.card ?: return@launch
-            val changed = current.copy(messages = current.messages.toMutableList().also { it[index] = message.copy(card = change(card)) })
-            _state.update { if (it.conversation.id == conversationId) it.copy(conversation = changed) else it }
-            withContext(NonCancellable) { save(changed) }
-        }
+        // Applied to each copy as it stands (updateMessage): never a copy
+        // read before a tap or a spoken yes moved the card on.
+        updateMessage(conversationId, index) { m -> m.card?.let { m.copy(card = change(it)) } ?: m }
     }
 
     private suspend fun finishReply(asked: StoredConversation, reply: StoredMessage): StoredConversation {
@@ -2575,6 +2853,7 @@ class AssistantController(
     /** Stops the reply being written and any voice: what it has so far stays. */
     fun stop() {
         if (_state.value.docJob != null && _state.value.replying) jobStopping = true
+        stopAsked = true
         voice?.stop()
         engine?.cancel()
         replyJob?.cancel()
@@ -2582,6 +2861,8 @@ class AssistantController(
     }
 
     private suspend fun stopReply() {
+        stopAsked = true
+        photoTextJob?.cancelAndJoin()
         voice?.stopAndWait()
         val job = replyJob ?: return
         engine?.cancel()
@@ -2622,11 +2903,15 @@ class AssistantController(
         scope.launch {
             if (titleFor == id) pauseTitle()
             if (_state.value.conversation.id == id) stopReply()
-            val ok = withContext(io) {
-                docs?.delete(id)
-                drafts?.delete(id)
-                docCache.keys.removeAll { it.startsWith("$id/") }
-                conversations.delete(id).also { readHistory() }
+            // Under the disk lock: a write in flight (a photo's text) can't
+            // bring the chat back after it.
+            val ok = diskLock.withLock {
+                withContext(io) {
+                    docs?.delete(id)
+                    drafts?.delete(id)
+                    docCache.keys.removeAll { it.startsWith("$id/") }
+                    conversations.delete(id).also { readHistory() }
+                }
             }
             if (_state.value.conversation.id == id) {
                 settings.currentConversation = null
@@ -2641,11 +2926,13 @@ class AssistantController(
         scope.launch {
             pauseTitle()
             stopReply()
-            val ok = withContext(io) {
-                docs?.clearAll()
-                drafts?.clearAll()
-                docCache.clear()
-                conversations.clearAll().also { readHistory() }
+            val ok = diskLock.withLock {
+                withContext(io) {
+                    docs?.clearAll()
+                    drafts?.clearAll()
+                    docCache.clear()
+                    conversations.clearAll().also { readHistory() }
+                }
             }
             settings.currentConversation = null
             _state.update { it.copy(conversation = conversations.create(clock())) }
@@ -2719,6 +3006,7 @@ class AssistantController(
         if (!canRetry(ui)) return
         val asked = retryBase(ui.conversation) ?: return
         retryingFrom = ui.conversation.messages.last()
+        stopAsked = false
         _state.update { it.copy(conversation = asked, replying = true, thinking = true) }
         replyJob = scope.launch { reply(asked) }
     }
@@ -3044,7 +3332,7 @@ class AssistantController(
         val llm = try {
             ensureEngine()
         } catch (e: CancellationException) {
-            finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), stopped = true))
+            finishReply(asked, (StoredMessage(Speaker.DOMOVOI, "", clock())).ended())
             throw e
         }
         if (llm == null) {
@@ -3080,7 +3368,7 @@ class AssistantController(
                 outputs += one.toString()
             }
         } catch (e: CancellationException) {
-            finishReply(asked, live().copy(text = "", stopped = true, firstTextMs = firstMs, stopMs = voice?.lastStopMs))
+            finishReply(asked, (live().copy(text = "", firstTextMs = firstMs, stopMs = voice?.lastStopMs)).ended())
             throw e
         } catch (e: Throwable) {
             return finishReply(asked, live().copy(text = "", error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
@@ -3219,7 +3507,7 @@ class AssistantController(
         val llm = try {
             ensureEngine()
         } catch (e: CancellationException) {
-            finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), stopped = true))
+            finishReply(asked, (StoredMessage(Speaker.DOMOVOI, "", clock())).ended())
             throw e
         }
         if (llm == null) {
@@ -3236,7 +3524,9 @@ class AssistantController(
         // (review round 1): nothing unchecked is shown or spoken. Meanwhile
         // the reply is empty and the chat says it is checking.
         fun live(): StoredMessage = StoredMessage(Speaker.DOMOVOI, "", clock(), backend = backend.label, docMode = mode)
-        _state.update { it.copy(checking = true, conversation = asked.copy(messages = asked.messages + live())) }
+        val eta = docEtaS(system.length + prompt.user.length, measuredSpeed(backend))
+        Log.i(TAG, "document turn: $mode, ${given.size} passages, ${system.length + prompt.user.length} prompt chars, about $eta s here")
+        _state.update { it.copy(checking = true, checkingEtaS = eta, conversation = asked.copy(messages = asked.messages + live())) }
         try {
             llm.reply(system, listOf(ChatTurn(fromUser = true, text = prompt.user)), clockLine()).collect { delta ->
                 if (firstMs == null && delta.isNotBlank()) firstMs = (nanos() - sent) / 1_000_000
@@ -3244,7 +3534,7 @@ class AssistantController(
             }
         } catch (e: CancellationException) {
             _state.update { it.copy(checking = false) }
-            finishReply(asked, live().copy(stopped = true, firstTextMs = firstMs, stopMs = voice?.lastStopMs))
+            finishReply(asked, (live().copy(firstTextMs = firstMs, stopMs = voice?.lastStopMs)).ended())
             throw e
         } catch (e: Throwable) {
             _state.update { it.copy(checking = false) }
@@ -3252,7 +3542,8 @@ class AssistantController(
         }
         val checked = if (calcOp != null) DocCalc.finish(text.toString(), given, question, names, calcOp, prompt.nonce, DocCalc.docsCtx(qaDocs))
         else DocQa.checkReply(text.toString(), given, question, names, prompt.nonce)
-        _state.update { it.copy(checking = false) }
+        _state.update { it.copy(checking = false, checkingEtaS = null) }
+        Log.i(TAG, "document turn: $mode answered in ${(nanos() - sent) / 1_000_000} ms")
         // Only the checked reply is shown, and spoken in a voice turn.
         onDelta(checked.content)
         val stats = llm.lastStats()
@@ -3301,7 +3592,7 @@ class AssistantController(
             replyJob = scope.launch {
                 pauseTitle()
                 withContext(NonCancellable) { save(picked) }
-                letterReply(picked, held.photo, {}, card.kind to option, held.viaServer)
+                letterReply(picked, held.photo, {}, card.kind to option, held.viaServer, held.byText)
             }
             return
         }
@@ -3792,6 +4083,20 @@ class AssistantController(
         /** Unload the model this long after the assistant leaves the screen. */
         const val UNLOAD_AFTER_MS = 5 * 60 * 1000L
         const val TITLE_DELAY_MS = 1_500L
+
+        /** About how long a reply's words are, tokens (a document answer). */
+        const val DOC_REPLY_TOKENS = 160
+
+        /** A document answer's wait on [speed], seconds, to the next 5:
+         *  reading [promptChars] of prompt, then writing its reply. */
+        fun docEtaS(promptChars: Int, speed: com.domovoi.app.assistant.docs.DocSpeed): Int {
+            val prefill = promptChars / speed.charsPerToken / speed.prefillTps.coerceAtLeast(1.0)
+            val decode = DOC_REPLY_TOKENS / speed.decodeTps.coerceAtLeast(0.5)
+            return (((prefill + decode) / 5.0).let { kotlin.math.ceil(it) } * 5).toInt().coerceAtLeast(5)
+        }
+
+        /** A reply the runtime cut off by itself, part-way. */
+        const val CUT_OFF = "The reply was cut off on this phone. Tap try again."
         private const val TITLE_POLL_MS = 500L
         /** The longest name a chat can be given. */
         const val RENAME_MAX_CHARS = 200
@@ -3808,6 +4113,9 @@ class AssistantController(
         const val FAST_ACTION_NO = "action_no"
         const val FAST_ACTION_AGAIN = "action_again"
         const val FAST_ACTION_HOUSE = "action_house"
+
+        /** "Do you mean the photo or the PDF?" (a follow-up with both). */
+        const val FAST_WHICH_SUBJECT = "which_subject"
         const val FAST_ACTION_UNDO = "action_undo"
 
         /** The replies of the player's own actions: a bare "continue" or
@@ -3825,6 +4133,9 @@ class AssistantController(
 
         /** Songs one "play" queues. */
         const val MUSIC_LIMIT = 200
+
+        /** Songs read for a near spelling's names (artist, album, title). */
+        const val NEAR_SCAN = 5_000
         private const val VIDEO_LIMIT = 5
 
         /** Undo shows under a reply this long (plan part 2: 10 s). */
@@ -3960,7 +4271,13 @@ fun modelTurns(messages: List<StoredMessage>): List<IndexedTurn> {
         } else if (m.text.isNotBlank()) {
             // A letter's explanation carries the letter's text it was made from
             // (D6), marked as data, so a follow-up can be answered from it.
-            val said = if (m.docMode == "letter" && m.sources.isNotEmpty()) PhoneLetters.historyText(m.text, m.sources.map { it.text }) else m.text
+            val said = when {
+                m.docMode == "letter" && m.sources.isNotEmpty() -> PhoneLetters.historyText(m.text, m.sources.map { it.text })
+                // A photo's answer carries the text read from the photo
+                // (owner, 2026-10-22), as data, for a follow-up.
+                m.docMode == PhotoText.MODE_PHOTO && m.sources.isNotEmpty() -> PhotoText.historyText(m.text, m.sources.map { it.text })
+                else -> m.text
+            }
             if (lastFromUser()) out += IndexedTurn(i, ChatTurn(fromUser = false, text = said))
         } else if (lastFromUser()) {
             out.removeAt(out.lastIndex)
@@ -4032,6 +4349,16 @@ data class HistoryWindow(
         const val HIGH_CHARS = 9_000
         const val LOW_CHARS = 4_500
     }
+}
+
+/** Whether a spoken turn ending in [last] opens the mic again for its
+ *  answer: an open action card only. A lookup card never does: going online
+ *  needs a tap, or a clear "yes, look it up" after the person taps the mic
+ *  (review round 1, internet off by default). */
+internal fun opensAnswerMic(last: StoredMessage?): Boolean {
+    if (last == null || last.fromUser) return false
+    val card = last.card
+    return card != null && card.kind == CardKind.ACTION && card.state == CardState.OPEN
 }
 
 /** What a "no" to a card answers. */

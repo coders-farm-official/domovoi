@@ -154,6 +154,14 @@ class VoiceSession(
     private val silenceWaitMs: Long = (SherpaSpeechDetector.DEFAULT_MIN_SILENCE_S * 1000).toLong(),
     private val work: CoroutineContext = Dispatchers.Default,
     private val clock: () -> Long = System::nanoTime,
+    /** After a turn: whether its reply asked a question that a spoken yes
+     *  or no answers (an asked-first card). The mic then opens once more,
+     *  by itself, for the answer (plan part 2: "a voice turn speaks the
+     *  question and waits for yes or no"). */
+    private val awaitsAnswer: () -> Boolean = { false },
+    /** The mic for that answer: gives up quietly when nobody speaks
+     *  (MicCapture.listen's giveUpAfterS). Null: no answer window. */
+    private val listenForAnswer: (suspend (onSpeech: () -> Unit) -> Utterance?)? = null,
 ) {
     private val _phase = MutableStateFlow(VoicePhase.Idle)
     val phase: StateFlow<VoicePhase> = _phase
@@ -161,6 +169,10 @@ class VoiceSession(
     /** True once the mic has heard speech in this turn (a tap then sends). */
     private val _heardSpeech = MutableStateFlow(false)
     val heardSpeech: StateFlow<Boolean> = _heardSpeech
+
+    /** True while the mic is open for a card's yes or no. */
+    private val _answering = MutableStateFlow(false)
+    val answering: StateFlow<Boolean> = _answering
 
     private val _problems = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val problems: SharedFlow<String> = _problems
@@ -209,7 +221,7 @@ class VoiceSession(
                 // A voice that will not start still leaves the written reply.
                 val spoken = openVoice()?.let { speakWith(it) }
                 coroutineScope {
-                    val speaker = spoken?.let { launch { it.run() } }
+                    val speaker = spoken?.let { launch { speakAll(it) } }
                     try {
                         reply { delta -> spoken?.push(delta) }
                     } finally {
@@ -254,36 +266,60 @@ class VoiceSession(
         } finally {
             speaking = null
             focus.release()
+            _answering.value = false
             _phase.value = VoicePhase.Idle
         }
     }
 
     private suspend fun spokenTurn() {
         stoppedAtNs = null
+        var answering = false
+        var windows = 0
+        while (true) {
+            if (!oneTurn(answering)) return
+            // A question that a yes or no answers: the mic opens once more,
+            // after the reply has been written and spoken (never during it).
+            val again = listenForAnswer != null && stoppedAtNs == null && windows < MAX_ANSWER_WINDOWS && awaitsAnswer()
+            if (!again) return
+            windows++
+            answering = true
+            _answering.value = true
+            _heardSpeech.value = false
+            _phase.value = VoicePhase.Listening
+        }
+    }
+
+    /** One utterance and its reply; false when the turn ends here. */
+    private suspend fun oneTurn(answering: Boolean): Boolean {
         focus.capture()
-        val utterance = listen {
-            _heardSpeech.value = true
+        val utterance = if (answering) {
+            listenForAnswer!!.invoke { _heardSpeech.value = true }
+        } else {
+            listen { _heardSpeech.value = true }
         }
         focus.release()
-        if (stoppedAtNs != null) return
+        if (stoppedAtNs != null) return false
         if (utterance == null) {
-            problem("nothing was heard; tap the mic and ask again")
-            return
+            // Nobody answered the card: it stays on screen, nothing said.
+            if (!answering) problem("nothing was heard; tap the mic and ask again")
+            return false
         }
         _phase.value = VoicePhase.Transcribing
         val heardFrom = clock()
         val transcript = withContext(work) { transcribe(utterance.samples) }.trim()
         val heard = clock()
         if (transcript.isBlank() || transcript.none { it.isLetterOrDigit() }) {
-            problem("didn't catch that; tap the mic and ask again")
-            return
+            // Noise in a card's answer window closes it quietly.
+            if (!answering) problem("didn't catch that; tap the mic and ask again")
+            return false
         }
+        _answering.value = false
         _phase.value = VoicePhase.Thinking
         // A voice that will not start still leaves the written answer.
         val spoken = openVoice()?.let { speakWith(it) }
         var firstText: Long? = null
         val file = coroutineScope {
-            val speaker = spoken?.let { launch { it.run() } }
+            val speaker = spoken?.let { launch { speakAll(it) } }
             val file = try {
                 answer(transcript) { delta ->
                     if (firstText == null && delta.isNotBlank()) firstText = clock()
@@ -303,6 +339,22 @@ class VoiceSession(
                 firstTextMs = firstText?.let { (it - heard) / 1_000_000 },
             ),
         )
+        return true
+    }
+
+    /** Speaks [spoken] to the end. A voice that fails part-way is said in
+     *  words and goes quiet; the reply being written is never stopped by it
+     *  (a failing child would otherwise cancel the model's reply, which then
+     *  shows as "stopped": Fold check 2026-10-21). */
+    private suspend fun speakAll(spoken: SpokenReply) {
+        try {
+            spoken.run()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            runCatching { spoken.stop() }
+            problem("the voice stopped: ${plainReason(e)}; the reply is written below")
+        }
     }
 
     private suspend fun openVoice(): SpeechOut? = try {
@@ -322,5 +374,14 @@ class VoiceSession(
 
     private fun problem(text: String) {
         _problems.tryEmit(text)
+    }
+
+    companion object {
+        /** Answer windows after one tap: the card, and once more after "I
+         *  didn't catch that". */
+        const val MAX_ANSWER_WINDOWS = 2
+
+        /** How long the answer window waits for someone to speak. */
+        const val ANSWER_WAIT_S = 6.0
     }
 }

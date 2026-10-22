@@ -73,6 +73,13 @@ class LiteRtLlmEngine(
     /** The context lines the kept conversation has been told, by kind. */
     private var told: Map<String, String> = emptyMap()
     @Volatile private var active: Conversation? = null
+    /** Conversations a cancel or an error has touched. LiteRT-LM's own
+     *  word (session_advanced.h, 0.18.0): "Reusing the session after
+     *  calling CancelProcess() is neither recommended nor supported ... the
+     *  session state [is] poisoned". On the Fold (2026-10-21) every turn
+     *  sent to a kept conversation after one cancel came back CANCELLED at
+     *  once, shown as "stopped". Such a conversation is never kept. */
+    private val poisoned = java.util.Collections.newSetFromMap(java.util.WeakHashMap<Conversation, Boolean>())
     @Volatile private var stats: LlmStats? = null
     @Volatile private var vision: LlmBackend? = null
 
@@ -228,7 +235,14 @@ class LiteRtLlmEngine(
     }.flowOn(Dispatchers.IO)
 
     override fun cancel() {
-        active?.let { runCatching { it.cancelProcess() } }
+        active?.let {
+            synchronized(lock) { poisoned += it }
+            runCatching { it.cancelProcess() }
+        }
+    }
+
+    override fun reset() {
+        synchronized(lock) { dropConversation() }
     }
 
     /**
@@ -280,7 +294,7 @@ class LiteRtLlmEngine(
         val question = history.last().text
         val toolsKey = turn.tools?.key.orEmpty()
         val current = conversation
-        if (current != null && current.isAlive && seenTools == toolsKey && canContinue(seenSystem, seen, turn.system, history)) {
+        if (current != null && current.isAlive && current !in poisoned && seenTools == toolsKey && canContinue(seenSystem, seen, turn.system, history)) {
             val ctx = withContextLines(turn.system, question, turn.context, told, rebuilt = false)
             return Prepared(current, ctx.question, ctx.told)
         }
@@ -323,7 +337,10 @@ class LiteRtLlmEngine(
     }
 
     private fun dropConversation() {
-        conversation?.let { if (it.isAlive) runCatching { it.close() } }
+        conversation?.let {
+            poisoned -= it
+            if (it.isAlive) runCatching { it.close() }
+        }
         conversation = null
         seenSystem = null
         seenTools = ""
@@ -359,12 +376,16 @@ class LiteRtLlmEngine(
 
             override fun onError(throwable: Throwable) {
                 finished = true
+                synchronized(lock) { poisoned += conv }
                 close(throwable)
             }
         }
         if (maxTokens == null) conv.sendMessageAsync(message, callback) else conv.sendMessageAsync(message, callback, maxOutputToken = maxTokens)
         awaitClose {
-            if (!finished) runCatching { conv.cancelProcess() }
+            if (!finished) {
+                synchronized(lock) { poisoned += conv }
+                runCatching { conv.cancelProcess() }
+            }
             if (active === conv) active = null
         }
     }.buffer(Channel.UNLIMITED)

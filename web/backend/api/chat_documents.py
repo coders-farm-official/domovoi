@@ -666,7 +666,9 @@ def _plan(docs: list[dict[str, Any]], question: str, new_docs: list[dict[str, An
             # heads-up needs the job's estimate (long_heads_up, from chat.py).
             return DocPlan(mode="summary", question=q, names=names, docs=loaded, long=True, chosen=prefs.chosen)
     else:
-        given = qa.retrieve(loaded, q, previous)
+        # A question, or an overview ("what is this?"): the whole document
+        # when it fits one pass, else the opening of every page.
+        given = qa.retrieve(loaded, q, previous, mode=mode)
         if not given and prefs.chosen is not None and prefs.chosen[0] == "rewrite":
             # "Try anyway" on a whole-document rewrite whose words match
             # nothing: as much of the document as one reply sees, from the

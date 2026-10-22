@@ -223,3 +223,21 @@ def test_without_a_pinned_zone_the_os_clock_round_trips() -> None:
     assert abs((utc - household_time.utc_now()).total_seconds()) < 5
     noon = datetime(2026, 7, 1, 12, 0)
     assert household_time.to_local(household_time.to_utc(noon)) == noon
+
+
+@pytest.mark.parametrize("said, hours, minute", [
+    ("quarter of seven", [6, 18], 45),
+    ("ten of nine", [8, 20], 50),
+    ("ten till noon", [11], 50),
+    ("ten past noon", [12], 10),
+    ("five to midnight", [23], 55),
+    ("half past one", [1, 13], 30),
+])
+def test_relative_times_with_of_and_noon(said, hours, minute):
+    """Review round 1 (wf/fold-fixes): "of" is "to" ("quarter of seven" is
+    6:45), and "till noon" / "to midnight" read on the 24-hour clock, as the
+    phone reads them (ClockWordsTest)."""
+    w = ct.parse_when(said)
+    assert w is not None
+    assert sorted({h for h, _ in ct.candidate_hours(w)}) == hours
+    assert w.minute == minute

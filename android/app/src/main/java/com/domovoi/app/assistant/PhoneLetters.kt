@@ -61,6 +61,21 @@ object PhoneLetters {
     /** The question a letter for the home server goes with when nothing is typed. */
     const val DEFAULT_QUESTION = "What does this letter say? What do I need to do?"
 
+    /** The printed-or-handwritten question asked the other way round: the
+     *  handwriting card needs both answers to agree (Fold check
+     *  2026-10-21: a printed label was called handwritten). */
+    const val KIND_CHECK_QUESTION = "Were the words on this paper written by a person with a pen or pencil, or made by a " +
+        "printer, a computer or a typewriter? Answer with one word: pen or printer."
+
+    /** The other-way-round answer says handwritten ("pen", "hand"...);
+     *  anything else, or both, is not. */
+    fun handwrittenAgain(raw: String?): Boolean {
+        val t = LetterRead.q(raw)
+        val hand = Regex("\\b(?:pen|pencil|hand|handwritten|handwriting|by hand|person)\\b").containsMatchIn(t)
+        val machine = Regex("\\b(?:printer|printed|print|computer|typewriter|typed|machine)\\b").containsMatchIn(t)
+        return hand && !machine
+    }
+
     /** The label of the letter's text kept beside its explanation. */
     const val SOURCE_LABEL = "photo 1"
 

@@ -194,6 +194,60 @@ class PhoneActionsControllerTest {
         assertTrue("no model was loaded", engines.isEmpty())
     }
 
+    /** Fold check 2026-10-21: reminders and "N minutes from now" alarms
+     *  are Clock timers, asked first, named for what to do. */
+    @Test fun aReminderInMinutesIsANamedTimerCard() {
+        val c = controller()
+        val q = c.ask("Remind me in five minutes to check Dome of War")
+        assertEquals("Set a timer for 5 minutes called \"check Dome of War\" in the Clock app?", q.text)
+        assertEquals(CardState.OPEN, q.card?.state)
+        c.ask("yes")
+        assertEquals(ClockRequest(ClockIntent.SET_TIMER, seconds = 300, label = "check Dome of War"), host.sent.single())
+        assertEquals("Set a timer for 5 minutes in the Clock app?", c.ask("Set an alarm for five minutes from now").text)
+        val at = c.ask("Remind me at 7 to call the dentist")
+        assertEquals("Set an alarm for 7:00 PM today called \"call the dentist\" in the Clock app?", at.text)
+        assertTrue("no model was loaded", engines.isEmpty())
+    }
+
+    /** Fold check 2026-10-21: "Play Outcast" (not in the library) went to
+     *  the model, which said "Playing Outcast now." and nothing played. */
+    @Test fun aModelReplyNeverClaimsToHavePlayedSomething() {
+        val c = controller()
+        script = { _, emit -> emit("Playing Out"); emit("cast now. "); emit("Enjoy the music!") }
+        val r = c.ask("Play Outcast")
+        assertEquals("${ClaimGuard.PLAY_LINE} Enjoy the music!", r.text)
+        assertTrue("nothing played", player.calls.isEmpty())
+        script = { _, emit -> emit("OutKast is a hip hop duo from Atlanta.") }
+        assertEquals("OutKast is a hip hop duo from Atlanta.", c.ask("who are outkast").text)
+    }
+
+    /** Fold check 2026-10-21: he meant OutKast. A near spelling is asked
+     *  about; yes plays it, no does nothing; a guess never plays by itself. */
+    @Test fun aNearSpellingIsAskedAndOnlyAYesPlaysIt() {
+        host.songs = listOf(song(1, "Hey Ya!", "OutKast"), song(2, "Roses", "OutKast"), song(3, "Let It Be", "The Beatles"))
+        val c = controller()
+        val q = c.ask("Play Outcast")
+        assertEquals("Did you mean OutKast?", q.text)
+        assertEquals(CardKind.ACTION, q.card?.kind)
+        assertTrue("nothing played on a guess", player.calls.isEmpty())
+        assertTrue("no model", engines.isEmpty())
+        val yes = c.ask("yes")
+        assertTrue(yes.text, yes.text.startsWith("Playing \"Hey Ya!\" by OutKast"))
+        assertEquals(listOf("play:2@0+0"), player.calls.toList())
+        assertEquals(CardState.DONE, c.card(1)?.state)
+        // No: nothing.
+        player.calls.clear()
+        c.ask("play the beatls")
+        assertEquals(ActionTexts.DECLINED, c.ask("no").text)
+        assertTrue(player.calls.isEmpty())
+        // The button.
+        c.ask("play outcast")
+        val i = c.state.value.conversation.messages.lastIndex
+        c.actionConfirmed(c.state.value.conversation.id, i)
+        until("played by the button") { player.calls.isNotEmpty() }
+        until("the card is done") { c.card(i)?.state == CardState.DONE }
+    }
+
     @Test fun anyNoWordCancelsAndAnUnclearReplyAsksAgain() {
         val c = controller()
         c.ask("wake me at 6:30")
@@ -540,6 +594,29 @@ class PhoneActionsControllerTest {
         Thread.sleep(500)
         assertEquals("exactly one request", 1, host.sent.size)
         assertEquals(CardState.DONE, conversations.load(id)!!.messages[1].card?.state)
+    }
+
+    /** Review round 1: a question sent while a tap is still going to the
+     *  Clock app carries a copy with the card open; saving it must not write
+     *  the card back to OPEN on disk. */
+    @Test fun aQuestionSentDuringATapNeverReopensTheCardOnDisk() {
+        val c = controller()
+        c.ask("set a timer for 10 minutes")
+        val id = c.state.value.conversation.id
+        host.clockDelayMs = 300
+        val before = c.state.value.conversation
+        c.actionConfirmed(id, 1)
+        until("the tap reached the Clock app") { host.sent.size == 1 }
+        until("done") { c.card(1)?.state == CardState.DONE }
+        // The turn's copy from before the tap, as a slow send would hold it.
+        script = { _, emit -> emit("Sure.") }
+        c.send("tell me something nice")
+        until("answered", 20_000) { !c.state.value.replying && c.state.value.conversation.messages.size >= before.messages.size + 2 }
+        Thread.sleep(200)
+        assertEquals(CardState.DONE, conversations.load(id)!!.messages[1].card?.state)
+        c.actionConfirmed(id, 1)
+        Thread.sleep(400)
+        assertEquals(1, host.sent.size)
     }
 
     @Test fun aSpokenYesThenATapSendOneClockRequest() {

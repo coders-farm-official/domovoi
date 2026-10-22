@@ -137,6 +137,36 @@ object ClockQuestions {
         return forms.firstOrNull { (_, re) -> re.matches(said) }?.first
     }
 
+    /** "what time is twelve to nine": a clock time said as words, read
+     *  back as the clock shows it (Fold check 2026-10-21: the model said
+     *  11:00 AM). Only "X to/past/after/before Y" and "N tonight". */
+    private val READING = Regex("^(?:$FILLER )*(?:$LEAD_IN )?(?<ask>what time is|what is|when is) (?<t>.+?)(?: $SUFFIX)*$")
+    private val RELATIVE_WORDS = Regex("\\b(?:past|after|to|till|before|of|tonight)\\b")
+
+    /** A clock word in the phrase itself: "half of 12" is maths, "half
+     *  past 12 tonight" is a time (review round 1). */
+    private val TIME_WORDS = Regex("\\b(?:am|pm|a m|p m|oclock|o clock|tonight|morning|afternoon|evening|night|noon|midday|midnight)\\b")
+
+    /** The reply to [text] when it asks what a spoken clock time is, or
+     *  null. Only when it asks for a time ("what time is …") or the phrase
+     *  carries a clock word; "what is half of 12" is the model's. */
+    fun reading(text: String, style: ClockStyle, now: ZonedDateTime): String? {
+        if (text.length > MAX_CHARS) return null
+        val said = toNight(normalize(text))
+        val m = READING.matchEntire(said) ?: return null
+        val t = m.groups["t"]?.value?.trim() ?: return null
+        if (!RELATIVE_WORDS.containsMatchIn(t)) return null
+        if (m.groups["ask"]?.value != "what time is" && !TIME_WORDS.containsMatchIn(t)) return null
+        val s = parseTime(t) ?: return null
+        val lead = t.replaceFirstChar { it.uppercase() }
+        val shown = when {
+            s.pm == null -> String.format(Locale.US, "%d:%02d", s.hour, s.minute)
+            else -> style.time(now.withHour(s.hour).withMinute(s.minute))
+        }
+        val midnight = if (s.pm == false && s.hour == 0 && s.minute == 0) ", midnight" else ""
+        return "$lead is $shown$midnight."
+    }
+
     /** The reply, as it is shown and spoken. */
     fun answer(question: ClockQuestion, now: ZonedDateTime, style: ClockStyle): String = when (question) {
         ClockQuestion.TIME -> "It's ${style.time(now)}."
