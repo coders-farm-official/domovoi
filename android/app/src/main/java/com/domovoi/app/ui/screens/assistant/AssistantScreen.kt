@@ -767,7 +767,7 @@ private fun Page(chrome: PhoneChatChrome, withPicker: Boolean = false, content: 
 @Composable
 private fun UnsupportedPhone(ui: AssistantUi) {
     DomovoiCard(Modifier.fillMaxWidth()) {
-        Text("This phone can't run the assistant", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg,
+        Text("This phone can't run phone chats", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg,
             modifier = Modifier.asHeading())
         Text(
             unsupportedText(ui.memory.marketedGb, ui.memory.lowRamDevice),
@@ -782,5 +782,5 @@ internal fun unsupportedText(gb: Int, lowRam: Boolean): String =
     "Domovoi on this phone runs a language model on the phone itself, which needs at least " +
         "${DeviceTiers.MIN_GB} GB of memory. " +
         (if (lowRam) "Android marks this phone as a low-memory device" else "This phone has $gb GB") +
-        ", so the assistant isn't available here. Everything else in the app works as usual, " +
+        ", so phone chats aren't available here. Everything else in the app works as usual, " +
         "and Chat still talks to your Domovoi server when one is connected."

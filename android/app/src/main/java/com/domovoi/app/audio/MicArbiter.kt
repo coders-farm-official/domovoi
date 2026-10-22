@@ -25,7 +25,7 @@ class MicOwnership {
         ROOM_MODE("room mode"),
         DROP_IN("a drop-in call"),
         CHAT_MIC("the chat mic"),
-        ASSISTANT("the assistant"),
+        ASSISTANT("a phone chat"),
     }
 
     /** A held microphone; [close] gives it back (idempotent). */

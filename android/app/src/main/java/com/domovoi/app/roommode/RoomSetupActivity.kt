@@ -225,7 +225,7 @@ internal val EXPLAINER: List<Pair<String, String>> = listOf(
         "After a restart the room needs one tap to start again. Turn off battery optimisation for Domovoi so Android " +
         "does not put the room to sleep. The microphone privacy toggle in quick settings stops it.",
     "What stops working" to
-        "The normal Domovoi app is locked while this is a room: no files, browsing, chat or assistant. Phone calls and " +
+        "The normal Domovoi app is locked while this is a room: no files, browsing or chats, on the home server or on this phone. Phone calls and " +
         "other apps that use the microphone pause the room.",
     "How to leave" to
         "Hold Exit on the room screen and unlock with your PIN, pattern or fingerprint; you can keep the room for " +

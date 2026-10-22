@@ -426,7 +426,7 @@ def test_admin_session_sees_the_household_token_with_copy_and_rotate(outcomes):
     assert "/api/auth/device-token" in o["hookCalls"]
     assert o["hasCopy"] and o["hasRotate"] and o["hasSet"]
     assert o["copied"] == TOKEN
-    assert any("Settings → Connection → Household token" in t for t in o["texts"])
+    assert any("Settings → Rooms & devices → Phones & browsers → Household token" in t for t in o["texts"])
 
 
 def test_a_cookie_only_tab_is_asked_to_sign_in_and_reads_nothing(outcomes):

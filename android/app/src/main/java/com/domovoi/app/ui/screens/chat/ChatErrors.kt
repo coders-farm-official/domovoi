@@ -53,10 +53,13 @@ internal data class ChatModelsInfo(
 )
 
 /** What the paperclip takes: the server's upload allowlist, plus the phone
- *  photos this app turns into a JPEG first (ChatPhotoPlan.kt). */
+ *  photos this app turns into a JPEG first (ChatPhotoPlan.kt), and the
+ *  documents it reads (DocExtract.ACCEPTS), up to 4 of each a message
+ *  (MAX_CHAT_IMAGES, MAX_CHAT_DOCUMENTS). */
 internal const val CHAT_ACCEPTS =
-    "Chat takes text and pictures, up to 4 a message: PNG, JPEG, GIF, WebP or BMP, and phone " +
-        "photos in HEIC or AVIF, which this phone turns into a JPEG first. No other files."
+    "Chat takes text, pictures and documents, up to 4 of each a message. Pictures: PNG, JPEG, GIF, WebP " +
+        "or BMP, and phone photos in HEIC or AVIF, which this phone turns into a JPEG first. Documents: " +
+        com.domovoi.app.assistant.docs.DocExtract.ACCEPTS + "."
 
 internal fun visionMissingText(model: String?): String {
     val name = model?.trim().orEmpty()

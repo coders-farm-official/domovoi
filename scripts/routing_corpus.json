@@ -1049,6 +1049,27 @@
       "note": "2026-10-21 review 2: a how-to question is answered from the manual; it started a drop-in (review 2)"
     },
     {
+      "utterance": "how do I add a scanner",
+      "handler": "help_desk",
+      "path": "fast",
+      "tags": ["action", "help-desk"],
+      "note": "2026-10-21: printer, scanner, document, letter, draft, health and AI are Domovoi words"
+    },
+    {
+      "utterance": "how do I turn the AI off",
+      "handler": "help_desk",
+      "path": "fast",
+      "tags": ["action", "help-desk"],
+      "note": "2026-10-21: the AI switch is Domovoi's"
+    },
+    {
+      "utterance": "how do I learn AI",
+      "handler": null,
+      "declined_by": "help_desk",
+      "tags": ["qa", "help-desk"],
+      "note": "2026-10-21: 'AI' alone isn't Domovoi"
+    },
+    {
       "utterance": "take a letter",
       "handler": "documents",
       "path": "fast",

@@ -39,8 +39,8 @@ import com.domovoi.app.ui.theme.Domovoi
 
 /** What the section's card says it holds. */
 internal const val DEVELOPER_OPTIONS_SUB =
-    "Tools for measuring the app on this phone, not needed for everyday use: the on-device " +
-        "assistant benchmark below, a reply's timings in the assistant's long-press menu, and the " +
+    "Tools for measuring the app on this phone, not needed for everyday use: the phone chat " +
+        "benchmark below, a reply's timings in a phone chat's long-press menu, and the " +
         "last stop's timing in its model settings."
 
 /** Under the section's switch: how to get back. */

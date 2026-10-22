@@ -106,7 +106,9 @@ class AssistantScreenTest {
     @Test fun aPhoneUnderTheFloorIsToldWhyAndGetsNoControls() {
         var buttons = emptyList<String?>()
         val shown = show(ui(memoryGib = 5.6)) { buttons = buttons().map { it.label } }
-        assertTrue(shown.toString(), "This phone can't run the assistant" in shown)
+        assertTrue(shown.toString(), "This phone can't run phone chats" in shown)
+        // One Chat: no screen calls the phone's own chat "the assistant".
+        assertFalse(shown.toString(), shown.any { it.contains("assistant", ignoreCase = true) })
         assertTrue(shown.any { it.contains("needs at least 8 GB of memory") && it.contains("This phone has 6 GB") })
         assertEquals("no control but Chat's way back", listOf("back"), buttons)
         assertFalse(shown.any { it.startsWith("download") })
@@ -114,7 +116,12 @@ class AssistantScreenTest {
 
     @Test fun setupShowsTheCostFirstAndStartsTheDownload() {
         val shown = show(ui()) { textButton("download (2.45 GB)").click() }
-        assertTrue(shown.toString(), "Set up the assistant on this phone" in shown)
+        assertTrue(shown.toString(), "Set up Domovoi on this phone" in shown)
+        assertFalse(shown.toString(), shown.any { it.contains("assistant", ignoreCase = true) })
+        // Phone chats look things up after an allow card and can send a
+        // document or letter home: the setup no longer says nothing leaves.
+        assertFalse(shown.toString(), shown.any { it.contains("nothing you ask leaves the phone") })
+        assertTrue(shown.any { it.contains("unless you allow a lookup or send a document or letter to your home server") })
         assertTrue(shown.any { it.contains("Gemma 4 E2B") })
         assertTrue(shown.any { it == "language model · 2.41 GB · Apache-2.0" })
         assertTrue(shown.any { it.startsWith("Needs 2.65 GB of free space; this phone has 50.00 GB free.") })
@@ -308,7 +315,7 @@ class AssistantScreenTest {
 
     @Test fun theModelPanelSaysWhereItRunsAndHowLongItTook() {
         assertEquals("In memory, on the CPU; loaded in 2.4 s.", engineSummary(EngineState.Ready(LlmBackend.CPU, 2_400)))
-        assertEquals("Not in memory now; it loads when you open the assistant.", engineSummary(EngineState.Unloaded))
+        assertEquals("Not in memory now; it loads when you open a phone chat.", engineSummary(EngineState.Unloaded))
         assertEquals("4 min 12 s", durationText(252_000))
         assertEquals("35 s", durationText(35_400))
         assertEquals("1 h 2 min", durationText(3_720_000))

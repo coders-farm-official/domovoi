@@ -65,11 +65,12 @@ internal fun AssistantSetupPanel(ui: AssistantUi, actions: AssistantActions) {
     val done = downloading?.bytesDone ?: missing?.bytesDone ?: 0L
 
     DomovoiCard(Modifier.fillMaxWidth()) {
-        Text("Set up the assistant on this phone", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg,
+        Text("Set up Domovoi on this phone", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg,
             modifier = Modifier.asHeading())
         Text(
             "Domovoi can answer right here, with no server and no internet, once its language model is " +
-                "on the phone. It is a one-time download; after that nothing you ask leaves the phone.",
+                "on the phone. It is a one-time download; after that what you ask stays on the phone, unless " +
+                "you allow a lookup or send a document or letter to your home server.",
             style = MaterialTheme.typography.bodyMedium,
             color = Domovoi.colors.fgMuted,
             modifier = Modifier.padding(top = 4.dp),
