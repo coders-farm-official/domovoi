@@ -562,10 +562,16 @@ def test_the_estimate_comes_from_measured_speeds_and_the_speed_route_says_it(mod
         assert s1["speed"]["prefill_tps"] == 100.0 and s1["speed"]["decode_tps"] == 10.0
         expect = longdoc.estimate_seconds(longdoc.even_chunks(40000), longdoc.Speed(100.0, 10.0, 4.0))
         assert s1["estimate_s"] == pytest.approx(expect, abs=0.1)
-        r = c.post(f"/api/chat/threads/{tid}/messages", json={"content": "summarize", "documents": [{"token": tok}]})
+        # A job this slow gets the heads-up first (documents plan D3,
+        # test_chat_heads_up.py); this device said not to warn about it.
+        r = c.post(f"/api/chat/threads/{tid}/messages", json={"content": "summarize", "documents": [{"token": tok}],
+                                                              "heads_up": {"skip": ["long"]}})
         job = _sse(r.text)[0][1]
         assert job["estimate_s"] is not None and job["estimate_s"] > 3 * 30
         assert "left" in job["line"]
+        # The slow speed stays out of the tests after this one (a job that
+        # slow gets the heads-up card first).
+        _q(c, "DELETE FROM chat_messages WHERE model = :m AND role = 'assistant'", {"m": model_name}, write=True)
 
 
 # ─── A phone's private job ──────────────────────────────────────────────

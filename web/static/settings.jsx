@@ -4219,9 +4219,10 @@ const CapturesPanel = () => {
  *
  * A section marked `optional` shows only once a page script registers
  * its panel in window.DomovoiSettingsSections ({ <id>: { Panel } }):
- * Health (health.jsx) does; Printers & scanners, Search and Chat are the
- * slots kept for what is being built (none of them shows a promise
- * before it can do something). */
+ * Health (health.jsx), Printers & scanners (printers.jsx) and Chat
+ * (chat_documents.jsx: the heads-up switch) do; Search is the slot kept
+ * for what is being built (none shows a promise before it can do
+ * something). */
 const SETTINGS_GROUPS = [
   { id: 'rooms-and-devices', label: 'Rooms & devices', icon: 'house',
     sections: ['rooms', 'phones-and-browsers', 'printers', 'app-layout'] },
@@ -4260,8 +4261,8 @@ const SETTINGS_SECTIONS = [
     sub: 'Where Domovoi looks things up, and your own key.',
     words: 'search lookup web sources key' },
   { id: 'chat', label: 'Chat', optional: true,
-    sub: 'How chat behaves.',
-    words: 'chat conversation' },
+    sub: 'A heads-up before shaky results, in this browser.',
+    words: 'chat conversation heads-up heads up warning warn warnings trust shaky calculate exactly reliable' },
   { id: 'internet', label: 'Internet',
     sub: 'Will this Domovoi have internet? It sets the defaults of the online extras.',
     words: 'internet online offline network web connection search helper' },

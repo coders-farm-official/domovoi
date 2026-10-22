@@ -343,3 +343,77 @@ internal fun CarryOnButton(left: Int, onClick: () -> Unit) {
 }
 
 internal fun carryOnText(left: Int) = "carry on ($left part${if (left == 1) "" else "s"} left)"
+
+// ---------------------------------------------------------------------------
+// The honest heads-up (documents plan D3), as both places draw it.
+// ---------------------------------------------------------------------------
+
+/** A heads-up card as the screen shows it, from either place. */
+internal data class HeadsUpView(
+    val kind: String,
+    val text: String,
+    /** (id, label), in order. */
+    val options: List<Pair<String, String>>,
+    val neverLabel: String,
+    val chosen: String?,
+)
+
+internal fun headsUpView(c: com.domovoi.app.assistant.docs.StoredHeadsUp) = HeadsUpView(
+    c.kind, c.text, c.options.mapNotNull { if (it.size == 2) it[0] to it[1] else null },
+    c.neverLabel.ifEmpty { NEVER_WARN }, c.chosen,
+)
+
+internal const val NEVER_WARN = "don't warn me about this again"
+
+internal fun silencedText(kind: String) =
+    "no more heads-ups about ${com.domovoi.app.assistant.docs.HeadsUpStore.KIND_WORDS[kind] ?: "this"} on this phone"
+
+/**
+ * The card that is the reply until an option is picked: the weakness in a
+ * sentence, the options that work where it was asked, and "don't warn me
+ * about this again" (this phone). Once picked (here or elsewhere) it shows
+ * the pick and no buttons.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun HeadsUpCard(
+    card: HeadsUpView,
+    silenced: Boolean,
+    busy: Boolean,
+    onPick: ((String) -> Unit)?,
+    onNever: () -> Unit,
+) {
+    Column(
+        Modifier
+            .widthIn(max = 480.dp)
+            .border(1.dp, Domovoi.colors.border, RoundedCornerShape(10.dp))
+            .background(Domovoi.colors.card, RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .semantics { contentDescription = "heads-up: ${card.text}" },
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(Modifier.size(8.dp).background(Domovoi.colors.warn, RoundedCornerShape(999.dp)))
+            Text("heads-up", style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgMuted)
+        }
+        Text(card.text, style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fg)
+        val chosen = card.chosen
+        if (chosen != null) {
+            Text(card.options.firstOrNull { it.first == chosen }?.second ?: chosen,
+                style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgMuted)
+        } else {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                card.options.forEach { (id, label) ->
+                    OutlinedButton(onClick = { onPick?.invoke(id) }, enabled = !busy && onPick != null) { Text(label) }
+                }
+            }
+            if (silenced) {
+                Text(silencedText(card.kind), style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgMuted)
+            } else {
+                TextButton(onClick = onNever) {
+                    Text(card.neverLabel, style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgMuted)
+                }
+            }
+        }
+    }
+}

@@ -13674,6 +13674,62 @@
         }
       }
     },
+    "/api/chat/threads/{thread_id}/heads-up": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Answer Heads Up",
+        "description": "The person's pick on a heads-up card: the card row keeps it\n(``doc.heads_up.chosen``) and the question before it is answered that\nway, streamed as ``POST .../messages`` streams (\"try anyway\": as it\nwould have been; \"calculate exactly\": the model lists the numbers and\nthe app adds them up; \"go ahead\": the long summary's job starts). A\ncard is answered once, and only while it is the thread's last\nmessage.",
+        "operationId": "answer_heads_up_api_chat_threads__thread_id__heads_up_post",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HeadsUpAnswer"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Answer Heads Up Api Chat Threads  Thread Id  Heads Up Post"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "{\"detail\": \"...\", \"code\": \"...\"}: `not_a_card` (the message is no heads-up card), `already_answered` (an option was picked already), `stale` (a newer message followed the card), `bad_option` (not one of the card's options)"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/chat/internet": {
       "get": {
         "tags": [
@@ -18674,6 +18730,57 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "HeadsUpAnswer": {
+        "properties": {
+          "message_id": {
+            "type": "integer",
+            "title": "Message Id"
+          },
+          "option": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Option"
+          },
+          "heads_up": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HeadsUpBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "message_id",
+          "option"
+        ],
+        "title": "HeadsUpAnswer",
+        "description": "The person's pick on a heads-up card (documents plan D3)."
+      },
+      "HeadsUpBody": {
+        "properties": {
+          "off": {
+            "type": "boolean",
+            "title": "Off",
+            "default": false
+          },
+          "skip": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 16,
+            "title": "Skip"
+          }
+        },
+        "type": "object",
+        "title": "HeadsUpBody",
+        "description": "A send's ``heads_up``: this device's switch and its silenced kinds."
+      },
       "HealthResponse": {
         "properties": {
           "status": {
@@ -22708,6 +22815,16 @@
               }
             ],
             "title": "Device Id"
+          },
+          "heads_up": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HeadsUpBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "revise_draft": {
             "anyOf": [

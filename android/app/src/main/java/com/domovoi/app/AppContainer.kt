@@ -220,6 +220,7 @@ class AppContainer(context: Context) {
             // The phone's own voice for spoken replies (Settings -> Voice),
             // opened without asking any server.
             phoneVoice = { phoneVoice.openOnPhone() },
+            headsUp = headsUp,
             lookups = phoneLookups(context),
             phone = { settings -> phoneChatContext(context, settings) },
             // N2: the Clock app, the player, the saved songs, books and
@@ -251,6 +252,13 @@ class AppContainer(context: Context) {
         savedBooks = { PhoneChatFacts.savedBooks(books, bookPositions) },
     )
     val assistant: AssistantController by assistantLazy
+
+    /** This phone's answers to the heads-up before shaky results (documents
+     *  plan D3; Settings → Chat): kept here, used by its own chats and sent
+     *  with every message in its home-server chats. */
+    val headsUp: com.domovoi.app.assistant.docs.HeadsUpStore by lazy {
+        com.domovoi.app.assistant.docs.HeadsUpStore.forApp(context)
+    }
 
     /** Phone chats' lookups (assistant/lookup/, part 5 W1), used only after
      *  the person's allow: at home the home server's own route (with the

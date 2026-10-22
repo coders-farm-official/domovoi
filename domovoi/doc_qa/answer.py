@@ -248,7 +248,25 @@ def build_prompt(question: str, given: Sequence[Given], names: Sequence[str], *,
         lines.append(f"Earlier question: {previous.strip()}")
     lines.append(f"Question: {question.strip()}")
     return {"rules": RULES_SUMMARY if mode == "summary" else RULES_QUESTION,
-            "user": "\n".join(lines)}
+            "user": "\n".join(lines), "nonce": n}
+
+
+def strip_fence(text: str, nonce: str | Sequence[str] | None = None) -> str:
+    """A reply without the prompt's own fence code echoed into it (a small
+    model copied it as a citation: "[a62cf03b]", 2026-10-21): the markers
+    with that code ("END OF PASSAGES a62cf03b>>>") and the code anywhere,
+    bracketed or not. Only the codes of this prompt (``nonce``: one, or
+    several for a combine step); any other bracket ("[20261021]", a policy
+    number) stays as written. No code known: the text as it is."""
+    t = text or ""
+    codes = [nonce] if isinstance(nonce, str) else list(nonce or [])
+    for code in codes:
+        if not code:
+            continue
+        c = re.escape(code)
+        t = re.sub(r"(?:<<<\s*)?(?:END OF\s+)?PASSAGES\s+" + c + r"(?:\s*>>>)?", "", t, flags=re.IGNORECASE)
+        t = re.sub(r"[\[(]\s*" + c + r"\s*[\])]|\b" + c + r"\b", "", t, flags=re.IGNORECASE)
+    return t
 
 
 # ─── The check ───────────────────────────────────────────────────────────
@@ -362,10 +380,11 @@ def _best_sentence(text: str, want: set[str]) -> str:
 
 
 def check_reply(reply: str, given: Sequence[Given], question: str = "",
-                names: Sequence[str] = ()) -> Checked:
+                names: Sequence[str] = (), nonce: str | None = None) -> Checked:
     """The app's check of a model's ``reply`` to the passages ``given``
-    (``names``: the documents', for the "couldn't find" note)."""
-    text = reply or ""
+    (``names``: the documents', for the "couldn't find" note; ``nonce``:
+    the prompt's fence code, never kept in the reply: :func:`strip_fence`)."""
+    text = strip_fence(reply or "", nonce)
     cited: list[str] = []
     dropped: list[str] = []
 

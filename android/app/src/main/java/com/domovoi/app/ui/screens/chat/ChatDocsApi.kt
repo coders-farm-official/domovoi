@@ -78,7 +78,33 @@ internal data class ServerDocReply(
     val notes: List<DocNote> = emptyList(),
     /** A summary a long-document job wrote: which job, and how far it read. */
     val job: ServerJobRef? = null,
+    /** mode "heads_up": the card this reply is (documents plan D3). */
+    val heads_up: ServerHeadsUp? = null,
 )
+
+/** A heads-up card's option, as the server gives it. */
+@Serializable
+internal data class ServerHeadsUpOption(val id: String = "", val label: String = "")
+
+/** A reply that is a heads-up card (documents plan D3): the weakness in a
+ *  sentence and the options that work on the home server; `chosen` once
+ *  picked. */
+@Serializable
+internal data class ServerHeadsUp(
+    val kind: String = "",
+    val text: String = "",
+    val options: List<ServerHeadsUpOption> = emptyList(),
+    val never_label: String? = null,
+    val chosen: String? = null,
+) {
+    fun view() = HeadsUpView(kind, text, options.map { it.id to it.label }, never_label ?: NEVER_WARN, chosen)
+}
+
+/** This phone's heads-up switch and silenced kinds, as a send carries them. */
+internal fun headsUpBody(p: com.domovoi.app.assistant.docs.HeadsUpPrefs): JsonObject = buildJsonObject {
+    put("off", p.off)
+    put("skip", kotlinx.serialization.json.buildJsonArray { p.skip.sorted().forEach { add(JsonPrimitive(it)) } })
+}
 
 @Serializable
 internal data class ServerJobRef(val id: String = "", val state: String = "", val parts: Int = 0, val read: Int = 0)

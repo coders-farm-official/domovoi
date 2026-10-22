@@ -282,6 +282,11 @@ private fun ChatPane(
                                         )
                                     }
                                 },
+                                // A card answers only while it ends the chat.
+                                onHeadsUp = if (i == 0 && !ui.replying) actions.pickHeadsUp else null,
+                                onNeverWarn = actions.neverWarn,
+                                headsUpSkip = actions.headsUpSkip,
+                                busy = ui.replying,
                             )
                         }
                     }
@@ -488,6 +493,11 @@ private fun MessageBubble(
     carryOnLeft: Int? = null,
     onCarryOn: () -> Unit = {},
     card: (@Composable () -> Unit)? = null,
+    /** A heads-up card's pick (null: it doesn't answer, not the last message). */
+    onHeadsUp: ((String) -> Unit)? = null,
+    onNeverWarn: (String) -> Unit = {},
+    headsUpSkip: Set<String> = emptySet(),
+    busy: Boolean = false,
 ) {
     val toast = LocalToast.current
     val clipboard = LocalClipboardManager.current
@@ -547,6 +557,12 @@ private fun MessageBubble(
                             Text("spoken", style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgFaint,
                                 modifier = Modifier.padding(top = 2.dp))
                         }
+                    } else if (m.headsUp != null) {
+                        // A heads-up card is the reply until an option is picked (D3).
+                        com.domovoi.app.ui.screens.chat.HeadsUpCard(
+                            com.domovoi.app.ui.screens.chat.headsUpView(m.headsUp), silenced = m.headsUp.kind in headsUpSkip,
+                            busy = busy, onPick = onHeadsUp, onNever = { onNeverWarn(m.headsUp.kind) },
+                        )
                     } else if (draftCard != null) {
                         draftCard()
                     } else if (m.text.isNotEmpty() || writing) {

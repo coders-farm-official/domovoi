@@ -109,6 +109,7 @@ from domovoi.help_desk import delivery as help_delivery
 from domovoi.config import settings as core_settings
 from domovoi.profile_context import build_profile_prefix
 from domovoi.voice_identifier import speaker_is_confident
+from domovoi.doc_qa import headsup as _headsup
 from web.backend.api import chat_doc_jobs as _jobs
 from web.backend.api import chat_documents as _docs
 from web.backend.api import chat_drafts as _drafts
@@ -642,6 +643,9 @@ class SendBody(BaseModel):
     model: Optional[str] = Field(None, max_length=200)
     # The sending install (the device tier's usual id), for the details view.
     device_id: Optional[str] = Field(None, max_length=64)
+    # This device's heads-up switch and silenced kinds (documents plan D3,
+    # chat_documents.HeadsUpBody); the rules are the server's.
+    heads_up: Optional[_docs.HeadsUpBody] = None
     # A draft card's Revise box (chat_drafts.py): the message is a revision
     # of this draft, whatever it says.
     revise_draft: Optional[int] = Field(None, ge=1)
@@ -788,7 +792,9 @@ async def _history_for_model(
     Ollama would otherwise drop the oldest part of an overlong prompt
     itself, mid-message, or a picture's tokens with it.
 
-    ``exclude_id``: a message left out (the reply "try again" replaces).
+    ``exclude_id``: a message left out (the reply "try again" replaces). A
+    heads-up card (``stats.model_role`` "heads_up") is never sent: it is
+    the app's words, not the conversation's.
     ``window``, when given, is told ``from_id``: the oldest message sent,
     where the model's view of the thread begins (the app's "earlier
     messages are beyond what Domovoi can keep in mind" divider)."""
@@ -800,6 +806,7 @@ async def _history_for_model(
                     SELECT id, role, content, images FROM chat_messages
                      WHERE thread_id = :id AND error IS NULL
                        AND id <> COALESCE(CAST(:skip AS BIGINT), -1)
+                       AND COALESCE(stats->>'model_role', '') <> 'heads_up'
                        AND NOT (role = 'assistant' AND COALESCE(stats ? 'lookup_card', false))
                      ORDER BY id DESC LIMIT :lim
                     """
@@ -1011,6 +1018,7 @@ async def send_message(thread_id: int, body: SendBody, request: Request) -> Stre
         thread_id, thread.person_id, has_images=bool(images), override=body.model,
         question=body.content, thread_title=thread.title, request=request,
         documents=documents, user_row_id=user_row_id, revise_draft=body.revise_draft, device_id=device_id,
+        heads_up=body.heads_up.prefs() if body.heads_up else None,
     )
 
 
@@ -1106,6 +1114,82 @@ async def retry_reply(thread_id: int) -> StreamingResponse:
     )
 
 
+class HeadsUpAnswer(BaseModel):
+    """The person's pick on a heads-up card (documents plan D3)."""
+    message_id: int
+    option: str = Field(..., min_length=1, max_length=32)
+    # This device's switch and silenced kinds, as a send carries them.
+    heads_up: Optional[_docs.HeadsUpBody] = None
+
+
+@router.post(
+    "/threads/{thread_id}/heads-up",
+    dependencies=SEND,
+    responses={409: {"description": '{"detail": "...", "code": "..."}: `not_a_card` (the message is no heads-up '
+                                    "card), `already_answered` (an option was picked already), `stale` (a newer "
+                                    "message followed the card), `bad_option` (not one of the card's options)"}},
+)
+async def answer_heads_up(thread_id: int, body: HeadsUpAnswer, request: Request) -> Any:
+    """The person's pick on a heads-up card: the card row keeps it
+    (``doc.heads_up.chosen``) and the question before it is answered that
+    way, streamed as ``POST .../messages`` streams ("try anyway": as it
+    would have been; "calculate exactly": the model lists the numbers and
+    the app adds them up; "go ahead": the long summary's job starts). A
+    card is answered once, and only while it is the thread's last
+    message."""
+    async with session_scope() as s:
+        thread = (
+            await s.execute(text("SELECT person_id, title FROM chat_threads WHERE id = :id"), {"id": thread_id})
+        ).first()
+        if thread is None:
+            raise HTTPException(status_code=404, detail="thread not found")
+        card = (await s.execute(text(
+            "SELECT id, doc FROM chat_messages WHERE id = :m AND thread_id = :t AND role = 'assistant'"),
+            {"m": body.message_id, "t": thread_id})).first()
+        if card is None:
+            raise HTTPException(status_code=404, detail="message not found")
+        doc = card.doc if isinstance(card.doc, dict) else json.loads(card.doc or "null") or {}
+        hu = doc.get("heads_up") if isinstance(doc, dict) else None
+        if doc.get("mode") != "heads_up" or not isinstance(hu, dict):
+            return _retry_refused("not_a_card", "that message is no heads-up card")
+        if hu.get("chosen"):
+            return _retry_refused("already_answered", "that card was answered already")
+        if body.option not in [str((o or {}).get("id")) for o in hu.get("options") or []]:
+            return _retry_refused("bad_option", "that isn't one of the card's options")
+        last = (await s.execute(text("SELECT max(id) FROM chat_messages WHERE thread_id = :t"),
+                                {"t": thread_id})).scalar_one()
+        if last != card.id:
+            return _retry_refused("stale", "a newer message followed that card; ask again")
+        asked = (await s.execute(text(
+            "SELECT id, content, images FROM chat_messages WHERE thread_id = :t AND role = 'user' AND id < :m "
+            "ORDER BY id DESC LIMIT 1"), {"t": thread_id, "m": card.id})).first()
+        if asked is None or not (asked.content or "").strip():
+            return _retry_refused("not_a_card", "that card has no question to answer")
+        # The pick is kept once: a second tap (or another device) finds it set.
+        took = (await s.execute(text(
+            "UPDATE chat_messages SET doc = jsonb_set(doc, '{heads_up,chosen}', to_jsonb(CAST(:o AS TEXT))) "
+            "WHERE id = :m AND COALESCE(doc->'heads_up'->>'chosen', '') = '' RETURNING id"),
+            {"o": body.option, "m": card.id})).first()
+        if took is None:
+            return _retry_refused("already_answered", "that card was answered already")
+        await _notify_chat(s, "message")
+        await s.commit()
+    kind = str(hu.get("kind") or "")
+    if body.option == "choose_another":
+        # Nothing to answer: the person picks another picture.
+        return {"chosen": body.option, "message_id": card.id}
+    stop_title_jobs()
+    prefs = (body.heads_up or _docs.HeadsUpBody()).prefs(chosen=(kind, body.option))
+    return await _answer(
+        thread_id, thread.person_id, has_images=kind in _headsup.PICTURE_KINDS and bool(asked.images),
+        question=asked.content, thread_title=thread.title,
+        request=request, documents=[], user_row_id=asked.id, heads_up=prefs,
+        # The card is the app's, not the conversation: the model never sees
+        # it (review round 1), as a retry leaves out the row it replaces.
+        skip_row_id=card.id,
+    )
+
+
 async def _answer(
     thread_id: int,
     person_id: int | None,
@@ -1118,6 +1202,8 @@ async def _answer(
     request: Request | None = None,
     documents: list[dict[str, Any]] | None = None,
     user_row_id: int | None = None,
+    heads_up: Any = None,
+    skip_row_id: int | None = None,
     revise_draft: int | None = None,
     device_id: str | None = None,
 ) -> StreamingResponse:
@@ -1125,7 +1211,9 @@ async def _answer(
     and :func:`retry_reply` with ``replace_id``: the reply it replaces,
     left out of what the model sees and deleted once the new one is
     written). ``question`` is the message being answered, ``documents``
-    the ones it carried and ``user_row_id`` its row (a send only)."""
+    the ones it carried and ``user_row_id`` its row (a send only).
+    ``heads_up``: the device's heads-up prefs and a pick on a card
+    (chat_documents.HeadsUpPrefs)."""
     override = (override or "").strip()
     model = override or (
         core_settings.ollama_vision_model if has_images else core_settings.ollama_model
@@ -1146,7 +1234,7 @@ async def _answer(
             model_role = "draft"
     if not has_images and replace_id is None and dturn is None:
         previous = await _docs.previous_question(thread_id, before_id=user_row_id)
-        plan = await _docs.plan_reply(thread_id, question, documents or [], previous)
+        plan = await _docs.plan_reply(thread_id, question, documents or [], previous, heads_up)
         if plan is not None and not override:
             model_role = "documents"
     if plan is not None and plan.long:
@@ -1154,17 +1242,29 @@ async def _answer(
         # job that carries on if the page goes, with progress, stop and the
         # reply written when it ends (chat_doc_jobs.py, documents plan D2).
         _docs._require_ai()
-        # One job a thread: a second "summarize" follows the one reading;
-        # and at most MAX_RUNNING in the house (review round 1).
-        claim = await _jobs.claim_thread(thread_id)
-        if isinstance(claim, _jobs.Job):
-            return _jobs.stream_thread_job(claim)
-        if claim == "busy":
-            plan.long, plan.immediate, plan.found = False, _jobs.BUSY_TEXT, False
+        docs = [{"token": d.get("token"), "name": d.get("name"), "parts": d.get("parts") or []} for d in plan.docs]
+        # The heads-up first (D3): a job that will take a long while here
+        # (its measured estimate), or pages it can't read, gets its card.
+        running = _jobs.live_thread_job(thread_id)
+        card_plan, hu_notes = (None, []) if running is not None else await _docs.long_heads_up(
+            plan, thread_id, heads_up, await _jobs.summary_facts(docs, override or None))
+        if card_plan is not None:
+            plan = card_plan
         else:
-            docs = [{"token": d.get("token"), "name": d.get("name"), "parts": d.get("parts") or []} for d in plan.docs]
-            job = await _jobs.start_thread_job(thread_id, user_row_id, plan.question, docs, model=override or None)
-            return _jobs.stream_thread_job(job)
+            # One job a thread: a second "summarize" follows the one reading;
+            # and at most MAX_RUNNING in the house (review round 1).
+            claim = await _jobs.claim_thread(thread_id)
+            if isinstance(claim, _jobs.Job):
+                return _jobs.stream_thread_job(claim)
+            if claim == "busy":
+                plan.long, plan.immediate, plan.found = False, _jobs.BUSY_TEXT, False
+            else:
+                job = await _jobs.start_thread_job(thread_id, user_row_id, plan.question, docs,
+                                                   model=override or None, notes=hu_notes)
+                return _jobs.stream_thread_job(job)
+    if plan is not None and plan.mode == "heads_up":
+        # The card is the reply: said by the app, no model asked.
+        model_role = "heads_up"
 
     refusal: tuple[str, str] | None = None
     if model_role == "vision":
@@ -1174,6 +1274,12 @@ async def _answer(
             tags = await ollama_client.tags_or_none()
             if tags is not None and not ollama_client.model_installed(model, tags):
                 refusal = _missing_text(model, model_role)
+
+    if refusal is None and has_images and replace_id is None and not override and plan is None:
+        # A picture to read, measured too blurry: its heads-up card first.
+        card_plan = await _picture_heads_up(thread_id, user_row_id, question, heads_up)
+        if card_plan is not None:
+            plan, model_role = card_plan, "heads_up"
 
     # The text model can't read pictures, so a text turn leaves the
     # thread's earlier ones out (see _history_for_model). A turn that may
@@ -1205,7 +1311,7 @@ async def _answer(
             longest = ollama_client.chat_system_prompt(profile, pictures=True, model_system=model_system)
             budget = max(0, ctx - _text_tokens(longest) - _reply_room())
         history = await _history_for_model(
-            thread_id, with_images=with_images, budget=budget, exclude_id=replace_id, window=window,
+            thread_id, with_images=with_images, budget=budget, exclude_id=replace_id if replace_id is not None else skip_row_id, window=window,
         )
     # A call that carries pictures: no reasoning before the answer (only
     # the answer is streamed, so the reader would wait in silence), and the
@@ -1500,7 +1606,7 @@ async def _answer(
             payload = {"detail": error, "code": code, "model": model}
             yield f"event: error\ndata: {json.dumps(payload)}\n\n"
         yield f"event: done\ndata: {json.dumps(_msg_dict(row))}\n\n"
-        if error is None:
+        if error is None and model_role != "heads_up":
             schedule_title_job(thread_id)
 
     async def _finish_retry(
@@ -2504,6 +2610,64 @@ async def upload(file: UploadFile = File(...)) -> dict[str, Any]:
     token = uuid.uuid4().hex
     (UPLOADS_DIR / f"{token}{ext}").write_bytes(data)
     return {"token": token, "name": file.filename or f"image{ext}"}
+
+
+#: The picture is measured at this size (longest side, grey): the same as
+#: the eval that set the threshold (chat-weak-spots.json, blur_variance).
+BLUR_EDGE = 384
+
+
+def _picture_blur(path: Path) -> float | None:
+    """The variance of the Laplacian of a stored picture, grey, at
+    :data:`BLUR_EDGE` (low is blurry). It passed the upload's header checks
+    (:func:`_check_picture`) when it was stored."""
+    from PIL import Image
+
+    with Image.open(path) as im:
+        im.draft("L", (BLUR_EDGE * 2, BLUR_EDGE * 2))
+        grey = im.convert("L")
+        grey.thumbnail((BLUR_EDGE, BLUR_EDGE), Image.Resampling.BILINEAR)
+        w, h = grey.size
+        px = list(grey.getdata())
+    rows = [px[y * w:(y + 1) * w] for y in range(h)]
+    v = _headsup.blur_variance(rows)
+    return None if v == float("inf") else v
+
+
+async def _picture_heads_up(thread_id: int, user_row_id: int | None, question: str, prefs: Any) -> Any:
+    """A message with pictures that asks to read them ("what does this
+    letter say?"): the heads-up card when one is measured too blurry
+    (documents plan D3), or None. Measured here, never judged by a model."""
+    if user_row_id is None or not _headsup.reading_request(question):
+        return None
+    async with session_scope() as s:
+        imgs = (await s.execute(text("SELECT images FROM chat_messages WHERE id = :id"),
+                                {"id": user_row_id})).scalar_one_or_none()
+    if isinstance(imgs, str):
+        imgs = json.loads(imgs)
+    blurs = []
+    for img in imgs or []:
+        p = _upload_path((img or {}).get("token", ""))
+        if p is None:
+            continue
+        try:
+            v = await executors.run("pictures", _picture_blur, p)
+        except Exception as e:  # noqa: BLE001 — no measurement, no card
+            log.info("chat: blur not measured: %s", type(e).__name__)
+            continue
+        if v is not None:
+            blurs.append(v)
+    if not blurs:
+        return None
+    prefs = prefs or _docs.HeadsUpPrefs()
+    found = _headsup.findings(_headsup.Request(mode="picture", question=question, where="server",
+                                               picture={"blur": min(blurs)}, ai_on=not _ai_turned_off()))
+    decision = _headsup.decide(found, shown=await _docs.shown_kinds(thread_id), skip=prefs.skip, off=prefs.off,
+                               chosen=prefs.chosen)
+    if decision.card is None:
+        return None
+    return _docs.DocPlan(mode="heads_up", immediate=decision.card.text, question=question,
+                         heads_up=decision.card.to_json() | {"chosen": None})
 
 
 @router.get("/uploads/{token}", dependencies=READ)

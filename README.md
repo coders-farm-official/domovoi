@@ -153,6 +153,20 @@ We build Domovoi in public. Here's where it stands.
   if you leave the page, and after a restart it asks before reading more;
   on a phone it runs while Chat is open and picks up where it left off.
   Every point in the summary cites a page the parts' notes cited.
+- **Chat says so before a shaky result.** Where Domovoi is measured to be
+  weak (an exact sum, a whole-document rewrite, scanned pages, a blurry
+  photo, a language it isn't tested in), a heads-up card says so first and
+  offers what works; **calculate exactly** pulls the numbers out of the
+  document and lets the app do the arithmetic, and refuses anything
+  ambiguous rather than guess. Each card has "don't warn me about this
+  again", and Settings → Chat & AI → Chat has a master switch.
+- **Chat writes resumes, cover letters and letters.** "Write a cover letter
+  for the warehouse job" gives a draft card; "shorter" or "more formal"
+  makes a new version (every version is kept and can be reopened, compared
+  or edited by hand). Saving makes a .docx or PDF that a job site's
+  applicant-tracking system can read back, into Documents → From Chat on the
+  home server or the phone's Chat documents, and "print it" prints on a
+  network printer. Writing runs on the home server or on the phone itself.
 - **Chat can look things up, with your permission.** Say "look up …",
   "what does this page say: https://…", or ask something Domovoi doesn't
   know. It searches its own manual and an offline library (Kiwix) first;
@@ -326,8 +340,9 @@ they have been tried on fewer devices than the rest, aren't yet held to
    since rc3 is in the [release notes](docs/RELEASE_NOTES.md): printing and
    scanning, AI chat and questions as an option, Settings in groups with
    one Health page, One Chat in the app, chat history and titles, the help
-   desk, asking a chat about a document and summarizing long ones, looking
-   things up from chat with your permission, a phone chat that answers about
+   desk, asking a chat about a document and summarizing long ones, honest
+   heads-ups before shaky results, writing and saving resumes and letters,
+   looking things up from chat with your permission, a phone chat that answers about
    the phone, does things on it and looks at a photo, the Windows satellite
    Setup, a smaller (R8-shrunk) release
    build of the app, tablet and sideways-phone screens that clear the

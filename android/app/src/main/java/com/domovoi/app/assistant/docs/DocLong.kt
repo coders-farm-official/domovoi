@@ -214,14 +214,14 @@ object DocLong {
     private fun request(question: String): String =
         DocText.pySplit(question).joinToString(" ").ifEmpty { "Summarize it." }
 
-    data class MapPrompt(val rules: String, val user: String, val given: List<Given>)
+    data class MapPrompt(val rules: String, val user: String, val given: List<Given>, val nonce: String = "")
 
     fun buildMapPrompt(chunk: DocChunk, docs: List<QaDoc>, index: Int, total: Int, question: String, nonce: String? = null): MapPrompt {
         val given = chunkGiven(chunk, docs)
         val names = docs.map { it.name.ifEmpty { "the document" } }
         val ask = "List the main points of part ${index + 1} of $total. (The person asked: ${request(question)})"
         val p = DocQa.buildPrompt(ask, given, if (docs.size > 1) listOf(names[chunk.doc]) else names, mode = "summary", nonce = nonce)
-        return MapPrompt(MAP_RULES, p.user, given)
+        return MapPrompt(MAP_RULES, p.user, given, p.nonce)
     }
 
     private fun asNotes(text: String): String = text.replace("<<<", "‹‹‹").replace(">>>", "›››")
@@ -237,7 +237,7 @@ object DocLong {
             "",
             "Request: ${request(question)}",
         ).joinToString("\n")
-        return DocQa.Prompt(REDUCE_RULES, user)
+        return DocQa.Prompt(REDUCE_RULES, user, n)
     }
 
     fun reduceGroups(notes: List<String>, limitChars: Int = (MAP_CHUNK_TOKENS * CHARS_PER_TOKEN).toInt()): List<List<Int>> {
@@ -262,11 +262,11 @@ object DocLong {
     /** A map step's reply after the app's check, line by line: labels only
      *  of passages in its chunk; a line whose every label was made up goes;
      *  "" when the reply says the part has nothing. */
-    fun cleanNote(reply: String, given: List<Given>): String {
+    fun cleanNote(reply: String, given: List<Given>, nonce: String? = null): String {
         val kept = ArrayList<String>()
         for (line in reply.lines()) {
             if (line.isBlank()) continue
-            val checked = DocQa.checkReply(line, given)
+            val checked = DocQa.checkReply(line, given, nonce = nonce)
             if (checked.found && checked.cited.isNotEmpty()) kept += checked.content
         }
         return kept.joinToString("\n").trim()
@@ -281,12 +281,12 @@ object DocLong {
 
     /** The summary's lines that cite a page some part's notes cited, with
      *  only such labels (the server's `keep_supported_lines`). */
-    fun keepSupportedLines(reply: String, given: List<Given>, noted: Set<String>): String {
+    fun keepSupportedLines(reply: String, given: List<Given>, noted: Set<String>, nonce: String? = null): String {
         val allowed = given.filter { DocQa.normLabel(it.cite) in noted }
         val kept = ArrayList<String>()
         for (line in reply.lines()) {
             if (line.isBlank()) continue
-            val checked = DocQa.checkReply(line, allowed)
+            val checked = DocQa.checkReply(line, allowed, nonce = nonce)
             if (checked.found && checked.cited.isNotEmpty()) kept += checked.content
         }
         return kept.joinToString("\n").trim()

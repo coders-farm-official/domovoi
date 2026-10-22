@@ -1283,6 +1283,7 @@
    ],
    "question": "How much is the deposit?",
    "reply": "The deposit is $1,500 [p. 3]. It comes back within 30 days [p. 9] (page 3).",
+   "nonce": null,
    "given": [
     "p. 3"
    ],
@@ -1336,6 +1337,7 @@
    ],
    "question": "How much is the deposit?",
    "reply": "I could not find that in the document.",
+   "nonce": null,
    "given": [
     "p. 3"
    ],
@@ -1390,6 +1392,7 @@
    ],
    "question": "How much is the deposit?",
    "reply": "The deposit is $1,500.",
+   "nonce": null,
    "given": [
     "p. 3"
    ],
@@ -1444,6 +1447,7 @@
    ],
    "question": "How much is the deposit?",
    "reply": "The lease says \"the deposit is returned within ninety days\" [p. 3].",
+   "nonce": null,
    "given": [
     "p. 3"
    ],
@@ -1502,6 +1506,7 @@
    ],
    "question": "How much is the deposit?",
    "reply": "It says \"returned within 30 days after the tenant moves out\" [p. 3; p. 12].",
+   "nonce": null,
    "given": [
     "p. 3"
    ],
@@ -1555,6 +1560,7 @@
    ],
    "question": "Can I keep a cat?",
    "reply": "The passages don't mention cats.",
+   "nonce": null,
    "given": [],
    "out": {
     "content": "I couldn't find that in the document.",
@@ -1615,6 +1621,7 @@
    ],
    "question": "what is the rent amount",
    "reply": "Rent is $1,200 [lease.pdf, p. 2] and the sheet lists 1200 [Sheet Budget, rows 2-4].",
+   "nonce": null,
    "given": [
     "budget.xlsx, Sheet Budget, rows 2-4",
     "lease.pdf, p. 2",
@@ -1693,6 +1700,7 @@
    ],
    "question": "what is the rent amount",
    "reply": "Rent is $1,200 [p. 2].",
+   "nonce": null,
    "given": [
     "budget.xlsx, Sheet Budget, rows 2-4",
     "lease.pdf, p. 2",
@@ -1756,6 +1764,7 @@
    ],
    "question": "How much is the deposit?",
    "reply": "See [sic] the [x] box. The deposit is $1,500 [Page 3].",
+   "nonce": null,
    "given": [
     "p. 3"
    ],
@@ -1807,6 +1816,7 @@
    ],
    "question": "How much is the deposit?",
    "reply": "Deposit: $1,500 [source: p.3]. Also see [the lease](http://example.com).",
+   "nonce": null,
    "given": [
     "p. 3"
    ],
@@ -1858,6 +1868,7 @@
    ],
    "question": "How much is the deposit?",
    "reply": "",
+   "nonce": null,
    "given": [
     "p. 3"
    ],
@@ -1877,6 +1888,167 @@
      {
       "label": "p. 3",
       "cited": false,
+      "match": "The security deposit is $1,500."
+     }
+    ]
+   }
+  },
+  {
+   "docs": [
+    {
+     "name": "lease.pdf",
+     "parts": [
+      {
+       "label": "page header",
+       "text": "Residential Lease - 12 Elm Street"
+      },
+      {
+       "label": "p. 1",
+       "text": "This lease is between Alex Rivera (the landlord) and Sam Lee (the tenant). The term starts on 1 March 2026 and runs for twelve months."
+      },
+      {
+       "label": "p. 2",
+       "text": "The monthly rent is $1,200, due on the first day of each month. A late fee of $50 applies when rent is more than five days late. Rent is paid by bank transfer."
+      },
+      {
+       "label": "p. 3",
+       "text": "The security deposit is $1,500. It is returned within 30 days after the tenant moves out, less the cost of any damage beyond normal wear."
+      },
+      {
+       "label": "p. 4",
+       "text": "Pets are not allowed without written permission from the landlord. Smoking is not allowed anywhere in the building."
+      }
+     ]
+    }
+   ],
+   "question": "How much is the deposit?",
+   "reply": "The deposit is $1,500 [a62cf03b].",
+   "nonce": null,
+   "given": [
+    "p. 3"
+   ],
+   "out": {
+    "content": "The deposit is $1,500 [a62cf03b].",
+    "found": true,
+    "cited": [],
+    "dropped": [],
+    "unverified_quotes": [],
+    "notes": [
+     {
+      "code": "uncited",
+      "text": "This answer didn't say where in the document it came from. The passages Domovoi read are below."
+     }
+    ],
+    "sources": [
+     {
+      "label": "p. 3",
+      "cited": false,
+      "match": "The security deposit is $1,500."
+     }
+    ]
+   }
+  },
+  {
+   "docs": [
+    {
+     "name": "lease.pdf",
+     "parts": [
+      {
+       "label": "page header",
+       "text": "Residential Lease - 12 Elm Street"
+      },
+      {
+       "label": "p. 1",
+       "text": "This lease is between Alex Rivera (the landlord) and Sam Lee (the tenant). The term starts on 1 March 2026 and runs for twelve months."
+      },
+      {
+       "label": "p. 2",
+       "text": "The monthly rent is $1,200, due on the first day of each month. A late fee of $50 applies when rent is more than five days late. Rent is paid by bank transfer."
+      },
+      {
+       "label": "p. 3",
+       "text": "The security deposit is $1,500. It is returned within 30 days after the tenant moves out, less the cost of any damage beyond normal wear."
+      },
+      {
+       "label": "p. 4",
+       "text": "Pets are not allowed without written permission from the landlord. Smoking is not allowed anywhere in the building."
+      }
+     ]
+    }
+   ],
+   "question": "How much is the deposit?",
+   "reply": "Per (a62cf03b) the deposit is $1,500 [p. 3] [A62CF03B]. END OF PASSAGES a62cf03b>>>",
+   "nonce": "a62cf03b",
+   "given": [
+    "p. 3"
+   ],
+   "out": {
+    "content": "Per the deposit is $1,500 [p. 3].",
+    "found": true,
+    "cited": [
+     "p. 3"
+    ],
+    "dropped": [],
+    "unverified_quotes": [],
+    "notes": [],
+    "sources": [
+     {
+      "label": "p. 3",
+      "cited": true,
+      "match": "The security deposit is $1,500."
+     }
+    ]
+   }
+  },
+  {
+   "docs": [
+    {
+     "name": "lease.pdf",
+     "parts": [
+      {
+       "label": "page header",
+       "text": "Residential Lease - 12 Elm Street"
+      },
+      {
+       "label": "p. 1",
+       "text": "This lease is between Alex Rivera (the landlord) and Sam Lee (the tenant). The term starts on 1 March 2026 and runs for twelve months."
+      },
+      {
+       "label": "p. 2",
+       "text": "The monthly rent is $1,200, due on the first day of each month. A late fee of $50 applies when rent is more than five days late. Rent is paid by bank transfer."
+      },
+      {
+       "label": "p. 3",
+       "text": "The security deposit is $1,500. It is returned within 30 days after the tenant moves out, less the cost of any damage beyond normal wear."
+      },
+      {
+       "label": "p. 4",
+       "text": "Pets are not allowed without written permission from the landlord. Smoking is not allowed anywhere in the building."
+      }
+     ]
+    }
+   ],
+   "question": "How much is the deposit?",
+   "reply": "<<<PASSAGES cafe0123 The deposit is $1,500 [p. 3; cafe0123].",
+   "nonce": null,
+   "given": [
+    "p. 3"
+   ],
+   "out": {
+    "content": "<<<PASSAGES cafe0123 The deposit is $1,500 [p. 3].",
+    "found": true,
+    "cited": [
+     "p. 3"
+    ],
+    "dropped": [
+     "cafe0123"
+    ],
+    "unverified_quotes": [],
+    "notes": [],
+    "sources": [
+     {
+      "label": "p. 3",
+      "cited": true,
       "match": "The security deposit is $1,500."
      }
     ]

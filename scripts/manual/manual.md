@@ -925,6 +925,19 @@ experiment and off unless whoever set up Domovoi turned it on.
 
 [More detail](docs/FAQ.md#can-i-send-pictures-in-chat)
 
+### What Domovoi is good and not so good at
+
+{{generated:weak-spots}}
+
+**How to:** a heads-up names the weakness and offers what works here:
+**calculate exactly** (the app adds up the numbers the model lists, each
+checked against its page, and says so plainly when it can't read one for
+certain), **go ahead** or **try anyway**. **don't warn me
+about this again** silences that kind on this device; [Settings →
+Chat](#settings/chat) (under Chat & AI) turns them all off. With them off, the two that
+guard against a wrong answer you can't see coming (exact sums and scanned
+pages) become a one-line note under the answer instead.
+
 ### Files and photos
 
 Every library in one place: Music, Documents, Pictures, Videos,

@@ -210,6 +210,13 @@
     "tab": "models"
    }
   },
+  "settings/chat": {
+   "dashboard": "#settings/chat",
+   "app": {
+    "screen": "Settings",
+    "tab": "chat"
+   }
+  },
   "settings/internet": {
    "dashboard": "#settings/internet",
    "app": {
@@ -526,6 +533,7 @@
    ],
    "pieces": [
     "chat",
+    "good-and-not",
     "files",
     "documents",
     "calendar",
@@ -2752,6 +2760,113 @@
     "text": "More detail",
     "target": "doc:docs/FAQ.md#can-i-send-pictures-in-chat"
    }
+  },
+  {
+   "id": "good-and-not",
+   "topic": "chat-files-calendar",
+   "title": "What Domovoi is good and not so good at",
+   "subtitle": "where to trust the answers, and where to check",
+   "keywords": [
+    "trust",
+    "accurate",
+    "accuracy",
+    "reliable",
+    "wrong",
+    "mistakes",
+    "heads-up",
+    "warning",
+    "limits",
+    "good at",
+    "bad at",
+    "weak"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "Domovoi decides when to give you a heads-up from these measured results, never from the model's own opinion of itself. A heads-up comes before a task measured below 70% or never measured; each one shows once per chat, and [Settings → Chat](route:settings/chat) turns them off on a device."
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "**Questions about a document** (good): Questions one passage of a document answers: the passage it needs was among those Domovoi read in 98% of our test questions. How well the model then answers is not measured on a phone yet. *(E-HEADSUP (retrieval), 2026-10-21, the app's own search, on our test documents)*"
+      },
+      {
+       "text": "**Questions about a document** (good): When nothing in the document matches your words, Domovoi answers \"I couldn't find that in the document\" without asking the model. *(E-HEADSUP (retrieval), 2026-10-21, the app's own search, on our test documents)*"
+      },
+      {
+       "text": "**Sources and pages** (okay): Sources and pages: the app keeps only citations of passages it gave the model, and checks quotes word for word. It does not check that the passage backs up the sentence, so open the source when it matters. *(documents plan D1, 2026-10-21, phone and home server)*"
+      },
+      {
+       "text": "**Rewriting a whole document** (okay): Rewriting a short document (up to about 4,800 characters, two pages): it fits in one reply. Writing quality is not measured yet. *(documents plan D1, 2026-10-21, phone and home server)*"
+      },
+      {
+       "text": "**Rewriting a whole document** (not reliable): Rewriting, translating or proofreading a longer document: the model sees at most about 4,800 characters of it in one reply, so a whole-document rewrite leaves most of it out. Domovoi gives a heads-up first. Instead: Ask for one part at a time (\"rewrite the second paragraph\"). *(E-HEADSUP (retrieval), 2026-10-21, the app's own search, on our test documents)*"
+      },
+      {
+       "text": "**Comparing parts of a long document** (okay): Comparing parts of a short document: all of it fits in what Domovoi reads for one question. *(documents plan D1, 2026-10-21, phone and home server)*"
+      },
+      {
+       "text": "**Comparing parts of a long document** (good): Comparing far-apart parts of a long document: both parts were among the passages Domovoi read in 93% of our test questions. *(E-HEADSUP (retrieval), 2026-10-21, the app's own search, on our test documents)*"
+      },
+      {
+       "text": "**Exact sums, averages and dates** (okay): A total or average the document states (a spreadsheet's column totals are worked out by Domovoi when it reads the file) is quoted, not calculated. *(documents plan D1, 2026-10-21, phone and home server)*"
+      },
+      {
+       "text": "**Exact sums, averages and dates** (not tested yet): Adding up, averaging or counting days between numbers spread over a document: the model's arithmetic isn't checked. With calculate exactly, the model only lists the numbers with their pages; the app checks each one is on its page as that whole number, reads it only in forms it knows for certain (a sign, a currency from a short list, the document's own separators, a scale like \"1.2k\" or \"1.2 million\"), and does the sum from the entries it found. When a number isn't on its page as listed, or it, its unit or a date's day and month can't be read for certain (a footnote mark, \"per month\", a range, an unknown currency), it names it and works nothing out. Domovoi gives a heads-up first. Instead: Use calculate exactly: the model lists the numbers with their pages and the app adds them up. *(documents plan D3, 2026-10-21, phone and home server)*"
+      },
+      {
+       "text": "**Long documents** (slow): Long documents on a phone's CPU: one part took 24 s at about 2,000 tokens and 69 s at about 6,000, so a 30-page summary takes a few minutes. The heads-up comes when a summary will take over 3 minutes here, or when your home server would be faster. Instead: Ask about the specific thing you need: it is found in seconds, wherever it is. *(D0 bench, 2026-10-21, Galaxy Z Fold (Gemma 4 E2B))*"
+      },
+      {
+       "text": "**Long documents** (okay): Long documents on a phone's GPU: one part took 7.1 s at about 2,000 tokens and 13 s at about 6,000. *(D0 bench, 2026-10-21, Galaxy Z Fold (Gemma 4 E2B))*"
+      },
+      {
+       "text": "**Long documents** (good): Long documents on a home server with a GPU: a 30-page summary in about 10-15 s. *(D0 bench, 2026-10-21, home server, RTX 4070 Ti SUPER (llama3.2:3b))*"
+      },
+      {
+       "text": "**Long documents** (slow): Long documents on a home server without a GPU: about 7 minutes for 30 pages, slower than a phone's GPU. The heads-up comes when a summary will take over 3 minutes. Instead: Ask about the specific thing you need: it is found in seconds, wherever it is. *(D0 bench, 2026-10-21, home server, 8 CPU cores, shared (llama3.2:3b))*"
+      },
+      {
+       "text": "**Scanned pages** (not reliable): Scanned pages (pictures of text) are found when a document is read, but chats don't read them yet. An answer names under it the pages it skipped, and a summary gets a heads-up first. Instead: Save the document from its original program as a PDF with text, or type the part you need. *(E-EXTRACT (D0), 2026-10-21, phone and home server)*"
+      },
+      {
+       "text": "**Languages** (good): English and Spanish: tested (98% of our questions found their passage). *(E-HEADSUP (retrieval), 2026-10-21, the app's own search, on our test documents)*"
+      },
+      {
+       "text": "**Languages** (not tested yet): Other languages: not tested yet. A document that clearly looks like one gets a heads-up first. Instead: Check the answer against the passages it names. *(E-HEADSUP, 2026-10-21, phone and home server)*"
+      },
+      {
+       "text": "**Blurry photos** (not tested yet): Blurry photos in home-server chats: a photo blurrier than our test scan (which the home server's vision model read word for word) gets a heads-up before it is sent. How much a blurry photo gets wrong is not measured yet. Instead: Take the photo again in good light, holding the phone flat over the page. *(E-HEADSUP (blur), 2026-10-21, home server)*"
+      },
+      {
+       "text": "**Handwriting** (not tested yet): Handwriting: not tested yet. Expect mistakes, and check names, dates and numbers. There is no heads-up for it yet: telling handwriting from print needs a step that isn't built. Instead: Type the part you need, or check every name, date and number. *(documents plan D6, 2026-10-21, phone and home server)*"
+      },
+      {
+       "text": "**Doing things from the phone's chat** (not reliable): Doing things by asking the phone's model (timers, music): it set off the wrong action on 10 of 35 near-miss phrases (\"how long should I boil an egg?\" set a timer), so the phone uses fixed phrases for actions instead, which made no false actions. *(N0 bench (S-TOOLS), 2026-10-21, Galaxy Z Fold (Gemma 4 E2B))*"
+      },
+      {
+       "text": "**Pictures on the phone** (not reliable): Pictures on a phone's CPU: too slow and too big (6.8 s, 2.76 GB). On the phone's GPU: 2.5 s, 4 of 4 useful. Phone chats don't take pictures yet; when they do, it will be where the GPU can read them. *(N0 bench (S-PIC), 2026-10-21, Galaxy Z Fold (Gemma 4 E2B))*"
+      },
+      {
+       "text": "**Writing speed** (okay): Writing speed on a phone's CPU: about 21 word-pieces a second, so a two-page rewrite takes about a minute. *(N0 bench, 2026-10-21, Galaxy Z Fold (Gemma 4 E2B))*"
+      },
+      {
+       "text": "**Writing speed** (good): Writing speed on a home server with a GPU: about 160 word-pieces a second. *(D0 bench, 2026-10-21, home server, RTX 4070 Ti SUPER (llama3.2:3b))*"
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "p",
+     "text": "A heads-up names the weakness and offers what works here: **calculate exactly** (the app adds up the numbers the model lists, each checked against its page, and says so plainly when it can't read one for certain), **go ahead** or **try anyway**. **don't warn me about this again** silences that kind on this device; [Settings → Chat](route:settings/chat) (under Chat & AI) turns them all off. With them off, the two that guard against a wrong answer you can't see coming (exact sums and scanned pages) become a one-line note under the answer instead."
+    }
+   ]
   },
   {
    "id": "files",
