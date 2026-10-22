@@ -69,6 +69,24 @@ def _wanted(name: str) -> str | None:
     return rel
 
 
+def _kept(name: str) -> bool:
+    """Files checked in by hand beside the bundle, which a re-fetch keeps:
+    the README about this directory and the licence texts of the fonts
+    Excalidraw carries (OFL-*.txt; the npm package ships none)."""
+    return name == "README.md" or name.startswith("OFL-")
+
+
+def clear_vendor_dir(vendor_dir: Path) -> None:
+    """Empty vendor_dir for a re-fetch, keeping the hand-added files."""
+    for child in vendor_dir.iterdir():
+        if _kept(child.name):
+            continue
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
 def fetch(force: bool = False) -> int:
     umd = VENDOR_DIR / UMD_FILENAME
     if umd.is_file() and not force:
@@ -81,13 +99,7 @@ def fetch(force: bool = False) -> int:
     print(f"  {len(blob) / 1_048_576:.1f} MiB")
 
     if force and VENDOR_DIR.is_dir():
-        for child in VENDOR_DIR.iterdir():
-            if child.name == "README.md":
-                continue          # the checked-in note about this directory
-            if child.is_dir():
-                shutil.rmtree(child)
-            else:
-                child.unlink()
+        clear_vendor_dir(VENDOR_DIR)
 
     written = 0
     with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
