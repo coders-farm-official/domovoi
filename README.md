@@ -167,6 +167,22 @@ We build Domovoi in public. Here's where it stands.
   applicant-tracking system can read back, into Documents → From Chat on the
   home server or the phone's Chat documents, and "print it" prints on a
   network printer. Writing runs on the home server or on the phone itself.
+- **Photograph a letter and ask what it says.** In a home-server chat, and
+  in a phone chat (read on the phone where its GPU can run the picture
+  model, otherwise by the home server through "+" → "a letter for the home
+  server"), a photo of a letter or a bill gets a plain-words explanation of
+  who it is from, what it is about and what to do. Every date and amount is
+  shown inside the letter's own sentence, quoted as the picture model read
+  it; the model's own sentences carry no figures. A blurry or handwritten
+  photo gets its heads-up card first. The phone never keeps the photo, and
+  the text read from it stays with that chat only.
+- **Read documents aloud, and take a letter, by voice.** "Read me the
+  lease" reads a PDF, Word, OpenDocument, text or markdown file from the
+  household's Documents folder aloud in any room, a page or so at a time
+  (stop, pause, start again, read that again); it uses no language model.
+  "Take a letter to the landlord" keeps the room listening until "end of
+  letter" or the room goes quiet, writes it up, and saves it as a Word file
+  in Documents → From Chat ("Saved as ..."); it is never sent anywhere.
 - **Chat can look things up, with your permission.** Say "look up …",
   "what does this page say: https://…", or ask something Domovoi doesn't
   know. It searches its own manual and an offline library (Kiwix) first;
@@ -342,6 +358,7 @@ they have been tried on fewer devices than the rest, aren't yet held to
    one Health page, One Chat in the app, chat history and titles, the help
    desk, asking a chat about a document and summarizing long ones, honest
    heads-ups before shaky results, writing and saving resumes and letters,
+   reading a photographed letter, reading documents aloud and taking a letter by voice,
    looking things up from chat with your permission, a phone chat that answers about
    the phone, does things on it and looks at a photo, the Windows satellite
    Setup, a smaller (R8-shrunk) release
@@ -350,6 +367,12 @@ they have been tried on fewer devices than the rest, aren't yet held to
    container guard.
 
 **Later**
+
+- **Guided resumes and letters, held out of 1.0.0.** The step-by-step
+  flows that ask questions to build a resume or letter are built but not
+  part of 1.0.0; plain "write a cover letter" in Chat ships. Photographed
+  letters and documents by voice were the last features planned for 1.0.0:
+  from here it is the soak and the release checks.
 
 - **The Android app on Google Play.** Coders Farm's developer account is
   cleared and the store listing is written; the release build is made
@@ -719,6 +742,8 @@ Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
 | Library, playlists, podcasts, audiobooks, news | voice control | voice control | ✅ full management | ✅ dashboard parity |
 | Videos | — | — | ✅ | ✅ |
 | Text chat with Domovoi, pictures included | — | — | ✅ | ✅ |
+| Read a document aloud; take a letter | voice: "read me the lease", "take a letter to the landlord" | — | — | — |
+| Explain a photographed letter | — | — | ✅ in chat | ✅ in chat (on the phone, or via the home server) |
 | Print and scan with network printers | voice: "print my cover letter", "scan this to Documents" | — | ✅ Settings, Files, Documents | ✅ Settings, Files (on the home server's files) |
 | An assistant that answers with no server | — | — | — | ✅ preview: 64-bit phones with 8 GB or more |
 | Save music, podcasts & audiobooks to your device | — | — | ✅ browser download | ✅ music & podcasts via DownloadManager; audiobooks into the app, played offline |
