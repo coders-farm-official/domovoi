@@ -1810,6 +1810,15 @@ and from the system's own state (`domovoi/help_desk`, `/api/help`).
   with the chat. Nothing about it leaves the network. With AI features off
   no screenshot is read at all. A chat on the phone can't read pictures;
   it offers a home-server chat instead and sends nothing by itself.
+* **Letter photos (documents plan D6).** In a home-server chat the photo
+  and the text read from it are kept with the thread, like any chat
+  picture. In a phone chat the photo is never kept; the text read from it
+  is kept beside the answer in the phone's own chat storage (deleted with
+  the chat). A phone that can't read photos itself may send one photo to
+  the paired home server (`POST /api/chat/letters/read`: device tier, AI
+  features on, at most 8 MB read into memory after the device check, one
+  per phone and two per house); the server writes nothing and logs only
+  the time it took.
 * **The records help reads are summaries, and redacted.** Troubleshooting
   picks named fields from the rooms' health samples and outage reports,
   the update record, plugins' status and the container guard's household

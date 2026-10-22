@@ -13,37 +13,54 @@ dependencies.
   The answer explains it plainly in a fixed shape: who it's from, what it's
   about, the deadlines, the amounts, the reference numbers, what to do
   next and what was unclear.
-* **Every date and amount shown is the letter's.** The picture model
-  transcribes the photo; the chat model explains the transcript; then the
-  app reads every date and amount in the explanation with the strict
-  grammar of "calculate exactly" and keeps only those the transcript has,
-  written the way the letter writes them. One the letter doesn't have is
-  left out, and a note says how many were. Deadlines and amounts due the
-  model missed are added from the letter's own sentences.
+* **Dates and amounts are checked against the text read from the photo.**
+  The picture model transcribes the photo; the chat model explains the
+  transcript; then the app scans everything it would show for anything
+  that looks like a date, an amount, a number, a percentage or a
+  reference (digits, currency signs and words, month names, ordinals,
+  weekdays, "tomorrow", numbers in words) and keeps a clause only when
+  every one of them is in the transcript exactly; a date whose day and
+  month could be read either way is refused. A dropped clause is counted
+  in a note under the answer. Deadlines and amounts due the model missed
+  are added from the letter's own sentences. The check is against what
+  was read: a photo misread in the first place (blur, glare, handwriting)
+  can still give a wrong date or amount, so the note says to check
+  anything important on the letter itself.
 * **Heads-up first.** A blurry photo gets its card before anything is
   sent to a model (as before, now for letter questions too: "what do I
   need to do about this bill?"). Handwriting now has its card too: the
   picture model is asked one word first, printed or handwritten, and a
   handwritten letter gets "Handwriting is hard for Domovoi" before it is
-  transcribed, once a chat.
+  transcribed, once a chat. **Real handwriting is not measured yet**: the
+  test notes were drawn in a script font.
 * **Text in a letter is data, never instructions.** It reaches the model
-  in a marked block it can't close, and a letter that talks to an AI
-  assistant ("ignore previous instructions…") is named in a note under
-  the answer; nothing from that text is shown as a fact.
+  in a marked block it can't close; lines that talk to an AI assistant
+  ("ignore previous instructions…", "Assistant: …", "To whoever
+  summarizes this…") or are dressed as one of the reply's labels are
+  named in a note, and nothing from them is shown as a fact.
 * **Home-server chats** keep the transcript with the thread (as the photo
-  already is), under the answer as "photo 1".
+  already is), under the answer as "photo 1". About **2 minutes a letter**
+  on a home server without a graphics card (measured on CPU); a few
+  seconds with one.
 * **Phone chats** read the letter on the phone where its GPU runs the photo
-  model (as N3's pictures do). Elsewhere, with a home server paired and AI
-  on there, "+" offers "a letter for the home server": the server reads
-  the photo and keeps nothing (`POST /api/chat/letters/read`), and the
-  phone writes and checks the explanation. With neither, the chat says so
-  plainly. Nothing is kept on the phone: the photo is wiped once answered,
-  and the transcript is never stored.
+  model (as N3's pictures do). Where the phone's check says it can't, and
+  a paired home server has AI on and its picture model installed, "+"
+  offers "a letter for the home server": the server reads the photo (at
+  most 8 MB, one per phone at a time and two in the house, after any voice
+  turn) and keeps nothing (`POST /api/chat/letters/read`), and the phone
+  writes and checks the explanation. With neither, the chat says so
+  plainly; it never says the phone can't before its check has run.
+* **What a phone chat keeps** (owner decision, 2026-10-21): never the
+  photo, which is wiped once answered. The text read from it is kept
+  beside the answer, as its "photo 1" source, so a follow-up question can
+  see the letter; it is deleted with the chat.
 * **With AI features off**, none of this starts: the routes refuse as
   every chat send does.
 * **Measured** on 12 synthetic phone photos (our own letters, including a
   Spanish one; blur, tilt, shadow, JPEG) with the default server models on
-  CPU: see the manual's "What Domovoi is good and not so good at".
+  CPU: on the 9 printed letters every deadline and amount we keyed was in
+  the answer, and nothing shown was missing from the letter's text. See
+  the manual's "What Domovoi is good and not so good at" for the limits.
 
 ## 2026-10-21 — App fix: asking about a document in a phone chat
 
