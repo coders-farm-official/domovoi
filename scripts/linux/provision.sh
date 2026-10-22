@@ -1875,6 +1875,153 @@ clear_stale_git_locks() {
 }
 # <<< stale-git-lock block <<<
 
+# >>> checkout-owner block >>>
+# The same text in scripts/linux/apply-update.sh and scripts/linux/provision.sh
+# (domovoi/tests/test_checkout_owner.py holds them together).
+#
+# A container that bind-mounts a folder of the checkout can take it over:
+# the SearXNG image's entrypoint runs as root and chowns /etc/searxng to its
+# own user (uid 977), which on the old `./searxng:/etc/searxng` entry was the
+# checkout's domovoi/searxng/. The service user's pull then can't replace a
+# file there ("unable to unlink old 'domovoi/searxng/settings.yml':
+# Permission denied", 2026-10-22, a Windows install stuck 291 commits
+# behind), and the code that stops it can only arrive through that pull.
+# docker-compose.yml now mounts it read-only; restore_checkout_owner DIR USER
+# gives back what an older entry had already taken, as root:
+#
+#   * Only paths git tracks (git ls-files, run as USER through GL_AS) and the
+#     directories above them, inside DIR. Never .git, an untracked or ignored
+#     path, or DIR itself.
+#   * Only a path owned by neither root nor USER that USER can't write (its
+#     mode bits, for USER's uid and groups): a container's. A root-owned path
+#     stays root's, and a folder an administrator shares with USER through
+#     its group stays as it is.
+#   * Only directories and regular files with one link (never a link, a
+#     device, a FIFO, or a hard link that could be another file's), and only
+#     on DIR's own file system (never a mounted folder, a Windows one
+#     included).
+#   * Root never resolves a path of the checkout by name (the service user
+#     can rename anything in it; review of wf/git-stale-lock, 2026-10-20):
+#     the Python below opens each component from DIR's descriptor with
+#     O_NOFOLLOW, checks the inode it then holds, and fchowns that inode, so
+#     a link or a rename in between can't point it anywhere else.
+#
+# Logs what it changed (CO_FIXED=1 then) and what it couldn't; never fails.
+CO_FIXED=0
+# shellcheck disable=SC2016
+CO_PY='# domovoi:checkout-owner
+import os, stat, sys
+root, uid, gid = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+groups = {int(g) for g in sys.argv[4].split(",") if g.isdigit()} | {gid}
+FL = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC | getattr(os, "O_NOCTTY", 0)
+seen = set()
+
+
+def say(*parts):
+    sys.stdout.write("\t".join(parts) + "\n")
+
+
+def writable(st, isdir):
+    if st.st_uid == uid:
+        w, x = stat.S_IWUSR, stat.S_IXUSR
+    elif st.st_gid in groups:
+        w, x = stat.S_IWGRP, stat.S_IXGRP
+    else:
+        w, x = stat.S_IWOTH, stat.S_IXOTH
+    return bool(st.st_mode & w) and (not isdir or bool(st.st_mode & x))
+
+
+def look(fd, st, rel):
+    if (st.st_dev, st.st_ino) in seen:
+        return
+    seen.add((st.st_dev, st.st_ino))
+    if st.st_uid in (0, uid):
+        return
+    isdir = stat.S_ISDIR(st.st_mode)
+    if not isdir and not (stat.S_ISREG(st.st_mode) and st.st_nlink == 1):
+        return
+    if writable(st, isdir):
+        return
+    try:
+        os.fchown(fd, uid, gid)
+        say("fixed", rel)
+    except OSError as e:
+        say("failed", rel, e.strerror or str(e))
+
+
+def walk(top, dev, path):
+    parts = path.split("/")
+    if any(c < " " or c == "\x7f" for c in path) or any(p in ("", ".", "..") for p in parts) \
+            or parts[0] == ".git":
+        return
+    fd = os.dup(top)
+    try:
+        for i, name in enumerate(parts):
+            last = i == len(parts) - 1
+            try:
+                st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                if not (stat.S_ISDIR(st.st_mode) or (last and stat.S_ISREG(st.st_mode))):
+                    return
+                nfd = os.open(name, FL | (0 if last else os.O_DIRECTORY), dir_fd=fd)
+            except OSError:
+                return
+            os.close(fd)
+            fd = nfd
+            st = os.fstat(fd)
+            if st.st_dev != dev:
+                return
+            look(fd, st, "/".join(parts[: i + 1]))
+    finally:
+        os.close(fd)
+
+
+try:
+    if uid != 0:
+        top = os.open(root, FL | os.O_DIRECTORY)
+        dev = os.fstat(top).st_dev
+        for raw in sys.stdin.buffer.read().split(b"\0"):
+            if raw:
+                try:
+                    walk(top, dev, raw.decode("utf-8"))
+                except UnicodeDecodeError:
+                    pass
+except Exception as e:
+    say("failed", "-", "%s: %s" % (type(e).__name__, e))
+'
+
+restore_checkout_owner() {
+  local dir=$1 user=$2 uid gid groups what path why
+  local -a fixed=() failed=()
+  dir=$(realpath -e -- "$dir" 2>/dev/null) || return 0
+  [ -d "$dir/.git" ] && [ ! -L "$dir/.git" ] || return 0
+  [ "$(id -u)" = 0 ] || return 0
+  uid=$(id -u "$user" 2>/dev/null) || uid=""
+  gid=$(id -g "$user" 2>/dev/null) || gid=""
+  if ! [[ $uid =~ ^[0-9]+$ && $gid =~ ^[0-9]+$ ]] || [ "$uid" = 0 ]; then return 0; fi
+  groups=$(id -G "$user" 2>/dev/null) || groups=""
+  groups=${groups// /,}
+  if ! command -v python3 >/dev/null 2>&1; then
+    log "can't look for checkout paths a container took over in $dir: no python3"
+    return 0
+  fi
+  while IFS=$'\t' read -r what path why; do
+    case $what in
+      fixed) fixed+=("$path") ;;
+      failed) failed+=("$path ($why)") ;;
+    esac
+  done < <("$GL_AS" git -C "$dir" ls-files -z 2>/dev/null \
+             | timeout -k 5 120 python3 -I -c "$CO_PY" "$dir" "$uid" "$gid" "$groups" 2>/dev/null)
+  if [ "${#fixed[@]}" -gt 0 ]; then
+    CO_FIXED=1
+    log "gave ${#fixed[@]} path(s) in $dir back to $user, which a container had taken over, so the dashboard's pull can replace them: ${fixed[*]:0:5}"
+  fi
+  if [ "${#failed[@]}" -gt 0 ]; then
+    log "could not give ${#failed[@]} path(s) in $dir back to $user: ${failed[*]:0:5}"
+  fi
+  return 0
+}
+# <<< checkout-owner block <<<
+
 # repair_torn_checkout DIR: put back the files a killed fast-forward
 # towards DIR's upstream had already rewritten (the core does the same at a
 # pull: domovoi/git_lock.py, repair_interrupted_checkout), so the
@@ -2099,10 +2246,11 @@ done
 '
 
 # tidy_checkout: what a git killed in the existing checkout left (its
-# stale locks, the files a killed fast-forward rewrote), cleaned up at
-# every run, a repair by Setup included: the one way in for a household
-# whose dashboard pull is stuck on them, since the code that would clean up
-# at a pull can't arrive through that pull. Under the update unit's
+# stale locks, the files a killed fast-forward rewrote), and the folders a
+# container took over (restore_checkout_owner), cleaned up at every run, a
+# repair by Setup included: the one way in for a household whose dashboard
+# pull is stuck on them, since the code that would clean up at a pull can't
+# arrive through that pull. Under the update unit's
 # checkout lock (apply-update.sh, hold_checkout_lock), when it is there,
 # so a dashboard pull never runs beside it.
 tidy_checkout() {
@@ -2122,6 +2270,9 @@ tidy_checkout() {
       lockf=""
     fi
   fi
+  # First, so the put-back below (and the dashboard's next pull) can
+  # replace a file in a folder a container had taken over.
+  restore_checkout_owner "$CHECKOUT" "$SVC_USER" 7>&-
   clear_stale_git_locks "$CHECKOUT" 7>&-
   repair_torn_checkout "$CHECKOUT" 7>&-
   if [ -n "$lockf" ]; then exec 7>&-; fi
@@ -3415,10 +3566,32 @@ do_images() {
 internet_policy() { svc_py -m domovoi.egress --print-policy 2>/dev/null | tr -d '[:space:]'; }
 searxng_running() { [ "$(as_svc docker inspect -f '{{.State.Running}}' domovoi-searxng 2>/dev/null)" = true ]; }
 
+# What the running container has at /etc/searxng: false (read-only), true
+# (read-write: an entry from before 2026-10-22), or nothing.
+searxng_mount_rw() {
+  as_svc docker inspect -f '{{range .Mounts}}{{if eq .Destination "/etc/searxng"}}{{.RW}}{{end}}{{end}}' domovoi-searxng 2>/dev/null
+}
+# Does the checkout's compose entry mount domovoi/searxng read-only (as
+# since 2026-10-22)? An older checkout's mounts it read-write, and the
+# image's entrypoint, as root, then chowns the folder to its own user: the
+# service user's next pull can't replace settings.yml (the
+# checkout-owner block above). Until the dashboard's update brings the new
+# entry, the helper is started with this on top of it, from stdin.
+searxng_entry_fixed() {
+  grep -Eq '^[[:space:]]*-[[:space:]]*"?\./searxng:/etc/searxng:ro"?[[:space:]]*$' "$CHECKOUT/domovoi/docker-compose.yml" 2>/dev/null
+}
+SEARXNG_READONLY_OVERRIDE='services:
+  searxng:
+    volumes:
+      - ./searxng:/etc/searxng:ro
+    environment:
+      FORCE_OWNERSHIP: "false"
+'
+
 inputs_searxng() { internet_policy || echo unknown; file_sig "$CHECKOUT/domovoi/docker-compose.yml"; }
 check_searxng() {
   case $(internet_policy) in
-    always|sometimes) searxng_running ;;
+    always|sometimes) searxng_running && [ "$(searxng_mount_rw)" != true ] ;;
     never) ! searxng_running ;;
     *) return 0 ;;
   esac
@@ -3431,7 +3604,13 @@ do_searxng() {
     always|sometimes)
       # The compose file's own digest-pinned image; restart: unless-stopped
       # keeps it up across reboots (LINUX_HOST.md, Internet or not).
-      (cd "$CHECKOUT/domovoi" && as_svc docker compose up -d --no-deps searxng) || die "docker compose up -d searxng failed"
+      if searxng_entry_fixed; then
+        (cd "$CHECKOUT/domovoi" && as_svc docker compose up -d --no-deps searxng) || die "docker compose up -d searxng failed"
+      else
+        log "the checkout's compose file mounts domovoi/searxng read-write (from before 2026-10-22), and the search helper would take the folder over again: started with it read-only until the dashboard's next update brings the new entry"
+        (cd "$CHECKOUT/domovoi" && printf '%s' "$SEARXNG_READONLY_OVERRIDE" \
+          | as_svc docker compose -f docker-compose.yml -f - up -d --no-deps searxng) || die "docker compose up -d searxng failed"
+      fi
       STEP_DONE_MSG="Search helper running (internet: $policy)"
       ;;
     never)
@@ -4190,6 +4369,11 @@ for step in "${STEP_IDS[@]:1}"; do
   case $step in
     user) SVC_HOME=$(svc_home) || true; [ -n "$SVC_HOME" ] || SVC_HOME=/home/$SVC_USER ;;
     env) settle_ai ;;
+    # Again after the search helper's step, every run: a container on an
+    # older read-write entry that Docker started meanwhile (at the distro's
+    # start, or a Docker restart since the checkout step) takes the folder
+    # over again as it starts; the step above recreated it read-only.
+    searxng) if ! dry; then restore_checkout_owner "$CHECKOUT" "$SVC_USER"; fi ;;
     checkout)
       if ! dry; then tidy_checkout; fi
       if [ -d "$CHECKOUT/.git" ] && [ -z "$HEAD_SHA" ]; then HEAD_SHA=$(g rev-parse HEAD 2>/dev/null || true); fi

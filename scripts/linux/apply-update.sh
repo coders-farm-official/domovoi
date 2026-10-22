@@ -852,6 +852,153 @@ clear_stale_git_locks() {
 }
 # <<< stale-git-lock block <<<
 
+# >>> checkout-owner block >>>
+# The same text in scripts/linux/apply-update.sh and scripts/linux/provision.sh
+# (domovoi/tests/test_checkout_owner.py holds them together).
+#
+# A container that bind-mounts a folder of the checkout can take it over:
+# the SearXNG image's entrypoint runs as root and chowns /etc/searxng to its
+# own user (uid 977), which on the old `./searxng:/etc/searxng` entry was the
+# checkout's domovoi/searxng/. The service user's pull then can't replace a
+# file there ("unable to unlink old 'domovoi/searxng/settings.yml':
+# Permission denied", 2026-10-22, a Windows install stuck 291 commits
+# behind), and the code that stops it can only arrive through that pull.
+# docker-compose.yml now mounts it read-only; restore_checkout_owner DIR USER
+# gives back what an older entry had already taken, as root:
+#
+#   * Only paths git tracks (git ls-files, run as USER through GL_AS) and the
+#     directories above them, inside DIR. Never .git, an untracked or ignored
+#     path, or DIR itself.
+#   * Only a path owned by neither root nor USER that USER can't write (its
+#     mode bits, for USER's uid and groups): a container's. A root-owned path
+#     stays root's, and a folder an administrator shares with USER through
+#     its group stays as it is.
+#   * Only directories and regular files with one link (never a link, a
+#     device, a FIFO, or a hard link that could be another file's), and only
+#     on DIR's own file system (never a mounted folder, a Windows one
+#     included).
+#   * Root never resolves a path of the checkout by name (the service user
+#     can rename anything in it; review of wf/git-stale-lock, 2026-10-20):
+#     the Python below opens each component from DIR's descriptor with
+#     O_NOFOLLOW, checks the inode it then holds, and fchowns that inode, so
+#     a link or a rename in between can't point it anywhere else.
+#
+# Logs what it changed (CO_FIXED=1 then) and what it couldn't; never fails.
+CO_FIXED=0
+# shellcheck disable=SC2016
+CO_PY='# domovoi:checkout-owner
+import os, stat, sys
+root, uid, gid = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+groups = {int(g) for g in sys.argv[4].split(",") if g.isdigit()} | {gid}
+FL = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC | getattr(os, "O_NOCTTY", 0)
+seen = set()
+
+
+def say(*parts):
+    sys.stdout.write("\t".join(parts) + "\n")
+
+
+def writable(st, isdir):
+    if st.st_uid == uid:
+        w, x = stat.S_IWUSR, stat.S_IXUSR
+    elif st.st_gid in groups:
+        w, x = stat.S_IWGRP, stat.S_IXGRP
+    else:
+        w, x = stat.S_IWOTH, stat.S_IXOTH
+    return bool(st.st_mode & w) and (not isdir or bool(st.st_mode & x))
+
+
+def look(fd, st, rel):
+    if (st.st_dev, st.st_ino) in seen:
+        return
+    seen.add((st.st_dev, st.st_ino))
+    if st.st_uid in (0, uid):
+        return
+    isdir = stat.S_ISDIR(st.st_mode)
+    if not isdir and not (stat.S_ISREG(st.st_mode) and st.st_nlink == 1):
+        return
+    if writable(st, isdir):
+        return
+    try:
+        os.fchown(fd, uid, gid)
+        say("fixed", rel)
+    except OSError as e:
+        say("failed", rel, e.strerror or str(e))
+
+
+def walk(top, dev, path):
+    parts = path.split("/")
+    if any(c < " " or c == "\x7f" for c in path) or any(p in ("", ".", "..") for p in parts) \
+            or parts[0] == ".git":
+        return
+    fd = os.dup(top)
+    try:
+        for i, name in enumerate(parts):
+            last = i == len(parts) - 1
+            try:
+                st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                if not (stat.S_ISDIR(st.st_mode) or (last and stat.S_ISREG(st.st_mode))):
+                    return
+                nfd = os.open(name, FL | (0 if last else os.O_DIRECTORY), dir_fd=fd)
+            except OSError:
+                return
+            os.close(fd)
+            fd = nfd
+            st = os.fstat(fd)
+            if st.st_dev != dev:
+                return
+            look(fd, st, "/".join(parts[: i + 1]))
+    finally:
+        os.close(fd)
+
+
+try:
+    if uid != 0:
+        top = os.open(root, FL | os.O_DIRECTORY)
+        dev = os.fstat(top).st_dev
+        for raw in sys.stdin.buffer.read().split(b"\0"):
+            if raw:
+                try:
+                    walk(top, dev, raw.decode("utf-8"))
+                except UnicodeDecodeError:
+                    pass
+except Exception as e:
+    say("failed", "-", "%s: %s" % (type(e).__name__, e))
+'
+
+restore_checkout_owner() {
+  local dir=$1 user=$2 uid gid groups what path why
+  local -a fixed=() failed=()
+  dir=$(realpath -e -- "$dir" 2>/dev/null) || return 0
+  [ -d "$dir/.git" ] && [ ! -L "$dir/.git" ] || return 0
+  [ "$(id -u)" = 0 ] || return 0
+  uid=$(id -u "$user" 2>/dev/null) || uid=""
+  gid=$(id -g "$user" 2>/dev/null) || gid=""
+  if ! [[ $uid =~ ^[0-9]+$ && $gid =~ ^[0-9]+$ ]] || [ "$uid" = 0 ]; then return 0; fi
+  groups=$(id -G "$user" 2>/dev/null) || groups=""
+  groups=${groups// /,}
+  if ! command -v python3 >/dev/null 2>&1; then
+    log "can't look for checkout paths a container took over in $dir: no python3"
+    return 0
+  fi
+  while IFS=$'\t' read -r what path why; do
+    case $what in
+      fixed) fixed+=("$path") ;;
+      failed) failed+=("$path ($why)") ;;
+    esac
+  done < <("$GL_AS" git -C "$dir" ls-files -z 2>/dev/null \
+             | timeout -k 5 120 python3 -I -c "$CO_PY" "$dir" "$uid" "$gid" "$groups" 2>/dev/null)
+  if [ "${#fixed[@]}" -gt 0 ]; then
+    CO_FIXED=1
+    log "gave ${#fixed[@]} path(s) in $dir back to $user, which a container had taken over, so the dashboard's pull can replace them: ${fixed[*]:0:5}"
+  fi
+  if [ "${#failed[@]}" -gt 0 ]; then
+    log "could not give ${#failed[@]} path(s) in $dir back to $user: ${failed[*]:0:5}"
+  fi
+  return 0
+}
+# <<< checkout-owner block <<<
+
 # The checkout lock (domovoi/git_version.py, CHECKOUT_LOCK_NAME): held for
 # this whole run, so a dashboard pull or channel switch, which takes it
 # before it moves the checkout, never runs git on the working tree beside
@@ -2726,7 +2873,10 @@ rollback() {
   SERVICES_STOPPED=1
   run_step rollback-stop stop_services || true
   # A git killed in the run (the stop above takes the core's down with it)
-  # may have left its lock: the reset needs the index.
+  # may have left its lock: the reset needs the index. And a search helper
+  # on its old read-write entry that Docker restarted meanwhile (the GPU
+  # step's Docker restart) has taken its folder over again.
+  restore_checkout_owner "$REPO_DIR" "$SERVICE_USER"
   clear_stale_git_locks "$REPO_DIR"
   if run_step rollback-checkout git_as reset --keep "$PREV_SHA"; then
     if [ "$DEPS_CHANGED" = 1 ]; then
@@ -2830,10 +2980,14 @@ main() {
   # The unit starts in /, and the service user's commands (python -m pip
   # puts the cwd on sys.path) should run somewhere they can read.
   cd "$REPO_DIR"
-  # Before any git here: no dashboard pull beside this run, and nothing
-  # left by a git that was killed (a stale index.lock would fail the
-  # rollback's reset, and every later pull).
+  # Before any git here: no dashboard pull beside this run, nothing left
+  # by a git that was killed (a stale index.lock would fail the rollback's
+  # reset, and every later pull), and no folder of the checkout a container
+  # took over (the search helper's, under its entry from before
+  # 2026-10-22: the dashboard's pull could not replace a file there, and
+  # neither could the rollback's reset).
   hold_checkout_lock
+  restore_checkout_owner "$REPO_DIR" "$SERVICE_USER"
   clear_stale_git_locks "$REPO_DIR"
   # The venv first: dotenv_get reads domovoi/.env through it.
   resolve_venv

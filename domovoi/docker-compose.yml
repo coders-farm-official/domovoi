@@ -129,10 +129,24 @@ services:
     container_name: domovoi-searxng
     ports:
       - "127.0.0.1:6888:8080"
+    # Read-only, and FORCE_OWNERSHIP off: the image's entrypoint runs as
+    # root and, by default, chowns /etc/searxng to its own user (uid 977)
+    # when it finds it owned by anyone else. On this bind mount that is the
+    # checkout's own domovoi/searxng/, and the service user's next pull could
+    # then not replace settings.yml ("unable to unlink old
+    # 'domovoi/searxng/settings.yml': Permission denied", 2026-10-22, a
+    # Windows install stuck 291 commits behind). Mounted :ro, nothing in the
+    # container can change the folder (a chown or a write gets EROFS), and
+    # with FORCE_OWNERSHIP=false the entrypoint doesn't try: it prints a
+    # warning that the folder isn't searxng's and starts. SearXNG only
+    # reads settings.yml. A folder an older entry had already handed over
+    # is given back by scripts/linux/provision.sh (Setup's repair) and the
+    # update unit (restore_checkout_owner).
     volumes:
-      - ./searxng:/etc/searxng
+      - ./searxng:/etc/searxng:ro
     environment:
       SEARXNG_BASE_URL: http://localhost:6888/
+      FORCE_OWNERSHIP: "false"
       # SearXNG's signing key (image proxy, preferences), from .env: a
       # fresh install's carries a random one (python -m
       # domovoi.env_bootstrap), and `--repair` adds one to an older .env
@@ -143,8 +157,9 @@ services:
       # SearXNG reads settings.yml only when it starts, and `up -d` keeps a
       # running container whose compose entry is unchanged. Bump this when
       # searxng/settings.yml changes, so the next update recreates the
-      # container with it (2: Wikipedia and Wikidata ranked first, W1).
-      DOMOVOI_SEARXNG_SETTINGS_REV: "2"
+      # container with it (2: Wikipedia and Wikidata ranked first, W1; 3:
+      # the folder mounted read-only, FORCE_OWNERSHIP off).
+      DOMOVOI_SEARXNG_SETTINGS_REV: "3"
     restart: unless-stopped
 
   # ─── Letta — conversational chat mode (#8), OPT-IN ────────────────────

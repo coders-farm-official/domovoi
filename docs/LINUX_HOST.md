@@ -1500,6 +1500,56 @@ cleanup to pull, so run `provision.sh` again (on Windows: a newer Setup
 over the install), or as the service user remove the lock once no git
 runs: `sudo -u domovoi rm /opt/domovoi/.git/index.lock`.
 
+### The search helper's folder
+
+**Troubleshooting: Pull says "pull failed: error: unable to unlink old
+'domovoi/searxng/settings.yml': Permission denied"** (often after "an
+earlier update was interrupted; Domovoi cleaned up and is trying
+again").
+
+Before 2026-10-22, `docker-compose.yml` mounted the checkout's
+`domovoi/searxng/` at `/etc/searxng` in the search helper's container,
+read-write. The SearXNG image's entrypoint runs as root and, unless
+`FORCE_OWNERSHIP` is off, chowns `/etc/searxng` to its own user (uid
+977) at every start. The folder then belonged to that uid, so the
+service user's fast-forward could not replace `settings.yml` once an
+update changed it. git stops on that file after it has already written
+the rest of the update into the tree, while HEAD and the index stay where
+they were.
+
+The fix, on Linux: **Restart Domovoi** on the dashboard, or
+`sudo systemctl start domovoi-update.service`, then **Pull** and
+**Restart** again. On a build from before the fix, re-run `provision.sh`
+instead (on Windows: a newer Setup over the install, see
+[WINDOWS_HOST.md](WINDOWS_HOST.md#when-something-goes-wrong)). On such a
+build, don't Restart or reboot before that: the services would start
+from the half-written tree, and Flyway would apply its migrations without
+the update's backup.
+
+Since the fix:
+
+- The entry is `./searxng:/etc/searxng:ro` with `FORCE_OWNERSHIP:
+  "false"`. Nothing in the container can change the folder, and the
+  entrypoint only warns that the folder isn't `searxng:searxng`.
+  SearXNG only reads `settings.yml`. `DOMOVOI_SEARXNG_SETTINGS_REV` is 3,
+  so the next update recreates the container with the new mount.
+- The update unit, as root, gives the folder back before any git it runs,
+  and again before a rollback's reset. `provision.sh` does the same at
+  every run, before it puts a torn tree back, and again after the search
+  helper's step. Both use `restore_checkout_owner`. It gives back only
+  paths git tracks, and the folders above them, that are owned by neither
+  root nor the service user and that the service user can't write. It
+  never follows a link or crosses into another file system, and it
+  changes each inode through a descriptor it opened, never by name.
+  Against an older checkout whose entry still mounts the folder
+  read-write, `provision.sh` starts the helper with the read-only entry on
+  top. The next update brings the entry itself.
+- A pull whose fast-forward fails or is stopped partway puts back what it
+  wrote at once, by the torn-tree rule above, so the tree stays HEAD's.
+  One that stops on this folder says "the search helper's settings
+  folder isn't writable; Restart Domovoi (or run Setup again on Windows)
+  fixes it". The core never asks for root.
+
 ### The update verifier
 
 [`scripts/linux/update-verifier.sh`](../scripts/linux/update-verifier.sh),

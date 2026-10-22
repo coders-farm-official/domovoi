@@ -181,7 +181,9 @@ faster-whisper==1.2.1 \
 LOCK
   printf '[project]\nname = "domovoi"\n' >"$o/pyproject.toml"
   printf 'FROM debian:bookworm-slim\n' >"$o/domovoi/Dockerfile.mpd"
-  printf 'services: {}\n' >"$o/domovoi/docker-compose.yml"
+  # The search helper's entry as it is since 2026-10-22 (read-only); the
+  # owner_* cases make an older checkout's.
+  printf 'services:\n  searxng:\n    volumes:\n      - ./searxng:/etc/searxng:ro\n' >"$o/domovoi/docker-compose.yml"
   printf 'OLLAMA_URL=http://localhost:11434\nWHISPER_MODEL=large-v3\nMPD_HTTP_BASE=auto\n# MUSIC_DIR=\n' >"$o/domovoi/.env.example"
   git -C "$o" add -A && git -C "$o" commit -q -m "fixture A"
   FIXTURE_A=$(git -C "$o" rev-parse HEAD)
@@ -521,7 +523,20 @@ case "$1 ${2-}" in
   "compose pull")
     [ ! -f "$SHIM_STATE/pull-fail" ] || { echo "Error response from daemon: toomanyrequests" >&2; exit 1; }
     for r in $refs; do touch "$SHIM_STATE/images/${r//[:\/@]/_}"; done ;;
-  "compose up") touch "$SHIM_STATE/searxng-running" ;;
+  # The search helper's container: running, and whether it mounts its
+  # folder read-write (searxng-mount-rw: true under the checkout's entry
+  # from before 2026-10-22, false under the new one or the override
+  # provision.sh hands it on stdin, kept in searxng-override).
+  "compose up")
+    touch "$SHIM_STATE/searxng-running"
+    if grep -q '/etc/searxng:ro' docker-compose.yml 2>/dev/null; then echo false; else echo true; fi >"$SHIM_STATE/searxng-mount-rw" ;;
+  "compose -f")
+    case " $* " in *" -f - "*) cat >"$SHIM_STATE/searxng-override" ;; esac
+    case " $* " in
+      *" up "*)
+        touch "$SHIM_STATE/searxng-running"
+        if grep -qs '/etc/searxng:ro' "$SHIM_STATE/searxng-override" docker-compose.yml; then echo false; else echo true; fi >"$SHIM_STATE/searxng-mount-rw" ;;
+    esac ;;
   # The Postgres container, as scripts/linux/db-diagnostics.sh asks after
   # it: pg-state is "status|health|exit code|restarts", pg-health the
   # last health check's output, pg-logs its log (no pg-state: no container).
@@ -552,6 +567,10 @@ case "$1 ${2-}" in
   "run --rm") [ -f "$SHIM_STATE/pg-volume" ] || exit 1; cat "$SHIM_STATE/pg-volume" ;;
   "inspect -f")
     if [ -f "$SHIM_STATE/containers/${!#}" ]; then cat "$SHIM_STATE/containers/${!#}"; exit 0; fi
+    if [[ $3 == *.Mounts* ]]; then
+      [ ! -f "$SHIM_STATE/searxng-running" ] || cat "$SHIM_STATE/searxng-mount-rw" 2>/dev/null || echo false
+      exit 0
+    fi
     if [ -f "$SHIM_STATE/searxng-running" ]; then echo true; else echo false; fi ;;
   "stop "*) rm -f "$SHIM_STATE/searxng-running" ;;
 esac
@@ -587,6 +606,7 @@ case "${1-}" in
     known "$2" || { echo "id: '$2': no such user" >&2; exit 1; }
     [ "$2" = root ] && echo 0 || echo 1000 ;;
   -g) known "$2" || exit 1; [ "$2" = root ] && echo 0 || echo 1000 ;;
+  -G) known "$2" || exit 1; [ "$2" = root ] && echo 0 || echo 1000 ;;
   -nG)
     known "$2" || exit 1
     printf '%s' "$2"; grep "^$2 " "$SHIM_STATE/groups" 2>/dev/null | cut -d' ' -f2 | while read -r g; do printf ' %s' "$g"; done; echo ;;
@@ -772,8 +792,28 @@ echo "INFO[0000] Wrote updated config to $cfg"
 echo "INFO[0000] It is recommended that docker daemon be restarted."
 SH
 
+  # restore_checkout_owner's snippet (python3 -I -c "# domovoi:checkout-owner
+  # ..." DIR UID GID GROUPS, git's file list on stdin) stands in for root's
+  # fchown: each path in taken-over (a folder the case made unwritable, as
+  # uid 977's is to the service user) that git tracks, or holds a file git
+  # tracks, is made writable again and reported as fixed. The snippet
+  # itself runs for real in the owner_snippet_* cases.
   cat >"$bin/python3" <<'SH'
 #!/usr/bin/env bash
+if [ "${1-}" = -I ] && [ "${2-}" = -c ] && [[ ${3-} == "# domovoi:checkout-owner"* ]]; then
+  echo "python3 checkout-owner $4 $5 $6 $7" >>"$SHIM_STATE/calls.log"
+  tracked=$(tr '\0' '\n')
+  if [ -f "$SHIM_STATE/taken-over" ]; then
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      if printf '%s\n' "$tracked" | grep -qxF -- "$p" || printf '%s\n' "$tracked" | grep -qF -- "$p/"; then
+        chmod u+w "$4/$p" && printf 'fixed\t%s\n' "$p"
+      fi
+    done <"$SHIM_STATE/taken-over"
+    rm -f "$SHIM_STATE/taken-over"
+  fi
+  exit 0
+fi
 echo "python3 $*" >>"$SHIM_STATE/calls.log"
 if [ "${1-}" = -c ]; then cat "$SHIM_STATE/py-version" 2>/dev/null || echo 3.14; exit 0; fi
 if [ "${1-}" = -m ] && [ "${2-}" = venv ]; then
@@ -4136,6 +4176,180 @@ case_tidy_a_fifo_is_left_where_it_is() {
   end_case
 }
 
+# ─── a folder of the checkout a container took over (owner_*) ────────────
+#
+# 2026-10-22: the search helper's compose entry mounted the checkout's
+# domovoi/searxng/ read-write, and the SearXNG image's entrypoint, as root,
+# chowned it to its own user (uid 977). The dashboard's pull (the service
+# user's git merge --ff-only) then stopped on "unable to unlink old
+# 'domovoi/searxng/settings.yml': Permission denied" after writing the rest
+# of the update into the tree, with HEAD left behind; the next pull put
+# that back, stopped again, and so on. Here the folder is made unwritable
+# by its owner (mode 0555, which git trips on exactly as on uid 977's), and
+# python3's shim gives it back for root's fchown. A case that runs where
+# the mode doesn't stop git (root, or Git Bash on Windows) is skipped.
+
+skip_case() { SKIPPED=$((SKIPPED + 1)); echo "skip $CASE_NAME: $*"; }
+
+# owner_origin: this case's own origin, ORIGIN's main plus SX_A (the search
+# helper's folder, under its entry from before 2026-10-22), checked out at
+# SX_A by a first run; then SX_B upstream (a new settings.yml, the new
+# read-only entry, a new migration, pyproject.toml), fetched.
+owner_origin() {
+  local o=$CASE/origin
+  cp -R "$ORIGIN" "$o"
+  mkdir -p "$o/domovoi/searxng" "$o/domovoi/db/migrations"
+  printf 'use_default_settings: true\n' >"$o/domovoi/searxng/settings.yml"
+  printf 'services:\n  searxng:\n    volumes:\n      - ./searxng:/etc/searxng\n' >"$o/domovoi/docker-compose.yml"
+  printf 'SELECT 1;\n' >"$o/domovoi/db/migrations/V001__a.sql"
+  git -C "$o" add -A && git -C "$o" commit -q -m "SX_A"
+  SX_A=$(git -C "$o" rev-parse HEAD)
+  run_prov "${wsl_args[@]}" --repo-url "$o" --ref "$SX_A"
+  printf 'use_default_settings: true\nsearch:\n  formats: [html, json]\n' >"$o/domovoi/searxng/settings.yml"
+  printf 'services:\n  searxng:\n    volumes:\n      - ./searxng:/etc/searxng:ro\n' >"$o/domovoi/docker-compose.yml"
+  printf 'SELECT 2;\n' >"$o/domovoi/db/migrations/V002__b.sql"
+  echo "# SX_B" >>"$o/pyproject.toml"
+  git -C "$o" add -A && git -C "$o" commit -q -m "SX_B"
+  SX_B=$(git -C "$o" rev-parse HEAD)
+  git -C "$CHECKOUT" fetch -q origin
+}
+
+# take_over: what the entrypoint's chown does to the folder, as far as the
+# service user's git can tell. 1 when this box's git doesn't trip on it.
+take_over() {
+  chmod 0555 "$CHECKOUT/domovoi/searxng"
+  echo domovoi/searxng >"$STATE/taken-over"
+  # By a container an older provision.sh or update unit made from the old
+  # entry: it mounts the folder read-write.
+  echo true >"$STATE/searxng-mount-rw"
+  if : 2>/dev/null >"$CHECKOUT/domovoi/searxng/.probe"; then
+    rm -f "$CHECKOUT/domovoi/searxng/.probe"; chmod 0755 "$CHECKOUT/domovoi/searxng"
+    return 1
+  fi
+}
+
+case_owner_a_taken_folder_is_given_back_and_the_torn_tree_put_back() {
+  new_case owner_a_taken_folder_is_given_back_and_the_torn_tree_put_back
+  owner_origin
+  check "first run exit 0" eq "$RC" 0
+  if ! take_over; then skip_case "the folder's mode doesn't stop git here"; end_case; return; fi
+  # The dashboard's pull, as the service user: it stops on settings.yml.
+  local out
+  out=$(git -C "$CHECKOUT" merge --ff-only origin/main 2>&1) && fail "the pull went through the taken folder"
+  check "git's own words" grep -qF "unable to unlink old 'domovoi/searxng/settings.yml': Permission denied" <<<"$out"
+  check "HEAD stayed" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$SX_A"
+  check "the rest of the update is in the tree (torn)" grep -qx '# SX_B' "$CHECKOUT/pyproject.toml"
+  check "its migration too, untracked" test -f "$CHECKOUT/domovoi/db/migrations/V002__b.sql"
+  # Setup's repair: the same provision.sh run over the install.
+  run_prov "${wsl_args[@]}" --repo-url "$CASE/origin" --ref "$SX_A"
+  check "repair exit 0" eq "$RC" 0
+  check "root gave the folder back, as the service user's" called "python3 checkout-owner $CHECKOUT 1000 1000 1000"
+  check "said so" said "gave 1 path(s) in $CHECKOUT back to domovoi, which a container had taken over"
+  check "before the torn tree was put back" before "python3 checkout-owner" "checkout -q --pathspec-from-file=-"
+  check "the folder is writable again" test -w "$CHECKOUT/domovoi/searxng"
+  check "HEAD not moved" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$SX_A"
+  check "the tree is HEAD's again" eq "$(git -C "$CHECKOUT" status --porcelain --untracked-files=no)" ""
+  check "the new migration is gone" absent "$CHECKOUT/domovoi/db/migrations/V002__b.sql"
+  check "said what it put back" said "an interrupted update had rewritten"
+  # SX_A's entry still mounts the folder read-write: the helper is started
+  # with the read-only one on top, so it can't take the folder again
+  # before the pull below.
+  check "the helper started read-only over the old entry" called "docker compose -f docker-compose.yml -f - up -d --no-deps searxng"
+  check "with the new entry on stdin" grep -qF -- '- ./searxng:/etc/searxng:ro' "$STATE/searxng-override"
+  check "and FORCE_OWNERSHIP off" grep -qF 'FORCE_OWNERSHIP: "false"' "$STATE/searxng-override"
+  check "said why" said "mounts domovoi/searxng read-write (from before 2026-10-22)"
+  check "the container mounts it read-only" eq "$(cat "$STATE/searxng-mount-rw")" false
+  check "the dashboard's pull can go now" git -C "$CHECKOUT" merge -q --ff-only origin/main
+  check "to SX_B" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$SX_B"
+  end_case
+}
+
+case_owner_a_rerun_recreates_a_helper_still_mounting_its_folder_read_write() {
+  new_case owner_a_rerun_recreates_a_helper_still_mounting_its_folder_read_write
+  owner_origin
+  check "first run exit 0" eq "$RC" 0
+  check "started read-only over the old entry" eq "$(cat "$STATE/searxng-mount-rw")" false
+  # An older update unit's Restart recreated it from SX_A's entry.
+  echo true >"$STATE/searxng-mount-rw"
+  run_prov "${wsl_args[@]}" --repo-url "$CASE/origin" --ref "$SX_A"
+  check "exit 0" eq "$RC" 0
+  check "the step ran again" said "[searxng] marker matches, but its result is no longer in place: running it again"
+  check "read-only again" eq "$(cat "$STATE/searxng-mount-rw")" false
+  run_prov "${wsl_args[@]}" --repo-url "$CASE/origin" --ref "$SX_A"
+  check "then the step is done" said "[searxng] already done, inputs unchanged"
+  end_case
+}
+
+case_owner_the_new_entry_is_started_as_it_is() {
+  new_case owner_the_new_entry_is_started_as_it_is
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A"
+  check "exit 0" eq "$RC" 0
+  check "plain compose" called "docker compose up -d --no-deps searxng"
+  check "nothing on top" not_called "docker compose -f docker-compose.yml -f -"
+  check "read-only" eq "$(cat "$STATE/searxng-mount-rw")" false
+  check "the folder looked at after the helper's step too" eq "$(grep -c '^python3 checkout-owner ' "$STATE/calls.log")" 2
+  check "nothing to give back" not_said "back to domovoi, which a container had taken over"
+  end_case
+}
+
+# The snippet itself, run for real by this box's Python as the harness's
+# own user: every path it would give back fails with EPERM (only root may
+# chown), so its "failed" lines are what it picked. UID 4242 stands for
+# the service user; the harness user (who owns every file here) is "the
+# container".
+owner_snippet() {
+  local dir=$1 uid=$2 groups=$3
+  # shellcheck disable=SC2016
+  bash -c 'eval "$(sed -n "/^# >>> checkout-owner block >>>/,/^# <<< checkout-owner block <<</p" "$0")"; printf "%s" "$CO_PY"' "$SCRIPT" >"$CASE/co.py"
+  git -C "$dir" ls-files -z | "$OWNER_PY" -I "$CASE/co.py" "$dir" "$uid" "$uid" "$groups" | LC_ALL=C sort
+}
+OWNER_PY=${HARNESS_PYTHON:-python3}
+owner_snippet_usable() {
+  "$OWNER_PY" -c 'import os, sys; sys.exit(0 if os.name == "posix" and hasattr(os, "O_NOFOLLOW") and os.geteuid() != 0 else 1)' 2>/dev/null
+}
+
+case_owner_snippet_picks_only_what_a_container_took() {
+  new_case owner_snippet_picks_only_what_a_container_took
+  if ! owner_snippet_usable; then skip_case "needs a POSIX Python, run as a user other than root"; end_case; return; fi
+  local d=$CASE/co got
+  mkdir -p "$d/domovoi/searxng" "$d/shared" "$d/untracked"
+  git -C "$d" init -q -b main
+  printf 'x\n' >"$d/domovoi/searxng/settings.yml"
+  printf 'x\n' >"$d/shared/f"
+  printf 'x\n' >"$d/top.txt"
+  printf 'x\n' >"$d/linked.txt"
+  ln "$d/linked.txt" "$d/untracked/another-name"
+  ln -s top.txt "$d/a-link"
+  git -C "$d" add -A -- domovoi shared top.txt linked.txt a-link
+  git -C "$d" commit -q -m one
+  chmod 0755 "$d/domovoi" "$d/domovoi/searxng" "$d/shared"
+  chmod g+w "$d/shared"
+  printf 'x\n' >"$d/untracked/file"
+  got=$(owner_snippet "$d" 4242 "4242,$(id -g)")
+  check "picks the tracked files and the folders above them, nothing else" eq "$got" \
+    "$(printf 'failed\t%s\tOperation not permitted\n' domovoi domovoi/searxng domovoi/searxng/settings.yml shared/f top.txt)"
+  check "the service user's own files are left alone" eq "$(owner_snippet "$d" "$(id -u)" "$(id -g)")" ""
+  end_case
+}
+
+case_owner_snippet_follows_no_link() {
+  new_case owner_snippet_follows_no_link
+  if ! owner_snippet_usable; then skip_case "needs a POSIX Python, run as a user other than root"; end_case; return; fi
+  local d=$CASE/co
+  mkdir -p "$d/domovoi/searxng" "$CASE/elsewhere"
+  git -C "$d" init -q -b main
+  printf 'x\n' >"$d/domovoi/searxng/settings.yml"
+  git -C "$d" add -A && git -C "$d" commit -q -m one
+  printf 'x\n' >"$CASE/elsewhere/settings.yml"
+  # The service user swaps the folder for a link to somewhere else: root
+  # must not follow it, by any name git still lists.
+  mv "$d/domovoi/searxng" "$d/domovoi/searxng.real"
+  ln -s "$CASE/elsewhere" "$d/domovoi/searxng"
+  check "only the folder above, never through the link" eq "$(owner_snippet "$d" 4242 4242)" \
+    "$(printf 'failed\tdomovoi\tOperation not permitted')"
+  end_case
+}
+
 CASES=(
   case_rerun_takes_nothing_from_the_working_tree
   case_rerun_refuses_an_unverified_head
@@ -4182,6 +4396,11 @@ CASES=(
   case_tidy_a_name_with_control_bytes_is_never_used
   case_tidy_a_huge_file_is_left_where_it_is
   case_tidy_a_fifo_is_left_where_it_is
+  case_owner_a_taken_folder_is_given_back_and_the_torn_tree_put_back
+  case_owner_a_rerun_recreates_a_helper_still_mounting_its_folder_read_write
+  case_owner_the_new_entry_is_started_as_it_is
+  case_owner_snippet_picks_only_what_a_container_took
+  case_owner_snippet_follows_no_link
   case_ref_sha_follows_the_track_branch
   case_ref_off_the_track_branch_stops
   case_new_install_follows_stable

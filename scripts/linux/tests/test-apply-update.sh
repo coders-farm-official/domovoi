@@ -4539,6 +4539,116 @@ old_lock() {
 said() { grep -qF -- "$1" "$CASE/output.log" || { echo "      not said: [$1]"; return 1; }; }
 need_flock() { command -v flock >/dev/null 2>&1 || { skip_case "no flock(1) here"; return 1; }; }
 
+# ─── a folder of the checkout a container took over (owner_*) ────────────
+#
+# The search helper's entry from before 2026-10-22 mounted domovoi/searxng
+# read-write, and its image's entrypoint chowns it to uid 977: the
+# dashboard's pull (and this script's rollback reset) could then not
+# replace settings.yml. As root, before any git, the script gives it back
+# (restore_checkout_owner). The folder is made unwritable (0555) here, and
+# python3's shim stands in for root's fchown: each path in taken-over that
+# git tracks, or holds a file git tracks, is made writable again. The
+# snippet itself runs for real in the provision harness (owner_snippet_*).
+
+# write_owner_shims DIR: on top of write_root_shims, an id that knows the
+# service user (uid, gid and groups 1000), and the python3 above.
+write_owner_shims() {
+  local bin=$1
+  cat >"$bin/id" <<'SH'
+#!/usr/bin/env bash
+case "${1-} ${2-}" in
+  "-u ") echo 0 ;;
+  "-u tester"|"-g tester"|"-G tester") echo 1000 ;;
+  *) exec /usr/bin/id "$@" ;;
+esac
+SH
+  cat >"$bin/python3" <<'SH'
+#!/usr/bin/env bash
+if [ "${1-}" = -I ] && [ "${2-}" = -c ] && [[ ${3-} == "# domovoi:checkout-owner"* ]]; then
+  echo "python3 checkout-owner $4 $5 $6 $7" >>"$SHIM_STATE/calls.log"
+  tracked=$(tr '\0' '\n')
+  if [ -f "$SHIM_STATE/taken-over" ]; then
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      if printf '%s\n' "$tracked" | grep -qxF -- "$p" || printf '%s\n' "$tracked" | grep -qF -- "$p/"; then
+        chmod u+w "$4/$p" && printf 'fixed\t%s\n' "$p"
+      fi
+    done <"$SHIM_STATE/taken-over"
+    rm -f "$SHIM_STATE/taken-over"
+  fi
+  exit 0
+fi
+echo "python3 shim: unexpected $*" >&2
+exit 1
+SH
+  chmod +x "$bin/id" "$bin/python3"
+}
+
+# owner_folder: the search helper's folder in the case's checkout, committed.
+owner_folder() {
+  mkdir -p "$REPO/domovoi/searxng"
+  printf 'use_default_settings: true\n' >"$REPO/domovoi/searxng/settings.yml"
+  commit_all "the search helper's settings"
+}
+
+case_owner_a_taken_folder_is_given_back_before_any_git() {
+  new_case owner_a_taken_folder_is_given_back_before_any_git
+  local sha; sha=$(owner_folder)
+  mkdir -p "$UPD" && echo "$sha" >"$UPD/applied_sha"
+  chmod 0555 "$REPO/domovoi/searxng"
+  echo domovoi/searxng >"$STATE/taken-over"
+  write_root_shims "$CASE/rootbin"
+  write_owner_shims "$CASE/rootbin"
+  run_update "$CASE/rootbin"
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "given back, as the service user's" called "python3 checkout-owner $(cd "$REPO" && pwd -P) 1000 1000 1000"
+  check "from git's list of tracked files, read as the service user" called "runuser -u tester -- git -C $(cd "$REPO" && pwd -P) ls-files -z"
+  check "before any other git" before "python3 checkout-owner" "rev-parse --verify HEAD"
+  check "the folder is writable again" test -w "$REPO/domovoi/searxng"
+  check "said so" said "gave 1 path(s) in $(cd "$REPO" && pwd -P) back to tester, which a container had taken over"
+  check "no step of its own" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "the dashboard's pull can replace settings.yml now" \
+    bash -c 'printf "x\n" >"$1/domovoi/searxng/settings.yml.new" && rm "$1/domovoi/searxng/settings.yml.new"' _ "$REPO"
+  end_case
+}
+
+case_owner_the_rollback_rewrites_a_folder_that_was_taken() {
+  new_case owner_the_rollback_rewrites_a_folder_that_was_taken
+  local sha_a2 sha_b
+  sha_a2=$(owner_folder)
+  mkdir -p "$UPD" && echo "$sha_a2" >"$UPD/applied_sha"
+  printf 'use_default_settings: true\nsearch: {formats: [json]}\n' >"$REPO/domovoi/searxng/settings.yml"
+  printf 'raise SystemExit("broken")\n' >"$REPO/domovoi/app.py"
+  sha_b=$(commit_all "B: new settings, broken code")
+  echo "$sha_b" >"$STATE/curl-fail-when-head"
+  chmod 0555 "$REPO/domovoi/searxng"
+  echo domovoi/searxng >"$STATE/taken-over"
+  write_root_shims "$CASE/rootbin"
+  write_owner_shims "$CASE/rootbin"
+  run_update "$CASE/rootbin"
+  check "rolled back" eq "$(field status)" '"rolled_back"'
+  check "to the previous commit" eq "$(g rev-parse HEAD)" "$sha_a2"
+  check "settings.yml is the previous commit's" eq "$(cat "$REPO/domovoi/searxng/settings.yml")" "use_default_settings: true"
+  check "looked again before the rollback's reset" eq "$(grep -c '^python3 checkout-owner ' "$STATE/calls.log")" 2
+  local last_look reset
+  last_look=$(grep -n '^python3 checkout-owner ' "$STATE/calls.log" | tail -n 1 | cut -d: -f1)
+  reset=$(grep -nF -- "reset --keep $sha_a2" "$STATE/calls.log" | head -n 1 | cut -d: -f1)
+  check "the second time before the reset" test -n "$reset" -a "${last_look:-0}" -lt "${reset:-0}"
+  end_case
+}
+
+case_owner_not_root_looks_at_nothing() {
+  new_case owner_not_root_looks_at_nothing
+  local sha; sha=$(owner_folder)
+  mkdir -p "$UPD" && echo "$sha" >"$UPD/applied_sha"
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "only root can give a file back: not tried" not_called "checkout-owner"
+  check "no ls-files for it" not_called "ls-files -z"
+  end_case
+}
+
 case_stale_lock_cleared_before_the_update() {
   new_case stale_lock_cleared_before_the_update
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
@@ -4730,6 +4840,9 @@ case_checkout_lock_wait_is_bounded() {
 
 CASES=(
   case_noop_restart
+  case_owner_a_taken_folder_is_given_back_before_any_git
+  case_owner_the_rollback_rewrites_a_folder_that_was_taken
+  case_owner_not_root_looks_at_nothing
   case_stale_lock_cleared_before_the_update
   case_stale_lock_removed_as_the_service_user
   case_stale_lock_a_running_git_keeps_its_lock

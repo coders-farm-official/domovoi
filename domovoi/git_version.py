@@ -1380,13 +1380,64 @@ def _tidy_checkout(base: str | None = None, tip: str | None = None) -> bool:
     return bool(cleared["removed"] or repaired.get("restored") or repaired.get("removed"))
 
 
+#: What the Version card says when git can't replace a file in the search
+#: helper's folder (domovoi/searxng/). Its container took the folder over:
+#: the SearXNG image's entrypoint, as root, chowns its /etc/searxng to its
+#: own user, and the compose entry from before 2026-10-22 mounted the
+#: checkout's folder there read-write (2026-10-22: "unable to unlink old
+#: 'domovoi/searxng/settings.yml': Permission denied", a Windows install
+#: stuck 291 commits behind). Only root can give it back, and the core never
+#: asks for root: the update unit does it at a Restart
+#: (scripts/linux/apply-update.sh, restore_checkout_owner), and a newer
+#: Setup's repair on Windows (scripts/linux/provision.sh).
+SEARXNG_FOLDER_MESSAGE = (
+    "the search helper's settings folder isn't writable; "
+    "Restart Domovoi (or run Setup again on Windows) fixes it"
+)
+
+
+def _searxng_folder_blocked(stderr: str | None) -> bool:
+    """Whether git stopped on a file under domovoi/searxng/ it may not
+    replace or create there."""
+    for line in (stderr or "").splitlines():
+        low = line.replace("\\", "/").lower()
+        if "domovoi/searxng/" in low and ("permission denied" in low or "unable to unlink" in low):
+            return True
+    return False
+
+
 def _git_failure(proc: subprocess.CompletedProcess, fallback: str) -> str:
     """A failed git that moves the checkout, as the Version card says it:
-    a lock still held is said in plain words (git_lock.BUSY_MESSAGE), and
-    git's own text never carries its hint: lines."""
+    a lock still held is said in plain words (git_lock.BUSY_MESSAGE), so is
+    the search helper's folder taken over by its container
+    (:data:`SEARXNG_FOLDER_MESSAGE`), and git's own text never carries its
+    hint: lines."""
     if git_lock.is_lock_error(proc.stderr):
         return git_lock.BUSY_MESSAGE
+    if _searxng_folder_blocked(proc.stderr):
+        return SEARXNG_FOLDER_MESSAGE
     return (git_lock.without_hints(proc.stderr) or fallback)[:_ERROR_MAX_CHARS]
+
+
+def _put_back(head: str | None, target: str, why: str) -> None:
+    """Blocking, under :func:`_checkout_lock`. A fast-forward that failed
+    or was stopped partway has already written much of the update into the
+    tree while HEAD and the index stay where they were (2026-10-22: one
+    file it couldn't replace, 385 files rewritten and 373 added, eight new
+    migrations among them). A Restart, or the next boot, would then run
+    that code on the old dependencies and let Flyway apply its migrations
+    without the update's backup. So it is put back at once, by the rule
+    the next pull's clean-up uses (git_lock.repair_interrupted_checkout:
+    only files holding a version of themselves from the update)."""
+    if not head or head == target:
+        return
+    out = git_lock.repair_interrupted_checkout(_run, settings.repo_dir, head, target)
+    if out.get("restored") or out.get("removed"):
+        log.warning(
+            "pull: the fast-forward %s partway; the %d file(s) it had rewritten and the %d it "
+            "had added are put back, so the tree is HEAD's again", why,
+            len(out.get("restored") or []), len(out.get("removed") or []),
+        )
 
 
 def _fast_forward(target: str) -> tuple[subprocess.CompletedProcess, str | None]:
@@ -1403,13 +1454,20 @@ def _fast_forward(target: str) -> tuple[subprocess.CompletedProcess, str | None]
             raise _CheckoutBusy()
         head = _full_sha("HEAD")
         notice = git_lock.INTERRUPTED_NOTICE if _tidy_checkout(head, target) else None
-        proc = _run("merge", "--ff-only", target)
-        if proc.returncode != 0 and git_lock.is_lock_error(proc.stderr):
-            # A lock that turned stale since the look above (its git died
-            # meanwhile): once more, if it goes now.
-            if git_lock.clear_stale_locks(settings.repo_dir)["removed"]:
-                notice = git_lock.INTERRUPTED_NOTICE
-                proc = _run("merge", "--ff-only", target)
+        try:
+            proc = _run("merge", "--ff-only", target)
+            if proc.returncode != 0 and git_lock.is_lock_error(proc.stderr):
+                # A lock that turned stale since the look above (its git died
+                # meanwhile): once more, if it goes now.
+                if git_lock.clear_stale_locks(settings.repo_dir)["removed"]:
+                    notice = git_lock.INTERRUPTED_NOTICE
+                    proc = _run("merge", "--ff-only", target)
+        except subprocess.TimeoutExpired:
+            # git_run killed it and removed its locks; what it wrote goes too.
+            _put_back(head, target, "was stopped")
+            raise
+        if proc.returncode != 0 and not git_lock.is_lock_error(proc.stderr):
+            _put_back(head, target, "failed")
         if notice:
             log.warning("pull: %s", notice)
         return proc, notice
@@ -1430,7 +1488,11 @@ async def pull() -> dict:
     stale lock it left is removed and the files a killed fast-forward had
     rewritten are put back; ``notice`` then says so in plain words
     (git_lock.INTERRUPTED_NOTICE), and a lock a live git still holds is
-    ``error`` = git_lock.BUSY_MESSAGE, never git's own text.
+    ``error`` = git_lock.BUSY_MESSAGE, never git's own text. A fast-forward
+    of this pull that fails or is stopped partway has what it wrote put
+    back the same way at once (:func:`_put_back`), so the tree stays HEAD's;
+    one that stops on the search helper's folder says so
+    (:data:`SEARXNG_FOLDER_MESSAGE`).
 
     Signed updates: while the allowed-signers file exists, a tip that does
     not verify against it is refused BEFORE the tree moves (``pulled=False``,

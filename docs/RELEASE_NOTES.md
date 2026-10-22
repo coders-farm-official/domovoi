@@ -4,6 +4,24 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-22 — Updates stuck on the search helper's folder
+
+Core, update unit, `provision.sh` and the compose file. No migration and
+no new dependency.
+
+* **A Pull that failed with "unable to unlink old
+  'domovoi/searxng/settings.yml': Permission denied" works again.** The
+  search helper's container had taken its settings folder in the checkout
+  over. It is now mounted read-only. The next Restart gives the folder
+  back and recreates the helper (settings revision 3). A box still on an
+  older build needs `provision.sh` run again, which on Windows means a
+  newer Setup over the install. Don't Restart or reboot such a box first
+  (docs/WINDOWS_HOST.md, When something goes wrong; docs/LINUX_HOST.md,
+  The search helper's folder).
+* **A pull that stops partway no longer leaves a half-written tree.** What
+  it wrote is put back at once, so a Restart or a reboot never starts the
+  services from it.
+
 ## 2026-10-21 — Fixes before 1.0: search addresses, Windows Setup, the wordmark font
 
 Core, dashboard and the Windows Setup. No migration and no new

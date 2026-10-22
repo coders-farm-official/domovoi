@@ -558,6 +558,26 @@ you share them.
   installs clean up on their own at the next Pull: the Version card says
   "an earlier update was interrupted; Domovoi cleaned up and is trying
   again" ([LINUX_HOST.md, An interrupted update](LINUX_HOST.md#an-interrupted-update)).
+- **Pull says "pull failed: error: unable to unlink old
+  'domovoi/searxng/settings.yml': Permission denied"** (often after "an
+  earlier update was interrupted; Domovoi cleaned up and is trying
+  again"), on a build from before 2026-10-22: the search helper's
+  container had taken over its settings folder in Domovoi's code, so the
+  update couldn't replace a file there. The pull stopped partway, after it
+  had already written much of the update into Domovoi's code, and that
+  build can't fix it from the dashboard. Until it is repaired, don't press
+  **Restart Domovoi**, and don't restart Windows if you can avoid it:
+  Domovoi would start from that half-written code, and could apply the
+  newer version's database changes without the update's backup. Run a
+  newer Setup over the install (a repair, as above). Its `provision.sh`
+  gives the folder back to Domovoi's account, puts back the files the
+  stopped pull had written, and starts the search helper with its folder
+  read-only. Then **Pull** and **Restart** as usual, in that order. Newer
+  builds mount the folder read-only, give it back at every restart, and
+  put back what a stopped pull wrote at once. The Version card then says
+  "the search helper's settings folder isn't writable; Restart Domovoi
+  (or run Setup again on Windows) fixes it"
+  ([LINUX_HOST.md, The search helper's folder](LINUX_HOST.md#the-search-helpers-folder)).
 - **The uninstaller stopped:** read its message and the log it names. The
   most likely cause is WSL itself (being updated, or not answering): wait,
   or restart Windows, then uninstall again. If it says the service is
