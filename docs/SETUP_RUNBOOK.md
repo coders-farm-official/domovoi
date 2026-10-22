@@ -13,6 +13,17 @@ page and let it send you into the deeper docs at the right moments.
 20–30 minutes per additional room.** The first satellite is where you'll
 learn the quirks of your particular mic board; the rest are repetition.
 
+**Three ways to bring up the server.** On a **Windows 11 PC**, run
+`DomovoiSetup.exe` ([the Windows installer](WINDOWS_HOST.md), a preview): it
+installs the whole server for you and ends with a setup code. On an
+**Ubuntu 26.04 box**, `scripts/linux/provision.sh` does Steps 1 and 2 in one
+unattended run ([LINUX_HOST.md, Or let the script do it](LINUX_HOST.md#or-let-the-script-do-it)).
+Either way, skip to [Step 3](#step-3--claim-admin-and-configure-for-your-hardware):
+both already set the CPU values from [CPU_HOST.md](CPU_HOST.md), start the
+services at boot, and update from **Settings → System → About & updates**. Steps 1 and
+2 below are the by-hand route, for developing Domovoi or for a machine
+neither tool covers.
+
 Related: [Satellite hardware](SATELLITE_HARDWARE.md) (parts and tour) ·
 [`satellite/PROVISIONING.md`](../satellite/PROVISIONING.md) (the canonical
 per-Pi checklist) · [Running without an NVIDIA GPU](CPU_HOST.md) ·
@@ -84,7 +95,7 @@ take:
 | Check | Why it matters |
 |---|---|
 | Does the server have an **NVIDIA GPU**? | If not, read [CPU_HOST.md](CPU_HOST.md) before Step 3 — you'll change four settings. |
-| Windows or **Linux** server? | The docs are Windows-first. Linux works and is the better host on a non-NVIDIA box — read [LINUX_HOST.md](LINUX_HOST.md) for Steps 1–2 and the systemd units, then rejoin here at Step 3. |
+| Windows or **Linux** server? | Windows 11: the installer ([WINDOWS_HOST.md](WINDOWS_HOST.md)), or by hand. Linux: the install script, or by hand ([LINUX_HOST.md](LINUX_HOST.md) has the steps and the systemd units). Either way, rejoin here at Step 3. |
 | Which **mic board** is on each satellite? | The 2-Mics HAT and the XVF3800 array are genuinely different builds. The HAT also has a V1/V2.0 codec trap — identify it *before* flashing ([PROVISIONING §0](../satellite/PROVISIONING.md)). |
 | **Pi Zero 2 W or a bigger Pi?** | Zero 2 W with an XVF3800 needs a true **OTG adapter**, not a plain cable, and a `cmdline.txt` fix. Pi 3/4/5 need neither. |
 | **Stereo powered speakers?** | On the XVF3800, budget a **mono→stereo adapter** per room. Standing rule — see below. |
@@ -97,6 +108,9 @@ take:
 > next one — different packages, Docker Engine instead of Docker Desktop,
 > and a virtualenv. Come back at
 > [Step 3](#step-3--claim-admin-and-configure-for-your-hardware).
+>
+> **Used the Windows installer or the Linux script?** They did this step
+> and the next for you. Go straight to Step 3.
 
 Install these before cloning anything:
 
@@ -233,7 +247,11 @@ it when you started it in a terminal; run as a service, it never prints
 the code, so it stays out of the journal. The journal gets one line
 saying where the file is.
 
-In the dashboard: **Settings → Advanced → Admin → "set up admin"**.
+In the dashboard: **Settings → System → Advanced → Admin → "set up admin"**.
+(With the Windows installer, Setup's last page shows the code and its
+**Open Domovoi** button opens this dialog for you; there is no shell inside
+its distro to read the file from. A lost or expired code: run Setup again,
+see [WINDOWS_HOST.md](WINDOWS_HOST.md#when-something-goes-wrong).)
 Enter the code, choose a password. The code file is deleted the instant
 setup completes. The dialog then asks **Will this Domovoi have internet?**
 — answer with your Step 0 decision, or **Decide later** (the Home page
@@ -254,7 +272,8 @@ redirected it prints only where the file is.
 
 **If your server has no NVIDIA GPU, do this before anything else.** Open
 [CPU_HOST.md](CPU_HOST.md) and apply its settings table — four values in
-the dashboard's gear menu. The default `whisper_device = cuda` can't load
+Settings → System → Advanced and Models. (Skip this if you used the installers: they
+set them.) The default `whisper_device = cuda` can't load
 on a machine without one: the core then falls back to `small.en` on the
 CPU (`whisper_cpu_fallback_model`) and the Models page shows a banner until
 you set the CPU values yourself. `whisper_compute_type` defaults to `auto`,
@@ -265,14 +284,14 @@ Ollama model settings are hot and take effect on the next turn.
 
 ### Tell it about the internet
 
-If you chose **Decide later**, answer now: **Settings → Internet**. The
+If you chose **Decide later**, answer now: **Settings → Privacy → Internet**. The
 page also shows which settings follow the answer and which you set
 yourself. Then, before you add music or build satellites:
 
 - **Yes, always, or Sometimes:** do
   [the items that stay yours](INTERNET.md#if-your-domovoi-will-have-internet):
   your town for local news, an AcoustID **application** key for song
-  recognition (Settings → Advanced → Library → **AcoustID key**, or
+  recognition (Settings → System → Advanced → Library → **AcoustID key**, or
   `ACOUSTID_API_KEY` in `domovoi/.env` and a restart), your radio market. Tracks the server looked at before it had a key are tried
   again by themselves, so the order no longer matters.
 - **No:** work through
@@ -291,11 +310,17 @@ Post text straight at the core's **`/v1/intent`** endpoint. That is the
 same router the satellites drive — it runs fast paths, handlers, and the
 tool model, and writes an `intents_log` row per turn.
 
+(On the Windows installer, run the `curl` lines below from a Windows
+PowerShell prompt as `curl.exe` against `http://localhost:6370`, with the
+token from Settings. The `docker exec` and `~/.domovoi` commands run inside
+the distro, which has no shell for you; skip them.)
+
 Once you have claimed admin, the endpoint wants the household device
 token, so the examples below carry it. It lives in
 `~/.domovoi/device-token.txt` on the server (mode 0600) and the shell
 snippets read it straight from there; on a box where you are not the
-domovoi user, read it from the dashboard's Settings page instead, or
+domovoi user (the Windows installer's distro, say), read it from the
+dashboard's Settings → Rooms & devices → Phones & browsers → Household token instead, or
 pass `-H "Authorization: Bearer <admin token>"`. Before setup, drop the
 header — a fresh install answers without one.
 
@@ -387,7 +412,7 @@ There are two routes.
 
 Flash stock **Raspberry Pi OS Lite (64-bit)** with any tool, no
 pre-configuration. Put the card back in the server. Dashboard →
-**Settings → Rooms → prepare satellite media**. It writes a first-boot overlay
+**Settings → Rooms & devices → Rooms → prepare satellite media**. It writes a first-boot overlay
 and an offline payload (wheels, packages, the satellite code from this
 machine, plugin payloads) to the card. The payload comes from the
 server's caches, which the server fills while it has internet (**Refresh
@@ -396,7 +421,7 @@ If a cache is incomplete the build warns, and the Pi fetches the rest over
 its own connection; its second boot also runs `apt` online to settle
 package dependencies, and tries again on later boots if it can't. Boot the
 Pi, plug it into the server's USB port, and adopt it from Settings →
-Satellites — name and Wi-Fi, done.
+Rooms & devices → Rooms — name and Wi-Fi, done.
 
 > ⚠️ **Be aware:** this flow is code-complete but has **not yet been
 > validated on real hardware** —
@@ -469,7 +494,7 @@ domovoi_url = "ws://<your-server>:6370"
 
 Use whatever name resolves reliably on your LAN. On first connection the
 core automatically provisions that room's MPD container and the room
-appears in the dashboard's Settings → Rooms.
+appears in the dashboard's Settings → Rooms & devices → Rooms.
 
 ---
 
@@ -595,15 +620,26 @@ remember why each one matters. The README's
 [Returning users](../README.md#returning-users-moving-or-reinstalling)
 section covers restoring them onto a new machine.
 
+On the Windows installer all three live inside the distro's disk
+(`C:\ProgramData\Domovoi\distro\ext4.vhdx`), and its uninstaller deletes
+them: there is no keep-data uninstall yet
+([WINDOWS_HOST.md](WINDOWS_HOST.md#uninstalling)). On a Linux box with the
+update unit, each update first dumps the database into
+`/var/lib/domovoi-update/backups/` (the newest five are kept); that is the
+update's safety net, not your backup.
+
 **Decide how the server starts.** `dev.ps1` is a foreground development
 script — it dies with the terminal, and it doesn't come back after a
 reboot. For a machine that's meant to run your house, the two processes
 (`python -m domovoi.main` and `python -m web.backend.main`) need to start
-unattended. On Windows that's a scheduled task at boot or a service
-wrapper. On Linux it's systemd, and
-[LINUX_HOST.md](LINUX_HOST.md#make-it-an-appliance) has the three units
-ready to paste. Whichever you choose, test it by rebooting the server and
-confirming the house comes back without you logging in.
+unattended. The Windows installer does this with its `DomovoiHost` service
+(whether everything starts before anyone signs in after a reboot is still
+being proven: [WINDOWS_HOST.md, Not in this build](WINDOWS_HOST.md#not-in-this-build));
+by hand on Windows it's a scheduled task at boot or a service wrapper. On
+Linux it's systemd: `provision.sh` installs the three units, and
+[LINUX_HOST.md](LINUX_HOST.md#make-it-an-appliance) has them ready to paste.
+Whichever you choose, test it by rebooting the server and confirming the
+house comes back without you logging in.
 
 **Test the power cut.** Pull power from the server. Bring it back. Does
 everything return — Docker, Postgres, both processes, every satellite —
