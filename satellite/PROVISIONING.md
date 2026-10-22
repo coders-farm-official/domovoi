@@ -1,12 +1,17 @@
 # Pi Satellite Provisioning Checklist
 
-> **A spare Linux laptop or mini PC, not a Pi?** Don't use this checklist:
+> **A spare laptop or PC, not a Pi?** Don't use this checklist:
 > its sudoers lines and root helpers (`domovoi-apply-payload`,
 > `domovoi-sync-time`, `domovoi-reboot`, `wpa_cli`) are for a dedicated Pi
 > and would hand the server root on someone's computer. Use the dashboard's
-> **Settings → Rooms → add a spare device**, which gives a one-line
-> install command for `satellite/scripts/install-pc.sh` (the `generic_pc`
-> profile, no root helpers): [docs/SPARE_DEVICE_SATELLITES.md](../docs/SPARE_DEVICE_SATELLITES.md).
+> **Settings → Rooms & devices → Rooms → add a spare device** instead. A
+> Linux laptop or mini PC gets a one-line install command for
+> `satellite/scripts/install-pc.sh` (the `generic_pc` profile, no root
+> helpers). A Windows laptop or PC gets a Setup to double-click
+> (`DomovoiSatelliteSetup.exe`, the `windows_pc` profile); it is not
+> code-signed yet, so Windows SmartScreen stops it once: press **More
+> info**, then **Run anyway**. Both are described in
+> [docs/SPARE_DEVICE_SATELLITES.md](../docs/SPARE_DEVICE_SATELLITES.md).
 
 > **Shipped units use the Wi-Fi setup portal.** A card prepared with
 > `setup_transport = "portal"` never touches this checklist and never
@@ -14,14 +19,16 @@
 > network from a phone, and the setup page opens itself. Type the device's
 > six-digit code into the dashboard's approval card to finish. See
 > [docs/SATELLITE_HARDWARE.md](../docs/SATELLITE_HARDWARE.md). USB adoption
-> below remains the bench and manufacturing route.
+> below remains the bench and manufacturing route. (A server on the Windows
+> install can't see USB devices, so it offers the portal only.)
 >
 > **Zero-touch path first (USB adoption).** If your SD card was prepared
-> with the Domovoi satellite payload (dashboard → Settings → Rooms → prepare
-> media, or an image that boots into provisioning mode), you don't need
+> with the Domovoi satellite payload (dashboard → Settings → Rooms & devices →
+> Rooms → prepare satellite media, or an image that boots into provisioning
+> mode), you don't need
 > most of this checklist: **boot the device, plug it into the Domovoi
 > server's USB port**, and an "adopt" card appears in the dashboard's
-> Settings → Rooms. Name it, enter Wi-Fi, done — the device configures
+> Settings → Rooms & devices → Rooms. Name it, enter Wi-Fi, done — the device configures
 > itself, pre-paired, and reboots onto your network. The device presents
 > as a `DOMOVOI-SET` flash drive while waiting (see
 > `satellite/provisioning_mode.py`; requires `mtools`/`dosfstools` on the
@@ -310,7 +317,7 @@ python -c "import openwakeword.utils; openwakeword.utils.download_models()"
 
 The `--no-deps` second line skips openwakeword's `tflite-runtime` pin, which has no Python 3.13 wheel (Trixie's default). The satellite client uses ONNX inference and never imports tflite-runtime; the runtime deps openwakeword actually needs (onnxruntime, scipy, etc.) are listed explicitly in `requirements.txt`. The third line fetches the pre-trained wake-word ONNX models — openwakeword ships the wheel without the model files (~50 MB) and the satellite client crashes at startup with `NO_SUCHFILE: Load model ... hey_jarvis_v0.1.onnx failed` until you run the downloader once.
 
-Note that `requirements.txt` hard-pins `onnxruntime==1.20.0`. cp313 wheels start at 1.20, and 1.21+ abort on the Pi Zero 2 W's Cortex-A53 with a `vector::operator[]` assertion from the manylinux gcc-toolset-14 build. 1.20.0 is the only known-good cp313+aarch64 combo for this hardware. If you upgrade onnxruntime later and the satellite starts crashing at `import openwakeword`, this is why — pin it back.
+Note that `requirements.txt` hard-pins `onnxruntime==1.20.0` on ARM boards (a spare x86 computer takes a current release). cp313 wheels start at 1.20, and 1.21+ abort on the Pi Zero 2 W's Cortex-A53 with a `vector::operator[]` assertion from the manylinux gcc-toolset-14 build. 1.20.0 is the only known-good cp313+aarch64 combo for this hardware. If you upgrade onnxruntime later and the satellite starts crashing at `import openwakeword`, this is why — pin it back.
 
 ### 6.4 Generate and edit the config
 
@@ -339,7 +346,7 @@ threshold = 0.5
 The example file ships with sensible defaults for everything else (barge-in, noise gate, music ALSA device, etc.).
 
 **`server_fingerprint`** is your server's identity, shown on the dashboard
-under **Settings → About**. Set it and this satellite makes the server sign
+under **Settings → System → About & updates**. Set it and this satellite makes the server sign
 a fresh nonce before every connect, refuses anything that cannot, and only
 installs code and plugin payloads from a manifest that server signed.
 Leave it out and the satellite records the first server it meets and holds
@@ -412,7 +419,7 @@ If you see the WebSocket connect immediately drop, or never see `server ready`, 
 
 ### 6.7 Sudoers entry for the WiFi self-heal
 
-The satellite's WiFi watcher (added 2026-05-06 after an rx-bitrate-stuck-at-1-Mbit/s incident that chopped TTS mid-word) recovers the link when the satellite has lost the server AND nothing on the network answers: not the server's machine (a connection **refused** by it counts as an answer — that is the server restarting, and since 2026-10-12 it never makes a satellite rejoin the Wi-Fi), and not the router. It never touches a link carrying a live session. The recovery needs root, so we add a single sudoers entry — no password prompt, exactly that one command, no other arguments.
+The satellite's WiFi watcher recovers the link when the satellite has lost the server AND nothing on the network answers: not the server's machine (a connection **refused** by it counts as an answer — that is the server restarting, and since 2026-10-12 it never makes a satellite rejoin the Wi-Fi), and not the router. It never touches a link carrying a live session. The recovery needs root, so we add a single sudoers entry — no password prompt, exactly that one command, no other arguments.
 
 > **What the sudoers lines are, and are not.** A card from media prep renders all of these lines into `/etc/sudoers.d/domovoi-satellite` (see `domovoi/satellite_media/templates/sudoers.tmpl`), keeps the service account **out of the `sudo` group**, and masks Pi OS's `010_pi-nopasswd`, so that file is the whole of the account's root access — `sudo -n true` fails. Each line names one root-owned helper the account cannot edit; what the helper does with root is bounded by the helper (the plugin-payload helper, for instance, runs whatever post-install script the server declared for an enabled plugin — see [SECURITY_PRIVACY.md](../docs/SECURITY_PRIVACY.md), "The satellite service account"). On a hand-built satellite the user you created in the imager is normally in `sudo`; these entries then only remove the password prompt for the client's own calls. Remove the account from `sudo` (`sudo gpasswd -d <username> sudo`) and delete `/etc/sudoers.d/010_pi-nopasswd` if you want the prepared-card posture.
 
@@ -468,7 +475,7 @@ Nothing here needs a fixed address. The satellite finds the server by name first
   ping -c 3 <server-ip-or-hostname>
   curl http://<server-ip>:6370/v1/health
   ```
-  Should return the server's health JSON. If not — Windows Firewall on the server machine is likely blocking port 6370 from LAN. Allow it inbound for the LAN subnet only.
+  Should return the server's health JSON. If not, a firewall on the server machine is likely blocking port 6370 from the LAN. Allow it inbound for the LAN subnet only. (The Windows install adds that rule itself, for the subnet the PC was on when Setup ran; see [WINDOWS_HOST.md](../docs/WINDOWS_HOST.md).)
 
 ## 8. Auto-start the satellite at boot (systemd)
 
@@ -492,13 +499,13 @@ journalctl -u domovoi-satellite -f   # tail logs
 
 The unit runs under `ProtectSystem=strict`: the file system is read-only to the client except `~/.domovoi`, `~/domovoi` and `/tmp`. If you add something the client must write elsewhere, extend `ReadWritePaths=` in the unit rather than dropping the directive — and do not add `NoNewPrivileges=` or any directive that implies it (`ProtectKernelTunables=`, `PrivateDevices=`, `RestrictRealtime=`, …): the sudoers helpers are how the client restarts itself, and they need to gain privileges to do it.
 
-After this, **`unplug → plug back in`** brings the Pi up, joins WiFi, and reconnects to the Domovoi server automatically. For the bulletproof path, also turn on overlayfs once the Pi's behavior is dialed in.
+After this, **`unplug → plug back in`** brings the Pi up, joins WiFi, and reconnects to the Domovoi server automatically.
 
-> **Note on the `journalctl` line above** — `enable --now` already started the service in the background. The `journalctl -u domovoi-satellite -f` tail is just for watching the startup log. Ctrl+C to exit the tail; the service keeps running.
+> **Note on the `journalctl` line above** — the helper only enables the unit; the `systemctl start` line above is what starts it (the by-hand route with `enable --now` starts it too). The `journalctl -u domovoi-satellite -f` tail is just for watching the startup log. Ctrl+C to exit the tail; the service keeps running.
 
 ### 8.1 Sudoers entry for self-restart
 
-The satellite can restart **its own** service when you change a config that only takes effect on a fresh process — an audio-device or LED change pushed from the web dashboard's per-satellite Settings, or the **Restart satellite** button in Settings → Rooms. `systemctl` needs root, so — exactly as with the WiFi entry in §6.7 — we add one no-password, single-command sudoers line: this one lets the account restart its own unit, and the posture note in §6.7 applies.
+The satellite can restart **its own** service when you change a config that only takes effect on a fresh process — an audio-device or LED change pushed from the web dashboard's per-satellite Settings, or the **Restart satellite** button in Settings → Rooms & devices → Rooms. `systemctl` needs root, so — exactly as with the WiFi entry in §6.7 — we add one no-password, single-command sudoers line: this one lets the account restart its own unit, and the posture note in §6.7 applies.
 
 > **Who can ask for it:** both buttons are admin actions on the server — the config push and the restart require an admin sign-in on the dashboard (`401` without one), as does pushing a wake model. Everyday room control — volume, playback, announcements — needs the household device token instead, which every satellite and app already carries. See [SECURITY_PRIVACY.md](../docs/SECURITY_PRIVACY.md#the-tiers).
 
@@ -570,7 +577,7 @@ echo "ws://<server-ip>:6370" | sudo tee /etc/domovoi/server.url
 With that file present the helper refuses an argument naming a different
 host, exits 2, and leaves the clock and the zone alone. Add
 `/etc/domovoi/server-identity.json` (the `{fingerprint, public_key}` your
-dashboard shows under Settings > About) and the root-owned verifier, and
+dashboard shows under Settings → System → About & updates) and the root-owned verifier, and
 the helper also makes the server sign a fresh nonce — and the address the
 helper dialed, so a host merely relaying the server's answers cannot pass
 — before copying its clock (see §6.4 for the `TRUSTED_HOSTS` note if your
@@ -658,7 +665,7 @@ printf '[Manager]\nRuntimeWatchdogSec=15\n' | sudo tee /etc/systemd/system.conf.
 sudo reboot
 ```
 
-After the next boot `journalctl -b | grep -i watchdog` shows systemd arming it (`Using hardware watchdog`). The **Health** card on the room's drawer (Settings → Rooms → room → Overview) shows what the client sees of itself, and its **Last outage** block shows what the previous life left behind — see `docs/TROUBLESHOOTING.md`.
+After the next boot `journalctl -b | grep -i watchdog` shows systemd arming it (`Using hardware watchdog`). The **Health** card on the room's drawer (Settings → Rooms & devices → Rooms → room → Overview; not the System → Health page) shows what the client sees of itself, and its **Last outage** block shows what the previous life left behind — see `docs/TROUBLESHOOTING.md`.
 
 ### 8.4 Network settings (applied as root at every boot)
 
@@ -678,7 +685,7 @@ Three settings every satellite carries since 2026-10-12, because the router kept
 - **When the boot step does the rename itself** (the first boot after the upgrade, before that unit exists, and the first boot after a room rename, which the helper cannot know of), it asks DHCP once more under the new name: `nmcli device modify wlan0 ipv4.dhcp-hostname domovoi-<room>`. This changes only the active connection; nothing is saved in the profile. NetworkManager restarts its DHCP client without leaving the network. It does this only right after an actual rename, only on the house profile, and only once the link is up (it waits up to 45 s). The router then shows the new name after a **single** reboot.
 - **A new card** is named before setup joins the house Wi-Fi, so even its first DHCP request carries `domovoi-<room>`.
 
-**What it did is on the Health card.** Each satellite's health sample carries `net_step` (what the step did on this boot) and `hostname` (the unit's name now). The Health card (Settings → Rooms → room → Overview) and the Android app's satellite overview show them as **boot network step**, with the reason:
+**What it did is on the Health card.** Each satellite's health sample carries `net_step` (what the step did on this boot) and `hostname` (the unit's name now). The Health card (Settings → Rooms & devices → Rooms → room → Overview) and the Android app's satellite overview show them as **boot network step**, with the reason:
 
 | State | Meaning |
 |---|---|
@@ -696,7 +703,7 @@ A satellite older than this shows neither field, and its card reads as before.
 
 **It also keeps root's record of the server's address** (`/etc/domovoi/server.url`, which the clock helper trusts over its caller) with the server when it moves: the client finds the server again by name and saves the new address in `config.toml`; at the next boot root makes that address sign a fresh challenge for itself with the root-owned identity pin before it updates its record. A server that does not answer that boot is tried again at the next. (On a card prepared since this change the clock helper does the same check itself on every connect, so the clock follows at once.) A video satellite's kiosk is restarted when the address changes, and the kiosk launcher clears Chromium's profile lock, which names the old host after a rename.
 
-**What changed is logged.** Each run writes `/var/lib/domovoi/net-settings.json` (root's directory, readable by the satellite user; what it changed, left alone, or could not do); the client reads it and logs every line, so it lands in the log the server keeps for the room (Settings → Rooms → room → Logs, *retained*) as `network settings (applied as root at boot): changed: …`. The service's own journal has the same lines: `journalctl -u domovoi-provisioning -b`.
+**What changed is logged.** Each run writes `/var/lib/domovoi/net-settings.json` (root's directory, readable by the satellite user; what it changed, left alone, or could not do); the client reads it and logs every line, so it lands in the log the server keeps for the room (Settings → Rooms & devices → Rooms → room → Logs, *retained*) as `network settings (applied as root at boot): changed: …`. The service's own journal has the same lines: `journalctl -u domovoi-provisioning -b`.
 
 **A hand-built unit without that service** (installed without `--with-provisioning`) applies the same step by hand, after each satellite upgrade that changes it:
 
@@ -742,7 +749,7 @@ journalctl -u domovoi-satellite -f           # tail logs (Ctrl+C exits the tail;
 journalctl -u domovoi-satellite --since "10 min ago"   # historical logs without tailing
 ```
 
-**Iterating on satellite code from the Domovoi server** — rsync + restart in one go:
+**Iterating on satellite code by hand** (developers; otherwise use **Upgrade satellite** under Settings → Rooms & devices → Rooms → the room → Overview, which pushes the server's current satellite code and restarts the satellite) — from the server's checkout, rsync + restart in one go:
 
 ```bash
 rsync -av --exclude __pycache__ \
@@ -776,7 +783,7 @@ The server requires a token for **every** room by default (`SATELLITE_PAIRING_ST
 
 If you **re-flash the SD card**, **replace the Pi**, or **move a room to a new device**, the new device generates a *fresh* token that won't match the one the server has on file for that room — so its `hello` is refused (case: token mismatch) and it can't connect. Clear the old pairing so the new device can re-pair:
 
-- **From the dashboard:** Settings → Rooms → open the room → **Overview** → **Reset pairing**. The pairing status line shows "paired since …" / "unpaired". (Admin login required — resetting pairing is a security action.)
+- **From the dashboard:** Settings → Rooms & devices → Rooms → open the room → **Overview** → **Reset pairing**. The pairing status line shows "paired since …" / "unpaired". (Admin login required — resetting pairing is a security action.)
 - **Effect:** the server deletes the room's `satellite_pairings` row; the next `hello` from that room is a first pairing again: it waits on the dashboard for you to approve it by the six-digit code the new device says (or, where strict pairing is turned off, claims the room with the new device's token).
 
 You do **not** need to reset pairing for a normal `restart`, `upgrade`, or `reboot` — the token sidecar survives those (it lives in `~/.domovoi/`, outside the code tree). Only a wiped config dir / new device needs a reset.

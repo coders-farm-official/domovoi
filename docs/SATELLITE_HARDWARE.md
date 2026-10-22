@@ -1,10 +1,13 @@
 # Building a Domovoi Satellite
 
-A satellite is the small Raspberry Pi box that gives Domovoi ears and a
-voice in one room: it listens for the wake word on-device, streams your
-speech to the server, plays the answer, shows state on its LEDs, and pipes
-that room's music. This guide takes you from a shopping cart to a working
-satellite, then covers living with a fleet of them.
+A satellite is what makes a room a Domovoi room. Usually it is a small
+Raspberry Pi box that gives the room ears and a voice: it listens for the
+wake word on-device, streams your speech to the server, plays the answer,
+shows state on its LEDs, and pipes that room's music. (A spare laptop, PC,
+phone or tablet can be a room too: see [Spare laptops, PCs and
+phones](#spare-laptops-pcs-and-phones).) This guide takes you from a
+shopping cart to a working Pi satellite, then covers living with a fleet of
+them.
 
 The **canonical step-by-step checklist** (every command, every gotcha,
 kept battle-tested) is [`satellite/PROVISIONING.md`](../satellite/PROVISIONING.md).
@@ -53,18 +56,34 @@ Buy one full kit first, get it working end-to-end, then provision the rest.
 A **video satellite** adds a screen: it plays music like any satellite and
 renders a fullscreen now-playing page (cover art, progress, touch
 transport) in a kiosk browser, with its controls in a type-gated block on
-the room's drawer in the dashboard's Settings → Rooms. Reference
+the room's drawer in the dashboard's Settings → Rooms & devices → Rooms. Reference
 hardware is the **Radxa Zero 3W** (RK3566, ≥2 GB RAM recommended) with an
 HDMI screen or DSI touch panel; voice is optional per device (`[mic]
 enabled`) — the default video build has no mic and adds one later by
 plugging in a supported board.
 Setup: [satellite/VIDEO_SATELLITE.md](../satellite/VIDEO_SATELLITE.md).
 
+### Spare laptops, PCs and phones
+
+You don't have to buy anything to try a room. A spare **Linux laptop or
+mini PC**, a **Windows laptop or PC**, an old **phone or tablet** (room mode
+in the Android app) or an old computer booted from a **USB stick** your
+server makes can be a room, with the same approval code and the same
+features as a Pi. They are a preview in 1.0: tried on fewer devices than a
+Pi. In the dashboard: **Settings → Rooms & devices → Rooms → add a spare
+device**. A Windows PC gets a Setup to double-click. It is not code-signed
+yet, so Windows SmartScreen stops it once ("Windows protected your PC"):
+press **More info**, then **Run anyway**. Everything about these devices,
+including what a laptop's microphone can and can't do, is in
+[SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md). The rest of this
+page is about Pi builds.
+
 ## The shipped path — the satellite's own setup Wi-Fi
 
 A satellite built for **portal onboarding** needs no cable to the server, no
 card handling and no tools. Powered on for the first time it raises its own
-WPA2 network, `Domovoi-Setup-<id>`, with a per-device key printed on the box.
+WPA2 network, `Domovoi-Setup-<id>`, with a per-device key that the dashboard
+shows when you prepare the card (the next sections say where to keep it).
 Join it from a phone and the setup page opens by itself — the same captive
 portal mechanism hotel Wi-Fi uses. Pick the house network, name the room,
 done: the satellite joins your Wi-Fi and appears on the dashboard.
@@ -106,8 +125,8 @@ or a `.local` name and nothing else, refuses a form body over 8 KB without
 reading it, and shows the address it resolved on the confirmation page so a
 typo is visible before the setup network closes.
 
-Choose the route when you prepare the card: **Settings → Rooms →
-prepare satellite media → wi-fi setup portal** (the default) or **usb
+Choose the route when you prepare the card: **Settings → Rooms & devices →
+Rooms → prepare satellite media → wi-fi setup portal** (the default) or **usb
 adoption**.
 
 On a Windows install, where Domovoi runs inside WSL, the portal is the
@@ -123,13 +142,16 @@ password. The zip's `README.txt` keeps the steps by hand (below).
 
 Skip most of the manual steps below: flash **stock Raspberry Pi OS Lite
 (64-bit)** with any tool (no pre-configure needed), re-insert the card
-into the Domovoi server, and use **Settings → Rooms → prepare satellite media**.
-The dashboard writes a first-boot overlay + a fully-offline payload (all
-Python wheels, packages, the satellite code from this machine, and any
-plugin payloads) onto the card's boot partition. Then: boot the device,
-plug it into the server's USB port, and adopt it from Settings → Rooms
-(name + Wi-Fi — done). Everything below remains the manual path — still
-the reference for custom setups and debugging.
+into the Domovoi server, and use **Settings → Rooms & devices → Rooms →
+prepare satellite media**. The dashboard writes a first-boot overlay + a
+fully-offline payload (all Python wheels, packages, the satellite code from
+this machine, and any plugin payloads) onto the card's boot partition. Then
+boot the device. With the default Wi-Fi setup portal, join its
+`Domovoi-Setup-<id>` network from a phone and finish there (above). With
+USB adoption, plug it into the server's USB port and adopt it from
+Settings → Rooms & devices → Rooms (name + Wi-Fi, done). Everything below
+remains the manual path, still the reference for custom setups and
+debugging.
 
 **Write down the passwords the dashboard shows you when the build
 finishes** — the console login, and for a Wi-Fi setup (portal) card the
@@ -174,8 +196,9 @@ sudo reboot
 ```
 
 `mpg123` matters more than it looks: the satellite spawns it to play the
-server's music stream. Without it, music "plays" server-side and the room
-stays silent.
+server's music stream and the spoken wake greeting. Without it, music
+"plays" server-side and the room stays silent, and the wake word is
+acknowledged with the chime instead of a greeting.
 
 ## Step 3 — Make the mic board work
 
@@ -218,7 +241,7 @@ Only the `satellite/` package runs on the Pi — the Domovoi core never
 does. The `--no-deps` line and the model download are both load-bearing;
 [PROVISIONING.md §6.3](../satellite/PROVISIONING.md) explains why (a Python
 3.13 wheel gap and a wheel that ships without its models). The
-`onnxruntime==1.20.0` pin in `requirements.txt` is also deliberate: 1.20.0 is
+`onnxruntime==1.20.0` pin in `requirements.txt` (for the ARM boards; a spare x86 computer takes a current release) is also deliberate: 1.20.0 is
 the only release that is *both* available as a Python 3.13 wheel (cp313 wheels
 start at 1.20) *and* runs on the Zero 2 W's Cortex-A53 — 1.21+ abort with a
 `vector::operator[]` assertion from their manylinux (gcc-toolset-14) build.
@@ -267,7 +290,8 @@ listening for wake word 'hey_jarvis' in room '<room>'
 ```
 
 If the WebSocket won't connect, it's almost always the server machine's
-firewall — allow port 6370 inbound from your LAN subnet.
+firewall: allow port 6370 inbound from your LAN subnet. (Domovoi's Windows
+Setup adds that rule itself, for the subnet the PC was on when it ran.)
 
 ## Step 6 — Make it an appliance
 
@@ -328,8 +352,8 @@ it's the real reference. The map:
 | `[playback]`, `[music]` | TTS pre-buffering, TTS make-up gain (important on the XVF3800's quiet line-level jack), and the ALSA device + priming handshake for music streaming. |
 | `[leds]`, `[wifi]`, `[log]` | LED backend/brightness, the Wi-Fi self-heal watchdog, log level. |
 
-Most settings can also be edited from the dashboard: **Settings → Rooms →
-(your room) → Settings**. Saving there rewrites the Pi's `config.toml` in place —
+Most settings can also be edited from the dashboard: **Settings → Rooms &
+devices → Rooms → (your room) → Settings**. Saving there rewrites the Pi's `config.toml` in place —
 preserving your comments, keeping a `.bak` — and restarts the satellite to
 apply (that's what the self-restart sudoers entry is for).
 
@@ -379,13 +403,13 @@ The satellite streams every 30 ms frame to the server as you speak, and
 ends the capture after `[listen] silence_timeout` (1.2 s) of silence. The
 server doesn't wait for that: at the first ~240 ms pause it starts
 transcribing what it already has, and at the end keeps that transcript
-only if you said nothing after it. A satellite from this release tells the
+only if you said nothing after it. A current satellite tells the
 server exactly when it heard a pause (`speech_pause`) and which frame was
 the last one with speech in it; an older satellite gets the same speed-up
 from the silence timeout it reports when it connects. The protocol
 details are in [uml/satellite-protocol.md](uml/satellite-protocol.md#speculative-transcription).
 
-A satellite from this release can also be stopped by the server: when
+A current satellite can also be stopped by the server: when
 what it has heard so far is a whole command ("pause the music", "set a
 timer for ten minutes"), the server ends the capture after a short pause
 (350-650 ms) instead of the full silence timeout, and answers sooner.
@@ -412,7 +436,7 @@ dashboard shows **needs a satellite upgrade** in its place.
 `hey_jarvis` is the out-of-the-box default; **"Hey Domovoi" is the
 documented destination**, and you train it in-product:
 
-1. Dashboard → **Settings → Wake words**: record positive clips — the
+1. Dashboard → **Settings → Voice → Wake words**: record positive clips — the
    recording happens **on the satellite itself**, through the actual mic
    board and room acoustics it will listen with.
 2. Train on the server (clips land in `~/.domovoi/wake_clips/`, models in
@@ -430,7 +454,7 @@ trusted. You never scp `.onnx` files around.
 
 ## Self-upgrade
 
-You also never scp *code* around. From the dashboard's Settings → Rooms (or
+You also never scp *code* around. From the dashboard's Settings → Rooms & devices → Rooms (or
 `POST /v1/admin/satellite/upgrade` — admin-gated, since it makes a Pi
 execute freshly-synced code; see
 [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#what-the-admin-password-actually-gates)),
