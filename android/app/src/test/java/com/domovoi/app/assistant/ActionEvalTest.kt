@@ -378,6 +378,52 @@ class ActionEvalTest {
         assertTrue("false actions on the review's near-misses: " + acted.joinToString("; "), acted.isEmpty())
     }
 
+    /** Kamron's Fold check (2026-10-21): "Set an alarm for five minutes
+     *  from now" and "Remind me in five minutes (to check Dome of War)" got
+     *  no card. The Clock app has no reminders and these are durations: a
+     *  timer for N, named for what to do; "remind me at 7 to …" is an alarm. */
+    private val foldActions: List<Case> = listOf(
+        timer("Set an alarm for five minutes from now", 300),
+        timer("Set an alarm for 5 minutes from now.", 300),
+        timer("Set an alarm in ten minutes", 600),
+        timer("Alarm in 20 minutes", 1200),
+        timer("Wake me up in 2 hours", 7200),
+        timer("Set an alarm for an hour from now", 3600),
+        timer("Remind me in five minutes", 300),
+        timer("Remind me in five minutes to check Dome of War", 300, "check Dome of War"),
+        timer("Remind me in 10 minutes to take the bread out", 600, "take the bread out"),
+        timer("Can you remind me in half an hour to call mom?", 1800, "call mom"),
+        timer("Remind me to stretch in 45 minutes", 2700, "stretch"),
+        timer("In twenty minutes remind me to check the laundry", 1200, "check the laundry"),
+        timer("Set a reminder for 15 minutes to move the car", 900, "move the car"),
+        timer("Remind me in an hour and a half", 5400),
+        alarm("Remind me at 7 to call the dentist", setOf(7, 19), 0),
+        alarm("Remind me at 6:30 pm to feed the cat", setOf(18), 30),
+        alarm("Remind me to water the plants at 8 am", setOf(8), 0),
+        alarm("Remind me at noon", setOf(12), 0),
+    )
+
+    private val foldNear: List<String> = listOf(
+        "Remind me to call mom", "Remind me what you said", "Remind me how long to boil an egg", "That reminds me",
+        "Remind me in the morning", "Did you remind me in five minutes?", "Don't remind me in five minutes",
+        "How do I set an alarm for 5 minutes from now?", "I set an alarm for five minutes from now",
+        "Why do alarms in 5 minutes feel so short?", "She reminded me in five minutes", "remind me who wrote Hamlet",
+        "remind me what a timer is for", "What's a reminder?", "Can reminders go off in five minutes?",
+        "Remind me later", "Remind me tomorrow", "Never mind the reminder", "No reminder in five minutes",
+        "Should I set an alarm for an hour from now?", "remind me of the plot of Dune",
+    )
+
+    @Test fun theFoldChecksRemindersAndRelativeAlarmsGetACard() {
+        val wrong = foldActions.map { it to score(it) }.filter { it.second != Outcome.RIGHT }
+        assertTrue("reminders and relative alarms: " + wrong.joinToString("; ") { (c, o) -> "$o \"${c.text}\" -> ${run(c.text)}" }, wrong.isEmpty())
+        val acted = foldNear.mapNotNull { t -> run(t, playback = false)?.let { "\"$t\" -> $it" } }
+        println("fold reminders: ${foldActions.size}/${foldActions.size} right; near-misses ${foldNear.size - acted.size}/${foldNear.size} left alone")
+        assertTrue("false actions on reminder near-misses: " + acted.joinToString("; "), acted.isEmpty())
+        // The label keeps its words as said, and a reminder at a time is labelled too.
+        val m = (ActionPatterns.match("Remind me at 7 to call the Dentist", now) as ActionAsk.Do).action
+        assertEquals("call the Dentist", m.label)
+    }
+
     private companion object {
         fun plain(s: String) = s.lowercase(Locale.US).replace(Regex("[^a-z0-9]+"), "")
     }

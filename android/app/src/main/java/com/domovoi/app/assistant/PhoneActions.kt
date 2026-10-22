@@ -151,6 +151,22 @@ object ActionPatterns {
 
     private val alarm = Regex("^(?<wake>$WAKE|$ALARM)(?: (?:for|at|by|on))?(?: (?<tom1>tomorrow)(?: (?:at|for|by))?)? (?:$VAGUE )?(?<time>$TIME)$REPEAT?$")
 
+    // Durations said as alarms or reminders (Fold check 2026-10-21): the
+    // Clock app has no reminders, and "an alarm for five minutes from now"
+    // is a countdown, so both are a Clock timer for that long, named for
+    // what to do when it was said. A reminder at a clock time is an alarm.
+    // norm() has already taken a closing "now" off ("five minutes from").
+    private const val LATER = "(?: from now| from right now| from right| from| later)?"
+    private const val TODO = "(?<label>[a-z0-9][a-z0-9' -]{0,60})"
+    private const val REMIND = "(?:remind me|set (?:a |me a )?reminder|make (?:a |me a )?reminder|give me a reminder|i need a reminder)"
+    private val alarmIn = Regex("^(?:$ALARM|$WAKE) (?:in|for|after) (?<dur>$DURATION)$LATER(?: (?:to|so i can|for) $TODO)?$")
+    private val alarmFromNow = Regex("^(?:$ALARM|$WAKE)(?: for)? (?<dur>$DURATION) from(?: right)?(?: now)?(?: (?:to|so i can|for) $TODO)?$")
+    private val remindIn = Regex("^$REMIND (?:in|after|for) (?<dur>$DURATION)$LATER(?: (?:to|that|about|of) $TODO)?$")
+    private val remindToIn = Regex("^$REMIND (?:to|about|of) $TODO (?:in|after) (?<dur>$DURATION)$LATER$")
+    private val inRemind = Regex("^in (?<dur>$DURATION) $REMIND (?:to|about|of) $TODO$")
+    private val remindAt = Regex("^$REMIND (?:at|for|by) (?<time>$TIME)(?: (?:to|that|about|of) $TODO)?$")
+    private val remindToAt = Regex("^$REMIND (?:to|about|of) $TODO (?:at|by) (?<time>$TIME)$")
+
     private val pause = Regex("^(?:pause|pause (?:the |my |this )?(?:music|song|track|audio|playback|book|audiobook|podcast|it|this|player)|pause it for a (?:sec|second|moment|minute|bit)|pause for a (?:sec|second|moment|bit)|hold the music|pause playback)$")
     private val resume = Regex("^(?:resume|resume (?:the |my )?(?:music|playback|playing|song|it)|continue|continue (?:the |my )?(?:music|playing|playback|song)|continue playing|unpause|un pause|keep (?:playing|going)|keep the music going|start (?:the music|playing) again|play again|carry on|press play|play|play it)$")
     private val stop = Regex("^(?:stop|stop (?:the |my |this )?(?:music|playback|playing|audio|song|it|player|book|audiobook|podcast)|stop playing (?:music|the music)|turn (?:off the music|the music off|it off)|shut (?:it|the music) off|stop all (?:the )?music|end playback|kill the music)$")
@@ -236,7 +252,36 @@ object ActionPatterns {
         if (!playback && t in BARE) return null
         if (undo.matches(t)) return ActionAsk.Undo
         if (isHouse(t)) return ActionAsk.House
-        return action(t, now)?.let { ActionAsk.Do(it) }
+        return action(t, now)?.let { a -> ActionAsk.Do(a.copy(label = a.label?.let { asSaid(it, text) })) }
+    }
+
+    /** [label] (lower case, from the normalized text) as [text] spelled it:
+     *  "check Dome of War", not "check dome of war". */
+    internal fun asSaid(label: String, text: String): String {
+        val i = text.lowercase().replace(Regex("[’‘`´]"), "'").indexOf(label)
+        return if (i >= 0) text.substring(i, i + label.length) else label
+    }
+
+    /** A reminder's or an alarm's "to …", as a Clock label. */
+    private fun todo(m: MatchResult): String? = runCatching { m.groups["label"]?.value }.getOrNull()?.trim()
+        ?.removePrefix("to ")?.trim()?.takeIf { it.isNotBlank() && it !in NOT_LABELS }
+
+    private fun reminder(t: String, now: ZonedDateTime): PhoneAction? {
+        for (re in listOf(alarmIn, alarmFromNow, remindIn, remindToIn, inRemind)) {
+            val m = re.matchEntire(t) ?: continue
+            val secs = parseDurationSeconds(m.groups["dur"]!!.value) ?: return null
+            if (secs <= 0) return null
+            return PhoneAction(ActionKind.SET_TIMER, seconds = secs, label = todo(m))
+        }
+        for (re in listOf(remindAt, remindToAt)) {
+            val m = re.matchEntire(t) ?: continue
+            val raw = m.groups["time"]!!.value
+            val spoken = parseTime(raw) ?: return null
+            val tomorrow = raw.contains("tomorrow")
+            val (hour, minute) = resolveHour(spoken, tomorrow, now)
+            return PhoneAction(ActionKind.SET_ALARM, hour = hour, minute = minute, tomorrow = tomorrow, label = todo(m))
+        }
+        return null
     }
 
     private fun isHouse(t: String): Boolean {
@@ -263,6 +308,7 @@ object ActionPatterns {
             return PhoneAction(ActionKind.SLEEP, minutes = min)
         }
         if (cancelSleep.matches(t)) return PhoneAction(ActionKind.CANCEL_SLEEP)
+        reminder(t, now)?.let { return it }
         for (re in listOf(timerFor, durationTimer, namedTimer, countDown, timerLabelled)) {
             val m = re.matchEntire(t) ?: continue
             val secs = parseDurationSeconds(m.groups["dur"]!!.value) ?: return null

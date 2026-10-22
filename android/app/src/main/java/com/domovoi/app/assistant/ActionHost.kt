@@ -249,7 +249,7 @@ object ActionTexts {
             val note = if (a.days.isEmpty() && a.tomorrow && dayWord(nextRing(a.hour ?: 0, a.minute ?: 0, now), now) == "today") {
                 " The Clock app rings at the next $at, which is today."
             } else ""
-            "${lead}Set an alarm for $at $whenText in the Clock app?$note"
+            "${lead}Set an alarm for $at $whenText" + (a.label?.let { " called \"$it\"" } ?: "") + " in the Clock app?$note"
         }
         ActionKind.PLAY_VIDEO -> "Play \"${videoTitle ?: a.query}\" from this phone's videos?"
         else -> ""
@@ -259,7 +259,7 @@ object ActionTexts {
     fun cardTitle(a: PhoneAction, style: ClockStyle, now: ZonedDateTime, videoTitle: String? = null): String = when (a.kind) {
         ActionKind.SET_TIMER -> "Timer: ${length(a.seconds ?: 0)}" + (a.label?.let { ", $it" } ?: "")
         ActionKind.SET_ALARM -> "Alarm: ${clockTime(a.hour ?: 0, a.minute ?: 0, style, now)}" +
-            (if (a.days.isNotEmpty()) ", ${days(a.days)}" else "")
+            (if (a.days.isNotEmpty()) ", ${days(a.days)}" else "") + (a.label?.let { ", $it" } ?: "")
         ActionKind.PLAY_VIDEO -> "Video: ${videoTitle ?: a.query}"
         else -> ""
     }
@@ -277,7 +277,7 @@ object ActionTexts {
     fun done(a: PhoneAction, style: ClockStyle, now: ZonedDateTime, videoTitle: String? = null): String = when (a.kind) {
         ActionKind.SET_TIMER -> "Sent to the Clock app: a timer for ${length(a.seconds ?: 0)}" + (a.label?.let { " called \"$it\"" } ?: "") + "."
         ActionKind.SET_ALARM -> "Sent to the Clock app: an alarm for ${clockTime(a.hour ?: 0, a.minute ?: 0, style, now)}" +
-            (if (a.days.isNotEmpty()) " ${days(a.days)}" else "") + "."
+            (if (a.days.isNotEmpty()) " ${days(a.days)}" else "") + (a.label?.let { " called \"$it\"" } ?: "") + "."
         ActionKind.PLAY_VIDEO -> "Playing \"${videoTitle ?: a.query}\"."
         else -> "Done."
     }

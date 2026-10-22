@@ -194,6 +194,21 @@ class PhoneActionsControllerTest {
         assertTrue("no model was loaded", engines.isEmpty())
     }
 
+    /** Fold check 2026-10-21: reminders and "N minutes from now" alarms
+     *  are Clock timers, asked first, named for what to do. */
+    @Test fun aReminderInMinutesIsANamedTimerCard() {
+        val c = controller()
+        val q = c.ask("Remind me in five minutes to check Dome of War")
+        assertEquals("Set a timer for 5 minutes called \"check Dome of War\" in the Clock app?", q.text)
+        assertEquals(CardState.OPEN, q.card?.state)
+        c.ask("yes")
+        assertEquals(ClockRequest(ClockIntent.SET_TIMER, seconds = 300, label = "check Dome of War"), host.sent.single())
+        assertEquals("Set a timer for 5 minutes in the Clock app?", c.ask("Set an alarm for five minutes from now").text)
+        val at = c.ask("Remind me at 7 to call the dentist")
+        assertEquals("Set an alarm for 7:00 PM today called \"call the dentist\" in the Clock app?", at.text)
+        assertTrue("no model was loaded", engines.isEmpty())
+    }
+
     @Test fun anyNoWordCancelsAndAnUnclearReplyAsksAgain() {
         val c = controller()
         c.ask("wake me at 6:30")
