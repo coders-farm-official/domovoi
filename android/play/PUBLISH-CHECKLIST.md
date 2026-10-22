@@ -2,9 +2,11 @@
 
 Everything Play asks for is ready in this folder; what is left is clicks
 in the Play Console, and the signing steps that only the key's owner does.
-Written 2026-10-15 for `wf/play-prep` (versionCode 26101501, versionName
-1.0.0-rc1). Play Console menu names move around; search the console for the
-quoted name if a path differs.
+Written 2026-10-15 for the first Play submission and kept up to date since.
+`<versionName>` and `<versionCode>` below are the values in
+`android/app/build.gradle.kts` for the build you are publishing. Play
+Console menu names move around; search the console for the quoted name if
+a path differs.
 
 | File | What it is |
 |---|---|
@@ -22,12 +24,12 @@ quoted name if a path differs.
 
 | Tonight | Waits |
 |---|---|
-| Create the app in the console (once the organisation account exists) | The organisation account itself, if not yet approved: D-U-N-S (free, up to ~30 days), identity and payments checks (up to ~5 days) |
+| Create the app in the console (once the organisation account exists) | The organisation account itself, if not yet approved (Coders Farm's was approved on 2026-10-16): D-U-N-S (free, up to ~30 days), identity and payments checks (up to ~5 days) |
 | App signing with your own key (PEPK), before the first upload | |
 | Build and upload the `.aab` to **internal testing**: testers can install it within minutes; internal releases may skip review, and the store listing and data safety can still be incomplete | Production review: no fixed time; Google says it can take up to 7 days or longer, and new developer accounts get a closer look |
 | Fill the listing and every App content form, send production for review | The production listing going live (after review) |
-| Push `wf/play-prep` to main, so the privacy policy URL is live | Re-record the room-mode video on a real phone (optional but stronger, below) |
-| | Android developer verification (2027): check the registration once Play shows it |
+| Open the privacy policy URL in a browser (it is on main); re-read it against DATA_SAFETY.md | Re-record the room-mode video on a real phone (optional but stronger, below) |
+| | Android developer verification (2027): `com.domovoi.app` and the release key were registered and verified on 2026-10-20; re-check it before 2027 |
 
 Organisation accounts are not held to the "12 testers for 14 days" closed
 test that new personal accounts need (Google's page names personal
@@ -37,12 +39,13 @@ own phones.
 
 ## 0. Before the console: the code and the key
 
-1. **Get this branch onto main and push it** (`wf/play-prep` sits on
-   `wf/assistant-m3`). The privacy policy URL
+1. **Build from a clean, pushed main.** The privacy policy URL
    (`https://github.com/coders-farm-official/domovoi/blob/main/docs/PRIVACY_POLICY.md`)
-   is a 404 until `docs/PRIVACY_POLICY.md` is on main, and the app links
-   the same address (Settings → About → Privacy). Open the URL in a
-   browser before submitting the listing.
+   is the file on main, and the app links the same address (Settings →
+   About & updates → Privacy). Open the URL in a browser before submitting
+   the listing, and check that the policy, `DATA_SAFETY.md` and the store
+   description say the same thing about lookups, location, contacts,
+   calendar and backups.
 2. **The release key.** Decision (2026-10-15): one key for the GitHub APKs,
    the household server's APKs and Play. If it doesn't exist yet, make it
    once, outside the checkout, and back it up in two places (losing it
@@ -60,7 +63,7 @@ own phones.
    ```
    It asks for the keystore, alias and passwords (never stored or
    logged), builds `bundleRelease`, signs it with jarsigner, checks it, and
-   prints the `.aab` path (`android\app\build\outputs\bundle\release-signed\domovoi-1.0.0-rc1-26101501.aab`),
+   prints the `.aab` path (`android\app\build\outputs\bundle\release-signed\domovoi-<versionName>-<versionCode>.aab`),
    its SHA-256 and the certificate's SHA-256. Bash: `bash android/scripts/play-bundle.sh`.
 
 ## 1. Create the app
@@ -114,11 +117,11 @@ signed differently and can never update each other.
 
 1. **Test and release → Testing → Internal testing → Testers**: create an
    email list (up to 100 people), add the household's Google accounts, save.
-2. **Create new release** → upload `domovoi-1.0.0-rc1-26101501.aab`.
-   Release name: `1.0.0-rc1 (26101501)`. Release notes (en-US):
-   > First Play release: the on-device assistant (64-bit phones with 8 GB
-   > or more), local music, videos and files, room mode, and the companion
-   > for your Domovoi server.
+2. **Create new release** → upload `domovoi-<versionName>-<versionCode>.aab`.
+   Release name: `<versionName> (<versionCode>)`. Release notes (en-US):
+   > First Play release: the companion for your Domovoi server, local
+   > music, videos and files, room mode, and phone chats with an AI on the
+   > phone (64-bit phones with 8 GB or more).
 3. **Next → Save → Start rollout to Internal testing**.
 4. Copy the **opt-in link** from the Testers tab; each tester opens it,
    accepts, and installs from Play. A phone with a debug or GitHub build
@@ -151,7 +154,10 @@ Work down the list; each has its drafted answer:
    `DECLARATIONS.md` §7.
 4. **Content rating**: questionnaire per `CONTENT_RATING.md`.
 5. **Target audience**: 18 and over (`CONTENT_RATING.md`).
-6. **Data safety**: `DATA_SAFETY.md`.
+6. **Data safety**: `DATA_SAFETY.md`, including the two lookup rows in
+   Section 2 (in-app search history, web browsing history). Re-open the
+   form for every release that changes a permission or what the app sends,
+   and compare it with the privacy policy.
 7. **Government apps, financial features, health, news**: no / none.
 8. **Advertising ID**: does not use it.
 9. **Foreground service permissions**: three types (microphone,
@@ -177,7 +183,7 @@ Work down the list; each has its drafted answer:
 ## 7. Better room-mode video (optional, recommended)
 
 The emulator's room had no server to answer. On a real spare phone paired
-with the Beelink, record with Android's own screen recorder (quick
+with your Domovoi server, record with Android's own screen recorder (quick
 settings → Screen record, no audio needed), about 30-60 s: open **Domovoi
 Room** → read the explainer → Start room mode → allow the microphone →
 scan the dashboard's room code → Become this room → (approve on the
@@ -188,9 +194,7 @@ and mediaPlayback links in the declaration.
 
 ## 8. GitHub release (the household server's APKs)
 
-On the branch that carries `android/scripts/release.ps1`
-(`wf/app-from-server`, under review), once merged: from a clean, pushed
-checkout,
+From a clean, pushed checkout of main,
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File android\scripts\release.ps1
 ```
@@ -216,6 +220,9 @@ list `com.domovoi.app` with the release key's certificate SHA-256. With
 Play App Signing on your own key that is the same certificate the GitHub
 APKs carry; if it is missing, add it there (**Add key**: the console has
 you sign a small proof APK with the key). Do this well before 2027.
+For `com.domovoi.app` it was done on 2026-10-20 (package registered,
+release key verified); check the page again if the signing key ever
+changes.
 
 ## Organisation account requirements (for reference)
 
