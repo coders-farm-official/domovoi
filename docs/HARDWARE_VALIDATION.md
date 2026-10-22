@@ -7,6 +7,12 @@ what still needs a pass on real devices before calling the features
 released. Check items off in a PR that records board, OS image, and
 kernel version.
 
+Section A is the **USB adoption** route (a prepared card, the Pi plugged
+into the server's USB port). A new room's default is the Wi-Fi setup portal,
+which does not use the USB gadget and is not what the items below test; and
+USB adoption isn't offered on the Windows install, which can't see USB
+drives.
+
 ## A. Pi Zero 2 W — prepared media + USB adoption
 
 Fresh card, stock Raspberry Pi OS Lite (64-bit, Trixie), no Imager
@@ -25,10 +31,10 @@ pre-configuration.
        - Known risk: the `systemd.run=` cmdline hook's exact path semantics
          on Trixie (`/boot/firmware` vs `/boot`) — if firstrun never runs,
          compare against what Raspberry Pi Imager writes and pin ours to
-         match (`domovoi/satellite_media/overlay.py:_CMDLINE_TOKENS`).
+         match (`domovoi/satellite_media/overlay.py:_FIRSTRUN_CMDLINE_TOKENS`).
 3. [ ] **Boot 2 (gadget):** plugged into the Domovoi server's USB port,
-       the device enumerates as a `DOMOVOI-SET` flash drive (Windows
-       assigns a letter; no driver prompts; `stall=0` + composite VID/PID
+       the device enumerates as a `DOMOVOI-SET` flash drive (on a native
+       Windows server Windows assigns a letter; no driver prompts; `stall=0` + composite VID/PID
        accepted). The dashboard's pending card appears ≤ 5 s.
 4. [ ] **Adopt:** name + Wi-Fi → provision file lands; device applies
        (two-stable-reads visible in its journal), wipes `provision.json`,

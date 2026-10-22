@@ -4,7 +4,9 @@ A server set up by the installers (the Linux script and the Windows
 installer) already runs this way: Whisper `small.en` on the CPU at `int8`,
 Qwen3 8B for routing (Qwen3 4B under 24 GB of memory), Llama 3.2 3B for
 answers and Qwen3-VL 2B for pictures, with Ollama using a GPU by itself
-when there is one. This page is for a server set up by hand, whose default
+when there is one (on a Windows PC, the installer's distro hands Ollama the
+PC's NVIDIA card; Whisper stays on the processor either way). This page is
+for a server set up by hand, whose default
 configuration assumes a machine with an NVIDIA GPU: Whisper runs on CUDA
 at `float16`, and Ollama keeps a 14B tool-routing model in VRAM. Plenty of
 good server hardware isn't shaped like that — AMD mini PCs, Intel NUCs,
@@ -34,8 +36,9 @@ Related: [FAQ — Can it run without a GPU?](FAQ.md#can-it-run-without-a-gpu) ·
 | `tts_engine` | `piper` | `piper` — unchanged, but read the note below |
 | Chat mode (Letta) | opt-in | **leave off** |
 
-All of these are dashboard settings — gear → **Advanced** for the Whisper
-ones, **Models** for the Ollama ones. The vision model is the one row where
+All of these are dashboard settings: **Settings → System → Advanced** (its
+*Speech-to-text* group) for the Whisper ones, **Settings → Chat & AI → Models** and
+Advanced's *Models* group for the Ollama ones. The vision model is the one row where
 the default is already the CPU host's: it answers chat messages with
 pictures, and `qwen2.5vl:7b` takes minutes per picture without a GPU. The
 Whisper settings are restart-tier (the model loads once at boot). The
@@ -134,7 +137,7 @@ again: that is where it pays most ("Lighter" → "Louder.", "soft" →
 right, of 252): 30 s alone / 10 s alone / 10 s with the second hearing —
 202 / 191 / 205, 206 / 201 / 212 and 165 / 170 / 181 over the three
 conditions, 224 / 222 / 227 on the clean clips. It costs a second decode
-(~0.9 s with `small.en` on the reference server, ~1.2 s on a desktop i9;
+(~0.9 s with `small.en` on the 8-core AMD mini PC these CPU figures come from, ~1.2 s on a desktop i9;
 more when the 30 s path falls back to higher temperatures on a word it
 can't make out) on 16-34% of those command captures, and it can add a
 wrong fast action: 1-2 in 252 on degraded audio.
@@ -169,8 +172,8 @@ second time). A turn heard twice records `stt_rechecked` and
 faster-whisper on its own runs 4 CPU threads, whatever the machine has.
 On an 8-core server that leaves half the cores idle while you wait for
 every transcript, and the encoder — most of a transcription's time — is
-exactly the work that spreads across cores. `whisper_cpu_threads` (gear →
-**Advanced** → Speech-to-text, restart tier) defaults to `0`, which means
+exactly the work that spreads across cores. `whisper_cpu_threads` (Settings
+→ System → Advanced → Speech-to-text, restart tier) defaults to `0`, which means
 one thread per **physical** core; hyperthreads add little to dense matrix
 work. Set a number to pin it, for example to leave cores free for Ollama
 while it answers. A non-zero value also overrides `OMP_NUM_THREADS`. The
@@ -183,7 +186,7 @@ journalctl -u domovoi-core | grep "loading Whisper"
 
 Why physical cores and not every hardware thread: measured with
 `small.en` on the 10-second window, eight cores with two threads each
-(an 8-core/16-thread box, like the reference AMD server) went from about
+(an 8-core/16-thread box, like the AMD mini PC above) went from about
 286 ms at 8 threads to 273 ms at 12 and 275 ms at 16 — the second thread
 on a core shares that core's vector units, so it buys a few percent at
 most. More *cores* do help: on a machine with cores to spare, 12 threads
@@ -222,7 +225,7 @@ or, to A/B tool models without touching the running core,
 failure is a small router treating a plain question as a tool call ("who
 painted the mona lisa" → double_check, → calculator, → news, depending
 on the model family); the corpus's `qa` cases catch exactly that. On the
-reference all-CPU AMD box, `qwen3:8b` (with thinking off, below) has been
+all-CPU AMD mini PC above, `qwen3:8b` (with thinking off, below) has been
 the better router of the two small models — run the corpus on yours
 rather than taking that on faith. Your remaining options are the same
 as always: go back to 14B and accept the latency, or add a fast path
@@ -340,7 +343,9 @@ the tail of the turn rather than in the middle of it. For most households
 it simply isn't the bottleneck.
 
 If you measure otherwise, the `system` engine is cheaper still, at the
-cost of a robotic voice.
+cost of a robotic voice. (On Linux it exists only if you installed
+`espeak-ng` yourself; the installers don't, so on a server they set up it
+isn't an option. See [LINUX_HOST.md](LINUX_HOST.md#1-the-system-voice-fallback-is-optional-on-linux).)
 
 Piper's voice model downloads from Hugging Face once, on first render.
 After that it is fully offline — which also makes it the rung that keeps
@@ -450,8 +455,8 @@ listening anyway and early commit can't fire. The
 that decode to ~0.25 s: the transcript is ready about 0.5 s after your
 last word, the capture ends at the tier's hold, and the reply starts
 roughly 0.15 s after that (`speech_to_reply_ms`). Expected: about
-0.6-0.7 s for a tier-A phrase and 0.8 s for tier B on the reference
-8-core server — measured on a desktop through a simulated satellite, not
+0.6-0.7 s for a tier-A phrase and 0.8 s for tier B on the 8-core AMD
+mini PC — measured on a desktop through a simulated satellite, not
 yet on the server — and only if the satellite's pause report arrives on
 time. The decode must finish inside the satellite's own silence timeout
 (0.78 s with `silence_timeout` 0.8): 240 ms for the pause plus ~280 ms of
@@ -571,8 +576,8 @@ python -m domovoi.fast_lane fetch         # optional: the 103 MB model now
 ```
 
 then `FASTLANE_MODE=shadow` in `domovoi/.env` and a restart, or
-Settings → Speech-to-text → *Fast lane* → **shadow**, which applies at
-once. The model downloads on first enable into
+Settings → System → Advanced → Speech-to-text → *Fast lane* → **shadow**, which
+applies at once. The model downloads on first enable into
 `~/.domovoi/models/fastlane/` from the sherpa-onnx project's GitHub
 releases, checked against a pinned SHA-256 (and its files again on every
 load). It is NVIDIA NeMo's
@@ -614,8 +619,8 @@ docker exec -i domovoi-postgres psql -U domovoi domovoi -c "SELECT at, room_id, 
 ```
 
 **Measured, on the dev box** (i9-14900KF, 333 Piper-TTS command clips in
-nine voices shaped like a satellite capture; not yet on the Beelink, and
-TTS voices are not a household):
+nine voices shaped like a satellite capture; not yet on a CPU-only
+server, and TTS voices are not a household):
 
 | | |
 |---|---|
@@ -686,7 +691,7 @@ skipped, and a question hears "My question-answering model isn't installed
 yet — an admin can add it in Settings, Models."
 
 The lightest box of all runs no language model: **AI chat and questions**
-off (Settings → Models, `AI_FEATURES=false`, or No at the installers'
+off (Settings → Chat & AI → Models, `AI_FEATURES=false`, or No at the installers'
 question) leaves only the fast paths, Whisper and Piper, and saves the
 6.4-9.1 GB of models and the memory they take while loaded
 ([FAQ](FAQ.md#is-ai-optional)).
@@ -711,7 +716,7 @@ the point. On a 24 GB machine, a rough accounting:
 | | Approx. |
 |---|---:|
 | The OS — Windows 4–6 GB, headless Linux 1–2 GB | 1–6 GB |
-| Containers — Postgres, SearXNG, one MPD per room (add ~1 GB for Docker Desktop itself on Windows) | 1–3 GB |
+| Containers — Postgres, SearXNG, one MPD per room (add ~1 GB for Docker Desktop itself if you run the server natively on Windows; the installer's distro uses Docker Engine, counted in the memory it is given) | 1–3 GB |
 | Whisper `small.en` int8 | ~1 GB |
 | `llama3.2:3b` | ~2.5 GB |
 | `qwen2.5:7b` | ~5 GB |
@@ -753,7 +758,7 @@ Tempting, and mostly not worth it yet.
   on Windows, if that's your host — see [LINUX_HOST.md](LINUX_HOST.md).
 
 If you want to try it, `ollama_url` is a dashboard setting
-(**Connections**), so nothing stops you pointing Domovoi at any Ollama
+(Settings → System → Advanced → *Connections*), so nothing stops you pointing Domovoi at any Ollama
 that works, on this box or another. Just don't make it a prerequisite for
 your install going live. Get the system running on CPU first, then
 experiment.
@@ -768,7 +773,7 @@ at its Ollama:
 
 1. On the GPU machine, make Ollama listen beyond localhost
    (`OLLAMA_HOST=0.0.0.0:11434`) and pull the models there.
-2. On the Domovoi server: dashboard → **Connections** → `ollama_url` →
+2. On the Domovoi server: Settings → System → Advanced → *Connections* → `ollama_url` →
    `http://<gpu-machine>:11434`.
 
 Now LLM work runs on the GPU while STT, TTS, satellite WebSockets, and

@@ -1,16 +1,20 @@
 # Running the Domovoi server on Linux
 
-Linux and Windows are both supported server hosts. Windows earned its
-first-class status honestly — for many households the gaming PC is the best
-AI hardware in the house — but that case rests almost entirely on having an
-NVIDIA GPU in it.
+Linux and Windows are both supported server hosts, and they run the same
+stack. On a Windows 11 PC the one-click installer
+([WINDOWS_HOST.md](WINDOWS_HOST.md)) puts everything on this page inside a
+private WSL2 distro, so the PC you already have, gaming PC and its NVIDIA
+GPU included, makes a fine host. This page is for a Linux machine, and for
+what runs inside that distro.
 
-On a dedicated always-on box, especially one without NVIDIA, **Linux is the
-better host** and it's where the project is heading. This page covers what
-actually differs. Nothing here is a workaround for a Windows assumption;
-the platform-specific paths are guarded and both are maintained.
+On a dedicated always-on box, especially one without NVIDIA, Linux is the
+simplest host: no Windows layer, and systemd from the start. The table
+below is what differs from running the server natively on Windows (the
+by-hand route in the README). Nothing here is a workaround for a Windows
+assumption; the platform-specific paths are guarded and both are maintained.
 
 Read alongside: [Setup runbook](SETUP_RUNBOOK.md) (the ordered bring-up) ·
+[Windows installer](WINDOWS_HOST.md) (this stack inside WSL2) ·
 [Running without an NVIDIA GPU](CPU_HOST.md) (model and device settings)
 
 ---
@@ -20,15 +24,19 @@ Read alongside: [Setup runbook](SETUP_RUNBOOK.md) (the ordered bring-up) ·
 The Windows-first case rests almost entirely on CUDA. Take CUDA away and
 the ledger flips:
 
-| | On Windows | On Linux |
+| | On Windows, by hand | On Linux |
 |---|---|---|
 | **CUDA DLL preloading** | `domovoi/bootstrap.py` preloads cuBLAS/cuDNN by hand because the Windows loader ignores `add_dll_directory()` for dependent DLLs. The plugin loader asserts it ran. | The whole module is `if sys.platform != "win32": return ()`. Dead code. It's the single biggest piece of Windows-specific engineering in the repo, and you skip it. |
-| **Wake-word training** | openWakeWord's training pipeline (piper-sample-generator) is Linux-only, so it runs in a Linux container under Docker Desktop. | On the server itself, in a container on its own Docker Engine, switched on from the dashboard (Settings → Wake words); an NVIDIA GPU gets its container runtime from the install and the update unit. See [Wake-word training](#wake-word-training). |
+| **Wake-word training** | openWakeWord's training pipeline (piper-sample-generator) is Linux-only, so it runs in a Linux container under Docker Desktop. | On the server itself, in a container on its own Docker Engine, switched on from the dashboard (Settings → Voice → Wake words); an NVIDIA GPU gets its container runtime from the install and the update unit. See [Wake-word training](#wake-word-training). |
 | **External binaries** (`ffmpeg`, `fpcalc`/Chromaprint, `mpg123`) | Download, unzip, put on PATH by hand. | `apt install`. |
 | **`faster-whisper` and `resemblyzer` install** | `pip install --no-deps -r requirements-no-deps.in`: without the dependencies they declare (PyAV, librosa, webrtcvad), which Domovoi doesn't use. | The same, from the hash-pinned `requirements-linux-py314-no-deps.lock`. |
 | **Docker** | Docker Desktop — a whole application, its own RAM overhead, its own licensing question. | Native Docker Engine. The core drives containers through the `docker` CLI (`mpd_provisioner.py`), so nothing else changes. |
 | **Autostart** | Scheduled task at boot, or a service wrapper. Fiddly. | systemd. Units below. |
 | **Ollama on an AMD/Intel iGPU** | ROCm support on Windows is thin. | Better supported, if you ever want to experiment. Still optional — see [CPU_HOST.md](CPU_HOST.md#what-about-the-integrated-gpu). |
+
+The Windows installer takes the Linux column: its WSL distro runs this
+page's systemd units, native Docker Engine and wake-word trainer, so
+nothing in the left column applies to it.
 
 ## What to know going in
 
@@ -79,11 +87,15 @@ or point the scanner at a fixed mountpoint:
 export SATELLITE_ADOPTION_SCAN_DIRS=/media/domovoi/setup
 ```
 
-**My advice: don't start here.** This flow is [already unvalidated on real
-hardware](HARDWARE_VALIDATION.md) on its best-supported platform. On Linux
-you'd be debugging two unknowns at once. Use the manual path in
-[`satellite/PROVISIONING.md`](../satellite/PROVISIONING.md) — it's proven,
-and it's the same amount of work the second time you do it.
+**My advice: don't start here.** USB adoption is the bench route. A new
+room's default is the Wi-Fi setup portal, which never touches the server's
+USB ports ([SATELLITE_HARDWARE.md](SATELLITE_HARDWARE.md)). And if the
+server can't mount the card, pick **download overlay zip** when you prepare
+it (Settings → Rooms & devices → Rooms → prepare satellite media) and unzip it onto the card
+from another computer. USB adoption still has an open checklist of its own
+([HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md)); the manual path in
+[`satellite/PROVISIONING.md`](../satellite/PROVISIONING.md) is the proven
+fallback.
 
 ### 2b. Restart-from-the-dashboard needs one sudoers line
 
@@ -276,7 +288,7 @@ Whisper model, the Piper voice and the room image. The models include the
 vision model that reads pictures in chat (`qwen3-vl:2b-instruct-q4_K_M` on
 both tiers, about 1.9 GB more to download); `--no-vision-model` leaves it
 out, and chat then says it isn't installed until an admin installs it from
-Settings → Models.
+Settings → Chat & AI → Models.
 
 **AI chat and questions are optional.** Run from a terminal, the script
 asks first: *Include AI chat and questions? It downloads about 6.4 GB of
@@ -289,7 +301,7 @@ either way: speech recognition (Whisper), the voices and the wake word
 are installed as usual, and only the AI models are left out. The answer
 goes into `domovoi/.env` as `AI_FEATURES=true` or `false`. Ollama itself
 is installed either way, so AI can be turned on later on the dashboard
-(Settings → Models), which downloads the models then. A later run of the
+(Settings → Chat & AI → Models), which downloads the models then. A later run of the
 script doesn't ask again: it keeps the answer `domovoi/.env` holds (yours,
 if you changed it in Settings since). An answer changed in Settings also
 stays over `--ai-models` or `--no-ai-models`, with a warning, and the AI
@@ -326,7 +338,7 @@ What else it settles, beyond the manual steps:
   installer's WSL distro that includes the PC's NVIDIA cards, which WSL
   hands through. The model tier still follows the box's memory alone, the
   vision model's included: on a box with an NVIDIA GPU, pick `qwen2.5vl:7b`
-  for the Vision row in Settings → Models afterwards.
+  for the Vision row in Settings → Chat & AI → Models afterwards.
   The script's last progress line lists what Ollama found (`"gpu"`, empty
   on a CPU-only box), and its log says it in words.
   Where an NVIDIA GPU is visible, the `gpu-runtime` step gives Docker its
@@ -370,7 +382,7 @@ sudo apt update && sudo apt install -y python3 python3-venv python3-dev build-es
 ```
 
 `xorriso` is what the core runs to make an old computer's room stick
-(Settings → Rooms → add a spare device → old computer; a GPL program
+(Settings → Rooms & devices → Rooms → add a spare device → old computer; a GPL program
 run on its own, never bundled with Domovoi). `libchromaprint-tools`
 provides `fpcalc` for library enrichment, and
 `python3-dev` + `build-essential` are what let the sdist-only pins
@@ -564,7 +576,7 @@ change to `pyproject.toml`, and commit both.
 > ```
 >
 > Then set `FASTLANE_MODE=shadow` in `domovoi/.env`, or pick **shadow**
-> under Settings → Speech-to-text → *Fast lane*, which applies without a
+> under Settings → System → Advanced → Speech-to-text → *Fast lane*, which applies without a
 > restart. It is outside the lock and outside pyproject: an update's venv
 > re-sync leaves it installed but does not install it.
 
@@ -602,7 +614,7 @@ to claim admin and apply your [CPU host settings](CPU_HOST.md).
 Installing needed it. After this point it's your choice. The dashboard
 asks right after you claim the admin account — **Yes, always**,
 **Sometimes**, or **No, keep everything in the house** — and you can
-change it later in **Settings → Internet**. [INTERNET.md](INTERNET.md)
+change it later in **Settings → Privacy → Internet**. [INTERNET.md](INTERNET.md)
 says what each answer switches; on Linux it comes down to this:
 
 - **Yes, always** (or **Sometimes**). Saving the answer starts the search
@@ -611,7 +623,7 @@ says what each answer switches; on Linux it comes down to this:
   keeps it in step after every update; Docker brings it back after a
   reboot. Then do [what stays yours](INTERNET.md#if-your-domovoi-will-have-internet):
   your town for local news, an AcoustID **application** key for song
-  recognition (Settings → Advanced → Library → **AcoustID key**, or
+  recognition (Settings → System → Advanced → Library → **AcoustID key**, or
   `domovoi/.env`), your radio market.
 - **No.** While the box is still online, work through
   [Before you disconnect](INTERNET.md#before-you-disconnect): the Whisper
@@ -816,7 +828,7 @@ ReadWritePaths=/data/music
 domovoi-core` scores the exposure (the units this page listed before
 scored 9.0 "UNSAFE" each; the shipped ones score about 3.5 for the web and
 1.8 for `domovoi-db`, and the core, which keeps only the file-system part,
-scores higher than both), Settings → About & updates still offers
+scores higher than both), Settings → System → About & updates still offers
 **Restart Domovoi** (its `sudo -n -l` probe runs inside the sandbox), a
 satellite turn answers, and a room's music starts (the core runs
 `docker`). The quick check for the sudo path on its own, as root:
@@ -862,7 +874,7 @@ the thread can't run either (C code holding the interpreter), Python's
 faulthandler dumps every stack and exits (status 1) 30 s after the stall
 time; what it writes goes to `~/.domovoi/logs/core-faulthandler.log`, and
 the next start moves it into `core-watchdog.log` and repeats it in the
-journal. Settings → About & updates shows the last such restart (**last freeze**,
+journal. Settings → System → About & updates shows the last such restart (**last freeze**,
 when and why). `LOOP_WATCHDOG_ENABLED=false` turns the checks off (the
 core then never ends itself; under the shipped unit it still says it is
 ready and keeps systemd's watchdog fed).
@@ -905,15 +917,15 @@ To decide `Restart=` yourself, put it in the unit or in a drop-in that
 sorts after `50-domovoi-restart.conf`.
 
 **The dashboard's Restart the core.** When the core doesn't answer, an
-admin gets **Restart the core** on Settings → About & updates, on the Satellites
-page and on Home's "isn't answering" row. It ends only a core that is
+admin gets **Restart the core** on Settings → System → About & updates, on Settings →
+Rooms & devices → Rooms and on Home's "isn't answering" row. It ends only a core that is
 truly stuck, never one that is busy, slow or missing its database:
 
 - **Liveness, not health.** The web asks `GET /v1/alive`, which the
   core's event loop answers by itself, with no database. Any answer at all,
   a `503` included, means the core runs: nothing is ended, and the button
-  isn't offered. A core whose database is down says so (the Satellites
-  banner reads *the database isn't answering*): restarting it can't help.
+  isn't offered. A core whose database is down says so (the Rooms page
+  banner reads *The database isn't answering*): restarting it can't help.
 - **Silent for longer than the core's own watchdog waits.** A press ends
   the core only after `/v1/alive` has given no answer, asked every second
   (3 s each), for `LOOP_WATCHDOG_STALL_SEC` + 15 s (45 s by default; never
@@ -975,7 +987,7 @@ sudo kill -USR1 "$(systemctl show -p MainPID --value domovoi-core)"   # every st
 ### Internet or not
 
 The internet answer needs nothing from the units. Saving it in Settings →
-Internet starts or stops the search helper at once, the
+Privacy → Internet starts or stops the search helper at once, the
 [update unit](#updates-from-the-dashboard) keeps it in step after every
 update, and under **No** the core sets `HF_HUB_OFFLINE=1` for itself (the
 `HF_HUB_OFFLINE` drop-in older versions of this guide suggested is no
@@ -1012,7 +1024,7 @@ own in `/etc/systemd/system` under one of those names is never replaced
 When it takes effect: at once when `provision.sh` runs, and otherwise at
 the **next healthy restart or update the update unit runs**
 ([Updates from the dashboard](#updates-from-the-dashboard), step 12):
-**Restart Domovoi** after you change the answer in Settings → Internet.
+**Restart Domovoi** after you change the answer in Settings → Privacy → Internet.
 Saving the answer alone doesn't change them: the core runs as the service
 user, which can't change systemd units. Without the update unit, run it
 yourself: `sudo bash /opt/domovoi/scripts/linux/os-jobs.sh --internet
@@ -1081,7 +1093,7 @@ anyone searches ([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#what-leaves-your-netw
 ## Wake-word training
 
 Training a wake word of your own runs on the server, in a container on its
-Docker Engine, once an admin turns it on: **Settings → Wake words → Turn on
+Docker Engine, once an admin turns it on: **Settings → Voice → Wake words → Turn on
 wake-word training**. That builds the trainer image (12.4 GB), downloads its
 training data (17.9 GB, into the Docker volume `domovoi_oww_cache`) and
 switches training on, with no shell and no restart: about 22 GB downloaded,
@@ -1163,7 +1175,7 @@ least two hours).
 
 **After an update** that changes `scripts/wake_word/docker`, the update unit
 rebuilds the trainer image (step 13), only on a box that built it. Answering
-**No** in Settings → Internet while that rebuild, or a "Turn on" job's build
+**No** in Settings → Privacy → Internet while that rebuild, or a "Turn on" job's build
 or download, is running stops it (the core stops the rebuild unit's `docker
 build`, and the job's container), and the core checks again when it starts.
 
@@ -1319,8 +1331,8 @@ does this:
    healthy plain restart too, so a changed answer takes effect at the next
    **Restart Domovoi**. It can't fail the update either: an `os-jobs` step
    is recorded only when it changed something (`ok`; what it changed is
-   in the journal and in `last-result.json`) or failed (`warn`; Settings
-   → Version shows the reason under the last update, such as "could not
+   in the journal and in `last-result.json`) or failed (`warn`; Settings →
+   System → About & updates shows the reason under the last update, such as "could not
    mask apt-daily.timer"). `DOMOVOI_MANAGE_OS_JOBS=0` skips it.
 13. Rebuild the wake-word trainer image when it is out of date. Only where
    it exists (a household turned training on; the name is
@@ -1691,7 +1703,7 @@ One version for the whole project, one tag per release (`v1.0.0`,
 
 The channel is the branch the checkout tracks, so the check, **Pull the
 latest**, the rolled-back `bad_sha` and the update unit's pin all work as
-before. Settings → About & updates shows:
+before. Settings → System → About & updates shows:
 
 - the release label of the code that runs: `1.0.0` on a release, `1.0.0 +
   14 (abc1234)` past one (`git describe --tags --match "v[0-9]*"`);
@@ -1809,7 +1821,7 @@ A package that does not match its hash fails the update, and it rolls
 back. If a later update can't use the lock at all (the venv moved to a
 newer Python, the lock was renamed, `DOMOVOI_DEPS_LOCK` was emptied), it
 does not stop: it resolves from the index as before, but its `sync-deps`
-step is a `warn`, the journal says WARNING, and Settings → About & updates shows
+step is a `warn`, the journal says WARNING, and Settings → System → About & updates shows
 **lock not applied: <reason>** under the last update until the next run.
 Re-seed and commit a lock for the new Python to go back to hash-checked
 installs. A lock change is a dependency change, so under the **No**
@@ -1991,7 +2003,7 @@ so the two halves always look at one file), `DOMOVOI_REVOKED_SIGNERS`,
 signer, key, enforced, allowed_signers, detail}`: `status` is `verified`,
 `unsigned`, `unverified` (signed, but not by a listed key, or no file to
 check against) or `unknown`; `signer` and `key` name a verified
-signature's principal and fingerprint. The Settings → About & updates card shows
+signature's principal and fingerprint. The Settings → System → About & updates card shows
 it as a badge beside the version: **signed**, **unsigned** or **signature
 not verified**, red when enforcement would refuse an update and amber when
 signing just isn't set up. `POST /v1/admin/version/pull` answers with the
@@ -2003,8 +2015,9 @@ dirty tree.
 
 ### One-time upgrade for existing installs
 
-For a box already running the three units above, such as the household's
-first server. One command sets it up. Over SSH, as your admin user:
+For a box already running the three units above, such as one set up by hand
+before the install script existed. One command sets it up. Over SSH, as
+your admin user:
 
 1. Pull, but don't press Restart yet. Use **Pull the latest** in the
    dashboard, or:
@@ -2226,6 +2239,13 @@ from them, so they stay LAN-published, and `ufw` must allow them alongside
 ```bash
 sudo ufw allow from 192.168.0.0/16 to any port 8050:8099 proto tcp
 ```
+
+**Printers and scanners.** Domovoi prints to and scans from network
+printers only (Settings → Rooms & devices → Printers & scanners). It finds them with a
+three-second multicast (mDNS) look, and the answers come back to UDP 5353.
+A host firewall that drops incoming multicast hides the printers from that
+look; **Look again** (which also sweeps your home network) and **Add by
+address** still work. Printers and scanners need nothing from the internet.
 
 **Rotating the Postgres password.** Postgres reads `POSTGRES_PASSWORD`
 only when it initialises the `domovoi-pgdata` volume; after that the

@@ -10,7 +10,7 @@ Domovoi's icon in the notification area. After setup the dashboard at
 Domovoi is running, and prepares satellite cards
 ([The tray icon](#the-tray-icon)).
 
-**This is a preview.** It ships with Domovoi 1.0 but isn't yet held to its promise. It is not code-signed (see [Unsigned](#unsigned)),
+**This is a preview.** It ships with Domovoi 1.0, but the promise the finished product will make (a PC that comes back by itself after every restart, signed programs, your data kept through an uninstall) isn't kept yet. It is not code-signed (see [Unsigned](#unsigned)),
 it installs a pinned commit and then follows a release channel (see
 [Updates and the release channel](#updates-and-the-release-channel)), and
 some of the finished product is not in it yet (see
@@ -27,7 +27,11 @@ asks) · [Security & privacy](SECURITY_PRIVACY.md)
 thing: [Satellites on spare devices → Windows](SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs).
 Its installer refuses to run on the PC where this server is installed;
 using the server PC as a room is planned for the server's tray icon (it
-doesn't do that yet).
+doesn't do that yet). This Setup carries that room installer
+(`DomovoiSatelliteSetup.exe`) and, each time Domovoi starts, the service
+copies it into the server's own cache inside the distro, so **Settings >
+Rooms & devices > Rooms > add a spare device** hands it to the
+house's other PCs with no internet needed.
 
 ---
 
@@ -96,12 +100,12 @@ that:
    Voice commands, music, timers and everything else work either way;
    speech recognition, Domovoi's voices, the wake word and Ollama itself
    are installed either way, so you can turn AI on later in the dashboard,
-   **Settings > Models**, which downloads the models then. The download
+   **Settings > Chat & AI > Models**, which downloads the models then. The download
    sizes on the pages after this one follow the answer.
    **Run again on an install** (a repair or an upgrade), the page starts at
    the answer the home has now, never at a Yes that would download the
    models into a home that turned AI off: the household's own
-   `AI_FEATURES` (what **Settings > Models** saved in `domovoi/.env`),
+   `AI_FEATURES` (what **Settings > Chat & AI > Models** saved in `domovoi/.env`),
    which `DomovoiHost` reads for Setup while Domovoi is running, else the
    answer Setup recorded last time. A Yes that comes from that record
    alone and is left as it is (a `DomovoiHost` from an older Setup can't
@@ -122,7 +126,7 @@ that:
 4. **Asks whether this PC will have internet after setup** (Yes, always /
    Sometimes / No; nothing is preselected). The answer goes to
    `provision.sh --internet`; see [INTERNET.md](INTERNET.md). You can
-   change it later in **Settings > Internet**.
+   change it later in **Settings > Privacy > Internet**.
 5. **Asks for the media folder** (default `C:\Users\Public\Domovoi`), the
    Windows folder you open in Explorer and copy music, pictures, videos,
    documents and audiobooks into. It must be a folder of your own on a
@@ -187,9 +191,9 @@ that:
    words. The code works for 24 hours (a restart of the service writes a
    fresh one). **Open Domovoi** copies the code too, then opens
    `http://localhost:6369/?installed=<commit>-<build time>#settings/configuration/setup`:
-   Settings > Advanced (Configuration before 2026-10-21; the old address
-   still lands there), where the **first-run admin setup** opens by
-   itself on a box nobody has claimed yet (if it doesn't, **set up admin**
+   Settings > System > Advanced (the address still says `configuration`,
+   that section's old name; it still lands there), where the
+   **first-run admin setup** opens by itself on a box nobody has claimed yet (if it doesn't, **set up admin**
    in the Admin box opens it). Paste the code into **setup code**, choose
    an admin password of at least 10 characters, type it again in
    **confirm password**, and click **set password**. A build whose pinned
@@ -205,7 +209,7 @@ that:
    processor when there is none), speech recognition always on the
    processor; with AI chat and questions left out (as `provision.sh`
    reported it), it says so and where to
-   turn them on (**Settings > Models**). Domovoi's icon appears beside the clock for the account that
+   turn them on (**Settings > Chat & AI > Models**). Domovoi's icon appears beside the clock for the account that
    ran Setup, and starts at every account's sign-in from then on
    ([The tray icon](#the-tray-icon)).
 
@@ -223,7 +227,7 @@ that:
 | Hyper-V firewall rules for WSL's VM creator (`{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}`), inbound TCP from your subnet only: `Domovoi-Dashboard-6369`, `Domovoi-Core-6370`, `Domovoi-MPD-8050-8099`, `Domovoi-Jellyfin-8096`, `Domovoi-RomM-7676`, `Domovoi-Kiwix-9467`. They apply to **every WSL VM on the PC**, your own WSL distros and Docker Desktop's included: anything of yours that listens on those ports in a mirrored-mode distro becomes reachable from your home network too. None if the PC has no private (RFC 1918) address. | Every `Domovoi-` rule for WSL's VM creator is removed (and listing them again must work, or the uninstaller says so). |
 | `C:\ProgramData\Domovoi` (`distro`, `wsl`, `backups`, `logs`, `state`, `host`): SYSTEM and Administrators only, with `domovoi-svc` allowed where it needs it. Household accounts can't open it. Setup only uses this folder if it made it. | Made administrators-only again, then deleted, only if Setup made it (files still in use are deleted at the next restart). |
 | The media folder and its `Music`, `Pictures`, `Videos`, `Documents`, `Audiobooks`: made if missing; `domovoi-svc` may read and write them (an inherited rule); a root folder Setup makes also lets every user of the PC (Users) read and write. An existing folder keeps all its own rules. | Setup's rule for `domovoi-svc` comes off. A folder Setup made is removed **only if it is empty**. No file in a media folder is ever deleted. |
-| `C:\Program Files\Domovoi` (`DomovoiHost.exe`, `DomovoiSetupHelper.exe`, `DomovoiTray.exe`, `domovoi.ico`, the uninstaller) and its Apps entry. | Deleted, after everything above is gone. |
+| `C:\Program Files\Domovoi` (`DomovoiHost.exe`, `DomovoiSetupHelper.exe`, `DomovoiTray.exe`, `DomovoiSatelliteSetup.exe`, `domovoi.ico`, the uninstaller) and its Apps entry. | Deleted, after everything above is gone. |
 | The tray icon's start at every account's sign-in: value `DomovoiTray` under `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run` (`"C:\Program Files\Domovoi\DomovoiTray.exe" --autostart`), and **Domovoi** in the Start menu (opens the dashboard, and brings a hidden icon back). Setup starts the icon for the account that ran it once the install has worked. | Every account's running icon is ended first (before the uninstall's other steps, and before Setup replaces the file on a repair); then the value and the Start menu entry are removed. |
 | Written by the icon itself, per account (not by Setup): `HKCU\Software\Domovoi\Tray` (`KeepAwake`, `StartWithWindows`) and its log, `%LOCALAPPDATA%\Domovoi\tray.log`. | The uninstalling account's settings are removed; other accounts' two values and the logs stay (they hold nothing of Domovoi's data). |
 | Only when missing (not on a PC that already runs WSL 2.7.14 or later): the Windows feature **Virtual Machine Platform**, and **WSL 2.7.14**. Only when they need a restart: a copy of Setup in `C:\Program Files\Domovoi\resume` and a `DomovoiSetupResume` value under `HKLM\...\CurrentVersion\RunOnce` that runs it (Windows deletes the value when it runs). | Virtual Machine Platform and WSL are left in place: they are shared with anything else that uses WSL. The copy and a leftover `DomovoiSetupResume` value are deleted. |
@@ -337,7 +341,7 @@ card's files as a zip and the icon's card helper puts them on the card:
 1. Flash a microSD card with **Raspberry Pi OS Lite (64-bit)** in
    Raspberry Pi Imager. When Imager offers to apply OS customisation
    settings, choose **No**.
-2. In the dashboard, **Settings > Rooms > prepare satellite media**:
+2. In the dashboard, **Settings > Rooms & devices > Rooms > prepare satellite media**:
    pick the board and the microphone, **Prepare**, then **download for the
    card helper**. Keep the setup network password it shows on screen.
 3. **Prepare a satellite card...** in the icon's menu. It picks the newest
@@ -349,7 +353,7 @@ card's files as a zip and the icon's card helper puts them on the card:
    disk or the Windows drive), asks for the setup network password, writes
    the card, reads everything back to check it, and offers **Eject**.
 4. Put the card in the Pi and switch it on. Join its setup Wi-Fi from your
-   phone, then approve it in **Settings > Rooms**.
+   phone, then approve it in **Settings > Rooms & devices > Rooms**.
 
 It writes exactly what a server that can see the card writes
 (`domovoi/satellite_media/overlay.py`, checked byte for byte by the tests):
@@ -403,18 +407,35 @@ the card helper (only `--fake-card` folders). Never point one at a
 household's install, and never use **Restart Domovoi** with a real
 service name in a test.
 
+## Printers and scanners
+
+Domovoi prints to and scans from printers on your home network (AirPrint,
+IPP Everywhere and Mopria printers, eSCL scanners): **Settings > Rooms & devices > Printers &
+scanners**. A printer on a USB cable, or one that needs its maker's driver,
+isn't supported on any host. Nothing here needs the internet.
+
+Domovoi finds them from inside the distro: a three-second multicast (mDNS)
+look when the page opens or you press **Look again**, which then also
+sweeps your home network for printers. WSL's own firewall rule already lets
+the answers in, so Setup adds no rule for it. The line under the list says
+how the last look found printers ("by multicast", "by unicast", "by
+sweep"); if it never says any "by multicast", multicast doesn't reach the
+server on your network, and **Look again** and **Add by address** (which
+needs no multicast) still work.
+
 ## Give the PC a fixed address (DHCP reservation)
 
-Satellites remember the server's address once they are approved and don't
-look for it again. If your router hands this PC a different address
-later, every satellite goes offline. Setup's last page shows the PC's
-address and MAC address: in your router's settings, add a **DHCP
-reservation** for that MAC address, so the PC always gets the same
-address. Do the same on a Linux server; it is not specific to Windows.
+A fixed address is a convenience, not a requirement. A satellite finds the
+server by name first, then at the address that worked last time, and if the
+server stays unreachable it searches its own network again, so it follows
+the server to a new address by itself. Setup's last page shows the PC's
+address and MAC address: if you would rather the address never changed, add
+a **DHCP reservation** for that MAC address in your router's settings. Do
+the same on a Linux server; it is not specific to Windows.
 
 ## Training wake words
 
-**Settings > Wake words** trains a wake word of your own ("Hey Domovoi")
+**Settings > Voice > Wake words** trains a wake word of your own ("Hey Domovoi")
 on this PC, inside the distro, once an admin turns training on there. The
 steps, what it costs and the licence of what it makes are in
 [`scripts/wake_word/README.md`](../scripts/wake_word/README.md). What this
@@ -458,7 +479,7 @@ PC needs for it:
   a 16 GB card, so the trainer takes the least busy card, away from the one
   holding the chat model.
 
-Then, as the admin: **Settings > Wake words > Turn on wake-word training**,
+Then, as the admin: **Settings > Voice > Wake words > Turn on wake-word training**,
 confirm, and wait (about 13 minutes on a fast line: the trainer's build,
 then the training data download; you can leave the page). Create a wake word, record at
 least 15 clips on a satellite (hundreds for an XVF3800), press **Train**,
@@ -525,7 +546,7 @@ you share them.
 - **Setup stopped partway:** run Setup again; it carries on, and
   `provision.sh` resumes where it stopped. Or uninstall, which undoes a
   half-finished setup too.
-- **Pull says `index.lock`: File exists** (Settings → About & updates, on a
+- **Pull says `index.lock`: File exists** (Settings > System > About & updates, on a
   build from before the fix below): an earlier update was cut off (a
   Windows restart or shutdown in the middle of one, say) and git left its
   lock behind. Nobody has a shell in the distro, so run a newer Setup over
@@ -563,7 +584,7 @@ you share them.
   app can't reach Domovoi, the dashboard says the server isn't
   answering): the core inside the distro has frozen. It notices by itself
   and restarts within a minute or so; if it hasn't, an admin gets
-  **Restart the core** on Settings → About & updates, Settings → Rooms and Home
+  **Restart the core** on Settings > System > About & updates, Settings > Rooms & devices > Rooms and Home
   ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#everything-offline-dashboard-up)).
   The distro runs the same units and the same loop watchdog as a Linux
   server ([LINUX_HOST.md, The loop watchdog](LINUX_HOST.md#the-loop-watchdog)):
@@ -572,7 +593,7 @@ you share them.
   survives a restart of the PC. A distro installed before 2026-10-15 gets
   the journal setting, and `Restart=on-failure` if its core unit had no
   restart policy at all, from the
-  next update run (Settings → About & updates, **Restart Domovoi**); the
+  next update run (Settings > System > About & updates, **Restart Domovoi**); the
   `Type=notify` unit itself comes with the next run of Setup. By hand, from
   an administrator PowerShell, `Restart-Service DomovoiHost` stops
   Domovoi's Linux system and starts it again, core included (the distro
@@ -603,15 +624,15 @@ updates then follow a release channel (`DomovoiChannel` in `pins.iss`,
 handed to `provision.sh` as `--track-branch`; the channels are described in
 [LINUX_HOST.md, Release channels](LINUX_HOST.md#release-channels)):
 
-- **`stable`**, on a release build: Domovoi's releases only. Settings →
-  About & updates says when a newer release is out; nothing
+- **`stable`**, on a release build: Domovoi's releases only. Settings >
+  System > About & updates says when a newer release is out; nothing
   updates until an admin pulls it there.
 - **`main`**, on a build pinned to a commit that is not a release: every
   change, as it lands.
 
 The repository has a `stable` branch only from the first release (v1.0.0)
-on. A release candidate's Setup (v1.0.0-rc2) that asks for stable before
-then follows `main`, and its log says so; the Version card says when the
+on. A release candidate's Setup that asks for stable before then follows
+`main`, and its log says so; the Version card says when the
 first release is out, and an admin switches to stable there. Nothing
 switches by itself. An install from before the channels follows `main`, as
 it always did, until someone switches it.
@@ -621,6 +642,14 @@ install checked out is one Setup pinned (`provision.sh` also refuses a
 `--ref` that resolves anywhere else), and fails the install closed
 otherwise. Repairs of an install that passed that check keep whatever the
 dashboard's updates moved it to.
+
+What the dashboard updates and what it does not: **Settings > System > About &
+updates** (**Check for updates**, **Pull the latest**, **Restart to apply
+changes**) updates Domovoi inside the distro: its code, libraries,
+database and room players. The Windows side (`DomovoiHost.exe`, the tray
+icon, and the room installer this server hands out) changes only when you
+run a newer `DomovoiSetup.exe` over the install, a repair that keeps your
+data. Nothing on the Windows side is updated by itself.
 
 Inside the distro, updates run as root exactly as on a Linux server, and
 so does what keeps them honest: the update unit's root-owned verifier
