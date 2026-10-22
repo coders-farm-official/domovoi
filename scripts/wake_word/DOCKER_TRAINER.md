@@ -7,8 +7,8 @@ assumption a GPU even exists), so the same image trains on a Linux server's
 Docker Engine, inside the Windows install's WSL distro, on a CPU-only box,
 and in Docker Desktop on a development PC.
 
-On a Domovoi server nobody runs any of this by hand: **Settings → Wake
-Words → Turn on wake-word training** builds the image, checks the GPU,
+On a Domovoi server nobody runs any of this by hand: **Settings → Voice →
+Wake words → Turn on wake-word training** builds the image, checks the GPU,
 downloads the training data and writes the command
 ([README.md, section 1](README.md#1-turn-training-on-once)). This page is
 how the pieces work, and the hand route for development PCs.
@@ -143,23 +143,29 @@ The training data (downloaded at run time, not at build) is pinned in
 To move a pin: change it, rebuild, train once, and check
 `train_config.template.yaml` against the new commit's `train.py`.
 
-### Publish once, pull everywhere
+### Sharing one build between your own PCs
 
 Building installs the full torch + training stack and bakes a ~255 MB TTS
-model: 12.4 GB on disk. A group of development PCs can share one build:
+model: 12.4 GB on disk. Your own development PCs can share one build
+without a registry:
 ```bash
-docker tag  domovoi-wake-trainer:latest ghcr.io/<you>/domovoi-wake-trainer:1
-docker push ghcr.io/<you>/domovoi-wake-trainer:1
-# on each PC:
-docker pull ghcr.io/<you>/domovoi-wake-trainer:1
-# and in domovoi/.env (or the core's process environment):
-WAKE_TRAINER_IMAGE=ghcr.io/<you>/domovoi-wake-trainer:1
+docker save domovoi-wake-trainer:latest | gzip > domovoi-wake-trainer.tar.gz
+# on each of your other PCs:
+docker load -i domovoi-wake-trainer.tar.gz
 ```
-The update unit never rebuilds an image whose name starts with a registry
-host: pull a newer one yourself when `scripts/wake_word/docker` changes.
-The dashboard's **Turn on wake-word training** always builds from the
-checkout, under the configured name, so with a published image set the two
-`.env` lines by hand instead ([Wire it into the Domovoi server](#wire-it-into-the-domovoi-server)).
+Keep the copy on your own PCs: don't push it to a registry or pass it on.
+The image holds GPL software (espeak-ng, ffmpeg, the mutagen library),
+LGPL libsndfile and NVIDIA's CUDA libraries, and a copy given to other
+people carries those licences' terms
+([LICENSES.md](../../docs/LICENSES.md#the-wake-word-trainer)). Every
+household builds its own image from this Dockerfile.
+
+The loaded image keeps its name and its `org.domovoi.wake-trainer.src`
+label, so it behaves like one built on that PC. The update unit never
+rebuilds an image whose name starts with a registry host; with a name like
+that set in `WAKE_TRAINER_IMAGE`, rebuild it yourself when
+`scripts/wake_word/docker` changes. The dashboard's **Turn on wake-word
+training** always builds from the checkout, under the configured name.
 
 ---
 
@@ -292,7 +298,7 @@ run the container by hand, add `--shm-size=2g` yourself.
 | `WAKE_TRAINER_REQUIRE_GPU` | — | set by the core (`1`) when the dashboard's setup found the GPU | the wrapper refuses to train on the CPU when its GPU check fails (exit 75, the reason in the log) |
 | `WAKE_TRAINER_CONTAINER` | — (`--name`) | `domovoi-wake-train` | the container's name |
 | `WAKE_TRAINER_SHM_SIZE` | — (`--shm-size`) | `2g` | shared memory for DataLoader workers |
-| `WAKE_TRAINER_IMAGE` | — | `domovoi-wake-trainer:latest` | image to run (a published tag to skip building) |
+| `WAKE_TRAINER_IMAGE` | — | `domovoi-wake-trainer:latest` | image to run (another name, e.g. for a copy loaded from another of your PCs) |
 | `WAKE_TRAINER_CACHE_VOLUME` | — | `domovoi_oww_cache` | named volume for the one-time datasets |
 | `WAKE_TRAINER_DOCKER` | — | `docker` | the docker command (e.g. `podman`) |
 | — | `WAKE_NICE` | `10` | the entrypoint's nice value (it also asks for the idle I/O class); `0` turns that off. The wrapper doesn't pass it: for a hand `docker run -e` |
@@ -301,7 +307,7 @@ run the container by hand, add `--shm-size=2g` yourself.
 **How they reach the wrapper.** The wrapper reads them from its process
 environment, and the core's trainer worker builds that environment: the
 core's own, plus every `WAKE_TRAINER_*` line in `domovoi/.env`, plus the
-values of the settings in **Settings → Advanced → Wake words**
+values of the settings in **Settings → System → Advanced → Wake words**
 (samples, steps, recorded share, CPUs, memory; 0 means the default here),
 plus `WAKE_TRAINER_DEADLINE_SEC`, `WAKE_TRAINER_REQUIRE_GPU` and `WAKE_PRONUNCIATIONS`. A variable in
 the core's process environment wins over the `.env` line. So a `.env` line
@@ -326,7 +332,7 @@ cores, where generating the 12,000 synthetic clips takes about an hour
 first run adds the dataset download (5.6 min at ~90 MB/s) unless the
 dashboard's setup already warmed it. Synthetic generation grows linearly
 with `WAKE_TRAINER_N_SAMPLES`, so 20k+ samples need a longer **Training
-time limit** (Settings → Advanced → Wake words) than the GPU's
+time limit** (Settings → System → Advanced → Wake words) than the GPU's
 automatic 3600 s. Generation is resumable (the run dir keeps its clips), so
 a run cut off by the limit continues where it stopped on the next Train.
 Recording **more real positive clips** than the minimum also helps
@@ -353,7 +359,7 @@ image, in `domovoi/.env`:
 WAKE_WORD_TRAINER_ENABLED=true
 WAKE_WORD_TRAIN_COMMAND=python "C:\path\to\domovoi\scripts\wake_word\train_wake_word.py" --clips "{clips_dir}" --phrase "{phrase}" --slug "{slug}" --out "{out}"
 ```
-Turning `WAKE_WORD_TRAINER_ENABLED` on in Settings → Advanced starts the
+Turning `WAKE_WORD_TRAINER_ENABLED` on in Settings → System → Advanced starts the
 trainer without a restart; a hand edit of `.env` needs one.
 Notes:
 - **Every placeholder is double-quoted.** The worker tokenizes with
@@ -368,8 +374,8 @@ Notes:
 - On Linux/Mac hosts use forward-slash paths and `python3` if that's what's on
   PATH:
   `WAKE_WORD_TRAIN_COMMAND=python3 "/srv/domovoi/scripts/wake_word/train_wake_word.py" --clips "{clips_dir}" --phrase "{phrase}" --slug "{slug}" --out "{out}"`
-- **Time limit:** **Training time limit** in Settings → Advanced → Wake
-  words (`WAKE_WORD_TRAIN_TIMEOUT_SEC`). 0, the default, sizes it to the
+- **Time limit:** **Training time limit** in Settings → System → Advanced →
+  Wake words (`WAKE_WORD_TRAIN_TIMEOUT_SEC`). 0, the default, sizes it to the
   server: 3600 s when the dashboard's setup found a GPU, otherwise twice the
   CPU estimate and at least 7200 s (7200 s for a trainer set up by hand,
   which the setup never measured).
@@ -482,7 +488,7 @@ set is the one the features were computed from (patch 8 above). The copies
 of the word's recorded clips a run puts in `positive_train/real_*.wav` are
 removed at the end of the run, however it ends (above); deleting the wake
 word in the dashboard removes its folder too. **Turn off and free the
-space** (Settings → Wake words) removes the whole volume, the image and
+space** (Settings → Voice → Wake words) removes the whole volume, the image and
 Docker's build cache, after showing their size.
 
 The dashboard's setup warms it. By hand (the first Train otherwise spends
@@ -557,10 +563,11 @@ card. Details: [docs/WINDOWS_HOST.md](../../docs/WINDOWS_HOST.md#training-wake-w
   `docker` isn't on the Domovoi server's PATH. Start Docker Desktop / the docker
   service. Remember the worker runs with the Domovoi server's PATH/env.
 - **`image ... not found locally` (exit 3)** — turn training on in Settings →
-  Wake Words (it builds the image), or build it by hand
-  ([Build OR pull](#build-or-pull)), or `docker pull` a published tag and set
-  `WAKE_TRAINER_IMAGE`. Turning `WAKE_WORD_TRAINER_ENABLED` on in Settings →
-  Configuration alone gives exactly this.
+  Voice → Wake words (it builds the image), or build it by hand
+  ([Build OR pull](#build-or-pull)), or load a copy built on another of your
+  PCs and set `WAKE_TRAINER_IMAGE` to its name. Turning
+  `WAKE_WORD_TRAINER_ENABLED` on in Settings → System → Advanced alone gives
+  exactly this.
 - **Wrapper logs `backend = CPU` but you have a GPU** — run the verify one-liner
   above. If `nvidia-smi` works on the host but the container probe fails,
   Docker's GPU runtime isn't set up (WSL2 engine off in Docker Desktop, or the
@@ -570,8 +577,8 @@ card. Details: [docs/WINDOWS_HOST.md](../../docs/WINDOWS_HOST.md#training-wake-w
   torch/CUDA build mismatch in the image, not passthrough.
 - **`train command timed out after Ns and was stopped`**, or **`exited 124`**
   with "stopped after N s: the training time limit ... ran out" — the run
-  took longer than **Training time limit** (Settings → Advanced → Wake
-  words). Raise it, or lower **Synthetic clips per wake word**. The container
+  took longer than **Training time limit** (Settings → System → Advanced →
+  Wake words). Raise it, or lower **Synthetic clips per wake word**. The container
   was removed either way. The synthetic clips generated so far stay in the
   cache volume, so the next run for the same word continues from them.
 - **`exited 143`** (or 130, 129) — the wrapper was told to stop by a signal
