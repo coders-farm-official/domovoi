@@ -3614,6 +3614,9 @@
        "text": "The photo is read on the phone and never leaves it. It isn't saved to your gallery, and it's gone once Domovoi has answered: the chat keeps a **photo (not kept)** mark instead, so a photo question has no **try again**. While a photo waits to be sent, the screen is kept out of screenshots."
       },
       {
+       "text": "The words read from the photo are kept beside its answer, so you can ask about it afterwards (\"who sent it?\"). They go when you delete the chat. With a document in the chat too, a question goes to whichever you asked about last; say \"the photo\" or \"the document\" to choose."
+      },
+      {
        "text": "A photo of a letter or a bill: see [Letters](node:letters)."
       },
       {
@@ -4462,12 +4465,12 @@
        "a file in Documents → From Chat, until you delete it"
       ],
       [
-       "Chats on a phone, with the text read from a letter",
+       "Chats on a phone, with the text read from a photo or a letter",
        "on that phone only, until you delete them"
       ],
       [
        "A photo in a phone chat",
-       "never kept"
+       "never kept (the words read from it are, with the chat)"
       ],
       [
        "A document or a letter photo sent with **ask the home server** or **use home server**",

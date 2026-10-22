@@ -1282,6 +1282,10 @@ chat can answer about a photo, in airplane mode too.
   **photo (not kept)** mark instead, so a photo question has no **try
   again**. While a photo waits to be sent, the screen is kept out of
   screenshots.
+- The words read from the photo are kept beside its answer, so you can ask
+  about it afterwards ("who sent it?"). They go when you delete the chat.
+  With a document in the chat too, a question goes to whichever you asked
+  about last; say "the photo" or "the document" to choose.
 - A photo of a letter or a bill: see [Letters](#node:letters).
 - After an install or an update, the first question takes a few seconds
   longer while the app tries the photo reader once.
@@ -1613,8 +1617,8 @@ Everything stays on your server, or on your phone.
 | Chats on the home server, with the pictures, documents and letter photos attached | until you delete the chat |
 | Every version of a draft in a chat | until you delete the chat |
 | A draft or a letter you saved | a file in Documents → From Chat, until you delete it |
-| Chats on a phone, with the text read from a letter | on that phone only, until you delete them |
-| A photo in a phone chat | never kept |
+| Chats on a phone, with the text read from a photo or a letter | on that phone only, until you delete them |
+| A photo in a phone chat | never kept (the words read from it are, with the chat) |
 | A document or a letter photo sent with **ask the home server** or **use home server** | nothing kept: it's deleted once it's read, and a summary waits in the server's memory only until the phone takes it |
 | Timers and reminders that went off | 7 days |
 | Command recordings (off unless an admin turns them on for a room) | 14 days |

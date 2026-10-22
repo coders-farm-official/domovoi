@@ -37,7 +37,7 @@ uninstalling the app deletes it.
 - **Phone chats**: the models (downloaded once, see below), the
   **conversations** (one file each, until you delete them; "clear all
   conversations" deletes every one), with what a lookup found (the titles
-  and addresses of its sources) and the text read from a letter photo,
+  and addresses of its sources) and the text read from a photo or a letter photo,
   the **documents** you attach and the **drafts** written in them (deleted
   with the chat), drafts you save to the phone's "Chat documents", and
   **reply reports** you save.
@@ -120,7 +120,9 @@ photo is shrunk and read by the model on the phone, in memory: it isn't
 saved to your gallery or the app's storage, it isn't sent anywhere (except
 a letter you choose to have your home server read, below), and it is
 discarded from memory once Domovoi has answered. The chat keeps a "photo"
-mark, not the photo.
+mark, not the photo. Since 2026-10-22 the words read from the photo are
+kept beside its answer in the phone's own chat storage, so you can ask
+about it afterwards; they are deleted with the chat.
 
 ## Lookups you allow
 

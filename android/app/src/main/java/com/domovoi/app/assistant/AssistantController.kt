@@ -1111,6 +1111,11 @@ class AssistantController(
         onDelta: (String) -> Unit,
         chosen: Pair<String, String>? = null,
         viaServer: Boolean = false,
+        /** The question didn't name a letter ("what does this say?"): the
+         *  text is read first, with no printed-or-handwritten step, and only
+         *  a text that reads like a letter gets the letter's layout; any
+         *  other gets a plain photo answer ([photoReply]). */
+        byText: Boolean = false,
     ): StoredConversation {
         var hold = false
         try {
@@ -1135,7 +1140,8 @@ class AssistantController(
             fun live(text: String = ""): StoredMessage =
                 StoredMessage(Speaker.DOMOVOI, text, clock(), backend = settings.backend.label, docMode = "letter",
                     vision = if (viaServer) "home server" else visionBackend().label)
-            _state.update { it.copy(checking = true, conversation = asked.withMetaOf(it.conversation).copy(messages = asked.messages + live())) }
+            val reading = if (byText) live().copy(docMode = PhotoText.MODE_PHOTO) else live()
+            _state.update { it.copy(checking = true, conversation = asked.withMetaOf(it.conversation).copy(messages = asked.messages + reading)) }
             val handwrittenPick = chosen?.first == "handwriting"
             var handwritten = handwrittenPick
             val transcript: String
@@ -1172,11 +1178,22 @@ class AssistantController(
                     }
                     val guard = visionCheck().also { it.begin(clock()) }
                     try {
-                        if (!handwrittenPick) {
+                        if (!handwrittenPick && !byText) {
                             val word = StringBuilder()
                             llm.replyToPhoto(LetterRead.KIND_SYSTEM, photo.jpeg, LetterRead.KIND_QUESTION, null, LetterRead.KIND_TOKENS)
                                 .collect { word.append(it) }
                             handwritten = LetterRead.parseKind(word.toString()) == "handwritten"
+                            // Two signals before the handwriting card (Fold
+                            // check 2026-10-21: a printed label was called
+                            // handwritten): the question asked again, the
+                            // other way round, must agree.
+                            if (handwritten) {
+                                val again = StringBuilder()
+                                llm.replyToPhoto(LetterRead.KIND_SYSTEM, photo.jpeg, PhoneLetters.KIND_CHECK_QUESTION, null, LetterRead.KIND_TOKENS)
+                                    .collect { again.append(it) }
+                                handwritten = PhoneLetters.handwrittenAgain(again.toString())
+                                Log.i(TAG, "letter kind: handwritten, checked again: ${if (handwritten) "handwritten" else "not handwritten"}")
+                            }
                             if (handwritten && chosen == null && t != null) {
                                 decide(DocHeadsUp.findings(HeadsUpRequest("picture", question, "phone", handwritten = true), t))
                                     .card?.let { guard.end(); _state.update { it.copy(checking = false) }; return card(it) }
@@ -1198,6 +1215,14 @@ class AssistantController(
                 _state.update { it.copy(checking = false) }
                 val who = if (viaServer) "The home server couldn't read it" else "The model stopped"
                 return finishReply(asked, live().copy(error = "$who: ${plainReason(e)}"))
+            }
+            // Not named as a letter, and its text doesn't read like one: a
+            // plain answer about the photo, with the text kept for follow-ups.
+            if (byText && !PhotoText.looksLikeLetter(transcript)) {
+                _state.update { it.copy(checking = false) }
+                hold = true
+                Log.i(TAG, "photo turn: \"${question.take(40)}\" read as plain text (signals ${PhotoText.letterSignals(transcript)})")
+                return photoReply(asked, photo, onDelta, readText = PhotoText.cleaned(transcript))
             }
             // 3. The explanation, from the transcript only, checked before it is shown.
             val explained = if (transcript.isBlank()) {
@@ -1330,6 +1355,9 @@ class AssistantController(
         // runs again once this reply is done), and whatever it wrote, or a
         // rename meanwhile, is kept.
         pauseTitle()
+        // The text still being read from the last photo comes first: this
+        // question may be about it.
+        photoTextJob?.join()
         val asked = question.withMetaOf(_state.value.conversation)
         // A retry's question is already on disk with the reply it may
         // replace: that copy stays until the new reply is finished.
@@ -1338,10 +1366,16 @@ class AssistantController(
         // answers "what time is it on this sign?".
         if (photo != null) {
             undoEntry = null
-            // A letter for the home server (D6), or a letter question with a
-            // photo this phone reads: read, explained and checked.
+            // A letter for the home server (D6), or a question that names a
+            // letter, a bill or a notice: read, explained and checked.
             val typed = asked.messages.last().text
-            if (viaServer || LetterRead.letterRequest(typed)) return letterReply(asked, photo, onDelta, viaServer = viaServer)
+            if (viaServer || PhotoText.namesALetterKind(typed) && LetterRead.letterRequest(typed)) {
+                return letterReply(asked, photo, onDelta, viaServer = viaServer)
+            }
+            // "What does this say?" (a label asks it too, Fold check
+            // 2026-10-21): read first; the letter's layout only when the
+            // text reads like a letter, else a plain answer.
+            if (LetterRead.letterRequest(typed)) return letterReply(asked, photo, onDelta, byText = true)
             return photoReply(asked, photo, onDelta)
         }
         // A Revise-box turn is always a revision of its draft (D4): no clock or
@@ -1358,7 +1392,24 @@ class AssistantController(
         // An attachment is the clearest sign of intent: with a document in
         // the chat, "what's the total?" never reaches the actions or the
         // phone's facts.
-        if (asked.documents.isNotEmpty()) { undoEntry = null; return docReply(asked, onDelta) }
+        // With a photo's text in the chat too (owner, 2026-10-22), the
+        // question goes to the subject it names, or the most recent one;
+        // Domovoi asks which when it can't tell.
+        var photoFollow = false
+        if (asked.documents.isNotEmpty()) {
+            undoEntry = null
+            when (PhotoText.subject(asked)) {
+                PhotoText.Subject.DOCUMENTS -> return docReply(asked, onDelta)
+                PhotoText.Subject.ASK -> {
+                    val text = PhotoText.askWhich(asked.documents.map { it.name })
+                    onDelta(text)
+                    return finishReply(asked, StoredMessage(Speaker.DOMOVOI, text, clock(), fastPath = FAST_WHICH_SUBJECT))
+                }
+                PhotoText.Subject.PHOTO -> photoFollow = true
+            }
+        }
+        // A photo follow-up goes on as any question: the photo's text is in
+        // the history the model is given (modelTurns).
         actionTurn(asked, onDelta)?.let { return it }
         undoEntry = null
         phoneReply(asked, onDelta)?.let { return it }
@@ -1531,7 +1582,8 @@ class AssistantController(
             val card = proposed.firstOrNull()?.let { proposalCard(it) }
             return finishReply(
                 viewed,
-                live().copy(text = said, firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }, card = card),
+                live().copy(text = said, firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }, card = card,
+                    docMode = if (photoFollow) PhotoText.MODE_FOLLOW else null),
             )
         } catch (e: CancellationException) {
             if (runtimeCancel()) {
@@ -1561,7 +1613,17 @@ class AssistantController(
      * the conversation keeps the "photo" marker on the question. The app's
      * peak memory over the reply is written on it (developer details).
      */
-    private suspend fun photoReply(asked: StoredConversation, photo: PendingPhoto, onDelta: (String) -> Unit): StoredConversation {
+    private suspend fun photoReply(
+        asked: StoredConversation,
+        photo: PendingPhoto,
+        onDelta: (String) -> Unit,
+        /** The photo's text, already read (a "what does this say?" photo
+         *  that didn't read like a letter): kept with the answer. */
+        readText: String? = null,
+    ): StoredConversation {
+        // The photo goes to the job that reads its text (handed on), or is
+        // wiped when this reply ends.
+        var handedOn = false
         try {
             val backend = settings.backend
             val llm = try {
@@ -1618,7 +1680,14 @@ class AssistantController(
                 val stats = llm.lastStats()
                 Log.i(TAG, "photo turn: first word $firstMs ms, peak ${peakKb()?.div(1024)} MB, " +
                     "${photo.width}x${photo.height} (${photo.source}) prepared in ${photo.prepMs} ms")
-                return finishReply(asked, live().copy(firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }))
+                val answered = live().copy(firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 })
+                if (readText != null) {
+                    return finishReply(asked, answered.copy(docMode = PhotoText.MODE_PHOTO, sources = PhotoText.sources(readText)))
+                }
+                val done = finishReply(asked, answered)
+                handedOn = true
+                keepPhotoText(done, photo)
+                return done
             } catch (e: CancellationException) {
                 sampler.cancel()
                 guard.end()
@@ -1630,8 +1699,47 @@ class AssistantController(
                 return finishReply(asked, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
             }
         } finally {
-            // Nothing of the photo outlives its reply.
-            photo.jpeg.fill(0)
+            // Nothing of the photo outlives its reply (or the reading of its
+            // text, just after).
+            if (!handedOn) photo.jpeg.fill(0)
+        }
+    }
+
+    /**
+     * After a photo's answer: its text is read (the transcription step, at
+     * most [PhotoText.READ_TOKENS]) and kept beside the answer, so a
+     * follow-up can reach it (owner, 2026-10-22); the photo itself is wiped
+     * when this ends, however it ends. The next question waits for it.
+     */
+    private fun keepPhotoText(done: StoredConversation, photo: PendingPhoto) {
+        val index = done.messages.lastIndex
+        photoTextJob = scope.launch {
+            try {
+                val raw = StringBuilder()
+                engineLock.withLock {
+                    val llm = engine?.takeIf { it.isLoaded && it.seesPhotos } ?: return@launch
+                    val guard = visionCheck().also { it.begin(clock()) }
+                    try {
+                        llm.replyToPhoto(LetterRead.TRANSCRIBE_SYSTEM, photo.jpeg, LetterRead.TRANSCRIBE_QUESTION, null, PhotoText.READ_TOKENS)
+                            .collect { raw.append(it) }
+                    } finally {
+                        guard.end()
+                    }
+                }
+                val text = PhotoText.cleaned(raw.toString())
+                Log.i(TAG, "photo text kept: ${text.length} chars")
+                if (text.isNotEmpty()) {
+                    updateMessage(done.id, index) { m ->
+                        if (m.fromUser) m else m.copy(docMode = m.docMode ?: PhotoText.MODE_PHOTO, sources = PhotoText.sources(text))
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Log.w(TAG, "the photo's text wasn't read: ${plainReason(e)}")
+            } finally {
+                photo.jpeg.fill(0)
+            }
         }
     }
 
@@ -1920,6 +2028,10 @@ class AssistantController(
     )
 
     @Volatile private var undoEntry: UndoEntry? = null
+
+    /** The text being read from the last photo after its answer, for
+     *  follow-ups (owner, 2026-10-22); the photo lives until it ends. */
+    @Volatile private var photoTextJob: Job? = null
 
     /** One action at a time: a tap and a spoken yes can't both run a card. */
     private val actionLock = Mutex()
@@ -2701,6 +2813,7 @@ class AssistantController(
 
     private suspend fun stopReply() {
         stopAsked = true
+        photoTextJob?.cancelAndJoin()
         voice?.stopAndWait()
         val job = replyJob ?: return
         engine?.cancel()
@@ -3945,6 +4058,9 @@ class AssistantController(
         const val FAST_ACTION_NO = "action_no"
         const val FAST_ACTION_AGAIN = "action_again"
         const val FAST_ACTION_HOUSE = "action_house"
+
+        /** "Do you mean the photo or the PDF?" (a follow-up with both). */
+        const val FAST_WHICH_SUBJECT = "which_subject"
         const val FAST_ACTION_UNDO = "action_undo"
 
         /** The replies of the player's own actions: a bare "continue" or
@@ -4100,7 +4216,13 @@ fun modelTurns(messages: List<StoredMessage>): List<IndexedTurn> {
         } else if (m.text.isNotBlank()) {
             // A letter's explanation carries the letter's text it was made from
             // (D6), marked as data, so a follow-up can be answered from it.
-            val said = if (m.docMode == "letter" && m.sources.isNotEmpty()) PhoneLetters.historyText(m.text, m.sources.map { it.text }) else m.text
+            val said = when {
+                m.docMode == "letter" && m.sources.isNotEmpty() -> PhoneLetters.historyText(m.text, m.sources.map { it.text })
+                // A photo's answer carries the text read from the photo
+                // (owner, 2026-10-22), as data, for a follow-up.
+                m.docMode == PhotoText.MODE_PHOTO && m.sources.isNotEmpty() -> PhotoText.historyText(m.text, m.sources.map { it.text })
+                else -> m.text
+            }
             if (lastFromUser()) out += IndexedTurn(i, ChatTurn(fromUser = false, text = said))
         } else if (lastFromUser()) {
             out.removeAt(out.lastIndex)

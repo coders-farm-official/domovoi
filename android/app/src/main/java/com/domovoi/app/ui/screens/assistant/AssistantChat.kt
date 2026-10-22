@@ -470,8 +470,11 @@ private fun EngineLine(ui: AssistantUi, actions: AssistantActions, onModel: () -
         else -> if (ui.checking) {
             Row(Modifier.padding(top = 6.dp).semantics { liveRegion = LiveRegionMode.Polite }) {
                 Pill(
-                    if (ui.conversation.messages.lastOrNull()?.docMode == "letter") "reading the letter and checking its dates and amounts"
-                    else "reading the passages and checking the answer" + (ui.checkingEtaS?.let { " · about $it s" } ?: ""),
+                    when (ui.conversation.messages.lastOrNull()?.docMode) {
+                        "letter" -> "reading the letter and checking its dates and amounts"
+                        com.domovoi.app.assistant.PhotoText.MODE_PHOTO -> "reading the photo"
+                        else -> null
+                    } ?: "reading the passages and checking the answer" + (ui.checkingEtaS?.let { " · about $it s" } ?: ""),
                     Tone.Brand, live = true,
                 )
             }
