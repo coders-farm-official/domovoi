@@ -76,6 +76,10 @@ def model(monkeypatch):
     async def _no_system(*a, **kw):
         return None
 
+    async def _quiet():
+        return False
+
+    monkeypatch.setattr(chat_api._jobs, "voice_busy", _quiet)
     monkeypatch.setattr(chat_api.ollama_client, "chat_stream", _stream)
     monkeypatch.setattr(chat_api.ollama_client, "tags_or_none", _tags)
     monkeypatch.setattr(chat_api.ollama_client, "model_system_or_none", _no_system)
@@ -249,3 +253,80 @@ def test_the_phones_way_in_says_when_there_is_no_picture_model(monkeypatch):
     with _client() as c:
         r = c.post("/api/chat/letters/read", files={"file": ("p.png", io.BytesIO(_photo()), "image/png")})
     assert r.status_code == 503 and r.json()["code"] == "vision_model_missing"
+
+
+@requires_db
+def test_the_phones_way_in_refuses_a_photo_over_8_mb_in_json(model):
+    big = bytes([0xFF, 0xD8, 0xFF]) + b"0" * (8 * 1024 * 1024 + 10)
+    with _client() as c:
+        r = c.post("/api/chat/letters/read", files={"file": ("p.jpg", io.BytesIO(big), "image/jpeg")})
+    assert r.status_code == 413 and r.json()["code"] == "file_too_large" and r.json()["max_mb"] == 8
+    assert [x for x in model.calls] == []
+    # Just over 8 MB but inside the transport budget: the handler's own refusal, same words.
+    over = bytes([0xFF, 0xD8, 0xFF]) + b"0" * (8 * 1024 * 1024 + 100)
+    with _client() as c:
+        head = (b"--b\r\nContent-Disposition: form-data; name=\"file\"; filename=\"p.jpg\"\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n")
+        body = head + over[:8 * 1024 * 1024 + 1] + b"\r\n--b--\r\n"
+        r = c.post("/api/chat/letters/read", content=body, headers={"content-type": "multipart/form-data; boundary=b"})
+    assert r.status_code == 413 and r.json()["code"] == "file_too_large"
+
+
+def test_the_transport_guard_caps_the_route_and_the_body_is_never_a_form_param():
+    import inspect
+
+    from domovoi.transport_guard import body_limit_for
+
+    assert body_limit_for("/api/chat/letters/read") == 8 * 1024 * 1024 + 64 * 1024
+    # No File()/Form() parameter: FastAPI reads no body (and spools nothing)
+    # before the device check runs; the handler reads it into memory itself.
+    assert list(inspect.signature(letters_api.read_letter).parameters) == ["request"]
+
+
+@requires_db
+def test_one_read_per_phone_and_two_per_house(model, monkeypatch):
+    with _client() as c:
+        monkeypatch.setattr(letters_api, "_reading", 2)
+        r = c.post("/api/chat/letters/read", files={"file": ("p.png", io.BytesIO(_photo()), "image/png")})
+        assert r.status_code == 429 and r.json()["code"] == "busy" and "two letters" in r.json()["detail"]
+        monkeypatch.setattr(letters_api, "_reading", 0)
+        monkeypatch.setattr(letters_api, "_caller", lambda request: "phone-1")
+        monkeypatch.setitem(letters_api._reading_by, "phone-1", 1)
+        r = c.post("/api/chat/letters/read", files={"file": ("p.png", io.BytesIO(_photo()), "image/png")})
+        assert r.status_code == 429 and "This phone" in r.json()["detail"]
+        letters_api._reading_by.pop("phone-1", None)
+        ok = c.post("/api/chat/letters/read", files={"file": ("p.png", io.BytesIO(_photo()), "image/png")})
+        assert ok.status_code == 200
+    assert letters_api._reading == 0 and not letters_api._reading_by
+
+
+@requires_db
+def test_a_voice_turn_goes_first(model, monkeypatch):
+    seen = []
+
+    async def _busy():
+        seen.append(len(model.calls))
+        return len(seen) == 1          # busy once, then free
+
+    async def _no_sleep(_s):
+        return None
+
+    monkeypatch.setattr(chat_api._jobs, "voice_busy", _busy)
+    monkeypatch.setattr(letters_api, "_pause", _no_sleep)
+    with _client() as c:
+        r = c.post("/api/chat/letters/read", files={"file": ("p.png", io.BytesIO(_photo()), "image/png")})
+    assert r.status_code == 200
+    assert seen[:2] == [0, 0]          # asked (and waited) before the first model step
+
+
+@requires_db
+def test_ready_says_whether_the_picture_model_is_there(model, monkeypatch):
+    async def _tags(*a, **kw):
+        return [{"name": "qwen3-vl:2b"}]
+
+    monkeypatch.setattr(letters_api.ai_features, "turned_off", lambda: False)
+    monkeypatch.setattr(chat_api.ollama_client, "tags_or_none", _tags)
+    with _client() as c:
+        assert c.get("/api/chat/letters/ready").json() == {"ai": True, "vision": True, "max_mb": 8}
+        monkeypatch.setattr(chat_api.core_settings, "ollama_vision_model", "other:1b")
+        assert c.get("/api/chat/letters/ready").json()["vision"] is False

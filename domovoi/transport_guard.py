@@ -28,6 +28,7 @@ the failure mode people actually hit.
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 import re
 from typing import Any, Iterable
@@ -249,6 +250,10 @@ UPLOAD_LIMITS: tuple[tuple[str, int], ...] = (
     # A document for a chat, and one a phone hands over to be read
     # (chat_documents.py caps the file itself at 100 MB, as it streams).
     ("/api/chat/documents", 101 * 1024 * 1024),
+    # A phone chat's letter photo for the home server to read (D6): 8 MB
+    # (web/backend/api/chat_letters.py MAX_PHOTO_BYTES) plus its form; the
+    # handler reads it into memory, never spooled.
+    ("/api/chat/letters/read", 8 * 1024 * 1024 + 64 * 1024),
     # A plugin zip, on both the core route and the web proxy in front of it.
     ("/v1/plugins/install", 256 * 1024 * 1024),
     ("/api/plugins/install", 256 * 1024 * 1024),
@@ -281,13 +286,26 @@ def body_limit_for(path: str) -> int:
     return best if best is not None else default_body_limit()
 
 
-async def _send_413(send: Any, limit: int) -> None:
-    body = f"request body exceeds the {limit}-byte limit for this route".encode()
+#: Routes whose clients read a coded JSON refusal ({"detail", "code",
+#: "max_mb"}) rather than the plain line: the phone words it.
+JSON_413 = {
+    "/api/chat/letters/read": "That photo is too large: the home server reads photos of up to 8 MB.",
+}
+
+
+async def _send_413(send: Any, limit: int, path: str = "") -> None:
+    detail = JSON_413.get(path)
+    if detail is not None:
+        body = json.dumps({"detail": detail, "code": "file_too_large", "max_mb": limit // (1024 * 1024)}).encode()
+        kind = b"application/json"
+    else:
+        body = f"request body exceeds the {limit}-byte limit for this route".encode()
+        kind = b"text/plain; charset=utf-8"
     await send({
         "type": "http.response.start",
         "status": 413,
         "headers": [
-            (b"content-type", b"text/plain; charset=utf-8"),
+            (b"content-type", kind),
             (b"content-length", str(len(body)).encode()),
         ],
     })
@@ -331,7 +349,7 @@ class BodyLimitMiddleware:
                 "refused %s %s: Content-Length %d over the %d-byte limit",
                 scope.get("method"), scope.get("path"), declared, limit,
             )
-            await _send_413(send, limit)
+            await _send_413(send, limit, scope.get("path", "") or "")
             return
 
         read = 0
@@ -348,7 +366,7 @@ class BodyLimitMiddleware:
                         scope.get("method"), scope.get("path"), limit,
                     )
                     responded = True
-                    await _send_413(send, limit)
+                    await _send_413(send, limit, scope.get("path", "") or "")
                     return {"type": "http.disconnect"}
             return message
 

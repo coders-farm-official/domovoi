@@ -14608,19 +14608,57 @@
         }
       }
     },
+    "/api/chat/letters/ready": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Letters Ready",
+        "description": "Whether this home server can read a phone's letter photo now: AI\nfeatures on and its picture model installed (``vision``; null when\nOllama couldn't be asked). The phone offers \"a letter for the home\nserver\" only when both are true.",
+        "operationId": "letters_ready_api_chat_letters_ready_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Letters Ready Api Chat Letters Ready Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/chat/letters/read": {
       "post": {
         "tags": [
           "chat"
         ],
         "summary": "Read Letter",
-        "description": "A phone chat's letter photo, read by the home server (documents plan\nD6): ``{\"blur\", \"kind\", \"text\", \"stopped\", \"seconds\"}``. ``blur`` is the\nvariance of the Laplacian (the phone decides the blurry card, which it\nshows before sending); ``kind`` \"printed\", \"handwritten\" or null;\n``text`` the transcript. With ``stop_if_handwritten`` (the default) a\nhandwritten photo comes back with ``stopped`` true and no text, so the\nphone can show the handwriting card first and ask again with false.\n\nNothing is kept: the photo is read in memory and never written, and\nnothing about it is logged beyond its timing. The explanation is\nwritten on the phone.",
+        "description": "A phone chat's letter photo, read by the home server (documents plan\nD6): ``{\"blur\", \"kind\", \"text\", \"stopped\", \"seconds\"}``. ``blur`` is the\nvariance of the Laplacian (the phone decides the blurry card, which it\nshows before sending); ``kind`` \"printed\", \"handwritten\" or null;\n``text`` the transcript. With ``stop_if_handwritten`` (the default) a\nhandwritten photo comes back with ``stopped`` true and no text, so the\nphone can show the handwriting card first and ask again with false.\n\nThe caller is checked before a byte of the body is read; the body is\nread into memory and refused past :data:`MAX_PHOTO_BYTES` (never\nspooled to disk). One read per phone at a time and :data:`MAX_READING`\nin the house (429 ``busy``); a voice turn in a room goes first. Nothing\nis kept: the photo is never written, and nothing about it is logged\nbeyond its timing. The explanation is written on the phone.",
         "operationId": "read_letter_api_chat_letters_read_post",
         "requestBody": {
           "content": {
             "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/Body_read_letter_api_chat_letters_read_post"
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "One letter photo: JPEG, PNG, GIF, WebP or BMP, at most 8 MB."
+                  },
+                  "stop_if_handwritten": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "file"
+                ]
               }
             }
           },
@@ -14641,23 +14679,16 @@
             "description": "The household's AI features are off (`X-Domovoi-Refusal: ai-off`)"
           },
           "413": {
-            "description": "{\"detail\": \"...\", \"code\": \"file_too_large\"|\"too_many_pixels\"}"
+            "description": "{\"detail\": \"...\", \"code\": \"file_too_large\", \"max_mb\": 8} or {\"code\": \"too_many_pixels\"}"
           },
           "415": {
             "description": "{\"detail\": \"...\", \"code\": \"unsupported_format\"}"
           },
+          "429": {
+            "description": "{\"detail\": \"...\", \"code\": \"busy\"}: this phone has a read under way, or the house two"
+          },
           "503": {
             "description": "{\"detail\": \"...\", \"code\": \"vision_model_missing\"|\"read_failed\"}"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
           }
         }
       }
@@ -16336,25 +16367,6 @@
           "file"
         ],
         "title": "Body_extract_document_api_chat_documents_extract_post"
-      },
-      "Body_read_letter_api_chat_letters_read_post": {
-        "properties": {
-          "file": {
-            "type": "string",
-            "contentMediaType": "application/octet-stream",
-            "title": "File"
-          },
-          "stop_if_handwritten": {
-            "type": "boolean",
-            "title": "Stop If Handwritten",
-            "default": true
-          }
-        },
-        "type": "object",
-        "required": [
-          "file"
-        ],
-        "title": "Body_read_letter_api_chat_letters_read_post"
       },
       "Body_send_voice_api_chat_threads__thread_id__voice_post": {
         "properties": {
