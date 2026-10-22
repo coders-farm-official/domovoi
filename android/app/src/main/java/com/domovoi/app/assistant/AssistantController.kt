@@ -1460,6 +1460,9 @@ class AssistantController(
             // check 2026-10-21) before any words: once more, on a fresh
             // conversation, so it is never shown as "stopped".
             var again = true
+            // No sentence claims an action the model can't do (Fold check
+            // 2026-10-21: "Playing Outcast now.", and nothing played).
+            var guard = ClaimGuard()
             while (true) try {
                 llm.reply(turn)
                     .collect { piece ->
@@ -1479,6 +1482,8 @@ class AssistantController(
                             delta = held.toString()
                             held.clear()
                         }
+                        delta = guard.push(delta)
+                        if (delta.isEmpty()) return@collect
                         text.append(delta)
                         onDelta(delta)
                         _state.update { ui ->
@@ -1493,17 +1498,24 @@ class AssistantController(
                 llm.cancel()
                 break
             } catch (e: CancellationException) {
-                if (!again || !runtimeCancel() || text.isNotEmpty() || held.isNotEmpty()) throw e
+                if (!again || !runtimeCancel() || text.isNotEmpty() || held.isNotEmpty() || guard.holding) throw e
                 again = false
+                guard = ClaimGuard()
                 Log.w(TAG, "the runtime cancelled a reply nobody stopped (${e.message}); asking once more")
                 llm.reset()
             }
             if (held.isNotEmpty()) {
                 val proposal = if (proposing) LookupRules.parseProposal(held.toString()) else null
                 if (proposal != null) return lookupReply(viewed, proposal, onDelta)
-                text.append(held)
-                onDelta(held.toString())
+                val rest = guard.push(held.toString())
+                text.append(rest)
+                onDelta(rest)
             }
+            guard.finish().takeIf { it.isNotEmpty() }?.let {
+                text.append(it)
+                onDelta(it)
+            }
+            if (guard.replaced) Log.i(TAG, "a model sentence claiming an action was replaced")
             val stats = llm.lastStats()
             recordSpeed(backend, stats, Persona.SYSTEM_PROMPT.length + sentTurns.sumOf { it.text.length })
             // A turn that ended in a tool call written as text (kept off the

@@ -209,6 +209,18 @@ class PhoneActionsControllerTest {
         assertTrue("no model was loaded", engines.isEmpty())
     }
 
+    /** Fold check 2026-10-21: "Play Outcast" (not in the library) went to
+     *  the model, which said "Playing Outcast now." and nothing played. */
+    @Test fun aModelReplyNeverClaimsToHavePlayedSomething() {
+        val c = controller()
+        script = { _, emit -> emit("Playing Out"); emit("cast now. "); emit("Enjoy the music!") }
+        val r = c.ask("Play Outcast")
+        assertEquals("${ClaimGuard.PLAY_LINE} Enjoy the music!", r.text)
+        assertTrue("nothing played", player.calls.isEmpty())
+        script = { _, emit -> emit("OutKast is a hip hop duo from Atlanta.") }
+        assertEquals("OutKast is a hip hop duo from Atlanta.", c.ask("who are outkast").text)
+    }
+
     @Test fun anyNoWordCancelsAndAnUnclearReplyAsksAgain() {
         val c = controller()
         c.ask("wake me at 6:30")
