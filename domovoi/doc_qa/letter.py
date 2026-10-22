@@ -23,10 +23,16 @@ need to do. Three model steps, then the app's check:
   (:mod:`domovoi.doc_qa.calc`), matched by value, and **shown as the
   letter writes them**; one that isn't there is left out, and a note says
   how many were;
-* a REFERENCE must be in the transcript, character for character (spaces
-  and dashes aside), and is shown as the letter writes it;
-* a sentence of FROM/ABOUT/TODO/UNCLEAR that names a date or an amount the
-  letter doesn't have is left out the same way;
+* a REFERENCE must be one of the transcript's tokens (or runs of tokens),
+  character for character, never part of one and never a bare year;
+* **detect broadly, verify strictly** (:func:`clause_problem`): in every
+  piece of text the app shows (a fact's description, a reference's label,
+  each sentence of FROM/ABOUT/TODO/UNCLEAR), anything that looks like a
+  date, amount, number, percentage or reference (digit runs, currency
+  signs, codes and words, month names and abbreviations, ordinals,
+  numeric dates, weekdays, "tomorrow", numbers in words) must be exactly
+  the letter's; one that isn't drops that clause, and a numeric date that
+  could be read either way is refused;
 * deadlines and amounts due that the letter states and the model missed
   are added from the letter's own lines (:func:`letter_facts`);
 * text in the letter aimed at an AI assistant ("ignore previous
@@ -162,32 +168,65 @@ def clean_transcript(raw: str) -> str:
 _INJECTION_RE = re.compile(
     r"\b(ignore|disregard|forget|override) (all |any |the |your )?(previous|prior|above|earlier|preceding|other)"
     r" (instructions?|prompts?|rules|messages?)\b"
-    r"|\b(note|message|instructions?) (to|for) (the )?(ai|a\.i\.|assistants?|chatbots?|language models?|llms?)\b"
+    r"|\b(note|message|instructions?) (to|for) (the )?(ai|a\.i\.|assistants?|chatbots?|language models?|llms?|models?)\b"
     r"|\b(dear|attention|hey|hello) (ai|assistant|chatbot|language model)\b"
     r"|\byou are (an? )?(ai|assistant|chatbot|language model)\b"
     r"|\b(system prompt|new instructions|jailbreak)\b"
-    r"|\b(ai|assistant|chatbot)s? (reading|processing|summari[sz]ing) this\b"
+    r"|\b(ai|assistant|chatbot|model)s? (reading|processing|summari[sz]ing) this\b"
+    r"|\bto (whoever|whomever|anyone|the (ai|assistant|model|bot)) (is )?(summari[sz]es|summari[sz]ing|reads|reading|"
+    r"processes|processing|explains|explaining) this\b"
+    r"|^\W*(assistant|ai|a\.i\.|system|user|model|chatbot|bot)\s*:"
     r"|\bignora (todas )?(las )?instrucciones (anteriores|previas)\b")
+
+#: Words a sentence may end on with a full stop that doesn't end it
+#: ("Nov. 1", "No. 31", "Acme Inc. says").
+_ABBREV = frozenset("jan feb mar apr jun jul aug sep sept oct nov dec no nos inc ltd co corp mr mrs ms dr st ave "
+                    "apt ste dept est etc vs approx tel ext jr sr e.g i.e a.m p.m u.s".split())
+_SENT_END_RE = re.compile(r"[.!?]+\s+")
 
 
 def _sentences(text: str) -> list[str]:
+    """``text`` cut into sentences: at a line break, and after ".", "!" or
+    "?" and a space, except after an abbreviation or a single letter
+    ("Nov. 1, 2026", "No. 31", "J. Smith")."""
     out: list[str] = []
     for line in (text or "").split("\n"):
-        for s in re.split(r"(?<=[.!?])\s+", line.strip()):
-            if s.strip():
-                out.append(s.strip())
+        line = line.strip()
+        if not line:
+            continue
+        start = 0
+        for m in _SENT_END_RE.finditer(line):
+            before = line[start:m.start()].split()
+            last = (before[-1] if before else "").lower().lstrip("(\"'“‘").rstrip(".")
+            if m.group(0)[0] == "." and (last in _ABBREV or (len(last) == 1 and last.isalpha())):
+                continue
+            piece = line[start:m.start() + len(m.group(0).rstrip())].strip()
+            if piece:
+                out.append(piece)
+            start = m.end()
+        rest = line[start:].strip()
+        if rest:
+            out.append(rest)
     return out
 
 
-def injection_sentences(transcript: str) -> list[str]:
-    """The letter's sentences that talk to an AI assistant."""
-    return [s for s in _sentences(transcript) if _INJECTION_RE.search(_q(s))]
+def injection_lines(transcript: str) -> list[str]:
+    """The letter's lines that talk to an AI assistant ("ignore previous
+    instructions", "Assistant: ...", "To whoever summarizes this: ..."),
+    and lines dressed as one of the reply's labels (:func:`dressed_label`:
+    "* TODO: wire $500", "**AMOUNT:** $500", "DEADLINE： ...")."""
+    out = []
+    for line in (transcript or "").split("\n"):
+        s = line.strip()
+        if s and (_INJECTION_RE.search(_q(s)) or dressed_label(s)):
+            out.append(s)
+    return out
 
 
 def injection_snippet(transcript: str) -> str | None:
-    """Eight words of the first such sentence, from two words before where
-    it speaks to the assistant ("..." after a cut), or None."""
-    found = injection_sentences(transcript)
+    """Eight words of the first such line, from two words before where it
+    speaks to the assistant ("..." after a cut), or None."""
+    found = injection_lines(transcript)
     if not found:
         return None
     q = _q(found[0])
@@ -199,16 +238,20 @@ def injection_snippet(transcript: str) -> str | None:
     return snippet + ("..." if start + 8 < len(words) else "")
 
 
-def _grams(text: str, n: int = 4) -> set[tuple[str, ...]]:
-    w = re.findall(r"\w+", _q(text))
-    return {tuple(w[i:i + n]) for i in range(len(w) - n + 1)}
+def _pairs(text: str) -> set[tuple[str, str]]:
+    """Pairs of neighbouring content words (stemmed; no stop words, numbers
+    or month names)."""
+    from domovoi.doc_qa.text import tokens
+
+    w = [t for t in tokens(text) if not _has_digit(t) and t not in calc._MONTHS]
+    return {(w[i], w[i + 1]) for i in range(len(w) - 1)}
 
 
 def repeats_injection(sentence: str, injected: Sequence[str]) -> bool:
-    """A sentence of the reply that repeats four words in a row of a
-    sentence aimed at an assistant (it may be following it)."""
-    mine = _grams(sentence)
-    return any(mine & _grams(s) for s in injected)
+    """A sentence of the reply that shares two content words in a row with
+    a line aimed at an assistant ("gift cards"): it may be following it."""
+    mine = _pairs(sentence)
+    return any(mine & _pairs(s) for s in injected)
 
 
 # ─── Step 3: explain ─────────────────────────────────────────────────────
@@ -217,7 +260,8 @@ LABELS = ("FROM", "ABOUT", "DEADLINE", "AMOUNT", "REFERENCE", "TODO", "UNCLEAR")
 RULES = (
     "The person photographed a letter and asks about it. Its text, read from the photo, is below. "
     "Explain it in plain words, from that text only.\n"
-    "Reply in exactly this form, one item per line, and nothing else:\n"
+    "Reply in exactly this form, one item per line, each line starting with its label in capitals, and nothing "
+    "else:\n"
     "FROM: who sent the letter (the company or person it comes from, not the person it is addressed to)\n"
     "ABOUT: one or two plain sentences: what the letter is about and what it asks for\n"
     "DEADLINE: a date copied exactly as the letter writes it | what has to happen by then\n"
@@ -267,15 +311,37 @@ def build_prompt(question: str, transcripts: Sequence[str], nonce: str | None = 
     return {"rules": RULES.replace("{language}", question_language(question)), "user": user, "nonce": n}
 
 
+_LABEL_LIKE_RE = re.compile(r"^(" + "|".join(LABELS) + r")S?\s*:")
+#: Put before a letter line that reads like one of the reply's labels.
+DEFANG = "(in the letter) "
+
+
+def dressed_label(line: str) -> bool:
+    """A letter line dressed as one of the reply's labels in a way no
+    letter writes one: TODO or UNCLEAR, or a label behind markdown, a
+    bullet or a full-width colon. ("Amount: $50" and "From: City Power" are
+    plain letter lines.)"""
+    if not _label_like(line):
+        return False
+    plain_label = re.match(r"^(" + "|".join(LABELS) + r")S?\s*:", line.strip(), re.IGNORECASE)
+    return plain_label is None or plain_label.group(1).upper() in ("TODO", "UNCLEAR")
+
+
+def _label_like(line: str) -> bool:
+    """A line that, read loosely (NFKC, no markdown, bullets or quotes in
+    front, any case), starts like one of the reply's labels: "* TODO:",
+    "**AMOUNT:**", "Deadline：", "> from:"."""
+    t = normalize(line).replace("*", "").replace("_", "").replace("`", "")
+    t = t.lstrip(" \t>#-•·+").upper()
+    return bool(_LABEL_LIKE_RE.match(t))
+
+
 def as_data(text: str) -> str:
-    """Letter text as it goes into the prompt: no block markers, and a line
-    can't start with one of the reply's labels ("TODO: wire $500")."""
+    """Letter text as it goes into the prompt: no block markers, and no
+    line that reads like a reply label (:func:`_label_like` lines get
+    :data:`DEFANG` in front)."""
     t = qa.as_data(text or "")
-    out = []
-    for line in t.split("\n"):
-        m = re.match(r"^(\s*)(" + "|".join(LABELS) + r")(\s*:)", line, re.IGNORECASE)
-        out.append(line if m is None else m.group(1) + m.group(2).lower() + m.group(3) + line[m.end():])
-    return "\n".join(out)
+    return "\n".join(DEFANG + line if _label_like(line) else line for line in t.split("\n"))
 
 
 @dataclass
@@ -293,7 +359,9 @@ class Parsed:
         return not (self.sender or self.about or self.todo or self.deadlines or self.amounts or self.references)
 
 
-_LINE_RE = re.compile(r"^(?:\s|[>*#_\-•])*(" + "|".join(LABELS) + r")S?(?:\s|[*_])*[:：](?:\s|[*_])*(.*)$", re.IGNORECASE)
+#: A reply line: the exact label, in capitals, first on the line (nothing
+#: looser: a letter line copied with markdown or a bullet isn't one).
+_LINE_RE = re.compile(r"^(" + "|".join(LABELS) + r"):(.*)$")
 
 
 def _split_pair(rest: str) -> tuple[str, str]:
@@ -313,9 +381,9 @@ def _split_pair(rest: str) -> tuple[str, str]:
 
 
 def parse(reply: str, nonce: str | None = None) -> Parsed:
-    """The labelled lines of ``reply`` (labels in any case, with markdown
-    around them or not); a line after a free-text label carries on that
-    label's text. Anything before the first label is ignored."""
+    """The labelled lines of ``reply`` (:data:`_LINE_RE`); a line after a
+    free-text label carries on that label's text. Anything before the
+    first label is ignored."""
     p = Parsed()
     text = reply or ""
     if nonce:
@@ -333,7 +401,7 @@ def parse(reply: str, nonce: str | None = None) -> Parsed:
                 attr = {"FROM": "sender", "ABOUT": "about", "TODO": "todo", "UNCLEAR": "unclear"}[current]
                 setattr(p, attr, (getattr(p, attr) + " " + line.strip(" *_-•")).strip())
             continue
-        label, rest = m.group(1).upper(), m.group(2).strip()
+        label, rest = m.group(1), m.group(2).strip()
         current = label
         if not rest:
             continue
@@ -413,30 +481,55 @@ _AMOUNT_CUE = re.compile(
 MONEY_UNITS = frozenset({"$", "€", "£", "¥", "₹", "USD", "MXN", "dollars", "%"})
 MAX_ADDED = 3
 
+#: Characters a token is trimmed of before it is compared ("$142.17." is
+#: "$142.17"; "(4471-2290-18)" is "4471-2290-18").
+_LEAD = "([{\"'“‘«¿¡*_"
+_TRAIL = ".,;:!?)]}\"'”’»*_"
+CURRENCY_SIGNS = "$€£¥₹"
+
+
+def tokens_of(text: str) -> list[str]:
+    """The tokens of ``text`` as the check compares them: split at spaces,
+    trimmed of quotes, brackets and the punctuation that ends a phrase."""
+    out = []
+    for w in calc.plain(text or "").split():
+        t = w.lstrip(_LEAD).rstrip(_TRAIL)
+        if t:
+            out.append(t)
+    return out
+
+
+def _has_digit(t: str) -> bool:
+    return any(c.isdecimal() for c in t)
+
 
 @dataclass
 class LetterText:
     """A transcript as the check reads it: ``raw`` as read, and ``text``
-    with every sentence aimed at an AI assistant blanked out (same length),
-    so no date, amount or number of one is ever shown as the letter's."""
+    with every line aimed at an AI assistant blanked out (same length), so
+    no date, amount or number of one is ever shown as the letter's."""
     raw: str
     text: str
     ctx: calc.Ctx
     whens: list[When]
     nums: list[calc.Num]
+    tokens: list[str]
+    words: set[str]
+    low: str
 
     @staticmethod
     def of(transcripts: Sequence[str]) -> "LetterText":
         raw = "\n\n".join(t for t in transcripts if t)
         text = raw
-        for s in injection_sentences(raw):
+        for s in injection_lines(raw):
             at = text.find(s)
             while at >= 0:
                 text = text[:at] + " " * len(s) + text[at + len(s):]
                 at = text.find(s, at + len(s))
         lang = headsup.guess_language(raw)
         ctx = calc.context([text], lang)
-        return LetterText(raw, text, ctx, read_whens(text, ctx), _amounts(text, ctx))
+        return LetterText(raw, text, ctx, read_whens(text, ctx), _amounts(text, ctx), tokens_of(text),
+                          set(text_words(text)), _q(text))
 
 
 def _sentence_at(text: str, pos: int) -> str:
@@ -469,8 +562,8 @@ def letter_facts(lt: LetterText) -> tuple[list[tuple[str, str]], list[tuple[str,
     """The deadlines (a date in a sentence that asks for something by then)
     and the amounts due (in a sentence that says so) the letter states,
     each with its sentence, at most :data:`MAX_ADDED` of each, in the order
-    written. Nothing from a sentence aimed at an AI assistant (blanked
-    in ``lt.text``)."""
+    written. Nothing from a line aimed at an AI assistant (blanked in
+    ``lt.text``)."""
     deadlines: list[tuple[str, str]] = []
     seen: set[Any] = set()
     for w in lt.whens:
@@ -494,14 +587,117 @@ def letter_facts(lt: LetterText) -> tuple[list[tuple[str, str]], list[tuple[str,
     return deadlines[:MAX_ADDED], amounts[:MAX_ADDED]
 
 
-# ─── The check ───────────────────────────────────────────────────────────
+# ─── The check: detect broadly, verify strictly ─────────────────────────
+_FULL_MONTHS = ("january february march april june july august september october november december "
+                "enero febrero marzo abril mayo junio julio agosto septiembre setiembre octubre noviembre "
+                "diciembre").split()
+_ABBR_MONTH_DOT_RE = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|ene|abr|ago|dic)\.")
+_FULL_MONTH_RE = re.compile(r"\b(" + "|".join(_FULL_MONTHS) + r")\b")
+_UNITS = ("one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
+          "seventeen eighteen nineteen").split()
+_TENS = "twenty thirty forty fifty sixty seventy eighty ninety".split()
+_ORD_UNITS = ("first second third fourth fifth sixth seventh eighth ninth tenth eleventh twelfth thirteenth "
+              "fourteenth fifteenth sixteenth seventeenth eighteenth nineteenth").split()
+
+
+def _ordinal_words() -> dict[str, int]:
+    out = {w: i + 1 for i, w in enumerate(_ORD_UNITS)}
+    out["twentieth"] = 20
+    out["thirtieth"] = 30
+    for i, w in enumerate(_ORD_UNITS[:9]):
+        out[f"twenty-{w}"] = 21 + i
+        out[f"twenty {w}"] = 21 + i
+    out["thirty-first"] = 31
+    out["thirty first"] = 31
+    return out
+
+
+ORDINAL_WORDS = _ordinal_words()
+_ORD_ALT = "|".join(sorted(ORDINAL_WORDS, key=len, reverse=True))
+_ORD = r"(?:([0-9]{1,2})(?:st|nd|rd|th)|(" + _ORD_ALT + r"))"
+_ORD_OF_MONTH_RE = re.compile(r"\b" + _ORD + r" (?:of )?(?:the month of )?(" + _MONTH_ALT + r")\b")
+_MONTH_THE_ORD_RE = re.compile(r"\b(" + _MONTH_ALT + r")\.? (?:the )?" + _ORD + r"(?![0-9])")
+_PARTIAL_DATE_RE = re.compile(r"(?<![0-9/.-])([0-9]{1,2})[/.-]([0-9]{1,2})(?![0-9]|[/.-][0-9])")
+#: Words that name a date, an amount or a number without a digit: each
+#: must be the letter's own.
+_NUMBER_WORDS = _UNITS[1:] + _TENS + "hundred thousand million billion dozen half quarter".split() + (
+    "dos tres cuatro cinco seis siete ocho nueve diez once doce veinte treinta cuarenta cincuenta sesenta setenta "
+    "ochenta noventa cien ciento cientos mil millón millones").split()
+_MONEY_WORDS = ("dollar dollars buck bucks euro euros pound pounds peso pesos cent cents percent pence usd eur gbp "
+                "cad mxn aud nzd jpy inr chf centavos céntimos").split()
+_DAY_WORDS = ("monday tuesday wednesday thursday friday saturday sunday today tomorrow tonight yesterday weekend "
+              "lunes martes miércoles miercoles jueves viernes sábado sabado domingo hoy mañana ayer").split()
+_WORD_RE = re.compile(r"\b(" + "|".join(sorted(_NUMBER_WORDS + _MONEY_WORDS + _DAY_WORDS + _FULL_MONTHS,
+                                                key=len, reverse=True)) + r")\b")
+_ONE_RE = re.compile(r"\bone (hundred|thousand|million|billion|dollars?|euros?|pounds?|cents?|percent)\b")
+_PER_CENT_RE = re.compile(r"\bper cent\b")
+_RELATIVE_RE = re.compile(r"\b(next|this|coming|following) (week|month|year|monday|tuesday|wednesday|thursday|friday|"
+                          r"saturday|sunday|weekend)\b|\bend of (the|this|next) (week|month|year)\b")
+
+
+def _ord_day(m: re.Match, g_num: int, g_word: int) -> int:
+    return int(m.group(g_num)) if m.group(g_num) else ORDINAL_WORDS[m.group(g_word)]
+
+
+def text_words(text: str) -> list[str]:
+    """Lowercase words of ``text`` (:func:`domovoi.doc_qa.text.words`)."""
+    from domovoi.doc_qa.text import words
+
+    return words(text)
+
+
+def clause_problem(text: str, lt: LetterText) -> str | None:
+    """Why ``text`` (a clause the app would show) names something the letter
+    doesn't, or None when all it names is the letter's. Detects broadly:
+    every token with a digit or a currency sign must be one of the
+    letter's tokens, exactly; every date (with a month name, an ordinal, or
+    in numbers) must be one of the letter's, and a numeric date whose day
+    and month could be either way is refused; month names, weekdays,
+    "today"/"next week", currency words and codes, and numbers written as
+    words must be the letter's words."""
+    have = set(lt.tokens)
+    for t in tokens_of(text):
+        if (_has_digit(t) or any(c in CURRENCY_SIGNS for c in t)) and t not in have:
+            return f"not in the letter: {t}"
+    for d in calc.read_dates(text, lt.ctx):
+        if d.date is None:
+            return f"day and month could be either way: {d.written}"
+    for w in read_whens(text, lt.ctx):
+        if not any((o.date == w.date) if w.date is not None else (o.md == w.md) for o in lt.whens):
+            return f"a date the letter doesn't have: {w.written}"
+    low = calc.plain(text).lower()
+    for m in _PARTIAL_DATE_RE.finditer(low):
+        a, b = int(m.group(1)), int(m.group(2))
+        if a <= 12 and b <= 12 and a != b:
+            return f"day and month could be either way: {m.group(0)}"
+    for rx, mi, num, word in ((_ORD_OF_MONTH_RE, 3, 1, 2), (_MONTH_THE_ORD_RE, 1, 2, 3)):
+        for m in rx.finditer(low):
+            md = (calc._MONTHS[m.group(mi)], _ord_day(m, num, word))
+            if not any(o.md == md for o in lt.whens):
+                return f"a date the letter doesn't have: {m.group(0)}"
+    letter_months = {o.md[0] for o in lt.whens} | {calc._MONTHS[w] for w in lt.words if w in _FULL_MONTHS}
+    for m in _ABBR_MONTH_DOT_RE.finditer(low):
+        if calc._MONTHS[m.group(1)] not in letter_months:
+            return f"a month the letter doesn't name: {m.group(0)}"
+    q = _q(text)
+    for m in _WORD_RE.finditer(q):
+        w = m.group(1)
+        if w in _FULL_MONTHS:
+            if calc._MONTHS[w] not in letter_months:
+                return f"a month the letter doesn't name: {w}"
+        elif w not in lt.words:
+            return f"not in the letter: {w}"
+    for rx in (_ONE_RE, _PER_CENT_RE, _RELATIVE_RE):
+        for m in rx.finditer(q):
+            if m.group(0) not in lt.low:
+                return f"not in the letter: {m.group(0)}"
+    return None
+
+
 def _match_when(fact: str, lt: LetterText) -> When | None:
     """The letter's date that ``fact`` names: the same day (with a year,
     the same date), or None."""
-    mine = read_whens(fact, lt.ctx)
-    if not mine:
-        return None
-    for w in mine:
+    for w in read_whens(fact, lt.ctx):
         for o in lt.whens:
             if w.date is not None:
                 if o.date == w.date:
@@ -512,50 +708,45 @@ def _match_when(fact: str, lt: LetterText) -> When | None:
 
 
 def _match_amount(fact: str, lt: LetterText) -> calc.Num | None:
-    """The letter's amount that ``fact`` names: the same value, in the same
-    currency (or the fact names none), or None."""
+    """The letter's amount of money that ``fact`` names: the same value, in
+    the same currency (or the fact names none), or None."""
     mine = _amounts(fact, lt.ctx)
-    if not mine:
-        return None
     mine.sort(key=lambda n: n.unit == "")
     for n in mine:
         for o in lt.nums:
-            if o.value == n.value and (n.unit == o.unit or (n.unit == "" and o.unit in MONEY_UNITS)):
+            if o.unit in MONEY_UNITS and o.value == n.value and (n.unit == o.unit or n.unit == ""):
                 return o
     return None
 
 
-def _flat(s: str) -> str:
-    return re.sub(r"[^\w]", "", _q(s))
+_YEAR_RE = re.compile(r"^(1[89]|20)[0-9]{2}$")
 
 
-def _match_reference(number: str, lt: LetterText) -> str | None:
-    """The letter's own writing of reference ``number`` (spaces, dashes,
-    dots and slashes aside, any case), or None. It needs a digit and three
-    letters or digits."""
-    core = re.sub(r"[^0-9A-Za-z]", "", normalize(number or ""))
-    if len(core) < 3 or not re.search(r"[0-9]", core):
+def match_reference(number: str, lt: LetterText) -> str | None:
+    """The letter's reference ``number``: the same token or run of tokens,
+    character for character (never part of one: "4471-2290" isn't
+    "4471-2290-18"), with a digit and at least three characters, and never
+    a bare year; or None."""
+    mine = tokens_of(number)
+    if not mine or not any(_has_digit(t) for t in mine) or sum(len(t) for t in mine) < 3:
         return None
-    pat = r"(?:\s|[./-])?".join(re.escape(c) for c in core)
-    m = re.search(r"(?<![0-9A-Za-z])" + pat + r"(?![0-9A-Za-z])", lt.text, re.IGNORECASE)
-    return m.group(0) if m else None
+    if len(mine) == 1 and _YEAR_RE.match(mine[0]):
+        return None
+    toks = lt.tokens
+    for i in range(len(toks) - len(mine) + 1):
+        if toks[i:i + len(mine)] == mine:
+            return " ".join(mine)
+    return None
 
 
-def _verbatim(fact: str, lt: LetterText) -> bool:
-    f = " ".join(_q(fact).split())
-    return len(re.sub(r"\W", "", f)) >= 3 and f in " ".join(_q(lt.text).split())
+def supports(what: str, sentence: str) -> bool:
+    """A fact's description shares a word (stemmed, not a stop word or a
+    number) with the letter's own sentence around it: "$25.00 | total
+    amount due" over "...a late fee of $25.00" doesn't."""
+    from domovoi.doc_qa.text import tokens
 
-
-def sentence_ok(sentence: str, lt: LetterText) -> bool:
-    """Every date and every amount of money a sentence names is the
-    letter's."""
-    for w in read_whens(sentence, lt.ctx):
-        if not any((o.date == w.date) if w.date is not None else (o.md == w.md) for o in lt.whens):
-            return False
-    for n in _amounts(sentence, lt.ctx):
-        if n.unit in MONEY_UNITS and not any(o.value == n.value and o.unit == n.unit for o in lt.nums):
-            return False
-    return True
+    mine = {t for t in tokens(what) if not _has_digit(t)}
+    return bool(mine & set(tokens(sentence)))
 
 
 _NOTHING_RE = re.compile(r"^(nothing|none|n/?a|no|nada|ninguno|ninguna)\b[.!]?$")
@@ -580,16 +771,17 @@ class Explained:
                 "shaped": self.shaped, "injection": self.injection is not None}
 
 
-NOTE_CHECKED = ("Dates, amounts and reference numbers above are copied from the letter's text and checked "
-                "against it. Domovoi read them from a photo, so check anything important on the letter itself.")
+NOTE_CHECKED = ("Dates, amounts and reference numbers above were checked against the text Domovoi read from the "
+                "photo. A misread photo can still be wrong, so check anything important on the letter itself.")
 NOTE_UNSHAPED = "Domovoi couldn't explain this letter clearly, so this lists what the letter's text states."
 NOTHING_READ = ("Domovoi couldn't read any text in this photo. Take it again in good light, with the whole "
                 "page in the picture.")
 
 
 def note_dropped(n: int) -> str:
-    return (f"Domovoi left out {n} date{'' if n == 1 else 's'} or amount{'' if n == 1 else 's'} that "
-            f"{'isn' if n == 1 else 'aren'}'t in the letter's text.")
+    return (f"Domovoi left out {n} part{'' if n == 1 else 's'} of its explanation that couldn't be checked "
+            f"against the letter's text (a date, an amount or a number the letter doesn't have, or a "
+            f"description that doesn't fit it).")
 
 
 def note_injection(snippet: str) -> str:
@@ -603,7 +795,7 @@ def _keep_sentences(text: str, lt: LetterText, injected: Sequence[str]) -> tuple
     for s in _sentences(text):
         if injected and repeats_injection(s, injected):
             continue
-        if not sentence_ok(s, lt):
+        if clause_problem(s, lt) is not None:
             dropped += 1
             continue
         kept.append(s)
@@ -617,42 +809,63 @@ def finish(reply: str, transcripts: Sequence[str], nonce: str | None = None) -> 
     if not lt.raw.strip():
         return Explained(NOTHING_READ, [{"code": "letter_unreadable", "text": NOTHING_READ}], [], [], [],
                          shaped=False)
-    injected = injection_sentences(lt.raw)
+    injected = injection_lines(lt.raw)
     snippet = injection_snippet(lt.raw)
     p = parse(reply, nonce)
     dropped = 0
+
+    def described(what: str, start: int) -> tuple[str, bool]:
+        """The description shown beside a checked fact: the model's when it
+        names nothing the letter lacks and fits the letter's sentence,
+        else the letter's own sentence (and it counts as left out)."""
+        quote = f"“{_sentence_at(lt.text, start)}”"
+        if not what:
+            return quote, False
+        if (injected and repeats_injection(what, injected)) or clause_problem(what, lt) is not None \
+                or not supports(what, _sentence_at(lt.text, start)):
+            return quote, True
+        return what, False
 
     deadlines: list[tuple[str, str]] = []
     seen_d: set[Any] = set()
     for fact, what in p.deadlines:
         w = _match_when(fact, lt)
-        if w is not None:
-            key = w.date or w.md
-            if key not in seen_d:
-                seen_d.add(key)
-                deadlines.append((w.written, what or f"“{_sentence_at(lt.text, w.start)}”"))
-        elif not read_whens(fact, lt.ctx) and _verbatim(fact, lt):
-            if fact.lower() not in seen_d:
-                seen_d.add(fact.lower())
-                deadlines.append((fact, what))
-        else:
+        # A deadline is a date the letter asks something by ("Statement
+        # date: October 3, 2026" isn't one, whatever the model calls it).
+        if w is None or clause_problem(fact, lt) is not None \
+                or not _DEADLINE_CUE.search(_q(_sentence_at(lt.text, w.start))):
             dropped += 1
+            continue
+        key = w.date or w.md
+        if key in seen_d:
+            continue
+        seen_d.add(key)
+        shown, left = described(what, w.start)
+        dropped += left
+        deadlines.append((w.written, shown))
     amounts: list[tuple[str, str]] = []
     seen_a: set[Any] = set()
     for fact, what in p.amounts:
         n = _match_amount(fact, lt)
-        if n is not None:
-            if (n.value, n.unit) not in seen_a:
-                seen_a.add((n.value, n.unit))
-                amounts.append((n.written, what or f"“{_sentence_at(lt.text, n.start)}”"))
-        else:
+        if n is None or clause_problem(fact, lt) is not None:
             dropped += 1
+            continue
+        if (n.value, n.unit) in seen_a:
+            continue
+        seen_a.add((n.value, n.unit))
+        shown, left = described(what, n.start)
+        dropped += left
+        amounts.append((n.written, shown))
     references: list[tuple[str, str]] = []
     seen_r: set[str] = set()
     for label, number in p.references:
-        found = _match_reference(number, lt)
-        if found is not None and _flat(found) not in seen_r:
-            seen_r.add(_flat(found))
+        found = match_reference(number, lt)
+        label_ok = not label or clause_problem(label, lt) is None
+        if found is None or not label_ok:
+            dropped += 1
+            continue
+        if found not in seen_r:
+            seen_r.add(found)
             references.append((label or "Reference", found))
 
     # What the letter states that the model missed.
@@ -720,18 +933,26 @@ def finish(reply: str, transcripts: Sequence[str], nonce: str | None = None) -> 
     return Explained(content, notes, deadlines, amounts, references, dropped, shaped, snippet)
 
 
+def shown_problems(content: str, transcripts: Sequence[str]) -> list[str]:
+    """Every line of a finished reply that names something the letter
+    doesn't (:func:`clause_problem`), quotes of the letter aside: the
+    guarantee, as a test can state it. Empty for a reply the check made."""
+    lt = LetterText.of(transcripts)
+    out = []
+    for line in content.split("\n"):
+        body = re.sub(r"“[^”]*”", "", line).replace("**", "")
+        why = clause_problem(body, lt)
+        if why is not None:
+            out.append(f"{line} ({why})")
+    return out
+
+
 def sources(transcripts: Sequence[str]) -> list[dict[str, Any]]:
     """The reply's sources: each photo's transcript ("photo 1"), so the
     person can read what the explanation was made from."""
-    return [{"token": None, "name": "the text Domovoi read from it", "label": f"photo {i + 1}", "page": None, "text": t,
-             "match": "", "cited": True} for i, t in enumerate(transcripts)]
+    return [{"token": None, "name": "the text Domovoi read from it", "label": f"photo {i + 1}", "page": None,
+             "text": t, "match": "", "cited": True} for i, t in enumerate(transcripts)]
 
 
 #: The note under a letter read past its handwriting card.
 NOTE_HANDWRITING = "Read from handwriting: check every name, date and number against the letter."
-
-
-def value_key(v: Decimal) -> str:
-    """A value as the shared cases write it (no exponent, no trailing zeros)."""
-    s = format(v.normalize(), "f")
-    return s

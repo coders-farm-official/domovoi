@@ -11,9 +11,10 @@ import java.util.Locale
  * explain in a fixed shape), and the app's check of the explanation: every
  * deadline and amount must be in the transcript (read with "calculate
  * exactly"'s strict grammar, [DocCalc]) and is shown as the letter writes
- * it; a reference number must be there character for character; sentences
- * naming a date or amount the letter doesn't have are left out; text aimed
- * at an AI assistant is named and never followed. Both sides are held to
+ * it; a reference number must be one of its tokens, exactly; and, detecting
+ * broadly and verifying strictly ([clauseProblem]), any clause naming a
+ * date, amount or number the letter doesn't have is left out; text aimed at
+ * an AI assistant is named and never followed. Both sides are held to
  * `letter_cases.json` (LetterReadSharedCasesTest).
  */
 object LetterRead {
@@ -117,30 +118,51 @@ object LetterRead {
     private val INJECTION_RE = re(
         """\b(ignore|disregard|forget|override) (all |any |the |your )?(previous|prior|above|earlier|preceding|other)""" +
             """ (instructions?|prompts?|rules|messages?)\b""" +
-            """|\b(note|message|instructions?) (to|for) (the )?(ai|a\.i\.|assistants?|chatbots?|language models?|llms?)\b""" +
+            """|\b(note|message|instructions?) (to|for) (the )?(ai|a\.i\.|assistants?|chatbots?|language models?|llms?|models?)\b""" +
             """|\b(dear|attention|hey|hello) (ai|assistant|chatbot|language model)\b""" +
             """|\byou are (an? )?(ai|assistant|chatbot|language model)\b""" +
             """|\b(system prompt|new instructions|jailbreak)\b""" +
-            """|\b(ai|assistant|chatbot)s? (reading|processing|summari[sz]ing) this\b""" +
+            """|\b(ai|assistant|chatbot|model)s? (reading|processing|summari[sz]ing) this\b""" +
+            """|\bto (whoever|whomever|anyone|the (ai|assistant|model|bot)) (is )?(summari[sz]es|summari[sz]ing|reads|reading|""" +
+            """processes|processing|explains|explaining) this\b""" +
+            """|^\W*(assistant|ai|a\.i\.|system|user|model|chatbot|bot)\s*:""" +
             """|\bignora (todas )?(las )?instrucciones (anteriores|previas)\b""",
     )
-    private val SENTENCE_SPLIT = re("""(?<=[.!?])\s+""")
 
+    /** Words a sentence may end on with a full stop that doesn't end it. */
+    private val ABBREV = ("jan feb mar apr jun jul aug sep sept oct nov dec no nos inc ltd co corp mr mrs ms dr st ave " +
+        "apt ste dept est etc vs approx tel ext jr sr e.g i.e a.m p.m u.s").split(" ").toSet()
+    private val SENT_END_RE = re("""[.!?]+\s+""")
+
+    /** [text] cut into sentences, abbreviations kept whole (the server's `_sentences`). */
     internal fun sentences(text: String?): List<String> {
         val out = ArrayList<String>()
-        for (line in (text ?: "").split("\n")) {
-            for (s in pyStrip(line).split(SENTENCE_SPLIT)) if (s.isNotBlank()) out += pyStrip(s)
+        for (raw in (text ?: "").split("\n")) {
+            val line = pyStrip(raw)
+            if (line.isEmpty()) continue
+            var start = 0
+            for (m in SENT_END_RE.findAll(line)) {
+                val before = DocText.pySplit(line.substring(start, m.range.first))
+                val last = (before.lastOrNull() ?: "").lowercase(Locale.ROOT).trimStart('(', '"', '\'', '“', '‘').trimEnd('.')
+                if (m.value[0] == '.' && (last in ABBREV || (last.length == 1 && last[0].isLetter()))) continue
+                val piece = pyStrip(line.substring(start, m.range.first + m.value.trimEnd().length))
+                if (piece.isNotEmpty()) out += piece
+                start = m.range.last + 1
+            }
+            val rest = pyStrip(line.substring(start))
+            if (rest.isNotEmpty()) out += rest
         }
         return out
     }
 
-    /** The letter's sentences that talk to an AI assistant. */
-    fun injectionSentences(transcript: String?): List<String> = sentences(transcript).filter { INJECTION_RE.containsMatchIn(q(it)) }
+    /** The letter's lines that talk to an AI assistant, or are dressed as a reply label ([dressedLabel]). */
+    fun injectionLines(transcript: String?): List<String> = (transcript ?: "").split("\n").map { pyStrip(it) }
+        .filter { it.isNotEmpty() && (INJECTION_RE.containsMatchIn(q(it)) || dressedLabel(it)) }
 
-    /** Eight words of the first such sentence, from two words before where it
+    /** Eight words of the first such line, from two words before where it
      *  speaks to the assistant ("..." after a cut), or null. */
     fun injectionSnippet(transcript: String?): String? {
-        val found = injectionSentences(transcript).firstOrNull() ?: return null
+        val found = injectionLines(transcript).firstOrNull() ?: return null
         val qs = q(found)
         val m = INJECTION_RE.find(qs)
         val words = DocText.pySplit(found)
@@ -150,16 +172,17 @@ object LetterRead {
         return snippet + if (start + 8 < words.size) "..." else ""
     }
 
-    private val WORD = re("""\w+""")
-    private fun grams(text: String, n: Int = 4): Set<List<String>> {
-        val w = WORD.findAll(q(text)).map { it.value }.toList()
-        return (0..(w.size - n)).map { w.subList(it, it + n) }.toSet()
+    private fun hasDigit(t: String) = t.any { it.isDigit() }
+
+    private fun pairs(text: String): Set<Pair<String, String>> {
+        val w = DocText.tokens(text).filter { !hasDigit(it) && it !in DocCalc.MONTHS }
+        return (0 until maxOf(0, w.size - 1)).map { w[it] to w[it + 1] }.toSet()
     }
 
-    /** A reply sentence that repeats four words in a row of a sentence aimed at an assistant. */
+    /** A reply sentence that shares two content words in a row with a line aimed at an assistant. */
     fun repeatsInjection(sentence: String, injected: List<String>): Boolean {
-        val mine = grams(sentence)
-        return injected.any { s -> grams(s).any { it in mine } }
+        val mine = pairs(sentence)
+        return injected.any { s -> pairs(s).any { it in mine } }
     }
 
     // ── Step 3: explain ─────────────────────────────────────────────────
@@ -167,7 +190,8 @@ object LetterRead {
 
     private const val RULES = "The person photographed a letter and asks about it. Its text, read from the photo, is below. " +
         "Explain it in plain words, from that text only.\n" +
-        "Reply in exactly this form, one item per line, and nothing else:\n" +
+        "Reply in exactly this form, one item per line, each line starting with its label in capitals, and nothing " +
+        "else:\n" +
         "FROM: who sent the letter (the company or person it comes from, not the person it is addressed to)\n" +
         "ABOUT: one or two plain sentences: what the letter is about and what it asks for\n" +
         "DEADLINE: a date copied exactly as the letter writes it | what has to happen by then\n" +
@@ -197,14 +221,26 @@ object LetterRead {
 
     data class Prompt(val rules: String, val user: String, val nonce: String)
 
-    private val LABEL_LINE = reI("""^(\s*)(${LABELS.joinToString("|")})(\s*:)""")
+    private val LABEL_LIKE_RE = re("""^(${LABELS.joinToString("|")})S?\s*:""")
+    private val PLAIN_LABEL_RE = reI("""^(${LABELS.joinToString("|")})S?\s*:""")
+    const val DEFANG = "(in the letter) "
+
+    private fun labelLike(line: String): Boolean {
+        val t = DocText.normalize(line).replace("*", "").replace("_", "").replace("`", "")
+            .trimStart(' ', '\t', '>', '#', '-', '•', '·', '+').uppercase(Locale.ROOT)
+        return LABEL_LIKE_RE.find(t)?.range?.first == 0
+    }
+
+    /** A letter line dressed as a reply label in a way no letter writes one (the server's `dressed_label`). */
+    fun dressedLabel(line: String): Boolean {
+        if (!labelLike(line)) return false
+        val m = PLAIN_LABEL_RE.find(pyStrip(line))?.takeIf { it.range.first == 0 }
+        return m == null || m.groupValues[1].uppercase(Locale.ROOT) in setOf("TODO", "UNCLEAR")
+    }
 
     /** Letter text as it goes into the prompt (the server's `as_data`). */
-    fun asData(text: String): String = DocQa.asData(text).split("\n").joinToString("\n") { line ->
-        val m = LABEL_LINE.find(line)
-        if (m == null || m.range.first != 0) line
-        else m.groupValues[1] + m.groupValues[2].lowercase(Locale.ROOT) + m.groupValues[3] + line.substring(m.range.last + 1)
-    }
+    fun asData(text: String): String =
+        DocQa.asData(text).split("\n").joinToString("\n") { if (labelLike(it)) DEFANG + it else it }
 
     fun buildPrompt(question: String, transcripts: List<String>, nonce: String? = null): Prompt {
         val n = nonce ?: DocQa.newNonce()
@@ -235,7 +271,8 @@ object LetterRead {
             amounts.isEmpty() && references.isEmpty()
     }
 
-    private val LINE_RE = reI("""^(?:\s|[>*#_\-•])*(${LABELS.joinToString("|")})S?(?:\s|[*_])*[:：](?:\s|[*_])*(.*)$""")
+    /** A reply line: the exact label, in capitals, first on the line. */
+    private val LINE_RE = Regex("""^(${LABELS.joinToString("|")}):(.*)$""")
     private val DIGIT = Regex("[0-9]")
 
     private fun splitPair(rest: String): Pair<String, String> {
@@ -265,14 +302,6 @@ object LetterRead {
         }
         text = DocQa.stripFence(text, nonce)
         var current: String? = null
-        fun append(label: String, more: String) {
-            when (label) {
-                "FROM" -> p.sender = pyStrip(pyStrip(p.sender + " " + more), " *_")
-                "ABOUT" -> p.about = pyStrip(pyStrip(p.about + " " + more), " *_")
-                "TODO" -> p.todo = pyStrip(pyStrip(p.todo + " " + more), " *_")
-                "UNCLEAR" -> p.unclear = pyStrip(pyStrip(p.unclear + " " + more), " *_")
-            }
-        }
         for (raw in text.replace("\r", "").split("\n")) {
             val line = pyStrip(raw)
             if (line.isEmpty()) { current = null; continue }
@@ -289,12 +318,15 @@ object LetterRead {
                 }
                 continue
             }
-            val label = m.groupValues[1].uppercase(Locale.ROOT)
+            val label = m.groupValues[1]
             val rest = pyStrip(m.groupValues[2])
             current = label
             if (rest.isEmpty()) continue
             when (label) {
-                "FROM", "ABOUT", "TODO", "UNCLEAR" -> append(label, rest)
+                "FROM" -> p.sender = pyStrip(p.sender + " " + rest, " *_")
+                "ABOUT" -> p.about = pyStrip(p.about + " " + rest, " *_")
+                "TODO" -> p.todo = pyStrip(p.todo + " " + rest, " *_")
+                "UNCLEAR" -> p.unclear = pyStrip(p.unclear + " " + rest, " *_")
                 "DEADLINE" -> p.deadlines += splitPair(rest)
                 "AMOUNT" -> p.amounts += splitPair(rest)
                 "REFERENCE" -> {
@@ -352,15 +384,25 @@ object LetterRead {
     val MONEY_UNITS = setOf("$", "€", "£", "¥", "₹", "USD", "MXN", "dollars", "%")
     const val MAX_ADDED = 3
     const val QUOTE_CHARS = 140
+    private const val LEAD = "([{\"'“‘«¿¡*_"
+    private const val TRAIL = ".,;:!?)]}\"'”’»*_"
+    const val CURRENCY_SIGNS = "$€£¥₹"
+
+    /** The tokens of [text] as the check compares them (the server's `tokens_of`). */
+    fun tokensOf(text: String?): List<String> = DocText.pySplit(DocCalc.plain(text ?: ""))
+        .map { w -> w.trimStart { it in LEAD }.trimEnd { it in TRAIL } }.filter { it.isNotEmpty() }
 
     /** A transcript as the check reads it: [raw] as read, [text] with every
-     *  sentence aimed at an AI assistant blanked out (same length). */
-    class LetterText(val raw: String, val text: String, val ctx: DocCalc.Ctx, val whens: List<When>, val nums: List<DocCalc.Num>) {
+     *  line aimed at an AI assistant blanked out (same length). */
+    class LetterText(
+        val raw: String, val text: String, val ctx: DocCalc.Ctx, val whens: List<When>, val nums: List<DocCalc.Num>,
+        val tokens: List<String>, val words: Set<String>, val low: String,
+    ) {
         companion object {
             fun of(transcripts: List<String>): LetterText {
                 val raw = transcripts.filter { it.isNotEmpty() }.joinToString("\n\n")
                 var text = raw
-                for (s in injectionSentences(raw)) {
+                for (s in injectionLines(raw)) {
                     var at = text.indexOf(s)
                     while (at >= 0) {
                         text = text.substring(0, at) + " ".repeat(s.length) + text.substring(at + s.length)
@@ -369,7 +411,8 @@ object LetterRead {
                 }
                 val lang = DocHeadsUp.guessLanguage(raw)
                 val ctx = DocCalc.context(listOf(text), lang)
-                return LetterText(raw, text, ctx, readWhens(text, ctx), amounts(text, ctx))
+                return LetterText(raw, text, ctx, readWhens(text, ctx), amounts(text, ctx), tokensOf(text),
+                    DocText.words(text).toSet(), q(text))
             }
         }
     }
@@ -426,10 +469,101 @@ object LetterRead {
         return deadlines.take(MAX_ADDED) to found.take(MAX_ADDED)
     }
 
-    // ── The check ───────────────────────────────────────────────────────
+    // ── The check: detect broadly, verify strictly ──────────────────────
+    private val FULL_MONTHS = ("january february march april june july august september october november december " +
+        "enero febrero marzo abril mayo junio julio agosto septiembre setiembre octubre noviembre diciembre").split(" ")
+    private val ABBR_MONTH_DOT_RE = re("""\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|ene|abr|ago|dic)\.""")
+    private val UNITS = ("one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen " +
+        "seventeen eighteen nineteen").split(" ")
+    private val TENS = "twenty thirty forty fifty sixty seventy eighty ninety".split(" ")
+    private val ORD_UNITS = ("first second third fourth fifth sixth seventh eighth ninth tenth eleventh twelfth thirteenth " +
+        "fourteenth fifteenth sixteenth seventeenth eighteenth nineteenth").split(" ")
+
+    val ORDINAL_WORDS: Map<String, Int> = LinkedHashMap<String, Int>().apply {
+        ORD_UNITS.forEachIndexed { i, w -> put(w, i + 1) }
+        put("twentieth", 20)
+        put("thirtieth", 30)
+        ORD_UNITS.take(9).forEachIndexed { i, w ->
+            put("twenty-$w", 21 + i)
+            put("twenty $w", 21 + i)
+        }
+        put("thirty-first", 31)
+        put("thirty first", 31)
+    }
+    private val ORD_ALT = ORDINAL_WORDS.keys.sortedByDescending { it.length }.joinToString("|")
+    private val ORD = """(?:([0-9]{1,2})(?:st|nd|rd|th)|($ORD_ALT))"""
+    private val ORD_OF_MONTH_RE = re("""\b$ORD (?:of )?(?:the month of )?(${DocCalc.MONTH_ALT})\b""")
+    private val MONTH_THE_ORD_RE = re("""\b(${DocCalc.MONTH_ALT})\.? (?:the )?$ORD(?![0-9])""")
+    private val PARTIAL_DATE_RE = Regex("""(?<![0-9/.-])([0-9]{1,2})[/.-]([0-9]{1,2})(?![0-9]|[/.-][0-9])""")
+    private val NUMBER_WORDS = UNITS.drop(1) + TENS + "hundred thousand million billion dozen half quarter".split(" ") +
+        ("dos tres cuatro cinco seis siete ocho nueve diez once doce veinte treinta cuarenta cincuenta sesenta setenta " +
+            "ochenta noventa cien ciento cientos mil millón millones").split(" ")
+    private val MONEY_WORDS = ("dollar dollars buck bucks euro euros pound pounds peso pesos cent cents percent pence usd eur gbp " +
+        "cad mxn aud nzd jpy inr chf centavos céntimos").split(" ")
+    private val DAY_WORDS = ("monday tuesday wednesday thursday friday saturday sunday today tomorrow tonight yesterday weekend " +
+        "lunes martes miércoles miercoles jueves viernes sábado sabado domingo hoy mañana ayer").split(" ")
+    private val WORD_CHECK_RE = re("""\b(${(NUMBER_WORDS + MONEY_WORDS + DAY_WORDS + FULL_MONTHS).sortedByDescending { it.length }.joinToString("|")})\b""")
+    private val ONE_RE = re("""\bone (hundred|thousand|million|billion|dollars?|euros?|pounds?|cents?|percent)\b""")
+    private val PER_CENT_RE = re("""\bper cent\b""")
+    private val RELATIVE_RE = re(
+        """\b(next|this|coming|following) (week|month|year|monday|tuesday|wednesday|thursday|friday|""" +
+            """saturday|sunday|weekend)\b|\bend of (the|this|next) (week|month|year)\b""",
+    )
+
+    private fun ordDay(m: MatchResult, num: Int, word: Int): Int =
+        if (m.groupValues[num].isNotEmpty()) m.groupValues[num].toInt() else ORDINAL_WORDS.getValue(m.groupValues[word])
+
+    /** Why [text] names something the letter doesn't, or null (the server's `clause_problem`). */
+    fun clauseProblem(text: String, lt: LetterText): String? {
+        val have = lt.tokens.toSet()
+        for (t in tokensOf(text)) {
+            if ((hasDigit(t) || t.any { it in CURRENCY_SIGNS }) && t !in have) return "not in the letter: $t"
+        }
+        for (d in DocCalc.readDates(text, lt.ctx)) {
+            if (d.date == null) return "day and month could be either way: ${d.written}"
+        }
+        for (w in readWhens(text, lt.ctx)) {
+            if (lt.whens.none { o -> if (w.date != null) o.date == w.date else o.md == w.md }) {
+                return "a date the letter doesn't have: ${w.written}"
+            }
+        }
+        val low = DocCalc.plain(text).lowercase(Locale.ROOT)
+        for (m in PARTIAL_DATE_RE.findAll(low)) {
+            val a = m.groupValues[1].toInt()
+            val b = m.groupValues[2].toInt()
+            if (a <= 12 && b <= 12 && a != b) return "day and month could be either way: ${m.value}"
+        }
+        fun ordinals(rx: Regex, mi: Int, num: Int, word: Int): String? {
+            for (m in rx.findAll(low)) {
+                val md = DocCalc.MONTHS.getValue(m.groupValues[mi]) to ordDay(m, num, word)
+                if (lt.whens.none { it.md == md }) return "a date the letter doesn't have: ${m.value}"
+            }
+            return null
+        }
+        ordinals(ORD_OF_MONTH_RE, 3, 1, 2)?.let { return it }
+        ordinals(MONTH_THE_ORD_RE, 1, 2, 3)?.let { return it }
+        val letterMonths = lt.whens.map { it.md.first }.toSet() +
+            lt.words.filter { it in FULL_MONTHS }.map { DocCalc.MONTHS.getValue(it) }
+        for (m in ABBR_MONTH_DOT_RE.findAll(low)) {
+            if (DocCalc.MONTHS.getValue(m.groupValues[1]) !in letterMonths) return "a month the letter doesn't name: ${m.value}"
+        }
+        val qt = q(text)
+        for (m in WORD_CHECK_RE.findAll(qt)) {
+            val w = m.groupValues[1]
+            if (w in FULL_MONTHS) {
+                if (DocCalc.MONTHS.getValue(w) !in letterMonths) return "a month the letter doesn't name: $w"
+            } else if (w !in lt.words) {
+                return "not in the letter: $w"
+            }
+        }
+        for (rx in listOf(ONE_RE, PER_CENT_RE, RELATIVE_RE)) {
+            for (m in rx.findAll(qt)) if (m.value !in lt.low) return "not in the letter: ${m.value}"
+        }
+        return null
+    }
+
     private fun matchWhen(fact: String, lt: LetterText): When? {
-        val mine = readWhens(fact, lt.ctx)
-        for (w in mine) for (o in lt.whens) {
+        for (w in readWhens(fact, lt.ctx)) for (o in lt.whens) {
             if (w.date != null) { if (o.date == w.date) return o } else if (o.md == w.md) return o
         }
         return null
@@ -438,36 +572,29 @@ object LetterRead {
     private fun matchAmount(fact: String, lt: LetterText): DocCalc.Num? {
         val mine = amounts(fact, lt.ctx).sortedBy { it.unit == "" }
         for (n in mine) for (o in lt.nums) {
-            if (o.value!!.compareTo(n.value!!) == 0 && (n.unit == o.unit || (n.unit == "" && o.unit in MONEY_UNITS))) return o
+            if (o.unit in MONEY_UNITS && o.value!!.compareTo(n.value!!) == 0 && (n.unit == o.unit || n.unit == "")) return o
         }
         return null
     }
 
-    private val NON_WORD = re("""\W""")
-    private fun flat(s: String) = NON_WORD.replace(q(s), "")
+    private val YEAR_RE = Regex("^(1[89]|20)[0-9]{2}$")
 
-    private fun matchReference(number: String, lt: LetterText): String? {
-        val core = DocText.normalize(number).filter { it in '0'..'9' || it in 'a'..'z' || it in 'A'..'Z' }
-        if (core.length < 3 || core.none { it in '0'..'9' }) return null
-        // Only ASCII letters and digits are left, so nothing needs escaping.
-        val pat = core.toList().joinToString("""(?:\s|[./-])?""")
-        val rx = Regex(pyRegex("""(?<![0-9A-Za-z])$pat(?![0-9A-Za-z])""").pattern, RegexOption.IGNORE_CASE)
-        return rx.find(lt.text)?.value
+    /** The letter's reference [number], token for token, or null (the server's `match_reference`). */
+    fun matchReference(number: String, lt: LetterText): String? {
+        val mine = tokensOf(number)
+        if (mine.isEmpty() || mine.none { hasDigit(it) } || mine.sumOf { it.length } < 3) return null
+        if (mine.size == 1 && YEAR_RE.matches(mine[0])) return null
+        val toks = lt.tokens
+        for (i in 0..(toks.size - mine.size)) {
+            if (toks.subList(i, i + mine.size) == mine) return mine.joinToString(" ")
+        }
+        return null
     }
 
-    private fun verbatim(fact: String, lt: LetterText): Boolean {
-        val f = DocText.pySplit(q(fact)).joinToString(" ")
-        return NON_WORD.replace(f, "").length >= 3 && f in DocText.pySplit(q(lt.text)).joinToString(" ")
-    }
-
-    fun sentenceOk(sentence: String, lt: LetterText): Boolean {
-        for (w in readWhens(sentence, lt.ctx)) {
-            if (lt.whens.none { o -> if (w.date != null) o.date == w.date else o.md == w.md }) return false
-        }
-        for (n in amounts(sentence, lt.ctx)) {
-            if (n.unit in MONEY_UNITS && lt.nums.none { o -> o.value!!.compareTo(n.value!!) == 0 && o.unit == n.unit }) return false
-        }
-        return true
+    /** A fact's description shares a content word with the letter's sentence around it. */
+    fun supports(what: String, sentence: String): Boolean {
+        val mine = DocText.tokens(what).filter { !hasDigit(it) }.toSet()
+        return DocText.tokens(sentence).any { it in mine }
     }
 
     private val NOTHING_RE = re("""^(nothing|none|n/?a|no|nada|ninguno|ninguna)\b[.!]?$""")
@@ -484,8 +611,8 @@ object LetterRead {
         val injection: String? = null,
     )
 
-    const val NOTE_CHECKED = "Dates, amounts and reference numbers above are copied from the letter's text and checked " +
-        "against it. Domovoi read them from a photo, so check anything important on the letter itself."
+    const val NOTE_CHECKED = "Dates, amounts and reference numbers above were checked against the text Domovoi read from the " +
+        "photo. A misread photo can still be wrong, so check anything important on the letter itself."
     const val NOTE_UNSHAPED = "Domovoi couldn't explain this letter clearly, so this lists what the letter's text states."
     const val NOTHING_READ = "Domovoi couldn't read any text in this photo. Take it again in good light, with the whole " +
         "page in the picture."
@@ -493,8 +620,9 @@ object LetterRead {
     const val NOTE_BLURRY = "Read from a blurry photo: some words may be guessed. Check them on the letter."
 
     fun noteDropped(n: Int): String =
-        "Domovoi left out $n date${if (n == 1) "" else "s"} or amount${if (n == 1) "" else "s"} that " +
-            "${if (n == 1) "isn" else "aren"}'t in the letter's text."
+        "Domovoi left out $n part${if (n == 1) "" else "s"} of its explanation that couldn't be checked " +
+            "against the letter's text (a date, an amount or a number the letter doesn't have, or a " +
+            "description that doesn't fit it)."
 
     fun noteInjection(snippet: String): String =
         "This letter has text aimed at AI assistants (“$snippet”). Domovoi doesn't follow " +
@@ -505,7 +633,7 @@ object LetterRead {
         var dropped = 0
         for (s in sentences(text)) {
             if (injected.isNotEmpty() && repeatsInjection(s, injected)) continue
-            if (!sentenceOk(s, lt)) { dropped++; continue }
+            if (clauseProblem(s, lt) != null) { dropped++; continue }
             kept += s
         }
         return kept.joinToString(" ") to dropped
@@ -516,39 +644,51 @@ object LetterRead {
     fun finish(reply: String?, transcripts: List<String>, nonce: String? = null): Explained {
         val lt = LetterText.of(transcripts)
         if (lt.raw.isBlank()) return Explained(NOTHING_READ, listOf(DocNote("letter_unreadable", NOTHING_READ)), emptyList(), emptyList(), emptyList(), shaped = false)
-        val injected = injectionSentences(lt.raw)
+        val injected = injectionLines(lt.raw)
         val snippet = injectionSnippet(lt.raw)
         val p = parse(reply, nonce)
         var dropped = 0
+
+        fun described(what: String, start: Int): Pair<String, Boolean> {
+            val sentence = sentenceAt(lt.text, start)
+            val quote = "“$sentence”"
+            if (what.isEmpty()) return quote to false
+            if ((injected.isNotEmpty() && repeatsInjection(what, injected)) || clauseProblem(what, lt) != null ||
+                !supports(what, sentence)
+            ) return quote to true
+            return what to false
+        }
 
         val deadlines = ArrayList<Pair<String, String>>()
         val seenD = HashSet<Any>()
         for ((fact, what) in p.deadlines) {
             val w = matchWhen(fact, lt)
-            if (w != null) {
-                val k: Any = w.date ?: w.md
-                if (seenD.add(k)) deadlines += w.written to what.ifEmpty { "“${sentenceAt(lt.text, w.start)}”" }
-            } else if (readWhens(fact, lt.ctx).isEmpty() && verbatim(fact, lt)) {
-                if (seenD.add(fact.lowercase(Locale.ROOT))) deadlines += fact to what
-            } else {
+            if (w == null || clauseProblem(fact, lt) != null || !DEADLINE_CUE.containsMatchIn(q(sentenceAt(lt.text, w.start)))) {
                 dropped++
+                continue
             }
+            if (!seenD.add(w.date ?: w.md)) continue
+            val (shown, left) = described(what, w.start)
+            if (left) dropped++
+            deadlines += w.written to shown
         }
         val found = ArrayList<Pair<String, String>>()
         val seenA = HashSet<Any>()
         for ((fact, what) in p.amounts) {
             val n = matchAmount(fact, lt)
-            if (n != null) {
-                if (seenA.add(key(n.value!!) to n.unit)) found += n.written to what.ifEmpty { "“${sentenceAt(lt.text, n.start)}”" }
-            } else {
-                dropped++
-            }
+            if (n == null || clauseProblem(fact, lt) != null) { dropped++; continue }
+            if (!seenA.add(key(n.value!!) to n.unit)) continue
+            val (shown, left) = described(what, n.start)
+            if (left) dropped++
+            found += n.written to shown
         }
         val references = ArrayList<Pair<String, String>>()
         val seenR = HashSet<String>()
         for ((label, number) in p.references) {
-            val hit = matchReference(number, lt) ?: continue
-            if (seenR.add(flat(hit))) references += label.ifEmpty { "Reference" } to hit
+            val hit = matchReference(number, lt)
+            val labelOk = label.isEmpty() || clauseProblem(label, lt) == null
+            if (hit == null || !labelOk) { dropped++; continue }
+            if (seenR.add(hit)) references += label.ifEmpty { "Reference" } to hit
         }
         val (addD, addA) = letterFacts(lt)
         for ((written, sentence) in addD) {
@@ -599,5 +739,15 @@ object LetterRead {
         if (dropped > 0) notes += DocNote("letter_dropped", noteDropped(dropped))
         if (snippet != null) notes += DocNote("letter_injection", noteInjection(snippet))
         return Explained(content, notes, deadlines, found, references, dropped, shaped, snippet)
+    }
+
+    private val QUOTED = Regex("“[^”]*”")
+
+    /** Every line of a finished reply that names something the letter doesn't (the server's `shown_problems`). */
+    fun shownProblems(content: String, transcripts: List<String>): List<String> {
+        val lt = LetterText.of(transcripts)
+        return content.split("\n").mapNotNull { line ->
+            clauseProblem(QUOTED.replace(line, "").replace("**", ""), lt)?.let { "$line ($it)" }
+        }
     }
 }

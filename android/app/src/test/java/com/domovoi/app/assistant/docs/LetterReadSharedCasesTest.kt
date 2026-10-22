@@ -56,7 +56,7 @@ class LetterReadSharedCasesTest {
     fun injection() {
         for (c in list("injection")) {
             val t = c["text"].str()!!
-            assertEquals(t, strings(c["sentences"]), LetterRead.injectionSentences(t))
+            assertEquals(t, strings(c["lines"]), LetterRead.injectionLines(t))
             assertEquals(t, c["snippet"].str(), LetterRead.injectionSnippet(t))
         }
     }
@@ -102,6 +102,28 @@ class LetterReadSharedCasesTest {
             assertEquals(name, f.getValue("dropped").jsonPrimitive.int, e.dropped)
             assertEquals(name, f.getValue("shaped").jsonPrimitive.boolean, e.shaped)
             assertEquals(name, f.getValue("injection").jsonPrimitive.boolean, e.injection != null)
+        }
+    }
+
+    @Test
+    fun clauses() {
+        for (c in list("clauses")) {
+            val lt = LetterRead.LetterText.of(listOf(c["letter"].str()!!))
+            assertEquals(c["text"].str(), c["problem"].str(), LetterRead.clauseProblem(c["text"].str()!!, lt))
+        }
+    }
+
+    @Test
+    fun sentencesAndAsData() {
+        for (c in list("sentences")) assertEquals(strings(c["sentences"]), LetterRead.sentences(c["text"].str()))
+        for (c in list("as_data")) assertEquals(c["out"].str(), LetterRead.asData(c["text"].str()!!))
+    }
+
+    @Test
+    fun nothingShownNamesWhatTheLetterLacks() {
+        for (c in list("finish")) {
+            val e = LetterRead.finish(c["reply"].str(), strings(c["transcripts"]), c["nonce"].str())
+            assertEquals(c["name"].str(), emptyList<String>(), LetterRead.shownProblems(e.content, strings(c["transcripts"])))
         }
     }
 
