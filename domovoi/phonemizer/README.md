@@ -30,9 +30,12 @@ about 1 ms the first time (the model), then it is cached.
 | `data/cmudict/` (the Carnegie Mellon Pronouncing Dictionary) | BSD-2-Clause style, `data/cmudict/LICENSE` (verified at the source, github.com/cmusphinx/cmudict) |
 | `data/phoneme_ids_en.json` | the symbol table of the three voices' `.onnx.json` (public-domain voices) |
 
-No espeak-ng code, data or output is used anywhere, including in training.
-(espeak-ng was run only to measure how often the converter disagrees with
-it, in throwaway containers outside the repo: see "The American set".)
+No espeak-ng code or data is part of Domovoi, and none was used to train
+the model. At run time the converter needs only ONNX Runtime (MIT) and
+NumPy (BSD), both imported lazily, and the data files above. (espeak-ng
+was run only to measure how often the converter disagrees with it, in
+throwaway containers outside the repo; nothing it wrote was kept: see "The
+American set".)
 
 ## How it works
 
@@ -211,7 +214,7 @@ What the converter must produce for 702 texts, each in both phoneme sets
 function-word sentences, heteronyms, 32 number forms plus 93 more
 normalization cases (money, times, dates, units, ordinals, phone numbers,
 abbreviations, odd punctuation), 74 names, 62 artists, the 337 common
-words, and 19 cases with their own "say it like" lists (Kamron's own name
+words, and 19 cases with their own "say it like" lists (one name spelled
 four ways among them). UTF-8 JSON, LF
 line endings, one case per line.
 
@@ -320,6 +323,5 @@ trained on CMUdict alone.
   Float results are bit-for-bit only on the same torch build, thread count
   and CPU family; elsewhere expect the same metrics, not the same bytes.
   Checked 2026-10-12: a full rerun of the script in the pinned container
-  (14 threads on an i9-14900KF's E-cores, about 95 minutes) reproduced all
-  four files above byte for byte, every epoch's loss and dev scores equal
-  to the recorded run's.
+  (14 threads, about 95 minutes) reproduced all four files above byte for
+  byte, every epoch's loss and dev scores equal to the recorded run's.

@@ -30,8 +30,10 @@ Prerequisites:
 * **Docker** (Postgres + Flyway run in containers; Postgres publishes host
   port **6432**)
 * **Linux, Windows, or macOS** all work for development. Linux and Windows
-  are both supported server hosts (see [LINUX_HOST.md](LINUX_HOST.md));
-  the CUDA/DLL paths are Windows-specific and stubbed in tests
+  are both supported server hosts (see [LINUX_HOST.md](LINUX_HOST.md); the
+  Windows installer runs the same Linux stack in a private WSL2 distro,
+  [WINDOWS_HOST.md](WINDOWS_HOST.md)); the CUDA/DLL paths are
+  Windows-specific and stubbed in tests
 * Optional for real voice work: [Ollama](https://ollama.com) on `:11434`,
   plus an NVIDIA GPU if you want Whisper on CUDA — `pip install -e
   ".[real-clients,cuda]"`. Without one, set `whisper_device=cpu`
@@ -49,11 +51,16 @@ One-shot bootstrap (brings up Postgres, runs migrations, starts the core):
 
 Manual equivalent — note the directory dance: `pip install` and `pytest` run
 from the **repo root** (where `pyproject.toml` lives); Docker commands run
-from `domovoi/` (where the compose file lives):
+from `domovoi/` (where the compose file lives). The first two lines make
+`domovoi/.env` for a fresh checkout (a random database password and the two
+helper-container secrets that `docker-compose.yml` refuses to run without);
+an existing `.env` is never touched:
 
 ```powershell
 pip install -e ".[dev,real-clients,voice-profile]"
 pip install --no-deps -r requirements-no-deps.in   # faster-whisper, resemblyzer (see below)
+python -m domovoi.env_bootstrap           # creates domovoi/.env on a fresh checkout
+python -m domovoi.env_bootstrap --repair  # adds the two secrets to an older .env
 cd domovoi
 docker compose up -d postgres
 docker compose run --rm flyway            # prod-DB migrations
@@ -136,7 +143,14 @@ export DOMOVOI_TEST_DB_ON_6432=1
 pytest
 ```
 
-On a machine that also runs Domovoi for real, put the test database on
+The `domovoi:domovoi` above is the password of a compose Postgres started
+without a `domovoi/.env`. If `dev.sh` / `dev.ps1` (or `python -m
+domovoi.env_bootstrap`) made one, its `POSTGRES_PASSWORD` is a random
+value: use that one in the URL instead.
+
+On a machine that also runs Domovoi for real (an installed Domovoi, the
+Windows installer included, keeps its own Postgres on 6432, so the dev
+compose Postgres can't share that port), put the test database on
 another port instead (a second Postgres container), and leave
 `DOMOVOI_TEST_DB_ON_6432` unset: the suite then can never reach the
 household's database. `satellite/tests` alone needs no database at all.
@@ -321,6 +335,10 @@ installed with Domovoi (core, dashboard, satellite, bundled plugins):
   maintainer instead of adding it. MPL-2.0 is acceptable for third-party
   code we use unmodified (certifi and tqdm on the server, Eigen inside the
   phone's native libraries); never patch such files.
+* **Fonts** may be under the SIL Open Font License 1.1, with the licence
+  text kept beside the font files: the Liberation Sans and Serif fonts in
+  `domovoi/drafts/fonts/` (used for drafts) are, and are credited in
+  [LICENSES.md](LICENSES.md).
 * **Check the licence at the source**: the package's own LICENSE / COPYING
   and file headers, and what its wheel bundles, not only the PyPI
   classifier. A BSD wrapper can carry an LGPL library (soundfile ships
@@ -475,11 +493,11 @@ wrong unless that migration has never shipped anywhere.
 ## Releasing
 
 A Domovoi release is one version for the whole project, and one tag:
-`v1.0.0-rc2`, `v1.0.0`, `v1.0.1`. The server, the dashboard, the
+`v1.0.0-rc3`, `v1.0.0`, `v1.0.1`. The server, the dashboard, the
 satellites (they run the code their server hands them), the Android app
 and the Windows Setup all carry it; plugins keep their own. SemVer: the tag
 is `v` plus the version, `pyproject.toml` has its PEP 440 spelling
-(`1.0.0rc2`), Android's `versionName` the version itself and `versionCode`
+(`1.0.0rc3`), Android's `versionName` the version itself and `versionCode`
 its own `YYMMDDNN` counter, which only goes up.
 `domovoi/tests/test_version_copies.py` holds every copy to `pyproject.toml`.
 Keep to fewer than ten release candidates (`rc10` sorts before `rc2`).
@@ -527,19 +545,22 @@ starts no workflow. Every pushed commit carries `[skip ci]`. In order:
    `pins.iss` is kept beside the Setup. It writes one `SHA256SUMS` (LF)
    for every file, sets the notes (`docs/release/v<version>.md`, or a
    summary of the `docs/RELEASE_NOTES.md` entries since the previous tag
-   with links into the full file at the tag), uploads the Setup and
-   `SHA256SUMS`, checks every file on GitHub against `SHA256SUMS`, and
+   with links into the full file at the tag), uploads the Setup, the tray
+   icon (`DomovoiTray.exe`), the spare-PC satellite Setup
+   (`DomovoiSatelliteSetup.exe`) and `SHA256SUMS`, checks every file on
+   GitHub against `SHA256SUMS`, and
    **last**, for a version without a suffix that GitHub doesn't mark a
    pre-release, checks the tag on GitHub once more and pushes the commit
    it checked, `git push origin <that SHA>:refs/heads/stable` (never
-   forced). Run again, it replaces the two files and leaves `stable` where
+   forced). Run again, it replaces those files and leaves `stable` where
    it is. `finish-release.sh` is the same for bash; it needs `--setup FILE`
    (a Setup built that way) off Windows. `-NoPublish` leaves the files in
    `windows\build\release\<tag>\`.
 
 The finished release holds the two APKs, `DomovoiSetup.exe` (not
-code-signed), `SHA256SUMS`, and notes naming the tag's commit, how the
-Setup was built and the app's signing certificate. Neither script
+code-signed), `DomovoiTray.exe`, `DomovoiSatelliteSetup.exe`, `SHA256SUMS`,
+and notes naming the tag's commit, how the Setup was built and the app's
+signing certificate. Neither script
 touches a keystore or a password outside `release.ps1`'s own prompts.
 
 ---

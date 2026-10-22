@@ -36,12 +36,11 @@ development** — see the note for developers at the bottom.
     two-tier identify chain — your **local library fingerprints** first
     (free, offline, catches songs you already own), then an **online
     song-identification service (Shazam)**.
-* **Automatic library acquisition.** A detected song you don't own yet
-  is queued into Domovoi's media-acquisition queue. The radio plugin
-  does not download anything itself and doesn't know what will: any
-  installed media-provider plugin fulfills the queue. With no provider
-  installed, detections still log and the queue holds the requests —
-  installing a provider later drains the backlog.
+* **Detections are announced, not acted on.** Each detection is saved
+  with whether the song is already in your library, and published on the
+  plugin event bus (`plugin.radio.detection_recorded`). The radio plugin
+  itself never queues or downloads anything; a media-provider plugin that
+  listens for that event may.
 
 ## Voice commands
 
@@ -61,11 +60,16 @@ different things.)
 FM tuning is optional and off by default (`RADIO_SDR_ENABLED=false`).
 You need:
 
-* an RTL2832U-based USB dongle (any cheap RTL-SDR stick);
-* the rtl-sdr tools on PATH (`rtl_fm`, `rtl_test`);
-* **Windows**: a one-time [Zadig](https://zadig.akeo.ie/) run to swap
-  the dongle's USB interface to WinUSB — without it the OS claims it as
-  a DVB-T receiver and `rtl_fm` can't open it;
+* an RTL2832U-based USB dongle (any cheap RTL-SDR stick) plugged into the
+  computer that runs the Domovoi server;
+* the rtl-sdr tools on PATH (`rtl_fm`, `rtl_test`; on Debian and Ubuntu,
+  `sudo apt install rtl-sdr`);
+* **Windows, server installed natively**: a one-time
+  [Zadig](https://zadig.akeo.ie/) run to swap the dongle's USB interface
+  to WinUSB — without it the OS claims it as a DVB-T receiver and
+  `rtl_fm` can't open it. A server installed with the Windows installer
+  runs inside a private Linux environment that cannot see USB devices, so
+  FM needs a Linux server or the native Windows install;
 * `ffmpeg` on PATH (also required for the audio sampler).
 
 The demodulated FM audio is served over HTTP on
@@ -85,8 +89,10 @@ fails, FM commands answer with a friendly explainer instead of erroring.
 
 All settings live under the plugin's `RADIO_` prefix in the plugin's own
 file, `~/.domovoi/plugins/radio.env` (in the home of the user the core
-runs as). The dashboard has no editor for plugin settings yet: edit the
-file, then restart the core. A `RADIO_*` variable in the core process's
+runs as; on a server installed with the Windows installer that is inside
+its private Linux environment). The dashboard has no editor for plugin
+settings yet: edit the file, then restart the core. A `RADIO_*` variable
+in the core process's
 own environment overrides the file. `RADIO_*` lines in `domovoi/.env` are
 **not** read — that file is the core's, and the core has no radio settings
 of its own. The interesting ones:
@@ -193,11 +199,12 @@ through — it exercises every extension plane:
   simulcast lookup) are `@device_endpoint` — any paired phone or browser —
   while the FCC bulk import keeps the admin default; nothing is open to
   the whole LAN;
-* **couplings**: acquisitions via `sdk.acquisition.enqueue` (no
-  provider vocabulary anywhere), now-playing stamping via
+* **couplings**: detections published as `plugin.radio.detection_recorded`
+  events (no provider vocabulary anywhere), now-playing stamping via
   `sdk.playback.play_url(source="radio")`, and a favorites matcher via
   `sdk.now_playing.register_matcher`.
 
-Layout, manifest spec, and test-harness docs: `docs/plugin-dev/` in the
+Layout, manifest spec, and test-harness docs:
+[`docs/PLUGIN_DEVELOPMENT.md`](../../docs/PLUGIN_DEVELOPMENT.md) in the
 main repository. The plugin's own suite lives in `tests/` and runs with
 the repo-wide `pytest`.

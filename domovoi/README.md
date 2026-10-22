@@ -1,14 +1,18 @@
 # Domovoi core service
 
-The core voice service package: STT → intent routing → handlers → TTS,
-WebSocket streaming for satellites, persistence, background workers, and
-the plugin runtime. This README is the package-internals reference —
-run-it and use-it documentation lives in the repo-root `README.md` and
-`docs/`; repo-wide conventions live in `AGENTS.md`.
+The core service package. It answers by voice (speech to text → intent
+routing → handlers → text to speech, with WebSocket streaming for the
+satellites) and in chat, reads documents, looks things up, prints and
+scans on the home network, keeps the library and the household's data in
+Postgres, runs the background workers, and hosts the plugin runtime. This
+README is the package-internals reference — run-it and use-it
+documentation lives in the repo-root `README.md` and `docs/`; repo-wide
+conventions live in `AGENTS.md`. The package map near the end says where
+each part lives.
 
 ## Run locally (Windows, PowerShell)
 
-The Domovoi server's `pyproject.toml` lives at the **repo root** (one level above this directory), so `pip install -e` and `python -m domovoi.main` must be run from there. Docker commands run from this directory where the compose file lives.
+The Domovoi server's `pyproject.toml` lives at the **repo root** (one level above this directory), so `pip install -e` and `python -m domovoi.main` must be run from there. Docker commands run from this directory where the compose file lives. This page is the quick version; [docs/CONTRIBUTING.md](../docs/CONTRIBUTING.md#development-setup) has the full setup, and a Windows PC that runs Domovoi from the installer is a different thing ([docs/WINDOWS_HOST.md](../docs/WINDOWS_HOST.md)).
 
 ```powershell
 # From the repo root (one level up):
@@ -17,12 +21,18 @@ cd ..
 # 1. Install Python deps (Python 3.11+)
 pip install -e ".[dev]"
 
-# 2. Bring up Postgres + run migrations (switch to domovoi/ for compose)
+# 2. Make domovoi/.env on a fresh checkout (random database password and the
+#    two helper-container secrets; compose refuses to run without them).
+#    An existing .env is never touched.
+python -m domovoi.env_bootstrap
+
+# 3. Bring up Postgres + run migrations (switch to domovoi/ for compose)
 cd domovoi
 docker compose up -d postgres
 docker compose run --rm flyway
 
-# 3. Start the app natively from the repo root (needs CUDA access; not containerized)
+# 4. Start the app natively from the repo root (the speech models run on a
+#    GPU with CUDA, or on the CPU: see below; the app itself is not containerized)
 cd ..
 python -m domovoi.main
 ```
@@ -41,18 +51,25 @@ Or in one shot (scripts handle the cd dance for you):
 
 ## Smoke test
 
+`POST /v1/intent` is on the device tier: after first-run setup it needs the
+household token (`~/.domovoi/device-token.txt`) as `X-Device-Token`, or an
+admin Bearer. Before setup it needs no header. The read-only calls below it
+(`/v1/handlers`, `/v1/connectivity`, `/v1/health`) need nothing.
+
 ```bash
+TOKEN="$(cat ~/.domovoi/device-token.txt)"
+
 # Set a timer
 curl -X POST http://localhost:6370/v1/intent \
-  -H "Content-Type: application/json" \
+  -H "Content-Type: application/json" -H "X-Device-Token: $TOKEN" \
   -d '{"transcript":"set a timer for 5 minutes","room_id":"kitchen"}'
 
 # Clock — time / date / day-of-week / year / month / tomorrow / yesterday
 curl -X POST http://localhost:6370/v1/intent \
-  -H "Content-Type: application/json" \
+  -H "Content-Type: application/json" -H "X-Device-Token: $TOKEN" \
   -d '{"transcript":"what time is it","room_id":"kitchen"}'
 curl -X POST http://localhost:6370/v1/intent \
-  -H "Content-Type: application/json" \
+  -H "Content-Type: application/json" -H "X-Device-Token: $TOKEN" \
   -d '{"transcript":"what is the date today","room_id":"kitchen"}'
 
 # List registered handlers
@@ -121,10 +138,10 @@ for the audit trail). The handler covers the user-facing parts.
 
 | Ask | Behavior |
 |---|---|
-| "I'm Sarah" / "my name is Sarah" / "call me Sarah" / "this is Sarah" / "I am Sarah" | Asks "Nice to meet you, Sarah. Did I get that right?" — parks `pending_confirmation` in session context AND flags `expect_followup` on the response, so the user can answer "yes" / "no" without saying "Hey Jarvis" again. The next clear "yes" enrolls Sarah's embedding into `voice_profiles`. "No" cancels with no DB write. |
-| "Domovoi, this is my friend Alex" / "this is Alex" / "meet Alex" | v1 acknowledges only — doesn't enroll, since the *introducer's* voice is on the wire, not the introduced person's. Full third-party enrollment lands with the LLM identity classifier follow-up. |
+| "I'm Sarah" / "my name is Sarah" / "call me Sarah" / "this is Sarah" / "I am Sarah" | Asks "Nice to meet you, Sarah. Did I get that right?" — parks `pending_confirmation` in session context AND flags `expect_followup` on the response, so the user can answer "yes" / "no" without saying the wake word again. The next clear "yes" enrolls Sarah's embedding into `voice_profiles`. "No" cancels with no DB write. A name someone already has is never made twice: the room asks "I already know someone called Sarah. Is that you?" first. |
+| "Domovoi, this is my friend Alex" / "this is Alex" / "meet Alex" | When a *known* person says it, parks a `third_party_expectation`: unknown voices heard in that window are clustered, and on the introducer's next turn Domovoi asks "By the way, was that Alex?"; the introducer's yes enrolls that voice. When Domovoi doesn't know who is speaking it just says hello and enrolls nothing, since the introducer's voice is on the wire, not the introduced person's. |
 | "who am I" / "do you know me" / "do you know who I am" | Reads back the current speaker from `ctx.person_id`, or "I don't recognize your voice yet." |
-| "forget me" / "forget my voice" / "don't save my voice" / "delete my voice profile" | Cascade-deletes the speaker's `people` row + `voice_profiles` rows; historical `intents_log.person_id` lapses to NULL via the FK's `ON DELETE SET NULL`. |
+| "forget me" / "forget my voice" / "don't save my voice" / "delete my voice profile" | Asks first, and does nothing unless the next turn (same room or phone, within a minute) says yes. On a yes, for a voice that matches the person's own samples, it deletes what that person said (their `conversation_log` and `intents_log` rows and the short-term conversation of the sessions those turns were in), then the `people` row, whose voice samples, memories and favorites go with it. A voice that was recognized only through samples a name claim added loses just those samples and is told what was kept. |
 
 Enrollment requires:
 * a session_id (programmatic `/v1/intent` calls without a WebSocket
@@ -172,9 +189,11 @@ catch via `{room: <id|"all">, message: <body>}`.
 
 ### Reminder command vocabulary
 
-Reminders are timers with a non-null `message`. The TimerWatcher fires
-expired reminders by calling `StreamSession.announce` on the originating
-room — the message is spoken aloud, not just logged.
+Reminders are timers with a non-null `message`. When one goes off, every
+online satellite announces it (the room it was set in, and each other room
+that hasn't turned on "Only reminders for this device"), and the phone and
+the dashboard notify from the same record: see
+`domovoi/timer_delivery.py`. The message is spoken aloud, not just logged.
 
 | Ask | Example response |
 |---|---|
@@ -186,8 +205,11 @@ room — the message is spoken aloud, not just logged.
 | "cancel my reminder to call mom" | Substring-match cancel (Whisper rarely matches the original label exactly) |
 | "cancel my reminders" | Cancels every reminder in the current room |
 
-Absolute-time reminders ("remind me at 5pm") are deferred — they need a
-real natural-language datetime parser. Use a relative duration for now.
+Clock times work too: "remind me at 6 pm to take the bins out", "remind
+me to call mom tomorrow at 7", "remind me tomorrow morning", "wake me up at
+7" and "set an alarm for 6:30". The time is placed on the household's wall
+clock (the server's own time zone, the one "what time is it" answers from):
+the next time it comes, so "at 6 pm" said at 23:20 is tomorrow's.
 
 ### Voice notes command vocabulary
 
@@ -242,8 +264,8 @@ via `{kind: time|date|day_of_week|year|month|tomorrow|yesterday}`.
 
 ### Timer command vocabulary
 
-Plain countdown timers (no spoken message — the watcher just logs / chimes
-when they fire). Reminders are a sibling of this: `timers.message IS NOT NULL`
+Plain countdown timers (no spoken message — a chime and the label, announced
+in every room like a reminder, see "Reminder command vocabulary"). Reminders are a sibling of this: `timers.message IS NOT NULL`
 becomes a reminder, otherwise it's a bare timer. Both share the same DB
 table and watcher worker.
 
@@ -255,9 +277,8 @@ table and watcher worker.
 | "cancel the timer for pasta" / "cancel the pasta timer" / "stop the timer named oven" | Substring-match cancel by label. |
 | "how much time left on the timer" / "how long left on the timer" | Reads remaining duration: "3 minutes left on the pasta timer." |
 
-Units accepted: `second(s)`, `minute(s)`, `hour(s)`. For longer or
-absolute-time-of-day forms, fall back to a reminder ("remind me to X at
-5pm" — currently deferred, see ReminderHandler notes).
+Units accepted: `second(s)`, `minute(s)`, `hour(s)`. For a time of day, use a
+reminder or an alarm ("remind me to X at 5pm", "set an alarm for 6:30").
 
 ### Calculator command vocabulary
 
@@ -628,9 +649,9 @@ mechanism is the ergonomic optimization, not the correctness guarantee.
 
 ### WiFi command vocabulary
 
-Voice triggers for the satellite-side WiFi self-heal that landed after
-the 2026-05-06 TTS-chop incident (`docs/INCIDENT_2026-05-06_TTS_CHOP.md`).
-The autonomous watcher polls `iw dev wlan0 link` every 60 s and
+Voice triggers for the satellite-side WiFi self-heal (added after a
+Wi-Fi link latched at 1 Mbit/s and chopped the speech). The autonomous
+watcher polls `iw dev wlan0 link` every 60 s and
 reassociates when rx bitrate dips below 5 Mbit/s; these voice commands
 let the user kick that flow without waiting for the next poll, or read
 the current rate. `requires_network="no"` — the action is fully Pi-local;
@@ -765,6 +786,11 @@ which engines responded.
 
 ### Conversational chat mode (#8, opt-in)
 
+This is the spoken, open-mic mode on a satellite. It is not the Chat page
+in the dashboard and the app (typed and spoken chats with a history, which
+does not use Letta); that one lives in `web/backend/api/chat.py` and
+`domovoi/chat_titles.py`.
+
 A wake-word-triggered **open-mic conversation** backed by a self-hosted
 [Letta](https://docs.letta.com) agent running on the **local** Ollama —
 distinct from the default command mode, which stays on the fast-path
@@ -873,6 +899,12 @@ chat that goes quiet for `chat_silence_timeout_sec` (30 s) with a
 
 ### LLM fallthrough (general Q&A)
 
+This path exists only while the household's AI switch is on (`AI_FEATURES`,
+Settings → Models; `domovoi/ai_features.py`). With it off nothing in
+Domovoi asks a language model: voice commands still run on their fixed
+phrases, and a question gets "I can't answer that one — I'm set up for home
+commands. Say 'what can you do' to hear them."
+
 When no handler's fast-path regex matches and no tool-call dispatch
 fires either, the router hands the transcript to the configured Ollama
 model with the chat-style system prompt. This is the catch-all "ask me
@@ -959,6 +991,9 @@ Test breakdown:
 - `tests/test_voice_embedder.py` — stub-embedder determinism + unit-norm output + empty-input handling. No DB.
 - `tests/test_voice_identifier.py` — pure-Python helpers (cosine, presence tier) + DB-backed match / no-match / closest-of-N / last_seen-touch behavior under the stub embedder.
 - `tests/test_voice_profile_handler.py` — regex coverage (incl. adjective false-positive defense), DB-backed self-intro / confirmation / forget flows, edge case for embedding-less acknowledgment.
+- `tests/test_router.py` — fast-path dispatch, offline gate, `intents_log` writes.
+- `tests/test_connectivity.py` — state transitions logged once per change.
+- `tests/test_integration.py` — end-to-end `POST /v1/intent` against real Postgres, timer watcher firing.
 
 ## Auditing conversation history
 
@@ -979,10 +1014,9 @@ exactly one row regardless of whether the path was fast / fast_offline
   `intents_log` if you want both routing + content.
 
 Capped only by retention policy (none currently — add a vacuum worker
-when the table gets unwieldy).
-- `tests/test_router.py` — fast-path dispatch, offline gate, `intents_log` writes.
-- `tests/test_connectivity.py` — state transitions logged once per change.
-- `tests/test_integration.py` — end-to-end `POST /v1/intent` against real Postgres, timer watcher firing.
+when the table gets unwieldy). A person's own turns are deleted when they
+say "forget me" (see "Voice-profile command vocabulary"), and the voice
+history settings (Settings → Voice history) can prune older ones.
 
 ## Environment variables
 
@@ -995,6 +1029,7 @@ All config is env-driven via `.env` (see `.env.example`):
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama server |
 | `SEARXNG_URL` | `http://localhost:6888` | SearxNG (DoubleCheckHandler) |
 | `INTERNET_ACCESS` | *(unset)* | `always` \| `sometimes` \| `never`: whether this box uses the internet, which sets the defaults of the online extras (docs/INTERNET.md). Unset = the behaviour before the setting existed. Settings → Internet in the dashboard |
+| `AI_FEATURES` | `true` | Whether Domovoi may use its chat models at all (AI chat and questions). `false`: voice commands still run on their fixed phrases, speech recognition and the voices stay, a question gets a fixed "set up for home commands" answer and Chat is hidden. Settings → Models |
 | `CONNECTIVITY_PROBE_TARGET` | `1.1.1.1:443` | `host:port` probed every 30 s (not dialed at all under `INTERNET_ACCESS=never`). Keep it on an internet address |
 | `CONNECTIVITY_PROBE_INTERVAL_SEC` | `30` | Poll interval |
 | `CONNECTIVITY_PROBE_TIMEOUT_SEC` | `2` | Per-probe timeout |
@@ -1008,18 +1043,20 @@ All config is env-driven via `.env` (see `.env.example`):
 | `LETTA_BASE_URL` | `http://localhost:6283` | Self-hosted Letta server (the `letta` compose service) |
 | `LETTA_TOKEN` | *(random, written on first bootstrap)* | SDK token = the server's `LETTA_SERVER_PASSWORD` (compose hands Letta the same value). Generated per install by `python -m domovoi.env_bootstrap`; `--repair` adds one to an older `.env`, and compose refuses to run without it. The core's own default (`domovoi-local`, the old shared value) only matters for a Letta started some other way |
 | `LETTA_MODEL` | `ollama/qwen2.5:14b` | Letta LLM handle (local Ollama) |
-| `LETTA_EMBEDDING_MODEL` | `ollama/nomic-embed-text` | Letta embedding handle — REQUIRED on self-hosted Letta |
+| `LETTA_EMBEDDING_MODEL` | `ollama/nomic-embed-text:latest` | Letta embedding handle — REQUIRED on self-hosted Letta |
 
 ## Adding a new handler
 
 1. **Create** `domovoi/handlers/<your_handler>.py`:
 
    ```python
-   from domovoi.handlers.base import Handler
+   from domovoi.handlers.base import Handler, HandlerDisplay
    from domovoi.models import Context, Intent, Response
 
    class YourHandler(Handler):
        name = "your_handler"
+       priority_band = 400       # required; see the band map in handlers/__init__.py
+       display = HandlerDisplay(label="Your handler", tone="info")   # required
        requires_network = "no"   # or "degraded" | "yes"
 
        tool_schema = {
@@ -1048,15 +1085,44 @@ All config is env-driven via `.env` (see `.env.example`):
 
    ```python
    from domovoi.handlers.your_handler import YourHandler
-   HANDLERS = [TimerHandler(), YourHandler()]
+   _CORE_HANDLERS = [..., YourHandler()]   # order here does not matter
    ```
+
+   The registry sorts on `(priority_band, core first, plugin slug, name)`;
+   add a `# band rationale:` comment beside `priority_band` and a line to the
+   band map at the top of that file.
 
 3. **Tests:**
    - `test_registry.py` automatically checks that your handler implements `fallback_offline` if needed.
    - Add handler-specific tests in `tests/test_<your_handler>.py`.
 
-4. **Schema:** if you need new tables or columns, write a **new** migration file (`V002__<desc>.sql`, `V003__<desc>.sql`, …). Never alter V001.
+4. **Schema:** if you need new tables or columns, write a **new** migration file with the next free number in `domovoi/db/migrations/` (`V039__<desc>.sql` and up at the time of writing). Never edit a migration that has shipped.
 
-## Layout
+## Package map
 
-See the repo-root `AGENTS.md` for the tree and the permanent conventions.
+The permanent conventions are in the repo-root `AGENTS.md`. Where the parts
+of this package live (each module's own docstring is the detail):
+
+| Where | What |
+|---|---|
+| `main.py`, `config.py`, `config_schema.py`, `bootstrap.py` | The FastAPI app and its lifespan, the settings model, the editable-settings registry the dashboard's Settings reads, and the Windows DLL bootstrap (never reorder its imports) |
+| `streaming.py`, `router.py`, `models.py` | The satellite WebSocket, the intent router, and the `Context` / `Intent` / `Response` types |
+| `handlers/` | The voice and chat commands, one module each, registered by priority band (`handlers/__init__.py` has the band map); `handlers/shared/` holds what several share |
+| `workers/` | Background workers: library indexing and enrichment, lyrics, news, podcasts, timers, pruners, wake-word training, printing, the container guard |
+| `clients/` | Wrappers for Whisper, Piper, Ollama, MPD, MusicBrainz, SearXNG, Letta and the like |
+| `db/` | Flyway migrations (`db/migrations/V###__*.sql`), repositories, the session factory |
+| `sdk/`, `plugins_runtime/`, `plugin_http.py`, `webkit.py`, `capabilities.py`, `events.py` | The plugin SDK, the loader, installer, manifest and contract checks, and the web-side kit (see `docs/PLUGIN_DEVELOPMENT.md`) |
+| `chat_titles.py`, `phone_voice.py`, `ai_features.py` | The Chat page's rules shared with the app: titles, the phone's chat mic, and the household's AI switch |
+| `help_desk/` | Domovoi as its own help desk: the manual, FAQ, troubleshooting guide and installed plugins' help files, searched and answered from only what they say |
+| `lookup.py`, `lookup_web.py`, `lookup_answer.py` | Lookup sources (local, api, web), the permission-first lookup chat uses, and the answer rules |
+| `doc_extract/`, `doc_qa/` | Text out of an attached document (PDF, Word, ODF, Markdown, text, spreadsheets) in a capped worker process, and finding and answering from it. In `doc_qa/`: `calc.py` ("calculate exactly": the model lists the numbers, our code does the sum and refuses what it can't read strictly), `headsup.py` (the short card before a task the app has measured as shaky) and `letter.py` (a photographed letter: transcribed, then explained with the dates and amounts quoted from the letter itself) |
+| `drafts/` | Chat drafts: the model writes content, our template code makes the `.docx` or PDF (four templates, every version kept); the bundled Liberation fonts and their licence sit in `drafts/fonts/` |
+| `voice_docs/`, `handlers/documents.py` | Documents by voice in any room: "read me the lease", and "take a letter to the landlord" (dictation becomes a letter draft saved in Documents, never sent anywhere) |
+| `printing/` | Printing and scanning on the home network: IPP, AirPrint, Mopria, eSCL; our own protocol code, with pypdfium2 and ReportLab for pages |
+| `egress.py`, `internet_profile.py`, `net_safety.py`, `searxng_service.py` | The internet answer and everything that must obey it |
+| `phonemizer/` | Text to phonemes for the Piper voices, without espeak-ng (its own README) |
+| `media_tags/`, `lyrics/` | Our own audio tag reader, and lyrics (embedded, sidecar, optional LRCLIB) |
+| `container_guard/` | Watches the Docker containers Domovoi and its plugins expect |
+| `satellite_*.py`, `satellite_media/`, `usb_stick/`, `join_page/` | Satellite pairing, upgrades, bundles, prepared SD media, the room stick, and the page that hands out the app |
+| `voice_*.py`, `wake_*.py` | Voice identification and history, voice settings, wake-word evaluation and training |
+| `admin_auth.py`, `auth.py`, `server_identity.py`, `transport_guard.py` | The admin account and sessions, server identity (signing), and request guards shared by both processes |
