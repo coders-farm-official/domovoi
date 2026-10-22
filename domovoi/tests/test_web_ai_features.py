@@ -443,7 +443,10 @@ def test_the_manual_marks_every_phrase_the_models_answer() -> None:
     for i, p in enumerate(phrases):
         if p.get("then"):
             continue
-        ai = p.get("path") in ("qa", "llm") or p.get("handler") in ("double_check", "chat_mode")
+        # A fast phrase whose turn ends at the model is marked too: a letter
+        # taken by voice is written up by it (documents plan D7).
+        ai = (p.get("path") in ("qa", "llm") or p.get("handler") in ("double_check", "chat_mode")
+              or p.get("text") == "take a letter to the landlord")
         assert (p.get("needs") == "ai") is ai or p.get("handler") == "chat_mode", p
         nxt = phrases[i + 1] if i + 1 < len(phrases) else None
         if nxt and nxt.get("then"):

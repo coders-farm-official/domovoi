@@ -16,6 +16,21 @@ import pytest
 from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
 from domovoi.handlers.base import Handler, HandlerDisplay, example_phrases_of
 
+
+@pytest.fixture(autouse=True)
+def _documents_folder_of_our_own(tmp_path, monkeypatch):
+    """The read fast path looks at Documents' names (handlers/documents.py):
+    an empty folder of the test's own, never the machine's ~/Documents."""
+    from domovoi.config import settings
+    from domovoi.voice_docs import reading
+
+    d = tmp_path / "Documents"
+    d.mkdir()
+    monkeypatch.setattr(settings, "documents_dir", str(d))
+    reading.invalidate()
+    yield d
+    reading.invalidate()
+
 # chat_mode lists its phrase only while chat mode is on (off by default).
 _EVERY_CORE = sorted(h.name for h in HANDLERS if h.plugin_slug is None and h.name != "chat_mode")
 _PHRASES = [

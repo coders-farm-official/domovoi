@@ -856,7 +856,9 @@ shorter", "make it more formal", or just "shorter" as your next message),
 or type it in the card's **revise** box: each change is a new version,
 and the reply says what changed. Every version is kept. A message about
 something else ("turn on the kitchen lights") is answered as usual and
-leaves the draft alone.
+leaves the draft alone. A letter taken by voice in a room ("take a letter
+to the landlord", see [Documents, sheets and
+drawings](#node:documents)) is here too, as its own chat.
 
 - **open** shows the draft beside the chat on a wide screen (in its place
   on a narrow one), with the message box still below it. Pick **v1**,
@@ -988,6 +990,34 @@ Podcasts, Audiobooks, and plugged-in drives.
 press **Save**.
 
 **App:** opens text files and sheets from Files.
+
+**Read aloud, in any room:** say "read me" and a document's name, as it
+is in Documents ("read me the house rules"), or with "document" or
+"file" after part of it ("read me the tax document"). Domovoi finds it in
+Documents (PDF, Word, OpenDocument, text or markdown) and reads it out in
+that room. If two fit, it asks which one; if it only heard something close,
+it asks "Did you mean …?". Over about a
+page, it says how long first ("It's 2 pages, about 3 minutes") and asks
+"The whole thing, or just the start?"; then it reads about a page at a time
+and asks "Shall I go on?". Say **stop**, **pause**, **start again** or
+**read that again**, and "continue reading" picks up later. It reads only
+what's in the household's Documents, never a phone's own files. Reading
+works with AI chat and questions off.
+
+**Take a letter:** say "take a letter to the landlord", say what it should
+say, then "end of letter" (or just stop talking). "scratch that" takes out
+the last thing you said; "cancel the letter" throws it away. Domovoi
+writes it up as a proper letter, signed with your name if it knows your
+voice (otherwise it asks who it's from), and says where it saved it:
+Documents → **From Chat**, as a Word file. It's also a chat in
+[Chat](#chat), where you can change it, save it as PDF or print it.
+Nothing is ever sent anywhere. Writing it up needs AI chat and questions
+on.
+
+**Try saying**
+
+- "read me the lease" · "read it back"
+- "take a letter to the landlord"
 
 ### Calendar
 

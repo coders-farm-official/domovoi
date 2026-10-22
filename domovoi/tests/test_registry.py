@@ -40,6 +40,7 @@ CORE_BANDS = {
     "intercom": 210,
     "chat_mode": 220,
     "printing": 222,
+    "documents": 225,
     "voice_notes": 230,
     "memory": 240,
     "homelab": 250,
@@ -132,7 +133,13 @@ def test_fast_paths_are_normalized_and_compiled() -> None:
             assert isinstance(fp, FastPath), (
                 f"{h.name}: fast path {fp!r} was not normalized to FastPath"
             )
-            assert isinstance(fp.pattern, re.Pattern)
+            # A compiled regex, or (core only) documents' claiming pattern:
+            # a regex whose match also asks the cached title index whether
+            # the turn is a document's (handlers/documents.py, D7 review).
+            assert isinstance(fp.pattern, re.Pattern) or (
+                h.plugin_slug is None and type(fp.pattern).__name__ == "_ClaimingPattern"
+                and isinstance(fp.pattern.pattern, str)
+            ), (h.name, fp.pattern)
             assert callable(fp.method)
             # FastPath keeps 2-tuple unpacking sugar for tuple-style iteration.
             pattern, method = fp
@@ -203,6 +210,10 @@ def test_choice_kinds_are_confirmation_kinds_with_a_reply_handler() -> None:
         "voice_profile": {"core.phone_voice_add", "core.room_voice_add", "core.forget_me"},
         "printing": {"core.print_pick", "core.print_printer", "core.printer_pick", "core.scan_more"},
         "help_desk": {"core.help_who"},
+        "documents": {
+            "core.doc_pick", "core.doc_length", "core.doc_more", "core.doc_paused",
+            "core.letter_author", "core.letter_dictation",
+        },
     }
 
 
@@ -228,6 +239,10 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
             "core.printer_pick", "core.scan_ready", "core.scan_more", "core.scan_read", "core.print_test",
         },
         "help_desk": {"core.help_send", "core.help_who"},
+        "documents": {
+            "core.doc_pick", "core.doc_length", "core.doc_more", "core.doc_paused",
+            "core.letter_author", "core.letter_dictation",
+        },
     }
     for name, kinds in expected.items():
         assert set(HANDLER_BY_NAME[name].confirmation_kinds) == kinds

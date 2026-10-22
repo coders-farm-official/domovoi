@@ -44,11 +44,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
-import os
-import re
-import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, AsyncIterator, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -61,6 +57,7 @@ from domovoi.admin_auth import require_device, require_device_read
 from domovoi.clients import ollama as ollama_client
 from domovoi.config import settings as core_settings
 from domovoi.drafts import ats, blocks, diff, docx_file, kinds, pdf_file, phrases, prompts, templates
+from domovoi.drafts import store as draft_store
 from web.backend.db import session_scope
 
 log = logging.getLogger(__name__)
@@ -70,7 +67,7 @@ DEVICE = [Depends(require_device)]
 READ = [Depends(require_device_read)]
 
 #: The folder in Documents saved drafts land in (plan Q5).
-CHAT_FOLDER = "From Chat"
+CHAT_FOLDER = draft_store.CHAT_FOLDER
 #: The longest draft the model writes in one pass, in tokens.
 DRAFT_MAX_TOKENS = 1800
 #: Past this many characters (about 1,600 tokens) a version is revised
@@ -81,7 +78,6 @@ _MEDIA = {
     "pdf": "application/pdf",
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
-_BAD_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f\x7f]+')
 
 
 async def _notify(s: Any, what: str) -> None:
@@ -542,8 +538,7 @@ def render(markdown: str, template_id: str, fmt: str, title: str) -> bytes:
 
 
 def file_name(title: str, version: int, fmt: str) -> str:
-    stem = " ".join(_BAD_NAME.sub(" ", title or "").split()).strip(" .")[:100] or "Draft"
-    return f"{stem} v{version}.{fmt}"
+    return draft_store.file_name(title, version, fmt)
 
 
 class SaveBody(BaseModel):
@@ -573,29 +568,18 @@ def _template_for(d: dict[str, Any], wanted: str | None) -> str:
 
 def _write_into_chat_folder(name: str, data: bytes) -> str:
     """Writes ``data`` as ``Documents/From Chat/<name>`` (a new name when
-    taken) and returns its Documents-relative path."""
+    taken) and returns its Documents-relative path: the core's writer
+    (:func:`domovoi.drafts.store.write_into_chat_folder`, which a letter
+    taken by voice saves through too), a refusal as a 409, and the Files
+    page's cached listing dropped."""
     from web.backend.api import documents as documents_api
-    from web.backend.api.files_security import is_sensitive_name, unstorable_reason
 
-    if is_sensitive_name(name) or unstorable_reason(name) is not None:
-        name = "Draft" + Path(name).suffix
-    base = documents_api._documents_dir()
-    base.mkdir(parents=True, exist_ok=True)
-    folder = base / CHAT_FOLDER
-    if folder.is_symlink():
-        raise HTTPException(status_code=409, detail="Documents/From Chat is a link; nothing is written through it")
-    folder.mkdir(exist_ok=True)
-    real = folder.resolve()
     try:
-        real.relative_to(base)
-    except ValueError:
-        raise HTTPException(status_code=409, detail="Documents/From Chat leads outside Documents") from None
-    target = documents_api._unique_path(real, name)
-    tmp = real / f".{uuid.uuid4().hex}.part"
-    tmp.write_bytes(data)
-    os.replace(tmp, target)
+        rel = draft_store.write_into_chat_folder(name, data)
+    except draft_store.SaveRefused as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
     documents_api._listing_changed()
-    return target.relative_to(base).as_posix()
+    return rel
 
 
 @router.post("/drafts/{draft_id}/save", dependencies=DEVICE)

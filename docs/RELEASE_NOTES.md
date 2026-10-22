@@ -67,6 +67,50 @@ dependencies.
   among the quoted sentences. See the manual's "What Domovoi is good and
   not so good at" for the limits.
 
+## 2026-10-21 — Read documents aloud and take a letter, in any room
+
+Core only. No migration, no new dependency, no new route.
+
+* **"Read me the lease."** Any room reads a document from the household's
+  Documents folder aloud: PDF, Word (.docx), OpenDocument (.odt), text or
+  markdown, found by its name (the same search as "print my cover
+  letter": inside Documents only, hidden and secret-named files left out).
+  A turn is the document's only when it's clear: the exact name ("read me
+  the house rules"), or a document word ("read me the tax document", a
+  lease, a contract, a file; "letter" when a letter in Documents fits).
+  "Read me the latest" stays the news', "read me Harry Potter" the
+  audiobooks', "read me the weather report" the Q&A model's. Two that
+  fit: "I found two: … Which one?"; something close: "Did you mean …?".
+  A question it asks ("Who's it from?", "Shall I go on?") is answered
+  only within a short time and never by a fresh wake word. Over about a page the room
+  says how long it is first ("It's 2 pages, about 3 minutes. The whole
+  thing, or just the start?"), then reads a page or so at a time and asks
+  "Shall I go on?". **stop**, **pause**, **start again**, **read that
+  again**, and later "continue reading", answer it; a part cut off by the
+  wake word is read again from its start. Never a phone's own files, and
+  only in the room that asked. No model is used: it works with AI chat and
+  questions off.
+* **"Take a letter to the landlord."** The room keeps listening while you
+  dictate, until "end of letter" or the room goes quiet (its follow-up
+  window closes with nothing said; nothing dictated, nothing saved); "scratch
+  that" and "cancel the letter" work while dictating. The language model
+  writes it up as a letter, signed with the speaker's name when voice ID
+  knows them (otherwise the room asks "Who's it from?"). It is saved as a
+  Word file in Documents → **From Chat**, and kept as a chat with the
+  letter as its draft (change it, save a PDF or print it there). The room
+  says "Saved as Letter to the landlord, in Documents, From Chat." It is
+  **never sent** anywhere. With AI chat and questions off it says so
+  before you start, and the manual leaves the phrase out. From the app's
+  chat mic it points you at the chat instead.
+* **Changed answer:** "write a letter to …" used to be saved as a voice
+  note reading "a letter to …"; it is a letter now. "write a note to the
+  letter carrier", "write down …" and "jot down …" are still notes.
+  "write my resume" by voice points you at Chat.
+* A new core handler, `documents` (band 225, between `printing` and
+  `voice_notes`), with a tool the routing model sees only when a turn
+  mentions taking or writing a letter, dictation, or reading a named kind
+  of document. `GET /v1/handlers` and `/api/capabilities` list it.
+
 ## 2026-10-21 — Write resumes and letters in Chat
 
 Core, dashboard and app, with one migration, **V039** (`chat_drafts`,

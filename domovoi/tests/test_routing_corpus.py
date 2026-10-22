@@ -45,6 +45,30 @@ from domovoi.router import (
 )
 from domovoi.tests.conftest import requires_db
 
+
+# The D7 review's fixture Documents: the read fast path claims an exact
+# name, so the corpus's document rows are routed against these names, never
+# the machine's own ~/Documents.
+_DOCS = ["Lease.pdf", "Cover letter.docx", "Harry Potter book report.docx", "Dune essay.txt",
+         "Pancake recipe.md", "House rules.txt", "Weather station manual.pdf", "Letter to the landlord v1.docx",
+         "Shopping list.txt", "The Hobbit reading notes.md", "Timer instructions.txt", "Latest invoice.pdf",
+         "Bedtime routine.md", "Calendar 2026.pdf", "Reminders.txt"]
+
+
+@pytest.fixture(autouse=True)
+def _documents_folder_of_our_own(tmp_path, monkeypatch):
+    from domovoi.config import settings
+    from domovoi.voice_docs import reading
+
+    d = tmp_path / "Documents"
+    d.mkdir()
+    for n in _DOCS:
+        (d / n).write_text("x", encoding="utf-8")
+    monkeypatch.setattr(settings, "documents_dir", str(d))
+    reading.invalidate()
+    yield d
+    reading.invalidate()
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORPUS_PATH = REPO_ROOT / "scripts" / "routing_corpus.json"
 CORPUS = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))["cases"]
@@ -57,6 +81,9 @@ GATED = {
     # offered only when the turn talks about printing, scanning or the
     # printer's supplies (handlers/printing.py)
     "printing",
+    # offered only when the turn says letter or dictate, or reads a named
+    # kind of document (handlers/documents.py)
+    "documents",
     # help_desk never: its fast path takes how-to questions about Domovoi
     # (or hands a how-to-worded command to its handler); its tool would be
     # bait for every other "how do I" question.
@@ -498,6 +525,15 @@ def test_questions_about_the_house_still_reach_the_router(utterance: str) -> Non
         ("i can't be late for the bus", "double_check", False),
         ("search for jazz", "double_check", False),
         ("google maps says it's twenty minutes", "double_check", False),
+        # documents (D7): a letter to write, dictation, or a named kind of
+        # document to read; never "read" or "letter" in passing
+        ("i'd like you to take down a letter for me", "documents", True),
+        ("could you start dictation", "documents", True),
+        ("can you read the tenancy agreement out", "documents", True),
+        ("what letter comes after b", "documents", False),
+        ("i read that somewhere", "documents", False),
+        ("read the room", "documents", False),
+        ("tell me about the history of rome", "documents", False),
     ],
 )
 def test_cue_words(utterance: str, tool: str, offered: bool) -> None:
@@ -510,7 +546,7 @@ def test_every_registered_handler_is_offered_for_a_plain_command() -> None:
     music_alias's on-request tool) in it must see every tool."""
     names = _offered(
         "double check the latest news about the 3 timers i set and their other names"
-        " on my calendar for the printer"
+        " on my calendar for the printer and write a letter"
     )
     assert set(names) == {h.name for h in HANDLERS} - NEVER_OFFERED
 
