@@ -221,6 +221,41 @@ class DocTurnTest {
         assertTrue(reply.sources.none { it.cited })
     }
 
+    /** Fold check 2026-10-21: "What is this?" on a PDF answered "I couldn't
+     *  find that in the document". A general question is an overview: the
+     *  model is asked what the document is, from the opening of every part
+     *  of a long one, in one reply (no keyword search, no long job). */
+    @Test fun whatIsThisIsAnOverviewEvenOfALongDocument() {
+        script = listOf("This is a garden guide. ", "- Water every morning [Section: Garden].")
+        val c = controller()
+        c.ready()
+        val long = DocFixtures.p("Garden", "Heading1") +
+            (1..120).joinToString("") { DocFixtures.p("Paragraph $it says the garden needs watering every morning in summer.") }
+        c.attach("garden.docx", { DocFixtures.docx(long).inputStream() }, question = "What is this?")
+        c.replied(1)
+        val reply = c.ui().conversation.messages.last()
+        assertEquals("overview", reply.docMode)
+        assertEquals(1, engines.single().replies.size)
+        assertTrue(engines.single().systems.single().endsWith(DocQa.RULES_OVERVIEW))
+        assertTrue(reply.text, reply.text.startsWith("This is a garden guide."))
+        assertNull("no long job", c.ui().conversation.job)
+        val asked = engines.single().replies.single().single().text
+        assertTrue("within one question's reading", asked.length < DocQa.RETRIEVE_CHARS + 1500)
+        // "Explain this" on a short one: the whole document.
+        c.send("Explain this")
+        c.replied(2)
+        assertEquals("overview", c.ui().conversation.messages.last().docMode)
+    }
+
+    /** A document answer is held until checked, so the wait is said: on the
+     *  Fold's bench speeds a full question (about 6,300 prompt characters)
+     *  takes about 25 s on the CPU, 10 s on the GPU. */
+    @Test fun theCheckingLineSaysHowLongItWillTake() {
+        assertEquals(25, AssistantController.docEtaS(6300, com.domovoi.app.assistant.docs.DocLong.benchSpeed(false)))
+        assertEquals(10, AssistantController.docEtaS(6300, com.domovoi.app.assistant.docs.DocLong.benchSpeed(true)))
+        assertEquals(5, AssistantController.docEtaS(10, com.domovoi.app.assistant.docs.DocSpeed(1000.0, 1000.0)))
+    }
+
     @Test fun aSummaryLongerThanOnePassIsReadAsAJob() {
         // D2 (PhoneDocJobTest has the rest): longer than one pass but one
         // part on the phone, so one call writes it, checked like any other.

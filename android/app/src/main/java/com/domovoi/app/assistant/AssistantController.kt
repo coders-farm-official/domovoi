@@ -159,6 +159,10 @@ data class AssistantUi(
     /** A reply about documents is being checked against them before it is
      *  shown (the model's own words are never shown unchecked). */
     val checking: Boolean = false,
+    /** How long that check's reply should take on this phone, seconds
+     *  (its measured speed): a document answer shows nothing until it is
+     *  checked, so the wait is said (Fold check 2026-10-21: "unresponsive"). */
+    val checkingEtaS: Int? = null,
     /** A PDF this phone can't read the text of, waiting for "Ask the home
      *  server" or to be dropped. */
     val pendingPdf: PendingDocument? = null,
@@ -3352,7 +3356,9 @@ class AssistantController(
         // (review round 1): nothing unchecked is shown or spoken. Meanwhile
         // the reply is empty and the chat says it is checking.
         fun live(): StoredMessage = StoredMessage(Speaker.DOMOVOI, "", clock(), backend = backend.label, docMode = mode)
-        _state.update { it.copy(checking = true, conversation = asked.copy(messages = asked.messages + live())) }
+        val eta = docEtaS(system.length + prompt.user.length, measuredSpeed(backend))
+        Log.i(TAG, "document turn: $mode, ${given.size} passages, ${system.length + prompt.user.length} prompt chars, about $eta s here")
+        _state.update { it.copy(checking = true, checkingEtaS = eta, conversation = asked.copy(messages = asked.messages + live())) }
         try {
             llm.reply(system, listOf(ChatTurn(fromUser = true, text = prompt.user)), clockLine()).collect { delta ->
                 if (firstMs == null && delta.isNotBlank()) firstMs = (nanos() - sent) / 1_000_000
@@ -3368,7 +3374,8 @@ class AssistantController(
         }
         val checked = if (calcOp != null) DocCalc.finish(text.toString(), given, question, names, calcOp, prompt.nonce, DocCalc.docsCtx(qaDocs))
         else DocQa.checkReply(text.toString(), given, question, names, prompt.nonce)
-        _state.update { it.copy(checking = false) }
+        _state.update { it.copy(checking = false, checkingEtaS = null) }
+        Log.i(TAG, "document turn: $mode answered in ${(nanos() - sent) / 1_000_000} ms")
         // Only the checked reply is shown, and spoken in a voice turn.
         onDelta(checked.content)
         val stats = llm.lastStats()
@@ -3908,6 +3915,17 @@ class AssistantController(
         /** Unload the model this long after the assistant leaves the screen. */
         const val UNLOAD_AFTER_MS = 5 * 60 * 1000L
         const val TITLE_DELAY_MS = 1_500L
+
+        /** About how long a reply's words are, tokens (a document answer). */
+        const val DOC_REPLY_TOKENS = 160
+
+        /** A document answer's wait on [speed], seconds, to the next 5:
+         *  reading [promptChars] of prompt, then writing its reply. */
+        fun docEtaS(promptChars: Int, speed: com.domovoi.app.assistant.docs.DocSpeed): Int {
+            val prefill = promptChars / speed.charsPerToken / speed.prefillTps.coerceAtLeast(1.0)
+            val decode = DOC_REPLY_TOKENS / speed.decodeTps.coerceAtLeast(0.5)
+            return (((prefill + decode) / 5.0).let { kotlin.math.ceil(it) } * 5).toInt().coerceAtLeast(5)
+        }
 
         /** A reply the runtime cut off by itself, part-way. */
         const val CUT_OFF = "The reply was cut off on this phone. Tap try again."

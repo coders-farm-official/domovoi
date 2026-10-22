@@ -77,12 +77,44 @@ def test_mode(case):
 
 
 def test_prompts():
+    rules = {"summary": answer.RULES_SUMMARY, "overview": answer.RULES_OVERVIEW, "question": answer.RULES_QUESTION}
     for case in CASES["prompt"]:
-        g = answer.retrieve(case["docs"], case["question"], case["previous"], mode=case["mode"])
+        g = answer.retrieve(case["docs"], case["question"], case["previous"], mode=case["mode"],
+                            single_pass=case.get("single_pass", answer.SINGLE_PASS_CHARS))
         pr = answer.build_prompt(case["question"], g, [d["name"] for d in case["docs"]], mode=case["mode"],
                                  previous=case["previous"], nonce="cafe0123")
         assert pr["user"] == case["user"]
-        assert pr["rules"] == (answer.RULES_SUMMARY if case["rules"] == "summary" else answer.RULES_QUESTION)
+        assert pr["rules"] == rules[case["rules"]]
+
+
+def test_overview_retrieve():
+    """Fold check 2026-10-21: "What is this?" is an overview: the whole
+    document when it fits, else the opening of every part."""
+    assert CASES["constants"]["rules_overview"] == answer.RULES_OVERVIEW
+    for case in CASES["overview_retrieve"]:
+        g = answer.retrieve(case["docs"], "what is this?", mode="overview", single_pass=case["single_pass"],
+                            budget=case["budget"])
+        assert [{"cite": x.cite, "text": x.passage.text} for x in g] == case["out"]
+    for case in CASES["opening"]:
+        assert answer.opening(case["in"], case["limit"]) == case["out"]
+
+
+def test_general_questions_about_a_document_are_overviews():
+    for q in ("What is this?", "what's this", "Explain this", "What does it say?", "what's it about",
+              "Tell me about this document", "What kind of document is this?"):
+        assert answer.choose_mode(q) == "overview", q
+    for q in ("What is the rent?", "what is this clause about?", "explain the late fee", "Summarize this"):
+        assert answer.choose_mode(q) != "overview", q
+
+
+def test_a_long_document_overview_reads_every_page_opening():
+    pages = [{"label": f"p. {i}", "text": (f"Page {i} explains step {i} of installing Domovoi on Windows. " * 30)}
+             for i in range(1, 16)]
+    docs = [{"name": "README-WINDOWS.pdf", "parts": pages}]
+    assert answer.retrieve(docs, "What is this?") == []        # the keyword search finds nothing
+    g = answer.retrieve(docs, "What is this?", mode="overview")
+    assert [x.cite for x in g] == [f"p. {i}" for i in range(1, 16)]
+    assert sum(len(x.passage.text) for x in g) <= answer.RETRIEVE_CHARS
 
 
 @pytest.mark.parametrize("case", CASES["check"], ids=lambda c: c["reply"][:30] or "empty")

@@ -471,7 +471,7 @@ private fun EngineLine(ui: AssistantUi, actions: AssistantActions, onModel: () -
             Row(Modifier.padding(top = 6.dp).semantics { liveRegion = LiveRegionMode.Polite }) {
                 Pill(
                     if (ui.conversation.messages.lastOrNull()?.docMode == "letter") "reading the letter and checking its dates and amounts"
-                    else "reading the passages and checking the answer",
+                    else "reading the passages and checking the answer" + (ui.checkingEtaS?.let { " · about $it s" } ?: ""),
                     Tone.Brand, live = true,
                 )
             }
