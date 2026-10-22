@@ -153,7 +153,7 @@ household.
   with its licence text beside it: Inter and JetBrains Mono (through
   fontsource 5.2.8, in `web/static/vendor/fonts/`), the three fonts
   Excalidraw carries (Virgil, Cascadia Code and Assistant, in
-  `web/static/vendor/excalidraw/`), and Playfair Display SC, the display
+  `web/static/vendor/excalidraw/`), and Vast Shadow (copyright 2011 Sorkin Type Co, SIL Open Font License 1.1), the display
   face (`web/static/fonts/`, also in `docs/design/fonts/`).
 - **Liberation Sans and Liberation Serif** 2.1.5 (SIL Open Font License
   1.1), embedded in the PDFs Chat writes. The same files are in the server

@@ -88,7 +88,7 @@ The product talks like a competent, slightly dry sysadmin who knows you personal
 ### Type
 - **Inter Variable** for everything UI. Geometric grotesque, optical-sized, reads well at 11–13 px.
 - **JetBrains Mono** for any value that's structurally code-shaped: file paths, IDs, durations like `3:58`, IP addresses, transfer rates. Tabular numerals on by default for monospace.
-- **Playfair Display SC** Bold (`fonts/PlayfairDisplaySC-Bold.ttf`, also in `web/static/fonts/`; SIL Open Font License 1.1, its licence text `OFL-PlayfairDisplaySC.txt` beside it) is the `--ff-display` token: a display face for one-off marquee lines. Nothing in the dashboard uses it today.
+- **Vast Shadow** Regular (`fonts/VastShadow-Regular.ttf`, also in `web/static/fonts/`; SIL Open Font License 1.1, its licence text `OFL-VastShadow.txt` beside it) is the `--ff-display` token: a shaded slab display face, the closest free match to the old brand face, for one-off marquee lines. Nothing in the dashboard uses it today.
 - **The wordmark** (`web/static/assets/wordmark.svg`) is the cat glyph plus "domovoi" set as SVG text in Inter 600 (and "/ web 0.1" in JetBrains Mono), not outlined paths, so it draws in Inter wherever Inter is loaded. It never used the display face.
 - Numbers in Inter use `font-variant-numeric: tabular-nums` so columns of `Mbit` values, durations, and counts line up.
 - One-step type scale: 32 / 24 / 18 / 15 / 13 / 11. No 14, no 16. The whole system runs on a 13-px body.
@@ -166,8 +166,8 @@ README.md                     ← you are here (this folder is docs/design/)
 colors_and_type.css           ← standalone token file for out-of-repo prototypes
                                  (canonical: web/static/colors_and_type.css)
 fonts/
-  PlayfairDisplaySC-Bold.ttf  ← display face (--ff-display; not used in the UI)
-  OFL-PlayfairDisplaySC.txt   ← its licence (SIL Open Font License 1.1)
+  VastShadow-Regular.ttf  ← display face (--ff-display; not used in the UI)
+  OFL-VastShadow.txt        ← its licence (SIL Open Font License 1.1)
 preview/
   type-*.html                 ← typography specimen cards
   color-*.html                ← color scale cards

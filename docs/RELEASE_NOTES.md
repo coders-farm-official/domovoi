@@ -24,7 +24,7 @@ dependency.
   admin setup. It checks the current address now.
 * **The design kit's display font.** Domovoi had no licence to ship the
   old display font, so it is removed. The design kit's display face is
-  now Playfair Display SC, under the SIL Open Font License
+  now Vast Shadow, under the SIL Open Font License
   ([docs/LICENSES.md](LICENSES.md)). The dashboard's wordmark, set in
   Inter, is unchanged.
 

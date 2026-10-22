@@ -23,7 +23,7 @@ FONT_SUFFIXES = {".ttf", ".otf", ".woff", ".woff2"}
 KNOWN = {
     "inter-": ("Inter", "."),
     "jetbrains-mono-": ("JetBrains Mono", "."),
-    "PlayfairDisplaySC-": ("Playfair Display", "."),
+    "VastShadow-": ("Vast Shadow", "."),
     "Liberation": ("Liberation", "."),
     # Excalidraw's own fonts, in excalidraw-assets/, whose contents the
     # fetch script replaces; their texts sit one level up, next to its README.
@@ -75,8 +75,6 @@ def test_every_shipped_font_is_credited_in_licenses_md():
     doc = LICENSES.read_text(encoding="utf-8")
     for font in _shipped_fonts():
         name, _ = _known(font)
-        if name == "Playfair Display":
-            name = "Playfair Display SC"
         assert name in doc, f"{name} ({font.relative_to(REPO)}) is not named in docs/LICENSES.md"
 
 

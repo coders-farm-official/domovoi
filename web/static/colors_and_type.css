@@ -103,16 +103,16 @@
   unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
 }
 
-/* Display face: Playfair Display SC Bold (SIL Open Font License 1.1, the
-   licence text is fonts/OFL-PlayfairDisplaySC.txt). A decorative display
+/* Display face: Vast Shadow Regular (SIL Open Font License 1.1, the
+   licence text is fonts/OFL-VastShadow.txt). A shaded slab display
    face that does NOT match Inter (body) or JetBrains Mono (mono), so it is
    a separate --ff-display slot rather than swapped in. Use it for one-off
    marquee lines where a more characterful face is wanted; nothing in the
    dashboard uses it today (the wordmark is set in Inter). */
 @font-face {
-  font-family: 'Playfair Display SC';
-  src: url('fonts/PlayfairDisplaySC-Bold.ttf') format('truetype');
-  font-weight: 700;
+  font-family: 'Vast Shadow';
+  src: url('fonts/VastShadow-Regular.ttf') format('truetype');
+  font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
@@ -211,7 +211,7 @@
   /* Type families */
   --ff-sans: 'Inter var', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --ff-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  --ff-display: 'Playfair Display SC', Georgia, serif; /* OFL display face, bold only */
+  --ff-display: 'Vast Shadow', Georgia, serif; /* OFL display face, regular only */
 
   /* Type scale */
   --t-xs:   11px;
