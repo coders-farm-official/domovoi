@@ -15,7 +15,7 @@ import java.util.Locale
  *
  * The table is the server's `domovoi/handlers/shared/clock_time.py`
  * (parse_when, then candidate_hours) on each phrase, printed by
- * functional-testing/fold-fixes/clock_compare.py: the hours it may be on a
+ * a small comparison script run over the same phrases: the hours it may be on a
  * 24-hour clock, and the minute.
  */
 class ClockWordsTest {
