@@ -553,7 +553,24 @@ starts no workflow. Every pushed commit carries `[skip ci]`. In order:
    pre-release, checks the tag on GitHub once more and pushes the commit
    it checked, `git push origin <that SHA>:refs/heads/stable` (never
    forced). Run again, it replaces those files and leaves `stable` where
-   it is. `finish-release.sh` is the same for bash; it needs `--setup FILE`
+   it is.
+
+   **The Windows update's signatures.** When the tag pins Domovoi's release
+   key (`windows/installer/release-signing.pub`), finish-release also
+   writes `DomovoiSetup.manifest.json` (kind, tag, version, the tag's
+   commit, the Setup's size and SHA-256) and signs the Setup and the
+   manifest with `ssh-keygen -Y sign` and the key's private half:
+   `-SigningKey <file>` (`--signing-key`, or `DOMOVOI_RELEASE_SIGNING_KEY`),
+   a file outside the checkout that the script never reads itself
+   (ssh-keygen does, and asks for its passphrase). It checks both
+   signatures against the tag's public half before anything is published,
+   and attaches `DomovoiSetup.exe.sig`, the manifest and
+   `DomovoiSetup.manifest.json.sig` (all in `SHA256SUMS`). A tag that pins
+   the key is refused without it; one that pins none is released without
+   signatures, and its Windows sides then can't update themselves. The key
+   is made once ([WINDOWS_HOST.md, The release
+   key](WINDOWS_HOST.md#the-release-key)); keep its private file and a
+   backup off the repository, like the Android keystore. `finish-release.sh` is the same for bash; it needs `--setup FILE`
    (a Setup built that way) off Windows. `-NoPublish` leaves the files in
    `windows\build\release\<tag>\`.
 

@@ -4,6 +4,50 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-22 — One "Update Domovoi" for both halves of a Windows install
+
+Server, dashboard, Windows side (DomovoiHost, the tray, Setup) and the
+release script. **Pull the latest** is called **Update Domovoi** now; on a
+Linux server that is the only change (it pulls, then the card offers
+**Restart to apply changes** as before).
+
+* **A Windows install updates both halves from one button.** In the
+  dashboard, **Update Domovoi** pulls, restarts through the update unit
+  (asked once), and then, when the release the Linux side now includes has
+  a newer Windows side, asks the tray on the PC for the Windows part: on
+  the PC itself Windows' administrator prompt comes next; from another
+  device the card says **Finish on your PC** and the tray shows a
+  notification to click (**sign in on the PC to finish** when no tray is
+  running). The tray menu's new **Update Domovoi...** does both halves
+  behind one administrator prompt.
+* **The Windows part** downloads the release's `DomovoiSetup.exe`, checks
+  it against Domovoi's own release key (an Ed25519 signature, SSHSIG; the
+  public half is built into the tray and the other programs), checks that
+  it is that release and newer, and runs the checked bytes as a silent
+  repair that keeps the household's answers and never uninstalls. A
+  declined prompt, a failed download, a bad signature or a failed repair is
+  said in plain words on the card and in the tray, with **Try again** and
+  Setup's log.
+* **The Version card shows both halves**: the Linux side's commit and the
+  Windows side's version and build commit (DomovoiHost writes them into the
+  distro as root at every start), with "Windows side is behind" when it is.
+  The Windows side follows releases only, on either channel. Not under
+  internet "never".
+* **Releases sign the Setup.** `finish-release` writes
+  `DomovoiSetup.manifest.json` and attaches `DomovoiSetup.exe.sig` and
+  `DomovoiSetup.manifest.json.sig` for a tag that pins the release key
+  (`windows/installer/release-signing.pub`), signed with `--signing-key`
+  (or `DOMOVOI_RELEASE_SIGNING_KEY`). **Owner, once:** make the key and
+  commit its public half (docs/WINDOWS_HOST.md, "The release key"). Until
+  then builds pin no key and offer no Windows part.
+* New routes: `GET /v1/windows/update` and `POST /v1/windows/update/result`
+  (the tray's, loopback only, no forwarding headers), `POST
+  /v1/admin/windows/request` (+ `/cancel`, security tier), the web's `POST
+  /api/config/version/windows-request` (+ `/cancel`); `GET
+  /v1/admin/version` gains `windows_side`. An install whose tray is from
+  1.0.0-rc3 or earlier updates its Windows side once by hand (run the new
+  Setup). No migration.
+
 ## 2026-10-22 — The tray fetches the setup Wi-Fi's key itself
 
 Windows tray and server. On the Windows installer a satellite card is a zip

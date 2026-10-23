@@ -4639,7 +4639,7 @@
        "text": "**Check for updates**."
       },
       {
-       "text": "**Pull the latest**."
+       "text": "**Update Domovoi**."
       },
       {
        "text": "**Restart to apply changes**."
@@ -4652,14 +4652,40 @@
     },
     {
      "type": "p",
+     "text": "**On a Windows PC** the card shows two halves: the **Linux side** and the **Windows side** (the service, the tray icon). **Update Domovoi** does both in one go: it updates and restarts the Linux side, then the Windows side when a newer release is out."
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "On the PC itself, Windows asks an administrator for permission next."
+      },
+      {
+       "text": "From another device, the card says **Finish on your PC**. Click the Domovoi notification on the PC, then allow it."
+      },
+      {
+       "text": "Nobody signed in on the PC? The card says **sign in on the PC to finish**."
+      },
+      {
+       "text": "From the PC's tray icon: **Update Domovoi...** does it all, after one Windows permission prompt."
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "The Windows side updates on releases only, even on **main**. It runs only a Setup signed with Domovoi's release key. If something stops it, the card says why and offers **Try again**."
+    },
+    {
+     "type": "p",
      "text": "See [App settings and updates](node:app-settings).",
      "only": "app"
+    },
+    {
+     "type": "p",
+     "text": "[More detail](doc:docs/LINUX_HOST.md#release-channels) · [On Windows](doc:docs/WINDOWS_HOST.md#update-domovoi-both-halves)"
     }
-   ],
-   "more": {
-    "text": "More detail",
-    "target": "doc:docs/LINUX_HOST.md#release-channels"
-   }
+   ]
   },
   {
    "id": "health",

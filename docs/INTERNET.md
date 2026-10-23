@@ -200,7 +200,7 @@ stays yours to do:
    [LINUX_HOST.md → Updates from the dashboard](LINUX_HOST.md#updates-from-the-dashboard);
    the Windows install runs the same update unit inside its own distro.
 
-   *Why:* **Pull the latest** and **Restart to apply changes** (Settings →
+   *Why:* **Update Domovoi** and **Restart to apply changes** (Settings →
    About & updates) then also re-sync dependencies, run
    migrations, rebuild the music image, keep the search helper in step
    with your answer, and roll back if the result isn't healthy.
@@ -390,10 +390,12 @@ your router, it would tell Domovoi the internet is up when it isn't.
 - Downloading models, voices and wake-word training data; installing
   plugins from GitHub (a plugin zip whose Python packages are already
   installed still installs).
-- Updates: **Check for updates** and **Pull the latest** are greyed, and
+- Updates: **Check for updates** and **Update Domovoi** are greyed, and
   on Linux the update unit refuses (touching nothing) an update that
   would download: new Python dependencies, a new music player image, or a
   moved container image pin (Postgres, Flyway, Letta, the search helper).
+  On a Windows install no Windows part is offered either (the release's
+  Setup comes from GitHub), and the Version card says why.
 
 #### Updating a box answered No
 
@@ -577,7 +579,12 @@ allowed, they send short text:
   station's audio to Shazam to name the song.
 
 And only if you choose them: downloads an admin starts (models, plugins,
-updates, the satellite cache). No voice sends anything: they are all local
+updates, the satellite cache). On a Windows install that includes the
+Windows part of **Update Domovoi**: the tray on the PC downloads the
+release's `DomovoiSetup.exe`, its manifest and their signatures from
+github.com, after an admin asked for it in the dashboard or chose it in the
+tray's menu, never by itself
+([WINDOWS_HOST.md](WINDOWS_HOST.md#update-domovoi-both-halves)). No voice sends anything: they are all local
 (the Microsoft Edge online voices were dropped in October 2026).
 
 The full list, with every off switch: [FAQ → What touches the internet](FAQ.md#what-touches-the-internet-and-how-do-i-turn-each-thing-off)
