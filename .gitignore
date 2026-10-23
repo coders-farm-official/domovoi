@@ -269,3 +269,6 @@ allowed_signers
 
 # Test-run output (scripts/dev/run-linux-harness.sh logs, and the like)
 .test-results/
+
+# stray PowerShell module cache left by test_windows_installer
+/Microsoft/
