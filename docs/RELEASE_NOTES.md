@@ -4,6 +4,29 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-23 — Upload whole folders on the Files page
+
+Dashboard and web server. **Upload** on the Files page is now a menu —
+**Files…** or **Folder…** — and a folder dragged in from Explorer or Finder
+is uploaded with its subfolders, recreated under the folder on screen
+(`Book Title/01.mp3` lands as `Book Title/01.mp3`, not flattened). Files go
+a few at a time with overall and per-file progress, Pause and Cancel, and a
+summary at the end; `desktop.ini`, `Thumbs.db` and `.DS_Store` are left
+out. When some of the batch is already there the page asks once: keep both,
+replace or skip. Into Music or Audiobooks the library reindexes once at the
+end (Music needs an admin session for that, as before; the summary says to
+press Rescan library when it didn't run).
+
+Each file streams to disk as it arrives, so a multi-GB audiobook no longer
+sits in the web process's memory; one file can be at most 8 GiB. The old
+`POST /api/files/upload` (the Android app's door) also stopped reading each
+file whole. New routes: `POST /api/files/upload-stream`,
+`/api/files/upload-check`, `/api/files/upload-done`
+(docs/API_REFERENCE.md). No migration.
+
+Before this, a dropped folder arrived as an unreadable zero-byte entry that
+failed the whole upload, and the file picker couldn't choose folders at all.
+
 ## 2026-10-22 — The tray fetches the setup Wi-Fi's key itself
 
 Windows tray and server. On the Windows installer a satellite card is a zip

@@ -235,6 +235,9 @@ UPLOAD_LIMITS: tuple[tuple[str, int], ...] = (
     # A music library zip, and the file manager's bulk import.
     ("/api/music/library/upload", 8 * 1024 * 1024 * 1024),
     ("/api/files/upload", 8 * 1024 * 1024 * 1024),
+    # One file of a folder upload, streamed to disk as it arrives (the
+    # route's own cap, files.py MAX_UPLOAD_FILE_BYTES, is the same 8 GiB).
+    ("/api/files/upload-stream", 8 * 1024 * 1024 * 1024),
     ("/api/files/import", 8 * 1024 * 1024 * 1024),
     # A Piper voice: the .onnx plus its .onnx.json (voices.py caps the
     # model itself at 200 MB).

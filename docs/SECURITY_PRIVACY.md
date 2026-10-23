@@ -745,15 +745,19 @@ documents and files, a plugin zip — keep their own much larger ceilings
 (`domovoi/transport_guard.py`), on top of the domain limits they already
 enforced. Within those ceilings several upload handlers still hold the
 whole upload in the dashboard process's memory before writing it (WEB-19,
-not yet fixed): `POST /api/files/upload` and `POST /api/music/library/upload`
-up to 8 GiB each, every member a music zip extracts up to 1 GiB, a
+not yet fixed): `POST /api/music/library/upload` up to 8 GiB, every member a music zip extracts up to 1 GiB, a
 documents upload up to 512 MiB and a chat image up to 64 MiB before its
 20 MB check — so one paired device can make that process allocate that
 much in a single request. Saving a spreadsheet in place
 (`PUT /api/documents/sheet/{path}`) is the same class: the whole workbook
 is loaded and rewritten in memory, several times its size on disk (S6).
-The Piper voice upload already streams to disk under a running budget;
-doing the same for these is the fix (WEB-19, a documented limit for 1.0).
+The Piper voice upload already streams to disk under a running budget,
+and so do the Files uploads since wf/folder-upload: `POST
+/api/files/upload-stream` (one file per request, the body written to disk a
+chunk at a time, at most 8 GiB a file) and `POST /api/files/upload`, which
+copies each part from the parser's disk spool in 1 MiB chunks instead of
+reading it whole. Doing the same for the rest is the fix (WEB-19, a
+documented limit for 1.0).
 `MAX_REQUEST_BYTES` moves the default.
 
 Two smaller bounds go with it. `Intent.transcript` and `room_id` are

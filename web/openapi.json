@@ -10287,6 +10287,189 @@
         }
       }
     },
+    "/api/files/upload-stream": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Upload Stream",
+        "description": "One file of a folder upload; the request body is the file's bytes.\n\n``path`` is the folder on screen (it must exist); ``rel_path`` is the\nfile's place under it (\"Book Title/Disc 1/01.mp3\"), each segment checked\n(:func:`upload_segment_problem`), missing folders made inside the\nlibrary (:func:`make_upload_parents`). The body is written to a hidden\npart-file next to its destination a chunk at a time and renamed into\nplace only when it is complete \u2014 a cancelled or broken upload leaves\nnothing behind, and a ``replace`` never leaves a half-written file under\nthe real name. ``on_conflict``: ``keep_both`` (the default, and what\n``/upload`` always did) saves as \"name (1).ext\"; ``replace`` overwrites;\n``skip`` answers ``skipped=\"already there\"`` without reading the body.\nOne file is at most :data:`MAX_UPLOAD_FILE_BYTES` (``413``).",
+        "operationId": "upload_stream_api_files_upload_stream_post",
+        "parameters": [
+          {
+            "name": "library_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Library Id"
+            }
+          },
+          {
+            "name": "rel_path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 4096,
+              "title": "Rel Path"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Path"
+            }
+          },
+          {
+            "name": "device_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 64,
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "on_conflict",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "keep_both",
+                "replace",
+                "skip"
+              ],
+              "type": "string",
+              "default": "keep_both",
+              "title": "On Conflict"
+            }
+          },
+          {
+            "name": "reindex",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Reindex"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StreamUploadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/files/upload-check": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Upload Check",
+        "description": "Before a batch: which of its files are already there (so the page\ncan ask once \u2014 keep both, replace, skip) and which names the server\nwould refuse. Writes nothing; gated like the upload itself, so a\nblocked device hears it before the first byte is sent.",
+        "operationId": "upload_check_api_files_upload_check_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadCheckResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/files/upload-done": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Upload Done",
+        "description": "The end of a batch sent with ``reindex=false``: the listing is read\nagain everywhere, and an indexed library (Music, Audiobooks) reindexes\nONCE for the whole batch. Same gates as the upload, and nothing the\nupload itself would not have run.",
+        "operationId": "upload_done_api_files_upload_done_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadDoneRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadDoneResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/files/delete": {
       "post": {
         "tags": [
@@ -23273,6 +23456,43 @@
         "title": "SpareDeviceEnrolRequest",
         "description": "Settings \u2192 Rooms \u2192 Add a spare device: the room the laptop or\nphone will be, and optionally the core address it should dial when the\none this server finds for itself is not the one the LAN reaches (a\nsecond network card). The answer is the enrolment payload, the Linux\ninstall command and what the QR code carries."
       },
+      "StreamUploadResponse": {
+        "properties": {
+          "saved": {
+            "type": "string",
+            "title": "Saved",
+            "default": ""
+          },
+          "skipped": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skipped"
+          },
+          "replaced": {
+            "type": "boolean",
+            "title": "Replaced",
+            "default": false
+          },
+          "bytes": {
+            "type": "integer",
+            "title": "Bytes",
+            "default": 0
+          },
+          "reindex_triggered": {
+            "type": "boolean",
+            "title": "Reindex Triggered",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "StreamUploadResponse"
+      },
       "SubscribeRequest": {
         "properties": {
           "feed_url": {
@@ -24117,6 +24337,109 @@
         },
         "type": "object",
         "title": "TrainerEnableBody"
+      },
+      "UploadCheckRequest": {
+        "properties": {
+          "library_id": {
+            "type": "string",
+            "title": "Library Id"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "default": ""
+          },
+          "rel_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 5000,
+            "minItems": 1,
+            "title": "Rel Paths"
+          },
+          "device_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 3,
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "library_id",
+          "rel_paths",
+          "device_id"
+        ],
+        "title": "UploadCheckRequest"
+      },
+      "UploadCheckResponse": {
+        "properties": {
+          "existing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Existing"
+          },
+          "refused": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Refused"
+          }
+        },
+        "type": "object",
+        "required": [
+          "existing",
+          "refused"
+        ],
+        "title": "UploadCheckResponse"
+      },
+      "UploadDoneRequest": {
+        "properties": {
+          "library_id": {
+            "type": "string",
+            "title": "Library Id"
+          },
+          "device_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 3,
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "library_id",
+          "device_id"
+        ],
+        "title": "UploadDoneRequest"
+      },
+      "UploadDoneResponse": {
+        "properties": {
+          "reindex_triggered": {
+            "type": "boolean",
+            "title": "Reindex Triggered"
+          },
+          "reindex_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reindex Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reindex_triggered"
+        ],
+        "title": "UploadDoneResponse"
       },
       "UploadResponse": {
         "properties": {
