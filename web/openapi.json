@@ -7136,6 +7136,73 @@
         }
       }
     },
+    "/api/config/version/windows-request": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Request Windows Step",
+        "description": "A Windows install's \"Update Domovoi\", its second half: ask the tray\non the PC for the Windows step (domovoi/windows_side.py). This process\nsays whether the browser is on that PC, by the loopback rule the tray's\nown routes use (domovoi/local_peer.py): then the tray starts at once and\nWindows asks for permission there; from another device the tray shows a\nnotification instead. Proxy of the core's ``POST\n/v1/admin/windows/request`` \u2192 ``{ok, request, joined, tray}`` (a press\nwhile a request waits joins it); ``after_linux``: this press updated the\nLinux side first. 409 with the reason when there is no step to take.",
+        "operationId": "request_windows_step_api_config_version_windows_request_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/WindowsStepRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config/version/windows-request/cancel": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Cancel Windows Step",
+        "description": "Withdraw the request for the Windows step.",
+        "operationId": "cancel_windows_step_api_config_version_windows_request_cancel_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/config/version/channel": {
       "post": {
         "tags": [
@@ -24899,6 +24966,17 @@
         },
         "type": "object",
         "title": "WifiStatus"
+      },
+      "WindowsStepRequest": {
+        "properties": {
+          "after_linux": {
+            "type": "boolean",
+            "title": "After Linux",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "WindowsStepRequest"
       },
       "ZipRequest": {
         "properties": {

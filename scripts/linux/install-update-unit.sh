@@ -508,7 +508,7 @@ check_repo() {
   fi
   [ -f "$REPO/scripts/linux/apply-update.sh" ] \
     || stop "$REPO has no scripts/linux/apply-update.sh" \
-      "That checkout predates the update unit. Pull first (Pull the latest in the dashboard), don't restart, then run this again."
+      "That checkout predates the update unit. Pull first (Update Domovoi in the dashboard), don't restart, then run this again."
   [ -f "$REPO/domovoi/docker-compose.yml" ] \
     || stop "$REPO has no domovoi/docker-compose.yml: is it a Domovoi checkout?"
   s=$(defaults_get DOMOVOI_REPO_DIR)
@@ -874,7 +874,7 @@ check_signing() {
     need_root_only "$f" "The update unit verifies every HEAD against the keys in $f, as root."
     if ! signer=$(verify_head_as_root "$f"); then
       stop "signed updates are enforced by $f, but HEAD ${HEAD_SHA:0:12} does not verify: $signer" \
-        "The update unit would refuse every run. Pull a commit signed by a key in $f (Pull the latest in the dashboard)," \
+        "The update unit would refuse every run. Pull a commit signed by a key in $f (Update Domovoi in the dashboard)," \
         "or remove the file to turn enforcement off, then run this again."
     fi
     line ok "signed updates enforced: HEAD ${HEAD_SHA:0:12} is signed by $signer ($f)"
@@ -913,7 +913,7 @@ check_signing() {
     done
     if [ -z "$match" ]; then
       stop "HEAD ${HEAD_SHA:0:12} is on none of the pinned branches ($(printf 'origin/%s, ' ${branches[@]+"${branches[@]}"} | sed 's/, $//')) as this box last fetched them" \
-        "The update unit would refuse every run. Pull the latest in the dashboard, or fix the pin, then run this again."
+        "The update unit would refuse every run. Pull the latest (Update Domovoi in the dashboard), or fix the pin, then run this again."
     fi
     line ok "upstream pinned: HEAD tracks origin/$tracked"
   fi
@@ -987,7 +987,7 @@ run_from_copy() {
 check_verifier() {
   [ -f "$VERIFIER_SRC" ] && [ ! -L "$VERIFIER_SRC" ] \
     || stop "there is no update-verifier.sh beside this script ($VERIFIER_SRC)" \
-      "Run the install-update-unit.sh of a checkout that has it (Pull the latest in the dashboard first)."
+      "Run the install-update-unit.sh of a checkout that has it (Update Domovoi in the dashboard first)."
   need_root_only "$(dirname "$VERIFIER_FILE")" \
     "The update unit runs $VERIFIER_FILE as root before every update."
   VERIFIER_STATE=$(file_state "$VERIFIER_FILE" "$VERIFIER_SRC")
@@ -1165,7 +1165,7 @@ apply_now() {
   case $status in
     ok)
       say ""
-      say "From now on, Pull the latest followed by Restart to apply changes runs the whole update."
+      say "From now on, Update Domovoi followed by Restart to apply changes runs the whole update."
       return 0
       ;;
     rolled_back)

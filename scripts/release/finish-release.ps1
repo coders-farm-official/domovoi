@@ -18,7 +18,11 @@ checkout at the tag or after it:
    provision.sh, is refused); the same build makes DomovoiTray.exe, the
    tray icon, attached too for Windows installs from before it, and
    DomovoiSatelliteSetup.exe, the double-click Setup that makes a spare
-   Windows PC a room (servers fetch it from the release);
+   Windows PC a room (servers fetch it from the release); when the tag
+   pins Domovoi's release key (windows\installer\release-signing.pub),
+   signs the Setup and its manifest for the Windows update with
+   ssh-keygen -Y sign and the key's private half (-SigningKey), and checks
+   both signatures against the tag's public key;
 3. writes one SHA256SUMS (LF) for every asset;
 4. writes the notes: docs/release/v<version>.md at the tag, or a summary of
    docs/RELEASE_NOTES.md since the previous tag with links into the full
@@ -35,7 +39,9 @@ checkout at the tag or after it:
 Nothing on GitHub changes until every check has passed. The work is done by
 finish_release.py beside this script (Python 3.11+, standard library); the
 bash twin is finish-release.sh. Needs git with push access, gh signed in,
-Inno Setup 6 (windows\build.ps1). Never touches a keystore or a password.
+Inno Setup 6 (windows\build.ps1), and ssh-keygen (OpenSSH) for a tag that
+pins the release key. Never reads a key or a password itself: ssh-keygen
+reads the release key and asks for its passphrase.
 
 .PARAMETER Tag
 The release, v<version>. Default: v + the Android versionName.
@@ -60,6 +66,12 @@ beside the Setup).
 .PARAMETER Since
 The tag the notes' summary counts from (default: the previous one).
 
+.PARAMETER SigningKey
+The private half of Domovoi's release key (an OpenSSH ed25519 key file
+outside the checkout; default: $env:DOMOVOI_RELEASE_SIGNING_KEY). Needed for
+a tag that pins the key (docs\CONTRIBUTING.md, Releasing, says how it is
+made, once).
+
 .EXAMPLE
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\finish-release.ps1 -NoPublish
 #>
@@ -70,7 +82,8 @@ param(
     [string]$Setup,
     [string]$Tray,
     [string]$SatelliteSetup,
-    [string]$Since
+    [string]$Since,
+    [string]$SigningKey
 )
 
 $ErrorActionPreference = 'Stop'
@@ -96,6 +109,7 @@ if ($Setup) { $pyArgs += @('--setup', $Setup) }
 if ($Tray) { $pyArgs += @('--tray', $Tray) }
 if ($SatelliteSetup) { $pyArgs += @('--satellite-setup', $SatelliteSetup) }
 if ($Since) { $pyArgs += @('--since', $Since) }
+if ($SigningKey) { $pyArgs += @('--signing-key', $SigningKey) }
 
 Set-Location (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 & $python @pyArgs

@@ -781,7 +781,7 @@ def test_setup_installs_starts_and_removes_the_tray():
     start = s[s.index("procedure StartTray;"):]
     start = start[: start.index("\nend;")]
     assert r"ExecAsOriginalUser(ExpandConstant('{app}\DomovoiTray.exe')" in start
-    assert "InstallOk := MachineSetup;\n    if InstallOk then\n      StartTray;" in s
+    assert "InstallOk := MachineSetup;\n    if InstallOk and not UpdateMode then\n      StartTray;" in s
     prep = s[s.index("function PrepareToInstall"):]
     prep = prep[: prep.index("\nend;")]
     assert prep.index("'host-stop'") < prep.index("StopTrays;")
@@ -822,3 +822,79 @@ def test_build_and_unit_tests():
         for name in ("DomovoiSetup.exe", "DomovoiSatelliteSetup.exe"):
             assert re.search(r"^built .*\\" + re.escape(name) + r" \(\d+ bytes, sha256 [0-9a-f]{64}\)$",
                              proc.stdout, re.M), name
+
+
+def _pascal_block(s: str, header: str) -> str:
+    block = s[s.index(header):]
+    return block[: block.index("\nend;")]
+
+
+def test_the_update_mode_asks_nothing_and_never_uninstalls():
+    """The Windows update's silent repair (design note
+    WINDOWS-ONE-UPDATE-2026-10-22): /update=1 runs only silently and only
+    over an install, takes the household's saved answers, and a failure
+    never answers "Remove what Setup has changed" (an uninstall, which
+    deletes the database) nor parks the service; the result goes to
+    /updateresult, and the tray starts again."""
+    s = SCRIPT.read_text(encoding="ascii")
+    init = _pascal_block(s, "function InitializeSetup")
+    assert "UpdateMode := ExpandConstant('{param:update|0}') = '1';" in init
+    assert "if not WizardSilent then" in init and "if not ReadSavedAnswers then" in init
+    saved = _pascal_block(s, "function ReadSavedAnswers")
+    assert "RunHelper(TmpHelper, 'saved-answers'" in saved
+    # Every question that could stand in a silent run stops instead.
+    retry = _pascal_block(s, "function RetryOrStop")
+    assert retry.index("if UpdateMode then") < retry.index("TaskDialogMsgBox")
+    ports = _pascal_block(s, "function ResolvePorts")
+    assert ports.index("if UpdateMode then") < ports.index("TaskDialogMsgBox")
+    pre = _pascal_block(s, "function RunPreflight")
+    assert pre.index("if UpdateMode then") < pre.index("if MsgBox(")
+    wait = _pascal_block(s, "function WaitForHost")
+    assert wait.index("if UpdateMode then") < wait.index("if MsgBox(")
+    # The undo question is never asked in update mode, and UndoOnExit is
+    # only ever set by it.
+    step = _pascal_block(s, "procedure CurStepChanged")
+    assert step.index("if not InstallOk and UpdateMode then") < step.index("UndoOnExit := MsgBox(")
+    assert "else if not InstallOk then" in step
+    assert s.count("UndoOnExit := MsgBox(") == 1
+    assert [line.strip() for line in s.splitlines() if "UndoOnExit :=" in line] == [
+        "UndoOnExit := MsgBox(FailureText + #13#10#13#10 + 'Remove what Setup has changed so far? "
+        "(Recommended unless you want to run Setup again later to carry on. Either way, the last page has a "
+        "Copy logs button.)',",
+        "UndoOnExit := False;",
+    ]
+    deinit = _pascal_block(s, "procedure DeinitializeSetup")
+    assert deinit.index("UndoOnExit := False;") < deinit.index("if UndoOnExit and FileExists(ExpandConstant('{uninstallexe}'))")
+    assert "WriteUpdateResult;" in deinit and "if TraysStopped then\n      StartTray;" in deinit
+    # The household's answers, kept.
+    assert "Result := SavedInternet;" in _pascal_block(s, "function InternetAnswer")
+    assert "Result := 'keep';" in _pascal_block(s, "function AiPrepareArg")
+    assert "Root := SavedMediaRoot;" in s
+    # The Linux part first, before the host is stopped or a file replaced.
+    prep = _pascal_block(s, "function PrepareToInstall")
+    assert prep.index("'linux-update --wait'") < prep.index("'host-stop'") < prep.index("StopTrays;")
+    assert "GetCustomSetupExitCode" in s and "Result := 10;" in _pascal_block(s, "function GetCustomSetupExitCode")
+    result = _pascal_block(s, "procedure WriteUpdateResult")
+    assert "CompareText(ExtractFileName(Path), 'result.txt') <> 0" in result
+
+
+def test_the_update_mode_after_review_round_1():
+    """Review round 1 of the Windows update: a failed silent repair starts
+    DomovoiHost again (it was stopped to replace its file: the media folder
+    on an unplugged drive used to leave Domovoi down), one Setup at a time
+    (SetupMutex), the 418 MB Ubuntu image not downloaded again when
+    DomovoiHost's folder holds the pinned one, and the result written only
+    into the administrators' run folder."""
+    s = SCRIPT.read_text(encoding="ascii")
+    assert r"SetupMutex=Global\DomovoiSetup" in s.split("[Code]")[0]
+    prep = _pascal_block(s, "function PrepareToInstall")
+    assert prep.index("HostStopped := True;") < prep.index("'host-stop'")
+    deinit = _pascal_block(s, "procedure DeinitializeSetup")
+    assert "if HostStopped and not InstallOk and FileExists(AppHelper) then" in deinit
+    assert deinit.index("RunHelper(AppHelper, 'host-start'") < deinit.index("WriteUpdateResult;")
+    nxt = _pascal_block(s, "function NextButtonClick")
+    assert r"if UpdateMode and FileExists(ExpandConstant('{commonappdata}\Domovoi\host\in\{#UbuntuName}')) then" in nxt
+    assert nxt.index("ImagePath := ExpandConstant('{commonappdata}") < nxt.index("DownloadPage.Add('{#UbuntuUrl}'")
+    assert "'job --image ' + AddQuotes(ImagePath)" in s
+    result = _pascal_block(s, "procedure WriteUpdateResult")
+    assert r"ExpandConstant('{commonappdata}\Domovoi\updates')" in result and "Pos('..', Path) > 0" in result

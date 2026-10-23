@@ -74,6 +74,10 @@ that:
   reinstalling Windows: read what Windows Security says before you switch
   it off.
 
+The Windows update (below) doesn't rely on Windows' code signing: it
+checks a downloaded Setup against Domovoi's own release key, an Ed25519
+signature, before it runs it.
+
 ## What Setup does
 
 1. **Checks the PC** and changes nothing: Smart App Control, Windows build,
@@ -329,6 +333,7 @@ Right-click it for the menu; double-click opens Domovoi.
 | **Prepare a satellite card...** | The card helper, below. |
 | **Keep this PC awake** | On by default: Windows doesn't put the PC to sleep while the icon runs (the screen may still turn off). The line under it says, from the power plan (never changed), whether Windows would still sleep it when nobody is signed in. |
 | **Start with Windows** | This account's sign-in start, on by default. |
+| **Update Domovoi...** | The whole update, both halves, behind one administrator's permission prompt ([Updates and the release channel](#updates-and-the-release-channel)). It reads **Finish updating Domovoi...** while the dashboard has asked for the Windows part. |
 | **Save logs for support...** | Domovoi's logs are administrators-only: Windows asks for permission, then Setup's helper copies them to `Documents\Domovoi logs`, blanked as **Copy logs** does, with the icon's own log beside them. Without Setup's helper on the PC only the icon's log is copied, and it says so. |
 | **Restart Domovoi...** | Asks first, then Windows asks for an administrator, then `Restart-Service DomovoiHost`: for when the dashboard itself can't be reached. |
 | **Hide this icon** | Hides it until the next sign-in; Domovoi keeps running, and so does **Keep this PC awake**. **Domovoi** in the Start menu brings it back. |
@@ -453,8 +458,7 @@ PC needs for it:
   Windows'. A **new install** gets it during Setup (`provision.sh`'s
   `gpu-runtime` step, since the installer pinned to `4d6b414`); an
   **existing install** from an earlier Setup gets it at its first update
-  from the dashboard (**Pull the latest**, then **Restart to apply
-  changes**). After that every **Restart Domovoi** checks it is
+  from the dashboard (**Update Domovoi**). After that every **Restart Domovoi** checks it is
   still in place. A try that failed is not repeated at every Restart: the
   next one is a day later, or at the next Restart after you press **Turn
   on wake-word training** or **Check the GPU and trainer again**. With the
@@ -640,7 +644,7 @@ you share them.
 ## Updates and the release channel
 
 Setup installs the pinned commit (`DomovoiCommit`), and the dashboard's
-updates then follow a release channel (`DomovoiChannel` in `pins.iss`,
+updates (the Linux side's; the Windows side's are below) then follow a release channel (`DomovoiChannel` in `pins.iss`,
 handed to `provision.sh` as `--track-branch`; the channels are described in
 [LINUX_HOST.md, Release channels](LINUX_HOST.md#release-channels)):
 
@@ -663,13 +667,141 @@ install checked out is one Setup pinned (`provision.sh` also refuses a
 otherwise. Repairs of an install that passed that check keep whatever the
 dashboard's updates moved it to.
 
-What the dashboard updates and what it does not: **Settings > System > About &
-updates** (**Check for updates**, **Pull the latest**, **Restart to apply
-changes**) updates Domovoi inside the distro: its code, libraries,
-database and room players. The Windows side (`DomovoiHost.exe`, the tray
-icon, and the room installer this server hands out) changes only when you
-run a newer `DomovoiSetup.exe` over the install, a repair that keeps your
-data. Nothing on the Windows side is updated by itself.
+### Update Domovoi: both halves
+
+A Windows install has two halves. The **Linux side** (Domovoi inside the
+distro: its code, libraries, database and room players) updates exactly
+as on a Linux server, through the update unit, as root. The **Windows
+side** (`DomovoiHost.exe`, the tray icon and the room installer this
+server hands out) changes only when a newer `DomovoiSetup.exe` repairs the
+install, which keeps your data. **Update Domovoi** does both:
+
+- **In the dashboard** (Settings > System > About & updates): one press,
+  one question. Domovoi pulls the latest code, then restarts with it
+  through the update unit (backup, dependencies, migrations, health check,
+  roll back on failure). Then, when the release the Linux side now
+  includes has a newer Windows side, it asks the tray on the PC for the
+  Windows part. With the dashboard open **on the PC itself**, Windows'
+  administrator prompt appears next. From **another device**, the card
+  says **Finish on your PC**, and the tray on the PC shows a notification:
+  click it, and Windows asks for permission there. If no tray has been
+  heard from for two minutes (nobody is signed in on the PC; a core
+  restart doesn't forget it), the card says **sign in on the PC to
+  finish**. When only the Windows side is behind, the card says **Windows
+  side is behind** and **Update Domovoi** is that part alone.
+- **Twice, or from two places**: a second press while the PC hasn't
+  finished joins the first (the card says the PC has been asked already),
+  so one Windows prompt at most, and a declined prompt leaves nothing
+  queued behind it. With several accounts signed in, only the first tray
+  to claim the request runs it. A second Setup refuses while one runs
+  (`SetupMutex`). A press while the Linux side is already updating says
+  **already updating** and follows that run.
+- **In the tray menu**: **Update Domovoi...**, one confirmation, then
+  Windows' administrator prompt, then both halves: the Linux part first
+  (inside the elevated program, before anything on Windows changes), then
+  the Windows part when a newer one is out. The tray has no admin
+  password: the Windows prompt is what allows it. The elevated program
+  leaves a one-off request in `C:\ProgramData\Domovoi\host\in`, which only
+  administrators can write, and DomovoiHost runs the dashboard's own update
+  in the distro (the same checks, the same order).
+
+The **Version card** shows both halves: the Linux side's release label and
+commit, and the Windows side's version and the commit it was built from,
+which DomovoiHost writes into the distro as root
+(`/var/lib/domovoi-windows/side.json`) every time Domovoi starts. The
+Windows side updates on **releases** only. On the `stable` channel both
+halves follow releases; on `main` the Linux side follows every change
+while the Windows side follows the latest release that code includes, and
+the card says so. When no newer Setup signed with the release key exists,
+there is no Windows part.
+
+**The Windows part, step by step.** The tray downloads that release's
+`DomovoiSetup.exe`, `DomovoiSetup.exe.sig`, `DomovoiSetup.manifest.json`
+and `DomovoiSetup.manifest.json.sig` from
+`github.com/coders-farm-official/domovoi` into a new folder,
+`%LOCALAPPDATA%\Domovoi\updates\<date>-<time>-<id>`, that only your
+account, Administrators and SYSTEM can open. It checks, with the release
+key's public half built into its own program (in `C:\Program
+Files\Domovoi`, which only administrators can change): the manifest's
+signature, that it names the release the Linux side expects (tag and
+commit) and a version newer than the installed one, the Setup's own
+signature, and its size and SHA-256 against the manifest. It reads the
+Setup for that check through a handle that lets nobody write, rename or
+delete the file, and keeps it so while Windows' prompt is up and the
+installed `DomovoiSetupHelper.exe` (from `C:\Program Files\Domovoi`) runs as
+an administrator. The helper copies the four files into
+`C:\ProgramData\Domovoi\updates\<same name>`, a folder only administrators
+can write, checks them again there with the key built into it (and a
+version newer than its own; one it can't compare is refused), and starts
+that copy: what runs as an administrator is bytes no other account can
+change, and its `setup.log` and `result.txt` are written in that folder
+too. Setup runs as a silent repair (`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL
+/update=1`): it keeps the answers this install has (internet, media
+folder, AI as the home has it now), shows no page and asks nothing,
+never removes anything, and doesn't download the Ubuntu image again when
+DomovoiHost's folder already holds the pinned one. Setup ends every tray icon to replace its file, so
+the icon goes away for the few minutes the repair takes, and comes back
+when it is done with the outcome as a notification. The dashboard shows
+the outcome too.
+
+**When something doesn't work:**
+
+| What happened | What you see |
+|---|---|
+| Windows' prompt was declined | Nothing runs. After a press that updated the Linux side first, the update is half done, and the card says so (the Linux part is updated, the Windows part isn't), with **Try again**; after a press that was the Windows part alone, or from the tray menu, nothing changed and it says that. |
+| Internet access is **No** (`never`) | No Windows part is offered; the card says why (the Setup comes from the release, an admin-started download like the pull: [INTERNET.md](INTERNET.md)). |
+| The download fails, or the release has no signature files | Said in plain words; nothing runs. A release without them isn't offered again. |
+| A signature doesn't check out, it's another key's, another release's, not newer, or the installed version can't be read | Said in plain words; the downloaded Setup is deleted and never run (the tray checks first, the elevated helper again on its own copy). |
+| The Linux part fails first (from the tray menu) | Setup stops before it changes anything on Windows, and says why. |
+| The repair fails | Everything is kept as it is: the silent repair never answers "Remove what Setup has changed" (which would uninstall), and it starts DomovoiHost again (it was stopped to replace its file), so Domovoi keeps running as it was, whatever step failed (the saved media folder on a drive that isn't plugged in, say). The card and the notification name Setup's log, `C:\ProgramData\Domovoi\updates\<run>\setup.log`, and `C:\ProgramData\Domovoi\logs` has the rest (**Save logs for support...**). Run the Setup in that folder by hand to see where it stops. |
+
+An install whose tray and DomovoiHost are from before this (1.0.0-rc3 and
+earlier) updates its Windows side once by hand: run the newer
+`DomovoiSetup.exe` over it.
+
+**Limits.** The tray's routes on the core answer any program on this PC
+(the shared-PC boundary, [below](#the-trust-boundary-on-a-shared-pc)): one
+could read the update state or post an outcome for the tray menu's own
+run, which the card shows. It can't answer or end a dashboard request (only
+the tray that claimed it can, with its token), mark a release as lacking a
+Setup signature, or start anything elevated: Windows' prompt and the release
+key stay the gates.
+
+### The release key
+
+The Windows part trusts a Setup only when it carries signatures by
+Domovoi's own release key, an Ed25519 key, made once by the maintainer,
+kept outside the repository and never committed. Its public half is
+`windows/installer/release-signing.pub`, which `windows\build.ps1` builds
+into every program; a build without that file pins no key and offers no
+Windows part. The release script signs each release with the private half
+(`scripts/release/finish-release`, `-SigningKey` / `--signing-key`, or
+`DOMOVOI_RELEASE_SIGNING_KEY`), with `ssh-keygen -Y sign` (SSHSIG: namespace
+`domovoi-windows-setup` for the Setup, `domovoi-windows-setup-manifest` for
+its manifest), and checks both signatures against the public half before
+anything is published. To make the key, once (any PC with OpenSSH; Windows
+has it built in):
+
+```powershell
+mkdir $HOME\.domovoi-release
+ssh-keygen -t ed25519 -a 100 -C "Domovoi release key" -f $HOME\.domovoi-release\domovoi-release
+# choose a passphrase; keep the private file (domovoi-release) and a backup of it
+copy $HOME\.domovoi-release\domovoi-release.pub windows\installer\release-signing.pub
+git add windows/installer/release-signing.pub
+git commit -m "windows: pin Domovoi's release key [skip ci]"
+```
+
+From the next release on, `finish-release` asks for the private file and
+its passphrase. Check a download by hand:
+
+```bash
+echo "domovoi-release $(cut -d' ' -f1,2 windows/installer/release-signing.pub)" > allowed
+ssh-keygen -Y verify -f allowed -I domovoi-release -n domovoi-windows-setup -s DomovoiSetup.exe.sig < DomovoiSetup.exe
+```
+
+Losing the private half means no release can update existing Windows
+sides any more: their programs pin this key. A new key needs a Setup run
+by hand once on each PC.
 
 Inside the distro, updates run as root exactly as on a Linux server, and
 so does what keeps them honest: the update unit's root-owned verifier

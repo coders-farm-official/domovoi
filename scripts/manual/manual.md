@@ -1694,16 +1694,37 @@ you run.
 **How to** *(admin)*
 
 1. **Check for updates**.
-2. **Pull the latest**.
-3. **Restart to apply changes**.
+2. **Update Domovoi**. It pulls the update, then restarts with it.
+3. On a server that can't restart itself, **Restart to apply changes**
+   comes next.
 
 A failed update rolls itself back. **updates** chooses the channel:
 **stable** (releases only) or **main** (every change, as it lands).
 After an update, reload any open dashboard once.
 
+**On a Windows PC** the card shows two halves: the **Linux side** and the
+**Windows side** (the service, the tray icon). **Update Domovoi** does
+both in one go: it updates and restarts the Linux side, then the Windows
+side when a newer release is out.
+
+- On the PC itself, Windows asks an administrator for permission next.
+- From another device, the card says **Finish on your PC**. Click the
+  Domovoi notification on the PC, then allow it.
+- Nobody signed in on the PC? The card says **sign in on the PC to
+  finish**.
+- Pressed twice, or from two devices? The PC is asked once. Windows asks
+  for permission once.
+- From the PC's tray icon: **Update Domovoi...** does it all, after one
+  Windows permission prompt.
+
+The Windows side updates on releases only, even on **main**. It runs only
+a Setup signed with Domovoi's release key. If something stops it, the card
+says why and offers **Try again**.
+
 **App:** see [App settings and updates](#node:app-settings).
 
-[More detail](docs/LINUX_HOST.md#release-channels)
+[More detail](docs/LINUX_HOST.md#release-channels) ·
+[On Windows](docs/WINDOWS_HOST.md#update-domovoi-both-halves)
 
 ### Health
 

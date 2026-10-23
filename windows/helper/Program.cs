@@ -24,6 +24,9 @@
 //   job --image P --image-sha256 H --provision P --provision-sha256 H --repo-url U --ref SHA [--track-branch stable|main] [--lan-ip IP|auto|none]
 //   check-media --root DIR                          read-only
 //   host-start | host-retry | host-park | setup-code | record-ai
+//   run-update --from DIR --run NAME --tag T [--commit SHA] [--linuxfirst]   the Windows step, elevated (Update.cs)
+//   linux-update [--wait] [--run NAME]              the Linux part of the Windows update (Update.cs)
+//   saved-answers                                   read-only: the answers Setup's update mode keeps
 //   uninstall [--dry-run]                           exit 3: done, with leftovers
 //   copy-logs --kind install|uninstall --dest DIR [--uninstall-log FILE]
 
@@ -63,7 +66,7 @@ namespace Domovoi.Windows.Helper
 
     static class Program
     {
-        static readonly HashSet<string> ReadOnly = new HashSet<string> { "preflight", "vmp-status", "wsl-status", "host-status", "plan", "check-media", "help" };
+        static readonly HashSet<string> ReadOnly = new HashSet<string> { "preflight", "vmp-status", "wsl-status", "host-status", "plan", "check-media", "saved-answers", "help" };
 
         static int Main(string[] argv)
         {
@@ -133,6 +136,9 @@ namespace Domovoi.Windows.Helper
                     case "saved-ai": Steps.SavedAi(o); return 0;
                     case "record-ai": Steps.RecordAi(o); return 0;
                     case "plan": Steps.Plan(o); return 0;
+                    case "linux-update": return Update.LinuxUpdate(o, a.Flag("--wait"), a.Opt("--run"));
+                    case "run-update": return Update.RunUpdate(o, a.Req("--from"), a.Req("--run"), a.Req("--tag"), a.Opt("--commit"), a.Flag("--linuxfirst"));
+                    case "saved-answers": Update.SavedAnswers(o); return 0;
                     case "uninstall": return Uninstall.Run(o, dry);
                     case "copy-logs": Logs.Copy(o, a.Req("--dest"), a.Req("--kind"), a.Opt("--uninstall-log")); return 0;
                     default:
@@ -160,7 +166,7 @@ namespace Domovoi.Windows.Helper
             {
                 string k = argv[i];
                 if (!k.StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException("unexpected argument: " + k);
-                if (k == "--dry-run" || k == "--ports-only" || k == "--skip-internet" || k == "--no-deny-logon" || k == "--installing") { flags.Add(k); continue; }
+                if (k == "--dry-run" || k == "--ports-only" || k == "--skip-internet" || k == "--no-deny-logon" || k == "--installing" || k == "--wait" || k == "--linuxfirst") { flags.Add(k); continue; }
                 if (i + 1 >= argv.Length) throw new ArgumentException(k + " needs a value");
                 values[k] = argv[++i];
             }

@@ -125,6 +125,14 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
         "the card helper's one-time pass IS the credential — 256 bits, once, a day, "
         "loopback peer only with no forwarding headers (test_satellite_media_claim.py)"
     ),
+    ("core", "POST", "/v1/windows/update/result"): (
+        "the Windows tray's outcome of a Windows step: loopback peer only with no forwarding "
+        "headers; only the tray that claimed a request may answer it (test_windows_side.py)"
+    ),
+    ("core", "POST", "/v1/windows/update/claim"): (
+        "one tray takes the admin's request: loopback peer only with no forwarding headers, "
+        "first caller only (O_EXCL), the token it gets is what its result must carry (test_windows_side.py)"
+    ),
     ("web", "DELETE", "/api/auth/sessions/{token_hash}"): "checks the Bearer inside the handler",
     ("web", "POST", "/api/auth/password"): "checks the Bearer inside the handler",
     # ── web: proxies whose gate is applied by the core (auth forwarded) ─

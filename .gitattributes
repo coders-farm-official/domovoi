@@ -13,3 +13,6 @@ android/licences/** -text
 # The room stick's own files run inside Debian's installer and on the
 # installed room: a CR breaks every shell script there (domovoi/usb_stick/).
 domovoi/usb_stick/stick/** text eol=lf
+# Signed release fixtures for the Windows update tests: signatures are over
+# the exact bytes, so no line-ending conversion on checkout.
+windows/tests/release-sig/** -text

@@ -1116,7 +1116,9 @@ const useServerRestartFollow = ({ core, fire, onSettled, busy = false, enabled =
  * the server going away mid-answer is the restart working, every poll
  * while it is away is quiet, and no read refused while it is coming back
  * opens a prompt (ServerRestart, data.js). */
-const restartDomovoiServer = async ({ core, fire, question, plain = false, onStart = () => {},
+// `confirmed`: the caller asked already (a Windows install's one "Update
+// Domovoi" asks once for the pull, the restart and the Windows part).
+const restartDomovoiServer = async ({ core, fire, question, plain = false, confirmed = false, onStart = () => {},
                                       onUnderway = () => {}, onSettled = () => {} }) => {
   const updating = !!(core && core.restart_mode === 'update');
   const updateText =
@@ -1140,7 +1142,7 @@ const restartDomovoiServer = async ({ core, fire, question, plain = false, onSta
   });
   // What the confirm asks, from the panel's copy.
   const asked = fullBy(core);
-  if (!window.confirm(asked
+  if (!confirmed && !window.confirm(asked
     ? fullUpdateText(asked, false)
     : plain
     ? `${question || 'Restart Domovoi now?'}\n\n` +

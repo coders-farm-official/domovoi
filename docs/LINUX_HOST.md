@@ -1192,7 +1192,16 @@ domovoi_oww_cache`, `docker builder prune`.
 
 ## Updates from the dashboard
 
-The version panel's **Pull the latest** fetches, verifies the fetched tip's
+(The button was called **Pull the latest** until 2026-10-22. Where the
+update unit can restart unattended (`restart_mode` `update` and the
+sudoers grant), **Update Domovoi** is one press: the pull, then the
+restart through the unit, asked once. Elsewhere it pulls, and **Restart to
+apply changes** follows. A press while an update is under way says
+**already updating** and follows it. On a Windows install the press also
+updates the Windows side:
+[WINDOWS_HOST.md](WINDOWS_HOST.md#update-domovoi-both-halves).)
+
+The version panel's **Update Domovoi** (the pull) fetches, verifies the fetched tip's
 signature (see [Signed updates](#signed-updates)), and fast-forwards to
 it. A pull can bring new Python dependencies, a new Flyway migration or a
 new MPD image, and a bare restart of core and web applies none of them:
@@ -2000,7 +2009,7 @@ The `export` says `HEAD is signed by alex (SHA256:...), listed in /etc/domovoi/a
 The installer's pre-flight reports `signed updates enforced: HEAD ... is signed by alex`,
 or stops, changing nothing, if HEAD would be refused. If the checkout is
 still on a commit from before you started signing, pull a signed one first
-(**Pull the latest** verifies it), then restart. Several people can sign:
+(**Update Domovoi** verifies it), then restart. Several people can sign:
 one line each. A key is retired by removing its line; to retire it while
 its old commits stay verifiable, list it in a revocation file instead
 (`ssh-keygen -Y verify -r`) and set `DOMOVOI_REVOKED_SIGNERS`.
@@ -2069,7 +2078,7 @@ For a box already running the three units above, such as one set up by hand
 before the install script existed. One command sets it up. Over SSH, as
 your admin user:
 
-1. Pull, but don't press Restart yet. Use **Pull the latest** in the
+1. Pull, but don't press Restart yet. Use **Update Domovoi** in the
    dashboard, or:
 
    ```bash
@@ -2163,7 +2172,7 @@ ran, that code is what it records. Flyway still runs on every update, but
 new dependencies or a new MPD image from that pull won't be installed:
 re-sync the venv as in [Install](#install) if `pyproject.toml` changed.
 
-From then on, **Pull the latest** followed by **Restart to apply changes**
+From then on, **Update Domovoi** followed by **Restart to apply changes**
 runs the whole pipeline, and **last update** in the version panel shows how
 it went. The old restart rule in `/etc/sudoers.d/domovoi-restart` can stay.
 It's used only if the unit is ever removed or masked.
@@ -2194,7 +2203,7 @@ in this order.
 
    `tee` must print a 40-character SHA. If it prints an error, stop there.
 
-2. Pull, but don't press Restart yet. Use **Pull the latest** in the
+2. Pull, but don't press Restart yet. Use **Update Domovoi** in the
    dashboard, or:
 
    ```bash
