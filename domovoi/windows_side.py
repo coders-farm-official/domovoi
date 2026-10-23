@@ -35,14 +35,21 @@ a newer ``DomovoiSetup.exe`` repairs the install. This module joins them:
   in its order.
 
 Files (the core's home, ``~/.domovoi/windows_update``; both processes run as
-the service user): ``request.json`` (the admin's request), ``result.json``
-(the tray's last outcome), ``unsigned.json`` (releases the tray found no
-signed Setup for).
+the service user): ``request.json`` (the admin's request; a second press
+while one waits joins it), ``claim-<id>.json`` (the one tray that took it:
+the hash of its token, made with O_EXCL so two signed-in accounts can't
+both run it), ``result.json`` (the tray's last outcome), ``unsigned.json``
+(releases the claiming tray found no signed Setup for), ``tray.json`` (when
+a tray last polled, so a core restart doesn't forget it) and
+``core-boot.json`` (the commit the core runs, for the tray's Linux part's
+rollback baseline).
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -268,28 +275,74 @@ def read_request() -> dict | None:
     if not isinstance(doc, dict) or not isinstance(doc.get("id"), str) or not _ID_RE.match(doc["id"]):
         return None
     return {"id": doc["id"], "on_this_pc": doc.get("on_this_pc") is True,
-            "at": doc.get("at") if isinstance(doc.get("at"), str) else None}
+            "after_linux": doc.get("after_linux") is True,
+            "at": doc.get("at") if isinstance(doc.get("at"), str) else None,
+            "claimed": (state_dir() / f"claim-{doc['id']}.json").exists()}
 
 
-def make_request(on_this_pc: bool) -> dict:
-    """A new request for the Windows step (replacing any earlier one: the
-    tray acts on each id once)."""
-    req = {"id": secrets.token_hex(8), "on_this_pc": bool(on_this_pc), "at": _iso(_now())}
+def make_request(on_this_pc: bool, after_linux: bool = False) -> tuple[dict, bool]:
+    """``(request, joined)``: a new request for the Windows step, or, while
+    one is still waiting, that one (a second press, from this dashboard or
+    another, joins it rather than starting a second run, and a run that was
+    declined doesn't leave a queued one behind). ``after_linux``: this press
+    updated the Linux side first (the card's words for a declined prompt
+    follow it)."""
+    pending = read_request()
+    if pending is not None:
+        return pending, True
+    for old in state_dir().glob("claim-*.json") if state_dir().is_dir() else ():
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    req = {"id": secrets.token_hex(8), "on_this_pc": bool(on_this_pc), "after_linux": bool(after_linux),
+           "at": _iso(_now())}
     _write_json("request.json", req)
     # The outcome of the last one is history now.
     _remove("result.json")
-    return req
+    return {**req, "claimed": False}, False
 
 
 def clear_request() -> None:
     _remove("request.json")
 
 
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def claim_request(request_id: object) -> str | None:
+    """The one tray that runs this request: a fresh token for the first
+    caller (the claim file is made with O_EXCL), None for anyone after it,
+    or when there is no such request. Two signed-in accounts each run a
+    tray; only one may launch."""
+    req = read_request()
+    if req is None or request_id != req["id"]:
+        return None
+    token = secrets.token_hex(16)
+    d = state_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(d / f"claim-{req['id']}.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return None
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump({"sha256": _token_hash(token), "at": _iso(_now())}, f)
+    return token
+
+
+def _claim_ok(request_id: str, token: object) -> bool:
+    doc = _read_json(f"claim-{request_id}.json")
+    if not isinstance(doc, dict) or not isinstance(token, str) or not isinstance(doc.get("sha256"), str):
+        return False
+    return hmac.compare_digest(_token_hash(token), doc["sha256"])
+
+
 def read_result() -> dict | None:
     doc = _read_json("result.json")
     if not isinstance(doc, dict) or doc.get("outcome") not in OUTCOMES:
         return None
-    return {k: doc.get(k) for k in ("outcome", "detail", "log", "version", "at", "request_id", "tag")}
+    return {k: doc.get(k) for k in ("outcome", "detail", "log", "version", "at", "request_id", "tag", "after_linux")}
 
 
 def _unsigned() -> list[str]:
@@ -306,16 +359,23 @@ def _clean_text(s: object, limit: int) -> str | None:
 
 def record_result(body: dict, target_tag: str | None) -> dict:
     """The tray's outcome of a Windows step (or of its own "Update Domovoi"):
-    kept for the card, and the request it answers is done. A
-    ``no_signed_setup`` marks the release, so the card stops offering it.
-    Only known outcomes and plain text are kept: any process on the PC can
-    reach this route (the shared-PC boundary), so it holds nothing the card
-    would act on by itself."""
+    kept for the card. Any process on the PC can reach this route (the
+    shared-PC boundary), so what it may change is held to the claim: only
+    the tray that claimed a request (its token, ``claim``) may answer it,
+    which ends the request, and only that answer can mark a release as
+    having no signed Setup (``unsigned.json``), so a stray POST can't hide
+    an update. An answer for no request (the tray menu's own run) is shown
+    and changes nothing else. Only known outcomes and plain text are kept.
+    PermissionError: a request id without its claim."""
     outcome = body.get("outcome")
     if outcome not in OUTCOMES:
         raise ValueError("unknown outcome")
     req = read_request()
     rid = body.get("request_id")
+    rid = rid if isinstance(rid, str) and _ID_RE.match(rid) else None
+    claimed = rid is not None and _claim_ok(rid, body.get("claim"))
+    if rid is not None and not claimed:
+        raise PermissionError("only the tray that claimed this request answers it")
     log_path = body.get("log")
     version = body.get("version")
     doc = {
@@ -324,32 +384,71 @@ def record_result(body: dict, target_tag: str | None) -> dict:
         "log": log_path if isinstance(log_path, str) and _LOG_RE.match(log_path) else None,
         "version": version if valid_version(version) else None,
         "at": _iso(_now()),
-        "request_id": rid if isinstance(rid, str) and _ID_RE.match(rid) else None,
+        "request_id": rid,
         "tag": target_tag,
+        "after_linux": bool(req and req["id"] == rid and req["after_linux"]),
     }
     _write_json("result.json", doc)
-    if req is not None and (doc["request_id"] == req["id"] or doc["request_id"] is None):
+    if req is not None and claimed and rid == req["id"]:
         clear_request()
-    if outcome == "no_signed_setup" and target_tag:
+    if outcome == "no_signed_setup" and target_tag and claimed:
         tags = _unsigned()
         if target_tag not in tags:
             _write_json("unsigned.json", [target_tag, *tags][:50])
     return doc
 
 
+# How often a poll is written down (it comes every 30 s).
+_TRAY_WRITE_SEC = 20
+
+
 def note_tray(version: object) -> None:
-    """The tray polled: it runs, as this version."""
-    _TRAY["at"] = _now()
-    _TRAY["version"] = version if valid_version(version) else None
+    """The tray polled: it runs, as this version. Kept in memory and, at
+    most every 20 s, in tray.json, so a core restart (every update) doesn't
+    make the card say nobody is signed in on the PC."""
+    now = _now()
+    ver = version if valid_version(version) else None
+    last_written = _TRAY.get("written")
+    _TRAY.update({"at": now, "version": ver})
+    if last_written is None or now - last_written >= _TRAY_WRITE_SEC:
+        try:
+            _write_json("tray.json", {"at": now, "version": ver})
+            _TRAY["written"] = now
+        except OSError as e:
+            log.warning("windows side: can't record the tray's poll: %s", e)
 
 
 def tray_seen() -> dict:
     at = _TRAY.get("at")
+    version = _TRAY.get("version")
+    if at is None:
+        doc = _read_json("tray.json")
+        if isinstance(doc, dict) and isinstance(doc.get("at"), (int, float)):
+            at = float(doc["at"])
+            version = doc.get("version") if valid_version(doc.get("version")) else None
     return {
         "running": at is not None and _now() - at < TRAY_FRESH_SEC,
         "seen_at": _iso(at) if at is not None else None,
-        "version": _TRAY.get("version"),
+        "version": version,
     }
+
+
+def record_core_boot(sha: str) -> None:
+    """The commit the core runs (git_version.boot_sha), for the tray's
+    Linux part, which runs in another process: its pull records it as the
+    rollback baseline, as the dashboard's pull does. Best effort."""
+    if not re.match(r"^[0-9a-f]{7,64}(-dirty)?$", sha or ""):
+        return
+    try:
+        _write_json("core-boot.json", {"sha": sha, "pid": os.getpid(), "at": _iso(_now())})
+    except OSError as e:
+        log.warning("windows side: can't record the core's commit: %s", e)
+
+
+def core_boot_sha() -> str | None:
+    doc = _read_json("core-boot.json")
+    sha = doc.get("sha") if isinstance(doc, dict) else None
+    return sha if isinstance(sha, str) and re.match(r"^[0-9a-f]{7,64}(-dirty)?$", sha) else None
 
 
 # ─── the state, for the card and for the tray ───────────────────────────
@@ -479,6 +578,11 @@ async def linux_update() -> dict:
     from_sha = await git_version.current_sha()
     behind = int(check.get("behind") or 0)
     if behind > 0:
+        # The rollback baseline the pull records is the code the CORE runs
+        # (this process never booted it): what the dashboard's pull uses.
+        running = await asyncio.to_thread(core_boot_sha)
+        if running and git_version.boot_sha() == "unknown":
+            git_version._BOOT_SHA = running
         bad = git_version._bad_sha(last)
         if bad and check.get("upstream_sha") == bad:
             return no(f"the latest commit ({bad[:7]}) failed to apply on this server and was rolled back, "

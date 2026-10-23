@@ -684,10 +684,18 @@ install, which keeps your data. **Update Domovoi** does both:
   Windows part. With the dashboard open **on the PC itself**, Windows'
   administrator prompt appears next. From **another device**, the card
   says **Finish on your PC**, and the tray on the PC shows a notification:
-  click it, and Windows asks for permission there. If nobody is signed in
-  on the PC (no tray is running), the card says **sign in on the PC to
+  click it, and Windows asks for permission there. If no tray has been
+  heard from for two minutes (nobody is signed in on the PC; a core
+  restart doesn't forget it), the card says **sign in on the PC to
   finish**. When only the Windows side is behind, the card says **Windows
   side is behind** and **Update Domovoi** is that part alone.
+- **Twice, or from two places**: a second press while the PC hasn't
+  finished joins the first (the card says the PC has been asked already),
+  so one Windows prompt at most, and a declined prompt leaves nothing
+  queued behind it. With several accounts signed in, only the first tray
+  to claim the request runs it. A second Setup refuses while one runs
+  (`SetupMutex`). A press while the Linux side is already updating says
+  **already updating** and follows that run.
 - **In the tray menu**: **Update Domovoi...**, one confirmation, then
   Windows' administrator prompt, then both halves: the Linux part first
   (inside the elevated program, before anything on Windows changes), then
@@ -719,12 +727,19 @@ signature, that it names the release the Linux side expects (tag and
 commit) and a version newer than the installed one, the Setup's own
 signature, and its size and SHA-256 against the manifest. It reads the
 Setup for that check through a handle that lets nobody write, rename or
-delete the file, and starts that same file, still held, as an
-administrator: Windows runs the bytes that were checked. Setup runs as a
-silent repair (`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL
+delete the file, and keeps it so while Windows' prompt is up and the
+installed `DomovoiSetupHelper.exe` (from `C:\Program Files\Domovoi`) runs as
+an administrator. The helper copies the four files into
+`C:\ProgramData\Domovoi\updates\<same name>`, a folder only administrators
+can write, checks them again there with the key built into it (and a
+version newer than its own; one it can't compare is refused), and starts
+that copy: what runs as an administrator is bytes no other account can
+change, and its `setup.log` and `result.txt` are written in that folder
+too. Setup runs as a silent repair (`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL
 /update=1`): it keeps the answers this install has (internet, media
-folder, AI as the home has it now), shows no page and asks nothing, and
-never removes anything. Setup ends every tray icon to replace its file, so
+folder, AI as the home has it now), shows no page and asks nothing,
+never removes anything, and doesn't download the Ubuntu image again when
+DomovoiHost's folder already holds the pinned one. Setup ends every tray icon to replace its file, so
 the icon goes away for the few minutes the repair takes, and comes back
 when it is done with the outcome as a notification. The dashboard shows
 the outcome too.
@@ -733,16 +748,24 @@ the outcome too.
 
 | What happened | What you see |
 |---|---|
-| Windows' prompt was declined | Nothing runs. From the dashboard the update is half done: the card says the Linux part is updated and the Windows part isn't, with **Try again**. From the tray menu nothing changed. |
+| Windows' prompt was declined | Nothing runs. After a press that updated the Linux side first, the update is half done, and the card says so (the Linux part is updated, the Windows part isn't), with **Try again**; after a press that was the Windows part alone, or from the tray menu, nothing changed and it says that. |
 | Internet access is **No** (`never`) | No Windows part is offered; the card says why (the Setup comes from the release, an admin-started download like the pull: [INTERNET.md](INTERNET.md)). |
 | The download fails, or the release has no signature files | Said in plain words; nothing runs. A release without them isn't offered again. |
-| A signature doesn't check out, it's another key's, another release's, or not newer | Said in plain words; the downloaded Setup is deleted and never run. |
+| A signature doesn't check out, it's another key's, another release's, not newer, or the installed version can't be read | Said in plain words; the downloaded Setup is deleted and never run (the tray checks first, the elevated helper again on its own copy). |
 | The Linux part fails first (from the tray menu) | Setup stops before it changes anything on Windows, and says why. |
-| The repair fails | Everything is kept as it is (the silent repair never answers "Remove what Setup has changed", which would uninstall, and leaves the service running); the card and the notification name Setup's log, `setup.log` in that run's folder, and `C:\ProgramData\Domovoi\logs` has the rest (**Save logs for support...**). Run the Setup in that folder by hand to see where it stops. |
+| The repair fails | Everything is kept as it is: the silent repair never answers "Remove what Setup has changed" (which would uninstall), and it starts DomovoiHost again (it was stopped to replace its file), so Domovoi keeps running as it was, whatever step failed (the saved media folder on a drive that isn't plugged in, say). The card and the notification name Setup's log, `C:\ProgramData\Domovoi\updates\<run>\setup.log`, and `C:\ProgramData\Domovoi\logs` has the rest (**Save logs for support...**). Run the Setup in that folder by hand to see where it stops. |
 
 An install whose tray and DomovoiHost are from before this (1.0.0-rc3 and
 earlier) updates its Windows side once by hand: run the newer
 `DomovoiSetup.exe` over it.
+
+**Limits.** The tray's routes on the core answer any program on this PC
+(the shared-PC boundary, [below](#the-trust-boundary-on-a-shared-pc)): one
+could read the update state or post an outcome for the tray menu's own
+run, which the card shows. It can't answer or end a dashboard request (only
+the tray that claimed it can, with its token), mark a release as lacking a
+Setup signature, or start anything elevated: Windows' prompt and the release
+key stay the gates.
 
 ### The release key
 

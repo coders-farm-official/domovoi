@@ -876,3 +876,25 @@ def test_the_update_mode_asks_nothing_and_never_uninstalls():
     assert "GetCustomSetupExitCode" in s and "Result := 10;" in _pascal_block(s, "function GetCustomSetupExitCode")
     result = _pascal_block(s, "procedure WriteUpdateResult")
     assert "CompareText(ExtractFileName(Path), 'result.txt') <> 0" in result
+
+
+def test_the_update_mode_after_review_round_1():
+    """Review round 1 of the Windows update: a failed silent repair starts
+    DomovoiHost again (it was stopped to replace its file: the media folder
+    on an unplugged drive used to leave Domovoi down), one Setup at a time
+    (SetupMutex), the 418 MB Ubuntu image not downloaded again when
+    DomovoiHost's folder holds the pinned one, and the result written only
+    into the administrators' run folder."""
+    s = SCRIPT.read_text(encoding="ascii")
+    assert r"SetupMutex=Global\DomovoiSetup" in s.split("[Code]")[0]
+    prep = _pascal_block(s, "function PrepareToInstall")
+    assert prep.index("HostStopped := True;") < prep.index("'host-stop'")
+    deinit = _pascal_block(s, "procedure DeinitializeSetup")
+    assert "if HostStopped and not InstallOk and FileExists(AppHelper) then" in deinit
+    assert deinit.index("RunHelper(AppHelper, 'host-start'") < deinit.index("WriteUpdateResult;")
+    nxt = _pascal_block(s, "function NextButtonClick")
+    assert r"if UpdateMode and FileExists(ExpandConstant('{commonappdata}\Domovoi\host\in\{#UbuntuName}')) then" in nxt
+    assert nxt.index("ImagePath := ExpandConstant('{commonappdata}") < nxt.index("DownloadPage.Add('{#UbuntuUrl}'")
+    assert "'job --image ' + AddQuotes(ImagePath)" in s
+    result = _pascal_block(s, "procedure WriteUpdateResult")
+    assert r"ExpandConstant('{commonappdata}\Domovoi\updates')" in result and "Pos('..', Path) > 0" in result

@@ -216,15 +216,16 @@ async def test_why_there_is_no_step(server, change, why) -> None:
 
 @pytest.mark.asyncio
 async def test_a_release_with_no_signed_setup_stops_being_offered(server) -> None:
-    windows_side.make_request(False)
-    windows_side.record_result({"outcome": "no_signed_setup", "request_id": None}, "v1.0.1")
+    req, _ = windows_side.make_request(False)
+    token = windows_side.claim_request(req["id"])
+    windows_side.record_result({"outcome": "no_signed_setup", "request_id": req["id"], "claim": token}, "v1.0.1")
     st = await windows_side.tray_state()
     assert st["step_needed"] is False and st["why_not"] == "unsigned_release"
 
 
 @pytest.mark.asyncio
 async def test_a_request_with_nothing_left_to_do_goes_away(server) -> None:
-    req = windows_side.make_request(True)
+    req, _ = windows_side.make_request(True)
     assert (await windows_side.tray_state())["request"] == req
     server["busy"] = True
     server["target"] = {"tag": "v1.0.0", "version": "1.0.0", "commit": C}
@@ -246,8 +247,9 @@ def test_the_tray_counts_as_running_for_two_minutes(monkeypatch) -> None:
 
 
 def test_a_result_keeps_known_outcomes_and_plain_text_only() -> None:
-    req = windows_side.make_request(False)
-    doc = windows_side.record_result({"outcome": "repair_failed", "request_id": req["id"],
+    req, _ = windows_side.make_request(False)
+    token = windows_side.claim_request(req["id"])
+    doc = windows_side.record_result({"outcome": "repair_failed", "request_id": req["id"], "claim": token,
                                       "detail": "Setup failed\x1b[31m at venv", "log": "C:\\Users\\k\\setup.log",
                                       "version": "1.0.1"}, "v1.0.1")
     assert doc["detail"] == "Setup failed[31m at venv" and doc["log"] == "C:\\Users\\k\\setup.log"
@@ -260,9 +262,78 @@ def test_a_result_keeps_known_outcomes_and_plain_text_only() -> None:
 
 
 def test_a_result_for_another_request_leaves_the_current_one() -> None:
-    req = windows_side.make_request(False)
-    windows_side.record_result({"outcome": "declined", "request_id": "0" * 16}, None)
+    req, _ = windows_side.make_request(False)
+    with pytest.raises(PermissionError):
+        windows_side.record_result({"outcome": "declined", "request_id": "0" * 16}, None)
     assert windows_side.read_request() == req
+
+
+# ─── review round 1: one run per press, one tray per run ────────────────
+
+
+def test_a_second_press_joins_the_waiting_request() -> None:
+    """Review probe (probe_requests.py): a second dashboard press while one
+    waits used to replace it, and a declined run then left the second one
+    behind for another prompt."""
+    a, joined_a = windows_side.make_request(True, after_linux=True)
+    b, joined_b = windows_side.make_request(False)
+    assert not joined_a and joined_b and b["id"] == a["id"]
+    assert windows_side.read_request()["on_this_pc"] is True, "the first press's request, unchanged"
+    token = windows_side.claim_request(a["id"])
+    windows_side.record_result({"outcome": "declined", "request_id": a["id"], "claim": token}, "v1.0.1")
+    assert windows_side.read_request() is None, "no queued second run after the declined one"
+    assert windows_side.read_result()["after_linux"] is True, "worded by what ran"
+    c, joined_c = windows_side.make_request(False)
+    assert not joined_c and c["id"] != a["id"] and windows_side.read_result() is None
+
+
+def test_only_one_tray_claims_a_request() -> None:
+    req, _ = windows_side.make_request(True)
+    first = windows_side.claim_request(req["id"])
+    assert first and windows_side.claim_request(req["id"]) is None, "the second account's tray gets nothing"
+    assert windows_side.read_request()["claimed"] is True
+    assert windows_side.claim_request("f" * 16) is None, "not the request"
+    windows_side.clear_request()
+    assert windows_side.claim_request(req["id"]) is None, "gone"
+
+
+def test_only_the_claiming_tray_answers_and_marks_a_release() -> None:
+    """Review probe: any loopback POST could end a request and hide a release
+    for good (no_signed_setup)."""
+    req, _ = windows_side.make_request(True)
+    token = windows_side.claim_request(req["id"])
+    with pytest.raises(PermissionError):
+        windows_side.record_result({"outcome": "no_signed_setup", "request_id": req["id"], "claim": "nope"}, "v1.0.1")
+    with pytest.raises(PermissionError):
+        windows_side.record_result({"outcome": "no_signed_setup", "request_id": req["id"]}, "v1.0.1")
+    # No request id (the tray menu's own run, or a stray caller): shown, and
+    # nothing else.
+    windows_side.record_result({"outcome": "no_signed_setup"}, "v1.0.1")
+    assert windows_side._unsigned() == [] and windows_side.read_request() is not None
+    windows_side.record_result({"outcome": "no_signed_setup", "request_id": req["id"], "claim": token}, "v1.0.1")
+    assert windows_side._unsigned() == ["v1.0.1"] and windows_side.read_request() is None
+
+
+def test_the_tray_is_remembered_across_a_core_restart(monkeypatch) -> None:
+    """Review: after every one-press update the restarted core forgot the
+    tray, and the card said "sign in on the PC to finish" until its next
+    30 s poll."""
+    t = [1000.0]
+    monkeypatch.setattr(windows_side, "_now", lambda: t[0])
+    windows_side.note_tray("1.0.0")
+    windows_side._TRAY.clear()             # the core restarts
+    t[0] += 45
+    seen = windows_side.tray_seen()
+    assert seen["running"] and seen["version"] == "1.0.0"
+    t[0] += windows_side.TRAY_FRESH_SEC
+    assert not windows_side.tray_seen()["running"], "absent for two minutes is absent"
+
+
+def test_the_core_records_its_commit_for_the_trays_linux_part() -> None:
+    windows_side.record_core_boot("4d6b414")
+    assert windows_side.core_boot_sha() == "4d6b414"
+    windows_side.record_core_boot("not a sha")
+    assert windows_side.core_boot_sha() == "4d6b414"
 
 
 # ─── the routes ─────────────────────────────────────────────────────────
@@ -286,13 +357,24 @@ def test_the_tray_reads_the_state_over_loopback_only(server, monkeypatch) -> Non
 
 
 def test_the_tray_reports_over_loopback_only(server) -> None:
-    req = windows_side.make_request(False)
-    r = _core(LAN).post("/v1/windows/update/result", json={"outcome": "ok", "request_id": req["id"]})
-    assert r.status_code == 403 and windows_side.read_request() == req
-    r = _core().post("/v1/windows/update/result", json={"outcome": "ok", "request_id": req["id"]},
+    req, _ = windows_side.make_request(False)
+    r = _core(LAN).post("/v1/windows/update/claim", json={"request_id": req["id"]})
+    assert r.status_code == 403 and r.json()["reason"] == "not_local"
+    r = _core().post("/v1/windows/update/claim", json={"request_id": req["id"]}, headers={"X-Forwarded-For": "1.2.3.4"})
+    assert r.status_code == 403
+    r = _core().post("/v1/windows/update/claim", json={"request_id": req["id"]})
+    assert r.status_code == 200
+    token = r.json()["claim"]
+    r = _core().post("/v1/windows/update/claim", json={"request_id": req["id"]})
+    assert r.status_code == 409 and r.json()["reason"] == "claimed", "a second tray"
+    r = _core(LAN).post("/v1/windows/update/result", json={"outcome": "ok", "request_id": req["id"], "claim": token})
+    assert r.status_code == 403
+    r = _core().post("/v1/windows/update/result", json={"outcome": "ok", "request_id": req["id"], "claim": token},
                      headers={"X-Forwarded-For": "10.0.0.9"})
     assert r.status_code == 403
-    r = _core().post("/v1/windows/update/result", json={"outcome": "ok", "request_id": req["id"], "version": "1.0.1"})
+    r = _core().post("/v1/windows/update/result", json={"outcome": "ok", "request_id": req["id"], "claim": "wrong"})
+    assert r.status_code == 403 and windows_side.read_request() is not None, "not the claiming tray"
+    r = _core().post("/v1/windows/update/result", json={"outcome": "ok", "request_id": req["id"], "claim": token, "version": "1.0.1"})
     assert r.status_code == 200 and r.json() == {"ok": True}
     assert windows_side.read_result()["outcome"] == "ok" and windows_side.read_request() is None
     assert _core().post("/v1/windows/update/result", json={"outcome": "whatever"}).status_code == 422
@@ -335,6 +417,9 @@ def test_an_admin_asks_for_the_step(server, as_admin) -> None:
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["ok"] and body["request"]["on_this_pc"] is True and body["tray"]["running"] is False
+    assert body["joined"] is False
+    again = _core().post("/v1/admin/windows/request", json={"on_this_pc": False}).json()
+    assert again["joined"] is True and again["request"]["id"] == body["request"]["id"], "a second press joins"
     assert windows_side.read_request()["id"] == body["request"]["id"]
     assert _core().post("/v1/admin/windows/request/cancel").json() == {"ok": True}
     assert windows_side.read_request() is None
@@ -393,6 +478,7 @@ def test_the_web_says_whether_the_browser_is_on_the_pc(monkeypatch) -> None:
     finally:
         web_app.dependency_overrides.pop(admin_auth.require_admin_security, None)
     assert [s["body"]["on_this_pc"] for s in sent] == [True, False, False]
+    assert all(s["body"]["after_linux"] is False for s in sent)
     assert all(s["path"] == "/v1/admin/windows/request" for s in sent)
 
 
@@ -434,6 +520,24 @@ def linux(monkeypatch):
     monkeypatch.setattr(self_restart, "restart", restart)
     monkeypatch.setattr(windows_side, "_applied_sha", lambda: s["applied"])
     return s
+
+
+@pytest.mark.asyncio
+async def test_the_pull_records_the_cores_commit_as_its_rollback_baseline(linux, monkeypatch) -> None:
+    """Review: in its own process boot_sha() was "unknown", so the pull
+    recorded HEAD as the commit to roll back to."""
+    windows_side.record_core_boot("a" * 40)
+    monkeypatch.setattr(git_version, "_BOOT_SHA", None)
+    seen = []
+
+    async def pull():
+        seen.append(git_version.boot_sha())
+        linux["calls"].append("pull")
+        return linux["pull"]
+
+    monkeypatch.setattr(git_version, "pull", pull)
+    r = await windows_side.linux_update()
+    assert r["started"] and seen == ["a" * 40]
 
 
 @pytest.mark.asyncio

@@ -417,24 +417,29 @@ async def pull_version(request: Request):
     )
 
 
+class WindowsStepRequest(BaseModel):
+    after_linux: bool = False
+
+
 @router.post(
     "/config/version/windows-request",
     # Security tier at both hops, like the pull and the restart.
     dependencies=[Depends(require_admin_security)],
 )
-async def request_windows_step(request: Request):
+async def request_windows_step(request: Request, body: WindowsStepRequest | None = None):
     """A Windows install's "Update Domovoi", its second half: ask the tray
     on the PC for the Windows step (domovoi/windows_side.py). This process
     says whether the browser is on that PC, by the loopback rule the tray's
     own routes use (domovoi/local_peer.py): then the tray starts at once and
     Windows asks for permission there; from another device the tray shows a
     notification instead. Proxy of the core's ``POST
-    /v1/admin/windows/request`` → ``{ok, request, tray}``; 409 with the
-    reason when there is no step to take."""
+    /v1/admin/windows/request`` → ``{ok, request, joined, tray}`` (a press
+    while a request waits joins it); ``after_linux``: this press updated the
+    Linux side first. 409 with the reason when there is no step to take."""
     return bridge_response(
         *await post_admin(
             "/v1/admin/windows/request",
-            {"on_this_pc": local_peer.from_this_pc(request)},
+            {"on_this_pc": local_peer.from_this_pc(request), "after_linux": bool(body and body.after_linux)},
             headers=auth_forward_headers(request),
         )
     )

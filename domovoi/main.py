@@ -356,6 +356,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Pin the version label to the code this process actually imported,
     # before anything can pull underneath us. See git_version.capture_boot_state.
     await git_version.capture_boot_state()
+    # The tray's Linux part on a Windows install runs in its own process
+    # and records this as its rollback baseline (domovoi/windows_side.py).
+    await asyncio.to_thread(windows_side.record_core_boot, git_version.boot_sha())
 
     # First-run admin setup code (design §7.2): while no admin credential
     # exists, write the 8-word code to ~/.domovoi/setup-code.txt — proof of
@@ -3065,8 +3068,32 @@ async def windows_update_state(request: Request, tray: str | None = None) -> JSO
     return JSONResponse(await windows_side.tray_state(), headers={"Cache-Control": "no-store"})
 
 
+class _TrayClaimBody(BaseModel):
+    request_id: str = Field(..., max_length=64)
+
+
+@app.post("/v1/windows/update/claim")
+async def windows_update_claim(body: _TrayClaimBody, request: Request) -> JSONResponse:
+    """One tray takes the admin's request before it starts anything: the
+    first caller gets ``{ok, claim}`` (a token its result must carry), any
+    other ``409 {reason: "claimed"}``, so two signed-in accounts' trays
+    never both download and prompt. ``404 {reason: "gone"}`` when the
+    request is no longer there. Loopback only, like the poll."""
+    if not local_peer.from_this_pc(request):
+        return JSONResponse(_NOT_LOCAL, status_code=403, headers={"Cache-Control": "no-store"})
+    token = await asyncio.to_thread(windows_side.claim_request, body.request_id)
+    if token is None:
+        req = await asyncio.to_thread(windows_side.read_request)
+        gone = req is None or req["id"] != body.request_id
+        return JSONResponse({"detail": "that request is gone" if gone else "another tray took this request",
+                             "reason": "gone" if gone else "claimed"},
+                            status_code=404 if gone else 409, headers={"Cache-Control": "no-store"})
+    return JSONResponse({"ok": True, "claim": token}, headers={"Cache-Control": "no-store"})
+
+
 class _TrayResultBody(BaseModel):
     request_id: str | None = Field(default=None, max_length=64)
+    claim: str | None = Field(default=None, max_length=64)
     outcome: str = Field(..., max_length=40)
     detail: str | None = Field(default=None, max_length=1000)
     log: str | None = Field(default=None, max_length=300)
@@ -3087,12 +3114,15 @@ async def windows_update_result(body: _TrayResultBody, request: Request) -> JSON
         doc = await asyncio.to_thread(windows_side.record_result, body.model_dump(), target)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
     log.info("windows update: the tray reports %s", doc["outcome"])
     return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
 
 
 class _WindowsRequestBody(BaseModel):
     on_this_pc: bool = False
+    after_linux: bool = False
 
 
 @app.post(
@@ -3108,15 +3138,19 @@ async def admin_windows_request(body: _WindowsRequestBody) -> dict[str, Any]:
     shows a notification. 409 with the reason when no step is needed (a
     Linux-only install, internet access turned off, nothing newer, no signed
     Setup for that release); 423 while the container guard holds updates.
-    ``{ok, request, tray}``: ``tray.running`` false means no tray has polled
-    lately (nobody is signed in on the PC)."""
+    ``after_linux``: this press updated the Linux side first (the card words
+    a declined prompt by it). A press while a request waits joins it
+    (``joined: true``, the same request): never a second run.
+    ``{ok, request, joined, tray}``: ``tray.running`` false means no tray has
+    polled for two minutes (remembered across core restarts), so nobody is
+    signed in on the PC."""
     await container_freeze.require_unfrozen("update_apply")
     st = await windows_side.card_state()
     if not st.get("present") or not st.get("step_needed"):
         why = st.get("why_not") or "no_windows_side"
         raise HTTPException(status_code=409, detail=_WINDOWS_WHY_NOT.get(why, "there is nothing to update on the PC"))
-    req = await asyncio.to_thread(windows_side.make_request, body.on_this_pc)
-    return {"ok": True, "request": req, "tray": windows_side.tray_seen()}
+    req, joined = await asyncio.to_thread(windows_side.make_request, body.on_this_pc, body.after_linux)
+    return {"ok": True, "request": req, "joined": joined, "tray": windows_side.tray_seen()}
 
 
 _WINDOWS_WHY_NOT = {

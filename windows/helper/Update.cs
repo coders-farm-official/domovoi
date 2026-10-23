@@ -2,7 +2,16 @@
 // WINDOWS-ONE-UPDATE-2026-10-22; docs/WINDOWS_HOST.md, "Updates and the
 // release channel"):
 //
-//   linux-update [--wait] [--result FILE]
+//   run-update --from DIR --run NAME --tag TAG [--commit SHA] [--linuxfirst]
+//       The Windows step, elevated (the tray, after Windows' permission
+//       prompt): copy the tray's checked download from DIR (its private run
+//       folder) into C:\ProgramData\Domovoi\updates\NAME, which only
+//       administrators can write, check it again there (the release key
+//       built into this program, the release TAG and its commit, newer than
+//       this program's own version), and start that copy as the silent
+//       repair, without waiting (Setup replaces this program's file). A
+//       refusal writes result.txt there (ok=0, outcome=, error=) and exits 1.
+//   linux-update [--wait] [--run NAME]
 //       The Linux part, for an administrator: a one-off request in host\in
 //       (administrators only) that DomovoiHost answers by running the
 //       dashboard's own update in the distro (WindowsSide.cs). With --wait,
@@ -11,8 +20,8 @@
 //       C:\Program Files\Domovoi) when the Windows side is current, and by
 //       Setup's update mode with /linuxfirst=1 (from its own temporary
 //       folder) before it changes anything. Prints linux=started|nothing_new
-//       |updated|failed and error=...; --result FILE gets the same as
-//       RunResult lines.
+//       |updated|failed and error=...; --run NAME writes the same as
+//       RunResult lines to C:\ProgramData\Domovoi\updates\NAME\result.txt.
 //   saved-answers
 //       What Setup's update mode passes on, from the install record:
 //       internet=, media_root=. Read-only.
@@ -33,9 +42,9 @@ namespace Domovoi.Windows.Helper
         // more for a slow dependency sync.
         const int WaitMinutes = 45;
 
-        public static int LinuxUpdate(Output o, bool wait, string resultFile)
+        public static int LinuxUpdate(Output o, bool wait, string run)
         {
-            if (resultFile != null) CheckResultPath(resultFile);
+            string resultFile = run != null ? Path.Combine(AdminRun(run), UpdateRun.ResultFile) : null;
             var result = new RunResult();
             try
             {
@@ -124,14 +133,94 @@ namespace Domovoi.Windows.Helper
             return r != null && r.Status == 200 ? UpdateState.From(r.Body) : null;
         }
 
-        // A file named result.txt in an existing folder.
-        static void CheckResultPath(string p)
+        // -- the elevated side's run folders --------------------------------
+
+        // C:\ProgramData\Domovoi\updates (Administrators and SYSTEM write,
+        // Users read, inheritance off), then a new folder NAME in it.
+        public static string AdminRun(string run)
         {
-            if (!Path.IsPathRooted(p) || !string.Equals(Path.GetFileName(p), UpdateRun.ResultFile, StringComparison.OrdinalIgnoreCase) || p.IndexOf("..", StringComparison.Ordinal) >= 0)
-                throw new ArgumentException("--result must be a full path to " + UpdateRun.ResultFile);
-            string dir = Path.GetDirectoryName(p);
-            if (!Directory.Exists(dir) || (File.GetAttributes(dir) & FileAttributes.ReparsePoint) != 0)
-                throw new ArgumentException("--result's folder doesn't exist");
+            if (!UpdateRun.IsRunName(run)) throw new ArgumentException("--run takes a run name");
+            string root = UpdateRun.AdminRoot;
+            if (!Directory.Exists(Paths.ProgramData)) throw new InvalidOperationException(Paths.ProgramData + " is missing: Domovoi isn't installed by Setup");
+            if (Directory.Exists(root) && (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException(root + " is a link; not using it");
+            Directory.CreateDirectory(root);
+            var sec = new System.Security.AccessControl.DirectorySecurity();
+            sec.SetAccessRuleProtection(true, false);
+            const System.Security.AccessControl.InheritanceFlags inherit = System.Security.AccessControl.InheritanceFlags.ContainerInherit | System.Security.AccessControl.InheritanceFlags.ObjectInherit;
+            sec.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.LocalSystemSid, null),
+                System.Security.AccessControl.FileSystemRights.FullControl, inherit, System.Security.AccessControl.PropagationFlags.None, System.Security.AccessControl.AccessControlType.Allow));
+            sec.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid, null),
+                System.Security.AccessControl.FileSystemRights.FullControl, inherit, System.Security.AccessControl.PropagationFlags.None, System.Security.AccessControl.AccessControlType.Allow));
+            sec.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.BuiltinUsersSid, null),
+                System.Security.AccessControl.FileSystemRights.ReadAndExecute, inherit, System.Security.AccessControl.PropagationFlags.None, System.Security.AccessControl.AccessControlType.Allow));
+            Directory.SetAccessControl(root, sec);
+            UpdateRun.Prune(root, DateTime.UtcNow, run);
+            string dir = Path.Combine(root, run);
+            if (Directory.Exists(dir)) throw new InvalidOperationException("the run folder " + dir + " exists already");
+            Directory.CreateDirectory(dir);
+            return dir;
+        }
+
+        // The four files from the tray's folder into dir (the
+        // administrators' run folder), then the check on what is now there,
+        // out of reach of anyone but an administrator: null when the copy
+        // may run, else why not and code (SetupCheck's words).
+        public static string CopyAndCheck(string from, string dir, SetupExpectation want, out SetupManifest m, out string code)
+        {
+            m = null;
+            code = null;
+            try
+            {
+                var bytes = new Dictionary<string, byte[]>();
+                foreach (string name in new[] { ReleaseNames.Manifest, ReleaseNames.ManifestSig, ReleaseNames.SetupSig, ReleaseNames.SetupAsset })
+                {
+                    string src = Path.Combine(from, name), dest = Path.Combine(dir, name);
+                    if (!File.Exists(src) || (File.GetAttributes(src) & FileAttributes.ReparsePoint) != 0) { code = SetupCheck.NoSignedSetup; return "the download has no " + name; }
+                    File.Copy(src, dest, false);
+                    bytes[name] = File.ReadAllBytes(dest);
+                }
+                return SetupCheck.Run(want, bytes[ReleaseNames.Manifest], Encoding.ASCII.GetString(bytes[ReleaseNames.ManifestSig]),
+                    bytes[ReleaseNames.SetupAsset], Encoding.ASCII.GetString(bytes[ReleaseNames.SetupSig]), out m, out code);
+            }
+            catch (IOException e) { code = "failed"; return "the download couldn't be copied: " + e.Message; }
+        }
+
+        // The Windows step's elevated half (header: run-update).
+        public static int RunUpdate(Output o, string from, string run, string tag, string commit, bool linuxFirst)
+        {
+            if (!ReleaseNames.IsTag(tag)) throw new ArgumentException("--tag takes a release tag");
+            if (commit != null && !System.Text.RegularExpressions.Regex.IsMatch(commit, "^[0-9a-f]{40}\\z")) throw new ArgumentException("--commit takes a full SHA");
+            if (!Path.IsPathRooted(from) || !Directory.Exists(from) || (File.GetAttributes(from) & FileAttributes.ReparsePoint) != 0)
+                throw new ArgumentException("--from must be the tray's run folder");
+            string dir = AdminRun(run);
+            var result = new RunResult();
+            string code;
+            SetupManifest m;
+            string why = CopyAndCheck(from, dir, new SetupExpectation { Tag = tag, Commit = commit, Installed = BuildVersion.Version, Key = ReleaseKey.Pinned() }, out m, out code);
+            if (why != null)
+            {
+                result.Ok = false;
+                result.Outcome = code ?? SetupCheck.BadSignature;
+                result.Error = "Domovoi didn't run the Setup: " + why;
+                File.WriteAllText(Path.Combine(dir, UpdateRun.ResultFile), result.Format(), new UTF8Encoding(false));
+                try { File.Delete(Path.Combine(dir, ReleaseNames.SetupAsset)); } catch (IOException) { }
+                o.Kv("error", result.Error);
+                o.LogOnly("run-update " + run + ": refused: " + why);
+                return 1;
+            }
+            string exe = Path.Combine(dir, ReleaseNames.SetupAsset);
+            var psi = new System.Diagnostics.ProcessStartInfo(exe, UpdateRun.SetupArguments(dir, linuxFirst))
+            {
+                UseShellExecute = false,
+                WorkingDirectory = Environment.SystemDirectory,
+            };
+            using (System.Diagnostics.Process p = System.Diagnostics.Process.Start(psi))
+                o.Kv("pid", p == null ? "" : Inv.S(p.Id));
+            o.Kv("run", dir);
+            o.Kv("version", m.Version);
+            o.Say("started Domovoi Setup " + m.Version + " from " + dir + " as a silent repair");
+            return 0;
         }
 
         // One request to DomovoiHost; its answer, or null and why.

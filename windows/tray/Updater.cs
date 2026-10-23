@@ -14,10 +14,15 @@
 // The Windows step: download the release's DomovoiSetup.exe, its manifest
 // and both signatures from the pinned repository into a private run folder
 // (UpdateRun), check them (SetupCheck: the pinned release key, the release
-// the core named, newer than this one), and start that same, still held
-// file elevated as a silent repair. Nothing runs whose check fails, and the
-// reason is said in plain words. Setup ends every tray to replace its file,
-// so the outcome goes into pending.txt and the next tray reports it.
+// the core named, newer than this one), then, holding the Setup so it
+// can't change, start the installed helper elevated (run-update): it copies
+// the files into an administrators-only folder, checks them again there
+// and starts that copy as a silent repair. Nothing runs whose check fails,
+// and the reason is said in plain words. A dashboard request is claimed on
+// the core first, so only one signed-in account's tray runs it. Setup ends
+// every tray to replace its file, so the run goes into pending.txt, and the
+// next tray reports its outcome (with the claim) BEFORE it reads the state
+// again (UpdatePoll), so a finished run never starts another.
 //
 // WindowsStep is pure orchestration over four interfaces (the core, the
 // release download, Windows' elevation, the clock and files), so the tests
@@ -54,7 +59,11 @@ namespace Domovoi.Windows.Tray
     public interface IUpdateServer
     {
         UpdateState State();
-        bool Report(string requestId, string outcome, string detail, string log, string version);
+        // The one tray that runs this request: its token, or null (another
+        // tray took it, or it is gone).
+        string Claim(string requestId);
+        // False only when the core should hear it again later (no answer).
+        bool Report(string requestId, string claim, string outcome, string detail, string log, string version);
     }
 
     public interface IReleaseFiles
@@ -85,7 +94,10 @@ namespace Domovoi.Windows.Tray
         public string Log;          // a log to look at, or null
         public string Version;      // the release that was installed (ok)
         public bool Launched;       // an elevated program ran
-        public IElevated Process;   // while it runs
+        public IElevated Process;   // while it runs (the helper)
+        public IDisposable Held;    // the checked download, held until the helper has copied it
+        public string Run;          // the run's name (UpdateRun.IsRunName)
+        public string Kind;         // "setup" or "linux"
 
         public bool Ok { get { return Outcome == Tray.Outcome.Ok || Outcome == Tray.Outcome.NothingNew; } }
     }
@@ -98,6 +110,7 @@ namespace Domovoi.Windows.Tray
         public string Installed;        // this tray's own version
         public string Helper;           // the installed DomovoiSetupHelper.exe, or null
         public string UpdatesRoot;      // %LOCALAPPDATA%\Domovoi\updates
+        public string AdminRoot = UpdateRun.AdminRoot;   // C:\ProgramData\Domovoi\updates
         public bool Dev;                // a developer run: never starts anything elevated
         public Func<DateTime> Now = delegate { return DateTime.UtcNow; };
     }
@@ -108,10 +121,13 @@ namespace Domovoi.Windows.Tray
         const long MaxSmall = 64 * 1024;
 
         // Everything up to the elevated start, then the start; the caller
-        // waits on result.Process (when Launched) and then calls Finish.
+        // waits on result.Process (when Launched), lets go of result.Held,
+        // then calls Finish. The elevated program is always the installed
+        // helper: the Linux part alone (linux-update), or the Windows step
+        // (run-update: it copies the checked download into an
+        // administrators-only folder, checks it again and starts that copy).
         // linuxFirst: the tray's own "Update Domovoi" (the Linux part runs
-        // first, elevated); false for a dashboard request (the Linux part is
-        // done).
+        // first, elevated); false for a dashboard request.
         public static StepResult Start(StepEnv env, UpdateState s, bool linuxFirst, out string runDir)
         {
             runDir = null;
@@ -122,26 +138,34 @@ namespace Domovoi.Windows.Tray
             bool windows = s.StepNeeded && s.TargetTag != null;
             if (!windows && !linuxFirst) return R(Outcome.NothingNew, "The Windows side is already up to date.");
             runDir = UpdateRun.NewRunDir(env.UpdatesRoot, env.Now());
+            string run = Path.GetFileName(runDir);
             if (!windows)
             {
                 // Only the Linux part: the installed helper, elevated.
-                return Launch(env, env.Helper, UpdateRun.LinuxArguments(runDir), null, null);
+                StepResult lr = Launch(env, env.Helper, UpdateRun.LinuxArguments(run), null, null);
+                lr.Run = run;
+                lr.Kind = "linux";
+                return lr;
             }
             if (env.Key == null) return R(Outcome.NoKey, "This Windows side pins no release key, so it can't check a downloaded Setup. Run the newer DomovoiSetup.exe by hand.");
             bool missing;
             string why;
             byte[] manifest = env.Files.Get(s.TargetTag, ReleaseNames.Manifest, MaxSmall, out missing, out why);
-            if (manifest == null) return missing ? NoSigned(s) : R(Outcome.DownloadFailed, "Domovoi " + s.TargetVersion + "'s Setup couldn't be downloaded (" + why + "). Nothing was run. Try again later.");
+            if (manifest == null) return missing ? NoSigned(s) : Undownloaded(s, why);
             byte[] manifestSig = env.Files.Get(s.TargetTag, ReleaseNames.ManifestSig, MaxSmall, out missing, out why);
-            if (manifestSig == null) return missing ? NoSigned(s) : R(Outcome.DownloadFailed, "Domovoi " + s.TargetVersion + "'s Setup couldn't be downloaded (" + why + "). Nothing was run. Try again later.");
+            if (manifestSig == null) return missing ? NoSigned(s) : Undownloaded(s, why);
             byte[] setupSig = env.Files.Get(s.TargetTag, ReleaseNames.SetupSig, MaxSmall, out missing, out why);
-            if (setupSig == null) return missing ? NoSigned(s) : R(Outcome.DownloadFailed, "Domovoi " + s.TargetVersion + "'s Setup couldn't be downloaded (" + why + "). Nothing was run. Try again later.");
+            if (setupSig == null) return missing ? NoSigned(s) : Undownloaded(s, why);
             string exe = Path.Combine(runDir, ReleaseNames.SetupAsset);
             if (!env.Files.Save(s.TargetTag, ReleaseNames.SetupAsset, MaxSetupBytes, exe, out missing, out why))
-                return missing ? NoSigned(s) : R(Outcome.DownloadFailed, "Domovoi " + s.TargetVersion + "'s Setup couldn't be downloaded (" + why + "). Nothing was run. Try again later.");
-            // From here the file can't change: checked and started through
-            // the same handle's bytes.
+                return missing ? NoSigned(s) : Undownloaded(s, why);
+            File.WriteAllBytes(Path.Combine(runDir, ReleaseNames.Manifest), manifest);
+            File.WriteAllBytes(Path.Combine(runDir, ReleaseNames.ManifestSig), manifestSig);
+            File.WriteAllBytes(Path.Combine(runDir, ReleaseNames.SetupSig), setupSig);
+            // From here the Setup can't change until the elevated helper has
+            // its own copy (which it checks again).
             HeldFile held = new HeldFile(exe);
+            bool keep = false;
             try
             {
                 byte[] bytes = held.ReadAll(MaxSetupBytes);
@@ -158,13 +182,22 @@ namespace Domovoi.Windows.Tray
                     if (code == Outcome.NoSignedSetup) return NoSigned(s);
                     return R(code ?? Outcome.BadSignature, "Domovoi didn't run the downloaded Setup: " + bad + ". It was deleted.");
                 }
-                StepResult r = Launch(env, exe, UpdateRun.SetupArguments(runDir, linuxFirst), Path.Combine(runDir, UpdateRun.LogFile), m.Version);
+                StepResult r = Launch(env, env.Helper, UpdateRun.StageArguments(runDir, run, s.TargetTag, s.TargetCommit, linuxFirst),
+                    Path.Combine(Path.Combine(env.AdminRoot, run), UpdateRun.LogFile), m.Version);
+                r.Run = run;
+                r.Kind = "setup";
+                if (r.Launched) { r.Held = held; keep = true; }
                 return r;
             }
             finally
             {
-                if (held != null) held.Dispose();
+                if (held != null && !keep) held.Dispose();
             }
+        }
+
+        static StepResult Undownloaded(UpdateState s, string why)
+        {
+            return R(Outcome.DownloadFailed, "Domovoi " + s.TargetVersion + "'s Setup couldn't be downloaded (" + why + "). Nothing was run. Try again later.");
         }
 
         static StepResult NoSigned(UpdateState s)
@@ -186,13 +219,22 @@ namespace Domovoi.Windows.Tray
             return new StepResult { Launched = true, Process = p, Log = log, Version = version };
         }
 
-        // After the elevated program exits: its result file says how it went.
-        public static StepResult Finish(string runDir, int exitCode, bool setup, string version)
+        // How a run went, from its result file in the administrators' run
+        // folder (adminRoot\run\result.txt, which no other account can
+        // write). exitCode: the helper's (setup: 0 means Setup was started
+        // and runs on by itself). Null while Setup is still running.
+        public static StepResult Finish(string adminRoot, string run, int exitCode, string kind, string version)
         {
-            RunResult rr = RunResult.Read(Path.Combine(runDir, UpdateRun.ResultFile));
-            string log = setup ? Path.Combine(runDir, UpdateRun.LogFile) : null;
+            string dir = Path.Combine(adminRoot, run);
+            bool setup = kind == "setup";
+            RunResult rr = RunResult.Read(Path.Combine(dir, UpdateRun.ResultFile));
+            if (setup && exitCode == 0 && rr == null) return null;
+            string log = setup ? Path.Combine(dir, UpdateRun.LogFile) : null;
             if (rr != null && rr.Log != null) log = rr.Log;
-            if (rr != null && rr.Ok && exitCode == 0)
+            if (rr != null && rr.Outcome != null && !rr.Ok)
+                // The helper refused the copy it checked again: never run.
+                return new StepResult { Outcome = rr.Outcome, Detail = (rr.Error ?? "Domovoi didn't run the Setup") + "." };
+            if (rr != null && rr.Ok)
             {
                 if (!setup && rr.Linux == "nothing_new") return new StepResult { Outcome = Outcome.NothingNew, Detail = "Domovoi is up to date." };
                 return new StepResult { Outcome = Outcome.Ok, Version = setup ? (rr.Version ?? version) : null, Log = log };
@@ -214,15 +256,16 @@ namespace Domovoi.Windows.Tray
             catch (UnauthorizedAccessException) { }
         }
 
-        // What the notification or the message says.
-        public static string Words(StepResult r, bool linuxAlreadyDone)
+        // What the notification or the message says. afterLinux: this run
+        // was asked for by a press that updated the Linux side first.
+        public static string Words(StepResult r, bool afterLinux)
         {
             switch (r.Outcome)
             {
                 case Outcome.Ok: return r.Version != null ? "Domovoi is updated: the Windows side is now " + r.Version + "." : "Domovoi is updated.";
                 case Outcome.NothingNew: return r.Detail ?? "Domovoi is up to date.";
                 case Outcome.Declined:
-                    return linuxAlreadyDone
+                    return afterLinux
                         ? "Windows didn't get an administrator's permission, so the update is half done: the Linux part is updated, the Windows part isn't. Choose \"Update Domovoi\" in this icon's menu to try again."
                         : "Windows didn't get an administrator's permission, so nothing was updated. Choose \"Update Domovoi\" in this icon's menu to try again.";
                 default:
@@ -240,13 +283,69 @@ namespace Domovoi.Windows.Tray
         // this PC, the Windows step at once (Windows' permission prompt is
         // next, in front of the person who just clicked); from another
         // device, a notification to click. Nothing while a step runs, while
-        // an earlier run's outcome hasn't reached the core, or when the
-        // request no longer needs a step.
+        // an earlier run's outcome hasn't reached the core, when another
+        // tray has claimed it, or when the request no longer needs a step.
         public static UpdateAction OnState(UpdateState s, string seenRequest, bool stepRunning, bool pendingRun)
         {
             if (s == null || s.RequestId == null || s.RequestId == seenRequest || stepRunning || pendingRun) return UpdateAction.Nothing;
-            if (!s.StepNeeded || s.LinuxBusy) return UpdateAction.Nothing;
+            if (!s.StepNeeded || s.LinuxBusy || s.RequestClaimed) return UpdateAction.Nothing;
             return s.RequestOnThisPc ? UpdateAction.StartNow : UpdateAction.Notify;
+        }
+    }
+
+    // One poll, in the order that keeps a finished run from starting
+    // another: first an earlier run's outcome goes to the core (which ends
+    // the request it answers), THEN the state is read, and only then is a
+    // request acted on.
+    public static class UpdatePoll
+    {
+        public static UpdateAction Run(IUpdateServer srv, string root, string adminRoot, DateTime utcNow, string seenRequest, bool stepRunning,
+            out UpdateState state, out PendingDone done)
+        {
+            done = stepRunning ? null : PendingFlow.Finish(srv, root, adminRoot, utcNow);
+            state = srv.State();
+            return UpdateDecision.OnState(state, seenRequest, stepRunning, PendingRun.Load(root) != null);
+        }
+    }
+
+    public sealed class PendingDone
+    {
+        public StepResult Result;
+        public bool AfterLinux;
+        public bool Show;
+    }
+
+    public static class PendingFlow
+    {
+        // A run an earlier tray started (Setup ends the tray to replace its
+        // file): its outcome from the run's result file, reported with its
+        // claim. Null while it still runs, or until the core has it.
+        public static PendingDone Finish(IUpdateServer srv, string root, string adminRoot, DateTime utcNow)
+        {
+            PendingRun p = PendingRun.Load(root);
+            if (p == null) return null;
+            if (p.Outcome == null)
+            {
+                DateTime started;
+                bool old = !DateTime.TryParse(p.Started, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out started)
+                    || utcNow - started.ToUniversalTime() > TimeSpan.FromHours(3);
+                StepResult fin = WindowsStep.Finish(adminRoot, p.Run, 0, p.Kind, p.Version);
+                if (fin == null)
+                {
+                    if (!old) return null;   // still running
+                    fin = new StepResult { Outcome = Outcome.RepairFailed, Detail = "Setup ended without saying how it went.", Log = Path.Combine(Path.Combine(adminRoot, p.Run), UpdateRun.LogFile) };
+                }
+                p.Outcome = fin.Outcome; p.Detail = fin.Detail; p.Log = fin.Log; p.Version = fin.Version ?? p.Version;
+                p.Save(root);
+            }
+            if (!srv.Report(p.RequestId, p.Claim, p.Outcome, p.Detail, p.Log, p.Version)) return null;
+            PendingRun.Clear(root);
+            return new PendingDone
+            {
+                Result = new StepResult { Outcome = p.Outcome, Detail = p.Detail, Log = p.Log, Version = p.Version },
+                AfterLinux = p.AfterLinux,
+                Show = !p.Shown,
+            };
         }
     }
 
@@ -254,9 +353,9 @@ namespace Domovoi.Windows.Tray
     // core (Setup ends this tray halfway through; the next one finishes).
     public sealed class PendingRun
     {
-        public string Run, RequestId, Kind, Started, Version;
+        public string Run, RequestId, Claim, Kind, Started, Version;
         public string Outcome, Detail, Log;
-        public bool Shown;
+        public bool Shown, AfterLinux;
 
         public static string PathIn(string root) { return Path.Combine(root, UpdateRun.PendingFile); }
 
@@ -275,6 +374,7 @@ namespace Domovoi.Windows.Tray
                 {
                     case "run": r.Run = v; break;
                     case "request": r.RequestId = v; break;
+                    case "claim": r.Claim = v; break;
                     case "kind": r.Kind = v; break;
                     case "started": r.Started = v; break;
                     case "version": r.Version = v; break;
@@ -282,6 +382,7 @@ namespace Domovoi.Windows.Tray
                     case "detail": r.Detail = v; break;
                     case "log": r.Log = v; break;
                     case "shown": r.Shown = v == "1"; break;
+                    case "after_linux": r.AfterLinux = v == "1"; break;
                 }
             }
             return UpdateRun.IsRunName(r.Run) ? r : null;
@@ -290,9 +391,9 @@ namespace Domovoi.Windows.Tray
         public void Save(string root)
         {
             var sb = new StringBuilder();
-            Line(sb, "run", Run); Line(sb, "request", RequestId); Line(sb, "kind", Kind); Line(sb, "started", Started);
+            Line(sb, "run", Run); Line(sb, "request", RequestId); Line(sb, "claim", Claim); Line(sb, "kind", Kind); Line(sb, "started", Started);
             Line(sb, "version", Version); Line(sb, "outcome", Outcome); Line(sb, "detail", Detail); Line(sb, "log", Log);
-            Line(sb, "shown", Shown ? "1" : null);
+            Line(sb, "shown", Shown ? "1" : null); Line(sb, "after_linux", AfterLinux ? "1" : null);
             Directory.CreateDirectory(root);
             AtomicFile.WriteAllText(PathIn(root), sb.ToString());
         }
@@ -324,15 +425,23 @@ namespace Domovoi.Windows.Tray
             return r != null && r.Status == 200 ? UpdateState.From(r.Body) : null;
         }
 
-        public bool Report(string requestId, string outcome, string detail, string log, string version)
+        public string Claim(string requestId)
+        {
+            JsonReply r = Loopback.Send("POST", core + Loopback.ClaimPath, "{\"request_id\": " + Loopback.Quote(requestId) + "}", 10000);
+            return r != null && r.Status == 200 ? Json.Str(r.Body, "claim") : null;
+        }
+
+        public bool Report(string requestId, string claim, string outcome, string detail, string log, string version)
         {
             string json = "{\"request_id\": " + (requestId == null ? "null" : Loopback.Quote(requestId))
+                + ", \"claim\": " + (claim == null ? "null" : Loopback.Quote(claim))
                 + ", \"outcome\": " + Loopback.Quote(outcome)
                 + ", \"detail\": " + (detail == null ? "null" : Loopback.Quote(detail.Length > 400 ? detail.Substring(0, 400) : detail))
                 + ", \"log\": " + (log == null ? "null" : Loopback.Quote(log))
                 + ", \"version\": " + (version == null ? "null" : Loopback.Quote(version)) + "}";
             JsonReply r = Loopback.Send("POST", core + Loopback.ResultPath, json, 10000);
-            return r != null && r.Status == 200;
+            // A refusal (403: not this tray's claim; 422) won't change on a retry.
+            return r != null && r.Status < 500;
         }
     }
 

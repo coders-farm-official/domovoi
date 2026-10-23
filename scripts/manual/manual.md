@@ -1694,8 +1694,9 @@ you run.
 **How to** *(admin)*
 
 1. **Check for updates**.
-2. **Update Domovoi**.
-3. **Restart to apply changes**.
+2. **Update Domovoi**. It pulls the update, then restarts with it.
+3. On a server that can't restart itself, **Restart to apply changes**
+   comes next.
 
 A failed update rolls itself back. **updates** chooses the channel:
 **stable** (releases only) or **main** (every change, as it lands).
@@ -1711,6 +1712,8 @@ side when a newer release is out.
   Domovoi notification on the PC, then allow it.
 - Nobody signed in on the PC? The card says **sign in on the PC to
   finish**.
+- Pressed twice, or from two devices? The PC is asked once. Windows asks
+  for permission once.
 - From the PC's tray icon: **Update Domovoi...** does it all, after one
   Windows permission prompt.
 

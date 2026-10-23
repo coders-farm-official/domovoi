@@ -1192,9 +1192,14 @@ domovoi_oww_cache`, `docker builder prune`.
 
 ## Updates from the dashboard
 
-(The button was called **Pull the latest** until 2026-10-22. On a
-Windows install the same press also restarts with the new code and then
-updates the Windows side: [WINDOWS_HOST.md](WINDOWS_HOST.md#update-domovoi-both-halves).)
+(The button was called **Pull the latest** until 2026-10-22. Where the
+update unit can restart unattended (`restart_mode` `update` and the
+sudoers grant), **Update Domovoi** is one press: the pull, then the
+restart through the unit, asked once. Elsewhere it pulls, and **Restart to
+apply changes** follows. A press while an update is under way says
+**already updating** and follows it. On a Windows install the press also
+updates the Windows side:
+[WINDOWS_HOST.md](WINDOWS_HOST.md#update-domovoi-both-halves).)
 
 The version panel's **Update Domovoi** (the pull) fetches, verifies the fetched tip's
 signature (see [Signed updates](#signed-updates)), and fast-forwards to

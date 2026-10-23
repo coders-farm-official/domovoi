@@ -106,7 +106,13 @@ def _scenario(version: dict, act: str = NOTHING, check: dict | None = None, extr
 _REQ_OK = {"POST /api/config/version/windows-request": {"ok": True, "request": {"id": "a" * 16}, "tray": {"running": True}}}
 
 SCENARIOS = {
-    "linux_only": _scenario(_version({"present": False}), CHECK, _check(behind=2, upstream_version="1.0.2")),
+    "linux_only": _scenario(_version({"present": False}, restart_capable=False), CHECK + UPDATE, _check(behind=2, upstream_version="1.0.2"),
+                            {"POST /api/config/version/pull": {"pulled": True, "new_sha": "0a1b2c3"}}),
+    "linux_one_press": _scenario(_version({"present": False}), CHECK + UPDATE, _check(behind=2, upstream_version="1.0.2"), {
+        "POST /api/config/version/pull": {"pulled": True, "new_sha": "0a1b2c3"},
+        "POST /api/config/version/restart": {"ok": False, "error": "no sudoers grant"}}),
+    "already_updating": _scenario(_version(_win()), CHECK + UPDATE, _check(behind=3, upstream_version="1.0.2"), {
+        "POST /api/config/version/pull": {"pulled": False, "error": "a restart or update is under way; pull again once it has finished"}}),
     "windows_behind": _scenario(_version(_win()), UPDATE, extra=_REQ_OK),
     "windows_current": _scenario(_version(_win(step_needed=False, why_not="up_to_date", version="1.0.1"))),
     "both_behind": _scenario(_version(_win()), CHECK + UPDATE, _check(behind=3, upstream_version="1.0.2"), {
@@ -119,7 +125,8 @@ SCENARIOS = {
     "on_this_pc": _scenario(_version(_win(request={"id": "a" * 16, "on_this_pc": True, "at": "x"}))),
     "no_tray": _scenario(_version(_win(request={"id": "a" * 16, "on_this_pc": False, "at": "x"},
                                        tray={"running": False, "seen_at": None, "version": None}))),
-    "declined": _scenario(_version(_win(result={"outcome": "declined", "detail": None, "log": None})), RETRY, extra=_REQ_OK),
+    "declined": _scenario(_version(_win(result={"outcome": "declined", "detail": None, "log": None, "after_linux": True})), RETRY, extra=_REQ_OK),
+    "declined_windows_only": _scenario(_version(_win(result={"outcome": "declined", "detail": None, "log": None, "after_linux": False}))),
     "repair_failed": _scenario(_version(_win(result={
         "outcome": "repair_failed", "detail": "Setup couldn't update the Windows side: provision.sh failed at venv.",
         "log": "C:\\Users\\k\\AppData\\Local\\Domovoi\\updates\\20261022-213000-0a1b2c3d\\setup.log"}))),
@@ -147,12 +154,29 @@ def driven(tmp_path_factory) -> dict:
     return out
 
 
-def test_a_linux_only_server_is_as_before_but_for_the_name(driven) -> None:
+def test_a_linux_only_server_without_the_unattended_restart_keeps_two_steps(driven) -> None:
     o = driven["linux_only"]
     assert o["before"]["windows"] is None and "Windows side" not in o["before"]["text"]
     assert "domovoi" in o["before"]["text"] and "Linux side" not in o["before"]["text"]
-    assert "Update Domovoi" in o["after"]["buttons"]
-    assert "the restart that loads it" in o["after"]["text"]
+    assert len(o["confirms"]) == 1 and o["confirms"][0].startswith("Pull the latest domovoi code")
+    posts = [c for c in o["calls"] if c.startswith("POST")]
+    assert posts == ["POST /api/config/version/check", "POST /api/config/version/pull"], "the pull alone"
+    assert "pulled — now 0a1b2c3. Restart to apply." in o["after"]["text"]
+
+
+def test_a_linux_only_server_with_the_update_unit_gets_one_press(driven) -> None:
+    o = driven["linux_one_press"]
+    assert len(o["confirms"]) == 1 and o["confirms"][0].startswith("Update Domovoi?") and "Windows" not in o["confirms"][0]
+    posts = [c for c in o["calls"] if c.startswith("POST")]
+    assert posts == ["POST /api/config/version/check", "POST /api/config/version/pull", "POST /api/config/version/restart"]
+    assert "POST /api/config/version/windows-request" not in o["calls"]
+
+
+def test_a_second_press_says_already_updating(driven) -> None:
+    o = driven["already_updating"]
+    assert "already updating — this card follows it" in o["after"]["text"]
+    assert "update failed" not in o["after"]["text"]
+    assert "POST /api/config/version/restart" not in o["calls"]
 
 
 def test_a_windows_install_shows_both_halves(driven) -> None:
@@ -167,7 +191,7 @@ def test_behind_on_windows_only_update_asks_the_pc(driven) -> None:
     o = driven["windows_behind"]
     assert o["before"]["behind"] == "Windows side is behind: 1.0.1 is out"
     assert "Update Domovoi" in o["before"]["buttons"]
-    assert o["calls"] == ["POST /api/config/version/windows-request"]
+    assert o["calls"] == ['POST /api/config/version/windows-request {"after_linux":false}']
     assert o["confirms"] == [], "asking the PC is not a question here: Windows asks there"
     assert "finish on your PC" in o["after"]["text"]
 
@@ -205,7 +229,13 @@ def test_a_declined_prompt_is_half_done_with_try_again(driven) -> None:
     o = driven["declined"]
     assert o["before"]["result"].startswith("The update is half done: the Linux part is updated, the Windows part isn’t")
     assert "Try again" in o["before"]["buttons"]
-    assert o["calls"] == ["POST /api/config/version/windows-request"]
+    assert o["calls"] == ['POST /api/config/version/windows-request {"after_linux":false}']
+
+
+def test_a_declined_windows_only_press_is_not_called_half_done(driven) -> None:
+    r = driven["declined_windows_only"]["before"]["result"]
+    assert r.startswith("The Windows part wasn’t updated: Windows didn’t get an administrator’s permission")
+    assert "Linux part is updated" not in r
 
 
 def test_a_failed_repair_names_its_log(driven) -> None:

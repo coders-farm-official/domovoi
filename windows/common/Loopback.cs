@@ -23,6 +23,7 @@ namespace Domovoi.Windows
         public const string Core = "http://127.0.0.1:6370";
         public const string StatePath = "/v1/windows/update";
         public const string ResultPath = "/v1/windows/update/result";
+        public const string ClaimPath = "/v1/windows/update/claim";
 
         // Null when nothing answered at all.
         public static JsonReply Send(string method, string url, string json, int timeoutMs)
@@ -99,7 +100,7 @@ namespace Domovoi.Windows
         public bool LinuxBusy;
         public string LastUpdateStarted, LastUpdateStatus, LastUpdateError;
         public string RequestId;
-        public bool RequestOnThisPc;
+        public bool RequestOnThisPc, RequestClaimed, RequestAfterLinux;
 
         public static UpdateState From(Dictionary<string, object> d)
         {
@@ -123,7 +124,13 @@ namespace Domovoi.Windows
                     s.LastUpdateError = Json.Str(lu, "error");
                 }
             }
-            if (r != null) { s.RequestId = Json.Str(r, "id"); s.RequestOnThisPc = Json.Bool(r, "on_this_pc") == true; }
+            if (r != null)
+            {
+                s.RequestId = Json.Str(r, "id");
+                s.RequestOnThisPc = Json.Bool(r, "on_this_pc") == true;
+                s.RequestClaimed = Json.Bool(r, "claimed") == true;
+                s.RequestAfterLinux = Json.Bool(r, "after_linux") == true;
+            }
             if (s.TargetTag != null && !ReleaseNames.IsTag(s.TargetTag)) { s.TargetTag = null; s.StepNeeded = false; }
             return s;
         }

@@ -7,9 +7,11 @@ a way that would otherwise get reported as a bug.
 ## 2026-10-22 — One "Update Domovoi" for both halves of a Windows install
 
 Server, dashboard, Windows side (DomovoiHost, the tray, Setup) and the
-release script. **Pull the latest** is called **Update Domovoi** now; on a
-Linux server that is the only change (it pulls, then the card offers
-**Restart to apply changes** as before).
+release script. **Pull the latest** is called **Update Domovoi** now. On a
+Linux server with the update unit and its sudoers grant it is one press
+(pull, then the restart, asked once); without them it pulls, and **Restart
+to apply changes** follows as before. A second press while an update runs
+says **already updating**.
 
 * **A Windows install updates both halves from one button.** In the
   dashboard, **Update Domovoi** pulls, restarts through the update unit
@@ -23,8 +25,12 @@ Linux server that is the only change (it pulls, then the card offers
 * **The Windows part** downloads the release's `DomovoiSetup.exe`, checks
   it against Domovoi's own release key (an Ed25519 signature, SSHSIG; the
   public half is built into the tray and the other programs), checks that
-  it is that release and newer, and runs the checked bytes as a silent
-  repair that keeps the household's answers and never uninstalls. A
+  it is that release and newer, and the elevated helper copies it into an
+  administrators-only folder, checks it again and runs that copy as a
+  silent repair that keeps the household's answers, never uninstalls, and
+  starts Domovoi again if it fails. One run per press: a second press joins
+  the first, only one signed-in account's tray claims it, and a second
+  Setup refuses while one runs. A
   declined prompt, a failed download, a bad signature or a failed repair is
   said in plain words on the card and in the tray, with **Try again** and
   Setup's log.
@@ -40,8 +46,9 @@ Linux server that is the only change (it pulls, then the card offers
   (or `DOMOVOI_RELEASE_SIGNING_KEY`). **Owner, once:** make the key and
   commit its public half (docs/WINDOWS_HOST.md, "The release key"). Until
   then builds pin no key and offer no Windows part.
-* New routes: `GET /v1/windows/update` and `POST /v1/windows/update/result`
-  (the tray's, loopback only, no forwarding headers), `POST
+* New routes: `GET /v1/windows/update`, `POST /v1/windows/update/claim`
+  and `POST /v1/windows/update/result` (the tray's, loopback only, no
+  forwarding headers; a request's result needs the claim's token), `POST
   /v1/admin/windows/request` (+ `/cancel`, security tier), the web's `POST
   /api/config/version/windows-request` (+ `/cancel`); `GET
   /v1/admin/version` gains `windows_side`. An install whose tray is from

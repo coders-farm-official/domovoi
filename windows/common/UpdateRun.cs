@@ -3,15 +3,19 @@
 //
 //   %LOCALAPPDATA%\Domovoi\updates\<run>\   this account, Administrators and SYSTEM only
 //       DomovoiSetup.exe, its .sig, the manifest and its .sig   (the tray's download)
-//       setup.log                                                 (Setup's /LOG)
-//       result.txt                                                (Setup's /updateresult, or the helper's --result)
 //   %LOCALAPPDATA%\Domovoi\updates\pending.txt                    the run a tray started, for the next tray
+//   C:\ProgramData\Domovoi\updates\<run>\    Administrators and SYSTEM write, Users read
+//       the same four files, copied there by the elevated helper, checked
+//       again, and the Setup that runs is that copy
+//       setup.log, result.txt                                     (Setup's /LOG and /updateresult, or the helper's)
 //
-// HeldFile is the TOCTOU guard: the Setup is read for the check through a
-// handle that shares read only (nobody, this account included, can write,
-// rename or delete the file while it is open) and that handle stays open
-// until the elevated process exists, so Windows runs the bytes that were
-// checked.
+// The tray checks its download first (plain words, nothing elevated yet),
+// holding the Setup open with read sharing only (HeldFile) until the
+// elevated helper has copied it: the helper (run-update) puts the files in
+// an administrators-only folder, checks them again there with the release
+// key built into it, and starts that copy. So what runs as an administrator
+// is bytes no other account can change, and its log and result are written
+// where only an administrator can (no junction can send them elsewhere).
 
 using System;
 using System.Collections.Generic;
@@ -62,6 +66,9 @@ namespace Domovoi.Windows
             return Path.Combine(localAppData, "Domovoi", "updates");
         }
 
+        // The elevated side's runs: C:\ProgramData\Domovoi\updates.
+        public static string AdminRoot { get { return Path.Combine(Paths.ProgramData, "updates"); } }
+
         static readonly Regex RunName = new Regex("^[0-9]{8}-[0-9]{6}-[0-9a-f]{8}\\z");
 
         public static bool IsRunName(string n) { return n != null && RunName.IsMatch(n); }
@@ -82,6 +89,8 @@ namespace Domovoi.Windows
             sec.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
             if (Directory.Exists(dir)) throw new IOException("the run folder exists already: " + dir);
             Directory.CreateDirectory(dir, sec);
+            // CreateDirectory keeps the ACL of a folder that appeared meanwhile.
+            if (!IsPrivate(dir)) throw new IOException("the run folder isn't private: " + dir);
             return dir;
         }
 
@@ -139,11 +148,25 @@ namespace Domovoi.Windows
                 + " \"/updateresult=" + d + "\\" + ResultFile + "\"";
         }
 
-        // The helper's Linux part on its own (nothing newer on Windows).
-        public static string LinuxArguments(string runDir)
+        // The helper's Linux part on its own (nothing newer on Windows); its
+        // result goes to the run's folder under AdminRoot.
+        public static string LinuxArguments(string run)
         {
-            if (runDir.IndexOf('"') >= 0) throw new ArgumentException("bad folder");
-            return "linux-update --wait --result \"" + runDir.TrimEnd('\\') + "\\" + ResultFile + "\"";
+            if (!IsRunName(run)) throw new ArgumentException("not a run name");
+            return "linux-update --wait --run " + run;
+        }
+
+        // The elevated helper's half of a Windows step: copy the tray's
+        // checked download (from) into AdminRoot\run, check it again there,
+        // and start that copy as the silent repair.
+        public static string StageArguments(string from, string run, string tag, string commit, bool linuxFirst)
+        {
+            if (from.IndexOf('"') >= 0) throw new ArgumentException("bad folder");
+            if (!IsRunName(run)) throw new ArgumentException("not a run name");
+            if (!ReleaseNames.IsTag(tag)) throw new ArgumentException("not a release tag");
+            if (commit != null && !Regex.IsMatch(commit, "^[0-9a-f]{40}\\z")) throw new ArgumentException("not a commit");
+            return "run-update --from \"" + from.TrimEnd('\\') + "\" --run " + run + " --tag " + tag
+                + (commit != null ? " --commit " + commit : "") + (linuxFirst ? " --linuxfirst" : "");
         }
     }
 
@@ -153,6 +176,7 @@ namespace Domovoi.Windows
     {
         public bool Ok;
         public string Error, Log, Linux, Version;
+        public string Outcome;      // a refusal's word (SetupCheck codes), when the helper refused
 
         public static RunResult Read(string path)
         {
@@ -185,6 +209,7 @@ namespace Domovoi.Windows
                 else if (k == "log") r.Log = v.Length > 0 ? v : null;
                 else if (k == "linux") r.Linux = v.Length > 0 ? v : null;
                 else if (k == "version") r.Version = v.Length > 0 ? v : null;
+                else if (k == "outcome") r.Outcome = v.Length > 0 ? v : null;
             }
             return any ? r : null;
         }
@@ -197,6 +222,7 @@ namespace Domovoi.Windows
             if (Log != null) sb.Append("log=").Append(OneLine(Log)).Append("\r\n");
             if (Linux != null) sb.Append("linux=").Append(OneLine(Linux)).Append("\r\n");
             if (Version != null) sb.Append("version=").Append(OneLine(Version)).Append("\r\n");
+            if (Outcome != null) sb.Append("outcome=").Append(OneLine(Outcome)).Append("\r\n");
             return sb.ToString();
         }
 

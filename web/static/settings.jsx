@@ -626,8 +626,12 @@ const VoicesPanel = () => {
  * offered. The panel offers exactly ONE update action
  * at a time, in the order an operator needs them: "Restart to apply
  * changes" when code is on disk but not loaded, else "Update Domovoi" when
- * behind (the pull: on a Linux-only server it pulls, and the restart that
- * loads it is offered next, as ever), else "Check for updates". The restart
+ * behind, else "Check for updates". "Update Domovoi" is one press (the
+ * pull, then the restart through the update unit, asked once) wherever the
+ * update unit can restart unattended (restart_mode "update" and
+ * restart_capable); elsewhere it pulls, and the restart that loads it is
+ * offered next, as ever. A press while an update is under way says
+ * "already updating" and follows it. The restart
  * is replaced by the manual command on a host without the sudoers grant
  * (see restart_capable).
  *
@@ -969,11 +973,15 @@ const WindowsSideNotes = ({ win, channel, busy, onRetry, requesting }) => {
           </div>);
   }
   if (result && result.outcome && result.outcome !== 'ok' && result.outcome !== 'nothing_new') {
-    const half = result.outcome === 'declined';
+    // Worded by what ran: "half done" only after a press that updated the
+    // Linux side first.
+    const declined = result.outcome === 'declined';
     lines.push(<div key="rs" className="version-windows-result" style={{ color: 'var(--err-ink)', overflowWrap: 'anywhere' }}>
-      {half
+      {declined && result.after_linux
         ? 'The update is half done: the Linux part is updated, the Windows part isn’t (Windows didn’t get an administrator’s permission).'
-        : `The Windows part didn’t update: ${result.detail || WINDOWS_OUTCOME[result.outcome] || result.outcome}`}
+        : declined
+          ? 'The Windows part wasn’t updated: Windows didn’t get an administrator’s permission on the PC.'
+          : `The Windows part didn’t update: ${result.detail || WINDOWS_OUTCOME[result.outcome] || result.outcome}`}
       {result.log && <span className="mono" style={{ display: 'block', fontSize: 11, color: 'var(--fg-muted)' }}>log: {result.log}</span>}
     </div>);
   } else if (result && result.outcome === 'ok' && result.version) {
@@ -1098,17 +1106,21 @@ const VersionSection = () => {
   // A Windows install's second half (windows_side, domovoi/windows_side.py).
   const win = core && core.windows_side && core.windows_side.present ? core.windows_side : null;
   const [requesting, setRequesting] = React.useState(false);
-  // Ask the tray on the PC for the Windows step.
-  const requestWindows = async () => {
+  // Ask the tray on the PC for the Windows step. afterLinux: this press
+  // updated the Linux side first (the card words a declined prompt by it).
+  // A press while one waits joins it (`joined`): never a second run.
+  const requestWindows = async (afterLinux = false) => {
     setRequesting(true);
     try {
-      const res = await apiPost('/api/config/version/windows-request', {});
+      const res = await apiPost('/api/config/version/windows-request', { after_linux: !!afterLinux });
       if (res && res.ok) {
-        fire(res.tray && res.tray.running === false
-          ? 'sign in on the PC to finish: its Domovoi icon does the Windows part'
-          : browserOnThisPc()
-            ? 'the Windows part is next: Windows asks for an administrator’s permission on this PC'
-            : 'finish on your PC: click the Domovoi notification there');
+        fire(res.joined
+          ? 'the PC has been asked already: finish there'
+          : res.tray && res.tray.running === false
+            ? 'sign in on the PC to finish: its Domovoi icon does the Windows part'
+            : browserOnThisPc()
+              ? 'the Windows part is next: Windows asks for an administrator’s permission on this PC'
+              : 'finish on your PC: click the Domovoi notification there');
       } else {
         fire(`the Windows part wasn’t asked for: ${(res && (res.detail || res.error)) || 'unknown'}`);
       }
@@ -1127,23 +1139,44 @@ const VersionSection = () => {
     return () => clearInterval(t);
   }, [pendingRequest]);
 
-  // A Windows install's one press: pull, the restart through the update
-  // unit (asked once, here), then the Windows step when the release the
-  // Linux side now includes is newer than the Windows side.
-  const updateBoth = async () => {
-    if (!window.confirm(
-      'Update Domovoi?\n\n' +
-      'First the Linux part: Domovoi pulls the latest code, then backs up, applies it and restarts ' +
-      '(the satellites, phones and this dashboard lose Domovoi for a minute or two; it rolls back if it ' +
-      'doesn’t come back healthy).\n\n' +
-      'Then the Windows part, when the release it now includes has a newer one: ' +
-      (browserOnThisPc()
-        ? 'Windows asks for an administrator’s permission on this PC.'
-        : 'you finish it on the PC (the Domovoi icon there shows a notification; Windows asks for an administrator’s permission).')
+  // An update already under way (another tab, another device, a second
+  // press): said as that, and the card follows it, never "update failed".
+  const UNDER_WAY = /under way|already running|in progress/i;
+  const alreadyUpdating = async () => {
+    let now = null;
+    try { now = await apiGet('/api/config/version', { quiet: true }); } catch { /* the pull below says */ }
+    if (now && now.restart_in_progress) {
+      fire('already updating — this card follows it');
+      refreshCore();
+      return true;
+    }
+    return false;
+  };
+
+  // The one press: pull, then the restart that loads it (asked once, here),
+  // then, on a Windows install, the Windows step when the release the Linux
+  // side now includes is newer than the Windows side. On a Linux server
+  // this is the press only where the restart can run unattended through the
+  // update unit (backup, migrations, roll back); elsewhere the pull and the
+  // restart stay two steps (pull, below).
+  const updateOnePress = async () => {
+    if (!window.confirm(win
+      ? 'Update Domovoi?\n\n' +
+        'First the Linux part: Domovoi pulls the latest code, then backs up, applies it and restarts ' +
+        '(the satellites, phones and this dashboard lose Domovoi for a minute or two; it rolls back if it ' +
+        'doesn’t come back healthy).\n\n' +
+        'Then the Windows part, when the release it now includes has a newer one: ' +
+        (browserOnThisPc()
+          ? 'Windows asks for an administrator’s permission on this PC.'
+          : 'you finish it on the PC (the Domovoi icon there shows a notification; Windows asks for an administrator’s permission).')
+      : 'Update Domovoi?\n\n' +
+        'Domovoi pulls the latest code, then backs up, applies it and restarts (the satellites, phones and ' +
+        'this dashboard lose Domovoi for a minute or two; it rolls back if it doesn’t come back healthy).'
     )) return;
     setPulling(true);
     let res = null;
     try {
+      if (await alreadyUpdating()) { setPulling(false); return; }
       res = await apiPost('/api/config/version/pull', {});
     } catch (e) {
       reportMutationFailure(fire, 'update', e);
@@ -1153,16 +1186,17 @@ const VersionSection = () => {
     setPulling(false);
     const notice = res && res.notice ? `${res.notice}. ` : '';
     if (!res || !res.pulled) {
+      if (res && UNDER_WAY.test(res.error || '')) { fire('already updating — this card follows it'); refreshCore(); return; }
       fire(`${notice}update failed: ${(res && res.error) || 'unknown'}`);
       return;
     }
     setStatus(null);
     const ok = await restart(false, true);
-    if (!ok) return;
+    if (!ok || !win) return;
     let now = null;
     try { now = await apiGet('/api/config/version', { quiet: true }); } catch { /* the card reads it again */ }
     const w = now && now.windows_side;
-    if (w && w.present && w.step_needed) await requestWindows();
+    if (w && w.present && w.step_needed) await requestWindows(true);
   };
 
   const pull = async () => {
@@ -1174,6 +1208,7 @@ const VersionSection = () => {
     )) return;
     setPulling(true);
     try {
+      if (await alreadyUpdating()) return;
       const res = await apiPost('/api/config/version/pull', {});
       // notice: Domovoi cleaned up after an interrupted git first
       // (domovoi/git_lock.py), said in plain words rather than git's own.
@@ -1181,6 +1216,9 @@ const VersionSection = () => {
       if (res && res.pulled) {
         fire(`${notice}pulled${res.new_sha ? ` — now ${res.new_sha}` : ''}. Restart to apply.`);
         setStatus(null);
+        refreshCore();
+      } else if (res && UNDER_WAY.test(res.error || '')) {
+        fire('already updating — this card follows it');
         refreshCore();
       } else {
         fire(`${notice}pull failed: ${(res && res.error) || 'unknown'}`);
@@ -1228,6 +1266,9 @@ const VersionSection = () => {
   const behind = status && status.upstream ? status.behind : null;
   const restartCapable = !!(core && core.restart_capable);
   const updateUnit = !!(core && core.restart_mode === 'update');
+  // One press (pull, then the restart) where the update unit can run the
+  // restart unattended, and always on a Windows install; else two steps.
+  const onePress = !!win || (updateUnit && restartCapable);
   const lastUpdate = core && core.last_update;
   const lastPill = lastUpdate && (UPDATE_RESULT_PILL[lastUpdate.status]
                                   || { tone: 'idle', label: lastUpdate.status });
@@ -1440,16 +1481,17 @@ const VersionSection = () => {
           </Button>
         )}
         {mode === 'pull' && (
-          <Button variant="primary" icon="download" onClick={win ? updateBoth : pull}
+          <Button variant="primary" icon="download" onClick={onePress ? updateOnePress : pull}
                   disabled={pulling || internetOff || !!restarting || requesting}
                   title={internetOff ? NEEDS_INTERNET_TEXT
                     : win ? 'the Linux part (pull, then the update unit’s restart), then the Windows part when a newer one is out'
-                      : 'pulls the latest code onto the server; the restart that loads it comes next'}>
+                      : onePress ? 'pulls the latest code and restarts with it through the update unit'
+                        : 'pulls the latest code onto the server; the restart that loads it comes next'}>
             {pulling ? 'Pulling…' : 'Update Domovoi'}
           </Button>
         )}
         {(mode === 'check' || mode === 'held') && win && win.step_needed && !win.request && !(win.result && win.result.outcome && win.result.outcome !== 'ok') && (
-          <Button variant="primary" icon="download" onClick={requestWindows} disabled={requesting || !!restarting}
+          <Button variant="primary" icon="download" onClick={() => requestWindows(false)} disabled={requesting || !!restarting}
                   title="the Windows part: the tray on the PC downloads the release’s signed Setup, checks it, and runs it behind one Windows permission prompt">
             {requesting ? 'Asking the PC…' : 'Update Domovoi'}
           </Button>
@@ -1498,11 +1540,13 @@ const VersionSection = () => {
         <div className="mono" style={{ padding: '0 16px 14px', fontSize: 11, color: 'var(--fg-faint)' }}>
           {win
             ? 'Update Domovoi pulls, then restarts with the new code, then does the Windows part when a newer one is out.'
-            : 'Update Domovoi pulls the latest onto the host — this panel will then offer the restart that loads it.'}
+            : onePress
+              ? 'Update Domovoi pulls, then restarts with the new code through the update unit.'
+              : 'Update Domovoi pulls the latest onto the host — this panel will then offer the restart that loads it.'}
         </div>
       )}
       <WindowsSideNotes win={win} channel={channel} busy={mode === 'busy' || !!restarting}
-                        onRetry={admin ? requestWindows : null} requesting={requesting}/>
+                        onRetry={admin ? () => requestWindows(false) : null} requesting={requesting}/>
       {status && status.tag_warning && mode !== 'busy' && (
         // A release tag that moved upstream (or tags that didn't arrive):
         // the labels may be off; the check and the pull work as ever.

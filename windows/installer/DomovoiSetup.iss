@@ -36,7 +36,12 @@
 ; and stops before anything on Windows changes if that fails. The outcome
 ; goes to /updateresult (ok=, error=, log=, linux=, version=) and the exit
 ; code (10: the files were replaced but the repair didn't finish), and the
-; tray starts again at the end.
+; tray starts again at the end. The tray's helper starts it from
+; C:\ProgramData\Domovoi\updates\<run> (administrators only), and the result
+; and the log go there too: /updateresult is refused anywhere else. A
+; failure starts DomovoiHost again (it was stopped to replace its file), so
+; Domovoi keeps running as it was. The Ubuntu image isn't downloaded again
+; when DomovoiHost's folder already holds the pinned one.
 ;
 ; Build: windows\build.ps1 (Inno Setup 6). Docs: docs/WINDOWS_HOST.md.
 
@@ -87,6 +92,10 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern dynamic
 CloseApplications=no
+; One Setup at a time on this PC, whoever starts it: a second one (a second
+; press of the Windows update, from another account's tray, or by hand)
+; refuses while the first runs.
+SetupMutex=Global\DomovoiSetup
 RestartIfNeededByRun=no
 UsePreviousAppDir=no
 Uninstallable=yes
@@ -204,8 +213,11 @@ var
     answers, whether the trays were ended (so this Setup starts this
     account's again), the Linux part's outcome, and whether the result file
     is written. }
-  UpdateMode, LinuxFirst, TraysStopped, ResultWritten: Boolean;
+  UpdateMode, LinuxFirst, TraysStopped, ResultWritten, HostStopped: Boolean;
   SavedInternet, SavedMediaRoot, LinuxOutcome: String;
+  { The Ubuntu image the job step hands DomovoiHost: the download, or (an
+    update) the pinned copy DomovoiHost's folder already holds. }
+  ImagePath: String;
 
   { The uninstaller: the helper's output lines as they come, and the list
     of steps under the progress bar. }
@@ -1290,7 +1302,7 @@ begin
     if not Step('Creating the hidden account domovoi-svc and the DomovoiHost service', 'account --exe ' + AddQuotes(ExpandConstant('{app}\DomovoiHost.exe')) + Deny, 4, Lines) then Exit;
     if not Step('Setting up the media folders', 'media', 6, Lines) then Exit;
     if not Step('Adding the firewall rules', 'firewall', 8, Lines) then Exit;
-    if not Step('Handing the work to DomovoiHost', 'job --image ' + AddQuotes(ExpandConstant('{tmp}\{#UbuntuName}')) +
+    if not Step('Handing the work to DomovoiHost', 'job --image ' + AddQuotes(ImagePath) +
       ' --image-sha256 {#UbuntuSha256} --provision ' + AddQuotes(ExpandConstant('{tmp}\provision.sh')) +
       ' --provision-sha256 {#ProvisionSha256} --repo-url {#DomovoiRepoUrl} --ref {#DomovoiCommit} --track-branch {#DomovoiChannel} --lan-ip auto', 12, Lines) then Exit;
     if not Step('Starting DomovoiHost', 'host-start', 14, Lines) then Exit;
@@ -1363,7 +1375,12 @@ begin
     Exit;
   ResultWritten := True;
   Path := ExpandConstant('{param:updateresult|}');
-  if (Path = '') or (CompareText(ExtractFileName(Path), 'result.txt') <> 0) or not DirExists(ExtractFileDir(Path)) then
+  { Only a result.txt in a run folder under C:\ProgramData\Domovoi\updates,
+    which only administrators can write (so no junction of anyone else's
+    can send this elevated write elsewhere). }
+  if (Path = '') or (CompareText(ExtractFileName(Path), 'result.txt') <> 0) or not DirExists(ExtractFileDir(Path))
+    or (Pos('..', Path) > 0)
+    or (CompareText(ExtractFileDir(ExtractFileDir(Path)), ExpandConstant('{commonappdata}\Domovoi\updates')) <> 0) then
   begin
     Log('Update mode: no usable /updateresult (' + Path + ')');
     Exit;
@@ -1586,7 +1603,18 @@ begin
 #else
     DownloadPage.Add('{#ProvisionUrl}', 'provision.sh', '{#ProvisionSha256}');
 #endif
-    DownloadPage.Add('{#UbuntuUrl}', '{#UbuntuName}', '{#UbuntuSha256}');
+    { An update over an install whose DomovoiHost folder holds the pinned
+      image (the helper's job step checks its SHA-256 and copies nothing
+      when it matches; DomovoiHost imports only a distro that isn't
+      registered): no 418 MB download again. }
+    ImagePath := ExpandConstant('{tmp}\{#UbuntuName}');
+    if UpdateMode and FileExists(ExpandConstant('{commonappdata}\Domovoi\host\in\{#UbuntuName}')) then
+    begin
+      ImagePath := ExpandConstant('{commonappdata}\Domovoi\host\in\{#UbuntuName}');
+      Log('Update mode: the Ubuntu image is already in ' + ImagePath + '; not downloading it');
+    end
+    else
+      DownloadPage.Add('{#UbuntuUrl}', '{#UbuntuName}', '{#UbuntuSha256}');
     if (WslState = 'missing') or (WslState = 'old') then
       DownloadPage.Add('{#WslMsiUrl}', '{#WslMsiName}', '{#WslMsiSha256}');
     DownloadPage.Show;
@@ -1662,7 +1690,10 @@ begin
   { A repair or a second run: stop the host so its exe can be replaced,
     and the tray icons, theirs. }
   if FileExists(AppHelper) then
+  begin
+    HostStopped := True;
     RunHelper(AppHelper, 'host-stop', Lines, Code);
+  end;
   StopTrays;
   if VmpState <> 'enabled' then
   begin
@@ -1739,12 +1770,21 @@ end;
 procedure DeinitializeSetup;
 var
   Code: Integer;
+  Lines: TArrayOfString;
 begin
   { The code was only ever in memory; drop it. }
   SetupCodeText := '';
   if UpdateMode then
   begin
     UndoOnExit := False;
+    { Every way an update can fail after the host was stopped (a step, the
+      media folder on a drive that isn't there, PrepareToInstall): start it
+      again, best effort, so Domovoi keeps running as it was. }
+    if HostStopped and not InstallOk and FileExists(AppHelper) then
+      if RunHelper(AppHelper, 'host-start', Lines, Code) and (Code = 0) then
+        Log('Update mode: started DomovoiHost again after the failure')
+      else
+        Log('Update mode: could not start DomovoiHost again: ' + KvValue(Lines, 'error'));
     WriteUpdateResult;
     { This account's icon again (the others start at their sign-in). }
     if TraysStopped then

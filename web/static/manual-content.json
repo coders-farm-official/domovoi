@@ -4639,10 +4639,10 @@
        "text": "**Check for updates**."
       },
       {
-       "text": "**Update Domovoi**."
+       "text": "**Update Domovoi**. It pulls the update, then restarts with it."
       },
       {
-       "text": "**Restart to apply changes**."
+       "text": "On a server that can't restart itself, **Restart to apply changes** comes next."
       }
      ]
     },
@@ -4666,6 +4666,9 @@
       },
       {
        "text": "Nobody signed in on the PC? The card says **sign in on the PC to finish**."
+      },
+      {
+       "text": "Pressed twice, or from two devices? The PC is asked once. Windows asks for permission once."
       },
       {
        "text": "From the PC's tray icon: **Update Domovoi...** does it all, after one Windows permission prompt."

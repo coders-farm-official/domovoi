@@ -327,7 +327,13 @@ namespace Domovoi.Windows
             if (m == null) return why;
             if (m.Tag != want.Tag) return "its manifest is for " + m.Tag + ", not " + want.Tag;
             if (want.Commit != null && m.Commit != want.Commit) return "it was built from " + m.Commit.Substring(0, 12) + ", not " + want.Tag + "'s commit " + want.Commit.Substring(0, Math.Min(12, want.Commit.Length));
-            if (want.Installed != null && ReleaseVersion.IsValid(want.Installed) && ReleaseVersion.Compare(m.Version, want.Installed) <= 0)
+            if (want.Installed == null || !ReleaseVersion.IsValid(want.Installed))
+            {
+                // Fail closed: what can't be compared is never run.
+                code = NotNewer;
+                return "the installed Windows side's version isn't known (" + (want.Installed ?? "none") + "), so Domovoi can't tell this one is newer; run the newer DomovoiSetup.exe by hand";
+            }
+            if (ReleaseVersion.Compare(m.Version, want.Installed) <= 0)
             {
                 code = NotNewer;
                 return "it is version " + m.Version + ", which isn't newer than the installed " + want.Installed;

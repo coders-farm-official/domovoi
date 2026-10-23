@@ -48,6 +48,7 @@ static partial class Tests
         RunFolders();
         RepairArguments();
         StepFlow();
+        HelperStage();
         UpdatePollFlow();
         SideReport();
     }
@@ -183,6 +184,13 @@ static partial class Tests
             True(p != null && code == SetupCheck.NotNewer && p.Contains("isn't newer"), "older: " + p);
             p = Check(Want(installed: "1.0.1"), "manifest-1.0.1.json", null, null, out code);
             True(p != null && code == SetupCheck.NotNewer, "the same: " + p);
+            foreach (string unknown in new[] { null, "", "garbage", "1.0" })
+            {
+                SetupManifest m;
+                p = SetupCheck.Run(new SetupExpectation { Tag = "v1.0.1", Commit = FixtureCommit, Installed = unknown, Key = TestKey() },
+                    SigFile("manifest-1.0.1.json"), SigText("manifest-1.0.1.json.sig"), SigFile("setup.bin"), SigText("setup.bin.sig"), out m, out code);
+                True(p != null && code == SetupCheck.NotNewer && p.Contains("isn't known"), "an installed version of '" + unknown + "' fails closed: " + p);
+            }
         });
         Run("setup check: a signed manifest of another release, or another commit, is refused", delegate
         {
@@ -264,13 +272,24 @@ static partial class Tests
     {
         Run("silent repair: the arguments, and never anything that could uninstall or restart", delegate
         {
-            string a = UpdateRun.SetupArguments(@"C:\Users\Kim Ng\AppData\Local\Domovoi\updates\20261022-213000-0a1b2c3d\", false);
-            Eq("/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL /SP- /update=1 \"/LOG=C:\\Users\\Kim Ng\\AppData\\Local\\Domovoi\\updates\\20261022-213000-0a1b2c3d\\setup.log\" \"/updateresult=C:\\Users\\Kim Ng\\AppData\\Local\\Domovoi\\updates\\20261022-213000-0a1b2c3d\\result.txt\"", a, "the dashboard's Windows step");
+            string a = UpdateRun.SetupArguments(@"C:\ProgramData\Domovoi\updates\20261022-213000-0a1b2c3d\", false);
+            Eq("/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL /SP- /update=1 \"/LOG=C:\\ProgramData\\Domovoi\\updates\\20261022-213000-0a1b2c3d\\setup.log\" \"/updateresult=C:\\ProgramData\\Domovoi\\updates\\20261022-213000-0a1b2c3d\\result.txt\"", a, "the dashboard's Windows step");
             True(UpdateRun.SetupArguments(@"C:\r", true).Contains(" /update=1 /linuxfirst=1 "), "the menu's: the Linux part first");
             foreach (string bad in new[] { "/SILENT", "/RESTARTAPPLICATIONS", "/FORCECLOSEAPPLICATIONS", "/MERGETASKS", "/TASKS", "uninst", "/DIR=" })
                 True(a.IndexOf(bad, StringComparison.OrdinalIgnoreCase) < 0 || (bad == "/SILENT" && a.Contains("/VERYSILENT")), "no " + bad);
             Throws<ArgumentException>(delegate { UpdateRun.SetupArguments("C:\\a\" /DIR=x", false); }, "a quote can't add arguments");
-            Eq("linux-update --wait --result \"C:\\r\\result.txt\"", UpdateRun.LinuxArguments(@"C:\r\"), "the helper's Linux part");
+            Eq("linux-update --wait --run 20261022-213000-0a1b2c3d", UpdateRun.LinuxArguments("20261022-213000-0a1b2c3d"), "the helper's Linux part");
+            Throws<ArgumentException>(delegate { UpdateRun.LinuxArguments("..\\x"); }, "only a run name");
+        });
+        Run("silent repair: the helper's stage arguments", delegate
+        {
+            Eq("run-update --from \"C:\\Users\\Kim Ng\\AppData\\Local\\Domovoi\\updates\\20261022-213000-0a1b2c3d\" --run 20261022-213000-0a1b2c3d --tag v1.0.1 --commit " + FixtureCommit + " --linuxfirst",
+                UpdateRun.StageArguments(@"C:\Users\Kim Ng\AppData\Local\Domovoi\updates\20261022-213000-0a1b2c3d\", "20261022-213000-0a1b2c3d", "v1.0.1", FixtureCommit, true), "with everything");
+            True(!UpdateRun.StageArguments(@"C:\r", "20261022-213000-0a1b2c3d", "v1.0.1", null, false).Contains("--commit"), "no commit");
+            Throws<ArgumentException>(delegate { UpdateRun.StageArguments("C:\\r\" --x", "20261022-213000-0a1b2c3d", "v1.0.1", null, false); }, "quote");
+            Throws<ArgumentException>(delegate { UpdateRun.StageArguments("C:\\r", "20261022-213000-0a1b2c3d", "v1.0.1 --x", null, false); }, "tag");
+            Throws<ArgumentException>(delegate { UpdateRun.StageArguments("C:\\r", "20261022-213000-0a1b2c3d", "v1.0.1", "HEAD", false); }, "commit");
+            Eq(@"C:\ProgramData\Domovoi\updates", UpdateRun.AdminRoot, "the elevated side's folder");
         });
     }
 
@@ -314,40 +333,63 @@ static partial class Tests
 
     sealed class FakeElevated : IElevated
     {
-        public int Code = 0;
+        public int Code;
         public int WaitForExit() { return Code; }
     }
 
+    // A pretend Windows: records what would run elevated, and lets a test
+    // play the helper's part (what it leaves in the administrators' run
+    // folder).
     sealed class FakeElevator : IElevator
     {
         public bool Decline;
-        public string Exe, Args;
+        public string Exe, Args, From;
         public bool HeldWhileStarting;
-        public Action<string> Writes;     // what the elevated program leaves (the run folder)
+        public Action<string> Writes;     // the helper's part, given its admin run folder
+        public string AdminRoot;
         public int Code = 0;
+
+        static string ArgAfter(string args, string flag)
+        {
+            int i = args.IndexOf(flag + " ", StringComparison.Ordinal);
+            if (i < 0) return null;
+            string rest = args.Substring(i + flag.Length + 1);
+            if (rest.StartsWith("\"")) return rest.Substring(1, rest.IndexOf('"', 1) - 1);
+            int sp = rest.IndexOf(' ');
+            return sp < 0 ? rest : rest.Substring(0, sp);
+        }
 
         public IElevated Start(string exe, string args, out bool declined, out string why)
         {
             Exe = exe; Args = args; why = null;
             declined = Decline;
-            if (exe.EndsWith(ReleaseNames.SetupAsset))
+            From = ArgAfter(args, "--from");
+            if (From != null)
             {
-                try { using (new FileStream(exe, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete)) { } HeldWhileStarting = false; }
+                // An attacker in the same account, mid-start: the checked
+                // download can't be changed while the helper copies it.
+                try { using (new FileStream(Path.Combine(From, ReleaseNames.SetupAsset), FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete)) { } HeldWhileStarting = false; }
                 catch (IOException) { HeldWhileStarting = true; }
             }
             if (Decline) return null;
-            if (Writes != null)
+            string run = ArgAfter(args, "--run");
+            if (Writes != null && run != null)
             {
-                string dir = Path.GetDirectoryName(exe.EndsWith(ReleaseNames.SetupAsset) ? exe : args.Substring(args.IndexOf('"') + 1).TrimEnd('"'));
+                string dir = Path.Combine(AdminRoot, run);
+                Directory.CreateDirectory(dir);
                 Writes(dir);
             }
             return new FakeElevated { Code = Code };
         }
     }
 
-    static StepEnv FakeEnv(FakeFiles files, FakeElevator elev, string helper = @"C:\Program Files\Domovoi\DomovoiSetupHelper.exe")
+    const string HelperExe = @"C:\Program Files\Domovoi\DomovoiSetupHelper.exe";
+
+    static StepEnv FakeEnv(FakeFiles files, FakeElevator elev, string helper = HelperExe)
     {
-        return new StepEnv { Files = files, Elevator = elev, Key = TestKey(), Installed = "1.0.0", Helper = helper, UpdatesRoot = TempDir("step") };
+        string admin = TempDir("admin");
+        elev.AdminRoot = admin;
+        return new StepEnv { Files = files, Elevator = elev, Key = TestKey(), Installed = "1.0.0", Helper = helper, UpdatesRoot = TempDir("step"), AdminRoot = admin };
     }
 
     static UpdateState Behind(string tag = "v1.0.1", string version = "1.0.1")
@@ -357,35 +399,56 @@ static partial class Tests
 
     static void StepFlow()
     {
-        Run("windows step: downloaded, checked, then started elevated as a silent repair, the file held", delegate
+        Run("windows step: checked, then the helper is started elevated with the held download, and Setup's result comes from the admin folder", delegate
         {
             var files = FakeFiles.Release("manifest-1.0.1.json");
-            var elev = new FakeElevator
-            {
-                Writes = delegate (string dir) { File.WriteAllText(Path.Combine(dir, UpdateRun.ResultFile), "ok=1\r\nversion=1.0.1\r\n"); },
-            };
+            var elev = new FakeElevator();
+            var env = FakeEnv(files, elev);
             string runDir;
-            StepResult r = WindowsStep.Start(FakeEnv(files, elev), Behind(), false, out runDir);
-            True(r.Launched, "started: " + r.Outcome + " " + r.Detail);
-            Eq(Path.Combine(runDir, ReleaseNames.SetupAsset), elev.Exe, "the checked copy in the private run folder");
+            StepResult r = WindowsStep.Start(env, Behind(), false, out runDir);
+            True(r.Launched && r.Kind == "setup" && r.Run == Path.GetFileName(runDir), "started: " + r.Outcome + " " + r.Detail);
+            Eq(HelperExe, elev.Exe, "the installed helper is what runs elevated, never the download");
+            Eq(UpdateRun.StageArguments(runDir, r.Run, "v1.0.1", FixtureCommit, false), elev.Args, "run-update with the private run folder");
             True(UpdateRun.IsPrivate(runDir), "the run folder is private");
-            Eq(UpdateRun.SetupArguments(runDir, false), elev.Args, "the silent repair");
-            True(elev.HeldWhileStarting, "nobody could write the Setup while Windows started it");
+            True(elev.HeldWhileStarting, "nobody could write the Setup while the elevated helper started");
+            True(r.Held != null, "and it stays held until the helper has exited");
+            Throws<IOException>(delegate { using (new FileStream(Path.Combine(runDir, ReleaseNames.SetupAsset), FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete)) { } }, "still held after Start");
+            foreach (string n in new[] { ReleaseNames.Manifest, ReleaseNames.ManifestSig, ReleaseNames.SetupSig })
+                True(File.Exists(Path.Combine(runDir, n)), n + " beside it, for the helper's own check");
             SeqEq(new[] { "v1.0.1/" + ReleaseNames.Manifest, "v1.0.1/" + ReleaseNames.ManifestSig, "v1.0.1/" + ReleaseNames.SetupSig, "v1.0.1/" + ReleaseNames.SetupAsset }, files.Asked, "the release's four files");
-            StepResult fin = WindowsStep.Finish(runDir, r.Process.WaitForExit(), true, r.Version);
+            int code = r.Process.WaitForExit();
+            r.Held.Dispose();
+            True(WindowsStep.Finish(env.AdminRoot, r.Run, code, "setup", r.Version) == null, "handed over to Setup: still running");
+            string admin = Path.Combine(env.AdminRoot, r.Run);
+            Directory.CreateDirectory(admin);
+            File.WriteAllText(Path.Combine(admin, UpdateRun.ResultFile), "ok=1\r\nversion=1.0.1\r\n");
+            StepResult fin = WindowsStep.Finish(env.AdminRoot, r.Run, code, "setup", r.Version);
             Eq(Outcome.Ok, fin.Outcome, "ok");
             Eq("Domovoi is updated: the Windows side is now 1.0.1.", WindowsStep.Words(fin, true), "words");
         });
-        Run("windows step: Windows' permission declined (simulated): nothing runs, the half-done update is named", delegate
+        Run("windows step: the helper's own check refused the copy: never run, its words", delegate
+        {
+            var elev = new FakeElevator { Code = 1, Writes = delegate (string dir) { File.WriteAllText(Path.Combine(dir, UpdateRun.ResultFile), "ok=0\r\noutcome=bad_signature\r\nerror=Domovoi didn't run the Setup: its signature doesn't match the file\r\n"); } };
+            var env = FakeEnv(FakeFiles.Release("manifest-1.0.1.json"), elev);
+            string runDir;
+            StepResult r = WindowsStep.Start(env, Behind(), false, out runDir);
+            r.Held.Dispose();
+            StepResult fin = WindowsStep.Finish(env.AdminRoot, r.Run, r.Process.WaitForExit(), "setup", r.Version);
+            Eq(Outcome.BadSignature, fin.Outcome, "the helper's refusal");
+            True(fin.Detail.Contains("doesn't match"), fin.Detail);
+        });
+        Run("windows step: Windows' permission declined (simulated): nothing runs, words by what ran", delegate
         {
             var elev = new FakeElevator { Decline = true };
             string runDir;
             StepResult r = WindowsStep.Start(FakeEnv(FakeFiles.Release("manifest-1.0.1.json"), elev), Behind(), false, out runDir);
             Eq(Outcome.Declined, r.Outcome, "declined");
-            True(!r.Launched && r.Process == null, "nothing runs");
+            True(!r.Launched && r.Process == null && r.Held == null, "nothing runs, nothing held");
+            File.Delete(Path.Combine(runDir, ReleaseNames.SetupAsset));
             string words = WindowsStep.Words(r, true);
             True(words.Contains("half done") && words.Contains("Linux part is updated") && words.Contains("try again"), words);
-            True(WindowsStep.Words(r, false).Contains("nothing was updated"), "from the menu nothing was done");
+            string alone = WindowsStep.Words(r, false);
+            True(alone.Contains("nothing was updated") && !alone.Contains("Linux part is updated"), "a Windows-only press updated nothing: " + alone);
         });
         Run("windows step: a bad signature, the wrong key or an older Setup is never started", delegate
         {
@@ -412,6 +475,11 @@ static partial class Tests
 
             r = WindowsStep.Start(FakeEnv(FakeFiles.Release("manifest-0.9.0.json"), elev), Behind("v0.9.0", "0.9.0"), false, out runDir);
             Eq(Outcome.NotNewer, r.Outcome, "older");
+            env = FakeEnv(FakeFiles.Release("manifest-1.0.1.json"), elev);
+            env.Installed = null;
+            r = WindowsStep.Start(env, Behind(), false, out runDir);
+            Eq(Outcome.NotNewer, r.Outcome, "an installed version nobody knows fails closed");
+            True(r.Detail.Contains("isn't known"), r.Detail);
             True(elev.Exe == null, "never started");
         });
         Run("windows step: no release-key signature, a failed download, internet off, not installed by Setup, a developer run", delegate
@@ -435,7 +503,7 @@ static partial class Tests
             var dev = FakeEnv(FakeFiles.Release("manifest-1.0.1.json"), elev);
             dev.Dev = true;
             r = WindowsStep.Start(dev, Behind(), false, out runDir);
-            True(!r.Launched && r.Detail.Contains("developer run"), "a developer run never elevates");
+            True(!r.Launched && r.Detail.Contains("developer run") && r.Held == null, "a developer run never elevates");
             True(elev.Exe == null, "nothing was started in any of these");
             UpdateState current = Behind();
             current.StepNeeded = false;
@@ -449,41 +517,46 @@ static partial class Tests
             var elev = new FakeElevator();
             string runDir;
             StepResult r = WindowsStep.Start(FakeEnv(FakeFiles.Release("manifest-1.0.1.json"), elev), Behind(), true, out runDir);
-            True(r.Launched && elev.Args.Contains("/linuxfirst=1"), "the Setup with the Linux part first");
+            True(r.Launched && elev.Args.EndsWith(" --linuxfirst"), "the Setup with the Linux part first");
+            r.Held.Dispose();
             UpdateState current = Behind();
             current.StepNeeded = false;
             elev = new FakeElevator { Writes = delegate (string dir) { File.WriteAllText(Path.Combine(dir, UpdateRun.ResultFile), "ok=1\r\nlinux=nothing_new\r\n"); } };
             var files = new FakeFiles();
-            r = WindowsStep.Start(FakeEnv(files, elev), current, true, out runDir);
-            True(r.Launched, "started");
-            Eq(@"C:\Program Files\Domovoi\DomovoiSetupHelper.exe", elev.Exe, "the installed helper");
-            Eq(UpdateRun.LinuxArguments(runDir), elev.Args, "its Linux part");
+            var env = FakeEnv(files, elev);
+            r = WindowsStep.Start(env, current, true, out runDir);
+            True(r.Launched && r.Kind == "linux" && r.Held == null, "started");
+            Eq(HelperExe, elev.Exe, "the installed helper");
+            Eq(UpdateRun.LinuxArguments(r.Run), elev.Args, "its Linux part");
             Eq(0, files.Asked.Count, "nothing downloaded");
-            Eq(Outcome.NothingNew, WindowsStep.Finish(runDir, r.Process.WaitForExit(), false, null).Outcome, "nothing new");
+            Eq(Outcome.NothingNew, WindowsStep.Finish(env.AdminRoot, r.Run, r.Process.WaitForExit(), "linux", null).Outcome, "nothing new");
         });
         Run("windows step: a failed repair names its log; a failed Linux part changed nothing on Windows", delegate
         {
-            string runDir = UpdateRun.NewRunDir(TempDir("fin"), DateTime.UtcNow);
-            File.WriteAllText(Path.Combine(runDir, UpdateRun.ResultFile), "ok=0\r\nerror=Setting up Domovoi's Linux system did not work: provision.sh failed at venv\r\n");
-            StepResult f = WindowsStep.Finish(runDir, 10, true, "1.0.1");
+            string admin = TempDir("fin");
+            string run = "20261022-213000-0a1b2c3d";
+            string dir = Path.Combine(admin, run);
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, UpdateRun.ResultFile), "ok=0\r\nerror=Setting up Domovoi's Linux system did not work: provision.sh failed at venv\r\n");
+            StepResult f = WindowsStep.Finish(admin, run, 0, "setup", "1.0.1");
             Eq(Outcome.RepairFailed, f.Outcome, "repair failed");
-            Eq(Path.Combine(runDir, UpdateRun.LogFile), f.Log, "Setup's log");
+            Eq(Path.Combine(dir, UpdateRun.LogFile), f.Log, "Setup's log, in the admin folder");
             True(WindowsStep.Words(f, true).Contains(f.Log) && f.Detail.Contains("provision.sh failed"), WindowsStep.Words(f, true));
-            File.WriteAllText(Path.Combine(runDir, UpdateRun.ResultFile), "ok=0\r\nlinux=failed\r\nerror=the Linux side's update rolled_back\r\n");
-            f = WindowsStep.Finish(runDir, 7, true, "1.0.1");
+            File.WriteAllText(Path.Combine(dir, UpdateRun.ResultFile), "ok=0\r\nlinux=failed\r\nerror=the Linux side's update rolled_back\r\n");
+            f = WindowsStep.Finish(admin, run, 0, "setup", "1.0.1");
             Eq(Outcome.LinuxFailed, f.Outcome, "Linux part failed");
             True(f.Detail.Contains("Nothing on Windows was changed"), f.Detail);
-            File.Delete(Path.Combine(runDir, UpdateRun.ResultFile));
-            f = WindowsStep.Finish(runDir, 0, true, "1.0.1");
-            Eq(Outcome.RepairFailed, f.Outcome, "no result is no success, whatever the exit code");
+            File.Delete(Path.Combine(dir, UpdateRun.ResultFile));
+            f = WindowsStep.Finish(admin, run, 1, "setup", "1.0.1");
+            Eq(Outcome.RepairFailed, f.Outcome, "the helper failed without a word: no success");
         });
         Run("windows step: a run another tray started is picked up from pending.txt", delegate
         {
             string root = TempDir("pending");
-            var p = new PendingRun { Run = "20261022-213000-0a1b2c3d", RequestId = "r1", Kind = "setup", Started = "2026-10-22T21:30:00.0000000Z", Version = "1.0.1" };
+            var p = new PendingRun { Run = "20261022-213000-0a1b2c3d", RequestId = "r1", Claim = "c1", Kind = "setup", Started = "2026-10-22T21:30:00.0000000Z", Version = "1.0.1", AfterLinux = true };
             p.Save(root);
             PendingRun back = PendingRun.Load(root);
-            True(back != null && back.Run == p.Run && back.RequestId == "r1" && back.Kind == "setup" && back.Outcome == null && !back.Shown, "round trip");
+            True(back != null && back.Run == p.Run && back.RequestId == "r1" && back.Claim == "c1" && back.Kind == "setup" && back.AfterLinux && back.Outcome == null && !back.Shown, "round trip");
             back.Outcome = Outcome.Ok; back.Shown = true; back.Detail = "a\nb";
             back.Save(root);
             back = PendingRun.Load(root);
@@ -495,7 +568,86 @@ static partial class Tests
         });
     }
 
+    static void HelperStage()
+    {
+        Run("helper: it checks its own copy in the admin folder, so a swap after the tray's check never runs (review item 3)", delegate
+        {
+            string from = TempDir("helper-from"), dir = TempDir("helper-admin");
+            File.WriteAllBytes(Path.Combine(from, ReleaseNames.SetupAsset), SigFile("setup.bin"));
+            File.WriteAllBytes(Path.Combine(from, ReleaseNames.SetupSig), SigFile("setup.bin.sig"));
+            File.WriteAllBytes(Path.Combine(from, ReleaseNames.Manifest), SigFile("manifest-1.0.1.json"));
+            File.WriteAllBytes(Path.Combine(from, ReleaseNames.ManifestSig), SigFile("manifest-1.0.1.json.sig"));
+            SetupManifest m;
+            string code;
+            string why = Domovoi.Windows.Helper.Update.CopyAndCheck(from, dir, Want(), out m, out code);
+            True(why == null && m.Version == "1.0.1", "the good copy passes: " + why);
+            True(File.ReadAllBytes(Path.Combine(dir, ReleaseNames.SetupAsset)).SequenceEqual(SigFile("setup.bin")), "and is what runs");
+            // The same account swaps the Setup in its own folder after the
+            // tray checked it: the helper's copy of that doesn't check out.
+            byte[] evil = SigFile("setup.bin");
+            evil[100] ^= 0xff;
+            File.WriteAllBytes(Path.Combine(from, ReleaseNames.SetupAsset), evil);
+            string dir2 = TempDir("helper-admin2");
+            why = Domovoi.Windows.Helper.Update.CopyAndCheck(from, dir2, Want(), out m, out code);
+            True(why != null && code == SetupCheck.BadSignature, "the swapped Setup is refused: " + why);
+            var w = Want();
+            w.Installed = null;
+            why = Domovoi.Windows.Helper.Update.CopyAndCheck(from, TempDir("helper-admin3"), w, out m, out code);
+            True(why != null, "and so is anything it can't compare");
+            File.Delete(Path.Combine(from, ReleaseNames.SetupSig));
+            why = Domovoi.Windows.Helper.Update.CopyAndCheck(from, TempDir("helper-admin4"), Want(), out m, out code);
+            True(why != null && code == SetupCheck.NoSignedSetup, "a missing signature: " + why);
+        });
+    }
+
     // -- the poll and the notification, against a pretend core -------------
+
+    // A pretend core with the claim and result rules of domovoi/windows_side.py.
+    sealed class FakeCore : IUpdateServer
+    {
+        public string RequestId = "0123456789abcdef";
+        public bool OnThisPc = true, StepNeeded = true;
+        public string ClaimedBy;
+        public readonly List<string> Calls = new List<string>();
+        public readonly List<string> Results = new List<string>();
+        int claims;
+
+        public UpdateState State()
+        {
+            Calls.Add("state");
+            var s = new UpdateState { Installed = "1.0.0", TargetTag = "v1.0.1", TargetVersion = "1.0.1", TargetCommit = FixtureCommit, StepNeeded = StepNeeded, Internet = "always" };
+            if (RequestId != null) { s.RequestId = RequestId; s.RequestOnThisPc = OnThisPc; s.RequestClaimed = ClaimedBy != null; }
+            return s;
+        }
+
+        public string Claim(string requestId)
+        {
+            Calls.Add("claim");
+            if (requestId != RequestId || ClaimedBy != null) return null;
+            ClaimedBy = "token" + (++claims);
+            return ClaimedBy;
+        }
+
+        public bool Report(string requestId, string claim, string outcome, string detail, string log, string version)
+        {
+            Calls.Add("report " + outcome);
+            if (requestId != null && claim != ClaimedBy) return true;   // refused: not retried
+            Results.Add(outcome);
+            if (requestId != null && requestId == RequestId) RequestId = null;
+            if (outcome == Outcome.Ok) StepNeeded = false;
+            return true;
+        }
+    }
+
+    static string PendingSetupRun(string root, string admin, string result)
+    {
+        string run = "20261022-213000-0a1b2c3d";
+        new PendingRun { Run = run, RequestId = "0123456789abcdef", Claim = "token1", Kind = "setup", AfterLinux = true,
+                         Started = DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture), Version = "1.0.1" }.Save(root);
+        Directory.CreateDirectory(Path.Combine(admin, run));
+        if (result != null) File.WriteAllText(Path.Combine(Path.Combine(admin, run), UpdateRun.ResultFile), result);
+        return run;
+    }
 
     static void UpdatePollFlow()
     {
@@ -503,7 +655,7 @@ static partial class Tests
             + "\"target\": {\"tag\": \"v1.0.1\", \"version\": \"1.0.1\", \"commit\": \"" + FixtureCommit + "\"}, "
             + "\"step_needed\": true, \"why_not\": null, \"internet\": \"always\", \"channel\": \"stable\", "
             + "\"linux\": {\"busy\": false, \"last_update\": {\"status\": \"ok\", \"started_at\": \"2026-10-22T20:00:00Z\"}}, "
-            + "\"request\": {\"id\": \"req-7\", \"on_this_pc\": false, \"at\": \"2026-10-22T20:05:00Z\"}}";
+            + "\"request\": {\"id\": \"req-7\", \"on_this_pc\": false, \"after_linux\": true, \"claimed\": false, \"at\": \"2026-10-22T20:05:00Z\"}}";
         Run("update poll: the core's answer, read over loopback", delegate
         {
             using (var d = new FakeDashboard())
@@ -512,7 +664,7 @@ static partial class Tests
                 UpdateState s = new HttpUpdateServer(d.Url).State();
                 True(s != null, "read");
                 True(s.Installed == "1.0.0" && s.TargetTag == "v1.0.1" && s.TargetCommit == FixtureCommit && s.StepNeeded, "the step");
-                True(s.RequestId == "req-7" && !s.RequestOnThisPc && s.Internet == "always" && !s.LinuxBusy && s.LastUpdateStatus == "ok", "the request");
+                True(s.RequestId == "req-7" && !s.RequestOnThisPc && s.RequestAfterLinux && !s.RequestClaimed && s.Internet == "always" && !s.LinuxBusy && s.LastUpdateStatus == "ok", "the request");
             }
             using (var d = new FakeDashboard())
             {
@@ -520,7 +672,7 @@ static partial class Tests
                 True(new HttpUpdateServer(d.Url).State() == null, "a refusal is no state");
             }
         });
-        Run("update poll: a request from another device notifies, one from this PC starts at once, each once", delegate
+        Run("update poll: a request from another device notifies, one from this PC starts at once, each once, never another tray's", delegate
         {
             UpdateState s = UpdateState.From(Json.ParseObject(StateJson));
             Eq(UpdateAction.Notify, UpdateDecision.OnState(s, null, false, false), "another device: a notification");
@@ -529,6 +681,9 @@ static partial class Tests
             Eq(UpdateAction.Nothing, UpdateDecision.OnState(s, null, false, true), "not while a run's outcome is on its way");
             s.RequestOnThisPc = true;
             Eq(UpdateAction.StartNow, UpdateDecision.OnState(s, null, false, false), "this PC: at once");
+            s.RequestClaimed = true;
+            Eq(UpdateAction.Nothing, UpdateDecision.OnState(s, null, false, false), "another tray claimed it");
+            s.RequestClaimed = false;
             s.LinuxBusy = true;
             Eq(UpdateAction.Nothing, UpdateDecision.OnState(s, null, false, false), "not while the Linux part runs");
             s.LinuxBusy = false;
@@ -538,15 +693,79 @@ static partial class Tests
             var bad = Json.ParseObject(StateJson.Replace("\"v1.0.1\"", "\"../x\""));
             True(!UpdateState.From(bad).StepNeeded, "a target that isn't a tag is no step");
         });
-        Run("update poll: the outcome goes back to the core", delegate
+        Run("update poll: a fresh tray after a failed repair reports first, then reads: no instant second prompt (review probe 3)", delegate
+        {
+            string root = TempDir("poll-fail"), admin = TempDir("poll-fail-admin");
+            PendingSetupRun(root, admin, "ok=0\r\nerror=the media folder isn't there\r\n");
+            var core = new FakeCore { ClaimedBy = "token1" };
+            UpdateState st;
+            PendingDone done;
+            UpdateAction act = UpdatePoll.Run(core, root, admin, DateTime.UtcNow, null, false, out st, out done);
+            SeqEq(new[] { "report repair_failed", "state" }, core.Calls, "the outcome before the state");
+            Eq(UpdateAction.Nothing, act, "the request it answered is gone: no second run");
+            True(done != null && done.Show && done.AfterLinux && done.Result.Outcome == Outcome.RepairFailed, "said once");
+            True(PendingRun.Load(root) == null, "forgotten");
+        });
+        Run("update poll: after a successful repair no second download, and the core keeps its 'ok'", delegate
+        {
+            string root = TempDir("poll-ok"), admin = TempDir("poll-ok-admin");
+            PendingSetupRun(root, admin, "ok=1\r\nversion=1.0.1\r\n");
+            var core = new FakeCore { ClaimedBy = "token1" };
+            UpdateState st;
+            PendingDone done;
+            Eq(UpdateAction.Nothing, UpdatePoll.Run(core, root, admin, DateTime.UtcNow, null, false, out st, out done), "nothing to start");
+            True(!st.StepNeeded && st.RequestId == null, "the step is done");
+            Eq(UpdateAction.Nothing, UpdatePoll.Run(core, root, admin, DateTime.UtcNow, null, false, out st, out done), "and on the next poll");
+            SeqEq(new[] { Outcome.Ok }, core.Results, "one 'ok', never overwritten");
+            True(!core.Calls.Contains("claim"), "nothing claimed, nothing downloaded");
+        });
+        Run("update poll: a run still going is left alone", delegate
+        {
+            string root = TempDir("poll-run"), admin = TempDir("poll-run-admin");
+            PendingSetupRun(root, admin, null);
+            var core = new FakeCore { ClaimedBy = "token1" };
+            UpdateState st;
+            PendingDone done;
+            Eq(UpdateAction.Nothing, UpdatePoll.Run(core, root, admin, DateTime.UtcNow, null, false, out st, out done), "nothing while Setup runs");
+            True(done == null && PendingRun.Load(root) != null && !core.Calls.Exists(c => c.StartsWith("report")), "nothing reported yet");
+        });
+        Run("update poll: two trays, one request: only the first claim runs", delegate
+        {
+            var core = new FakeCore();
+            string a = core.Claim(core.RequestId), b = core.Claim(core.RequestId);
+            True(a != null && b == null, "the second account's tray gets no claim");
+            True(core.State().RequestClaimed, "and the request reads as claimed");
+            Eq(UpdateAction.Nothing, UpdateDecision.OnState(core.State(), null, false, false), "so the other tray does nothing");
+        });
+        Run("update poll: claim and outcome over loopback", delegate
         {
             using (var d = new FakeDashboard())
             {
                 string got = null;
-                d.Answer = (k, bearer, body) => { if (k == "POST /v1/windows/update/result") { got = body; return R(200, "{\"ok\": true}"); } return R(404, "{}"); };
-                True(new HttpUpdateServer(d.Url).Report("req-7", Outcome.Declined, "said \"no\"", null, null), "accepted");
-                True(got.Contains("\"request_id\": \"req-7\"") && got.Contains("\"outcome\": \"declined\"") && got.Contains("said \\\"no\\\""), got);
+                bool taken = false;
+                d.Answer = (k, bearer, body) =>
+                {
+                    if (k == "POST /v1/windows/update/claim")
+                    {
+                        if (taken) return R(409, "{\"reason\": \"claimed\"}");
+                        taken = true;
+                        True(body.Contains("\"request_id\": \"req-7\""), "the request");
+                        return R(200, "{\"ok\": true, \"claim\": \"tok\"}");
+                    }
+                    if (k == "POST /v1/windows/update/result") { got = body; return R(200, "{\"ok\": true}"); }
+                    return R(404, "{}");
+                };
+                var srv = new HttpUpdateServer(d.Url);
+                Eq("tok", srv.Claim("req-7"), "claimed");
+                True(srv.Claim("req-7") == null, "taken");
+                True(srv.Report("req-7", "tok", Outcome.Declined, "said \"no\"", null, null), "accepted");
+                True(got.Contains("\"request_id\": \"req-7\"") && got.Contains("\"claim\": \"tok\"") && got.Contains("\"outcome\": \"declined\"") && got.Contains("said \\\"no\\\""), got);
                 True(d.Seen.All(x => !x.Contains("NO-XRW")), "with X-Requested-With");
+            }
+            using (var d = new FakeDashboard())
+            {
+                d.Answer = (k, bearer, body) => R(403, "{\"detail\": \"not this tray's\"}");
+                True(new HttpUpdateServer(d.Url).Report("req-7", "x", Outcome.Ok, null, null, null), "a refusal isn't retried forever");
             }
         });
     }
