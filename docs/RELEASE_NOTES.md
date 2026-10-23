@@ -4,6 +4,18 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-22 — The tray fetches the setup Wi-Fi's key itself
+
+Windows tray and server. On the Windows installer a satellite card is a zip
+that the tray's helper writes onto the SD card. Preparing a Wi-Fi setup card
+now puts a one-time pass in the zip (`domovoi/claim.json`, no password), and
+the tray trades it once, over this PC's own loopback, for the setup
+network's key and writes `domovoi/ap.json` onto the card, so nobody types the
+key there. The pass stops working a day after the build, or when the server
+restarts. When it has, the tray says which and offers **Sign in as admin to
+fetch it** (new admin route `POST /api/satellites/media/jobs/{id}/setup-key`;
+after a restart it makes a new key for the same network). No migration.
+
 ## 2026-10-22 — Satellites join WPA2/WPA3 mixed routers, and say why when they can't
 
 Satellite code (the setup page and its Wi-Fi join). Cards must be prepared

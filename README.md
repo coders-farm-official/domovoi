@@ -233,6 +233,11 @@ We build Domovoi in public. Here's where it stands.
   when your server stays off the internet), and the Health card says so
   until it is back
   ([self-healing](satellite/PROVISIONING.md#83-reboot-helper-and-hardware-watchdog-self-healing-while-nobody-is-home)).
+  The setup page joins WPA2/WPA3 mixed routers, open networks and hidden
+  ones (type the name under "Not in the list?"), says why a join failed
+  (password, network not found, timeout, no address, WPA3-only,
+  enterprise, WEP), and a satellite follows its router if the router's
+  security changes later.
 - **No GPL or LGPL libraries in the server's Python code:** tag reading
   and the music player's client are Domovoi's own, and audio is encoded by
   the system's `ffmpeg`, run as a program. Every model, voice and dataset
@@ -326,7 +331,8 @@ they have been tried on fewer devices than the rest, aren't yet held to
   ([Windows installer](docs/WINDOWS_HOST.md)). Setup also puts
   Domovoi's icon beside the clock: whether Domovoi is
   running, the dashboard, a QR code for phones, and a helper that prepares
-  a Raspberry Pi's SD card from Windows
+  a Raspberry Pi's SD card from Windows (it fetches the setup Wi-Fi's
+  key itself, so nobody types it there)
   ([the tray icon](docs/WINDOWS_HOST.md#the-tray-icon)).
 - **Satellites on spare devices.** A Linux or Windows laptop or PC, or an old
   phone or tablet through the Android app's room mode, can be a room instead
