@@ -31,6 +31,16 @@ namespace Domovoi.Windows.Tray
         int probing;
         CardWizard wizard;
 
+        // The Windows update (Updater.cs).
+        readonly System.Windows.Forms.Timer updatePoll = new System.Windows.Forms.Timer();
+        readonly IUpdateServer updates;
+        readonly string updatesRoot;
+        UpdateState updateState;
+        string seenRequest;
+        bool stepRunning;
+        int updating;
+        Action balloonAction;
+
         public TrayApp(Options opt, ITrayStore store, Log log, string exe)
         {
             this.opt = opt;
@@ -50,6 +60,21 @@ namespace Domovoi.Windows.Tray
             poll.Tick += delegate { Poll(); };
             poll.Start();
             Poll();
+            updates = new HttpUpdateServer(opt.CoreUrl);
+            updatesRoot = UpdateRun.Root(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+            // A developer run keeps its runs apart from the real tray's.
+            if (opt.Dev) updatesRoot = updatesRoot + "-dev-" + opt.Profile;
+            icon.BalloonTipClicked += delegate { Action a = balloonAction; balloonAction = null; if (a != null) a(); };
+            icon.BalloonTipClosed += delegate { balloonAction = null; };
+            updatePoll.Interval = 30000;
+            updatePoll.Tick += delegate { PollUpdates(); };
+            if (!Program.Snapshotting)
+            {
+                PendingRun keep = PendingRun.Load(updatesRoot);
+                UpdateRun.Prune(updatesRoot, DateTime.UtcNow, keep != null ? keep.Run : null);
+                updatePoll.Start();
+                PollUpdates();
+            }
             log.Write("tray started (" + (opt.Dev ? "developer profile " + opt.Profile + ", " + opt.WebUrl : "installed Domovoi") + ")");
         }
 
@@ -146,6 +171,15 @@ namespace Domovoi.Windows.Tray
             var logs = new ToolStripMenuItem("Save logs for support...");
             logs.Click += delegate { SaveLogs(); };
             items.Add(logs);
+            bool finish = updateState != null && updateState.RequestId != null && updateState.StepNeeded;
+            var update = new ToolStripMenuItem(stepRunning ? "Updating Domovoi..." : finish ? "Finish updating Domovoi..." : "Update Domovoi...")
+            {
+                Enabled = opt.Service != null && !stepRunning,
+            };
+            if (finish && !stepRunning) update.Font = new Font(menu.Font, FontStyle.Bold);
+            UpdateState asOf = updateState;
+            update.Click += delegate { if (finish) StartWindowsStep(asOf, false, true); else UpdateFromMenu(); };
+            items.Add(update);
             var restart = new ToolStripMenuItem("Restart Domovoi...") { Enabled = opt.Service != null };
             restart.Click += delegate { Restart(); };
             items.Add(restart);
@@ -252,6 +286,171 @@ namespace Domovoi.Windows.Tray
             });
         }
 
+        // -- the Windows update (Updater.cs) ------------------------------
+
+        void PollUpdates()
+        {
+            if (Interlocked.Exchange(ref updating, 1) == 1) return;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                UpdateState st = null;
+                try
+                {
+                    st = updates.State();
+                    FinishPending();
+                }
+                catch (Exception e) { log.Write("update poll failed: " + e.Message); }
+                finally { Interlocked.Exchange(ref updating, 0); }
+                Invoke(delegate { OnUpdateState(st); });
+            });
+        }
+
+        void OnUpdateState(UpdateState st)
+        {
+            updateState = st;
+            UpdateAction act = UpdateDecision.OnState(st, seenRequest, stepRunning, PendingRun.Load(updatesRoot) != null);
+            if (act == UpdateAction.Nothing) return;
+            seenRequest = st.RequestId;
+            log.Write("the dashboard asked for the Windows step (" + (st.RequestOnThisPc ? "on this PC" : "from another device") + ", " + st.TargetTag + ")");
+            if (act == UpdateAction.StartNow) { StartWindowsStep(st, false, false); return; }
+            if (!icon.Visible) icon.Visible = true;
+            balloonAction = delegate { StartWindowsStep(updateState ?? st, false, true); };
+            icon.ShowBalloonTip(30000, "Finish updating Domovoi",
+                "The Linux part is updated. Click here to update the Windows part (Domovoi " + st.TargetVersion + "); Windows asks for an administrator's permission.", ToolTipIcon.Info);
+        }
+
+        void UpdateFromMenu()
+        {
+            if (MessageBox.Show("Update Domovoi?\n\nDomovoi checks for updates and installs them: the Linux part first (a backup, then a restart: satellites, phones and the dashboard lose Domovoi for a minute or two), then the Windows part when a newer one is out, which this icon downloads and checks against Domovoi's release key first.\n\nWindows asks for an administrator's permission next.",
+                    "Update Domovoi", MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button1) != DialogResult.OK)
+                return;
+            StartWindowsStep(updateState, true, true);
+        }
+
+        StepEnv Env()
+        {
+            return new StepEnv
+            {
+                Files = new GitHubReleaseFiles(),
+                Elevator = new ShellElevator(),
+                Key = ReleaseKey.Pinned(),
+                Installed = BuildVersion.Version,
+                Helper = Admin.Helper(),
+                UpdatesRoot = updatesRoot,
+                Dev = opt.Dev,
+            };
+        }
+
+        // linuxFirst: the menu's "Update Domovoi" (both halves); false: a
+        // dashboard request (the Linux part is done). asked: someone here
+        // clicked, so a problem gets a message box rather than a notification.
+        void StartWindowsStep(UpdateState known, bool linuxFirst, bool asked)
+        {
+            if (stepRunning) return;
+            stepRunning = true;
+            string requestId = linuxFirst ? null : (known != null ? known.RequestId : null);
+            log.Write("update: " + (linuxFirst ? "both halves, from the menu" : "the Windows step"));
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                StepResult r;
+                string runDir = null;
+                try
+                {
+                    UpdateState st = updates.State() ?? known;
+                    r = WindowsStep.Start(Env(), st, linuxFirst, out runDir);
+                }
+                catch (Exception e)
+                {
+                    if (!(e is IOException || e is UnauthorizedAccessException || e is InvalidOperationException || e is ArgumentException || e is System.Security.Cryptography.CryptographicException)) throw;
+                    r = new StepResult { Outcome = Outcome.Failed, Detail = "The update couldn't start: " + e.Message };
+                }
+                if (!r.Launched)
+                {
+                    Done(r, requestId, asked);
+                    return;
+                }
+                bool setup = r.Version != null;
+                var pending = new PendingRun
+                {
+                    Run = Path.GetFileName(runDir), RequestId = requestId, Kind = setup ? "setup" : "linux",
+                    Started = DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture), Version = r.Version,
+                };
+                pending.Save(updatesRoot);
+                log.Write("update: " + (setup ? "Setup " + r.Version + " runs as a silent repair" : "the Linux part runs") + " (" + runDir + ")");
+                Invoke(delegate
+                {
+                    if (icon.Visible)
+                        icon.ShowBalloonTip(15000, "Updating Domovoi", setup
+                            ? "Setup updates the Windows side now. This icon goes away while it does, and comes back when it's done."
+                            : "The Linux part is updating. Domovoi is back in a few minutes.", ToolTipIcon.Info);
+                });
+                int code;
+                try { code = r.Process.WaitForExit(); }
+                catch (InvalidOperationException) { code = -1; }
+                StepResult fin = WindowsStep.Finish(runDir, code, setup, r.Version);
+                pending.Outcome = fin.Outcome; pending.Detail = fin.Detail; pending.Log = fin.Log; pending.Version = fin.Version ?? pending.Version;
+                pending.Save(updatesRoot);
+                Done(fin, requestId, asked);
+            });
+        }
+
+        // An outcome: reported to the core, said here, and the run forgotten
+        // once the core has it.
+        void Done(StepResult r, string requestId, bool asked)
+        {
+            log.Write("update: " + r.Outcome + (r.Detail != null ? " (" + r.Detail + ")" : "") + (r.Log != null ? " log " + r.Log : ""));
+            bool reported = updates.Report(requestId, r.Outcome, r.Detail, r.Log, r.Version);
+            PendingRun p = PendingRun.Load(updatesRoot);
+            if (p != null && p.Outcome != null)
+            {
+                if (reported) PendingRun.Clear(updatesRoot);
+                else { p.Shown = true; p.Save(updatesRoot); }
+            }
+            string words = WindowsStep.Words(r, requestId != null);
+            Invoke(delegate
+            {
+                stepRunning = false;
+                if (asked && !r.Ok && r.Outcome != Outcome.Declined)
+                    MessageBox.Show(words, "Update Domovoi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                else if (icon.Visible)
+                    icon.ShowBalloonTip(15000, r.Ok ? "Domovoi is up to date" : "Domovoi's update didn't finish", words, r.Ok ? ToolTipIcon.Info : ToolTipIcon.Warning);
+                Poll();
+                PollUpdates();
+            });
+        }
+
+        // A run an earlier tray started (Setup ends the tray to replace its
+        // file): its outcome, from the run's result file, reported and said.
+        void FinishPending()
+        {
+            if (stepRunning) return;
+            PendingRun p = PendingRun.Load(updatesRoot);
+            if (p == null) return;
+            if (p.Outcome == null)
+            {
+                string runDir = Path.Combine(updatesRoot, p.Run);
+                RunResult rr = RunResult.Read(Path.Combine(runDir, UpdateRun.ResultFile));
+                DateTime started;
+                bool old = !DateTime.TryParse(p.Started, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out started)
+                    || DateTime.UtcNow - started.ToUniversalTime() > TimeSpan.FromHours(3);
+                if (rr == null && !old) return;   // still running
+                StepResult fin = WindowsStep.Finish(runDir, rr != null && rr.Ok ? 0 : 1, p.Kind == "setup", p.Version);
+                p.Outcome = fin.Outcome; p.Detail = fin.Detail; p.Log = fin.Log; p.Version = fin.Version ?? p.Version;
+                p.Save(updatesRoot);
+            }
+            if (!updates.Report(p.RequestId, p.Outcome, p.Detail, p.Log, p.Version)) return;
+            PendingRun.Clear(updatesRoot);
+            if (p.Shown) return;
+            var r = new StepResult { Outcome = p.Outcome, Detail = p.Detail, Log = p.Log, Version = p.Version };
+            string words = WindowsStep.Words(r, p.RequestId != null);
+            log.Write("update (finished while the icon was away): " + p.Outcome + (p.Detail != null ? " (" + p.Detail + ")" : ""));
+            Invoke(delegate
+            {
+                if (icon.Visible)
+                    icon.ShowBalloonTip(15000, r.Ok ? "Domovoi is up to date" : "Domovoi's update didn't finish", words, r.Ok ? ToolTipIcon.Info : ToolTipIcon.Warning);
+            });
+        }
+
         void SaveLogs()
         {
             string dest = Admin.LogsFolder();
@@ -337,6 +536,7 @@ namespace Domovoi.Windows.Tray
             if (disposing)
             {
                 poll.Dispose();
+                updatePoll.Dispose();
                 icon.Visible = false;
                 icon.Dispose();
                 menu.Dispose();

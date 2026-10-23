@@ -30,6 +30,8 @@ REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "release" / "finish_release.py"
 GIT = shutil.which("git")
 requires_git = pytest.mark.skipif(GIT is None, reason="no git")
+SSH_KEYGEN = shutil.which("ssh-keygen")
+requires_ssh_keygen = pytest.mark.skipif(SSH_KEYGEN is None, reason="no ssh-keygen")
 
 
 def _load():
@@ -163,7 +165,8 @@ class World:
     """A checkout after the release commit (a later commit on top), its bare origin, and a fake release."""
 
     def __init__(self, tmp_path: Path, monkeypatch, version: str = "1.0.0-rc2", stable: str | None = None,
-                 hand_notes: str | None = None, github_prerelease: bool = False, annotated: bool = False):
+                 hand_notes: str | None = None, github_prerelease: bool = False, annotated: bool = False,
+                 release_key: bytes | None = None):
         self.tmp = tmp_path
         self.version = version
         self.tag = f"v{version}"
@@ -195,6 +198,8 @@ class World:
         _write(w, "docs/RELEASE_NOTES.md", NOTES_RC2)
         if hand_notes is not None:
             _write(w, f"docs/release/{self.tag}.md", hand_notes)
+        if release_key is not None:
+            _write(w, "windows/installer/release-signing.pub", release_key)
         _git(w, "add", "-A"); _git(w, "commit", "--quiet", "-m", "release: Domovoi")
         self.build = _git(w, "rev-parse", "HEAD")
         # The release commit: android/release.json naming its own APKs, on the build commit, tagged.
@@ -908,3 +913,100 @@ def test_release_commits_the_manifest_then_tags_that_commit(script):
     assert "DOMOVOI_RELEASE_ORIGIN_URL" in text and "coders-farm-official/domovoi(" in text
     # A run that stopped after the commit carries on (nothing signed again).
     assert "carries on from" in text
+
+
+# ─── the Windows update's signatures ─────────────────────────────────────
+
+
+def _keypair(tmp_path: Path, name: str) -> tuple[Path, bytes]:
+    """A throwaway ed25519 key (no passphrase), outside the checkout."""
+    d = tmp_path / "keys"
+    d.mkdir(exist_ok=True)
+    key = d / name
+    subprocess.run([SSH_KEYGEN, "-q", "-t", "ed25519", "-N", "", "-C", "throwaway " + name, "-f", str(key)], check=True)
+    return key, (d / (name + ".pub")).read_bytes()
+
+
+def _verify(sig: Path, data: Path, public: bytes, ns: str, tmp_path: Path) -> bool:
+    allowed = tmp_path / "allowed"
+    parts = public.decode().split()
+    allowed.write_bytes(f"x {parts[0]} {parts[1]}\n".encode())
+    with open(data, "rb") as f:
+        return subprocess.run([SSH_KEYGEN, "-Y", "verify", "-f", str(allowed), "-I", "x", "-n", ns, "-s", str(sig)],
+                              stdin=f, capture_output=True).returncode == 0
+
+
+@requires_git
+@requires_ssh_keygen
+def test_a_tag_that_pins_the_release_key_gets_its_setup_signed(tmp_path, monkeypatch):
+    """The Setup, its manifest, and both Ed25519 signatures (SSHSIG, each
+    under its own namespace), made with the key's private half by
+    ssh-keygen, checked against the tag's pinned public key, in SHA256SUMS
+    and uploaded after the Setup."""
+    key, public = _keypair(tmp_path, "release")
+    w = World(tmp_path, monkeypatch, version="1.0.0", release_key=public)
+    assert w.run("--signing-key", str(key)) == 0
+    stage = w.stage
+    manifest = json.loads((stage / "DomovoiSetup.manifest.json").read_bytes())
+    setup = stage / "DomovoiSetup.exe"
+    assert manifest == {"kind": "domovoi-windows-setup", "schema": 1, "tag": w.tag, "version": "1.0.0",
+                        "commit": w.tag_commit, "file": "DomovoiSetup.exe", "size": setup.stat().st_size,
+                        "sha256": hashlib.sha256(setup.read_bytes()).hexdigest()}
+    assert b"\r" not in (stage / "DomovoiSetup.manifest.json").read_bytes()
+    assert _verify(stage / "DomovoiSetup.exe.sig", setup, public, "domovoi-windows-setup", tmp_path)
+    assert _verify(stage / "DomovoiSetup.manifest.json.sig", stage / "DomovoiSetup.manifest.json", public,
+                   "domovoi-windows-setup-manifest", tmp_path)
+    assert not _verify(stage / "DomovoiSetup.exe.sig", setup, public, "domovoi-windows-setup-manifest", tmp_path), \
+        "the namespaces keep the two signatures apart"
+    names = [line.split("  ", 1)[1] for line in (stage / "SHA256SUMS").read_text(encoding="ascii").splitlines()]
+    assert names[-4:] == ["DomovoiSetup.exe", "DomovoiSetup.exe.sig", "DomovoiSetup.manifest.json",
+                          "DomovoiSetup.manifest.json.sig"]
+    (upload,) = w.calls("upload")
+    assert [Path(a).name for a in upload[3:8]] == ["DomovoiSetup.exe", "DomovoiSetup.exe.sig", "DomovoiSetup.manifest.json",
+                                                   "DomovoiSetup.manifest.json.sig", "SHA256SUMS"]
+    notes = w.state["releases"][w.tag]["body"]
+    assert "| DomovoiSetup.exe.sig |" in notes and "ssh-keygen -Y verify" in notes
+    assert not (stage / ".allowed_signers").exists()
+    assert key.read_bytes(), "the key stays where it was"
+
+
+@requires_git
+@requires_ssh_keygen
+def test_a_tag_that_pins_the_key_is_refused_without_it_or_with_another(tmp_path, monkeypatch):
+    key, public = _keypair(tmp_path, "release")
+    other, _ = _keypair(tmp_path, "other")
+    w = World(tmp_path, monkeypatch, version="1.0.0", release_key=public)
+    monkeypatch.delenv("DOMOVOI_RELEASE_SIGNING_KEY", raising=False)
+    with pytest.raises(fr.Refused, match="must be signed: pass --signing-key"):
+        w.run("--no-publish")
+    with pytest.raises(fr.Refused, match="doesn't verify against the tag's windows/installer/release-signing.pub"):
+        w.run("--no-publish", "--signing-key", str(other))
+    with pytest.raises(fr.Refused, match="no release key at"):
+        w.run("--no-publish", "--signing-key", str(tmp_path / "missing"))
+    inside = w.work / "build" / "release-key"   # ignored by git, still inside
+    inside.parent.mkdir(exist_ok=True)
+    shutil.copyfile(key, inside)
+    with pytest.raises(fr.Refused, match="inside the checkout"):
+        w.run("--no-publish", "--signing-key", str(inside))
+    assert w.calls("upload") == []
+    monkeypatch.setenv("DOMOVOI_RELEASE_SIGNING_KEY", str(key))
+    assert w.run("--no-publish") == 0, "the environment names it too"
+    assert (w.stage / "DomovoiSetup.exe.sig").is_file()
+
+
+@requires_git
+def test_a_tag_without_the_key_is_released_without_signatures(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch)
+    monkeypatch.delenv("DOMOVOI_RELEASE_SIGNING_KEY", raising=False)
+    assert w.run("--no-publish") == 0
+    assert not (w.stage / "DomovoiSetup.exe.sig").exists() and not (w.stage / "DomovoiSetup.manifest.json").exists()
+    assert any("no Windows update signatures" in m for m in w.said)
+    with pytest.raises(fr.Refused, match="the tag pins no release key"):
+        w.run("--no-publish", "--signing-key", str(tmp_path / "whatever"))
+
+
+def test_the_signature_files_are_known_to_the_release_check():
+    rel = {"assets": [{"name": n} for n in ("DomovoiSetup.exe.sig", "DomovoiSetup.manifest.json",
+                                             "DomovoiSetup.manifest.json.sig")]}
+    with pytest.raises(fr.Refused, match="has no a.apk"):
+        fr._check_published_apks(rel, [{"file": "a.apk", "size": 1, "sha256": "1" * 64}])

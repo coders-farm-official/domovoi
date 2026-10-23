@@ -12,11 +12,14 @@
 #   bash scripts/release/finish-release.sh --setup F --tray T # ...and its DomovoiTray.exe (default: bin/ beside the Setup)
 #   ... --setup F --satellite-setup S                         # ...and its DomovoiSatelliteSetup.exe (default: beside the Setup)
 #   bash scripts/release/finish-release.sh --since v1.0.0-rc2 # the tag the notes count from
+#   ... --signing-key ~/keys/domovoi-release                  # the release key's private half (or DOMOVOI_RELEASE_SIGNING_KEY)
 #
 # The Setup builds on Windows only (windows/build.ps1 -Pin in a clean
 # worktree of the tag, run through Windows PowerShell from Git Bash);
 # elsewhere pass --setup. Needs git with push
-# access and gh signed in. Never touches a keystore or a password.
+# access and gh signed in, and ssh-keygen for a tag that pins the release
+# key (it signs the Setup for the Windows update). Never reads a key or a
+# password itself.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"

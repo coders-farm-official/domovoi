@@ -45,8 +45,23 @@ every check has passed):
    the household's PCs. With ``--setup``, from ``--satellite-setup FILE``
    or the one beside the Setup. A tag whose build makes none is released
    without it.
+   Then, when the tag pins Domovoi's release key
+   (``windows/installer/release-signing.pub``, which the Setup's programs
+   embed), the Windows update's signatures (docs/WINDOWS_HOST.md, "Updates
+   and the release channel"): ``DomovoiSetup.manifest.json`` (kind, tag,
+   version, the tag's commit, the Setup's size and SHA-256), and
+   ``DomovoiSetup.exe.sig`` and ``DomovoiSetup.manifest.json.sig``, detached
+   Ed25519 signatures (SSHSIG) made by ``ssh-keygen -Y sign`` with the
+   private half the owner names (``--signing-key FILE`` or
+   ``DOMOVOI_RELEASE_SIGNING_KEY``; outside the checkout, refused inside it,
+   and never read by this script: ssh-keygen reads it, and asks for its
+   passphrase itself), each checked with ``ssh-keygen -Y verify`` against
+   the tag's pinned public key before anything is published. A tag that
+   pins a key is refused without one; a tag that pins none is released
+   without signatures, and the Windows side then has no update step.
 3. One ``SHA256SUMS`` (LF line endings) for every asset: the APKs (from
-   the manifest), the Setup, the tray and the satellite Setup.
+   the manifest), the Setup and its signatures and manifest, the tray and
+   the satellite Setup.
 4. The release notes: ``docs/release/v<version>.md`` at the tag if there is
    one, otherwise a summary of the ``docs/RELEASE_NOTES.md`` entries added
    since the previous tag (a release candidate counts from the tag before
@@ -73,7 +88,8 @@ run would do.
 
 git, gh and Windows PowerShell are run by their absolute paths, never from
 the checkout (Windows would look in the current folder first). Standard
-library only. Never touches a keystore or a password; the only writes
+library only. Never reads a key or a password (ssh-keygen reads the
+release key's private half, at the path given); the only writes
 outside ``windows/build/`` are a temporary worktree's registration in
 ``.git``, the GitHub release's assets and notes, and the ``stable`` branch.
 """
@@ -106,6 +122,19 @@ TRAY_ASSET = "DomovoiTray.exe"
 #: servers fetch (domovoi/satellite_setup.py SETUP_ASSET).
 SATELLITE_SETUP_ASSET = "DomovoiSatelliteSetup.exe"
 SUMS_ASSET = "SHA256SUMS"
+#: The Windows update's signatures (windows/common/ReleaseSignature.cs reads
+#: them): the Setup's, its manifest, and the manifest's.
+SETUP_SIG_ASSET = "DomovoiSetup.exe.sig"
+MANIFEST_ASSET = "DomovoiSetup.manifest.json"
+MANIFEST_SIG_ASSET = "DomovoiSetup.manifest.json.sig"
+SIGNATURE_ASSETS = (SETUP_SIG_ASSET, MANIFEST_ASSET, MANIFEST_SIG_ASSET)
+#: The public half of Domovoi's release key, at the tag (build.ps1 embeds it).
+RELEASE_KEY = "windows/installer/release-signing.pub"
+SETUP_NAMESPACE = "domovoi-windows-setup"
+MANIFEST_NAMESPACE = "domovoi-windows-setup-manifest"
+MANIFEST_KIND = "domovoi-windows-setup"
+#: The name the checks give the key in their allowed-signers line.
+SIGNER = "domovoi-release"
 #: GitHub refuses a release body over this many characters.
 BODY_LIMIT = 125_000
 #: What the notes aim for: the summary shrinks to fit.
@@ -283,6 +312,7 @@ class Release:
     candidate_of: str | None = None   # X.Y.Z, when the version has a suffix
     tray_sha256: str | None = None    # DomovoiTray.exe, when the tag's build makes one
     satellite_setup_sha256: str | None = None  # DomovoiSatelliteSetup.exe, likewise
+    signatures: dict[str, str] | None = None  # the Windows update's files -> their SHA-256
 
 
 def _who(abi: str) -> str:
@@ -303,6 +333,11 @@ def body(rel: Release) -> str:
     for e in rel.apks:
         files.append(f"| {e['file']} | {_who(e['abi'])} | `{e['sha256']}` |")
     files.append(f"| {SETUP_ASSET} | the Windows installer (preview, not code-signed) | `{rel.setup_sha256}` |")
+    for name, what in ((SETUP_SIG_ASSET, "the Setup's Ed25519 signature by Domovoi's release key, for the Windows update"),
+                       (MANIFEST_ASSET, "what the Setup is (version, commit, size, SHA-256), for the Windows update"),
+                       (MANIFEST_SIG_ASSET, "the manifest's Ed25519 signature by Domovoi's release key")):
+        if rel.signatures and name in rel.signatures:
+            files.append(f"| {name} | {what} | `{rel.signatures[name]}` |")
     if rel.tray_sha256:
         files.append(f"| {TRAY_ASSET} | the Windows tray icon, for an install from before it (Setup installs it) | `{rel.tray_sha256}` |")
     if rel.satellite_setup_sha256:
@@ -320,6 +355,10 @@ def body(rel: Release) -> str:
         "Its `android/release.json` names the two APKs above, which a server hands to the household's phones.",
         f"- `{SETUP_ASSET}` installs that commit. {how} It is not code-signed, so Windows says \"Unknown publisher\": "
         f"[docs/WINDOWS_HOST.md]({REPO_URL}/blob/{rel.tag}/docs/WINDOWS_HOST.md).",
+        *([f"- A Windows install updates its Windows side from `{SETUP_ASSET}` once its signatures check out against the "
+             "release key its own programs pin (`ssh-keygen -Y verify`, namespace "
+             f"`{SETUP_NAMESPACE}`; [docs/WINDOWS_HOST.md]({REPO_URL}/blob/{rel.tag}/docs/WINDOWS_HOST.md))."]
+          if rel.signatures else []),
         f"- The Android app's signing certificate SHA-256: `{rel.cert}` (check with `apksigner verify --print-certs <file>`).",
         "- Check a download: `sha256sum -c SHA256SUMS --ignore-missing` (Linux, macOS, Git Bash), "
         "or `Get-FileHash -Algorithm SHA256 <file>` (PowerShell) against the line in `SHA256SUMS`.",
@@ -351,6 +390,9 @@ def sums_text(rel: Release) -> str:
     """``SHA256SUMS``: ``<sha256>  <file>`` per asset, LF line endings."""
     lines = [f"{e['sha256']}  {e['file']}" for e in rel.apks]
     lines.append(f"{rel.setup_sha256}  {SETUP_ASSET}")
+    for name in SIGNATURE_ASSETS:
+        if rel.signatures and name in rel.signatures:
+            lines.append(f"{rel.signatures[name]}  {name}")
     if rel.tray_sha256:
         lines.append(f"{rel.tray_sha256}  {TRAY_ASSET}")
     if rel.satellite_setup_sha256:
@@ -550,7 +592,7 @@ def _digest(asset: dict[str, Any]) -> str | None:
 
 def _check_published_apks(release: dict[str, Any], apks: list[dict[str, Any]]) -> None:
     assets = {a["name"]: a for a in release.get("assets") or []}
-    allowed = {e["file"] for e in apks} | {SETUP_ASSET, TRAY_ASSET, SATELLITE_SETUP_ASSET, SUMS_ASSET}
+    allowed = {e["file"] for e in apks} | {SETUP_ASSET, TRAY_ASSET, SATELLITE_SETUP_ASSET, SUMS_ASSET, *SIGNATURE_ASSETS}
     unknown = sorted(set(assets) - allowed)
     if unknown:
         die(f"the release has files finish-release doesn't know: {', '.join(unknown)} "
@@ -634,6 +676,59 @@ def _build_setup(src: Path, tag: str, repo: Path) -> Path:
     return exe
 
 
+def setup_manifest(tag: str, version: str, tag_commit: str, setup: Path) -> bytes:
+    """``DomovoiSetup.manifest.json``: what the tray checks a downloaded
+    Setup against (windows/common/ReleaseSignature.cs SetupManifest), its
+    version and commit signed along with it."""
+    doc = {"kind": MANIFEST_KIND, "schema": 1, "tag": tag, "version": version, "commit": tag_commit,
+           "file": SETUP_ASSET, "size": setup.stat().st_size, "sha256": sha256_file(setup)}
+    return (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode("ascii")
+
+
+def sign_setup(stage: Path, setup: Path, *, tag: str, version: str, tag_commit: str, key: Path,
+               public: bytes, repo: Path, ssh_keygen: str | None = None) -> dict[str, str]:
+    """The Windows update's three files beside the staged Setup: the
+    manifest, and both signatures by the release key's private half
+    ``key`` (``ssh-keygen -Y sign``, which reads it and asks for its
+    passphrase itself), each checked against the tag's pinned public key
+    (``ssh-keygen -Y verify``). Their SHA-256, by name."""
+    keygen = ssh_keygen or find_exe("ssh-keygen", repo)
+    if not keygen:
+        die("no ssh-keygen on PATH (OpenSSH's; Windows has it in C:\\Windows\\System32\\OpenSSH, Git Bash has its own)")
+    key = Path(key).expanduser().resolve()
+    if not key.is_file():
+        die(f"no release key at {key} (--signing-key)")
+    if key.is_relative_to(Path(repo).resolve()):
+        die("the release key is inside the checkout: keep it outside (and backed up)")
+    line = public.decode("ascii", "replace").strip().splitlines()[0] if public.strip() else ""
+    parts = line.split()
+    if len(parts) < 2 or parts[0] != "ssh-ed25519":
+        die(f"{RELEASE_KEY} at the tag is not one ssh-ed25519 public key line")
+    manifest = stage / MANIFEST_ASSET
+    manifest.write_bytes(setup_manifest(tag, version, tag_commit, setup))
+    allowed = stage / ".allowed_signers"
+    # Bytes, so Windows doesn't turn the newline into CRLF.
+    allowed.write_bytes(f'{SIGNER} namespaces="{SETUP_NAMESPACE},{MANIFEST_NAMESPACE}" {parts[0]} {parts[1]}\n'
+                        .encode("ascii"))
+    try:
+        for file, ns in ((setup, SETUP_NAMESPACE), (manifest, MANIFEST_NAMESPACE)):
+            sig = file.with_name(file.name + ".sig")
+            sig.unlink(missing_ok=True)
+            print(f"finish-release: signing {file.name} ({ns}) with {key}...", flush=True)
+            p = subprocess.run([keygen, "-Y", "sign", "-f", str(key), "-n", ns, str(file)])
+            if p.returncode != 0 or not sig.is_file():
+                die(f"ssh-keygen -Y sign failed for {file.name}")
+            with open(file, "rb") as data:
+                v = subprocess.run([keygen, "-Y", "verify", "-f", str(allowed), "-I", SIGNER, "-n", ns, "-s", str(sig)],
+                                   stdin=data, capture_output=True)
+            if v.returncode != 0:
+                die(f"{sig.name} doesn't verify against the tag's {RELEASE_KEY}: is --signing-key that key's "
+                    "private half?")
+    finally:
+        allowed.unlink(missing_ok=True)
+    return {name: sha256_file(stage / name) for name in SIGNATURE_ASSETS}
+
+
 def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None,
         build_setup: Callable[[Path, str, Path], Path] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="finish-release", description=(
@@ -646,6 +741,8 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
     ap.add_argument("--satellite-setup", help="with --setup: the DomovoiSatelliteSetup.exe of that build "
                     "(default: the one beside the Setup)")
     ap.add_argument("--since", help="the tag the notes' summary counts from (default: the previous one)")
+    ap.add_argument("--signing-key", help="the private half of Domovoi's release key (an OpenSSH ed25519 key file, "
+                    "outside the checkout; default DOMOVOI_RELEASE_SIGNING_KEY), for the Windows update's signatures")
     args = ap.parse_args(argv)
 
     repo = Path(repo or REPO)
@@ -798,6 +895,25 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
             if not t.git_ok("worktree", "remove", "--force", str(src)):
                 say(f"warning: couldn't remove the build worktree {src}: git worktree remove --force it later")
 
+    # The Windows update's signatures, when the tag pins the release key.
+    release_key = t.git_bytes("show", f"{tag_commit}:{RELEASE_KEY}")
+    signing_key = args.signing_key or os.environ.get("DOMOVOI_RELEASE_SIGNING_KEY") or None
+    signatures = None
+    if release_key is not None:
+        if not signing_key:
+            die(f"the tag pins Domovoi's release key ({RELEASE_KEY}), so its Setup must be signed: pass --signing-key "
+                "with the path of the key's private half (or set DOMOVOI_RELEASE_SIGNING_KEY); docs/CONTRIBUTING.md, "
+                "Releasing, says how it was made")
+        signatures = sign_setup(stage, staged_setup, tag=tag, version=version, tag_commit=tag_commit,
+                                key=Path(signing_key), public=release_key, repo=repo)
+        say(f"signed {SETUP_ASSET} and its manifest; both check out against the tag's {RELEASE_KEY}")
+    elif signing_key:
+        die(f"--signing-key given, but the tag pins no release key ({RELEASE_KEY}): its Windows side couldn't "
+            "check the signatures anyway")
+    else:
+        say(f"no Windows update signatures: the tag pins no release key ({RELEASE_KEY}), so its Windows side has "
+            "no update step")
+
     # 3 and 4. SHA256SUMS and the notes. --------------------------------------
     if args.since and not t.git_ok("rev-parse", "--verify", "--quiet", f"refs/tags/{args.since}"):
         die(f"no tag {args.since} (--since)")
@@ -807,7 +923,7 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
                    setup_sha256=sha256_file(staged_setup), setup_built=not args.setup, previous_tag=since,
                    tray_sha256=sha256_file(staged_tray) if staged_tray.is_file() else None,
                    satellite_setup_sha256=sha256_file(staged_sat) if staged_sat.is_file() else None,
-                   candidate_of=m.group(1) if by_name else None)
+                   signatures=signatures, candidate_of=m.group(1) if by_name else None)
     if hand is not None:
         info.notes = hand.decode("utf-8")
         say(f"the notes: docs/release/{tag}.md at the tag")
@@ -835,7 +951,8 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
         say(f"and {SATELLITE_SETUP_ASSET} ({staged_sat.stat().st_size} bytes)")
     else:
         say(f"no {SATELLITE_SETUP_ASSET}: this tag's build makes none (it predates the satellite Setup)")
-    uploads = [staged_setup, *([staged_tray] if info.tray_sha256 else []),
+    uploads = [staged_setup, *([stage / n for n in SIGNATURE_ASSETS] if signatures else []),
+               *([staged_tray] if info.tray_sha256 else []),
                *([staged_sat] if info.satellite_setup_sha256 else []), stage / SUMS_ASSET]
 
     stable_push = f"{tag_commit}:refs/heads/stable"

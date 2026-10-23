@@ -27,7 +27,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
-import ipaddress
 import json
 import logging
 import re
@@ -42,7 +41,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi import egress
+from domovoi import egress, local_peer
 from domovoi.admin_auth import require_admin_mutation, require_admin_read
 from domovoi.container_guard import freeze as container_freeze
 from domovoi.host_kind import host_kind
@@ -540,14 +539,6 @@ _CLAIM_REFUSALS: dict[str, tuple[int, str]] = {
     )),
 }
 
-# Headers a proxy adds to say who it relays for. The card helper talks to
-# the dashboard directly and sends none of them. uvicorn rewrites the peer
-# from X-Forwarded-For when a loopback peer sends one (its
-# --forwarded-allow-ips default), so with any of them present the peer
-# can't be taken at its word (round 4's WIN-7: loopback XFF trust on WSL).
-_FORWARDING_HEADERS = ("x-forwarded-for", "forwarded", "x-real-ip", "x-forwarded-host")
-
-
 def _claim_refused(reason: str) -> JSONResponse:
     status, detail = _CLAIM_REFUSALS[reason]
     return JSONResponse(
@@ -559,24 +550,12 @@ def _claim_refused(reason: str) -> JSONResponse:
 
 def _from_this_pc(request: Request) -> bool:
     """Whether the TCP peer is this machine's loopback, with nothing in
-    the request claiming to relay for someone else.
-
-    On a Windows install the tray reaches the dashboard in WSL through
-    mirrored networking's loopback (hostAddressLoopback), where a Windows
-    process's 127.0.0.1 arrives as 127.0.0.1; a phone or a laptop on the
-    LAN arrives as its own address. Every Windows account on the PC shares
-    that loopback (the shared-PC trust boundary in docs/WINDOWS_HOST.md),
-    and still needs the zip's 256-bit pass."""
-    if any(request.headers.get(h) for h in _FORWARDING_HEADERS):
-        return False
-    host = request.client.host if request.client else ""
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
-    return ip.is_loopback
+    the request claiming to relay for someone else
+    (:func:`domovoi.local_peer.from_this_pc`, the rule the Windows tray's
+    loopback routes share). Every Windows account on the PC shares that
+    loopback (the shared-PC trust boundary in docs/WINDOWS_HOST.md), and
+    still needs the zip's 256-bit pass."""
+    return local_peer.from_this_pc(request)
 
 
 class ClaimRequest(BaseModel):

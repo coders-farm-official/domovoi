@@ -40,6 +40,7 @@ from sqlalchemy import text  # noqa: E402
 from domovoi import admin_auth as admin_auth_mod  # noqa: E402
 from domovoi import git_version  # noqa: E402
 from domovoi import self_restart  # noqa: E402
+from domovoi import local_peer, windows_side  # noqa: E402
 from domovoi import voice_activity  # noqa: E402
 from domovoi import server_identity  # noqa: E402
 from domovoi.container_guard import freeze as container_freeze  # noqa: E402
@@ -2930,6 +2931,16 @@ async def admin_version() -> dict[str, Any]:
     # ({at, reason, pid, log}), or None: the Version card says when and
     # why, and where the stacks are (domovoi/loop_watchdog.py).
     state["last_watchdog_restart"] = await asyncio.to_thread(loop_watchdog.last_stall)
+    # A Windows install's other half (domovoi/windows_side.py): the Windows
+    # side's version as DomovoiHost reported it, the release this code
+    # includes, whether the Windows step is needed, the dashboard's request,
+    # the tray's last outcome and whether a tray is there. {"present":
+    # false} on a Linux-only install.
+    try:
+        state["windows_side"] = await windows_side.card_state()
+    except Exception as e:  # noqa: BLE001 — the version card must still render
+        log.warning("windows side unreadable: %s", e)
+        state["windows_side"] = {"present": False}
     return state
 
 
@@ -3029,6 +3040,103 @@ async def _restart_would_apply() -> bool:
         # Can't tell: treat it as an apply (the freeze errs toward paused).
         return True
     return running.removesuffix("-dirty") != checkout.removesuffix("-dirty")
+
+
+# ─── The Windows update (domovoi/windows_side.py) ─────────────────────────
+# One "Update Domovoi" across a Windows install's two halves: the admin asks
+# for the Windows step here, and the tray on the PC (no credential: the
+# shared-PC boundary, docs/WINDOWS_HOST.md) reads the state and reports its
+# outcome over loopback only (domovoi/local_peer.py).
+
+_NOT_LOCAL = {"detail": "this is answered only to the Domovoi tray on the server's own PC", "reason": "not_local"}
+
+
+@app.get("/v1/windows/update")
+async def windows_update_state(request: Request, tray: str | None = None) -> JSONResponse:
+    """The tray's poll: the Windows side DomovoiHost reported, the release
+    this code includes (``target``), whether a Windows step is needed and
+    why not, the internet answer, whether an update is under way, and the
+    admin's request (``{id, on_this_pc, at}``) when there is one. Answered
+    to a loopback peer that sent no forwarding header only (403
+    ``not_local``); ``tray`` (its version) records that a tray is there."""
+    if not local_peer.from_this_pc(request):
+        return JSONResponse(_NOT_LOCAL, status_code=403, headers={"Cache-Control": "no-store"})
+    windows_side.note_tray(tray)
+    return JSONResponse(await windows_side.tray_state(), headers={"Cache-Control": "no-store"})
+
+
+class _TrayResultBody(BaseModel):
+    request_id: str | None = Field(default=None, max_length=64)
+    outcome: str = Field(..., max_length=40)
+    detail: str | None = Field(default=None, max_length=1000)
+    log: str | None = Field(default=None, max_length=300)
+    version: str | None = Field(default=None, max_length=64)
+
+
+@app.post("/v1/windows/update/result")
+async def windows_update_result(body: _TrayResultBody, request: Request) -> JSONResponse:
+    """The tray's outcome of a Windows step (``ok``, ``declined``,
+    ``bad_signature``, ``repair_failed`` with its log, ...): kept for the
+    Version card, and the request it answers is done. Loopback only, like
+    the poll; only known outcomes and plain text are kept."""
+    if not local_peer.from_this_pc(request):
+        return JSONResponse(_NOT_LOCAL, status_code=403, headers={"Cache-Control": "no-store"})
+    state = await windows_side.tray_state()
+    target = (state.get("target") or {}).get("tag")
+    try:
+        doc = await asyncio.to_thread(windows_side.record_result, body.model_dump(), target)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    log.info("windows update: the tray reports %s", doc["outcome"])
+    return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
+
+
+class _WindowsRequestBody(BaseModel):
+    on_this_pc: bool = False
+
+
+@app.post(
+    "/v1/admin/windows/request",
+    # Security tier, like the pull and the restart: it starts an update of
+    # the PC's own programs. Bearer-only; 501 before setup.
+    dependencies=[Depends(require_admin_security)],
+)
+async def admin_windows_request(body: _WindowsRequestBody) -> dict[str, Any]:
+    """Ask the tray on the PC for the Windows step. ``on_this_pc`` (the
+    web says so, from the browser's own address): the tray starts it at
+    once, and Windows asks for an administrator's permission there; else it
+    shows a notification. 409 with the reason when no step is needed (a
+    Linux-only install, internet access turned off, nothing newer, no signed
+    Setup for that release); 423 while the container guard holds updates.
+    ``{ok, request, tray}``: ``tray.running`` false means no tray has polled
+    lately (nobody is signed in on the PC)."""
+    await container_freeze.require_unfrozen("update_apply")
+    st = await windows_side.card_state()
+    if not st.get("present") or not st.get("step_needed"):
+        why = st.get("why_not") or "no_windows_side"
+        raise HTTPException(status_code=409, detail=_WINDOWS_WHY_NOT.get(why, "there is nothing to update on the PC"))
+    req = await asyncio.to_thread(windows_side.make_request, body.on_this_pc)
+    return {"ok": True, "request": req, "tray": windows_side.tray_seen()}
+
+
+_WINDOWS_WHY_NOT = {
+    "no_windows_side": "this server isn't a Windows install",
+    "internet_off": "internet access is turned off, and the Windows side updates from Domovoi's releases on the internet",
+    "no_release": "the code this server runs includes no release yet",
+    "up_to_date": "the Windows side is up to date",
+    "unsigned_release": "that release has no signed Windows Setup",
+}
+
+
+@app.post(
+    "/v1/admin/windows/request/cancel",
+    dependencies=[Depends(require_admin_security)],
+)
+async def admin_windows_request_cancel() -> dict[str, Any]:
+    """Withdraw the request (a tray that already started the step carries
+    on; Windows' own prompt is the last word there)."""
+    await asyncio.to_thread(windows_side.clear_request)
+    return {"ok": True}
 
 
 # ─── Container guard (docs/CONTAINER_GUARD.md) ────────────────────────────

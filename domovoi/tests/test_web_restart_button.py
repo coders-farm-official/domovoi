@@ -488,13 +488,13 @@ SCENARIOS["flow_no_started_at"] = scenario(flow(), srv={"started": None, "noStar
 # A fast host: the new server answers before any poll found the old one
 # gone. Its boot time moved, and that alone ends the wait.
 SCENARIOS["flow_back_between_polls"] = scenario(flow(), srv={"lingerPolls": 1, "skipDown": True})
-# Behind the upstream, "Pull the latest" is the update action; a restart
+# Behind the upstream, "Update Domovoi" is the update action; a restart
 # under way greys it, as it greys the check.
 SCENARIOS["flow_pull_mode"] = scenario(r"""
 await A.login(__PW);
 await start();
 await press({ type: 'button', text: 'Check for updates' }); await step();
-await pumpUntil(() => pageButtons().some((b) => b.startsWith('Pull the latest')));
+await pumpUntil(() => pageButtons().some((b) => b.startsWith('Update Domovoi')));
 const out = { before: view() };
 const flow = press(plainButton); await step();
 await pumpUntil(() => !!note());
@@ -1018,9 +1018,9 @@ def test_a_restart_quicker_than_the_poll_is_still_seen(driven) -> None:
 
 def test_a_restart_under_way_greys_the_pull(driven) -> None:
     o = driven["flow_pull_mode"]
-    assert "Pull the latest" in o["before"]["buttons"], o["before"]["buttons"]
+    assert "Update Domovoi" in o["before"]["buttons"], o["before"]["buttons"]
     assert RESTART in o["before"]["buttons"], o["before"]["buttons"]
-    assert "Pull the latest [disabled]" in o["away"]["buttons"], o["away"]["buttons"]
+    assert "Update Domovoi [disabled]" in o["away"]["buttons"], o["away"]["buttons"]
     assert "Restarting… [disabled]" in o["away"]["buttons"], o["away"]["buttons"]
     assert o["result"] is True
     assert o["restarts"] == ["bearer"]

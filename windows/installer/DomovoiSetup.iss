@@ -22,6 +22,22 @@
 ; administrators-only folder, so the helper copies them, redacted, to
 ; Documents\Domovoi logs and Explorer opens it.
 ;
+; Update mode (the Windows update's Windows step, design note
+; WINDOWS-ONE-UPDATE-2026-10-22): the tray starts this Setup, after checking
+; its signatures, as /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL /SP-
+; /update=1 [/linuxfirst=1] /LOG=<run>\setup.log /updateresult=<run>\result.txt
+; (windows\common\UpdateRun.cs SetupArguments). It is a repair of the
+; existing install: the household's answers come from Setup's install record
+; (the helper's saved-answers; AI kept as the home has it), no page and no
+; question is shown, and a failure never undoes anything (no "Remove what
+; Setup has changed", which would uninstall, and the service isn't parked:
+; Domovoi keeps running as it is). /linuxfirst=1 (the tray's own "Update
+; Domovoi") runs the Linux part first, through the helper's linux-update,
+; and stops before anything on Windows changes if that fails. The outcome
+; goes to /updateresult (ok=, error=, log=, linux=, version=) and the exit
+; code (10: the files were replaced but the repair didn't finish), and the
+; tray starts again at the end.
+;
 ; Build: windows\build.ps1 (Inno Setup 6). Docs: docs/WINDOWS_HOST.md.
 
 #include "pins.iss"
@@ -184,6 +200,13 @@ var
   StopButton: TNewButton;
   StopRequested: Boolean;
 
+  { Update mode (the header): what was asked, the household's saved
+    answers, whether the trays were ended (so this Setup starts this
+    account's again), the Linux part's outcome, and whether the result file
+    is written. }
+  UpdateMode, LinuxFirst, TraysStopped, ResultWritten: Boolean;
+  SavedInternet, SavedMediaRoot, LinuxOutcome: String;
+
   { The uninstaller: the helper's output lines as they come, and the list
     of steps under the progress bar. }
   UninstLines: TArrayOfString;
@@ -210,6 +233,7 @@ procedure StopTrays;
 var
   Code: Integer;
 begin
+  TraysStopped := True;
   if Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM DomovoiTray.exe', '', SW_HIDE, ewWaitUntilTerminated, Code) then
     Log('taskkill DomovoiTray.exe: exit ' + IntToStr(Code))
   else
@@ -357,6 +381,13 @@ function RetryOrStop(const Instruction, Text: String): Boolean;
 var
   R: Integer;
 begin
+  { Update mode asks nothing: the step stops, and the result says why. }
+  if UpdateMode then
+  begin
+    Log('Update mode: ' + Instruction + ': ' + Text);
+    Result := False;
+    Exit;
+  end;
   while True do
   begin
     { (No line here may start with "[": ISCC would read it as a section.) }
@@ -389,6 +420,16 @@ begin
     Owners := KvValues(Lines, 'port_owner');
     if GetArrayLength(Owners) = 0 then
       Exit;
+    if UpdateMode then
+    begin
+      Parts := StringSplit(Owners[0], ['|'], stAll);
+      if GetArrayLength(Parts) >= 3 then
+        FailureText := Parts[1] + ': ' + Parts[2]
+      else
+        FailureText := 'A port Domovoi needs is taken by another program.';
+      Result := False;
+      Exit;
+    end;
     for I := 0 to GetArrayLength(Owners) - 1 do
     begin
       Parts := StringSplit(Owners[I], ['|'], stAll);
@@ -432,6 +473,8 @@ var
   Lines: TArrayOfString;
   Code: Integer;
 begin
+  if UpdateMode then
+    Exit;
 #ifdef ProvisionAiChoice
   AiSavedDefault := '';
   AiSavedFrom := '';
@@ -484,6 +527,11 @@ begin
     end;
     if not Ran or (Code <> 0) then
     begin
+      if UpdateMode then
+      begin
+        FailureText := 'Setup could not check this PC (' + KvValue(Preflight, 'error') + ').';
+        Exit;
+      end;
       if MsgBox('Setup could not check this PC (' + KvValue(Preflight, 'error') + ').' + #13#10#13#10 +
         'If Windows blocked DomovoiSetupHelper.exe, Smart App Control or an antivirus program is stopping unsigned programs: this preview is unsigned (see docs/WINDOWS_HOST.md, "Unsigned").',
         mbError, MB_RETRYCANCEL) = IDRETRY then
@@ -493,6 +541,11 @@ begin
     Fatal := KvValues(Preflight, 'fatal');
     if GetArrayLength(Fatal) > 0 then
     begin
+      if UpdateMode then
+      begin
+        FailureText := 'Domovoi can''t be updated on this PC now: ' + JoinLines(Fatal, '');
+        Exit;
+      end;
       if TaskDialogMsgBox('Domovoi can''t be installed on this PC yet', JoinLines(Fatal, ''), mbCriticalError,
         MB_RETRYCANCEL, ['Check again', 'Cancel Setup'], 0) = IDRETRY then
         Continue;
@@ -555,6 +608,12 @@ end;
 function AiPrepareArg: String;
 begin
   Result := AiAnswer;
+  { Update mode: as the home has it now (a recorded No stays No). }
+  if UpdateMode then
+  begin
+    Result := 'keep';
+    Exit;
+  end;
 #ifdef ProvisionAiChoice
   if Resumed then
   begin
@@ -774,6 +833,13 @@ begin
   Result := ExpandConstant('{param:internet|}');
   if Result <> '' then
     Exit;
+  if UpdateMode then
+  begin
+    { The answer Setup recorded; an existing domovoi/.env's own answer is
+      never written over (provision.sh), so Settings > Internet stands. }
+    Result := SavedInternet;
+    Exit;
+  end;
   if RadioAlways.Checked then
     Result := 'always'
   else if RadioSometimes.Checked then
@@ -1083,6 +1149,11 @@ begin
       Exit;
     if GetTickCount - Started > LimitMs then
     begin
+      if UpdateMode then
+      begin
+        FailureText := 'Domovoi was still not ready after ' + IntToStr(LimitMs div 3600000) + ' hours.';
+        Exit;
+      end;
       if MsgBox('Domovoi is still not ready after ' + IntToStr(LimitMs div 3600000) + ' hours. Keep waiting another hour?' + #13#10#13#10 +
         'What it is doing: ' + KvValue(Lines, 'message') + #13#10 + 'Logs: C:\ProgramData\Domovoi\logs (host.log, provision.log).', mbConfirmation, MB_YESNO) <> IDYES then
       begin
@@ -1226,7 +1297,9 @@ begin
     if not WaitForHost then Exit;
     ProgressPage.SetProgress(100, 100);
     StopButton.Visible := False;
-    SetupCodeText := ReadSetupCode;
+    { An update repairs a claimed install: no code to show. }
+    if not UpdateMode then
+      SetupCodeText := ReadSetupCode;
     Result := True;
   finally
     StopButton.Visible := False;
@@ -1256,6 +1329,74 @@ begin
   RegWriteStringValue(HKLM, RunOnceKey, RunOnceName, Data);
 end;
 
+{ -- update mode (the header) -------------------------------------------- }
+
+{ The answers this install has (the helper's saved-answers, from Setup's
+  install record). False: none, so this is no install to update. }
+function ReadSavedAnswers: Boolean;
+var
+  Lines: TArrayOfString;
+  Code: Integer;
+begin
+  Result := False;
+  if not RunHelper(TmpHelper, 'saved-answers', Lines, Code) or (Code <> 0) then
+  begin
+    FailureText := 'This PC has no Domovoi for Setup to update (' + KvValue(Lines, 'error') + '). Run Setup itself.';
+    Exit;
+  end;
+  SavedInternet := KvValue(Lines, 'internet');
+  SavedMediaRoot := KvValue(Lines, 'media_root');
+  if (SavedInternet = '') or (SavedMediaRoot = '') then
+  begin
+    FailureText := 'Setup''s install record has no answers to keep. Run Setup itself.';
+    Exit;
+  end;
+  Result := True;
+end;
+
+{ The outcome, for the tray: /updateresult names the file (a result.txt). }
+procedure WriteUpdateResult;
+var
+  Path, Text, LogPath: String;
+begin
+  if ResultWritten or not UpdateMode then
+    Exit;
+  ResultWritten := True;
+  Path := ExpandConstant('{param:updateresult|}');
+  if (Path = '') or (CompareText(ExtractFileName(Path), 'result.txt') <> 0) or not DirExists(ExtractFileDir(Path)) then
+  begin
+    Log('Update mode: no usable /updateresult (' + Path + ')');
+    Exit;
+  end;
+  LogPath := ExpandConstant('{log}');
+  if InstallOk then
+    Text := 'ok=1' + #13#10
+  else
+  begin
+    if FailureText = '' then
+      FailureText := 'Setup stopped before it finished.';
+    StringChangeEx(FailureText, #13#10, ' ', True);
+    StringChangeEx(FailureText, #10, ' ', True);
+    Text := 'ok=0' + #13#10 + 'error=' + FailureText + #13#10;
+  end;
+  if LogPath <> '' then
+    Text := Text + 'log=' + LogPath + #13#10;
+  if LinuxOutcome <> '' then
+    Text := Text + 'linux=' + LinuxOutcome + #13#10;
+  Text := Text + 'version={#AppVersion}' + #13#10;
+  if not SaveStringToFile(Path, Text, False) then
+    Log('Update mode: could not write ' + Path);
+end;
+
+{ The files were replaced but the repair didn't finish: 10, for the tray
+  (it reads the result file too). }
+function GetCustomSetupExitCode: Integer;
+begin
+  Result := 0;
+  if UpdateMode and not InstallOk then
+    Result := 10;
+end;
+
 { -- event functions ---------------------------------------------------- }
 
 function InitializeSetup: Boolean;
@@ -1272,11 +1413,19 @@ begin
     SuppressibleMsgBox('Smart App Control is on, and this preview of Domovoi is not code-signed. Windows would block Setup''s helper and the Domovoi service, so Setup stops here.' + #13#10#13#10 +
       'To install it anyway, turn Smart App Control off in Windows Security > App & browser control > Smart App Control settings. On many Windows 11 builds it can only be turned back on by resetting or reinstalling Windows; read what Windows Security says first (docs/WINDOWS_HOST.md, "Unsigned").',
       mbCriticalError, MB_OK, IDOK);
+    if ExpandConstant('{param:update|0}') = '1' then
+    begin
+      UpdateMode := True;
+      FailureText := 'Smart App Control is on, and Domovoi is not code-signed, so Windows would block its programs.';
+      WriteUpdateResult;
+    end;
     Result := False;
     Exit;
   end;
   Resumed := ExpandConstant('{param:resume|0}') = '1';
   NoDenyLogon := ExpandConstant('{param:nodenylogon|0}') = '1';
+  UpdateMode := ExpandConstant('{param:update|0}') = '1';
+  LinuxFirst := UpdateMode and (ExpandConstant('{param:linuxfirst|0}') = '1');
 #ifndef ProvisionAiChoice
   { This build's provision.sh always pulls the AI models (pins.iss): say so
     now, not after the account, the firewall rules and the downloads. }
@@ -1289,6 +1438,26 @@ begin
   end;
 #endif
   ExtractTemporaryFile('{#Helper}');
+  if UpdateMode then
+  begin
+    { Only silently, and only over an install: a repair, never a first
+      install, and never with a question. }
+    if not WizardSilent then
+    begin
+      FailureText := 'The update mode runs silently only (the Domovoi tray starts it so).';
+      WriteUpdateResult;
+      Result := False;
+      Exit;
+    end;
+    if not ReadSavedAnswers then
+    begin
+      Log('Update mode: ' + FailureText);
+      WriteUpdateResult;
+      Result := False;
+      Exit;
+    end;
+    Log('Update mode: internet ' + SavedInternet + ', media folder ' + SavedMediaRoot + ', Linux part first: ' + IntToStr(Ord(LinuxFirst)));
+  end;
   Result := True;
 end;
 
@@ -1312,6 +1481,8 @@ begin
     False, '');
   MediaPage.Add('Media folder:');
   Root := ExpandConstant('{param:mediaroot|}');
+  if UpdateMode then
+    Root := SavedMediaRoot;
   if Root = '' then
     Root := 'C:\Users\Public\Domovoi';
   MediaPage.Values[0] := Root;
@@ -1333,6 +1504,12 @@ begin
   Result := False;
   { After the restart the answers come back on the command line (the AI
     one as /ai=, which the AI page starts at). }
+  { Update mode shows no page; its answers are the saved ones. }
+  if UpdateMode then
+  begin
+    Result := (PageID <> wpWelcome) and (PageID <> wpReady);
+    Exit;
+  end;
   if Resumed and (ExpandConstant('{param:internet|}') <> '') then
 #ifdef ProvisionAiChoice
     Result := (PageID = AiPage.ID) or (PageID = ConsentPage.ID) or (PageID = InternetPage.ID) or (PageID = MediaPage.ID);
@@ -1392,7 +1569,10 @@ begin
       Problem := KvValue(Lines, 'error');
     if Problem <> '' then
     begin
-      MsgBox(Problem, mbError, MB_OK);
+      if UpdateMode then
+        FailureText := 'The media folder ' + MediaPage.Values[0] + ' can''t be used: ' + Problem
+      else
+        MsgBox(Problem, mbError, MB_OK);
       Result := False;
     end;
   end
@@ -1414,6 +1594,7 @@ begin
       try
         DownloadPage.Download;
       except
+        FailureText := 'A download did not work: ' + GetExceptionMessage;
         if not DownloadPage.AbortedByUser then
           SuppressibleMsgBox('A download did not work: ' + GetExceptionMessage, mbCriticalError, MB_OK, IDOK);
         Result := False;
@@ -1461,6 +1642,23 @@ var
   Code: Integer;
 begin
   Result := '';
+  { Update mode from the tray's own "Update Domovoi": the Linux part first,
+    through this Setup's helper (DomovoiHost runs the dashboard's update in
+    the distro), waiting until the update unit is done. If it fails,
+    nothing on Windows has changed yet, and nothing does. }
+  if LinuxFirst then
+  begin
+    Log('Update mode: the Linux part first');
+    if not RunHelper(TmpHelper, 'linux-update --wait', Lines, Code) or (Code <> 0) then
+    begin
+      LinuxOutcome := 'failed';
+      Result := 'The Linux part didn''t update: ' + KvValue(Lines, 'error') + '. Nothing on Windows was changed.';
+      FailureText := Result;
+      Exit;
+    end;
+    LinuxOutcome := KvValue(Lines, 'linux');
+    Log('Update mode: the Linux part: ' + LinuxOutcome);
+  end;
   { A repair or a second run: stop the host so its exe can be replaced,
     and the tray icons, theirs. }
   if FileExists(AppHelper) then
@@ -1476,17 +1674,20 @@ begin
       CreateRunOnceEntry;
       NeedsRestart := True;
       Result := 'Windows has to restart to finish turning on Virtual Machine Platform. Setup starts again by itself after you sign in, and carries on from here.';
+      FailureText := Result;
       Exit;
     end;
     if Code <> 0 then
     begin
       Result := 'Windows could not turn on Virtual Machine Platform (dism exit code ' + IntToStr(Code) + ').';
+      FailureText := Result;
       Exit;
     end;
   end;
   if WslState = 'denied' then
   begin
     Result := 'This PC''s WSL version has a known problem with the networking Domovoi uses. Update it (run "wsl --update" as an administrator), then run Setup again.';
+    FailureText := Result;
     Exit;
   end;
   if (WslState = 'missing') or (WslState = 'old') then
@@ -1504,6 +1705,8 @@ begin
     if Code <> 0 then
       Result := 'WSL did not install (msiexec exit code ' + IntToStr(Code) + ').';
   end;
+  if Result <> '' then
+    FailureText := Result;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -1514,9 +1717,14 @@ begin
   if CurStep = ssPostInstall then
   begin
     InstallOk := MachineSetup;
-    if InstallOk then
+    if InstallOk and not UpdateMode then
       StartTray;
-    if not InstallOk then
+    if not InstallOk and UpdateMode then
+      { Never "Remove what Setup has changed" (that uninstalls, and the
+        uninstall deletes the database), and the service isn't parked:
+        Domovoi keeps running as it is, and the result says what failed. }
+      Log('Update mode: the repair did not finish; everything is kept as it is: ' + FailureText)
+    else if not InstallOk then
     begin
       UndoOnExit := MsgBox(FailureText + #13#10#13#10 + 'Remove what Setup has changed so far? (Recommended unless you want to run Setup again later to carry on. Either way, the last page has a Copy logs button.)',
         mbConfirmation, MB_YESNO) = IDYES;
@@ -1534,6 +1742,14 @@ var
 begin
   { The code was only ever in memory; drop it. }
   SetupCodeText := '';
+  if UpdateMode then
+  begin
+    UndoOnExit := False;
+    WriteUpdateResult;
+    { This account's icon again (the others start at their sign-in). }
+    if TraysStopped then
+      StartTray;
+  end;
   if UndoOnExit and FileExists(ExpandConstant('{uninstallexe}')) then
     Exec(ExpandConstant('{uninstallexe}'), '/SILENT /NORESTART', '', SW_SHOWNORMAL, ewNoWait, Code);
 end;

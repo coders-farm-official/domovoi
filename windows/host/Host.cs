@@ -12,7 +12,11 @@
 //      its "start" step, wait until the ports Domovoi needs are free on
 //      Windows (when the pinned provision.sh has --stop-before);
 //   5. wait until both health URLs answer from Windows;
-//   6. answer one-off requests (the setup code);
+//   6. answer one-off requests (the setup code, the household's AI answer,
+//      and an administrator's Linux update: WindowsSide.cs);
+//   6a. tell the Linux side which Windows side runs it (WindowsSide.cs:
+//      /var/lib/domovoi-windows/side.json, written as root at every
+//      bring-up), for the dashboard's Version card;
 //   7. with the start parameter "unregister": unregister the distro, end
 //      this account's own WSL session (wsl --shutdown as domovoi-svc, which
 //      leaves every other account's WSL alone), and stop (the uninstaller's
@@ -274,7 +278,33 @@ namespace Domovoi.Windows.Host
             Status("ready", HostProgress.PhaseReady, 100, "Domovoi is running");
             log.Write("ready");
             PlaceSatelliteSetup();
+            ReportWindowsSide();
             return true;
+        }
+
+        // This build's version and commit, into the distro as root, for the
+        // core (domovoi/windows_side.py). Never fails the bring-up: a core
+        // without it shows no Windows side and offers no Windows step.
+        void ReportWindowsSide()
+        {
+            try
+            {
+                string text = WindowsSideReport.Content(BuildVersion.Version, BuildVersion.Commit, DateTime.UtcNow);
+                byte[] body = new UTF8Encoding(false).GetBytes(text);
+                string sha;
+                using (var h = System.Security.Cryptography.SHA256.Create()) sha = Sha256.Hex(h.ComputeHash(body));
+                WslResult r = Wsl.Run(new[] { "-d", Paths.DistroName, "-u", "root", "--cd", "/", "--exec", "/bin/sh", "-c", WindowsSideReport.Script() }, 60000, body, 4096);
+                if (r.ExitCode == 0 && r.Stdout.StartsWith(sha, StringComparison.Ordinal))
+                    log.Write("told the Linux side this Windows side is " + BuildVersion.Version + (BuildVersion.Commit != null ? " (" + BuildVersion.Commit.Substring(0, 12) + ")" : ""));
+                else
+                    log.Write("could not tell the Linux side the Windows side's version (exit " + Inv.S(r.ExitCode) + "): " + FirstLine(r.Stderr + r.Stdout));
+            }
+            catch (Exception e)
+            {
+                if (!(e is IOException || e is UnauthorizedAccessException || e is InvalidOperationException
+                      || e is ArgumentException || e is System.ComponentModel.Win32Exception)) throw;
+                log.Write("could not tell the Linux side the Windows side's version: " + e.Message);
+            }
         }
 
         // The satellite Setup this server's Setup brought, into the core's
@@ -755,6 +785,7 @@ namespace Domovoi.Windows.Host
                     string verb = Json.Str(d, "verb");
                     if (verb == "setup-code") AnswerSetupCode(Json.Str(d, "public_key"), ready, resp);
                     else if (verb == "ai-features") AnswerAiFeatures(ready, resp);
+                    else if (verb == "linux-update") AnswerLinuxUpdate(ready, resp);
                     else { resp["ok"] = false; resp["error"] = "unknown request"; }
                 }
                 catch (FormatException e) { resp["ok"] = false; resp["error"] = "bad request: " + e.Message; }
@@ -825,6 +856,32 @@ namespace Domovoi.Windows.Host
             resp["ai_features"] = on;
             resp["ok"] = true;
             log.Write("ai-features request: answered (" + (on ? "on" : "off") + ")");
+        }
+
+        // An administrator's Linux update (the tray's "Update Domovoi", after
+        // Windows' permission prompt, through the helper's linux-update):
+        // the dashboard's own update, run in the distro as the service user
+        // (python -m domovoi.windows_side linux-update: the container
+        // guard's freeze, the check, a commit that was rolled back, the
+        // pull, then the restart through the update unit). Only an
+        // administrator can write host\in, so only one can ask. The answer is
+        // the CLI's: started (the update unit runs now), nothing_new, or an
+        // error in the dashboard's words.
+        void AnswerLinuxUpdate(bool ready, Dictionary<string, object> resp)
+        {
+            resp["ok"] = false;
+            if (!ready) { resp["error"] = "Domovoi is not running yet"; return; }
+            WslResult r = Wsl.Run(LinuxUpdate.WslArgs(Paths.DistroName, SatelliteSetupPlacement.ServiceUser), LinuxUpdate.TimeoutMs, null, 64 * 1024);
+            Dictionary<string, object> a = LinuxUpdate.Answer(r.Stdout);
+            if (r.TimedOut || a == null)
+            {
+                resp["error"] = r.TimedOut ? "the Linux update did not answer in time" : "the Linux update gave no answer (exit " + Inv.S(r.ExitCode) + "): " + FirstLine(r.Stderr + r.Stdout);
+                log.Write("linux-update request: " + (string)resp["error"]);
+                return;
+            }
+            foreach (string k in new[] { "ok", "started", "nothing_new", "error", "from_sha", "to_sha" })
+                if (a.ContainsKey(k)) resp[k] = a[k];
+            log.Write("linux-update request: " + (Json.Bool(a, "started") == true ? "the update unit is running" : Json.Bool(a, "nothing_new") == true ? "nothing new" : "refused: " + (Json.Str(a, "error") ?? "no reason")));
         }
 
         // -- stopping and unregistering ---------------------------------

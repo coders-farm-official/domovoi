@@ -625,9 +625,29 @@ const VoicesPanel = () => {
  * channel root's update unit doesn't allow (DOMOVOI_UPSTREAM_BRANCH) isn't
  * offered. The panel offers exactly ONE update action
  * at a time, in the order an operator needs them: "Restart to apply
- * changes" when code is on disk but not loaded, else "Pull the latest" when
- * behind, else "Check for updates". The restart is replaced by the manual
- * command on a host without the sudoers grant (see restart_capable).
+ * changes" when code is on disk but not loaded, else "Update Domovoi" when
+ * behind (the pull: on a Linux-only server it pulls, and the restart that
+ * loads it is offered next, as ever), else "Check for updates". The restart
+ * is replaced by the manual command on a host without the sudoers grant
+ * (see restart_capable).
+ *
+ * A Windows install (`windows_side.present`, domovoi/windows_side.py) has a
+ * second half: the Windows side (DomovoiHost, the tray icon, the satellite
+ * Setup), which updates on releases only, through a silent repair by the
+ * release's own signed DomovoiSetup.exe behind one Windows permission
+ * prompt (docs/WINDOWS_HOST.md, "Updates and the release channel"). There
+ * the card's rows say "Linux side" and "Windows side", and "Update
+ * Domovoi" is the whole update in one press: the pull, the restart through
+ * the update unit (no second question), then, when the release the Linux
+ * side now includes is newer than the Windows side, the request for the
+ * Windows step (POST /api/config/version/windows-request). The tray on the
+ * PC does that step: at once when this browser is on that PC, else after a
+ * click on its notification, so the card says "Finish on your PC" (and
+ * "sign in on the PC to finish" when no tray has been heard from). When
+ * only the Windows side is behind, "Update Domovoi" is that request alone.
+ * The tray's outcome comes back to the card (declined, a bad signature, a
+ * failed repair with its log), with "Try again". Under internet "never",
+ * no Windows step is offered and the card says why.
  *
  * Whenever no restart is waiting, an admin also gets "Restart Domovoi": the
  * same restart with nothing to load, for a setting changed by hand in
@@ -660,6 +680,7 @@ const VoicesPanel = () => {
  *   POST  /api/config/version/pull · git pull --ff-only → { pulled, new_sha, error, notice }
  *   POST  /api/config/version/channel · follow stable or main; HEAD never moves → { ok, changed, channel, error }
  *   POST  /api/config/version/restart · bounce core+web, or start the update unit → { ok, mode, units, error }
+ *   POST  /api/config/version/windows-request · a Windows install: ask the tray for the Windows step → { ok, request, tray }
  *   GET   /api/config/core/restart · when the core doesn't answer: what "Restart the core" would do
  *   POST  /api/config/core/restart · the web ends a core that doesn't answer; systemd starts it again
  *
@@ -889,6 +910,102 @@ const LastUpdateWarnings = ({ lastUpdate }) => {
   );
 };
 
+// The Windows side's words (domovoi/windows_side.py why_not and the tray's
+// outcomes, windows/tray/Updater.cs Outcome).
+const WINDOWS_WHY_NOT = {
+  internet_off: 'The Windows side updates from Domovoi’s releases on the internet, and internet access is turned off here (Settings → Privacy → Internet), so it isn’t offered.',
+  no_release: 'The Windows side updates on releases, and the code this server runs includes none yet.',
+};
+const WINDOWS_OUTCOME = {
+  ok: 'updated',
+  nothing_new: 'already up to date',
+  declined: 'Windows didn’t get an administrator’s permission',
+  download_failed: 'the release’s Setup couldn’t be downloaded',
+  no_signed_setup: 'the release has no signed Windows Setup',
+  bad_signature: 'the downloaded Setup didn’t check out against Domovoi’s release key, so it wasn’t run',
+  not_newer: 'the downloaded Setup isn’t newer than the Windows side, so it wasn’t run',
+  no_key: 'the Windows side pins no release key, so it can’t check a Setup',
+  repair_failed: 'Setup couldn’t update the Windows side',
+  linux_failed: 'the Linux part didn’t update',
+  internet_off: 'internet access is turned off',
+  not_installed: 'this PC’s Domovoi wasn’t installed by Domovoi Setup',
+  failed: 'the update didn’t finish',
+};
+const browserOnThisPc = () => {
+  try { return ['localhost', '127.0.0.1', '[::1]', '::1'].includes(window.location.hostname); }
+  catch { return false; }
+};
+
+// The Windows half of the Version card: its row's extra lines, under the
+// version (request, tray, outcome, why not). `onRetry`: the button that
+// asks for the Windows step again.
+const WindowsSideNotes = ({ win, channel, busy, onRetry, requesting }) => {
+  if (!win) return null;
+  const req = win.request;
+  const tray = win.tray || {};
+  const result = !req ? win.result : null;
+  const target = win.target || null;
+  const lines = [];
+  if (channel === 'main' && target) {
+    lines.push(<div key="ch" className="version-windows-channel" style={{ color: 'var(--fg-muted)' }}>
+      The Linux side follows every change on main; the Windows side follows releases (the latest this
+      code includes: {target.version}).
+    </div>);
+  }
+  if (req && !busy) {
+    lines.push(tray.running === false
+      ? <div key="rq" className="version-windows-request" style={{ color: 'var(--warn-ink)' }}>
+          Sign in on the PC to finish: the Domovoi icon beside its clock does the Windows part, and nobody
+          is signed in there now (or its icon isn’t running).
+        </div>
+      : req.on_this_pc
+        ? <div key="rq" className="version-windows-request" style={{ color: 'var(--warn-ink)' }}>
+            Windows asks for an administrator’s permission on this PC next: the Domovoi icon is updating
+            the Windows part.
+          </div>
+        : <div key="rq" className="version-windows-request" style={{ color: 'var(--warn-ink)' }}>
+            Finish on your PC: click the Domovoi notification there (or “Finish updating Domovoi” in its
+            icon’s menu), and Windows asks for an administrator’s permission.
+          </div>);
+  }
+  if (result && result.outcome && result.outcome !== 'ok' && result.outcome !== 'nothing_new') {
+    const half = result.outcome === 'declined';
+    lines.push(<div key="rs" className="version-windows-result" style={{ color: 'var(--err-ink)', overflowWrap: 'anywhere' }}>
+      {half
+        ? 'The update is half done: the Linux part is updated, the Windows part isn’t (Windows didn’t get an administrator’s permission).'
+        : `The Windows part didn’t update: ${result.detail || WINDOWS_OUTCOME[result.outcome] || result.outcome}`}
+      {result.log && <span className="mono" style={{ display: 'block', fontSize: 11, color: 'var(--fg-muted)' }}>log: {result.log}</span>}
+    </div>);
+  } else if (result && result.outcome === 'ok' && result.version) {
+    lines.push(<div key="rs" className="version-windows-result" style={{ color: 'var(--ok-ink)' }}>
+      The Windows side updated to {result.version}.
+    </div>);
+  }
+  if (!win.step_needed && WINDOWS_WHY_NOT[win.why_not]) {
+    lines.push(<div key="wn" className="version-windows-why" style={{ color: 'var(--fg-muted)' }}>{WINDOWS_WHY_NOT[win.why_not]}</div>);
+  }
+  if (!win.step_needed && win.why_not === 'unsigned_release' && target) {
+    lines.push(<div key="us" className="version-windows-why" style={{ color: 'var(--fg-muted)' }}>
+      Domovoi {target.version} has no signed Windows Setup, so the Windows side stays at {win.version} until a
+      release that has one.
+    </div>);
+  }
+  const retry = onRetry && win.step_needed && !req && !busy && result && result.outcome !== 'ok';
+  if (!lines.length && !retry) return null;
+  return (
+    <div className="version-windows-notes" style={{ padding: '0 16px 12px', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {lines}
+      {retry && (
+        <span>
+          <Button variant="secondary" icon="rotate-cw" onClick={onRetry} disabled={requesting}>
+            {requesting ? 'Asking the PC…' : 'Try again'}
+          </Button>
+        </span>
+      )}
+    </div>
+  );
+};
+
 const VersionSection = () => {
   const { data: cfg } = useApiObject('/api/config');
   // Checking and pulling talk to the git remote: greyed under "No"
@@ -978,6 +1095,76 @@ const VersionSection = () => {
     }
   };
 
+  // A Windows install's second half (windows_side, domovoi/windows_side.py).
+  const win = core && core.windows_side && core.windows_side.present ? core.windows_side : null;
+  const [requesting, setRequesting] = React.useState(false);
+  // Ask the tray on the PC for the Windows step.
+  const requestWindows = async () => {
+    setRequesting(true);
+    try {
+      const res = await apiPost('/api/config/version/windows-request', {});
+      if (res && res.ok) {
+        fire(res.tray && res.tray.running === false
+          ? 'sign in on the PC to finish: its Domovoi icon does the Windows part'
+          : browserOnThisPc()
+            ? 'the Windows part is next: Windows asks for an administrator’s permission on this PC'
+            : 'finish on your PC: click the Domovoi notification there');
+      } else {
+        fire(`the Windows part wasn’t asked for: ${(res && (res.detail || res.error)) || 'unknown'}`);
+      }
+    } catch (e) {
+      reportMutationFailure(fire, 'the Windows update', e);
+    } finally {
+      setRequesting(false);
+      refreshCore();
+    }
+  };
+  // While the PC has a request, follow the tray's progress.
+  const pendingRequest = !!(win && win.request);
+  React.useEffect(() => {
+    if (!pendingRequest) return undefined;
+    const t = setInterval(() => { refreshCore(); }, 10000);
+    return () => clearInterval(t);
+  }, [pendingRequest]);
+
+  // A Windows install's one press: pull, the restart through the update
+  // unit (asked once, here), then the Windows step when the release the
+  // Linux side now includes is newer than the Windows side.
+  const updateBoth = async () => {
+    if (!window.confirm(
+      'Update Domovoi?\n\n' +
+      'First the Linux part: Domovoi pulls the latest code, then backs up, applies it and restarts ' +
+      '(the satellites, phones and this dashboard lose Domovoi for a minute or two; it rolls back if it ' +
+      'doesn’t come back healthy).\n\n' +
+      'Then the Windows part, when the release it now includes has a newer one: ' +
+      (browserOnThisPc()
+        ? 'Windows asks for an administrator’s permission on this PC.'
+        : 'you finish it on the PC (the Domovoi icon there shows a notification; Windows asks for an administrator’s permission).')
+    )) return;
+    setPulling(true);
+    let res = null;
+    try {
+      res = await apiPost('/api/config/version/pull', {});
+    } catch (e) {
+      reportMutationFailure(fire, 'update', e);
+      setPulling(false);
+      return;
+    }
+    setPulling(false);
+    const notice = res && res.notice ? `${res.notice}. ` : '';
+    if (!res || !res.pulled) {
+      fire(`${notice}update failed: ${(res && res.error) || 'unknown'}`);
+      return;
+    }
+    setStatus(null);
+    const ok = await restart(false, true);
+    if (!ok) return;
+    let now = null;
+    try { now = await apiGet('/api/config/version', { quiet: true }); } catch { /* the card reads it again */ }
+    const w = now && now.windows_side;
+    if (w && w.present && w.step_needed) await requestWindows();
+  };
+
   const pull = async () => {
     if (!window.confirm(
       'Pull the latest domovoi code (git pull --ff-only)?\n\n' +
@@ -1010,8 +1197,8 @@ const VersionSection = () => {
   // page's "restart to finish the upgrade". `plain`: Restart Domovoi, with
   // nothing waiting to load (which the update unit may still run as its
   // full update; restartDomovoiServer asks, and onUnderway says).
-  const restart = (plain) => restartDomovoiServer({
-    core, fire, plain,
+  const restart = (plain, confirmed = false) => restartDomovoiServer({
+    core, fire, plain, confirmed,
     onStart: (how) => { setRestarting(plain ? 'plain' : 'apply'); setRuns(how || null); },
     onUnderway: (how) => { if (how) setRuns(how); setUnderway(true); },
     onSettled: () => { setUnderway(false); setStatus(null); return refreshCore(); },
@@ -1098,7 +1285,7 @@ const VersionSection = () => {
                     rowGap: 8, fontSize: 13, alignItems: 'center' }}>
         <div className="label">web build</div>
         <div className="mono" style={{ color: webVer ? 'var(--fg)' : 'var(--fg-faint)' }}>{webVer || '—'}</div>
-        <div className="label">domovoi</div>
+        <div className="label">{win ? 'Linux side' : 'domovoi'}</div>
         <div className="mono" style={{ color: coreSha ? 'var(--fg)' : 'var(--fg-faint)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           {coreLabel && <span className="version-label" style={{ userSelect: 'all' }}>{coreLabel}</span>}
           {(!coreLabel || !labelHasSha(coreLabel, coreSha)) && (
@@ -1113,6 +1300,25 @@ const VersionSection = () => {
             </span>
           )}
         </div>
+        {win && (
+          <React.Fragment>
+            <div className="label">Windows side</div>
+            <div className="version-windows mono" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ userSelect: 'all' }}>{win.version}</span>
+              {win.build_commit && (
+                <span style={{ color: 'var(--fg-muted)', userSelect: 'all' }} title={`built from ${win.build_commit}`}>
+                  ({shortCommit(win.build_commit)})
+                </span>
+              )}
+              {win.step_needed && win.target && (
+                <span className="version-windows-behind" title={`the Linux side includes Domovoi ${win.target.version}`}>
+                  <Pill tone="warn">Windows side is behind: {win.target.version} is out</Pill>
+                </span>
+              )}
+              <span style={{ color: 'var(--fg-muted)', fontSize: 12, fontFamily: 'var(--font-sans, inherit)' }}>updates on releases</span>
+            </div>
+          </React.Fragment>
+        )}
         {codePending && (
           <React.Fragment>
             <div className="label">checked out</div>
@@ -1234,9 +1440,18 @@ const VersionSection = () => {
           </Button>
         )}
         {mode === 'pull' && (
-          <Button variant="primary" icon="download" onClick={pull} disabled={pulling || internetOff || !!restarting}
-                  title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>
-            {pulling ? 'Pulling…' : 'Pull the latest'}
+          <Button variant="primary" icon="download" onClick={win ? updateBoth : pull}
+                  disabled={pulling || internetOff || !!restarting || requesting}
+                  title={internetOff ? NEEDS_INTERNET_TEXT
+                    : win ? 'the Linux part (pull, then the update unit’s restart), then the Windows part when a newer one is out'
+                      : 'pulls the latest code onto the server; the restart that loads it comes next'}>
+            {pulling ? 'Pulling…' : 'Update Domovoi'}
+          </Button>
+        )}
+        {(mode === 'check' || mode === 'held') && win && win.step_needed && !win.request && !(win.result && win.result.outcome && win.result.outcome !== 'ok') && (
+          <Button variant="primary" icon="download" onClick={requestWindows} disabled={requesting || !!restarting}
+                  title="the Windows part: the tray on the PC downloads the release’s signed Setup, checks it, and runs it behind one Windows permission prompt">
+            {requesting ? 'Asking the PC…' : 'Update Domovoi'}
           </Button>
         )}
         {(mode === 'check' || mode === 'held') && (
@@ -1281,9 +1496,13 @@ const VersionSection = () => {
       )}
       {mode === 'pull' && (
         <div className="mono" style={{ padding: '0 16px 14px', fontSize: 11, color: 'var(--fg-faint)' }}>
-          Pull updates the host files only — this panel will then offer the restart that loads them.
+          {win
+            ? 'Update Domovoi pulls, then restarts with the new code, then does the Windows part when a newer one is out.'
+            : 'Update Domovoi pulls the latest onto the host — this panel will then offer the restart that loads it.'}
         </div>
       )}
+      <WindowsSideNotes win={win} channel={channel} busy={mode === 'busy' || !!restarting}
+                        onRetry={admin ? requestWindows : null} requesting={requesting}/>
       {status && status.tag_warning && mode !== 'busy' && (
         // A release tag that moved upstream (or tags that didn't arrive):
         // the labels may be off; the check and the pull work as ever.

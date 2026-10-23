@@ -1,0 +1,10 @@
+{
+  "commit": "c0ffee0123456789abcdef0123456789abcdef01",
+  "file": "DomovoiSetup.exe",
+  "kind": "domovoi-windows-setup",
+  "schema": 1,
+  "sha256": "4da7179ab79e2515384310ccbbcdc4082ad3f6b84e28b0b69a60b8025bd4c8bd",
+  "size": 3000,
+  "tag": "v0.9.0",
+  "version": "0.9.0"
+}

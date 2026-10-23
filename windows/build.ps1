@@ -184,8 +184,34 @@ $csc = Join-Path $fw 'csc.exe'
 if (-not (Test-Path -LiteralPath $csc)) { throw "No in-box C# compiler at $csc (.NET Framework 4.8.1 is part of Windows 11)." }
 
 $refs = @('System.dll', 'System.Core.dll', 'System.Web.Extensions.dll', 'System.ServiceProcess.dll',
-          'System.Management.dll', 'System.Security.dll') | ForEach-Object { '/r:' + (Join-Path $fw $_) }
-$common = @(Get-ChildItem -LiteralPath (Join-Path $here 'common') -Filter '*.cs' | Sort-Object Name | ForEach-Object { $_.FullName })
+          'System.Management.dll', 'System.Security.dll', 'System.Numerics.dll') | ForEach-Object { '/r:' + (Join-Path $fw $_) }
+# The commit this build is made from, compiled into every exe
+# (common\UpdateRun.cs BuildVersion.Commit): DomovoiHost tells the Linux
+# side, and the dashboard's Version card shows it beside the version.
+$buildCommit = ''
+$gitCmd = Get-Command git -ErrorAction SilentlyContinue
+if ($gitCmd) {
+    try { $buildCommit = Invoke-GitText $gitCmd.Source @('-C', (Split-Path -Parent $here), 'rev-parse', 'HEAD') } catch { $buildCommit = '' }
+}
+if ($buildCommit -notmatch '^[0-9a-f]{40}$') { $buildCommit = '' }
+$buildInfo = Join-Path $obj 'BuildInfo.g.cs'
+$buildInfoText = "// Written by windows\build.ps1; not in git.`nnamespace Domovoi.Windows { public static class BuildInfo { public const string Commit = `"$buildCommit`"; } }`n"
+[System.IO.File]::WriteAllText($buildInfo, $buildInfoText, (New-Object System.Text.UTF8Encoding($false)))
+$common = @(Get-ChildItem -LiteralPath (Join-Path $here 'common') -Filter '*.cs' | Sort-Object Name | ForEach-Object { $_.FullName }) + @($buildInfo)
+# Domovoi's release key, its public half (docs/WINDOWS_HOST.md, "The release
+# key"): embedded in every exe, so the tray checks a downloaded Setup against
+# it (common\ReleaseSignature.cs). A build without the file has none, and no
+# Windows update step: the tray then says to run the newer Setup by hand.
+$releaseKey = Join-Path $here 'installer\release-signing.pub'
+$keyArg = @()
+if (Test-Path -LiteralPath $releaseKey) {
+    $keyText = [System.IO.File]::ReadAllText($releaseKey)
+    if ($keyText -notmatch '\Assh-ed25519 [A-Za-z0-9+/=]+( [^\r\n]*)?\r?\n?\z') { throw "$releaseKey is not one OpenSSH ed25519 public key line" }
+    $keyArg = @('/resource:' + $releaseKey + ',Domovoi.ReleaseSigning.pub')
+    Write-Output "release key: $releaseKey"
+} else {
+    Write-Output "release key: none ($releaseKey is missing), so this build has no Windows update step"
+}
 $manifest = Join-Path $here 'common\asInvoker.manifest.xml'
 
 # The tray's windows (WinForms), its icon pictures and the card zip.
@@ -202,13 +228,13 @@ function Invoke-Csc([string]$OutFile, [string[]]$Sources, [string[]]$ExtraArgs, 
 $manifestArg = '/win32manifest:' + $manifest
 # Domovoi's icon (installer\art\make_art.py makes it from docs/assets/domovoi-icon.png).
 $iconArg = '/win32icon:' + (Join-Path $here 'installer\art\domovoi.ico')
-Invoke-Csc (Join-Path $bin 'DomovoiHost.exe') ($common + @(Get-ChildItem -LiteralPath (Join-Path $here 'host') -Filter '*.cs' | ForEach-Object { $_.FullName })) @($manifestArg, $iconArg)
-Invoke-Csc (Join-Path $bin 'DomovoiSetupHelper.exe') ($common + @(Get-ChildItem -LiteralPath (Join-Path $here 'helper') -Filter '*.cs' | ForEach-Object { $_.FullName })) @($manifestArg, $iconArg)
+Invoke-Csc (Join-Path $bin 'DomovoiHost.exe') ($common + @(Get-ChildItem -LiteralPath (Join-Path $here 'host') -Filter '*.cs' | ForEach-Object { $_.FullName })) (@($manifestArg, $iconArg) + $keyArg)
+Invoke-Csc (Join-Path $bin 'DomovoiSetupHelper.exe') ($common + @(Get-ChildItem -LiteralPath (Join-Path $here 'helper') -Filter '*.cs' | ForEach-Object { $_.FullName })) (@($manifestArg, $iconArg) + $keyArg)
 # The tray: a Windows app (no console), its own manifest (DPI aware), the
 # icon embedded for the notification area too.
 $traySrc = @(Get-ChildItem -LiteralPath (Join-Path $here 'tray') -Filter '*.cs' | Sort-Object Name | ForEach-Object { $_.FullName })
 $trayIcon = '/resource:' + (Join-Path $here 'installer\art\domovoi.ico') + ',Domovoi.Tray.domovoi.ico'
-Invoke-Csc (Join-Path $bin 'DomovoiTray.exe') ($common + $traySrc) (@(('/win32manifest:' + (Join-Path $here 'tray\tray.manifest.xml')), $iconArg, $trayIcon) + $trayRefs) 'winexe'
+Invoke-Csc (Join-Path $bin 'DomovoiTray.exe') ($common + $traySrc) (@(('/win32manifest:' + (Join-Path $here 'tray\tray.manifest.xml')), $iconArg, $trayIcon) + $trayRefs + $keyArg) 'winexe'
 Write-Output "built $bin\DomovoiHost.exe, $bin\DomovoiSetupHelper.exe and $bin\DomovoiTray.exe"
 
 if (-not $SkipTests) {
@@ -223,7 +249,9 @@ if (-not $SkipTests) {
     $hostSrc = @(Get-ChildItem -LiteralPath (Join-Path $here 'host') -Filter '*.cs' | ForEach-Object { $_.FullName })
     # The tray's too (TrayTests.cs: its card goldens, tests\card-goldens.json,
     # and QrReference.cs, matrices from an independent QR encoder).
-    $testSrc = @('Tests.cs', 'TrayTests.cs', 'QrReference.cs') | ForEach-Object { Join-Path $here ('tests\' + $_) }
+    # UpdateTests.cs: the Windows update, its signatures checked against
+    # tests\release-sig (a throwaway key's; the test exe embeds no release key).
+    $testSrc = @('Tests.cs', 'TrayTests.cs', 'QrReference.cs', 'UpdateTests.cs') | ForEach-Object { Join-Path $here ('tests\' + $_) }
     Invoke-Csc $testExe ($common + $helperSrc + $hostSrc + $traySrc + $testSrc) (@("/r:$sma", '/main:Tests', $trayIcon) + $trayRefs)
     & $testExe
     if ($LASTEXITCODE -ne 0) { throw "unit tests failed" }

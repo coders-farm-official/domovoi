@@ -161,14 +161,14 @@ def test_the_card_names_the_release_and_the_channel(driven) -> None:
 def test_on_stable_the_check_says_it_is_the_latest_release(driven) -> None:
     a = driven["stable_latest"]["after"]
     assert a["result"] == "the latest release"
-    assert "Pull the latest" not in a["buttons"]
+    assert "Update Domovoi" not in a["buttons"]
     assert a["latest"] is None                       # stable names its release in the result itself
 
 
 def test_on_stable_a_newer_release_is_offered_by_name(driven) -> None:
     a = driven["stable_release_available"]["after"]
     assert a["result"] == "Domovoi 1.0.1 is available"
-    assert "Pull the latest" in a["buttons"]
+    assert "Update Domovoi" in a["buttons"]
 
 
 def test_on_stable_past_the_latest_release_updates_wait_for_the_next(driven) -> None:
@@ -179,14 +179,14 @@ def test_on_stable_past_the_latest_release_updates_wait_for_the_next(driven) -> 
     assert a["result"] == "newer than the latest release"
     assert a["ahead"] == ("This server runs newer code than the latest release (1.0.0 + 23 (abc1234)); "
                           "updates resume with the next release that includes it.")
-    assert "Pull the latest" not in a["buttons"]
+    assert "Update Domovoi" not in a["buttons"]
 
 
 def test_on_main_the_check_counts_commits_and_names_the_latest_release(driven) -> None:
     a = driven["main_behind"]["after"]
     assert a["result"] == "3 commits behind"
     assert a["latest"] == "latest release: 1.0.0"
-    assert "Pull the latest" in a["buttons"]
+    assert "Update Domovoi" in a["buttons"]
 
 
 def test_switching_asks_switches_and_checks(driven) -> None:
@@ -229,7 +229,7 @@ def test_a_moved_tag_is_a_warning_beside_a_working_update(driven) -> None:
     """rc2 review C1: the check still offers the pull; the moved tag is a
     line about the labels."""
     a = driven["tag_moved"]["after"]
-    assert "Pull the latest" in a["buttons"]
+    assert "Update Domovoi" in a["buttons"]
     assert "a published release tag moved upstream (v1.0.0)" in a["text"]
 
 
