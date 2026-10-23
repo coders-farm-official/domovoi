@@ -65,6 +65,7 @@ from satellite import (
     remote_config,
     sound_sync,
     wake_model_sync,
+    wifi_adapt,
     wifi_profiles,
 )
 from satellite import alsa_names, not_started
@@ -173,6 +174,13 @@ REBOOT_HELPER = Path("/usr/local/sbin/domovoi-reboot")
 # network back (satellite/scripts/domovoi-wifi-reset; cards prepared from
 # 2026-10-17 on, or by hand per PROVISIONING.md §8.3). Checked, never assumed.
 WIFI_RESET_HELPER = Path("/usr/local/sbin/domovoi-wifi-reset")
+# The router changed its security (satellite/wifi_adapt.py): the root-owned
+# helper that rescans and, when the table says so, changes the house
+# profile's key-mgmt/PMF to match, then brings it up. Argv-less sudoers line,
+# like the two above (cards prepared from 2026-10-22 on; older cards get the
+# same check at every boot from satellite/net_settings.py).
+WIFI_ADAPT_HELPER = Path("/usr/local/sbin/domovoi-wifi-adapt")
+WIFI_ADAPT_TIMEOUT_SEC = 150.0
 # How long `nmcli connection up id domovoi-home` may take. nmcli waits up to
 # 90 s for the activation by itself; a join at the edge of range (an
 # association, the key exchange and DHCP, each retried) can need well over
@@ -3515,10 +3523,83 @@ class Satellite(pc_engine.SpareDeviceEngine):
             )
             if _sudo_refused(err):
                 return False
+            # The router may have changed its security since setup: look
+            # before cycling the radio, which cannot fix that.
+            adapted = self._wifi_adapt(associated, ap_active)
+            if adapted is not None:
+                return adapted
             return self._wifi_reset_radio(
                 f"`nmcli {step.label}` failed (rc={r.returncode})", associated, ap_active,
             )
         return False
+
+    # ── The router changed its security ──────────────────────────────
+    #: Plain words for a security change no profile edit can fix (WPA3-only
+    #: on a Pi Zero 2 W ...), or None. Feeds the self-check (no reboots,
+    #: a rescan every few minutes), the health record and the ring.
+    _wifi_mismatch: str | None = None
+    _wifi_adapt_missing_said: bool = False
+
+    def _wifi_mismatch_set(self, words: str, kind: str) -> None:
+        if self._wifi_mismatch == words:
+            return
+        self._wifi_mismatch = words
+        log.error("wifi: %s - not rebooting over it; rescanning every %.0f min",
+                  words, wifi_adapt.MISMATCH_RETRY_SEC / 60)
+        last = getattr(self, "_last_health", None)
+        if last is not None:
+            last.note_action("wifi_mismatch", f"{kind}: {words}")
+        # Red, not the no-server orange: this one needs the router changed.
+        _setup_status("join-failed")
+
+    def _wifi_mismatch_clear(self, why: str) -> None:
+        if self._wifi_mismatch is None:
+            return
+        log.info("wifi: the router mismatch is over (%s)", why)
+        self._wifi_mismatch = None
+
+    def _wifi_adapt(self, associated: bool, ap_active: bool) -> bool | None:
+        """Run the security check (satellite/scripts/domovoi-wifi-adapt).
+        True/False when it decided the outcome (joined; or a mismatch no
+        change can fix, recorded); None when the radio reset should run as
+        before (nothing to change, the router not in the scan, no helper)."""
+        if associated or ap_active:
+            return None
+        if not WIFI_ADAPT_HELPER.exists():
+            if not self._wifi_adapt_missing_said:
+                self._wifi_adapt_missing_said = True
+                log.info("wifi recovery: no %s on this unit (cards prepared before "
+                         "2026-10-22); the router's security is checked at boot only",
+                         WIFI_ADAPT_HELPER)
+            return None
+        try:
+            r = subprocess.run(
+                ["sudo", "-n", str(WIFI_ADAPT_HELPER)],
+                capture_output=True, text=True, timeout=WIFI_ADAPT_TIMEOUT_SEC,
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            log.warning("wifi recovery (security check): %s", e)
+            return None
+        lines = [ln for ln in (r.stdout or "").splitlines() if ln.strip()]
+        for ln in lines[:-1]:
+            log.info("wifi recovery (security check): %s", ln[:300])
+        state, kind = wifi_adapt.parse_result(lines[-1] if lines else "")
+        if r.returncode == 0 and state in ("adapted", "connected"):
+            log.info("wifi recovery: the router's security %s; joined",
+                     "changed and the house profile followed" if state == "adapted"
+                     else "check found the link up")
+            self._wifi_mismatch_clear("joined")
+            return True
+        if r.returncode == 7 and kind in wifi_adapt.MISMATCH_WORDS:
+            self._wifi_mismatch_set(wifi_adapt.MISMATCH_WORDS[kind], kind)
+            return False
+        if _sudo_refused(r.stderr or ""):
+            log.warning("wifi recovery: sudo does not allow %s (check the sudoers "
+                        "entry)", WIFI_ADAPT_HELPER)
+            return None
+        # Anything else: the router is not a mismatch (any more).
+        self._wifi_mismatch_clear(f"the security check says {state or 'nothing'}")
+        return None
 
     _wifi_reset_missing_said: bool = False
 
@@ -3891,6 +3972,14 @@ class Satellite(pc_engine.SpareDeviceEngine):
         self._net_report_mtime = mtime
         report = net_settings.read_report() if mtime is not None else None
         self._net_report = report
+        # Root's boot-time security check found a router this radio cannot
+        # join (this boot's record only): the self-check backs off from the
+        # start instead of rebooting into the same answer.
+        ws = (report or {}).get("wifi_security")
+        if (isinstance(ws, dict) and ws.get("state") == "mismatch"
+                and ws.get("kind") in wifi_adapt.MISMATCH_WORDS
+                and report.get("boot_id") == net_settings._boot_id()):
+            self._wifi_mismatch_set(wifi_adapt.MISMATCH_WORDS[ws["kind"]], ws["kind"])
         if report is not None:
             run_id = f"{report.get('boot_id')}:{report.get('ts')}"
             try:
@@ -4168,6 +4257,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
         if since is None:
             # The server is back: the next outage starts its ladder over.
             self._health_recovery_failures = 0
+            self._wifi_mismatch_clear("the server is reachable again")
         last_recovery = max(
             (t for t in (self._health_last_wifi_recovery, self._last_reassociate_at) if t is not None),
             default=None,
@@ -4210,6 +4300,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 if self._health_budget is not None else 0
             ),
             reboot_backoff_cap=float(self._hcfg("reboot_backoff_cap_min", 60.0)) * 60.0,
+            wifi_mismatch=getattr(self, "_wifi_mismatch", None),
+            wifi_mismatch_retry=wifi_adapt.MISMATCH_RETRY_SEC,
             mic_silence_limit=float(self._hcfg("mic_silence_sec", 30.0)),
             heartbeat_limit=float(self._hcfg("heartbeat_stale_sec", 60.0)),
         )

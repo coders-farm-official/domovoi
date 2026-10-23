@@ -17,7 +17,7 @@ power saving off, the room's host name) and applies whichever is missing,
 saying what it changed. Root required: configfs, mkfs, nmcli, hostnamectl,
 timedatectl, reboot.
 
-Deliberately imports ONLY stdlib + ``provisioning_protocol`` +
+Deliberately imports ONLY stdlib + ``provisioning_protocol`` + ``wifi_reasons`` +
 ``config_writer`` — it must run on a bare image with none of the audio
 stack installed. ``mtools``/``dosfstools`` are apt prerequisites of the
 unprovisioned image (the media-prep pipeline installs them).
@@ -55,6 +55,7 @@ from typing import Any, Protocol
 
 from satellite import config_writer
 from satellite import provisioning_protocol as proto
+from satellite import wifi_reasons
 
 log = logging.getLogger("provisioning")
 
@@ -307,21 +308,32 @@ _HOME_CONNECTION = "domovoi-home"
 # 802-11-wireless.powersave: 2 = disable). See satellite/net_settings.py.
 _POWERSAVE_OFF = "2"
 
-# The two `wifi-sec.key-mgmt` values a home network with a passphrase can
-# want. `wpa-psk` covers WPA2 and WPA2/WPA3 mixed; `sae` is WPA3-only.
+# The `wifi-sec.key-mgmt` values a home network can want. `wpa-psk` covers
+# WPA2, WPA (TKIP) and the WPA2 side of WPA2/WPA3 mixed; `sae` is WPA3;
+# `none` (no security block at all) is an open network.
 _KEY_MGMT_PSK = "wpa-psk"
 _KEY_MGMT_SAE = "sae"
-# Lowercased fragments of an nmcli failure that mean the join REACHED
-# activation and the AP would not have us — the only kind of failure where
-# trying the other key-mgmt can possibly help. An AP that is not there, or a
-# radio that is not usable, says something else and gets no second attempt.
-_ACTIVATION_FAILURE_MARKERS = (
-    "activation failed",
-    "secrets were required",
-    "no secrets",
-    "authentication",
-)
+_KEY_MGMT_OPEN = "none"
+# `802-11-wireless-security.pmf` values (Protected Management Frames).
+#
+# PMF OFF on the first wpa-psk attempt is the fix for 2026-10-22, and the
+# same fix the setup hotspot got on 2026-10-17 (portal_transport.AP_PMF).
+# For a key-mgmt=wpa-psk profile with PMF left at its default, NetworkManager
+# hands wpa_supplicant `key_mgmt=WPA-PSK WPA-PSK-SHA256 SAE ...` whenever
+# the supplicant and driver report SAE + PMF + BIP support
+# (src/core/supplicant/nm-supplicant-config.c, client AND access-point
+# mode). Against a WPA2/WPA3 mixed router, wpa_supplicant then prefers SAE,
+# and the Pi Zero 2 W's brcmfmac radio cannot complete SAE: the join fails
+# as "Secrets were required" with the right password
+# (raspberrypi/linux#4976). With PMF disabled NM leaves SAE out, the
+# supplicant joins the WPA2 side, and a WPA2 router is unaffected (PMF is
+# optional in WPA2). A WPA2 router that REQUIRES PMF gets a second attempt
+# with PMF at NM's default.
+_PMF_DISABLE = "disable"
+_PMF_DEFAULT = "default"
+_PMF_REQUIRED = "required"      # WPA3 (SAE) mandates PMF
 _PSK_PLACEHOLDER = "<psk>"
+_NETWORK_PLACEHOLDER = "<network>"
 
 
 def _split_terse(line: str) -> list[str]:
@@ -364,22 +376,53 @@ def _scrub(text: str, psk: str) -> str:
     return text
 
 
+def _nmcli_text(r) -> str:
+    """Everything nmcli printed, stderr then stdout, as text."""
+    parts = []
+    for out in (r.stderr, r.stdout):
+        if isinstance(out, bytes):
+            out = out.decode("utf-8", "replace")
+        if out:
+            parts.append(out)
+    return "\n".join(parts)
+
+
 def _nmcli_detail(r, psk: str) -> str:
-    """nmcli's own last word about a failure, scrubbed. Empty when it said
-    nothing at all."""
-    out = r.stderr or r.stdout or ""
-    if isinstance(out, bytes):
-        out = out.decode("utf-8", "replace")
-    out = _scrub(out, psk).strip()
-    return out.splitlines()[-1].strip() if out else ""
+    """nmcli's own reason for a failure, one line, scrubbed. Empty when it
+    said nothing at all.
+
+    The reason, not the last line: a real nmcli ends every activation
+    failure with ``Hint: use 'journalctl -xe NM_CONNECTION=...`` and the
+    reason is the ``Error:`` line ABOVE it. Taking the last line is what
+    showed Kamron the hint instead of the reason (2026-10-22), and what made
+    the sae fallback never run (the hint matched no failure marker)."""
+    return wifi_reasons.reason_line(_scrub(_nmcli_text(r), psk))
+
+
+class _Scan:
+    """What one rescan said about the network being joined.
+
+    ``security`` is nmcli's SECURITY field for every row carrying the name
+    (an AP on both bands contributes both rows' flags): ``None`` when the
+    name was never seen, ``""`` when it was seen with no security at all,
+    i.e. an open network. ``freqs`` are the rows' frequencies in MHz, where
+    nmcli gave them."""
+
+    __slots__ = ("visible", "security", "freqs")
+
+    def __init__(self, visible: bool, security: str | None, freqs: list[int]):
+        self.visible = visible
+        self.security = security
+        self.freqs = freqs
+
+    def __iter__(self):            # (visible, security), as it always was
+        return iter((self.visible, self.security))
 
 
 def _wait_for_ssid(
     nmcli: str, ssid: str, run, timeout: float, sleep=time.sleep
-) -> tuple[bool, str | None]:
-    """Rescan until NetworkManager can see ``ssid``, or give up. Returns
-    ``(visible, security)`` — the AP's advertised SECURITY field, or None
-    when we never saw it.
+) -> _Scan:
+    """Rescan until NetworkManager can see ``ssid``, or give up.
 
     Found on hardware, reliably: the first join ALWAYS failed and the second
     always worked, same password pasted both times. The join ran the instant
@@ -390,15 +433,15 @@ def _wait_for_ssid(
     failed the same way. By the customer's second submission NM had scanned.
 
     The join no longer DEPENDS on this scan (see :func:`_nmcli_join`) — but
-    the SECURITY field is still the only way to know WPA2 from WPA3-only
-    without guessing, so it is worth the same wait it always was. An AP that
-    answers on both bands contributes both rows' flags.
+    the SECURITY field is the only way to tell WPA2 from WPA2/WPA3 mixed
+    from WPA3-only from open from enterprise without guessing, so it is
+    worth the same wait it always was.
     """
     deadline = time.monotonic() + timeout
     while True:
         try:
             r = run(
-                [nmcli, "-t", "-f", "SSID,SECURITY", "device", "wifi",
+                [nmcli, "-t", "-f", "SSID,SECURITY,FREQ", "device", "wifi",
                  "list", "--rescan", "yes"],
                 capture_output=True, text=True, timeout=20,
             )
@@ -406,41 +449,164 @@ def _wait_for_ssid(
             r = None
         if r is not None and r.returncode == 0:
             flags: list[str] = []
+            freqs: list[int] = []
             found = False
             for ln in (r.stdout or "").splitlines():
                 row = _split_terse(ln.strip())
                 if row and row[0].strip() == ssid:
                     found = True
                     if len(row) > 1:
-                        flags.append(row[1].strip())
+                        flag = row[1].strip()
+                        if flag and flag != "--":
+                            flags.append(flag)
+                    if len(row) > 2:
+                        m = re.match(r"\s*(\d+)", row[2])
+                        if m:
+                            freqs.append(int(m.group(1)))
             if found:
-                return True, " ".join(f for f in flags if f) or None
+                return _Scan(True, " ".join(flags), freqs)
         if time.monotonic() >= deadline:
-            return False, None
+            return _Scan(False, None, [])
         sleep(_WIFI_SCAN_POLL_SEC)
 
 
-def _key_mgmt_candidates(security: str | None) -> list[str]:
-    """Which ``wifi-sec.key-mgmt`` values to try, best first.
+def _security_tokens(security: str | None) -> set[str]:
+    return set((security or "").upper().replace(",", " ").split())
 
-    From the scan when there is one. When there is NOT — the blind join this
-    whole path exists to survive — the order is ``wpa-psk`` then ``sae``,
-    because WPA2 and WPA2/WPA3-mixed are what nearly every home AP
-    advertises and ``wpa-psk`` is the single value that joins both of them,
-    while ``sae`` joins only an AP that offers SAE. Getting it wrong costs
-    one extra attempt, never a failure the customer sees.
 
-    An AP the scan says is WPA3 with no WPA2 alongside it gets ``sae`` first
-    — and ``wpa-psk`` still queued behind it, because a scan row read
-    through one rescan of a radio just out of AP mode is evidence, not
-    proof.
+def _is_raw_key(psk: str) -> bool:
+    return len(psk) == 64 and all(c in "0123456789abcdefABCDEF" for c in psk)
+
+
+def _join_plan(
+    security: str | None, psk: str
+) -> tuple[list[tuple[str, str | None]], str | None, str | None]:
+    """``(attempts, refusal, family)`` for a network whose scan said
+    ``security`` (None: never seen).
+
+    ``attempts`` is the ordered list of ``(key-mgmt, pmf)`` to try, each a
+    fresh profile; ``refusal`` is a :mod:`satellite.wifi_reasons` kind when
+    there is nothing worth trying (an enterprise network, WEP, a blank
+    password for a secured network); ``family`` names what the scan said
+    (``wpa2``, ``mixed``, ``wpa3``, ``open``, ``unknown``), which decides
+    how a run of refusals is explained.
+
+    Every order below starts with the one setting that works on the Pi Zero
+    2 W for that kind of network, then the one a different radio or router
+    may need:
+
+    * WPA2 / WPA (TKIP): wpa-psk PMF off, then wpa-psk PMF default (a WPA2
+      router that requires PMF).
+    * WPA2/WPA3 mixed: wpa-psk PMF off (the WPA2 side; NM leaves SAE out),
+      then sae PMF required (a radio that can do WPA3).
+    * WPA3-only: sae PMF required, once. A 64-hex key cannot be used with
+      SAE (it needs the password itself), so that is refused in words.
+    * Open: no security block.
+    * Not seen / hidden: wpa-psk PMF off, then sae PMF required — what
+      nearly every home network is, cheapest first.
     """
-    tokens = set((security or "").upper().replace(",", " ").split())
+    tokens = _security_tokens(security)
+    raw = _is_raw_key(psk)
+    if security is not None and ("802.1X" in tokens or "EAP" in tokens) \
+            and not tokens & {"WPA-PSK", "PSK", "SAE"}:
+        return [], wifi_reasons.ENTERPRISE, "enterprise"
+    if "WEP" in tokens:
+        return [], wifi_reasons.WEP, "wep"
+    if tokens == {"OWE"}:
+        # "Enhanced open": encrypted, no password.
+        return [("owe", None)], None, "open"
     sae = bool(tokens & {"WPA3", "SAE"})
-    psk = bool(tokens & {"WPA", "WPA1", "WPA2", "PSK", "WPA-PSK"})
-    if sae and not psk:
-        return [_KEY_MGMT_SAE, _KEY_MGMT_PSK]
-    return [_KEY_MGMT_PSK, _KEY_MGMT_SAE]
+    wpa = bool(tokens & {"WPA", "WPA1", "WPA2", "PSK", "WPA-PSK"})
+    if security is not None and not tokens:
+        return [(_KEY_MGMT_OPEN, None)], None, "open"
+    if not psk:
+        if security is None:
+            # Blank password and a network we could not see: an open one
+            # is the only kind it could join.
+            return [(_KEY_MGMT_OPEN, None)], None, "unknown"
+        return [], wifi_reasons.NEEDS_PASSWORD, "secured"
+    if sae and not wpa:
+        if raw:
+            return [], wifi_reasons.WPA3_RAW_KEY, "wpa3"
+        return [(_KEY_MGMT_SAE, _PMF_REQUIRED)], None, "wpa3"
+    if sae and wpa:
+        plan = [(_KEY_MGMT_PSK, _PMF_DISABLE)]
+        if not raw:
+            plan.append((_KEY_MGMT_SAE, _PMF_REQUIRED))
+        return plan, None, "mixed"
+    if wpa:
+        return [(_KEY_MGMT_PSK, _PMF_DISABLE), (_KEY_MGMT_PSK, _PMF_DEFAULT)], \
+            None, "wpa2"
+    plan = [(_KEY_MGMT_PSK, _PMF_DISABLE)]
+    if not raw:
+        plan.append((_KEY_MGMT_SAE, _PMF_REQUIRED))
+    return plan, None, "unknown"
+
+
+def _key_mgmt_candidates(security: str | None) -> list[str]:
+    """The key-mgmt values :func:`_join_plan` would try, in order (kept for
+    readers of the older shape)."""
+    plan, _refusal, _family = _join_plan(security, "x" * 8)
+    return [km for km, _pmf in plan]
+
+
+# The phy's band list, from `iw phy`. Band 1 is 2.4 GHz, band 2 is 5 GHz.
+_IW_BAND = re.compile(r"^\s*Band (\d+):", re.MULTILINE)
+
+
+def _radio_is_24ghz_only(run) -> bool | None:
+    """True when this radio has no 5 GHz band (the Pi Zero 2 W, Zero W,
+    Pi 3 B), False when it has one, None when `iw` would not say."""
+    try:
+        r = run(["iw", "phy"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    out = r.stdout if isinstance(r.stdout, str) else (r.stdout or b"").decode(
+        "utf-8", "replace")
+    if r.returncode != 0 or not out:
+        return None
+    bands = set(_IW_BAND.findall(out))
+    if not bands:
+        return None
+    return "2" not in bands
+
+
+# The last failed join's evidence from NetworkManager's own journal, kept
+# for the card's report (setup_report). Scrubbed: no network name, no
+# password, no hardware addresses.
+LAST_JOIN_LOG: list[str] = []
+_JOURNAL_KEYS = (
+    "reason", "auth", "handshake", "sae", "assoc", "ctrl-event", "4-way",
+    "disconnect", "secrets", "failed", "pmf", "key_mgmt", "key-mgmt",
+)
+_MAC = re.compile(r"\b[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}\b")
+
+
+def _journal_tail(run, ssid: str, psk: str, lines: int = 8) -> list[str]:
+    """NetworkManager's and wpa_supplicant's last words about the join,
+    filtered to the lines that say why, scrubbed. Empty when the journal is
+    not readable (not root, no systemd)."""
+    try:
+        r = run(
+            ["journalctl", "-b", "--no-pager", "-o", "cat", "--since", "-3min",
+             "-u", "NetworkManager", "-u", "wpa_supplicant"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    out = r.stdout if isinstance(r.stdout, str) else (r.stdout or b"").decode(
+        "utf-8", "replace")
+    if r.returncode != 0 or not out:
+        return []
+    keep = []
+    for ln in out.splitlines():
+        low = ln.lower()
+        if not any(k in low for k in _JOURNAL_KEYS):
+            continue
+        ln = _scrub_ssid(_scrub(ln, psk), ssid)
+        ln = _MAC.sub("xx:xx:xx:xx:xx:xx", ln)
+        keep.append(ln.strip()[:240])
+    return keep[-lines:]
 
 
 _ADDED_UUID = re.compile(r"\(([0-9a-fA-F-]{36})\)")
@@ -548,6 +714,55 @@ def _delete_wifi_profiles(nmcli: str, uuids: list[str], run) -> None:
             pass
 
 
+def _scrub_ssid(text: str, ssid: str) -> str:
+    """``text`` without the network's name, so nmcli's words can go where
+    the name may not (the card). The quoted forms nmcli uses always; the
+    bare name only when it is long enough not to eat ordinary words."""
+    if not ssid:
+        return text
+    for form in (f"'{ssid}'", f'"{ssid}"'):
+        text = text.replace(form, f"'{_NETWORK_PLACEHOLDER}'")
+    if len(ssid) >= 4:
+        text = text.replace(ssid, _NETWORK_PLACEHOLDER)
+    return text
+
+
+def _profile_args(
+    nmcli: str, ssid: str, psk: str, hidden: bool, km: str, pmf: str | None
+) -> list[str]:
+    """The `nmcli connection add` argv for one attempt. A list, never a
+    shell line: a name or password with spaces, quotes or any other byte
+    reaches NetworkManager exactly as typed."""
+    add = [
+        nmcli, "connection", "add", "type", "wifi",
+        "con-name", _HOME_CONNECTION, "ifname", _WIFI_IFACE, "ssid", ssid,
+        "connection.autoconnect", "yes",
+        "802-11-wireless.powersave", _POWERSAVE_OFF,
+    ]
+    if km != _KEY_MGMT_OPEN:
+        add += ["wifi-sec.key-mgmt", km]
+        if pmf is not None:
+            add += ["wifi-sec.pmf", pmf]
+        if km in (_KEY_MGMT_PSK, _KEY_MGMT_SAE):
+            add += ["wifi-sec.psk", psk]
+    if hidden:
+        # A hidden AP is in no scan by definition, so the profile has to
+        # say so or NM never probes for it. Same inference hole as the
+        # visible case, same explicit answer.
+        add += ["802-11-wireless.hidden", "yes"]
+    return add
+
+
+def _retryable(kind: str, text: str) -> bool:
+    """A failure another security setting might get past: the AP was
+    reached and turned us away. A network that is not there, a radio that
+    is not usable, or a timeout says something else and gets no second
+    attempt."""
+    if kind in wifi_reasons.AUTH_KINDS:
+        return True
+    return kind == wifi_reasons.OTHER and "activation failed" in text.lower()
+
+
 def _nmcli_join(
     nmcli: str,
     ssid: str,
@@ -556,6 +771,8 @@ def _nmcli_join(
     timeout: float,
     run,
     security: str | None,
+    *,
+    only_24ghz: bool | None = None,
 ) -> tuple[bool, str | None]:
     """Build the connection profile ourselves, then bring it up.
 
@@ -566,16 +783,30 @@ def _nmcli_join(
     nothing to infer from: NM writes a profile carrying a PSK and no
     key-mgmt, and activation dies on ``802-11-wireless-security.key-mgmt:
     property is missing`` while the customer stares at a password they typed
-    correctly. Naming key-mgmt ourselves deletes the inference, and with it
-    the dependency on a scan that may never have happened.
+    correctly. Naming key-mgmt (and PMF, see ``_PMF_DISABLE``) ourselves
+    deletes the inference.
 
-    Each candidate key-mgmt starts from a profile WE made this second: see
-    :func:`_wifi_profiles_for_ssid` for why inheriting one is what made
-    every retry fail identically.
+    Each attempt of :func:`_join_plan` starts from a profile WE made this
+    second: see :func:`_wifi_profiles_for_ssid` for why inheriting one is
+    what made every retry fail identically.
+
+    A failure comes back tagged with its :mod:`satellite.wifi_reasons`
+    kind, and nmcli's reason line with the network's name and the password
+    taken out.
     """
-    first_err: str | None = None
+    prefix = f"wifi join failed for {ssid!r}"
+    plan, refusal, family = _join_plan(security, psk)
+    if refusal is not None:
+        log.warning("not joining %r: %s (scan said %r)", ssid, refusal, security)
+        return False, wifi_reasons.tagged(prefix, refusal)
+
+    def clean(text: str) -> str:
+        return _scrub_ssid(text, ssid)
+
+    first: tuple[str, str] | None = None     # (kind, detail) of attempt 1
+    kinds: list[str] = []
     tried = False
-    for km in _key_mgmt_candidates(security):
+    for km, pmf in plan:
         # Whatever an earlier attempt left behind goes first — an earlier
         # submission's half-made profile, or the previous candidate's.
         # `nmcli device wifi connect` REUSED a matching saved profile, so
@@ -585,40 +816,27 @@ def _nmcli_join(
         _delete_wifi_profiles(
             nmcli, _wifi_profiles_for_ssid(nmcli, ssid, run), run
         )
-        add = [
-            nmcli, "connection", "add", "type", "wifi",
-            "con-name", _HOME_CONNECTION, "ifname", _WIFI_IFACE, "ssid", ssid,
-            "connection.autoconnect", "yes",
-            "802-11-wireless.powersave", _POWERSAVE_OFF,
-            "wifi-sec.key-mgmt", km,
-            "wifi-sec.psk", psk,
-        ]
-        if hidden:
-            # A hidden AP is in no scan by definition, so the profile has to
-            # say so or NM never probes for it. Same inference hole as the
-            # visible case, same explicit answer.
-            add += ["802-11-wireless.hidden", "yes"]
+        add = _profile_args(nmcli, ssid, psk, hidden, km, pmf)
         tried = True
         try:
             r = run(add, capture_output=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             # Never re-raise: the argv of that call holds the passphrase and
             # TimeoutExpired stringifies the command it was given.
-            return False, f"wifi join timed out for {ssid!r}"
+            return False, wifi_reasons.tagged(
+                f"wifi join timed out for {ssid!r}", wifi_reasons.TIMEOUT)
         except OSError:
-            return False, (
-                f"wifi join failed for {ssid!r}: NetworkManager is not answering"
-            )
+            return False, wifi_reasons.tagged(
+                prefix, wifi_reasons.RADIO, "NetworkManager is not answering")
         if r.returncode != 0:
-            detail = _nmcli_detail(r, psk)
+            detail = clean(_nmcli_detail(r, psk))
             log.warning(
                 "nmcli profile for %r could not be created (rc=%d): %s",
                 ssid, r.returncode, detail,
             )
-            return False, (
-                f"wifi setup failed for {ssid!r}: "
-                f"{detail or 'the connection could not be created'}"
-            )
+            return False, wifi_reasons.tagged(
+                f"wifi setup failed for {ssid!r}", wifi_reasons.SETUP_FAILED,
+                detail or "the connection could not be created")
 
         # Activate THE PROFILE WE JUST MADE, by the uuid nmcli printed for
         # it. Re-deriving it from a fresh listing and falling back to
@@ -639,42 +857,42 @@ def _nmcli_join(
                     "%d saved profiles carry that ssid - refusing to guess "
                     "which one to bring up", ssid, len(uuids),
                 )
-                return False, (
-                    f"wifi setup failed for {ssid!r}: the connection could "
-                    f"not be identified after it was created"
-                )
+                return False, wifi_reasons.tagged(
+                    f"wifi setup failed for {ssid!r}", wifi_reasons.SETUP_FAILED,
+                    "the connection could not be identified after it was created")
             uuid = uuids[0]
         up = [nmcli, "connection", "up", "uuid", uuid]
         try:
             r = run(up, capture_output=True, timeout=timeout)
         except subprocess.TimeoutExpired:
-            return False, f"wifi join timed out for {ssid!r}"
+            _delete_wifi_profiles(
+                nmcli, _wifi_profiles_for_ssid(nmcli, ssid, run), run)
+            return False, wifi_reasons.tagged(
+                f"wifi join timed out for {ssid!r}", wifi_reasons.TIMEOUT)
         except OSError:
-            return False, (
-                f"wifi join failed for {ssid!r}: NetworkManager is not answering"
-            )
+            return False, wifi_reasons.tagged(
+                prefix, wifi_reasons.RADIO, "NetworkManager is not answering")
         if r.returncode == 0:
             # One profile answers to the home name: a re-provision onto a
             # different network leaves the previous network's profile
             # behind (it matched no ssid above), and `connection up id`
             # with two of them is a coin toss.
             _delete_other_home_profiles(nmcli, uuid, run)
+            LAST_JOIN_LOG.clear()
+            log.info("joined %r as %s (pmf %s)", ssid, km, pmf or "-")
             return True, None
-        # Keep nmcli's own words. Reporting every failure as "wrong
-        # password?" hid a scan-cache problem behind a message that sent
-        # people re-typing a password that was right the first time.
-        detail = _nmcli_detail(r, psk)
+        # Keep nmcli's own words — the reason line, not the Hint after it.
+        text = _scrub(_nmcli_text(r), psk)
+        detail = clean(_nmcli_detail(r, psk))
+        kind = wifi_reasons.classify(text)
+        kinds.append(kind)
         log.warning(
-            "nmcli join of %r as %s failed (rc=%d): %s",
-            ssid, km, r.returncode, detail,
+            "nmcli join of %r as %s (pmf %s) failed (rc=%d, %s): %s",
+            ssid, km, pmf or "-", r.returncode, kind, detail,
         )
-        if first_err is None:
-            # The FIRST candidate's reason is the one the customer gets:
-            # wpa-psk is what their AP almost certainly speaks, so "secrets
-            # were required" from that attempt is the true story, and the
-            # sae attempt behind it is our business, not theirs.
-            first_err = f"wifi join failed for {ssid!r}: {detail or 'wrong password?'}"
-        if not any(m in detail.lower() for m in _ACTIVATION_FAILURE_MARKERS):
+        if first is None:
+            first = (kind, detail)
+        if not _retryable(kind, text):
             break
     if tried:
         # Don't leave a profile that cannot associate sitting there with
@@ -683,7 +901,17 @@ def _nmcli_join(
         _delete_wifi_profiles(
             nmcli, _wifi_profiles_for_ssid(nmcli, ssid, run), run
         )
-    return False, first_err or f"wifi join failed for {ssid!r}"
+    LAST_JOIN_LOG[:] = _journal_tail(run, ssid, psk)
+    for ln in LAST_JOIN_LOG:
+        log.warning("NetworkManager: %s", ln)
+    kind, detail = first or (wifi_reasons.OTHER, "")
+    if family == "wpa3" and all(k in wifi_reasons.AUTH_KINDS for k in kinds):
+        # Every attempt was SAE and every one was turned away. Either the
+        # password is wrong or the radio cannot do WPA3; the words say both.
+        kind = wifi_reasons.WPA3_ONLY
+    elif kind == wifi_reasons.NOT_FOUND and only_24ghz:
+        kind = wifi_reasons.NOT_FOUND_24
+    return False, wifi_reasons.tagged(prefix, kind, detail)
 
 
 def _wpa_conf_drop_ssid(ssid: str) -> int:
@@ -751,9 +979,10 @@ def apply_wifi(
     or a brace in it is refused rather than written.
 
     Neither path infers anything: the nmcli profile names its own
-    ``wifi-sec.key-mgmt`` (:func:`_nmcli_join`) and the wpa_supplicant block
-    names its own ``psk=``. An open network has no passphrase and
-    ``validate_wifi_psk`` refuses one, so there is nothing here for it."""
+    ``wifi-sec.key-mgmt`` and PMF (:func:`_join_plan`) and the
+    wpa_supplicant block names its own ``psk=`` (or ``key_mgmt=NONE`` for
+    an open network, the one case with a blank ``psk``). A failure is
+    tagged with its :mod:`satellite.wifi_reasons` kind."""
     try:
         proto.validate_wifi_ssid(ssid)
     except proto.ProvisionInvalid as e:
@@ -762,21 +991,30 @@ def apply_wifi(
         run(["iw", "reg", "set", country], capture_output=True, timeout=15)
     nmcli = shutil.which("nmcli")
     if nmcli:
-        # A hidden network never appears in a scan. For everything else the
-        # scan is still worth waiting for — it says WPA2 or WPA3 and saves an
-        # attempt — but the join below no longer NEEDS it to have worked.
+        # A network flagged hidden never appears in a scan. For everything
+        # else the scan is still worth waiting for — it says WPA2, mixed,
+        # WPA3-only, open or enterprise — but the join below no longer
+        # NEEDS it to have worked.
         security: str | None = None
         if not hidden:
-            visible, security = _wait_for_ssid(
-                nmcli, ssid, run, _WIFI_SCAN_WAIT_SEC
-            )
-            if not visible:
+            scan = _wait_for_ssid(nmcli, ssid, run, _WIFI_SCAN_WAIT_SEC)
+            security = scan.security
+            if not scan.visible:
+                # Not seen: still hosting, out of range, 5 GHz only on a
+                # 2.4 GHz radio, or a hidden network typed by name. The
+                # profile probes for it either way: `hidden yes` makes NM
+                # ask for the name instead of waiting to hear it, which
+                # costs nothing when the network is not hidden.
+                hidden = True
                 log.warning(
-                    "%r not visible after %.0fs of scanning - joining blind "
-                    "with an explicit security type",
+                    "%r not visible after %.0fs of scanning - joining blind, "
+                    "probing for it by name, with an explicit security type",
                     ssid, _WIFI_SCAN_WAIT_SEC,
                 )
-        return _nmcli_join(nmcli, ssid, psk, hidden, timeout, run, security)
+        return _nmcli_join(
+            nmcli, ssid, psk, hidden, timeout, run, security,
+            only_24ghz=_radio_is_24ghz_only(run),
+        )
     # wpa_supplicant fallback: append a network block of our own making
     # (ssid= as hex, psk= as the derived key, no passphrase comment) and
     # reconfigure. Built in Python rather than taken from wpa_passphrase,
@@ -801,7 +1039,8 @@ def apply_wifi(
             if b"wpa_state=COMPLETED" in (st.stdout or b""):
                 return True, None
             time.sleep(3)
-        return False, f"wifi join timed out for {ssid!r}"
+        return False, wifi_reasons.tagged(
+            f"wifi join timed out for {ssid!r}", wifi_reasons.TIMEOUT)
     except (OSError, subprocess.TimeoutExpired) as e:
         return False, f"wifi tooling unavailable: {type(e).__name__}"
 
@@ -1525,8 +1764,13 @@ def run(
         status, error = "wifi_failed", err
         # The named reason (it carries the house network's name) goes to
         # the portal page and the journal; the card gets generic words.
+        # What NetworkManager itself said about the join, scrubbed of the
+        # network's name, the password and hardware addresses: the one
+        # place a household with no keyboard can read it (pull the card,
+        # open domovoi/device-info.json).
         _report(None, None, top={"status": status, "step": "home-wifi-failed",
-                                 "error": _card_error(status, err)})
+                                 "error": _card_error(status, err),
+                                 "join_log": list(LAST_JOIN_LOG)})
         loops += 1
         if max_loops is not None and loops >= max_loops:
             return 1

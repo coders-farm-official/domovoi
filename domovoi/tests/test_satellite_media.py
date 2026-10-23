@@ -71,7 +71,8 @@ def fake_repo(tmp_path, monkeypatch):
     # Every root helper and the verifier `assemble` ships under system/:
     # the fixture used to stop at apply-payload, so both tests below failed
     # on the first helper added after it (domovoi-sync-time), on every box.
-    for helper in ("domovoi-sync-time", "domovoi-reboot", "domovoi-wifi-reset"):
+    for helper in ("domovoi-sync-time", "domovoi-reboot", "domovoi-wifi-reset",
+                   "domovoi-wifi-adapt"):
         (sat / "scripts" / helper).write_text("#!/bin/sh\n", encoding="utf-8")
     (sat / "_ed25519.py").write_text("# verifier\n", encoding="utf-8")
     (sat / "secret.env").write_text("nope", encoding="utf-8")

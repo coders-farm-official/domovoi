@@ -35,6 +35,12 @@
 # Argv-less like the reboot helper; it refuses to run while the setup
 # hotspot's profile is saved - see satellite/scripts/domovoi-wifi-reset.
 @USER@ ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-wifi-reset ""
+# When the house network will not come back: rescans, and if the router's
+# security changed (WPA2 -> WPA2/WPA3 mixed, WPA3-only, back again), changes
+# the house profile's key-mgmt/PMF to match and brings it up (2026-10-22).
+# Argv-less; it edits only domovoi-home, only from its own table - see
+# satellite/scripts/domovoi-wifi-adapt.
+@USER@ ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-wifi-adapt ""
 # The XVF3800's LED ring is driven over USB, which needs root. The client
 # tries a plain call first and falls back to `sudo -n` (PROVISIONING §E).
 @USER@ ALL=(root) NOPASSWD: /opt/xvf3800/xvf_host

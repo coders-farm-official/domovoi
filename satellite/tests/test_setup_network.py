@@ -527,7 +527,8 @@ def test_a_failed_join_never_puts_the_house_network_on_the_card(home, card, monk
     ("wifi join timed out for 'HomeNet'", setup_report.JOIN_TIMED_OUT),
     ("wifi network name refused: 'HomeNet' is too long", setup_report.JOIN_REFUSED),
     ("wifi tooling unavailable: FileNotFoundError", setup_report.JOIN_NO_TOOLS),
-    ("anything else naming 'HomeNet'", setup_report.JOIN_FAILED),
+    # Not a password problem, so not called one (2026-10-22).
+    ("anything else naming 'HomeNet'", "couldn't join your home Wi-Fi"),
 ])
 def test_a_join_error_becomes_generic_words(err, expected):
     assert setup_report.card_error("wifi_failed", err) == expected

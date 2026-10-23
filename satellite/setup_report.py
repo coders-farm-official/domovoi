@@ -36,6 +36,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from satellite import wifi_reasons
+
 log = logging.getLogger(__name__)
 
 # Where Pi OS mounts the boot partition: /boot/firmware since bookworm,
@@ -51,20 +53,34 @@ _LOCK = threading.Lock()
 # portal page get the named version (nmcli's words and the network's name);
 # the card does not, because the house network's name has no business on a
 # card anyone can pull and read.
-JOIN_FAILED = "couldn't join your home Wi-Fi — wrong password?"
-JOIN_TIMED_OUT = "couldn't join your home Wi-Fi in time — is it in range?"
-JOIN_REFUSED = "the home Wi-Fi details were refused — check the name and password"
+#
+# Since 2026-10-22 a join error is tagged with its kind
+# (satellite/wifi_reasons.py), and the card gets that kind's words plus
+# nmcli's reason line, which the join has already stripped of the network's
+# name and the password: the card is the one place a household with no
+# keyboard can read WHY (pull the card, open domovoi/device-info.json).
+JOIN_FAILED = wifi_reasons.CARD[wifi_reasons.WRONG_PASSWORD]
+JOIN_TIMED_OUT = wifi_reasons.CARD[wifi_reasons.TIMEOUT]
+JOIN_REFUSED = wifi_reasons.CARD[wifi_reasons.SETUP_FAILED]
 JOIN_NO_TOOLS = "couldn't join your home Wi-Fi — the Wi-Fi tools on this card failed"
 
 
 def card_error(status: str | None, error: str | None) -> str | None:
     """``error`` as the card may show it. A failed join's reason is
-    replaced by generic words; other errors (the setup network's own, which
-    name no house network) pass through."""
+    replaced by its kind's words (and nmcli's scrubbed reason, when the
+    error is tagged); other errors (the setup network's own, which name no
+    house network) pass through."""
     if not error:
         return None
     if status != "wifi_failed":
         return error
+    kind = wifi_reasons.kind_of(error)
+    if kind is not None:
+        words = wifi_reasons.CARD[kind]
+        detail = wifi_reasons.detail_of(error)
+        return f"{words} (NetworkManager: {detail})" if detail else words
+    # An untagged error: an older card's, or one of the few that are not
+    # from the join itself.
     low = error.lower()
     if "timed out" in low:
         return JOIN_TIMED_OUT
@@ -72,7 +88,7 @@ def card_error(status: str | None, error: str | None) -> str | None:
         return JOIN_REFUSED
     if "tooling unavailable" in low:
         return JOIN_NO_TOOLS
-    return JOIN_FAILED
+    return wifi_reasons.CARD[wifi_reasons.classify(error)]
 
 
 def report_path(boot_dirs=None) -> Path | None:

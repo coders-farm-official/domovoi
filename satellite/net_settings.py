@@ -80,6 +80,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from satellite import wifi_adapt
 from satellite import wifi_profiles
 
 log = logging.getLogger("net-settings")
@@ -255,6 +256,9 @@ class Report:
         #: The room's name, and whether the unit has it with its record.
         self.wanted: str | None = None
         self.confirmed = False
+        #: What the house network's security check found this run
+        #: (satellite/wifi_adapt.py), or None when it did not run.
+        self.wifi: dict[str, Any] | None = None
 
     def change(self, what: str) -> None:
         log.info("changed: %s", what)
@@ -284,6 +288,7 @@ class Report:
             "unchanged": self.unchanged,
             "skipped": self.skipped,
             "errors": self.errors,
+            "wifi_security": self.wifi,
         }
 
 
@@ -373,6 +378,45 @@ def delete_setup_profile(nmcli: str, profiles: list[wifi_profiles.Profile],
     for p in profiles:
         if p.is_ap and p.name != wifi_profiles.AP_CONNECTION:
             report.skip(f"access-point profile {p.name!r} is not Domovoi's")
+
+
+#: The board, for whether its radio can do WPA3 (wifi_adapt.board_can_sae).
+DEVICE_MODEL = Path("/proc/device-tree/model")
+
+
+def _model(path: Path | None = None) -> str | None:
+    try:
+        raw = (path or DEVICE_MODEL).read_bytes()
+    except OSError:
+        return None
+    return raw.split(b"\x00", 1)[0].decode("utf-8", "replace").strip() or None
+
+
+def adapt_home_security(nmcli: str, profiles: list[wifi_profiles.Profile], run: Callable[..., Any],
+                        report: Report, *, sleep: Callable[[float], None] = time.sleep,
+                        model: str | None = None) -> None:
+    """The house profile's security against the router's, before the first
+    join can give up (2026-10-22: an access point switched to WPA2/WPA3
+    mixed, and the satellites set up before it never came back, not even
+    after a power cycle). Decided from a scan (satellite/wifi_adapt.py);
+    a profile that is up is never touched."""
+    if not any(p.name == wifi_adapt.HOME_PROFILE for p in profiles):
+        report.same(f"no {wifi_adapt.HOME_PROFILE} profile: no Wi-Fi security to check")
+        return
+    res = wifi_adapt.adapt(run, nmcli, model=model if model is not None else _model(),
+                           after_failure=False, connect=True, sleep=sleep)
+    report.wifi = res.document()
+    if res.state == "adapted":
+        for what in res.changed:
+            report.change(f"Wi-Fi security: {what}")
+    elif res.state == "mismatch":
+        report.error(f"Wi-Fi security: {res.words}")
+    elif res.state in ("failed", "error"):
+        for what in res.changed:
+            report.change(f"Wi-Fi security: {what}")
+        report.error(f"Wi-Fi security: {res.words}")
+    else:
+        report.same(f"Wi-Fi security: {res.words}")
 
 
 def disable_powersave(nmcli: str | None, profiles: list[wifi_profiles.Profile],
@@ -1225,6 +1269,8 @@ def apply(
         else:
             report.same("no NetworkManager: no setup hotspot profile to delete")
         disable_powersave(nm, profiles, run, report)
+        if nm and when == "boot":
+            adapt_home_security(nm, profiles, run, report, sleep=sleep)
         # At setup the reboot that follows makes the next request carry it.
         if renamed_now and nm and when in ("boot", "manual"):
             refresh_dhcp_name(nm, renamed_now[1], profiles, run, report,
