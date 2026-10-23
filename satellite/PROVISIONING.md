@@ -33,8 +33,14 @@
 > **show setup details** in the dashboard shows it. If the pass was used,
 > has expired, or the server restarted since the build (the key lives in
 > its memory only), the tray says which and offers **Sign in as admin to
-> fetch it** (after a restart that makes a new key for the same network,
-> and the tray shows it), and typing the key stays the last way. A card
+> fetch it** (after a restart that makes a new key for the same network
+> and a new console login, since the zip holds the old login only as a
+> hash; the tray writes the new login's `userconf.txt` line in place of
+> the zip's, checks it, and shows both, and so does **show setup
+> details**), and typing the key stays the last way. A card written with
+> the pass while the server still remembers the build keeps the build's
+> own console login. After a restart, a build row whose details are gone
+> says so instead of offering **show setup details**. A card
 > written straight to a drive gets `ap.json` from the server, as before.
 >
 > **Zero-touch path first (USB adoption).** If your SD card was prepared

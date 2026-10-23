@@ -178,6 +178,10 @@ def _public(job: dict[str, Any]) -> dict[str, Any]:
     out = dict(job)
     out.pop("artifact_path", None)   # server-local; download endpoint serves it
     out["has_artifact"] = bool(job.get("artifact_path"))
+    # Whether "show setup details" has anything to show: they live in this
+    # process's memory only, so a restart clears them (the dashboard then
+    # says so instead of offering a button that opens nothing).
+    out["has_credentials"] = job.get("id") in _JOB_CREDENTIALS
     return out
 
 
@@ -453,9 +457,9 @@ async def media_job_credentials(job_id: int) -> dict[str, Any]:
     404 once the web process has restarted — they live in memory only. A
     card written straight to a drive still has them, so the message says
     where to look; a zip never carried them (WEB-1), so it says to build
-    it again (or, for the setup key alone, ``POST /jobs/{id}/setup-key``
-    makes a new one). ``console`` is null after that: the console
-    password is in no file, only its hash."""
+    it again, or write it with the tray, whose admin sign-in makes a new
+    setup key and console login (``POST /jobs/{id}/setup-key``); then
+    ``reissued`` is true and these are the new ones."""
     creds = _JOB_CREDENTIALS.get(job_id)
     if creds is None:
         raise HTTPException(
@@ -467,7 +471,13 @@ async def media_job_credentials(job_id: int) -> dict[str, Any]:
                 "did, so prepare it again."
             ),
         )
-    return creds
+    return _shown(creds)
+
+
+def _shown(creds: dict[str, Any]) -> dict[str, Any]:
+    """Credentials as answered: the ``userconf`` line (a hash, for the
+    card writer only) stays out of the dashboard's view."""
+    return {k: v for k, v in creds.items() if k != "userconf"}
 
 
 # What a Domovoi setup network is called (overlay.generate_ap_credentials).
@@ -491,18 +501,24 @@ class SetupKeyRequest(BaseModel):
     dependencies=[Depends(require_admin_mutation)],
 )
 async def media_job_setup_key(job_id: int, body: SetupKeyRequest) -> dict[str, Any]:
-    """The setup network's key for a zip build, made again if this process
-    has forgotten it (a restart): for an admin holding card files whose
-    one-time pass no longer works (the tray's "Sign in as admin to fetch
-    it").
+    """The setup network's key and the console login for a zip build, made
+    again if this process has forgotten them (a restart): for an admin
+    holding card files whose one-time pass no longer works (the tray's
+    "Sign in as admin to fetch it").
 
-    The key lives only in the card's ``domovoi/ap.json``: nothing on the
-    server checks it later, so a NEW key for the same network name,
-    written onto the card by whoever asked, works as well as the old one.
-    It is remembered like the first (memory only), so "show setup details"
-    shows the new one, and ``reissued`` says the one shown before no
-    longer applies. While the build's key is still remembered it is
-    answered unchanged. 404 when there is no finished zip build with that
+    Both live only on the card: the key in ``domovoi/ap.json``, the console
+    password as the hash in ``userconf.txt``. Nothing on the server checks
+    either later, and the card the tray is writing has never booted, so a
+    NEW key for the same network and a NEW console password work as well
+    as the old ones. The answer carries ``userconf``, the ``userconf.txt``
+    line (``user:$6$...``, LF-terminated) the tray writes in place of the
+    zip's; ``console`` and ``userconf`` are null when this host can't hash
+    a password (no openssl), and the zip's own console login stays.
+    Remembered like the first (memory only), so "show setup details" shows
+    the new ones, and ``reissued`` says the ones shown before no longer
+    apply. While the build's are still remembered they are answered
+    unchanged (``userconf`` null for the build's own: the zip's
+    ``userconf.txt`` already matches it). 404 when there is no finished zip build with that
     id: prepare the card again."""
     if not _SETUP_SSID.match(body.ssid):
         raise HTTPException(status_code=422, detail="that isn't a Domovoi setup network name")
@@ -513,14 +529,27 @@ async def media_job_setup_key(job_id: int, body: SetupKeyRequest) -> dict[str, A
                 "those card files name a different setup network from build "
                 f"{job_id}. Prepare the card again on the dashboard."
             ))
-        return {"ap": creds["ap"], "reissued": bool(creds.get("reissued"))}
+        return {
+            "ap": creds["ap"],
+            "console": creds.get("console"),
+            "userconf": creds.get("userconf"),
+            "reissued": bool(creds.get("reissued")),
+        }
     job = await _job_row(job_id)
     if job is None or job.get("target_kind") != "zip" or job.get("status") != "done":
         raise HTTPException(status_code=404, detail=_CANT_RECOVER_DETAIL)
     ap = {"ssid": body.ssid, "psk": overlay.generate_ap_credentials()["psk"]}
-    # The console password is in the zip only as a hash: it can't be shown again.
-    _remember_credentials(job_id, {"ap": ap, "console": None, "reissued": True})
-    return {"ap": ap, "reissued": True}
+    # The zip's console password is only a hash, so it can't be shown
+    # again: make a new one, and the line the card's userconf.txt needs for
+    # it, the way the build does (overlay.write_overlay).
+    console = overlay.generate_console_credentials(builder.SAT_USER)
+    digest = await asyncio.to_thread(overlay.hash_password, console["password"])
+    userconf = f"{console['username']}:{digest}\n" if digest else None
+    if userconf is None:
+        console = None
+    creds = {"ap": ap, "console": console, "userconf": userconf, "reissued": True}
+    _remember_credentials(job_id, creds)
+    return dict(creds)
 
 
 # ─── The card helper's one-time pass (no admin session) ──────────────────

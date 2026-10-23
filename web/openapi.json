@@ -4142,7 +4142,7 @@
           "satellite-media"
         ],
         "summary": "Media Job Credentials",
-        "description": "The setup-AP and console credentials for a prepared card.\n\n404 once the web process has restarted \u2014 they live in memory only. A\ncard written straight to a drive still has them, so the message says\nwhere to look; a zip never carried them (WEB-1), so it says to build\nit again (or, for the setup key alone, ``POST /jobs/{id}/setup-key``\nmakes a new one). ``console`` is null after that: the console\npassword is in no file, only its hash.",
+        "description": "The setup-AP and console credentials for a prepared card.\n\n404 once the web process has restarted \u2014 they live in memory only. A\ncard written straight to a drive still has them, so the message says\nwhere to look; a zip never carried them (WEB-1), so it says to build\nit again, or write it with the tray, whose admin sign-in makes a new\nsetup key and console login (``POST /jobs/{id}/setup-key``); then\n``reissued`` is true and these are the new ones.",
         "operationId": "media_job_credentials_api_satellites_media_jobs__job_id__credentials_get",
         "parameters": [
           {
@@ -4187,7 +4187,7 @@
           "satellite-media"
         ],
         "summary": "Media Job Setup Key",
-        "description": "The setup network's key for a zip build, made again if this process\nhas forgotten it (a restart): for an admin holding card files whose\none-time pass no longer works (the tray's \"Sign in as admin to fetch\nit\").\n\nThe key lives only in the card's ``domovoi/ap.json``: nothing on the\nserver checks it later, so a NEW key for the same network name,\nwritten onto the card by whoever asked, works as well as the old one.\nIt is remembered like the first (memory only), so \"show setup details\"\nshows the new one, and ``reissued`` says the one shown before no\nlonger applies. While the build's key is still remembered it is\nanswered unchanged. 404 when there is no finished zip build with that\nid: prepare the card again.",
+        "description": "The setup network's key and the console login for a zip build, made\nagain if this process has forgotten them (a restart): for an admin\nholding card files whose one-time pass no longer works (the tray's\n\"Sign in as admin to fetch it\").\n\nBoth live only on the card: the key in ``domovoi/ap.json``, the console\npassword as the hash in ``userconf.txt``. Nothing on the server checks\neither later, and the card the tray is writing has never booted, so a\nNEW key for the same network and a NEW console password work as well\nas the old ones. The answer carries ``userconf``, the ``userconf.txt``\nline (``user:$6$...``, LF-terminated) the tray writes in place of the\nzip's; ``console`` and ``userconf`` are null when this host can't hash\na password (no openssl), and the zip's own console login stays.\nRemembered like the first (memory only), so \"show setup details\" shows\nthe new ones, and ``reissued`` says the ones shown before no longer\napply. While the build's are still remembered they are answered\nunchanged (``userconf`` null for the build's own: the zip's\n``userconf.txt`` already matches it). 404 when there is no finished zip build with that\nid: prepare the card again.",
         "operationId": "media_job_setup_key_api_satellites_media_jobs__job_id__setup_key_post",
         "parameters": [
           {

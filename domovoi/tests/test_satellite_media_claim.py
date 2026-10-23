@@ -251,7 +251,14 @@ def test_the_setup_key_route_answers_the_remembered_key():
     if r.status_code == 401:
         pytest.skip("this test database has an admin password; covered by the db test below")
     assert r.status_code == 200, r.text
-    assert r.json() == {"ap": {"ssid": "Domovoi-Setup-3FA9", "psk": "k7tqmzr4wd"}, "reissued": False}
+    # The build's own console login, unchanged, and no userconf line: the
+    # zip's userconf.txt already carries its hash.
+    assert r.json() == {
+        "ap": {"ssid": "Domovoi-Setup-3FA9", "psk": "k7tqmzr4wd"},
+        "console": {"username": "domovoi", "password": "consolepw22"},
+        "userconf": None,
+        "reissued": False,
+    }
     r = _client().post("/api/satellites/media/jobs/7/setup-key", json={"ssid": "Domovoi-Setup-0000"})
     assert r.status_code == 409
 
@@ -282,8 +289,17 @@ def _insert_job(kind: str, status: str) -> int:
     return asyncio.run(_i())
 
 
+FAKE_DIGEST = "$6$abcdefgh12345678$" + "a" * 86
+
+
 @requires_db
-def test_after_a_restart_an_admin_gets_a_new_key_for_the_same_network():
+def test_after_a_restart_an_admin_gets_a_new_key_for_the_same_network(monkeypatch):
+    """And a new console login: the zip's is only a hash, so after a restart
+    it is unknown; the card the tray is writing hasn't booted, so a new
+    password, with the userconf.txt line that carries its hash, works."""
+    hashed = []
+    monkeypatch.setattr(media_api.overlay, "hash_password",
+                        lambda pw: hashed.append(pw) or FAKE_DIGEST)
     _truncate_jobs()
     try:
         job = _insert_job("zip", "done")
@@ -297,14 +313,21 @@ def test_after_a_restart_an_admin_gets_a_new_key_for_the_same_network():
             assert body["reissued"] is True
             assert body["ap"]["ssid"] == "Domovoi-Setup-3FA9"
             assert len(body["ap"]["psk"]) == 10
-            # The dashboard's "show setup details" shows the new one.
+            console = body["console"]
+            assert console["username"] == "domovoi" and len(console["password"]) == media_api.overlay._CONSOLE_PASSWORD_LEN
+            assert hashed == [console["password"]]          # hashed the way the build does
+            assert body["userconf"] == f"domovoi:{FAKE_DIGEST}\n"
+            # The dashboard's "show setup details" shows the new ones, and
+            # not the userconf line (it's for the card writer).
             shown = client.get(f"/api/satellites/media/jobs/{job}/credentials").json()
-            assert shown["ap"] == body["ap"] and shown["console"] is None
-            assert shown["reissued"] is True
+            assert shown["ap"] == body["ap"] and shown["console"] == console
+            assert shown["reissued"] is True and "userconf" not in shown
+            row = next(j for j in client.get("/api/satellites/media/jobs").json() if j["id"] == job)
+            assert row["has_credentials"] is True
             # Asked again: the same key, not a third one.
             again = client.post(f"/api/satellites/media/jobs/{job}/setup-key",
                                 json={"ssid": "Domovoi-Setup-3FA9"}).json()
-            assert again["ap"] == body["ap"]
+            assert again == body                            # with its userconf line, for a second card
 
             # Nothing to recover: no such build, a drive build, an unfinished one.
             drive = _insert_job("drive", "done")
@@ -374,3 +397,59 @@ def test_the_tray_knows_every_reason_the_server_gives():
     ):
         assert words in cs, words
     assert media_api._CANT_RECOVER_DETAIL in cs
+
+
+@requires_db
+def test_with_no_way_to_hash_the_console_login_stays_the_zips(monkeypatch):
+    """No openssl: the setup key is still made again; the console login
+    can't be, so none is sent and the card keeps the zip's userconf.txt."""
+    monkeypatch.setattr(media_api.overlay, "hash_password", lambda pw: None)
+    _truncate_jobs()
+    try:
+        job = _insert_job("zip", "done")
+        with TestClient(app, base_url=BASE, headers=HDR) as client:
+            r = client.post(f"/api/satellites/media/jobs/{job}/setup-key",
+                            json={"ssid": "Domovoi-Setup-3FA9"})
+            if r.status_code == 401:
+                pytest.skip("the shared test database has an admin password set")
+            body = r.json()
+            assert body["reissued"] is True and len(body["ap"]["psk"]) == 10
+            assert body["console"] is None and body["userconf"] is None
+    finally:
+        _truncate_jobs()
+
+
+@requires_db
+def test_the_jobs_list_says_which_builds_still_have_setup_details():
+    """After a restart the dashboard shows a plain line instead of a "show
+    setup details" button that would open nothing."""
+    _truncate_jobs()
+    try:
+        kept = _insert_job("zip", "done")
+        cleared = _insert_job("zip", "done")
+        media_api._remember_credentials(kept, {
+            "ap": {"ssid": "Domovoi-Setup-3FA9", "psk": "k7tqmzr4wd"},
+            "console": {"username": "domovoi", "password": "consolepw22"},
+        })
+        with TestClient(app, base_url=BASE, headers=HDR) as client:
+            r = client.get("/api/satellites/media/jobs")
+            if r.status_code == 401:
+                pytest.skip("the shared test database has an admin password set")
+            rows = {j["id"]: j for j in r.json()}
+            assert rows[kept]["has_credentials"] is True
+            assert rows[cleared]["has_credentials"] is False
+    finally:
+        _truncate_jobs()
+
+
+def test_the_dashboard_row_never_offers_a_button_with_nothing_behind_it():
+    """Owner rule: no misleading controls. The row's button is gated on
+    has_credentials, and the cleared case reads the agreed line."""
+    jsx = (Path(__file__).resolve().parents[2] / "web" / "static" / "satellite_media.jsx").read_text(encoding="utf-8")
+    assert "j.has_credentials !== false" in jsx
+    assert ("Setup details were cleared when Domovoi restarted. Write this card with the tray "
+            "icon (it can sign in as admin to make a new password).") in jsx
+    # The row names its build number, which the tray shows too.
+    assert "#{j.id} · {j.board} · {j.mic_profile}" in jsx
+    cs = (Path(__file__).resolve().parents[2] / "windows" / "tray" / "CardZip.cs").read_text(encoding="utf-8")
+    assert '"Dashboard build " + (Claim != null ? "#"' in cs

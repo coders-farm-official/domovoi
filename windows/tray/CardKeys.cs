@@ -16,7 +16,10 @@
 // (POST /api/auth/login), then the build's credentials
 // (GET /api/satellites/media/jobs/{id}/credentials), or a new password for
 // the same network when the server forgot it
-// (POST /api/satellites/media/jobs/{id}/setup-key), then sign-out. The admin
+// (POST /api/satellites/media/jobs/{id}/setup-key), then sign-out. A new
+// password comes with a new console login too: the zip's console password
+// exists only as a hash, so the server sends the matching userconf.txt line
+// and the card writer puts it on the card in place of the zip's. The admin
 // password is held only for that one call. Typing the password the
 // dashboard showed stays the last way.
 
@@ -55,6 +58,10 @@ namespace Domovoi.Windows.Tray
         public bool Reissued;       // a new password the server made: the dashboard's old one is wrong now
         public KeyProblem Problem;
         public string Detail;       // the server's words, for a sign-in refusal
+        // The console login to tell the person (null: the dashboard's still
+        // applies, or none could be made), and, with a new one, the
+        // userconf.txt line that carries its hash (written in place of the zip's).
+        public string ConsoleUser, ConsolePassword, Userconf;
 
         public bool Ok { get { return Psk != null; } }
 
@@ -136,7 +143,19 @@ namespace Domovoi.Windows.Tray
         {
             if (a == null) return KeyAnswer.Fail(KeyProblem.Unreachable);
             if (a.Ok && SetupPassword.Problem(a.Psk) != null) return KeyAnswer.Fail(KeyProblem.Refused);
+            if (a.Ok && a.Userconf != null && !UserconfLine.IsMatch(a.Userconf)) return KeyAnswer.Fail(KeyProblem.Refused);
             return a;
+        }
+
+        // user:$6$salt$hash and a newline: what overlay.write_overlay writes,
+        // and the only shape Pi OS's first boot reads (a bad one locks the
+        // account silently).
+        public static readonly System.Text.RegularExpressions.Regex UserconfLine =
+            new System.Text.RegularExpressions.Regex(@"^[a-z_][a-z0-9_-]{0,31}:\$6\$[./0-9A-Za-z]{1,16}\$[./0-9A-Za-z]{86}\n\z");
+
+        public static byte[] UserconfBytes(string line)
+        {
+            return new UTF8Encoding(false).GetBytes(line);
         }
     }
 
@@ -178,10 +197,13 @@ namespace Domovoi.Windows.Tray
                 string path = "/api/satellites/media/jobs/" + Inv.S(jobId);
                 Reply got = Send("GET", path + "/credentials", null, token);
                 if (got == null) return KeyAnswer.Fail(KeyProblem.Unreachable);
-                if (got.Status == 200 && Json.Str(Json.Obj(got.Body, "ap"), "ssid") == ssid)
-                    return Psk(got, KeyProblem.Unrecoverable, Json.Bool(got.Body, "reissued") == true);
+                // The build's own (not made again): the zip's userconf.txt
+                // already matches its console login.
+                if (got.Status == 200 && Json.Str(Json.Obj(got.Body, "ap"), "ssid") == ssid && Json.Bool(got.Body, "reissued") != true)
+                    return Psk(got, KeyProblem.Unrecoverable, false);
                 if (got.Status != 200 && got.Status != 404) return KeyAnswer.Fail(KeyProblem.SignInRefused, Json.Str(got.Body, "detail"));
-                // Forgotten (404), or the build remembered has no such network: make one again.
+                // Forgotten (404), made again earlier (its userconf.txt line is
+                // only in setup-key's answer), or no such network: ask setup-key.
                 Reply made = Send("POST", path + "/setup-key", "{\"ssid\": " + Quote(ssid) + "}", token);
                 if (made == null) return KeyAnswer.Fail(KeyProblem.Unreachable);
                 if (made.Status == 200) return Psk(made, KeyProblem.Unrecoverable, Json.Bool(made.Body, "reissued") == true);
@@ -197,7 +219,14 @@ namespace Domovoi.Windows.Tray
         static KeyAnswer Psk(Reply r, KeyProblem otherwise, bool reissued)
         {
             string psk = Json.Str(Json.Obj(r.Body, "ap"), "psk");
-            return psk != null ? KeyAnswer.Got(psk, reissued) : KeyAnswer.Fail(otherwise);
+            if (psk == null) return KeyAnswer.Fail(otherwise);
+            KeyAnswer a = KeyAnswer.Got(psk, reissued);
+            Dictionary<string, object> console = Json.Obj(r.Body, "console");
+            a.ConsoleUser = Json.Str(console, "username");
+            a.ConsolePassword = Json.Str(console, "password");
+            if (a.ConsoleUser == null || a.ConsolePassword == null) a.ConsoleUser = a.ConsolePassword = null;
+            a.Userconf = Json.Str(r.Body, "userconf");
+            return a;
         }
 
         sealed class Reply

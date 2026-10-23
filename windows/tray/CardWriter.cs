@@ -8,8 +8,11 @@
 // Order: free space first; then the files the first-boot hook runs; then
 // config.txt and cmdline.txt last, so a card pulled out halfway never
 // boots into a hook whose files aren't there. Then every file is read back
-// and checked (each copied file against the zip, the payload against
-// payload.sha256, ap.json and the two edits against what was meant).
+// and checked (each copied file against the zip, userconf.txt among them,
+// the payload against payload.sha256, ap.json and the two edits against what
+// was meant). A console login made again after a server restart comes with
+// its own userconf.txt line, written in place of the zip's and checked the
+// same way.
 
 using System;
 using System.Collections.Generic;
@@ -104,6 +107,13 @@ namespace Domovoi.Windows.Tray
         // progress(message, percent).
         public static CardWriteResult Write(CardPackage pkg, string root, string psk, Action<string, int> progress)
         {
+            return Write(pkg, root, psk, null, progress);
+        }
+
+        // userconf: the userconf.txt line for a console login the server made
+        // again (CardKeys), or null for the zip's own.
+        public static CardWriteResult Write(CardPackage pkg, string root, string psk, string userconf, Action<string, int> progress)
+        {
             if (progress == null) progress = delegate { };
             var result = new CardWriteResult();
             string config = Path.Combine(root, "config.txt"), cmdline = Path.Combine(root, "cmdline.txt");
@@ -115,6 +125,12 @@ namespace Domovoi.Windows.Tray
                 string why = SetupPassword.Problem(psk);
                 if (why != null) throw new CardWriteException(why);
                 ap = ApJson.Bytes(pkg.ApSsid, SetupPassword.Normalize(psk));
+            }
+            byte[] login = null;
+            if (userconf != null)
+            {
+                if (!CardKeyFlow.UserconfLine.IsMatch(userconf)) throw new CardWriteException("The console login Domovoi sent isn't one a Raspberry Pi can use. Try again, or prepare the card again on the dashboard.");
+                login = CardKeyFlow.UserconfBytes(userconf);
             }
 
             progress("Checking the free space on the card", 2);
@@ -132,6 +148,7 @@ namespace Domovoi.Windows.Tray
                 order.Sort(delegate (CardFile a, CardFile b) { return (b.Entry == "domovoi/payload.tar.gz").CompareTo(a.Entry == "domovoi/payload.tar.gz"); });
                 foreach (CardFile f in order)
                 {
+                    if (login != null && f.Dest == "userconf.txt") continue;   // the new one goes in below
                     ZipArchiveEntry e = zip.GetEntry(f.Entry);
                     if (e == null || e.Length != f.Size) throw new CardWriteException("The zip changed while the card was being written. Pick it again.");
                     string dest = Path.Combine(root, f.Dest);
@@ -147,6 +164,13 @@ namespace Domovoi.Windows.Tray
                     result.Written.Add(f.Dest.Replace('\\', '/'));
                     done += f.Size;
                 }
+            }
+            if (login != null)
+            {
+                progress("Writing the new console login (userconf.txt)", 86);
+                WriteBytes(Path.Combine(root, "userconf.txt"), login);
+                hashes["userconf.txt"] = CardZip.Sha256Hex(login);
+                result.Written.Add("userconf.txt");
             }
             if (ap != null)
             {
