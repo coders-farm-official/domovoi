@@ -64,13 +64,27 @@ namespace Domovoi.Windows.Tray
 
         public string Summary()
         {
-            string when = BuiltAt;
+            return JobLine() + ". For " + BoardLabel + (IsPortal ? ", set up over Wi-Fi (" + ApSsid + ")" : ", adopted over USB")
+                + ". " + CardZip.Mib(CopyBytes) + " to copy.";
+        }
+
+        public string When()
+        {
             DateTimeOffset t;
             if (DateTimeOffset.TryParseExact(BuiltAt, "yyyy-MM-ddTHH:mm:sszzz", CultureInfo.InvariantCulture, DateTimeStyles.None, out t)
                 || DateTimeOffset.TryParse(BuiltAt, CultureInfo.InvariantCulture, DateTimeStyles.None, out t))
-                when = t.LocalDateTime.ToString("d MMM yyyy, HH:mm", CultureInfo.CurrentCulture);
-            return "Built " + when + " for " + BoardLabel + (IsPortal ? ", set up over Wi-Fi (" + ApSsid + ")" : ", adopted over USB")
-                + ". " + CardZip.Mib(CopyBytes) + " to copy.";
+                return t.LocalDateTime.ToString("d MMM yyyy, HH:mm", CultureInfo.CurrentCulture);
+            return BuiltAt;
+        }
+
+        // Which dashboard build these files are, the way its row in Settings >
+        // Rooms > prepare satellite media reads (#17, pi02w,
+        // respeaker_2mic_hat_v2, joined by middle dots), and when (the row's
+        // time, on hover there).
+        // The number comes from the one-time pass; older files have none.
+        public string JobLine()
+        {
+            return "Dashboard build " + (Claim != null ? "#" + Inv.S(Claim.JobId) + " \u00B7 " : "") + Board + " \u00B7 " + MicProfile + ", built " + When();
         }
     }
 

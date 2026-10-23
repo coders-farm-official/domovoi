@@ -970,7 +970,103 @@ static partial class Tests
             True(File.ReadAllBytes(Path.Combine(card, "domovoi", "ap.json")).SequenceEqual(ApJson.Bytes("Domovoi-Setup-3FA9", "k7tqmzr4wd")), "ap.json");
             True(!File.Exists(Path.Combine(card, "domovoi", "claim.json")), "no claim on the card");
         });
+        CardKeysConsole();
         CardKeysHttp();
+    }
+
+    static readonly string GoodUserconf = "domovoi:$6$abcdefgh12345678$" + new string('a', 40) + new string('B', 40) + "./0123" + "\n";
+
+    static KeyAnswer Reissued()
+    {
+        KeyAnswer a = KeyAnswer.Got("m3n4p5q6r7", true);
+        a.ConsoleUser = "domovoi";
+        a.ConsolePassword = "c0nsolepw";
+        a.Userconf = GoodUserconf;
+        return a;
+    }
+
+    static void CardKeysConsole()
+    {
+        Run("card key: the card files name their dashboard build (number, board, mic board, time)", delegate
+        {
+            var spec = new ZipSpec();
+            spec.Extra.Add(ClaimEntry(17, Tomorrow()));
+            CardPackage p = CardZip.Open(MakeZip(TempDir("job-zip"), spec));
+            True(p.JobLine().StartsWith("Dashboard build #17 \u00B7 pi02w \u00B7 respeaker_2mic_hat_v2, built "), p.JobLine());
+            True(p.Summary().StartsWith(p.JobLine()), "the zip page leads with it");
+            True(CardZip.Open(MakeZip(TempDir("job-old-zip"), new ZipSpec())).JobLine().StartsWith("Dashboard build pi02w \u00B7 "), "an older zip: no number");
+            var keys = new FakeKeys { ClaimAnswer = KeyAnswer.Fail(KeyProblem.Forgotten) };
+            using (CardWizard w = WizardAtCard(spec, keys, delegate { return null; }))
+            {
+                w.ClickNext();
+                Eq(p.JobLine() + ".", w.JobText, "the password step names it");
+                w.GoTo(CardStep.Done);
+                True(w.DoneText.Contains(p.JobLine()), "so does the last step");
+            }
+        });
+        Run("card key: an admin sign-in after a restart brings a new console login, written and checked", delegate
+        {
+            var spec = new ZipSpec();
+            spec.Extra.Add(ClaimEntry(17, Tomorrow()));
+            var keys = new FakeKeys { ClaimAnswer = KeyAnswer.Fail(KeyProblem.Forgotten), AdminAnswer = Reissued() };
+            using (CardWizard w = WizardAtCard(spec, keys, delegate { return "admin-pw"; }))
+            {
+                w.ClickNext();
+                w.SignInAndFetch();
+                Eq(CardStep.Write, w.Step, "on to writing");
+                True(w.WriteLeadText.Contains("m3n4p5q6r7") && w.WriteLeadText.Contains("domovoi / c0nsolepw"), "both shown: " + w.WriteLeadText);
+                w.GoTo(CardStep.Done);
+                True(w.DoneText.Contains("New console login (it replaces the one shown before): domovoi / c0nsolepw."), "done names it");
+            }
+            CardPackage p = CardZip.Open(MakeZip(TempDir("relogin-zip"), spec));
+            string card = FlashedCard("relogin-card", GoldenInput("bookworm stock", "config"), GoldenInput("bookworm stock", "cmdline"));
+            CardWriteResult r = CardWriter.Write(p, card, "m3n4p5q6r7", GoodUserconf, null);
+            True(File.ReadAllBytes(Path.Combine(card, "userconf.txt")).SequenceEqual(new UTF8Encoding(false).GetBytes(GoodUserconf)), "the new hash, not the zip's");
+            True(r.Checked.Contains("userconf.txt"), "read back and checked");
+            Eq(1, r.Written.Count(x => x == "userconf.txt"), "written once");
+        });
+        Run("card key: the zip's own console login is kept, and checked, on the one-time-pass path", delegate
+        {
+            var spec = new ZipSpec();
+            spec.Extra.Add(ClaimEntry(17, Tomorrow()));
+            var keys = new FakeKeys();
+            using (CardWizard w = WizardAtCard(spec, keys, delegate { return null; }))
+            {
+                w.ClickNext();
+                True(w.KeyFetched && w.Key.Userconf == null && !w.Key.Reissued, "no new login");
+                True(!w.WriteLeadText.Contains("console login"), "none mentioned");
+            }
+            CardPackage p = CardZip.Open(MakeZip(TempDir("keep-zip"), spec));
+            string card = FlashedCard("keep-card", GoldenInput("bookworm stock", "config"), GoldenInput("bookworm stock", "cmdline"));
+            CardWriteResult r = CardWriter.Write(p, card, "k7tqmzr4wd", null, null);
+            Eq("domovoi:$6$salt$hash\n", File.ReadAllText(Path.Combine(card, "userconf.txt")), "the zip's userconf.txt");
+            True(r.Checked.Contains("userconf.txt"), "read back and checked");
+        });
+        Run("card key: a userconf line a Pi can't use is refused before anything is written", delegate
+        {
+            CardPackage p = CardZip.Open(MakeZip(TempDir("badlogin-zip"), new ZipSpec()));
+            string card = FlashedCard("badlogin-card", "x=1\n", "rootwait\n");
+            foreach (string bad in new[] { "domovoi:$1$abc$def\n", "domovoi:" + GoodUserconf.Substring(8).TrimEnd('\n'), "root:x\n", GoodUserconf + "more\n" })
+                Throws<CardWriteException>(() => CardWriter.Write(p, card, "k7tqmzr4wd", bad, null), "refused: " + bad);
+            True(!Directory.Exists(Path.Combine(card, "domovoi")), "nothing written");
+            KeyAnswer a = Reissued();
+            a.Userconf = "domovoi:plain\n";
+            var spec = new ZipSpec();
+            spec.Extra.Add(ClaimEntry(17, Tomorrow()));
+            Eq(KeyProblem.Refused, CardKeyFlow.FetchAsAdmin(new FakeKeys { AdminAnswer = a }, CardZip.Open(MakeZip(TempDir("badlogin2-zip"), spec)), "pw").Problem, "the answer is refused too");
+        });
+        Run("card key: no console login could be made: the card keeps the zip's and says so", delegate
+        {
+            var spec = new ZipSpec();
+            spec.Extra.Add(ClaimEntry(17, Tomorrow()));
+            var keys = new FakeKeys { ClaimAnswer = KeyAnswer.Fail(KeyProblem.Forgotten), AdminAnswer = KeyAnswer.Got("m3n4p5q6r7", true) };
+            using (CardWizard w = WizardAtCard(spec, keys, delegate { return "admin-pw"; }))
+            {
+                w.ClickNext();
+                w.SignInAndFetch();
+                True(w.WriteLeadText.Contains("couldn't be made again"), w.WriteLeadText);
+            }
+        });
     }
 
     // -- HttpCardKeys against a pretend dashboard on loopback -----------------
@@ -1082,7 +1178,7 @@ static partial class Tests
                 d.Answer = (k, bearer, body) =>
                 {
                     if (k == "POST /api/auth/login") return body.Contains("\"right one\"") ? R(200, "{\"ok\": true, \"token\": \"T0K\"}") : R(401, "{\"detail\": \"wrong password\"}");
-                    if (k == "GET /api/satellites/media/jobs/17/credentials" && bearer == "T0K") return R(200, "{\"ap\": {\"ssid\": \"Domovoi-Setup-3FA9\", \"psk\": \"k7tqmzr4wd\"}, \"console\": null}");
+                    if (k == "GET /api/satellites/media/jobs/17/credentials" && bearer == "T0K") return R(200, "{\"ap\": {\"ssid\": \"Domovoi-Setup-3FA9\", \"psk\": \"k7tqmzr4wd\"}, \"console\": {\"username\": \"domovoi\", \"password\": \"orig1nalpw\"}}");
                     if (k == "POST /api/auth/logout" && bearer == "T0K") return R(200, "{\"ok\": true}");
                     return R(500, "{}");
                 };
@@ -1093,6 +1189,7 @@ static partial class Tests
                 d.Seen.Clear();
                 KeyAnswer a = keys.AdminFetch(17, "Domovoi-Setup-3FA9", "right one");
                 True(a.Ok && a.Psk == "k7tqmzr4wd" && !a.Reissued, "the build's password");
+                True(a.ConsolePassword == "orig1nalpw" && a.Userconf == null, "the build's console login: the zip's userconf.txt stays");
                 SeqEq(new[] { "POST /api/auth/login", "GET /api/satellites/media/jobs/17/credentials bearer=T0K", "POST /api/auth/logout bearer=T0K" }, d.Seen, "sign in, read, sign out");
             }
         });
@@ -1108,7 +1205,7 @@ static partial class Tests
                     if (k == "POST /api/satellites/media/jobs/17/setup-key")
                     {
                         True(body.Contains("\"ssid\": \"Domovoi-Setup-3FA9\""), "the card's network");
-                        return recoverable ? R(200, "{\"ap\": {\"ssid\": \"Domovoi-Setup-3FA9\", \"psk\": \"m3n4p5q6r7\"}, \"reissued\": true}") : R(404, "{\"detail\": \"no\"}");
+                        return recoverable ? R(200, "{\"ap\": {\"ssid\": \"Domovoi-Setup-3FA9\", \"psk\": \"m3n4p5q6r7\"}, \"console\": {\"username\": \"domovoi\", \"password\": \"c0nsolepw\"}, \"userconf\": " + HttpCardKeys.Quote(GoodUserconf) + ", \"reissued\": true}") : R(404, "{\"detail\": \"no\"}");
                     }
                     if (k == "POST /api/auth/logout") return R(200, "{}");
                     return R(500, "{}");
@@ -1116,11 +1213,29 @@ static partial class Tests
                 var keys = new HttpCardKeys(d.Url);
                 KeyAnswer a = keys.AdminFetch(17, "Domovoi-Setup-3FA9", "pw");
                 True(a.Ok && a.Psk == "m3n4p5q6r7" && a.Reissued, "a new password");
+                True(a.ConsoleUser == "domovoi" && a.ConsolePassword == "c0nsolepw" && a.Userconf == GoodUserconf, "and a new console login with its userconf.txt line");
                 True(d.Seen.Last().StartsWith("POST /api/auth/logout"), "signed out");
                 recoverable = false;
                 d.Seen.Clear();
                 Eq(KeyProblem.Unrecoverable, keys.AdminFetch(17, "Domovoi-Setup-3FA9", "pw").Problem, "can't be had");
                 True(d.Seen.Last().StartsWith("POST /api/auth/logout"), "signed out after a failure too");
+            }
+        });
+        Run("card key http: a login made again earlier is fetched from setup-key, which carries its userconf line", delegate
+        {
+            using (var d = new FakeDashboard())
+            {
+                d.Answer = (k, bearer, body) =>
+                {
+                    if (k == "POST /api/auth/login") return R(200, "{\"ok\": true, \"token\": \"T0K\"}");
+                    if (k == "GET /api/satellites/media/jobs/17/credentials") return R(200, "{\"ap\": {\"ssid\": \"Domovoi-Setup-3FA9\", \"psk\": \"m3n4p5q6r7\"}, \"console\": {\"username\": \"domovoi\", \"password\": \"c0nsolepw\"}, \"reissued\": true}");
+                    if (k == "POST /api/satellites/media/jobs/17/setup-key") return R(200, "{\"ap\": {\"ssid\": \"Domovoi-Setup-3FA9\", \"psk\": \"m3n4p5q6r7\"}, \"console\": {\"username\": \"domovoi\", \"password\": \"c0nsolepw\"}, \"userconf\": " + HttpCardKeys.Quote(GoodUserconf) + ", \"reissued\": true}");
+                    if (k == "POST /api/auth/logout") return R(200, "{}");
+                    return R(500, "{}");
+                };
+                KeyAnswer a = new HttpCardKeys(d.Url).AdminFetch(17, "Domovoi-Setup-3FA9", "pw");
+                True(a.Ok && a.Reissued && a.Userconf == GoodUserconf, "the same new login, with its line");
+                True(d.Seen.Any(x => x.StartsWith("POST /api/satellites/media/jobs/17/setup-key")), "asked setup-key");
             }
         });
         Run("card key http: a throttled sign-in shows the server's words", delegate

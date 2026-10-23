@@ -53,7 +53,7 @@ namespace Domovoi.Windows.Tray
         readonly Label cardNote = new Label();
         // Password page
         readonly TextBox ssidBox = new TextBox(), pskBox = new TextBox();
-        readonly Label pskNote = new Label(), keyReason = new Label(), keyNext = new Label();
+        readonly Label pskNote = new Label(), keyReason = new Label(), keyNext = new Label(), keyJob = new Label();
         readonly Button adminButton = new Button(), retryButton = new Button();
         // Write page
         readonly Label writeLead = new Label(), writeStatus = new Label();
@@ -238,24 +238,27 @@ namespace Domovoi.Windows.Tray
             p.Controls.Add(pskBox);
             pskNote.SetBounds(140, 176, 420, 34);
             p.Controls.Add(pskNote);
-            p.Controls.Add(Para("The dashboard showed it when it built these files (Settings > Rooms > prepare satellite media > show setup details). It's ten characters: lower-case letters and the digits 2 to 9.", 214, 50));
+            p.Controls.Add(Para("The dashboard showed it when it built these files (Settings > Rooms > prepare satellite media > show setup details). It's ten characters: lower-case letters and the digits 2 to 9.", 214, 34));
+            keyJob.SetBounds(0, 250, 560, 18);
+            keyJob.ForeColor = SystemColors.GrayText;
+            p.Controls.Add(keyJob);
             return p;
         }
 
         Control WritePage()
         {
             var p = new Panel();
-            writeLead.SetBounds(0, 0, 560, 50);
+            writeLead.SetBounds(0, 0, 560, 80);
             writeButton.Text = "Write to the card";
-            writeButton.SetBounds(0, 54, 150, 30);
+            writeButton.SetBounds(0, 84, 150, 30);
             writeButton.Click += delegate { StartWrite(); };
             ejectButton.Text = "Eject the card";
-            ejectButton.SetBounds(160, 54, 150, 30);
+            ejectButton.SetBounds(160, 84, 150, 30);
             ejectButton.Enabled = false;
             ejectButton.Click += delegate { EjectCard(); };
-            writeBar.SetBounds(0, 94, 560, 18);
-            writeStatus.SetBounds(0, 118, 560, 40);
-            writeLog.SetBounds(0, 162, 560, 104);
+            writeBar.SetBounds(0, 122, 560, 18);
+            writeStatus.SetBounds(0, 144, 560, 40);
+            writeLog.SetBounds(0, 186, 560, 80);
             writeLog.IntegralHeight = false;
             p.Controls.AddRange(new Control[] { writeLead, writeButton, ejectButton, writeBar, writeStatus, writeLog });
             return p;
@@ -264,10 +267,10 @@ namespace Domovoi.Windows.Tray
         Control DonePage()
         {
             var p = new Panel();
-            doneText.SetBounds(0, 0, 560, 100);
+            doneText.SetBounds(0, 0, 560, 150);
             p.Controls.Add(doneText);
-            p.Controls.Add(Link("Open Settings > Rooms", 110, delegate { openUrl(webUrl + "/#settings/rooms"); }));
-            var another = new Button { Text = "Prepare another card", AutoSize = true, Location = new Point(0, 146) };
+            p.Controls.Add(Link("Open Settings > Rooms", 160, delegate { openUrl(webUrl + "/#settings/rooms"); }));
+            var another = new Button { Text = "Prepare another card", AutoSize = true, Location = new Point(0, 192) };
             another.Click += delegate { written = false; chosen = null; GoTo(CardStep.Card); };
             p.Controls.Add(another);
             return p;
@@ -314,6 +317,9 @@ namespace Domovoi.Windows.Tray
                         + (KeyFetched ? key.Psk + (key.Reissued ? " (a new one: the password the dashboard showed before won't work)" : " (the dashboard shows it too)") : "you typed here")
                         + ", and follow the page that opens. Then approve the satellite in Settings > Rooms."
                     : "Put the card in the Pi and switch it on, then plug it into the Domovoi server's USB port and adopt it in Settings > Rooms.";
+                if (KeyFetched && key.Reissued)
+                    doneText.Text += "\n\n" + ConsoleLine();
+                doneText.Text += "\n\n" + package.JobLine() + ".";
             }
             UpdateButtons();
         }
@@ -465,6 +471,18 @@ namespace Domovoi.Windows.Tray
 
         public void ClickNext() { GoNext(); }
 
+        public string DoneText { get { return doneText.Text; } }
+        public string WriteLeadText { get { return writeLead.Text; } }
+        public string JobText { get { return keyJob.Text; } }
+
+        // The console login made again with the password (the zip's is only a hash).
+        string ConsoleLine()
+        {
+            if (key.ConsoleUser != null && key.Userconf != null)
+                return "New console login (it replaces the one shown before): " + key.ConsoleUser + " / " + key.ConsolePassword + ".";
+            return "The console login couldn't be made again: the card keeps the one shown when it was built.";
+        }
+
         public void ClickBack() { GoBack(); }
 
         // -- the setup network's password -------------------------------
@@ -522,6 +540,7 @@ namespace Domovoi.Windows.Tray
         {
             if (key == null || key.Ok) return;
             keyReason.Text = CardKeyWords.Reason(key);
+            keyJob.Text = package.JobLine() + ".";
             keyNext.Text = CardKeyWords.NextStep(key);
             // No pass, or nothing the server can recover: signing in can't help.
             adminOffered = key.Problem != KeyProblem.NoClaim && key.Problem != KeyProblem.Unrecoverable;
@@ -548,7 +567,8 @@ namespace Domovoi.Windows.Tray
             if (package.IsPortal && KeyFetched)
                 writeLead.Text += "\nDomovoi filled in the setup network password (" + key.Psk + ")."
                     + (key.Reissued ? " It's new: the dashboard's old one won't work." : "")
-                    + " You'll need it on your phone.";
+                    + " You'll need it on your phone."
+                    + (key.Reissued ? " " + ConsoleLine() : "");
             if (!written)
             {
                 writeBar.Value = 0;
@@ -568,6 +588,8 @@ namespace Domovoi.Windows.Tray
             UpdateButtons();
             string root = chosen.Drive.Root;
             string psk = KeyFetched ? key.Psk : pskBox.Text;
+            // A console login made again comes with its userconf.txt line.
+            string userconf = KeyFetched && key.Reissued ? key.Userconf : null;
             CardPackage pkg = package;
             var t = new Thread(delegate ()
             {
@@ -575,7 +597,7 @@ namespace Domovoi.Windows.Tray
                 string error = null;
                 try
                 {
-                    result = CardWriter.Write(pkg, root, psk, delegate (string msg, int pct)
+                    result = CardWriter.Write(pkg, root, psk, userconf, delegate (string msg, int pct)
                     {
                         BeginInvoke(new Action(delegate { writeBar.Value = Math.Max(0, Math.Min(100, pct)); writeStatus.Text = msg + "..."; writeLog.Items.Add(msg); writeLog.TopIndex = writeLog.Items.Count - 1; }));
                     });

@@ -135,7 +135,7 @@ const CredentialsModal = ({ creds, zip, cardHelper, onClose }) => {
                   write it down.{' '}</>
               )}
               {creds.reissued
-                ? 'This password was made again after the dashboard restarted: the one shown before won’t work for this card. '
+                ? 'These were made again after Domovoi restarted, when the tray icon signed in as admin to write the card: the ones shown before no longer apply to this card. '
                 : 'This is the only place it is shown. '}
               The downloaded zip contains no passwords, and these are held in
               memory here until the dashboard restarts.
@@ -177,7 +177,7 @@ const MediaJobRow = ({ j, onShowCredentials, cardHelper }) => {
           {j.status}
         </Pill>
         <span className="mono" style={{ fontSize: 12 }}>
-          {j.board} · {j.mic_profile} · {j.target_kind === 'zip' ? 'zip download' : `drive ${j.target_ref}:`}
+          #{j.id} · {j.board} · {j.mic_profile} · {j.target_kind === 'zip' ? 'zip download' : `drive ${j.target_ref}:`}
         </span>
         <span style={{ flex: 1 }}/>
         {j.status === 'done' && j.has_artifact && (
@@ -186,7 +186,8 @@ const MediaJobRow = ({ j, onShowCredentials, cardHelper }) => {
             {cardHelper ? 'download for the card helper' : 'download zip'}
           </a>
         )}
-        <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{relTime(j.requested_at)}</span>
+        <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}
+              title={j.requested_at ? new Date(j.requested_at).toLocaleString() : undefined}>{relTime(j.requested_at)}</span>
       </div>
       {live && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
@@ -212,11 +213,22 @@ const MediaJobRow = ({ j, onShowCredentials, cardHelper }) => {
       {/* Zip builds too: their passwords are in no file at all (WEB-1), so
           this is the only place a portal card's setup key can be read —
           and inside WSL the zip is the only way to build a card. */}
-      {j.status === 'done' && onShowCredentials && (
+      {/* Held in the server's memory only, so a restart clears them: then
+          the row says so rather than offering a button that opens nothing
+          (owner rule: no misleading controls). A server too old to say
+          (no has_credentials) keeps the button. */}
+      {j.status === 'done' && onShowCredentials && j.has_credentials !== false && (
         <div style={{ marginTop: 6 }}>
           <Button variant="ghost" icon="key" onClick={() => onShowCredentials(j)}>
             show setup details
           </Button>
+        </div>
+      )}
+      {j.status === 'done' && j.has_credentials === false && (
+        <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
+          {j.target_kind === 'zip'
+            ? 'Setup details were cleared when Domovoi restarted. Write this card with the tray icon (it can sign in as admin to make a new password).'
+            : 'Setup details were cleared when Domovoi restarted. The card has them in domovoi/ap.json and domovoi/console.json.'}
         </div>
       )}
     </div>
