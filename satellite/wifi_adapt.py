@@ -166,15 +166,21 @@ def decide(security: str | None, key_mgmt: str | None, pmf: str | None,
         if km == SAE:
             if mixed and can_sae is not False and not after_failure:
                 return Plan("ok", why="WPA3 profile on a mixed router, on a radio that can")
-            tries = [(PSK, PMF_DISABLE)] + ([] if mixed else [(PSK, PMF_DEFAULT)])
-            return Plan("change", tuple(tries),
+            return Plan("change", ((PSK, PMF_DISABLE), (PSK, PMF_OPTIONAL)),
                         why="the router offers WPA2 again; back to wpa-psk")
-        if mixed and pmf != PMF_DISABLE:
-            return Plan("change", ((PSK, PMF_DISABLE),),
+        if mixed and pmf == PMF_DEFAULT:
+            # A profile from before 2026-10-22: NM offers SAE with it.
+            tries = ((PSK, PMF_DISABLE),) + (((PSK, PMF_OPTIONAL),) if after_failure else ())
+            return Plan("change", tries,
                         why="the router is WPA2/WPA3 mixed; PMF off keeps the join on WPA2")
-        if not mixed and after_failure and pmf == PMF_DISABLE:
-            return Plan("change", ((PSK, PMF_DEFAULT),),
-                        why="WPA2 with PMF off failed; the router may require PMF")
+        if after_failure and pmf == PMF_DISABLE:
+            return Plan("change", ((PSK, PMF_OPTIONAL),),
+                        why="wpa-psk with PMF off failed; the router may require PMF")
+        if after_failure and mixed and pmf == PMF_OPTIONAL:
+            # Each failed recovery tries the other one; never at boot, which
+            # would undo what a recovery found to work.
+            return Plan("change", ((PSK, PMF_DISABLE),),
+                        why="wpa-psk with PMF optional failed; PMF off keeps the join on WPA2")
         return Plan("ok", why="the profile matches the router")
     # WPA3-only.
     if km == SAE:

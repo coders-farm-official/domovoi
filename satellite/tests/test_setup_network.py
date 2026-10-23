@@ -522,6 +522,36 @@ def test_a_failed_join_never_puts_the_house_network_on_the_card(home, card, monk
     assert doc["error"] == setup_report.JOIN_FAILED
 
 
+def test_a_failed_join_puts_every_attempt_on_the_card(home, card, monkeypatch):
+    """join_scan and join_attempts (satellite/join_diag.py) reach the card
+    with the rest of the failure, scrubbed."""
+    class _Once(_FailingTransport):
+        def __init__(self):
+            super().__init__(lambda: None, succeed_after=0)
+            self.ap_ssid = "Domovoi-Setup-A4F2"
+
+        def wait_for_provision(self, nonce):
+            return {"room_id": "den"}
+
+        def network_report(self, state, error):
+            return {"state": state, "last_error": error,
+                    "line": setup_report.line(state=state, error=error)}
+
+    def failing(*a, **k):
+        pm.JOIN_DIAG.scan = [{"ap": "AP-1 (..:01:9b)", "security": "WPA2", "channel": 1,
+                              "freq_mhz": 2412, "signal": 78}]
+        pm.JOIN_DIAG.attempts = [{"key_mgmt": "wpa-psk", "pmf": "disable",
+                                  "ap": "AP-1 (..:01:9b)", "outcome": "wrong-password"}]
+        return False, "wifi join failed for 'Kitchen Router 5G' [wrong-password]: Error: x"
+
+    monkeypatch.setattr(pm, "apply_provision", failing)
+    pm.run(_Once(), max_loops=1)
+    doc = json.loads(card.read_text(encoding="utf-8"))
+    assert doc["join_scan"][0]["ap"] == "AP-1 (..:01:9b)"
+    assert doc["join_attempts"][0]["outcome"] == "wrong-password"
+    assert "Kitchen Router" not in card.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("err, expected", [
     ("wifi join failed for 'HomeNet': Secrets were required", setup_report.JOIN_FAILED),
     ("wifi join timed out for 'HomeNet'", setup_report.JOIN_TIMED_OUT),

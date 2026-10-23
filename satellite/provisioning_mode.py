@@ -55,6 +55,7 @@ from typing import Any, Protocol
 
 from satellite import config_writer
 from satellite import provisioning_protocol as proto
+from satellite import join_diag
 from satellite import wifi_reasons
 
 log = logging.getLogger("provisioning")
@@ -156,7 +157,7 @@ def _read_ap_json(path: Path) -> dict[str, str] | None:
         # validates them: the boot partition is the one file a household
         # can edit, so a setup network can be re-tuned there without
         # rebuilding the card.
-        for key in ("channel", "pmf"):
+        for key in ("channel", "pmf", "join_bssid", "join_band"):
             if doc.get(key) is not None:
                 creds[key] = str(doc[key])
         return creds
@@ -331,6 +332,12 @@ _KEY_MGMT_OPEN = "none"
 # with PMF at NM's default.
 _PMF_DISABLE = "disable"
 _PMF_DEFAULT = "default"
+# PMF OPTIONAL is the second wpa-psk try on a WPA2 or WPA2/WPA3 router: an
+# access point that REQUIRES PMF (some Wi-Fi 7 routers run transition mode
+# that way) refuses a PMF-off client at association (802.11 status 31).
+# With PMF optional NetworkManager also offers SAE again where the radio
+# claims it - which is why it is never the FIRST try on a Pi Zero 2 W.
+_PMF_OPTIONAL = "optional"
 _PMF_REQUIRED = "required"      # WPA3 (SAE) mandates PMF
 _PSK_PLACEHOLDER = "<psk>"
 _NETWORK_PLACEHOLDER = "<network>"
@@ -495,9 +502,10 @@ def _join_plan(
     2 W for that kind of network, then the one a different radio or router
     may need:
 
-    * WPA2 / WPA (TKIP): wpa-psk PMF off, then wpa-psk PMF default (a WPA2
-      router that requires PMF).
+    * WPA2 / WPA (TKIP): wpa-psk PMF off, then wpa-psk PMF optional (a
+      WPA2 router that requires PMF).
     * WPA2/WPA3 mixed: wpa-psk PMF off (the WPA2 side; NM leaves SAE out),
+      then wpa-psk PMF optional (a router that requires PMF, status 31),
       then sae PMF required (a radio that can do WPA3).
     * WPA3-only: sae PMF required, once. A 64-hex key cannot be used with
       SAE (it needs the password itself), so that is refused in words.
@@ -530,12 +538,12 @@ def _join_plan(
             return [], wifi_reasons.WPA3_RAW_KEY, "wpa3"
         return [(_KEY_MGMT_SAE, _PMF_REQUIRED)], None, "wpa3"
     if sae and wpa:
-        plan = [(_KEY_MGMT_PSK, _PMF_DISABLE)]
+        plan = [(_KEY_MGMT_PSK, _PMF_DISABLE), (_KEY_MGMT_PSK, _PMF_OPTIONAL)]
         if not raw:
             plan.append((_KEY_MGMT_SAE, _PMF_REQUIRED))
         return plan, None, "mixed"
     if wpa:
-        return [(_KEY_MGMT_PSK, _PMF_DISABLE), (_KEY_MGMT_PSK, _PMF_DEFAULT)], \
+        return [(_KEY_MGMT_PSK, _PMF_DISABLE), (_KEY_MGMT_PSK, _PMF_OPTIONAL)], \
             None, "wpa2"
     plan = [(_KEY_MGMT_PSK, _PMF_DISABLE)]
     if not raw:
@@ -575,6 +583,10 @@ def _radio_is_24ghz_only(run) -> bool | None:
 # for the card's report (setup_report). Scrubbed: no network name, no
 # password, no hardware addresses.
 LAST_JOIN_LOG: list[str] = []
+# What every join attempt of the current provisioning attempt did: the scan
+# of the chosen network's access points and one entry per attempt
+# (satellite/join_diag.py). Reset by apply_provision; goes on the card.
+JOIN_DIAG = join_diag.Diag()
 _JOURNAL_KEYS = (
     "reason", "auth", "handshake", "sae", "assoc", "ctrl-event", "4-way",
     "disconnect", "secrets", "failed", "pmf", "key_mgmt", "key-mgmt",
@@ -727,6 +739,48 @@ def _scrub_ssid(text: str, ssid: str) -> str:
     return text
 
 
+# A DIAGNOSTIC pin for the house network's join, from ap.json on the boot
+# partition (``"join_bssid": "aa:bb:cc:dd:ee:ff"``, ``"join_band": "bg"`` or
+# ``"a"``): which of two access points broadcasting one name the setup join
+# may use, to tell them apart on hardware. Never a fix: it is cleared from
+# the profile once the join worked, so the satellite still roams later.
+JOIN_PIN: dict[str, str] = {}
+_BSSID = re.compile(r"^[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}$")
+
+
+def set_join_pin(bssid: str | None, band: str | None) -> None:
+    JOIN_PIN.clear()
+    if bssid:
+        if _BSSID.match(bssid.strip()):
+            JOIN_PIN["bssid"] = bssid.strip().lower()
+        else:
+            log.warning("ignoring ap.json join_bssid (not a hardware address)")
+    if band:
+        if band.strip().lower() in ("bg", "a"):
+            JOIN_PIN["band"] = band.strip().lower()
+        else:
+            log.warning("ignoring ap.json join_band=%r (allowed: bg, a)", band)
+    if JOIN_PIN:
+        log.warning("DIAGNOSTIC: the house network join is pinned (%s); remove "
+                    "join_bssid/join_band from ap.json when done",
+                    ", ".join(f"{k}={v}" for k, v in JOIN_PIN.items()))
+
+
+def _clear_join_pin(nmcli: str, uuid: str, run) -> None:
+    """After a pinned join worked: the profile may roam again."""
+    if not JOIN_PIN:
+        return
+    args = [nmcli, "connection", "modify", "uuid", uuid]
+    if "bssid" in JOIN_PIN:
+        args += ["802-11-wireless.bssid", ""]
+    if "band" in JOIN_PIN:
+        args += ["802-11-wireless.band", ""]
+    try:
+        run(args, capture_output=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        log.warning("could not clear the diagnostic join pin from the profile")
+
+
 def _profile_args(
     nmcli: str, ssid: str, psk: str, hidden: bool, km: str, pmf: str | None
 ) -> list[str]:
@@ -750,7 +804,26 @@ def _profile_args(
         # say so or NM never probes for it. Same inference hole as the
         # visible case, same explicit answer.
         add += ["802-11-wireless.hidden", "yes"]
+    if "bssid" in JOIN_PIN:
+        add += ["802-11-wireless.bssid", JOIN_PIN["bssid"]]
+    if "band" in JOIN_PIN:
+        add += ["802-11-wireless.band", JOIN_PIN["band"]]
     return add
+
+
+def _note_attempt(run, started: float, km: str, pmf: str | None, ok: bool,
+                  kind: str | None, detail: str, ssid: str, psk: str) -> None:
+    """One attempt into JOIN_DIAG, and its gist into the journal. Never
+    stops a join."""
+    try:
+        e = JOIN_DIAG.record(run, since=started, key_mgmt=km, pmf=pmf, ok=ok,
+                             kind=kind, detail=detail, ssid=ssid, psk=psk)
+        log.info("join attempt %s/%s: %s via %s %s%s%s", km, pmf or "-", e["outcome"],
+                 e["ap"] or "?", e["freq_mhz"] or "",
+                 (" reasons " + ", ".join(e["reason_codes"])) if e["reason_codes"] else "",
+                 (" status " + ", ".join(e["status_codes"])) if e["status_codes"] else "")
+    except Exception as ex:  # noqa: BLE001 — diagnostics never fail a join
+        log.debug("join diagnostics failed: %s", ex)
 
 
 def _retryable(kind: str, text: str) -> bool:
@@ -862,9 +935,11 @@ def _nmcli_join(
                     "the connection could not be identified after it was created")
             uuid = uuids[0]
         up = [nmcli, "connection", "up", "uuid", uuid]
+        started = time.time()
         try:
             r = run(up, capture_output=True, timeout=timeout)
         except subprocess.TimeoutExpired:
+            _note_attempt(run, started, km, pmf, False, wifi_reasons.TIMEOUT, "", ssid, psk)
             _delete_wifi_profiles(
                 nmcli, _wifi_profiles_for_ssid(nmcli, ssid, run), run)
             return False, wifi_reasons.tagged(
@@ -878,6 +953,8 @@ def _nmcli_join(
             # behind (it matched no ssid above), and `connection up id`
             # with two of them is a coin toss.
             _delete_other_home_profiles(nmcli, uuid, run)
+            _clear_join_pin(nmcli, uuid, run)
+            _note_attempt(run, started, km, pmf, True, None, "", ssid, psk)
             LAST_JOIN_LOG.clear()
             log.info("joined %r as %s (pmf %s)", ssid, km, pmf or "-")
             return True, None
@@ -886,6 +963,7 @@ def _nmcli_join(
         detail = clean(_nmcli_detail(r, psk))
         kind = wifi_reasons.classify(text)
         kinds.append(kind)
+        _note_attempt(run, started, km, pmf, False, kind, detail, ssid, psk)
         log.warning(
             "nmcli join of %r as %s (pmf %s) failed (rc=%d, %s): %s",
             ssid, km, pmf or "-", r.returncode, kind, detail,
@@ -999,6 +1077,16 @@ def apply_wifi(
         if not hidden:
             scan = _wait_for_ssid(nmcli, ssid, run, _WIFI_SCAN_WAIT_SEC)
             security = scan.security
+            # Every access point broadcasting the name, from the scan just
+            # taken: two radios on one name with different settings is
+            # exactly what one merged SECURITY string hides.
+            try:
+                JOIN_DIAG.take_scan(run, nmcli, ssid)
+            except Exception as e:  # noqa: BLE001
+                log.debug("join scan diagnostics failed: %s", e)
+            for row in JOIN_DIAG.scan:
+                log.info("join scan: %s %s ch %s %s MHz signal %s", row["ap"],
+                         row["security"], row["channel"], row["freq_mhz"], row["signal"])
             if not scan.visible:
                 # Not seen: still hosting, out of range, 5 GHz only on a
                 # 2.4 GHz radio, or a hidden network typed by name. The
@@ -1363,6 +1451,7 @@ def apply_provision(
 
     # 5. Wi-Fi — the step that can fail on a typo'd PSK.
     wifi = payload["wifi"]
+    JOIN_DIAG.reset()
     last_err: str | None = None
     for attempt in range(1, wifi_attempts + 1):
         ok, err = apply_wifi(
@@ -1631,6 +1720,7 @@ def _default_transport() -> GadgetBackend | Transport:
         profiles=[profile],
         radio={k: creds[k] for k in ("channel", "pmf") if k in creds},
     )
+    set_join_pin(creds.get("join_bssid"), creds.get("join_band"))
 
 
 # ─── Main loop ────────────────────────────────────────────────────────────
@@ -1770,7 +1860,8 @@ def run(
         # open domovoi/device-info.json).
         _report(None, None, top={"status": status, "step": "home-wifi-failed",
                                  "error": _card_error(status, err),
-                                 "join_log": list(LAST_JOIN_LOG)})
+                                 "join_log": list(LAST_JOIN_LOG),
+                                 **JOIN_DIAG.card()})
         loops += 1
         if max_loops is not None and loops >= max_loops:
             return 1

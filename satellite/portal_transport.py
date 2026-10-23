@@ -350,6 +350,9 @@ class PortalTransport:
         self._thread: threading.Thread | None = None
         self._ap_up = False
         self.phone_seen = False
+        # The last form submitted (portal_pages.render_form's keep-fields),
+        # in memory only and never the password.
+        self.last_choice: dict[str, Any] | None = None
         # Requested settings (ap.json overrides applied); `channel` becomes
         # a number once the scan has picked one.
         self.radio = radio_settings(radio)
@@ -807,6 +810,14 @@ class PortalTransport:
         # and wins over the picker, like the room.
         custom_ssid = (fields.get("ssid_custom") or "").strip()
         raw_ssid = custom_ssid or (fields.get("ssid") or "").strip()
+        # What was chosen, for the form when it comes back after a failed
+        # join (the hotspot returns, the page reloads). Never the password.
+        self.last_choice = {
+            "ssid": raw_ssid or None,
+            "room": (fields.get("room") or "").strip() or None,
+            "room_custom": (fields.get("room_custom") or "").strip() or None,
+            "url": (fields.get("url") or "").strip() or None,
+        }
         ssid = proto.validate_wifi_ssid(raw_ssid)
         # Blank is an open network (the join refuses it, in words, if the
         # network turns out to need a password). Anything else must be
@@ -923,7 +934,8 @@ def _make_handler(transport: PortalTransport):
 
                     setup_status("phone-connected")
                     transport._report_up()
-                self._form(error=transport.setup_error())
+                self._form(error=transport.setup_error(),
+                           **(transport.last_choice or {}))
             elif path == "/device-info":
                 self._send(json.dumps(transport.device_info),
                            ctype="application/json")
@@ -977,8 +989,7 @@ def _make_handler(transport: PortalTransport):
                 # refused, and a client reading the status can tell. Never
                 # echo the password back.
                 self._form(error=str(e), status=400,
-                           room=fields.get("room") or None,
-                           ssid=fields.get("ssid") or None)
+                           **(transport.last_choice or {}))
                 return
 
             # Respond FIRST. Accepting drops the AP, and a phone that never

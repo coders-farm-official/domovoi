@@ -746,8 +746,8 @@ The setup page (`http://192.168.4.1` on the `Domovoi-Setup-<id>` network) reads 
 
 | The router says | Tried, in order | Notes |
 |---|---|---|
-| WPA2-Personal (AES), WPA (TKIP), WPA/WPA2 | `wpa-psk` with PMF off, then `wpa-psk` with PMF at NetworkManager's default | The second attempt covers a WPA2 router that *requires* PMF (802.11w) |
-| WPA2/WPA3 mixed ("transition", "WPA3-Personal+WPA2-PSK") | `wpa-psk` with PMF off, then `sae` with PMF required | PMF off keeps NetworkManager from offering SAE, which a Pi Zero 2 W cannot finish |
+| WPA2-Personal (AES), WPA (TKIP), WPA/WPA2 | `wpa-psk` with PMF off, then `wpa-psk` with PMF optional | The second attempt covers a WPA2 router that *requires* PMF (802.11w) |
+| WPA2/WPA3 mixed ("transition", "WPA3-Personal+WPA2-PSK") | `wpa-psk` with PMF off, then `wpa-psk` with PMF optional, then `sae` with PMF required | PMF off keeps NetworkManager from offering SAE, which a Pi Zero 2 W cannot finish; PMF optional is for a router that requires PMF even in transition mode (some Wi-Fi 7 routers; refused with 802.11 status 31) |
 | WPA3-only (SAE) | `sae` with PMF required, once | A 64-character hex key cannot be used with WPA3; the page asks for the password |
 | Open (no password) | No security | Leave the password blank. A password typed for an open network is ignored |
 | Enhanced Open (OWE) | `owe` | |
@@ -773,11 +773,13 @@ The network name and password go to `nmcli` as separate arguments, never through
 |---|---|
 | WPA2/WPA3 mixed (from WPA2) | Turns PMF off on `domovoi-home` and rejoins on the WPA2 side |
 | WPA3-only | Pi 4 / Pi 5: switches to WPA3 (SAE, PMF required). **Pi Zero 2 W, Zero W, Pi 3 B: can't** — red ring, and *"the router switched to WPA3-only; this speaker needs WPA2/WPA3 mixed mode"* in the room's log and health; no reboots, a rescan every 5 minutes |
-| WPA2 again (from WPA3-only or mixed) | Back to `wpa-psk`, PMF off; PMF on if the router requires it |
+| WPA2 again (from WPA3-only or mixed) | Back to `wpa-psk`, PMF off; PMF optional if the router requires it. A failed recovery on a mixed router tries the other of the two |
 | Enterprise (802.1X), WEP, no password | Says so (same places), doesn't reboot |
 | A new name or password | Not something it can follow: set the speaker up again |
 
-**When a join fails** the page says why, in one of these: the password wasn't accepted; the network couldn't be found (with the 2.4 GHz note on a 2.4 GHz-only radio); the router took too long; the router gave no address; WPA3-only; enterprise; WEP; the radio wasn't ready. Only the first is called a password problem. NetworkManager's own reason follows in brackets. The same words, without the network's name, go on the card: put it in any PC and open `domovoi/device-info.json`. `error` is the reason; `join_log` holds the last lines NetworkManager and wpa_supplicant wrote about the join (for example `reason=WRONG_KEY`), with the network name, the password and hardware addresses removed.
+**When a join fails** the page says why, in one of these: the password wasn't accepted; the network couldn't be found (with the 2.4 GHz note on a 2.4 GHz-only radio); the router took too long; the router gave no address; WPA3-only; enterprise; WEP; the radio wasn't ready. Only the first is called a password problem. NetworkManager's own reason follows in brackets. The same words, without the network's name, go on the card: put it in any PC and open `domovoi/device-info.json`. `error` is the reason; `join_log` holds the last lines NetworkManager and wpa_supplicant wrote about the join (for example `reason=WRONG_KEY`), with the network name, the password and hardware addresses removed. Since 2026-10-22 it also has `join_scan`, every access point broadcasting the chosen name (labelled `AP-1`, `AP-2` … strongest first, with the last two bytes of its address, its security flags, channel, frequency and signal), and `join_attempts`, one entry per try: the key-mgmt and PMF used, which access point and frequency it tried, the outcome, the 802.11 reason and status codes in words, and the wpa_supplicant / NetworkManager lines for that try. Two access points on one name with different settings, or a different password on one of them, show up there. After a failed join the setup page comes back with the same network, room and server address chosen (never the password); until a network is chosen the list reads *Choose your network*.
+
+**Pinning one access point (diagnostic only).** To find out which of two access points broadcasting one name a satellite can join, add `"join_bssid": "aa:bb:cc:dd:ee:ff"` (that access point's 2.4 GHz address, from its admin page) and/or `"join_band": "bg"` to `domovoi/ap.json` on the card's boot partition, then set up again. The setup join then uses only that access point; once it has joined, the pin is taken off the house profile so the satellite roams as usual. Remove the keys afterwards. It is not a fix: a satellite should join whichever access point is strongest.
 
 ## 9. Label the hardware
 
