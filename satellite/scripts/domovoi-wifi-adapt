@@ -124,14 +124,17 @@ elif [ "$km" != wpa-psk ] && [ "$km" != sae ]; then
   result mismatch password-now 7
 elif [ "$wpa" = yes ]; then
   if [ "$km" = sae ]; then
-    if [ "$sae" = yes ]; then attempts="wpa-psk:disable"; else attempts="wpa-psk:disable wpa-psk:default"; fi
+    attempts="wpa-psk:disable wpa-psk:optional"
     reason="the router offers WPA2 again; back to wpa-psk"
-  elif [ "$sae" = yes ] && [ "$pmf" != disable ]; then
-    attempts="wpa-psk:disable"
+  elif [ "$sae" = yes ] && [ "$pmf" = default ]; then
+    attempts="wpa-psk:disable wpa-psk:optional"
     reason="the router is WPA2/WPA3 mixed; PMF off keeps the join on WPA2"
-  elif [ "$sae" = no ] && [ "$pmf" = disable ]; then
-    attempts="wpa-psk:default"
-    reason="WPA2 with PMF off failed; the router may require PMF"
+  elif [ "$pmf" = disable ]; then
+    attempts="wpa-psk:optional"
+    reason="wpa-psk with PMF off failed; the router may require PMF"
+  elif [ "$sae" = yes ] && [ "$pmf" = optional ]; then
+    attempts="wpa-psk:disable"
+    reason="wpa-psk with PMF optional failed; PMF off keeps the join on WPA2"
   else
     result ok - 1
   fi

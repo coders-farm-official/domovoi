@@ -94,25 +94,38 @@ def render_form(
     room: str | None = None,
     ssid: str | None = None,
     profile: str | None = None,
+    room_custom: str | None = None,
+    url: str | None = None,
 ) -> str:
-    """The setup form. ``networks`` is what the device itself can see, so the
-    customer picks their house network from a list instead of typing an SSID
-    they may not know the exact spelling of."""
+    """The setup form. ``networks`` is what the device itself can see,
+    strongest first, so the customer picks their house network from a list
+    instead of typing an SSID they may not know the exact spelling of.
+
+    ``ssid`` / ``room`` / ``room_custom`` / ``url``: what the person chose
+    last time, kept when the form comes back after a failed join (never the
+    password). Until a network is chosen the list reads "Choose your
+    network": defaulting to its first entry put a neighbour's smart-plug
+    hotspot in the box (2026-10-22, "SmartLife-0000")."""
     nets = list(networks)
     profs = list(profiles)
+    typed_ssid = ssid if ssid and ssid not in nets else ""
 
     err_html = f"<div class=\"err\">{html.escape(error)}</div>" if error else ""
 
     if nets:
         network_field = (
             "<label for=\"ssid\">Your Wi-Fi network</label>"
-            f"<select id=\"ssid\" name=\"ssid\">{_options(nets, ssid)}</select>"
+            "<select id=\"ssid\" name=\"ssid\">"
+            "<option value=\"\"" + ("" if ssid in nets else " selected")
+            + ">Choose your network</option>"
+            f"{_options(nets, ssid)}</select>"
             # A hidden network is in no scan, and a network the radio
             # cannot hear is not either: it can still be typed.
             "<label for=\"ssid_custom\">Not in the list? Type its name "
             "<span class=\"hint\">(optional; hidden networks too)</span></label>"
             "<input id=\"ssid_custom\" name=\"ssid_custom\" autocapitalize=\"off\" "
-            "autocorrect=\"off\" placeholder=\"exactly as your router shows it\">"
+            "autocorrect=\"off\" placeholder=\"exactly as your router shows it\" "
+            f"value=\"{html.escape(typed_ssid)}\">"
         )
     else:
         # A scan can come back empty on a busy radio. Never dead-end.
@@ -149,19 +162,21 @@ def render_form(
 
   <label for="room">Which room is it in?</label>
   <select id="room" name="room">{_options(COMMON_ROOMS, room)}
-    <option value="">Something else…</option>
+    <option value=""{" selected" if room_custom else ""}>Something else…</option>
   </select>
 
   <label for="room_custom">If something else, name it</label>
   <input id="room_custom" name="room_custom" autocapitalize="off"
-         autocorrect="off" placeholder="e.g. back porch">
+         autocorrect="off" placeholder="e.g. back porch"
+         value="{html.escape(room_custom or "")}">
   <div class="hint">Letters, numbers and spaces. Spaces become dashes, and
     everything is lowercased — "Back Porch" becomes "back-porch".</div>
   {profile_field}
 
   <label for="url">Domovoi server address <span class="hint">(optional)</span></label>
   <input id="url" name="url" autocapitalize="off" autocorrect="off"
-         placeholder="leave blank to find it automatically">
+         placeholder="leave blank to find it automatically"
+         value="{html.escape(url or "")}">
 
   <button type="submit">Connect</button>
 </form>

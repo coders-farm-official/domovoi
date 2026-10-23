@@ -95,15 +95,21 @@ def _settings(h: Home):
 
 CASES = [
     # (scan security, profile km, profile pmf, board, after_failure) -> state, attempts / kind
-    ("WPA2 WPA3", "wpa-psk", "default", ZERO_2_W, True, "change", (("wpa-psk", "disable"),)),
+    ("WPA2 WPA3", "wpa-psk", "default", ZERO_2_W, True, "change",
+     (("wpa-psk", "disable"), ("wpa-psk", "optional"))),
     ("WPA2 WPA3", "wpa-psk", "default", ZERO_2_W, False, "change", (("wpa-psk", "disable"),)),
-    ("WPA2 WPA3", "wpa-psk", "disable", ZERO_2_W, True, "ok", ()),
+    # PMF off failed on a mixed router: one that requires PMF (status 31).
+    ("WPA2 WPA3", "wpa-psk", "disable", ZERO_2_W, True, "change", (("wpa-psk", "optional"),)),
+    ("WPA2 WPA3", "wpa-psk", "disable", ZERO_2_W, False, "ok", ()),
+    ("WPA2 WPA3", "wpa-psk", "optional", ZERO_2_W, True, "change", (("wpa-psk", "disable"),)),
+    ("WPA2 WPA3", "wpa-psk", "optional", ZERO_2_W, False, "ok", ()),
     ("WPA3", "wpa-psk", "disable", ZERO_2_W, True, "mismatch", "wpa3-only-board"),
     ("WPA3", "wpa-psk", "disable", PI_4, True, "change", (("sae", "required"),)),
     ("WPA3", "sae", "required", PI_4, True, "ok", ()),
-    ("WPA2", "sae", "required", PI_4, True, "change", (("wpa-psk", "disable"), ("wpa-psk", "default"))),
-    ("WPA2 WPA3", "sae", "required", ZERO_2_W, True, "change", (("wpa-psk", "disable"),)),
-    ("WPA2", "wpa-psk", "disable", ZERO_2_W, True, "change", (("wpa-psk", "default"),)),
+    ("WPA2", "sae", "required", PI_4, True, "change", (("wpa-psk", "disable"), ("wpa-psk", "optional"))),
+    ("WPA2 WPA3", "sae", "required", ZERO_2_W, True, "change",
+     (("wpa-psk", "disable"), ("wpa-psk", "optional"))),
+    ("WPA2", "wpa-psk", "disable", ZERO_2_W, True, "change", (("wpa-psk", "optional"),)),
     ("WPA2", "wpa-psk", "disable", ZERO_2_W, False, "ok", ()),
     ("WPA2", "wpa-psk", "default", ZERO_2_W, True, "ok", ()),
     ("WPA2 802.1X", "wpa-psk", "disable", ZERO_2_W, True, "mismatch", "enterprise-now"),
@@ -186,7 +192,18 @@ def test_a_wpa2_router_that_now_requires_pmf_gets_pmf_back():
              pmf_required=True)
     assert not h.joins()
     res = wifi_adapt.adapt(h, "nmcli", model=ZERO_2_W, after_failure=True, sleep=lambda s: None)
-    assert res.state == "adapted" and _settings(h) == ("wpa-psk", "default")
+    assert res.state == "adapted" and _settings(h) == ("wpa-psk", "optional")
+
+
+def test_a_mixed_router_that_requires_pmf_gets_pmf_optional():
+    """A Wi-Fi 7 router in transition mode with PMF required refuses a
+    PMF-off client (status 31); PMF optional joins, on a radio that does
+    not claim SAE (so NetworkManager does not offer it)."""
+    h = Home(security="WPA2 WPA3", router=("wpa-psk", "sae"), km="wpa-psk", pmf="disable",
+             pmf_required=True, reports_sae=False)
+    assert not h.joins()
+    res = wifi_adapt.adapt(h, "nmcli", model=ZERO_2_W, after_failure=True, sleep=lambda s: None)
+    assert res.state == "adapted" and _settings(h) == ("wpa-psk", "optional")
 
 
 def test_a_link_that_is_up_is_never_touched():

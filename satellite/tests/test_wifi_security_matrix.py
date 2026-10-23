@@ -205,8 +205,8 @@ def test_the_reason_is_the_error_line_not_the_hint():
     assert "Hint" not in err and "journalctl" not in err
     assert "Secrets were required" in err
     assert wr.kind_of(err) == wr.WRONG_PASSWORD
-    # ... and because the reason was read, the sae fallback ran.
-    assert _plan(r) == [("wpa-psk", "disable"), ("sae", "required")]
+    # ... and because the reason was read, the fallbacks ran.
+    assert _plan(r) == [("wpa-psk", "disable"), ("wpa-psk", "optional"), ("sae", "required")]
 
 
 def test_the_detail_helper_skips_the_hint():
@@ -223,7 +223,11 @@ def test_the_detail_helper_skips_the_hint():
     # requires it.
     ("WPA2", ("wpa-psk",), {}, [("wpa-psk", "disable")]),
     ("WPA2", ("wpa-psk",), {"pmf_required": True},
-     [("wpa-psk", "disable"), ("wpa-psk", "default")]),
+     [("wpa-psk", "disable"), ("wpa-psk", "optional")]),
+    # WPA2/WPA3 mixed with PMF required (a Wi-Fi 7 router), on a radio
+    # that does not claim SAE: PMF off is refused, PMF optional joins.
+    ("WPA2 WPA3", ("wpa-psk", "sae"), {"pmf_required": True, "reports_sae": False},
+     [("wpa-psk", "disable"), ("wpa-psk", "optional")]),
     # WPA (TKIP) and WPA/WPA2 mixed: wpa-psk carries both.
     ("WPA1", ("wpa-psk",), {}, [("wpa-psk", "disable")]),
     ("WPA1 WPA2", ("wpa-psk",), {}, [("wpa-psk", "disable")]),
