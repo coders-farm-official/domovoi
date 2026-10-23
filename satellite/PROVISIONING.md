@@ -22,6 +22,21 @@
 > below remains the bench and manufacturing route. (A server on the Windows
 > install can't see USB devices, so it offers the portal only.)
 >
+> **The setup network's password, on the Windows install.** The dashboard
+> can't write the card there, so it builds a zip and the tray icon's
+> **Prepare a satellite card** writes it. The zip carries no password, only
+> a one-time pass (`domovoi/claim.json`: the build's number and a random
+> secret). The tray trades it, once, over the PC's own loopback, for the
+> setup key and writes `domovoi/ap.json` onto the card itself, so nobody
+> types the key there; the pass never goes on the card and stops working
+> a day after the build. The person still needs the key for their phone:
+> **show setup details** in the dashboard shows it. If the pass was used,
+> has expired, or the server restarted since the build (the key lives in
+> its memory only), the tray says which and offers **Sign in as admin to
+> fetch it** (after a restart that makes a new key for the same network,
+> and the tray shows it), and typing the key stays the last way. A card
+> written straight to a drive gets `ap.json` from the server, as before.
+>
 > **Zero-touch path first (USB adoption).** If your SD card was prepared
 > with the Domovoi satellite payload (dashboard → Settings → Rooms & devices →
 > Rooms → prepare satellite media, or an image that boots into provisioning

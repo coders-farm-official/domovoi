@@ -2,10 +2,12 @@
 // server's own output (card-goldens.json, made by
 // domovoi/tests/test_windows_card_parity.py from overlay.write_overlay),
 // the zip checks, the drive filter on a fake drive list, a whole card
-// written into a folder that mimics a flashed boot partition, the status
+// written into a folder that mimics a flashed boot partition, the setup
+// network password fetched with the zip's one-time pass (a fake server, and
+// a pretend dashboard on a loopback socket), the status
 // rules, the network address pick, sign-in registration on an in-memory
 // store, the command line, and the QR encoder. Nothing here touches a real
-// drive, the registry, a service or the network.
+// drive, the registry, a service or the network beyond that loopback socket.
 
 using System;
 using System.Collections.Generic;
@@ -52,6 +54,7 @@ static partial class Tests
         CardZipChecks();
         CardDriveFilter();
         CardWrites();
+        CardKeys();
         TrayStatus();
         TrayAddresses();
         TrayStartup();
@@ -764,6 +767,375 @@ static partial class Tests
                 foreach (int size in new[] { 16, 20, 24, 32 })
                     using (var b = Icons.Picture(s, size)) Eq(size, b.Width, s + " " + size);
             True(Icons.DotColor(TrayState.Running) != Icons.DotColor(TrayState.Problem), "colours differ");
+        });
+    }
+
+    // -- the setup network's password, fetched (CardKeys) -------------------
+
+    // Answers for the server, and counts what it was asked.
+    sealed class FakeKeys : ICardKeys
+    {
+        public KeyAnswer ClaimAnswer = KeyAnswer.Got("k7tqmzr4wd", false);
+        public KeyAnswer AdminAnswer = KeyAnswer.Got("m3n4p5q6r7", true);
+        public int Claims, AdminFetches;
+        public string LastAdminPassword, LastSsid;
+        public long LastJob;
+
+        public KeyAnswer Claim(CardClaim c) { Claims++; LastJob = c.JobId; return ClaimAnswer; }
+
+        public KeyAnswer AdminFetch(long jobId, string ssid, string password)
+        {
+            AdminFetches++; LastJob = jobId; LastSsid = ssid; LastAdminPassword = password;
+            return AdminAnswer;
+        }
+    }
+
+    const string GoodSecret = "Zm9vYmFyYmF6cXV4cXV1eHF1dXhxdXV4cXV1eHF1dXg";
+
+    static KeyValuePair<string, byte[]> ClaimEntry(long job, string expiresAt)
+    {
+        return new KeyValuePair<string, byte[]>("domovoi/claim.json", Encoding.UTF8.GetBytes(
+            "{\n  \"schema\": 1,\n  \"job_id\": " + Inv.S(job) + ",\n  \"secret\": \"" + GoodSecret + "\",\n  \"expires_at\": \"" + expiresAt + "\"\n}"));
+    }
+
+    static string Tomorrow() { return DateTime.UtcNow.AddHours(20).ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture); }
+
+    // A wizard on a Wi-Fi setup card's files, the card chosen, Next not yet clicked.
+    static CardWizard WizardAtCard(ZipSpec spec, ICardKeys keys, Func<System.Windows.Forms.IWin32Window, string> ask)
+    {
+        string zip = MakeZip(TempDir("key-zip"), spec);
+        var f = new FakeDrives();
+        f.Drives.Add(D(@"E:\", true, "FAT32", true));
+        f.Boot(@"E:\", false, true);
+        f.Disks[@"E:\"] = 32000000000L;
+        var w = new CardWizard("http://127.0.0.1:1", f, TempDir("key-downloads"), delegate { }, delegate { return "ab:cd"; }, keys, ask);
+        IntPtr h = w.Handle;   // the list's selection needs its window
+        w.SetZip(zip);
+        True(w.Key == null, "nothing fetched before the card");
+        w.GoTo(CardStep.Card);
+        Eq(1, w.CardCount, "the fake card is offered");
+        w.SelectCard(0);
+        return w;
+    }
+
+    static void CardKeys()
+    {
+        Run("card key: the zip's one-time pass is read and never copied to the card", delegate
+        {
+            var spec = new ZipSpec();
+            spec.Extra.Add(ClaimEntry(17, "2026-10-23T12:00:00Z"));
+            CardPackage p = CardZip.Open(MakeZip(TempDir("claim-zip"), spec));
+            True(p.Claim != null, "claim read");
+            Eq(17L, p.Claim.JobId, "job");
+            Eq(GoodSecret, p.Claim.Secret, "secret");
+            Eq(new DateTimeOffset(2026, 10, 23, 12, 0, 0, TimeSpan.Zero), p.Claim.ExpiresAt.Value, "expires");
+            True(p.Files.All(x => x.Entry != "domovoi/claim.json"), "not copied");
+            True(CardZip.DestFor("domovoi/claim.json") == null, "no place on the card");
+            True(CardZip.Open(MakeZip(TempDir("noclaim-zip"), new ZipSpec())).Claim == null, "an older zip: no claim");
+            var bad = new ZipSpec();
+            bad.Extra.Add(new KeyValuePair<string, byte[]>("domovoi/claim.json", Encoding.UTF8.GetBytes("{\"schema\": 1, \"job_id\": 3, \"secret\": \"short\"}")));
+            True(CardZip.Open(MakeZip(TempDir("badclaim-zip"), bad)).Claim == null, "a claim of the wrong shape is left out, the files still open");
+        });
+        Run("card key: a pass that works means no password step", delegate
+        {
+            var spec = new ZipSpec();
+            spec.Extra.Add(ClaimEntry(17, Tomorrow()));
+            var keys = new FakeKeys();
+            using (CardWizard w = WizardAtCard(spec, keys, delegate { Fail("asked for the admin password"); return null; }))
+            {
+                w.ClickNext();
+                Eq(CardStep.Write, w.Step, "straight to writing");
+                True(w.KeyFetched && w.Key.Psk == "k7tqmzr4wd", "the server's password");
+                Eq(1, keys.Claims, "asked once");
+                Eq(17L, keys.LastJob, "for this build");
+                w.ClickBack();
+                Eq(CardStep.Card, w.Step, "back skips the password step");
+                w.ClickNext();
+                Eq(1, keys.Claims, "not asked again: the pass is spent and the password kept");
+            }
+        });
+        Run("card key: every reason it fails is said in plain words, then the password step", delegate
+        {
+            var cases = new[]
+            {
+                new { P = KeyProblem.Used, Words = "This card's one-time pass was already used.", Admin = true, Retry = false },
+                new { P = KeyProblem.Expired, Words = "This card was prepared more than a day ago, so its pass expired.", Admin = true, Retry = false },
+                new { P = KeyProblem.Forgotten, Words = "Your Domovoi server restarted since this card was prepared, so it no longer has the password.", Admin = true, Retry = false },
+                new { P = KeyProblem.Unreachable, Words = "Can't reach your Domovoi server.", Admin = true, Retry = true },
+                new { P = KeyProblem.Refused, Words = "Your Domovoi server didn't accept this card's one-time pass.", Admin = true, Retry = false },
+            };
+            foreach (var c in cases)
+            {
+                var spec = new ZipSpec();
+                spec.Extra.Add(ClaimEntry(17, Tomorrow()));
+                var keys = new FakeKeys { ClaimAnswer = KeyAnswer.Fail(c.P) };
+                using (CardWizard w = WizardAtCard(spec, keys, delegate { return null; }))
+                {
+                    w.ClickNext();
+                    Eq(CardStep.Password, w.Step, c.P + ": the password step");
+                    Eq(c.Words, w.KeyReasonText, c.P + ": the reason");
+                    Eq(c.Admin, w.AdminOffered, c.P + ": admin sign-in offered");
+                    Eq(c.Retry, w.RetryOffered, c.P + ": try again offered");
+                    True(w.KeyNextText.Contains("type the password the dashboard showed"), c.P + ": typing it is the last way");
+                    if (c.P != KeyProblem.Unreachable)
+                        True(w.KeyNextText.Contains("Sign in as admin to fetch it, or prepare the card again on the dashboard."), c.P + ": what to do next");
+                    else
+                        True(w.KeyNextText.Contains("Check that Domovoi is running"), "unreachable: check it's running");
+                    w.SetPassword("k7tqmzr4wd");
+                    w.ClickNext();
+                    Eq(CardStep.Write, w.Step, c.P + ": typing it still works");
+                }
+            }
+        });
+        Run("card key: files without a pass ask for the password, and signing in can't help", delegate
+        {
+            var keys = new FakeKeys();
+            using (CardWizard w = WizardAtCard(new ZipSpec(), keys, delegate { Fail("asked"); return null; }))
+            {
+                w.ClickNext();
+                Eq(CardStep.Password, w.Step, "the password step");
+                Eq("These card files are from an older Domovoi, so they don't carry a one-time pass.", w.KeyReasonText, "the reason");
+                True(!w.AdminOffered, "no admin sign-in without a build number");
+                Eq(0, keys.Claims, "the server isn't asked");
+            }
+        });
+        Run("card key: a pass past its time is expired without asking the server", delegate
+        {
+            var spec = new ZipSpec();
+            spec.Extra.Add(ClaimEntry(17, DateTime.UtcNow.AddHours(-1).ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture)));
+            var keys = new FakeKeys();
+            using (CardWizard w = WizardAtCard(spec, keys, delegate { return null; }))
+            {
+                w.ClickNext();
+                Eq(CardKeyWords.Expired, w.KeyReasonText, "expired");
+                Eq(0, keys.Claims, "not asked");
+            }
+        });
+        Run("card key: signing in as admin fetches it, a wrong password says so, cancelling changes nothing", delegate
+        {
+            var spec = new ZipSpec();
+            spec.Extra.Add(ClaimEntry(17, Tomorrow()));
+            var keys = new FakeKeys { ClaimAnswer = KeyAnswer.Fail(KeyProblem.Forgotten) };
+            string typed = null;
+            using (CardWizard w = WizardAtCard(spec, keys, delegate { return typed; }))
+            {
+                w.ClickNext();
+                Eq(CardStep.Password, w.Step, "the password step");
+                w.SignInAndFetch();                                  // cancelled
+                Eq(0, keys.AdminFetches, "cancelled: nothing asked");
+                Eq(CardStep.Password, w.Step, "cancelled: still here");
+
+                typed = "not-it";
+                keys.AdminAnswer = KeyAnswer.Fail(KeyProblem.WrongPassword, "wrong password");
+                w.SignInAndFetch();
+                Eq("wrong password", w.KeyReasonText, "the dashboard's words");
+                True(w.AdminOffered, "can sign in again");
+                Eq(CardStep.Password, w.Step, "still here");
+
+                keys.AdminAnswer = KeyAnswer.Fail(KeyProblem.Unrecoverable);
+                w.SignInAndFetch();
+                Eq("Your Domovoi server can't recover this card's password. Prepare the card again on the dashboard.", w.KeyReasonText, "can't recover");
+                True(!w.AdminOffered, "signing in again can't help");
+
+                typed = "the-admin-password";
+                keys.AdminAnswer = KeyAnswer.Got("m3n4p5q6r7", true);
+                w.SignInAndFetch();
+                Eq(CardStep.Write, w.Step, "fetched: on to writing");
+                True(w.KeyFetched && w.Key.Psk == "m3n4p5q6r7" && w.Key.Reissued, "a new password");
+                Eq("the-admin-password", keys.LastAdminPassword, "the typed admin password, passed through");
+                Eq("Domovoi-Setup-3FA9", keys.LastSsid, "for this card's network");
+                Eq(17L, keys.LastJob, "for this build");
+            }
+        });
+        Run("card key: a password the card can't use is refused", delegate
+        {
+            var spec = new ZipSpec();
+            spec.Extra.Add(ClaimEntry(17, Tomorrow()));
+            var keys = new FakeKeys { ClaimAnswer = KeyAnswer.Got("not one!", false) };
+            using (CardWizard w = WizardAtCard(spec, keys, delegate { return null; }))
+            {
+                w.ClickNext();
+                Eq(CardStep.Password, w.Step, "the password step");
+                Eq(CardKeyWords.Refused, w.KeyReasonText, "refused");
+            }
+        });
+        Run("card key: the fetched password is the one written to the card", delegate
+        {
+            var spec = new ZipSpec();
+            spec.Extra.Add(ClaimEntry(17, Tomorrow()));
+            CardPackage p = CardZip.Open(MakeZip(TempDir("fetched-zip"), spec));
+            KeyAnswer a = CardKeyFlow.Fetch(new FakeKeys(), p, DateTimeOffset.UtcNow);
+            string card = FlashedCard("fetched-card", GoldenInput("bookworm stock", "config"), GoldenInput("bookworm stock", "cmdline"));
+            CardWriter.Write(p, card, a.Psk, null);
+            True(File.ReadAllBytes(Path.Combine(card, "domovoi", "ap.json")).SequenceEqual(ApJson.Bytes("Domovoi-Setup-3FA9", "k7tqmzr4wd")), "ap.json");
+            True(!File.Exists(Path.Combine(card, "domovoi", "claim.json")), "no claim on the card");
+        });
+        CardKeysHttp();
+    }
+
+    // -- HttpCardKeys against a pretend dashboard on loopback -----------------
+
+    sealed class FakeDashboard : IDisposable
+    {
+        readonly System.Net.Sockets.TcpListener listener;
+        readonly System.Threading.Thread thread;
+        public readonly List<string> Seen = new List<string>();     // "METHOD path auth? body"
+        public Func<string, string, string, KeyValuePair<int, string>> Answer;   // (method+path, bearer, body)
+        public string Url { get { return "http://127.0.0.1:" + Inv.S(((System.Net.IPEndPoint)listener.LocalEndpoint).Port); } }
+
+        public FakeDashboard()
+        {
+            listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+            listener.Start();
+            thread = new System.Threading.Thread(Loop) { IsBackground = true };
+            thread.Start();
+        }
+
+        void Loop()
+        {
+            while (true)
+            {
+                System.Net.Sockets.TcpClient c;
+                try { c = listener.AcceptTcpClient(); } catch (Exception) { return; }
+                using (c)
+                using (var s = c.GetStream())
+                {
+                    var head = new StringBuilder();
+                    int b;
+                    while ((b = s.ReadByte()) >= 0)
+                    {
+                        head.Append((char)b);
+                        if (head.Length >= 4 && head.ToString(head.Length - 4, 4) == "\r\n\r\n") break;
+                    }
+                    string[] lines = head.ToString().Split(new[] { "\r\n" }, StringSplitOptions.None);
+                    string[] first = lines[0].Split(' ');
+                    int length = 0; string bearer = null; bool xrw = false;
+                    foreach (string l in lines)
+                    {
+                        int i = l.IndexOf(':');
+                        if (i < 0) continue;
+                        string k = l.Substring(0, i).Trim().ToLowerInvariant(), v = l.Substring(i + 1).Trim();
+                        if (k == "content-length") length = int.Parse(v);
+                        if (k == "authorization" && v.StartsWith("Bearer ")) bearer = v.Substring(7);
+                        if (k == "x-requested-with") xrw = true;
+                    }
+                    var body = new byte[length];
+                    int got = 0;
+                    while (got < length) { int n = s.Read(body, got, length - got); if (n <= 0) break; got += n; }
+                    string text = Encoding.UTF8.GetString(body);
+                    string key = first[0] + " " + first[1];
+                    lock (Seen) Seen.Add(key + (bearer != null ? " bearer=" + bearer : "") + (xrw ? "" : " NO-XRW"));
+                    KeyValuePair<int, string> a = Answer(key, bearer, text);
+                    byte[] payload = Encoding.UTF8.GetBytes(a.Value);
+                    byte[] reply = Encoding.ASCII.GetBytes("HTTP/1.1 " + Inv.S(a.Key) + " X\r\nContent-Type: application/json\r\nContent-Length: " + Inv.S(payload.Length) + "\r\nConnection: close\r\n\r\n");
+                    s.Write(reply, 0, reply.Length);
+                    s.Write(payload, 0, payload.Length);
+                }
+            }
+        }
+
+        public void Dispose() { listener.Stop(); }
+    }
+
+    static KeyValuePair<int, string> R(int status, string json) { return new KeyValuePair<int, string>(status, json); }
+
+    static void CardKeysHttp()
+    {
+        var claim = new CardClaim { JobId = 17, Secret = GoodSecret };
+        Run("card key http: the pass is traded for the password, and every refusal is named", delegate
+        {
+            using (var d = new FakeDashboard())
+            {
+                string reason = null;
+                d.Answer = (k, bearer, body) =>
+                {
+                    if (k != "POST /api/satellites/media/claim") return R(404, "{}");
+                    True(body.Contains("\"job_id\": 17") && body.Contains(GoodSecret), "the pass is sent");
+                    return reason == null
+                        ? R(200, "{\"ap\": {\"ssid\": \"Domovoi-Setup-3FA9\", \"psk\": \"k7tqmzr4wd\"}}")
+                        : R(reason == "used" ? 409 : reason == "invalid" ? 403 : 410, "{\"detail\": \"x\", \"reason\": \"" + reason + "\"}");
+                };
+                var keys = new HttpCardKeys(d.Url);
+                KeyAnswer a = keys.Claim(claim);
+                True(a.Ok && a.Psk == "k7tqmzr4wd", "got it");
+                reason = "used"; Eq(KeyProblem.Used, keys.Claim(claim).Problem, "used");
+                reason = "expired"; Eq(KeyProblem.Expired, keys.Claim(claim).Problem, "expired");
+                reason = "forgotten"; Eq(KeyProblem.Forgotten, keys.Claim(claim).Problem, "forgotten");
+                reason = "invalid"; Eq(KeyProblem.Refused, keys.Claim(claim).Problem, "invalid");
+                reason = "not_local"; Eq(KeyProblem.Refused, keys.Claim(claim).Problem, "not local");
+                True(d.Seen.All(s => !s.Contains("NO-XRW")), "every write carries X-Requested-With");
+            }
+        });
+        Run("card key http: nobody answering is unreachable", delegate
+        {
+            int port;
+            var l = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+            l.Start(); port = ((System.Net.IPEndPoint)l.LocalEndpoint).Port; l.Stop();
+            var keys = new HttpCardKeys("http://127.0.0.1:" + Inv.S(port));
+            Eq(KeyProblem.Unreachable, keys.Claim(claim).Problem, "claim");
+            Eq(KeyProblem.Unreachable, keys.AdminFetch(17, "Domovoi-Setup-3FA9", "pw").Problem, "admin");
+        });
+        Run("card key http: an admin sign-in reads the build's password, then signs out", delegate
+        {
+            using (var d = new FakeDashboard())
+            {
+                d.Answer = (k, bearer, body) =>
+                {
+                    if (k == "POST /api/auth/login") return body.Contains("\"right one\"") ? R(200, "{\"ok\": true, \"token\": \"T0K\"}") : R(401, "{\"detail\": \"wrong password\"}");
+                    if (k == "GET /api/satellites/media/jobs/17/credentials" && bearer == "T0K") return R(200, "{\"ap\": {\"ssid\": \"Domovoi-Setup-3FA9\", \"psk\": \"k7tqmzr4wd\"}, \"console\": null}");
+                    if (k == "POST /api/auth/logout" && bearer == "T0K") return R(200, "{\"ok\": true}");
+                    return R(500, "{}");
+                };
+                var keys = new HttpCardKeys(d.Url);
+                KeyAnswer bad = keys.AdminFetch(17, "Domovoi-Setup-3FA9", "nope");
+                Eq(KeyProblem.WrongPassword, bad.Problem, "wrong password");
+                Eq("wrong password", CardKeyWords.Reason(bad), "the dashboard's words");
+                d.Seen.Clear();
+                KeyAnswer a = keys.AdminFetch(17, "Domovoi-Setup-3FA9", "right one");
+                True(a.Ok && a.Psk == "k7tqmzr4wd" && !a.Reissued, "the build's password");
+                SeqEq(new[] { "POST /api/auth/login", "GET /api/satellites/media/jobs/17/credentials bearer=T0K", "POST /api/auth/logout bearer=T0K" }, d.Seen, "sign in, read, sign out");
+            }
+        });
+        Run("card key http: after a restart the admin gets a new password, or is told it can't be had", delegate
+        {
+            using (var d = new FakeDashboard())
+            {
+                bool recoverable = true;
+                d.Answer = (k, bearer, body) =>
+                {
+                    if (k == "POST /api/auth/login") return R(200, "{\"ok\": true, \"token\": \"T0K\"}");
+                    if (k == "GET /api/satellites/media/jobs/17/credentials") return R(404, "{\"detail\": \"credentials aren't in memory any more\"}");
+                    if (k == "POST /api/satellites/media/jobs/17/setup-key")
+                    {
+                        True(body.Contains("\"ssid\": \"Domovoi-Setup-3FA9\""), "the card's network");
+                        return recoverable ? R(200, "{\"ap\": {\"ssid\": \"Domovoi-Setup-3FA9\", \"psk\": \"m3n4p5q6r7\"}, \"reissued\": true}") : R(404, "{\"detail\": \"no\"}");
+                    }
+                    if (k == "POST /api/auth/logout") return R(200, "{}");
+                    return R(500, "{}");
+                };
+                var keys = new HttpCardKeys(d.Url);
+                KeyAnswer a = keys.AdminFetch(17, "Domovoi-Setup-3FA9", "pw");
+                True(a.Ok && a.Psk == "m3n4p5q6r7" && a.Reissued, "a new password");
+                True(d.Seen.Last().StartsWith("POST /api/auth/logout"), "signed out");
+                recoverable = false;
+                d.Seen.Clear();
+                Eq(KeyProblem.Unrecoverable, keys.AdminFetch(17, "Domovoi-Setup-3FA9", "pw").Problem, "can't be had");
+                True(d.Seen.Last().StartsWith("POST /api/auth/logout"), "signed out after a failure too");
+            }
+        });
+        Run("card key http: a throttled sign-in shows the server's words", delegate
+        {
+            using (var d = new FakeDashboard())
+            {
+                d.Answer = (k, bearer, body) => R(429, "{\"detail\": \"too many failed attempts - wait 30 s\"}");
+                KeyAnswer a = new HttpCardKeys(d.Url).AdminFetch(17, "Domovoi-Setup-3FA9", "pw");
+                Eq(KeyProblem.SignInRefused, a.Problem, "refused");
+                Eq("too many failed attempts - wait 30 s", CardKeyWords.Reason(a), "words");
+            }
+        });
+        Run("card key http: JSON strings are escaped", delegate
+        {
+            Eq("\"a\\\"b\\\\c\\u000a\"", HttpCardKeys.Quote("a\"b\\c\n"), "quote");
         });
     }
 }

@@ -4,7 +4,10 @@
 // can see the card would (CardWriter).
 //
 // Steps: build the files in the dashboard; the zip; the card; the setup
-// network password (Wi-Fi setup cards); write, check, eject; done.
+// network password (Wi-Fi setup cards: fetched from the Domovoi on this PC
+// with the zip's one-time pass, CardKeys, so the step is skipped; shown
+// only when that can't work, with the reason, an admin sign-in, and the
+// password typed by hand as the last way); write, check, eject; done.
 
 using System;
 using System.Collections.Generic;
@@ -25,6 +28,8 @@ namespace Domovoi.Windows.Tray
         readonly IDriveSource drives;
         readonly Action<string> openUrl;
         readonly Func<string> serverFingerprint;
+        readonly ICardKeys keys;
+        readonly Func<IWin32Window, string> askAdminPassword;
         readonly Label title = new Label(), lead = new Label();
         readonly Panel body = new Panel();
         readonly Button back = new Button(), next = new Button(), cancel = new Button();
@@ -36,6 +41,9 @@ namespace Domovoi.Windows.Tray
         List<CardTarget> targets = new List<CardTarget>();
         CardTarget chosen;
         bool written, writing;
+        // The setup network's password as Domovoi gave it, or why it didn't
+        // (null: not asked yet for these card files). Memory only.
+        KeyAnswer key;
 
         // Zip page
         readonly TextBox zipPath = new TextBox();
@@ -45,7 +53,8 @@ namespace Domovoi.Windows.Tray
         readonly Label cardNote = new Label();
         // Password page
         readonly TextBox ssidBox = new TextBox(), pskBox = new TextBox();
-        readonly Label pskNote = new Label();
+        readonly Label pskNote = new Label(), keyReason = new Label(), keyNext = new Label();
+        readonly Button adminButton = new Button(), retryButton = new Button();
         // Write page
         readonly Label writeLead = new Label(), writeStatus = new Label();
         readonly ProgressBar writeBar = new ProgressBar();
@@ -62,7 +71,18 @@ namespace Domovoi.Windows.Tray
 
         // serverFingerprint: this PC's Domovoi's identity (Probe.ServerFingerprint), null when it doesn't answer.
         public CardWizard(string webUrl, IDriveSource drives, string downloads, Action<string> openUrl, Func<string> serverFingerprint)
+            : this(webUrl, drives, downloads, openUrl, serverFingerprint, new HttpCardKeys(webUrl), AdminPrompt.Ask)
         {
+        }
+
+        // keys: where the setup network's password comes from (the tests
+        // answer for the server); askAdminPassword: the admin sign-in
+        // prompt, null when the person cancels it.
+        public CardWizard(string webUrl, IDriveSource drives, string downloads, Action<string> openUrl, Func<string> serverFingerprint,
+            ICardKeys keys, Func<IWin32Window, string> askAdminPassword)
+        {
+            this.keys = keys;
+            this.askAdminPassword = askAdminPassword;
             this.webUrl = webUrl.TrimEnd('/');
             this.drives = drives;
             this.openUrl = openUrl;
@@ -132,11 +152,11 @@ namespace Domovoi.Windows.Tray
             var p = new Panel();
             p.Controls.Add(Para("1.  Flash a microSD card with Raspberry Pi OS Lite (64-bit), using Raspberry Pi Imager. When Imager offers to apply OS customisation settings, choose No: Domovoi sets the card up itself.", 0, 48));
             p.Controls.Add(Para("2.  Build the card files in the dashboard: Settings > Rooms > prepare satellite media. Pick the board and the microphone, click Prepare, and download the files when the build is done.", 56, 48));
-            p.Controls.Add(Para("3.  The dashboard shows the card's setup network password once. Keep it on screen: this helper asks for it.", 112, 34));
+            p.Controls.Add(Para("3.  This helper fills in the card's setup network password by itself, from Domovoi on this PC. You'll still need that password on your phone: the dashboard shows it.", 112, 34));
             var open = new Button { Text = "Open Settings > Rooms", AutoSize = true, Location = new Point(0, 160) };
             open.Click += delegate { openUrl(webUrl + "/#settings/rooms/media"); };
             p.Controls.Add(open);
-            p.Controls.Add(Para("Already have the files and the password? Click Next.", 206, 24));
+            p.Controls.Add(Para("Already have the files? Click Next.", 206, 24));
             return p;
         }
 
@@ -190,22 +210,35 @@ namespace Domovoi.Windows.Tray
             return p;
         }
 
+        // Shown only when the password couldn't be fetched: why, what to do,
+        // an admin sign-in, and typing it as the last way.
         Control PasswordPage()
         {
             var p = new Panel();
-            p.Controls.Add(FieldLabel("Setup network", 4));
-            ssidBox.SetBounds(140, 0, 260, 24);
+            keyReason.SetBounds(0, 0, 560, 36);
+            keyReason.Font = new Font(Font, FontStyle.Bold);
+            keyReason.ForeColor = ErrorColor;
+            keyNext.SetBounds(0, 38, 560, 34);
+            adminButton.Text = "Sign in as admin to fetch it";
+            adminButton.SetBounds(0, 74, 220, 28);
+            adminButton.Click += delegate { SignInAndFetch(); };
+            retryButton.Text = "Try again";
+            retryButton.SetBounds(228, 74, 100, 28);
+            retryButton.Click += delegate { RetryFetch(); };
+            p.Controls.AddRange(new Control[] { keyReason, keyNext, adminButton, retryButton });
+            p.Controls.Add(FieldLabel("Setup network", 118));
+            ssidBox.SetBounds(140, 114, 260, 24);
             ssidBox.ReadOnly = true;
             p.Controls.Add(ssidBox);
-            p.Controls.Add(FieldLabel("Password", 40));
-            pskBox.SetBounds(140, 36, 260, 24);
+            p.Controls.Add(FieldLabel("Or type it", 152));
+            pskBox.SetBounds(140, 148, 260, 24);
             pskBox.Font = new Font(FontFamily.GenericMonospace, 11f);
             pskBox.MaxLength = 40;
             pskBox.TextChanged += delegate { PasswordChanged(); };
             p.Controls.Add(pskBox);
-            pskNote.SetBounds(140, 68, 420, 50);
+            pskNote.SetBounds(140, 176, 420, 34);
             p.Controls.Add(pskNote);
-            p.Controls.Add(Para("Where to find it: the dashboard showed it when it built these files (Settings > Rooms > prepare satellite media > show setup details). It's ten characters: lower-case letters and the digits 2 to 9.", 130, 54));
+            p.Controls.Add(Para("The dashboard showed it when it built these files (Settings > Rooms > prepare satellite media > show setup details). It's ten characters: lower-case letters and the digits 2 to 9.", 214, 50));
             return p;
         }
 
@@ -253,7 +286,7 @@ namespace Domovoi.Windows.Tray
             { CardStep.Build, new[] { "Prepare a satellite card", "Domovoi runs inside Windows' Linux system here, which can't see SD cards, so this helper puts the card files on the card for it." } },
             { CardStep.Zip, new[] { "The card files", "Pick the zip you downloaded from the dashboard." } },
             { CardStep.Card, new[] { "The card", "Put the freshly flashed card in this PC. Only removable drives that look like a new Raspberry Pi card are listed: never a hard disk." } },
-            { CardStep.Password, new[] { "The setup network password", "This card raises its own Wi-Fi so you can set it up from your phone. Type that network's password as the dashboard showed it." } },
+            { CardStep.Password, new[] { "The setup network password", "This card raises its own Wi-Fi so you can set it up from your phone. The helper couldn't get that network's password from Domovoi by itself." } },
             { CardStep.Write, new[] { "Write the card", "" } },
             { CardStep.Done, new[] { "The card is ready", "" } },
         };
@@ -269,6 +302,7 @@ namespace Domovoi.Windows.Tray
             if (s == CardStep.Password)
             {
                 ssidBox.Text = package.ApSsid;
+                ShowKeyProblem();
                 PasswordChanged();
                 pskBox.Focus();
             }
@@ -276,7 +310,9 @@ namespace Domovoi.Windows.Tray
             if (s == CardStep.Done)
             {
                 doneText.Text = package.IsPortal
-                    ? "Put the card in the Pi and switch it on. After a few minutes it raises its own Wi-Fi, " + package.ApSsid + ": join it from your phone, with the password you typed here, and follow the page that opens. Then approve the satellite in Settings > Rooms."
+                    ? "Put the card in the Pi and switch it on. After a few minutes it raises its own Wi-Fi, " + package.ApSsid + ": join it from your phone, with the password "
+                        + (KeyFetched ? key.Psk + (key.Reissued ? " (a new one: the password the dashboard showed before won't work)" : " (the dashboard shows it too)") : "you typed here")
+                        + ", and follow the page that opens. Then approve the satellite in Settings > Rooms."
                     : "Put the card in the Pi and switch it on, then plug it into the Domovoi server's USB port and adopt it in Settings > Rooms.";
             }
             UpdateButtons();
@@ -313,7 +349,7 @@ namespace Domovoi.Windows.Tray
                         && MessageBox.Show(this, "This card already has Domovoi's files on it. Write this zip's files over them?\n\nThe card's other files stay as they are.", Text,
                             MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
                         return;
-                    GoTo(package.IsPortal ? CardStep.Password : CardStep.Write);
+                    ChooseKeyStep();
                     break;
                 case CardStep.Password: if (SetupPassword.Problem(pskBox.Text) == null) GoTo(CardStep.Write); break;
                 case CardStep.Write: if (written) GoTo(CardStep.Done); break;
@@ -327,7 +363,7 @@ namespace Domovoi.Windows.Tray
                 case CardStep.Zip: GoTo(CardStep.Build); break;
                 case CardStep.Card: GoTo(CardStep.Zip); break;
                 case CardStep.Password: GoTo(CardStep.Card); break;
-                case CardStep.Write: GoTo(package.IsPortal ? CardStep.Password : CardStep.Card); break;
+                case CardStep.Write: GoTo(package.IsPortal && !KeyFetched ? CardStep.Password : CardStep.Card); break;
             }
         }
 
@@ -335,6 +371,7 @@ namespace Domovoi.Windows.Tray
         {
             zipPath.Text = path;
             package = null;
+            key = null;
             try
             {
                 Cursor = Cursors.WaitCursor;
@@ -418,9 +455,80 @@ namespace Domovoi.Windows.Tray
         {
             if (index < cardList.Items.Count) cardList.Items[index].Selected = true;
             CardChosen();
+            // A list whose window isn't shown (the tests) keeps no selection.
+            if (chosen == null && index < targets.Count) { chosen = targets[index]; UpdateButtons(); }
         }
 
+        public int CardCount { get { return targets.Count; } }
+
         public void SetPassword(string text) { pskBox.Text = text; }
+
+        public void ClickNext() { GoNext(); }
+
+        public void ClickBack() { GoBack(); }
+
+        // -- the setup network's password -------------------------------
+
+        // Whether Domovoi gave the password (so nobody types it).
+        public bool KeyFetched { get { return key != null && key.Ok; } }
+        public KeyAnswer Key { get { return key; } }
+        public string KeyReasonText { get { return keyReason.Text; } }
+        public string KeyNextText { get { return keyNext.Text; } }
+        // What the password step offers (a control's Visible reads false
+        // until the window is shown, so these are kept).
+        public bool AdminOffered { get { return step == CardStep.Password && adminOffered; } }
+        public bool RetryOffered { get { return step == CardStep.Password && retryOffered; } }
+        bool adminOffered, retryOffered;
+
+        // After the card: a Wi-Fi setup card's password is fetched once for
+        // these card files; the password step appears only when that failed.
+        public void ChooseKeyStep()
+        {
+            if (!package.IsPortal) { GoTo(CardStep.Write); return; }
+            if (!KeyFetched) FetchKey();
+            GoTo(KeyFetched ? CardStep.Write : CardStep.Password);
+        }
+
+        void FetchKey()
+        {
+            Cursor = Cursors.WaitCursor;
+            try { key = CardKeyFlow.Fetch(keys, package, DateTimeOffset.UtcNow); }
+            catch (Exception) { key = KeyAnswer.Fail(KeyProblem.Unreachable); }
+            finally { Cursor = Cursors.Default; }
+        }
+
+        public void RetryFetch()
+        {
+            FetchKey();
+            if (KeyFetched) GoTo(CardStep.Write);
+            else ShowKeyProblem();
+        }
+
+        public void SignInAndFetch()
+        {
+            string password = askAdminPassword(this);
+            if (password == null) return;
+            Cursor = Cursors.WaitCursor;
+            KeyAnswer a;
+            try { a = CardKeyFlow.FetchAsAdmin(keys, package, password); }
+            catch (Exception) { a = KeyAnswer.Fail(KeyProblem.Unreachable); }
+            finally { password = null; Cursor = Cursors.Default; }
+            key = a;
+            if (a.Ok) { GoTo(CardStep.Write); return; }
+            ShowKeyProblem();
+        }
+
+        void ShowKeyProblem()
+        {
+            if (key == null || key.Ok) return;
+            keyReason.Text = CardKeyWords.Reason(key);
+            keyNext.Text = CardKeyWords.NextStep(key);
+            // No pass, or nothing the server can recover: signing in can't help.
+            adminOffered = key.Problem != KeyProblem.NoClaim && key.Problem != KeyProblem.Unrecoverable;
+            retryOffered = key.Problem == KeyProblem.Unreachable;
+            adminButton.Visible = adminOffered;
+            retryButton.Visible = retryOffered;
+        }
 
         void PasswordChanged()
         {
@@ -437,6 +545,10 @@ namespace Domovoi.Windows.Tray
             lead.Text = "Domovoi's files go onto " + chosen.Title() + ". Nothing is formatted or deleted: config.txt and cmdline.txt get Domovoi's lines added, and a domovoi folder is added.";
             writeLead.Text = CardZip.Mib(package.CopyBytes) + " to copy" + (chosen.Drive.Free > 0 ? ", " + Bytes(chosen.Drive.Free) + " free on the card's boot partition." : ".")
                 + " Don't take the card out until this says it's done.";
+            if (package.IsPortal && KeyFetched)
+                writeLead.Text += "\nDomovoi filled in the setup network password (" + key.Psk + ")."
+                    + (key.Reissued ? " It's new: the dashboard's old one won't work." : "")
+                    + " You'll need it on your phone.";
             if (!written)
             {
                 writeBar.Value = 0;
@@ -455,7 +567,7 @@ namespace Domovoi.Windows.Tray
             writeButton.Enabled = false;
             UpdateButtons();
             string root = chosen.Drive.Root;
-            string psk = pskBox.Text;
+            string psk = KeyFetched ? key.Psk : pskBox.Text;
             CardPackage pkg = package;
             var t = new Thread(delegate ()
             {

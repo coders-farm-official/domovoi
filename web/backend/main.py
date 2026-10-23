@@ -398,6 +398,8 @@ app.include_router(voice_history_api.router)
 # Media-prep BEFORE satellites: its /api/satellites/media/* paths must
 # never be captured by the satellites router's /{room_id} parameters.
 app.include_router(satellite_media_api.router)
+# The card helper's one-time pass: no admin session, loopback only.
+app.include_router(satellite_media_api.claim_router)
 # The container guard: the banner's reads and the admin actions (docs/CONTAINER_GUARD.md).
 app.include_router(containers_api.router)
 app.include_router(satellites_api.router)

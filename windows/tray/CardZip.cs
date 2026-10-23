@@ -5,8 +5,10 @@
 // cmdline.txt (only Domovoi's additions), userconf.txt (the console
 // password's hash) and domovoi/ (firstrun.sh, payload.tar.gz,
 // payload.sha256, build-info.json, device-info.json,
-// server-identity.json). No passwords: the setup network's one is typed in
-// the card helper (domovoi/ap.json is written from it).
+// server-identity.json, and claim.json on a Wi-Fi setup card). No
+// passwords: the setup network's one is fetched from the Domovoi on this PC
+// with claim.json's one-time pass (CardKeys), or typed in the card helper,
+// and domovoi/ap.json is written from it. claim.json never goes on the card.
 //
 // Refused: anything that isn't a zip of that shape, a payload whose
 // SHA-256 isn't the one payload.sha256 names, a board this helper doesn't
@@ -50,6 +52,7 @@ namespace Domovoi.Windows.Tray
         public List<string> CmdlineTokens;
         public string PayloadSha256;
         public string ServerFingerprint;   // domovoi/server-identity.json, or null
+        public CardClaim Claim;            // domovoi/claim.json, or null (a USB card, an older zip)
         public List<CardFile> Files = new List<CardFile>();
 
         public bool IsPortal { get { return SetupTransport == "portal"; } }
@@ -76,6 +79,8 @@ namespace Domovoi.Windows.Tray
         public const string NamePattern = "domovoi-satellite-overlay*.zip";
         public const string Readme = "README.txt";
         public const string ApJson = "domovoi/ap.json";
+        public const string ClaimJson = "domovoi/claim.json";
+        static readonly Regex ClaimSecret = new Regex(@"^[A-Za-z0-9_-]{32,200}\z");
 
         // The boards the server prepares cards for (boards.py, BOARDS with
         // supported=True), with the file a flashed card of each carries.
@@ -127,7 +132,7 @@ namespace Domovoi.Windows.Tray
             {
                 string name = entry.Substring(8);
                 if (PlainName.IsMatch(name) && !DeviceName.IsMatch(name) && !name.EndsWith(".", StringComparison.Ordinal))
-                    return name == "ap.json" || name == "console.json" ? null : "domovoi\\" + name;
+                    return name == "ap.json" || name == "console.json" || name == "claim.json" ? null : "domovoi\\" + name;
             }
             throw new CardZipException("This zip holds \"" + entry + "\", which a Domovoi card zip never does. Download the card files again from the dashboard.");
         }
@@ -230,8 +235,27 @@ namespace Domovoi.Windows.Tray
                 ZipArchiveEntry idEntry;
                 if (entries.TryGetValue("domovoi/server-identity.json", out idEntry))
                     pkg.ServerFingerprint = Json.Str(ReadJson(idEntry, "server-identity.json"), "fingerprint");
+                ZipArchiveEntry claimEntry;
+                if (pkg.IsPortal && entries.TryGetValue(ClaimJson, out claimEntry))
+                    pkg.Claim = ReadClaim(ReadJson(claimEntry, "claim.json"));
                 return pkg;
             }
+        }
+
+        // A pass that isn't the shape the server writes is left out (the
+        // helper then asks for the password, as for an older zip) rather
+        // than refusing card files that are otherwise fine.
+        static CardClaim ReadClaim(Dictionary<string, object> d)
+        {
+            long? job = Json.Long(d, "job_id");
+            string secret = Json.Str(d, "secret");
+            if (Json.Long(d, "schema") != 1 || job == null || job <= 0 || secret == null || !ClaimSecret.IsMatch(secret)) return null;
+            var c = new CardClaim { JobId = job.Value, Secret = secret };
+            DateTimeOffset t;
+            string exp = Json.Str(d, "expires_at");
+            if (exp != null && DateTimeOffset.TryParse(exp, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out t))
+                c.ExpiresAt = t;
+            return c;
         }
 
         const int TextMax = 1024 * 1024;

@@ -1383,7 +1383,9 @@ About the price of a smart speaker. [Parts list](docs/SATELLITE_HARDWARE.md)
    card's drive, and press **Prepare**.
 3. **On the Windows install**, which can't see SD cards: choose
    **download for the card helper**, then write the card with the tray
-   icon's **Prepare a satellite card**.
+   icon's **Prepare a satellite card**. It fills in the setup Wi-Fi
+   password by itself. You'll still need that password for your phone:
+   **show setup details** shows it.
 4. Start the Pi with the card. It makes its own Wi-Fi network,
    `Domovoi-Setup-<id>`. Join it from your phone, pick your home Wi-Fi and
    name the room.
