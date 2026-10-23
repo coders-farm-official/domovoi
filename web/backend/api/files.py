@@ -79,6 +79,8 @@ from __future__ import annotations
 import io
 import logging
 import os
+import re
+import secrets
 import shutil
 import zipfile
 from pathlib import Path
@@ -125,6 +127,7 @@ from web.backend.api.files_security import (
     safe_join,
     unstorable_reason,
 )
+from web.backend.api import files_security as _fs
 from web.backend.api.csrf_guard import require_requested_with
 from web.backend.api import listing_cache, paging
 from web.backend.api.music import _safe_basename, _unique_path
@@ -618,6 +621,9 @@ def _read_folder(root: Path, target: Path) -> listing_cache.Snapshot:
         name = entry.name
         if is_sensitive_name(name):
             continue
+        # An upload still on its way (/upload-stream's part-file).
+        if name.startswith(PART_PREFIX):
+            continue
         if _is_link(entry):
             # Symlink guard — drop anything whose realpath escapes the root.
             real = (target / name).resolve(strict=False)
@@ -932,15 +938,18 @@ async def _upload_files(
         ):
             skipped.append(f"{raw}: bad filename")
             continue
-        data = await up.read()
         cand = _unique_path(dest, name)
         try:
             cand.resolve(strict=False).relative_to(root)
         except ValueError:
             skipped.append(f"{name}: refused (escapes library root)")
             continue
+        # Copied in chunks from the parser's spool, never read whole: this
+        # was ``cand.write_bytes(await up.read())``, which held every file
+        # of the request in memory at once — a 3 GB audiobook was 3 GB of
+        # this process.
         try:
-            cand.write_bytes(data)
+            await anyio.to_thread.run_sync(_copy_spool_to, up.file, cand)
         except OSError as e:
             skipped.append(f"{name}: write failed ({e})")
             continue
@@ -958,6 +967,381 @@ async def _upload_files(
         reindex_triggered = await _trigger_reindex(lib.reindex_kind, request)
     return UploadResponse(saved=saved, skipped=skipped, reindex_triggered=reindex_triggered,
                           created_dir=created_dir)
+
+
+# One write's worth of an upload. Memory per upload in flight is about this
+# much, whatever the file's size.
+UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+def _copy_spool_to(src: Any, cand: Path) -> None:
+    """Copy a multipart part's spooled file to ``cand`` a chunk at a time;
+    a part-written file is removed again."""
+    src.seek(0)
+    try:
+        with open(cand, "xb") as out:
+            shutil.copyfileobj(src, out, UPLOAD_CHUNK_BYTES)
+    except FileExistsError:
+        raise OSError(f"{cand.name} appeared while it was being saved")
+    except OSError:
+        try:
+            cand.unlink()
+        except OSError:
+            pass
+        raise
+
+
+# ─── Folder upload: one file per request, streamed (WEB-19) ─────────────────
+#
+# The dashboard's Upload → Folder… and a folder dropped on the Files page
+# send their files one request each, a few at a time, to
+# ``POST /upload-stream``. The body IS the file — no multipart — and it goes
+# to disk a chunk at a time as it arrives, so memory does not grow with the
+# file and there is no second copy in a temp spool. ``rel_path`` carries the
+# file's place inside the folder that was picked ("Book Title/01.mp3");
+# missing folders are made inside the target, one checked level at a time.
+#
+# Before the queue starts, ``POST /upload-check`` says which of the batch's
+# paths are already there, so the page can ask ONCE for the whole batch:
+# keep both, replace or skip (``on_conflict``). Each file is sent with
+# ``reindex=false`` and the batch ends with one ``POST /upload-done``, which
+# runs the library's reindex once rather than once per file.
+
+#: The largest single file ``/upload-stream`` takes — the same ceiling the
+#: transport guard sets on the route (domovoi/transport_guard.py). A long
+#: audiobook as one .m4b is 1–3 GB; this leaves room for a lossless one.
+MAX_UPLOAD_FILE_BYTES = 8 * 1024 * 1024 * 1024
+
+#: How deep a picked folder may go, and how many paths one check may name.
+_MAX_REL_DEPTH = 32
+_MAX_CHECK_PATHS = 5000
+
+#: The prefix of the hidden file a streamed upload is written to before it
+#: takes its name. Hidden from listings (``_read_folder``).
+PART_PREFIX = ".domovoi-upload-"
+
+_RESERVED_ON_WINDOWS_CHARS = '<>:"|?*'
+
+ConflictRule = Literal["keep_both", "replace", "skip"]
+
+
+def upload_segment_problem(seg: str) -> str | None:
+    """Why ``seg`` can't be one folder or file name of an uploaded path, or
+    None. Applied to EVERY segment of ``rel_path``.
+
+    Looser than :func:`new_folder_name_problem` in one way on purpose: a
+    colon or question mark is refused only on a Windows server, where NTFS
+    can't store it — "Dune: Messiah/01.mp3" from a Mac is an ordinary name on
+    a Linux box. Everything that changes WHERE a file lands is refused on
+    every host: a dot segment, a separator inside a name, a trailing dot or
+    space (Windows trims it), a Windows device name, a secret-shaped name."""
+    if not seg or not seg.strip():
+        return "an empty name"
+    if seg in (".", ".."):
+        return "a '.' or '..' segment"
+    if "\\" in seg or "/" in seg:
+        return "a backslash in a name"
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in seg):
+        return "control characters in a name"
+    if seg != seg.strip() or seg.endswith("."):
+        return "a name can't start or end with a space, or end with a dot"
+    if len(seg.encode("utf-8", "surrogatepass")) > 255:
+        return "a name longer than 255 bytes"
+    if seg.split(".", 1)[0].rstrip(" ").upper() in _WINDOWS_DEVICE_NAMES:
+        return "a name Windows reserves for a device"
+    if is_sensitive_name(seg):
+        return "a reserved name"
+    if _fs.WINDOWS_NAME_RULES and any(ch in seg for ch in _RESERVED_ON_WINDOWS_CHARS):
+        return "a character this server's filesystem can't store (< > : \" | ? *)"
+    return None
+
+
+def split_upload_rel(rel_path: str) -> list[str]:
+    """``rel_path`` → its segments, or ``400`` naming what is wrong with it.
+    The last segment is the file name. Never normalised into something else:
+    a path that needs fixing is refused, not guessed at."""
+    rel = rel_path or ""
+    if not rel.strip():
+        raise HTTPException(status_code=400, detail="rel_path is empty")
+    if rel.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", rel):
+        raise HTTPException(status_code=400, detail=f"{rel!r}: absolute paths are refused")
+    segs = rel.split("/")
+    if len(segs) > _MAX_REL_DEPTH:
+        raise HTTPException(status_code=400, detail=f"{rel!r}: more than {_MAX_REL_DEPTH} folders deep")
+    for seg in segs:
+        problem = upload_segment_problem(seg)
+        if problem is not None:
+            raise HTTPException(status_code=400, detail=f"{rel!r}: {problem}")
+    return segs
+
+
+def _within(p: Path, root: Path) -> bool:
+    try:
+        p.resolve(strict=False).relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def make_upload_parents(root: Path, base: Path, folders: list[str]) -> Path:
+    """Make ``folders`` (already checked by :func:`split_upload_rel`) under
+    ``base``, one level at a time, and return the deepest. Every level is
+    re-resolved inside ``root`` after it exists, so a link sitting (or
+    raced) in a folder's place can point anywhere INSIDE the library and
+    never out; a file in a folder's place is a ``409``."""
+    cur = base
+    for name in folders:
+        nxt = cur / name
+        try:
+            nxt.mkdir()
+        except FileExistsError:
+            pass
+        except OSError as e:
+            raise HTTPException(status_code=400, detail=f"couldn't make the folder {name!r}: {e}")
+        if not _within(nxt, root):
+            raise HTTPException(status_code=400, detail="path escapes library root")
+        if not nxt.is_dir():
+            raise HTTPException(status_code=409, detail=f"a file named {name!r} is where a folder should go")
+        cur = nxt.resolve(strict=False)
+    return cur
+
+
+def _reserve_unique(dirpath: Path, name: str) -> Path:
+    """``name``, or ``name (1)``… — the first free one, CREATED empty so a
+    second upload running at the same moment can't pick it too."""
+    stem, suffix = Path(name).stem, Path(name).suffix
+    i = 0
+    while True:
+        cand = dirpath / (name if i == 0 else f"{stem} ({i}){suffix}")
+        try:
+            fd = os.open(cand, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0))
+            os.close(fd)
+            return cand
+        except FileExistsError:
+            i += 1
+            if i > 10_000:
+                raise HTTPException(status_code=409, detail=f"{name}: no free name left")
+
+
+async def _writable_library(request: Request, library_id: str, device_id: str) -> MediaLibrary:
+    """The write gates every upload route applies, in upload's order: the
+    device block (403), the admin-write libraries (401), ``editable`` (403)."""
+    await _assert_can_write(device_id)
+    lib = await _resolve_library(library_id)
+    await _assert_admin_for(lib, request)
+    if not lib.editable:
+        raise HTTPException(status_code=403, detail="library is not editable")
+    return lib
+
+
+def _fmt_gb(n: int) -> str:
+    return f"{n / 1024 ** 3:.1f} GB"
+
+
+class StreamUploadResponse(BaseModel):
+    #: Where the file landed, relative to the library root — "" when skipped.
+    saved: str = ""
+    #: Why it was not saved ("already there" for on_conflict=skip).
+    skipped: Optional[str] = None
+    replaced: bool = False
+    bytes: int = 0
+    reindex_triggered: bool = False
+
+
+@router.post(
+    "/upload-stream",
+    response_model=StreamUploadResponse,
+    dependencies=[Depends(require_device), Depends(require_requested_with)],
+)
+async def upload_stream(
+    request: Request,
+    library_id: str = Query(...),
+    rel_path: str = Query(..., max_length=4096),
+    path: str = Query(""),
+    device_id: str = Query(..., min_length=3, max_length=64),
+    on_conflict: ConflictRule = Query("keep_both"),
+    reindex: bool = Query(True),
+) -> StreamUploadResponse:
+    """One file of a folder upload; the request body is the file's bytes.
+
+    ``path`` is the folder on screen (it must exist); ``rel_path`` is the
+    file's place under it ("Book Title/Disc 1/01.mp3"), each segment checked
+    (:func:`upload_segment_problem`), missing folders made inside the
+    library (:func:`make_upload_parents`). The body is written to a hidden
+    part-file next to its destination a chunk at a time and renamed into
+    place only when it is complete — a cancelled or broken upload leaves
+    nothing behind, and a ``replace`` never leaves a half-written file under
+    the real name. ``on_conflict``: ``keep_both`` (the default, and what
+    ``/upload`` always did) saves as "name (1).ext"; ``replace`` overwrites;
+    ``skip`` answers ``skipped="already there"`` without reading the body.
+    One file is at most :data:`MAX_UPLOAD_FILE_BYTES` (``413``)."""
+    lib = await _writable_library(request, library_id, device_id)
+    root = lib.root_path
+    segs = split_upload_rel(rel_path)
+    folders, name = segs[:-1], segs[-1]
+
+    declared = request.headers.get("content-length")
+    if declared is not None and declared.isdigit() and int(declared) > MAX_UPLOAD_FILE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(f"{name} is {_fmt_gb(int(declared))}; one file can be at most "
+                    f"{_fmt_gb(MAX_UPLOAD_FILE_BYTES)}"),
+        )
+
+    base = safe_join(root, path)
+    if not base.is_dir():
+        raise HTTPException(status_code=404, detail="destination directory not found")
+    rel_dir = "/".join(folders)
+    if rel_dir:
+        # The whole folder path as a plain destination would be, before
+        # anything is made: containment, the config dir, the recordings.
+        safe_join(root, ((path or "").rstrip("/") + "/" + rel_dir).lstrip("/"))
+    dest_dir = make_upload_parents(root, base, folders)
+    final = dest_dir / name
+    if not _within(final, root):
+        raise HTTPException(status_code=400, detail="path escapes library root")
+
+    def rel_of(p: Path) -> str:
+        return p.resolve(strict=False).relative_to(root).as_posix()
+
+    if final.exists() or final.is_symlink():
+        if final.is_dir():
+            return StreamUploadResponse(skipped="a folder of that name is already there")
+        if on_conflict == "skip":
+            return StreamUploadResponse(skipped="already there")
+
+    part = dest_dir / f"{PART_PREFIX}{secrets.token_hex(8)}.part"
+    written = 0
+    try:
+        f = await anyio.to_thread.run_sync(lambda: open(part, "xb"))
+        try:
+            buf = bytearray()
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                written += len(chunk)
+                if written > MAX_UPLOAD_FILE_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"{name}: one file can be at most {_fmt_gb(MAX_UPLOAD_FILE_BYTES)}",
+                    )
+                buf += chunk
+                if len(buf) >= UPLOAD_CHUNK_BYTES:
+                    data, buf = bytes(buf), bytearray()
+                    await anyio.to_thread.run_sync(f.write, data)
+            if buf:
+                await anyio.to_thread.run_sync(f.write, bytes(buf))
+        finally:
+            await anyio.to_thread.run_sync(f.close)
+        replaced = False
+        if on_conflict == "replace" and final.is_file() and not final.is_symlink():
+            target = final
+            replaced = True
+        elif on_conflict == "skip" and (final.exists() or final.is_symlink()):
+            # Arrived while this one was on its way.
+            _unlink_quiet(part)
+            return StreamUploadResponse(skipped="already there")
+        else:
+            target = await anyio.to_thread.run_sync(_reserve_unique, dest_dir, name)
+        await anyio.to_thread.run_sync(os.replace, part, target)
+    except HTTPException:
+        _unlink_quiet(part)
+        raise
+    except OSError as e:
+        _unlink_quiet(part)
+        raise HTTPException(status_code=507 if getattr(e, "errno", None) == 28 else 400,
+                            detail=f"{name}: write failed ({e.strerror or e})")
+    except BaseException:
+        # The client went away (cancel), or the server is stopping.
+        _unlink_quiet(part)
+        raise
+
+    reindex_triggered = False
+    if reindex:
+        listing_cache.invalidate(lib.id)
+        if lib.reindex_kind in INDEXED_KINDS:
+            reindex_triggered = await _trigger_reindex(lib.reindex_kind, request)
+    return StreamUploadResponse(saved=rel_of(target), replaced=replaced, bytes=written,
+                                reindex_triggered=reindex_triggered)
+
+
+def _unlink_quiet(p: Path) -> None:
+    try:
+        p.unlink()
+    except OSError:
+        pass
+
+
+class UploadCheckRequest(BaseModel):
+    library_id: str
+    path: str = ""
+    rel_paths: list[str] = Field(..., min_length=1, max_length=_MAX_CHECK_PATHS)
+    device_id: str = _DEVICE_ID_FIELD
+
+
+class UploadCheckResponse(BaseModel):
+    #: The rel_paths that already name a file (or folder) in place.
+    existing: list[str]
+    #: rel_paths the server would refuse, each with why.
+    refused: dict[str, str]
+
+
+@router.post("/upload-check", response_model=UploadCheckResponse,
+             dependencies=[Depends(require_device)])
+async def upload_check(request: Request, req: UploadCheckRequest) -> UploadCheckResponse:
+    """Before a batch: which of its files are already there (so the page
+    can ask once — keep both, replace, skip) and which names the server
+    would refuse. Writes nothing; gated like the upload itself, so a
+    blocked device hears it before the first byte is sent."""
+    lib = await _writable_library(request, req.library_id, req.device_id)
+    root = lib.root_path
+    base = safe_join(root, req.path)
+    if not base.is_dir():
+        raise HTTPException(status_code=404, detail="destination directory not found")
+
+    def check() -> tuple[list[str], dict[str, str]]:
+        existing: list[str] = []
+        refused: dict[str, str] = {}
+        for rel in req.rel_paths:
+            try:
+                split_upload_rel(rel)
+            except HTTPException as e:
+                refused[rel] = str(e.detail).split(": ", 1)[-1]
+                continue
+            cand = base / rel
+            if not _within(cand, root):
+                refused[rel] = "path escapes library root"
+            elif cand.exists():
+                existing.append(rel)
+        return existing, refused
+
+    existing, refused = await anyio.to_thread.run_sync(check)
+    return UploadCheckResponse(existing=existing, refused=refused)
+
+
+class UploadDoneRequest(BaseModel):
+    library_id: str
+    device_id: str = _DEVICE_ID_FIELD
+
+
+class UploadDoneResponse(BaseModel):
+    reindex_triggered: bool
+    #: "music" / "audiobooks" when the library is one the server indexes.
+    reindex_kind: Optional[str] = None
+
+
+@router.post("/upload-done", response_model=UploadDoneResponse,
+             dependencies=[Depends(require_device)])
+async def upload_done(request: Request, req: UploadDoneRequest) -> UploadDoneResponse:
+    """The end of a batch sent with ``reindex=false``: the listing is read
+    again everywhere, and an indexed library (Music, Audiobooks) reindexes
+    ONCE for the whole batch. Same gates as the upload, and nothing the
+    upload itself would not have run."""
+    lib = await _writable_library(request, req.library_id, req.device_id)
+    listing_cache.invalidate(lib.id)
+    kind = lib.reindex_kind if lib.reindex_kind in INDEXED_KINDS else None
+    triggered = await _trigger_reindex(kind, request) if kind else False
+    return UploadDoneResponse(reindex_triggered=triggered, reindex_kind=kind)
 
 
 # Windows device names: a file or folder so named, with any extension,

@@ -346,38 +346,103 @@ const NEW_KINDS = [
   { kind: 'text',    label: 'Text file',     icon: 'file',      hint: 'Plain text · name as typed' },
 ];
 
-const NewMenu = ({ disabled, onPick }) => {
+/* A button that opens a short menu of choices: "+ New" (Documents) and
+ * Upload (Files… / Folder…). One component so both behave the same way:
+ * a real menu button (aria-haspopup/expanded), focus moves into the menu
+ * when it opens and back to the button when it closes, ↑/↓/Home/End move
+ * between items, Esc or a press outside closes it. `pointerdown` rather
+ * than `mousedown` for the outside press, so a tap on a phone closes it
+ * the same way a click does. */
+let filesMenuSeq = 0;
+const FilesActionMenu = ({ label, icon, variant = 'secondary', disabled, title, items, onPick,
+                           align = 'right' }) => {
   const [open, setOpen] = React.useState(false);
-  const ref = React.useRef(null);
-  React.useEffect(() => {
-    if (!open) return;
-    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('mousedown', onDoc);
-    document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
+  const wrapRef = React.useRef(null);
+  const btnRef = React.useRef(null);
+  const itemRefs = React.useRef([]);
+  const idRef = React.useRef(null);
+  if (idRef.current == null) { filesMenuSeq += 1; idRef.current = `files-menu-${filesMenuSeq}`; }
+  const menuId = idRef.current;
+  const menuRef = React.useRef(null);
+  // Anchored to the button's edge, then nudged back inside the window: on a
+  // phone the Upload button sits near the left, and a right-anchored menu
+  // hung off the screen there.
+  const [shift, setShift] = React.useState(0);
+  React.useLayoutEffect(() => {
+    if (!open || !menuRef.current) { setShift(0); return; }
+    const r = menuRef.current.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth || window.innerWidth;
+    if (r.left < 8) setShift(8 - r.left);
+    else if (r.right > vw - 8) setShift(vw - 8 - r.right);
   }, [open]);
+  const close = (refocus) => {
+    setOpen(false);
+    if (refocus && btnRef.current) btnRef.current.focus();
+  };
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const onDoc = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(true); } };
+    document.addEventListener('pointerdown', onDoc);
+    document.addEventListener('keydown', onKey);
+    // The first item takes focus, so the arrow keys work at once.
+    const t = setTimeout(() => { if (itemRefs.current[0]) itemRefs.current[0].focus(); }, 0);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener('pointerdown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  const onMenuKey = (e) => {
+    const els = itemRefs.current.filter(Boolean);
+    const i = els.indexOf(document.activeElement);
+    let next = null;
+    if (e.key === 'ArrowDown') next = els[(i + 1) % els.length];
+    else if (e.key === 'ArrowUp') next = els[(i - 1 + els.length) % els.length];
+    else if (e.key === 'Home') next = els[0];
+    else if (e.key === 'End') next = els[els.length - 1];
+    else if (e.key === 'Tab') { setOpen(false); return; }
+    if (next) { e.preventDefault(); next.focus(); }
+  };
+  const onBtnKey = (e) => {
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !disabled) { e.preventDefault(); setOpen(true); }
+  };
   return (
-    <div ref={ref} style={{ position: 'relative' }}>
-      <Button variant="primary" icon="plus" disabled={disabled}
-              onClick={() => setOpen((o) => !o)}>New</Button>
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      {/* A plain <button> with Button's classes: Button can't carry a ref,
+          and the menu hands focus back to this on close. */}
+      <button type="button" className={`btn btn-${variant}`} disabled={disabled} title={title}
+              ref={btnRef} aria-haspopup="menu" aria-expanded={open}
+              aria-controls={open ? menuId : undefined}
+              onKeyDown={onBtnKey}
+              onClick={() => setOpen((o) => !o)}>
+        {icon && <Icon name={icon} size={14}/>}
+        {label}
+        <Icon name="chevron-down" size={13}/>
+      </button>
       {open && (
-        <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 50,
-                      minWidth: 240, background: 'var(--card)', border: '1px solid var(--border)',
+        <div id={menuId} ref={menuRef} role="menu"
+             aria-label={typeof label === 'string' ? label : undefined}
+             onKeyDown={onMenuKey}
+             style={{ position: 'absolute', [align]: 0, top: 'calc(100% + 6px)', zIndex: 50,
+                      transform: shift ? `translateX(${shift}px)` : undefined,
+                      minWidth: 220, maxWidth: 'calc(100vw - 32px)', background: 'var(--card)',
+                      border: '1px solid var(--border)',
                       borderRadius: 'var(--r-md)', boxShadow: 'var(--shadow-md), var(--inner-highlight)',
                       padding: 6, display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {NEW_KINDS.map((it) => (
-            <button key={it.kind}
-                    onClick={() => { setOpen(false); onPick(it.kind); }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg)'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                    style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px',
-                             background: 'transparent', border: 'none', borderRadius: 'var(--r-sm)',
-                             cursor: 'pointer', textAlign: 'left', font: 'inherit', color: 'var(--fg)' }}>
+          {items.map((it, i) => (
+            <button key={it.key} role="menuitem" type="button" tabIndex={-1}
+                    ref={(el) => { itemRefs.current[i] = el; }}
+                    className="files-menu-item"
+                    onClick={() => { close(true); onPick(it.key); }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 10px',
+                             minHeight: 40, background: 'transparent', border: 'none',
+                             borderRadius: 'var(--r-sm)', cursor: 'pointer', textAlign: 'left',
+                             font: 'inherit', color: 'var(--fg)' }}>
               <Icon name={it.icon} size={16}/>
               <span style={{ display: 'flex', flexDirection: 'column' }}>
                 <span style={{ fontSize: 13, fontWeight: 500 }}>{it.label}</span>
-                <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{it.hint}</span>
+                {it.hint && <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{it.hint}</span>}
               </span>
             </button>
           ))}
@@ -386,6 +451,11 @@ const NewMenu = ({ disabled, onPick }) => {
     </div>
   );
 };
+
+const NewMenu = ({ disabled, onPick }) => (
+  <FilesActionMenu label="New" icon="plus" variant="primary" disabled={disabled}
+                   items={NEW_KINDS.map((it) => ({ ...it, key: it.kind }))} onPick={onPick}/>
+);
 
 /* ============================================================ *
  *  Files browser — the generic multi-library surface.
@@ -774,6 +844,516 @@ const FilesDeleteConfirm = ({ state, busy, onCancel, onConfirm }) => {
   );
 };
 
+/* ---- Uploading files and folders ------------------------------------
+ * Upload → Files… / Folder…, or anything dropped on the page (files and
+ * folders mixed), becomes ONE batch: a list of { file, rel } where `rel`
+ * is the file's place inside what was picked ("Book Title/01.mp3"; a
+ * plain file is just its name). The batch is sent one file per request to
+ * POST /api/files/upload-stream, FILES_UPLOAD_PARALLEL at a time, the body
+ * being the file itself, so the server streams it to disk (files.py) and
+ * a multi-GB audiobook never sits in anyone's memory.
+ *
+ * Before anything is sent, /api/files/upload-check says which paths are
+ * already there; when any are, the page asks ONCE for the whole batch:
+ * keep both, replace, or skip. The batch ends with /api/files/upload-done,
+ * which reindexes Music or Audiobooks once rather than once per file.
+ *
+ * What a dropped FOLDER looks like to a page: `dataTransfer.files` lists
+ * it as a zero-byte, type-less File that cannot be read (sending it fails
+ * the whole request), so folders are walked through
+ * `DataTransferItem.webkitGetAsEntry()` instead. Those entries are only
+ * valid during the drop event itself: collect them synchronously there,
+ * walk them afterwards. `readEntries` answers in batches (100 at a time in
+ * Chrome), so a reader is read until it answers an empty batch. */
+const FILES_UPLOAD_JUNK = new Set(['desktop.ini', 'thumbs.db', '.ds_store']);
+// files.py MAX_UPLOAD_FILE_BYTES — the server says the same thing if a
+// bigger one gets there anyway.
+const FILES_UPLOAD_MAX_BYTES = 8 * 1024 * 1024 * 1024;
+const FILES_UPLOAD_PARALLEL = 3;
+const FILES_UPLOAD_CHOICES = [
+  { key: 'files',  label: 'Files…',  icon: 'file-up',   hint: 'one or more files' },
+  { key: 'folder', label: 'Folder…', icon: 'folder-up', hint: 'a whole folder, with its subfolders' },
+];
+// Under files.py _MAX_CHECK_PATHS (5000), and small enough that long paths
+// stay inside the 1 MiB JSON body every ordinary route takes.
+const FILES_UPLOAD_CHECK_CHUNK = 2000;
+
+const filesUploadBaseName = (rel) => String(rel).split('/').pop();
+const isFilesUploadJunk = (rel) => FILES_UPLOAD_JUNK.has(filesUploadBaseName(rel).toLowerCase());
+const fmtUploadGB = (n) => `${(n / 1024 ** 3).toFixed(1)} GB`;
+
+const readAllDirEntries = (reader) => new Promise((resolve, reject) => {
+  const out = [];
+  const step = () => reader.readEntries((batch) => {
+    if (!batch.length) { resolve(out); return; }
+    for (const e of batch) out.push(e);
+    step();
+  }, reject);
+  step();
+});
+
+const fileOfEntry = (entry) => new Promise((resolve, reject) => entry.file(resolve, reject));
+
+/* FileSystemEntry[] → { items: [{file, rel}], unreadable: [reason] }. */
+const walkDroppedEntries = async (entries) => {
+  const items = [];
+  const unreadable = [];
+  const visit = async (entry, prefix) => {
+    const rel = prefix + entry.name;
+    if (entry.isFile) {
+      try { items.push({ file: await fileOfEntry(entry), rel }); }
+      catch { unreadable.push(`${rel}: couldn't be read from this computer`); }
+    } else if (entry.isDirectory) {
+      let kids;
+      try { kids = await readAllDirEntries(entry.createReader()); }
+      catch { unreadable.push(`${rel}/: the folder couldn't be opened`); return; }
+      for (const kid of kids) {
+        // eslint-disable-next-line no-await-in-loop
+        await visit(kid, `${rel}/`);
+      }
+    }
+  };
+  for (const e of entries) {
+    // eslint-disable-next-line no-await-in-loop
+    await visit(e, '');
+  }
+  return { items, unreadable };
+};
+
+/* SYNCHRONOUS part of a drop: grab the entries (or, in a browser without
+ * the entries API, the plain files) before the event ends. Returns a
+ * promise of the batch. */
+const collectDroppedUpload = (dt) => {
+  const its = dt && dt.items ? Array.from(dt.items).filter((it) => it.kind === 'file') : [];
+  const entries = its.map((it) => (it.webkitGetAsEntry ? it.webkitGetAsEntry()
+    : (it.getAsEntry ? it.getAsEntry() : null))).filter(Boolean);
+  if (entries.length) return walkDroppedEntries(entries);
+  // No entries API: a folder is the zero-byte, type-less, extensionless
+  // File described above. Leave it out and say so, rather than letting it
+  // fail every other file in the drop.
+  const items = [];
+  const unreadable = [];
+  for (const f of Array.from((dt && dt.files) || [])) {
+    if (f.size === 0 && !f.type && !/\.[^.]+$/.test(f.name)) {
+      unreadable.push(`${f.name}: looks like a folder — this browser can't read dropped folders; use Upload → Folder…`);
+    } else items.push({ file: f, rel: f.name });
+  }
+  return Promise.resolve({ items, unreadable });
+};
+
+/* An <input type=file> selection → the batch. With `webkitdirectory` each
+ * File carries `webkitRelativePath` ("Book Title/01.mp3"). */
+const pickedUploadItems = (fileList) => Array.from(fileList || []).map((f) => (
+  { file: f, rel: f.webkitRelativePath || f.name }));
+
+const uploadErrorDetail = (xhr) => {
+  let body = null;
+  try { body = JSON.parse(xhr.responseText); } catch { /* plain text */ }
+  const d = body && body.detail;
+  if (typeof d === 'string') return d;
+  if (d && typeof d === 'object' && d.detail) return String(d.detail);
+  const txt = String(xhr.responseText || '').trim();
+  return txt ? txt.slice(0, 160) : `${xhr.status} ${xhr.statusText || 'error'}`;
+};
+
+/* One file, streamed. XHR rather than fetch: only XHR reports upload
+ * progress. Same headers apiFetch sends (credential, device id, the
+ * preflight-forcing X-Requested-With). */
+const sendUploadFile = ({ libraryId, path, item, onConflict, onProgress }) => {
+  const xhr = new XMLHttpRequest();
+  const q = new URLSearchParams({
+    library_id: libraryId, path: path || '', rel_path: item.rel,
+    device_id: DeviceIdentity.id(), on_conflict: onConflict, reindex: 'false',
+  });
+  const promise = new Promise((resolve, reject) => {
+    xhr.open('POST', `${API_BASE}/api/files/upload-stream?${q.toString()}`);
+    xhr.withCredentials = true;
+    const h = apiHeaders();
+    Object.keys(h).forEach((k) => { if (h[k] != null) xhr.setRequestHeader(k, h[k]); });
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.upload.onprogress = (e) => onProgress(e.loaded);
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(JSON.parse(xhr.responseText)); } catch { resolve({}); }
+        return;
+      }
+      const err = new Error(uploadErrorDetail(xhr));
+      err.status = xhr.status;
+      reject(err);
+    };
+    xhr.onerror = () => reject(Object.assign(
+      new Error('the connection to the server dropped'), { network: true }));
+    xhr.onabort = () => reject(Object.assign(new Error('cancelled'), { aborted: true }));
+    xhr.send(item.file);
+  });
+  return { promise, abort: () => { try { xhr.abort(); } catch { /* done already */ } } };
+};
+
+/* The queue. One batch at a time; `snap` is what the panel draws. */
+const useFilesUploadQueue = ({ fire, onFinished }) => {
+  const [snap, setSnap] = React.useState(null);
+  const [ask, setAsk] = React.useState(null);      // { existing: [rel], total, resolve }
+  const q = React.useRef(null);
+  const timer = React.useRef(null);
+
+  const publish = (now) => {
+    const cur = q.current;
+    if (!cur) { setSnap(null); return; }
+    const draw = () => {
+      timer.current = null;
+      const c = q.current;
+      if (!c) return;
+      let bytesDone = c.bytesFinished;
+      c.active.forEach((a) => { bytesDone += a.loaded; });
+      setSnap({
+        phase: c.phase, paused: c.paused, label: c.label,
+        total: c.items.length, finished: c.finished, saved: c.saved.length,
+        skipped: c.skipped.slice(), failed: c.failed.slice(), junk: c.junk.slice(),
+        notSent: c.notSent, replaced: c.replaced,
+        bytesTotal: c.bytesTotal, bytesDone,
+        active: Array.from(c.active.values()).map((a) => ({ rel: a.rel, loaded: a.loaded, size: a.size })),
+        reindex: c.reindex, fatal: c.fatal, cancelled: c.cancelled,
+      });
+    };
+    if (now) { if (timer.current) clearTimeout(timer.current); draw(); return; }
+    if (!timer.current) timer.current = setTimeout(draw, 150);
+  };
+
+  const running = !!(snap && (snap.phase === 'checking' || snap.phase === 'asking' || snap.phase === 'running'));
+
+  // Leaving the page mid-upload loses what hasn't been sent: say so.
+  React.useEffect(() => {
+    if (!running) return undefined;
+    const onBefore = (e) => { e.preventDefault(); e.returnValue = ''; return ''; };
+    window.addEventListener('beforeunload', onBefore);
+    return () => window.removeEventListener('beforeunload', onBefore);
+  }, [running]);
+
+  const finish = async (c) => {
+    c.phase = 'finishing';
+    c.notSent = c.items.length - c.finished;
+    if (c.saved.length) {
+      try {
+        c.reindex = await apiPost('/api/files/upload-done',
+          { library_id: c.libraryId, device_id: DeviceIdentity.id() });
+      } catch (e) { c.reindex = { error: String((e && e.message) || e) }; }
+    }
+    c.phase = 'done';
+    publish(true);
+    const parts = [`${c.saved.length} file${c.saved.length === 1 ? '' : 's'} uploaded`];
+    if (c.skipped.length) parts.push(`${c.skipped.length} skipped`);
+    if (c.failed.length) parts.push(`${c.failed.length} failed`);
+    if (c.cancelled && c.notSent) parts.push(`${c.notSent} not sent (cancelled)`);
+    fire(parts.join(' · '));
+    if (onFinished) onFinished(c);
+  };
+
+  const worker = async (c) => {
+    for (;;) {
+      if (c.cancelled) return;
+      if (c.paused) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => { c.wake.push(r); });
+        continue;
+      }
+      const i = c.next++;
+      if (i >= c.items.length) return;
+      const item = c.items[i];
+      if (item.skip) {
+        c.skipped.push(`${item.rel}: ${item.skip}`);
+        c.finished += 1;
+        publish();
+        continue;
+      }
+      const a = { rel: item.rel, loaded: 0, size: item.file.size };
+      const send = sendUploadFile({ libraryId: c.libraryId, path: c.path, item,
+                                    onConflict: c.onConflict,
+                                    onProgress: (n) => { a.loaded = n; publish(); } });
+      a.abort = send.abort;
+      c.active.set(i, a);
+      publish();
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const res = await send.promise;
+        if (res && res.saved) { c.saved.push(res.saved); if (res.replaced) c.replaced += 1; }
+        else c.skipped.push(`${item.rel}: ${(res && res.skipped) || 'not saved'}`);
+        c.finished += 1;
+      } catch (e) {
+        if (e && e.aborted) { c.active.delete(i); publish(); return; }
+        c.finished += 1;
+        c.failed.push(`${item.rel}: ${e.message || e}`);
+        // Refused for who we are (signed out, unpaired, blocked): every
+        // other file would be refused the same way. Stop, and say why.
+        if (e && (e.status === 401 || e.status === 403)) {
+          c.fatal = e.message || 'the server refused the upload';
+          c.cancelled = true;
+          c.active.forEach((o, k) => { if (k !== i && o.abort) o.abort(); });
+        }
+      }
+      c.active.delete(i);
+      c.bytesFinished += item.file.size;
+      publish();
+    }
+  };
+
+  const start = async ({ items, unreadable = [], libraryId, path, label }) => {
+    if (q.current && q.current.phase !== 'done') {
+      fire('an upload is already running — wait for it, or cancel it first');
+      return;
+    }
+    const junk = items.filter((it) => isFilesUploadJunk(it.rel)).map((it) => it.rel);
+    const keep = items.filter((it) => !isFilesUploadJunk(it.rel));
+    const c = {
+      phase: 'checking', paused: false, cancelled: false, label, libraryId, path,
+      items: keep, next: 0, finished: 0, saved: [], skipped: unreadable.slice(), failed: [],
+      junk, notSent: 0, replaced: 0, bytesTotal: keep.reduce((s, it) => s + it.file.size, 0),
+      bytesFinished: 0, active: new Map(), wake: [], reindex: null, fatal: null,
+      onConflict: 'keep_both',
+    };
+    q.current = c;
+    publish(true);
+    if (!keep.length) { await finish(c); return; }
+    keep.forEach((it) => {
+      if (it.file.size > FILES_UPLOAD_MAX_BYTES) {
+        it.skip = `${fmtUploadGB(it.file.size)} — one file can be at most ${fmtUploadGB(FILES_UPLOAD_MAX_BYTES)}`;
+      }
+    });
+    // Which are already there, and which names the server won't take.
+    const existing = [];
+    try {
+      for (let at = 0; at < keep.length; at += FILES_UPLOAD_CHECK_CHUNK) {
+        const chunk = keep.slice(at, at + FILES_UPLOAD_CHECK_CHUNK);
+        // eslint-disable-next-line no-await-in-loop
+        const r = await apiPost('/api/files/upload-check', {
+          library_id: libraryId, path: path || '', device_id: DeviceIdentity.id(),
+          rel_paths: chunk.map((it) => it.rel),
+        });
+        const refused = r.refused || {};
+        chunk.forEach((it) => { if (refused[it.rel] && !it.skip) it.skip = refused[it.rel]; });
+        (r.existing || []).forEach((rel) => existing.push(rel));
+      }
+    } catch (e) {
+      const msg = mutationErrorText(e, 'upload', { kept: false });
+      if (msg) fire(msg);
+      q.current = null; publish(true);
+      return;
+    }
+    if (c.cancelled) { await finish(c); return; }
+    if (existing.length) {
+      c.phase = 'asking'; publish(true);
+      const choice = await new Promise((resolve) => setAsk({ existing, total: keep.length, resolve }));
+      setAsk(null);
+      if (choice === 'cancel') { q.current = null; publish(true); return; }
+      c.onConflict = choice;
+      if (choice === 'skip') {
+        const ex = new Set(existing);
+        keep.forEach((it) => { if (ex.has(it.rel) && !it.skip) it.skip = 'already there'; });
+      }
+    }
+    // Progress is over what will actually be sent.
+    c.bytesTotal = keep.reduce((sum, it) => sum + (it.skip ? 0 : it.file.size), 0);
+    c.phase = 'running'; publish(true);
+    const n = Math.min(FILES_UPLOAD_PARALLEL, keep.length);
+    await Promise.all(Array.from({ length: n }, () => worker(c)));
+    await finish(c);
+  };
+
+  const pause = () => { const c = q.current; if (c && c.phase === 'running') { c.paused = true; publish(true); } };
+  const resume = () => {
+    const c = q.current;
+    if (!c) return;
+    c.paused = false;
+    const w = c.wake; c.wake = [];
+    w.forEach((r) => r());
+    publish(true);
+  };
+  const cancel = () => {
+    const c = q.current;
+    if (!c || c.phase === 'done') return;
+    c.cancelled = true;
+    c.active.forEach((a) => { if (a.abort) a.abort(); });
+    resume();
+  };
+  const dismiss = () => {
+    if (q.current && q.current.phase !== 'done') return;
+    q.current = null; publish(true);
+  };
+  return { snap, ask, running, start, pause, resume, cancel, dismiss };
+};
+
+/* What the batch's reindex did, in words — or what the person must do. */
+const uploadReindexNote = (snap) => {
+  const r = snap.reindex;
+  if (!r || !snap.saved) return null;
+  if (r.error) return `The library wasn't told about the new files (${r.error}). Rescan it to list them.`;
+  if (r.reindex_kind === 'audiobooks') {
+    return r.reindex_triggered ? 'Audiobooks has picked them up.'
+      : 'Audiobooks didn’t reindex — press reindex on the Audiobooks page to list them.';
+  }
+  if (r.reindex_kind === 'music') {
+    return r.reindex_triggered ? 'Music is reindexing — they appear there in a moment.'
+      : 'Music hasn’t indexed them yet — an admin can press Rescan library on the Music page.';
+  }
+  return null;
+};
+
+const UploadBar = ({ frac, thin }) => (
+  <div style={{ height: thin ? 3 : 6, background: 'var(--sunken)', borderRadius: 3, overflow: 'hidden' }}>
+    <div style={{ height: '100%', width: `${Math.max(0, Math.min(1, frac)) * 100}%`,
+                  background: 'var(--brand)', transition: 'width .15s ease' }}/>
+  </div>
+);
+
+/* The batch on screen: overall and per-file progress while it runs, the
+ * summary once it's done. */
+const FilesUploadPanel = ({ up }) => {
+  const s = up.snap;
+  if (!s || s.phase === 'asking') return null;
+  const done = s.phase === 'done';
+  const frac = s.bytesTotal ? s.bytesDone / s.bytesTotal : (s.total ? s.finished / s.total : 1);
+  const problems = [...s.failed, ...s.skipped];
+  const note = done ? uploadReindexNote(s) : null;
+  let headline;
+  if (s.phase === 'checking') headline = `Getting ${s.total} file${s.total === 1 ? '' : 's'} ready…`;
+  else if (!done) {
+    headline = `${s.paused ? 'Paused' : 'Uploading'} — ${s.finished} of ${s.total}`
+      + ` file${s.total === 1 ? '' : 's'} done · ${fmtBytes(s.bytesDone)} of ${fmtBytes(s.bytesTotal)}`;
+  } else {
+    headline = `${s.saved} file${s.saved === 1 ? '' : 's'} uploaded`
+      + (s.replaced ? ` (${s.replaced} replaced)` : '')
+      + (s.skipped.length ? `, ${s.skipped.length} skipped` : '')
+      + (s.failed.length ? `, ${s.failed.length} failed` : '')
+      + (s.notSent ? `, ${s.notSent} not sent` : '')
+      + (s.cancelled && !s.fatal ? ' — cancelled' : '');
+  }
+  return (
+    <div role="region" aria-label="Upload progress"
+         style={{ marginBottom: 12, padding: '12px 14px', borderRadius: 'var(--r-md)',
+                  border: '1px solid var(--border)', background: 'var(--card)',
+                  display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <Icon name={done ? (s.failed.length ? 'alert-triangle' : 'check-circle') : 'upload'} size={15}/>
+        <strong role="status" aria-live="polite" style={{ fontSize: 13, flex: '1 1 220px' }}>{headline}</strong>
+        <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>into {s.label}</span>
+        {!done && s.phase === 'running' && (s.paused
+          ? <Button icon="play" onClick={up.resume}>Resume</Button>
+          : <Button icon="pause" onClick={up.pause}
+                    title="finish the files on their way, then wait">Pause</Button>)}
+        {!done && <Button icon="x" onClick={up.cancel}>Cancel</Button>}
+        {done && <Button icon="x" onClick={up.dismiss}>Close</Button>}
+      </div>
+      {!done && <UploadBar frac={frac}/>}
+      {!done && s.active.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+          {s.active.map((a) => (
+            <div key={a.rel} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto',
+                                      gap: '2px 10px', fontSize: 12 }}>
+              <span className="mono" title={a.rel}
+                    style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.rel}</span>
+              <span style={{ color: 'var(--fg-muted)' }}>
+                {a.size ? `${Math.round((a.loaded / a.size) * 100)}%` : '…'} of {fmtBytes(a.size)}
+              </span>
+              <div style={{ gridColumn: '1 / -1' }}><UploadBar frac={a.size ? a.loaded / a.size : 0} thin/></div>
+            </div>
+          ))}
+        </div>
+      )}
+      {s.paused && !done && (
+        <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+          Files already on their way finish; nothing new starts until you resume.
+        </div>
+      )}
+      {done && s.fatal && (
+        <div style={{ fontSize: 12, color: 'var(--danger)' }}>Stopped: {s.fatal}</div>
+      )}
+      {done && note && <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{note}</div>}
+      {done && s.junk.length > 0 && (
+        <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>
+          Left out {s.junk.length} system file{s.junk.length === 1 ? '' : 's'}
+          {' '}({Array.from(new Set(s.junk.map(filesUploadBaseName))).join(', ')}).
+        </div>
+      )}
+      {done && problems.length > 0 && (
+        <details open={problems.length <= 5}>
+          <summary style={{ fontSize: 12, cursor: 'pointer' }}>
+            {problems.length} not uploaded — why
+          </summary>
+          <div style={{ maxHeight: 180, overflowY: 'auto', marginTop: 6, display: 'flex',
+                        flexDirection: 'column', gap: 3 }}>
+            {problems.map((p, i) => (
+              <div key={i} className="mono" style={{ fontSize: 11.5, color: 'var(--fg-muted)',
+                                                     overflowWrap: 'anywhere' }}>{p}</div>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+};
+
+/* Asked once per batch when some of it is already there. */
+const FilesConflictDialog = ({ ask }) => {
+  const firstRef = React.useRef(null);
+  React.useEffect(() => { if (firstRef.current) firstRef.current.focus(); }, [!!ask]);
+  React.useEffect(() => {
+    if (!ask) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') ask.resolve('cancel'); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [ask]);
+  if (!ask) return null;
+  const n = ask.existing.length;
+  const all = n === ask.total;
+  const title = all
+    ? `${n === 1 ? 'This file is' : `All ${n} files are`} already here`
+    : `${n} of ${ask.total} files are already here`;
+  const choice = (key, icon, label, sub, primary) => (
+    <button type="button" ref={primary ? firstRef : undefined}
+            className={`btn ${primary ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => ask.resolve(key)}
+            style={{ justifyContent: 'flex-start', height: 'auto', padding: '9px 12px', textAlign: 'left' }}>
+      <Icon name={icon} size={15}/>
+      <span style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <span style={{ fontWeight: 600 }}>{label}</span>
+        <span style={{ fontSize: 11.5, opacity: 0.8, fontWeight: 400 }}>{sub}</span>
+      </span>
+    </button>
+  );
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(0,0,0,0.45)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+         onClick={() => ask.resolve('cancel')}>
+      <div role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}
+           style={{ width: 'min(460px, 100%)', background: 'var(--card)',
+                    border: '1px solid var(--border)', borderRadius: 'var(--r-lg)',
+                    boxShadow: 'var(--shadow-md), var(--inner-highlight)', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px',
+                      borderBottom: '1px solid var(--border-soft)' }}>
+          <Icon name="copy" size={16}/>
+          <strong style={{ fontSize: 14 }}>{title}</strong>
+        </div>
+        <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8,
+                      fontSize: 13, color: 'var(--fg-muted)' }}>
+          <div style={{ maxHeight: 110, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {ask.existing.slice(0, 50).map((rel) => (
+              <div key={rel} className="mono" style={{ fontSize: 11.5, overflowWrap: 'anywhere' }}>{rel}</div>
+            ))}
+            {n > 50 && <div style={{ fontSize: 11.5 }}>…and {n - 50} more</div>}
+          </div>
+          <div>What should happen to {n === 1 ? 'it' : 'them'}? This applies to the whole upload.</div>
+          {choice('keep_both', 'copy', 'Keep both', 'the new one is saved as “name (1)”', true)}
+          {choice('replace', 'refresh-cw', 'Replace', 'the file here is overwritten')}
+          {choice('skip', 'skip-forward', 'Skip', 'upload only what isn’t here yet')}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '10px 16px',
+                      borderTop: '1px solid var(--border-soft)' }}>
+          <Button icon="x" onClick={() => ask.resolve('cancel')}>Cancel upload</Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 /* The Files page — library selector + breadcrumb folder browser + the
  * New(upload) / Download / Delete / Import controls. Documents-library rows
  * keep the exact office/text/drawing/newtab editing routing. */
@@ -797,11 +1377,11 @@ const FilesPage = () => {
   const [sheetRel, setSheetRel] = React.useState(null); // spreadsheet editor
   const [textRel, setTextRel] = React.useState(null);   // text editor
   const [drawing, setDrawing] = React.useState(null);   // excalidraw: {rel_path}
-  const [uploading, setUploading] = React.useState(false);
   const [busy, setBusy] = React.useState(null);         // 'deleting'|'downloading'|'importing'|null
   const [dlPct, setDlPct] = React.useState(null);       // 0..1 or null
   const [confirmState, setConfirmState] = React.useState(null);   // {entries}
   const fileInputRef = React.useRef(null);
+  const folderInputRef = React.useRef(null);
   // What's currently being dragged: {libraryId, paths, label}. A ref, not
   // state — it's read inside drop handlers and must never trigger a render
   // mid-drag (a re-render during a drag cancels it in some browsers).
@@ -926,33 +1506,31 @@ const FilesPage = () => {
     }
   };
 
-  // ── New (upload into the current directory) ──
-  const onUpload = async (fileList) => {
-    const files = Array.from(fileList || []);
-    if (!files.length) return;
-    if (!activeLib?.editable) { fire('this library is read-only'); return; }
-    if (view?.writable === false) { fire(view.blocked_reason || 'this device is blocked from changing files'); return; }
-    setUploading(true);
-    fire(`uploading ${files.length} file${files.length === 1 ? '' : 's'}…`);
-    try {
-      const fd = new FormData();
-      fd.append('library_id', activeId);
-      fd.append('path', path);
-      fd.append('device_id', DeviceIdentity.id());
-      files.forEach((f) => fd.append('files', f));
-      const res = await apiUpload('/api/files/upload', fd);
-      const parts = [`uploaded ${res.saved.length} file${res.saved.length === 1 ? '' : 's'}`];
-      if (res.skipped?.length) parts.push(`${res.skipped.length} skipped`);
-      if (res.reindex_triggered) parts.push('reindexing');
-      fire(parts.join(' · '));
-      refresh();
-    } catch (e) {
-      const msg = mutationErrorText(e, 'upload', { kept: false });
-      if (msg) fire(msg);
-    } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
+  // ── Upload (files and folders into the current directory) ──
+  // Every way in — Upload → Files…, Upload → Folder…, a drop — becomes one
+  // batch for the queue (useFilesUploadQueue, above), which keeps the
+  // folders' structure under the folder on screen.
+  const up = useFilesUploadQueue({ fire, onFinished: () => refresh() });
+  const uploading = up.running;
+  const uploadGate = () => {
+    if (!activeLib?.editable) { fire('this library is read-only'); return false; }
+    if (view?.writable === false) { fire(view.blocked_reason || 'this device is blocked from changing files'); return false; }
+    return true;
+  };
+  const startUpload = ({ items, unreadable }) => {
+    if (!items.length && !(unreadable && unreadable.length)) return;
+    if (!uploadGate()) return;
+    const where = [activeLib?.label || activeId, ...(path ? path.split('/') : [])].join(' / ');
+    up.start({ items, unreadable, libraryId: activeId, path, label: where });
+  };
+  const onPicked = (input) => {
+    const items = pickedUploadItems(input.files);
+    input.value = '';
+    startUpload({ items, unreadable: [] });
+  };
+  const onUploadPick = (key) => {
+    const el = key === 'folder' ? folderInputRef.current : fileInputRef.current;
+    if (el) el.click();
   };
 
   // ── Download (file → attachment, folder → streamed zip) ──
@@ -1071,11 +1649,12 @@ const FilesPage = () => {
   const onOsFileDrop = (e) => {
     if (isInternalDrag(e) || !hasOsFiles(e)) return;
     e.preventDefault();
-    const files = e.dataTransfer.files;
-    if (!files || !files.length) return;
-    if (!activeLib?.editable) { fire('this library is read-only'); return; }
-    if (view?.writable === false) { fire(view.blocked_reason || 'this device is blocked from changing files'); return; }
-    onUpload(files);
+    if (!uploadGate()) return;
+    if (up.running) { fire('an upload is already running — wait for it, or cancel it first'); return; }
+    // The entries must be taken NOW, inside the event; the walk is async.
+    collectDroppedUpload(e.dataTransfer)
+      .then(startUpload)
+      .catch((err) => fire(`couldn't read what was dropped: ${String((err && err.message) || err).slice(0, 80)}`));
   };
 
   // ── Import (removable source → an importable library) ──
@@ -1127,10 +1706,17 @@ const FilesPage = () => {
          onDrop={onOsFileDrop}>
       <PageHeader title="Files"
         sub={"Browse every library — core media, plugins & removable drives."
-             + " Drag rows onto a folder, a breadcrumb, or another library to move them."}
+             + " Drag rows onto a folder, a breadcrumb, or another library to move them;"
+             + " drop files or whole folders from your computer to upload them here."}
         actions={<>
+          {/* Two pickers behind one Upload menu: a browser's file dialog picks
+              files OR (webkitdirectory) folders, never both at once. */}
           <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }}
-                 onChange={(e) => onUpload(e.target.files)}/>
+                 data-testid="files-upload-input" tabIndex={-1} aria-hidden="true"
+                 onChange={(e) => onPicked(e.target)}/>
+          <input ref={folderInputRef} type="file" multiple webkitdirectory="" directory=""
+                 style={{ display: 'none' }} data-testid="files-folder-input" tabIndex={-1}
+                 aria-hidden="true" onChange={(e) => onPicked(e.target)}/>
           {/* Scan (printers.jsx): only with a saved scanner, and only where
               this device may write to Documents (a scan writes there); a
               finished scan lands in Documents, so the folder is read again. */}
@@ -1138,17 +1724,18 @@ const FilesPage = () => {
             <window.PrintingScanButton fire={fire} onDone={() => refresh()}/>
           )}
           {isDocuments && <NewMenu disabled={!canUpload} onPick={onCreate}/>}
-          <Button variant={isDocuments ? 'secondary' : 'primary'} icon="upload"
-                  disabled={uploading || !canUpload}
-                  title={uploadTitle}
-                  onClick={() => fileInputRef.current && fileInputRef.current.click()}>
-            {uploading ? 'Uploading…' : 'Upload'}
-          </Button>
+          <FilesActionMenu label={uploading ? 'Uploading…' : 'Upload'} icon="upload"
+                           variant={isDocuments ? 'secondary' : 'primary'}
+                           disabled={uploading || !canUpload} title={uploadTitle}
+                           items={FILES_UPLOAD_CHOICES} onPick={onUploadPick}/>
         </>}/>
 
       <LibrarySelector libraries={libraries} activeId={activeId}
                        onSelect={onSelectLibrary} onRefresh={rescan}
                        onDropMove={canWrite ? onDropIntoLibrary : null}/>
+
+      <FilesUploadPanel up={up}/>
+      <FilesConflictDialog ask={up.ask}/>
 
       {blocked && (
         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '10px 14px',
@@ -1243,7 +1830,7 @@ const FilesPage = () => {
             ? <Empty title="nothing matches" sub={`filter = “${needle}”`}
                      action={<Button icon="x" onClick={() => setFilter('')}>clear filter</Button>}/>
             : <Empty title="empty folder"
-                     sub={canUpload ? 'upload files with Upload, or go back up' : 'nothing here'}/>
+                     sub={canUpload ? 'upload files or a folder with Upload (or drop them here), or go back up' : 'nothing here'}/>
         ) : (
           entries.map((entry) => {
             if (!entry.is_dir && isDocuments && view.doc_editing) {

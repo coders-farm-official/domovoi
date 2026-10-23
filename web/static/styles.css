@@ -849,6 +849,11 @@ button.lyr-line:hover { background: var(--brand-soft); }
    past the card and left the name 0px wide, so there, as in the Room
    queue, they take a line of their own under the name (a fourth wraps),
    each a 44px target, and the name gets two lines before its ellipsis. */
+/* Files page menus (New, Upload): hover and keyboard focus look the same. */
+.files-menu-item:hover,
+.files-menu-item:focus-visible { background: var(--bg) !important; outline: none; }
+.files-menu-item:focus-visible { box-shadow: inset 0 0 0 2px var(--brand); }
+
 .files-row {
   display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto;
   gap: 12px; align-items: center; padding: 11px 14px;
