@@ -215,6 +215,14 @@ async def assemble(
         sat_dir / "scripts" / "domovoi-wifi-reset",
         system / "domovoi-wifi-reset",
     )
+    # The security-check helper: when the house network will not come back,
+    # it looks at the router and makes the house profile's security match
+    # (satellite/wifi_adapt.py). Root-installed and argv-less like the two
+    # above.
+    shutil.copy2(
+        sat_dir / "scripts" / "domovoi-wifi-adapt",
+        system / "domovoi-wifi-adapt",
+    )
     # The verifier that helper uses to make the server prove who it is.
     # Shipped separately from the copy under satellite/ because first boot
     # installs THIS one root-owned: the helper runs as root on the

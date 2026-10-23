@@ -39,6 +39,9 @@ EXPECTED_HELPERS = {
     # Argv-less radio off/on + the house profile by name (2026-10-17), the
     # self-check's rung after `nmcli connection up` timed out.
     '/usr/local/sbin/domovoi-wifi-reset ""',
+    # Argv-less: the router's security changed; the house profile follows
+    # it, from the helper's own table (2026-10-22).
+    '/usr/local/sbin/domovoi-wifi-adapt ""',
     "/opt/xvf3800/xvf_host",
 }
 

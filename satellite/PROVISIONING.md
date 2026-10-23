@@ -606,6 +606,8 @@ Two units died while idle for days (October 2026) and only a power cycle brought
 
 **The Wi-Fi reset helper.** When that `connection up` times out or fails on a link that is down, the client runs `sudo -n /usr/local/sbin/domovoi-wifi-reset`: the Wi-Fi radio off, three seconds, on, then the house profile `domovoi-home` again by name. It refuses any argument, and it does nothing while the setup hotspot's profile (`domovoi-setup`) is still saved, because turning the radio on lets NetworkManager connect to whatever it likes. Cards prepared from 2026-10-17 on have it; a unit without it skips that rung (one log line says so) and goes on to the reboot.
 
+**The Wi-Fi security check (2026-10-22).** Before the radio reset, the client runs `sudo -n /usr/local/sbin/domovoi-wifi-adapt`: it rescans, and if the router's security changed since setup it changes the house profile's key-mgmt and PMF to match, then brings it up (the table in §8.5; it edits only `domovoi-home`, only those two settings, never a link that is up, and refuses any argument). When the router changed to something this radio cannot use (WPA3-only on a Pi Zero 2 W, 802.1X, WEP) it says so instead: the ring turns red, the reason goes in the log the server keeps and the health record, and the self-check **does not reboot** over it. It rescans every 5 minutes, so the unit comes back by itself once the router is changed back. Root's boot step (§8.4) runs the same check at every boot, before the first join can give up, so a card without this helper still adapts after a power cycle. Cards prepared from 2026-10-22 on have the helper.
+
 **Missing base packages (2026-10-17).** The boot step that applies the network settings (`domovoi-provisioning.service`, root, every boot) also checks the base apt set of §3 once setup has finished. If one is missing — a card whose setup ran with the Wi-Fi down could lose mpg123 — it waits up to 5 minutes for a route, finishes any interrupted dpkg run (`dpkg --configure -a`), then runs `apt-get install --no-install-recommends --no-remove` for exactly those packages (20 minutes for the whole run) and records the result in `/var/lib/domovoi/base-packages.json`. On a card prepared while the server's internet access was turned off it does not go online: it installs from the card's own deb cache (`dpkg -i`) or apt's (`--no-download`) only. Until then the Health card says *reboot needed: system packages missing (…)*. It needs nothing installed beyond the satellite code push; reboot once with the network up. On a hand-built unit, `sudo ~/satellite-venv/bin/python -m satellite.base_packages` does one run by hand.
 
 **The hardware watchdog.** The Pi's SoC has a watchdog timer; once systemd is told to pet it, a kernel or firmware wedge that stops PID 1 reboots the unit on its own instead of leaving it dead until someone pulls the plug. It is two files: a line in the boot partition's `config.txt` and a systemd drop-in.
@@ -628,8 +630,10 @@ sudo awk '/NOPASSWD/ {print $1; exit}' "$ROOT/etc/sudoers.d/domovoi-satellite"
 #    the Wi-Fi recovery and the self-restart.
 sudo install -o root -g root -m 0755 domovoi/satellite/scripts/domovoi-reboot "$ROOT/usr/local/sbin/domovoi-reboot"
 sudo install -o root -g root -m 0755 domovoi/satellite/scripts/domovoi-wifi-reset "$ROOT/usr/local/sbin/domovoi-wifi-reset"
+sudo install -o root -g root -m 0755 domovoi/satellite/scripts/domovoi-wifi-adapt "$ROOT/usr/local/sbin/domovoi-wifi-adapt"
 printf '%s\n' '<username> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-reboot ""' \
   '<username> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-wifi-reset ""' \
+  '<username> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-wifi-adapt ""' \
   | sudo tee "$ROOT/etc/sudoers.d/satellite-reboot" >/dev/null
 sudo chmod 0440 "$ROOT/etc/sudoers.d/satellite-reboot"
 sudo visudo -cf "$ROOT/etc/sudoers.d/satellite-reboot"
@@ -646,14 +650,16 @@ printf '[Manager]\nRuntimeWatchdogSec=15\n' | sudo tee "$ROOT/etc/systemd/system
 ```bash
 sudo install -m 0755 ~/domovoi/satellite/scripts/domovoi-reboot /usr/local/sbin/domovoi-reboot
 sudo install -m 0755 ~/domovoi/satellite/scripts/domovoi-wifi-reset /usr/local/sbin/domovoi-wifi-reset
+sudo install -m 0755 ~/domovoi/satellite/scripts/domovoi-wifi-adapt /usr/local/sbin/domovoi-wifi-adapt
 sudo visudo -f /etc/sudoers.d/satellite-reboot
 ```
 
-Paste these two lines (same `<username>` as §6.7; the posture note there applies). The `""` allows each helper with no arguments only:
+Paste these three lines (same `<username>` as §6.7; the posture note there applies). The `""` allows each helper with no arguments only:
 
 ```
 <username> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-reboot ""
 <username> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-wifi-reset ""
+<username> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-wifi-adapt ""
 ```
 
 Then the watchdog (`/boot/config.txt` on images older than Bookworm):
@@ -739,6 +745,16 @@ The network name and password go to `nmcli` as separate arguments, never through
 | Linux laptop (`install-pc.sh`) | The laptop's | Its own network settings: Domovoi does not join Wi-Fi for it | | |
 | Windows PC (Windows satellite Setup) | The PC's | Windows' own Wi-Fi | | |
 | Phone in room mode | The phone's | The phone's own Wi-Fi | | |
+
+**When the router's security changes later**, the satellite follows it, decided from a scan, never blindly (`satellite/wifi_adapt.py`; at every boot, and when the link will not come back — §8.3):
+
+| You changed the router to | The satellite |
+|---|---|
+| WPA2/WPA3 mixed (from WPA2) | Turns PMF off on `domovoi-home` and rejoins on the WPA2 side |
+| WPA3-only | Pi 4 / Pi 5: switches to WPA3 (SAE, PMF required). **Pi Zero 2 W, Zero W, Pi 3 B: can't** — red ring, and *"the router switched to WPA3-only; this speaker needs WPA2/WPA3 mixed mode"* in the room's log and health; no reboots, a rescan every 5 minutes |
+| WPA2 again (from WPA3-only or mixed) | Back to `wpa-psk`, PMF off; PMF on if the router requires it |
+| Enterprise (802.1X), WEP, no password | Says so (same places), doesn't reboot |
+| A new name or password | Not something it can follow: set the speaker up again |
 
 **When a join fails** the page says why, in one of these: the password wasn't accepted; the network couldn't be found (with the 2.4 GHz note on a 2.4 GHz-only radio); the router took too long; the router gave no address; WPA3-only; enterprise; WEP; the radio wasn't ready. Only the first is called a password problem. NetworkManager's own reason follows in brackets. The same words, without the network's name, go on the card: put it in any PC and open `domovoi/device-info.json`. `error` is the reason; `join_log` holds the last lines NetworkManager and wpa_supplicant wrote about the join (for example `reason=WRONG_KEY`), with the network name, the password and hardware addresses removed.
 
@@ -933,4 +949,5 @@ Selecting the profile auto-disables the ALSA mic-gain tune and the software nois
 - **Old `seeed-voicecard` DKMS approach is dead** — the `respeaker/seeed-voicecard` repo (and its forks like HinTak's) is the *old* way and breaks on every kernel bump. Use `Seeed-Studio/seeed-linux-dtoverlays` instead — it's a pure dtoverlay, no kernel module to maintain.
 - **Default codec gain is near-silent** — first playback after install will sound barely audible. Run `alsamixer -c 0` and push playback channels to 80%, then `sudo alsactl store` to persist.
 - **`pulseaudio` vs `pipewire`** — Pi OS Lite ships neither by default; ALSA direct is fine and simpler. Don't install pulseaudio unless something else demands it.
+- **Changed your router's security?** The satellite adapts (§8.5): mixed mode and WPA2 just work, at the next boot or within minutes. **WPA3-only needs mixed mode on a Pi Zero 2 W**: its radio can't do WPA3, so the ring goes red and the room's log says so, and it rejoins on its own once the router is back on WPA2/WPA3 mixed.
 - **Pi Zero 2 W memory** — 512 MB RAM. openWakeWord runs but is tight. If you hit OOMs later, swap is your friend; we'll deal with it then.

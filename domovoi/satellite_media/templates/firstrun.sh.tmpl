@@ -438,6 +438,12 @@ if ! skip units; then
   if [ -f "$PAYDIR/system/domovoi-wifi-reset" ]; then
     install -m 0755 "$PAYDIR/system/domovoi-wifi-reset" /usr/local/sbin/domovoi-wifi-reset
   fi
+  # The security-check helper (satellite/scripts/domovoi-wifi-adapt): the
+  # recovery's look at the router when the house network will not come
+  # back - its security may have changed since setup. Guarded the same way.
+  if [ -f "$PAYDIR/system/domovoi-wifi-adapt" ]; then
+    install -m 0755 "$PAYDIR/system/domovoi-wifi-adapt" /usr/local/sbin/domovoi-wifi-adapt
+  fi
   # The verifier that helper checks the server's signature with. Root's
   # copy, not the satellite user's: the helper runs as root on that
   # user's request and must import nothing that user can edit.

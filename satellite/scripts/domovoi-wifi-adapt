@@ -1,0 +1,165 @@
+#!/bin/sh
+# Domovoi satellite: when the house network will not come back, look at
+# the router and, if its security changed, change the house profile's to
+# match - then bring it up. Installed to /usr/local/sbin/domovoi-wifi-adapt
+# (root:root 0755) by the media-prep bootstrap, invoked by the client's
+# Wi-Fi recovery through exactly this sudoers line:
+#
+#   <user> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-wifi-adapt ""
+#
+# The "" admits it with no arguments only, and it refuses any anyway: what
+# it does with root is fixed here, in this root-owned file. It edits ONE
+# profile (domovoi-home), only its key-mgmt and PMF, only to values from the
+# table below, and only when a scan says the router changed.
+#
+# Why (2026-10-22): an access point switched to "WPA3-Personal+WPA2-PSK";
+# the satellites' wpa-psk profiles (PMF default) let NetworkManager offer
+# SAE, the Pi Zero 2 W's radio cannot finish SAE, and they never came back -
+# not even after a power cycle.
+#
+# The table is satellite/wifi_adapt.py decide(after_failure=True); the
+# tests run this script against it case by case. The last line printed is
+#   result=<state> kind=<kind>
+# and the exit code:
+#   0 joined (after a change) or already up   1 nothing to change
+#   7 a mismatch no change can fix (kind says) 8 changed, still not joined
+#   10 the house network is not in the scan    4 no profile   2 arguments
+
+set -u
+
+if [ "$#" -ne 0 ]; then
+  echo "domovoi-wifi-adapt takes no arguments" >&2
+  exit 2
+fi
+
+NMCLI=/usr/bin/nmcli
+HOME_PROFILE=domovoi-home
+MODEL_FILE=/proc/device-tree/model
+
+say() {
+  logger -t domovoi-wifi-adapt "$*" 2>/dev/null || true
+  echo "$*"
+}
+
+result() {
+  echo "result=$1 kind=$2"
+  exit "$3"
+}
+
+get() {
+  # One field of the house profile, nmcli's escaping undone.
+  "$NMCLI" -t -g "$1" connection show id "$HOME_PROFILE" 2>/dev/null | head -n 1 | sed 's/\\\(.\)/\1/g'
+}
+
+if ! "$NMCLI" -t -f NAME connection show 2>/dev/null | grep -qx "$HOME_PROFILE"; then
+  say "no $HOME_PROFILE profile on this unit; nothing done"
+  result none no-profile 4
+fi
+if [ "$(get GENERAL.STATE)" = "activated" ]; then
+  result connected - 0
+fi
+
+ssid="$(get 802-11-wireless.ssid)"
+km="$(get 802-11-wireless-security.key-mgmt)"
+pmf="$(get 802-11-wireless-security.pmf)"
+case "$pmf" in
+  1*|*disable*) pmf=disable ;;
+  2*|*optional*) pmf=optional ;;
+  3*|*required*) pmf=required ;;
+  *) pmf=default ;;
+esac
+
+# The board: the Broadcom radios that cannot finish SAE.
+model="$(tr -d '\000' <"$MODEL_FILE" 2>/dev/null || true)"
+can_sae=yes
+case "$model" in
+  *"Zero 2 W"*|*"Zero W"*) can_sae=no ;;
+  "Raspberry Pi 3 Model B Plus"*) can_sae=yes ;;
+  "Raspberry Pi 3 Model B"*) can_sae=no ;;
+esac
+
+# The router's SECURITY, every scan row with this name (both bands).
+want="$(printf '%s' "$ssid" | sed 's/\\/\\\\/g; s/:/\\:/g')"
+sec=""
+seen=no
+i=0
+while [ "$i" -lt 3 ]; do
+  rows="$("$NMCLI" -t -f SSID,SECURITY device wifi list --rescan yes 2>/dev/null)" || rows=""
+  match="$(printf '%s\n' "$rows" | WANT="$want:" awk '
+    { w = ENVIRON["WANT"]; if (index($0, w) == 1) { print "+" substr($0, length(w) + 1) } }')"
+  if [ -n "$match" ]; then
+    seen=yes
+    sec="$(printf '%s\n' "$match" | sed 's/^+//; s/^--$//' | tr '\n' ' ')"
+    break
+  fi
+  i=$((i + 1))
+  [ "$i" -lt 3 ] && sleep 5
+done
+if [ "$seen" = no ]; then
+  say "the house network is not in the scan; nothing to decide"
+  result not-visible - 10
+fi
+
+sec=" $(printf '%s' "$sec" | tr ',' ' ' | tr 'a-z' 'A-Z') "
+has() { case "$sec" in *" $1 "*) return 0 ;; esac; return 1; }
+
+wpa=no; sae=no
+for t in WPA WPA1 WPA2 PSK WPA-PSK; do has "$t" && wpa=yes; done
+for t in WPA3 SAE; do has "$t" && sae=yes; done
+blank=yes
+for t in $sec; do [ "$t" = "--" ] || blank=no; done
+
+attempts=""
+reason=""
+if { has 802.1X || has EAP; } && ! { has PSK || has WPA-PSK || has SAE; }; then
+  result mismatch enterprise-now 7
+elif has WEP; then
+  result mismatch wep-now 7
+elif [ "$blank" = yes ]; then
+  case "$km" in
+    wpa-psk|sae) result mismatch open-now 7 ;;
+    *) result ok - 1 ;;
+  esac
+elif [ "$km" != wpa-psk ] && [ "$km" != sae ]; then
+  result mismatch password-now 7
+elif [ "$wpa" = yes ]; then
+  if [ "$km" = sae ]; then
+    if [ "$sae" = yes ]; then attempts="wpa-psk:disable"; else attempts="wpa-psk:disable wpa-psk:default"; fi
+    reason="the router offers WPA2 again; back to wpa-psk"
+  elif [ "$sae" = yes ] && [ "$pmf" != disable ]; then
+    attempts="wpa-psk:disable"
+    reason="the router is WPA2/WPA3 mixed; PMF off keeps the join on WPA2"
+  elif [ "$sae" = no ] && [ "$pmf" = disable ]; then
+    attempts="wpa-psk:default"
+    reason="WPA2 with PMF off failed; the router may require PMF"
+  else
+    result ok - 1
+  fi
+else
+  if [ "$km" = sae ]; then
+    if [ "$pmf" = required ]; then result ok - 1; fi
+    attempts="sae:required"
+    reason="WPA3 needs PMF required"
+  elif [ "$can_sae" = no ]; then
+    say "the router switched to WPA3-only; this speaker needs WPA2/WPA3 mixed mode"
+    result mismatch wpa3-only-board 7
+  else
+    attempts="sae:required"
+    reason="the router is WPA3-only now"
+  fi
+fi
+
+for a in $attempts; do
+  new_km="${a%%:*}"
+  new_pmf="${a#*:}"
+  say "changing $HOME_PROFILE: $km/$pmf -> $new_km/$new_pmf ($reason)"
+  "$NMCLI" connection modify id "$HOME_PROFILE" \
+    802-11-wireless-security.key-mgmt "$new_km" \
+    802-11-wireless-security.pmf "$new_pmf" || result error modify-failed 8
+  km="$new_km"; pmf="$new_pmf"
+  if "$NMCLI" --wait 45 connection up id "$HOME_PROFILE"; then
+    echo "changed=$new_km/$new_pmf"
+    result adapted - 0
+  fi
+done
+result failed - 8

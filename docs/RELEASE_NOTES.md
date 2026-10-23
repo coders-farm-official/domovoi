@@ -24,6 +24,14 @@ again to get it; no server change, no migration.
   timeout, no address from the router, WPA3-only, enterprise or WEP. The
   card's `domovoi/device-info.json` gets the same words without the
   network's name, plus `join_log`, NetworkManager's own lines.
+* **A router whose security changes later.** At every boot and when the
+  link won't come back, the satellite rescans and makes `domovoi-home`
+  match (mixed: PMF off; WPA3-only: SAE where the radio can; WPA2 again:
+  back to wpa-psk). WPA3-only on a Pi Zero 2 W is said plainly (red ring,
+  the room's log and health) and never rebooted over; it rescans every
+  5 minutes. New root helper `/usr/local/sbin/domovoi-wifi-adapt`
+  (argv-less sudoers line) on cards prepared from today; older cards get
+  the boot-time check with the code push and a reboot.
 * **Open and hidden networks.** A blank password joins an open network,
   and **Not in the list?** takes a typed name (hidden networks too).
   satellite/PROVISIONING.md §8.5 lists what each board can join.

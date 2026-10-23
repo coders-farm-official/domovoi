@@ -973,6 +973,14 @@ class CheckInput:
     recovery_failures: int = 0
     recent_reboots: int = 0
     reboot_backoff_cap: float = 60 * 60.0
+    # The router's security changed to something this radio cannot use
+    # (satellite/wifi_adapt.py: WPA3-only on a Pi Zero 2 W, 802.1X, WEP),
+    # in plain words; None when not. A reboot cannot fix that, so while it
+    # is set the link-down ladder never reboots: it rescans (a recovery)
+    # every `wifi_mismatch_retry`, so the unit comes back on its own once
+    # the router is changed back.
+    wifi_mismatch: str | None = None
+    wifi_mismatch_retry: float = 5 * 60.0
     mic_silence_limit: float = 30.0
     heartbeat_limit: float = 60.0
 
@@ -1122,6 +1130,8 @@ def decide(ci: CheckInput) -> list[Decision]:
             cooldown = ci.recovery_cooldown
             if down and ci.recovery_failures > 0:
                 cooldown = min(cooldown, ci.link_down_retry)
+            if ci.wifi_mismatch:
+                cooldown = ci.wifi_mismatch_retry
             due = (
                 ci.last_wifi_recovery is None
                 or ci.now - ci.last_wifi_recovery >= cooldown
@@ -1135,6 +1145,8 @@ def decide(ci: CheckInput) -> list[Decision]:
                     f"; {ci.recovery_failures} recovery attempt(s) failed so far"
                     if ci.recovery_failures else ""
                 )
+                if ci.wifi_mismatch:
+                    tries += f"; {ci.wifi_mismatch} (rescanning every "                              f"{ci.wifi_mismatch_retry / 60:.0f} min)"
                 out.append(Decision(
                     "wifi_recover",
                     f"no server for {ci.no_server_for / 60:.0f} min and {what} "
@@ -1143,7 +1155,9 @@ def decide(ci: CheckInput) -> list[Decision]:
                     check="no_server_link", basis="sample",
                 ))
         reboot_at, why = reboot_threshold(ci)
-        if ci.no_server_for >= reboot_at and silent:
+        # A router this radio cannot join is not something a reboot fixes:
+        # rebooting over it is the loop this rule exists to stop.
+        if ci.no_server_for >= reboot_at and silent and not ci.wifi_mismatch:
             reason = (
                 f"no server for {ci.no_server_for / 60:.0f} min and the gateway does "
                 f"not answer{why}; the network stack needs a reboot"
