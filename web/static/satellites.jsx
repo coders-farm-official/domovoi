@@ -2027,7 +2027,8 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
           <div style={{ marginLeft: 'auto' }}><IconButton name="x" onClick={onClose}/></div>
         </div>
         <Tabs tabs={tabs} value={tab} onChange={setTab} padX={16}/>
-        <div style={{ flex: 1, overflow: 'auto' }}>
+        {/* Its own scroller: a table header sticks to this edge, not to .main's padding. */}
+        <div style={{ flex: 1, overflow: 'auto', '--tbl-stick-top': '0px' }}>
           {tab === 'overview'      && <OverviewBody s={s} sats={sats} fire={fire} onClose={onClose} refresh={refresh}/>}
           {tab === 'sessions'      && <RoomSessionsBody room={s.room_id}/>}
           {tab === 'conversations' && <RoomConversationsBody room={s.room_id}/>}

@@ -156,6 +156,7 @@
   grid-area: main;
   overflow: auto;
   padding: 24px;
+  --main-pad-t: 24px;
   /* Room for the global docked mini-player (64px tall, fixed to the
      viewport bottom — or to the top of the phone strip, see the 760px
      block). Harmless when the player is idle — it just reserves a strip
@@ -193,6 +194,12 @@
    it (ContainerGuardBanner keeps --guard-banner-h at its height; unset
    while no banner shows). */
 .main { scroll-padding-top: var(--guard-banner-h, 0px); }
+/* A sticky table header measures from the scrollport's PADDING edge, so in
+   .main (24px / 16px of top padding) `top: 0` parks it that far below the
+   top, with rows scrolling past above it. Pull it up by the padding, and
+   down by the guard banner when one shows (the banner does the same with
+   its own `top: -24px`). A table in a scroller of its own resets this. */
+.main { --tbl-stick-top: calc(var(--guard-banner-h, 0px) - var(--main-pad-t)); }
 /* A household token the server refused, or its wait after wrong ones
    (DeviceTokenNotice, components.jsx): one notice at the top of the page,
    in the page's flow (the guard banner, if any, stays the sticky one). */
@@ -424,7 +431,7 @@
 
 /* Table ---------------------------------------------------------- */
 table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
-table.tbl thead th { font-size: 11px; font-weight: 500; color: var(--fg-muted); text-align: left; text-transform: lowercase; padding: 8px 16px; background: var(--sunken); border-bottom: 1px solid var(--border); position: sticky; top: 0; }
+table.tbl thead th { font-size: 11px; font-weight: 500; color: var(--fg-muted); text-align: left; text-transform: lowercase; padding: 8px 16px; background: var(--sunken); border-bottom: 1px solid var(--border); position: sticky; top: var(--tbl-stick-top, 0px); }
 table.tbl tbody td { padding: 0 16px; height: 40px; border-bottom: 1px solid var(--border-soft); color: var(--fg); vertical-align: middle; }
 table.tbl tbody tr:last-child td { border-bottom: none; }
 table.tbl tbody tr:hover td { background: var(--brand-soft); }
@@ -496,7 +503,7 @@ table.tbl .actions { text-align: right; }
   .sidebar .nav-item.more-active { background: var(--brand-soft); color: var(--fg); }
   .sidebar .nav-item.more-active .ico { color: var(--brand-ink); }
   .sidebar .nav-item .badge { display: none; }
-  .main { padding: 16px; padding-bottom: 88px; min-width: 0; }
+  .main { padding: 16px; padding-bottom: 88px; min-width: 0; --main-pad-t: 16px; }
   /* The container guard's banner follows .main's 16px padding. */
   .guard-banner { top: -16px; margin: -16px -16px 16px; padding: 10px 16px; }
   .guard-banner-actions { flex-direction: column; align-items: flex-end; gap: 4px; }
