@@ -15,8 +15,10 @@
  * /status answers drive_targets: false: the card drops the USB transport
  * and the drive targets, stops polling for cards, and leads with the
  * Windows tray icon's card helper (windows/tray, "Prepare a satellite
- * card"), which writes the zip onto the card and asks for the setup
- * network password shown here; the zip's README keeps the steps by hand.
+ * card"), which writes the zip onto the card and fetches the setup
+ * network's password itself from this server (the zip's one-time pass,
+ * POST /api/satellites/media/claim); the person still reads it here for
+ * their phone. The zip's README keeps the steps by hand.
  * The tray links here as #settings/rooms/media, which opens this
  * card. */
 
@@ -125,12 +127,18 @@ const CredentialsModal = ({ creds, zip, cardHelper, onClose }) => {
                       paddingTop: 14, borderTop: '1px solid var(--border-soft)' }}>
           {zip && cardHelper ? (
             <>
-              Keep this open, or write these down: this is the only place they
-              are shown.{ap && (
-                <> Domovoi's tray icon → <b>Prepare a satellite card</b> asks
-                  for the wi-fi password when it writes the card.</>
-              )} The downloaded zip deliberately contains no passwords, and they
-              are held in memory here until the dashboard restarts.
+              {ap && (
+                <>The desktop app (Domovoi's tray icon → <b>Prepare a satellite
+                  card</b>) fills in the wi-fi password by itself when it
+                  writes the card: you don't type it there. You still need it
+                  on your phone, to join the setup network, so keep this open or
+                  write it down.{' '}</>
+              )}
+              {creds.reissued
+                ? 'This password was made again after the dashboard restarted: the one shown before won’t work for this card. '
+                : 'This is the only place it is shown. '}
+              The downloaded zip contains no passwords, and these are held in
+              memory here until the dashboard restarts.
             </>
           ) : zip ? (
             <>
@@ -432,10 +440,11 @@ const PrepareMediaCard = ({ fire }) => {
                 Domovoi is running inside WSL on Windows, which can't see SD
                 cards. Build the card files here, then use Domovoi's tray icon
                 (beside the clock) → <b>Prepare a satellite card</b>: it writes
-                them onto the card and asks for the setup network password
-                shown when the build finishes ("show setup details"). Then set
-                the satellite up from a phone over its own Wi-Fi. By hand
-                instead: the zip's README.txt has the steps.
+                them onto the card and fills in the setup network password by
+                itself. You'll still need that password for your phone: it's
+                shown here when the build finishes ("show setup details").
+                Then set the satellite up from your phone over its own Wi-Fi.
+                By hand instead: the zip's README.txt has the steps.
               </span>
             </div>
           )}

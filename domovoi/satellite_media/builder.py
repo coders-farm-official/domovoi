@@ -16,6 +16,7 @@ built only with every pinned model in the cache, verified (SAT-11).
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import time
@@ -33,6 +34,9 @@ log = logging.getLogger(__name__)
 
 # The account stage 1 creates on the device.
 SAT_USER = "domovoi"
+
+# The one-time pass in a Wi-Fi setup card's zip (see ``build``'s claim).
+CLAIM_JSON_PATH = "domovoi/claim.json"
 
 BUILDS_ROOT = Path("~/.domovoi/satellite_media/builds").expanduser()
 
@@ -101,8 +105,9 @@ def _windows_readme(ap: dict | None) -> str:
     readme = [
         "On Windows, use Domovoi's tray icon → Prepare a satellite card.",
         "",
-        "It puts these files on the card for you, checks them, and asks for",
-        "the setup network password the dashboard showed when it built them.",
+        "It puts these files on the card for you and checks them. It fills in",
+        "the setup network password by itself, from Domovoi on this PC. You",
+        "still need that password on your phone: the dashboard shows it.",
         "The icon is beside the clock (the amber cat; it may be under the ^",
         "arrow).",
         "",
@@ -170,10 +175,19 @@ async def build(
     offline: bool = True,
     sat_type: str = "voice",
     progress: Progress = _noop_progress,
+    claim: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run one build. Returns {ok, warnings, artifact_path?, written?,
     offline}. Raises on unbuildable inputs (unsupported board, bad target);
-    degradable problems become warnings instead."""
+    degradable problems become warnings instead.
+
+    ``claim``: the one-time pass a ZIP build of a Wi-Fi setup card carries
+    as ``domovoi/claim.json`` (``{"job_id", "secret", "expires_at"}``,
+    minted by the web layer, which keeps only its hash). The tray's card
+    helper trades it once, over loopback, for the setup network's key, so
+    nobody types it (``POST /api/satellites/media/claim``). Ignored for a
+    drive build (the card gets ``ap.json`` itself) and a USB card (no
+    setup network)."""
     board = BOARDS.get(board_id)
     if board is None or not board.supported:
         raise ValueError(f"board {board_id!r} is not supported for prepared media")
@@ -378,6 +392,13 @@ async def build(
             include_credential_files=False,
             server_identity=identity,
         )
+        if claim is not None and ap is not None:
+            # Not a password: a one-time pass the card helper on this PC
+            # trades for one, from loopback only, within a day. The card
+            # helper never copies it onto the card.
+            (staging / CLAIM_JSON_PATH).write_text(
+                json.dumps(claim, indent=2), encoding="utf-8",
+            )
         (staging / "README.txt").write_text(
             zip_readme(ap, windows_host=is_wsl()), encoding="utf-8",
         )

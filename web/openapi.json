@@ -4142,7 +4142,7 @@
           "satellite-media"
         ],
         "summary": "Media Job Credentials",
-        "description": "The setup-AP and console credentials for a prepared card.\n\n404 once the web process has restarted \u2014 they live in memory only. A\ncard written straight to a drive still has them, so the message says\nwhere to look; a zip never carried them (WEB-1), so it says to build\nit again.",
+        "description": "The setup-AP and console credentials for a prepared card.\n\n404 once the web process has restarted \u2014 they live in memory only. A\ncard written straight to a drive still has them, so the message says\nwhere to look; a zip never carried them (WEB-1), so it says to build\nit again (or, for the setup key alone, ``POST /jobs/{id}/setup-key``\nmakes a new one). ``console`` is null after that: the console\npassword is in no file, only its hash.",
         "operationId": "media_job_credentials_api_satellites_media_jobs__job_id__credentials_get",
         "parameters": [
           {
@@ -4164,6 +4164,61 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Media Job Credentials Api Satellites Media Jobs  Job Id  Credentials Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/media/jobs/{job_id}/setup-key": {
+      "post": {
+        "tags": [
+          "satellite-media"
+        ],
+        "summary": "Media Job Setup Key",
+        "description": "The setup network's key for a zip build, made again if this process\nhas forgotten it (a restart): for an admin holding card files whose\none-time pass no longer works (the tray's \"Sign in as admin to fetch\nit\").\n\nThe key lives only in the card's ``domovoi/ap.json``: nothing on the\nserver checks it later, so a NEW key for the same network name,\nwritten onto the card by whoever asked, works as well as the old one.\nIt is remembered like the first (memory only), so \"show setup details\"\nshows the new one, and ``reissued`` says the one shown before no\nlonger applies. While the build's key is still remembered it is\nanswered unchanged. 404 when there is no finished zip build with that\nid: prepare the card again.",
+        "operationId": "media_job_setup_key_api_satellites_media_jobs__job_id__setup_key_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupKeyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Media Job Setup Key Api Satellites Media Jobs  Job Id  Setup Key Post"
                 }
               }
             }
@@ -4284,6 +4339,46 @@
                   "additionalProperties": true,
                   "type": "object",
                   "title": "Response Media Cache Refresh Api Satellites Media Cache Refresh Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/media/claim": {
+      "post": {
+        "tags": [
+          "satellite-media"
+        ],
+        "summary": "Media Claim",
+        "description": "Trade a zip's one-time pass (``domovoi/claim.json``) for the setup\nnetwork's name and key, once.\n\nNo admin session: the pass is the credential. Answered only to a\nloopback peer that sent no forwarding headers (403 ``not_local``),\nchecked before anything else. Then, with ``reason`` in the body:\n410 ``forgotten`` when this process no longer has the build's\ncredentials (a restart; the card helper then offers an admin sign-in\nor the typed password), 403 ``invalid`` for a secret that isn't the\nbuild's, 410 ``expired`` a day after the build, 409 ``used`` the second\ntime. A success marks the pass used; \"show setup details\" in the\ndashboard keeps showing the key, which the person still types on their\nphone.",
+        "operationId": "media_claim_api_satellites_media_claim_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -17550,6 +17645,25 @@
         "title": "CastTracksRequest",
         "description": "Cast an arbitrary ordered queue of library tracks into a room.\n\nThe browser music player owns the queue order (it's whatever the user\nbuilt locally), so unlike ``PlayPlaylistRequest`` this ships the exact\n``track_id`` list rather than a playlist id. Proxied to the\nDomovoi server's ``/v1/admin/music/play-tracks``.\n\nThe room starts on the first id: a client sends its CURRENT track first\n(not the top of its queue), with ``start_sec`` = how far into it the\nlistener is, so the hand-off carries on where the listener was.\n``start_paused``: the listener had it paused, so the room waits there,\npaused, until someone presses play."
       },
+      "ClaimRequest": {
+        "properties": {
+          "job_id": {
+            "type": "integer",
+            "title": "Job Id"
+          },
+          "secret": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Secret"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "secret"
+        ],
+        "title": "ClaimRequest"
+      },
       "ClearBody": {
         "properties": {
           "note": {
@@ -23026,6 +23140,21 @@
           "model"
         ],
         "title": "SetActiveBody"
+      },
+      "SetupKeyRequest": {
+        "properties": {
+          "ssid": {
+            "type": "string",
+            "maxLength": 64,
+            "title": "Ssid",
+            "description": "the setup network's name, from the zip's domovoi/device-info.json"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ssid"
+        ],
+        "title": "SetupKeyRequest"
       },
       "SetupRequest": {
         "properties": {
