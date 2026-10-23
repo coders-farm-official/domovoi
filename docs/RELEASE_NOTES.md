@@ -4,6 +4,30 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-22 — Satellites join WPA2/WPA3 mixed routers, and say why when they can't
+
+Satellite code (the setup page and its Wi-Fi join). Cards must be prepared
+again to get it; no server change, no migration.
+
+* **A Pi Zero 2 W joins a WPA2/WPA3 mixed ("transition") router.** The house
+  profile left Protected Management Frames at NetworkManager's default, and
+  NetworkManager then offers WPA3 (SAE) to a mixed router whenever the
+  Pi's driver claims it can; the Pi Zero 2 W cannot finish SAE, so the join
+  failed with the right password. The first attempt now uses WPA2 with PMF
+  off, as the setup network itself has since 2026-10-17. WPA3-only is
+  tried once with SAE; a Pi Zero 2 W can't do it, and the page says to turn
+  on mixed mode.
+* **The setup page says what went wrong.** It showed nmcli's
+  `Hint: use 'journalctl …'` line instead of the reason above it, and
+  called every failure a password problem. It now says which one: the
+  password, a network it can't find (2.4 GHz only on a Pi Zero 2 W), a
+  timeout, no address from the router, WPA3-only, enterprise or WEP. The
+  card's `domovoi/device-info.json` gets the same words without the
+  network's name, plus `join_log`, NetworkManager's own lines.
+* **Open and hidden networks.** A blank password joins an open network,
+  and **Not in the list?** takes a typed name (hidden networks too).
+  satellite/PROVISIONING.md §8.5 lists what each board can join.
+
 ## 2026-10-22 — Updates stuck on the search helper's folder
 
 Core, update unit, `provision.sh` and the compose file. No migration and

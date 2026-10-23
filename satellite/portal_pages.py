@@ -107,6 +107,12 @@ def render_form(
         network_field = (
             "<label for=\"ssid\">Your Wi-Fi network</label>"
             f"<select id=\"ssid\" name=\"ssid\">{_options(nets, ssid)}</select>"
+            # A hidden network is in no scan, and a network the radio
+            # cannot hear is not either: it can still be typed.
+            "<label for=\"ssid_custom\">Not in the list? Type its name "
+            "<span class=\"hint\">(optional; hidden networks too)</span></label>"
+            "<input id=\"ssid_custom\" name=\"ssid_custom\" autocapitalize=\"off\" "
+            "autocorrect=\"off\" placeholder=\"exactly as your router shows it\">"
         )
     else:
         # A scan can come back empty on a busy radio. Never dead-end.
@@ -138,7 +144,8 @@ def render_form(
 
   <label for="psk">Wi-Fi password</label>
   <input id="psk" name="psk" type="password" autocapitalize="off"
-         autocorrect="off" required>
+         autocorrect="off">
+  <div class="hint">Leave it blank only if your network has no password.</div>
 
   <label for="room">Which room is it in?</label>
   <select id="room" name="room">{_options(COMMON_ROOMS, room)}

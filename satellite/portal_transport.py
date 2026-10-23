@@ -471,7 +471,16 @@ class PortalTransport:
         status = (self.device_info or {}).get("status")
         detail = ((self.device_info or {}).get("error") or "").strip()
         if status == "wifi_failed":
-            msg = "Couldn't join that network. Check the password and try again."
+            # The reason's own words: only a password that was refused is
+            # called a password problem (2026-10-22: every failure said
+            # "Check the password", the real one included a WPA3 router).
+            from satellite import wifi_reasons
+
+            kind = wifi_reasons.kind_of(detail) or wifi_reasons.classify(detail)
+            msg = wifi_reasons.PORTAL[kind]
+            if wifi_reasons.kind_of(detail):
+                nm = wifi_reasons.detail_of(detail)
+                return f"{msg} (Details: {nm})" if nm else msg
             return f"{msg} ({detail})" if detail else msg
         if status == "room_taken":
             return "That room name is already in use. Pick a different one."
@@ -794,10 +803,15 @@ class PortalTransport:
         Raises :class:`proto.ProvisionInvalid` with a message safe to show a
         customer — it must never echo the password back.
         """
-        ssid = proto.validate_wifi_ssid((fields.get("ssid") or "").strip())
-        psk = fields.get("psk") or ""
-        if not psk:
-            raise proto.ProvisionInvalid("Enter your Wi-Fi password.")
+        # "Other network" (hidden, or not in the scan) is typed by hand
+        # and wins over the picker, like the room.
+        custom_ssid = (fields.get("ssid_custom") or "").strip()
+        raw_ssid = custom_ssid or (fields.get("ssid") or "").strip()
+        ssid = proto.validate_wifi_ssid(raw_ssid)
+        # Blank is an open network (the join refuses it, in words, if the
+        # network turns out to need a password). Anything else must be
+        # something WPA can carry - said here, before the hotspot goes.
+        psk = proto.validate_wifi_psk(fields.get("psk") or "", allow_open=True)
 
         # The custom field wins when the picker was set to "something else".
         room_raw = (fields.get("room") or "").strip()

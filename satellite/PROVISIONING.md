@@ -713,6 +713,35 @@ sudo ~/satellite-venv/bin/python -m satellite.net_settings   # run from ~/domovo
 
 It prints what it changed; a second run changes nothing. It installs no boot unit unless you add `--install-early-unit`. With that flag it installs `domovoi-hostname.service` and its root-owned helper; without it, the Health card says *early rename unit not installed: hand-built card*. (Under `sudo`, `$HOME` is root's. The step finds the satellite account from the code tree it runs from, `~/domovoi/satellite`.) Its client never shows *reboot needed*, because there is no boot-time step to wait for. Its Health card says **not installed**, with this command.
 
+### 8.5 Which home Wi-Fi networks a satellite can join
+
+The setup page (`http://192.168.4.1` on the `Domovoi-Setup-<id>` network) reads the network's security from a scan and builds the NetworkManager profile itself (`satellite/provisioning_mode.py`, `_join_plan`). It tries these settings in order, each from a fresh profile named `domovoi-home`:
+
+| The router says | Tried, in order | Notes |
+|---|---|---|
+| WPA2-Personal (AES), WPA (TKIP), WPA/WPA2 | `wpa-psk` with PMF off, then `wpa-psk` with PMF at NetworkManager's default | The second attempt covers a WPA2 router that *requires* PMF (802.11w) |
+| WPA2/WPA3 mixed ("transition", "WPA3-Personal+WPA2-PSK") | `wpa-psk` with PMF off, then `sae` with PMF required | PMF off keeps NetworkManager from offering SAE, which a Pi Zero 2 W cannot finish |
+| WPA3-only (SAE) | `sae` with PMF required, once | A 64-character hex key cannot be used with WPA3; the page asks for the password |
+| Open (no password) | No security | Leave the password blank. A password typed for an open network is ignored |
+| Enhanced Open (OWE) | `owe` | |
+| Not in the scan (hidden, out of range, or 5 GHz only on a 2.4 GHz radio) | `wpa-psk` PMF off, then `sae`, probing for the name (`hidden yes`) | Type the name under **Not in the list?** |
+| WPA/WPA2/WPA3-Enterprise (802.1X), WEP | Not tried | The page says why: a username is needed, or WEP is too old |
+
+The network name and password go to `nmcli` as separate arguments, never through a shell, so spaces, quotes, `$`, backslashes and non-ASCII letters arrive as typed. Names are 1–32 bytes, without control characters, `"`, `{` or `}` (refused, with a message). Passwords are 8–63 printable ASCII characters, or the 64-hex-digit key itself, or blank for an open network.
+
+**Per board:**
+
+| Board | Bands | WPA2 | WPA2/WPA3 mixed | WPA3-only |
+|---|---|---|---|---|
+| Raspberry Pi Zero 2 W (CYW43436) | 2.4 GHz only | Yes | Yes (joins the WPA2 side) | **No.** Its Wi-Fi chip cannot complete SAE ([raspberrypi/linux#4976](https://github.com/raspberrypi/linux/issues/4976)); the page says to switch the router to mixed mode |
+| Raspberry Pi 3 B (BCM43438) | 2.4 GHz only | Yes | Yes (WPA2 side) | No |
+| Raspberry Pi 3 B+, 4, 5 (CYW43455) | 2.4 + 5 GHz | Yes | Yes (WPA2 side first) | Expected on current Raspberry Pi OS firmware (7.45.234 or newer, [firmware-nonfree#41](https://github.com/RPi-Distro/firmware-nonfree/issues/41)); not yet verified on hardware |
+| Linux laptop (`install-pc.sh`) | The laptop's | Its own network settings: Domovoi does not join Wi-Fi for it | | |
+| Windows PC (Windows satellite Setup) | The PC's | Windows' own Wi-Fi | | |
+| Phone in room mode | The phone's | The phone's own Wi-Fi | | |
+
+**When a join fails** the page says why, in one of these: the password wasn't accepted; the network couldn't be found (with the 2.4 GHz note on a 2.4 GHz-only radio); the router took too long; the router gave no address; WPA3-only; enterprise; WEP; the radio wasn't ready. Only the first is called a password problem. NetworkManager's own reason follows in brackets. The same words, without the network's name, go on the card: put it in any PC and open `domovoi/device-info.json`. `error` is the reason; `join_log` holds the last lines NetworkManager and wpa_supplicant wrote about the join (for example `reason=WRONG_KEY`), with the network name, the password and hardware addresses removed.
+
 ## 9. Label the hardware
 
 - [ ] Stick a label on the Pi case with: hostname, room, IP, **HAT version (V1/V2.0)**. Future you will be grateful.

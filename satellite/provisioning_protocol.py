@@ -131,9 +131,12 @@ def validate_wifi_ssid(ssid: Any) -> str:
     return ssid
 
 
-def validate_wifi_psk(psk: Any) -> str:
+def validate_wifi_psk(psk: Any, *, allow_open: bool = False) -> str:
     """What WPA2-PSK accepts: 8 to 63 printable ASCII characters, or the
-    64-hex-digit key itself. Never echoed."""
+    64-hex-digit key itself. Never echoed. ``allow_open``: a blank password
+    is an open network (no security), not a mistake."""
+    if allow_open and psk == "":
+        return psk
     if not isinstance(psk, str) or not psk:
         raise ProvisionInvalid("Enter your Wi-Fi password.")
     if len(psk) == 64 and all(ch in _HEX for ch in psk):
@@ -164,15 +167,16 @@ def wpa_supplicant_network_block(ssid: str, psk: str, *, hidden: bool = False) -
     its configuration, built here rather than taken from ``wpa_passphrase``:
     ``ssid=`` as hex, so no byte of the name is ever read as syntax;
     ``psk=`` as the derived key, and no ``#psk="..."`` comment carrying the
-    passphrase; ``scan_ssid=1`` for a hidden network. Validates both
+    passphrase; ``scan_ssid=1`` for a hidden network; ``key_mgmt=NONE``
+    and no ``psk=`` for an open one (a blank ``psk``). Validates both
     inputs first."""
     validate_wifi_ssid(ssid)
-    validate_wifi_psk(psk)
-    lines = [
-        "network={",
-        f"\tssid={ssid.encode('utf-8').hex()}",
-        f"\tpsk={wpa_psk_hex(ssid, psk)}",
-    ]
+    validate_wifi_psk(psk, allow_open=True)
+    lines = ["network={", f"\tssid={ssid.encode('utf-8').hex()}"]
+    if psk:
+        lines.append(f"\tpsk={wpa_psk_hex(ssid, psk)}")
+    else:
+        lines.append("\tkey_mgmt=NONE")
     if hidden:
         lines.append("\tscan_ssid=1")
     lines.append("}")
@@ -403,7 +407,9 @@ def validate_provision(doc: Any, expected_nonce: str) -> dict[str, Any]:
     # accepts; here the shape is what matters.
     normalize_server_url(payload["domovoi_url"])
     wifi = payload.get("wifi")
-    if not isinstance(wifi, dict) or not wifi.get("ssid") or not wifi.get("psk"):
+    # A blank psk is an open network; a missing one is a malformed payload.
+    if not isinstance(wifi, dict) or not wifi.get("ssid") \
+            or not isinstance(wifi.get("psk"), str):
         raise ProvisionInvalid("payload missing wifi credentials")
     # The name goes into a root-owned network configuration on the device
     # (as argv to nmcli, or hex into wpa_supplicant.conf); one that cannot

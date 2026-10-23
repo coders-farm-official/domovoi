@@ -169,7 +169,9 @@ def test_explicit_url_is_kept(portal):
 
 @pytest.mark.parametrize("fields,fragment", [
     ({"psk": PSK, "room": "kitchen"}, "network"),
-    ({"ssid": "HomeNet", "room": "kitchen"}, "password"),
+    # A blank password is an open network now; a password WPA can't carry
+    # is still refused before the hotspot goes.
+    ({"ssid": "HomeNet", "psk": "short", "room": "kitchen"}, "password"),
     ({"ssid": "HomeNet", "psk": PSK, "room": ""}, "room"),
     ({"ssid": "HomeNet", "psk": PSK, "room": "kitchen",
       "profile": "nonexistent"}, "microphone"),
@@ -715,7 +717,7 @@ def test_a_failed_join_is_explained_on_the_form(monkeypatch, tmp_path):
                      error="Secrets were required, but not provided")
     try:
         _s, body, _h = _get(t, "/")
-        assert "Check the password" in body
+        assert "password wasn" in body              # the password, by name
         assert "Secrets were required" in body      # nmcli's own words
     finally:
         t.withdraw()
