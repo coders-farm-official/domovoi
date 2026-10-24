@@ -412,7 +412,7 @@ There are two routes.
 
 Flash stock **Raspberry Pi OS Lite (64-bit)** with any tool, no
 pre-configuration. Put the card back in the server. Dashboard →
-**Settings → Rooms & devices → Rooms → prepare satellite media**. It writes a first-boot overlay
+**Settings → Rooms & devices → Rooms → prepare a room's SD card**. It writes a first-boot overlay
 and an offline payload (wheels, packages, the satellite code from this
 machine, plugin payloads) to the card. The payload comes from the
 server's caches, which the server fills while it has internet (**Refresh

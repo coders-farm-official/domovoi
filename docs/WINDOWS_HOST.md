@@ -330,7 +330,7 @@ Right-click it for the menu; double-click opens Domovoi.
 | **Copy address** | That address, to paste into a message. |
 | **Show a code for your phone** | That address as a QR code: point the phone's camera at it. |
 | **User manual** | The dashboard's manual (`#manual`). |
-| **Prepare a satellite card...** | The card helper, below. |
+| **Prepare a room's SD card...** | The card helper, below. |
 | **Keep this PC awake** | On by default: Windows doesn't put the PC to sleep while the icon runs (the screen may still turn off). The line under it says, from the power plan (never changed), whether Windows would still sleep it when nobody is signed in. |
 | **Start with Windows** | This account's sign-in start, on by default. |
 | **Update Domovoi...** | The whole update, both halves, behind one administrator's permission prompt ([Updates and the release channel](#updates-and-the-release-channel)). It reads **Finish updating Domovoi...** while the dashboard has asked for the Windows part. |
@@ -338,7 +338,7 @@ Right-click it for the menu; double-click opens Domovoi.
 | **Restart Domovoi...** | Asks first, then Windows asks for an administrator, then `Restart-Service DomovoiHost`: for when the dashboard itself can't be reached. |
 | **Hide this icon** | Hides it until the next sign-in; Domovoi keeps running, and so does **Keep this PC awake**. **Domovoi** in the Start menu brings it back. |
 
-### Prepare a satellite card
+### Prepare a room's SD card
 
 Domovoi's Linux system can't see SD cards here, so the dashboard builds the
 card's files as a zip and the icon's card helper puts them on the card:
@@ -346,10 +346,10 @@ card's files as a zip and the icon's card helper puts them on the card:
 1. Flash a microSD card with **Raspberry Pi OS Lite (64-bit)** in
    Raspberry Pi Imager. When Imager offers to apply OS customisation
    settings, choose **No**.
-2. In the dashboard, **Settings > Rooms & devices > Rooms > prepare satellite media**:
+2. In the dashboard, **Settings > Rooms & devices > Rooms > prepare a room's SD card**:
    pick the board and the microphone, **Prepare**, then **download for the
    card helper**. Keep the setup network password it shows on screen.
-3. **Prepare a satellite card...** in the icon's menu. It picks the newest
+3. **Prepare a room's SD card...** in the icon's menu. It picks the newest
    `domovoi-satellite-overlay*.zip` in Downloads (or **Browse**), checks it
    (its shape, the payload against its SHA-256, and that it was built by
    the Domovoi on this PC: the server identity it carries against the one

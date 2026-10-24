@@ -1476,6 +1476,48 @@
       "handler": null,
       "tags": ["review-d7", "documents"],
       "note": "documents' fast path stops a reading in this room, and declines it otherwise. 2026-10-21 D7 review r1"
+    },
+    {
+      "utterance": "how do I set up a room",
+      "handler": "help_desk",
+      "path": "fast",
+      "tags": ["action", "help-desk", "rooms-wording"],
+      "note": "2026-10-23 rooms wording: the dashboard and manual say 'set up a room' now"
+    },
+    {
+      "utterance": "how do I set up a satellite",
+      "handler": "help_desk",
+      "path": "fast",
+      "tags": ["action", "help-desk", "rooms-wording"],
+      "note": "2026-10-23 rooms wording: the old word keeps working"
+    },
+    {
+      "utterance": "how do I set up a phone as a room",
+      "handler": "help_desk",
+      "path": "fast",
+      "tags": ["action", "help-desk", "rooms-wording"],
+      "note": "2026-10-23 rooms wording: a spare phone, in the new words"
+    },
+    {
+      "utterance": "how do I prepare a room's sd card",
+      "handler": "help_desk",
+      "path": "fast",
+      "tags": ["action", "help-desk", "rooms-wording"],
+      "note": "2026-10-23 rooms wording: the renamed 'prepare satellite media' card"
+    },
+    {
+      "utterance": "drop in on the kitchen satellite",
+      "handler": "dropin",
+      "path": "fast",
+      "tags": ["action", "rooms", "rooms-wording"],
+      "note": "2026-10-23 rooms wording: the old word after a room's name is still dropped"
+    },
+    {
+      "utterance": "play some jazz on the garage satellite",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms", "rooms-wording"],
+      "note": "2026-10-23 rooms wording: the old word after a room's name is still dropped"
     }
   ]
 }

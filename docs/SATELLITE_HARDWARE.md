@@ -126,15 +126,15 @@ reading it, and shows the address it resolved on the confirmation page so a
 typo is visible before the setup network closes.
 
 Choose the route when you prepare the card: **Settings → Rooms & devices →
-Rooms → prepare satellite media → wi-fi setup portal** (the default) or **usb
+Rooms → prepare a room's SD card → wi-fi setup portal** (the default) or **usb
 adoption**.
 
 On a Windows install, where Domovoi runs inside WSL, the portal is the
 only route and the card's files come as a download. WSL can't see USB
 drives or SD cards, so USB adoption and writing straight to a card aren't
 offered there. Domovoi's tray icon writes the card instead: **Prepare a
-satellite card** in its menu ([WINDOWS_HOST.md, Prepare a satellite
-card](WINDOWS_HOST.md#prepare-a-satellite-card)) takes the download, puts
+room's SD card** in its menu ([WINDOWS_HOST.md, Prepare a room's SD
+card](WINDOWS_HOST.md#prepare-a-rooms-sd-card)) takes the download, puts
 it on the card exactly as the server would, and asks for the setup network
 password. The zip's `README.txt` keeps the steps by hand (below).
 
@@ -143,7 +143,7 @@ password. The zip's `README.txt` keeps the steps by hand (below).
 Skip most of the manual steps below: flash **stock Raspberry Pi OS Lite
 (64-bit)** with any tool (no pre-configure needed), re-insert the card
 into the Domovoi server, and use **Settings → Rooms & devices → Rooms →
-prepare satellite media**. The dashboard writes a first-boot overlay + a
+prepare a room's SD card**. The dashboard writes a first-boot overlay + a
 fully-offline payload (all Python wheels, packages, the satellite code from
 this machine, and any plugin payloads) onto the card's boot partition. Then
 boot the device. With the default Wi-Fi setup portal, join its

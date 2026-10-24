@@ -91,7 +91,7 @@ export SATELLITE_ADOPTION_SCAN_DIRS=/media/domovoi/setup
 room's default is the Wi-Fi setup portal, which never touches the server's
 USB ports ([SATELLITE_HARDWARE.md](SATELLITE_HARDWARE.md)). And if the
 server can't mount the card, pick **download overlay zip** when you prepare
-it (Settings → Rooms & devices → Rooms → prepare satellite media) and unzip it onto the card
+it (Settings → Rooms & devices → Rooms → prepare a room's SD card) and unzip it onto the card
 from another computer. USB adoption still has an open checklist of its own
 ([HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md)); the manual path in
 [`satellite/PROVISIONING.md`](../satellite/PROVISIONING.md) is the proven

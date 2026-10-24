@@ -125,8 +125,8 @@ A room *is* a satellite, and every room is added from the dashboard, as
 admin, in **Settings → Rooms & devices → Rooms**:
 
 1. **A Raspberry Pi:** put Raspberry Pi OS Lite (64-bit) on a microSD card,
-   put the card in the server's card reader, and use **prepare satellite
-   media → wi-fi setup portal → Prepare** (on the Windows install, which
+   put the card in the server's card reader, and use **prepare a room's
+   SD card → wi-fi setup portal → Prepare** (on the Windows install, which
    can't see SD cards, **download overlay zip** and unzip it onto the
    card). The Pi starts its own setup Wi-Fi (`Domovoi-Setup-<id>`): join it
    from a phone, pick your home Wi-Fi and name the room.

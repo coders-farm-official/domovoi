@@ -24,7 +24,7 @@
 >
 > **The setup network's password, on the Windows install.** The dashboard
 > can't write the card there, so it builds a zip and the tray icon's
-> **Prepare a satellite card** writes it. The zip carries no password, only
+> **Prepare a room's SD card** writes it. The zip carries no password, only
 > a one-time pass (`domovoi/claim.json`: the build's number and a random
 > secret). The tray trades it, once, over the PC's own loopback, for the
 > setup key and writes `domovoi/ap.json` onto the card itself, so nobody
@@ -45,7 +45,7 @@
 >
 > **Zero-touch path first (USB adoption).** If your SD card was prepared
 > with the Domovoi satellite payload (dashboard → Settings → Rooms & devices →
-> Rooms → prepare satellite media, or an image that boots into provisioning
+> Rooms → prepare a room's SD card, or an image that boots into provisioning
 > mode), you don't need
 > most of this checklist: **boot the device, plug it into the Domovoi
 > server's USB port**, and an "adopt" card appears in the dashboard's

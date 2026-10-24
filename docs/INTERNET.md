@@ -184,8 +184,8 @@ stays yours to do:
    *Why:* "play 97.5 FM" finds the station in your market rather than any
    97.5 in the country.
 
-4. **Fill the satellite media cache.** Settings → Rooms → *prepare satellite
-   media* → **Refresh caches** (admin sign-in; the wheel fetch can take
+4. **Fill the satellite media cache.** Settings → Rooms → *prepare a room's
+   SD card* → **Refresh caches** (admin sign-in; the wheel fetch can take
    minutes). The wake-word models come from pinned URLs and are checked
    against pinned digests; the server no longer needs the `openwakeword`
    package for that. An offline card is prepared only when the cache holds

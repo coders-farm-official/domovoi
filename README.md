@@ -623,8 +623,8 @@ six-digit approval code, and you type that code into **Settings → Rooms &
 devices → Rooms** on the dashboard (as admin) to make it a room. Three routes:
 
 - **A Raspberry Pi.** Flash stock Raspberry Pi OS Lite (64-bit), put the
-  card in the server, and use **Settings → Rooms & devices → Rooms → prepare satellite
-  media** (on the Windows installer, which can't see SD cards, download the
+  card in the server, and use **Settings → Rooms & devices → Rooms → prepare a room's
+  SD card** (on the Windows installer, which can't see SD cards, download the
   zip and unzip it onto the card). On its first boot the Pi raises its own
   setup Wi-Fi (`Domovoi-Setup-<id>`): join it from a phone, pick your home
   Wi-Fi, name the room, then approve the code the Pi says out loud.
@@ -646,7 +646,7 @@ devices → Rooms** on the dashboard (as admin) to make it a room. Three routes:
   to this server** on the card once first) and opens it as that room. A
   phone that already has the app can scan the code from its **Domovoi
   Room** icon instead. The phone gets
-  its wake-word models from the server, so press **prepare satellite media
+  its wake-word models from the server, so press **prepare a room's SD card
   → Refresh caches** once first
   ([room mode](docs/SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode)).
 

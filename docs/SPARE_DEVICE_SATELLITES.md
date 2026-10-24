@@ -405,7 +405,7 @@ Raspberry Pi satellite. It runs inside the normal Domovoi Android app as
 | The Domovoi app | From your own server: the QR code's page downloads it from there. The server gets the release named in its `android/release.json` from the project's GitHub release once, when you press **Download the app to this server** on the card (about 130 MB; it never downloads by itself, and until then the page tells the phone to ask you), or you **upload an APK** of that release on the card when internet access is off; it hands out a file only when it is exactly that release's, signed by the project's release key. Until the first app release is published, the card and the page say "no app release yet". |
 | Its charger | A room listens all day. Turn on the phone's battery-protection (charge limit) setting if it has one, and never use a phone whose battery has swollen. |
 | Your home Wi-Fi | Room mode uses Wi-Fi (or a wired dock) only, never mobile data: with no Wi-Fi it is offline. |
-| The server's wake-word models | The phone runs the same openWakeWord models as a Pi, fetched from your server. On the dashboard, **Settings → Rooms & devices → Rooms → prepare satellite media → Refresh caches** once (it downloads them; it needs the internet that one time). A Pi you prepared already did this. |
+| The server's wake-word models | The phone runs the same openWakeWord models as a Pi, fetched from your server. On the dashboard, **Settings → Rooms & devices → Rooms → prepare a room's SD card → Refresh caches** once (it downloads them; it needs the internet that one time). A Pi you prepared already did this. |
 | A room code | On the dashboard, **Settings → Rooms & devices → Rooms → add a spare device**: a QR code (a link to your server's join page with the code in it) and a line of text that starts `domovoi-room:1?…`. It names your server, the server's key and the room. It holds no secret. |
 
 ### Setting it up (about ten minutes)
@@ -536,7 +536,7 @@ You can turn your own phone into a room for a while. Then:
 | Not listening: … needs a screen lock | This phone is also paired with your household. Set a PIN, pattern or password; the room starts again. |
 | Another device is already waiting for approval as this room | Reject the other request on the dashboard, or wait three minutes. |
 | …this is a different server… / …would not sign for… | The address in the room code answered with a different key, or something is relaying it. Make a new room code on the right server. A server reached through a name or a forwarded port needs that name in its `TRUSTED_HOSTS`. |
-| The server has no wake-word models yet | Dashboard: Settings → Rooms & devices → Rooms → prepare satellite media → Refresh caches. |
+| The server has no wake-word models yet | Dashboard: Settings → Rooms & devices → Rooms → prepare a room's SD card → Refresh caches. |
 | The server does not hand wake-word models to phones yet | Update the Domovoi server. |
 | waiting for Wi-Fi | The phone has no Wi-Fi. Room mode never uses mobile data. |
 | (on the room code screen) … is not on the home network | The room code names a server outside your home network. A room only talks to a server at a private address (10.x, 172.16-31.x, 192.168.x, IPv6 fc00::/7 or fe80::/10) or a name ending in `.local`, `.home.arpa`, `.lan` or `.internal`; not loopback, not 100.64.x (carrier NAT), not 169.254.x. |

@@ -1343,8 +1343,8 @@ played**, **Notes**, **Timers**, **Logs**, and **Settings** (the gear).
   for a chime, or make its voice louder: its **Settings** tab, **Wake
   sensitivity**, **Wake acknowledgement**, **Voice loudness boost**.
 - A Pi or spare computer acting up: its **Overview** tab, under
-  **maintenance**, **Restart satellite**. Updating it: **Upgrade
-  satellite**, in the same place.
+  **maintenance**, **Restart room**. Updating it: **Upgrade
+  room**, in the same place.
 - A room moved to new hardware: **Reset pairing** (also under
   **maintenance**), then approve the new device.
 
@@ -1378,12 +1378,12 @@ About the price of a smart speaker. [Parts list](docs/SATELLITE_HARDWARE.md)
 
 1. Put Raspberry Pi OS Lite (64-bit) on a microSD card, and put the card
    in the server's card reader.
-2. [Settings → Rooms & devices → Rooms](#settings/rooms) → **prepare
-   satellite media**. Choose **wi-fi setup portal**, then **write to** the
+2. [Settings → Rooms & devices → Rooms](#settings/rooms) → **prepare a
+   room's SD card**. Choose **wi-fi setup portal**, then **write to** the
    card's drive, and press **Prepare**.
 3. **On the Windows install**, which can't see SD cards: choose
    **download for the card helper**, then write the card with the tray
-   icon's **Prepare a satellite card**. It fills in the setup Wi-Fi
+   icon's **Prepare a room's SD card**. It fills in the setup Wi-Fi
    password by itself. You'll still need that password for your phone:
    **show setup details** shows it.
 4. Start the Pi with the card. It makes its own Wi-Fi network,
@@ -1442,7 +1442,7 @@ announcements.
 **How to**
 
 1. *(admin, once)* [Settings → Rooms & devices → Rooms](#settings/rooms) →
-   **prepare satellite media** → **Refresh caches**. This gives phones the
+   **prepare a room's SD card** → **Refresh caches**. This gives phones the
    wake word.
 2. *(admin)* **add a spare device**, name the room, then **make the
    code**. A QR code appears. If the card says the app isn't on the server
@@ -1501,8 +1501,8 @@ listens.
 - What it needs: a server with 24 GB of memory, about 22 GB of downloads
   and about 32 GB of disk. A word takes about 20 minutes to train with an
   NVIDIA graphics card, and over an hour on the processor.
-- The steps: **Create** the word, **Record** 15 or more clips on a
-  satellite in the room itself, press **Train**, then **Push to room**.
+- The steps: **Create** the word, **Record** 15 or more clips on the
+  room device itself, press **Train**, then **Push to room**.
 - A wake word trained at home is for your household only ([why](docs/LICENSES.md#the-wake-word-trainer)).
 
 **Greetings** *(admin)*
@@ -1755,7 +1755,7 @@ among them, and each opens its part of Health.
 - **Containers:** Domovoi watches the containers it runs. If one goes
   missing, stops, or is replaced from outside Domovoi, it opens an
   incident and shows a banner. A sign of tampering pauses risky changes
-  (plugin installs, updates, satellite upgrades, preparing media) until an
+  (plugin installs, updates, room upgrades, preparing SD cards) until an
   admin reviews it; everything else keeps working.
 - *(admin)* **acknowledge** hides the banner. **clear after review** ends
   the incident, once you know why it happened. **behind the scenes** shows

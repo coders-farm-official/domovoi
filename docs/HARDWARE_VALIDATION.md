@@ -18,7 +18,7 @@ drives.
 Fresh card, stock Raspberry Pi OS Lite (64-bit, Trixie), no Imager
 pre-configuration.
 
-1. [ ] Dashboard **prepare satellite media** onto the inserted card
+1. [ ] Dashboard **prepare a room's SD card** onto the inserted card
        (drive target detected; free-space check sane; build completes).
        Cold-cache build: wheels fetch succeeds for cp313/aarch64;
        docker-less machine degrades to `offline=false` with the warning
