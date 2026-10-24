@@ -326,10 +326,17 @@ _KEY_MGMT_OPEN = "none"
 # mode). Against a WPA2/WPA3 mixed router, wpa_supplicant then prefers SAE,
 # and the Pi Zero 2 W's brcmfmac radio cannot complete SAE: the join fails
 # as "Secrets were required" with the right password
-# (raspberrypi/linux#4976). With PMF disabled NM leaves SAE out, the
-# supplicant joins the WPA2 side, and a WPA2 router is unaffected (PMF is
-# optional in WPA2). A WPA2 router that REQUIRES PMF gets a second attempt
-# with PMF at NM's default.
+# (raspberrypi/linux#4976).
+#
+# CORRECTION (2026-10-23, from the card's own supplicant lines): PMF off
+# does NOT keep SAE out on the NetworkManager Raspberry Pi OS Trixie ships
+# (1.52). There the PMF condition on SAE applies to access-point mode only;
+# a client wpa-psk profile gets `WPA-PSK WPA-PSK-SHA256 FT-PSK SAE FT-SAE`
+# whatever its PMF, FT whenever wpa_supplicant has 802.11r. No profile
+# setting removes an AKM from that list. satellite/wifi_guard.py (a root
+# service on every prepared card) does, at the supplicant: no FT on any Pi,
+# no SAE where the radio can't finish it. PMF off stays the first attempt:
+# harmless on WPA2, and it is what an older or newer NetworkManager honours.
 _PMF_DISABLE = "disable"
 _PMF_DEFAULT = "default"
 # PMF OPTIONAL is the second wpa-psk try on a WPA2 or WPA2/WPA3 router: an
@@ -504,7 +511,8 @@ def _join_plan(
 
     * WPA2 / WPA (TKIP): wpa-psk PMF off, then wpa-psk PMF optional (a
       WPA2 router that requires PMF).
-    * WPA2/WPA3 mixed: wpa-psk PMF off (the WPA2 side; NM leaves SAE out),
+    * WPA2/WPA3 mixed: wpa-psk PMF off (the WPA2 side; SAE and FT are
+      taken out at the supplicant by satellite/wifi_guard.py),
       then wpa-psk PMF optional (a router that requires PMF, status 31),
       then sae PMF required (a radio that can do WPA3).
     * WPA3-only: sae PMF required, once. A 64-hex key cannot be used with
@@ -601,7 +609,7 @@ def _journal_tail(run, ssid: str, psk: str, lines: int = 8) -> list[str]:
     try:
         r = run(
             ["journalctl", "-b", "--no-pager", "-o", "cat", "--since", "-3min",
-             "-u", "NetworkManager", "-u", "wpa_supplicant"],
+             "-u", "NetworkManager", "-u", "wpa_supplicant", "-u", "domovoi-wifi-guard"],
             capture_output=True, text=True, timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -812,9 +820,11 @@ def _profile_args(
 
 
 def _note_attempt(run, started: float, km: str, pmf: str | None, ok: bool,
-                  kind: str | None, detail: str, ssid: str, psk: str) -> None:
-    """One attempt into JOIN_DIAG, and its gist into the journal. Never
-    stops a join."""
+                  kind: str | None, detail: str, ssid: str, psk: str) -> str | None:
+    """One attempt into JOIN_DIAG, and its gist into the journal. Returns
+    the outcome the evidence supports (``no-answer`` where NetworkManager
+    said "Secrets were required" but no handshake ever started), or None.
+    Never stops a join."""
     try:
         e = JOIN_DIAG.record(run, since=started, key_mgmt=km, pmf=pmf, ok=ok,
                              kind=kind, detail=detail, ssid=ssid, psk=psk)
@@ -822,8 +832,10 @@ def _note_attempt(run, started: float, km: str, pmf: str | None, ok: bool,
                  e["ap"] or "?", e["freq_mhz"] or "",
                  (" reasons " + ", ".join(e["reason_codes"])) if e["reason_codes"] else "",
                  (" status " + ", ".join(e["status_codes"])) if e["status_codes"] else "")
+        return e["outcome"]
     except Exception as ex:  # noqa: BLE001 — diagnostics never fail a join
         log.debug("join diagnostics failed: %s", ex)
+        return None
 
 
 def _retryable(kind: str, text: str) -> bool:
@@ -962,8 +974,10 @@ def _nmcli_join(
         text = _scrub(_nmcli_text(r), psk)
         detail = clean(_nmcli_detail(r, psk))
         kind = wifi_reasons.classify(text)
+        if _note_attempt(run, started, km, pmf, False, kind, detail, ssid, psk) \
+                == wifi_reasons.NO_ANSWER:
+            kind = wifi_reasons.NO_ANSWER
         kinds.append(kind)
-        _note_attempt(run, started, km, pmf, False, kind, detail, ssid, psk)
         log.warning(
             "nmcli join of %r as %s (pmf %s) failed (rc=%d, %s): %s",
             ssid, km, pmf or "-", r.returncode, kind, detail,

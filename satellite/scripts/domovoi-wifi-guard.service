@@ -1,0 +1,38 @@
+# Domovoi satellite: keep wpa_supplicant to the Wi-Fi security this radio can
+# do. NetworkManager hands the supplicant FT (802.11r) and SAE (WPA3) for
+# every wpa-psk profile when the radio claims them; the Pi Zero 2 W's
+# brcmfmac firmware finishes neither, and against a router that offers them
+# (WPA2/WPA3 mixed, EasyMesh) every connect request goes unanswered
+# (2026-10-23). This rewrites key_mgmt on each station network NetworkManager
+# adds, before the association starts - see satellite/wifi_guard.py.
+#
+# A root-owned copy of satellite/wifi_guard.py, run by the system Python in
+# isolated mode: it never runs the satellite account's code. Installed by
+# stage 1 of media prep to /usr/local/lib/systemd/system (manual form):
+#   sudo install -m 0755 ~/domovoi/satellite/wifi_guard.py /usr/local/lib/domovoi/wifi-guard
+#   sudo install -m 0644 ~/domovoi/satellite/scripts/domovoi-wifi-guard.service \
+#     /usr/local/lib/systemd/system/domovoi-wifi-guard.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now domovoi-wifi-guard
+
+[Unit]
+Description=Domovoi satellite: Wi-Fi security the radio can do (no FT, no SAE where it can't)
+After=dbus.service
+Before=NetworkManager.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 -I /usr/local/lib/domovoi/wifi-guard
+Restart=always
+RestartSec=5
+ProtectSystem=strict
+ReadWritePaths=/run
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target

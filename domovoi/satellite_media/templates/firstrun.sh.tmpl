@@ -491,13 +491,27 @@ if ! skip units; then
       "$PAYDIR/system/domovoi-hostname.service" /usr/local/lib/systemd/system/domovoi-hostname.service
     EARLY_UNIT=domovoi-hostname
   fi
+  # The Wi-Fi guard (satellite/wifi_guard.py, 2026-10-23): rewrites the
+  # AKMs NetworkManager hands wpa_supplicant to the ones this radio can do
+  # (no 802.11r, no WPA3 on a Pi Zero 2 W), so a WPA2/WPA3 or mesh router
+  # does not leave every connect request unanswered. Root-owned, run by the
+  # system Python with -I. Guarded: a payload from before it lacks it.
+  WIFI_GUARD=""
+  if [ -f "$PAYDIR/system/domovoi-wifi-guard" ] && [ -f "$PAYDIR/system/domovoi-wifi-guard.service" ]; then
+    mkdir -p /usr/local/lib/domovoi /usr/local/lib/systemd/system
+    install -m 0755 -o root -g root \
+      "$PAYDIR/system/domovoi-wifi-guard" /usr/local/lib/domovoi/wifi-guard
+    install -m 0644 -o root -g root \
+      "$PAYDIR/system/domovoi-wifi-guard.service" /usr/local/lib/systemd/system/domovoi-wifi-guard.service
+    WIFI_GUARD=domovoi-wifi-guard
+  fi
   sed -e "s|@USER@|$SAT_USER|g" "$PAYDIR/system/sudoers" \
     >/etc/sudoers.d/domovoi-satellite
   chmod 0440 /etc/sudoers.d/domovoi-satellite
   systemctl daemon-reload
   # Satellite unit stays DISABLED until stage 2 finishes; provisioning +
   # bootstrap (and the host-name unit) arm now.
-  systemctl enable domovoi-provisioning domovoi-bootstrap $EARLY_UNIT
+  systemctl enable domovoi-provisioning domovoi-bootstrap $EARLY_UNIT $WIFI_GUARD
   done_step units
 fi
 

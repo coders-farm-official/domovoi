@@ -41,19 +41,20 @@ ENTERPRISE = "enterprise"
 WEP = "wep"
 NEEDS_PASSWORD = "needs-password"       # secured network, blank password
 RADIO = "radio"
+NO_ANSWER = "no-answer"                 # the connect request was never answered
 SETUP_FAILED = "setup-failed"           # the profile itself was refused
 OTHER = "other"
 
 KINDS = (
     WRONG_PASSWORD, WPA3_ONLY, WPA3_RAW_KEY, AUTH_TIMEOUT, NOT_FOUND,
     NOT_FOUND_24, TIMEOUT, NO_ADDRESS, ENTERPRISE, WEP, NEEDS_PASSWORD,
-    RADIO, SETUP_FAILED, OTHER,
+    RADIO, SETUP_FAILED, OTHER, NO_ANSWER,
 )
 
 # An attempt whose failure is one of these REACHED the access point and
 # was turned away during authentication: the only kind where trying another
 # security setting can help.
-AUTH_KINDS = (WRONG_PASSWORD, AUTH_TIMEOUT)
+AUTH_KINDS = (WRONG_PASSWORD, AUTH_TIMEOUT, NO_ANSWER)
 
 # ─── what nmcli says ─────────────────────────────────────────────────────
 #
@@ -200,6 +201,11 @@ PORTAL = {
     SETUP_FAILED: "The speaker couldn't save those Wi-Fi details. Check the "
                   "network name and password and try again.",
     OTHER: "Couldn't join that network.",
+    NO_ANSWER: "Couldn't connect to your router: it didn't answer the speaker's "
+               "connection request, so the password was never even tried. If other "
+               "devices connect fine, the router may be using something this "
+               "speaker can't (fast roaming / 802.11r, or WPA3); the card's "
+               "domovoi/device-info.json says what was tried.",
 }
 
 # The card's device-info.json: anyone holding the card can read it, so no
@@ -219,4 +225,6 @@ CARD = {
     RADIO: "couldn't join your home Wi-Fi — the radio wasn't ready",
     SETUP_FAILED: "the home Wi-Fi details were refused — check the name and password",
     OTHER: "couldn't join your home Wi-Fi",
+    NO_ANSWER: "couldn't join your home Wi-Fi — the router didn't answer the "
+               "connection request (not the password)",
 }

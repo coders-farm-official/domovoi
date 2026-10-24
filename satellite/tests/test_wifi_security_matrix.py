@@ -62,10 +62,13 @@ class Radio:
     def __init__(self, *, security="WPA2", router=("wpa-psk",), psk=PSK,
                  ssid=SSID, freq="2437 MHz", visible=True, hidden_ap=False,
                  pmf_required=False, driver_sae=False, reports_sae=True,
-                 bands=("1",), up_error=None, journal=""):
+                 bands=("1",), up_error=None, journal="", guard=True):
         self.security, self.router, self.psk, self.ssid = security, set(router), psk, ssid
         self.freq, self.visible, self.hidden_ap = freq, visible, hidden_ap
         self.pmf_required, self.driver_sae, self.reports_sae = pmf_required, driver_sae, reports_sae
+        # satellite/wifi_guard.py running (every prepared card from
+        # 2026-10-23): it takes SAE out on a radio that can't finish it.
+        self.guard = guard
         self.bands, self.up_error, self.journal = bands, up_error, journal
         self.profiles: dict[str, dict[str, str]] = {}
         self.adds: list[dict[str, str]] = []
@@ -119,8 +122,11 @@ class Radio:
         return self._ok(cmd, "", text)
 
     def _offered(self, p) -> set[str]:
-        """The AKMs NetworkManager hands wpa_supplicant for a profile
-        (nm-supplicant-config.c, client mode)."""
+        """The AKMs wpa_supplicant ends up with for a profile:
+        NetworkManager 1.52's list (nm-supplicant-config.c, client mode:
+        SAE whenever the radio claims it, WHATEVER the PMF setting - the
+        PMF condition there is for access-point mode only), then the wifi
+        guard's cut on a radio that cannot finish SAE."""
         km, pmf = p.get("wifi-sec.key-mgmt"), p.get("wifi-sec.pmf", "default")
         if km is None:
             return {"open"}
@@ -131,8 +137,10 @@ class Radio:
         out = set()
         if pmf != "required":
             out.add("wpa-psk")
-        if self.reports_sae and pmf != "disable":
+        if self.reports_sae:
             out.add("sae")
+        if self.guard and not self.driver_sae and out != {"sae"}:
+            out.discard("sae")
         return out
 
     def _up(self, cmd, p, uuid):
@@ -190,7 +198,7 @@ def test_kambers_router_joins_on_the_first_attempt():
 def test_what_the_old_profile_did_on_that_router():
     """The profile the card built until today (PMF left at default) fails
     there with the right password - the model reproduces the bug."""
-    r = Radio(security="WPA2 WPA3", router=("wpa-psk", "sae"))
+    r = Radio(security="WPA2 WPA3", router=("wpa-psk", "sae"), guard=False)
     r.adds.append({})
     old = {"ssid": SSID, "wifi-sec.key-mgmt": "wpa-psk", "wifi-sec.psk": PSK}
     r.profiles["old"] = {"name": "domovoi-home", **old}

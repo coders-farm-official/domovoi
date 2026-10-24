@@ -62,6 +62,9 @@ def fake_repo(tmp_path, monkeypatch):
     (sat / "requirements.txt").write_text("requests==2.32.0\n", encoding="utf-8")
     (sat / "domovoi-satellite.service").write_text("[Unit]\n", encoding="utf-8")
     (sat / "scripts" / "domovoi-provisioning.service").write_text("[Unit]\n", encoding="utf-8")
+    # The Wi-Fi guard and its unit (satellite/wifi_guard.py, 2026-10-23).
+    (sat / "wifi_guard.py").write_text("# guard\n", encoding="utf-8")
+    (sat / "scripts" / "domovoi-wifi-guard.service").write_text("[Unit]\n", encoding="utf-8")
     # The early unit's two files are string constants in net_settings.py.
     (sat / "net_settings.py").write_text(
         'EARLY_HELPER_TEXT = "#!/usr/bin/python3 -I\\nprint(1)\\n"\n'

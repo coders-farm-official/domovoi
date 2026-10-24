@@ -159,10 +159,63 @@ class Diag:
                     "signal": _int(f[5]) if len(f) > 5 else None,
                 })
         rows.sort(key=lambda x: -(x["signal"] or 0))
+        rsn = self.rsn_details(run)
         self.scan = []
         for row in rows:
             mac = row.pop("mac")
-            self.scan.append({"ap": self._named(mac), **row})
+            self.scan.append({"ap": self._named(mac), **row, **rsn.get(mac, {})})
+
+    @staticmethod
+    def rsn_details(run, iface: str = "wlan0") -> dict[str, dict[str, Any]]:
+        """Per BSSID, from the kernel's last scan (``iw dev wlan0 scan
+        dump``, which triggers nothing): the RSN AKM suites and capability
+        bits, whether it does 802.11r (FT: an FT suite or a mobility
+        domain), and its Wi-Fi generation. What one merged SECURITY string
+        cannot say."""
+        try:
+            r = run(["iw", "dev", iface, "scan", "dump"], capture_output=True, text=True,
+                    timeout=20)
+        except (OSError, subprocess.TimeoutExpired):
+            return {}
+        if r.returncode != 0:
+            return {}
+        out: dict[str, dict[str, Any]] = {}
+        cur: dict[str, Any] | None = None
+        in_rsn = False
+        for ln in _text(r).splitlines():
+            m = re.match(r"^BSS ([0-9a-fA-F:]{17})", ln)
+            if m:
+                cur = out.setdefault(m.group(1).lower(), {
+                    "akm": [], "rsn_capabilities": [], "ft": False, "wifi": None})
+                in_rsn = False
+                continue
+            if cur is None:
+                continue
+            s = ln.strip()
+            if s.startswith("RSN:"):
+                in_rsn = True
+                continue
+            if in_rsn and s.startswith("* Authentication suites:"):
+                cur["akm"] = s.split(":", 1)[1].split()
+                cur["ft"] = cur["ft"] or any(a.startswith("FT/") for a in cur["akm"])
+                continue
+            if in_rsn and s.startswith("* Capabilities:"):
+                cur["rsn_capabilities"] = [c for c in s.split(":", 1)[1].split()
+                                           if not c.startswith("(")]
+                continue
+            if not s.startswith("*"):
+                in_rsn = False
+            if s.startswith("Mobility Domain") or s.startswith("MD:"):
+                cur["ft"] = True
+            for tag, gen in (("EHT capabilities", 7), ("HE capabilities", 6),
+                             ("VHT capabilities", 5), ("HT capabilities", 4)):
+                if s.startswith(tag) and (cur["wifi"] or 0) < gen:
+                    cur["wifi"] = gen
+        for v in out.values():
+            caps = v["rsn_capabilities"]
+            v["pmf"] = ("required" if "MFP-required" in caps else
+                        "capable" if "MFP-capable" in caps else "no")
+        return out
 
     # ── one attempt ──
     def record(self, run, *, since: float, key_mgmt: str, pmf: str | None, ok: bool,
@@ -182,16 +235,32 @@ class Diag:
         reasons = sorted({int(x) for x in re.findall(r"\breason=(\d+)", joined)})
         statuses = sorted({int(x) for x in re.findall(r"\bstatus_code=(\d+)", joined)})
         hints = []
+        handshake = ("4way_handshake" in joined.lower() or "4-Way Handshake" in joined
+                     or "WRONG_KEY" in joined)
         if "WRONG_KEY" in joined or "4-Way Handshake failed" in joined or 15 in reasons:
             hints.append("the access point rejected the key in the 4-way handshake")
         if "CTRL-EVENT-ASSOC-REJECT" in joined:
             hints.append("the access point refused the association")
-        if re.search(r"\bSAE\b", joined):
-            hints.append("WPA3 (SAE) was negotiated")
+        # 2026-10-23: "Authentication with <AP> timed out" ten seconds after
+        # every "Trying to associate", then NetworkManager's "association
+        # took too long" -> need-auth -> no-secrets. NetworkManager calls
+        # that "Secrets were required"; the key was never even tried.
+        no_answer = (not ok and not handshake and (
+            re.search(r"Authentication with .* timed out", joined) is not None
+            or "association took too long" in joined))
+        if no_answer:
+            hints.append("the access point never answered the connection request "
+                         "(no 4-way handshake: not a password problem)")
+        offered = re.findall(r"Config: added 'key_mgmt' value '([^']*)'", joined)
+        rewritten = re.findall(r"key_mgmt '[^']*' -> '([^']*)'", joined)
         entry = {
             "key_mgmt": key_mgmt, "pmf": pmf or "-",
+            # What wpa_supplicant was actually handed (NetworkManager's
+            # list), and what the wifi guard cut it to (wifi_guard.py).
+            "supplicant_key_mgmt": offered[-1] if offered else None,
+            "guard_key_mgmt": rewritten[-1] if rewritten else None,
             "ap": self._named(tried) if tried else None, "freq_mhz": freq,
-            "outcome": "joined" if ok else (kind or "failed"),
+            "outcome": "joined" if ok else ("no-answer" if no_answer else (kind or "failed")),
             "nmcli": detail or None,
             "reason_codes": [f"{c}: {REASONS.get(c, '?')}" for c in reasons],
             "status_codes": [f"{c}: {STATUSES.get(c, '?')}" for c in statuses],
@@ -208,7 +277,8 @@ class Diag:
         try:
             r = run(["journalctl", "-b", "--no-pager", "-o", "cat",
                      "--since", f"@{int(since) - 1}",
-                     "-u", "NetworkManager", "-u", "wpa_supplicant"],
+                     "-u", "NetworkManager", "-u", "wpa_supplicant",
+                     "-u", "domovoi-wifi-guard"],
                     capture_output=True, text=True, timeout=10)
         except (OSError, subprocess.TimeoutExpired):
             return []

@@ -190,6 +190,16 @@ async def assemble(
         overlay.TEMPLATES_DIR / "domovoi-bootstrap.service",
         system / "domovoi-bootstrap.service",
     )
+    # The Wi-Fi guard (satellite/wifi_guard.py): keeps wpa_supplicant to the
+    # AKMs the radio can do (no FT, no SAE on a Pi Zero 2 W). Self-contained
+    # and stdlib-only, so stage 1 installs it root-owned and the system
+    # Python runs it in isolated mode, never from the satellite account's
+    # code tree.
+    shutil.copy2(sat_dir / "wifi_guard.py", system / "domovoi-wifi-guard")
+    shutil.copy2(
+        sat_dir / "scripts" / "domovoi-wifi-guard.service",
+        system / "domovoi-wifi-guard.service",
+    )
     shutil.copy2(
         sat_dir / "scripts" / "domovoi-apply-payload",
         system / "domovoi-apply-payload",
