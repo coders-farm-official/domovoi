@@ -23,8 +23,8 @@
 
 const CTR_FREEZE_LIST = [
   'plugin installs, upgrades and enabling a plugin',
-  'satellite code upgrades and the plugin payloads they carry',
-  'satellite media preparation',
+  'room software upgrades and the plugin payloads they carry',
+  'preparing rooms’ SD cards',
   'pulling and applying Domovoi updates',
 ];
 

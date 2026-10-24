@@ -39,7 +39,7 @@ globalThis.relTime = () => 'just now';
 
 OPEN_AND_READ = r"""
 h.render();
-const head = h.find({ type: 'span', text: 'prepare satellite media' });
+const head = h.find({ type: 'span', text: `prepare a room's SD card` });
 const opener = h.ancestors(head).find((a) => a.type === 'button');
 await h.click((el) => el === opener);
 const row = h.findAll((el) => el.type === 'span' && el.props && el.props.style

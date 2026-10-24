@@ -143,7 +143,7 @@ const SatCard = ({ s, onOpen, tick, coreDown = false }) => {
             {s.settings_ignored.length === 1 ? 'a setting ignored' : `${s.settings_ignored.length} settings ignored`}
           </Pill>
         )}
-        <span title={coreDown ? 'the server’s core isn’t answering, so no satellite can connect' : undefined}>
+        <span title={coreDown ? 'the server’s core isn’t answering, so no room can connect' : undefined}>
           <Pill tone={online ? 'live' : coreDown ? 'warn' : 'idle'} live={online}>
             {online ? 'online' : coreDown ? 'can’t connect' : s.status === 'waiting' ? 'waiting' : 'offline'}
           </Pill>
@@ -478,7 +478,7 @@ const SatHealthCard = ({ room, online }) => {
         {s && Array.isArray(s.settings_ignored) && s.settings_ignored.length > 0 &&
           <Pill tone="warn" title={s.settings_ignored.join('\n')}>settings ignored</Pill>}
         {s && s.wifi && s.wifi.mode === 'ap' &&
-          <Pill tone="err" title="the radio is hosting the setup hotspot instead of being on the house Wi-Fi; the satellite is bringing the house network back">setup hotspot on</Pill>}
+          <Pill tone="err" title="the radio is hosting the setup hotspot instead of being on the house Wi-Fi; the room device is bringing the house network back">setup hotspot on</Pill>}
         {s && satNeeds2023(s.boot) &&
           <Pill tone="warn" title="Secure Boot is on and the firmware lacks Microsoft's 2023 certificate (below)">firmware needs the 2023 certificate</Pill>}
         {s && s.mic_blocked === true &&
@@ -504,7 +504,7 @@ const SatHealthCard = ({ room, online }) => {
       {error && !s && <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>couldn’t read health: {error}</div>}
       {!error && !s && data && (
         <div style={{ fontSize: 12, color: 'var(--fg-faint)', marginTop: 6 }}>
-          no health sample yet — the satellite sends one a minute once it runs code from 2026-10-09 on (upgrade it from this tab)
+          no health sample yet — the room sends one a minute once it runs software from 2026-10-09 on (upgrade it from this tab)
         </div>
       )}
       {!data && !error && <div style={{ fontSize: 12, color: 'var(--fg-faint)', marginTop: 6 }}>loading…</div>}
@@ -714,7 +714,7 @@ const SatCaptureControl = ({ s, fire, refresh }) => {
   const turnOn = async () => {
     if (!window.confirm(
       `Record commands in ${s.room_id}?\n\n` +
-      `Each command said to this satellite (after the wake word, or answering a ` +
+      `Each command said in this room (after the wake word, or answering a ` +
       `follow-up question) is kept on the Domovoi server for ${days} days, the audio ` +
       `and what it heard, so admins can tune when Domovoi stops listening. ` +
       `Wake-word training, drop-in calls and chat are never kept.\n\n` +
@@ -825,7 +825,7 @@ const SatTimerScopeControl = ({ s, fire, refresh }) => {
         Only reminders for this device
       </label>
       <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>
-        Covers timers and reminders. Off: this satellite also announces the ones set in other rooms and says which room they came from. On: it announces only the ones set on this satellite. The room a timer or reminder was set in always announces it.
+        Covers timers and reminders. Off: this room also announces the ones set in other rooms and says which room they came from. On: it announces only the ones set in this room. The room a timer or reminder was set in always announces it.
       </div>
     </div>
   );
@@ -942,7 +942,7 @@ const RoomVoicePicker = ({ s, fire, refresh }) => {
   // No registry (not loaded, or unreadable): nothing to offer honestly.
   if (!changeable || !admin || rows.length === 0) {
     const why = !admin ? 'sign in as an admin to change it here, or say “switch to <name>’s voice” in the room'
-      : !changeable ? 'its satellite keeps its own voice: change it while the room is online'
+      : !changeable ? 'the room keeps its own voice: change it while the room is online'
       : 'say “switch to <name>’s voice” in the room to change it';
     return <div title={why}>{label}</div>;
   }
@@ -967,7 +967,7 @@ const RoomVoicePicker = ({ s, fire, refresh }) => {
       <select aria-label={`${s.room_id}’s voice`} value={current} disabled={busy}
               onChange={e => pick(e.target.value)}
               title={onServer ? 'kept on the server for this room: it applies offline too'
-                              : 'the satellite keeps it: it says the change in the new voice'}
+                              : 'the room keeps it: it says the change in the new voice'}
               style={{ flex: 1, minWidth: 0, maxWidth: 260, font: 'inherit', fontSize: 12, height: 28, padding: '0 6px',
                        borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
                        background: 'var(--card)', color: 'var(--fg)', boxShadow: 'var(--inner-highlight)' }}>
@@ -1084,7 +1084,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   const restartSat = async () => {
     if (upgrading) { fire(`${s.room_id} is upgrading — it restarts itself when the new code is in`); return; }
     if (s.status !== 'online') { fire(`${s.room_id} is offline`); return; }
-    if (!window.confirm(`Restart the ${s.room_id} satellite? It'll drop offline for a few seconds while the service bounces.`)) return;
+    if (!window.confirm(`Restart the ${s.room_id} room? It'll drop offline for a few seconds while the service bounces.`)) return;
     try {
       await apiPost(`/api/satellites/${s.room_id}/restart`, {});
       fire(`restarting ${s.room_id}…`);
@@ -1097,8 +1097,8 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
     if (upgrading || asking) return;
     if (s.status !== 'online') { fire(`${s.room_id} is offline`); return; }
     if (!window.confirm(
-      `Upgrade the ${s.room_id} satellite to ${coreSha || 'the latest domovoi code'}?\n\n` +
-      `It pulls the new satellite code from the Domovoi server, backs up its current ` +
+      `Upgrade the ${s.room_id} room to ${coreSha || 'the latest domovoi code'}?\n\n` +
+      `It pulls the new room software from the Domovoi server, backs up its current ` +
       `tree, and restarts — dropping offline for a few seconds. If the new code won't ` +
       `start, it rolls back automatically.\n\n` +
       `Some updates finish at the next boot: if its health card then says ` +
@@ -1340,7 +1340,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
         <div style={{ display: 'flex', gap: 8 }}>
           <input value={msg} onChange={e => setMsg(e.target.value)}
                  onKeyDown={e => { if (e.key === 'Enter') sendAnnounce(); }}
-                 placeholder={`speak through the ${s.room_id} satellite…`}
+                 placeholder={`speak in the ${s.room_id} room…`}
                  disabled={s.status !== 'online' || !canAnnounce}
                  style={{ flex: 1, font: 'inherit', fontSize: 13, height: 32, padding: '0 10px',
                           borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
@@ -1400,13 +1400,13 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
               would leave a half-copied tree with no rollback armed. */}
           <Button icon="refresh-cw" disabled={upgrading || s.status !== 'online' || !canRestart} onClick={restartSat}
                   title={upgrading ? 'it restarts itself when the new code is in' : undefined}>
-            Restart satellite
+            Restart room
           </Button>
           <Button variant={needsUpgrade && canUpgrade ? 'primary' : 'secondary'} icon="download-cloud"
                   disabled={upgrading || asking || s.status !== 'online' || upToDate || !canUpgrade}
-                  title={upgrading ? 'an upgrade is under way — this unlocks when the satellite is back' : undefined}
+                  title={upgrading ? 'an upgrade is under way — this unlocks when the room is back' : undefined}
                   onClick={upgradeSat}>
-            {upgrading || asking ? 'Upgrading…' : 'Upgrade satellite'}
+            {upgrading || asking ? 'Upgrading…' : 'Upgrade room'}
           </Button>
           <Button icon="shield-off" disabled={!(s.pairing && s.pairing.paired)} onClick={resetPairing}>
             Reset pairing
@@ -1438,7 +1438,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
             <Button icon="trash-2" onClick={async () => {
               if (!window.confirm(
                 `Retire ${s.room_id}?\n\n` +
-                `Frees the name so a new satellite can use it. Removes this room's ` +
+                `Frees the name so a new room device can use it. Removes this room's ` +
                 `pairing, any pending approval, and its music instance.\n\n` +
                 `Saved playlists for the room and conversation history are kept.`
               )) return;
@@ -1485,7 +1485,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
         )}
         {canRestart && canUpgrade ? (
           <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>
-            restart bounces domovoi-satellite.service · upgrade syncs satellite code to {coreSha || 'the Domovoi server'} then restarts · reset pairing lets a re-flashed / new device re-pair as this room
+            restart bounces domovoi-satellite.service · upgrade syncs room software to {coreSha || 'the Domovoi server'} then restarts · reset pairing lets a re-flashed / new device re-pair as this room
           </div>
         ) : (
           <div className="mono sat-not-offered" style={{ marginTop: 6 }}>
@@ -1533,7 +1533,7 @@ const RoomConversationsBody = ({ room }) => {
         </span>
       </div>
       {filtered.length === 0
-        ? <Empty glyph="sleeping" title="nothing said in this room" sub={q ? `q = “${q}”` : 'satellite has been quiet'}/>
+        ? <Empty glyph="sleeping" title="nothing said in this room" sub={q ? `q = “${q}”` : 'the room has been quiet'}/>
         : <div>{filtered.map(c => <SatConversationTurn key={c.id} c={c}/>)}</div>}
     </>
   );
@@ -1781,8 +1781,8 @@ const SatelliteSettingNeedsUpgrade = ({ f }) => (
         <Icon name="info" size={13}/>
       </span>
     </div>
-    <span title="This satellite's software doesn't have this setting yet. Upgrade it from its Overview tab." style={{ flexShrink: 0 }}>
-      <Pill tone="warn">needs a satellite upgrade</Pill>
+    <span title="This room's software doesn't have this setting yet. Upgrade it from its Overview tab." style={{ flexShrink: 0 }}>
+      <Pill tone="warn">needs a room upgrade</Pill>
     </span>
   </div>
 );
@@ -1808,7 +1808,7 @@ const RoomSettingsBody = ({ room, fire }) => {
 
   const save = async () => {
     if (dirtyCount === 0) return;
-    if (!window.confirm(`Save and restart the ${room} satellite? It'll drop offline for a few seconds while it applies the change.`)) return;
+    if (!window.confirm(`Save and restart the ${room} room? It'll drop offline for a few seconds while it applies the change.`)) return;
     setSaving(true); setResult(null);
     try {
       const res = await apiPatch(`/api/satellites/${room}/config`, { changes: edits });
@@ -1836,13 +1836,13 @@ const RoomSettingsBody = ({ room, fire }) => {
   if (loading && fields.length === 0)
     return <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading settings…</div>;
   if (fields.length === 0)
-    return <Empty glyph="sleeping" title="settings unavailable" sub="the satellite must be online to edit its config"/>;
+    return <Empty glyph="sleeping" title="settings unavailable" sub="the room must be online to edit its config"/>;
 
   return (
     <div style={{ padding: '12px 16px' }}>
       <div style={{ margin: '0 0 12px', padding: '8px 12px', borderRadius: 'var(--r-sm)', background: 'var(--sunken)', border: '1px solid var(--border-soft)', fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
-        Saving rewrites the Pi's <code>config.toml</code> and <strong>restarts the satellite</strong> to apply — it drops offline for a few seconds.
-        {!reported && <div style={{ color: 'var(--warn-ink)', marginTop: 4 }}>waiting for the satellite to report its current config…</div>}
+        Saving rewrites the Pi's <code>config.toml</code> and <strong>restarts the room</strong> to apply — it drops offline for a few seconds.
+        {!reported && <div style={{ color: 'var(--warn-ink)', marginTop: 4 }}>waiting for the room to report its current config…</div>}
       </div>
       {renderGroups(common)}
       {advanced.length > 0 && (
@@ -1853,7 +1853,7 @@ const RoomSettingsBody = ({ room, fire }) => {
           </button>
           {advOpen && <>
             <div style={{ margin: '10px 0', padding: '10px 12px', borderRadius: 'var(--r-sm)', background: 'oklch(0.8 0.16 60 / 0.12)', border: '1px solid var(--warn)', fontSize: 12, color: 'var(--fg)', lineHeight: 1.5 }}>
-              <strong>⚠ These can take the satellite offline.</strong> A wrong audio device, LED, or mic-gain value can leave it without mic or sound until you SSH in and fix <code>~/.domovoi/config.toml</code> (a <code>.bak</code> is saved on every change).
+              <strong>⚠ These can take the room offline.</strong> A wrong audio device, LED, or mic-gain value can leave it without mic or sound until you SSH in and fix <code>~/.domovoi/config.toml</code> (a <code>.bak</code> is saved on every change).
             </div>
             {renderGroups(advanced)}
           </>}
@@ -1929,7 +1929,7 @@ const RoomLogsBody = ({ room, online }) => {
 
   if (error)
     return <Empty glyph="sleeping" title="couldn't read the log"
-                  sub={online ? error : 'nothing is retained for this room yet, and the live ring needs the satellite online'}
+                  sub={online ? error : 'nothing is retained for this room yet, and the live ring needs the room online'}
                   action={<Button icon="rotate-cw" onClick={load}>Try again</Button>}/>;
 
   // Two logs since 2026-10-09: what the core RETAINS on disk for this room
@@ -1977,11 +1977,11 @@ const RoomLogsBody = ({ room, online }) => {
         ? <Empty glyph="sleeping" title="this device doesn't offer a live log"
                  sub="it didn't declare one in its hello — the retained log is what it pushed"/>
       : !showRetained && !live
-        ? <Empty glyph="sleeping" title="the live ring needs the satellite online"
+        ? <Empty glyph="sleeping" title="the live ring needs the room online"
                  sub={retained ? 'the retained log above is what it pushed before it went offline' : 'the buffer lives in its own process'}/>
         : text === ''
           ? <Empty glyph="sleeping" title={showRetained ? 'nothing retained yet' : 'log is empty'}
-                   sub={showRetained ? 'the satellite pushes its lines once it runs code from 2026-10-09 on' : 'the satellite has not written anything since it started'}/>
+                   sub={showRetained ? 'the room pushes its lines once it runs software from 2026-10-09 on' : 'the room has not written anything since it started'}/>
           : <pre ref={preRef} className="mono" style={preStyle}>{text}</pre>}
     </div>
   );
@@ -2061,7 +2061,7 @@ const Broadcast = ({ onlineCount, fire, compact = false }) => {
       return;
     }
     if (onlineCount === 0) {
-      fire('no satellites connected — nothing to broadcast to');
+      fire('no rooms connected — nothing to broadcast to');
       return;
     }
     try {
@@ -2072,11 +2072,11 @@ const Broadcast = ({ onlineCount, fire, compact = false }) => {
       const result = await apiPost('/api/satellites/announce-all', { message: msg });
       const delivered = Array.isArray(result?.announced_to) ? result.announced_to : [];
       if (delivered.length === 0) {
-        fire('broadcast queued but no satellites accepted it (dead connections?)');
+        fire('broadcast queued but no rooms accepted it (dead connections?)');
       } else if (delivered.length < onlineCount) {
         fire(`broadcast partial — ${delivered.length}/${onlineCount} reached (${delivered.join(', ')})`);
       } else {
-        fire(`broadcasted to ${delivered.length} satellite${delivered.length === 1 ? '' : 's'}`);
+        fire(`broadcasted to ${delivered.length} room${delivered.length === 1 ? '' : 's'}`);
       }
       setMsg('');
     } catch (e) {
@@ -2120,7 +2120,7 @@ const Broadcast = ({ onlineCount, fire, compact = false }) => {
       </div>
       <div style={{ padding: 16, background: 'var(--sunken)' }}>
         <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginBottom: 10 }}>
-          Speaks through every connected satellite simultaneously.
+          Speaks in every connected room at once.
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <input value={msg} onChange={e => setMsg(e.target.value)}
@@ -2220,7 +2220,7 @@ const AdoptModal = ({ pending, sats, force, onClose, onAdopted, fire }) => {
                     borderRadius: 'var(--r-lg)', boxShadow: 'var(--shadow-md), var(--inner-highlight)',
                     padding: 20 }}>
         <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
-          {force ? 're-provision satellite' : 'adopt satellite'}
+          {force ? 'set up this room again' : 'adopt as a room'}
         </div>
         <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 16 }}>
           {pending.model || pending.board || 'unknown board'}
@@ -2228,7 +2228,7 @@ const AdoptModal = ({ pending, sats, force, onClose, onAdopted, fire }) => {
           {' · '}{pending.sat_type}
         </div>
 
-        {row('satellite name', (
+        {row('room name', (
           <>
             <input value={roomId} onChange={e => setRoomId(e.target.value)} style={adoptInputStyle}
                    placeholder="kitchen, livingroom_tv, …" autoFocus disabled={force && !!pending.already_adopted_as}/>
@@ -2236,7 +2236,7 @@ const AdoptModal = ({ pending, sats, force, onClose, onAdopted, fire }) => {
             {collision && <div className="mono" style={{ fontSize: 11, color: 'var(--err-ink)', marginTop: 4 }}>that name is taken</div>}
           </>
         ))}
-        {row('room label (optional — groups satellites in one room)', (
+        {row('room label (optional — groups several devices in one room)', (
           <input value={roomLabel} onChange={e => setRoomLabel(e.target.value)} style={adoptInputStyle}
                  placeholder="Living Room"/>
         ))}
@@ -2373,7 +2373,7 @@ const ApprovalCard = ({ a, busy, error, onApprove, onReject, onClearError }) => 
               * lives nowhere on this page). "N attempts" next to a code
               * box read as a limit running down — F-049. */}
             {a.attempts > 1
-              ? <span title="times this satellite has asked to be approved — not a limit">
+              ? <span title="times this room has asked to be approved — not a limit">
                   {' · '}asked {a.attempts} times
                 </span>
               : null}
@@ -2408,8 +2408,8 @@ const ApprovalCard = ({ a, busy, error, onApprove, onReject, onClearError }) => 
       )}
       <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--fg-muted)' }}>
         {a.has_code === false
-          ? `This request arrived without a code — power-cycle the satellite so it asks again with one.`
-          : `Type the ${APPROVAL_CODE_LEN} digits the satellite is showing and saying. Reading them off the device is what proves this request is the unit in front of you. Missed them? The code never changes — the satellite says it again every time it retries, and it is on the Pi in ~/.domovoi/approval_code.`}
+          ? `This request arrived without a code — power-cycle the room device so it asks again with one.`
+          : `Type the ${APPROVAL_CODE_LEN} digits the room device is showing and saying. Reading them off the device is what proves this request is the unit in front of you. Missed them? The code never changes — the room says it again every time it retries, and it is on the Pi in ~/.domovoi/approval_code.`}
       </div>
     </Card>
   );
@@ -2425,7 +2425,7 @@ const PendingSatCard = ({ p, adopted, onAdopt }) => {
       <Icon name="usb" size={18}/>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 14, fontWeight: 600 }}>
-          {p.parse_error ? 'unreadable setup drive' : (p.model || p.board || 'new satellite')}
+          {p.parse_error ? 'unreadable setup drive' : (p.model || p.board || 'new room device')}
         </div>
         <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>
           {p.parse_error
@@ -2681,10 +2681,10 @@ const SpareWindows = ({ res, fire }) => {
                                                     running={!!(st && st.fetch && st.fetch.running)} onGet={getSetup}/>}
       <div role="note" className="spare-windows-unsigned"
            style={{ fontSize: 11.5, color: 'var(--warn-ink)', lineHeight: 1.5 }}>
-        Not signed yet: neither the Setup nor the satellite's own code carries a signature (Python itself is
+        Not signed yet: neither the Setup nor the room's own software carries a signature (Python itself is
         signed by the Python Software Foundation). Windows Security or another antivirus may warn
         about a program that downloads and starts programs; Windows shows its microphone-in-use
-        icon the whole time the satellite listens for the wake word.
+        icon the whole time the room listens for the wake word.
       </div>
       {rt && (
         <div className="spare-windows-runtime" style={{ fontSize: 11.5, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
@@ -2873,7 +2873,7 @@ const SpareLinuxPython = ({ res, fire }) => {
   return (
     <div className="spare-linux-python" style={{ fontSize: 11.5, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
       Older Linux (Ubuntu 22.04, Mint 21, Debian 11) and Fedora, openSUSE or Arch get the
-      satellite's own Python ({versions}).{' '}
+      room software's own Python ({versions}).{' '}
       {rt.ready
         ? <>This server holds it ({spareMb(rt.bytes_total)}): the laptop gets it from here.</>
         : <>This server doesn't hold it yet ({spareMb(rt.bytes_total)}{rt.bytes_cached ? `, ${spareMb(rt.bytes_cached)} so far` : ''}).
@@ -2965,7 +2965,7 @@ const SpareUsbStick = ({ res, body, fire }) => {
       </div>
       <div style={note}>
         An old 64-bit PC or laptop, or an Intel Mac from 2012 to 2017, becomes this room: the stick
-        installs a fresh system on it (Debian) and the satellite, with no terminal and no password. It
+        installs a fresh system on it (Debian) and the room software, with no terminal and no password. It
         <b> erases that computer’s disk</b>, and asks first, on the computer itself, naming the disk.
         Like the other spare devices, the stick is a preview: so far it has been tried in virtual
         machines; real computers are next.
@@ -3053,7 +3053,7 @@ const SpareUsbStick = ({ res, body, fire }) => {
       </details>
       <div className="spare-stick-power" style={{ fontSize: 11.5, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
         A room runs day and night. An old desktop tower draws about 30 to 80 W: $50 to $130 a year at US
-        prices, more than a new Pi satellite costs. An old laptop (6 to 15 W, $10 to $25 a year) or a mini PC
+        prices, more than a new Raspberry Pi room costs. An old laptop (6 to 15 W, $10 to $25 a year) or a mini PC
         is the better room if you have the choice.
       </div>
       {others.length > 0 && (
@@ -3168,7 +3168,7 @@ const SpareDeviceCard = ({ fire }) => {
                   <div className="label">linux laptop or mini pc</div>
                   <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
                     On the device, signed in as the account it will run as, open a terminal and
-                    paste this. It installs the satellite and shows the approval code.
+                    paste this. It sets the device up as a room and shows the approval code.
                   </div>
                   <pre className="mono spare-command" tabIndex={0}
                        style={{ margin: 0, padding: 10, fontSize: 11.5, lineHeight: 1.45,
@@ -3260,7 +3260,7 @@ const SatellitesPage = ({ embedded = false } = {}) => {
 
   const decide = async (a, action, code) => {
     if (action === 'reject' && !window.confirm(
-      `Reject ${a.room_id}?\n\nThe satellite keeps retrying until it is ` +
+      `Reject ${a.room_id}?\n\nThe room device keeps retrying until it is ` +
       `approved or powered off — this clears the request, it doesn't ban the device.`
     )) return;
     setApprovalBusy(a.room_id);
@@ -3335,10 +3335,10 @@ const SatellitesPage = ({ embedded = false } = {}) => {
               <StatusDot tone="err"/>
               <span style={{ fontSize: 14, fontWeight: 600 }}>
                 {downWhy === 'db'
-                  ? 'The database isn’t answering, so satellites can’t connect.'
+                  ? 'The database isn’t answering, so rooms can’t connect.'
                   : downWhy === 'sick'
-                    ? 'The server’s core is running but can’t answer, so satellites can’t connect.'
-                    : 'The server’s core isn’t answering, so satellites can’t connect.'}
+                    ? 'The server’s core is running but can’t answer, so rooms can’t connect.'
+                    : 'The server’s core isn’t answering, so rooms can’t connect.'}
               </span>
             </div>
             <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
@@ -3379,12 +3379,12 @@ const SatellitesPage = ({ embedded = false } = {}) => {
       )}
 
       {loading && sats.length === 0 ? (
-        <Card><div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading satellites…</div></Card>
+        <Card><div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading rooms…</div></Card>
       ) : sats.length === 0 ? (
-        <Card><Empty glyph="sleeping" title="no satellites provisioned yet"
+        <Card><Empty glyph="sleeping" title="no rooms set up yet"
                      sub={onWsl
-                       ? "build the card's files below, write them with the tray icon's card helper, then set the satellite up from a phone — no USB adoption while Domovoi runs inside WSL on Windows"
-                       : "plug a satellite into this machine's USB port to adopt it — or provision one manually"}/></Card>
+                       ? "build the card's files below, write them with the tray icon's card helper, then set the room up from a phone — no USB adoption while Domovoi runs inside WSL on Windows"
+                       : "plug a room device into this machine's USB port to adopt it — or set one up by hand"}/></Card>
       ) : labels.length === 0 ? (
         grid(sats)
       ) : (
@@ -3434,7 +3434,7 @@ const SatellitesPage = ({ embedded = false } = {}) => {
   }
   return (
     <div className="page">
-      <PageHeader title="Satellites" sub={summary}/>
+      <PageHeader title="Rooms" sub={summary}/>
       {body}
     </div>
   );

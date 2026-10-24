@@ -5,7 +5,7 @@ whenever the now-playing list was empty, so on a box with no mpd_rooms
 the Room queue tab offered a room that did not exist, fetched
 ``/api/music/queue/kitchen`` (a 502 with no core) and rendered the
 failure as the success-shaped "queue is empty · say play something in
-kitchen" (finding F-020, card MUS-01). The "no rooms provisioned yet"
+kitchen" (finding F-020, card MUS-01). The "no rooms set up yet"
 branch was unreachable.
 
 Now the room set is exactly what now-playing returned; every consumer
@@ -137,23 +137,23 @@ def test_no_rooms_means_no_kitchen_anywhere(driven):
 
 def test_room_queue_tab_reaches_its_no_rooms_branch(driven):
     r = driven["page_no_rooms"]
-    assert "no rooms provisioned yet" in r["queueTab"]
+    assert "no rooms set up yet" in r["queueTab"]
     assert "queue is empty" not in _joined(r["queueTab"])
 
 
 def test_playlist_play_without_rooms_toasts_instead_of_posting(driven):
     r = driven["page_no_rooms"]
     assert not any(c.startswith("POST /api/music/play-playlist") for c in r["calls"]), r["calls"]
-    assert any("no rooms provisioned yet" in t for t in r["afterPlay"])
+    assert any("no rooms set up yet" in t for t in r["afterPlay"])
 
 
 def test_drawers_say_no_rooms_and_disable_play(driven):
     d = driven["drawer_no_rooms"]
-    assert any("no rooms provisioned yet" in t for t in d["texts"])
+    assert any("no rooms set up yet" in t for t in d["texts"])
     assert d["play"]["props"].get("disabled") is True
     assert d["play"]["text"] == "play in a room"
     p = driven["playlist_drawer_no_rooms"]
-    assert any("no rooms provisioned yet" in t for t in p["texts"])
+    assert any("no rooms set up yet" in t for t in p["texts"])
     for label in ("play", "shuffle"):
         btn = next(b for b in p["btns"] if b["text"] == label)
         assert btn["props"].get("disabled") is True, label
@@ -191,8 +191,8 @@ def test_now_playing_failure_is_not_first_boot(driven):
     r = driven["page_np_502"]
     header = _joined(r["header"])
     assert "rooms unavailable" in header and "domovoi unreachable" in header
-    assert "no rooms provisioned yet" not in header
+    assert "no rooms set up yet" not in header
     assert "retry" in r["header"]
     queue = _joined(r["queueTab"])
-    assert "rooms unavailable" in queue and "no rooms provisioned yet" not in queue
+    assert "rooms unavailable" in queue and "no rooms set up yet" not in queue
     assert "kitchen" not in queue

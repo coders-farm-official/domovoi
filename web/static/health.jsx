@@ -273,7 +273,7 @@ const healthChecks = ({ viewer, health, rooms, plugins, pluginErrors, acq,
       add({ ...c, tone: 'warn', items: roomItems(approvals),
             text: approvals.length === 1
               ? `${approvals[0].room_id} is waiting for approval`
-              : `${approvals.length} satellites are waiting for approval` });
+              : `${approvals.length} rooms are waiting for approval` });
     }
   }
   {
@@ -285,8 +285,8 @@ const healthChecks = ({ viewer, health, rooms, plugins, pluginErrors, acq,
     else {
       add({ ...c, tone: 'warn',
             text: pending.length === 1
-              ? 'a satellite is plugged in and ready to adopt'
-              : `${pending.length} satellites are plugged in and ready to adopt` });
+              ? 'a room device is plugged in and ready to adopt'
+              : `${pending.length} room devices are plugged in and ready to adopt` });
     }
   }
 

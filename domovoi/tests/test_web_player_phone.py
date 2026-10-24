@@ -766,7 +766,7 @@ def test_the_sheet_says_it_is_looking_for_rooms_until_they_answer(driven) -> Non
     # The rooms read asks every room's MPD (1.6 s on the live check), and
     # the sheet mounts the list afresh on every open.
     assert driven["sheet_rooms_loading"] == ["looking for rooms…"]
-    assert driven["sheet_no_rooms"] == ["no rooms online — connect a satellite"]
+    assert driven["sheet_no_rooms"] == ["no rooms online — set up a room"]
 
 
 def test_html_is_marked_docked_only_while_the_bar_shows(driven) -> None:

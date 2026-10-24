@@ -40,9 +40,9 @@ HARNESS = Path(__file__).with_name("jsx_interact_harness.js")
 FILES = ["web/static/components.jsx", "web/static/satellite_media.jsx", "web/static/satellites.jsx"]
 
 LABEL = "Only reminders for this device"
-HELP = ("Covers timers and reminders. Off: this satellite also announces the ones set in other "
-        "rooms and says which room they came from. On: it announces only the ones set on this "
-        "satellite. The room a timer or reminder was set in always announces it.")
+HELP = ("Covers timers and reminders. Off: this room also announces the ones set in other "
+        "rooms and says which room they came from. On: it announces only the ones set in this "
+        "room. The room a timer or reminder was set in always announces it.")
 TOAST_ON = "kitchen now announces only its own timers and reminders"
 TOAST_OFF = "kitchen now announces timers and reminders from every room"
 PUT_PATH = "/api/satellites/kitchen/timer-announcements"

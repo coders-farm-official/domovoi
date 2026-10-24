@@ -745,7 +745,7 @@ const HomeRooms = ({ rooms, answered, failed, dbDown, stale, fetchedAt, timerLef
     content = (
       <Card>
         <Empty glyph="sleeping" title="no rooms yet"
-               action={<a href="#settings/rooms" className="home-link">add a satellite</a>}/>
+               action={<a href="#settings/rooms" className="home-link">set up a room</a>}/>
       </Card>
     );
   } else {

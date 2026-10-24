@@ -126,7 +126,7 @@ const GreetingsPanel = () => {
     guard(() => apiDelete(`/api/greetings/${g.id}`), 'greeting removed'));
   const remove = (g) => del.request(g, {
     title: 'Delete this greeting?',
-    body: <div>“{g.text}” leaves the {g.category} bank and satellites stop playing it. This can’t be undone.</div>,
+    body: <div>“{g.text}” leaves the {g.category} bank and rooms stop playing it. This can’t be undone.</div>,
   });
 
   const generic = items.filter((g) => g.category === 'generic');
@@ -135,7 +135,7 @@ const GreetingsPanel = () => {
   return (
     <React.Fragment>
       <Card title="Add a greeting"
-            sub="Changes re-render and reach connected satellites within seconds. Use {name} for the bot's name.">
+            sub="Changes re-render and reach connected rooms within seconds. Use {name} for the bot's name.">
         <AddGreeting onAdd={add}/>
       </Card>
 
@@ -576,7 +576,7 @@ const VoicesPanel = () => {
     guard(() => apiDelete(`/api/voices/${v.id}`), 'voice removed'));
   const remove = (v) => del.request(v, {
     title: `Delete the voice “${v.name}”?`,
-    body: <div>The uploaded Piper model and its config are removed — upload them again to get the voice back. Satellites using it fall back to the default voice.</div>,
+    body: <div>The uploaded Piper model and its config are removed — upload them again to get the voice back. Rooms using it fall back to the default voice.</div>,
   });
 
   return (
@@ -592,7 +592,7 @@ const VoicesPanel = () => {
         <Empty title="No voices yet" sub="Upload a Piper model above."/>
       ) : (
         <Card title={`Registered (${items.length})`}
-              sub="The default is used by any satellite that hasn't picked its own.">
+              sub="The default is used by any room that hasn't picked its own.">
           {items.map((v) => (
             <VoiceRow key={v.id} v={v} sampling={samplingId === v.id} onPlay={playSample}
                       onRename={rename} onSetDefault={setDefault} onDelete={remove}/>
@@ -771,7 +771,7 @@ const AdminSection = ({ setupAsked = false }) => {
   try { signOutError = Auth.signOutError || null; } catch { /* older Auth */ }
   return (
     <Card title="Admin"
-          sub="Gates settings edits, plugin management, satellite upgrades, and deleting files. Saving a document, everyday playback and browsing never need it.">
+          sub="Gates settings edits, plugin management, room upgrades, and deleting files. Saving a document, everyday playback and browsing never need it.">
       <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center',
                     gap: 12, flexWrap: 'wrap' }}>
         {st === null
@@ -1163,14 +1163,14 @@ const VersionSection = () => {
     if (!window.confirm(win
       ? 'Update Domovoi?\n\n' +
         'First the Linux part: Domovoi pulls the latest code, then backs up, applies it and restarts ' +
-        '(the satellites, phones and this dashboard lose Domovoi for a minute or two; it rolls back if it ' +
+        '(the rooms, phones and this dashboard lose Domovoi for a minute or two; it rolls back if it ' +
         'doesn’t come back healthy).\n\n' +
         'Then the Windows part, when the release it now includes has a newer one: ' +
         (browserOnThisPc()
           ? 'Windows asks for an administrator’s permission on this PC.'
           : 'you finish it on the PC (the Domovoi icon there shows a notification; Windows asks for an administrator’s permission).')
       : 'Update Domovoi?\n\n' +
-        'Domovoi pulls the latest code, then backs up, applies it and restarts (the satellites, phones and ' +
+        'Domovoi pulls the latest code, then backs up, applies it and restarts (the rooms, phones and ' +
         'this dashboard lose Domovoi for a minute or two; it rolls back if it doesn’t come back healthy).'
     )) return;
     setPulling(true);
@@ -1203,7 +1203,7 @@ const VersionSection = () => {
     if (!window.confirm(
       'Pull the latest domovoi code (git pull --ff-only)?\n\n' +
       'This updates the files on the Domovoi host but does not load them — ' +
-      'this panel will then offer the restart that does. Satellites can be ' +
+      'this panel will then offer the restart that does. Rooms can be ' +
       'upgraded individually afterwards.'
     )) return;
     setPulling(true);
@@ -1442,7 +1442,7 @@ const VersionSection = () => {
       {coreDown && (
         <div className="version-core-down" style={{ padding: '0 16px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ fontSize: 12, color: 'var(--err-ink)' }}>
-            The Domovoi core isn’t answering, so the satellites and the app can’t reach it.
+            The Domovoi core isn’t answering, so the rooms and the app can’t reach it.
           </div>
           <CoreRestart onBack={() => { setStatus(null); return refreshCore(); }}/>
         </div>
@@ -2335,7 +2335,7 @@ const _WAKE_STATUS_TONE = {
 // A room <select> fed by the satellite roster, filtered to online rooms.
 const RoomSelect = ({ value, onChange, rooms }) => (
   <select value={value} onChange={(e) => onChange(e.target.value)} style={_wakeFieldStyle}>
-    {rooms.length === 0 && <option value="">no online satellites</option>}
+    {rooms.length === 0 && <option value="">no rooms online</option>}
     {rooms.map((r) => <option key={r.room_id} value={r.room_id}>{r.room_id}</option>)}
   </select>
 );
@@ -3055,7 +3055,7 @@ const WakeWordsPanel = () => {
   const add = (name, phrase) =>
     guard(() => apiPost('/api/wake-words', { name, phrase }), 'wake word created');
   const recordStart = (w, room) => {
-    if (!room) { fire('no online satellite to record on'); return; }
+    if (!room) { fire('no room online to record in'); return; }
     return guard(() => apiPost(`/api/wake-words/${w.id}/record/start`, { room_id: room }),
       `recording “${w.phrase}” on ${room}…`);
   };
@@ -3081,7 +3081,7 @@ const WakeWordsPanel = () => {
   const setDefault = (w) =>
     guard(() => apiPatch(`/api/wake-words/${w.id}`, { set_default: true }), `${w.name} is now the default`);
   const push = (w, room) => {
-    if (!room) { fire('no online satellite to push to'); return; }
+    if (!room) { fire('no room online to push to'); return; }
     return guard(() => apiPost(`/api/wake-words/${w.id}/push`, { room_id: room }),
       `pushed “${w.name}” to ${room}`);
   };
@@ -3091,7 +3091,7 @@ const WakeWordsPanel = () => {
     guard(() => apiDelete(`/api/wake-words/${w.id}`), 'wake word removed'));
   const remove = (w) => del.request(w, {
     title: `Delete the wake word “${w.name}”?`,
-    body: <div>Its recorded clips and trained model are deleted with it — they can’t be recovered. Satellites keep the model already pushed to them until another one is pushed.</div>,
+    body: <div>Its recorded clips and trained model are deleted with it — they can’t be recovered. Rooms keep the model already pushed to them until another one is pushed.</div>,
   });
 
   return (
@@ -3099,12 +3099,12 @@ const WakeWordsPanel = () => {
       <WakeTrainerCard status={trainer} error={trainerError} refresh={refreshTrainer} fire={fire}/>
 
       <Card title="Create a wake word"
-            sub="Name it, then record positive clips on a satellite and train an openWakeWord model.">
+            sub="Name it, then record positive clips in a room and train an openWakeWord model.">
         <AddWakeWord onAdd={add}/>
       </Card>
 
       <div style={{ padding: '0 2px 10px', fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
-        ⚠ Record clips on the <strong>same mic board</strong> the satellite uses at runtime — the
+        ⚠ Record clips on the <strong>same mic board</strong> the room uses at runtime — the
         XVF3800's on-chip beamforming/AGC reshapes the signal, so a model trained from HAT-recorded
         clips can detect poorly on an XVF array. Training runs on this server once it is turned on
         above. A model trained here is for this household only: its training data's licences
@@ -3163,9 +3163,9 @@ const ServerFingerprint = () => {
         {fp}
       </div>
       <div style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 4 }}>
-        Satellites prepared from this dashboard are built with this string and
+        Rooms prepared from this dashboard are built with this string and
         will talk to no other server. It is printed on the card &mdash; if the two
-        ever disagree, the satellite is being answered by something else.
+        ever disagree, the room is being answered by something else.
       </div>
     </div>
   );
@@ -4497,7 +4497,7 @@ const SETTINGS_GROUPS = [
 
 const SETTINGS_SECTIONS = [
   { id: 'rooms', label: 'Rooms', aliases: ['satellites'],
-    sub: 'Each room’s satellite: status, approvals and adoption, announcements, and each room’s drawer.',
+    sub: 'Each room: status, approvals and adoption, announcements, and each room’s drawer.',
     words: 'satellite satellites pi speaker microphone mic approve approval adopt announce announcement drawer wifi wi-fi upgrade screen kiosk intercom' },
   { id: 'phones-and-browsers', label: 'Phones & browsers', aliases: ['devices'],
     sub: 'Name this device, get the app, the household token, guests, and who may edit a room’s play queue.',
@@ -4509,7 +4509,7 @@ const SETTINGS_SECTIONS = [
     sub: 'The tabs along the bottom of this browser at phone width — kept in this browser only.',
     words: 'phone bar tabs bottom bar layout menu navigation' },
   { id: 'wake-words', label: 'Wake words', aliases: ['wakewords'],
-    sub: 'The words that wake Domovoi: train your own, record clips on a satellite.',
+    sub: 'The words that wake Domovoi: train your own, record clips in a room.',
     words: 'wake word words hey hello train training clips record' },
   { id: 'voices', label: 'Voices',
     sub: 'Domovoi’s voice, how it says words, and the voices each room can speak in.',

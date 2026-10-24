@@ -55,7 +55,7 @@ const RoomChips = ({ rooms, room, onPick }) => {
   if (rooms.length === 0) {
     return (
       <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-        no rooms provisioned yet — connect a satellite to play on a speaker
+        no rooms set up yet — set up a room to play on a speaker
       </div>
     );
   }
@@ -994,8 +994,8 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
       return <Empty glyph="headphones" title="rooms unavailable"
                     sub={`couldn't load now-playing: ${apiErrorText(npError)}`}/>;
     }
-    return <Empty glyph="headphones" title="no rooms provisioned yet"
-                  sub="connect a satellite to bring its room online"/>;
+    return <Empty glyph="headphones" title="no rooms set up yet"
+                  sub="set up a room to play music there"/>;
   }
 
   const items = order || queue?.items || [];
@@ -2016,7 +2016,7 @@ const MusicPage = () => {
   // The Playlists tab's row play button targets the first room; with none
   // provisioned it says so rather than posting to a room that isn't there.
   const onPlayPlaylistInFirstRoom = (playlist) => {
-    if (rooms.length === 0) { fire('no rooms provisioned yet — connect a satellite to play on a speaker'); return; }
+    if (rooms.length === 0) { fire('no rooms set up yet — set up a room to play on a speaker'); return; }
     return onPlayPlaylist(playlist, rooms[0]);
   };
   const onShufflePlaylist = (playlist, room_id) => playInRoom(
@@ -2215,7 +2215,7 @@ const MusicPage = () => {
                    sub={`couldn't load now-playing: ${apiErrorText(npError)}`}
                    action={<Button icon="refresh-cw" onClick={refreshNP}>retry</Button>}/>
           ) : (
-            <Empty glyph="headphones" title="no rooms provisioned yet" sub="connect a satellite to bring its room online"/>
+            <Empty glyph="headphones" title="no rooms set up yet" sub="set up a room to play music there"/>
           )}
         </Card>
       ) : (

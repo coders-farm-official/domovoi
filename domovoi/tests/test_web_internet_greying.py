@@ -118,7 +118,7 @@ def _scenarios(answer: str) -> dict:
                     "GET /api/satellites/media/targets": [],
                     "GET /api/satellites/media/jobs": []},
             "script": ("h.render();"
-                       " const head = h.find({ type: 'span', text: 'prepare satellite media' });"
+                       " const head = h.find({ type: 'span', text: `prepare a room's SD card` });"
                        " const opener = h.ancestors(head).find((a) => a.type === 'button');"
                        " await h.click((el) => el === opener);"
                        f" return {{ refresh: {_button('Refresh caches')}, prepare: {_button('Prepare')},"

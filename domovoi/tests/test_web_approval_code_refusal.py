@@ -149,7 +149,7 @@ async def test_the_wrong_code_says_what_to_do_about_it(monkeypatch, faked) -> No
     assert "does not match" in detail, detail
     # It sends the operator back to the device, which is the only place
     # the real digits are.
-    assert "satellite" in detail and "try again" in detail, detail
+    assert "room device" in detail and "try again" in detail, detail
 
 
 @pytest.mark.asyncio

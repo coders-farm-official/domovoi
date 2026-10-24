@@ -925,7 +925,7 @@ def test_the_confirm_says_what_a_restart_interrupts(driven) -> None:
     first, _, body = text.partition("\n\n")
     assert first == "Restart Domovoi now?"
     assert "domovoi/.env" in body
-    assert "satellites reconnect on their own" in body
+    assert "rooms reconnect on their own" in body
     assert "Music playing in a room may stop" in body
     # Not the pulled-code confirm: nothing is backed up or applied.
     assert "backs up" not in body and "pulled code" not in text

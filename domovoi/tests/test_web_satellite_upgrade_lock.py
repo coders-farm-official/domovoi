@@ -63,8 +63,8 @@ globalThis.UpgradeHost = () => React.createElement(OverviewBody, {
 });
 window.__look = (h) => {
   const w = h.global('window');
-  const btn = h.find((e) => e.type === 'button' && /^(Upgrade satellite|Upgrading…)$/.test(w.__deep(e)));
-  const restart = h.find((e) => e.type === 'button' && w.__deep(e) === 'Restart satellite');
+  const btn = h.find((e) => e.type === 'button' && /^(Upgrade room|Upgrading…)$/.test(w.__deep(e)));
+  const restart = h.find((e) => e.type === 'button' && w.__deep(e) === 'Restart room');
   const line = (cls) => { const el = h.find((e) => w.__cls(e).includes(cls)); return el ? w.__deep(el) : null; };
   return {
     button: btn ? w.__deep(btn) : null, disabled: btn ? !!btn.props.disabled : null,
@@ -77,7 +77,7 @@ window.__look = (h) => {
 };
 window.__press = async (h) => {
   const w = h.global('window');
-  await h.click((e) => e.type === 'button' && /^(Upgrade satellite|Upgrading…)$/.test(w.__deep(e)));
+  await h.click((e) => e.type === 'button' && /^(Upgrade room|Upgrading…)$/.test(w.__deep(e)));
   await w.__settle(h);
 };
 """
@@ -201,7 +201,7 @@ def driven(tmp_path_factory) -> dict:
 
 def test_an_accepted_upgrade_locks_the_button_and_the_restart(driven) -> None:
     o = driven["accepted_then_back"]
-    assert o["before"]["button"] == "Upgrade satellite" and o["before"]["disabled"] is False
+    assert o["before"]["button"] == "Upgrade room" and o["before"]["disabled"] is False
     p = o["pressed"]
     assert p["button"] == "Upgrading…" and p["disabled"] is True
     assert p["restartDisabled"] is True
@@ -217,7 +217,7 @@ def test_it_stays_locked_while_the_satellite_is_away_and_unlocks_when_it_is_back
     assert o["away"]["button"] == "Upgrading…" and o["away"]["disabled"] is True
     assert o["away"]["progress"].startswith("Restarting into the new code…")
     b = o["back"]
-    assert b["button"] == "Upgrade satellite"
+    assert b["button"] == "Upgrade room"
     assert b["disabled"] is True                   # up to date now
     assert b["restartDisabled"] is False
     assert b["progress"] is None
@@ -227,7 +227,7 @@ def test_it_stays_locked_while_the_satellite_is_away_and_unlocks_when_it_is_back
 
 def test_a_rollback_unlocks_and_says_so(driven) -> None:
     o = driven["accepted_then_rolled_back"]
-    assert o["button"] == "Upgrade satellite" and o["disabled"] is False
+    assert o["button"] == "Upgrade room" and o["disabled"] is False
     assert o["result"].startswith("came back on its old code (old1234)")
     assert any(f.startswith("kitchen came back on its old code (old1234)") for f in o["fired"])
 
@@ -244,7 +244,7 @@ def test_last_times_record_does_not_end_this_press(driven) -> None:
 ])
 def test_a_request_that_did_not_start_leaves_the_button_offered(driven, name, said) -> None:
     o = driven[name]
-    assert o["button"] == "Upgrade satellite" and o["disabled"] is False
+    assert o["button"] == "Upgrade room" and o["disabled"] is False
     assert o["progress"] is None
     assert o["error"] == said
     assert said in o["fired"]
@@ -264,7 +264,7 @@ def test_a_reload_mid_upgrade_is_still_locked(driven) -> None:
 
 def test_a_reload_after_says_how_it_went_without_a_toast(driven) -> None:
     o = driven["reloaded_after"]
-    assert o["button"] == "Upgrade satellite"
+    assert o["button"] == "Upgrade room"
     assert o["result"] == "upgraded to new1234"
     assert o["fired"] == []
 
@@ -273,7 +273,7 @@ def test_an_older_server_ends_the_press_on_the_reported_version(driven) -> None:
     o = driven["older_server"]
     assert o["pressed"]["button"] == "Upgrading…"
     assert o["away"]["button"] == "Upgrading…"
-    assert o["back"]["button"] == "Upgrade satellite"
+    assert o["back"]["button"] == "Upgrade room"
     assert o["back"]["result"] == "upgraded to new1234"
 
 

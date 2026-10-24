@@ -172,15 +172,15 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
             <div style={{ border: '1px solid var(--warn)', background: 'var(--err-soft)',
                           borderRadius: 'var(--r-sm)', padding: '10px 12px', fontSize: 12, lineHeight: 1.5 }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontWeight: 600, marginBottom: 4 }}>
-                <Icon name="radio" size={13}/> satellite payload
+                <Icon name="radio" size={13}/> room payload
               </div>
               {satRoot ? (
                 <div>
-                  This plugin installs software that <strong>runs as root on every satellite</strong>{' '}
+                  This plugin installs software that <strong>runs as root on every room device</strong>{' '}
                   the next time they sync.
                 </div>
               ) : (
-                <div>This plugin copies files onto every satellite the next time they sync.</div>
+                <div>This plugin copies files onto every room device the next time they sync.</div>
               )}
               {(sat.apt_packages || []).length > 0 && (
                 <div className="mono" style={{ marginTop: 4 }}>apt packages: {(sat.apt_packages || []).join(', ')}</div>

@@ -264,7 +264,7 @@ const DisplayApp = () => {
           <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 10 }}>no room set</div>
           <div style={{ fontSize: 14, color: 'var(--fg-muted)', lineHeight: 1.6 }}>
             open this page as <span className="mono">/display.html?room=&lt;room_id&gt;&amp;device_token=&lt;household token&gt;</span> —
-            the video satellite's kiosk launcher builds this URL from its config
+            a video room's kiosk launcher builds this URL from its config
             (see <span className="mono">satellite/VIDEO_SATELLITE.md</span>). Without the
             token the screen shows what was playing when it loaded and then stops
             updating (the live push refuses an unpaired screen), with no room name,

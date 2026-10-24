@@ -101,10 +101,10 @@ const ConfirmForget = ({ person, sessionCount, turnCount, open, onClose, onConfi
  * never an embedding. Deleting one is admin-tier on the server.
  */
 const PERSON_VOICE_SAMPLE_SETS = [
-  { key: 'satellite', label: 'satellite samples',
-    hint: 'heard by a room’s satellite — what satellites recognize this voice by' },
+  { key: 'satellite', label: 'room samples',
+    hint: 'heard in a room — what rooms recognize this voice by' },
   { key: 'phone', label: 'phone samples',
-    hint: 'said into the app’s chat mic — what the phone recognizes this voice by first; satellites never use them' },
+    hint: 'said into the app’s chat mic — what the phone recognizes this voice by first; rooms never use them' },
 ];
 
 /*
@@ -708,7 +708,7 @@ const VOICE_HISTORY_GOES = [
   'what everyone said to Domovoi, and what it answered, in every room and on every phone: the Conversations and Sessions tabs',
   'the routing log behind them',
   'each room’s short-term conversation (what “say that again” and a follow-up question use)',
-  'the satellites’ logs kept on the server, which quote what they heard',
+  'the rooms’ logs kept on the server, which quote what they heard',
 ];
 const VOICE_HISTORY_STAYS =
   'People, voice samples, memories, notes, timers, the music played, chat threads and command recordings stay.';
@@ -958,7 +958,7 @@ const PeoplePage = () => {
 
   // One voice sample, either set (admin-tier on the server).
   const onDeleteSample = async (sample) => {
-    const where = sample.source === 'phone' ? 'phone sample' : 'satellite sample';
+    const where = sample.source === 'phone' ? 'phone sample' : 'room sample';
     if (!window.confirm(`Delete this ${where} (#${sample.id}) from ${selected ? selected.name : 'this person'}? This can't be undone.`)) return;
     try {
       await apiDelete(`/api/people/${sample.person_id}/profiles/${sample.id}`);

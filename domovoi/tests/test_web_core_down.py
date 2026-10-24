@@ -204,7 +204,7 @@ def driven(tmp_path_factory) -> dict:
 
 def test_satellites_say_the_core_is_down_not_that_they_are(driven) -> None:
     r = driven["sat_down_household"]
-    assert r["banner"] and "core isn’t answering, so satellites can’t connect" in r["banner"]
+    assert r["banner"] and "core isn’t answering, so rooms can’t connect" in r["banner"]
     assert "the core isn’t answering · 4 known" in r["text"]
     assert len(r["cards"]) == 4
     for card in r["cards"]:
@@ -265,7 +265,7 @@ def test_home_s_row_carries_the_restart_for_an_admin(driven) -> None:
 
 def test_a_database_that_is_down_is_named_and_offers_no_restart(driven) -> None:
     r = driven["sat_db_down_admin"]
-    assert r["banner"] and "The database isn’t answering, so satellites can’t connect" in r["banner"]
+    assert r["banner"] and "The database isn’t answering, so rooms can’t connect" in r["banner"]
     assert "Restarting the core won’t help" in r["banner"]
     assert "core isn’t answering" not in r["banner"]
     assert "Restart the core" not in r["buttons"]

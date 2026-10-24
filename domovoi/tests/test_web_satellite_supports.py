@@ -159,7 +159,7 @@ def test_a_pi_row_renders_exactly_as_the_row_from_before_s0(driven, pi):
     now, before = driven[pi], driven[pi + "__before_s0"]
     assert now == before
     assert now["badge"] is None, "no board badge on a Pi, even with an adopted board"
-    assert not _button(now, "Restart satellite")["disabled"]
+    assert not _button(now, "Restart room")["disabled"]
     assert "settings stay on the device" not in now["settings"]
     assert "battery" not in now["overview"] and "mic blocked" not in now["overview"]
 
@@ -167,8 +167,8 @@ def test_a_pi_row_renders_exactly_as_the_row_from_before_s0(driven, pi):
 def test_a_linux_pc_shows_its_board_and_keeps_what_it_declared(driven):
     r = driven["linux_pc"]
     assert r["badge"] == "Linux PC"
-    assert not _button(r, "Restart satellite")["disabled"]
-    assert not _button(r, "Upgrade satellite")["disabled"]
+    assert not _button(r, "Restart room")["disabled"]
+    assert not _button(r, "Upgrade room")["disabled"]
     assert "battery" in r["overview"] and "81%" in r["overview"]
     assert "charging" in r["overview"]
     assert "settings stay on the device" not in r["settings"]
@@ -197,8 +197,8 @@ def test_a_spare_device_without_a_battery_shows_none(driven):
 def test_an_android_room_greys_what_it_left_out_with_a_reason(driven):
     r = driven["android_room"]
     assert r["badge"] == "Android room"
-    assert _button(r, "Restart satellite")["disabled"]
-    assert _button(r, "Upgrade satellite")["disabled"]
+    assert _button(r, "Restart room")["disabled"]
+    assert _button(r, "Upgrade room")["disabled"]
     assert not _button(r, "Reset pairing")["disabled"], "pairing is the core's, always offered"
     assert "this Android room restarts and updates itself" in r["overview"]
     assert "mic blocked" in r["overview"] and "64%" in r["overview"]

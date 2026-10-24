@@ -1143,7 +1143,7 @@ def test_each_cast_failure_says_what_failed(driven):
         "Try again in a minute; if it keeps failing, restart the domovoi."
     )
     assert out["satellite"] == (
-        "Couldn't cast to office — no satellite has connected to the domovoi yet, so there is no speaker to play on."
+        "Couldn't cast to office — no room has connected to the domovoi yet, so there is no speaker to play on."
     )
     # An older core names no part: no guess at which, and no raw reply.
     assert out["older_core"] == "Couldn't cast to office — the domovoi couldn't start it (it said 502)."

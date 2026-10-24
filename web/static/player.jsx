@@ -1837,7 +1837,7 @@ const _castFailureNote = (e, roomId) => {
       'Try again in a minute; if it keeps failing, restart the domovoi.';
   }
   if (part === 'satellite') {
-    return `${head} — no satellite has connected to the domovoi yet, so there is no speaker to play on.`;
+    return `${head} — no room has connected to the domovoi yet, so there is no speaker to play on.`;
   }
   if (e && e.deviceTokenRequired) return `${head} — this browser needs pairing with the domovoi again.`;
   if (status === 404) return `${head} — none of these songs are in the library now (try a library rescan).`;
@@ -1905,7 +1905,7 @@ const PlayerCastTargets = ({ p, onPicked, big = false }) => {
           it answers, say so rather than "no rooms online". */}
       {rooms.length === 0 && (
         <div style={{ padding: 12, fontSize: 11, color: 'var(--fg-muted)' }}>
-          {loading ? 'looking for rooms…' : 'no rooms online — connect a satellite'}
+          {loading ? 'looking for rooms…' : 'no rooms online — set up a room'}
         </div>
       )}
       {err && <div style={{ padding: '10px 14px', fontSize: 11, color: 'var(--err-ink)', borderTop: '1px solid var(--border-soft)' }}>{err}</div>}

@@ -1148,13 +1148,13 @@ const restartDomovoiServer = async ({ core, fire, question, plain = false, confi
     ? `${question || 'Restart Domovoi now?'}\n\n` +
       'domovoi-core and domovoi-web restart, so changes to domovoi/.env ' +
       'take effect. Voice and this dashboard are back in a few seconds, and ' +
-      'satellites reconnect on their own. Music playing in a room may stop; ' +
+      'rooms reconnect on their own. Music playing in a room may stop; ' +
       'ask for it again if it does.'
     : updating
     ? `${question || 'Apply the pulled code?'}\n\n${updateText}`
     : `${question || 'Restart the Domovoi services to load the pulled code?'}\n\n` +
       'This bounces domovoi-core and domovoi-web. Voice is unavailable for ' +
-      'a few seconds and connected satellites reconnect on their own.'
+      'a few seconds and connected rooms reconnect on their own.'
   )) return false;
   onStart(told(asked, updating ? 'update' : 'restart'));
   // The server as it is now, not as the panel last read it (see `core`).
@@ -1404,7 +1404,7 @@ const CoreRestart = ({ onBack, style }) => {
       'It isn’t answering. The dashboard first makes sure it is really stuck ' +
       '(no answer at all for about a minute, longer than the core waits before ' +
       'it restarts itself), then ends it, and the system starts it again. ' +
-      'Satellites and the app reconnect by themselves.'
+      'Rooms and the app reconnect by themselves.'
     )) return;
     setBusy(true);
     try {
@@ -2677,7 +2677,7 @@ const LoginModal = ({ onClose }) => {
             </div>
           ) : (
             <div className="hint">
-              Admin actions (deleting files, settings, plugins, satellite
+              Admin actions (deleting files, settings, plugins, room
               upgrades) need this; saving, playback and browsing never do.
             </div>
           )}

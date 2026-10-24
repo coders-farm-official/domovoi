@@ -141,7 +141,7 @@ def test_an_off_index_origin_is_flagged(rendered) -> None:
 
 def test_satellite_payload_renders_in_its_own_panel(rendered) -> None:
     texts = _texts(rendered["satellite_root"])
-    assert any("runs as root on every satellite" in t for t in texts), texts
+    assert any("runs as root on every room device" in t for t in texts), texts
     assert any("i2c-tools" in t and "libasound2-plugins" in t for t in texts), texts
     assert any("satellite/post-install.sh" in t for t in texts), texts
     assert any("smbus2==0.4.3" in t for t in texts), texts

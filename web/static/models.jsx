@@ -178,7 +178,7 @@ const SttStatusBanner = ({ stt }) => {
       </div>
       <div>
         {off
-          ? <>Whisper didn't load at startup, so satellites can't be understood. Configured: </>
+          ? <>Whisper didn't load at startup, so rooms can't be understood. Configured: </>
           : <>The configured Whisper didn't load at startup; <span className="mono">{_sttDesc(stt.loaded)}</span> is
               transcribing instead. Configured: </>}
         <span className="mono">{_sttDesc(configured)}</span>.
@@ -1148,9 +1148,9 @@ const ModelsPanel = () => {
       <Card title="Voices & wake words"
             sub="Managed in full on the Settings page — surfaced here so everything model-shaped is in one place.">
         <FoldedSummary icon="volume-2" title="TTS voices"
-          sub="Domovoi's voices, all on this server (Piper) — each satellite speaks in one." tab="voices"/>
+          sub="Domovoi's voices, all on this server (Piper) — each room speaks in one." tab="voices"/>
         <FoldedSummary icon="mic" title="Wake words"
-          sub="Custom openWakeWord models — record clips on a satellite, train, push." tab="wakewords"/>
+          sub="Custom openWakeWord models — record clips in a room, train, push." tab="wakewords"/>
       </Card>
 
       {delConfirm.node}

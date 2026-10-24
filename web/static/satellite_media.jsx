@@ -114,7 +114,7 @@ const CredentialsModal = ({ creds, zip, cardHelper, onClose }) => {
         </div>
         <div style={{ fontSize: 13, color: 'var(--fg-muted)', marginBottom: 18 }}>
           {ap
-            ? 'This satellite will create its own Wi-Fi network. Connect to it with this password and the setup page should open by itself — if it does not, browse to the address below.'
+            ? 'This room will create its own Wi-Fi network. Connect to it with this password and the setup page should open by itself — if it does not, browse to the address below.'
             : 'This card is adopted over USB, so it has no setup network.'}
         </div>
 
@@ -128,7 +128,7 @@ const CredentialsModal = ({ creds, zip, cardHelper, onClose }) => {
           {zip && cardHelper ? (
             <>
               {ap && (
-                <>The desktop app (Domovoi's tray icon → <b>Prepare a satellite
+                <>The desktop app (Domovoi's tray icon → <b>Prepare a room's SD
                   card</b>) fills in the wi-fi password by itself when it
                   writes the card: you don't type it there. You still need it
                   on your phone, to join the setup network, so keep this open or
@@ -202,7 +202,7 @@ const MediaJobRow = ({ j, onShowCredentials, cardHelper }) => {
       )}
       {j.status === 'done' && j.target_kind === 'zip' && cardHelper && (
         <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
-          then Domovoi's tray icon → Prepare a satellite card
+          then Domovoi's tray icon → Prepare a room's SD card
         </div>
       )}
       {j.status === 'done' && j.target_kind === 'drive' && (
@@ -374,7 +374,7 @@ const PrepareMediaCard = ({ fire }) => {
                        background: 'none', border: 'none', padding: '14px 16px',
                        display: 'flex', alignItems: 'center', gap: 10 }}>
         <Icon name="disc-3" size={16}/>
-        <span style={{ fontSize: 14, fontWeight: 600, flex: 1 }}>prepare satellite media</span>
+        <span style={{ fontSize: 14, fontWeight: 600, flex: 1 }}>prepare a room's SD card</span>
         <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
           {!drivesVisible
             ? 'flash stock OS · build here · tray icon writes the card · boot · set up from a phone'
@@ -451,11 +451,11 @@ const PrepareMediaCard = ({ fire }) => {
               <span style={{ fontSize: 11, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
                 Domovoi is running inside WSL on Windows, which can't see SD
                 cards. Build the card files here, then use Domovoi's tray icon
-                (beside the clock) → <b>Prepare a satellite card</b>: it writes
+                (beside the clock) → <b>Prepare a room's SD card</b>: it writes
                 them onto the card and fills in the setup network password by
                 itself. You'll still need that password for your phone: it's
                 shown here when the build finishes ("show setup details").
-                Then set the satellite up from your phone over its own Wi-Fi.
+                Then set the room up from your phone over its own Wi-Fi.
                 By hand instead: the zip's README.txt has the steps.
               </span>
             </div>
@@ -481,7 +481,7 @@ const PrepareMediaCard = ({ fire }) => {
                 <span key={p.slug} style={{ marginRight: 10 }}>
                   {p.slug} {smBytes(p.payload_bytes)}
                   {p.satellite_root && (
-                    <span title="this plugin runs root steps on satellites"
+                    <span title="this plugin runs root steps on room devices"
                           style={{ color: 'var(--warn-ink)', display: 'inline-flex',
                                    alignItems: 'center', gap: 2 }}>
                       {' '}<Icon name="shield-alert" size={10}/> root
