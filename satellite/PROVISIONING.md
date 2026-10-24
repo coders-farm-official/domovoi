@@ -781,6 +781,33 @@ The network name and password go to `nmcli` as separate arguments, never through
 
 **Pinning one access point (diagnostic only).** To find out which of two access points broadcasting one name a satellite can join, add `"join_bssid": "aa:bb:cc:dd:ee:ff"` (that access point's 2.4 GHz address, from its admin page) and/or `"join_band": "bg"` to `domovoi/ap.json` on the card's boot partition, then set up again. The setup join then uses only that access point; once it has joined, the pin is taken off the house profile so the satellite roams as usual. Remove the keys afterwards. It is not a fix: a satellite should join whichever access point is strongest.
 
+### 8.6 The boot partition is FAT (writes that survive a pulled plug)
+
+The card's boot partition (`/boot/firmware`, `/boot` on older releases) is FAT: no journal, and a satellite is usually switched off by pulling its plug. On 2026-10-23 a card pulled after a failed Wi-Fi join held a `domovoi/device-info.json` Windows called "corrupted and unreadable". Stage 1 had rewritten it in place, unsynced, about fifteen times a first boot.
+
+What the satellite writes there, and how often:
+
+| File | Written by | How often |
+|---|---|---|
+| `domovoi/device-info.json` | stage 1 (`info`) | once per step on first boot, about 15 writes, again after a power cut mid-setup |
+| | provisioning mode (`satellite/setup_report.py`) | when setup changes state: hotspot starting, up, failed, a phone joined (checked every 30 s, written only when the count rises), the page opened, the hotspot closed, the join's result (with `join_log`, `join_scan` and `join_attempts`) |
+| | stage 2 | once, `status: active` |
+| `config.txt` | stage 1 (HAT overlay, appended) | once; provisioning mode removes the gadget overlay once, after adoption |
+| `cmdline.txt` | stage 1 (removes its first-boot hook) | once; provisioning mode removes the gadget module once, after adoption |
+| `overlays/*.dtbo` | stage 1 (HAT boards) | once |
+
+Nothing else: `ap.json`, `payload.*`, `build-info.json` and `server-identity.json` are written by media prep on the PC and only read on the device, and every log, status and health file is on the ext4 root (`/var/log`, `/var/lib/domovoi`, `~/.domovoi`).
+
+Every one of those writes goes through one helper: `satellite/boot_write.py` in Python, `boot_put` / `boot_copy` / `boot_info` (`domovoi/satellite_media/templates/boot-write.sh.tmpl`, rendered into both stages) in shell. Each writes a temporary file beside the target, syncs it, renames it over the target and syncs the filesystem again (`os.sync()` / `sync -f`; on vfat a directory fsync alone does not put the rename on the card). A power cut leaves the old file or the new one, never half of either. Nothing is written when the content is already there, an empty write is refused, and when only the report's clock and retry counter moved, provisioning mode rewrites it at most every 30 minutes. A retry loop no longer marks the card "starting" on every turn. Guard tests (`satellite/tests/test_boot_write.py`, `domovoi/tests/test_satellite_boot_writes.py`) fail on any other write to the boot partition. A report that no longer parses is replaced, not left unreadable; the server's adoption scan and the adopt call already treat an unreadable `device-info.json` as no device.
+
+**The mount options stay as Pi OS ships them** (`vfat defaults`, fsck pass 2, so the FAT is checked and repaired at every boot). Neither the card image nor first boot changes `/etc/fstab`, and this doesn't either:
+
+- `sync` makes every write to the partition synchronous, including the tens of megabytes of kernel, firmware and initramfs files a Pi OS update writes there. Those updates get much slower and the card wears faster, and a rename is still not atomic.
+- `flush` only starts writeback sooner. It narrows the window without closing it.
+- `/etc/fstab` belongs to Pi OS, and one bad line there sends the unit to emergency mode with no network.
+
+Syncing after each of our writes gives the guarantee that matters, and those writes are rare.
+
 ## 9. Label the hardware
 
 - [ ] Stick a label on the Pi case with: hostname, room, IP, **HAT version (V1/V2.0)**. Future you will be grateful.

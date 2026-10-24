@@ -1,0 +1,53 @@
+# ── Writes to the boot partition ─────────────────────────────────────────
+# (templates/boot-write.sh.tmpl, rendered into stage 1 and stage 2 alike;
+# satellite/boot_write.py is the Python side of the same rule)
+#
+# The boot partition is FAT: no journal, and a satellite is usually switched
+# off by pulling its plug. A file rewritten in place there and caught by a
+# power cut can come back unreadable (a device-info.json did, 2026-10-23),
+# and a torn cmdline.txt or config.txt is a Pi that no longer boots. So
+# every write to it goes through boot_put: the new content to a temporary
+# file beside the target, synced, renamed over the target, synced again;
+# nothing at all when the target already holds it; and never an empty file
+# (that is the command feeding it having failed). `sync -f` syncs the whole
+# filesystem the file is on, which is what puts a vfat rename on the card.
+#
+#   boot_put <target>             new content on stdin
+#   boot_copy <source> <target>
+#   boot_info <device-info.json> <status> [<step>] [<error>]
+#       sets the report's status/step/error (an empty step or error is
+#       null), keeping the rest; a missing or damaged report starts over
+#       from the skeleton media prep seeds
+boot_sync() { sync -f "$1" 2>/dev/null || sync; }
+boot_put() {
+  local target="$1" tmp="$1.tmp"
+  cat >"$tmp" || { rm -f "$tmp"; return 1; }
+  if [ ! -s "$tmp" ]; then
+    rm -f "$tmp"
+    echo "WARN: not writing an empty $target"
+    return 1
+  fi
+  if [ -f "$target" ] && cmp -s "$tmp" "$target"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  boot_sync "$tmp"
+  mv -f "$tmp" "$target" || { rm -f "$tmp"; return 1; }
+  boot_sync "$target"
+}
+boot_copy() { boot_put "$2" <"$1"; }
+boot_info() {
+  python3 -c '
+import json, sys
+path, status, step, error = (sys.argv[1:] + ["", "", ""])[:4]
+try:
+    with open(path, encoding="utf-8") as fh:
+        doc = json.load(fh)
+    if not isinstance(doc, dict):
+        raise ValueError("not an object")
+except Exception:
+    doc = {"domovoi_setup": 1, "nonce": "firstboot", "profiles_supported": []}
+doc.update(status=status, step=step or None, error=error or None)
+sys.stdout.buffer.write((json.dumps(doc, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
+' "$@" | boot_put "$1"
+}

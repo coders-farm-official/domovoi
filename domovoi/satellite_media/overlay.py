@@ -213,6 +213,13 @@ def render_template(name: str, substitutions: dict[str, str]) -> str:
     return out.replace("\r\n", "\n")
 
 
+def boot_write_helpers() -> str:
+    """The shell side of satellite/boot_write.py (templates/boot-write.sh.tmpl):
+    the only way stage 1 and stage 2 write to the card's FAT boot partition.
+    Rendered into both, so the two never carry different copies."""
+    return (TEMPLATES_DIR / "boot-write.sh.tmpl").read_text(encoding="utf-8").rstrip("\n")
+
+
 def sdist_only_packages() -> str:
     """The packages pip has to build rather than download, space-separated
     for the shell. Same list the wheel fetcher skips — a package that cannot
@@ -252,7 +259,8 @@ def render_firstrun(
 
     return render_template(
         "firstrun.sh.tmpl",
-        {"SAT_USER": sat_user, "MIC_PROFILE": mic_profile, "SAT_TYPE": sat_type,
+        {"BOOT_WRITE": boot_write_helpers(),
+            "SAT_USER": sat_user, "MIC_PROFILE": mic_profile, "SAT_TYPE": sat_type,
             "SETUP_TRANSPORT": setup_transport,
             "WIFI_COUNTRY": validate_wifi_country(wifi_country),
             "KEYBOARD_LAYOUT": validate_keyboard_layout(keyboard_layout),
@@ -311,7 +319,8 @@ def render_stage2(sat_user: str) -> str:
     # server checked (SAT-11).
     return render_template(
         "stage2.sh.tmpl",
-        {"SAT_USER": sat_user, "CODE_EXT_ALLOW": allow,
+        {"BOOT_WRITE": boot_write_helpers(),
+            "SAT_USER": sat_user, "CODE_EXT_ALLOW": allow,
             "SDIST_ONLY": sdist_only_packages(),
             "APT_PACKAGES": apt_packages(),
             "OWW_PINS": oww_pins_text()},

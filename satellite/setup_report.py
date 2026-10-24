@@ -28,15 +28,13 @@ card that can't be written must never stop a device from being set up.
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
-from satellite import wifi_reasons
+from satellite import boot_write, wifi_reasons
 
 log = logging.getLogger(__name__)
 
@@ -113,9 +111,10 @@ def update(*, top: dict[str, Any] | None = None,
     """Merge ``top`` into the document and ``network`` into its
     ``setup_network`` block, then write it back. True when written.
 
-    Rewritten in place, through a temporary file and a rename, and flushed:
-    the card is pulled out of a device that was simply switched off, and a
-    half-written report is worse than a stale one."""
+    Through satellite/boot_write.py: a temporary file, synced, renamed over
+    the old one, synced again, because the card is pulled out of a device
+    that was simply switched off and the partition is FAT. And only when
+    something a person would read has changed: see ``_worth_writing``."""
     path = report_path(boot_dirs)
     if path is None:
         return False
@@ -125,44 +124,70 @@ def update(*, top: dict[str, Any] | None = None,
         return _update_locked(path, top, network)
 
 
-def _update_locked(path: Path, top, network) -> bool:
-    try:
-        try:
-            text = path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            text = None
-        if text is None:
-            doc: dict[str, Any] = {}
-        else:
-            try:
-                doc = json.loads(text)
-            except ValueError:
-                doc = None
-            if not isinstance(doc, dict):
-                # Stage 1's fields are in there, maybe half-written by a
-                # power cut. Ours are not worth more than theirs: leave it.
-                log.warning("%s does not parse; not rewriting it", path)
-                return False
-        if top:
-            doc.update(top)
-        if network is not None:
-            block = doc.get(BLOCK)
-            block = dict(block) if isinstance(block, dict) else {}
-            block.update(network)
-            block["updated"] = _now()
-            doc[BLOCK] = block
-        tmp = path.with_name(NAME + ".tmp")
-        # Readable as written: non-ASCII stays as typed, not escaped.
-        raw = (json.dumps(doc, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
-        with open(tmp, "wb") as fh:          # binary: no CRLF, whatever the OS
-            fh.write(raw)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
+# Fields that change on every report without saying anything new: when
+# they are ALL that changed, the card is rewritten at most this often.
+# ``updated`` is the write's own time, ``line`` repeats the rest in words
+# (with the time in it), ``attempts`` counts a retry loop's turns.
+_VOLATILE = ("updated", "line", "attempts")
+VOLATILE_REWRITE_SEC = 30 * 60
+_last_write: dict[str, float] = {}
+
+
+def _stable(doc: dict[str, Any]) -> dict[str, Any]:
+    out = dict(doc)
+    block = out.get(BLOCK)
+    if isinstance(block, dict):
+        out[BLOCK] = {k: v for k, v in block.items() if k not in _VOLATILE}
+    return out
+
+
+def _worth_writing(path: Path, old: dict[str, Any] | None,
+                   new: dict[str, Any]) -> bool:
+    """FAT has no journal, so every write is a chance for a power cut to
+    land mid-write: write when the report says something new, and when only
+    its clock and counters moved, at most every ``VOLATILE_REWRITE_SEC``."""
+    if old is None or _stable(old) != _stable(new):
         return True
+    if old == new:
+        return False
+    last = _last_write.get(str(path))
+    return last is None or time.monotonic() - last >= VOLATILE_REWRITE_SEC
+
+
+def _skeleton() -> dict[str, Any]:
+    # What stage 1 would have started from, so the card still reads as a
+    # Domovoi setup card once a damaged report has been replaced.
+    return {"domovoi_setup": 1, "profiles_supported": []}
+
+
+def _update_locked(path: Path, top, network) -> bool:
+    old = boot_write.read_json(path)
+    if old is None and path.exists():
+        # Missing a closing brace, empty, or unreadable altogether: a power
+        # cut caught an older, in-place write. Leaving it means the card
+        # never says anything again; start over from what stage 1 seeds.
+        log.warning("%s is damaged; replacing it", path)
+        doc: dict[str, Any] = _skeleton()
+        doc["report_replaced"] = f"{_now()}: the previous report was unreadable"
+    else:
+        doc = dict(old or {})
+    if top:
+        doc.update(top)
+    if network is not None:
+        block = doc.get(BLOCK)
+        block = dict(block) if isinstance(block, dict) else {}
+        block.update(network)
+        block["updated"] = _now()
+        doc[BLOCK] = block
+    if not _worth_writing(path, old, doc):
+        return False
+    try:
+        boot_write.write_json(path, doc)
     except OSError as e:
         log.warning("could not update %s: %s", path, e)
         return False
+    _last_write[str(path)] = time.monotonic()
+    return True
 
 
 def line(*, state: str, ssid: str | None = None, channel: int | None = None,

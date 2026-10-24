@@ -423,7 +423,7 @@ def test_no_card_no_file(satellite_paths_in_tmp, tmp_path):
 def test_an_unwritable_card_never_stops_setup(card, tmp_path, monkeypatch):
     def boom(*a, **k):
         raise OSError("read-only file system")
-    monkeypatch.setattr(setup_report.os, "replace", boom)
+    monkeypatch.setattr(setup_report.boot_write.os, "replace", boom)
     t = _transport([], tmp_path)
     t.expose(_info())          # no raise
     t.withdraw()
@@ -450,9 +450,12 @@ def test_a_successful_setup_is_recorded(home, card, monkeypatch):
         "provisioned", "joined-home-wifi", None)
 
 
-def test_each_attempt_first_marks_the_card_as_starting(home, card):
+def test_the_first_attempt_marks_the_card_as_starting(home, card):
     """Otherwise a previous boot's failure reads as current for the whole
-    time this attempt waits for the radio (seen in the container run)."""
+    time this attempt waits for the radio (seen in the container run).
+    A retry does not: the failure on the card is then this run's own, and
+    re-marking it every turn of a retry loop rewrote a FAT file twice a
+    turn, forever (2026-10-23, a card Windows could no longer read)."""
     seen = []
 
     class _Peek(_FailingTransport):
@@ -465,7 +468,7 @@ def test_each_attempt_first_marks_the_card_as_starting(home, card):
 
     t = _Peek(lambda: RuntimeError("no"), succeed_after=1)
     pm.run(t, max_loops=3)
-    assert seen == ["setup-network-starting", "setup-network-starting"]
+    assert seen == ["setup-network-starting", "setup-network-failed"]
 
 
 def test_no_radio_fails_after_one_wait_without_scanning(monkeypatch, tmp_path):
@@ -570,11 +573,15 @@ def test_setup_network_errors_pass_through_and_none_stays_none():
     assert setup_report.card_error("wifi_failed", None) is None
 
 
-def test_a_card_file_that_does_not_parse_is_left_alone(card):
+def test_a_card_file_that_does_not_parse_is_replaced(card):
+    """Torn by a power cut during an older in-place write: left alone, the
+    card would never say anything again (2026-10-23). Writes are crash-safe
+    now (satellite/boot_write.py), so start over rather than stay silent."""
     card.write_text('{"domovoi_setup": 1, "status": "bootstr', encoding="utf-8")
-    before = card.read_bytes()
-    assert setup_report.update(top={"step": "x"}, network={"state": "up"}) is False
-    assert card.read_bytes() == before
+    assert setup_report.update(top={"step": "x"}, network={"state": "up"}) is True
+    doc = json.loads(card.read_text(encoding="utf-8"))
+    assert doc["domovoi_setup"] == 1 and doc["step"] == "x"
+    assert doc["setup_network"]["state"] == "up"
 
 
 def test_a_card_folder_without_the_file_gets_one(card):

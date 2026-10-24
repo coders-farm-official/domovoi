@@ -149,7 +149,13 @@ def test_stage_two_only_runs_the_venv_python_as_the_service_account():
     for line in _code_lines(_stage2()):
         if '"$VENVPY"' in line:
             assert "as_user" in line, line
-    assert 'python3 - "$BOOT/domovoi/device-info.json"' in _stage2()
+    # The update goes through boot_info (templates/boot-write.sh.tmpl), which
+    # runs the OS's python3.
+    stage2 = _stage2()
+    assert 'boot_info "$BOOT/domovoi/device-info.json"' in stage2
+    helper = stage2[stage2.index("boot_info() {"):]
+    helper = helper[:helper.index("\n}\n")]
+    assert "python3 -c" in helper and "VENVPY" not in helper
 
 
 def test_the_led_fallback_drops_to_the_service_account_when_root():
