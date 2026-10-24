@@ -48,6 +48,26 @@
         <a id="dl-main" class="button primary" href="#">download the app</a>
         <p id="dl-main-sub" class="small"></p>
         <p id="dl-other-line" class="small"><a id="dl-other" href="#"></a></p>
+
+        <div id="dl-trouble" class="trouble" hidden>
+          <p id="dl-trouble-line"><b>Didn't start, or did your phone block it?</b></p>
+          <button id="dl-retry" type="button" class="button">Try again</button>
+          <p id="dl-retry-note" class="small" hidden></p>
+          <details id="dl-help" class="help">
+            <summary>The phone blocked it? What to tap</summary>
+            <ul>
+              <li><b>“This file might be harmful”</b> or <b>“can’t be downloaded securely”</b> (Chrome): tap <b>Download anyway</b> or <b>Keep</b>. Or open the browser’s <b>Downloads</b> list and tap the file.</li>
+              <li><b>“Download multiple files?”</b> (Chrome): tap <b>Allow</b>, then press <b>Try again</b>.</li>
+              <li><b>“For your security, your phone isn’t allowed to install unknown apps from this source”</b>: tap <b>Settings</b>, turn on <b>Allow from this source</b>, then go back.</li>
+              <li><b>Play Protect “blocked” or “unsafe app”</b>: tap <b>More details</b>, then <b>Install anyway</b>.</li>
+              <li>The install screen never appeared? Open the <b>Downloads</b> app (or <b>Files</b>) on the phone and tap the Domovoi file.</li>
+            </ul>
+          </details>
+          <p class="small">Another browser works too (Firefox, Samsung Internet, Edge): copy this link and open it there.</p>
+          <input id="dl-link" class="linkbox" type="text" readonly aria-label="Download link">
+          <button id="dl-copy" type="button" class="button">Copy link</button>
+          <p id="dl-copy-note" class="small" hidden></p>
+        </div>
         <p class="small">If the phone says <b>App not installed</b>, download the other one. Domovoi <span id="version"></span>.</p>
         <p id="skip-install" class="small" hidden>The Domovoi app already on this phone? Go on to step 2.</p>
 

@@ -84,3 +84,16 @@ figcaption { font-size: 12.5px; color: var(--fg-muted); line-height: 1.4; }
 .toggle-on { fill: var(--brand); }
 .knob { fill: #ffffff; }
 .app-dot { fill: var(--brand); }
+
+/* After a download is tapped: try again, what to tap if blocked, copy link. */
+.trouble { margin-top: 14px; padding: 12px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--sunken); }
+.trouble p { margin: 6px 0; }
+.trouble .button { margin-top: 8px; }
+.help { margin: 10px 0; font-size: 13.5px; color: var(--fg-muted); }
+.help summary { cursor: pointer; font-weight: 600; color: var(--fg); min-height: 32px; }
+.help ul { margin: 6px 0 0; padding-left: 20px; }
+.help li { margin: 6px 0; }
+.linkbox {
+  display: block; width: 100%; margin-top: 8px; padding: 10px; font-size: 13px;
+  border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--card); color: var(--fg);
+}

@@ -5,7 +5,9 @@
 // and href.
 //
 // Usage: node join_page_harness.js <repo-root> '<scenario json>'
-//   scenario: {href, search, ua, platform, app (the /v1/android-app body, or null for a 500)}
+//   scenario: {href, search, ua, platform, app (the /v1/android-app body, or null for a 500),
+//     clicks (optional: element ids to tap, in order, once the page has drawn),
+//     clipboard (optional: give navigator a clipboard.writeText that records)}
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -18,7 +20,9 @@ const src = fs.readFileSync(path.join(root, 'domovoi/join_page/join.js'), 'utf8'
 
 const els = {};
 const make = (id, hidden) => ({
-  id, hidden, textContent: '', className: '', attrs: {}, children: [],
+  id, hidden, textContent: '', className: '', attrs: {}, children: [], value: '', fetched: [],
+  click() { this.fetched.push(this.attrs.href); if (this.onclick) this.onclick(); },
+  focus() {}, select() {}, setSelectionRange() {},
   get href() { return this.attrs.href; }, set href(v) { this.attrs.href = v; },
   setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return this.attrs[k]; },
   appendChild(c) { this.children.push(c); this.textContent += c.textContent; return c; },
@@ -45,10 +49,14 @@ XMLHttpRequest.prototype.send = function () {
 };
 const url = new URL(sc.href);
 const window = { location: { href: sc.href, search: url.search, protocol: url.protocol, host: url.host } };
+const copied = [];
+const navigator = { userAgent: sc.ua, platform: sc.platform };
+if (sc.clipboard) navigator.clipboard = { writeText: (t) => { copied.push(t); } };
 vm.runInNewContext(src, {
-  window, document, XMLHttpRequest, navigator: { userAgent: sc.ua, platform: sc.platform },
+  window, document, XMLHttpRequest, navigator,
   encodeURIComponent, decodeURIComponent, JSON, Math, String, URL: sc.noUrl ? undefined : URL,
 });
-const out = { doc_title: document.title };
-for (const [id, el] of Object.entries(els)) out[id] = { text: el.textContent, hidden: el.hidden, href: el.attrs.href || null, cls: el.className };
+for (const id of sc.clicks || []) els[id].onclick();
+const out = { doc_title: document.title, copied };
+for (const [id, el] of Object.entries(els)) out[id] = { text: el.textContent, hidden: el.hidden, href: el.attrs.href || null, download: el.attrs.download || null, cls: el.className, value: el.value, fetched: el.fetched };
 process.stdout.write(JSON.stringify(out));

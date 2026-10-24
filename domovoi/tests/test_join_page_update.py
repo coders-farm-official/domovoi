@@ -35,10 +35,11 @@ def _status(ready=(True, True)):
             "apks": apks, "ready": all(ready)}
 
 
-def _join(href, app, platform="Linux armv81") -> dict:
+def _join(href, app, platform="Linux armv81", clicks=(), clipboard=False) -> dict:
     node = shutil.which("node")
     assert node, "node is required to run the join page's script"
-    scenario = json.dumps({"href": href, "ua": ANDROID_UA, "platform": platform, "app": app})
+    scenario = json.dumps({"href": href, "ua": ANDROID_UA, "platform": platform, "app": app,
+                           "clicks": list(clicks), "clipboard": clipboard})
     proc = subprocess.run([node, str(HARNESS), str(aa.REPO), scenario],
                           capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert proc.returncode == 0, proc.stderr
@@ -99,3 +100,77 @@ def test_an_update_the_server_doesnt_hold_says_so_and_offers_nothing():
     assert page["title"]["text"] == "Update the Domovoi app"
     assert "Download the app to this server" in page["install-state"]["text"]
     assert page["downloads"]["hidden"]
+
+
+# ─── trouble downloading: try again, what to tap, copy link ───────────────
+
+@pytest.mark.parametrize("url", [BASE, BASE + "?abi=arm64-v8a&update=1"], ids=["household", "update"])
+def test_the_retry_block_waits_until_a_download_is_tapped(url):
+    page = _join(url, _status())
+    assert page["dl-trouble"]["hidden"]
+    page = _join(url, _status(), clicks=["dl-main"])
+    assert not page["dl-trouble"]["hidden"]
+    html = (aa.REPO / "domovoi/join_page/join.html").read_text(encoding="utf-8")
+    assert "Didn't start, or did your phone block it?" in html and "Try again" in html
+    assert page["dl-link"]["value"].startswith("http://192.168.1.20:6370/v1/android-app/files/")
+
+
+@pytest.mark.parametrize("url", [BASE, BASE + "?abi=armeabi-v7a&update=1"], ids=["household", "update"])
+def test_try_again_uses_a_fresh_url_every_time_and_keeps_the_download_attribute(url):
+    page = _join(url, _status(), clicks=["dl-main", "dl-retry", "dl-retry", "dl-retry"])
+    main = page["dl-main"]
+    assert main["href"].endswith(".apk?try=3"), "a new url each time, never stacking ?try="
+    assert main["href"].count("?") == 1
+    assert main["download"] == main["href"].split("/")[-1].split("?")[0]
+    assert [h.rsplit("?try=", 1)[-1] for h in main["fetched"]] == ["1", "2", "3"]
+    assert page["dl-link"]["value"].endswith("?try=3")
+    assert not page["dl-trouble"]["hidden"], "usable any number of times"
+
+
+def test_try_again_retries_the_other_download_if_that_is_the_one_tapped():
+    page = _join(BASE + "?abi=arm64-v8a", _status(), clicks=["dl-other", "dl-retry"])
+    assert page["dl-other"]["href"].endswith("armeabi-v7a.apk?try=1")
+    assert page["dl-main"]["fetched"] == [] and page["dl-main"]["href"].endswith("arm64-v8a.apk")
+
+
+def test_try_again_before_any_tap_retries_the_main_download():
+    page = _join(BASE, _status(), clicks=["dl-retry"])
+    assert page["dl-main"]["href"].endswith("?try=1") and len(page["dl-main"]["fetched"]) == 1
+
+
+def test_the_help_covers_every_common_block_in_plain_words():
+    html = (aa.REPO / "domovoi/join_page/join.html").read_text(encoding="utf-8")
+    for needle in ("Download anyway", "<b>Keep</b>", "Downloads", "Download multiple files", "<b>Settings</b>",
+                   "Allow from this source", "More details", "Install anyway", "Another browser works too"):
+        assert needle in html, needle
+    assert "<details" in html, "collapsible"
+
+
+def test_copy_link_uses_the_clipboard_when_there_is_one_and_says_how_when_not():
+    page = _join(BASE, _status(), clicks=["dl-main", "dl-copy"], clipboard=True)
+    assert page["copied"] == [page["dl-link"]["value"]] and "Link copied" in page["dl-copy-note"]["text"]
+    page = _join(BASE, _status(), clicks=["dl-main", "dl-copy"])
+    assert page["copied"] == [] and "Press and hold" in page["dl-copy-note"]["text"]
+
+
+def test_the_room_code_and_the_32_bit_pick_are_untouched_by_the_retry_block():
+    page = _join(BASE + "?abi=armeabi-v7a#" + PAYLOAD, _status(), clicks=["dl-main", "dl-retry"])
+    assert page["dl-main"]["href"].endswith("armeabi-v7a.apk?try=1")
+    assert page["title"]["text"] == "Make this phone a Domovoi room" and not page["step-room"]["hidden"]
+    assert "#" not in page["dl-link"]["value"], "the room code never rides in a download link"
+
+
+def test_the_download_route_ignores_an_unknown_query():
+    from domovoi import main
+    import inspect
+
+    sig = inspect.signature(main.android_app_file)
+    assert list(sig.parameters) == ["name"], "no query parameter to reject ?try=<n>"
+
+
+def test_the_script_stays_plain_es5():
+    import re
+
+    js = (aa.REPO / "domovoi/join_page/join.js").read_text(encoding="utf-8")
+    code = "\n".join(l for l in js.splitlines() if not l.lstrip().startswith(("/*", "*", "//")))
+    assert not re.search(r"=>|\blet\b|\bconst\b|`|\.includes\(|\.startsWith\(|\bPromise\b|\bfetch\(", code)

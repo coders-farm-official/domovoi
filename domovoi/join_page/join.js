@@ -14,6 +14,12 @@
  *   opens this page as /join?abi=<abi>&update=1: the app knows the phone's
  *   own processor, so that APK goes first when this server holds it, and
  *   the page is worded for a phone that already has the app.
+ * - After a download is tapped the page asks "didn't start, or did your
+ *   phone block it?": Try again re-downloads from a fresh URL (?try=<n>;
+ *   the server ignores unknown query params; a phone can suppress a repeat
+ *   of a URL it already handled), as often as needed, with short help for
+ *   the usual phone blocks and a copy-link for another browser. Same for
+ *   the update page (?update=1).
  * - Step 2 is an Android intent: link to the app's domovoi-room: handler
  *   (package com.domovoi.app only), falling back to this page with
  *   ?app=missing when the app isn't installed. Firefox gets the plain
@@ -131,6 +137,71 @@
     el.hidden = false;
   }
 
+  // ----- the download retry -------------------------------------------
+  var lastLink = null;   // the download link last tapped (or the main one)
+  var tries = 0;
+
+  function absolute(path) {
+    return window.location.protocol + '//' + window.location.host + path;
+  }
+
+  function stripTry(path) { return String(path).replace(/[?&]try=\d+$/, ''); }
+
+  function note(id, message) { text(id, message); show(id, !!message); }
+
+  function offerRetry(link) {
+    lastLink = link;
+    $('dl-link').value = absolute(link.getAttribute('href') || link.href);
+    show('dl-trouble', true);
+    note('dl-copy-note', '');
+  }
+
+  // Download again from a URL the phone hasn't seen: the same file with a
+  // harmless ?try=<n>. The link keeps its download attribute.
+  function retry() {
+    var link = lastLink || $('dl-main');
+    var base = stripTry(link.getAttribute('href') || link.href);
+    tries += 1;
+    link.href = base + '?try=' + tries;
+    link.setAttribute('download', link.getAttribute('download') || '');
+    $('dl-link').value = absolute(link.href);
+    note('dl-retry-note', 'Asked the phone again (try ' + tries + '). If it still doesn’t start, see below, or tap Try again once more.');
+    if (link.click) link.click();
+    else window.location.href = link.href;
+  }
+
+  function copyLink() {
+    var box = $('dl-link');
+    var done = false;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        navigator.clipboard.writeText(box.value);
+        note('dl-copy-note', 'Link copied. Paste it into another browser’s address bar.');
+        return;
+      } catch (e) { /* fall through */ }
+    }
+    try {
+      box.focus();
+      box.select();
+      if (box.setSelectionRange) box.setSelectionRange(0, box.value.length);
+      done = document.execCommand && document.execCommand('copy');
+    } catch (e2) { done = false; }
+    note('dl-copy-note', done ? 'Link copied. Paste it into another browser’s address bar.'
+      : 'Press and hold the link above to copy it, then paste it into another browser.');
+  }
+
+  function wireRetry() {
+    var links = ['dl-main', 'dl-other'];
+    for (var i = 0; i < links.length; i++) {
+      (function (el) {
+        if (!el) return;
+        el.onclick = function () { offerRetry(el); return true; };
+      })($(links[i]));
+    }
+    $('dl-retry').onclick = function () { retry(); return false; };
+    $('dl-copy').onclick = function () { copyLink(); return false; };
+  }
+
   function renderApp(err, app, code) {
     if (err) {
       stateLine('Couldn’t ask this server about the app (' + err.message + '). Reload the page in a moment.', true);
@@ -191,6 +262,7 @@
       ? ' Come back to this page in the browser for step 2.'
       : ' Open Domovoi from the home screen.'));
     show('downloads', true);
+    wireRetry();
     // A household phone's next step, once there is an app to install (an
     // update has none: the app is set up already).
     show('step-connect', !code && !updating());
