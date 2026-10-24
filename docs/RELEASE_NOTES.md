@@ -106,6 +106,10 @@ change.
 * **"The router didn't answer" is no longer called a wrong password.**
   The card's `join_scan` now shows each access point's RSN suites, PMF and
   802.11r; each attempt shows the AKM list the supplicant was given.
+* **A card pulled mid-setup no longer reads as "corrupted".** The card's
+  boot partition (the part Windows can see) is now written crash-safe and
+  far less often, so a card unplugged after a failed Wi-Fi join keeps a
+  readable `device-info.json` and a Pi that still boots.
 
 ## 2026-10-22 — Satellites join WPA2/WPA3 mixed routers, and say why when they can't
 
