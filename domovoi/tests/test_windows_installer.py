@@ -579,7 +579,7 @@ def test_the_finish_page_does_not_say_satellites_need_a_fixed_address():
     offers the DHCP reservation as a choice, not a warning."""
     s = SCRIPT.read_text(encoding="ascii")
     assert "satellites lose Domovoi" not in s
-    assert "satellites look for Domovoi again by themselves" in s and "DHCP reservation for ' + LanMac + '" in s
+    assert "rooms look for Domovoi again by themselves" in s and "DHCP reservation for ' + LanMac + '" in s
 
 
 def test_the_finish_page_claims_no_graphics_card_setup_did_not_find():
@@ -691,7 +691,7 @@ def test_the_doc_names_every_machine_change():
         "Copy logs", "Documents\\Domovoi logs", "DomovoiRemoveProfile", "wsl --shutdown", "as `domovoi-svc`",
         "?installed=", "--stop-before", "#settings/configuration/setup", "DashboardTabRoutes",
         "first-run admin setup", "set up admin", "set password",
-        "DomovoiTray.exe", "The tray icon", "Prepare a satellite card", "Keep this PC awake",
+        "DomovoiTray.exe", "The tray icon", "Prepare a room's SD card", "Keep this PC awake",
     ):
         assert needle in doc, needle
 

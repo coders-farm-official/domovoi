@@ -201,7 +201,7 @@ namespace Domovoi.Windows.Tray
                 }
                 foreach (string req in new[] { "domovoi/build-info.json", "domovoi/payload.sha256", "domovoi/payload.tar.gz", "domovoi/firstrun.sh", "domovoi/device-info.json", "config.txt", "cmdline.txt" })
                     if (!entries.ContainsKey(req))
-                        throw new CardZipException("This isn't a Domovoi satellite card zip (it has no " + req + "). Download it from the dashboard: Settings > Rooms > prepare satellite media.");
+                        throw new CardZipException("This isn't a Domovoi room card zip (it has no " + req + "). Download it from the dashboard: Settings > Rooms > prepare a room's SD card.");
 
                 var pkg = new CardPackage();
                 pkg.ZipPath = Path.GetFullPath(path);
@@ -245,7 +245,7 @@ namespace Domovoi.Windows.Tray
                 string actual;
                 using (Stream s = entries["domovoi/payload.tar.gz"].Open()) actual = Sha256Hex(s);
                 if (actual != pkg.PayloadSha256)
-                    throw new CardZipException("The satellite software in this zip is damaged (its SHA-256 doesn't match). Download the card files again.");
+                    throw new CardZipException("The room software in this zip is damaged (its SHA-256 doesn't match). Download the card files again.");
                 ZipArchiveEntry idEntry;
                 if (entries.TryGetValue("domovoi/server-identity.json", out idEntry))
                     pkg.ServerFingerprint = Json.Str(ReadJson(idEntry, "server-identity.json"), "fingerprint");

@@ -160,7 +160,7 @@ def place_vc_runtime(root: Path, lock: dict[str, Any], wheels_dir: Path) -> None
             part.write_bytes(body)
             os.replace(part, dest)
     say("  Microsoft's C++ runtime (" + ", ".join(f"{d['file']} {d.get('version', '')}".strip()
-                                            for d in vc_runtime_dlls(lock)) + ") beside the satellite's Python")
+                                            for d in vc_runtime_dlls(lock)) + ") beside the room's Python")
 
 
 def lock_entries(lock: dict[str, Any]) -> list[dict[str, Any]]:
@@ -285,7 +285,7 @@ def pip_install(root: Path, wheels_dir: Path, lock: dict[str, Any],
     env["PIP_CONFIG_FILE"] = os.devnull
     r = run(argv, capture_output=True, text=True, timeout=1800, creationflags=CREATE_NO_WINDOW, env=env)
     if r.returncode != 0:
-        raise InstallError(f"pip could not install the satellite's libraries: {(r.stderr or r.stdout)[-800:]}")
+        raise InstallError(f"pip could not install the room software's libraries: {(r.stderr or r.stdout)[-800:]}")
     for rel in lock.get("remove_after_install") or []:
         target = site_packages(root) / rel
         if ".." not in Path(rel).parts:
@@ -342,7 +342,7 @@ class Registry:
         q = ps_quote
         script = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut({q(lnk)}); "
                   f"$s.TargetPath={q(target)}; $s.Arguments={q(args)}; $s.WorkingDirectory={q(workdir)}; "
-                  f"$s.IconLocation={q(icon)}; $s.Description='Domovoi room satellite'; $s.Save()")
+                  f"$s.IconLocation={q(icon)}; $s.Description='Domovoi room'; $s.Save()")
         lnk.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run([powershell(), "-NoProfile", "-NonInteractive", "-Command", script],
                        capture_output=True, text=True, timeout=60, check=True, creationflags=CREATE_NO_WINDOW)
@@ -559,7 +559,7 @@ def check_install_root(root: Path, profile: Path | None = None) -> None:
     if profile is not None:
         home = Path(os.path.abspath(profile))
         if root == home or not root.is_relative_to(home):
-            raise InstallError(f"{root} is not inside your own user folder ({home}); the satellite installs "
+            raise InstallError(f"{root} is not inside your own user folder ({home}); the room software installs "
                                "only there, where no other account can change it", 2)
         chain = [root, *[a for a in root.parents if a != home and a.is_relative_to(home)]]
     else:
@@ -598,7 +598,7 @@ def stop_running(root: Path) -> None:
         return
     from satellite import win32
 
-    say("Stopping the satellite that is installed here, to install it again...")
+    say("Stopping the room that is installed here, to install it again...")
     for kind in (win32.STOP_EVENT, win32.TRAY_QUIT_EVENT):
         event = win32.NamedEvent.open_existing(win32.object_name(kind))
         if event is not None:
@@ -642,9 +642,9 @@ def install(args: argparse.Namespace, *, run: Callable[..., Any] = subprocess.ru
     if not permissions:
         if interactive:
             say("")
-            say("May the Domovoi server update and restart this satellite on its own?")
-            say("  1) automatic - it installs signed satellite updates, applies settings from the")
-            say("                 dashboard and restarts the satellite when it needs to, like a Pi")
+            say("May the Domovoi server update and restart this room on its own?")
+            say("  1) automatic - it installs signed room software updates, applies settings from")
+            say("                 the dashboard and restarts the room when it needs to, like a Pi")
             say("  2) ask me    - each of those waits for your OK in the tray (or the command line)")
             say("Either way it never needs administrator rights. Change it later in")
             say(f"{root / '.domovoi' / 'config.toml'} ([pc] permissions).")
@@ -675,7 +675,7 @@ def install(args: argparse.Namespace, *, run: Callable[..., Any] = subprocess.ru
     replace_dir(bundle / "satellite", root / "app" / "satellite")
     shutil.copyfile(bundle / "satellite" / "scripts" / "uninstall-windows.ps1", root / "uninstall.ps1")
 
-    say("Getting the satellite's libraries (about 95 MB, each checked against its pinned SHA-256)...")
+    say("Getting the room software's libraries (about 95 MB, each checked against its pinned SHA-256)...")
     wheels_dir = root / "cache" / "wheels"
     sources: dict[str, int] = {}
     vc_runtime_dlls(lock)     # the lock pins the runtime properly before anything is fetched

@@ -237,7 +237,7 @@ class GadgetBackend:
         serial = (read_wlan_mac() or "domovoi").replace(":", "")
         (g / "strings/0x409/serialnumber").write_text(serial + "\n")
         (g / "strings/0x409/manufacturer").write_text("Domovoi\n")
-        (g / "strings/0x409/product").write_text("Domovoi satellite setup\n")
+        (g / "strings/0x409/product").write_text("Domovoi room setup\n")
         ms = g / "functions/mass_storage.usb0"
         (ms / "stall").write_text("0\n")
         (ms / "lun.0/removable").write_text("1\n")

@@ -155,7 +155,7 @@ def require_pin(cfg: Any) -> tuple[bool, str]:
     if fp:
         return True, f"{fp} ({source})"
     return False, (
-        "this satellite has no pinned Domovoi server identity, and a spare "
+        "this room device has no pinned Domovoi server identity, and a spare "
         "computer never trusts the first server that answers. Enrol it again "
         "from the dashboard (Settings → Rooms → Add a spare device), or "
         "set [satellite] server_fingerprint to the SHA256:… shown under "
@@ -176,7 +176,7 @@ def core_account(config_dir: Path) -> str | None:
     for name in CORE_MARKERS:
         if (Path(config_dir) / name).exists():
             return (f"{Path(config_dir) / name} belongs to a Domovoi server: install the "
-                    "satellite under another account (a server and a satellite can't share ~/.domovoi)")
+                    "room under another account (a server and a room device can't share ~/.domovoi)")
     return None
 
 
@@ -509,8 +509,8 @@ class SpareDeviceEngine:
                 from satellite import not_started
 
                 log.error("control channel not started (%s); not running without it", e)
-                why = ("another process holds this satellite's control pipe, so its tray could not see "
-                       "or mute it. Sign out and in again (or restart the PC), then choose Start satellite.")
+                why = ("another process holds this room's control pipe, so its tray could not see "
+                       "or mute it. Sign out and in again (or restart the PC), then choose Start the room.")
                 print(f"domovoi-satellite: not starting: {why}", file=sys.stderr, flush=True)
                 not_started.note(why)
                 self._request_exit(engine_platform.EXIT_CONFIG)
@@ -532,8 +532,8 @@ CLI_FLAGS = ("status", "approval_code", "mute", "unmute", "pending", "approve", 
 
 
 def add_cli_arguments(parser) -> None:
-    group = parser.add_argument_group("talk to the running satellite (spare computers)")
-    group.add_argument("--status", action="store_true", help="Print the running satellite's status and exit.")
+    group = parser.add_argument_group("talk to the running room (spare computers)")
+    group.add_argument("--status", action="store_true", help="Print the running room's status and exit.")
     group.add_argument("--json", action="store_true", help="With --status: print it as JSON.")
     group.add_argument("--approval-code", action="store_true",
                        help="Print the approval code while it waits for approval.")
@@ -630,11 +630,11 @@ def cli(args: Any) -> int:
 
         why = not_started.read()
         if why:
-            print(f"The satellite is not running: {why}", file=sys.stderr)
+            print(f"The room is not running: {why}", file=sys.stderr)
         else:
             hint = ("start it from the Start menu: Domovoi Satellite" if sys.platform == "win32"
                     else "systemctl --user status domovoi-satellite")
-            print(f"{e}. Is the satellite running? ({hint})", file=sys.stderr)
+            print(f"{e}. Is the room running? ({hint})", file=sys.stderr)
         return 3
 
 

@@ -400,7 +400,7 @@ def reboot_note(present_missing: list[str], report: dict[str, Any] | None,
             last = "; this boot's install failed (see the log)"
         elif state == "deferred":
             last = "; setup has not finished yet"
-    return (f"system packages missing ({names}): reboot this satellite with the network "
+    return (f"system packages missing ({names}): reboot this room device with the network "
             f"up and it installs them{last}")[:200]
 
 

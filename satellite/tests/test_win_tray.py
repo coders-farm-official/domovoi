@@ -49,11 +49,11 @@ class FakeClient:
 
 def test_stop_becomes_start_only_where_the_tray_can_start_it():
     up = [i.label for i in tray.menu(status(), can_start=True)]
-    assert "Stop satellite…" in up and "Start satellite" not in up
+    assert "Stop the room…" in up and "Start the room" not in up
     down = tray.menu(None, can_start=True)
-    assert [i.action for i in down if i.label == "Start satellite"] == ["start"]
+    assert [i.action for i in down if i.label == "Start the room"] == ["start"]
     linux = [i.label for i in tray.menu(None)]
-    assert "Stop satellite…" in linux and "Start satellite" not in linux
+    assert "Stop the room…" in linux and "Start the room" not in linux
 
 
 def test_stop_and_start_use_what_the_platform_gives():
@@ -129,7 +129,7 @@ def test_not_running_is_grey_with_the_supervisor_s_reason_and_start_offered(icon
     icon.deliver(None)
     icon.apply_status()
     assert icon.state == "offline" and "no pinned server identity" in icon.tip()
-    assert "Start satellite" in _labels(icon)
+    assert "Start the room" in _labels(icon)
 
 
 @windows_only
@@ -148,15 +148,15 @@ def test_a_refusal_to_start_is_a_toast_once_with_the_engine_s_words(icon, tmp_pa
     refused = [b for b in icon.balloons if b.key == "refused"]
     assert len(refused) == 1, "once per refusal, not every poll"
     note = refused[0]
-    assert note.summary == "Domovoi satellite didn't start" and len(note.summary) <= win_tray.INFO_TITLE_MAX
+    assert note.summary == "Domovoi room didn't start" and len(note.summary) <= win_tray.INFO_TITLE_MAX
     assert "alsa_device 'x & y' is not a Windows audio device" in note.body
-    assert note.body.endswith("Start satellite in this menu.") and len(note.body) <= win_tray.INFO_MAX
+    assert note.body.endswith("Start the room in this menu.") and len(note.body) <= win_tray.INFO_MAX
     assert "Not running: not starting" in icon.tip()
-    # Clicking it opens the menu, where Start satellite is.
+    # Clicking it opens the menu, where Start the room is.
     shown = []
     icon.show_menu = lambda: shown.append(True)
     icon._balloon_clicked()
-    assert shown and "Start satellite" in _labels(icon)
+    assert shown and "Start the room" in _labels(icon)
     # A new refusal (a later start) is said again; a plain stop is not.
     path.write_text(json.dumps({**doc, "at": 2000.0}), encoding="utf-8")
     icon.deliver(None)
@@ -205,7 +205,7 @@ def test_allow_shows_every_key_in_full_and_asks_first(icon):
 @windows_only
 def test_stop_asks_first(icon, monkeypatch):
     stopped = []
-    icon.actions.stopper = lambda: stopped.append(1) or tray.Note("stop", "Satellite stopped", "")
+    icon.actions.stopper = lambda: stopped.append(1) or tray.Note("stop", "Room stopped", "")
     icon._do("stop_ask")
     assert stopped == [] and icon.asked
     icon.ask = lambda title, text: True
@@ -224,7 +224,7 @@ def test_stop_sets_the_user_s_stop_event(monkeypatch):
     watcher = win32.NamedEvent(name)
     try:
         note = win_tray.stop_satellite()
-        assert watcher.wait(1) and note.summary == "Satellite stopped"
+        assert watcher.wait(1) and note.summary == "Room stopped"
     finally:
         watcher.close()
 

@@ -100,7 +100,7 @@ namespace Domovoi.Windows.Tray
         public static void CheckFree(long free, long needed)
         {
             if (free < needed)
-                throw new CardWriteException("The card has " + CardZip.Mib(free) + " free, and the satellite files need " + CardZip.Mib(needed)
+                throw new CardWriteException("The card has " + CardZip.Mib(free) + " free, and the room's files need " + CardZip.Mib(needed)
                     + ". Flash it again with Raspberry Pi OS Lite (64-bit), which leaves room, then try again.");
         }
 
@@ -160,7 +160,7 @@ namespace Domovoi.Windows.Tray
                         hashes[f.Dest] = hashing.Hex();
                     }
                     if (f.Entry == "domovoi/payload.tar.gz" && hashes[f.Dest] != pkg.PayloadSha256)
-                        throw new CardWriteException("The satellite software in the zip is damaged (its SHA-256 doesn't match). Download the card files again.");
+                        throw new CardWriteException("The room software in the zip is damaged (its SHA-256 doesn't match). Download the card files again.");
                     result.Written.Add(f.Dest.Replace('\\', '/'));
                     done += f.Size;
                 }
@@ -194,7 +194,7 @@ namespace Domovoi.Windows.Tray
             string payloadOnCard;
             using (var s = new FileStream(Path.Combine(root, "domovoi", "payload.tar.gz"), FileMode.Open, FileAccess.Read, FileShare.Read)) payloadOnCard = CardZip.Sha256Hex(s);
             if (!sum.StartsWith(payloadOnCard + " ", StringComparison.Ordinal) || payloadOnCard != pkg.PayloadSha256)
-                throw new CardWriteException("The satellite software on the card doesn't match its checksum. The card may be failing: try another one.");
+                throw new CardWriteException("The room software on the card doesn't match its checksum. The card may be failing: try another one.");
             result.Checked.Add("domovoi/payload.tar.gz against payload.sha256");
             if (ap != null)
             {

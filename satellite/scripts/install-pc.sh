@@ -672,7 +672,7 @@ stage_pinned_python() {  # step 0: the pinned file, checked, unpacked in a priva
   [ -x /usr/bin/curl ] || [ -x /usr/bin/wget ] || die "curl or wget is needed to download the satellite's Python" 2
   make_stage
   f=$PYSTAGE/$PIN_FILE
-  say "This computer gets the satellite's own Python $PIN_VERSION ($((PIN_SIZE / 1000000)) MB, pinned by its SHA-256)..."
+  say "This computer gets the room software's own Python $PIN_VERSION ($((PIN_SIZE / 1000000)) MB, pinned by its SHA-256)..."
   core=$(payload_core)
   if [ -n "$core" ]; then fetch_to "$core/v1/satellite-linux/files/$PIN_FILE" "$f" 0; fi
   if pinned_ok "$f"; then
@@ -732,8 +732,8 @@ install_root_s_python() {  # step 3: root's own copy of the staged Python -> PY=
   $SUDO /usr/bin/rm -f "$PY_PART"
   PY=$PINNED_PY
   python_is_root_s "$PY" && [ "$($PY -I -c 'import platform; print(platform.python_version())')" = "$PIN_VERSION" ] \
-    && python_stays_home "$PYTHON_HOME" || die "root's copy of the satellite's Python is not usable" 1
-  say "  the satellite's Python $PIN_VERSION is in $PYTHON_HOME (root's)"
+    && python_stays_home "$PYTHON_HOME" || die "root's copy of the room's Python is not usable" 1
+  say "  the room's Python $PIN_VERSION is in $PYTHON_HOME (root's)"
 }
 
 remove_root_s_python() {  # root's fixed paths only; never through a link
@@ -815,7 +815,7 @@ uninstall() {
   fi
   layout
   need_sudo
-  say "Removing the Domovoi satellite ($MODE install)..."
+  say "Removing the Domovoi room ($MODE install)..."
   if [ "$MODE" = desktop ]; then
     # The account's part first, with no sudo used yet and none of the
     # satellite's own code run at all: its unit stopped (root reaches the
@@ -832,7 +832,7 @@ uninstall() {
     have_systemd && user_systemctl daemon-reload >/dev/null 2>&1 || true
     if [ "$PURGE" = 1 ]; then
       purge_satellite_files
-      say "  the satellite's settings and records are gone"
+      say "  the room's settings and records are gone"
     else
       say "  kept $CONFIG_DIR/config.toml (--purge removes it)"
     fi
@@ -946,7 +946,7 @@ if [ "$FAMILY" != debian ]; then
 elif [ ! -x /usr/bin/python3 ]; then
   SYSTEM_WHY="it has no python3"
 elif ! /usr/bin/python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
-  SYSTEM_WHY="its Python is $(/usr/bin/python3 -I -c 'import platform; print(platform.python_version())' 2>/dev/null || echo unknown), older than the 3.11 the satellite needs"
+  SYSTEM_WHY="its Python is $(/usr/bin/python3 -I -c 'import platform; print(platform.python_version())' 2>/dev/null || echo unknown), older than the 3.11 the room software needs"
 elif [ ! -f "$SRC/satellite/locks/pc-$(/usr/bin/python3 -I -c 'import sys; print("cp%d%d" % sys.version_info[:2])')-$MACHINE.txt" ]; then
   SYSTEM_WHY="its Python $(/usr/bin/python3 -I -c 'import platform; print(platform.python_version())') has no pinned package list yet"
 fi
@@ -957,7 +957,7 @@ case $PYTHON_CHOICE in
 esac
 if [ "$USE_PY" = pinned ]; then
   read_pin || die "there is no pinned Python for $MACHINE in this bundle, so nothing was installed" 2
-  glibc_ok || die "this Linux's C library is $(/usr/bin/getconf GNU_LIBC_VERSION 2>/dev/null || echo 'not glibc'); the satellite needs glibc 2.$MIN_GLIBC_MINOR or newer (Debian 10, Ubuntu 18.10, Fedora 29 and later), so nothing was installed" 2
+  glibc_ok || die "this Linux's C library is $(/usr/bin/getconf GNU_LIBC_VERSION 2>/dev/null || echo 'not glibc'); the room software needs glibc 2.$MIN_GLIBC_MINOR or newer (Debian 10, Ubuntu 18.10, Fedora 29 and later), so nothing was installed" 2
   [ "$PYTHON_CHOICE" = pinned ] || say "$OS_NAME: $SYSTEM_WHY."
 fi
 # The Python packages come from a hash-pinned list made for this Python and
@@ -1000,9 +1000,9 @@ say "  this device will be the room \"$ROOM\" ($ROOM_ID)"
 if [ -z "$PERMISSIONS" ]; then
   if [ "$INTERACTIVE" = 1 ]; then
     say ""
-    say "May the Domovoi server update and restart this satellite on its own?"
-    say "  1) automatic - it installs signed satellite updates, applies settings from the"
-    say "                 dashboard and restarts the satellite when it needs to, like a Pi"
+    say "May the Domovoi server update and restart this room on its own?"
+    say "  1) automatic - it installs signed room software updates, applies settings from"
+    say "                 the dashboard and restarts the room when it needs to, like a Pi"
     say "  2) ask me    - each of those waits for your OK in the tray (or the command line)"
     say "Either way nothing runs as root. You can change this later in ~/.domovoi/config.toml ([pc] permissions)."
     read -r -p "Choose 1 or 2 [2]: " choice </dev/tty || choice=2
@@ -1121,7 +1121,7 @@ elif have_systemd; then
   if [ "$(/usr/bin/loginctl show-user "$RUN_AS" -p Linger --value 2>/dev/null || echo no)" != yes ]; then
     $SUDO /usr/bin/loginctl enable-linger "$RUN_AS"
     record_set "linger_enabled_by_installer=true"
-    say "  linger on: the satellite starts at boot, before anyone signs in"
+    say "  linger on: the room starts at boot, before anyone signs in"
   fi
   # The sound devices belong to whoever sits at the screen; in the audio
   # group the satellite can still open them when nobody is signed in.
@@ -1202,7 +1202,7 @@ else
 fi
 as_sat /usr/bin/find "$PREFIX/satellite" -name __pycache__ -type d -prune -exec /usr/bin/rm -rf {} +
 
-say "Setting up Python (this downloads the satellite's libraries, a few minutes)..."
+say "Setting up Python (this downloads the room software's libraries, a few minutes)..."
 # A fresh venv every time: an old one is the account's, and nothing in it
 # (a planted .pth runs at Python's start) is ever run.
 as_sat /usr/bin/rm -rf "$VENV"
@@ -1232,7 +1232,7 @@ render() {  # render TEMPLATE -> stdout
 
 STARTED=0
 if ! have_systemd; then
-  say "systemd is not running here, so no service was installed. Run the satellite by hand:"
+  say "systemd is not running here, so no service was installed. Run the room by hand:"
   say "  cd $PREFIX && $VENV/bin/python -m satellite.client"
 elif [ "$MODE" = desktop ]; then
   /usr/bin/mkdir -p "$HOME_DIR/.config/systemd/user"
@@ -1289,7 +1289,7 @@ forget_sudo
 # ─── 10. approval ────────────────────────────────────────────────────────
 
 say ""
-say "Installed. The satellite is the room \"$ROOM\" ($ROOM_ID)."
+say "Installed. This computer is the room \"$ROOM\" ($ROOM_ID)."
 if [ "$MODE" = desktop ]; then
   say "  status:    cd $PREFIX && $VENV/bin/python -m satellite.client --status"
   say "  log:       journalctl --user -u domovoi-satellite -e"

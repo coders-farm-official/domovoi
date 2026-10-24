@@ -95,7 +95,7 @@ def connection_text(st: dict[str, Any] | None) -> str:
         from satellite import not_started
 
         why = not_started.read()
-        return "the satellite isn't running" + (f": {why}" if why else "")
+        return "the room isn't running" + (f": {why}" if why else "")
     conn = st.get("connection")
     reason = st.get("reason")
     if conn == "connected":
@@ -155,7 +155,7 @@ _PENDING_BASE = 100
 MAX_PENDING_ITEMS = 4
 
 PENDING_LABELS = {
-    "update": "the satellite update",
+    "update": "the room software update",
     "restart": "the restart",
     "config": "the new settings",
     "wake_word": "the new wake word",
@@ -197,10 +197,10 @@ def menu(st: dict[str, Any] | None, *, can_start: bool = False) -> list[MenuItem
         MenuItem(_IDS["logs"], "Show logs folder", action="logs", enabled=up),
         MenuItem(_IDS["about"], "About", action="about"),
         MenuItem(_IDS["sep4"], "", separator=True),
-        MenuItem(_IDS["quit"], "Quit tray (the satellite keeps running)", action="quit"),
-        (MenuItem(_IDS["start"], "Start satellite", action="start")
+        MenuItem(_IDS["quit"], "Quit tray (the room keeps running)", action="quit"),
+        (MenuItem(_IDS["start"], "Start the room", action="start")
          if can_start and not up else
-         MenuItem(_IDS["stop"], "Stop satellite…", action="stop_ask", enabled=up)),
+         MenuItem(_IDS["stop"], "Stop the room…", action="stop_ask", enabled=up)),
     ]
     return items
 
@@ -270,7 +270,7 @@ def about_note(st: dict[str, Any] | None) -> Note:
         f"Room: {room_name(st)} ({((st or {}).get('room') or {}).get('id', '?')})",
         f"Server: {server.get('url') or '?'}",
         f"Pinned identity: {server.get('fingerprint') or 'none'}",
-        f"Satellite code: {(st or {}).get('version') or 'as installed'}",
+        f"Room software: {(st or {}).get('version') or 'as installed'}",
         f"Updates: {(st or {}).get('permissions') or '?'}",
         f"Python {sys.version.split()[0]}",
     ]
@@ -278,8 +278,8 @@ def about_note(st: dict[str, Any] | None) -> Note:
 
 
 STOP_NOTE = Note(
-    "stop", "Stop the satellite?",
-    "It stops listening and leaves the room until you start it again "
+    "stop", "Stop the room?",
+    "This computer stops listening and the room goes quiet until you start it again "
     "(systemctl --user start domovoi-satellite) or restart the computer.",
     actions=[("stop", "Stop it"), ("cancel", "Keep it running")],
     persistent=True,
@@ -444,8 +444,8 @@ class TrayActions:
             elif action == "logs":
                 got = self.client.call("logs-path")
                 if not self.opener(got.get("path") or ""):
-                    return Note("logs", "Satellite logs", got.get("hint") or "")
-                return Note("logs", "Satellite logs", f"Recent lines: {got.get('hint')}")
+                    return Note("logs", "Room logs", got.get("hint") or "")
+                return Note("logs", "Room logs", f"Recent lines: {got.get('hint')}")
             elif action == "about":
                 return about_note(st)
             elif action == "stop_ask":
@@ -455,12 +455,12 @@ class TrayActions:
                     return self.stopper()
                 self.run(["systemctl", "--user", "stop", SERVICE_UNIT],
                          capture_output=True, text=True, timeout=30)
-                return Note("stop", "Satellite stopped",
+                return Note("stop", "Room stopped",
                             "Start it again with: systemctl --user start domovoi-satellite")
             elif action == "start" and self.starter is not None:
                 return self.starter()
         except ConnectionError as e:
-            return Note("error", APP_NAME, f"The satellite isn't answering ({e}).")
+            return Note("error", APP_NAME, f"The room isn't answering ({e}).")
         return None
 
 

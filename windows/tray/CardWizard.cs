@@ -87,7 +87,7 @@ namespace Domovoi.Windows.Tray
             this.drives = drives;
             this.openUrl = openUrl;
             this.serverFingerprint = serverFingerprint;
-            Text = "Prepare a satellite card";
+            Text = "Prepare a room's SD card";
             Icon = Icons.App(32);
             Font = SystemFonts.MessageBoxFont;
             AutoScaleMode = AutoScaleMode.Dpi;
@@ -151,7 +151,7 @@ namespace Domovoi.Windows.Tray
         {
             var p = new Panel();
             p.Controls.Add(Para("1.  Flash a microSD card with Raspberry Pi OS Lite (64-bit), using Raspberry Pi Imager. When Imager offers to apply OS customisation settings, choose No: Domovoi sets the card up itself.", 0, 48));
-            p.Controls.Add(Para("2.  Build the card files in the dashboard: Settings > Rooms > prepare satellite media. Pick the board and the microphone, click Prepare, and download the files when the build is done.", 56, 48));
+            p.Controls.Add(Para("2.  Build the card files in the dashboard: Settings > Rooms > prepare a room's SD card. Pick the board and the microphone, click Prepare, and download the files when the build is done.", 56, 48));
             p.Controls.Add(Para("3.  This helper fills in the card's setup network password by itself, from Domovoi on this PC. You'll still need that password on your phone: the dashboard shows it.", 112, 34));
             var open = new Button { Text = "Open Settings > Rooms", AutoSize = true, Location = new Point(0, 160) };
             open.Click += delegate { openUrl(webUrl + "/#settings/rooms/media"); };
@@ -238,7 +238,7 @@ namespace Domovoi.Windows.Tray
             p.Controls.Add(pskBox);
             pskNote.SetBounds(140, 176, 420, 34);
             p.Controls.Add(pskNote);
-            p.Controls.Add(Para("The dashboard showed it when it built these files (Settings > Rooms > prepare satellite media > show setup details). It's ten characters: lower-case letters and the digits 2 to 9.", 214, 34));
+            p.Controls.Add(Para("The dashboard showed it when it built these files (Settings > Rooms > prepare a room's SD card > show setup details). It's ten characters: lower-case letters and the digits 2 to 9.", 214, 34));
             keyJob.SetBounds(0, 250, 560, 18);
             keyJob.ForeColor = SystemColors.GrayText;
             p.Controls.Add(keyJob);
@@ -286,7 +286,7 @@ namespace Domovoi.Windows.Tray
 
         static readonly Dictionary<CardStep, string[]> Words = new Dictionary<CardStep, string[]>
         {
-            { CardStep.Build, new[] { "Prepare a satellite card", "Domovoi runs inside Windows' Linux system here, which can't see SD cards, so this helper puts the card files on the card for it." } },
+            { CardStep.Build, new[] { "Prepare a room's SD card", "Domovoi runs inside Windows' Linux system here, which can't see SD cards, so this helper puts the card files on the card for it." } },
             { CardStep.Zip, new[] { "The card files", "Pick the zip you downloaded from the dashboard." } },
             { CardStep.Card, new[] { "The card", "Put the freshly flashed card in this PC. Only removable drives that look like a new Raspberry Pi card are listed: never a hard disk." } },
             { CardStep.Password, new[] { "The setup network password", "This card raises its own Wi-Fi so you can set it up from your phone. The helper couldn't get that network's password from Domovoi by itself." } },
@@ -315,7 +315,7 @@ namespace Domovoi.Windows.Tray
                 doneText.Text = package.IsPortal
                     ? "Put the card in the Pi and switch it on. After a few minutes it raises its own Wi-Fi, " + package.ApSsid + ": join it from your phone, with the password "
                         + (KeyFetched ? key.Psk + (key.Reissued ? " (a new one: the password the dashboard showed before won't work)" : " (the dashboard shows it too)") : "you typed here")
-                        + ", and follow the page that opens. Then approve the satellite in Settings > Rooms."
+                        + ", and follow the page that opens. Then approve the new room in Settings > Rooms."
                     : "Put the card in the Pi and switch it on, then plug it into the Domovoi server's USB port and adopt it in Settings > Rooms.";
                 if (KeyFetched && key.Reissued)
                     doneText.Text += "\n\n" + ConsoleLine();
@@ -386,7 +386,7 @@ namespace Domovoi.Windows.Tray
                 switch (CardZip.FromThisServer(p.ServerFingerprint, serverFingerprint()))
                 {
                     case CardZip.Origin.OtherServer:
-                        Note(zipResult, "These card files were built by a different Domovoi server, not the one on this PC, so a satellite made from them would never pair with it. Build them in this PC's dashboard (step 1)." + where, ErrorColor);
+                        Note(zipResult, "These card files were built by a different Domovoi server, not the one on this PC, so a room made from them would never pair with it. Build them in this PC's dashboard (step 1)." + where, ErrorColor);
                         break;
                     case CardZip.Origin.Unknown:
                         package = p;

@@ -520,11 +520,11 @@ if (-not $Work) { $Work = $env:TEMP }
 $dir = Join-Path $Work ('domovoi-' + [guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $dir
 try {
-    Say "Downloading the satellite from $base ..."
+    Say "Downloading the room software from $base ..."
     $tgz = Join-Path $dir 's.tgz'
     $got = [DomovoiSatelliteSetup.Http]::Get(($base + $BundlePath), $tgz, 256MB, 600000)
     if ($got.Status -ne 200) {
-        Fail "could not download the satellite from $base`: $(if ($got.Error) { $got.Error } else { 'HTTP ' + $got.Status })" 3
+        Fail "could not download the room software from $base`: $(if ($got.Error) { $got.Error } else { 'HTTP ' + $got.Status })" 3
     }
     if ((Get-FileHash -Algorithm SHA256 -LiteralPath $tgz).Hash -ne $proven.sha.ToUpperInvariant()) {
         Fail ('this is not the download the server signed for this code (Domovoi was updated since, or it was ' +
@@ -532,9 +532,9 @@ try {
     }
     Say '  checked against the SHA-256 the server signed for this code'
     & "$env:SystemRoot\System32\tar.exe" -xzf $tgz -C $dir
-    if ($LASTEXITCODE -ne 0) { Fail 'could not unpack the satellite download' 4 }
+    if ($LASTEXITCODE -ne 0) { Fail 'could not unpack the room software download' 4 }
     $script = Join-Path $dir 'satellite\scripts\install-windows.ps1'
-    if (-not (Test-Path -LiteralPath $script)) { Fail 'the satellite download has no Windows installer' 4 }
+    if (-not (Test-Path -LiteralPath $script)) { Fail 'the room software download has no Windows installer' 4 }
 
     $argv = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $script, $proven.payload,
               '-Yes', '-Permissions', $Permissions, '-Power', $Power, '-Wait', '0')
@@ -565,7 +565,7 @@ $root = if ($InstallRoot) { $InstallRoot } else { Join-Path $env:LOCALAPPDATA 'D
 $py = Join-Path $root 'python\python.exe'
 $Result['approved'] = '0'
 if (Test-Path -LiteralPath $py) {
-    Say 'Waiting for the satellite to get its approval code from the server...'
+    Say 'Waiting for the room to get its approval code from the server...'
     # Whatever a satellite module resolves as ~ is the install folder, as
     # when the installer runs it (satellite\win_install.py).
     $env:USERPROFILE = $root

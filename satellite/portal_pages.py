@@ -150,7 +150,7 @@ def render_form(
 
     body = f"""
 {err_html}
-<h1>Set up your Domovoi satellite</h1>
+<h1>Set up your Domovoi room</h1>
 <p class="sub">This connects the speaker to your home Wi-Fi. It only takes a moment.</p>
 <form method="post" action="/provision">
   {network_field}
@@ -208,7 +208,7 @@ def render_accepted(*, room_id: str, code: str, server: str | None = None) -> st
   closing now, so your phone will drop back to your normal Wi-Fi on its own.</p>
 <div class="code">{html.escape(code)}</div>
 <p class="done">Open your Domovoi dashboard to finish. It will ask you to
-  approve a new satellite showing this code. You can close this page.</p>
+  approve a new room showing this code. You can close this page.</p>
 """
     return _page("Connecting", body)
 
@@ -220,7 +220,7 @@ def render_probe_redirect(target: str) -> str:
     return _page(
         "Domovoi setup",
         f"<h1>Domovoi setup</h1><p class=\"sub\">"
-        f"<a href=\"{esc}\">Tap here to set up your satellite</a>.</p>",
+        f"<a href=\"{esc}\">Tap here to set up your room</a>.</p>",
     )
 
 

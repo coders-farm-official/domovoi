@@ -681,7 +681,7 @@ begin
   S := S + IntToStr(N) + '. A private WSL distro named "domovoi" (Ubuntu 26.04) that belongs to domovoi-svc, stored in C:\ProgramData\Domovoi. WSL settings for domovoi-svc alone: mirrored networking, memory up to ' + WslMemGb + ' GB. Your own WSL distros, your .wslconfig and Docker Desktop are not touched.' + #13#10#13#10;
   N := N + 1;
   if LanPrivate = '1' then
-    S := S + IntToStr(N) + '. Six Hyper-V firewall rules for WSL, named Domovoi-..., so phones and satellites on your home network (' + LanSubnet + ') reach Domovoi: TCP 6369 (dashboard), 6370 (voice), 8050-8099 (music streams), 8096, 7676 and 9467 (plugins). They apply to every WSL VM on this PC, your own WSL distros and Docker Desktop''s included: anything of yours listening on those ports in mirrored mode becomes reachable from your home network too.' + #13#10#13#10
+    S := S + IntToStr(N) + '. Six Hyper-V firewall rules for WSL, named Domovoi-..., so phones and rooms on your home network (' + LanSubnet + ') reach Domovoi: TCP 6369 (dashboard), 6370 (voice), 8050-8099 (music streams), 8096, 7676 and 9467 (plugins). They apply to every WSL VM on this PC, your own WSL distros and Docker Desktop''s included: anything of yours listening on those ports in mirrored mode becomes reachable from your home network too.' + #13#10#13#10
   else
     S := S + IntToStr(N) + '. No firewall rules: this PC has no private home-network address, so Domovoi answers on this PC only.' + #13#10#13#10;
   N := N + 1;
@@ -1055,7 +1055,7 @@ begin
     CodeEdit.Text := SetupCodeText;
     if SetupCodeText = '' then
       WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 + 'Setup could not read the setup code. Restarting the DomovoiHost service writes a fresh one (see docs/WINDOWS_HOST.md).';
-    LanText.Caption := 'Phones and satellites reach Domovoi at http://' + LanIp + ':6369. If it changes, satellites look for Domovoi again by themselves; to keep it fixed, reserve it for this PC in your router (DHCP reservation for ' + LanMac + ').' + #13#10 +
+    LanText.Caption := 'Phones and rooms reach Domovoi at http://' + LanIp + ':6369. If it changes, rooms look for Domovoi again by themselves; to keep it fixed, reserve it for this PC in your router (DHCP reservation for ' + LanMac + ').' + #13#10 +
       ModelsText(GpuRaw, TierText);
   end
   else

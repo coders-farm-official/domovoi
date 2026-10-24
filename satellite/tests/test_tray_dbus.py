@@ -190,7 +190,7 @@ async def test_the_tray_registers_shows_the_state_and_its_menu_drives_the_engine
         # The menu, as the panel draws it.
         revision, items = await layout(panel, name)
         labels = [p.get("label") for _, p in items if p.get("type") != "separator"]
-        assert "Mute listening" in labels and "Stop satellite…" in labels
+        assert "Mute listening" in labels and "Stop the room…" in labels
         assert labels[0] == "Kid's Room · connected to 192.168.1.20"
 
         # Mute from the menu: the engine mutes, and the icon and menu follow.
@@ -255,10 +255,10 @@ async def test_an_update_waiting_for_ok_is_allowed_from_its_pop_up(desktop):
     await t.start()
     try:
         assert await until(lambda: t.status is not None)
-        action = engine.pending.offer("update", "new satellite code (44f0fff → 9c1d2aa)",
+        action = engine.pending.offer("update", "new room software (44f0fff → 9c1d2aa)",
                                       lambda: engine.ran.append("update"))
-        assert await until(lambda: any(n["summary"].endswith("the satellite update") for n in notes.shown))
-        note = next(n for n in notes.shown if n["summary"].endswith("the satellite update"))
+        assert await until(lambda: any(n["summary"].endswith("the room software update") for n in notes.shown))
+        note = next(n for n in notes.shown if n["summary"].endswith("the room software update"))
         assert note["actions"] == [f"approve:{action.id}", "Allow", f"decline:{action.id}", "Not now"]
         assert t.sni_status() == "NeedsAttention"
         notes.invoke(note["id"], f"approve:{action.id}")

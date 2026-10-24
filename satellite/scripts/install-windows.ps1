@@ -106,7 +106,7 @@ if ($Uninstall) {
 # --- what this PC is -----------------------------------------------------
 
 if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
-    Fail 'this satellite needs 64-bit Windows on an Intel or AMD processor (x64)' 2
+    Fail 'a Windows room needs 64-bit Windows on an Intel or AMD processor (x64)' 2
 }
 
 function Get-MissingCpuFeatures {
@@ -145,7 +145,7 @@ if ($cpuMissing.Count -gt 0) {
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if ($TestAsAdministrator -or $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Fail ('this window runs as administrator. Open a normal PowerShell window (not "Run as administrator") ' +
-          'and paste the command again: the satellite installs for you only and must never run with ' +
+          'and paste the command again: the room software installs for you only and must never run with ' +
           'administrator rights.') 2
 }
 
@@ -196,7 +196,7 @@ function Get-CorePcReason {
 
 $reason = Get-CorePcReason
 if ($reason) {
-    Fail ("$reason. A room satellite is never installed on the PC that runs the Domovoi server: " +
+    Fail ("$reason. A room is never installed on the PC that runs the Domovoi server: " +
           'using this PC as a room will come with the server''s own tray. Nothing was changed.') 5
 }
 
@@ -255,14 +255,14 @@ function Get-SmartAppControlState {
 
 function Get-SmartAppControlNote([string]$State) {
     if ($State -eq 'on') {
-        return ('Smart App Control is on. It may block parts of the satellite that are not signed yet ' +
-                '(some of its Python libraries), with no "run anyway": if the satellite does not start, or ' +
+        return ('Smart App Control is on. It may block parts of the room software that are not signed yet ' +
+                '(some of its Python libraries), with no "run anyway": if the room does not start, or ' +
                 'Windows says it blocked part of an app, see "Smart App Control" in the guide ' +
                 '(docs\SPARE_DEVICE_SATELLITES.md).')
     }
     if ($State -eq 'evaluation') {
         return ('Smart App Control is in evaluation mode. Windows may turn it on later, and then block ' +
-                'parts of the satellite that are not signed yet; see "Smart App Control" in the guide ' +
+                'parts of the room software that are not signed yet; see "Smart App Control" in the guide ' +
                 '(docs\SPARE_DEVICE_SATELLITES.md).')
     }
     return $null

@@ -114,9 +114,9 @@ namespace Domovoi.Windows.Tray
             bool? was = lastUp;
             lastUp = v.Up;
             if (was == null || was.Value == v.Up) return null;
-            if (v.Up) return new[] { "Domovoi is running again", "Satellites and phones can reach it." };
-            if (v.State == TrayState.Stopped) return new[] { v.Line, "Satellites and phones can't reach it until it starts again." };
-            return new[] { v.Line, v.Detail ?? "Satellites and phones may not reach it." };
+            if (v.Up) return new[] { "Domovoi is running again", "Rooms and phones can reach it." };
+            if (v.State == TrayState.Stopped) return new[] { v.Line, "Rooms and phones can't reach it until it starts again." };
+            return new[] { v.Line, v.Detail ?? "Rooms and phones may not reach it." };
         }
     }
 

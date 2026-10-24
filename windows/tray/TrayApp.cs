@@ -143,7 +143,7 @@ namespace Domovoi.Windows.Tray
             items.Add(manual);
             items.Add(new ToolStripSeparator());
 
-            var card = new ToolStripMenuItem("Prepare a satellite card...");
+            var card = new ToolStripMenuItem("Prepare a room's SD card...");
             card.Click += delegate { OpenCardHelper(); };
             items.Add(card);
             items.Add(new ToolStripSeparator());
@@ -268,7 +268,7 @@ namespace Domovoi.Windows.Tray
 
         void Restart()
         {
-            if (MessageBox.Show("Restart Domovoi?\n\nSatellites, phones and the dashboard lose Domovoi for a minute or two while it starts again. Windows asks for an administrator's permission next.",
+            if (MessageBox.Show("Restart Domovoi?\n\nRooms, phones and the dashboard lose Domovoi for a minute or two while it starts again. Windows asks for an administrator's permission next.",
                     "Restart Domovoi", MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.OK)
                 return;
             string args = Admin.RestartArguments(opt.Service);
@@ -332,7 +332,7 @@ namespace Domovoi.Windows.Tray
 
         void UpdateFromMenu()
         {
-            if (MessageBox.Show("Update Domovoi?\n\nDomovoi checks for updates and installs them: the Linux part first (a backup, then a restart: satellites, phones and the dashboard lose Domovoi for a minute or two), then the Windows part when a newer one is out, which this icon downloads and checks against Domovoi's release key first.\n\nWindows asks for an administrator's permission next.",
+            if (MessageBox.Show("Update Domovoi?\n\nDomovoi checks for updates and installs them: the Linux part first (a backup, then a restart: rooms, phones and the dashboard lose Domovoi for a minute or two), then the Windows part when a newer one is out, which this icon downloads and checks against Domovoi's release key first.\n\nWindows asks for an administrator's permission next.",
                     "Update Domovoi", MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button1) != DialogResult.OK)
                 return;
             StartWindowsStep(updateState, true, true);

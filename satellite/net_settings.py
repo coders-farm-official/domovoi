@@ -1497,7 +1497,7 @@ def assess(report: dict[str, Any] | None, *, unit_state: str, boot_id: str | Non
             "network step at boot (sudo systemctl enable domovoi-provisioning)"
             if unit_state == "disabled" else
             "no domovoi-provisioning.service on this device, so nothing runs the network step "
-            "at boot (a hand-built satellite or a spare device); on a satellite Pi, "
+            "at boot (a hand-built room device or a spare device); on a Raspberry Pi room, "
             "sudo ~/satellite-venv/bin/python -m satellite.net_settings applies it once"
         )
         return status, None
@@ -1514,7 +1514,7 @@ def assess(report: dict[str, Any] | None, *, unit_state: str, boot_id: str | Non
         return status, (
             "network settings (no setup hotspot, Wi-Fi power saving off, host name "
             "domovoi-<room>, set before the Wi-Fi joins) are applied at boot: reboot this "
-            "satellite once"
+            "room device once"
         )
     assert report is not None
     if unit_state == "enabled" and not this_boot and report.get("when") != "manual":
@@ -1539,7 +1539,7 @@ def assess(report: dict[str, Any] | None, *, unit_state: str, boot_id: str | Non
         return status, (
             f"the boot-time network settings did not all apply ({errors[0][:120]}"
             f"{f' and {len(errors) - 1} more' if len(errors) > 1 else ''}); "
-            "reboot this satellite to retry"
+            "reboot this room device to retry"
         )
     return status, None
 

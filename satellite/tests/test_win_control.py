@@ -337,7 +337,7 @@ def test_a_squatted_name_stops_the_engine_with_78_before_it_listens(monkeypatch,
         _winapi.CloseHandle(squat)
     assert asked == [engine_platform.EXIT_CONFIG] and getattr(eng, "_control_server", None) is None
     err = capsys.readouterr().err
-    assert err.startswith("domovoi-satellite: not starting: another process holds this satellite's control pipe")
+    assert err.startswith("domovoi-satellite: not starting: another process holds this room's control pipe")
 
 
 def test_the_client_lends_the_server_no_rights():

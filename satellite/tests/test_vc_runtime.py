@@ -160,7 +160,7 @@ def test_the_engine_says_what_is_missing_and_what_to_do(tmp_path):
     sysdir.mkdir()
     why = real_check(py, sysdir, version_of=lambda p: (14, 44, 0, 0))
     assert why.startswith("Microsoft's Visual C++ runtime is not on this PC (msvcp140.dll, msvcp140_1.dll missing)")
-    assert "the copies the satellite installs beside its Python are gone" in why
+    assert "the copies the room software installs beside its Python are gone" in why
     assert "Paste the install command" in why and engine_platform.VC_REDIST_URL in why
     for name in engine_platform.VC_RUNTIME_DLLS:
         (sysdir / name).write_bytes(b"x")
@@ -229,7 +229,7 @@ def test_smart_app_control_is_read_not_changed_and_said_plainly():
     lines = r.stdout.strip().splitlines()
     assert lines[0] in ("on", "off", "evaluation", "unknown") and lines[1] == "---"
     on, evaluation, off, unknown = lines[2:6]
-    assert on.startswith("Smart App Control is on. It may block parts of the satellite")
+    assert on.startswith("Smart App Control is on. It may block parts of the room software")
     assert "evaluation mode" in evaluation and "may turn it on later" in evaluation
     assert off == "NONE" and unknown == "NONE"
     text = SCRIPT.read_text(encoding="ascii")

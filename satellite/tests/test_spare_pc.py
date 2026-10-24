@@ -486,7 +486,7 @@ def test_cli_mute_and_approve(fake_client, capsys):
 def test_cli_without_an_engine_says_so(fake_client, capsys):
     fake_client.answers["status"] = ConnectionError("the satellite engine isn't answering")
     assert client.main(["--status"]) == 3
-    assert "Is the satellite running?" in capsys.readouterr().err
+    assert "Is the room running?" in capsys.readouterr().err
 
 
 def test_the_installer_waits_and_prints_the_code_once(fake_client):
@@ -677,7 +677,7 @@ def test_a_laptop_whose_settings_do_not_load_stays_stopped_and_says_why(tmp_path
     assert why and "don't load" in why
     assert why in tray.connection_text(None)
     assert client.main(["--status"]) == 3
-    assert f"The satellite is not running: {why}" in capsys.readouterr().err
+    assert f"The room is not running: {why}" in capsys.readouterr().err
 
 
 def test_a_start_that_passes_the_checks_clears_the_reason(tmp_path, monkeypatch):

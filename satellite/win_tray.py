@@ -221,8 +221,8 @@ def supervisor_refusal(root: Path) -> tuple[str, float] | None:
     return reason, float(at) if isinstance(at, (int, float)) else 0.0
 
 
-REFUSED_TITLE = "Domovoi satellite didn't start"
-REFUSED_AFTER = " Fix that, then choose Start satellite in this menu."
+REFUSED_TITLE = "Domovoi room didn't start"
+REFUSED_AFTER = " Fix that, then choose Start the room in this menu."
 
 
 def _short_reason(reason: str) -> str:
@@ -509,7 +509,7 @@ class WinTray:
             self._tell(note.summary, note.body)
             return
         if action == "stop_ask":
-            if not self.ask(APP_NAME, "Stop the satellite?\n\nIt stops listening and leaves the room "
+            if not self.ask(APP_NAME, "Stop the room?\n\nThis computer stops listening and the room goes quiet "
                                       "until you start it again (Start menu: Domovoi Satellite, or "
                                       "this menu), or sign in again."):
                 return
@@ -585,7 +585,7 @@ def stop_satellite() -> tray.Note:
     event = win32.NamedEvent(win32.object_name(win32.STOP_EVENT))
     event.set()
     event.close()
-    return tray.Note("stop", "Satellite stopped",
+    return tray.Note("stop", "Room stopped",
                      "It is not listening. Start it again from this menu or the Start menu "
                      "(Domovoi Satellite).")
 
@@ -601,8 +601,8 @@ def start_satellite(root: Path | None = None) -> tray.Note:
             stderr=subprocess.DEVNULL, close_fds=True, creationflags=win_service.DETACHED_PROCESS,
         )
     except OSError as e:
-        return tray.Note("start", "Could not start the satellite", str(e))
-    return tray.Note("start", "Starting the satellite", "It listens again in a few seconds.")
+        return tray.Note("start", "Could not start the room", str(e))
+    return tray.Note("start", "Starting the room", "It listens again in a few seconds.")
 
 
 def main(argv: list[str] | None = None) -> int:

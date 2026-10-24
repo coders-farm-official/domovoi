@@ -7385,7 +7385,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
             log.info("upgrade requested by server")
             if self._held(
                 "update",
-                f"new satellite code ({_read_synced_sha() or 'unknown'} → "
+                f"new room software ({_read_synced_sha() or 'unknown'} → "
                 f"{payload.get('expected_sha') or 'latest'})",
                 lambda p=dict(payload): self._apply_upgrade(p),
             ):

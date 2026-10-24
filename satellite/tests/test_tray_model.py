@@ -78,7 +78,7 @@ def test_the_menu_has_every_item_of_the_design():
     assert got[0] == "Kid's Room · connected to 192.168.1.20"
     for want in ("Mute listening", "Volume up", "Volume down", "Which room is this? (plays a chime)",
                  "Open dashboard", "Show logs folder", "About",
-                 "Quit tray (the satellite keeps running)", "Stop satellite…"):
+                 "Quit tray (the room keeps running)", "Stop the room…"):
         assert want in got
     assert items[0].enabled is False
     assert [i.id for i in items] == [i.id for i in tray.menu(status(mic="muted"))], "ids are stable"
@@ -90,7 +90,7 @@ def test_mute_becomes_unmute():
 
 
 def test_pending_actions_get_allow_and_not_now():
-    st = status(pending=[{"id": "a1", "kind": "update", "summary": "new satellite code", "received_at": 1}])
+    st = status(pending=[{"id": "a1", "kind": "update", "summary": "new room software", "received_at": 1}])
     actions = [i.action for i in tray.menu(st)]
     assert "approve:a1" in actions and "decline:a1" in actions
 

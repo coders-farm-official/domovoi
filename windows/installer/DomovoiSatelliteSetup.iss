@@ -400,16 +400,16 @@ begin
   { Two short lines, filled in when the page opens (CurPageChanged). }
   RoomText := AddText(ChoicePage, ' ', 0, 0, False);
   Y := RoomText.Top + ScaleY(56);
-  T := AddText(ChoicePage, 'May the Domovoi server update and restart this satellite on its own?', Y, 0, False);
+  T := AddText(ChoicePage, 'May the Domovoi server update and restart this room on its own?', Y, 0, False);
   Y := T.Top + T.Height + ScaleY(6);
   RadioAsk := AddRadio(ChoicePage, 'Ask me first', Y);
   T := AddText(ChoicePage, 'Updates, settings from the dashboard and restarts wait for your OK in the tray icon''s menu.', RadioAsk.Top + RadioAsk.Height, ScaleX(18), False);
   Y := T.Top + T.Height + ScaleY(6);
   RadioAuto := AddRadio(ChoicePage, 'Automatic', Y);
-  T := AddText(ChoicePage, 'It installs signed satellite updates, applies settings from the dashboard and restarts when it needs to, like a Raspberry Pi room.', RadioAuto.Top + RadioAuto.Height, ScaleX(18), False);
+  T := AddText(ChoicePage, 'It installs signed room software updates, applies settings from the dashboard and restarts when it needs to, like a Raspberry Pi room.', RadioAuto.Top + RadioAuto.Height, ScaleX(18), False);
   RadioAsk.Checked := True;
   Y := T.Top + T.Height + ScaleY(12);
-  T := AddText(ChoicePage, 'While it is plugged in (this changes the PC''s power plan, which every account on it shares; removing the satellite puts it back):', Y, 0, False);
+  T := AddText(ChoicePage, 'While it is plugged in (this changes the PC''s power plan, which every account on it shares; removing the room puts it back):', Y, 0, False);
   Y := T.Top + T.Height + ScaleY(6);
   CheckStandby := AddCheck(ChoicePage, 'Never sleep (the screen can still turn off)', Y);
   CheckLid := AddCheck(ChoicePage, 'Keep running with the lid closed', CheckStandby.Top + CheckStandby.Height + ScaleY(4));
@@ -485,7 +485,7 @@ begin
   Result := False;
   if IsAdmin then
   begin
-    SuppressibleMsgBox('Setup is running as administrator. Close it and open it again with a double-click (not "Run as administrator"): the satellite installs for you only and must never run with administrator rights.', mbCriticalError, MB_OK, IDOK);
+    SuppressibleMsgBox('Setup is running as administrator. Close it and open it again with a double-click (not "Run as administrator"): the room software installs for you only and must never run with administrator rights.', mbCriticalError, MB_OK, IDOK);
     Exit;
   end;
   { Smart App Control (Windows 11) checks every program file; parts of the
@@ -494,9 +494,9 @@ begin
   if RegQueryDWordValue(HKLM, 'SYSTEM\CurrentControlSet\Control\CI\Policy', 'VerifiedAndReputablePolicyState', Sac) then
   begin
     if Sac = 1 then
-      SuppressibleMsgBox('Smart App Control is on. It may block parts of the satellite that are not signed yet, with no "run anyway": then the satellite does not start, or Windows says it blocked part of an app. See "Smart App Control" in docs/SPARE_DEVICE_SATELLITES.md.', mbInformation, MB_OK, IDOK)
+      SuppressibleMsgBox('Smart App Control is on. It may block parts of the room software that are not signed yet, with no "run anyway": then the room does not start, or Windows says it blocked part of an app. See "Smart App Control" in docs/SPARE_DEVICE_SATELLITES.md.', mbInformation, MB_OK, IDOK)
     else if Sac = 2 then
-      SuppressibleMsgBox('Smart App Control is in evaluation mode. Windows may turn it on later and then block parts of the satellite that are not signed yet. See "Smart App Control" in docs/SPARE_DEVICE_SATELLITES.md.', mbInformation, MB_OK, IDOK);
+      SuppressibleMsgBox('Smart App Control is in evaluation mode. Windows may turn it on later and then block parts of the room software that are not signed yet. See "Smart App Control" in docs/SPARE_DEVICE_SATELLITES.md.', mbInformation, MB_OK, IDOK);
   end;
   ExtractTemporaryFile('{#Worker}');
   Result := True;
@@ -572,5 +572,5 @@ begin
     'Updates and restarts:' + NewLine + Space + Updates + NewLine + NewLine +
     'Power:' + NewLine + Space + Power + NewLine + NewLine +
     'For:' + NewLine + Space + GetUserNameString + ' (this account only), into ' + ExpandConstant('{localappdata}') + '\Domovoi\Satellite' + NewLine + NewLine +
-    'Setup downloads the satellite from your Domovoi server, checks it, then installs it (about 350 MB on disk).';
+    'Setup downloads the room software from your Domovoi server, checks it, then installs it (about 350 MB on disk).';
 end;
