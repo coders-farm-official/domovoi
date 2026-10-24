@@ -35,6 +35,8 @@ echo "== domovoi stage-2 $(date -Is) =="
 as_user() { runuser -u "$SAT_USER" -- "$@"; }
 status() { [ -x /usr/local/sbin/domovoi-status ] && /usr/local/sbin/domovoi-status "$@" || true; }
 
+@BOOT_WRITE@
+
 # Same as stage 1, repeated here on purpose: Pi OS's first-boot user setup
 # (userconf.txt) ran on boot 2, between the two, and it puts the account
 # it handles in the sudo group and writes /etc/sudoers.d/010_pi-nopasswd
@@ -314,12 +316,7 @@ if systemctl is-active --quiet domovoi-satellite.service; then
   # satellite account's to edit.
   for BOOT in /boot/firmware /boot; do
     [ -f "$BOOT/domovoi/device-info.json" ] || continue
-    python3 - "$BOOT/domovoi/device-info.json" <<'EOF' || true
-import json, sys
-p = sys.argv[1]
-doc = json.load(open(p)); doc.update(status="active", step=None, error=None)
-json.dump(doc, open(p, "w"), indent=2)
-EOF
+    boot_info "$BOOT/domovoi/device-info.json" active || true
     break
   done
   echo "stage 2 complete"

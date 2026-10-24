@@ -53,6 +53,7 @@ import time
 from pathlib import Path
 from typing import Any, Protocol
 
+from satellite import boot_write
 from satellite import config_writer
 from satellite import provisioning_protocol as proto
 from satellite import join_diag
@@ -1582,7 +1583,9 @@ def revert_usb_gadget_boot_config(boot_dirs=None) -> list[str]:
             kept = [ln for ln in text.splitlines()
                     if ln.strip() != _GADGET_CONFIG_LINE]
             if kept != text.splitlines():
-                cfg.write_text("\n".join(kept) + "\n", encoding="utf-8", newline="\n")
+                # The boot partition is FAT, and a torn config.txt or
+                # cmdline.txt is a Pi that does not boot: never in place.
+                boot_write.write_text(cfg, "\n".join(kept) + "\n")
                 changed.append(str(cfg))
         except OSError as e:
             log.warning("could not revert %s: %s", cfg, e)
@@ -1606,7 +1609,7 @@ def revert_usb_gadget_boot_config(boot_dirs=None) -> list[str]:
             if rebuilt != raw:
                 # A malformed cmdline can stop the Pi booting — one line, no
                 # stray newline, exactly as the firmware expects.
-                cmdline.write_text(rebuilt, encoding="utf-8", newline="\n")
+                boot_write.write_text(cmdline, rebuilt)
                 changed.append(str(cmdline))
         except OSError as e:
             log.warning("could not revert %s: %s", cmdline, e)
@@ -1781,11 +1784,15 @@ def run(
             profiles_supported=_profiles(),
         )
         # So the card never shows a previous boot's failure as current
-        # while this attempt is still waiting for the radio.
-        _report(transport, "starting",
-                top={"status": status, "step": "setup-network-starting",
-                     "error": _card_error(status, error)},
-                error=_card_error(status, error), attempts=failures + 1)
+        # while this attempt is still waiting for the radio. Once per run of
+        # failures, not per retry: a retry loop would otherwise rewrite the
+        # card (FAT, no journal) twice a turn, forever, with the "failed"
+        # report it is about to repeat already there.
+        if failures == 0:
+            _report(transport, "starting",
+                    top={"status": status, "step": "setup-network-starting",
+                         "error": _card_error(status, error)},
+                    error=_card_error(status, error), attempts=1)
         try:
             transport.expose(info)
         except Exception as e:  # noqa: BLE001 — reported, then retried or parked

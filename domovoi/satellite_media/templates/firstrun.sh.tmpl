@@ -55,19 +55,10 @@ else
   rm -f /var/lib/domovoi/internet-off
 fi
 
-info() {
-  # Update device-info.json (status/step/error) on the boot partition.
-  python3 - "$BOOT/domovoi/device-info.json" "$1" "$2" "${3:-}" <<'EOF' || true
-import json, sys
-p, status, step, error = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] or None
-try:
-    doc = json.load(open(p))
-except Exception:
-    doc = {"domovoi_setup": 1, "nonce": "firstboot", "profiles_supported": []}
-doc.update(status=status, step=step, error=error)
-json.dump(doc, open(p, "w"), indent=2)
-EOF
-}
+@BOOT_WRITE@
+
+# Update device-info.json (status/step/error) on the boot partition.
+info() { boot_info "$BOOT/domovoi/device-info.json" "$1" "$2" "${3:-}" || true; }
 
 fail() { echo "FAIL: $1"; info bootstrapping "$2" "$1"; exit 1; }
 done_step() { touch "$STEPS/$1"; }
@@ -403,11 +394,18 @@ if ! skip micboard; then
   case "$MIC_PROFILE" in
     respeaker_2mic_hat_v1|respeaker_2mic_hat_v2)
       if ls "$PAYDIR"/dtbo/*.dtbo >/dev/null 2>&1; then
-        cp "$PAYDIR"/dtbo/*.dtbo "$BOOT/overlays/" 2>/dev/null \
-          || cp "$PAYDIR"/dtbo/*.dtbo /boot/firmware/overlays/ 2>/dev/null || true
+        OVL="$BOOT/overlays"
+        [ -d "$OVL" ] || OVL=/boot/firmware/overlays
+        for DTBO in "$PAYDIR"/dtbo/*.dtbo; do
+          boot_copy "$DTBO" "$OVL/$(basename "$DTBO")" 2>/dev/null || true
+        done
+        # Appended through boot_put like everything else here: a config.txt
+        # torn by a power cut is a Pi that does not boot.
         grep -q "^dtoverlay=respeaker" "$BOOT/config.txt" 2>/dev/null || \
-          printf '\ndtoverlay=%s\ndtparam=spi=on\n' \
-            "$(basename "$(ls "$PAYDIR"/dtbo/*.dtbo | head -1)" .dtbo)" >>"$BOOT/config.txt"
+          { cat "$BOOT/config.txt" 2>/dev/null
+            printf '\ndtoverlay=%s\ndtparam=spi=on\n' \
+              "$(basename "$(ls "$PAYDIR"/dtbo/*.dtbo | head -1)" .dtbo)"
+          } | boot_put "$BOOT/config.txt" || true
       else
         echo "WARN: no prebuilt dtbo in payload — follow PROVISIONING §4 on-device"
       fi
@@ -534,8 +532,9 @@ if ! skip cmdline; then
     NEW="$(tr ' ' '
 ' <"$CMD"       | grep -v '^systemd\.run'       | grep -v '^systemd\.unit=kernel-command-line\.target$'       | tr '
 ' ' ' | sed -e 's/[[:space:]]\{1,\}/ /g' -e 's/^ //' -e 's/ $//')"
+    # Through boot_put: a cmdline.txt torn by a power cut stops the Pi.
     [ -n "$NEW" ] && printf '%s
-' "$NEW" >"$CMD"
+' "$NEW" | boot_put "$CMD"
     break
   done
   done_step cmdline
