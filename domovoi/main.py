@@ -900,6 +900,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     schedule_speech_warm_up("boot")
 
+    # The Android app phones install from here: after an update brought a
+    # new release, fetch it in the background where the household allows
+    # it (domovoi/android_app.py auto_refresh; the old one serves meanwhile).
+    from domovoi import android_app as _android_app
+
+    _android_app.schedule_auto_refresh(frozen=container_freeze.is_frozen)
+
     log.info("domovoi started; bot_name=%s", settings.bot_name)
     # Satellites can connect from here on: a timer that went off during
     # startup (or while the server was down) waits for its rooms to
@@ -929,6 +936,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             [
                 ("LLM warm-up", cancel_warm_up, 1.0),
                 ("speech warm-up", cancel_speech_warm_up, 1.0),
+                ("Android app refresh", _android_app.cancel_auto_refresh, 1.0),
                 # Plugins first (reverse of startup: they loaded last), then
                 # the core worker set, then the probe.
                 ("plugins", lambda: LOADER.shutdown(worker_timeout=_STOP_WORKERS_SEC),

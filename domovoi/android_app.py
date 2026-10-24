@@ -17,8 +17,8 @@ the first release exists, and then every page says so plainly.
 This module is the core's half, shaped like the Windows satellite's
 runtime (domovoi/satellite_windows.py):
 
-* :func:`fetch` — only when an admin presses the dashboard's button
-  (never by itself: owner decision 2026-10-15), each APK the manifest names is
+* :func:`fetch` — the first time only when an admin presses the dashboard's
+  button (never by itself: owner decision 2026-10-15), each APK the manifest names is
   downloaded from that GitHub release only (the URL is fixed by the tag
   and file name; through the outbound gate, domovoi/net_safety.py) into
   ``~/.domovoi/satellite_media/cache/android_app/<versionCode>/`` and kept
@@ -37,6 +37,30 @@ runtime (domovoi/satellite_windows.py):
   it, like the satellite code bundle.
 * :func:`status` / :func:`public_status` — what the dashboard card and the
   join page show.
+
+**After an update** (2026-10-23, Kamron's Moto: "the app isn't on this
+server yet" from a QR code the dashboard had just offered). The cache is
+kept per release (``…/android_app/<versionCode>/``), and an update that
+brings a new ``android/release.json`` names a new, empty folder: the
+release an admin had put here was still on disk but no longer counted, so
+every phone was told to ask. Now:
+
+* the newest older release still in the cache is **served until the new
+  one is here** (:func:`_fallback`), its files held to the pinned release
+  key's signature and their ABI (the folder name and file names say which
+  release it is; nothing in that folder is trusted for more than the key
+  vouches for). ``public_status`` then describes THAT release (so a
+  phone's update check never takes it for the new one) and names the new
+  one under ``newer``. A release that must not be served any more is ruled
+  out with ``min_served_version_code`` in release.json;
+* older folders are dropped only once the new release is complete
+  (:func:`_tidy`), never by a fetch that failed half-way;
+* :func:`auto_refresh` fetches the new release by itself, once per start
+  with backoff, ONLY where an admin had already put an app on this server
+  (an older release in the cache) and internet access is "always"
+  (:func:`auto_fetch_decision`; docs/INTERNET.md). The first download stays
+  an admin's (owner decision 2026-10-15), and "sometimes" keeps big
+  automatic downloads off, as it does for podcasts.
 """
 
 from __future__ import annotations
@@ -50,6 +74,7 @@ import shutil
 import threading
 import time
 import zipfile
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -133,6 +158,10 @@ def load_manifest(path: Path | None = None) -> dict[str, Any]:
     published = rel.get("published")
     if published is not None and (not isinstance(published, str) or not _DATE_RE.match(published)):
         raise ManifestError("bad published date")
+    min_served = rel.get("min_served_version_code")
+    if min_served is not None and (not isinstance(min_served, int) or isinstance(min_served, bool)
+                                   or not 1 <= min_served <= code):
+        raise ManifestError(f"bad min_served_version_code {min_served!r}")
     apks = rel.get("apks")
     if not isinstance(apks, list) or not apks:
         raise ManifestError("the release names no APKs")
@@ -165,7 +194,7 @@ def load_manifest(path: Path | None = None) -> dict[str, Any]:
         "release": {
             "package": PACKAGE, "version_name": version, "version_code": code,
             "tag": rel["tag"], "cert_sha256": cert, "commit": commit, "published": published,
-            "apks": out_apks,
+            "min_served_version_code": min_served, "apks": out_apks,
         },
     }
 
@@ -211,8 +240,6 @@ def check_apk(path: Path, entry: dict[str, Any], cert_sha256: str) -> None:
     SHA-256, the APK's own signature (v2, and v3 when present) verified,
     its certificate the release key's, and libraries for the entry's ABI
     only. Raises :class:`ApkRefused`."""
-    from domovoi import apk_signature
-
     name = entry["file"]
     try:
         size = path.stat().st_size
@@ -223,6 +250,15 @@ def check_apk(path: Path, entry: dict[str, Any], cert_sha256: str) -> None:
     got = _sha256(path)
     if got != entry["sha256"]:
         raise ApkRefused("sha256", f"{name}: SHA-256 {got[:16]}…, the release says {entry['sha256'][:16]}…")
+    _check_signed(path, name, entry["abi"], cert_sha256)
+
+
+def _check_signed(path: Path, name: str, abi: str, cert_sha256: str) -> None:
+    """The half of :func:`check_apk` that needs no manifest entry: the
+    APK's own signature verified, by the pinned key, and libraries for
+    ``abi`` only. What an older release's cached files are held to."""
+    from domovoi import apk_signature
+
     try:
         signer = apk_signature.verify(path)
     except apk_signature.ApkSignatureError as e:
@@ -237,9 +273,9 @@ def check_apk(path: Path, entry: dict[str, Any], cert_sha256: str) -> None:
         abis = native_abis(path)
     except (OSError, zipfile.BadZipFile) as e:
         raise ApkRefused("abi", f"{name}: its files can't be listed: {e}") from e
-    if abis != {entry["abi"]}:
+    if abis != {abi}:
         shown = ", ".join(sorted(abis)) or "none"
-        raise ApkRefused("abi", f"{name}: carries libraries for {shown}, not {entry['abi']} only")
+        raise ApkRefused("abi", f"{name}: carries libraries for {shown}, not {abi} only")
 
 
 # (path, size, mtime_ns, inode, ctime_ns, pins) -> None when it passed, else the refusal's
@@ -248,23 +284,22 @@ _checked: dict[tuple[Any, ...], str | None] = {}
 _checked_lock = threading.Lock()
 
 
-def _passes(path: Path, entry: dict[str, Any], cert_sha256: str) -> bool:
+def _memo_check(path: Path, pins: tuple[Any, ...], check: Callable[[], None]) -> bool:
     try:
         st = path.stat()
     except OSError:
         return False
-    if path.is_symlink() or not path.is_file() or st.st_size != entry["size"]:
+    if path.is_symlink() or not path.is_file() or not 0 < st.st_size <= MAX_APK_BYTES:
         return False
     # The file's identity as well as its size and time: a same-size file
     # put in its place with the old mtime is a new inode (and, on Linux, a
     # new ctime, which can't be set back), so it is checked again.
-    key = (str(path), st.st_size, st.st_mtime_ns, st.st_ino, st.st_ctime_ns,
-           entry["sha256"], cert_sha256, entry["abi"])
+    key = (str(path), st.st_size, st.st_mtime_ns, st.st_ino, st.st_ctime_ns) + pins
     with _checked_lock:
         if key in _checked:
             return _checked[key] is None
     try:
-        check_apk(path, entry, cert_sha256)
+        check()
         verdict = None
     except ApkRefused as e:
         log.warning("Android app: %s", e)
@@ -274,59 +309,173 @@ def _passes(path: Path, entry: dict[str, Any], cert_sha256: str) -> bool:
     return verdict is None
 
 
+def _passes(path: Path, entry: dict[str, Any], cert_sha256: str) -> bool:
+    try:
+        if path.stat().st_size != entry["size"]:
+            return False
+    except OSError:
+        return False
+    return _memo_check(path, (entry["sha256"], cert_sha256, entry["abi"]),
+                       lambda: check_apk(path, entry, cert_sha256))
+
+
+def _passes_signed(path: Path, abi: str, cert_sha256: str) -> bool:
+    return _memo_check(path, ("signed", cert_sha256, abi),
+                       lambda: _check_signed(path, path.name, abi, cert_sha256))
+
+
 def entry_for(manifest: dict[str, Any], name: str) -> dict[str, Any] | None:
     if not isinstance(name, str):
         return None
     return next((e for e in _apks(manifest) if e["file"] == name), None)
 
 
+def _current(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """The manifest's own release, per ABI, with whether it is here."""
+    rel = manifest.get("release")
+    bucket = _bucket_path(manifest)
+    if not rel or bucket is None:
+        return []
+    return [
+        {"abi": e["abi"], "file": e["file"], "size": e["size"],
+         "ready": _passes(bucket / e["file"], e, rel["cert_sha256"]),
+         "path": FILES_PATH + e["file"]}
+        for e in rel["apks"]
+    ]
+
+
+def _complete(manifest: dict[str, Any]) -> bool:
+    cur = _current(manifest)
+    return bool(cur) and all(a["ready"] for a in cur)
+
+
+_OLD_FILE_RE = re.compile(r"^domovoi-(?P<version>.+)-(?P<abi>arm64-v8a|armeabi-v7a)\.apk$")
+
+
+def _fallback(manifest: dict[str, Any]) -> dict[str, Any] | None:
+    """The newest OLDER release still in the cache that stands in until the
+    manifest's own one is here: a folder ``<versionCode>/`` below the
+    manifest's (and not below its ``min_served_version_code``) holding one
+    file per ABI the manifest names, all of one version, each signed by the
+    pinned release key with libraries for its ABI only. None if there is
+    none. (After an update: the release an admin had put here.)"""
+    from domovoi.satellite_media import cache
+
+    rel = manifest.get("release")
+    root = cache.CACHE_ROOT / CACHE_BUCKET
+    if not rel or not root.is_dir():
+        return None
+    floor = rel.get("min_served_version_code") or 1
+    try:
+        folders = sorted(
+            (int(p.name), p) for p in root.iterdir()
+            if p.name.isdigit() and len(p.name) <= 10 and p.is_dir() and not p.is_symlink()
+        )
+    except OSError:
+        return None
+    wanted = [e["abi"] for e in rel["apks"]]
+    for code, folder in reversed(folders):
+        if not floor <= code < rel["version_code"]:
+            continue
+        found: dict[str, Path] = {}
+        versions: set[str] = set()
+        try:
+            names = sorted(p.name for p in folder.iterdir())
+        except OSError:
+            continue
+        for name in names:
+            m = _OLD_FILE_RE.match(name)
+            if m and _VERSION_RE.match(m["version"]) and m["abi"] in wanted:
+                found[m["abi"]] = folder / name
+                versions.add(m["version"])
+        if len(versions) != 1 or set(found) != set(wanted):
+            continue
+        if not all(_passes_signed(found[abi], abi, rel["cert_sha256"]) for abi in wanted):
+            continue
+        try:
+            apks = [{"abi": abi, "file": found[abi].name, "size": found[abi].stat().st_size,
+                     "ready": True, "path": FILES_PATH + found[abi].name, "_path": found[abi]}
+                    for abi in wanted]
+        except OSError:
+            continue
+        return {"version_name": versions.pop(), "version_code": code, "apks": apks}
+    return None
+
+
 def cached_file(manifest: dict[str, Any], name: str) -> Path | None:
     """The cached APK called ``name`` if the manifest names it and its bytes
-    pass :func:`check_apk`; else None."""
+    pass :func:`check_apk`; or, until the manifest's release is all here,
+    the file of that name of the older release :func:`_fallback` stands
+    in with; else None."""
+    if not isinstance(name, str):
+        return None
     entry = entry_for(manifest, name)
     bucket = _bucket_path(manifest)
-    if entry is None or bucket is None:
+    if bucket is None:
         return None
-    path = bucket / entry["file"]
-    return path if _passes(path, entry, manifest["release"]["cert_sha256"]) else None
+    if entry is not None:
+        path = bucket / entry["file"]
+        if _passes(path, entry, manifest["release"]["cert_sha256"]):
+            return path
+    if _complete(manifest):
+        return None
+    fb = _fallback(manifest)
+    return next((a["_path"] for a in (fb or {}).get("apks", []) if a["file"] == name), None)
 
 
 # ─── status ───────────────────────────────────────────────────────────────
 
 def public_status(manifest: dict[str, Any]) -> dict[str, Any]:
     """What the join page reads (``GET /v1/android-app``, open on the LAN):
-    the release, and each APK with whether this server holds it."""
+    the release, and each APK with whether this server holds it. Until the
+    manifest's release is all here, an older one still in the cache
+    (:func:`_fallback`) is what is described and offered, with the
+    manifest's under ``newer``: a phone's update check reads ``release`` as
+    what it would get."""
     rel = manifest.get("release")
     if not rel:
         return {"release": None, "apks": [], "ready": False}
-    apks = [
-        {"abi": e["abi"], "file": e["file"], "size": e["size"],
-         "ready": cached_file(manifest, e["file"]) is not None,
-         "path": FILES_PATH + e["file"]}
-        for e in rel["apks"]
-    ]
+    apks = _current(manifest)
+    ready = bool(apks) and all(a["ready"] for a in apks)
+    if not ready:
+        fb = _fallback(manifest)
+        if fb is not None:
+            return {
+                "release": {"version_name": fb["version_name"], "version_code": fb["version_code"],
+                            "cert_sha256": rel["cert_sha256"]},
+                "apks": [{k: v for k, v in a.items() if k != "_path"} for a in fb["apks"]],
+                "ready": True,
+                "newer": {"version_name": rel["version_name"], "version_code": rel["version_code"]},
+            }
     return {
         "release": {"version_name": rel["version_name"], "version_code": rel["version_code"],
                     "cert_sha256": rel["cert_sha256"]},
         "apks": apks,
-        "ready": all(a["ready"] for a in apks),
+        "ready": ready,
     }
 
 
 def status(manifest: dict[str, Any]) -> dict[str, Any]:
-    """The admin card's view: :func:`public_status` plus what is missing,
-    the sizes, the fetch's state and whether a fetch would be refused."""
+    """The admin card's view: :func:`public_status` plus, for the
+    manifest's own release, what is missing, the sizes, the fetch's state,
+    whether a fetch would be refused and what the automatic refresh did.
+    ``ready`` says whether a phone can install the app from here now
+    (``newer`` is set when what it gets is an older release);
+    ``current_ready`` whether it is the manifest's own."""
     from domovoi import egress
 
     out = public_status(manifest)
-    apks = out["apks"]
+    apks = _current(manifest)
     out.update(
+        current_ready=bool(apks) and all(a["ready"] for a in apks),
+        current_version_name=(manifest.get("release") or {}).get("version_name"),
         missing=[a["file"] for a in apks if not a["ready"]],
         bytes_total=sum(a["size"] for a in apks),
         bytes_cached=sum(a["size"] for a in apks if a["ready"]),
         upload_max=max((a["size"] for a in apks), default=0),
         internet_off=egress.internet_turned_off(),
         fetch=dict(_job),
+        auto=dict(_auto),
     )
     return out
 
@@ -335,7 +484,9 @@ def status(manifest: dict[str, Any]) -> dict[str, Any]:
 
 def _tidy(manifest: dict[str, Any]) -> None:
     """Drop anything in the cache the manifest doesn't vouch for: strays in
-    this release's folder, and older releases' folders."""
+    this release's folder and, once this release is all here, older
+    releases' folders (until then the newest of them is what phones get,
+    :func:`_fallback`, so a fetch that failed half-way loses nothing)."""
     from domovoi.satellite_media import cache
 
     bucket = _bucket_path(manifest)
@@ -353,6 +504,8 @@ def _tidy(manifest: dict[str, Any]) -> None:
                 continue
             p.unlink(missing_ok=True)
     root = cache.CACHE_ROOT / CACHE_BUCKET
+    if bucket is not None and not _complete(manifest):
+        return
     if root.is_dir():
         for p in root.iterdir():
             if bucket is None or p.resolve() != bucket.resolve():
@@ -439,6 +592,120 @@ def start_fetch(manifest: dict[str, Any]) -> bool:
 
     threading.Thread(target=run, name="android-app-fetch", daemon=True).start()
     return True
+
+
+# ─── keeping it current after an update ───────────────────────────────────
+# An update that brings a new release.json leaves the old release serving
+# (_fallback) and, where the household allows it, fetches the new one by
+# itself: the admin chose to have the app on this server, and this keeps
+# that choice current. Never the first download (owner decision
+# 2026-10-15), never under "sometimes" (big automatic downloads stay off,
+# docs/INTERNET.md) or "never", never before the question is answered
+# (every default stays as it was), and never while the container guard's
+# freeze is on. Once per start: a first try after AUTO_DELAYS[0], then a
+# retry after each later delay while it fails.
+
+AUTO_DELAYS = (120.0, 600.0, 3600.0, 6 * 3600.0, 24 * 3600.0)
+
+_auto: dict[str, Any] = {"state": "idle", "reason": None, "tries": 0, "next_at": None}
+
+
+def auto_fetch_decision(manifest: dict[str, Any], policy: str | None = None) -> tuple[bool, str]:
+    """Whether :func:`auto_refresh` may fetch this release now, and why
+    (or why not), under the internet answer ``policy`` (default: the live
+    one, domovoi/egress.py)."""
+    from domovoi import egress
+
+    rel = manifest.get("release")
+    if not rel:
+        return False, "there is no app release yet"
+    if _complete(manifest):
+        return False, f"Domovoi {rel['version_name']} is already on this server"
+    pol = egress.policy() if policy is None else policy
+    if pol == "never":
+        return False, "internet access is turned off for this box (Settings → Internet): upload the APKs instead"
+    if pol == "sometimes":
+        return False, ("internet access is “sometimes”, so big downloads wait for an admin: press "
+                       "“Download the app to this server”")
+    if pol != "always":
+        return False, ("internet access hasn't been answered yet (Settings → Internet), so downloads wait "
+                       "for an admin: press “Download the app to this server”")
+    fb = _fallback(manifest)
+    if fb is None:
+        return False, ("no admin has put the app on this server yet: the first download is an admin's "
+                       "(“Download the app to this server”)")
+    return True, f"updating the app on this server from Domovoi {fb['version_name']} to {rel['version_name']}"
+
+
+async def auto_refresh(load: Callable[[], dict[str, Any]] | None = None, *,
+                       delays: tuple[float, ...] = AUTO_DELAYS,
+                       sleep: Callable[[float], Awaitable[Any]] | None = None,
+                       frozen: Callable[[], Awaitable[bool]] | None = None,
+                       poll: float = 2.0) -> str:
+    """Fetch the manifest's release in the background when
+    :func:`auto_fetch_decision` allows it: once, with a retry after each of
+    ``delays`` while it fails. Returns the last word (also in ``_auto``,
+    which the admin card shows)."""
+    import asyncio
+
+    sleep = sleep or asyncio.sleep
+    load = load or load_manifest
+    why = "not tried"
+    for i, delay in enumerate(delays):
+        _auto.update(state="waiting", next_at=time.time() + delay)
+        await sleep(delay)
+        _auto["next_at"] = None
+        try:
+            manifest = load()
+        except ManifestError as e:
+            _auto.update(state="skipped", reason=str(e))
+            return str(e)
+        go, why = auto_fetch_decision(manifest)
+        if not go:
+            _auto.update(state="done" if _complete(manifest) else "skipped", reason=why)
+            log.info("Android app: no automatic download: %s", why)
+            return why
+        if frozen is not None and await frozen():
+            why = "the container guard's freeze is on"
+            _auto.update(state="skipped", reason=why)
+            return why
+        _auto.update(state="running", reason=why, tries=i + 1)
+        log.info("Android app: %s", why)
+        start_fetch(manifest)   # False: an admin's fetch is running, and is waited for the same way
+        while _job["running"]:
+            await sleep(poll)
+        if _complete(manifest):
+            why = f"Domovoi {manifest['release']['version_name']} is on this server"
+            _auto.update(state="done", reason=why)
+            return why
+        why = _job.get("message") or "the download failed"
+        _auto.update(state="failed", reason=why)
+        log.warning("Android app: automatic download failed (try %d of %d): %s", i + 1, len(delays), why)
+    return why
+
+
+_auto_task: Any = None
+
+
+def schedule_auto_refresh(frozen: Callable[[], Awaitable[bool]] | None = None) -> None:
+    """Start :func:`auto_refresh` on the running loop (the core's start)."""
+    import asyncio
+
+    global _auto_task
+    if _auto_task is not None and not _auto_task.done():
+        return
+    _auto_task = asyncio.get_running_loop().create_task(auto_refresh(frozen=frozen), name="android-app-refresh")
+
+
+async def cancel_auto_refresh() -> None:
+    global _auto_task
+    task, _auto_task = _auto_task, None
+    if task is not None and not task.done():
+        task.cancel()
+        try:
+            await task
+        except BaseException:  # noqa: BLE001 — cancelled, or it failed: either way it is gone
+            pass
 
 
 def upload_target(manifest: dict[str, Any]) -> Path:

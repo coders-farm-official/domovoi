@@ -146,8 +146,8 @@ serves an APK it verifies the file's own v2/v3 signature and requires that
 certificate (`domovoi/android_app.py`, `domovoi/apk_signature.py`). It gets
 the files from this repo's GitHub release only when an admin presses
 **Download the app to this server** (on the spare-device card or Settings →
-Phones & browsers; never by itself), or from an admin's upload when internet access
-is off. `release` is `null` until the first release, and
+Phones & browsers; the first time never by itself), or from an admin's upload when
+internet access is off. After an update brings a newer release, the release already on the server keeps serving until the new one is here, and a server whose internet answer is **Yes, always** fetches it by itself, once per start with retries; under **Sometimes**, **No** or no answer it waits for an admin's press. `release` is `null` until the first release, and
 every page says "no app release yet".
 
 Publishing is the owner's job, on his own machine: the signing key never

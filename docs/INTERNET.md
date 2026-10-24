@@ -579,7 +579,11 @@ allowed, they send short text:
   station's audio to Shazam to name the song.
 
 And only if you choose them: downloads an admin starts (models, plugins,
-updates, the satellite cache). On a Windows install that includes the
+updates, the satellite cache). One of them stays current by itself: once an
+admin has put the Android app on the server for phones, a box answered
+**Yes, always** fetches the newer app an update names (from the project's
+GitHub release, once per start with retries); under **Sometimes** it waits
+for the admin's **Download the app to this server**, as big downloads do. On a Windows install that includes the
 Windows part of **Update Domovoi**: the tray on the PC downloads the
 release's `DomovoiSetup.exe`, its manifest and their signatures from
 github.com, after an admin asked for it in the dashboard or chose it in the
