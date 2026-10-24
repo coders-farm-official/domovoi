@@ -4202,7 +4202,17 @@ const GetTheAppCard = () => {
       <Card title="Get the Domovoi app" sub={sub}>
         {admin
           ? <div style={{ padding: '12px 16px' }}><AppOnServer onReady={() => setTick(t => t + 1)}/></div>
-          : note(`The app isn’t on this server yet (Domovoi ${app.release.version_name}). Ask whoever runs Domovoi to press “Download the app to this server” here, signed in as admin.`)}
+          : (
+            <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div>The app isn’t on this server yet (Domovoi {app.release.version_name}), so there is no code to scan.
+                An admin puts it here: sign in as admin, then press “Download the app to this server”.</div>
+              <div>
+                <Button icon="key" onClick={() => { try { Auth.openModal(); } catch (e) { /* no auth.js */ } }}>
+                  sign in as admin
+                </Button>
+              </div>
+            </div>
+          )}
       </Card>
     );
   }

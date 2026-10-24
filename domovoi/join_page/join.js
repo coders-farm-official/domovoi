@@ -205,6 +205,7 @@
   function renderApp(err, app, code) {
     if (err) {
       stateLine('Couldn’t ask this server about the app (' + err.message + '). Reload the page in a moment.', true);
+      show('reload-line', true);
       return;
     }
     var already = code && !code.bad ? ' If the Domovoi app is already on this phone, go on to step 2.' : '';
@@ -220,8 +221,13 @@
     var ready64 = main64 && main64.ready;
     var ready32 = main32 && main32.ready;
     if (!ready64 && !ready32) {
-      stateLine('The app isn’t on this server yet. Ask whoever runs Domovoi to press “Download the app ' +
-        'to this server” on the dashboard (Settings → Phones & browsers), then reload this page.' + already, true);
+      // The last resort: the dashboard offers this page's code only once the
+      // app is here, but an update or a cleared cache can still land a phone
+      // here. Worded for the phone's owner being the admin too.
+      stateLine('The app isn’t on this server yet. Open the Domovoi dashboard on your computer → Settings → ' +
+        'Rooms & devices → Phones & browsers → Download the app to this server, then reload this page. ' +
+        '(Not the admin? Ask whoever runs Domovoi to do that.)' + already, true);
+      show('reload-line', true);
       return;
     }
     show('install-state', false);
@@ -302,6 +308,8 @@
       show('step-room', true);
       show('missing-app', missingApp);
     }
+    var reload = $('reload');
+    if (reload) reload.onclick = function () { window.location.reload(); return false; };
     get('/v1/android-app', function (err, app) { renderApp(err, app, code); });
   }
 

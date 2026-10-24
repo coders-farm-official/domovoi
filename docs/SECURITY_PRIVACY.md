@@ -3676,8 +3676,18 @@ devices, so:
   (the URL is fixed by the manifest's tag and file name), through the
   outbound gate (public addresses only, each redirect vetted), only when an
   admin presses **Download the app to this server**
-  (`POST /v1/admin/android-app/fetch`; nothing starts it by itself, owner
-  decision 2026-10-15); refused under `INTERNET_ACCESS=never`. Or an admin's upload
+  (`POST /v1/admin/android-app/fetch`; nothing starts a first download by
+  itself, owner decision 2026-10-15); refused under `INTERNET_ACCESS=never`.
+  The one exception keeps an admin's choice current: after an update
+  brings a newer release, a server that already holds an older one and
+  whose internet answer is `always` fetches the new one by itself, once
+  per start with backoff (`android_app.auto_refresh`; never under
+  `sometimes`, `never` or no answer, never during a container-guard
+  freeze). Until it is here the older release keeps serving: its files are
+  held to the pinned release key's signature and their ABI (their folder
+  and names say which release; nothing else in it is trusted), and
+  `min_served_version_code` in `release.json` rules out releases that must
+  not be served any more. Or an admin's upload
   (`POST /v1/admin/android-app/upload`), kept only if it is byte for byte
   one of the manifest's files and passes the same checks. Nothing partial is
   ever in place: a download or upload lands under a temporary name and is

@@ -466,6 +466,7 @@ def card(tmp_path_factory) -> dict:
         "windows_runtime": WIN_RUNTIME,
         "linux_runtime": LINUX_RUNTIME,
         "conflict": None,
+        "android_app": APP_READY,
     }
     qr_js = (REPO / "web" / "static" / "vendor" / "qrcode" / "qrcode.js").read_text(encoding="utf-8")
     api = {
@@ -687,14 +688,28 @@ const phone = h.find((e) => String((e.props && e.props.className) || '').include
 const app = () => h.find((e) => String((e.props && e.props.className) || '').includes('spare-app'));
 const out = { text: (phone ? w.__deep(phone) : '') + ' | ' + (app() ? w.__deep(app()) : ''),
               qr: w.__qrData.slice(), buttons: [] };
+// Where the codes are drawn: on the column, or only under "the phone
+// already has the Domovoi app?" (2026-10-23: no code to scan for a page
+// that couldn't install anything).
+const qrCount = () => {
+  const qrs = h.findAll((e) => e.type === 'svg' && String(e.props.className || '').includes('spare-qr'));
+  const has = h.find((e) => String((e.props && e.props.className) || '').includes('spare-phone-has-app'));
+  return { shown: qrs.filter((q) => !has || !h.ancestors(q).includes(has)).length,
+           behind_has_app: has ? qrs.filter((q) => h.ancestors(q).includes(has)).length : 0 };
+};
+out.qrs = qrCount();
 out.buttons = app() ? h.findAll((e) => e.type === 'button' && h.ancestors(e).includes(app())).map(w.__deep) : [];
 if (w.__act === 'fetch') { await h.click(isBtn('Download the app to this server')); await w.__settle(h, 10); }
+if (w.__act === 'signin') { await h.click(isBtn('sign in as admin')); await w.__settle(h); }
 if (w.__act === 'upload') {
   const input = h.find((e) => e.type === 'input' && e.props.type === 'file');
   await input.props.onChange({ target: { files: [{ name: 'domovoi-9.9.9-arm64-v8a.apk' }] } });
   await w.__settle(h, 10);
 }
 out.after = app() ? w.__deep(app()) : '';
+out.afterButtons = app() ? h.findAll((e) => e.type === 'button' && h.ancestors(e).includes(app())).map(w.__deep) : [];
+out.qrsAfter = qrCount();
+out.modal = w.__modal || 0;
 out.calls = h.calls;
 return out;
 """
@@ -718,10 +733,22 @@ def phone(tmp_path_factory) -> dict:
     common = {"GET /api/satellites": [], "GET /api/satellites/approvals": [],
               "GET /api/satellites/pending": [], "GET /api/capabilities": {"host_kind": "linux"}}
 
-    def scenario(app, act="", extra=None):
+    def scenario(app, act="", extra=None, auth=""):
         api = dict(common, **{"POST /api/satellites/enrolment": dict(base, android_app=app)}, **(extra or {}))
         return {"files": FILES, "component": "SatellitesPanel", "api": api, "script": _PHONE_SCRIPT,
-                "setup": _SETUP + qr_js + "\nwindow.qrcode = qrcode;\n" + _QR_SPY + f"\nwindow.__act = {act!r};\n"}
+                "setup": _SETUP + auth + qr_js + "\nwindow.qrcode = qrcode;\n" + _QR_SPY
+                + f"\nwindow.__act = {act!r};\n"}
+
+    # A reloaded tab past its window: the cookie shows the page, the
+    # admin sign-in a download needs is gone (adminReloadState viewOnly).
+    view_only = ("Auth = { status: { authenticated: true }, subscribe: () => () => {}, isLoggedIn: () => false, "
+                 "canResume: () => false, headers: () => ({}), modalOpen: false, "
+                 "openModal: () => { window.__modal = (window.__modal || 0) + 1; } };")
+    older = dict(APP_READY, release=dict(APP_READY["release"], version_name="9.9.8", version_code=98),
+                 apks=[dict(a, file=a["file"].replace("9.9.9", "9.9.8"), path=a["path"].replace("9.9.9", "9.9.8"))
+                       for a in APP_READY["apks"]],
+                 newer={"version_name": "9.9.9", "version_code": 99}, current_ready=False,
+                 current_version_name="9.9.9", missing=[a["file"] for a in APP_APKS], bytes_cached=0)
 
     def card(app, extra=None, guest=False):
         auth = ("Auth = { status: {}, subscribe: () => () => {}, isLoggedIn: () => false, "
@@ -747,6 +774,10 @@ def phone(tmp_path_factory) -> dict:
                             {"UPLOAD /api/satellites/android-app/upload": dict(
                                 APP_READY, accepted="domovoi-9.9.9-arm64-v8a.apk")}),
         "ready": scenario(APP_READY),
+        "older": scenario(older),
+        "view_only": scenario(APP_MISSING, "signin", auth=view_only),
+        "refused_401": scenario(APP_MISSING, "fetch", {"POST /api/satellites/android-app/fetch": {
+            "__error": {"status": 401, "message": "admin session required"}}}),
         "card_ready": card(ready_public),
         "card_none": card(dict(ready_public, release=None, apks=[], ready=False)),
         "card_missing": card(dict(ready_public, ready=False), {"GET /api/satellites/android-app": APP_MISSING}),
@@ -756,8 +787,39 @@ def phone(tmp_path_factory) -> dict:
 
 def test_the_phone_qr_carries_the_join_link(phone):
     payload = enrolment.build("http://192.168.1.20:6370", FP, "Kid's Room")
-    assert phone["none"]["qr"] == [enrolment.join_link(payload)]
-    assert "phone's camera" in phone["none"]["text"]
+    assert phone["ready"]["qr"] == [enrolment.join_link(payload)]
+    assert "phone's camera" in phone["ready"]["text"]
+    assert phone["ready"]["qrs"] == {"shown": 1, "behind_has_app": 0}
+
+
+def test_no_qr_to_scan_until_the_app_is_on_the_server(phone):
+    """Kamron's Moto, 2026-10-23: the card showed the code, the page it
+    opened said the app wasn't on the server. Now the first step says so,
+    and the code appears once the app is here."""
+    r = phone["missing"]
+    assert "First, put the Domovoi app on this server, so phones can install it from here." in r["text"]
+    assert "phone's camera" not in r["text"]
+    assert r["qrs"]["shown"] == 0, "no code on the column while the app isn't here"
+    assert r["qrs"]["behind_has_app"] == 1 and "The phone already has the Domovoi app?" in r["text"]
+    offline = phone["offline"]
+    assert offline["qrs"]["shown"] == 0 and offline["qrsAfter"]["shown"] == 1, "the upload landed: the code appears"
+
+
+def test_an_older_release_is_offered_as_what_it_is_with_the_newer_one_to_fetch(phone):
+    r = phone["older"]
+    assert r["qrs"]["shown"] == 1, "phones can install 9.9.8 from here now"
+    assert "Phones get Domovoi 9.9.8 from this server" in r["text"] and "until Domovoi 9.9.9" in r["text"]
+    assert any("Download the app to this server (about 127 MB)" in b for b in r["buttons"])
+
+
+def test_without_the_admin_sign_in_the_step_says_an_admin_does_it(phone):
+    r = phone["view_only"]
+    assert "An admin needs to do this step" in r["text"]
+    assert not any("Download the app" in b for b in r["buttons"]) and any("sign in as admin" in b for b in r["buttons"])
+    assert r["modal"] == 1, "the button opens the sign-in"
+    refused = phone["refused_401"]
+    assert "An admin needs to do this step" in refused["after"]
+    assert not any("Download the app" in b for b in refused["afterButtons"])
 
 
 def test_no_release_is_said_plainly_with_no_buttons(phone):
@@ -768,7 +830,7 @@ def test_no_release_is_said_plainly_with_no_buttons(phone):
 
 def test_a_missing_app_waits_for_the_download_button_then_shows_progress(phone):
     r = phone["missing"]
-    assert "The app isn’t on this server yet (Domovoi 9.9.9: 64-bit 79 MB, 32-bit 48 MB)" in r["text"]
+    assert "Domovoi 9.9.9 for phones: 127 MB from the project’s GitHub release" in r["text"]
     assert any("Download the app to this server (about 127 MB)" in b for b in r["buttons"])
     assert any("upload an APK" in b for b in r["buttons"])
     assert [c.get("path") for c in r["calls"] if c.get("method") == "POST"].count(
@@ -786,7 +848,8 @@ def test_a_failed_download_stays_on_the_card_with_the_button(phone):
 
 def test_with_internet_off_only_the_upload_is_offered_and_it_lands(phone):
     r = phone["offline"]
-    assert "Internet access is off" in r["text"] and "domovoi-9.9.9-arm64-v8a.apk" in r["text"]
+    assert "Internet access is turned off for this box (Settings → Internet)" in r["text"]
+    assert "domovoi-9.9.9-arm64-v8a.apk" in r["text"]
     assert not any("Download the app" in b for b in r["buttons"]) and any("upload an APK" in b for b in r["buttons"])
     assert any(c.get("method") == "UPLOAD" and c.get("path") == "/api/satellites/android-app/upload" for c in r["calls"])
     assert "This server hands out Domovoi 9.9.9" in r["after"]
@@ -806,7 +869,8 @@ def test_settings_devices_offers_the_app_to_household_phones(phone):
     admin = phone["card_missing"]
     assert "Download the app to this server (about 127 MB)" in admin["text"] and admin["qr"] == []
     guest = phone["card_missing_guest"]
-    assert "Ask whoever runs Domovoi to press “Download the app to this server”" in guest["text"]
+    assert "An admin puts it here: sign in as admin, then press “Download the app to this server”" in guest["text"]
+    assert "sign in as admin" in guest["text"] and guest["qr"] == []
     assert "Download the app to this server (about" not in guest["text"], "no button a guest can't use"
 
 

@@ -1121,8 +1121,8 @@ withheld from an unpaired client); every write is **Device** tier.
 | `POST /api/satellites/windows-runtime/fetch` | **Admin** | — | Proxy → core `POST /v1/admin/satellite-windows/fetch` (the card's **get the Windows files**). |
 | `GET /api/satellites/windows-setup` | **Admin read** | — | Proxy → core `GET /v1/admin/satellite-setup`. |
 | `POST /api/satellites/windows-setup/fetch` | **Admin** | — | Proxy → core `POST /v1/admin/satellite-setup/fetch` (the card's **get the Windows Setup**). |
-| `GET /api/satellites/android-app` | **Admin read** | — | Proxy → core `GET /v1/admin/android-app`. |
-| `POST /api/satellites/android-app/fetch` | **Admin** | — | Proxy → core `POST /v1/admin/android-app/fetch`: the cards' **Download the app to this server**, the only thing that starts a download. |
+| `GET /api/satellites/android-app` | **Admin read** | — | Proxy → core `GET /v1/admin/android-app`: `ready` (a phone can install the app from here now), `current_ready` (and it is the release this server's version names; `newer` set while an older one serves), `missing`, sizes, `fetch`, `auto` (the refresh after an update), `internet_off`. |
+| `POST /api/satellites/android-app/fetch` | **Admin** | — | Proxy → core `POST /v1/admin/android-app/fetch`: the cards' **Download the app to this server**. The only other download is the core's own refresh after an update, where an older release is already held and internet access is `always` (`domovoi/android_app.py` `auto_refresh`). |
 | `POST /api/satellites/android-app/upload` | **Admin** | multipart `file` | Streamed through to core `POST /v1/admin/android-app/upload` without being held here (the card's **upload an APK**); the core's answer verbatim. `415` for anything but a multipart upload. |
 | `GET /api/satellites/linux-runtime` | **Admin read** | — | Proxy → core `GET /v1/admin/satellite-linux`. |
 | `POST /api/satellites/linux-runtime/fetch` | **Admin** | — | Proxy → core `POST /v1/admin/satellite-linux/fetch` (the card's **get the Linux Python**). |

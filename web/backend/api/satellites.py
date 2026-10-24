@@ -527,8 +527,10 @@ async def spare_device_enrolment(body: SpareDeviceEnrolRequest, request: Request
 async def _android_app_for_a_phone(request: Request) -> dict[str, Any] | None:
     """The admin view of the app on the core, for the card's phone column,
     or None from a core that doesn't say. Read only: the server downloads
-    the app only when an admin presses the card's button (owner decision
-    2026-10-15), never because a code was made."""
+    the app the first time only when an admin presses the card's button
+    (owner decision 2026-10-15), never because a code was made; the card
+    offers the phone's QR code only once ``ready`` says a phone can install
+    it from here."""
     status, doc = await get_admin("/v1/admin/android-app", headers=auth_forward_headers(request))
     return doc if status == 200 and isinstance(doc, dict) else None
 
@@ -550,7 +552,9 @@ async def android_app_status(request: Request):
     "/android-app/fetch",
     # The server downloads the release's APKs from GitHub only on an
     # admin's button press, each held to android/release.json and its
-    # signature; nothing else starts a download (owner decision 2026-10-15).
+    # signature. Nothing else starts a first download (owner decision
+    # 2026-10-15); the core's own refresh after an update only keeps a
+    # release an admin put there current (domovoi/android_app.py).
     dependencies=[Depends(require_admin_mutation)],
 )
 async def android_app_fetch(request: Request):
