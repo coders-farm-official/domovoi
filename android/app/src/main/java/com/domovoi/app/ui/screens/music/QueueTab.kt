@@ -260,7 +260,7 @@ private fun RoomQueueHeader(rooms: List<String>, rq: RoomQueueModel) {
 
     DomovoiCard(Modifier.fillMaxWidth(), padding = 0) {
         if (rooms.isEmpty()) {
-            EmptyState("no rooms provisioned yet", "connect a satellite to bring its room online")
+            EmptyState("no rooms provisioned yet", "set up a room to bring it online")
             return@DomovoiCard
         }
 

@@ -26,7 +26,7 @@ fun RoomModeEntryCard() {
         Text("Use this device as a room", style = MaterialTheme.typography.titleMedium)
         Text(
             "A spare phone or tablet on its charger can be a room: it listens for the wake word and speaks, " +
-                "like a satellite. The normal app is locked while it is one.",
+                "like any other room device. The normal app is locked while it is one.",
             style = MaterialTheme.typography.bodyMedium,
             color = Domovoi.colors.fgMuted,
         )

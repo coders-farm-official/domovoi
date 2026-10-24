@@ -317,8 +317,8 @@ internal fun songTitle(np: SatNowPlaying?): String =
 internal const val TIMER_SCOPE_LABEL = "Only reminders for this device"
 
 internal const val TIMER_SCOPE_HELP =
-    "Covers timers and reminders. Off: this satellite also announces the ones set in other rooms " +
-        "and says which room they came from. On: it announces only the ones set on this satellite. " +
+    "Covers timers and reminders. Off: this room also announces the ones set in other rooms " +
+        "and says which room they came from. On: it announces only the ones set in this room. " +
         "The room a timer or reminder was set in always announces it."
 
 internal fun timerScopePath(room: String): String = "/api/satellites/$room/timer-announcements"

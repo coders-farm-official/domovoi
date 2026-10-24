@@ -422,7 +422,7 @@ private fun TransportRow(isRemote: Boolean, effPlaying: Boolean, rooms: List<Str
                     // Only rooms that answered now-playing are listed; with
                     // none, say so rather than offer a room that isn't there.
                     Text(
-                        "no rooms online — connect a satellite",
+                        "no rooms online — set up a room",
                         style = MaterialTheme.typography.bodySmall,
                         color = Domovoi.colors.fgMuted,
                         modifier = Modifier

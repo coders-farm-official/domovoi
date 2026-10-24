@@ -143,10 +143,10 @@ class HomeApiTest {
         assertEquals("/api/satellites/announce-all", r.path)
         assertEquals("dinner's ready", body(r)["message"]!!.jsonPrimitive.content)
         assertEquals(listOf("kitchen", "office"), heard)
-        assertEquals("broadcasted to 2 satellites", announceToast(heard, 2))
+        assertEquals("broadcasted to 2 rooms", announceToast(heard, 2))
         assertEquals("broadcast partial — 2/3 reached (kitchen, office)", announceToast(heard, 3))
-        assertEquals("broadcasted to 1 satellite", announceToast(listOf("kitchen"), 1))
-        assertEquals("broadcast queued but no satellites accepted it (dead connections?)", announceToast(emptyList(), 2))
+        assertEquals("broadcasted to 1 room", announceToast(listOf("kitchen"), 1))
+        assertEquals("broadcast queued but no rooms accepted it (dead connections?)", announceToast(emptyList(), 2))
     }
 
     @Test fun calendarAsksFromLocalMidnight() = runBlocking {

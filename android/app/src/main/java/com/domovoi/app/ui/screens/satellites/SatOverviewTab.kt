@@ -380,7 +380,7 @@ private fun AnnounceSection(s: Satellite) {
                 value = msg,
                 onValueChange = { msg = it },
                 placeholder = {
-                    Text("speak through the ${s.room_id} satellite…", color = Domovoi.colors.fgSubtle)
+                    Text("speak in the ${s.room_id} room…", color = Domovoi.colors.fgSubtle)
                 },
                 enabled = s.online,
                 singleLine = true,
@@ -781,7 +781,7 @@ private fun MaintenanceSection(
             )
         }
         Text(
-            "restart bounces domovoi-satellite.service · upgrade syncs satellite code to " +
+            "restart bounces domovoi-satellite.service · upgrade syncs the room software to " +
                 "${coreSha ?: "the server's tree"} then restarts",
             style = MaterialTheme.typography.labelSmall,
             color = Domovoi.colors.fgFaint,
@@ -802,7 +802,7 @@ private fun MaintenanceSection(
         ConfirmDialog(
             title = "upgrade ${s.room_id}?",
             body = "Upgrades to ${coreSha ?: "the latest Domovoi code"}. It pulls the new " +
-                "satellite code from the server, backs up its current tree, and restarts — " +
+                "room software from the server, backs up its current tree, and restarts — " +
                 "dropping offline for a few seconds. If the new code won't start, it rolls back automatically. " +
                 "Some updates finish at the next boot: if it then says \"reboot needed\", unplug it " +
                 "for a few seconds and plug it back in.",

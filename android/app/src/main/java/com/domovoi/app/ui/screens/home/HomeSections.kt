@@ -586,7 +586,7 @@ internal fun HomeRooms(
                 QuietLine(if (dbDown) "rooms unavailable · the database isn't answering" else "couldn't load rooms")
             }
             rooms.isEmpty() -> HomeCard(null) {
-                EmptyState("no rooms yet", action = { HomeLink("add a satellite") { onOpenRoom("") } })
+                EmptyState("no rooms yet", action = { HomeLink("set up a room") { onOpenRoom("") } })
             }
             else -> {
                 val groups = groupRooms(sortRooms(rooms))

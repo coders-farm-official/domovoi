@@ -249,7 +249,7 @@ fun SatConversationsTab(room: String) {
                 if (filtered.isEmpty()) {
                     EmptyState(
                         "nothing said in this room",
-                        if (q.isNotBlank()) "q = “$q”" else "satellite has been quiet",
+                        if (q.isNotBlank()) "q = “$q”" else "this room has been quiet",
                     )
                 } else {
                     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {

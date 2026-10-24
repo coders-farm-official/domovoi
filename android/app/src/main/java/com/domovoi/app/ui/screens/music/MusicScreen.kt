@@ -332,7 +332,7 @@ fun MusicScreen() {
     // ── Playlists actions ─────────────────────────────────────────────
     val onPlayPlaylist: (Playlist) -> Unit = play@{ p ->
         val room = rooms.firstOrNull()
-            ?: return@play toast("no rooms online — connect a satellite to play ${p.name}")
+            ?: return@play toast("no rooms online — set up a room to play ${p.name}")
         toast("playing ${p.name} in $room…")
         scope.launchAction(
             action = {

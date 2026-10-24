@@ -144,7 +144,7 @@ fun SatellitesScreen(embedded: Boolean = false) {
                     if (embedded) {
                         Text(summary, style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fgMuted)
                     } else {
-                        PageHeader("Satellites", summary)
+                        PageHeader("Rooms", summary)
                     }
                 }
                 val err = satsState.error
@@ -155,7 +155,7 @@ fun SatellitesScreen(embedded: Boolean = false) {
                         item(span = { GridItemSpan(maxLineSpan) }) { ErrorState(err, satsState.refresh) }
                     sats.isEmpty() ->
                         item(span = { GridItemSpan(maxLineSpan) }) {
-                            EmptyState("no satellites provisioned yet", "connect a Pi to bring a room online")
+                            EmptyState("no rooms set up yet", "set up a Raspberry Pi room, or use a spare phone as a room")
                         }
                     else -> items(sats, key = { it.room_id }) { s ->
                         SatCard(s, extraSec) { openRoom = s.room_id }
@@ -312,7 +312,7 @@ private fun BroadcastComposer(onlineCount: Int) {
             return
         }
         if (onlineCount == 0) {
-            toast("no satellites connected — nothing to broadcast to")
+            toast("no rooms connected — nothing to broadcast to")
             return
         }
         scope.launch {
@@ -328,11 +328,11 @@ private fun BroadcastComposer(onlineCount: Int) {
                 val delivered = res.announced_to
                 when {
                     delivered.isEmpty() ->
-                        toast("broadcast queued but no satellites accepted it (dead connections?)")
+                        toast("broadcast queued but no rooms accepted it (dead connections?)")
                     delivered.size < onlineCount ->
                         toast("broadcast partial — ${delivered.size}/$onlineCount reached (${delivered.joinToString(", ")})")
                     else ->
-                        toast("broadcasted to ${delivered.size} satellite" + if (delivered.size == 1) "" else "s")
+                        toast("broadcasted to ${delivered.size} room" + if (delivered.size == 1) "" else "s")
                 }
                 msg = ""
             }.onFailure { toast("broadcast failed: ${it.message}") }
@@ -361,7 +361,7 @@ private fun BroadcastComposer(onlineCount: Int) {
         HorizontalDivider(color = Domovoi.colors.borderSoft)
         Column(Modifier.fillMaxWidth().background(Domovoi.colors.sunken).padding(16.dp)) {
             Text(
-                "Speaks through every connected satellite simultaneously.",
+                "Speaks in every connected room at once.",
                 style = MaterialTheme.typography.bodySmall,
                 color = Domovoi.colors.fgMuted,
             )

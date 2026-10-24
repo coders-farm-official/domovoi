@@ -337,7 +337,7 @@ class CastPlanTest {
     @Test fun aCastWithNoSatelliteYetNamesTheSatellite() {
         val body = "{\"failed\":\"satellite\",\"detail\":\"no satellite has connected to the domovoi yet\"}"
         assertEquals(
-            "couldn't cast to den: no satellite has connected to the domovoi yet, so there's no speaker to play on",
+            "couldn't cast to den: no room has connected to the domovoi yet, so there's no speaker to play on",
             CastPlanner.failureNote(ApiException(503, "503 Service Unavailable: $body", body = body), "den"),
         )
     }

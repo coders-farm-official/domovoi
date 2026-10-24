@@ -352,7 +352,7 @@ internal fun ConnectionPanel() {
             PanelCard(
                 "Listening as",
                 "Podcast and audiobook resume positions sync to this person — pick yourself to " +
-                    "share progress with the satellites; leave it on this device to keep it local.",
+                    "share progress with the rooms; leave it on this device to keep it local.",
             ) {
                 if (peopleState.error != null && peopleState.data == null) {
                     Text(

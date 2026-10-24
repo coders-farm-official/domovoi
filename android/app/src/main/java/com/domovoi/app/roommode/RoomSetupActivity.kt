@@ -210,7 +210,7 @@ private fun NeedsLock(onSetLock: () -> Unit, onCancel: () -> Unit) {
 internal val EXPLAINER: List<Pair<String, String>> = listOf(
     "Always listening" to
         "The microphone stays on to hear the wake word. What you say after the wake word goes to your Domovoi server, " +
-        "on your home network, like a Domovoi satellite. Nothing goes anywhere else.",
+        "on your home network, as it does from every other room. Nothing goes anywhere else.",
     "A shared device" to
         "This phone becomes a room for the whole household: anyone can talk to it, drop in on it and play music here, " +
         "and guests can control the room's music while it plays.",

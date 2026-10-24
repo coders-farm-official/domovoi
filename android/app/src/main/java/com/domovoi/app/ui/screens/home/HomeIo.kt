@@ -117,10 +117,10 @@ internal fun stopAllToast(total: Int, outcome: StopOutcome): String {
 /** An honest announce toast: a 200 can still mean dead connections under
  *  the server's active-sessions map, so it reads the rooms that took it. */
 internal fun announceToast(delivered: List<String>, onlineCount: Int): String = when {
-    delivered.isEmpty() -> "broadcast queued but no satellites accepted it (dead connections?)"
+    delivered.isEmpty() -> "broadcast queued but no rooms accepted it (dead connections?)"
     delivered.size < onlineCount ->
         "broadcast partial — ${delivered.size}/$onlineCount reached (${delivered.joinToString(", ")})"
-    else -> "broadcasted to ${plural(delivered.size, "satellite")}"
+    else -> "broadcasted to ${plural(delivered.size, "room")}"
 }
 
 /** A `satellites.wifi.changed` payload: room → its new Wi-Fi report.

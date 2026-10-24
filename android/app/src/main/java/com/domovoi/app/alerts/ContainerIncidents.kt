@@ -174,7 +174,7 @@ internal fun deriveBanner(incidents: List<ContainerIncident>): IncidentBanner {
         "${shown.size} problems with Domovoi's containers need attention."
     }
     if (tone == "tamper") {
-        text += " Plugin installs, updates and satellite upgrades are paused until an admin reviews it."
+        text += " Plugin installs, updates and room upgrades are paused until an admin reviews it."
     }
     return IncidentBanner(true, tone, text, shown.size, shown.map { it.id }, frozen)
 }
@@ -349,8 +349,8 @@ fun incidentMeta(inc: ContainerIncident, rel: (String?) -> String): String {
 /** What a tamper incident holds back, while one is open (the web's list). */
 val FREEZE_LIST = listOf(
     "plugin installs, upgrades and enabling a plugin",
-    "satellite code upgrades and the plugin payloads they carry",
-    "satellite media preparation",
+    "room software upgrades and the plugin payloads they carry",
+    "preparing a room's SD card",
     "pulling and applying Domovoi updates",
 )
 

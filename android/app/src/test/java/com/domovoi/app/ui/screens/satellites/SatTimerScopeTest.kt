@@ -87,8 +87,8 @@ class SatTimerScopeTest {
     @Test fun theWordsAreTheWebsWords() {
         assertEquals("Only reminders for this device", TIMER_SCOPE_LABEL)
         assertEquals(
-            "Covers timers and reminders. Off: this satellite also announces the ones set in other rooms and says " +
-                "which room they came from. On: it announces only the ones set on this satellite. The room a timer " +
+            "Covers timers and reminders. Off: this room also announces the ones set in other rooms and says " +
+                "which room they came from. On: it announces only the ones set in this room. The room a timer " +
                 "or reminder was set in always announces it.",
             TIMER_SCOPE_HELP,
         )

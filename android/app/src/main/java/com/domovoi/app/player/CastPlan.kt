@@ -190,7 +190,7 @@ object CastPlanner {
                 "couldn't cast to $room: its music player on the domovoi server isn't answering " +
                     "(try again in a minute; if it keeps failing, restart the domovoi)"
             e is ApiException && e.failedPart == "satellite" ->
-                "couldn't cast to $room: no satellite has connected to the domovoi yet, so there's no speaker to play on"
+                "couldn't cast to $room: no room has connected to the domovoi yet, so there's no speaker to play on"
             e is ApiException && e.deviceTokenRequired ->
                 "couldn't cast to $room: this phone needs pairing with the domovoi again"
             e is ApiException && e.status == 404 ->

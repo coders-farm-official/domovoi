@@ -52,7 +52,7 @@ enum class Route(val label: String, val icon: ImageVector) {
     /** Not a screen of its own any more: navigating here opens Settings on
      *  its Rooms section ([settingsTabFor]), as the web's old #satellites
      *  opens Settings → Rooms. On no launcher ([LauncherlessRoutes]). */
-    Satellites("Satellites", Icons.Filled.CellTower),
+    Satellites("Rooms", Icons.Filled.CellTower),
     Calendar("Calendar", Icons.Filled.CalendarMonth),
     Stations("Stations", Icons.Filled.Radio),
     Files("Files", Icons.Filled.Folder),

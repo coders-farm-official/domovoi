@@ -190,7 +190,7 @@ private fun PhoneCallDialog(client: DropinCallClient, roomId: String, onClose: (
                     }
                 }
                 Text(
-                    "two-way audio with the ${roomId.replace('_', ' ')} satellite — speakerphone is on",
+                    "two-way audio with the ${roomId.replace('_', ' ')} room — speakerphone is on",
                     style = MaterialTheme.typography.labelSmall,
                     color = Domovoi.colors.fgFaint,
                 )

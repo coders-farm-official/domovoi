@@ -116,7 +116,7 @@ fun SatSettingsTab(room: String) {
         cfg == null -> ErrorState(state.error ?: "request failed", state.refresh)
         cfg.fields.isEmpty() -> EmptyState(
             "settings unavailable",
-            "the satellite must be online to edit its config",
+            "the room must be online to edit its config",
         )
         else -> {
             val fields = cfg.fields
@@ -131,14 +131,14 @@ fun SatSettingsTab(room: String) {
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                 ) {
                     Text(
-                        "Saving rewrites the Pi's config.toml and restarts the satellite to apply — " +
+                        "Saving rewrites the Pi's config.toml and restarts the room device to apply — " +
                             "it drops offline for a few seconds.",
                         style = MaterialTheme.typography.bodySmall,
                         color = Domovoi.colors.fgMuted,
                     )
                     if (!cfg.reported) {
                         Text(
-                            "waiting for the satellite to report its current config…",
+                            "waiting for the room to report its current config…",
                             style = MaterialTheme.typography.bodySmall,
                             color = Domovoi.colors.warn,
                             modifier = Modifier.padding(top = 4.dp),
@@ -184,7 +184,7 @@ fun SatSettingsTab(room: String) {
                                 .padding(horizontal = 12.dp, vertical = 10.dp),
                         ) {
                             Text(
-                                "These can take the satellite offline. A wrong audio device, LED, or " +
+                                "These can take the room offline. A wrong audio device, LED, or " +
                                     "mic-gain value can leave it without mic or sound until you SSH in and " +
                                     "fix ~/.domovoi/config.toml (a .bak is saved on every change).",
                                 style = MaterialTheme.typography.bodySmall,

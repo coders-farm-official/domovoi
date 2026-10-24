@@ -565,7 +565,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
                 Log.w(TAG, "models missing on the server: ${r.names}")
                 update {
                     it.copy(wakeProblem = "The server has no wake-word models yet (${r.names.joinToString()}). " +
-                        "On the dashboard: Settings → Rooms → prepare satellite media → Refresh caches.")
+                        "On the dashboard: Settings → Rooms → Prepare a room's SD card → Refresh caches.")
                 }
             }
             is RoomModels.Outcome.Failed -> {

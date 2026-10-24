@@ -356,7 +356,7 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
         val msg = announceMsg.trim()
         when {
             msg.isEmpty() -> toast("type a message first")
-            announceOnline == 0 -> toast("no satellites connected — nothing to broadcast to")
+            announceOnline == 0 -> toast("no rooms connected — nothing to broadcast to")
             announcing -> Unit
             else -> {
                 announcing = true

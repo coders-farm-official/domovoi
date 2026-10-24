@@ -108,7 +108,7 @@ internal enum class SettingsSection(
     val dashboard: String? = null,
 ) {
     Rooms("rooms", "Rooms", SettingsGroup.RoomsAndDevices,
-        "Each room's satellite: status, announcements, and each room's details.",
+        "Each room's device: status, announcements, and each room's details.",
         "satellite satellites pi speaker microphone room announce wifi", listOf("satellites")),
     PhonesAndBrowsers("phones-and-browsers", "Phones & browsers", SettingsGroup.RoomsAndDevices,
         "Which server this phone talks to, and who's listening. The household's other phones and browsers are on the dashboard.",
@@ -120,7 +120,7 @@ internal enum class SettingsSection(
         "The tabs along the bottom of this phone, left to right.",
         "phone bar tabs bottom bar layout", listOf("phonebar")),
     WakeWords("wake-words", "Wake words", SettingsGroup.Voice,
-        "The words that wake Domovoi: train your own, record clips on a satellite.",
+        "The words that wake Domovoi: train your own, record clips in a room.",
         "wake word hey hello train", dashboard = "wake-words"),
     Voices("voices", "Voices", SettingsGroup.Voice,
         "How this phone speaks: your Domovoi's voice, downloaded once, or the phone's own.",

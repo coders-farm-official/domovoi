@@ -72,7 +72,7 @@ internal fun NowPlayingStrip(
         DomovoiCard(Modifier.fillMaxWidth()) {
             EmptyState(
                 "no rooms provisioned yet",
-                "connect a satellite to bring its room online",
+                "set up a room to bring it online",
             )
         }
         return
