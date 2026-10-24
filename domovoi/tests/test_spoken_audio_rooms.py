@@ -252,7 +252,7 @@ async def test_an_unpaired_satellite_cannot_start_a_book_elsewhere(store) -> Non
 
 async def test_from_v1_intent(store) -> None:
     resp = await _say("play the audiobook dune in the garage", Context(room_id="dining_room"))
-    assert resp.text == "I can only reach another room's speaker from a room or the app."
+    assert resp.text == "I can only reach another room's speaker from a room device or the app."
 
 
 # ─── names that end in a place ───────────────────────────────────────────

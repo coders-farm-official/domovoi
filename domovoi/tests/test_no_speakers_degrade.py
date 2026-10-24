@@ -71,7 +71,7 @@ async def test_music_request_degrades_when_no_room_is_provisioned(
         Context(room_id="kitchen", online=True),
         db_session,
     )
-    assert "connected" in resp.text.lower()
+    assert "no rooms have been set up" in resp.text.lower()
 
 
 @requires_db

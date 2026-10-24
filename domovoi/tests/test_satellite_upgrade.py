@@ -152,7 +152,7 @@ async def test_admin_satellite_upgrade_503_with_no_sessions() -> None:
                 headers=await _admin_headers(),
             )
     assert r.status_code == 503
-    assert "no satellites" in r.json()["detail"].lower()
+    assert "no rooms" in r.json()["detail"].lower()
 
 
 @requires_db

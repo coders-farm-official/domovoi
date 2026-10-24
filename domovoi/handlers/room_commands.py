@@ -111,7 +111,7 @@ UNPAIRED_TEXT = (
     "This speaker isn't paired with the house, so it can't change what's "
     "playing in other rooms."
 )
-NO_APP_TEXT = "I can only reach another room's speaker from a room or the app."
+NO_APP_TEXT = "I can only reach another room's speaker from a room device or the app."
 EVERYWHERE_OTHER_TEXT = "I can only do that in one room at a time."
 
 # What a satellite without a pairing token may do in a room that is

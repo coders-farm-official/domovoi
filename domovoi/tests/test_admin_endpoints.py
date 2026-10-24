@@ -2,7 +2,7 @@
 
 Covers each admin endpoint's happy path and the error shapes the web
 backend's `bridge_response` relies on (404 for unknown room, 503 for
-no satellites at all). Library reindex/enrich are covered by their
+no rooms at all). Library reindex/enrich are covered by their
 own worker tests; here we just verify the queued ack returns 200.
 """
 
@@ -60,7 +60,7 @@ async def test_admin_announce_returns_503_with_no_sessions() -> None:
                 "/v1/admin/announce", json={"message": "dinner is ready"}
             )
         assert r.status_code == 503
-        assert "no satellites" in r.json()["detail"].lower()
+        assert "no rooms" in r.json()["detail"].lower()
 
 
 @requires_db

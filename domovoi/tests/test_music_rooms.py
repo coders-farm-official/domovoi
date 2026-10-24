@@ -674,7 +674,7 @@ async def test_controls_never_start_a_player(house) -> None:
 async def test_from_v1_intent_there_is_no_satellite_to_reach(house) -> None:
     ctx = Context(room_id="dining_room")  # /v1/intent: no app
     resp = await _say("play weezer in the garage", ctx)
-    assert resp.text == "I can only reach another room's speaker from a room or the app."
+    assert resp.text == "I can only reach another room's speaker from a room device or the app."
     assert house.lib.played == []
 
 
