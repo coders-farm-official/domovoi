@@ -212,7 +212,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     FieldSpec(
         "bot_name", "Bot name", "Identity",
         "What the assistant calls itself in responses (NOT the wake word — "
-        "that's trained per-satellite). Takes effect after a restart.",
+        "that's trained per room). Takes effect after a restart.",
         "str", tier="restart",
     ),
     FieldSpec(
@@ -460,7 +460,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "voice_history_keep", "Keep voice history", "Privacy",
         "How long Domovoi keeps what people say to it and what it answered: "
         "the Conversations and Sessions tabs, the routing log behind them, "
-        "each room's short-term conversation, and the satellites' logs kept "
+        "each room's short-term conversation, and the room devices' logs kept "
         "on this server. Anything older is deleted once a day, and right "
         "away when you save. Forever keeps it all. Memories, voice samples, "
         "notes, timers, the music played and chat threads are not affected.",
@@ -554,7 +554,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     ),
     FieldSpec(
         "media_plays_retention_days", "Play-history retention", "Library",
-        "How long the Satellites 'Recently played' history is kept before "
+        "How long each room's 'Recently played' history is kept before "
         "the pruner deletes old rows. 0 = keep forever.",
         "int", min=0, max=3650, unit="days",
     ),
@@ -710,9 +710,9 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     # ─── Timers & reminders (house-wide delivery, V018) ────────────────
     FieldSpec(
         "timer_offline_grace_sec", "Late-joiner window", "Timers & reminders",
-        "A satellite that connects or reconnects within this long after a timer "
+        "A room that connects or reconnects within this long after a timer "
         "or reminder goes off still announces it. After a Domovoi server restart "
-        "the window starts once the server accepts satellites again.",
+        "the window starts once the server accepts rooms again.",
         "float", section="advanced", tier="hot", min=0, max=900, unit="sec",
     ),
     FieldSpec(
@@ -803,7 +803,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     FieldSpec(
         "wake_trainer_real_target_fraction", "Share of recorded clips", "Wake words",
         "How much of the positive set is copies of the clips recorded on "
-        "your satellites (each copy gets different room echo and noise). "
+        "your rooms (each copy gets different room echo and noise). "
         "0 = the trainer's 0.2. More only helps with many varied "
         "recordings; with few it learns those exact takes.",
         "float", section="advanced", tier="hot", min=0, max=0.9,
@@ -958,12 +958,12 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     FieldSpec(
         "speculative_stt_enabled", "Start transcribing at the first pause",
         "Speech-to-text",
-        "On by default: while a satellite is still waiting out its "
+        "On by default: while a room is still waiting out its "
         "end-of-speech silence, Whisper starts on what it has at the first "
         "short pause, and that transcript is used when nothing was said "
         "after it — so the silence and the transcription overlap instead "
         "of adding up. Each pause somebody talks past costs one extra "
-        "transcription of CPU. Off transcribes only after the satellite "
+        "transcription of CPU. Off transcribes only after the room "
         "stops listening.",
         "bool", section="advanced", tier="hot",
     ),
@@ -972,8 +972,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "Speech-to-text",
         "When the transcript taken at a pause is a whole closed command "
         "(\"pause the music\", \"what's playing\"), stop listening after a "
-        "short hold instead of the satellite's full end-of-speech silence, "
-        "and answer. Anything said after the hold is lost. Only satellites "
+        "short hold instead of the room's full end-of-speech silence, "
+        "and answer. Anything said after the hold is lost. Only rooms "
         "running this release's code are ended early; each can opt out in "
         "its own Listening settings. Needs \"Start transcribing at the "
         "first pause\" on.",
@@ -1008,7 +1008,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "fastlane_mode", "Fast lane", "Speech-to-text",
         "A small streaming recognizer that follows each command while it is "
         "being spoken and notices a finished simple one (pause, volume up, a "
-        "timer) before the satellite stops listening. 'shadow' only LOGS what "
+        "timer) before the room stops listening. 'shadow' only LOGS what "
         "it would have done and whether Whisper agreed (GET /v1/stats/latency "
         "counts them); every reply is exactly what it would have been. 'off' "
         "(the default) loads nothing. Needs the fastlane extra; the model "
@@ -1032,7 +1032,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     ),
     FieldSpec(
         "ws_ping_interval_sec", "WS ping interval", "Networking",
-        "How often the Domovoi server pings each satellite's WebSocket to "
+        "How often the Domovoi server pings each room device's WebSocket to "
         "detect a dead connection. Lower = faster dead-socket detection, "
         "slightly more traffic. Takes effect after a restart.",
         "float", section="advanced", tier="restart", min=1, max=120, unit="sec",
@@ -1040,11 +1040,11 @@ EDITABLE_FIELDS: list[FieldSpec] = [
 
     # ─── Security ──────────────────────────────────────────────────────
     FieldSpec(
-        "satellite_pairing_strict", "Strict satellite pairing", "Security",
-        "Require every satellite to be let in deliberately. ON (the default "
+        "satellite_pairing_strict", "Strict room pairing", "Security",
+        "Require every room device to be let in deliberately. ON (the default "
         "for a new install) = a tokenless connection is refused, and a "
         "room's first pairing waits under 'waiting for approval' until you "
-        "type in the six-digit code the satellite is showing and saying — "
+        "type in the six-digit code the room device is showing and saying — "
         "so a new or re-flashed Pi needs you at the dashboard. OFF = "
         "trust-on-first-use: a room that has never paired still accepts a "
         "tokenless connection, while any room that HAS paired is fully "
@@ -1052,12 +1052,12 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "bool", section="advanced", tier="restart",
     ),
     FieldSpec(
-        "satellite_hello_timeout_sec", "Satellite hello deadline", "Security",
-        "How long a newly connected satellite socket gets to send its hello "
+        "satellite_hello_timeout_sec", "Room device hello deadline", "Security",
+        "How long a newly connected room device gets to send its hello "
         "frame before the server drops it. Nothing is provisioned or listed "
         "for a room until its hello has passed the pairing check, so a bare "
         "connection from any device on the LAN never creates a room. Real "
-        "satellites say hello immediately; raise this only on a very slow "
+        "room devices say hello immediately; raise this only on a very slow "
         "link. Takes effect after a restart.",
         "float", section="advanced", tier="restart", min=1, max=60, unit="sec",
     ),
@@ -1091,15 +1091,15 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "int", tier="hot", min=0, max=1440, unit="min",
     ),
     FieldSpec(
-        "satellite_adoption_enabled", "USB satellite adoption", "Security",
-        "Scan the Domovoi server's USB ports for unprovisioned satellites "
+        "satellite_adoption_enabled", "USB room adoption", "Security",
+        "Scan the Domovoi server's USB ports for unprovisioned room devices "
         "(the plug-in-and-adopt flow in Settings → Rooms). Turn off to "
         "stop scanning removable drives entirely.",
         "bool", tier="hot",
     ),
     FieldSpec(
         "satellite_adoption_advertise_url", "Adoption server URL", "Security",
-        "The core WebSocket URL written into adopted satellites' config "
+        "The core WebSocket URL written into adopted room devices' config "
         "(e.g. ws://192.168.1.50:6370). 'auto' (or empty) detects the LAN "
         "address at adopt time — set a URL only when the server has several "
         "network interfaces and autodetection picks the wrong one.",

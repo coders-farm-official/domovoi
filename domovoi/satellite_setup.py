@@ -439,7 +439,7 @@ def fetch() -> tuple[bool, str]:
     from domovoi import egress
 
     if windows_install():
-        return False, ("this server came with Domovoi's Windows Setup, which brings the satellite Setup "
+        return False, ("this server came with Domovoi's Windows Setup, which brings the spare-PC room Setup "
                        "with it: run the newest DomovoiSetup.exe to update it")
     if egress.internet_turned_off():
         return False, ("internet access is off (Settings → Internet), so this server can't download "

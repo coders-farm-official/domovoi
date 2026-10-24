@@ -664,7 +664,7 @@ class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
         return self._reply(
             ctx,
             f"Playback speed set to {self._fmt_speed(speed)}. "
-            "It applies on the browser player; satellite speed is coming soon.",
+            "It applies on the browser player; speed in the rooms is coming soon.",
         )
 
     async def _time_left(self, ctx: Context, session: AsyncSession) -> Response:

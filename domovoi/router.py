@@ -581,7 +581,7 @@ def _no_speakers_yet(session_id: UUID | None, ctx: Context) -> Response:
         )
     return Response(
         text=(
-            "I can't play anything yet — no satellite has connected, so "
+            "I can't play anything yet — no room has connected, so "
             "there are no speakers set up in any room."
         ),
         session_id=session_id,

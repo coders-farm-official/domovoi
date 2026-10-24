@@ -94,7 +94,7 @@ async def test_enter_declines_without_a_live_satellite_stream() -> None:
     ctx = Context(session_id=uuid4(), room_id="kitchen", online=True)  # no app
     resp = await ChatModeHandler()._enter(ctx, _ExplodingSession())  # type: ignore[arg-type]
     assert resp.matched_handler == "chat_mode"
-    assert "satellite" in resp.text.lower()
+    assert "only works in a room" in resp.text.lower()
     assert resp.expect_followup is not True
 
 
@@ -103,7 +103,7 @@ async def test_enter_declines_when_this_room_has_no_connected_pi() -> None:
     """A streaming context for a DIFFERENT room is still no mic here."""
     ctx = _streaming_ctx(session_id=uuid4(), room_id="kitchen", live_rooms=("office",))
     resp = await ChatModeHandler()._enter(ctx, _ExplodingSession())  # type: ignore[arg-type]
-    assert "satellite" in resp.text.lower()
+    assert "only works in a room" in resp.text.lower()
 
 
 @pytest.mark.asyncio
@@ -113,7 +113,7 @@ async def test_enter_does_not_over_refuse_a_room_with_a_live_pi() -> None:
     the turn got PAST the satellite gate rather than being declined by it."""
     ctx = _streaming_ctx(session_id=uuid4(), room_id="kitchen", live_rooms=("kitchen",))
     resp = await ChatModeHandler()._enter(ctx, _ExplodingSession())  # type: ignore[arg-type]
-    assert "satellite" not in resp.text.lower()
+    assert "only works in a room" not in resp.text.lower()
 
 
 @requires_db
@@ -147,4 +147,4 @@ async def test_enter_without_session_declines_gracefully() -> None:
     ctx = Context(session_id=None, room_id="kitchen", online=True)
     resp = await ChatModeHandler()._enter(ctx, _ExplodingSession())  # type: ignore[arg-type]
     assert resp.matched_handler == "chat_mode"
-    assert "satellite" in resp.text.lower()
+    assert "only works in a room" in resp.text.lower()

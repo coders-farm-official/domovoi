@@ -158,13 +158,13 @@ async def apply(app: Any, room_id: str, name: str | None) -> dict[str, Any]:
             if not known:
                 raise VoiceChangeRefused(404, f"there is no room {room_id!r}")
             raise VoiceChangeRefused(
-                409, f"{room_id} is offline, and its satellite keeps its own voice: "
+                409, f"{room_id} is offline, and its device keeps its own voice: "
                      "change it once the room is back")
 
     if not on_server:
         if name is None:
             raise VoiceChangeRefused(
-                400, f"{room_id}'s satellite keeps a voice of its own: pick one by name")
+                400, f"{room_id}'s device keeps a voice of its own: pick one by name")
         try:
             await session.announce(
                 confirmation(name), defer_to_capture=True, voice=name,

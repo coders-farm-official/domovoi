@@ -291,7 +291,7 @@ def fetch_debs(
         # saying out loud, because it silently un-does "fully offline".
         return True, (
             f"debs cached in {dest} — could not fetch {', '.join(missing)}; "
-            "a satellite will apt-get those online during stage 2"
+            "a room device will apt-get those online during stage 2"
         )
     return True, f"debs cached in {dest}"
 
@@ -319,12 +319,12 @@ def base_debs_warning(missing: list[str]) -> str:
     and saying what that costs and what fixes it."""
     return (
         f"BASE PACKAGES NOT ON THIS CARD: the offline package cache has no "
-        f"{', '.join(missing)}. The satellite installs them online during "
+        f"{', '.join(missing)}. The room device installs them online during "
         f"setup (stage 2), and again at every boot until they are there "
         f"(satellite/base_packages.py) - but until it has the network, "
         f"whatever needs them does not work (mpg123: the spoken wake "
         f"greeting and music). Check that Docker works on the server and "
-        f"refresh the satellite package cache before preparing more cards."
+        f"refresh the room package cache before preparing more cards."
     )
 
 
@@ -442,7 +442,7 @@ def fetch_xvf_host(run=git_run.run) -> tuple[bool, str]:
     if git is None:
         return False, (
             "git is not available, so the XVF3800 LED tool can't be cached — "
-            "satellites built from this payload will have a dark ring"
+            "room devices built from this payload will have a dark ring"
         )
     with tempfile.TemporaryDirectory() as tmp:
         clone = Path(tmp) / "src"

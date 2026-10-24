@@ -103,7 +103,7 @@ def zip_readme(ap: dict | None, *, windows_host: bool) -> str:
 def _windows_readme(ap: dict | None) -> str:
     portal = ap is not None
     readme = [
-        "On Windows, use Domovoi's tray icon → Prepare a satellite card.",
+        "On Windows, use Domovoi's tray icon → Prepare a room's SD card.",
         "",
         "It puts these files on the card for you and checks them. It fills in",
         "the setup network password by itself, from Domovoi on this PC. You",
@@ -146,7 +146,7 @@ def _windows_readme(ap: dict | None) -> str:
             "   own Wi-Fi setup network: set it up from a phone, then approve it",
             "   in the dashboard's Settings -> Rooms.",
             "",
-            "Without ap.json the satellite never raises its setup network.",
+            "Without ap.json the room device never raises its setup network.",
         ]
     else:
         readme += [
@@ -259,7 +259,7 @@ async def build(
                 f"failed their SHA-256 check ({', '.join(missing)})"
                 + (f" - {oww_problem}" if oww_problem else "")
                 + ". Retry when the download works, or prepare the card with "
-                "offline off: the satellite then downloads them and keeps "
+                "offline off: the room device then downloads them and keeps "
                 "only files that match the same pins."
             )
         if not st["xvf_host"]["ok"]:

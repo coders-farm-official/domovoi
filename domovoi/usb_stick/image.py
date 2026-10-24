@@ -372,7 +372,7 @@ def stick_files(*, pin: dict[str, Any], payload: str, bundle: bytes, epoch: int,
     if not isinstance(epoch, int) or epoch <= 0:
         raise StickError("bad_option", "no build time")
     if not bundle or len(bundle) > MAX_BUNDLE_BYTES:
-        raise StickError("bundle", "the satellite bundle is empty or too large")
+        raise StickError("bundle", "the room software bundle is empty or too large")
     enrol = parse_room(payload)
     bundle_sha = hashlib.sha256(bundle).hexdigest()
     hostname = hostname_for(enrol.room_id)

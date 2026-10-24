@@ -96,14 +96,14 @@ def offline_text(room: Room, what: str) -> str:
     the thing that can't be done there ("play music there")."""
     where = room.spoken
     if not room.seen:
-        return f"The satellite in {where} hasn't connected yet, so I can't {what}."
+        return f"The device in {where} hasn't connected yet, so I can't {what}."
     return f"The speaker in {where} is offline right now, so I can't {what}."
 
 
 def unknown_room_text(said: str, rooms: list[Room]) -> str:
     said = said.strip()
     if not rooms:
-        return f"I don't have a room called {said} — no satellites have joined yet."
+        return f"I don't have a room called {said} — no rooms have been set up yet."
     return f"I don't have a room called {said}. I have {rooms_mod.say_rooms(rooms)}."
 
 
@@ -111,7 +111,7 @@ UNPAIRED_TEXT = (
     "This speaker isn't paired with the house, so it can't change what's "
     "playing in other rooms."
 )
-NO_APP_TEXT = "I can only reach another room's speaker from a satellite or the app."
+NO_APP_TEXT = "I can only reach another room's speaker from a room or the app."
 EVERYWHERE_OTHER_TEXT = "I can only do that in one room at a time."
 
 # What a satellite without a pairing token may do in a room that is

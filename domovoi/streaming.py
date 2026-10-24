@@ -2679,7 +2679,7 @@ class StreamSession:
                 "reason": "approval_code_invalid",
                 "message": (
                     f"an approval code is {APPROVAL_CODE_DIGITS} digits — "
-                    "re-run the satellite's setup to get a new one"
+                    "set the room up again to get a new one"
                 ),
             })
             return False

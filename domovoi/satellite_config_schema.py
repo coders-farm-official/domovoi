@@ -87,13 +87,13 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     FieldSpec(
         "wake.threshold", "Wake sensitivity", "Wake word",
         "How easily the wake word triggers (0–1). HIGHER = fewer false "
-        "wakes (the satellite triggers less); lower = more sensitive. "
+        "wakes (the room triggers less); lower = more sensitive. "
         "Default 0.5 — raise toward 0.6–0.7 if it wakes on background noise.",
         "float", min=0.0, max=1.0,
     ),
     FieldSpec(
         "wake.ack_mode", "Wake acknowledgement", "Wake word",
-        "What the satellite does when it hears the wake word, before it "
+        "What the room does when it hears the wake word, before it "
         "listens for your command. A spoken greeting (\"Yes?\") or a short "
         "chime plays to the end first, and anything said over it is not "
         "heard — so it cannot answer its own greeting. The greeting adds "
@@ -160,7 +160,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     FieldSpec(
         "listen.max_record_seconds", "Max command length", "Listening",
         "Hard cap on how long a single spoken command can run before the "
-        "satellite gives up and sends what it has.",
+        "device gives up and sends what it has.",
         "float", min=5.0, max=60.0, unit="sec",
     ),
     FieldSpec(
@@ -175,7 +175,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "Listening",
         "On by default: when what the server has heard so far is a whole "
         "command (\"pause the music\", \"set a timer for ten minutes\"), it "
-        "stops this satellite listening after a short pause instead of the "
+        "stops this room listening after a short pause instead of the "
         "full end-of-speech silence, and answers sooner. Anything said after "
         "that pause is lost — turn off in a room where people pause "
         "mid-command. Needs early commit on for the whole server too.",
@@ -184,7 +184,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     FieldSpec(
         "listen.speech_pause_ms", "Pause that starts transcribing",
         "Listening",
-        "How long a silence after speech (ms) makes the satellite tell the "
+        "How long a silence after speech (ms) makes the room device tell the "
         "server you have paused, so it starts transcribing while the "
         "end-of-speech silence is still counting down. Default 240. Lower "
         "starts the transcript sooner, but also on the gaps between words, "
@@ -241,24 +241,24 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     FieldSpec(
         "mic.enabled", "Voice input", "Voice input",
         "Run the wake-word/VAD/capture stack. Off on mic-less video builds "
-        "— the satellite still speaks, announces, and plays music. Turning "
+        "— the room still speaks, announces, and plays music. Turning "
         "this ON requires a supported microphone (and [audio] input device "
-        "pinned to it) or the satellite fails at startup.",
+        "pinned to it) or the room device fails at startup.",
         "bool",
     ),
     FieldSpec(
         "display.idle_mode", "Idle screen", "Display",
-        "What a video satellite's screen shows when nothing is playing: a "
+        "What a video room's screen shows when nothing is playing: a "
         "dimmed clock, a blank (black) screen, or the last cover art. "
-        "Ignored on voice satellites.",
+        "Ignored on voice-only rooms.",
         "choice", choices=["clock", "blank", "art"],
     ),
     FieldSpec(
         "display.power_method", "Screen power mechanism", "Display",
         "How the display on/off toggle drives the panel: wlopm (Wayland/"
         "cage), xset (X11 DPMS), backlight (sysfs, DSI panels), auto tries "
-        "each in that order, none disables the toggle. Ignored on voice "
-        "satellites.",
+        "each in that order, none disables the toggle. Ignored on voice-only "
+        "rooms.",
         "choice", section="advanced",
         choices=["auto", "wlopm", "xset", "backlight", "none"],
     ),
@@ -272,7 +272,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     ),
     FieldSpec(
         "log.level", "Log level", "Logging",
-        "Satellite log verbosity. DEBUG is very noisy; INFO is normal.",
+        "Room device log verbosity. DEBUG is very noisy; INFO is normal.",
         "choice", choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     ),
 
@@ -311,7 +311,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "ALSA device mpg123 uses for music. Wrong = music routes to the "
         "wrong card or doesn't play. XVF3800: pin to the array. A plain "
         "device name only (default, hw:1,0, plughw:CARD=Array,DEV=0): the "
-        "satellite refuses one that makes ALSA write a file or run a command.",
+        "room device refuses one that makes ALSA write a file or run a command.",
         "str", section="advanced",
         pattern=ALSA_PCM_PATTERN,
         pattern_help="a plain ALSA device name, e.g. default, hw:1,0 or plughw:CARD=Array,DEV=0",
@@ -349,7 +349,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     ),
     FieldSpec(
         "wifi.enabled", "WiFi self-heal", "WiFi",
-        "Autonomous watchdog that reassociates the WiFi when the satellite "
+        "Autonomous watchdog that reassociates the WiFi when the room device "
         "has lost the core AND the core does not answer a TCP connect (the "
         "2026-05-06 wedged-link cause). It never touches a link that is "
         "carrying a live session. Needs the wpa_cli sudoers entry "

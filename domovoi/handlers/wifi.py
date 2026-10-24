@@ -234,7 +234,7 @@ class WifiHandler(Handler):
             where = f" to {ssid}" if ssid else ""
             text = f"WiFi is connected{where} with a {quality} signal."
             if quality == "weak":
-                text += " Moving the satellite or the router closer together would help."
+                text += " Moving the room device or the router closer together would help."
             return Response(
                 text=text,
                 session_id=ctx.session_id,
@@ -245,7 +245,7 @@ class WifiHandler(Handler):
             # down). Surface what we can without crashing.
             return Response(
                 text=(
-                    "WiFi looks unhealthy — the satellite reported a link "
+                    "WiFi looks unhealthy — the room device reported a link "
                     "but no rate. Try asking me to fix the WiFi."
                 ),
                 session_id=ctx.session_id,

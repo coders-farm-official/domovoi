@@ -624,7 +624,7 @@ async def test_an_offline_room_says_so(house) -> None:
 
 async def test_a_room_never_connected_says_so(house) -> None:
     resp = await _say("play weezer on the porch", _ctx())
-    assert resp.text == "The satellite in the porch hasn't connected yet, so I can't play music there."
+    assert resp.text == "The device in the porch hasn't connected yet, so I can't play music there."
 
 
 async def test_a_room_with_no_music_player_gets_one_started_by_its_own_id(house, monkeypatch) -> None:
@@ -674,7 +674,7 @@ async def test_controls_never_start_a_player(house) -> None:
 async def test_from_v1_intent_there_is_no_satellite_to_reach(house) -> None:
     ctx = Context(room_id="dining_room")  # /v1/intent: no app
     resp = await _say("play weezer in the garage", ctx)
-    assert resp.text == "I can only reach another room's speaker from a satellite or the app."
+    assert resp.text == "I can only reach another room's speaker from a room or the app."
     assert house.lib.played == []
 
 

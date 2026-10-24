@@ -56,8 +56,8 @@ RequiresNetwork = Literal["no", "degraded", "yes"]
 # What a phone turn hears when it asks for a satellite's own setting — its
 # Wi-Fi, its voice (owner decisions 2026-10-08: "refuse politely").
 SATELLITE_SETTING_TEXT = (
-    "That's a satellite setting, so I can't change it from a phone. "
-    "Ask the satellite in that room instead."
+    "That's a setting on the room device, so I can't change it from a phone. "
+    "Ask Domovoi in that room instead."
 )
 
 

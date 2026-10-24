@@ -231,7 +231,7 @@ async def test_start_no_app():
     ctx = Context(session_id=uuid4(), room_id="office", online=True, app=None)
     r = DropInHandler()._start("kitchen", ctx)
     assert r.dropin_action is None
-    assert "satellite" in r.text.lower()
+    assert "only works from a room" in r.text.lower()
 
 
 async def test_start_disabled(rooms_office_kitchen, monkeypatch):

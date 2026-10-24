@@ -41,7 +41,7 @@ def test_exception_is_typed_not_bare_runtime_error():
 def test_degraded_response_is_spoken_and_explains_why():
     r = _no_speakers_yet(None, Context(online=True))
     assert isinstance(r, Response)
-    assert r.text and "satellite" in r.text.lower()
+    assert r.text and "no room has connected" in r.text.lower()
 
 
 @requires_db
@@ -63,7 +63,7 @@ async def test_music_request_degrades_when_no_room_is_provisioned(
     )
 
     # A spoken answer, not an exception — and one that says what to do.
-    assert "satellite" in resp.text.lower()
+    assert "no room has connected" in resp.text.lower()
 
     # The original utterance, which names the room: still an answer.
     resp = await route(
@@ -71,7 +71,7 @@ async def test_music_request_degrades_when_no_room_is_provisioned(
         Context(room_id="kitchen", online=True),
         db_session,
     )
-    assert "satellite" in resp.text.lower()
+    assert "connected" in resp.text.lower()
 
 
 @requires_db

@@ -189,7 +189,7 @@ class DropInHandler(Handler):
         if ctx.app is None:
             # No streaming context (e.g. a direct /v1/intent call) → there's
             # no live mic to open.
-            return self._say("Drop-in only works from a satellite.", ctx)
+            return self._say("Drop-in only works from a room.", ctx)
         if not getattr(settings, "dropin_enabled", True):
             return self._say("Drop-in is turned off right now.", ctx)
         if not room_may_reach_other_rooms(ctx.app, ctx.room_id):

@@ -199,7 +199,7 @@ class ChatModeHandler(Handler):
             or ctx.room_id not in live_rooms
         ):
             return Response(
-                text="Chat mode only works from a satellite.",
+                text="Chat mode only works in a room, by voice.",
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
@@ -215,7 +215,7 @@ class ChatModeHandler(Handler):
         if ctx.room_id in full_duplex and not full_duplex.get(ctx.room_id):
             return Response(
                 text=(
-                    "Chat mode needs a satellite with echo cancellation, and "
+                    "Chat mode needs a room device with echo cancellation, and "
                     "this room's mic can't do that yet."
                 ),
                 session_id=ctx.session_id,

@@ -557,13 +557,13 @@ def _routed(response: Response, monkeypatch) -> list:
     [
         ("unreachable", 502, "the music player for office on the domovoi server isn't answering", "music_player"),
         ("not_playing", 409, "nothing is playing in office", None),
-        ("no_speakers", 503, "no satellite has connected", "satellite"),
+        ("no_speakers", 503, "no room has connected", "satellite"),
     ],
 )
 async def test_the_admin_control_answers_non_2xx_on_a_failure(
     monkeypatch, failure: str, status: int, detail: str, part: str | None
 ) -> None:
-    text = "I can't play anything yet — no satellite has connected" if failure == "no_speakers" else UNREACHABLE
+    text = "I can't play anything yet — no room has connected" if failure == "no_speakers" else UNREACHABLE
     _routed(Response(text=text, matched_handler="music", failure=failure), monkeypatch)
 
     with pytest.raises(HTTPException) as e:
@@ -664,7 +664,7 @@ async def test_a_cast_with_no_satellite_ever_connected_names_the_satellite(monke
 
     assert e.status_code == 503
     assert e.failed == "satellite"
-    assert "no satellite has connected" in e.detail
+    assert "no room has connected" in e.detail
 
 
 async def test_a_control_that_happened_answers_ok(monkeypatch) -> None:

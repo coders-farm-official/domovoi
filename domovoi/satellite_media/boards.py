@@ -48,7 +48,7 @@ PI02W = BoardProfile(
 
 RADXA_ZERO3W = BoardProfile(
     id="radxa-zero3w",
-    label="Radxa Zero 3W (video satellite)",
+    label="Radxa Zero 3W (video room)",
     supported=False,
     stock_os="Armbian / Radxa Debian",
     python_version="3.13",

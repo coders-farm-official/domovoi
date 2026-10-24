@@ -599,7 +599,7 @@ class DocumentsHandler(Handler):
             return self._reply(ctx, "On the phone, type it in a chat instead, like write a letter to the "
                                     "landlord, and the draft appears there.")
         if ctx.session_id is None or not ctx.answerable:
-            return self._reply(ctx, "Taking a letter needs a room that can listen. Say it to a satellite, or "
+            return self._reply(ctx, "Taking a letter needs a room that can listen. Say it in a room, or "
                                     "type it in Chat.")
         if ai_features.turned_off():
             # Plainly, before any dictation: nothing would write it up.

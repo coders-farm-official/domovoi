@@ -301,7 +301,7 @@ def test_the_zip_readme_on_windows_leads_with_the_card_helper(tmp_path, monkeypa
     monkeypatch.setattr(builder, "is_wsl", lambda: True)
     portal = _zip_readme(tmp_path / "win-portal", monkeypatch, "portal")
     first = portal.splitlines()[0]
-    assert first == "On Windows, use Domovoi's tray icon → Prepare a satellite card."
+    assert first == "On Windows, use Domovoi's tray icon → Prepare a room's SD card."
     for phrase in ("Never replace the card's cmdline.txt", "one long line", "type a space", "press End",
                    "very end", "All files", "ap.json.txt", "domovoi/ap.json",
                    "set it up from a phone", "no passwords", "choose No"):

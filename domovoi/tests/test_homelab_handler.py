@@ -100,8 +100,8 @@ def test_format_models_summary_variants() -> None:
 
 def test_format_rooms_summary_variants() -> None:
     assert _format_rooms_summary([]) == "no rooms connected"
-    assert _format_rooms_summary(["kitchen"]) == "the kitchen satellite is connected"
-    assert _format_rooms_summary(["kitchen", "garage"]) == "2 satellites connected"
+    assert _format_rooms_summary(["kitchen"]) == "the kitchen room is connected"
+    assert _format_rooms_summary(["kitchen", "garage"]) == "2 rooms connected"
 
 
 # ─── Behavior (mocked subprocess + httpx) ──────────────────────────────────
@@ -141,7 +141,7 @@ async def test_status_response_with_all_sources_available() -> None:
     assert "GPU 10% load" in response.text
     assert "llama3.2:3b" in response.text.lower()
     # Two rooms registered.
-    assert "2 satellites" in response.text.lower()
+    assert "2 rooms" in response.text.lower()
 
 
 @pytest.mark.asyncio

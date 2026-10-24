@@ -186,8 +186,8 @@ def _format_rooms_summary(active_rooms: list[str]) -> str:
     if not active_rooms:
         return "no rooms connected"
     if len(active_rooms) == 1:
-        return f"the {active_rooms[0]} satellite is connected"
-    return f"{len(active_rooms)} satellites connected"
+        return f"the {active_rooms[0]} room is connected"
+    return f"{len(active_rooms)} rooms connected"
 
 
 class HomelabHandler(Handler):

@@ -60,7 +60,7 @@ def banner(rows: list[dict[str, Any]]) -> dict[str, Any]:
     else:
         text = f"{len(shown)} problems with Domovoi's containers need attention."
     if tampers:
-        text += " Plugin installs, updates and satellite upgrades are paused until an admin reviews it."
+        text += " Plugin installs, updates and room upgrades are paused until an admin reviews it."
     return {
         "show": True,
         "tone": tone,

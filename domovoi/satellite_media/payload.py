@@ -103,7 +103,7 @@ async def assemble(
     pay.mkdir(parents=True)
     warnings: list[str] = []
 
-    progress("collecting satellite code")
+    progress("collecting the room software")
     n = _copy_tree(repo_root / "satellite", pay / "satellite", _allowed_code_file)
     if n == 0:
         raise RuntimeError(f"no satellite code found under {repo_root}")
@@ -136,7 +136,7 @@ async def assemble(
     # silently produced nothing.
     if not list((pay / "sounds" / "setup").glob("*.wav")):
         warnings.append(
-            "no setup clips in the payload - this satellite will set itself "
+            "no setup clips in the payload - this room device will set itself "
             "up silently (the ring still works)"
         )
 

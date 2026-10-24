@@ -1844,13 +1844,13 @@ async def _satellite_setup_download(code: str) -> FileResponse:
         return FastAPIResponse(
             status_code=404, media_type="text/plain; charset=utf-8",
             content="This Domovoi setup link has expired (codes last 24 hours) or was mistyped.\n"
-                    "Make a new code on the dashboard: Settings > Satellites > add a spare device.\n")
+                    "Make a new code on the dashboard: Settings > Rooms > add a spare device.\n")
     path = await asyncio.to_thread(satellite_setup.cached_file)
     if path is None:
         return FastAPIResponse(
             status_code=404, media_type="text/plain; charset=utf-8",
             content="This Domovoi server doesn't hold the Windows Setup yet.\n"
-                    "On the dashboard, Settings > Satellites > add a spare device: press\n"
+                    "On the dashboard, Settings > Rooms > add a spare device: press\n"
                     "\"get the Windows Setup\", then open this link again.\n")
     name = satellite_setup.download_name(satellite_setup.normalize_code(code), enrolment.parse(payload).core)
     return FileResponse(path, media_type="application/vnd.microsoft.portable-executable", filename=name,
@@ -2603,7 +2603,7 @@ async def admin_announce(body: _AdminAnnounceBody) -> dict[str, Any]:
     """
     sessions: dict[str, Any] = app.state.active_sessions
     if not sessions:
-        raise HTTPException(status_code=503, detail="no satellites connected")
+        raise HTTPException(status_code=503, detail="no rooms connected")
     if body.room_id is None:
         targets = list(sessions.values())
     else:
@@ -2754,7 +2754,7 @@ async def admin_satellite_restart(body: _AdminSatelliteRestartBody) -> dict[str,
 
     sessions: dict[str, Any] = app.state.active_sessions
     if not sessions:
-        raise HTTPException(status_code=503, detail="no satellites connected")
+        raise HTTPException(status_code=503, detail="no rooms connected")
     target = sessions.get(body.room_id)
     if target is None:
         raise HTTPException(
@@ -2768,7 +2768,7 @@ async def admin_satellite_restart(body: _AdminSatelliteRestartBody) -> dict[str,
     except Exception as e:
         log.warning("admin restart to room=%s failed: %s", body.room_id, e)
         raise HTTPException(
-            status_code=502, detail=f"couldn't reach satellite: {e}"
+            status_code=502, detail=f"couldn't reach the room device: {e}"
         ) from e
 
     async with session_scope() as s:
@@ -2804,7 +2804,7 @@ async def admin_satellite_set_volume(body: _AdminSetVolumeBody) -> dict[str, Any
 
     sessions: dict[str, Any] = app.state.active_sessions
     if not sessions:
-        raise HTTPException(status_code=503, detail="no satellites connected")
+        raise HTTPException(status_code=503, detail="no rooms connected")
     target = sessions.get(body.room_id)
     if target is None:
         raise HTTPException(
@@ -2817,7 +2817,7 @@ async def admin_satellite_set_volume(body: _AdminSetVolumeBody) -> dict[str, Any
     except Exception as e:
         log.warning("admin set-volume for room=%s failed: %s", body.room_id, e)
         raise HTTPException(
-            status_code=502, detail=f"couldn't reach satellite: {e}"
+            status_code=502, detail=f"couldn't reach the room device: {e}"
         ) from e
 
     async with session_scope() as s:
@@ -2854,7 +2854,7 @@ async def admin_satellite_display(body: _AdminSatelliteDisplayBody) -> dict[str,
 
     sessions: dict[str, Any] = app.state.active_sessions
     if not sessions:
-        raise HTTPException(status_code=503, detail="no satellites connected")
+        raise HTTPException(status_code=503, detail="no rooms connected")
     target = sessions.get(body.room_id)
     if target is None:
         raise HTTPException(
@@ -2864,7 +2864,7 @@ async def admin_satellite_display(body: _AdminSatelliteDisplayBody) -> dict[str,
     if sat_type != "video":
         raise HTTPException(
             status_code=409,
-            detail=f"room {body.room_id!r} is not a video satellite",
+            detail=f"room {body.room_id!r} has no screen (it isn't a video room)",
         )
     _require_declared(target, "display", "screen control")
 
@@ -2874,7 +2874,7 @@ async def admin_satellite_display(body: _AdminSatelliteDisplayBody) -> dict[str,
     except Exception as e:
         log.warning("admin display for room=%s failed: %s", body.room_id, e)
         raise HTTPException(
-            status_code=502, detail=f"couldn't reach satellite: {e}"
+            status_code=502, detail=f"couldn't reach the room device: {e}"
         ) from e
 
     async with session_scope() as s:
@@ -3361,7 +3361,7 @@ async def admin_satellite_upgrade(
     await container_freeze.require_unfrozen("satellite_upgrade")
     sessions: dict[str, Any] = app.state.active_sessions
     if not sessions:
-        raise HTTPException(status_code=503, detail="no satellites connected")
+        raise HTTPException(status_code=503, detail="no rooms connected")
     target = sessions.get(body.room_id)
     if target is None:
         raise HTTPException(
@@ -3383,7 +3383,7 @@ async def admin_satellite_upgrade(
             status_code=409,
             detail=(
                 f"{body.room_id} is already upgrading (asked {asked} s ago); "
-                f"it is done when the satellite is back on the new code, "
+                f"it is done when the room device is back on the new code, "
                 f"or in {left} s if it never says"
             ),
         )
@@ -3406,7 +3406,7 @@ async def admin_satellite_upgrade(
         satellite_upgrades.forget(upgrades, body.room_id, record)
         log.warning("admin upgrade to room=%s failed: %s", body.room_id, e)
         raise HTTPException(
-            status_code=502, detail=f"couldn't reach satellite: {e}"
+            status_code=502, detail=f"couldn't reach the room device: {e}"
         ) from e
 
     async with session_scope() as s:
@@ -3658,7 +3658,7 @@ async def admin_wake_record_start(
     except Exception as e:
         log.warning("admin wake record start to room=%s failed: %s", body.room_id, e)
         raise HTTPException(
-            status_code=502, detail=f"couldn't reach satellite: {e}"
+            status_code=502, detail=f"couldn't reach the room device: {e}"
         ) from e
     return {
         "recording": True,
@@ -3689,7 +3689,7 @@ async def admin_wake_record_stop(
     except Exception as e:
         log.warning("admin wake record stop to room=%s failed: %s", body.room_id, e)
         raise HTTPException(
-            status_code=502, detail=f"couldn't reach satellite: {e}"
+            status_code=502, detail=f"couldn't reach the room device: {e}"
         ) from e
     return {"recording": False, "room_id": body.room_id}
 
@@ -3737,7 +3737,7 @@ async def admin_wake_push(body: _AdminWakePushBody) -> dict[str, Any]:
     except Exception as e:
         log.warning("admin wake push to room=%s failed: %s", body.room_id, e)
         raise HTTPException(
-            status_code=502, detail=f"couldn't reach satellite: {e}"
+            status_code=502, detail=f"couldn't reach the room device: {e}"
         ) from e
     return {
         "pushed": True,
@@ -4085,7 +4085,7 @@ async def admin_update_satellite_config(
             rejected[name] = f"this device doesn't have this setting (it didn't declare {ability!r})"
             continue
         if reported and name not in reported:
-            rejected[name] = "this satellite doesn't have this setting yet — upgrade it first"
+            rejected[name] = "this room device doesn't have this setting yet — upgrade it first"
             continue
         try:
             # By the satellite's own rule for its board: a Windows PC's
@@ -4103,7 +4103,7 @@ async def admin_update_satellite_config(
     except Exception as e:
         log.warning("admin set_config room=%s failed: %s", room_id, e)
         raise HTTPException(
-            status_code=502, detail=f"couldn't reach satellite: {e}"
+            status_code=502, detail=f"couldn't reach the room device: {e}"
         ) from e
 
     async with session_scope() as s:
@@ -4209,14 +4209,14 @@ async def admin_get_satellite_logs(
     except TimeoutError:
         raise HTTPException(
             status_code=504,
-            detail="satellite stopped answering mid-log-transfer",
+            detail="the room device stopped answering mid-log-transfer",
         ) from None
     except ConnectionError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
         log.warning("admin get logs room=%s failed: %s", room_id, e)
         raise HTTPException(
-            status_code=502, detail=f"couldn't reach satellite: {e}"
+            status_code=502, detail=f"couldn't reach the room device: {e}"
         ) from e
 
     body: str = result["text"]
@@ -4357,9 +4357,9 @@ def approval_throttled_detail() -> str:
         f"{APPROVAL_CODE_MAX_ATTEMPTS} tries for the moment — wait "
         f"up to {int(APPROVAL_CODE_WINDOW_SEC)} seconds and type the "
         "code again. Nothing is lost and nothing is banned: the "
-        "satellite is still waiting, and the count is kept in "
+        "room device is still waiting, and the count is kept in "
         "memory, so the limit clears itself with no action from "
-        "anyone. The code does not change: the satellite says it "
+        "anyone. The code does not change: the room device says it "
         "again on every retry, it is on the Pi in "
         "~/.domovoi/approval_code, and it is the code column of "
         "that room's satellite_approvals row"
@@ -4405,7 +4405,7 @@ async def admin_satellite_approve(
     if not code or not code.isdigit():
         raise HTTPException(
             status_code=400,
-            detail="send the numeric code the satellite is showing",
+            detail="send the numeric code the room device is showing",
         )
     if not APPROVAL_CODE_LIMITER.allow(f"approve:{room_id}"):
         log.warning("pairing: room=%s approval attempts throttled", room_id)
@@ -4421,7 +4421,7 @@ async def admin_satellite_approve(
         raise HTTPException(
             status_code=409,
             detail=(
-                "that request carries no code — power-cycle the satellite "
+                "that request carries no code — power-cycle the room device "
                 "so it asks again with one"
             ),
         )
@@ -4435,7 +4435,7 @@ async def admin_satellite_approve(
             status_code=422,
             detail=(
                 "that code does not match — check the six digits the "
-                "satellite is showing and saying, and try again"
+                "room device is showing and saying, and try again"
             ),
         )
     log.info("pairing: room=%s APPROVED by an operator", room_id)
@@ -4632,7 +4632,7 @@ async def admin_delete_satellite(
                 status_code=409,
                 detail=(
                     f"room {room_id!r} is connected right now — take the "
-                    "satellite offline before retiring the room"
+                    "room device offline before retiring the room"
                 ),
             )
         removed_meta = await SatellitesRepository(s).delete(room_id)
@@ -5113,7 +5113,7 @@ async def _ensure_room_mpd(room_id: str) -> None:
             status_code=404,
             detail=(
                 f"there is no room named {room_id!r} — a room appears once its "
-                "satellite has connected (or been adopted)"
+                "device has connected (or been adopted)"
             ),
         )
     try:
@@ -5241,7 +5241,7 @@ async def admin_music_play_tracks(body: _AdminPlayTracksBody) -> dict[str, Any]:
     except MPDNotProvisioned as e:
         raise _MusicFailure(
             503,
-            "no satellite has connected to the domovoi yet, so no room has a speaker",
+            "no room has connected to the domovoi yet, so there's no speaker to play on",
             "satellite",
         ) from e
     try:
