@@ -48,7 +48,9 @@ XMLHttpRequest.prototype.send = function () {
   this.onreadystatechange();
 };
 const url = new URL(sc.href);
-const window = { location: { href: sc.href, search: url.search, protocol: url.protocol, host: url.host } };
+let reloads = 0;
+const window = { location: { href: sc.href, search: url.search, protocol: url.protocol, host: url.host,
+  reload() { reloads += 1; } } };
 const copied = [];
 const navigator = { userAgent: sc.ua, platform: sc.platform };
 if (sc.clipboard) navigator.clipboard = { writeText: (t) => { copied.push(t); } };
@@ -57,6 +59,6 @@ vm.runInNewContext(src, {
   encodeURIComponent, decodeURIComponent, JSON, Math, String, URL: sc.noUrl ? undefined : URL,
 });
 for (const id of sc.clicks || []) els[id].onclick();
-const out = { doc_title: document.title, copied };
+const out = { doc_title: document.title, copied, reloads };
 for (const [id, el] of Object.entries(els)) out[id] = { text: el.textContent, hidden: el.hidden, href: el.attrs.href || null, download: el.attrs.download || null, cls: el.className, value: el.value, fetched: el.fetched };
 process.stdout.write(JSON.stringify(out));

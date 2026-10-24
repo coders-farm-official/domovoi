@@ -527,7 +527,7 @@ def test_a_32_bit_browser_gets_the_32_bit_app_first_and_firefox_the_plain_link()
 
 @pytest.mark.parametrize("app,words", [
     (_app_status(release=False), "no Domovoi app release yet"),
-    (_app_status(ready=(False, False)), "isn’t on this server yet. Ask whoever runs Domovoi to press “Download the app to this server”"),
+    (_app_status(ready=(False, False)), "isn’t on this server yet. Open the Domovoi dashboard on your computer → Settings → Rooms & devices → Phones & browsers → Download the app to this server, then reload this page"),
     (None, "Couldn’t ask this server"),
 ], ids=["no_release", "not_on_the_server", "server_error"])
 def test_without_an_app_to_offer_the_page_says_why_and_offers_nothing(app, words):
