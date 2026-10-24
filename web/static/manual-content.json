@@ -3745,7 +3745,7 @@
        "text": "Make a room hear the wake word more or less easily, swap its greeting for a chime, or make its voice louder: its **Settings** tab, **Wake sensitivity**, **Wake acknowledgement**, **Voice loudness boost**."
       },
       {
-       "text": "A Pi or spare computer acting up: its **Overview** tab, under **maintenance**, **Restart satellite**. Updating it: **Upgrade satellite**, in the same place."
+       "text": "A Pi or spare computer acting up: its **Overview** tab, under **maintenance**, **Restart room**. Updating it: **Upgrade room**, in the same place."
       },
       {
        "text": "A room moved to new hardware: **Reset pairing** (also under **maintenance**), then approve the new device."
@@ -3841,10 +3841,10 @@
        "text": "Put Raspberry Pi OS Lite (64-bit) on a microSD card, and put the card in the server's card reader."
       },
       {
-       "text": "[Settings → Rooms & devices → Rooms](route:settings/rooms) → **prepare satellite media**. Choose **wi-fi setup portal**, then **write to** the card's drive, and press **Prepare**."
+       "text": "[Settings → Rooms & devices → Rooms](route:settings/rooms) → **prepare a room's SD card**. Choose **wi-fi setup portal**, then **write to** the card's drive, and press **Prepare**."
       },
       {
-       "text": "**On the Windows install**, which can't see SD cards: choose **download for the card helper**, then write the card with the tray icon's **Prepare a satellite card**. It fills in the setup Wi-Fi password by itself. You'll still need that password for your phone: **show setup details** shows it."
+       "text": "**On the Windows install**, which can't see SD cards: choose **download for the card helper**, then write the card with the tray icon's **Prepare a room's SD card**. It fills in the setup Wi-Fi password by itself. You'll still need that password for your phone: **show setup details** shows it."
       },
       {
        "text": "Start the Pi with the card. It makes its own Wi-Fi network, `Domovoi-Setup-<id>`. Join it from your phone, pick your home Wi-Fi and name the room."
@@ -3973,7 +3973,7 @@
      "ordered": true,
      "items": [
       {
-       "text": "{admin} once: [Settings → Rooms & devices → Rooms](route:settings/rooms) → **prepare satellite media** → **Refresh caches**. This gives phones the wake word."
+       "text": "{admin} once: [Settings → Rooms & devices → Rooms](route:settings/rooms) → **prepare a room's SD card** → **Refresh caches**. This gives phones the wake word."
       },
       {
        "text": "{admin} **add a spare device**, name the room, then **make the code**. A QR code appears. If the card says the app isn't on the server yet, press **Download the app to this server** on that card first."
@@ -4114,7 +4114,7 @@
        "text": "What it needs: a server with 24 GB of memory, about 22 GB of downloads and about 32 GB of disk. A word takes about 20 minutes to train with an NVIDIA graphics card, and over an hour on the processor."
       },
       {
-       "text": "The steps: **Create** the word, **Record** 15 or more clips on a satellite in the room itself, press **Train**, then **Push to room**."
+       "text": "The steps: **Create** the word, **Record** 15 or more clips on the room device itself, press **Train**, then **Push to room**."
       },
       {
        "text": "A wake word trained at home is for your household only ([why](doc:docs/LICENSES.md#the-wake-word-trainer))."
@@ -4754,7 +4754,7 @@
        "text": "\"the Domovoi server isn't answering\": an admin presses **Restart the core** on that row. See [Restarting](node:restart)."
       },
       {
-       "text": "**Containers:** Domovoi watches the containers it runs. If one goes missing, stops, or is replaced from outside Domovoi, it opens an incident and shows a banner. A sign of tampering pauses risky changes (plugin installs, updates, satellite upgrades, preparing media) until an admin reviews it; everything else keeps working."
+       "text": "**Containers:** Domovoi watches the containers it runs. If one goes missing, stops, or is replaced from outside Domovoi, it opens an incident and shows a banner. A sign of tampering pauses risky changes (plugin installs, updates, room upgrades, preparing SD cards) until an admin reviews it; everything else keeps working."
       },
       {
        "text": "{admin} **acknowledge** hides the banner. **clear after review** ends the incident, once you know why it happened. **behind the scenes** shows what is watched, with **check now** and **rebuild the music player image**."

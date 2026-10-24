@@ -2930,7 +2930,7 @@ const SparePhone = ({ res }) => {
         <>
           {asked && app.release && (
             <div className="spare-phone-first" style={{ ...muted, color: 'var(--fg)' }}>
-              <b>First, put the Domovoi app on this server, so phones can install it from here.</b>{' '}
+              <b>First, put the Domovoi app on this server, so a phone can install it from here and become a room.</b>{' '}
               The QR code for the phone appears here when it’s done.
             </div>
           )}

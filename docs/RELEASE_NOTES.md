@@ -4,6 +4,39 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-23 — It's a room now, everywhere people read it
+
+Android app, dashboard, join page, the room device's setup portal and
+tray, the Windows tray icon, spoken replies, error messages and the user
+manual. What people read says **room** where it said *satellite*: the
+hardware is a **room device** (or "a Raspberry Pi room", "this phone as a
+room", "a spare laptop as a room"), and adding one is **set up a room**.
+The rule is at the top of docs/GLOSSARY.md. Labels to look for under
+their new names:
+
+* **prepare satellite media** (Settings → Rooms) is **prepare a room's SD
+  card**; the tray icon's **Prepare a satellite card...** is **Prepare a
+  room's SD card...** (docs/WINDOWS_HOST.md's section anchor moved with it,
+  to `#prepare-a-rooms-sd-card`).
+* **Restart satellite** / **Upgrade satellite** in a room's Overview are
+  **Restart room** / **Upgrade room**; *satellite code* is **room
+  software**. The PC room's tray menu says **Start the room** / **Stop the
+  room…**.
+* Settings → Security: **Strict room pairing**, **Room device hello
+  deadline**, **USB room adoption** (the same settings and keys).
+* The setup portal's heading is **Set up your Domovoi room**, and a Pi in
+  USB adoption names itself **Domovoi room setup** in a device list.
+* Error `detail` strings say room too ("no rooms connected", "couldn't
+  reach the room device: …"). A script that matched the old wording needs
+  the new one; the status codes are unchanged.
+
+Unchanged: API paths, JSON keys, event names, service and file names
+(`domovoi-satellite.service`, `satellite/`), the Windows app name **Domovoi
+Satellite** (its Start-menu shortcut and Installed-apps entry), log lines,
+and the builder docs. Spoken commands that say "satellite" ("drop in on the
+kitchen satellite", "how do I set up a satellite") keep working beside the
+room ones. No migration.
+
 ## 2026-10-23 — Upload whole folders on the Files page
 
 Dashboard and web server. **Upload** on the Files page is now a menu —

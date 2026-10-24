@@ -797,7 +797,7 @@ def test_no_qr_to_scan_until_the_app_is_on_the_server(phone):
     opened said the app wasn't on the server. Now the first step says so,
     and the code appears once the app is here."""
     r = phone["missing"]
-    assert "First, put the Domovoi app on this server, so phones can install it from here." in r["text"]
+    assert "First, put the Domovoi app on this server, so a phone can install it from here and become a room." in r["text"]
     assert "phone's camera" not in r["text"]
     assert r["qrs"]["shown"] == 0, "no code on the column while the app isn't here"
     assert r["qrs"]["behind_has_app"] == 1 and "The phone already has the Domovoi app?" in r["text"]

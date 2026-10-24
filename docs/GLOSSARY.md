@@ -1,5 +1,20 @@
 # Glossary
 
+## Room or satellite: the wording rule
+
+**What people read says "room".** The Android app, the dashboard, the join page, the room device's setup portal, what a room device says or shows, the Windows tray icon and its card writer, notifications, error messages and the [user manual](../scripts/manual/manual.md) all say *room*:
+
+* the hardware is a **room device**, or by its kind: "a Raspberry Pi room", "this phone as a room", "a spare laptop as a room";
+* setting one up is **"set up a room"**;
+* the card for a Raspberry Pi is prepared with **"prepare a room's SD card"** (the dashboard card) and **"Prepare a room's SD card"** (the tray icon's menu);
+* what an upgrade installs is the **room software**.
+
+**"Satellite" stays where builders look:** code identifiers, API paths and JSON keys, log lines meant for developers, file and service names (`satellite/`, `domovoi-satellite.service`), and the technical docs for builders ([PROVISIONING](../satellite/PROVISIONING.md), [API reference](API_REFERENCE.md), [Architecture](ARCHITECTURE.md), [Spare-device satellites](SPARE_DEVICE_SATELLITES.md)). Spoken commands that say "satellite" keep working beside the "room" ones.
+
+A satellite is the device that makes a room.
+
+---
+
 Every Domovoi term you'll meet in these docs, in the dashboard, or in the code — alphabetical, defined in plain English. Cross-references in *italics* point at other entries here.
 
 ---

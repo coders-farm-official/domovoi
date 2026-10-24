@@ -224,7 +224,7 @@
       // The last resort: the dashboard offers this page's code only once the
       // app is here, but an update or a cleared cache can still land a phone
       // here. Worded for the phone's owner being the admin too.
-      stateLine('The app isn’t on this server yet. Open the Domovoi dashboard on your computer → Settings → ' +
+      stateLine('The app isn’t on this server yet, so this phone can’t become a room yet. Open the Domovoi dashboard on your computer → Settings → ' +
         'Rooms & devices → Phones & browsers → Download the app to this server, then reload this page. ' +
         '(Not the admin? Ask whoever runs Domovoi to do that.)' + already, true);
       show('reload-line', true);
