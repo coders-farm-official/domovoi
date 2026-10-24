@@ -150,8 +150,13 @@ def test_pmf_is_read_in_every_shape_nmcli_prints():
 def test_wpa2_to_mixed_the_satellite_rejoins_by_itself():
     """Kamron's case: set up on WPA2 (the profile setup used to make), the
     router goes mixed, NM offers SAE, the Pi can't, and the link is gone."""
-    h = Home(security="WPA2 WPA3", router=("wpa-psk", "sae"), km="wpa-psk", pmf="default")
+    h = Home(security="WPA2 WPA3", router=("wpa-psk", "sae"), km="wpa-psk", pmf="default",
+             guard=False)
     assert h.joins() is False                      # what the satellites hit
+    # NetworkManager 1.52 offers SAE with PMF off too: the profile change
+    # alone is not enough, the wifi guard (on every card from 2026-10-23)
+    # is what takes SAE out.
+    h.guard = True
     res = wifi_adapt.adapt(h, "nmcli", model=ZERO_2_W, after_failure=True, sleep=lambda s: None)
     assert res.state == "adapted", res
     assert _settings(h) == ("wpa-psk", "disable")

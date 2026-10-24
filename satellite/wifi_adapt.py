@@ -8,6 +8,13 @@ the saved profile (``wpa-psk``, PMF at NetworkManager's default) lets NM
 offer WPA3 (SAE) to a mixed router, and the Pi Zero 2 W's radio cannot
 finish SAE (see ``provisioning_mode._PMF_DISABLE``).
 
+Since 2026-10-23 the AKMs themselves (no FT anywhere on a Pi, no SAE where
+the radio can't) are enforced for EVERY activation - setup, this module's
+boot and runtime changes, NetworkManager's own reconnects - by
+satellite/wifi_guard.py at the supplicant; NetworkManager 1.52 offers SAE
+and FT whatever the profile's PMF says, so the table below chooses PMF and
+key-mgmt, and the guard keeps the list to what the radio can do.
+
 This module decides, FROM A SCAN and never blindly, whether the profile's
 security must change:
 

@@ -90,6 +90,23 @@ restarts. When it has, the tray says which and offers **Sign in as admin to
 fetch it** (new admin route `POST /api/satellites/media/jobs/{id}/setup-key`;
 after a restart it makes a new key for the same network). No migration.
 
+## 2026-10-23 — Satellites join mesh and WPA2/WPA3 routers on a Pi Zero 2 W
+
+Satellite code and the card image (prepare the card again). No server
+change.
+
+* **A Pi Zero 2 W joins a TP-Link EasyMesh / WPA2/WPA3 router.** Every
+  connect request went unanswered: NetworkManager hands wpa_supplicant FT
+  (802.11r) and WPA3 (SAE) with every WPA2 profile — PMF off did not stop
+  it, as the 2026-10-22 note below said it would — and the Pi's radio
+  completes neither. A new root service on the card,
+  `domovoi-wifi-guard`, takes them out before each association (no FT on
+  any Pi, no SAE on a Zero 2 W / Zero W / 3 B unless the network is
+  WPA3-only).
+* **"The router didn't answer" is no longer called a wrong password.**
+  The card's `join_scan` now shows each access point's RSN suites, PMF and
+  802.11r; each attempt shows the AKM list the supplicant was given.
+
 ## 2026-10-22 — Satellites join WPA2/WPA3 mixed routers, and say why when they can't
 
 Satellite code (the setup page and its Wi-Fi join). Cards must be prepared

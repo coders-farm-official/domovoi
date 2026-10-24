@@ -747,7 +747,7 @@ The setup page (`http://192.168.4.1` on the `Domovoi-Setup-<id>` network) reads 
 | The router says | Tried, in order | Notes |
 |---|---|---|
 | WPA2-Personal (AES), WPA (TKIP), WPA/WPA2 | `wpa-psk` with PMF off, then `wpa-psk` with PMF optional | The second attempt covers a WPA2 router that *requires* PMF (802.11w) |
-| WPA2/WPA3 mixed ("transition", "WPA3-Personal+WPA2-PSK") | `wpa-psk` with PMF off, then `wpa-psk` with PMF optional, then `sae` with PMF required | PMF off keeps NetworkManager from offering SAE, which a Pi Zero 2 W cannot finish; PMF optional is for a router that requires PMF even in transition mode (some Wi-Fi 7 routers; refused with 802.11 status 31) |
+| WPA2/WPA3 mixed ("transition", "WPA3-Personal+WPA2-PSK") | `wpa-psk` with PMF off, then `wpa-psk` with PMF optional, then `sae` with PMF required | NetworkManager hands the supplicant SAE and FT (802.11r) with every `wpa-psk` profile; the Wi-Fi guard takes them out on a radio that can't finish them (below). PMF optional is for a router that requires PMF even in transition mode (802.11 status 31) |
 | WPA3-only (SAE) | `sae` with PMF required, once | A 64-character hex key cannot be used with WPA3; the page asks for the password |
 | Open (no password) | No security | Leave the password blank. A password typed for an open network is ignored |
 | Enhanced Open (OWE) | `owe` | |
@@ -766,6 +766,8 @@ The network name and password go to `nmcli` as separate arguments, never through
 | Linux laptop (`install-pc.sh`) | The laptop's | Its own network settings: Domovoi does not join Wi-Fi for it | | |
 | Windows PC (Windows satellite Setup) | The PC's | Windows' own Wi-Fi | | |
 | Phone in room mode | The phone's | The phone's own Wi-Fi | | |
+
+**The Wi-Fi guard (2026-10-23).** NetworkManager (1.52 on Raspberry Pi OS Trixie) hands wpa_supplicant `WPA-PSK WPA-PSK-SHA256 FT-PSK SAE FT-SAE` for every `wpa-psk` profile, PMF off included, and no profile setting changes that. wpa_supplicant prefers FT-SAE, SAE and FT-PSK (802.11r fast roaming) over plain WPA-PSK, and the Pi Zero 2 W's radio finishes none of them: against a WPA2/WPA3 mixed or mesh router (TP-Link EasyMesh turns 802.11r on) every connect request goes unanswered — `Authentication with … timed out`, then *association took too long*, which nmcli reports as "Secrets were required". `domovoi-wifi-guard.service` (root; `satellite/wifi_guard.py` installed root-owned as `/usr/local/lib/domovoi/wifi-guard`, run by `/usr/bin/python3 -I`) watches the supplicant and rewrites `key_mgmt` on each network NetworkManager adds, before it associates: no FT on any Raspberry Pi, and no SAE on a Pi Zero 2 W, Zero W or 3 B unless the network is WPA3-only. Roaming between access points still works, by plain re-association. Diagnostic overrides in `domovoi/ap.json`: `"join_no_ft": false` keeps FT, `"join_key_mgmt": "WPA-PSK"` forces a list, `"join_key_mgmt": "auto"` turns the guard off. Its lines are in `journalctl -u domovoi-wifi-guard`, and on the card in each `join_attempts` entry (`supplicant_key_mgmt`, `guard_key_mgmt`). `join_scan` also lists each access point's RSN suites (`akm`), PMF (`pmf`: no/capable/required), 802.11r (`ft`) and Wi-Fi generation (`wifi`). An attempt the access point never answered reads `no-answer`, not *wrong password*.
 
 **When the router's security changes later**, the satellite follows it, decided from a scan, never blindly (`satellite/wifi_adapt.py`; at every boot, and when the link will not come back — §8.3):
 
