@@ -105,7 +105,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from domovoi import executors
+from domovoi import executors, richdoc
 from domovoi.admin_auth import require_admin_mutation, require_device, require_device_read
 from domovoi.config import settings as core_settings
 from web.backend.api.csrf_guard import require_requested_with
@@ -134,12 +134,22 @@ router = APIRouter(prefix="/api/documents", tags=["documents"])
 # The Documents ("doc") view is the CATCH-ALL: every file not claimed by
 # the Spreadsheets or Drawings views, each routed to the right open-action
 # by ``_doc_category`` below. Sheet/drawing views stay narrow (exact-ext).
-_DOC_EXTS = frozenset({".docx", ".doc", ".odt", ".rtf", ".txt", ".md"})
+_DOC_EXTS = frozenset({".html", ".htm", ".docx", ".doc", ".odt", ".rtf", ".txt", ".md"})
 _SHEET_EXTS = frozenset({".xlsx", ".xls", ".ods", ".csv"})
 _DRAWING_EXTS = frozenset({".excalidraw", ".svg"})
 
-# Legacy office word-processor types — stored/served, not edited in-app.
+# Office word-processor types. .docx opens in the document editor
+# (converted on open, ``_RICH_EDITOR_EXTS``); the others are stored and
+# served, not edited in-app.
 _OFFICE_WP_EXTS = frozenset({".docx", ".doc", ".odt", ".rtf"})
+
+# Formatted documents: the editor's own files (one self-contained HTML
+# page each, domovoi.richdoc). People see them as "Document".
+_FORMATTED_EXTS = frozenset({".html", ".htm"})
+
+# Everything the live document editor opens and saves: formatted
+# documents, markdown, and Word (.docx, converted on open and on save).
+_RICH_EDITOR_EXTS = _FORMATTED_EXTS | frozenset({".md", ".markdown", ".docx"})
 
 # Sheet types the homegrown editor can actually round-trip.
 _EDITABLE_SHEET_EXTS = frozenset({".xlsx", ".csv"})
@@ -190,7 +200,8 @@ _SHEET_MAX_COLS = 60
 def _doc_category(ext: str) -> str:
     """How the unified Documents page should open a file of this extension.
 
-      * ``"doc"``      → homegrown markdown editor (.md, toolbar + preview).
+      * ``"doc"``      → the live document editor (formatted documents
+                         .html/.htm, markdown .md, Word .docx).
       * ``"sheet"``    → homegrown spreadsheet editor (.xlsx/.csv).
       * ``"drawing"``  → in-page Excalidraw editor (.excalidraw scenes).
       * ``"newtab"``   → open the raw endpoint in a new tab (PDFs, images).
@@ -199,7 +210,7 @@ def _doc_category(ext: str) -> str:
                          the /text endpoint decides if it's really editable).
     """
     ext = ext.lower()
-    if ext in _MARKDOWN_EXTS:
+    if ext in _RICH_EDITOR_EXTS:
         return "doc"
     if ext in _EDITABLE_SHEET_EXTS:
         return "sheet"
@@ -441,6 +452,13 @@ def _assert_text_editor_may_write(target: Path) -> None:
     the name is one the editor could open afterwards.
     """
     ext = target.suffix.lower()
+    if ext in _FORMATTED_EXTS or ext == ".docx":
+        # A formatted document is written only through PUT /doc, which
+        # sanitises it; raw text here would skip that. A .docx is not text.
+        raise HTTPException(
+            status_code=415,
+            detail=f"{ext} is saved by the document editor, not the text editor",
+        )
     if _doc_category(ext) not in _TEXT_EDITOR_CATEGORIES:
         raise HTTPException(
             status_code=415,
@@ -649,7 +667,7 @@ def _blank_xlsx() -> bytes:
     return buf.getvalue()
 
 
-def _blank_content(ext: str) -> bytes:
+def _blank_content(ext: str, title: str = "") -> bytes:
     if ext == ".xlsx":
         return _blank_xlsx()
     if ext == ".excalidraw":
@@ -661,14 +679,23 @@ def _blank_content(ext: str) -> bytes:
         return (
             '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600"></svg>'
         ).encode("utf-8")
+    if ext in _FORMATTED_EXTS:
+        return richdoc.document_file("<p></p>", title).encode("utf-8")
+    if ext == ".docx":
+        from docx import Document
+
+        buf = io.BytesIO()
+        Document().save(buf)
+        return buf.getvalue()
     # .md / .txt / .csv — empty file is valid.
     return b""
 
 
-# Default extension a "New <kind>" gets. "doc" is markdown-first now —
-# the homegrown editor's native format.
+# Default extension a "New <kind>" gets. A new document is a formatted
+# document (.html, the live editor's own format); naming it "x.md" still
+# makes a markdown one.
 _KIND_NEW_EXT = {
-    "doc": ".md",
+    "doc": ".html",
     "sheet": ".xlsx",
     "drawing": ".excalidraw",
 }
@@ -697,7 +724,7 @@ async def create_document(request: Request, req: CreateRequest) -> DocumentRow:
         if target.exists():
             raise HTTPException(status_code=409, detail=f"{raw} already exists")
         _ensure_parent_dir(target)
-        target.write_bytes(_blank_content(ext))
+        target.write_bytes(_blank_content(ext, target.stem))
         st = target.stat()
     _listing_changed()
     return DocumentRow(
@@ -1268,10 +1295,21 @@ async def export_doc(rel_path: str, fmt: Literal["docx"] = Query("docx")) -> Res
     target = _readable_target(rel_path)
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail=f"{rel_path} not found")
-    if target.suffix.lower() not in (_MARKDOWN_EXTS | {".txt"}):
-        raise HTTPException(status_code=415, detail="docx export is for .md/.txt documents")
+    ext = target.suffix.lower()
+    if ext not in (_MARKDOWN_EXTS | _FORMATTED_EXTS | {".txt"}):
+        raise HTTPException(status_code=415, detail="docx export is for documents (.html/.md/.txt)")
+    if target.stat().st_size > _DOC_MAX_BYTES:
+        raise HTTPException(status_code=413, detail=f"{target.name} is too large to export")
     text_ = target.read_bytes().decode("utf-8", errors="replace")
-    data = _markdown_to_docx(text_)
+    if ext in _FORMATTED_EXTS:
+        from domovoi.richdoc.word import html_to_docx
+
+        data = await executors.run(
+            "documents",
+            lambda: html_to_docx(richdoc.sanitize_html(richdoc.document_body(text_)), target.stem),
+        )
+    else:
+        data = _markdown_to_docx(text_)
     return Response(
         content=data,
         media_type=(
@@ -1332,6 +1370,223 @@ async def export_sheet(
             "Content-Disposition": f'attachment; filename="{name}"',
             "Content-Length": str(len(data)),
         },
+    )
+
+
+# ─── The live document editor (.html / .md / .docx) ─────────────────
+# web/static/doc_editor.jsx (window.DomovoiDocEditor) opens three kinds of
+# file and saves each as itself:
+#
+#   * a formatted document (.html/.htm): the editor's content, sanitised
+#     HERE on every load and every save (domovoi.richdoc.sanitize_html),
+#     written as one self-contained page (richdoc.document_file);
+#   * markdown (.md): the editor sends its markdown serialisation;
+#   * Word (.docx): read in the browser (mammoth, from /raw); a save the
+#     person chose to keep as Word is converted here (richdoc.word).
+#
+# The co-editing saver (wf/doc-collab) writes the clean file through the
+# same PUT, so a document saved by one person or by five is the same file.
+
+#: The largest formatted document (pictures embedded) or markdown file the
+#: editor opens or saves. Pictures are downscaled to about 2000 px and
+#: compressed before they are embedded, so this is a lot of them.
+_DOC_MAX_BYTES = 32 * 1024 * 1024
+_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def _editor_format(ext: str) -> str:
+    ext = ext.lower()
+    if ext in _FORMATTED_EXTS:
+        return "html"
+    if ext in _MARKDOWN_EXTS:
+        return "md"
+    if ext == ".docx":
+        return "docx"
+    raise HTTPException(
+        status_code=415, detail=f"{ext or 'that file'} isn't opened by the document editor"
+    )
+
+
+class DocWriteRequest(BaseModel):
+    # The editor's content (body only, no page wrapper) for .html/.docx.
+    html: Optional[str] = Field(None, max_length=_DOC_MAX_BYTES)
+    # The editor's markdown, required for a .md target.
+    markdown: Optional[str] = Field(None, max_length=_DOC_MAX_BYTES)
+    device_id: Optional[str] = Field(None, min_length=3, max_length=64)
+
+
+class DocSaveAsRequest(DocWriteRequest):
+    # The document being saved under another format; the new file goes
+    # beside it, named after it, never over an existing file.
+    from_path: str = Field(..., min_length=1, max_length=1024)
+    format: Literal["html", "docx", "md"]
+
+
+class DocConvertRequest(BaseModel):
+    html: str = Field(..., max_length=_DOC_MAX_BYTES)
+    title: str = Field("", max_length=200)
+
+
+def _doc_bytes(fmt: str, html_: Optional[str], markdown: Optional[str], title: str) -> bytes:
+    """What a save writes for ``fmt``, built from the request. Runs in the
+    ``documents`` pool: sanitising and converting a 32 MiB document is
+    real work, and never the event loop's."""
+    if fmt == "md":
+        if markdown is None:
+            raise HTTPException(status_code=422, detail="a markdown save needs `markdown`")
+        return markdown.encode("utf-8")
+    if html_ is None:
+        raise HTTPException(status_code=422, detail="this save needs `html`")
+    body = richdoc.sanitize_html(html_)
+    if fmt == "docx":
+        from domovoi.richdoc.word import html_to_docx
+
+        return html_to_docx(body, title)
+    data = richdoc.document_file(body, title).encode("utf-8")
+    if len(data) > _DOC_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"that document is larger than {_DOC_MAX_BYTES // _MIB} MB; "
+            "try smaller or fewer pictures",
+        )
+    return data
+
+
+def _assert_doc_overwritable(target: Path, fmt: str) -> None:
+    """Refuse a save over a file the editor could not have opened: the
+    mirror of :func:`_assert_text_editor_may_write` for this editor, so a
+    save is never an overwrite of something it never read."""
+    if not target.exists():
+        return
+    if not target.is_file():
+        raise HTTPException(status_code=415, detail=f"{_rel_of(target)} is a folder, not a document")
+    if target.stat().st_size > _DOC_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"{target.name} is larger than the {_DOC_MAX_BYTES // _MIB} MB the editor opens",
+        )
+    if fmt == "md":
+        try:
+            target.read_bytes().decode("utf-8")
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status_code=415, detail=f"{target.name} isn't a text file; it was not overwritten"
+            ) from None
+    elif fmt == "docx" and not zipfile.is_zipfile(target):
+        raise HTTPException(
+            status_code=409, detail=f"{target.name} isn't a Word file; it was not overwritten"
+        )
+
+
+def _row(target: Path) -> DocumentRow:
+    st = target.stat()
+    ext = target.suffix.lower()
+    return DocumentRow(
+        rel_path=_rel_of(target), name=target.stem, ext=ext, size=st.st_size,
+        modified_at=st.st_mtime, category=_doc_category(ext),
+    )
+
+
+def _read_doc(target: Path, fmt: str) -> dict[str, Any]:
+    data = target.read_bytes()
+    if fmt == "html":
+        text_ = data.decode("utf-8", errors="replace")
+        return {"html": richdoc.sanitize_html(richdoc.document_body(text_))}
+    try:
+        return {"markdown": data.decode("utf-8-sig")}
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=415, detail=f"{target.name} isn't a text file") from None
+
+
+@router.get("/doc/{rel_path:path}", dependencies=DAILY)
+async def read_doc(rel_path: str) -> dict[str, Any]:
+    """A document for the editor: a formatted document's content, already
+    sanitised and without its page wrapper (``html``); a markdown file's
+    text (``markdown``); for a .docx, only its details (the browser reads
+    ``/raw`` and converts it)."""
+    target = _readable_target(rel_path)
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail=f"{rel_path} not found")
+    fmt = _editor_format(target.suffix)
+    with _usable_path(rel_path):
+        st = target.stat()
+        if st.st_size > _DOC_MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"{target.name} is larger than the {_DOC_MAX_BYTES // _MIB} MB the editor opens",
+            )
+        out: dict[str, Any] = {
+            "rel_path": _rel_of(target), "name": target.stem, "ext": target.suffix.lower(),
+            "format": fmt, "size": st.st_size, "modified_at": st.st_mtime,
+        }
+        if fmt != "docx":
+            out.update(await executors.run("documents", _read_doc, target, fmt))
+    return out
+
+
+@router.put("/doc/{rel_path:path}", response_model=DocumentRow, dependencies=DEVICE)
+async def write_doc(request: Request, rel_path: str, req: DocWriteRequest) -> DocumentRow:
+    """Save the editor's document as the file it is (see the section
+    comment): .html sanitised and wrapped, .md as the editor's markdown,
+    .docx converted. Device tier and the Files write policy, like every
+    other save here; written through a temporary file, so a failed save
+    never leaves half a document."""
+    await _assert_files_policy(request, req.device_id)
+    target = _safe_target(rel_path)
+    _assert_saveable_name(target)
+    fmt = _editor_format(target.suffix)
+    with _usable_path(rel_path):
+        _assert_doc_overwritable(target, fmt)
+        _ensure_parent_dir(target)
+        data = await executors.run("documents", _doc_bytes, fmt, req.html, req.markdown, target.stem)
+        _replace_atomically(target, lambda p: p.write_bytes(data))
+        row = _row(target)
+    _listing_changed()
+    return row
+
+
+@router.post("/doc-save-as", response_model=DocumentRow, dependencies=DEVICE)
+async def save_doc_as(request: Request, req: DocSaveAsRequest) -> DocumentRow:
+    """"Save as formatted document" (from a .md or a .docx) and "save as
+    Word": a NEW file beside ``from_path``, named after it, with `` (1)``
+    and so on when that name is taken. Nothing existing is overwritten."""
+    await _assert_files_policy(request, req.device_id)
+    source = _safe_target(req.from_path)
+    ext = {"html": ".html", "docx": ".docx", "md": ".md"}[req.format]
+    with _usable_path(req.from_path):
+        _ensure_parent_dir(source)
+        target = _unique_path(source.parent, f"{source.stem}{ext}")
+        target = _safe_target(_rel_of(target.resolve(strict=False)))
+        _assert_saveable_name(target)
+        data = await executors.run("documents", _doc_bytes, req.format, req.html, req.markdown, target.stem)
+        # Exclusive create: a file that appeared since _unique_path looked
+        # is left alone, and this save is refused rather than written over it.
+        try:
+            with open(target, "xb") as fh:
+                fh.write(data)
+        except FileExistsError:
+            raise HTTPException(status_code=409, detail=f"{target.name} already exists") from None
+        row = _row(target)
+    _listing_changed()
+    return row
+
+
+@router.post("/convert/docx", dependencies=DAILY)
+async def convert_to_docx(req: DocConvertRequest) -> Response:
+    """The editor's content as a Word file, for "Download as Word": what is
+    on screen, saved or not. Nothing is written on the server."""
+    def build() -> bytes:
+        from domovoi.richdoc.word import html_to_docx
+
+        return html_to_docx(richdoc.sanitize_html(req.html), req.title)
+
+    from web.backend.api.audio_serve import attachment_headers, safe_download_name
+
+    data = await executors.run("documents", build)
+    name = safe_download_name(req.title, fallback="Document")
+    return Response(
+        content=data, media_type=_DOCX,
+        headers={**attachment_headers(f"{name}.docx"), "Content-Length": str(len(data))},
     )
 
 

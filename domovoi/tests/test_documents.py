@@ -77,9 +77,14 @@ def test_rel_of_roundtrips(docs_dir):
 # ─── Category routing ───────────────────────────────────────────────
 def test_doc_category_routing():
     assert docs._doc_category(".md") == "doc"
+    # The live document editor opens formatted documents and Word too.
+    assert docs._doc_category(".html") == "doc"
+    assert docs._doc_category(".htm") == "doc"
+    assert docs._doc_category(".docx") == "doc"
     assert docs._doc_category(".xlsx") == "sheet"
     assert docs._doc_category(".csv") == "sheet"
-    assert docs._doc_category(".docx") == "download"
+    assert docs._doc_category(".doc") == "download"
+    assert docs._doc_category(".odt") == "download"
     assert docs._doc_category(".xls") == "download"
     assert docs._doc_category(".ods") == "download"
     assert docs._doc_category(".excalidraw") == "drawing"
@@ -90,14 +95,30 @@ def test_doc_category_routing():
 
 
 # ─── Create / list ──────────────────────────────────────────────────
-def test_create_doc_defaults_to_markdown(docs_dir):
+def test_create_doc_defaults_to_a_formatted_document(docs_dir):
     with _client() as c:
         r = c.post("/api/documents/create", json={"name": "notes", "kind": "doc"})
+        md = c.post("/api/documents/create", json={"name": "plain.md", "kind": "doc"})
     assert r.status_code == 200
     body = r.json()
-    assert body["rel_path"] == "notes.md"
+    assert body["rel_path"] == "notes.html"
     assert body["category"] == "doc"
-    assert (docs_dir / "notes.md").is_file()
+    text_ = (docs_dir / "notes.html").read_text(encoding="utf-8")
+    # A whole, self-contained page: it opens as a document in any browser.
+    assert text_.startswith("<!DOCTYPE html>") and "<style>" in text_
+    assert "<title>notes</title>" in text_
+    # Naming it .md still makes a markdown document.
+    assert md.json()["rel_path"] == "plain.md"
+    assert (docs_dir / "plain.md").read_bytes() == b""
+
+
+def test_create_word_doc_is_a_real_docx(docs_dir):
+    with _client() as c:
+        r = c.post("/api/documents/create", json={"name": "letter.docx", "kind": "doc"})
+    assert r.json()["rel_path"] == "letter.docx" and r.json()["category"] == "doc"
+    from docx import Document
+
+    Document(docs_dir / "letter.docx")  # opens cleanly
 
 
 def test_create_sheet_is_valid_xlsx(docs_dir):
@@ -113,12 +134,16 @@ def test_create_sheet_is_valid_xlsx(docs_dir):
 def test_list_tags_categories(docs_dir):
     (docs_dir / "a.md").write_text("# hi", encoding="utf-8")
     (docs_dir / "b.csv").write_text("1,2", encoding="utf-8")
-    (docs_dir / "legacy.docx").write_bytes(b"pk")
+    (docs_dir / "word.docx").write_bytes(b"pk")
+    (docs_dir / "legacy.doc").write_bytes(b"\xd0\xcf")  # OLE2, as a real .doc starts
+    (docs_dir / "c.html").write_text("<p>hi</p>", encoding="utf-8")
     with _client() as c:
         rows = {r["rel_path"]: r for r in c.get("/api/documents/").json()}
     assert rows["a.md"]["category"] == "doc"
     assert rows["b.csv"]["category"] == "sheet"
-    assert rows["legacy.docx"]["category"] == "download"
+    assert rows["word.docx"]["category"] == "doc"
+    assert rows["c.html"]["category"] == "doc"
+    assert rows["legacy.doc"]["category"] == "download"
 
 
 # ─── Sheet grid round-trip ──────────────────────────────────────────

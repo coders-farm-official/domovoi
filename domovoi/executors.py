@@ -69,6 +69,10 @@ POOL_SIZES: dict[str, int] = {
     # reads the whole file (up to ~280 MB for the largest it takes): one at
     # a time (delta review S6).
     "sheets": 1,
+    # The document editor's formatted documents (domovoi.richdoc): the
+    # allowlist pass over a load or a save (up to 32 MiB, pictures
+    # embedded) and the Word conversion, never on the event loop.
+    "documents": 2,
 }
 
 _pools: dict[str, ThreadPoolExecutor] = {}
