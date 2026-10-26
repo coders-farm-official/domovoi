@@ -232,6 +232,10 @@ TABLES_TO_TRUNCATE = [
     "scan_jobs",
     "printer_room_defaults",
     "printers",
+    # Co-editing (V042): shared state, edits and version history.
+    "collab_snapshots",
+    "collab_updates",
+    "collab_docs",
 ]
 
 

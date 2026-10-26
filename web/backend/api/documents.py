@@ -522,6 +522,25 @@ async def _assert_files_policy(request: Request, device_id: Optional[str]) -> No
     await files_api.assert_documents_write_allowed(request, device_id)
 
 
+async def _collab_saved(request: Request, target: Path) -> None:
+    """Tell co-editing (web/backend/api/collab.py) that a save landed. A save
+    from a co-editing client carries ``X-Domovoi-Collab`` and is recorded as
+    the clean file of its revision; any other save means the file changed
+    under the shared state, which is then rebuilt from it. Never raises.
+    Every route that saves a co-edited type calls this (imported late:
+    collab imports this module)."""
+    from web.backend.api import collab
+
+    await collab.note_file_saved(request, target)
+
+
+async def _collab_forget(rel_paths: list[str]) -> None:
+    """Deleted documents take their co-editing state and history with them."""
+    from web.backend.api import collab
+
+    await collab.forget_paths(rel_paths)
+
+
 # ─── Schemas ────────────────────────────────────────────────────────
 class DocumentRow(BaseModel):
     rel_path: str
@@ -734,6 +753,7 @@ async def delete_documents(req: DeleteRequest) -> DeleteResult:
             failed.append(rp)
     if deleted:
         _listing_changed()
+        await _collab_forget(deleted)
     return DeleteResult(deleted=deleted, failed=failed)
 
 
@@ -825,6 +845,7 @@ async def write_text_file(
         target.write_text(req.text, encoding="utf-8", newline="")
         st = target.stat()
     _listing_changed()
+    await _collab_saved(request, target)
     ext = target.suffix.lower()
     return DocumentRow(
         rel_path=target.name,
@@ -1185,6 +1206,7 @@ async def write_sheet(
         await executors.run("sheets", _write_sheet_grid, target, req.rows)
         st = target.stat()
     _listing_changed()
+    await _collab_saved(request, target)
     ext = target.suffix.lower()
     return DocumentRow(
         rel_path=target.name, name=target.stem, ext=ext,

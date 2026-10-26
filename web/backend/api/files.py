@@ -1471,6 +1471,11 @@ async def delete(request: Request, req: DeleteRequest) -> DeleteResponse:
 
     if deleted:
         listing_cache.invalidate(lib.id)
+        if lib.id == DOCUMENTS_LIBRARY_ID:
+            # Co-editing state and version history go with the documents.
+            from web.backend.api import collab
+
+            await collab.forget_paths(deleted)
     reindex_triggered = False
     if deleted and lib.reindex_kind in INDEXED_KINDS:
         reindex_triggered = await _trigger_reindex(
@@ -1672,6 +1677,8 @@ async def move(request: Request, req: MoveRequest) -> MoveResponse:
             # drives, and on Windows that's the common case.
             shutil.move(str(src), str(dest))
             moved.append(dest.relative_to(target.root_path).as_posix())
+            if DOCUMENTS_LIBRARY_ID in (source.id, target.id):
+                await _collab_follow_move(source, target, src, dest)
         except OSError as e:
             failed.append(f"{rel}: {e}")
 
@@ -1688,6 +1695,19 @@ async def move(request: Request, req: MoveRequest) -> MoveResponse:
         moved=moved, skipped=skipped, failed=failed,
         reindex_triggered=reindex_triggered,
     )
+
+
+async def _collab_follow_move(source: MediaLibrary, target: MediaLibrary,
+                              src: Path, dest: Path) -> None:
+    """A move in or out of Documents: a co-edited document's id and history
+    follow it inside Documents, and go when it leaves."""
+    from web.backend.api import collab
+
+    old_rel = src.relative_to(source.root_path).as_posix()
+    if source.id == target.id == DOCUMENTS_LIBRARY_ID:
+        await collab.note_moved(old_rel, dest.relative_to(target.root_path).as_posix())
+    elif source.id == DOCUMENTS_LIBRARY_ID:
+        await collab.forget_paths([old_rel])
 
 
 def _is_under(candidate: Path, ancestor: Path) -> bool:
