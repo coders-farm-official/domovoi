@@ -227,10 +227,17 @@ def image_verdict(e: Expected, obs: Observed, view: DockerView) -> str:
       data, no finding.
 
     The music player image (pinned by the ID the core built) has no
-    registry provenance by design: any other ID is ``foreign``.
+    registry provenance by design: any other ID is ``foreign`` — but a
+    room's container still on Domovoi's previous build (``image_id_previous``,
+    kept when a rebuild Domovoi vouched for moved the baseline) is waiting
+    to be recreated, not tampering.
     """
     if e.image_id:
-        return OK if obs.image_id == e.image_id else FOREIGN
+        if obs.image_id == e.image_id:
+            return OK
+        if e.image_id_previous and obs.image_id == e.image_id_previous:
+            return OK
+        return FOREIGN
     if not (e.image_digests or e.image_ref):
         return OK
     if e.image_digests and obs.image_id in e.image_digests:
@@ -446,7 +453,8 @@ def detect(
             continue
         if in_mpd and not in_compose and not obs.security() and (
             normalize_ref(obs.config_image) == normalize_ref(exp.mpd_tag_ref)
-            and (exp.mpd_image_id is None or obs.image_id == exp.mpd_image_id)
+            and (exp.mpd_image_id is None
+                 or obs.image_id in (exp.mpd_image_id, exp.mpd_image_previous))
         ):
             # A removed room's music player, left running: ours, harmless.
             det.unrecognized.append(name)

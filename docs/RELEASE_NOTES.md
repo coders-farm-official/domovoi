@@ -4,6 +4,42 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-25 — A new room after a rebuilt music player no longer trips the container guard
+
+* **"The music player for <room> is running a different image than the
+  one Domovoi expects" when a room is set up after an update or a
+  repair.** A rebuilt `domovoi-mpd:latest` was taken on only at the
+  core's next start, and only when the update unit's result said it had
+  rebuilt the image; a room whose player was created from the new image
+  before that (the first music in a newly set-up room) opened a tamper
+  incident and paused updates, plugin installs, room upgrades and SD card
+  preparation. And clearing it kept nothing: the next new room was
+  reported again. Now:
+  * the update unit records the image it builds
+    (`/var/lib/domovoi-update/mpd-image.json`, root's, written before any
+    room's player can be made from it), as the installer already did, and
+    the guard takes a recorded image on at any check, not only at the
+    core's start. Open incidents about exactly that image are closed by
+    Domovoi, with the record named;
+  * clearing an incident about the music player image (after review)
+    makes that image the one the guard expects: the next room made from it
+    is not reported;
+  * a room's player still on Domovoi's previous build isn't tampering (it
+    waits to be recreated);
+  * when Docker says the image was made during the last update and after
+    the expected one, the incident says the update probably rebuilt it,
+    and that it's safe to clear if you didn't build it yourself.
+
+  A `docker build` or `docker tag` by hand is still reported, update or
+  not. **If such an incident is open on your box now** (it pauses updates
+  too): check when the image was made (`docker image inspect -f
+  '{{.Created}}' domovoi-mpd:latest`, on the Windows install inside its
+  distro) against the update's time on Settings → Health; if you didn't
+  build it yourself, **clear after review** every incident about the music
+  player image on the Containers page, then take this update. Its first
+  check takes the image you cleared on, and rooms set up after that aren't
+  reported. No rebuild needed.
+
 ## 2026-10-23 — It's a room now, everywhere people read it
 
 Android app, dashboard, join page, the room device's setup portal and

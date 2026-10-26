@@ -224,21 +224,38 @@ case "${1-}" in
     if [ -f "$SHIM_STATE/fail-docker-build" ]; then echo "build failed" >&2; exit 1; fi
     # The wake-word trainer's build (--label org.domovoi.wake-trainer.src=TREE
     # -t NAME DIR) leaves an image with that label.
-    lbl="" tag=""
+    lbl="" tag="" file=""
     while [ $# -gt 0 ]; do
-      case $1 in --label) lbl=$2; shift 2 ;; -t) tag=$2; shift 2 ;; *) shift ;; esac
+      case $1 in --label) lbl=$2; shift 2 ;; -t) tag=$2; shift 2 ;; -f) file=$2; shift 2 ;; *) shift ;; esac
     done
     case $lbl in
       org.domovoi.wake-trainer.src=*)
         echo "$tag" >"$SHIM_STATE/trainer-image"
         printf '%s' "${lbl#*=}" >"$SHIM_STATE/trainer-label" ;;
+      *)
+        # Any other build (the music player's) leaves an image under its
+        # tag, in image-<tag>: the ID in mpd-build-id, else the SHA-256 of
+        # the Dockerfile (another Dockerfile, another image). Nothing while
+        # mpd-build-no-id says the ID can't be read.
+        if [ -n "$tag" ] && [ ! -f "$SHIM_STATE/mpd-build-no-id" ]; then
+          if [ -f "$SHIM_STATE/mpd-build-id" ]; then
+            cat "$SHIM_STATE/mpd-build-id" >"$SHIM_STATE/image-${tag//[\/:]/_}"
+          else
+            echo "sha256:$(sha256sum <"$file" | cut -c1-64)" >"$SHIM_STATE/image-${tag//[\/:]/_}"
+          fi
+        fi ;;
     esac
     exit 0
     ;;
   image)
-    # image inspect [-f FORMAT] NAME: only the trainer image exists, named
-    # in trainer-image, with the label in trainer-label (none: no file).
+    # image inspect [-f FORMAT] NAME: an image a build above left (image-<tag>,
+    # its ID), or the trainer image, named in trainer-image, with the label
+    # in trainer-label (none: no file).
     name=${!#}
+    if [ "${2-}" = inspect ] && [ -f "$SHIM_STATE/image-${name//[\/:]/_}" ]; then
+      case " $* " in *.Id*) cat "$SHIM_STATE/image-${name//[\/:]/_}" ;; esac
+      exit 0
+    fi
     if [ "${2-}" != inspect ] || [ ! -f "$SHIM_STATE/trainer-image" ] || [ "$name" != "$(cat "$SHIM_STATE/trainer-image")" ]; then
       echo "Error response from daemon: No such image: $name" >&2; exit 1
     fi
@@ -1050,6 +1067,97 @@ case_mpd_changed() {
   check "rebuild while core is stopped" before "systemctl stop" "docker build"
   check "rebuild before core starts" before "docker build" "systemctl start domovoi-core.service"
   check "no pip" not_called "pip "
+  end_case
+}
+
+# The update unit records the music player image it built in
+# DOMOVOI_UPDATE_DIR/mpd-image.json (root's, 0644): the core's container
+# guard takes exactly that image, and no other, as Domovoi's own. On
+# 2026-10-25 a rebuilt domovoi-mpd:latest that nothing named was reported
+# as tampering when the next room was set up. Written after the build and
+# before a room's player is removed or the core starts again, so no player
+# can be made from the new image before the record exists.
+rec_field() { sed -n "s/^  \"$1\": \(.*\)$/\1/p" "$UPD/mpd-image.json" | sed 's/,$//'; }
+dockerfile_id() { printf 'sha256:%s' "$(printf "$1" | sha256sum | cut -c1-64)"; }
+case_mpd_record_written() {
+  new_case mpd_record_written
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'FROM debian:trixie-slim\n' >"$REPO/domovoi/Dockerfile.mpd"
+  local sha_b; sha_b=$(commit_all "B: mpd")
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the record is there" test -f "$UPD/mpd-image.json"
+  check "by the update" eq "$(rec_field by)" '"update"'
+  check "names the image the build left" eq "$(rec_field image_id)" "\"$(dockerfile_id 'FROM debian:trixie-slim\n')\""
+  check "and the tag" eq "$(rec_field tag)" '"domovoi-mpd:latest"'
+  check "this run's (its started_at)" eq "$(rec_field run_started_at)" "$(field started_at)"
+  check "the commit it updated to" eq "$(rec_field to_sha)" "\"$sha_b\""
+  check "a UTC stamp" grep -Eq '^  "built_at": "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",$' "$UPD/mpd-image.json"
+  check "readable by everyone, written by its owner only" eq "$(stat -c %a "$UPD/mpd-image.json")" 644
+  check "no temp file left" eq "$(ls -a "$UPD" | grep -c '^\.mpd-image')" 0
+  check "the ID read after the build" before "docker build -t domovoi-mpd:latest" "docker image inspect -f {{.Id}} domovoi-mpd:latest"
+  check "recorded before a room's player goes" before "docker image inspect -f {{.Id}} domovoi-mpd:latest" "docker rm -f domovoi-mpd-kitchen"
+  check "recorded before the core starts" before "docker image inspect -f {{.Id}} domovoi-mpd:latest" "systemctl start domovoi-core.service"
+  check "says so" grep -qF "as the music player image this update built" "$CASE/output.log"
+  if [ -n "${HARNESS_PYTHON:-}" ]; then
+    local p=$UPD/mpd-image.json py=$HARNESS_PYTHON
+    if command -v cygpath >/dev/null 2>&1; then p=$(cygpath -w "$p"); py=$(cygpath -u "$py"); fi
+    check "the record is valid JSON" "$py" -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); assert d["by"] == "update" and d["image_id"].startswith("sha256:")' "$p"
+  fi
+  end_case
+}
+
+# An image ID that can't be read after the build leaves no record (the
+# guard then falls back to the run's mpd_changed), says so, and fails
+# nothing.
+case_mpd_record_unreadable_id() {
+  new_case mpd_record_unreadable_id
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'FROM debian:trixie-slim\n' >"$REPO/domovoi/Dockerfile.mpd"
+  commit_all "B: mpd" >/dev/null
+  touch "$STATE/mpd-build-no-id"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "mpd_changed" eq "$(field mpd_changed)" true
+  check "no record" test ! -e "$UPD/mpd-image.json"
+  check "says why" grep -qF "not recorded for the container guard" "$CASE/output.log"
+  check "the rooms still go" called "docker rm -f domovoi-mpd-kitchen"
+  end_case
+}
+
+# A rollback that rebuilds the old image records that one: the record names
+# the image the tag ends on, under the same run.
+case_mpd_record_follows_the_rollback() {
+  new_case mpd_record_follows_the_rollback
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'FROM debian:trixie-slim\n' >"$REPO/domovoi/Dockerfile.mpd"
+  printf 'raise SystemExit("broken")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: mpd + broken code")
+  echo "$sha_b" >"$STATE/curl-fail-when-head"
+  run_update
+  check "rolled back" eq "$(field status)" '"rolled_back"'
+  check "built twice" eq "$(grep -c '^docker build -t domovoi-mpd:latest' "$STATE/calls.log")" 2
+  check "the record names the rollback's image" eq "$(rec_field image_id)" "\"$(dockerfile_id 'FROM debian:bookworm-slim\n')\""
+  check "under the same run" eq "$(rec_field run_started_at)" "$(field started_at)"
+  end_case
+}
+
+# Nothing built, nothing recorded: an update that leaves the music player
+# alone, and a plain restart, leave an earlier record as it was.
+case_mpd_record_untouched_without_a_build() {
+  new_case mpd_record_untouched_without_a_build
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '{"by": "update", "image_id": "sha256:%s"}\n' "$(printf 'a%.0s' $(seq 64))" >"$UPD/mpd-image.json"
+  cp "$UPD/mpd-image.json" "$CASE/record-before"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  commit_all "B: code only" >/dev/null
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no build" not_called "docker build"
+  check "the record is as it was" cmp -s "$UPD/mpd-image.json" "$CASE/record-before"
+  run_update
+  check "a plain restart" eq "$(field mode)" '"restart"'
+  check "still as it was" cmp -s "$UPD/mpd-image.json" "$CASE/record-before"
   end_case
 }
 
@@ -2521,6 +2629,7 @@ case_never_mpd_conf_only_keeps_the_image() {
   check "no docker build" not_called "docker build"
   check "rooms recreated for the new conf" called "docker rm -f domovoi-mpd-kitchen"
   check "says why" eq "$(grep -c 'keeping the domovoi-mpd:latest image' "$CASE/output.log")" 1
+  check "no image recorded (none built)" test ! -e "$UPD/mpd-image.json"
   check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
   end_case
 }
@@ -4878,6 +4987,10 @@ CASES=(
   case_retired_packages_kept_through_a_rollback
   case_retired_packages_untouched_when_the_sync_fails
   case_mpd_changed
+  case_mpd_record_written
+  case_mpd_record_unreadable_id
+  case_mpd_record_follows_the_rollback
+  case_mpd_record_untouched_without_a_build
   case_mpd_conf_only
   case_migration_health_failure_rolls_back
   case_flyway_failure_without_growth

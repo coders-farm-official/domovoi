@@ -1284,9 +1284,13 @@ does this:
    version panel shows **lock not applied: <reason>** under the last
    update.
 6. If `domovoi/Dockerfile.mpd` or `domovoi/mpd.conf` changed: rebuild
-   `domovoi-mpd:latest` exactly as the core does, and remove the room
-   containers. The core recreates each one at startup from its `mpd_rooms`
-   row, with the same data volume, so playlists and queues survive.
+   `domovoi-mpd:latest` exactly as the core does, record the image it
+   built in `/var/lib/domovoi-update/mpd-image.json` (root's, 0644: the
+   container guard takes exactly that image as Domovoi's own,
+   [CONTAINER_GUARD.md](CONTAINER_GUARD.md#the-music-players)), and remove
+   the room containers. The core recreates each one at startup from its
+   `mpd_rooms` row, with the same data volume, so playlists and queues
+   survive.
 7. Docker's GPU runtime, where an NVIDIA GPU is visible
    (`scripts/linux/gpu-runtime.sh`, [Wake-word training](#wake-word-training)):
    the NVIDIA Container Toolkit installed when it is missing, and the

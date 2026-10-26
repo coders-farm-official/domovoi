@@ -58,8 +58,12 @@
 #      edge-tts, LGPL), since pip never removes what nothing requires any
 #      more.
 #   5. Rebuild the MPD image the way mpd_provisioner.py does if
-#      Dockerfile.mpd or mpd.conf changed, and remove the room containers so
-#      the core recreates them (same data volumes) from the new image.
+#      Dockerfile.mpd or mpd.conf changed, record the image it built in
+#      DOMOVOI_UPDATE_DIR/mpd-image.json (root's, 0644: the core's
+#      container guard takes exactly that image as Domovoi's own, and the
+#      record is written before any room's player can be made from it), and
+#      remove the room containers so the core recreates them (same data
+#      volumes) from the new image.
 #   6. Docker's GPU runtime, where an NVIDIA GPU is visible
 #      (reconcile_gpu_runtime, scripts/linux/gpu-runtime.sh, the helper
 #      provision.sh runs too): the NVIDIA Container Toolkit installed when
@@ -365,6 +369,10 @@ RESULT_FILE=$UPDATE_DIR/last-result.json
 APPLIED_FILE=$UPDATE_DIR/applied_sha
 BAD_FILE=$UPDATE_DIR/bad_sha
 FREEZE_FILE=$UPDATE_DIR/pip-freeze-pre.txt
+# The music player image the last rebuild-mpd built (record_mpd_image): the
+# core's container guard takes that image, and only that one, as Domovoi's
+# own (domovoi/container_guard/engine.py, UPDATE_MPD_RECORD).
+MPD_RECORD=$UPDATE_DIR/mpd-image.json
 
 # What counts as "the dependencies changed" / "the MPD image changed".
 # Git pathspecs, relative to the repo root. pyproject.toml counts too, but
@@ -2025,6 +2033,7 @@ rebuild_mpd() {
     # too): root's docker CLI would read the Dockerfile through whatever
     # link the checkout holds there.
     as_user docker build -t "$MPD_TAG" -f "$REPO_DIR/domovoi/Dockerfile.mpd" "$REPO_DIR/domovoi" || return 1
+    record_mpd_image
   fi
   names=$(docker ps -a --format '{{.Names}}') || return 1
   for n in $names; do
@@ -2033,6 +2042,37 @@ rebuild_mpd() {
       docker rm -f "$n" || return 1
     fi
   done
+}
+
+# record_mpd_image: MPD_RECORD for the image rebuild_mpd just built, by
+# rename (root's, 0644). Written here, while core and web are stopped and
+# before the rooms' players are removed, so no player can be created from
+# the new image before the record that vouches for it exists. The core's
+# container guard (docs/CONTAINER_GUARD.md, "The music players") takes the
+# image it names as Domovoi's own when it is newer than the image the guard
+# recorded, at the core's start or at any check while it runs; any other
+# image under the tag (a docker build by hand) is still reported. An ID that
+# can't be read leaves no record, and says so: the guard then falls back to
+# this run's mpd_changed, as before the record existed. run_started_at ties
+# it to this run's last-result.json.
+record_mpd_image() {
+  local id
+  id=$({ as_user docker image inspect -f '{{.Id}}' "$MPD_TAG" 2>/dev/null || true; } | tr -d '[:space:]')
+  if ! [[ $id =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo "warning: could not read the image ID $MPD_TAG names (got '$id'); not recorded for the container guard"
+    return 0
+  fi
+  write_atomic "$MPD_RECORD" "$(
+    printf '{\n'
+    printf '  "by": "update",\n'
+    printf '  "image_id": "%s",\n' "$id"
+    printf '  "tag": %s,\n' "$(json_str "$MPD_TAG")"
+    printf '  "built_at": "%s",\n' "$(now_iso)"
+    printf '  "run_started_at": %s,\n' "$(json_str "$STARTED_AT")"
+    printf '  "to_sha": %s\n' "$(json_str_or_null "$HEAD_SHA")"
+    printf '}'
+  )"$'\n'
+  echo "recorded $MPD_TAG ($id) as the music player image this update built"
 }
 
 wait_healthy() {

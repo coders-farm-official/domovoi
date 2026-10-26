@@ -241,7 +241,12 @@ async def _checks(guard, clock, n=4):
 
 
 @requires_db
-async def test_a_running_core_holds_the_tag_the_installer_rebuilt(guard_env, record) -> None:  # noqa: F811
+async def test_a_running_core_takes_on_the_tag_the_installer_rebuilt(guard_env, record) -> None:  # noqa: F811
+    # Until 2026-10-25 the tag check was held until the core's restart, and
+    # a room created from the new tag before then was reported (the lazy
+    # order of test_container_guard_update_rebuild.py): now the image is
+    # taken on at the check, the room on the old one kept as Domovoi's
+    # previous build.
     guard, docker, clock, expected = guard_env
     write_record(record)
     expected["set"] = _rooms_expected()
@@ -249,9 +254,12 @@ async def test_a_running_core_holds_the_tag_the_installer_rebuilt(guard_env, rec
     await _checks(guard, clock)
     async with session_scope() as s:
         assert await store.open_incidents(s) == []
+        b = await store.get_baseline(s, cg_engine.MPD_BASELINE_KEY)
+        p = await store.get_baseline(s, cg_engine.MPD_PREVIOUS_KEY)
     assert guard.status["findings"] == []
-    # The room still runs the recorded image: nothing about it either.
-    assert "Domovoi's installer rebuilt" in (expected["set"].mpd_tag_hold or "")
+    assert (b["value"], b["source"], p["value"]) == (NEW, "provision", OLD)
+    assert "installer" in (guard.mpd_note or "")
+    assert expected["set"].mpd_tag_hold is None
     holds.clear()
 
 

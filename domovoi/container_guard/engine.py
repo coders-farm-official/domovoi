@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import dataclasses
 import json
 import logging
 import os
@@ -63,6 +64,10 @@ from domovoi.container_guard.model import FAILURE, ONESHOT, RUNNING, TAMPER, Fin
 log = logging.getLogger(__name__)
 
 MPD_BASELINE_KEY = "mpd_image_id"
+# The baseline before the current one, kept when a rebuild Domovoi vouched
+# for (or an admin's clear) moved it: rooms still on Domovoi's previous
+# build wait to be recreated, they aren't tampering.
+MPD_PREVIOUS_KEY = "mpd_image_id_previous"
 MAX_BACKOFF_SEC = 300.0
 # Resolved incidents past the retention are pruned about once a day.
 PRUNE_EVERY_SEC = 24 * 3600.0
@@ -385,7 +390,7 @@ class ContainerGuard:
             det = Detection(daemon_ok=True, held={n: recovering for n in expected.containers})
             self.debouncer.pending.clear()
         else:
-            await self._hold_vouched_tag(expected, view)
+            await self._adopt_mpd_image(expected, view)
             det = detect(expected, view, now_wall=self.wall(), boot_wall=self.started_wall,
                          memory=self.memory, now_mono=self.clock())
 
@@ -411,14 +416,24 @@ class ContainerGuard:
         self.status = self._status(cfg, expected, view, det, hold, db_ok, written)
         return self.status
 
-    async def _hold_vouched_tag(self, exp: ExpectedSet, view: Any) -> None:
-        """The tag moved while this core runs, and the installer's record
-        vouches for the new image (a repair by Setup rebuilt it): hold the
-        tag check instead of reporting it. The rooms keep being compared to
-        the recorded image they still run; provision.sh restarts the core
-        right after its build, and that start adopts the new image
-        (:func:`note_mpd_image`). Anything the record doesn't name is still
-        reported."""
+    async def _adopt_mpd_image(self, exp: ExpectedSet, view: Any) -> None:
+        """The music player tag names another image than the recorded one
+        while the core runs. Take it on as the baseline at once, before the
+        rules run, when
+
+        * a root-owned record of a rebuild Domovoi made itself names exactly
+          that image, built after the baseline (:func:`vouched_rebuild`: the
+          installer's provision.sh, or the update unit's rebuild-mpd), or
+        * an admin cleared, after review, a finding about exactly that image
+          (the tag's, or a room's container made from it): "keep the image".
+
+        So a room created from the new tag before the core restarts (a room
+        set up right after Setup's repair rebuilt the image) is not reported,
+        and neither is the next one after a clear. Any image nothing vouches
+        for is left to the rules: a ``docker build`` by hand is still
+        tampering. Open incidents about exactly a vouched image are closed
+        with the record named (the same evidence would have kept them from
+        opening)."""
         ref, baseline = exp.mpd_tag_ref, exp.mpd_image_id
         if not ref or not baseline or exp.mpd_tag_hold or not view.ok:
             return
@@ -426,15 +441,58 @@ class ContainerGuard:
         if not tag_id or tag_id == baseline:
             return
         try:
-            vouched = await asyncio.to_thread(provision_evidence, exp.mpd_image_at, tag_id)
+            by = await asyncio.to_thread(vouched_rebuild, exp.mpd_image_at, tag_id)
         except Exception as e:  # noqa: BLE001 — no evidence, then
-            log.debug("container guard: installer record unreadable: %s", e)
-            vouched = False
-        if vouched:
-            exp.mpd_tag_hold = (
-                "Domovoi's installer rebuilt the music player image; the core takes it on "
-                "when it restarts"
+            log.debug("container guard: rebuild records unreadable: %s", e)
+            by = None
+        source = MPD_SOURCES.get(by or "")
+        try:
+            async with self.session_factory() as s:
+                if source is None:
+                    if not await _cleared_image(s, tag_id, exp.mpd_prefix):
+                        return
+                    by, source = "admin", "admin-cleared"
+                await _move_baseline(s, tag_id, source, baseline)
+                if by != "admin":
+                    await _clear_vouched(s, tag_id, by, exp.mpd_prefix)
+        except Exception as e:  # noqa: BLE001 — the database may be away
+            if source is None or by == "admin":
+                return
+            # Root's record vouches whatever the database says: this check
+            # doesn't report it, the next one records it.
+            log.warning("container guard: rebuilt music player image not recorded yet: %s", e)
+        _take_on(exp, tag_id, previous=baseline)
+        self.mpd_note = MPD_NOTES[by]
+        log.warning("container guard: music player image %s taken on (%s); it was %s",
+                    tag_id[:19], source, baseline[:19])
+
+    async def _with_rebuild_hint(self, f: Finding, exp: ExpectedSet) -> Finding:
+        """A music player image incident about to open: when the evidence
+        says Domovoi's own update probably built the image (it was made
+        during the update unit's last run and is newer than the expected
+        one), say so and what to check. Otherwise unchanged."""
+        if f.cls != TAMPER or f.kind != "image" or not exp.mpd_image_id:
+            return f
+        mpd = f.key.startswith("tamper:mpd-image:") or bool(
+            f.container and exp.mpd_prefix and f.container.startswith(exp.mpd_prefix)
+        )
+        found_id = (f.found or {}).get("image_id")
+        if not mpd or not isinstance(found_id, str):
+            return f
+        created = getattr(self.docker, "image_created", None)
+        if created is None:
+            return f
+        try:
+            times = await created([found_id, exp.mpd_image_id])
+            hint = await asyncio.to_thread(
+                rebuild_hint, times.get(found_id), times.get(exp.mpd_image_id), exp.mpd_image_at,
             )
+        except Exception as e:  # noqa: BLE001 — the plain words, then
+            log.debug("container guard: no rebuild hint: %s", e)
+            return f
+        if not hint:
+            return f
+        return dataclasses.replace(f, summary=f"{f.summary} {hint}")
 
     async def _persist(self, det: Detection, expected: ExpectedSet, now: float) -> dict[str, Any]:
         opened: list[int] = []
@@ -461,6 +519,7 @@ class ContainerGuard:
             ]
             await store.release_acceptance(s, release)
             for f in plan.to_open:
+                f = await self._with_rebuild_hint(f, expected)
                 iid, created = await store.open_incident(s, f)
                 if created:
                     opened.append(iid)
@@ -603,11 +662,14 @@ async def gather_expected(guard: ContainerGuard, cfg: GuardConfig, *, with_db: b
             )
         ]
         baseline = await store.get_baseline(s, MPD_BASELINE_KEY)
+        previous = await store.get_baseline(s, MPD_PREVIOUS_KEY)
     exp.mpd_image_id = (baseline or {}).get("value") or None
     exp.mpd_image_at = (baseline or {}).get("recorded_at")
+    exp.mpd_image_previous = (previous or {}).get("value") or None
     exp.add(
         mpd_expectations(
             rooms, tag_ref=settings.mpd_image_tag, image_id=exp.mpd_image_id, warm_done=True,
+            image_id_previous=exp.mpd_image_previous,
         )
     )
     plugin_rows = await reg.list_plugins()
@@ -624,27 +686,122 @@ async def gather_expected(guard: ContainerGuard, cfg: GuardConfig, *, with_db: b
 
 # ─── the music player image baseline ──────────────────────────────────────
 
+# How the baseline moved, by what vouched for the new image: the
+# container_guard_baselines.source written, and the line on Settings → Health.
+MPD_SOURCES = {
+    "provision": "provision",
+    "update": "update-unit:record",
+}
+MPD_NOTES = {
+    "provision": "rebuilt by Domovoi's installer (provision.sh); adopted",
+    "update": "rebuilt by the update unit (its record names the image); adopted",
+    "admin": "kept by an admin who cleared the incident about it after review; adopted",
+}
+
+
+async def _move_baseline(s: Any, image_id: str, source: str, previous: str | None) -> None:
+    """Record ``image_id`` as the music player image, keeping the one it
+    replaces as the previous build (rooms still on it are recreated, not
+    reported)."""
+    if previous and previous != image_id:
+        await store.set_baseline(s, MPD_PREVIOUS_KEY, previous, "previous")
+    await store.set_baseline(s, MPD_BASELINE_KEY, image_id, source)
+
+
+def _take_on(exp: ExpectedSet, image_id: str, *, previous: str | None) -> None:
+    """The expected set of this check, with ``image_id`` as the music
+    player image (the rooms' expectations too)."""
+    from datetime import datetime, timezone
+
+    exp.mpd_image_id = image_id
+    exp.mpd_image_at = datetime.now(timezone.utc)
+    if previous and previous != image_id:
+        exp.mpd_image_previous = previous
+    for name, e in list(exp.containers.items()):
+        if e.role == "mpd" and e.owner == "core":
+            exp.containers[name] = dataclasses.replace(
+                e, image_id=image_id,
+                image_id_previous=(exp.mpd_image_previous
+                                   if exp.mpd_image_previous != image_id else None),
+            )
+
+
+def _is_mpd_image_finding(key: str, container: str | None, prefix: str | None) -> bool:
+    """A tamper finding about the music player image: the tag's, or a
+    room's container (named with the music player prefix)."""
+    if container is None:
+        return key.startswith("tamper:mpd-image:")
+    return bool(prefix) and container.startswith(prefix or "") and key.startswith("tamper:image:")
+
+
+async def _cleared_image(s: Any, image_id: str, prefix: str | None) -> bool:
+    """Whether an admin cleared, after review, a finding about exactly this
+    music player image (the tag's, or a room's container made from it) and
+    it is still accepted."""
+    for key, container in await store.accepted(s):
+        if key.endswith(f":{image_id}") and _is_mpd_image_finding(key, container, prefix):
+            return True
+    return False
+
+
+_BUILDERS = {"provision": "Domovoi's installer (provision.sh)", "update": "Domovoi's update"}
+
+
+async def _clear_vouched(s: Any, image_id: str, by: str, prefix: str | None) -> list[int]:
+    """Close the open music player image incidents about exactly
+    ``image_id``, which a root-owned record of Domovoi's own rebuild now
+    vouches for (the same evidence would have kept them from opening):
+    recorded as cleared by Domovoi, with the record named."""
+    who = _BUILDERS.get(by, by)
+    out: list[int] = []
+    for row in await store.open_incidents(s):
+        if row["class"] != TAMPER or row["kind"] != "image":
+            continue
+        if (row.get("found") or {}).get("image_id") != image_id:
+            continue
+        if not _is_mpd_image_finding(row["incident_key"], row.get("container"), prefix):
+            continue
+        await store.clear(
+            s, int(row["id"]), "Domovoi",
+            f"{who} built this image ({image_id[:19]}): its root-owned record names it.",
+        )
+        log.warning("container guard: incident #%s cleared: %s built %s",
+                    row["id"], who, image_id[:19])
+        out.append(int(row["id"]))
+    return out
+
+
+def _mpd_prefix_setting() -> str | None:
+    from domovoi.config import settings
+
+    return settings.mpd_container_prefix or None
+
+
 async def note_mpd_image(image_id: str | None, *, built: bool) -> str:
     """Record or check the music player image the core runs rooms from.
 
-    Called by ``mpd_provisioner.ensure_image`` at boot. ``built``: the core
-    just built it, so it is the baseline. Otherwise the existing image is
-    adopted when there is no baseline yet (the first boot with the guard),
-    or when Domovoi's installer or the update unit rebuilt it
-    (:func:`mpd_rebuild_evidence`: a root-owned record says so, or on an
-    update-unit host the unit's record can't be read). Any other change is
-    left for the guard's check to report: the image under the tag is not
-    the one Domovoi built. Returns what it did ("built", "adopted", "same",
-    "provision", "update", "unverified", "changed", "unrecorded")."""
+    Called by ``mpd_provisioner.ensure_image`` at boot (and by the admin's
+    rebuild). ``built``: the core just built it, so it is the baseline.
+    Otherwise the existing image is adopted when there is no baseline yet
+    (the first boot with the guard), or when Domovoi's installer or the
+    update unit rebuilt it (:func:`mpd_rebuild_evidence`: a root-owned
+    record says so, or on an update-unit host the unit's record can't be
+    read). Any other change is left for the guard's check to report (or to
+    take on, once an admin cleared it after review): the image under the
+    tag is not the one Domovoi built. Whenever the baseline moves, the one
+    it replaces is kept as the previous build. Returns what it did
+    ("built", "adopted", "same", "provision", "update", "unverified",
+    "changed", "unrecorded")."""
     if not image_id:
         return "unrecorded"
     guard = get_guard()
     try:
         async with guard.session_factory() as s:
-            if built:
-                await store.set_baseline(s, MPD_BASELINE_KEY, image_id, "core-build")
-                return "built"
             current = await store.get_baseline(s, MPD_BASELINE_KEY)
+            previous = (current or {}).get("value")
+            if built:
+                await _move_baseline(s, image_id, "core-build", previous)
+                return "built"
             if current is None:
                 await store.set_baseline(s, MPD_BASELINE_KEY, image_id, "first-seen")
                 return "adopted"
@@ -653,16 +810,18 @@ async def note_mpd_image(image_id: str | None, *, built: bool) -> str:
             evidence = await asyncio.to_thread(
                 mpd_rebuild_evidence, current.get("recorded_at"), image_id,
             )
-            if evidence == "provision":
-                await store.set_baseline(s, MPD_BASELINE_KEY, image_id, "provision")
-                guard.mpd_note = "rebuilt by Domovoi's installer (provision.sh); adopted"
-                return "provision"
+            if evidence in ("provision", "update-record"):
+                by = "provision" if evidence == "provision" else "update"
+                await _move_baseline(s, image_id, MPD_SOURCES[by], previous)
+                await _clear_vouched(s, image_id, by, _mpd_prefix_setting())
+                guard.mpd_note = MPD_NOTES[by]
+                return by
             if evidence in ("finished", "in-flight"):
-                await store.set_baseline(s, MPD_BASELINE_KEY, image_id, f"update-unit:{evidence}")
+                await _move_baseline(s, image_id, f"update-unit:{evidence}", previous)
                 guard.mpd_note = f"rebuilt by the update unit ({evidence}); adopted"
                 return "update"
             if evidence is not None:
-                await store.set_baseline(s, MPD_BASELINE_KEY, image_id, f"unverified:{evidence}")
+                await _move_baseline(s, image_id, f"unverified:{evidence}", previous)
                 guard.mpd_note = (
                     "changed while the core was down; the update unit's record of the "
                     f"run can't be read ({evidence}), so it was adopted unverified"
@@ -695,13 +854,19 @@ def mpd_rebuild_evidence(recorded_at: Any, image_id: str | None = None) -> str |
       by Setup on Windows, a repair included) recorded building exactly
       this image after the baseline was recorded
       (:func:`provision_evidence`);
-    * ``finished`` — the update unit's record of a finished run says it rebuilt
-      the image (``mpd_changed``) after the baseline was recorded;
+    * ``update-record`` — the update unit's rebuild-mpd step recorded
+      building exactly this image after the baseline was recorded
+      (:func:`update_record_evidence`);
+    * ``finished`` — the update unit's record of a finished run says it
+      rebuilt the image (``mpd_changed``) after the baseline was recorded,
+      and that run left no record of which image it built (an update script
+      from before 2026-10-25);
     * ``in-flight`` — the record of the run under way (``status: running``,
       which the unit writes before it rebuilds and starts the core) says
       ``mpd_changed`` and names the SHA this core runs: ``to_sha`` for the
       update itself, ``from_sha`` for its rollback (rollback-mpd rebuilds
-      the old image and the core starts on the previous SHA);
+      the old image and the core starts on the previous SHA); again only
+      when that run recorded no image;
     * ``record-missing:<why>`` (``unit-running`` when systemd says the unit
       is running) — this host has the update unit but its record can't be
       read. Adopted without paging, and said so on the status. This opens
@@ -712,18 +877,26 @@ def mpd_rebuild_evidence(recorded_at: Any, image_id: str | None = None) -> str |
       core runs is still caught by the tag and per-room checks.
 
     A READABLE record that doesn't say so is no evidence: an update that
-    didn't touch the music player never vouches for a new image, and the
+    didn't touch the music player never vouches for a new image, a run that
+    recorded the image it built vouches for that image alone, and the
     installer's record vouches only for the image it names."""
     from domovoi import git_version, self_restart
 
-    if image_id and provision_evidence(recorded_at, image_id):
-        return "provision"
+    if image_id:
+        by = vouched_rebuild(recorded_at, image_id)
+        if by == "provision":
+            return "provision"
+        if by == "update":
+            return "update-record"
     try:
         last, problem = git_version.load_last_update()
     except Exception:  # noqa: BLE001
         last, problem = None, "unreadable"
     if isinstance(last, dict):
         if not last.get("mpd_changed"):
+            return None
+        if _run_recorded_its_build(last):
+            # That run named the image it built, and it isn't this one.
             return None
         if last.get("status") == "running":
             running = git_version.boot_sha().removesuffix("-dirty")
@@ -748,32 +921,48 @@ def mpd_rebuild_evidence(recorded_at: Any, image_id: str | None = None) -> str |
     return f"record-missing:{problem or 'unreadable'}"
 
 
+def _parse_stamp(stamp: Any) -> Any:
+    """``YYYY-MM-DDTHH:MM:SSZ`` (as the root scripts write it) as an aware
+    datetime, or None."""
+    from datetime import datetime, timezone
+
+    if not isinstance(stamp, str):
+        return None
+    try:
+        return datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _aware(value: Any) -> Any:
+    """A datetime with a zone (UTC when it had none), or None."""
+    from datetime import datetime, timezone
+
+    if not isinstance(value, datetime):
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
 def _stamped_after(stamp: Any, recorded_at: Any) -> bool:
     """Whether ``stamp`` (``YYYY-MM-DDTHH:MM:SSZ``, as the root scripts write
     it) is at or after the baseline's ``recorded_at`` (None: no baseline
     time to compare, so any valid stamp is after)."""
-    from datetime import datetime, timezone
-
-    if not isinstance(stamp, str):
-        return False
-    try:
-        when = datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-    except ValueError:
+    when = _parse_stamp(stamp)
+    if when is None:
         return False
     if recorded_at is None:
         return True
-    if isinstance(recorded_at, datetime):
-        if recorded_at.tzinfo is None:
-            recorded_at = recorded_at.replace(tzinfo=timezone.utc)
-        return when >= recorded_at
-    return False
+    at = _aware(recorded_at)
+    return at is not None and when >= at
 
 
 # What scripts/linux/provision.sh writes each time it builds the music
-# player image (root's, 0644, in its root-owned state directory). Not a
-# setting: the .env is the service user's, and the evidence must stay where
-# only root writes.
+# player image, and what the update unit's rebuild-mpd step
+# (scripts/linux/apply-update.sh) writes each time it does: root's, 0644,
+# each in its own root-owned state directory. Not settings: the .env is the
+# service user's, and the evidence must stay where only root writes.
 PROVISION_MPD_RECORD = "/var/lib/domovoi-provision/mpd-image.json"
+UPDATE_MPD_RECORD = "/var/lib/domovoi-update/mpd-image.json"
 _RECORD_MAX_BYTES = 4096
 _IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
@@ -787,7 +976,7 @@ def _root_only(st: os.stat_result) -> bool:
 def _trusted_record(path: Path) -> bool:
     """Blocking. Whether ``path`` is a regular file (not a link) that only
     root can have written: it and its directory are root's alone. Never on
-    Windows, which has no provision.sh and no such owners."""
+    Windows, which has no provision.sh, no update unit and no such owners."""
     if sys.platform == "win32":
         return False
     try:
@@ -798,6 +987,30 @@ def _trusted_record(path: Path) -> bool:
     return stat.S_ISREG(st.st_mode) and _root_only(st) and _root_only(parent)
 
 
+def _read_root_record(where: str) -> dict | None:
+    """Blocking. The JSON object in a record only root can have written, or
+    None (missing, not root's alone, oversized, unreadable, not an object)."""
+    path = Path(where)
+    if not _trusted_record(path):
+        return None
+    try:
+        with path.open("rb") as f:
+            raw = f.read(_RECORD_MAX_BYTES + 1)
+        doc = json.loads(raw.decode("utf-8")) if len(raw) <= _RECORD_MAX_BYTES else None
+    except (OSError, ValueError):
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def _record_vouches(where: str, by: str, recorded_at: Any, image_id: str) -> bool:
+    if not _IMAGE_ID_RE.match(image_id or ""):
+        return False
+    doc = _read_root_record(where)
+    if doc is None or doc.get("by") != by or doc.get("image_id") != image_id:
+        return False
+    return _stamped_after(doc.get("built_at"), recorded_at)
+
+
 def provision_evidence(recorded_at: Any, image_id: str) -> bool:
     """Blocking. True when the installer's record (:data:`PROVISION_MPD_RECORD`)
     says it built exactly ``image_id``, at or after the baseline's
@@ -805,20 +1018,84 @@ def provision_evidence(recorded_at: Any, image_id: str) -> bool:
     malformed record, one root doesn't own alone, one that names another
     image (a ``docker build`` by hand after the installer's) or an older
     build (the installer's image re-tagged after a later one)."""
-    path = Path(PROVISION_MPD_RECORD)
-    if not _IMAGE_ID_RE.match(image_id or "") or not _trusted_record(path):
+    return _record_vouches(PROVISION_MPD_RECORD, "provision", recorded_at, image_id)
+
+
+def update_record_evidence(recorded_at: Any, image_id: str) -> bool:
+    """Blocking. The same for the update unit's record
+    (:data:`UPDATE_MPD_RECORD`, ``"by": "update"``), which its rebuild-mpd
+    step writes right after the build, while the core is stopped: before
+    any room's player can be created from the new image."""
+    return _record_vouches(UPDATE_MPD_RECORD, "update", recorded_at, image_id)
+
+
+def vouched_rebuild(recorded_at: Any, image_id: str) -> str | None:
+    """Blocking. Which of Domovoi's own root-run builds recorded building
+    exactly ``image_id`` after the baseline: ``provision``, ``update``, or
+    None (a build by anyone else)."""
+    if provision_evidence(recorded_at, image_id):
+        return "provision"
+    if update_record_evidence(recorded_at, image_id):
+        return "update"
+    return None
+
+
+def _run_recorded_its_build(last: dict) -> bool:
+    """Whether the update unit's record of its last run sits beside a
+    record of the music player image that run built (the same
+    ``started_at``): then that image, and only that one, is vouched for."""
+    started = last.get("started_at")
+    if not isinstance(started, str):
         return False
+    doc = _read_root_record(UPDATE_MPD_RECORD)
+    return doc is not None and doc.get("by") == "update" and doc.get("run_started_at") == started
+
+
+# How far either side of the update unit's run an image's creation time may
+# fall and still count as made during it (whole-second stamps, a build
+# that finished as the record was written).
+_RUN_SLACK_SEC = 120.0
+
+
+def rebuild_hint(found_created: Any, expected_created: Any, recorded_at: Any,
+                 *, now: Any = None) -> str | None:
+    """Blocking. The sentence a music player image incident gets when the
+    evidence says Domovoi's update probably rebuilt the image: it was made
+    during the update unit's last run (its started_at to its finished_at,
+    or to now for a run still going), and after the image Domovoi expected
+    (that image's own creation time, or else when it was recorded). None
+    otherwise: an image from any other time is only called unexpected."""
+    from datetime import datetime, timedelta, timezone
+
+    from domovoi import git_version
+
+    made = _aware(found_created)
+    if made is None:
+        return None
+    floor = _aware(expected_created) or _aware(recorded_at)
+    if floor is None or made <= floor:
+        return None
     try:
-        with path.open("rb") as f:
-            raw = f.read(_RECORD_MAX_BYTES + 1)
-        doc = json.loads(raw.decode("utf-8")) if len(raw) <= _RECORD_MAX_BYTES else None
-    except (OSError, ValueError):
-        return False
-    if not isinstance(doc, dict) or doc.get("by") != "provision":
-        return False
-    if doc.get("image_id") != image_id:
-        return False
-    return _stamped_after(doc.get("built_at"), recorded_at)
+        last, _ = git_version.load_last_update()
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(last, dict):
+        return None
+    start = _parse_stamp(last.get("started_at"))
+    end = _parse_stamp(last.get("finished_at"))
+    if end is None and last.get("status") == "running":
+        end = _aware(now) or datetime.now(timezone.utc)
+    if start is None or end is None:
+        return None
+    slack = timedelta(seconds=_RUN_SLACK_SEC)
+    if not (start - slack <= made <= end + slack):
+        return None
+    at = start.strftime("%Y-%m-%d %H:%M UTC")
+    return (
+        f"This image was probably rebuilt by Domovoi's update at {at}; if you didn't "
+        "build it yourself, it's safe to clear (clearing it makes it the music player "
+        "image Domovoi expects)."
+    )
 
 
 SEARXNG_START_UNIT = "domovoi-searxng-start.service"

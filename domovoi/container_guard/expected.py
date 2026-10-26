@@ -93,6 +93,10 @@ class ExpectedSet:
     # When that ID was recorded (the baseline's recorded_at): a record of a
     # Domovoi rebuild vouches for a new image only if it is newer.
     mpd_image_at: Any = None
+    # The baseline before that one, when a rebuild Domovoi vouched for (or
+    # an admin's clear) moved it: rooms still on it are Domovoi's previous
+    # build, waiting to be recreated (docs/CONTAINER_GUARD.md).
+    mpd_image_previous: str | None = None
     mpd_tag_hold: str | None = None
     # Every container name a plugin declares, whatever the plugin's state.
     plugin_names: frozenset[str] = frozenset()
@@ -203,6 +207,7 @@ def mpd_expectations(
     tag_ref: str,
     image_id: str | None,
     warm_done: bool,
+    image_id_previous: str | None = None,
 ) -> list[Expected]:
     """One running music player per ``(room_id, container_name)`` row."""
     out: list[Expected] = []
@@ -220,6 +225,9 @@ def mpd_expectations(
                 required=True,
                 image_ref=tag_ref,
                 image_id=image_id,
+                image_id_previous=(image_id_previous
+                                   if image_id_previous and image_id_previous != image_id
+                                   else None),
                 hold=hold,
             )
         )
