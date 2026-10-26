@@ -884,7 +884,7 @@
       element: mount,
       extensions: exts,
       content: collab ? undefined : env.initialHtml,
-      editable: !opts.readOnly,
+      editable: env.editable,
       editorProps: {
         attributes: { spellcheck: 'true', 'aria-label': 'Document', role: 'textbox', 'aria-multiline': 'true' },
         transformPastedHTML: (html) => sanitizeDoc(cleanPastedHtml(html)),
@@ -910,14 +910,23 @@
         },
       },
     });
-    if (collab && collab.seed && env.initialHtml) {
-      // A brand-new shared document: this client writes the file's content
-      // into it, once (B decides which client seeds).
-      const first = editor.state.doc.firstChild;
-      const empty = editor.state.doc.childCount <= 1 && editor.state.doc.textContent === ''
-        && !(first && /figure|table/.test(first.type.name));
-      // not undoable: undo is the person's own edits, not the file's content
-      if (empty) editor.chain().setMeta('addToHistory', false).setContent(env.initialHtml, true).run();
+    if (collab && env.initialHtml) {
+      // A brand-new shared document: ONE client writes the file's content
+      // into it, once; co-editing (collab.js) picks which and when, and
+      // calls the seeder after the first sync. Not undoable: undo is the
+      // person's own edits, not the file's content.
+      const seedNow = () => {
+        if (editor.isDestroyed) return;
+        const first = editor.state.doc.firstChild;
+        const empty = editor.state.doc.childCount <= 1 && editor.state.doc.textContent === ''
+          && !(first && /figure|table/.test(first.type.name));
+        if (empty) editor.chain().setMeta('addToHistory', false).setContent(env.initialHtml, true).run();
+      };
+      if (typeof collab.onSeed === 'function') collab.onSeed(() => seedNow());
+      else if (collab.seed) {
+        seedNow();
+        if (typeof collab.markSeeded === 'function') collab.markSeeded();
+      }
     }
     return editor;
   };
@@ -1204,7 +1213,13 @@
     const [error, setError] = React.useState(null);
     const [registry, setRegistry] = React.useState(opts.fonts || window.DomovoiFonts || null);
     const [fonts, setFonts] = React.useState(BUILTIN_FONTS);
+    const [editable, setEditable] = React.useState(false);
     const markdown = opts.format === 'md';
+    const coll = opts.collab || null;
+    // Editable unless the caller said read-only, and, when co-editing, only
+    // once the shared document holds its content (collab.ready) and while
+    // this session may write (collab.readonly is a view-only session).
+    const canEdit = () => !bridge.readOnly && !(coll && (coll.readonly || coll.ready === false));
 
     React.useEffect(() => { bridge.setFonts = (r) => setRegistry(r || null); }, []);
     React.useEffect(() => {
@@ -1225,7 +1240,7 @@
           else if (opts.format === 'docx' && opts.content instanceof ArrayBuffer) initialHtml = await docxToHtml(opts.content);
           else initialHtml = sanitizeDoc(opts.content);
           if (dead) return;
-          const env = { markdown, initialHtml, notice: opts.onNotice || null };
+          const env = { markdown, initialHtml, notice: opts.onNotice || null, editable: canEdit() };
           env.insertPictures = (files, at) => bridge.insertPictures(files, at);
           ed = buildEditor(T, mountRef.current, opts, env);
           bridge.serializer = buildMarkdownSerializer(T);
@@ -1254,6 +1269,22 @@
           used.forEach((f) => ensureFont(registry, f));
           embedOutsidePictures(ed, env.notice);
           bridge.editor = ed;
+          // (Tiptap's setEditable emits an "update" unless told not to;
+          // opening a document must never look like an edit, or it would
+          // be saved unread.)
+          bridge.applyEditable = () => {
+            if (!ed || ed.isDestroyed) return;
+            const want = canEdit();
+            if (ed.isEditable !== want) ed.setEditable(want, false);
+            setEditable(want);
+          };
+          bridge.applyEditable();
+          if (coll) {
+            if (coll.whenReady && coll.whenReady.then) coll.whenReady.then(() => bridge.applyEditable());
+            if (typeof coll.on === 'function') {
+              ['hello', 'status', 'ready'].forEach((evt) => coll.on(evt, () => bridge.applyEditable()));
+            }
+          }
           setEditor(ed);
           bridge.resolve();
         } catch (e) {
@@ -1263,17 +1294,11 @@
       return () => { dead = true; if (ed) ed.destroy(); bridge.editor = null; };
     }, []);
 
-    // (Tiptap's setEditable emits an "update" unless told not to; opening a
-    // document must never look like an edit, or it would be saved unread.)
-    React.useEffect(() => {
-      if (editor && editor.isEditable !== !opts.readOnly) editor.setEditable(!opts.readOnly, false);
-    }, [editor, opts.readOnly]);
-
     return (
       <div className="de-shell">
-        {editor && !opts.readOnly && <Toolbar editor={editor} env={{ markdown, insertPictures: (f, at) => bridge.insertPictures(f, at), notice: opts.onNotice }}
+        {editor && editable && <Toolbar editor={editor} env={{ markdown, insertPictures: (f, at) => bridge.insertPictures(f, at), notice: opts.onNotice }}
                                               fonts={fonts} registry={registry}/>}
-        {markdown && !opts.readOnly && editor && (
+        {markdown && editable && editor && (
           <div className="de-note">
             <Icon name="info" size={14}/>
             <span>This is a Markdown file. Fonts, colours, sizes and alignment can't be kept in it: save as a formatted document to use fonts.</span>
@@ -1320,7 +1345,8 @@
     let resolve; let reject;
     const ready = new Promise((res, rej) => { resolve = res; reject = rej; });
     ready.catch(() => {});
-    const bridge = { editor: null, serializer: null, resolve: () => resolve(api), reject: (e) => reject(e) };
+    const bridge = { editor: null, serializer: null, readOnly: !!opts.readOnly,
+                     resolve: () => resolve(api), reject: (e) => reject(e) };
     const initial = typeof opts.content === 'string' ? opts.content : '';
     const api = {
       format: opts.format,
@@ -1336,6 +1362,7 @@
       isEmpty: () => (bridge.editor ? bridge.editor.isEmpty : !initial),
       focus: () => { if (bridge.editor) bridge.editor.commands.focus(); },
       setFonts: (registry) => { if (bridge.setFonts) bridge.setFonts(registry); },
+      setReadOnly: (v) => { bridge.readOnly = !!v; if (bridge.applyEditable) bridge.applyEditable(); },
       destroy: () => { try { root.unmount(); } catch (e) { /* already gone */ } },
     };
     bridge.api = api;
@@ -1519,6 +1546,8 @@ img { max-width: 100%; height: auto; }
     const [askDocx, setAskDocx] = React.useState(false);
     const [menu, setMenu] = React.useState(null);
     const [collabOn, setCollabOn] = React.useState(false);
+    const [history, setHistory] = React.useState(false);
+    const [reload, setReload] = React.useState(0);
     const hostRef = React.useRef(null);
     const edRef = React.useRef(null);
     const collabRef = React.useRef(null);
@@ -1552,10 +1581,23 @@ img { max-width: 100%; height: auto; }
               notice("Live co-editing isn't available right now; you're editing on your own.");
             }
           }
+          let viewOnly = false;
+          if (collab && collab.readonly && collab.ready === false) {
+            // A view-only session on a document nobody who can write has
+            // open: the shared copy is empty, so show the file itself.
+            try { collab.close(); } catch (e) { /* gone */ }
+            collab = null;
+            viewOnly = true;
+          }
           if (dead) { if (collab && collab.close) collab.close(); return; }
+          if (collab && typeof collab.on === 'function') {
+            // The file was changed outside the editor and the shared copy
+            // was rebuilt from it: open it again.
+            collab.on('reset', () => { notice('This document was changed elsewhere; it has been reopened.'); setReload((n) => n + 1); });
+          }
           collabRef.current = collab;
           setCollabOn(!!collab);
-          setState({ status: 'ready', doc, content });
+          setState({ status: 'ready', doc, content, viewOnly });
         } catch (e) {
           if (!dead) setState({ status: 'error', message: apiErrorTextSafe(e) });
         }
@@ -1566,10 +1608,14 @@ img { max-width: 100%; height: auto; }
         collabRef.current = null;
         if (c && typeof c.close === 'function') { try { c.close(); } catch (e) { /* gone */ } }
       };
-    }, [rel]);
+    }, [rel, reload]);
 
     // ── save ──
-    const clientSaves = () => !(collabRef.current && collabRef.current.writesFile);
+    // With co-editing, the co-editing client decides when the file is
+    // written (whoever edited last, once typing stops, and on close) and
+    // calls this editor's saver; without it, this overlay autosaves.
+    const coSaves = () => !!(collabRef.current && typeof collabRef.current.setSaver === 'function');
+    const clientSaves = () => !coSaves();
     const doSave = React.useCallback(async (opts) => {
       const ed = edRef.current;
       const d = state.doc;
@@ -1644,13 +1690,31 @@ img { max-width: 100%; height: auto; }
         format: d.format,
         collab: collabRef.current,
         fonts: window.DomovoiFonts || null,
-        readOnly: false,
+        readOnly: !!state.viewOnly,
         onChange: () => onChangeRef.current(),
         onNotice: notice,
         onSaveAsFormatted: d.format === 'md' ? () => saveAs('html') : undefined,
       });
       edRef.current = ed;
       seq.current = { change: 0, saved: 0, timer: 0, inflight: null };
+      const collab = collabRef.current;
+      if (collab && typeof collab.setSaver === 'function') {
+        collab.setSaver(async ({ headers }) => {
+          const body = { html: ed.getHTML() };
+          if (d.format === 'md') body.markdown = ed.getMarkdown();
+          try {
+            await apiFetch(`/api/documents/doc/${encodeURIComponent(rel)}`, {
+              method: 'PUT', headers: headers || {}, body: JSON.stringify(body), noPrompt: true });
+            seq.current.saved = seq.current.change;
+            setSaveError('');
+            return true;
+          } catch (e) {
+            const why = deviceBlockReason(e);
+            if (why) setRefused(why); else setSaveError(mutationErrorText(e) || '');
+            throw e;
+          }
+        });
+      }
       ed.ready.then(() => ed.focus()).catch(() => {});
       return () => { clearTimeout(seq.current.timer); ed.destroy(); edRef.current = null; };
     }, [state.status, state.doc, state.content]);
@@ -1676,6 +1740,14 @@ img { max-width: 100%; height: auto; }
     const requestClose = async () => {
       const s = seq.current;
       clearTimeout(s.timer);
+      const collab = collabRef.current;
+      if (collab && typeof collab.close === 'function') {
+        // co-editing saves on the way out (if this client is behind)
+        collabRef.current = null;
+        try { await collab.close(); } catch (e) { /* the shared copy keeps the edits */ }
+        onClose();
+        return;
+      }
       if (s.change > s.saved && state.doc && clientSaves()) {
         if (state.doc.format === 'docx' && docxChoice !== 'docx') { setAskDocx(true); return; }
         const ok = await saveRef.current();
@@ -1720,11 +1792,17 @@ img { max-width: 100%; height: auto; }
             <strong style={{ fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={rel}>{title}</strong>
             <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               {fmtWord && <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{fmtWord} file</span>}
-              {state.status === 'ready' && <SaveState state={blocked ? 'error' : save}/>}
-              {collabOn && <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>· shared live</span>}
+              {state.status === 'ready' && !collabOn && !state.viewOnly && <SaveState state={blocked ? 'error' : save}/>}
+              {state.viewOnly && <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>View only</span>}
+              {collabOn && window.CollabPresence && <window.CollabPresence collab={collabRef.current}/>}
             </span>
           </div>
           <span style={{ flex: 1 }}/>
+          {state.status === 'ready' && collabOn && window.CollabHistory && (
+            <Button icon="history" onClick={() => setHistory(true)} title="Version history">
+              <span className="de-hide-narrow">History</span>
+            </Button>
+          )}
           {state.status === 'ready' && fmt === 'docx' && (
             <Button variant="primary" icon="save" disabled={!!blocked || save === 'saved' || save === 'saving'}
                     onClick={() => { clearTimeout(seq.current.timer); doSave(); }}>Save</Button>
@@ -1770,6 +1848,13 @@ img { max-width: 100%; height: auto; }
           {state.status === 'ready' && <div ref={hostRef} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}/>}
         </div>
 
+        {history && collabOn && window.CollabHistory && (
+          <window.CollabHistory path={rel} collab={collabRef.current} fire={fire} onClose={() => setHistory(false)}
+                                renderPreview={(el, ydoc) => {
+                                  const pv = window.DomovoiDocEditor.create(el, { format: fmt, collab: { ydoc }, readOnly: true });
+                                  return () => pv.destroy();
+                                }}/>
+        )}
         {askDocx && (
           <div role="dialog" aria-modal="true" aria-label="How to save this Word file"
                style={{ position: 'fixed', inset: 0, zIndex: 125, background: 'rgba(0,0,0,.45)', display: 'flex',
