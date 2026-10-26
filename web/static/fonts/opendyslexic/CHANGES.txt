@@ -1,0 +1,11 @@
+Changes made by Domovoi (scripts/vendor/fonts.py)
+===================================================
+
+The font files in this folder were made from antijingoist/opendyslexic at 1824da5c0e41
+as follows:
+
+* none: the project's own WOFF2 files, copied as they are (renamed).
+
+Nothing else was changed: the outlines, the names and the copyright
+notices inside the fonts are the originals'. The licence beside this file
+(OFL.txt) still applies to every file here.

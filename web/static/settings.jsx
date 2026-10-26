@@ -4493,7 +4493,7 @@ const CapturesPanel = () => {
  * A section marked `optional` shows only once a page script registers
  * its panel in window.DomovoiSettingsSections ({ <id>: { Panel } }):
  * Health (health.jsx), Printers & scanners (printers.jsx) and Chat
- * (chat_documents.jsx: the heads-up switch) do; Search is the slot kept
+ * (chat_documents.jsx: the heads-up switch) and Fonts (fonts.jsx) do; Search is the slot kept
  * for what is being built (none shows a promise before it can do
  * something). */
 const SETTINGS_GROUPS = [
@@ -4502,6 +4502,7 @@ const SETTINGS_GROUPS = [
   { id: 'voice', label: 'Voice', icon: 'audio-lines', sections: ['wake-words', 'voices', 'greetings'] },
   { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat'] },
   { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history'] },
+  { id: 'documents', label: 'Documents', icon: 'file-text', sections: ['fonts'] },
   { id: 'system', label: 'System', icon: 'server', sections: ['about', 'health', 'advanced'] },
 ];
 
@@ -4542,6 +4543,9 @@ const SETTINGS_SECTIONS = [
   { id: 'voice-history', label: 'Voice history', aliases: ['recordings'],
     sub: 'Commands kept from the rooms you opted in, to tune when Domovoi stops listening — admins only.',
     words: 'voice history recordings recording captures commands kept audio transcript privacy delete' },
+  { id: 'fonts', label: 'Fonts', optional: true,
+    sub: 'The fonts documents and spreadsheets can use, and adding more for the whole house.',
+    words: 'font fonts typeface typefaces lettering documents document spreadsheets sheets writing more fonts add' },
   { id: 'about', label: 'About & updates',
     sub: 'What Domovoi is, the version it runs, and its updates.',
     words: 'about version update updates upgrade check pull restart channel stable main release manual licence licences license fingerprint' },

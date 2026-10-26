@@ -1,0 +1,12 @@
+Changes made by Domovoi (scripts/vendor/fonts.py)
+===================================================
+
+The font files in this folder were made from google/fonts ofl/ibmplexmono at e7db6ca603fd
+as follows:
+
+* each file was compressed to WOFF2, whole (no characters or features
+  removed: this family has a Reserved Font Name, so it is not modified).
+
+Nothing else was changed: the outlines, the names and the copyright
+notices inside the fonts are the originals'. The licence beside this file
+(OFL.txt) still applies to every file here.

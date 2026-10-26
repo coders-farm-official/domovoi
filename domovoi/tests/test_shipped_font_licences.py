@@ -43,6 +43,25 @@ def _shipped_fonts() -> list[Path]:
             if p and Path(p).suffix.lower() in FONT_SUFFIXES and (REPO / p).is_file()]
 
 
+# The editors' bundled set (web/static/fonts/<slug>/, scripts/vendor/fonts.py):
+# OFL-1.1 or Apache-2.0, each family's licence file beside its files, listed
+# in that folder's manifest.json. test_web_fonts.py holds the set to it in
+# full; here each file is matched to its family and licence.
+EDITOR_FONTS = REPO / "web" / "static" / "fonts"
+
+
+def _editor_family(font: Path) -> dict | None:
+    if font.parent.parent != EDITOR_FONTS:
+        return None
+    import json
+
+    manifest = json.loads((EDITOR_FONTS / "manifest.json").read_text(encoding="utf-8"))
+    for fam in manifest["families"]:
+        if fam["slug"] == font.parent.name and any(f["file"] == font.name for f in fam["faces"]):
+            return fam
+    raise AssertionError(f"{font.relative_to(REPO)}: not in web/static/fonts/manifest.json")
+
+
 def _known(font: Path) -> tuple[str, str]:
     for prefix, entry in KNOWN.items():
         if font.name.startswith(prefix):
@@ -60,7 +79,15 @@ def test_there_are_fonts_to_check():
 
 
 def test_every_shipped_font_has_its_ofl_text_beside_it():
+    from web.backend.fonts_store import licence_verdict
+
     for font in _shipped_fonts():
+        fam = _editor_family(font)
+        if fam is not None:
+            text = (font.parent / fam["licence_file"]).read_text(encoding="utf-8")
+            meta = {"OFL-1.1": "OFL", "Apache-2.0": "APACHE2"}[fam["licence"]]
+            assert licence_verdict(meta, text)[0] == fam["licence"], font
+            continue
         name, where = _known(font)
         folder = (font.parent / where).resolve()
         texts = [p for p in folder.iterdir()
@@ -74,7 +101,8 @@ def test_every_shipped_font_has_its_ofl_text_beside_it():
 def test_every_shipped_font_is_credited_in_licenses_md():
     doc = LICENSES.read_text(encoding="utf-8")
     for font in _shipped_fonts():
-        name, _ = _known(font)
+        fam = _editor_family(font)
+        name = fam["family"] if fam is not None else _known(font)[0]
         assert name in doc, f"{name} ({font.relative_to(REPO)}) is not named in docs/LICENSES.md"
 
 
