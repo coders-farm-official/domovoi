@@ -1461,6 +1461,21 @@ screen lock, and while it's a room, the rest of the app is locked.
 To leave, hold **exit room mode**, unlock, then choose **Keep this room**
 or **Forget this room**.
 
+**Battery**
+
+Keep the phone on its charger: rooms are always on. The room's card shows
+its battery and whether it's charging. Off its charger, at 20% and again
+at 10%:
+
+- Home shows a notice, and the Domovoi app on your phones says "Pako is
+  at 15%. Plug it in."
+- The room itself says "This is Pako. My battery is low. Please plug me
+  in." It never says it between 10 pm and 7 am.
+
+Each warning comes once per charge. A room that went offline nearly empty
+says **probably out of battery**. The room's **Settings** tab has **Say
+when the battery is low** and **Notify when the battery is low**, both on.
+
 **If something's wrong**
 
 - *mic blocked*: turn the microphone back on in quick settings.

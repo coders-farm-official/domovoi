@@ -488,11 +488,34 @@ on does not burn in. It is shown over the lock screen.
 | Volume ("turn it up") | yes: the phone's media volume |
 | Drop-ins | on phones with an echo canceller only (most phones; the app checks). The room says so to the server, which refuses a drop-in otherwise |
 | Chat mode | no (not in this version) |
-| Restart, upgrade, Settings tab, live log, wake-word clip recording on the dashboard | no: the app updates from its store or a new APK; the dashboard greys these out for an "Android room" |
+| Restart, upgrade, live log, wake-word clip recording on the dashboard | no: the app updates from its store or a new APK; the dashboard greys these out for an "Android room" |
+| Settings tab | only the two battery switches below; everything else is set on the phone |
 
-The dashboard shows the room with an **Android room** badge, and its
-health block shows the phone's battery and **mic blocked** when Android is
-handing the room silence.
+The dashboard shows the room with an **Android room** badge, its battery
+and % on the card (with a charging marker), and its health block shows the
+battery and **mic blocked** when Android is handing the room silence.
+
+### The battery (2026-10-25)
+
+Keep the phone on its charger: rooms are always on. The phone sends its
+battery with its health sample once a minute, and again when the charger
+goes on or off or the level moves 5 %. Off its charger, at **20 %** and
+again at **10 %**, once per charge (`domovoi/room_battery.py`):
+
+- Home and Health → Rooms show "Pako's battery is low (15%) · plug it in",
+  and the Domovoi app on the household's phones notifies "Pako is at 15%.
+  Plug it in." (**Room batteries** channel). The notification goes away
+  once the room charges.
+- The room itself says "This is Pako. My battery is low. Please plug me
+  in." Never between 22:00 and 07:00 on the server's clock (Domovoi has no
+  quiet-hours setting); then only the notice and the notification go.
+- A phone room that went offline after a last report at 5 % or less, off
+  its charger, reads **probably out of battery** instead of a plain
+  offline line.
+
+The room's **Settings** tab has **Say when the battery is low** and
+**Notify when the battery is low**, both on by default, kept on the server
+(V040) and read at each warning. Pis and laptops have none of this.
 
 ### Android's rules
 
