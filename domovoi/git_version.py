@@ -1088,7 +1088,9 @@ def load_last_update() -> tuple[dict | None, str | None]:
     for k in ("from_sha", "to_sha", "bad_sha"):
         if k in out and not (isinstance(out[k], str) and _FULL_SHA_RE.match(out[k])):
             out[k] = None
-    if "mpd_record" in out and out["mpd_record"] not in _MPD_RECORD_STATES:
+    if "mpd_record" in out and not (
+        isinstance(out["mpd_record"], str) and out["mpd_record"] in _MPD_RECORD_STATES
+    ):
         out["mpd_record"] = None
     if isinstance(out.get("error"), str):
         out["error"] = out["error"][:_ERROR_MAX_CHARS]
