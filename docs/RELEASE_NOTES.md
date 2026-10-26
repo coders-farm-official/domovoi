@@ -19,26 +19,32 @@ a way that would otherwise get reported as a bug.
     (`/var/lib/domovoi-update/mpd-image.json`, root's, written before any
     room's player can be made from it), as the installer already did, and
     the guard takes a recorded image on at any check, not only at the
-    core's start. Open incidents about exactly that image are closed by
-    Domovoi, with the record named;
-  * clearing an incident about the music player image (after review)
-    makes that image the one the guard expects: the next room made from it
-    is not reported;
-  * a room's player still on Domovoi's previous build isn't tampering (it
-    waits to be recreated);
-  * when Docker says the image was made during the last update and after
-    the expected one, the incident says the update probably rebuilt it,
-    and that it's safe to clear if you didn't build it yourself.
+    core's start. The ID recorded is the one root's own Docker sees under
+    the tag, and only when it agrees with what the build printed. An
+    incident already open about exactly that image stays open for the
+    admin (a note says the update recorded building it);
+  * clearing the music player tag's own incident ("The music player image
+    was replaced outside Domovoi") while the tag still names that image
+    makes it the one the guard expects: the next room made from it is not
+    reported. A room's incident covers only that room's player;
+  * a room's player still on Domovoi's previous build isn't tampering
+    until it is recreated;
+  * when the update unit's own result says its last run rebuilt the music
+    player without recording which image, the incident says the update may
+    have rebuilt it, and to check that nobody built it by hand before
+    clearing.
 
   A `docker build` or `docker tag` by hand is still reported, update or
   not. **If such an incident is open on your box now** (it pauses updates
-  too): check when the image was made (`docker image inspect -f
-  '{{.Created}}' domovoi-mpd:latest`, on the Windows install inside its
-  distro) against the update's time on Settings → Health; if you didn't
-  build it yourself, **clear after review** every incident about the music
-  player image on the Containers page, then take this update. Its first
-  check takes the image you cleared on, and rooms set up after that aren't
-  reported. No rebuild needed.
+  too): check that nobody built or tagged `domovoi-mpd:latest` by hand
+  (on the Windows install, inside its distro), then **clear after
+  review** every incident about the music player image on the Containers
+  page and take this update. The clear on the box's current version
+  keeps nothing, so after the update **rebuild the music player image**
+  on the Containers page (it builds it as the core does, makes it the
+  image the guard expects and restarts the rooms' players on it), or, the
+  next time the guard reports "The music player image was replaced
+  outside Domovoi" for it, clear that incident to keep the image.
 
 ## 2026-10-23 — It's a room now, everywhere people read it
 

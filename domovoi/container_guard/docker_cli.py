@@ -11,10 +11,6 @@ on the host:
    seen before (an image ID never changes what it is, so this is cached);
 4. one ``docker image inspect`` of the music player image tag.
 
-(When a music player image incident opens, one more ``docker image
-inspect`` asks when the two images were made, for its words:
-:meth:`DockerCli.image_created`.)
-
 Nothing here starts, stops, pulls or removes anything. The CLI runs in a
 worker thread with a timeout (the docker CLI is what the rest of the core
 already drives — mpd_provisioner, searxng_service — so no new dependency),
@@ -28,7 +24,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import shutil
 import subprocess
 from collections.abc import Iterable
@@ -153,37 +148,14 @@ class DockerCli:
             return False
         return None
 
-    async def image_created(self, image_ids: Iterable[str]) -> dict[str, Any]:
-        """When each image was made (its ``Created``, as an aware datetime),
-        by image ID; an image Docker no longer has, or can't say about, is
-        left out. Only asked when a music player image incident opens."""
-        ids = sorted({i for i in image_ids if i})
-        if not ids or shutil.which(self.exe) is None:
-            return {}
-        # One missing image makes inspect exit non-zero but print the rest.
-        _, out, _ = await self._call(["image", "inspect", "--format", "{{.Id}}\t{{.Created}}", *ids])
-        found: dict[str, Any] = {}
-        for line in out.splitlines():
-            image_id, _, created = line.partition("\t")
-            when = parse_created(created.strip())
-            if image_id.strip() and when is not None:
-                found[image_id.strip()] = when
-        return found
-
-
-def parse_created(value: str) -> Any:
-    """Docker's ``Created`` (RFC 3339, nanoseconds and a zone, or ``Z``) as
-    an aware datetime; None when it isn't one."""
-    from datetime import datetime
-
-    m = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$", value or "")
-    if not m:
-        return None
-    zone = "+00:00" if m.group(2) == "Z" else m.group(2)
-    try:
-        return datetime.fromisoformat(m.group(1) + zone)
-    except ValueError:
-        return None
+    async def tag_image_id(self, ref: str) -> str | None:
+        """The local image ID ``ref`` names right now, or None (absent, or
+        Docker can't say). The clear route asks it before keeping an image
+        an admin cleared (engine.adopt_cleared_tag)."""
+        if not ref or shutil.which(self.exe) is None:
+            return None
+        rc, out, _ = await self._call(["image", "inspect", "--format", "{{.Id}}", ref])
+        return (out.strip() or None) if rc == 0 else None
 
 
 class Claimer:

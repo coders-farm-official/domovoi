@@ -3317,14 +3317,26 @@ async def admin_container_incident_clear(
     Recorded (who, when, the note). When every open tamper incident is
     cleared the freeze lifts. If the condition is still there it stays
     accepted (it doesn't reopen); anything different opens a new incident.
-    409 for a failure (it resolves by itself) or one already cleared."""
+    Clearing the music player TAG's own incident ("The music player image
+    was replaced outside Domovoi") while the tag still names that image
+    keeps it: it becomes the image the guard expects (``kept_image``), so
+    the next room set up from it isn't reported. A room's incident covers
+    only that container. 409 for a failure (it resolves by itself) or one
+    already cleared."""
+    from domovoi.container_guard import engine as cg_engine
     from domovoi.container_guard import store as cg_store
     from domovoi.container_guard import views as cg_views
 
     actor = _incident_actor(request)
+    kept: str | None = None
     try:
         async with session_scope() as s:
             row = await cg_store.clear(s, incident_id, actor, body.note if body else None)
+            if row.get("container") is None and str(row.get("incident_key") or "").startswith(
+                "tamper:mpd-image:"
+            ):
+                tag_id = await cg_engine.get_guard().docker.tag_image_id(settings.mpd_image_tag)
+                kept = await cg_engine.adopt_cleared_tag(s, row, tag_id)
     except cg_store.IncidentError as e:
         raise HTTPException(status_code=e.status, detail=str(e)) from e
     container_freeze.forget()
@@ -3332,6 +3344,7 @@ async def admin_container_incident_clear(
     return {
         "incident": cg_views.incident_view(row, admin=True),
         "frozen": await container_freeze.is_frozen(),
+        "kept_image": kept,
     }
 
 

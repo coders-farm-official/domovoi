@@ -107,14 +107,19 @@ in the same operation, before any room's player can be made from it:
 | Who builds it | When | What vouches for the image |
 |---|---|---|
 | **The core** | at its start when the tag names no image, and the admin's **rebuild the music player image** on the Containers page | the core records the new ID as the baseline itself, right after the build and before any room's player is created or moved onto it |
-| **Domovoi's installer** (`scripts/linux/provision.sh`: the Windows Setup, a repair included, or a Linux install) | when the tag names no image, or when it built the image the tag names and `Dockerfile.mpd` changed since | `/var/lib/domovoi-provision/mpd-image.json` (`by: provision`, `image_id`, `tag`, `dockerfile_sha256`, `built_at`), written right after the build, before the rooms' players still on the old image are removed and a running core is restarted |
-| **The update unit** (`scripts/linux/apply-update.sh`, step 5 `rebuild-mpd`, and the same step in a rollback) | when an update changes `Dockerfile.mpd` or `mpd.conf` | `/var/lib/domovoi-update/mpd-image.json` (`by: update`, `image_id`, `tag`, `built_at`, `run_started_at`, `to_sha`), written right after the build while the core and web are stopped, before the rooms' players are removed and the core starts again (since 2026-10-25) |
+| **Domovoi's installer** (`scripts/linux/provision.sh`: the Windows Setup, a repair included, or a Linux install) | when the tag names no image, or when it built the image the tag names and `Dockerfile.mpd` changed since | `/var/lib/domovoi-provision/mpd-image.json` (`by: provision`, `image_id`, `tag`, `dockerfile_sha256`, `built_at`), written right after the build, before the rooms' players still on the old image are removed and a running core is restarted; a build it can't verify (below) leaves no record, with a warning |
+| **The update unit** (`scripts/linux/apply-update.sh`, step 5 `rebuild-mpd`, and the same step in a rollback) | when an update changes `Dockerfile.mpd` or `mpd.conf` | `/var/lib/domovoi-update/mpd-image.json` (`by: update`, `image_id`, `tag`, `built_at`, `run_started_at`, `to_sha`), removed before each build and written right after it while the core and web are stopped, before the rooms' players are removed and the core starts again (since 2026-10-25); a build it can't verify leaves none |
 
 The two records count only while the file and its directory are root's
 alone (root-owned, writable by nobody else, not a link), and each vouches
 for exactly the image it names, built after the recorded one was
 recorded. Neither path is a setting: `domovoi/.env` belongs to the
-service user.
+service user. The build runs as the service user (`docker build -q`); the
+ID it prints is read in root's shell and recorded only when root's own
+`docker image inspect` of the tag (an empty `DOCKER_CONFIG`, no
+`DOCKER_HOST` or `DOCKER_CONTEXT`) agrees: the tag's image ID, or on
+Docker's containerd image store its config digest (what `-q` prints
+there). The ID recorded is the tag's image ID, what the guard compares.
 
 **While the core runs**, every check first looks at the tag: when it
 names another image than the recorded one and a record names exactly that
@@ -123,12 +128,17 @@ rule runs ("rebuilt by Domovoi's installer" or "rebuilt by the update
 unit" on Settings → Health). So a room set up right after a rebuild — its
 player created from the new tag before anything restarts the core — is
 not reported. The image it replaced is kept as Domovoi's **previous
-build** (`mpd_image_id_previous`): a room's player still on it is waiting
-to be recreated, not tampering (the tag itself must name the current
-one). An open incident about exactly a vouched image (one that opened
-before the record could be read) is closed, cleared by "Domovoi" with a
-note naming the record, and the freeze lifts when no other tamper
-incident is open.
+build** (`mpd_image_id_previous`) while a room's player still runs it:
+such a player is waiting to be recreated, not tampering (the tag itself
+must name the current one). Once no room's player runs it, the guard
+forgets it, and a room on it is reported like any other image. An
+incident already open about exactly a vouched image (one that opened
+before the record could be read) is **not** closed: anyone in the
+`docker` group can write a root-owned file through a container
+(docs/SECURITY_PRIVACY.md), so lifting the freeze stays the admin's call.
+It gets a sentence instead — "Domovoi's update recorded building this
+image (…) in its root-owned record; check that nobody built it by hand,
+then clear." — and stays open until the admin clears it.
 
 **At the core's start**, when the tag names another image than the one
 recorded, the same two records are asked first, then the update unit's
@@ -159,24 +169,30 @@ record names: the tag and every room's player made from it are reported,
 whether the core is running or not, and whatever the update unit's last
 run said.
 
-**Clearing an incident about the music player image keeps that image.**
-When an admin clears, after review, a finding about the image the tag
-names now (the tag's own, or a room's player made from it), the next
-check takes that image on as the baseline ("kept by an admin"), so the
-next room set up isn't reported about the same image again. Any other
-image is news again.
+**Clearing the tag's incident keeps that image.** When an admin clears,
+after review, the music player tag's own incident ("The music player
+image was replaced outside Domovoi") and the tag still names that image
+at that moment, the clear makes it the baseline ("kept by an admin", the
+clear's answer says `kept_image`), so the next room set up from it isn't
+reported. Once, at the clear, and nowhere else: clearing a room's
+incident covers only that room's player, and an image the tag no longer
+names is not kept. Any other image is news again.
 
 **What the incident says.** When a music player image incident opens and
-the evidence shows Domovoi's update probably made the image — Docker says
-it was created during the update unit's last run (from its `started_at`
-to its `finished_at`, two minutes either side) and after the image the
-guard expected — the incident adds: "This image was probably rebuilt by
-Domovoi's update at <time>; if you didn't build it yourself, it's safe to
-clear (clearing it makes it the music player image Domovoi expects)." An
-image made at any other time gets only the plain words. Before you clear
-it, check that nobody built the image by hand: `docker image inspect
-domovoi-mpd:latest` shows when it was made (`.Created`), and
-`journalctl -u domovoi-update` shows what the update unit ran then.
+the update unit's own root-owned result says its last run rebuilt the
+music player (`mpd_changed: true`) without recording which image it built
+(an update script from before 2026-10-25, or one that couldn't verify
+the ID), finishing after the image the guard expected was recorded (or
+still going), and no record names another image built since, the
+incident adds: "Domovoi's update at <time> rebuilt the music player image
+without recording which image it built, so this may be that rebuild:
+check that nobody built or tagged domovoi-mpd:latest by hand …, then
+clear." It never says the image is safe, and it never relies on what
+Docker says about when the image was made (`.Created` is whatever the
+builder chose). Any other incident gets only the plain words. To check:
+`journalctl -u domovoi-update` shows what the update unit ran and when,
+and the shell history and `docker events` of the people with Docker
+access show anything else.
 
 Until 2026-10-21 the installer rebuilt the image on every re-run of its
 images step (a repair by Setup after any change to the compose file) and
@@ -467,10 +483,13 @@ Windows install, inside its private WSL2 distro: see
    while it is open the freeze also blocks updates: if an update should
    come first, clear the incident, update, then rebuild (so the image the
    guard expects is the one the rooms run). Or, if you mean to keep the image,
-   clear the incident with a note saying so: the guard then expects that
-   image, and the next room set up from it isn't reported. An incident
-   that says the image was probably rebuilt by Domovoi's update is that
-   case (above, "What the incident says"). If you didn't change it,
+   clear the incident with a note saying so: clearing the tag's own
+   incident ("The music player image was replaced outside Domovoi")
+   while the tag still names that image makes it the image the guard
+   expects, and the next room set up from it isn't reported; clear each
+   room's incident too. An incident that says Domovoi's update may have
+   rebuilt the image is that case, once you have checked (above, "What
+   the incident says"). If you didn't change it,
    treat the box as compromised: the container's image came from
    somewhere you didn't choose.
 2. **An unknown container.** `docker inspect <name>` says what it runs and

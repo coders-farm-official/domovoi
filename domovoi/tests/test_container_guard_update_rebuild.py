@@ -20,11 +20,15 @@ The fix, tested here:
 * the guard takes a vouched image on at any check, not only at the core's
   start, so a room created from the new tag before anything restarts is
   not reported; an image nobody vouched for (a ``docker build`` by hand)
-  still is;
-* an admin who clears an incident about the music player image keeps that
-  image: the next room made from it isn't reported again;
-* the incident says when the evidence shows Domovoi's update probably
-  built the image.
+  still is. Incidents already open stay open for the admin (a docker-group
+  user can forge a root-owned record), with a note naming the record;
+* an admin who clears the TAG's own incident while the tag names that
+  image keeps it: the next room made from it isn't reported again. A
+  room's incident covers only that container;
+* Domovoi's previous build is exempt only until no room runs it;
+* the incident says so when the update unit's own result shows its last
+  run rebuilt the image without recording which (never from Docker's
+  ``Created`` time, which a builder chooses).
 """
 
 from __future__ import annotations
@@ -33,16 +37,17 @@ import json
 from datetime import datetime, timezone
 
 import pytest
+from sqlalchemy import text
 
 from domovoi import git_version, self_restart
 from domovoi.container_guard import engine as cg_engine
 from domovoi.container_guard import freeze, holds, store
 from domovoi.container_guard.detect import RestartMemory, detect
-from domovoi.container_guard.docker_cli import parse_created
 from domovoi.container_guard.expected import ExpectedSet, mpd_expectations
-from domovoi.container_guard.model import TAMPER, DockerView, Listed, Observed
+from domovoi.container_guard.model import TAMPER, DockerView, Finding, Listed, Observed
 from domovoi.db.session import session_scope
 from domovoi.tests.conftest import requires_db
+from domovoi.tests.auth_testkit import _db  # noqa: F401 (fixture)
 from domovoi.tests.test_container_guard_engine import guard_env  # noqa: F401 (fixture)
 
 # The two images of incident #5.
@@ -179,11 +184,11 @@ def _view(tag_id: str, *rooms: tuple[str, str]) -> DockerView:
     return v
 
 
-def _expected(*rooms: str, baseline: str = OLD) -> ExpectedSet:
+def _expected(*rooms: str, baseline: str = OLD, previous: str | None = None) -> ExpectedSet:
     exp = ExpectedSet(mpd_prefix=PREFIX, mpd_tag_ref=TAG, mpd_image_id=baseline,
-                      mpd_image_at=BASELINE_AT)
+                      mpd_image_at=BASELINE_AT, mpd_image_previous=previous)
     exp.add(mpd_expectations([(r, PREFIX + r) for r in rooms], tag_ref=TAG, image_id=baseline,
-                             warm_done=True))
+                             warm_done=True, image_id_previous=previous))
     return exp
 
 
@@ -291,14 +296,35 @@ async def test_an_installer_rebuild_with_the_core_running_and_a_new_room(guard_e
     docker.view = _view(NEW, ("dining-room", NEW))
     await _checks(guard, clock)
     assert await _open() == []
-    assert await _baseline() == (NEW, "provision", OLD)
+    assert await _baseline() == (NEW, "provision", None), "no room on the old build to exempt"
+
+
+def _incident_finding(container: str | None, image_id: str, key: str | None = None) -> Finding:
+    """A tamper image finding as detect writes it: the tag's (container
+    None) or a container's."""
+    if container is None:
+        key = key or f"tamper:mpd-image:{image_id}"
+        label, summary = "the music player image", "The music player image was replaced outside Domovoi."
+    else:
+        key = key or f"tamper:image:{container}:{image_id}"
+        label, summary = f"the container {container}", f"The container {container} is running a different image."
+    return Finding(key=key, cls=TAMPER, kind="image", severity="error", container=container,
+                   owner="core", label=label, summary=summary,
+                   expected={"image": TAG, "image_id": OLD}, found={"image": TAG, "image_id": image_id})
+
+
+async def _open_finding(f: Finding) -> int:
+    async with session_scope() as s:
+        iid, _ = await store.open_incident(s, f)
+    return iid
 
 
 @requires_db
-async def test_open_incidents_about_a_vouched_image_are_cleared_by_domovoi(guard_env, records) -> None:  # noqa: F811
-    """An install whose incident opened before the evidence was there: once
-    a root record names exactly that image, the guard takes it on and
-    closes those incidents, saying whose record it was; the freeze lifts."""
+async def test_open_incidents_about_a_vouched_image_are_noted_and_left_open(guard_env, records) -> None:  # noqa: F811
+    """An incident that opened before a record could be read is not closed
+    when one appears: anyone in the docker group can write a root-owned
+    file through a container, so lifting the freeze stays the admin's call.
+    It gets a sentence naming the record; NEW detection is quiet."""
     guard, docker, clock, expected = guard_env
     records["last"]["doc"] = dict(QUIET_RUN)
     await _seed_baseline()
@@ -306,22 +332,59 @@ async def test_open_incidents_about_a_vouched_image_are_cleared_by_domovoi(guard
     docker.view = _view(NEW, ("dining-room", NEW))
     await _checks(guard, clock)
     assert len(await _open()) == 2
+    # A plugin's container on the same image ID: not the music player's,
+    # never noted as Domovoi's build.
+    plugin = await _open_finding(_incident_finding("jellyfin", NEW))
     write_update_record(records["update"])
-    await _checks(guard, clock, n=1)
-    assert await _open() == []
+    await _checks(guard, clock, n=2)
+    rows = {r["id"]: r for r in await _open()}
+    assert len(rows) == 3, "nothing closed by the record"
+    noted = [r for i, r in rows.items() if i != plugin]
+    assert all("Domovoi's update recorded building this image" in r["summary"] for r in noted)
+    assert all(r["summary"].count("recorded building") == 1 for r in noted), "noted once"
+    assert all("then clear" in r["summary"] for r in noted)
+    assert "recorded building" not in rows[plugin]["summary"]
     async with session_scope() as s:
-        rows = await store.recent_incidents(s)
-        assert await store.frozen_by(s) == []
-    assert {r["cleared_by"] for r in rows} == {"Domovoi"}
-    assert all("Domovoi's update built this image" in r["clear_note"] for r in rows)
-    freeze.forget()
+        assert await store.frozen_by(s), "the freeze stays until the admin clears"
+    # (No room runs the old build: it isn't kept as the previous one.)
+    assert await _baseline() == (NEW, "update-unit:record", None)
+    # A room set up now, from the vouched image: no new incident.
+    expected["set"].add(mpd_expectations([("office", PREFIX + "office")], tag_ref=TAG,
+                                         image_id=NEW, warm_done=True))
+    docker.view = _view(NEW, ("dining-room", NEW), ("office", NEW))
+    await _checks(guard, clock)
+    assert len(await _open()) == 3
 
 
 @requires_db
-async def test_an_admin_clear_keeps_the_image_for_the_next_room(guard_env, records) -> None:  # noqa: F811
-    """No record names the image (incident #5's box: the update ran a script
-    from before the record). "Clear after review" is the way out, and it is
-    the whole way: the next room made from that image isn't reported."""
+async def test_clearing_a_room_s_incident_covers_that_container_only(guard_env, records) -> None:  # noqa: F811
+    guard, docker, clock, expected = guard_env
+    records["last"]["doc"] = dict(QUIET_RUN)
+    await _seed_baseline()
+    expected["set"] = _expected("kitchen", "dining-room")
+    docker.view = _view(NEW, ("kitchen", OLD), ("dining-room", NEW))
+    await _checks(guard, clock)
+    room = next(r for r in await _open() if r["container"] == "domovoi-mpd-dining-room")
+    async with session_scope() as s:
+        row = await store.clear(s, int(room["id"]), "admin", "the update rebuilt it")
+        assert await cg_engine.adopt_cleared_tag(s, row, NEW) is None
+    await _checks(guard, clock)
+    assert await _baseline() == (OLD, "core-build", None), "nothing adopted"
+    assert [r["container"] for r in await _open()] == [None], "the tag's own incident stays"
+    # The next room set up from that image: reported, on its own.
+    expected["set"].add(mpd_expectations([("office", PREFIX + "office")], tag_ref=TAG,
+                                         image_id=OLD, warm_done=True))
+    docker.view = _view(NEW, ("kitchen", OLD), ("dining-room", NEW), ("office", NEW))
+    await _checks(guard, clock)
+    assert sorted(r["container"] or "" for r in await _open()) == ["", "domovoi-mpd-office"]
+
+
+@requires_db
+async def test_clearing_the_tag_s_incident_keeps_the_image_for_the_next_room(guard_env, records) -> None:  # noqa: F811
+    """No record names the image (incident #5's box: the update ran a
+    script from before the record). Clearing the TAG's incident while the
+    tag names that image is the way out, and the whole way: the next room
+    made from it isn't reported."""
     guard, docker, clock, expected = guard_env
     records["last"]["doc"] = dict(QUIET_RUN)
     await _seed_baseline()
@@ -329,26 +392,87 @@ async def test_an_admin_clear_keeps_the_image_for_the_next_room(guard_env, recor
     docker.view = _view(NEW, ("kitchen", OLD), ("dining-room", NEW))
     await _checks(guard, clock)
     rows = await _open()
+    tag = next(r for r in rows if r["container"] is None)
     room = next(r for r in rows if r["container"] == "domovoi-mpd-dining-room")
     async with session_scope() as s:
-        await store.clear(s, int(room["id"]), "admin", "the update rebuilt it")
-    await _checks(guard, clock, n=1)
+        row = await store.clear(s, int(tag["id"]), "admin", "the update rebuilt it")
+        assert await cg_engine.adopt_cleared_tag(s, row, NEW) == NEW
+        await store.clear(s, int(room["id"]), "admin", "same")
     assert await _baseline() == (NEW, "admin-cleared", OLD)
-    assert "cleared" in (guard.mpd_note or "")
-    # The tag's own incident stays open until the admin clears it too:
-    # nothing about the image is cleared for them.
-    assert [r["container"] for r in await _open()] == [None]
-    # A new room on that image, and the kitchen still on the old one: quiet.
-    expected["set"].add(mpd_expectations([("office", PREFIX + "office")], tag_ref=TAG,
-                                         image_id=NEW, warm_done=True, image_id_previous=OLD))
+    # (gather_expected reads the baseline at every check; this fixture's set
+    # is fixed, so it is given what the next gather would read.)
+    expected["set"] = _expected("kitchen", "dining-room", "office", baseline=NEW, previous=OLD)
     docker.view = _view(NEW, ("kitchen", OLD), ("dining-room", NEW), ("office", NEW))
     await _checks(guard, clock)
-    assert [r["container"] for r in await _open()] == [None]
+    assert await _open() == []
     # Another build by hand later: news again.
     docker.view = _view(HAND2, ("kitchen", OLD), ("dining-room", NEW), ("office", HAND2))
     await _checks(guard, clock)
     found = sorted((r["container"] or "", r["found"]["image_id"]) for r in await _open())
-    assert ("", HAND2) in found and ("domovoi-mpd-office", HAND2) in found
+    assert found == [("", HAND2), ("domovoi-mpd-office", HAND2)]
+
+
+@requires_db
+async def test_a_cleared_finding_adopts_only_the_tag_s_own_and_only_its_current_image(guard_env) -> None:  # noqa: F811
+    await _seed_baseline()
+    cases = [
+        (_incident_finding(None, NEW), HAND, "the tag names another image now"),
+        (_incident_finding(None, NEW), None, "the tag names nothing"),
+        (_incident_finding(PREFIX + "kitchen", NEW), NEW, "a room's container"),
+        (_incident_finding("jellyfin", NEW), NEW, "a plugin's container on that very ID"),
+        (_incident_finding(None, NEW, key=f"tamper:unknown:{PREFIX}x:{NEW}"), NEW,
+         "another kind of finding"),
+        (_incident_finding(None, "sha256:" + "z" * 64), "sha256:" + "z" * 64, "not an image ID"),
+    ]
+    for f, tag_id, why in cases:
+        iid = await _open_finding(f)
+        async with session_scope() as s:
+            row = await store.clear(s, iid, "admin", None)
+            assert await cg_engine.adopt_cleared_tag(s, row, tag_id) is None, why
+        assert await _baseline() == (OLD, "core-build", None), why
+
+
+@requires_db
+async def test_the_clear_route_keeps_the_tag_s_image(_db, records, monkeypatch) -> None:  # noqa: F811
+    """POST …/clear on the tag's incident, the tag still naming its image:
+    ``kept_image``; on a room's incident, nothing kept."""
+    from domovoi.container_guard.docker_cli import DockerCli
+    from domovoi.db.session import engine as db_engine
+    from domovoi.tests.auth_testkit import bearer, claim_admin, core_client, web_client
+
+    async with db_engine.begin() as conn:
+        await conn.execute(text("TRUNCATE container_incidents, container_guard_baselines RESTART IDENTITY"))
+    freeze.forget()
+    cg_engine.reset_guard(None)
+    asked: list[str] = []
+
+    async def tag_image_id(self, ref):
+        asked.append(ref)
+        return NEW
+
+    monkeypatch.setattr(DockerCli, "tag_image_id", tag_image_id)
+    try:
+        await _seed_baseline()
+        room = await _open_finding(_incident_finding(PREFIX + "dining-room", NEW))
+        tag = await _open_finding(_incident_finding(None, NEW))
+        async with web_client() as w:
+            token = await claim_admin(w)
+        async with core_client() as c:
+            r = await c.post(f"/v1/admin/containers/incidents/{room}/clear", headers=bearer(token), json={})
+            assert r.status_code == 200 and r.json()["kept_image"] is None
+            assert asked == [], "a room's clear doesn't even look at the tag"
+            assert await _baseline() == (OLD, "core-build", None)
+            r = await c.post(f"/v1/admin/containers/incidents/{tag}/clear", headers=bearer(token),
+                             json={"note": "our update rebuilt it"})
+            assert r.status_code == 200, r.text
+            assert r.json()["kept_image"] == NEW and r.json()["frozen"] is False
+        assert asked == [TAG]
+        assert await _baseline() == (NEW, "admin-cleared", OLD)
+    finally:
+        cg_engine.reset_guard(None)
+        async with db_engine.begin() as conn:
+            await conn.execute(text("TRUNCATE container_incidents, container_guard_baselines RESTART IDENTITY"))
+        freeze.forget()
 
 
 # ─── the previous build, in the rules ─────────────────────────────────────
@@ -379,64 +503,98 @@ def test_no_previous_build_when_it_is_the_current_one() -> None:
     assert e.image_id_previous is None
 
 
+@requires_db
+async def test_the_previous_build_is_forgotten_once_no_room_runs_it(guard_env, records) -> None:  # noqa: F811
+    """The exemption covers the players that were on the old build when the
+    baseline moved, until they are recreated: after that, a room on the old
+    image is reported like any other."""
+    guard, docker, clock, expected = guard_env
+    await _seed_baseline()
+    write_update_record(records["update"])
+    expected["set"] = _expected("kitchen", "dining-room")
+    docker.view = _view(NEW, ("kitchen", OLD), ("dining-room", NEW))
+    await _checks(guard, clock)
+    assert await _baseline() == (NEW, "update-unit:record", OLD)
+    # Docker not answering is no data: nothing forgotten on it.
+    assert guard._previous_unused(expected["set"], DockerView(ok=False, error="timed out")) is False
+    # The kitchen recreated on the new image: the previous build goes.
+    docker.view = _view(NEW, ("kitchen", NEW), ("dining-room", NEW))
+    await _checks(guard, clock, n=1)
+    assert await _baseline() == (NEW, "update-unit:record", None)
+    assert await _open() == []
+    # Someone runs the old image in a room's place again: reported.
+    docker.view = _view(NEW, ("kitchen", OLD), ("dining-room", NEW))
+    await _checks(guard, clock)
+    assert [(r["container"], r["found"]["image_id"]) for r in await _open()] == [
+        ("domovoi-mpd-kitchen", OLD)]
+
+
 # ─── what the incident says ───────────────────────────────────────────────
 
-MADE_IN_RUN = datetime(2026, 10, 25, 1, 12, 30, tzinfo=timezone.utc)
-OLD_MADE = datetime(2026, 10, 17, 9, 0, tzinfo=timezone.utc)
+HINT = ("Domovoi's update at 2026-10-25 01:10 UTC rebuilt the music player image without "
+        "recording which image it built, so this may be that rebuild: check that nobody built "
+        "or tagged domovoi-mpd:latest by hand")
 
 
-def test_the_hint_when_the_image_was_made_during_the_update(records) -> None:
-    hint = cg_engine.rebuild_hint(MADE_IN_RUN, OLD_MADE, BASELINE_AT)
-    assert hint == (
-        "This image was probably rebuilt by Domovoi's update at 2026-10-25 01:10 UTC; if you "
-        "didn't build it yourself, it's safe to clear (clearing it makes it the music player "
-        "image Domovoi expects)."
-    )
-    # The expected image gone from Docker: when it was recorded is the floor.
-    assert cg_engine.rebuild_hint(MADE_IN_RUN, None, BASELINE_AT) == hint
+def test_the_hint_when_the_update_rebuilt_without_a_record(records) -> None:
+    hint = cg_engine.rebuild_hint(NEW, BASELINE_AT)
+    assert hint is not None and hint.startswith(HINT) and hint.endswith("then clear.")
+    assert "safe" not in hint
+    # A run still going counts too.
+    records["last"]["doc"] = dict(RUN, status="running", finished_at=None)
+    assert cg_engine.rebuild_hint(NEW, BASELINE_AT) is not None
+    # An update record from an earlier run, built before the baseline:
+    # nothing about this one.
+    write_update_record(records["update"], image_id=OLD, run_started_at="2026-10-01T00:00:00Z",
+                        built_at="2026-10-01T00:05:00Z")
+    records["last"]["doc"] = dict(RUN)
+    assert cg_engine.rebuild_hint(NEW, BASELINE_AT) is not None
+
+
+def _provision_record(path, image_id, built_at="2026-10-25T01:12:31Z") -> None:
+    path.write_text(json.dumps({"by": "provision", "image_id": image_id, "tag": TAG,
+                                "dockerfile_sha256": "f" * 64, "built_at": built_at}),
+                    encoding="utf-8")
 
 
 @pytest.mark.parametrize(
-    "made, expected_made, last, why",
+    "setup, why",
     [
-        (datetime(2026, 10, 25, 3, 0, tzinfo=timezone.utc), OLD_MADE, RUN, "made after the update finished"),
-        (datetime(2026, 10, 25, 1, 0, tzinfo=timezone.utc), OLD_MADE, RUN, "made before it started"),
-        (MADE_IN_RUN, datetime(2026, 10, 25, 1, 13, tzinfo=timezone.utc), RUN, "older than the expected image"),
-        (MADE_IN_RUN, OLD_MADE, None, "no update record"),
-        (MADE_IN_RUN, OLD_MADE, {"status": "ok"}, "a record without times"),
-        (None, OLD_MADE, RUN, "Docker can't say when it was made"),
+        ("quiet", "the run didn't rebuild the music player (mpd_changed false)"),
+        ("no-result", "no update record at all"),
+        ("recorded", "the run recorded the image it built, and it is another one"),
+        ("other-update-record", "an update record names another image built since the baseline"),
+        ("other-provision-record", "the installer recorded building another image since"),
+        ("before-baseline", "the run finished before the expected image was recorded"),
+        ("no-start", "the run has no start time"),
     ],
 )
-def test_no_hint_unless_the_evidence_shows_it(records, made, expected_made, last, why) -> None:
-    records["last"]["doc"] = last
-    assert cg_engine.rebuild_hint(made, expected_made, BASELINE_AT) is None, why
-
-
-def test_no_hint_without_any_floor(records) -> None:
-    assert cg_engine.rebuild_hint(MADE_IN_RUN, None, None) is None
-
-
-def test_a_run_still_going_counts_up_to_now(records) -> None:
-    records["last"]["doc"] = dict(RUN, status="running", finished_at=None)
-    now = datetime(2026, 10, 25, 1, 20, tzinfo=timezone.utc)
-    assert cg_engine.rebuild_hint(MADE_IN_RUN, OLD_MADE, BASELINE_AT, now=now)
-    assert cg_engine.rebuild_hint(datetime(2026, 10, 25, 2, 0, tzinfo=timezone.utc), OLD_MADE,
-                                  BASELINE_AT, now=now) is None
+def test_no_hint_unless_the_update_s_own_records_say_so(records, setup, why) -> None:
+    if setup == "quiet":
+        records["last"]["doc"] = dict(QUIET_RUN)
+    elif setup == "no-result":
+        records["last"]["doc"] = None
+    elif setup == "recorded":
+        write_update_record(records["update"], image_id=HAND)
+    elif setup == "other-update-record":
+        write_update_record(records["update"], image_id=HAND, run_started_at="2026-10-20T00:00:00Z")
+    elif setup == "other-provision-record":
+        _provision_record(records["provision"], HAND)
+    elif setup == "before-baseline":
+        records["last"]["doc"] = dict(RUN, finished_at="2026-10-24T17:00:00Z")
+    elif setup == "no-start":
+        records["last"]["doc"] = dict(RUN, started_at=None)
+    assert cg_engine.rebuild_hint(NEW, BASELINE_AT) is None, why
 
 
 @requires_db
-async def test_incident_5_now_says_the_update_probably_built_it(guard_env, records) -> None:  # noqa: F811
-    """The replay of incident #5 on a box whose update left no record: the
-    incident opens (nothing verifiable vouches), and its words say what the
-    evidence shows and what to check."""
+async def test_incident_5_replayed_on_an_update_that_rebuilt_without_a_record(guard_env, records) -> None:  # noqa: F811
+    """The replay of incident #5 on a box whose update said it rebuilt the
+    music player (``mpd_changed: true``) with a script from before the
+    record: the incident opens (nothing verifiable names the image), and
+    its words say what the update's own result shows and what to check."""
     guard, docker, clock, expected = guard_env
-    records["last"]["doc"] = dict(QUIET_RUN)
     await _seed_baseline()
-
-    async def image_created(ids):
-        return {NEW: MADE_IN_RUN, OLD: OLD_MADE}
-
-    docker.image_created = image_created
     expected["set"] = _expected("dining-room")
     docker.view = _view(NEW, ("dining-room", NEW))
     await _checks(guard, clock)
@@ -446,31 +604,35 @@ async def test_incident_5_now_says_the_update_probably_built_it(guard_env, recor
     assert room["summary"].startswith(
         "The music player for dining-room is running a different image than the one Domovoi expects."
     )
-    assert "probably rebuilt by Domovoi's update at 2026-10-25 01:10 UTC" in room["summary"]
-    assert "if you didn't build it yourself, it's safe to clear" in room["summary"]
+    assert HINT in room["summary"] and "safe" not in room["summary"]
     assert room["expected"]["image_id"] == OLD and room["found"]["image_id"] == NEW
     holds.clear()
 
 
 @requires_db
-async def test_a_hand_build_outside_any_update_gets_no_hint(guard_env, records) -> None:  # noqa: F811
+async def test_incident_5_replayed_on_an_update_that_did_not_rebuild(guard_env, records) -> None:  # noqa: F811
+    """The same, on an update that said nothing about the music player
+    (Dockerfile.mpd and mpd.conf unchanged since 2026-10-07, so most likely
+    incident #5's own case): plain words, no hint."""
+    guard, docker, clock, expected = guard_env
+    records["last"]["doc"] = dict(QUIET_RUN)
+    await _seed_baseline()
+    expected["set"] = _expected("dining-room")
+    docker.view = _view(NEW, ("dining-room", NEW))
+    await _checks(guard, clock)
+    rows = await _open()
+    assert len(rows) == 2
+    assert all("Domovoi's update at" not in r["summary"] for r in rows)
+
+
+@requires_db
+async def test_a_hand_build_after_a_recorded_update_gets_no_hint(guard_env, records) -> None:  # noqa: F811
     guard, docker, clock, expected = guard_env
     await _seed_baseline()
-
-    async def image_created(ids):
-        return {HAND: datetime(2026, 10, 25, 9, 0, tzinfo=timezone.utc), OLD: OLD_MADE}
-
-    docker.image_created = image_created
+    write_update_record(records["update"])          # the update built NEW and said so
     expected["set"] = _expected("dining-room")
     docker.view = _view(HAND, ("dining-room", HAND))
     await _checks(guard, clock)
     rows = await _open()
     assert len(rows) == 2
-    assert all("probably" not in r["summary"] for r in rows)
-
-
-def test_docker_s_created_times() -> None:
-    assert parse_created("2026-10-25T01:12:30.123456789Z") == MADE_IN_RUN.replace(microsecond=0)
-    assert parse_created("2026-10-25T01:12:30Z") == MADE_IN_RUN
-    assert parse_created("2026-10-24T21:12:30-04:00") == MADE_IN_RUN
-    assert parse_created("") is None and parse_created("yesterday") is None
+    assert all("Domovoi's update at" not in r["summary"] for r in rows)
