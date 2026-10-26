@@ -1301,8 +1301,25 @@ def _read_workbook_model(target: Path) -> dict[str, Any]:
                "in a spreadsheet app.")
     model.pop("over_budget", None)
     model.pop("lost", None)
+    if why is None:
+        why = _unsaveable_why(target, model["workbook"])
     model.update(format="xlsx", editable=why is None, why=why)
     return model
+
+
+def _unsaveable_why(target: Path, workbook: dict[str, Any]) -> Optional[str]:
+    """A file that opens editable must be one its own unchanged snapshot can
+    be saved from: run the save's checks on it (merges past the limits, a
+    sheet name or text a save refuses, ...) and, if they fail, say so and
+    open it read-only, rather than let someone edit what can't be saved."""
+    snap = dict(workbook)
+    snap["sheets"] = {sid: dict(sh, origin=sid) for sid, sh in (workbook.get("sheets") or {}).items()}
+    try:
+        sheet_workbook.validate_snapshot(snap)
+    except sheet_workbook.WorkbookRefused as exc:
+        return (f"{target.name} can't be saved from the sheet editor ({exc.detail}), so it "
+                "opens read-only here. Edit it in a spreadsheet app.")
+    return None
 
 
 def _read_workbook_json(target: Path, rel: str) -> bytes:

@@ -3,30 +3,31 @@
  * the household's browsers fetch pictures from anywhere on the internet
  * whenever a sheet is opened: a third party learns who opened it, and when.
  * Domovoi makes no outside requests, so IMAGE takes only a picture inside
- * the formula (data:image/...) or one on this server (a relative URL or the
- * page's own origin). Anything else is #VALUE!, and nothing is fetched. */
-export function imageUrlAllowed(url, origin) {
-  if (typeof url !== 'string') return false;
-  const u = url.trim();
-  if (!u) return false;
-  if (/^data:image\/(png|jpe?g|gif|webp|bmp);/i.test(u)) return true;
-  if (/^[a-z][a-z0-9+.-]*:/i.test(u) || u.startsWith('//') || u.startsWith('\\')) {
-    // An absolute URL (or scheme-relative): only this page's own origin.
-    try {
-      return new URL(u).origin === origin && /^https?:$/i.test(new URL(u).protocol);
-    } catch (e) {
-      return false;
-    }
+ * the formula (data:image/png|jpeg|gif|webp;base64) or one that RESOLVES to
+ * this page's own origin over http(s). Anything else is #VALUE!, and nothing
+ * is fetched. */
+export function imageUrlAllowed(url, origin, base) {
+  if (typeof url !== 'string' || !url) return false;
+  // A picture inside the formula: the ORIGINAL string, strictly.
+  if (/^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(url)) return true;
+  // Everything else: resolve it exactly as the browser will (which strips
+  // tabs and control characters and reads "/\host" as "//host"), then
+  // allow only this page's own origin over http(s).
+  let r;
+  try {
+    r = new URL(url, base || origin);
+  } catch (e) {
+    return false;
   }
-  return true; // relative to this server
+  return (r.protocol === 'http:' || r.protocol === 'https:') && r.origin === origin;
 }
 
 /* A subclass of Univer's own IMAGE function that refuses other URLs. */
-export function makeSafeImage(BaseImage, ErrorValueObject, getOrigin) {
+export function makeSafeImage(BaseImage, ErrorValueObject, getOrigin, getBase = getOrigin) {
   return class SafeImageFunction extends BaseImage {
     _handleSingleObject(source, ...rest) {
       if (source && typeof source.isString === 'function' && source.isString()) {
-        if (!imageUrlAllowed(String(source.getValue()), getOrigin())) {
+        if (!imageUrlAllowed(String(source.getValue()), getOrigin(), getBase())) {
           return ErrorValueObject.create('#VALUE!');
         }
       }

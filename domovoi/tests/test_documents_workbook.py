@@ -920,10 +920,10 @@ def test_a_billion_laughs_workbook_is_not_expanded(docs_dir):
     assert len(r.content) < 1_000_000
 
 
-def test_image_urls_are_limited_to_this_server(tmp_path):
-    """=IMAGE("https://elsewhere/...") would have every browser that opens
-    the sheet fetch from a third party. The bundled override allows only
-    data: pictures and this server (scripts/vendor/univer/safe_image.js)."""
+def _image_verdicts(tmp_path, origin, base, cases):
+    """Run safe_image.js under node: imageUrlAllowed for each case, and the
+    IMAGE subclass for the first one (cases go in as JSON, so no escaping
+    is lost between Python, the shell and JavaScript)."""
     import shutil
     import subprocess
 
@@ -932,31 +932,184 @@ def test_image_urls_are_limited_to_this_server(tmp_path):
     node = shutil.which("node")
     assert node, "node is required"
     module = Path(__file__).resolve().parents[2] / "scripts" / "vendor" / "univer" / "safe_image.js"
+    (tmp_path / "cases.json").write_text(json.dumps({"origin": origin, "base": base, "cases": cases}),
+                                         encoding="utf-8")
     script = tmp_path / "check.mjs"
     script.write_text(
+        "import { readFileSync } from 'node:fs';\n"
         "import { imageUrlAllowed, makeSafeImage } from " + json.dumps(module.as_uri()) + ";\n"
-        "const o = 'http://192.168.1.20:6369';\n"
-        "const cases = ['https://tracker.example/p.png', 'http://192.168.1.20:6369/api/x.png',\n"
-        "  '/api/documents/raw/a.png', 'a.png', 'data:image/png;base64,AAAA', 'data:text/html,hi',\n"
-        "  '//evil.example/x.png', 'javascript:alert(1)', 'HTTP://192.168.1.20:6369/x.png', '',\n"
-        "  'http://192.168.1.20:6370/x.png', 'file:///etc/passwd'];\n"
+        "const { origin, base, cases } = JSON.parse(readFileSync(process.argv[2], 'utf8'));\n"
         "class Base { _handleSingleObject(s) { return 'drawn:' + s.getValue(); } }\n"
-        "const Err = { create: (e) => e };\n"
-        "const Safe = makeSafeImage(Base, Err, () => o);\n"
+        "const Safe = makeSafeImage(Base, { create: (e) => e }, () => origin, () => base);\n"
         "const str = (v) => ({ isString: () => true, getValue: () => v });\n"
-        "console.log(JSON.stringify({ allowed: cases.map((u) => imageUrlAllowed(u, o)),\n"
-        "  via: [new Safe()._handleSingleObject(str('https://tracker.example/p.png')),\n"
-        "        new Safe()._handleSingleObject(str('/x.png'))] }));\n",
+        "console.log(JSON.stringify({\n"
+        "  allowed: cases.map((u) => imageUrlAllowed(u, origin, base)),\n"
+        "  via: cases.map((u) => new Safe()._handleSingleObject(str(u))),\n"
+        "}));\n",
         encoding="utf-8",
     )
-    out = json.loads(subprocess.run([node, str(script)], capture_output=True, text=True, check=True).stdout)
-    assert out["allowed"] == [False, True, True, True, True, False, False, False, True, False, False, False]
-    assert out["via"] == ["#VALUE!", "drawn:/x.png"]
+    run = subprocess.run([node, str(script), str(tmp_path / "cases.json")],
+                         capture_output=True, text=True, check=True)
+    return json.loads(run.stdout)
+
+
+def test_image_urls_are_limited_to_this_server(tmp_path):
+    """=IMAGE("https://elsewhere/...") would have every browser that opens
+    the sheet fetch from a third party. The bundled override allows only
+    strict data: pictures and URLs that RESOLVE to this server
+    (scripts/vendor/univer/safe_image.js)."""
+    from pathlib import Path
+
+    origin = "http://192.168.1.20:6369"
+    base = origin + "/sheet.html#path=a.xlsx"
+    cases = {
+        "https://tracker.example/p.png": False,
+        "http://192.168.1.20:6369/api/x.png": True,
+        "/api/documents/raw/a.png": True,
+        "a.png": True,
+        "data:image/png;base64,AAAA": True,
+        "data:image/svg+xml;base64,AAAA": False,
+        "data:text/html,hi": False,
+        "DATA:image/png;base64,AAAA": False,
+        "javascript:alert(1)": False,
+        "": False,
+        "http://192.168.1.20:6370/x.png": False,
+        "file:///etc/passwd": False,
+        # Round 2: what the browser normalises across origins.
+        "/\\host/x.png": False,                       # "/\" is read as "//"
+        "/" + chr(92) + "tracker.example/x.png": False,
+        "ht\ttp://tracker.example/x.png": False,      # a tab inside the scheme
+        "\x01https://tracker.example/x.png": False,  # a leading control character
+        " https://tracker.example/x.png": False,
+        "//tracker.example/x.png": False,
+        "\\\\tracker.example\\x.png": False,
+        "HtTpS://tracker.example/x.png": False,
+        "HTTP://192.168.1.20:6369/x.png": True,
+        "hTtP://192.168.1.20:6369/x.png": True,
+    }
+    out = _image_verdicts(tmp_path, origin, base, list(cases))
+    assert dict(zip(cases, out["allowed"])) == cases
+    for url, ok, drawn in zip(cases, cases.values(), out["via"]):
+        assert drawn == ("drawn:" + url if ok else "#VALUE!"), url
     bundle = Path(__file__).resolve().parents[2] / "web" / "static" / "vendor" / "univer" / "univer.js"
     text = bundle.read_text(encoding="utf-8")
-    assert "formulaFunctions" in text and "data:image" in text
+    assert "formulaFunctions" in text and "data:image" in text and "location.href" in text
     editor = (Path(__file__).resolve().parents[2] / "web" / "static" / "sheet_editor.jsx").read_text(encoding="utf-8")
     assert "formula: { function: lib.formulaFunctions || [] }" in editor
+
+
+def test_any_openpyxl_warning_on_load_makes_the_file_read_only(docs_dir):
+    """Round 2: a dynamic Print_Area (OFFSET) was dropped on save; openpyxl
+    said so in words the first filter didn't match. Now every load warning
+    counts, except a short list of harmless ones."""
+    p = docs_dir / "pa.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet"
+    ws["A1"] = 1
+    wb.save(p)
+    dn = (b'<definedNames><definedName name="_xlnm.Print_Area" localSheetId="0">'
+          b'OFFSET(Sheet!$A$1,0,0,COUNTA(Sheet!$A:$A),5)</definedName></definedNames>')
+    _splice(p, "xl/workbook.xml", lambda d: d.replace(b"<calcPr", dn + b"<calcPr") if b"<calcPr" in d
+            else d.replace(b"</workbook>", dn + b"</workbook>"))
+    raw = p.read_bytes()
+    _, lost = sw.load_xlsx(p)
+    assert lost and "Print area" in lost[0]
+    with _client() as c:
+        g = c.get("/api/documents/workbook/pa.xlsx").json()
+        assert g["editable"] is False
+        snap = g["workbook"]
+        for sid in snap["sheetOrder"]:
+            snap["sheets"][sid]["origin"] = sid
+        snap["sheets"]["s0"]["cellData"]["3"] = {"0": {"v": "x", "t": 1}}
+        assert _put(c, "pa.xlsx", snap, g["version"]).status_code == 409
+        assert c.put("/api/documents/sheet/pa.xlsx", json={"rows": [[{"v": "9"}]]}).status_code == 409
+    assert p.read_bytes() == raw
+
+
+def test_harmless_load_warnings_do_not_block_editing(tmp_path, monkeypatch):
+    import warnings
+
+    import openpyxl
+
+    p = tmp_path / "ok.xlsx"
+    wb = Workbook()
+    wb.active["A1"] = 1
+    wb.save(p)
+    real = openpyxl.load_workbook
+
+    def noisy(*a, **k):
+        warnings.warn("Workbook contains no default style, apply openpyxl's default")
+        warnings.warn("Title is more than 31 characters. Some applications may not be able to read the file")
+        return real(*a, **k)
+
+    monkeypatch.setattr(openpyxl, "load_workbook", noisy)
+    _, lost = sw.load_xlsx(p)
+    assert lost == []
+
+    def lossy(*a, **k):
+        warnings.warn("Something new openpyxl will drop")
+        return real(*a, **k)
+
+    monkeypatch.setattr(openpyxl, "load_workbook", lossy)
+    _, lost = sw.load_xlsx(p)
+    assert lost == ["Something new openpyxl will drop"]
+
+
+@pytest.mark.parametrize("build, word", [
+    # One merge bigger than a save may carry.
+    (lambda ws: (ws.__setitem__("A1", "label"), ws.merge_cells("A1:Z5000")), "merged"),
+    # More merged ranges than a save may carry.
+    (lambda ws: [ws.merge_cells(start_row=r, end_row=r, start_column=c, end_column=c + 1)
+                 for r in range(1, sw.MAX_MERGES // 2 + 2) for c in (1, 3)], "merged"),
+])
+def test_a_file_the_editor_could_not_save_opens_read_only(docs_dir, build, word):
+    """Round 2: a file whose own merges exceed the save limits opened
+    editable and then failed every save. Now the open runs the save's
+    checks on the file's own snapshot and opens it read-only, saying why."""
+    p = docs_dir / "lm.xlsx"
+    wb = Workbook()
+    build(wb.active)
+    wb.save(p)
+    with _client() as c:
+        g = c.get("/api/documents/workbook/lm.xlsx").json()
+    assert g["editable"] is False
+    assert "can't be saved from the sheet editor" in g["why"] and word in g["why"]
+
+
+def test_an_ordinary_file_still_opens_editable(docs_dir):
+    _household(docs_dir / "h.xlsx")
+    with _client() as c:
+        g = c.get("/api/documents/workbook/h.xlsx").json()
+    assert g["editable"] is True and g["why"] is None
+
+
+@pytest.mark.parametrize("style", [
+    {"ht": []}, {"vt": {}}, {"tb": "3"}, {"bl": 1.5}, {"bd": {"t": {"s": []}}}, {"bd": {"t": 5}},
+    {"bd": {"t": {"s": 1, "cl": "red"}}}, {"bd": []}, {"ul": {"s": []}}, {"st": 1},
+    {"cl": {"rgb": []}}, {"bg": "yellow"}, {"tr": {"a": 0, "v": []}},
+])
+def test_malformed_styles_are_400(docs_dir, style):
+    c = TestClient(app, headers={"X-Requested-With": "domovoi-tests"}, raise_server_exceptions=False)
+    snap = _one_sheet({"0": {"0": {"v": 1, "s": style}}})
+    r = _put(c, "u.xlsx", snap)
+    assert r.status_code == 400, (style, r.status_code, r.text)
+    snap = _one_sheet({"0": {"0": {"v": 1, "s": "x1"}}})
+    snap["styles"] = {"x1": style}
+    assert _put(c, "u.xlsx", snap).status_code == 400
+    assert not (docs_dir / "u.xlsx").exists()
+
+
+def test_well_formed_styles_still_save(docs_dir):
+    snap = _one_sheet({"0": {"0": {"v": 1, "s": {
+        "bl": 1, "it": True, "ht": 2, "vt": 3, "tb": 3, "ul": {"s": 1}, "st": {"s": 0},
+        "cl": {"rgb": "#FF0000"}, "bg": {"rgb": "rgb(1,2,3)"}, "tr": {"a": -45, "v": 0},
+        "bd": {"t": {"s": 1, "cl": {"rgb": "#000000"}}, "b": None},
+    }}}})
+    with _client() as c:
+        assert _put(c, "w.xlsx", snap).status_code == 200
+    a1 = load_workbook(docs_dir / "w.xlsx").active["A1"]
+    assert a1.font.b and a1.alignment.horizontal == "center" and a1.alignment.text_rotation == 45
 
 
 def test_the_bundle_carries_no_hyphenation_patterns():

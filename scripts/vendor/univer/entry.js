@@ -18,7 +18,8 @@ const builtinImage = ALL_IMPLEMENTED_FUNCTIONS.find((f) => f[1] === 'IMAGE');
 // Registered after the built-ins (engine-formula FormulaController), so this
 // replaces IMAGE rather than adding a second one.
 const formulaFunctions = builtinImage
-  ? [[makeSafeImage(builtinImage[0], ErrorValueObject, () => window.location.origin), 'IMAGE']]
+  ? [[makeSafeImage(builtinImage[0], ErrorValueObject, () => window.location.origin,
+      () => window.location.href), 'IMAGE']]
   : [];
 
 window.DomovoiUniverLib = {

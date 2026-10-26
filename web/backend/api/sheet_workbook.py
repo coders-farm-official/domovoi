@@ -124,6 +124,24 @@ def _check_int(value: Any, what: str, low: int, high: int) -> int:
     return value
 
 
+def _check_flag(value: Any, what: str) -> None:
+    """An enum or 0/1 flag: a plain whole number (or true/false), nothing else."""
+    if value is None or isinstance(value, bool):
+        return
+    if not isinstance(value, int) or not -1000 <= value <= 1000:
+        raise _bad(f"{what} must be a whole number")
+
+
+def _check_color(value: Any, what: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        raise _bad(f"{what} must be an object")
+    rgb = value.get("rgb")
+    if rgb is not None and (not isinstance(rgb, str) or len(rgb) > 64):
+        raise _bad(f"{what} must be a colour")
+
+
 def _check_style(style: Any, what: str) -> None:
     if style is None or isinstance(style, str):
         if isinstance(style, str) and len(style) > 64:
@@ -143,9 +161,29 @@ def _check_style(style: Any, what: str) -> None:
         if not isinstance(tr, dict):
             raise _bad(f"{what}: rotation must be an object")
         _check_number(tr.get("a"), f"{what}: rotation", -360, 360)
-    for key in ("bd", "cl", "bg", "ul", "st"):
-        if style.get(key) is not None and not isinstance(style.get(key), dict):
+        _check_flag(tr.get("v"), f"{what}: rotation")
+    for key in ("bl", "it", "ht", "vt", "tb", "stf", "td", "va"):
+        _check_flag(style.get(key), f"{what}: {key}")
+    for key in ("ul", "st", "ol", "bbl"):
+        dec = style.get(key)
+        if dec is None:
+            continue
+        if not isinstance(dec, dict):
             raise _bad(f"{what}: {key} must be an object")
+        _check_flag(dec.get("s"), f"{what}: {key}")
+    for key in ("cl", "bg"):
+        _check_color(style.get(key), f"{what}: {key}")
+    bd = style.get("bd")
+    if bd is not None:
+        if not isinstance(bd, dict):
+            raise _bad(f"{what}: borders must be an object")
+        for side in bd.values():
+            if side is None:
+                continue
+            if not isinstance(side, dict):
+                raise _bad(f"{what}: a border must be an object")
+            _check_flag(side.get("s"), f"{what}: border style")
+            _check_color(side.get("cl"), f"{what}: border colour")
 
 
 def _check_cell(cell: Any, where: str, styles: dict) -> None:
@@ -912,7 +950,16 @@ def read_csv(target: Path, max_rows: int, max_cols: int) -> dict:
 
 # openpyxl's own word for "this part of the file is dropped when I save it"
 # (sparklines, x14 validation and conditional formatting, slicers, ...).
-_UNKEPT_WARNING = re.compile(r"will be removed|not supported", re.IGNORECASE)
+# ANY warning openpyxl gives while loading means it may not write the file
+# back as it found it (round 2 proved a dynamic Print_Area lost under the
+# wording "Print area cannot be set to ..."), so every UserWarning makes the
+# file read-only, except these, which change nothing a save would write
+# differently.
+_HARMLESS_WARNINGS = (
+    "Workbook contains no default style",
+    "Workbook contains no stylesheet",
+    "Title is more than 31 characters",
+)
 
 
 def load_xlsx(target: Path, **kwargs: Any) -> tuple[Any, list[str]]:
@@ -926,7 +973,11 @@ def load_xlsx(target: Path, **kwargs: Any) -> tuple[Any, list[str]]:
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         wb = load_workbook(target, **kwargs)
-    lost = sorted({str(w.message) for w in caught if _UNKEPT_WARNING.search(str(w.message))})
+    lost = sorted({
+        str(w.message) for w in caught
+        if issubclass(w.category, UserWarning)
+        and not str(w.message).startswith(_HARMLESS_WARNINGS)
+    })
     return wb, lost
 
 
