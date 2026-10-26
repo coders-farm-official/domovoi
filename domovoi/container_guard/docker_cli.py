@@ -148,6 +148,15 @@ class DockerCli:
             return False
         return None
 
+    async def tag_image_id(self, ref: str) -> str | None:
+        """The local image ID ``ref`` names right now, or None (absent, or
+        Docker can't say). The clear route asks it before keeping an image
+        an admin cleared (engine.adopt_cleared_tag)."""
+        if not ref or shutil.which(self.exe) is None:
+            return None
+        rc, out, _ = await self._call(["image", "inspect", "--format", "{{.Id}}", ref])
+        return (out.strip() or None) if rc == 0 else None
+
 
 class Claimer:
     """Decides which listed containers the guard inspects (the callable

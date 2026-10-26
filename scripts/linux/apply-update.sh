@@ -58,8 +58,12 @@
 #      edge-tts, LGPL), since pip never removes what nothing requires any
 #      more.
 #   5. Rebuild the MPD image the way mpd_provisioner.py does if
-#      Dockerfile.mpd or mpd.conf changed, and remove the room containers so
-#      the core recreates them (same data volumes) from the new image.
+#      Dockerfile.mpd or mpd.conf changed, record the image it built in
+#      DOMOVOI_UPDATE_DIR/mpd-image.json (root's, 0644: the core's
+#      container guard takes exactly that image as Domovoi's own, and the
+#      record is written before any room's player can be made from it), and
+#      remove the room containers so the core recreates them (same data
+#      volumes) from the new image.
 #   6. Docker's GPU runtime, where an NVIDIA GPU is visible
 #      (reconcile_gpu_runtime, scripts/linux/gpu-runtime.sh, the helper
 #      provision.sh runs too): the NVIDIA Container Toolkit installed when
@@ -365,6 +369,10 @@ RESULT_FILE=$UPDATE_DIR/last-result.json
 APPLIED_FILE=$UPDATE_DIR/applied_sha
 BAD_FILE=$UPDATE_DIR/bad_sha
 FREEZE_FILE=$UPDATE_DIR/pip-freeze-pre.txt
+# The music player image the last rebuild-mpd built (record_mpd_image): the
+# core's container guard takes that image, and only that one, as Domovoi's
+# own (domovoi/container_guard/engine.py, UPDATE_MPD_RECORD).
+MPD_RECORD=$UPDATE_DIR/mpd-image.json
 
 # What counts as "the dependencies changed" / "the MPD image changed".
 # Git pathspecs, relative to the repo root. pyproject.toml counts too, but
@@ -397,6 +405,12 @@ START_MS=0
 DEPS_CHANGED=0
 MPD_CHANGED=0
 MPD_IMAGE_CHANGED=0
+# What record_mpd_image did with this run's last music player build:
+# recorded, or unconfirmed (the build's image ID and root's look at the tag
+# didn't agree, or either couldn't be read: no record). Empty: no build.
+# In last-result.json as mpd_record, which the container guard's words
+# about an unvouched image follow (domovoi/container_guard/engine.py).
+MPD_RECORD_STATE=""
 # An `image:` line in the compose file changed: the next compose up pulls.
 IMAGES_CHANGED=0
 # The internet answer as this run found it at the start ("" when
@@ -570,6 +584,7 @@ write_result() {
     fi
     printf '  "deps_changed": %s,\n' "$(json_bool "$DEPS_CHANGED")"
     printf '  "mpd_changed": %s,\n' "$(json_bool "$MPD_CHANGED")"
+    printf '  "mpd_record": %s,\n' "$(json_str_or_null "$MPD_RECORD_STATE")"
     printf '  "signature": %s,\n' "$(json_signature)"
     printf '  "migrations_before": %s,\n' "$(json_int_or_null "$MIGRATIONS_BEFORE")"
     printf '  "migrations_after": %s,\n' "$(json_int_or_null "$MIGRATIONS_AFTER")"
@@ -2014,17 +2029,32 @@ restore_pins() {
 # remove the room containers; the core's startup warm (warm_known_rooms)
 # recreates each from its mpd_rooms row with the same named data volume.
 rebuild_mpd() {
-  local names n
+  local names n built iiddir
   if [ "$POLICY_AT_START" = never ] && [ "$MPD_IMAGE_CHANGED" = 0 ]; then
     # Only mpd.conf changed, and the build would at most re-pull the base
     # image: keep the image (internet access is turned off) and just
     # recreate the rooms so they mount the new conf.
     echo "internet access is turned off: keeping the $MPD_TAG image (Dockerfile.mpd unchanged)"
   else
+    # The record of an earlier build goes first: whatever happens below, it
+    # never names an image this run didn't make (a stale one would vouch
+    # for nothing and keep the guard from its mpd_changed fallback).
+    rm -f "$MPD_RECORD"
+    MPD_RECORD_STATE=""
     # As the service user (in the docker group, as the core that builds it
     # too): root's docker CLI would read the Dockerfile through whatever
-    # link the checkout holds there.
-    as_user docker build -t "$MPD_TAG" -f "$REPO_DIR/domovoi/Dockerfile.mpd" "$REPO_DIR/domovoi" || return 1
+    # link the checkout holds there. Its output goes to the journal as
+    # before; the image ID comes from --iidfile, in a directory the service
+    # user makes for itself, read here by root (read_iid) and checked
+    # against root's own look at the tag (record_mpd_image).
+    iiddir=$(as_user mktemp -d) || return 1
+    if ! as_user docker build --iidfile "$iiddir/iid" -t "$MPD_TAG" -f "$REPO_DIR/domovoi/Dockerfile.mpd" "$REPO_DIR/domovoi"; then
+      as_user rm -rf -- "$iiddir" || true
+      return 1
+    fi
+    built=$(read_iid "$iiddir/iid")
+    as_user rm -rf -- "$iiddir" || true
+    record_mpd_image "$built"
   fi
   names=$(docker ps -a --format '{{.Names}}') || return 1
   for n in $names; do
@@ -2033,6 +2063,78 @@ rebuild_mpd() {
       docker rm -f "$n" || return 1
     fi
   done
+}
+
+# read_iid FILE: the image ID a build's --iidfile left in FILE, or nothing:
+# read only when FILE is a regular file and not a link, at most 100 bytes.
+# FILE sits in the service user's own temporary directory (the build runs
+# as that user and writes it); root takes what it reads as data only, and
+# records nothing until its own look at the tag agrees (root_image_ids).
+read_iid() {
+  { [ -f "$1" ] && [ ! -L "$1" ]; } || return 0
+  { head -c 100 -- "$1" 2>/dev/null || true; } | tr -d '[:space:]'
+}
+
+# root_image_ids TAG: what root's own docker CLI says TAG names, with an
+# empty DOCKER_CONFIG and no DOCKER_HOST or DOCKER_CONTEXT (nobody's
+# context, plugins or credential helpers): its image ID on the first line,
+# and on the second, on Docker's containerd image store, the image's config
+# digest (what `docker build -q` prints there; on the classic store it
+# prints the ID itself). Empty lines when it can't say.
+root_image_ids() {
+  local cfg id="" conf=""
+  cfg=$(mktemp -d) || { printf '\n\n'; return 0; }
+  id=$({ env -u DOCKER_HOST -u DOCKER_CONTEXT DOCKER_CONFIG="$cfg" docker image inspect -f '{{.Id}}' "$1" 2>/dev/null || true; } | tr -d '[:space:]')
+  conf=$({ env -u DOCKER_HOST -u DOCKER_CONTEXT DOCKER_CONFIG="$cfg" docker image inspect -f '{{json .Descriptor}}' "$1" 2>/dev/null || true; } \
+    | grep -o '"config.digest":"sha256:[0-9a-f]\{64\}"' | grep -o 'sha256:[0-9a-f]\{64\}' | head -n 1 || true)
+  rm -rf "$cfg"
+  printf '%s\n%s\n' "$id" "$conf"
+}
+
+# record_mpd_image BUILT: MPD_RECORD for the image rebuild_mpd just built
+# (BUILT: the ID its --iidfile held), by rename (root's, 0644).
+# Written here, while core and web are stopped and before the rooms' players
+# are removed, so no player can be created from the new image before the
+# record that vouches for it exists. Recorded only when root's own look at
+# the tag (root_image_ids) agrees with what the build wrote; the ID
+# recorded is the tag's image ID, what the guard compares. The core's
+# container guard (docs/CONTAINER_GUARD.md, "The music players") takes the
+# image it names as Domovoi's own when it is newer than the image the guard
+# recorded, at the core's start or at any check while it runs; any other
+# image under the tag (a docker build by hand) is still reported. When the
+# two don't agree, or either can't be read, there is no record (removed, if
+# one was there), the step says so, and the run's mpd_record says
+# unconfirmed: the guard then falls back to this run's mpd_changed, as
+# before the record existed, and its words say the update couldn't confirm
+# which image it built. run_started_at ties the record to this run's
+# last-result.json.
+record_mpd_image() {
+  local built ids id conf
+  built=$(printf '%s' "${1-}" | tr -d '[:space:]')
+  ids=$(root_image_ids "$MPD_TAG")
+  id=$(printf '%s\n' "$ids" | sed -n 1p)
+  conf=$(printf '%s\n' "$ids" | sed -n 2p)
+  if ! [[ $id =~ ^sha256:[0-9a-f]{64}$ ]] || ! [[ $built =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || { [ "$built" != "$id" ] && [ "$built" != "$conf" ]; }; then
+    rm -f "$MPD_RECORD"
+    MPD_RECORD_STATE=unconfirmed
+    [[ $built =~ ^sha256:[0-9a-f]{64}$ ]] || built="no image ID"
+    [[ $id =~ ^sha256:[0-9a-f]{64}$ ]] || id="no image"
+    echo "warning: the build wrote $built and root's docker says $MPD_TAG is $id; not recorded for the container guard"
+    return 0
+  fi
+  write_atomic "$MPD_RECORD" "$(
+    printf '{\n'
+    printf '  "by": "update",\n'
+    printf '  "image_id": "%s",\n' "$id"
+    printf '  "tag": %s,\n' "$(json_str "$MPD_TAG")"
+    printf '  "built_at": "%s",\n' "$(now_iso)"
+    printf '  "run_started_at": %s,\n' "$(json_str "$STARTED_AT")"
+    printf '  "to_sha": %s\n' "$(json_str_or_null "$HEAD_SHA")"
+    printf '}'
+  )"$'\n'
+  MPD_RECORD_STATE=recorded
+  echo "recorded $MPD_TAG ($id) as the music player image this update built"
 }
 
 wait_healthy() {

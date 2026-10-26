@@ -328,3 +328,28 @@ async def set_baseline(s: AsyncSession, key: str, value: str, source: str) -> No
 
 def iso(value: Any) -> Any:
     return value.isoformat() if isinstance(value, datetime) else value
+
+
+async def drop_baseline(s: AsyncSession, key: str, value: str) -> None:
+    """Forget a baseline, only while it still says ``value`` (a newer one
+    written meanwhile stays)."""
+    await s.execute(
+        text("DELETE FROM container_guard_baselines WHERE key = :k AND value = :v"),
+        {"k": key, "v": value},
+    )
+
+
+async def note_incident(s: AsyncSession, incident_id: int, note: str) -> bool:
+    """Add a sentence to an open incident's words, once (the guard's own
+    finding about it, for the admin who reviews it). True when added."""
+    result = await s.execute(
+        text(
+            "UPDATE container_incidents SET summary = summary || ' ' || :n "
+            "WHERE id = :i AND resolved_at IS NULL AND strpos(summary, :n) = 0"
+        ),
+        {"i": int(incident_id), "n": note[:400]},
+    )
+    if result.rowcount:
+        await notify(s, f"changed:{incident_id}")
+        return True
+    return False

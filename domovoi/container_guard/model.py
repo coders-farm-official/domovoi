@@ -129,6 +129,11 @@ class Expected:
     image_ref: str | None = None
     image_digests: frozenset[str] = frozenset()
     image_id: str | None = None
+    # The music player image recorded before ``image_id`` (Domovoi's own
+    # previous build, kept when a rebuild Domovoi vouched for moved the
+    # baseline): a room still on it waits to be recreated, it isn't
+    # tampering. The tag itself must be ``image_id``.
+    image_id_previous: str | None = None
     allow: frozenset[str] = frozenset()
     # Why checks of this container wait right now (a room starting, a
     # plugin upgrading or recreating it). None: it is checked.

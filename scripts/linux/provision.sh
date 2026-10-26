@@ -3478,6 +3478,47 @@ mpd_build_reason() {
   fi
   return 1
 }
+# read_iid FILE: the image ID a build's --iidfile left in FILE, or nothing:
+# read only when FILE is a regular file and not a link, at most 100 bytes.
+# FILE sits in the service user's own temporary directory (the build runs
+# as that user and writes it); root takes what it reads as data only, and
+# records nothing until its own look at the tag agrees (built_image_id).
+read_iid() {
+  { [ -f "$1" ] && [ ! -L "$1" ]; } || return 0
+  { head -c 100 -- "$1" 2>/dev/null || true; } | tr -d '[:space:]'
+}
+
+# root_image_ids TAG: what root's own docker CLI says TAG names, with an
+# empty DOCKER_CONFIG and no DOCKER_HOST or DOCKER_CONTEXT (nobody's
+# context, plugins or credential helpers): its image ID on the first line,
+# and on the second, on Docker's containerd image store, the image's config
+# digest (what `docker build -q` prints there; on the classic store it
+# prints the ID itself). Empty lines when it can't say. The same function
+# as scripts/linux/apply-update.sh's.
+root_image_ids() {
+  local cfg id="" conf=""
+  cfg=$(mktemp -d) || { printf '\n\n'; return 0; }
+  id=$({ env -u DOCKER_HOST -u DOCKER_CONTEXT DOCKER_CONFIG="$cfg" docker image inspect -f '{{.Id}}' "$1" 2>/dev/null || true; } | tr -d '[:space:]')
+  conf=$({ env -u DOCKER_HOST -u DOCKER_CONTEXT DOCKER_CONFIG="$cfg" docker image inspect -f '{{json .Descriptor}}' "$1" 2>/dev/null || true; } \
+    | grep -o '"config.digest":"sha256:[0-9a-f]\{64\}"' | grep -o 'sha256:[0-9a-f]\{64\}' | head -n 1 || true)
+  rm -rf "$cfg"
+  printf '%s\n%s\n' "$id" "$conf"
+}
+# built_image_id BUILT: the tag's image ID by root's own docker, printed,
+# when it agrees with BUILT (what the build's --iidfile held, written by the
+# service user's CLI): the ID itself, or its config digest on the
+# containerd image store (what an iidfile holds there). Status 1, printing nothing, when they don't agree or either is
+# missing.
+built_image_id() {
+  local built ids id conf
+  built=$(printf '%s' "${1-}" | tr -d '[:space:]')
+  ids=$(root_image_ids "$(mpd_tag)")
+  id=$(printf '%s\n' "$ids" | sed -n 1p)
+  conf=$(printf '%s\n' "$ids" | sed -n 2p)
+  [[ $id =~ ^sha256:[0-9a-f]{64}$ ]] && [[ $built =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  [ "$built" = "$id" ] || [ "$built" = "$conf" ] || return 1
+  printf '%s\n' "$id"
+}
 # write_mpd_record IMAGE_ID: MPD_RECORD for the image just built, by rename
 # from a temp file beside it (root's, 0644; the core reads it).
 write_mpd_record() {
@@ -3533,7 +3574,7 @@ plan_images() {
   echo "docker build -t $(mpd_tag) -f domovoi/Dockerfile.mpd domovoi (only when $(mpd_tag) is missing, or Dockerfile.mpd changed since this script built it)"
 }
 do_images() {
-  local tag cur new why
+  local tag cur new why built iiddir
   # Pulled here rather than at domovoi-db's first start, where the download
   # would have no progress and the start step would wait on it.
   emit_frac 50 "Downloading the database images"
@@ -3551,13 +3592,30 @@ do_images() {
   # core's first boot (which would build it with no progress, and not at
   # all on a box without internet).
   emit_frac 500 "Building the music player"
-  (cd "$CHECKOUT/domovoi" && as_svc docker build --progress=plain -t "$tag" -f "$CHECKOUT/domovoi/Dockerfile.mpd" "$CHECKOUT/domovoi") \
-    || die "docker build of $tag failed"
+  # The build's progress goes to the log as before; its image ID comes from
+  # --iidfile, in a directory the service user makes for itself, read here
+  # by root (read_iid) and checked against root's own look at the tag
+  # before it is recorded.
+  iiddir=$(as_svc mktemp -d) || die "could not make a temporary directory as $SVC_USER"
+  if ! (cd "$CHECKOUT/domovoi" && as_svc docker build --progress=plain --iidfile "$iiddir/iid" -t "$tag" -f "$CHECKOUT/domovoi/Dockerfile.mpd" "$CHECKOUT/domovoi"); then
+    as_svc rm -rf -- "$iiddir" || true
+    die "docker build of $tag failed"
+  fi
+  built=$(read_iid "$iiddir/iid")
+  as_svc rm -rf -- "$iiddir" || true
   check_images || die "the database images or $tag are not there after the pull and build"
-  new=$(mpd_image_id)
-  # Recorded before anything else, so a core that starts now finds it.
-  write_mpd_record "$new"
-  if [ "$new" != "$cur" ]; then mpd_move_rooms "$new"; fi
+  if new=$(built_image_id "$built"); then
+    # Recorded before anything else, so a core that starts now finds it.
+    write_mpd_record "$new"
+  else
+    # Never a record of an image this run can't vouch for, nor a stale
+    # one: the container guard will report the new image, for an admin.
+    rm -f "$MPD_RECORD"
+    new=$(mpd_image_id)
+    [[ $built =~ ^sha256:[0-9a-f]{64}$ ]] || built="no image ID"
+    warn "the build of $tag wrote $built and root's docker says the tag names ${new:-no image}; not recorded for the container guard, which will report the image"
+  fi
+  if [ -n "$new" ] && [ "$new" != "$cur" ]; then mpd_move_rooms "$new"; fi
   STEP_DONE_MSG="Images ready ($tag built)"
 }
 
