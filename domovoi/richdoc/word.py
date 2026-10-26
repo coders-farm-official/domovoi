@@ -29,6 +29,7 @@ import re
 from dataclasses import dataclass, replace
 from typing import Any
 
+from domovoi.image_safety import LIBRARY_FORMATS, PictureRefused, open_image
 from domovoi.richdoc.text import _Node, _TreeBuilder
 
 _HEADINGS = {"h1": 1, "h2": 2, "h3": 3, "h4": 4, "h5": 5, "h6": 6}
@@ -212,8 +213,6 @@ class _Writer:
 
     # ── pictures ──
     def _picture_bytes(self, src: str) -> tuple[bytes, int, int] | None:
-        from domovoi.image_safety import LIBRARY_FORMATS, PictureRefused, open_image
-
         m = _DATA_URI.match(src or "")
         if not m:
             return None

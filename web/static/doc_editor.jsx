@@ -170,21 +170,39 @@
     // markdown-it has no task lists: "- [ ] x" / "- [x] x" become the
     // editor's checklist.
     const doc = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
-    doc.querySelectorAll('ul').forEach((ul) => {
+    // A list can mix both ("- milk" then "- [ ] call"), so it is split into
+    // runs: plain items stay a bulleted list, checklist items become one.
+    const marker = /^\s*\[( |x|X)\]\s+/;
+    Array.from(doc.querySelectorAll('ul')).forEach((ul) => {
       const items = Array.from(ul.children).filter((c) => c.tagName === 'LI');
-      const marker = /^\s*\[( |x|X)\]\s+/;
-      if (!items.length || !items.every((li) => marker.test(li.textContent))) return;
-      ul.setAttribute('data-type', 'taskList');
+      if (!items.some((li) => marker.test(li.textContent))) return;
+      const runs = [];
       items.forEach((li) => {
-        const walker = doc.createTreeWalker(li, NodeFilter.SHOW_TEXT);
-        const first = walker.nextNode();
-        const m = first && marker.exec(first.nodeValue);
-        li.setAttribute('data-type', 'taskItem');
-        li.setAttribute('data-checked', m && /x/i.test(m[1]) ? 'true' : 'false');
-        if (first && m) first.nodeValue = first.nodeValue.replace(marker, '');
+        const task = marker.test(li.textContent);
+        if (!runs.length || runs[runs.length - 1].task !== task) runs.push({ task, items: [] });
+        runs[runs.length - 1].items.push(li);
       });
+      runs.forEach((run) => {
+        const list = doc.createElement('ul');
+        if (run.task) list.setAttribute('data-type', 'taskList');
+        run.items.forEach((li) => {
+          if (run.task) {
+            // the first text that isn't the whitespace between tags
+            const walker = doc.createTreeWalker(li, NodeFilter.SHOW_TEXT);
+            let first = walker.nextNode();
+            while (first && !first.nodeValue.trim()) first = walker.nextNode();
+            const m = first && marker.exec(first.nodeValue);
+            li.setAttribute('data-type', 'taskItem');
+            li.setAttribute('data-checked', m && /x/i.test(m[1]) ? 'true' : 'false');
+            if (first && m) first.nodeValue = first.nodeValue.replace(marker, '');
+          }
+          list.appendChild(li);
+        });
+        ul.parentNode.insertBefore(list, ul);
+      });
+      ul.remove();
     });
-    return doc.body.innerHTML;
+    return unwrapLonePictures(doc.body.innerHTML);
   };
 
   const buildMarkdownSerializer = (T) => {
@@ -271,6 +289,21 @@
     return self;
   };
 
+  /* A picture alone in a paragraph (how Word and web pages hold one) is a
+   * picture, not a paragraph around one: without this, each leaves an
+   * empty line above and below it in the document. */
+  const unwrapLonePictures = (html) => {
+    const doc = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
+    doc.querySelectorAll('p').forEach((p) => {
+      const imgs = p.querySelectorAll('img');
+      if (imgs.length && !p.textContent.trim()) {
+        imgs.forEach((img) => p.parentNode.insertBefore(img, p));
+        p.remove();
+      }
+    });
+    return doc.body.innerHTML;
+  };
+
   /* ───────────────────────── pasted Word / web HTML ───────────────────────── */
   /* Word puts its lists in as paragraphs with mso-list styles and a typed
    * bullet; Google Docs wraps the whole selection in a bold tag that isn't
@@ -339,7 +372,7 @@
       const s = img.getAttribute('src') || '';
       if (!RASTER.test(s) && !/^https?:/i.test(s)) img.remove();
     });
-    return doc.body.innerHTML;
+    return unwrapLonePictures(doc.body.innerHTML);
   };
 
   /* ───────────────────────── the editor's own CSS ───────────────────────── */
@@ -637,8 +670,16 @@
         e.preventDefault();
         clearTimeout(capTimer);
         setAttrs({ caption: cap.value.slice(0, 500) });
+        // the cursor goes to the line after the picture (one is made when
+        // the picture is the last thing in the document)
         const pos = getPos();
-        if (pos != null) editor.chain().focus().setTextSelection(pos + node.nodeSize).run();
+        cap.blur();
+        editor.view.focus();
+        if (pos == null) return;
+        const after = pos + node.nodeSize;
+        const next = editor.state.doc.nodeAt(after);
+        if (next && next.isTextblock) editor.commands.setTextSelection(after + 1);
+        else editor.chain().insertContentAt(after, { type: 'paragraph' }).setTextSelection(after + 1).run();
       }
     });
     cap.addEventListener('blur', () => {
@@ -1270,7 +1311,7 @@
         }
       }),
     });
-    return sanitizeDoc(result.value);
+    return sanitizeDoc(unwrapLonePictures(result.value));
   };
 
   const create = (el, options) => {
@@ -1468,7 +1509,7 @@ img { max-width: 100%; height: auto; }
     );
   };
 
-  const DocEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null, embedded = false }) => {
+  const DocEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null, embedded = false, closeRef = null }) => {
     const [rel, setRel] = React.useState(rel_path);
     const [state, setState] = React.useState({ status: 'loading' });
     const [save, setSave] = React.useState('saved');
@@ -1642,6 +1683,8 @@ img { max-width: 100%; height: auto; }
       }
       onClose();
     };
+    // The phone app's Back button closes through here too (doc_page.jsx).
+    if (closeRef) closeRef.current = requestClose;
 
     // ── download / share ──
     const title = state.doc ? state.doc.name : baseName(rel);
@@ -1682,12 +1725,9 @@ img { max-width: 100%; height: auto; }
             </span>
           </div>
           <span style={{ flex: 1 }}/>
-          {state.status === 'ready' && fmt === 'md' && (
-            <Button icon="file-text" className="btn btn-secondary de-hide-narrow" onClick={() => saveAs('html')}
-                    title="Make a formatted copy (fonts, colours, pictures) and keep editing that">Save as formatted document</Button>
-          )}
           {state.status === 'ready' && fmt === 'docx' && (
-            <Button variant="primary" icon="save" disabled={!!blocked} onClick={() => { clearTimeout(seq.current.timer); doSave(); }}>Save</Button>
+            <Button variant="primary" icon="save" disabled={!!blocked || save === 'saved' || save === 'saving'}
+                    onClick={() => { clearTimeout(seq.current.timer); doSave(); }}>Save</Button>
           )}
           {state.status === 'ready' && (
             <div style={{ position: 'relative' }}>
@@ -1732,7 +1772,7 @@ img { max-width: 100%; height: auto; }
 
         {askDocx && (
           <div role="dialog" aria-modal="true" aria-label="How to save this Word file"
-               style={{ position: 'fixed', inset: 0, zIndex: 125, background: 'var(--overlay, rgba(0,0,0,.5))', display: 'flex',
+               style={{ position: 'fixed', inset: 0, zIndex: 125, background: 'rgba(0,0,0,.45)', display: 'flex',
                         alignItems: 'center', justifyContent: 'center', padding: 16 }}>
             <div style={{ background: 'var(--card)', color: 'var(--fg)', borderRadius: 'var(--r-lg, 12px)', padding: 20, maxWidth: 440,
                           boxShadow: 'var(--shadow-md)', display: 'flex', flexDirection: 'column', gap: 12 }}>

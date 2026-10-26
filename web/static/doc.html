@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+  <title>Document</title>
+  <link rel="stylesheet" href="colors_and_type.css">
+  <link rel="stylesheet" href="styles.css">
+  <!-- One document, full screen: the Documents editor without the dashboard
+       around it. The phone app opens this in its own in-app view
+       (android: ui/screens/documents/WebDocEditor.kt); a browser can open
+       it too: /doc.html?path=<path inside Documents>. Only what the editor
+       needs is loaded (no player, no shell, no service worker); the
+       Tiptap / Yjs / mammoth bundles load when the document does. -->
+  <style>
+    html, body { height: 100%; margin: 0; background: var(--bg); }
+    #root { height: 100%; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="/vendor/react/react.development.js"></script>
+  <script src="/vendor/react/react-dom.development.js"></script>
+  <script src="/vendor/babel/babel.min.js"></script>
+  <script src="/vendor/lucide/lucide.min.js"></script>
+
+  <script type="text/babel" data-presets="react" src="auth.js"></script>
+  <script type="text/babel" data-presets="react" src="sanitize_html.js"></script>
+  <script type="text/babel" data-presets="react" src="data.js"></script>
+  <script type="text/babel" data-presets="react" src="components.jsx"></script>
+  <script type="text/babel" data-presets="react" src="doc_editor.jsx"></script>
+  <script type="text/babel" data-presets="react" src="doc_page.jsx"></script>
+</body>
+</html>
