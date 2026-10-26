@@ -1224,7 +1224,7 @@ class Settings(BaseSettings):
     # directory, never separate stores. The web backend reads this via
     # `from domovoi.config import settings as core_settings` exactly like
     # music.py reads music_dir. Editing is fully homegrown/in-page
-    # (markdown doc editor, x-spreadsheet grid, Excalidraw) — the former
+    # (markdown doc editor, Univer sheet grid, Excalidraw) — the former
     # OnlyOffice/Collabora sidecar containers are retired.
     documents_dir: str = os.path.expanduser("~/Documents")
 

@@ -4,7 +4,7 @@ The Drawings page (`web/static/drawings.jsx`) loads Excalidraw from this
 directory — `/vendor/excalidraw/excalidraw.production.min.js` plus the
 `excalidraw-assets/` fonts and locales it lazy-loads via
 `window.EXCALIDRAW_ASSET_PATH`. Like React, Babel, lucide, marked and
-x-spreadsheet, it is served from this box so the dashboard makes zero
+Univer, it is served from this box so the dashboard makes zero
 external requests.
 
 **Why 0.17.6:** Excalidraw went ESM-only at 0.18.0. The dashboard has no

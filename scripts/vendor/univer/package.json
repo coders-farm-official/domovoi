@@ -1,0 +1,20 @@
+{
+  "name": "domovoi-vendor-univer",
+  "private": true,
+  "description": "Pins for the vendored Univer sheet editor bundle (web/static/vendor/univer). Built by vendor_univer.py; nothing here runs on a Domovoi box.",
+  "license": "MIT",
+  "dependencies": {
+    "@univerjs/core": "1.2.0",
+    "@univerjs/presets": "1.2.0",
+    "@univerjs/preset-sheets-core": "1.2.0",
+    "@univerjs/preset-sheets-filter": "1.2.0",
+    "@univerjs/preset-sheets-sort": "1.2.0",
+    "@univerjs/themes": "1.2.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "rxjs": "7.8.2"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10"
+  }
+}

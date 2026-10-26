@@ -47,7 +47,6 @@
   </script>
   <link rel="stylesheet" href="colors_and_type.css">
   <link rel="stylesheet" href="styles.css">
-  <link rel="stylesheet" href="/vendor/xspreadsheet/xspreadsheet.css">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
@@ -63,10 +62,10 @@
   <script src="/vendor/react/react-dom.development.js"></script>
   <script src="/vendor/babel/babel.min.js"></script>
   <script src="/vendor/lucide/lucide.min.js"></script>
-  <!-- Homegrown editors: marked (markdown preview, MIT) + x-spreadsheet
-       (grid with client-side formulas, MIT). Vendored like everything else. -->
+  <!-- Homegrown editors: marked (markdown preview, MIT). The sheet
+       editor's Univer (Apache-2.0, /vendor/univer) is loaded by
+       sheet_editor.jsx the first time a sheet is opened. -->
   <script src="/vendor/marked/marked.min.js"></script>
-  <script src="/vendor/xspreadsheet/xspreadsheet.js"></script>
 
   <script type="text/babel" data-presets="react" src="auth.js"></script>
   <!-- Turns rendered markdown back into data before any page shows it.

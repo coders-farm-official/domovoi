@@ -11,10 +11,14 @@ iframes, no JWT/WOPI handshakes, no per-file engine locks):
     formatting + live preview (vendored ``marked``), plain UTF-8 storage
     via the ``/text`` endpoints. Export to .docx server-side
     (``/export/doc``, python-docx).
-  * **Sheet editor** (web/static/sheet_editor.jsx) — vendored
-    ``x-spreadsheet`` grid with client-side formula evaluation. Reads and
-    writes .xlsx (openpyxl — values, formula strings; a save updates the
-    existing workbook in place) and .csv through the ``/sheet`` endpoints; export to .csv/.xlsx via ``/export/sheet``.
+  * **Sheet editor** (web/static/sheet_editor.jsx) — vendored Univer
+    (open-source core, Apache-2.0) with client-side formula evaluation.
+    Reads and writes the whole workbook (.xlsx: every sheet, formatting,
+    merges, sizes, frozen panes; .csv: values) through the ``/workbook``
+    endpoints and :mod:`web.backend.api.sheet_workbook` (openpyxl; a save
+    updates the existing file in place). The older ``/sheet`` grid
+    endpoints serve the phone app's own grid editor. Export to .csv/.xlsx
+    via ``/export/sheet``.
   * **Excalidraw** — in-page React lib, unchanged (.excalidraw scenes).
 
 Legacy office formats (.docx/.doc/.odt/.rtf and .xls/.ods) are stored,
@@ -116,6 +120,7 @@ from web.backend.api.files_security import (
 )
 from web.backend.api.inline_serve import disposition_for, inert_headers
 from web.backend.api import listing_cache
+from web.backend.api import sheet_workbook
 
 log = logging.getLogger(__name__)
 
@@ -1042,11 +1047,16 @@ def _replace_atomically(target: Path, write: Callable[[Path], None]) -> None:
                 pass
 
 
-def _write_csv_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> None:
+def _write_csv_grid(
+    target: Path,
+    rows: list[list[Optional[SheetCell]]],
+    max_rows: int = _SHEET_MAX_ROWS,
+    max_cols: int = _SHEET_MAX_COLS,
+) -> None:
     """Write the grid as CSV. The editor only ever saw the first
-    ``_SHEET_MAX_ROWS`` x ``_SHEET_MAX_COLS``; anything the file holds
-    beyond that window is carried over as it was rather than dropped, and
-    a UTF-8 byte-order mark the file started with is kept."""
+    ``max_rows`` x ``max_cols``; anything the file holds beyond that
+    window is carried over as it was rather than dropped, and a UTF-8
+    byte-order mark the file started with is kept."""
     original: list[list[str]] = []
     bom = False
     _assert_sheet_save_fits(target)
@@ -1058,15 +1068,15 @@ def _write_csv_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> None
     def text(c: Optional[SheetCell]) -> str:
         return c.f if c and c.f else (c.v if c and c.v is not None else "")
 
-    window = _SHEET_MAX_ROWS if len(original) > _SHEET_MAX_ROWS else len(rows)
+    window = max_rows if len(original) > max_rows else len(rows)
     out: list[list[str]] = []
     for r in range(window):
-        part = [text(c) for c in rows[r][:_SHEET_MAX_COLS]] if r < len(rows) else []
-        beyond = original[r][_SHEET_MAX_COLS:] if r < len(original) else []
+        part = [text(c) for c in rows[r][:max_cols]] if r < len(rows) else []
+        beyond = original[r][max_cols:] if r < len(original) else []
         if beyond:
-            part = part + [""] * (_SHEET_MAX_COLS - len(part)) + beyond
+            part = part + [""] * (max_cols - len(part)) + beyond
         out.append(part)
-    out.extend(original[_SHEET_MAX_ROWS:])
+    out.extend(original[max_rows:])
 
     def write(path: Path) -> None:
         with path.open("w", encoding="utf-8-sig" if bom else "utf-8", newline="") as fh:
@@ -1191,6 +1201,253 @@ async def write_sheet(
         size=st.st_size, modified_at=st.st_mtime,
         category=_doc_category(ext),
     )
+
+
+# ─── Univer sheet editor: the whole workbook (.xlsx / .csv) ─────────
+# web/static/sheet_editor.jsx (Univer, open-source core) reads and saves
+# the workbook model in sheet_workbook.py. The /sheet grid routes above
+# stay for the phone app's own grid editor and older clients.
+_WB_CSV_ROWS = sheet_workbook.WINDOW_ROWS
+_WB_CSV_COLS = sheet_workbook.WINDOW_COLS
+
+
+class WorkbookWriteRequest(BaseModel):
+    # Univer's IWorkbookData (sheetOrder, sheets, styles); each sheet may
+    # carry ``origin``, the id GET gave the sheet it started as.
+    workbook: dict[str, Any]
+    # The ``version`` GET (or the last save) returned. A sheet saved by
+    # someone else since is refused with 409 unless ``force``.
+    base_version: Optional[str] = Field(None, max_length=64)
+    force: bool = False
+    device_id: Optional[str] = Field(None, min_length=3, max_length=64)
+
+
+def _sheet_version(target: Path) -> Optional[str]:
+    """What a save compares against to tell "nobody else saved": the
+    file's modification time (ns) and size; None for no file."""
+    try:
+        st = target.stat()
+    except OSError:
+        return None
+    return f"{st.st_mtime_ns}-{st.st_size}"
+
+
+def _blank_workbook(name: str) -> dict[str, Any]:
+    return {
+        "workbook": {
+            "id": "domovoi-sheet", "name": name, "appVersion": "domovoi", "locale": "enUS",
+            "styles": {}, "sheetOrder": ["s0"],
+            "sheets": {"s0": {"id": "s0", "name": "Sheet1", "rowCount": 1000, "columnCount": 26,
+                              "cellData": {}}},
+        },
+        "truncated": [],
+    }
+
+
+def _read_workbook_model(target: Path) -> dict[str, Any]:
+    """The editor's view of a sheet file, and whether it may save it."""
+    ext = target.suffix.lower()
+    if ext == ".csv":
+        model = sheet_workbook.read_csv(target, _WB_CSV_ROWS, _WB_CSV_COLS)
+        model.update(format="csv", editable=True, why=None)
+        try:
+            _assert_sheet_save_fits(target)
+        except HTTPException as exc:
+            model.update(editable=False, why=str(exc.detail))
+        return model
+    if ext != ".xlsx":
+        raise HTTPException(
+            status_code=415,
+            detail=f"{ext} isn't editable in the sheet editor (xlsx/csv only)",
+        )
+    if target.stat().st_size == 0:
+        model = _blank_workbook(target.stem)
+        model.update(format="xlsx", editable=True, why=None)
+        return model
+    _assert_xlsx_fits(target)
+    try:
+        _assert_sheet_save_fits(target)
+        too_big = None
+    except HTTPException as exc:
+        too_big = str(exc.detail)
+    try:
+        if too_big:
+            model = sheet_workbook.read_xlsx_values_only(target)
+        else:
+            model = sheet_workbook.read_xlsx(target)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — whatever openpyxl could not read
+        raise HTTPException(
+            status_code=415,
+            detail=f"{target.name} could not be read as a workbook. Download it and "
+            "open it in a spreadsheet app.",
+        ) from exc
+    why = too_big
+    if why is None and _xlsx_unkept_parts(target):
+        why = (f"{target.name} has charts, pictures or pivot tables the sheet editor "
+               "can't keep, so it opens read-only here. Edit it in a spreadsheet app.")
+    model.update(format="xlsx", editable=why is None, why=why)
+    return model
+
+
+def _write_workbook_file(
+    target: Path, snapshot: dict[str, Any], base_version: Optional[str], force: bool,
+) -> Optional[str]:
+    """Save ``snapshot`` into ``target`` (in the one-thread sheets pool, so
+    the version check and the write can't interleave with another save).
+    Returns the new version."""
+    from openpyxl import Workbook, load_workbook
+
+    if not force and _sheet_version(target) != base_version:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "changed",
+                "message": f"{target.name} was saved from another device after you "
+                "opened it.",
+            },
+        )
+    ext = target.suffix.lower()
+    if ext == ".csv":
+        rows = sheet_workbook.csv_rows(snapshot)
+        grid = [[SheetCell(v=t) if t != "" else None for t in row] for row in rows]
+        _write_csv_grid(target, grid, _WB_CSV_ROWS, _WB_CSV_COLS)
+        return _sheet_version(target)
+    if ext != ".xlsx":  # pragma: no cover — _assert_sheet_editor_may_write ran first
+        raise HTTPException(status_code=415, detail=f"{ext} isn't editable in the sheet editor")
+    wb = None
+    if target.is_file() and target.stat().st_size > 0:
+        _assert_xlsx_fits(target)
+        _assert_sheet_save_fits(target)
+        if _xlsx_unkept_parts(target):
+            raise HTTPException(
+                status_code=409,
+                detail=f"{target.name} has charts, pictures or pivot tables the sheet "
+                "editor can't keep, so it was not saved. Edit it in a spreadsheet app.",
+            )
+        try:
+            wb = load_workbook(target)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=409,
+                detail=f"{target.name} could not be read as a workbook, so it was not "
+                "saved. Open it in a spreadsheet app.",
+            ) from exc
+    if wb is None:
+        wb = Workbook()
+    sheet_workbook.write_xlsx(wb, snapshot)
+    _replace_atomically(target, lambda path: wb.save(path))
+    return _sheet_version(target)
+
+
+@router.get("/workbook/{rel_path:path}", dependencies=DAILY)
+async def read_workbook(rel_path: str) -> dict[str, Any]:
+    """The whole workbook for the Univer sheet editor (every sheet, values,
+    formulas, formatting, merges, sizes, frozen panes), its ``version`` for
+    the save's stale check, and whether it may be saved here
+    (``editable``/``why``). 415 for types it can't open."""
+    target = _readable_target(rel_path)
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail=f"{rel_path} not found")
+    with _usable_path(rel_path):
+        version = _sheet_version(target)
+        model = await executors.run("sheets", _read_workbook_model, target)
+    return {
+        "rel_path": _rel_of(target),
+        "version": version,
+        "window": {"rows": sheet_workbook.WINDOW_ROWS, "cols": sheet_workbook.WINDOW_COLS},
+        **model,
+    }
+
+
+@router.put("/workbook/{rel_path:path}", dependencies=DEVICE)
+async def write_workbook(
+    request: Request, rel_path: str, req: WorkbookWriteRequest
+) -> dict[str, Any]:
+    """Save the editor's workbook into the file in place: only what changed
+    is written, so what the editor doesn't show survives (see
+    sheet_workbook). 409 ``{reason: "changed"}`` when someone else saved
+    since ``base_version`` (send ``force`` to overwrite), 409 for files
+    with parts openpyxl can't keep, 413 past the size limits or the
+    editor's window, 415 for non-sheet targets."""
+    await _assert_files_policy(request, req.device_id)
+    target = _safe_target(rel_path)
+    _assert_saveable_name(target)
+    _assert_sheet_editor_may_write(target)
+    with _usable_path(rel_path):
+        _ensure_parent_dir(target)
+        version = await executors.run(
+            "sheets", _write_workbook_file, target, req.workbook, req.base_version, req.force,
+        )
+        st = target.stat()
+    _listing_changed()
+    ext = target.suffix.lower()
+    return {
+        "rel_path": _rel_of(target), "name": target.stem, "ext": ext,
+        "size": st.st_size, "modified_at": st.st_mtime,
+        "category": _doc_category(ext), "version": version,
+    }
+
+
+# Who else has a sheet open, so the editor can say "Kitchen tablet is also
+# editing this sheet" instead of letting two people overwrite each other
+# unawares. In memory, per web process: it is a courtesy, not a lock (the
+# save's version check is what actually stops a silent overwrite).
+_PRESENCE_TTL = 40.0
+_presence: dict[str, dict[str, tuple[Optional[str], float]]] = {}
+
+
+class PresenceRequest(BaseModel):
+    session_id: str = Field(..., min_length=8, max_length=64)
+    device_id: Optional[str] = Field(None, max_length=64)
+    leaving: bool = False
+
+
+async def _device_names(device_ids: list[str]) -> dict[str, str]:
+    if not device_ids:
+        return {}
+    try:
+        from sqlalchemy import bindparam, text as sql_text
+        from web.backend.db import session_scope
+
+        async with session_scope() as s:
+            rows = (await s.execute(
+                sql_text("SELECT device_id, name FROM devices WHERE device_id IN :ids")
+                .bindparams(bindparam("ids", expanding=True)),
+                {"ids": device_ids},
+            )).all()
+        return {r[0]: r[1] for r in rows if r[1]}
+    except Exception:  # noqa: BLE001 — names are a nicety; never fail the ping
+        log.debug("presence: device names unavailable", exc_info=True)
+        return {}
+
+
+@router.post("/presence/{rel_path:path}", dependencies=DEVICE)
+async def sheet_presence(rel_path: str, req: PresenceRequest) -> dict[str, Any]:
+    """Heartbeat from an open sheet editor (every ~15 s; ``leaving`` on
+    close). Answers who ELSE has the same file open, by device name."""
+    import time
+
+    target = _readable_target(rel_path)
+    key = _rel_of(target)
+    now = time.monotonic()
+    for k in list(_presence):
+        live = {sid: v for sid, v in _presence[k].items() if now - v[1] < _PRESENCE_TTL}
+        if live:
+            _presence[k] = live
+        else:
+            del _presence[k]
+    here = _presence.setdefault(key, {})
+    if req.leaving:
+        here.pop(req.session_id, None)
+    else:
+        here[req.session_id] = (req.device_id, now)
+    others = [dev for sid, (dev, _) in here.items() if sid != req.session_id]
+    names = await _device_names(sorted({d for d in others if d}))
+    if not here:
+        _presence.pop(key, None)
+    return {"others": sorted(names.get(d or "", "another device") for d in others)}
 
 
 # ─── Exports (docx from markdown · csv/xlsx from sheets) ────────────
