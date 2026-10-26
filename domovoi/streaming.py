@@ -503,7 +503,7 @@ from domovoi.router import (
     is_request_for_a_story,
     route,
 )
-from domovoi import satellite_abilities, satellite_health, satellite_upgrades
+from domovoi import room_battery, satellite_abilities, satellite_health, satellite_upgrades
 from domovoi.satellite_abilities import Abilities, NotDeclared
 from domovoi.satellite_media.overlay import APPROVAL_CODE_DIGITS
 from domovoi.timer_delivery import AnnounceInterrupted, AnnounceNotStarted
@@ -3469,6 +3469,16 @@ class StreamSession:
         self._health_samples += 1
         if self._health_samples % satellite_health.LOG_EVERY_SAMPLES == 1:
             log.info("%s", satellite_health.format_health_line(self.room_id, sample))
+        # A phone room's battery (domovoi/room_battery.py): its last report
+        # and the 20 % / 10 % warnings. Every report counts, the extra ones
+        # a phone sends when its level moves included; never raises.
+        if sample.get("battery") is not None:
+            app = self.ws.app
+            watch = satellite_health.state_obj(
+                app.state, "room_battery",
+                lambda: room_battery.BatteryWatch(speaker=room_battery.session_speaker(app)),
+            )
+            await watch.observe(self.room_id, self.board, sample.get("battery"))
         # One row per HEALTH_MIN_PERSIST_SEC per session at most: a device
         # that floods the frame costs memory updates, not database writes.
         mono = time.monotonic()

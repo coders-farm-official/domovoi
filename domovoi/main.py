@@ -680,6 +680,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     voice_history.use_retained_log(app.state.satellite_retained_log)
     app.state.log_push_limiter = satellite_health.LogPushLimiter()
+    # A phone room's battery (domovoi/room_battery.py, V040): its last
+    # report and the 20 % / 10 % low-battery warnings, spoken in the room
+    # itself through its own session.
+    from domovoi import room_battery
+
+    app.state.room_battery = room_battery.BatteryWatch(speaker=room_battery.session_speaker(app))
     # Per-room code version (the synced_sha the Pi reports in its hello frame
     # after a satellite-code sync) so the dashboard can show which satellites
     # are behind the core's current SHA. None means the Pi has never

@@ -142,7 +142,17 @@ def _battery(v: Any) -> dict[str, Any] | None:
     if pct is not None and not 0 <= pct <= 100:
         pct = None
     out = {"percent": pct, "charging": _bool(v.get("charging")), "on_power": _bool(v.get("on_power"))}
-    return out if any(x is not None for x in out.values()) else None
+    if not any(x is not None for x in out.values()):
+        return None
+    # 2026-10-25: a phone in room mode also says which charger it is on
+    # (Android's EXTRA_PLUGGED); kept only when it is one of these.
+    if v.get("plugged") in BATTERY_PLUGGED:
+        out["plugged"] = v["plugged"]
+    return out
+
+
+#: The chargers a phone names in ``battery.plugged``.
+BATTERY_PLUGGED = frozenset({"ac", "usb", "wireless", "dock"})
 
 
 #: The states a satellite's boot-time network step can report
