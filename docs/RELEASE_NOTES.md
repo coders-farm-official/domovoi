@@ -4,6 +4,33 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-25 — Quiet hours
+
+Core, web, dashboard and Android app. Quiet hours: Domovoi won't speak
+announcements in a room, like low battery or printer problems. Alarms,
+timers and reminders still ring, and answers, intercom ("tell the kitchen
+dinner's ready") and the dashboard's Broadcast still speak.
+
+* **House-wide:** Settings → Advanced → Voice & speech → **Quiet hours**, on by
+  default, **22:00 to 07:00** (`QUIET_HOURS_ENABLED`, `QUIET_HOURS_START`,
+  `QUIET_HOURS_END` in `.env`; applies at once). The times are on the
+  server's clock, the zone the installer set (the one reminders use).
+  **Every server gets quiet hours on upgrade:** a room that used to say a
+  printer problem at night no longer does. Turn them off there to keep the
+  old behaviour.
+* **Per room** (every room's Settings tab, dashboard and app): **Same as
+  the house** (default), **Custom hours**, or **Off for this room**
+  (`satellites.quiet_mode` / `quiet_start` / `quiet_end`, in V040 below).
+* Held back: low-battery warnings, printer failures, a letter or
+  document that is ready, a voice that finished downloading, song
+  recognition finishing, and every plugin announcement (`sdk.speech`
+  cannot ask otherwise). Nothing held back is spoken later; a plugin's
+  `announce` returns the rooms it reached, so a quiet room is not in the
+  list.
+* New routes: `GET`/`PUT /api/satellites/{room}/quiet-hours`
+  (docs/API_REFERENCE.md). `StreamSession.announce` takes `kind`
+  (`notice`, the default; `alarm`; `user`).
+
 ## 2026-10-25 — A phone room warns before its battery runs out
 
 Core, web, dashboard and Android app. **Migration V040** (Flyway): two
@@ -25,8 +52,7 @@ charge:
   Plug it in." (a new **Room batteries** notification channel; the 10 %
   one replaces the 20 % one, and it goes away once the room charges).
 * The room itself says "This is Pako. My battery is low. Please plug me
-  in." Domovoi has no quiet-hours setting, so the room never says it
-  between 22:00 and 07:00 on the server's clock; the notice and the
+  in.", except during its quiet hours (below); the notice and the
   notification still go, and it is not said later.
 
 Each phone room's **Settings** tab (the dashboard's room drawer) has **Say

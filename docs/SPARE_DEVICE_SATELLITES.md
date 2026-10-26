@@ -507,8 +507,8 @@ again at **10 %**, once per charge (`domovoi/room_battery.py`):
   Plug it in." (**Room batteries** channel). The notification goes away
   once the room charges.
 - The room itself says "This is Pako. My battery is low. Please plug me
-  in." Never between 22:00 and 07:00 on the server's clock (Domovoi has no
-  quiet-hours setting); then only the notice and the notification go.
+  in." Not during the room's quiet hours (Settings → Advanced → Voice & speech, or
+  the room's Settings tab); then only the notice and the notification go.
 - A phone room that went offline after a last report at 5 % or less, off
   its charger, reads **probably out of battery** instead of a plain
   offline line.
