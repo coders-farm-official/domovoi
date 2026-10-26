@@ -61,6 +61,9 @@ import kotlinx.serialization.json.put
  */
 @Composable
 fun SatSettingsTab(room: String) {
+    // Kept on the server for every room (domovoi/quiet_hours.py), so it is
+    // here whether or not the room's device takes remote settings.
+    SatQuietHoursSection(room)
     val app = LocalApp.current
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
