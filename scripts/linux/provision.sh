@@ -3478,6 +3478,37 @@ mpd_build_reason() {
   fi
   return 1
 }
+# root_image_ids TAG: what root's own docker CLI says TAG names, with an
+# empty DOCKER_CONFIG and no DOCKER_HOST or DOCKER_CONTEXT (nobody's
+# context, plugins or credential helpers): its image ID on the first line,
+# and on the second, on Docker's containerd image store, the image's config
+# digest (what `docker build -q` prints there; on the classic store it
+# prints the ID itself). Empty lines when it can't say. The same function
+# as scripts/linux/apply-update.sh's.
+root_image_ids() {
+  local cfg id="" conf=""
+  cfg=$(mktemp -d) || { printf '\n\n'; return 0; }
+  id=$({ env -u DOCKER_HOST -u DOCKER_CONTEXT DOCKER_CONFIG="$cfg" docker image inspect -f '{{.Id}}' "$1" 2>/dev/null || true; } | tr -d '[:space:]')
+  conf=$({ env -u DOCKER_HOST -u DOCKER_CONTEXT DOCKER_CONFIG="$cfg" docker image inspect -f '{{json .Descriptor}}' "$1" 2>/dev/null || true; } \
+    | grep -o '"config.digest":"sha256:[0-9a-f]\{64\}"' | grep -o 'sha256:[0-9a-f]\{64\}' | head -n 1 || true)
+  rm -rf "$cfg"
+  printf '%s\n%s\n' "$id" "$conf"
+}
+# built_image_id BUILT: the tag's image ID by root's own docker, printed,
+# when it agrees with BUILT (what `docker build -q` printed in the service
+# user's CLI): the ID itself, or its config digest on the containerd image
+# store. Status 1, printing nothing, when they don't agree or either is
+# missing.
+built_image_id() {
+  local built ids id conf
+  built=$(printf '%s' "${1-}" | tr -d '[:space:]')
+  ids=$(root_image_ids "$(mpd_tag)")
+  id=$(printf '%s\n' "$ids" | sed -n 1p)
+  conf=$(printf '%s\n' "$ids" | sed -n 2p)
+  [[ $id =~ ^sha256:[0-9a-f]{64}$ ]] && [[ $built =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  [ "$built" = "$id" ] || [ "$built" = "$conf" ] || return 1
+  printf '%s\n' "$id"
+}
 # write_mpd_record IMAGE_ID: MPD_RECORD for the image just built, by rename
 # from a temp file beside it (root's, 0644; the core reads it).
 write_mpd_record() {
@@ -3530,10 +3561,10 @@ check_images() {
 }
 plan_images() {
   echo "docker compose pull ${DB_SERVICES[*]} (the digests domovoi/docker-compose.yml pins)"
-  echo "docker build -t $(mpd_tag) -f domovoi/Dockerfile.mpd domovoi (only when $(mpd_tag) is missing, or Dockerfile.mpd changed since this script built it)"
+  echo "docker build -q -t $(mpd_tag) -f domovoi/Dockerfile.mpd domovoi (only when $(mpd_tag) is missing, or Dockerfile.mpd changed since this script built it)"
 }
 do_images() {
-  local tag cur new why
+  local tag cur new why built
   # Pulled here rather than at domovoi-db's first start, where the download
   # would have no progress and the start step would wait on it.
   emit_frac 50 "Downloading the database images"
@@ -3551,13 +3582,22 @@ do_images() {
   # core's first boot (which would build it with no progress, and not at
   # all on a box without internet).
   emit_frac 500 "Building the music player"
-  (cd "$CHECKOUT/domovoi" && as_svc docker build --progress=plain -t "$tag" -f "$CHECKOUT/domovoi/Dockerfile.mpd" "$CHECKOUT/domovoi") \
+  # -q: the image ID on stdout, read here in root's shell and checked
+  # against root's own look at the tag before it is recorded.
+  built=$(cd "$CHECKOUT/domovoi" && as_svc docker build -q -t "$tag" -f "$CHECKOUT/domovoi/Dockerfile.mpd" "$CHECKOUT/domovoi") \
     || die "docker build of $tag failed"
   check_images || die "the database images or $tag are not there after the pull and build"
-  new=$(mpd_image_id)
-  # Recorded before anything else, so a core that starts now finds it.
-  write_mpd_record "$new"
-  if [ "$new" != "$cur" ]; then mpd_move_rooms "$new"; fi
+  if new=$(built_image_id "$built"); then
+    # Recorded before anything else, so a core that starts now finds it.
+    write_mpd_record "$new"
+  else
+    # Never a record of an image this run can't vouch for, nor a stale
+    # one: the container guard will report the new image, for an admin.
+    rm -f "$MPD_RECORD"
+    new=$(mpd_image_id)
+    warn "the build of $tag printed '$built' and root's docker says the tag names '$new'; not recorded for the container guard, which will report the image"
+  fi
+  if [ -n "$new" ] && [ "$new" != "$cur" ]; then mpd_move_rooms "$new"; fi
   STEP_DONE_MSG="Images ready ($tag built)"
 }
 

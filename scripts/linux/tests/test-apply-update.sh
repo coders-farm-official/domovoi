@@ -224,9 +224,9 @@ case "${1-}" in
     if [ -f "$SHIM_STATE/fail-docker-build" ]; then echo "build failed" >&2; exit 1; fi
     # The wake-word trainer's build (--label org.domovoi.wake-trainer.src=TREE
     # -t NAME DIR) leaves an image with that label.
-    lbl="" tag="" file=""
+    lbl="" tag="" file="" quiet=0
     while [ $# -gt 0 ]; do
-      case $1 in --label) lbl=$2; shift 2 ;; -t) tag=$2; shift 2 ;; -f) file=$2; shift 2 ;; *) shift ;; esac
+      case $1 in --label) lbl=$2; shift 2 ;; -t) tag=$2; shift 2 ;; -f) file=$2; shift 2 ;; -q) quiet=1; shift ;; *) shift ;; esac
     done
     case $lbl in
       org.domovoi.wake-trainer.src=*)
@@ -236,13 +236,26 @@ case "${1-}" in
         # Any other build (the music player's) leaves an image under its
         # tag, in image-<tag>: the ID in mpd-build-id, else the SHA-256 of
         # the Dockerfile (another Dockerfile, another image). Nothing while
-        # mpd-build-no-id says the ID can't be read.
+        # mpd-build-no-id says the ID can't be read. -q prints the ID (what
+        # mpd-build-prints says instead, when it exists: a CLI that lies).
+        # Under mpd-store-containerd the image is kept the way Docker's
+        # containerd image store keeps it: -q prints the config digest,
+        # and the image's ID (image-<tag>) is another digest, the config
+        # one in its Descriptor (image-<tag>.config).
         if [ -n "$tag" ] && [ ! -f "$SHIM_STATE/mpd-build-no-id" ]; then
+          img=$SHIM_STATE/image-${tag//[\/:]/_}
           if [ -f "$SHIM_STATE/mpd-build-id" ]; then
-            cat "$SHIM_STATE/mpd-build-id" >"$SHIM_STATE/image-${tag//[\/:]/_}"
+            cat "$SHIM_STATE/mpd-build-id" >"$img"
           else
-            echo "sha256:$(sha256sum <"$file" | cut -c1-64)" >"$SHIM_STATE/image-${tag//[\/:]/_}"
+            echo "sha256:$(sha256sum <"$file" | cut -c1-64)" >"$img"
           fi
+          printed=$(cat "$img")
+          if [ -f "$SHIM_STATE/mpd-store-containerd" ]; then
+            cp "$img" "$img.config"
+            echo "sha256:$(printf 'index-%s' "$printed" | sha256sum | cut -c1-64)" >"$img"
+          fi
+          if [ -f "$SHIM_STATE/mpd-build-prints" ]; then printed=$(cat "$SHIM_STATE/mpd-build-prints"); fi
+          if [ "$quiet" = 1 ]; then echo "$printed"; fi
         fi ;;
     esac
     exit 0
@@ -253,7 +266,16 @@ case "${1-}" in
     # in trainer-label (none: no file).
     name=${!#}
     if [ "${2-}" = inspect ] && [ -f "$SHIM_STATE/image-${name//[\/:]/_}" ]; then
-      case " $* " in *.Id*) cat "$SHIM_STATE/image-${name//[\/:]/_}" ;; esac
+      case " $* " in
+        *.Id*) cat "$SHIM_STATE/image-${name//[\/:]/_}" ;;
+        *.Descriptor*)
+          if [ -f "$SHIM_STATE/image-${name//[\/:]/_}.config" ]; then
+            printf '{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"%s","size":1,"annotations":{"config.digest":"%s"}}\n' \
+              "$(cat "$SHIM_STATE/image-${name//[\/:]/_}")" "$(cat "$SHIM_STATE/image-${name//[\/:]/_}.config")"
+          else
+            echo null
+          fi ;;
+      esac
       exit 0
     fi
     if [ "${2-}" != inspect ] || [ ! -f "$SHIM_STATE/trainer-image" ] || [ "$name" != "$(cat "$SHIM_STATE/trainer-image")" ]; then
@@ -1060,7 +1082,7 @@ case_mpd_changed() {
   check "status ok" eq "$(field status)" '"ok"'
   check "mpd_changed" eq "$(field mpd_changed)" true
   check "deps not changed" eq "$(field deps_changed)" false
-  check "builds like mpd_provisioner" called "docker build -t domovoi-mpd:latest -f $REPO/domovoi/Dockerfile.mpd $REPO/domovoi"
+  check "builds like mpd_provisioner" called "docker build -q -t domovoi-mpd:latest -f $REPO/domovoi/Dockerfile.mpd $REPO/domovoi"
   check "removes room kitchen" called "docker rm -f domovoi-mpd-kitchen"
   check "removes room office" called "docker rm -f domovoi-mpd-office"
   check "leaves postgres alone" not_called "docker rm -f domovoi-postgres"
@@ -1095,7 +1117,8 @@ case_mpd_record_written() {
   check "a UTC stamp" grep -Eq '^  "built_at": "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",$' "$UPD/mpd-image.json"
   check "readable by everyone, written by its owner only" eq "$(stat -c %a "$UPD/mpd-image.json")" 644
   check "no temp file left" eq "$(ls -a "$UPD" | grep -c '^\.mpd-image')" 0
-  check "the ID read after the build" before "docker build -t domovoi-mpd:latest" "docker image inspect -f {{.Id}} domovoi-mpd:latest"
+  check "the ID read after the build" before "docker build -q -t domovoi-mpd:latest" "docker image inspect -f {{.Id}} domovoi-mpd:latest"
+  check "by root's own docker, not the service user's" not_called "runuser -u tester -- docker image inspect"
   check "recorded before a room's player goes" before "docker image inspect -f {{.Id}} domovoi-mpd:latest" "docker rm -f domovoi-mpd-kitchen"
   check "recorded before the core starts" before "docker image inspect -f {{.Id}} domovoi-mpd:latest" "systemctl start domovoi-core.service"
   check "says so" grep -qF "as the music player image this update built" "$CASE/output.log"
@@ -1104,6 +1127,59 @@ case_mpd_record_written() {
     if command -v cygpath >/dev/null 2>&1; then p=$(cygpath -w "$p"); py=$(cygpath -u "$py"); fi
     check "the record is valid JSON" "$py" -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); assert d["by"] == "update" and d["image_id"].startswith("sha256:")' "$p"
   fi
+  end_case
+}
+
+# On Docker's containerd image store (Docker 29's default) `docker build -q`
+# prints the image's config digest and the image ID is another digest: the
+# record holds the ID, what the container guard compares, once root's own
+# look at the tag finds the printed digest as that image's config.
+case_mpd_record_containerd_store() {
+  new_case mpd_record_containerd_store
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'FROM debian:trixie-slim\n' >"$REPO/domovoi/Dockerfile.mpd"
+  commit_all "B: mpd" >/dev/null
+  touch "$STATE/mpd-store-containerd"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the record holds the image ID" eq "$(rec_field image_id)" "\"$(cat "$STATE/image-domovoi-mpd_latest")\""
+  check "not the config digest" test "$(rec_field image_id)" != "\"$(dockerfile_id 'FROM debian:trixie-slim\n')\""
+  check "root's look at the image's descriptor" called "docker image inspect -f {{json .Descriptor}} domovoi-mpd:latest"
+  end_case
+}
+
+# What the build printed (the service user's docker CLI) and what root's
+# docker says the tag names must agree, or nothing is recorded (and an
+# earlier record is gone): the guard falls back to mpd_changed.
+case_mpd_record_refused_when_the_build_and_root_disagree() {
+  new_case mpd_record_refused_when_the_build_and_root_disagree
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '{"by": "update", "image_id": "sha256:%s"}\n' "$(printf 'a%.0s' $(seq 64))" >"$UPD/mpd-image.json"
+  printf 'FROM debian:trixie-slim\n' >"$REPO/domovoi/Dockerfile.mpd"
+  commit_all "B: mpd" >/dev/null
+  echo "sha256:$(printf 'c%.0s' $(seq 64))" >"$STATE/mpd-build-prints"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no record" test ! -e "$UPD/mpd-image.json"
+  check "says why" grep -qF "not recorded for the container guard" "$CASE/output.log"
+  check "the rooms still go" called "docker rm -f domovoi-mpd-kitchen"
+  end_case
+}
+
+# A build that fails takes the last run's record with it: after the
+# rollback the record never names an image that isn't this run's.
+case_mpd_record_stale_one_removed_by_a_failed_build() {
+  new_case mpd_record_stale_one_removed_by_a_failed_build
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '{"by": "update", "image_id": "sha256:%s"}\n' "$(printf 'a%.0s' $(seq 64))" >"$UPD/mpd-image.json"
+  printf 'FROM debian:trixie-slim\n' >"$REPO/domovoi/Dockerfile.mpd"
+  commit_all "B: mpd" >/dev/null
+  touch "$STATE/fail-docker-build"
+  run_update
+  # (The shim's builds all fail, the rollback's too.)
+  check "the update failed" eq "$(field status)" '"rollback_failed"'
+  check "the build was tried" called "docker build -q -t domovoi-mpd:latest"
+  check "no record left" test ! -e "$UPD/mpd-image.json"
   end_case
 }
 
@@ -1136,7 +1212,7 @@ case_mpd_record_follows_the_rollback() {
   echo "$sha_b" >"$STATE/curl-fail-when-head"
   run_update
   check "rolled back" eq "$(field status)" '"rolled_back"'
-  check "built twice" eq "$(grep -c '^docker build -t domovoi-mpd:latest' "$STATE/calls.log")" 2
+  check "built twice" eq "$(grep -c '^docker build -q -t domovoi-mpd:latest' "$STATE/calls.log")" 2
   check "the record names the rollback's image" eq "$(rec_field image_id)" "\"$(dockerfile_id 'FROM debian:bookworm-slim\n')\""
   check "under the same run" eq "$(rec_field run_started_at)" "$(field started_at)"
   end_case
@@ -4123,7 +4199,7 @@ case_dotenv_is_read_the_way_the_core_reads_it() {
   check "the music player image never looked up as the trainer" not_called "docker image inspect domovoi-mpd:latest"
   check "never built under the trainer's label" not_called "--label org.domovoi.wake-trainer.src"
   check "no wake-trainer step" eq "$(step_names | grep -c wake-trainer)" 0
-  check "MPD_IMAGE_TAG: quoted, the last one" called "docker build -t my-mpd:5 -f $REPO/domovoi/Dockerfile.mpd $REPO/domovoi"
+  check "MPD_IMAGE_TAG: quoted, the last one" called "docker build -q -t my-mpd:5 -f $REPO/domovoi/Dockerfile.mpd $REPO/domovoi"
   check "MPD_CONTAINER_PREFIX: up to its comment" called "docker rm -f domovoi-mpd-kitchen"
   check "and only those rooms" not_called "docker rm -f domovoi-mpd-office"
   check "nothing read line by line" not_said "read line by line"
@@ -4989,6 +5065,9 @@ CASES=(
   case_mpd_changed
   case_mpd_record_written
   case_mpd_record_unreadable_id
+  case_mpd_record_containerd_store
+  case_mpd_record_refused_when_the_build_and_root_disagree
+  case_mpd_record_stale_one_removed_by_a_failed_build
   case_mpd_record_follows_the_rollback
   case_mpd_record_untouched_without_a_build
   case_mpd_conf_only

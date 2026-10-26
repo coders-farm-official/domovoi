@@ -2022,18 +2022,24 @@ restore_pins() {
 # remove the room containers; the core's startup warm (warm_known_rooms)
 # recreates each from its mpd_rooms row with the same named data volume.
 rebuild_mpd() {
-  local names n
+  local names n built
   if [ "$POLICY_AT_START" = never ] && [ "$MPD_IMAGE_CHANGED" = 0 ]; then
     # Only mpd.conf changed, and the build would at most re-pull the base
     # image: keep the image (internet access is turned off) and just
     # recreate the rooms so they mount the new conf.
     echo "internet access is turned off: keeping the $MPD_TAG image (Dockerfile.mpd unchanged)"
   else
+    # The record of an earlier build goes first: whatever happens below, it
+    # never names an image this run didn't make (a stale one would vouch
+    # for nothing and keep the guard from its mpd_changed fallback).
+    rm -f "$MPD_RECORD"
     # As the service user (in the docker group, as the core that builds it
     # too): root's docker CLI would read the Dockerfile through whatever
-    # link the checkout holds there.
-    as_user docker build -t "$MPD_TAG" -f "$REPO_DIR/domovoi/Dockerfile.mpd" "$REPO_DIR/domovoi" || return 1
-    record_mpd_image
+    # link the checkout holds there. -q: the image ID on stdout, read here
+    # in root's shell (record_mpd_image checks it against root's own look
+    # at the tag).
+    built=$(as_user docker build -q -t "$MPD_TAG" -f "$REPO_DIR/domovoi/Dockerfile.mpd" "$REPO_DIR/domovoi") || return 1
+    record_mpd_image "$built"
   fi
   names=$(docker ps -a --format '{{.Names}}') || return 1
   for n in $names; do
@@ -2044,22 +2050,47 @@ rebuild_mpd() {
   done
 }
 
-# record_mpd_image: MPD_RECORD for the image rebuild_mpd just built, by
-# rename (root's, 0644). Written here, while core and web are stopped and
-# before the rooms' players are removed, so no player can be created from
-# the new image before the record that vouches for it exists. The core's
+# root_image_ids TAG: what root's own docker CLI says TAG names, with an
+# empty DOCKER_CONFIG and no DOCKER_HOST or DOCKER_CONTEXT (nobody's
+# context, plugins or credential helpers): its image ID on the first line,
+# and on the second, on Docker's containerd image store, the image's config
+# digest (what `docker build -q` prints there; on the classic store it
+# prints the ID itself). Empty lines when it can't say.
+root_image_ids() {
+  local cfg id="" conf=""
+  cfg=$(mktemp -d) || { printf '\n\n'; return 0; }
+  id=$({ env -u DOCKER_HOST -u DOCKER_CONTEXT DOCKER_CONFIG="$cfg" docker image inspect -f '{{.Id}}' "$1" 2>/dev/null || true; } | tr -d '[:space:]')
+  conf=$({ env -u DOCKER_HOST -u DOCKER_CONTEXT DOCKER_CONFIG="$cfg" docker image inspect -f '{{json .Descriptor}}' "$1" 2>/dev/null || true; } \
+    | grep -o '"config.digest":"sha256:[0-9a-f]\{64\}"' | grep -o 'sha256:[0-9a-f]\{64\}' | head -n 1 || true)
+  rm -rf "$cfg"
+  printf '%s\n%s\n' "$id" "$conf"
+}
+
+# record_mpd_image BUILT: MPD_RECORD for the image rebuild_mpd just built
+# (BUILT: what its `docker build -q` printed), by rename (root's, 0644).
+# Written here, while core and web are stopped and before the rooms' players
+# are removed, so no player can be created from the new image before the
+# record that vouches for it exists. Recorded only when root's own look at
+# the tag (root_image_ids) agrees with what the build printed; the ID
+# recorded is the tag's image ID, what the guard compares. The core's
 # container guard (docs/CONTAINER_GUARD.md, "The music players") takes the
 # image it names as Domovoi's own when it is newer than the image the guard
 # recorded, at the core's start or at any check while it runs; any other
-# image under the tag (a docker build by hand) is still reported. An ID that
-# can't be read leaves no record, and says so: the guard then falls back to
-# this run's mpd_changed, as before the record existed. run_started_at ties
-# it to this run's last-result.json.
+# image under the tag (a docker build by hand) is still reported. When the
+# two don't agree, or either can't be read, there is no record (removed, if
+# one was there), and the step says so: the guard then falls back to this
+# run's mpd_changed, as before the record existed. run_started_at ties it
+# to this run's last-result.json.
 record_mpd_image() {
-  local id
-  id=$({ as_user docker image inspect -f '{{.Id}}' "$MPD_TAG" 2>/dev/null || true; } | tr -d '[:space:]')
-  if ! [[ $id =~ ^sha256:[0-9a-f]{64}$ ]]; then
-    echo "warning: could not read the image ID $MPD_TAG names (got '$id'); not recorded for the container guard"
+  local built ids id conf
+  built=$(printf '%s' "${1-}" | tr -d '[:space:]')
+  ids=$(root_image_ids "$MPD_TAG")
+  id=$(printf '%s\n' "$ids" | sed -n 1p)
+  conf=$(printf '%s\n' "$ids" | sed -n 2p)
+  if ! [[ $id =~ ^sha256:[0-9a-f]{64}$ ]] || ! [[ $built =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || { [ "$built" != "$id" ] && [ "$built" != "$conf" ]; }; then
+    rm -f "$MPD_RECORD"
+    echo "warning: the build printed '$built' and root's docker says $MPD_TAG is '$id'; not recorded for the container guard"
     return 0
   fi
   write_atomic "$MPD_RECORD" "$(
