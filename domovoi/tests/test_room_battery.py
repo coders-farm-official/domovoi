@@ -69,12 +69,6 @@ def test_charging_or_a_level_back_up_ends_the_cycle():
     assert not rb.cycle_ends(R(9))
 
 
-@pytest.mark.parametrize(("hour", "quiet"), [(21, False), (22, True), (23, True), (0, True),
-                                             (6, True), (7, False), (12, False)])
-def test_quiet_hours_are_ten_at_night_to_seven(hour, quiet):
-    assert rb.in_quiet_hours(datetime(2026, 10, 25, hour, 30)) is quiet
-
-
 def test_the_words():
     assert rb.display_name("pako") == "Pako"
     assert rb.display_name("living_room") == "Living room"
@@ -163,6 +157,16 @@ def _bat(pct, charging=False, on_power=False):
     return {"percent": pct, "charging": charging, "on_power": on_power}
 
 
+@pytest.fixture(autouse=True)
+def _house_quiet_hours_on(monkeypatch):
+    """These tests set their own clock against the house default, 22:00-07:00."""
+    from domovoi.config import settings
+
+    monkeypatch.setattr(settings, "quiet_hours_enabled", True)
+    monkeypatch.setattr(settings, "quiet_hours_start", "22:00")
+    monkeypatch.setattr(settings, "quiet_hours_end", "07:00")
+
+
 def _watch(clock=None, said=None, answer=True):
     async def speaker(room, words):
         if said is not None:
@@ -173,7 +177,7 @@ def _watch(clock=None, said=None, answer=True):
 
 
 async def _settle(watch: rb.BatteryWatch) -> None:
-    for _ in range(20):
+    for _ in range(500):   # up to 5 s on a busy box
         if not watch._tasks:
             return
         await asyncio.sleep(0.01)
@@ -374,20 +378,22 @@ async def test_the_speaker_uses_the_rooms_own_session():
         def __init__(self, exc=None):
             self.exc = exc
 
-        async def announce(self, words, *, defer_to_capture=False):
-            seen.append((words, defer_to_capture))
+        async def announce(self, words, *, defer_to_capture=False, kind=None):
+            seen.append((words, defer_to_capture, kind))
             if self.exc:
                 raise self.exc
 
     app = SimpleNamespace(state=SimpleNamespace(active_sessions={"pako": Sess()}))
     speak = rb.session_speaker(app)
     assert await speak("pako", "hi") is True
-    assert seen == [("hi", True)]
+    assert seen == [("hi", True, "notice")]
     assert await speak("gone", "hi") is False
     app.state.active_sessions["pako"] = Sess(AnnounceNotStarted("busy", reason="responding"))
     assert await speak("pako", "hi") is False
     app.state.active_sessions["pako"] = Sess(AnnounceNotStarted("no", reason="unsupported"))
     assert await speak("pako", "hi") is None
+    app.state.active_sessions["pako"] = Sess(AnnounceNotStarted("shh", reason="quiet_hours"))
+    assert await speak("pako", "hi") is None   # not retried: never said later
 
 
 @pytest.mark.asyncio

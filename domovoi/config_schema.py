@@ -82,6 +82,10 @@ Section = Literal["common", "advanced"]
 FieldType = Literal["int", "float", "bool", "str", "choice"]
 
 
+#: A quiet-hours clock time, "HH:MM" 24-hour (domovoi/quiet_hours.py).
+QUIET_CLOCK_PATTERN = r"([01]\d|2[0-3]):[0-5]\d"
+
+
 @dataclass(frozen=True)
 class FieldSpec:
     name: str                       # must be a Settings.model_fields key
@@ -398,6 +402,27 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "How fast the bot talks. 1.0 = normal, 1.2 = a bit quicker, 0.9 = "
         "a bit slower. Applies to the next thing it says.",
         "float", tier="reapply", min=0.5, max=2.0,
+    ),
+    FieldSpec(
+        "quiet_hours_enabled", "Quiet hours", "Voice & speech",
+        "Between the times below, Domovoi won't speak announcements in the "
+        "rooms, like a low battery or a printer problem. Alarms, timers and "
+        "reminders still ring, and it still answers when you ask it "
+        "something. Each room can keep its own hours or turn them off in its "
+        "Settings tab. Applies immediately.",
+        "bool", tier="hot",
+    ),
+    FieldSpec(
+        "quiet_hours_start", "Quiet hours start", "Voice & speech",
+        "When quiet hours begin, on the server's clock (24-hour, e.g. 22:00). "
+        "Applies immediately.",
+        "str", tier="hot", pattern=QUIET_CLOCK_PATTERN, pattern_help="a time like 22:00",
+    ),
+    FieldSpec(
+        "quiet_hours_end", "Quiet hours end", "Voice & speech",
+        "When quiet hours end (24-hour, e.g. 07:00). Earlier than the start "
+        "means the next morning. Applies immediately.",
+        "str", tier="hot", pattern=QUIET_CLOCK_PATTERN, pattern_help="a time like 07:00",
     ),
 
     # ─── Voice profiles (speaker ID) ───────────────────────────────────

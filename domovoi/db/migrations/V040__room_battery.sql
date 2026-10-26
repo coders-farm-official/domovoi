@@ -1,5 +1,6 @@
 -- V040 — a phone room's battery: its last report, its low-battery warnings
--- and the room's two switches (2026-10-25, domovoi/room_battery.py).
+-- and the room's two switches (2026-10-25, domovoi/room_battery.py); and
+-- every room's quiet-hours choice (domovoi/quiet_hours.py).
 --
 -- A phone in room mode reports its battery in its `health` frame
 -- (`battery` = {percent, charging, on_power}). A phone room that is not on
@@ -28,10 +29,19 @@
 --                            (or a level back above the thresholds) ends
 --                            them. `spoken` is whether the room said it.
 --
+-- satellites.quiet_mode       'house' (the house's quiet hours, Settings →
+--                            Voice & speech), 'custom' (quiet_start..
+--                            quiet_end, "HH:MM") or 'off'. Any room, Pi,
+--                            laptop or phone. Read at each announcement.
+--
 -- NOTIFY room_battery_changed → the live socket's `room_battery.changed`.
 
 ALTER TABLE satellites ADD COLUMN IF NOT EXISTS battery_say BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE satellites ADD COLUMN IF NOT EXISTS battery_notify BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE satellites ADD COLUMN IF NOT EXISTS quiet_mode TEXT NOT NULL DEFAULT 'house'
+    CHECK (quiet_mode IN ('house', 'custom', 'off'));
+ALTER TABLE satellites ADD COLUMN IF NOT EXISTS quiet_start TEXT;
+ALTER TABLE satellites ADD COLUMN IF NOT EXISTS quiet_end TEXT;
 
 CREATE TABLE IF NOT EXISTS room_battery (
     room_id     TEXT PRIMARY KEY,

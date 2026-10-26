@@ -503,7 +503,7 @@ from domovoi.router import (
     is_request_for_a_story,
     route,
 )
-from domovoi import room_battery, satellite_abilities, satellite_health, satellite_upgrades
+from domovoi import quiet_hours, room_battery, satellite_abilities, satellite_health, satellite_upgrades
 from domovoi.satellite_abilities import Abilities, NotDeclared
 from domovoi.satellite_media.overlay import APPROVAL_CODE_DIGITS
 from domovoi.timer_delivery import AnnounceInterrupted, AnnounceNotStarted
@@ -4461,7 +4461,7 @@ class StreamSession:
                 if target is None or target is self:
                     continue
                 try:
-                    await target.announce(response.announce_text)
+                    await target.announce(response.announce_text, kind="user")
                 except Exception as e:
                     log.warning(
                         "intercom: failed to announce to room=%s: %s",
@@ -5691,8 +5691,18 @@ class StreamSession:
         voice: str | None = None,
         pi_action: str | None = None,
         pi_action_arg: str | None = None,
+        kind: str = "notice",
     ) -> None:
         """Inject a TTS-synthesized announcement into this Pi's stream.
+
+        ``kind`` (domovoi/quiet_hours.py, 2026-10-25): ``notice`` (the
+        default: a low battery, a printer problem, a document that is
+        ready, a plugin's news) is held back during the room's quiet hours
+        with ``AnnounceNotStarted(reason='quiet_hours')`` (nothing is
+        spoken, then or later); ``alarm`` (timers, alarms, reminders) and
+        ``user`` (somebody asked for it now: intercom, Broadcast, a voice
+        they picked) are never held back. This is the one gate: every
+        unprompted announcement, the SDK's included, passes here.
 
         Reuses the normal response wire format (response_start →
         PCM chunks → response_end) so the satellite handles it as if it
@@ -5776,7 +5786,7 @@ class StreamSession:
         # still to come (`_restart_music_after_announce`).
         self._announce_callers += 1
         try:
-            await self._announce(text, defer_to_capture, voice, pi_action, pi_action_arg)
+            await self._announce(text, defer_to_capture, voice, pi_action, pi_action_arg, kind)
         finally:
             self._announce_callers -= 1
 
@@ -5787,11 +5797,20 @@ class StreamSession:
         voice: str | None = None,
         pi_action: str | None = None,
         pi_action_arg: str | None = None,
+        kind: str = "notice",
     ) -> None:
         """`announce`'s body, run while it is counted in
         `_announce_callers`; see there."""
         async with self._announce_lock:
             self._announce_cut = False
+            # Quiet hours (domovoi/quiet_hours.py), checked under the lock so
+            # announcements still take their turns in the order they came.
+            if await quiet_hours.holds_back(self.room_id, kind):
+                log.info("room %s: quiet hours, announcement not spoken (%s)", self.room_id, kind)
+                raise AnnounceNotStarted(
+                    f"room {self.room_id} is in quiet hours",
+                    reason="quiet_hours",
+                )
             if self._response_task is not None and not self._response_task.done():
                 log.warning(
                     "intercom: room=%s mid-response, skipping announce", self.room_id

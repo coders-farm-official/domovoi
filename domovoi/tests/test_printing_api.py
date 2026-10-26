@@ -342,7 +342,7 @@ async def test_a_voice_job_that_fails_is_said_once_in_its_room(house, monkeypatc
     class Room:
         room_id = "kitchen"
 
-        async def announce(self, text_):
+        async def announce(self, text_, **kw):
             said.append(("kitchen", text_))
 
     monkeypatch.setattr(speech, "_active_sessions_provider", lambda: {"kitchen": Room()})

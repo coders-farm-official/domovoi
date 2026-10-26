@@ -168,7 +168,7 @@ async def apply(app: Any, room_id: str, name: str | None) -> dict[str, Any]:
         try:
             await session.announce(
                 confirmation(name), defer_to_capture=True, voice=name,
-                pi_action="set_voice", pi_action_arg=name,
+                pi_action="set_voice", pi_action_arg=name, kind="user",
             )
         except Exception as e:  # noqa: BLE001 - AnnounceNotStarted / Interrupted / a dead socket
             reason = getattr(e, "reason", None)
@@ -197,7 +197,7 @@ async def apply(app: Any, room_id: str, name: str | None) -> dict[str, Any]:
         spoken = name or (default or {}).get("name")
         if spoken:
             try:
-                await session.announce(confirmation(spoken), defer_to_capture=True)
+                await session.announce(confirmation(spoken), defer_to_capture=True, kind="user")
                 said = True
             except Exception as e:  # noqa: BLE001 - kept anyway; the room was busy
                 log.info("room voice: %s did not say the confirmation: %s", room_id, e)

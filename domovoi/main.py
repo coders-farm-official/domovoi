@@ -2632,7 +2632,7 @@ async def admin_announce(body: _AdminAnnounceBody) -> dict[str, Any]:
     announced: list[str] = []
     for sess in targets:
         try:
-            await sess.announce(body.message)
+            await sess.announce(body.message, kind="user")
             announced.append(sess.room_id)
         except Exception as e:
             log.warning("admin announce to room=%s failed: %s", sess.room_id, e)

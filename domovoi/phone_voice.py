@@ -452,7 +452,7 @@ def _fan_out(app: Any, response: Response, room: str) -> None:
 
     async def _announce(target: Any, target_room: str) -> None:
         try:
-            await target.announce(message)
+            await target.announce(message, kind="user")
         except Exception as e:  # noqa: BLE001
             log.warning("phone voice: intercom from %s to %s failed: %s", room, target_room, e)
 

@@ -500,3 +500,14 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
             f"with scripts/dev/run-linux-harness.sh all",
             yellow=True,
         )
+
+
+@pytest.fixture(autouse=True)
+def _quiet_hours_off_unless_asked(monkeypatch):
+    """Quiet hours (domovoi/quiet_hours.py) are on by default, 22:00-07:00
+    on the machine's own clock, so an announcement test run at night would
+    see its notice held back. Off for every test; a test about quiet hours
+    turns them on itself (or passes its own settings and clock)."""
+    from domovoi.config import settings
+
+    monkeypatch.setattr(settings, "quiet_hours_enabled", False)

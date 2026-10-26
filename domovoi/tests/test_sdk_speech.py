@@ -21,7 +21,7 @@ class _FakeSession:
         self.explode = explode
         self.announced: list[str] = []
 
-    async def announce(self, text: str) -> None:
+    async def announce(self, text: str, **kw) -> None:
         if self.explode:
             raise OSError("satellite dropped wifi")
         self.announced.append(text)

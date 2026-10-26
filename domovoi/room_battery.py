@@ -25,11 +25,12 @@ owner's "Pako", 2026-10-25). The core's side, all here:
   when the battery is low" is on. And the room says it itself, "This is
   Pako. My battery is low. Please plug me in.", while its "Say when the
   battery is low" is on and it is not quiet hours.
-* **Quiet hours.** Domovoi has no quiet-hours or do-not-disturb setting
-  (checked 2026-10-25), so the room never speaks the warning between
-  22:00 and 07:00 on the household's clock (:mod:`domovoi.household_time`);
+* **Quiet hours** (:mod:`domovoi.quiet_hours`: the house's hours, or the
+  room's own, or off for the room). Inside them the room doesn't say it;
   the notice and the notification still go. A warning kept quiet is not
-  said later.
+  said later. The announcement is a ``notice``, so StreamSession.announce
+  holds it back too should the hours begin between the warning and its
+  retries.
 
 Both switches live on the room's ``satellites`` row (V040, default on) and
 are read at each warning, so a change counts at once, no restart. Only
@@ -52,6 +53,8 @@ from typing import Any, Awaitable, Callable
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from domovoi import quiet_hours
+
 log = logging.getLogger(__name__)
 
 #: The board a phone in room mode names in its hello.
@@ -65,9 +68,6 @@ RESET_ABOVE = 25
 OUT_OF_BATTERY_AT = 5
 #: The last report is rewritten at least this often, unchanged or not.
 REPORT_REFRESH_SEC = 600.0
-#: The room says nothing from QUIET_START_HOUR to QUIET_END_HOUR (local).
-QUIET_START_HOUR = 22
-QUIET_END_HOUR = 7
 #: How often, and how far apart, a spoken warning is tried when the room is
 #: busy (mid-reply, listening, in a call).
 SPEAK_ATTEMPTS = 4
@@ -136,12 +136,6 @@ def warning_due(reading: Reading, warned: set[int] | frozenset[int]) -> int | No
     if any(w <= low for w in warned):
         return None
     return low
-
-
-def in_quiet_hours(local: datetime) -> bool:
-    """22:00-07:00 on the household's wall clock."""
-    h = local.hour
-    return h >= QUIET_START_HOUR or h < QUIET_END_HOUR
 
 
 def display_name(room_id: str, label: str | None = None) -> str:
@@ -382,7 +376,9 @@ class BatteryWatch:
             if due is not None:
                 sw = await switches(s, room_id)
                 label = await _label(s, room_id)
-                quiet = in_quiet_hours(self._local_now())
+                quiet = quiet_hours.in_window(self._local_now(), *hours) if (
+                    hours := quiet_hours.hours_for(await quiet_hours.room_choice(s, room_id))
+                ) else False
                 new_id = (await s.execute(
                     text("INSERT INTO room_battery_warnings (room_id, threshold, percent) "
                          "VALUES (:r, :t, :p) RETURNING id"),
@@ -401,7 +397,7 @@ class BatteryWatch:
                     "room %s battery at %s%% (under %s%%), off its charger: warning %s%s",
                     room_id, reading.percent, due, new_id,
                     "" if sw.say and not quiet else
-                    (" (not spoken: quiet hours)" if sw.say else " (not spoken: the room's switch is off)"),
+                    (" (not spoken: the room's switch is off)" if not sw.say else " (not spoken: quiet hours)"),
                 )
             if out.ended or out.warned is not None or changed:
                 await notify_changed(s, f"{room_id}:{reading.percent}")
@@ -465,12 +461,12 @@ def session_speaker(app: Any) -> Speaker:
         if session is None:
             return False
         try:
-            await session.announce(words, defer_to_capture=True)
+            await session.announce(words, defer_to_capture=True, kind="notice")
         except AnnounceInterrupted:
             return True
         except AnnounceNotStarted as e:
-            if getattr(e, "reason", "") == "unsupported":
-                return None  # never will: stop trying
+            if getattr(e, "reason", "") in ("unsupported", "quiet_hours"):
+                return None  # never will (or not now, and never later): stop trying
             return False
         return True
 
