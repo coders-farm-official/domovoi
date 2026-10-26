@@ -352,7 +352,11 @@ they have been tried on fewer devices than the rest, aren't yet held to
   is downloaded. A phone room changes its voice like any room ("switch to
   Kristin's voice"); the server keeps the choice for it. An admin can also
   pick any room's voice in its drawer on the dashboard (Settings → Rooms &
-  devices → Rooms).
+  devices → Rooms). A phone room warns before its battery runs out: off its
+  charger, at 20 % and again at 10 %, the dashboard's Home and Health and
+  the app on the household's phones say so, and the room says it aloud
+  unless it is in its quiet hours; each room can turn the spoken and the
+  notified warning off in its Settings tab.
 - **A USB stick that turns an old PC into a room.** The dashboard prepares
   the stick, and an old 64-bit PC, laptop or Intel Mac installs Debian and
   the satellite from it after you type ERASE on it; a network cable for the
@@ -387,8 +391,11 @@ they have been tried on fewer devices than the rest, aren't yet held to
    the phone, does things on it and looks at a photo, the Windows satellite
    Setup, a smaller (R8-shrunk) release
    build of the app, tablet and sideways-phone screens that clear the
-   clock and cutouts, and a repair by Setup that no longer trips the
-   container guard.
+   clock and cutouts, a repair by Setup or an update that rebuilds the music
+   player that no longer trips the container guard, quiet hours (Domovoi
+   doesn't speak announcements such as a printer problem in a room at night:
+   22:00 to 07:00 by default, set for the house or for each room) and a
+   phone room's low-battery warning.
 
 **Later**
 
