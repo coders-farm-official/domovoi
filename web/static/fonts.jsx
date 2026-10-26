@@ -40,6 +40,15 @@ const DomovoiFontsModule = (() => {
   const norm = (name) => String(name || '').trim().replace(/^['"]|['"]$/g, '').trim().toLowerCase();
   const cssQuote = (name) => '"' + String(name).replace(/["\\]/g, '\\$&').replace(/[\u0000-\u001f<>]/g, '') + '"';
 
+  /* How the list is read. The dashboard's apiGet (data.js: the household
+   * token, the sign-in retry) when the page has it; a page without data.js
+   * (a stand-alone editor page) can hand its own: setFetcher(path => json). */
+  let fetcher = (path) => {
+    if (typeof apiGet !== 'function') return Promise.reject(new Error('no apiGet on this page'));
+    return apiGet(path, { quiet: true });
+  };
+  const setFetcher = (fn) => { if (typeof fn === 'function') { fetcher = fn; if (loaded) load(true); } };
+
   let families = [];          // [{family, slug, category, source, weights, italic, licence, faces}]
   let byName = new Map();     // lower-case name -> entry
   let loaded = false;
@@ -76,7 +85,7 @@ const DomovoiFontsModule = (() => {
     if (inflight) return inflight;
     inflight = (async () => {
       try {
-        const body = await apiGet('/api/fonts', { quiet: true });
+        const body = await fetcher('/api/fonts');
         setFamilies((body && body.families) || []);
       } catch {
         try {
@@ -299,6 +308,7 @@ const DomovoiFontsModule = (() => {
   } catch { /* no document (a test sandbox) */ }
 
   const api = {
+    setFetcher,
     CATEGORIES, CATEGORY_LABELS, list, load, ready: () => load(), ensure, onChange, status,
     has: (n) => status(n) === 'installed', get: (n) => { const f = get(n); return f ? list().find((x) => x.slug === f.slug) : null; },
     substituteFor, stack, firstFamily, familiesInHTML, missingInHTML, recent, markUsed, add, remove, lookup,

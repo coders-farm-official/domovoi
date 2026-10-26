@@ -560,7 +560,7 @@ def _registry() -> dict:
 def test_the_registry_compiles_and_keeps_its_interface():
     r = _registry()
     for name in ("list", "ensure", "onChange", "load", "status", "familiesInHTML", "missingInHTML",
-                 "recent", "markUsed", "add", "remove", "Picker"):
+                 "recent", "markUsed", "add", "remove", "lookup", "setFetcher", "Picker"):
         assert name in r["exports"], name
     assert r["pickerIsFunction"] and r["settingsPanel"]
     assert r["listBeforeLoad"] == 0
