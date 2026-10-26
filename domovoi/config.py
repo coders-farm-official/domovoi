@@ -806,8 +806,8 @@ class Settings(BaseSettings):
     # Quiet hours (2026-10-25, owner request; domovoi/quiet_hours.py): between
     # these two clock times on the house's clock (the server's zone, the one
     # reminders use: domovoi/household_time.py) a room speaks no unprompted
-    # announcement (a low battery, a printer problem, a document that is
-    # ready, a plugin's). Alarms, timers and reminders still ring; answers
+    # announcement (a low battery, a printer problem, a voice that
+    # finished downloading, a plugin's). Alarms, timers and reminders still ring; answers
     # and "say this in the kitchen" still speak. Each room may follow these,
     # keep its own hours, or turn them off (satellites.quiet_mode, V040).
     # "HH:MM", 24-hour; start after end crosses midnight. A value that is

@@ -21,8 +21,8 @@ dinner's ready") and the dashboard's Broadcast still speak.
 * **Per room** (every room's Settings tab, dashboard and app): **Same as
   the house** (default), **Custom hours**, or **Off for this room**
   (`satellites.quiet_mode` / `quiet_start` / `quiet_end`, in V040 below).
-* Held back: low-battery warnings, printer failures, a letter or
-  document that is ready, a voice that finished downloading, song
+* Held back: low-battery warnings, printer failures, a voice that
+  finished downloading, song
   recognition finishing, and every plugin announcement (`sdk.speech`
   cannot ask otherwise). Nothing held back is spoken later; a plugin's
   `announce` returns the rooms it reached, so a quiet room is not in the

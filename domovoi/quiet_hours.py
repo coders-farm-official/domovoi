@@ -20,14 +20,14 @@ whose ``kind`` is not exempt. The kinds:
 
 * ``notice`` (the default, and the only kind a plugin can reach: the SDK's
   ``speech.announce`` never passes another): a low battery, a printer
-  problem, a document or letter that is ready, a voice that finished
-  downloading, a plugin's news. Held back during quiet hours: nothing is
+  problem, a voice that finished downloading, song recognition done, a
+  plugin's news. Held back during quiet hours: nothing is
   spoken then or later; the dashboard's notice and the phones'
   notification (where the feature has one) still go;
 * ``alarm``: timers, alarms and reminders. Never held back;
 * ``user``: somebody asked for it right now ("say dinner's ready in the
-  kitchen", the dashboard's Broadcast, a voice change they picked). Never
-  held back.
+  kitchen", the dashboard's Broadcast, a voice change they picked, the
+  end of a letter they just dictated in the room). Never held back.
 
 Answers to a question are replies, not announcements, and never pass here.
 """

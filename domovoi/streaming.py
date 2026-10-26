@@ -5696,8 +5696,8 @@ class StreamSession:
         """Inject a TTS-synthesized announcement into this Pi's stream.
 
         ``kind`` (domovoi/quiet_hours.py, 2026-10-25): ``notice`` (the
-        default: a low battery, a printer problem, a document that is
-        ready, a plugin's news) is held back during the room's quiet hours
+        default: a low battery, a printer problem, a voice that finished
+        downloading, a plugin's news) is held back during the room's quiet hours
         with ``AnnounceNotStarted(reason='quiet_hours')`` (nothing is
         spoken, then or later); ``alarm`` (timers, alarms, reminders) and
         ``user`` (somebody asked for it now: intercom, Broadcast, a voice

@@ -197,7 +197,12 @@ async def test_a_printer_failure_is_held_back(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_a_letter_ready_line_is_held_back(monkeypatch):
+@pytest.mark.parametrize("empty", [False, True])
+async def test_the_end_of_a_dictation_is_a_reply_and_never_held_back(monkeypatch, empty):
+    """Someone just dictated a letter in the room and is waiting: "Saved as
+    …" (or "I didn't hear a letter…") is their answer, spoken at 23:00 too."""
+    from contextlib import asynccontextmanager
+
     from domovoi.handlers import documents
     from domovoi.sdk import speech
 
@@ -210,15 +215,9 @@ async def test_a_letter_ready_line_is_held_back(monkeypatch):
     async def write_and_save(state):
         return Saved()
 
-    monkeypatch.setattr(documents.letters, "write_and_save", write_and_save)
-
-    from contextlib import asynccontextmanager
-
     @asynccontextmanager
     async def scope():
         yield SimpleNamespace()
-
-    monkeypatch.setattr("domovoi.db.session.session_scope", scope)
 
     class Repo:
         def __init__(self, s):
@@ -227,9 +226,19 @@ async def test_a_letter_ready_line_is_held_back(monkeypatch):
         async def set_context_key(self, *a):
             return None
 
+    monkeypatch.setattr(documents.letters, "write_and_save", write_and_save)
+    monkeypatch.setattr("domovoi.db.session.session_scope", scope)
     monkeypatch.setattr(documents, "SessionRepository", Repo)
-    await documents._write_up_later({}, 1, "kitchen")
-    assert spoken == []
+    if empty:
+        await documents._say_reply("kitchen", "I didn't hear a letter, so nothing was saved.")
+        assert spoken == ["I didn't hear a letter, so nothing was saved."]
+    else:
+        await documents._write_up_later({}, 1, "kitchen")
+        assert len(spoken) == 1 and spoken[0].startswith("Saved as")
+    # Both lines in the module go through the reply path, never sdk.speech.
+    src = inspect.getsource(documents)
+    assert "SpeechAPI(" not in src
+    assert src.count("await _say_reply(room_id,") == 2
 
 
 # ─── never held back: pinned at each caller ──────────────────────────────
@@ -289,7 +298,8 @@ def test_answers_never_pass_the_gate():
 
 
 def test_the_unprompted_ones_are_notices():
-    for path in ("domovoi/printing/jobs.py", "domovoi/handlers/documents.py", "domovoi/handlers/library.py",
+    assert _announce_kinds("domovoi/handlers/documents.py") == ["user"]   # the dictation's answer
+    for path in ("domovoi/printing/jobs.py", "domovoi/handlers/library.py",
                  "domovoi/handlers/voice.py", "domovoi/room_battery.py", "domovoi/sdk/speech.py"):
         kinds = _announce_kinds(path)
         assert kinds and all(k in (None, "notice") for k in kinds), (path, kinds)

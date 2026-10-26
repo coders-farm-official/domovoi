@@ -795,14 +795,32 @@ async def _idle_end(session_id: Any, room_id: str | None, seq: int, app: Any) ->
             _IDLE.pop(str(session_id), None)
     if empty:
         if room_id:
-            from domovoi.sdk.speech import SpeechAPI
-
             try:
-                await SpeechAPI("core").announce(room_id, "I didn't hear a letter, so nothing was saved.")
+                await _say_reply(room_id, "I didn't hear a letter, so nothing was saved.")
             except Exception as e:  # noqa: BLE001
                 log.info("letter by voice: the announcement failed: %s", type(e).__name__)
         return
     await _write_up_later(state, session_id, room_id)
+
+
+async def _say_reply(room_id: str, text_: str) -> list[str]:
+    """Say the end of a dictation in its room: the answer to someone who
+    just dictated a letter there and is waiting for it, so a reply
+    (``kind="user"``), never held back by quiet hours
+    (domovoi/quiet_hours.py). Core only: the SDK's ``speech.announce``
+    can only send notices. The rooms reached ([] when it isn't connected)."""
+    from domovoi.sdk import speech
+
+    provider = speech._active_sessions_provider
+    sess = (provider() or {}).get(room_id) if provider is not None else None
+    if sess is None:
+        return []
+    try:
+        await sess.announce(text_, kind="user")
+    except Exception as e:  # noqa: BLE001 — best-effort, like any announcement
+        log.info("letter by voice: %s didn't take the line: %s", room_id, type(e).__name__)
+        return []
+    return [room_id]
 
 
 def _awaiting_reply(live: Any) -> bool:
@@ -818,7 +836,6 @@ def _awaiting_reply(live: Any) -> bool:
 async def _write_up_later(state: dict, session_id: Any, room_id: str | None) -> None:
     """Write the letter up and say where it is (or why not) in the room."""
     from domovoi.db.session import session_scope
-    from domovoi.sdk.speech import SpeechAPI
 
     try:
         saved = await letters.write_and_save(state)
@@ -840,7 +857,7 @@ async def _write_up_later(state: dict, session_id: Any, room_id: str | None) -> 
         log.warning("letter by voice: the session couldn't be updated: %s", type(e).__name__)
     if room_id:
         try:
-            reached = await SpeechAPI("core").announce(room_id, _said(line))
+            reached = await _say_reply(room_id, _said(line))
             if not reached:
                 log.info("letter by voice: %s wasn't reachable to hear where the letter is", room_id)
         except Exception as e:  # noqa: BLE001

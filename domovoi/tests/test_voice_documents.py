@@ -471,11 +471,11 @@ async def test_phone_resume_and_the_old_collision(db_session, docs, model):
 async def test_a_command_after_the_room_stopped_listening_ends_the_letter(db_session, docs, model, monkeypatch):
     spoken: list[tuple[str, str]] = []
 
-    async def _announce(self, room_id, text_):
+    async def _announce(room_id, text_):
         spoken.append((room_id, text_))
         return [room_id]
 
-    monkeypatch.setattr("domovoi.sdk.speech.SpeechAPI.announce", _announce)
+    monkeypatch.setattr(documents_handler, "_say_reply", _announce)
     pid = await _person("Sam Lee")
     room = Room(db_session, person_id=pid)
     await room.say("take a letter to the landlord", trigger="wake_word")
