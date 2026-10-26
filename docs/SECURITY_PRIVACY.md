@@ -1694,8 +1694,27 @@ the other:
   extension as well as the media type: a name that is a document's
   (`.html`, `.svg`, `.rss`, `.xsl`, …) is a download even under a type
   that would otherwise be allowed.
-- **Rendered markdown is sanitised before it reaches the page.** The
-  document editor's preview runs `marked` output through
+- **Documents are sanitised on the server, on every load and every
+  save.** The Documents editor's formatted documents are `.html` files,
+  and an `.html` file in Documents can come from anywhere. The server
+  rebuilds each one from an allowlist (`domovoi/richdoc/sanitize.py`):
+  only the tags and attributes the editor itself writes, `style` cut down
+  to the properties the editor sets on that element (colour, highlight,
+  font, size, alignment, widths) with each value matched whole (no
+  `url()`, `expression()`, escapes or comments), links to `http(s)`,
+  `mailto` and `tel` only, and pictures only as embedded raster
+  `data:image/…` (never SVG, never an outside address, so opening a
+  document fetches nothing from anywhere). Scripts, styles, frames,
+  objects, SVG and MathML go with their contents. The browser applies
+  the same allowlist before anything reaches the editor
+  (`sanitizeDocumentHtml` in `web/static/sanitize_html.js`), and the
+  editor's schema keeps only what it knows. A picture pasted from a web
+  page is copied into the document when the site allows it and dropped
+  when it doesn't. The raw file is still only ever served as a download
+  with the sandbox headers (below). `domovoi/tests/test_documents_formatted.py`
+  holds the cases.
+- **Rendered markdown is sanitised before it reaches the page.** Chat
+  replies and other markdown previews run `marked` output through
   `web/static/sanitize_html.js`, an allowlist-and-escape pass that keeps
   markdown's own elements, drops every `on*` attribute, drops
   `<script>`/`<style>`/`<iframe>` with their contents, and accepts only

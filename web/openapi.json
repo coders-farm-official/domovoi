@@ -9861,6 +9861,184 @@
         }
       }
     },
+    "/api/documents/doc/{rel_path}": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Read Doc",
+        "description": "A document for the editor: a formatted document's content, already\nsanitised and without its page wrapper (``html``); a markdown file's\ntext (``markdown``); for a .docx, only its details (the browser reads\n``/raw`` and converts it).",
+        "operationId": "read_doc_api_documents_doc__rel_path__get",
+        "parameters": [
+          {
+            "name": "rel_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rel Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Read Doc Api Documents Doc  Rel Path  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Write Doc",
+        "description": "Save the editor's document as the file it is (see the section\ncomment): .html sanitised and wrapped, .md as the editor's markdown,\n.docx converted. Device tier and the Files write policy, like every\nother save here; written through a temporary file, so a failed save\nnever leaves half a document.",
+        "operationId": "write_doc_api_documents_doc__rel_path__put",
+        "parameters": [
+          {
+            "name": "rel_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rel Path"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentRow"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/documents/doc-save-as": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Save Doc As",
+        "description": "\"Save as formatted document\" (from a .md or a .docx) and \"save as\nWord\": a NEW file beside ``from_path``, named after it, with `` (1)``\nand so on when that name is taken. Nothing existing is overwritten.",
+        "operationId": "save_doc_as_api_documents_doc_save_as_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocSaveAsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentRow"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/documents/convert/docx": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Convert To Docx",
+        "description": "The editor's content as a Word file, for \"Download as Word\": what is\non screen, saved or not. Nothing is written on the server.",
+        "operationId": "convert_to_docx_api_documents_convert_docx_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocConvertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/documents/upload": {
       "post": {
         "tags": [
@@ -18519,6 +18697,131 @@
         ],
         "title": "DisplayRequest",
         "description": "Drive a video satellite's screen from the drawer's Display block."
+      },
+      "DocConvertRequest": {
+        "properties": {
+          "html": {
+            "type": "string",
+            "maxLength": 33554432,
+            "title": "Html"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Title",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "html"
+        ],
+        "title": "DocConvertRequest"
+      },
+      "DocSaveAsRequest": {
+        "properties": {
+          "html": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 33554432
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Html"
+          },
+          "markdown": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 33554432
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Markdown"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "from_path": {
+            "type": "string",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "From Path"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "html",
+              "docx",
+              "md"
+            ],
+            "title": "Format"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from_path",
+          "format"
+        ],
+        "title": "DocSaveAsRequest"
+      },
+      "DocWriteRequest": {
+        "properties": {
+          "html": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 33554432
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Html"
+          },
+          "markdown": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 33554432
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Markdown"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "title": "DocWriteRequest"
       },
       "DocumentRow": {
         "properties": {

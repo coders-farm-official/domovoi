@@ -149,6 +149,19 @@ household.
   (ISC), marked 12.0.2 (MIT), x-spreadsheet (MIT), qrcode-generator 1.4.4
   by Kazuhiko Arase (MIT) and Excalidraw 0.17.6 (MIT; it carries DOMPurify
   3.0.3 under Apache-2.0 or MPL-2.0, used here under Apache-2.0).
+- **The Documents editor's libraries** (`web/static/vendor/tiptap`,
+  `vendor/yjs`, `vendor/mammoth`), built from exact pinned versions by
+  `scripts/vendor/editors/build.mjs`, each folder with a `THIRD-PARTY.json`
+  that lists every package inside with its version and licence, and the
+  licence texts in `licenses/`: Tiptap 2.27.3 and ProseMirror (MIT; the
+  editor), y-prosemirror 1.3.7, Yjs 13.6.33, y-protocols 1.0.7, lib0
+  0.2.119, y-websocket 3.1.0 and y-indexeddb 9.0.12 (MIT; co-editing),
+  markdown-it 14.3.3 and prosemirror-markdown (MIT, with entities under
+  BSD-2-Clause; Markdown files), linkifyjs (MIT), and mammoth 1.13.0
+  (BSD-2-Clause; opening Word files), which carries jszip 3.10.2 (MIT or
+  GPL-3.0, used under MIT; with pako under MIT and Zlib), lop, option and
+  dingbat-to-unicode (BSD-2-Clause), and @xmldom/xmldom, underscore,
+  xmlbuilder, base64-js, lie, immediate and setimmediate (MIT).
 - **The dashboard's fonts**, all under the SIL Open Font License 1.1, each
   with its licence text beside it: Inter and JetBrains Mono (through
   fontsource 5.2.8, in `web/static/vendor/fonts/`), the three fonts

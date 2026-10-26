@@ -7,17 +7,19 @@ extension, never separate stores. Three in-app editors, all homegrown or
 in-page — the OnlyOffice/Collabora sidecar containers are retired (no
 iframes, no JWT/WOPI handshakes, no per-file engine locks):
 
-  * **Doc editor** (web/static/doc_editor.jsx) — markdown-first: toolbar
-    formatting + live preview (vendored ``marked``), plain UTF-8 storage
-    via the ``/text`` endpoints. Export to .docx server-side
-    (``/export/doc``, python-docx).
+  * **Doc editor** (web/static/doc_editor.jsx) — a live word-processor
+    editor (Tiptap, vendored). New documents are formatted documents:
+    one self-contained ``.html`` page each (domovoi/richdoc), sanitised
+    here on every load and save; ``.md`` opens and saves as markdown;
+    ``.docx`` converts on open and, if the person keeps it as Word, on
+    save. Routes: ``/doc`` (GET/PUT), ``/doc-save-as``, ``/convert/docx``.
   * **Sheet editor** (web/static/sheet_editor.jsx) — vendored
     ``x-spreadsheet`` grid with client-side formula evaluation. Reads and
     writes .xlsx (openpyxl — values, formula strings; a save updates the
     existing workbook in place) and .csv through the ``/sheet`` endpoints; export to .csv/.xlsx via ``/export/sheet``.
   * **Excalidraw** — in-page React lib, unchanged (.excalidraw scenes).
 
-Legacy office formats (.docx/.doc/.odt/.rtf and .xls/.ods) are stored,
+Legacy office formats (.doc/.odt/.rtf and .xls/.ods) are stored,
 listed, uploaded, and downloaded — but not edited in-app (category
 ``download``).
 
