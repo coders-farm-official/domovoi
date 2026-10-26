@@ -14,7 +14,9 @@ anything that ends up in the bundle is not under a permissive licence.
 
 Output (web/static/vendor/univer/):
   univer.js                 ES module entry; sets window.DomovoiUniverLib
-  chunks/*.js               lazy chunks (hyphenation dictionaries, ...)
+  chunks/*.js               shared chunks esbuild splits out, if any (the
+                            hyphenation patterns are left out on purpose:
+                            build.mjs)
   univer.css                the presets' stylesheets
   LICENSE                   Univer's Apache-2.0 licence text
   THIRD-PARTY-NOTICES.txt   every bundled package, version, licence, text
@@ -69,29 +71,13 @@ def _licence_text(pkg_dir: Path) -> str:
 def main() -> int:
     work = Path(tempfile.mkdtemp(prefix="domovoi-univer-"))
     try:
-        for name in ("package.json", "package-lock.json", "entry.js"):
+        for name in ("package.json", "package-lock.json", "entry.js", "safe_image.js", "build.mjs"):
             shutil.copy2(HERE / name, work / name)
         _run(["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"], work)
         out = work / "out"
-        _run(
-            [
-                str(work / "node_modules" / ".bin" / "esbuild"),
-                "entry.js",
-                "--bundle",
-                "--format=esm",
-                "--splitting",
-                "--minify",
-                "--target=es2020",
-                "--define:process.env.NODE_ENV=\"production\"",
-                f"--outdir={out}",
-                "--entry-names=univer",
-                "--chunk-names=chunks/[name]-[hash]",
-                "--legal-comments=none",
-                f"--metafile={work / 'meta.json'}",
-                "--log-level=warning",
-            ],
-            work,
-        )
+        # build.mjs: esbuild, plus emptying engine-render's hyphenation-pattern
+        # loaders, so none of those patterns (mixed licences) is bundled.
+        _run(["node", "build.mjs", str(out), str(work / "meta.json")], work)
         meta = json.loads((work / "meta.json").read_text(encoding="utf-8"))
         packages: set[str] = set()
         for output in meta["outputs"].values():
@@ -102,7 +88,9 @@ def main() -> int:
 
         notices: list[str] = [
             "Third-party code bundled into web/static/vendor/univer/ by "
-            "scripts/vendor/univer/vendor_univer.py.\n"
+            "scripts/vendor/univer/vendor_univer.py. Univer's hyphenation patterns "
+            "(@univerjs/engine-render, from TeX hyph-utf8) are deliberately NOT included: "
+            "scripts/vendor/univer/build.mjs empties their loader table.\n"
         ]
         bad: list[str] = []
         for pkg in sorted(packages):

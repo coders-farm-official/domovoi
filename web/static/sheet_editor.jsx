@@ -370,6 +370,9 @@ const SheetEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null, inA
               disableAutoFocus: true,
               customFontFamily: { override: true, list: fonts },
               menu: sheetMenuConfig(csv),
+              // =IMAGE() only for pictures inside the formula or on this
+              // server: no outside requests (scripts/vendor/univer/safe_image.js).
+              formula: { function: lib.formulaFunctions || [] },
               footer: {
                 sheetBar: true, statisticBar: true, menus: false, zoomSlider: false,
                 addSheetButtonConfig: { show: !csv },
@@ -442,12 +445,13 @@ const SheetEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null, inA
     let stopped = false;
     const ping = async (leaving) => {
       try {
+        // The device is read from the request (this header, or the
+        // registration cookie), not from the body.
+        const dev = (typeof DeviceIdentity !== 'undefined' && DeviceIdentity.id) ? DeviceIdentity.id() : null;
         const r = await apiFetch(`/api/documents/presence/${enc}`, {
           method: 'POST', quiet: true, noPrompt: true,
-          body: JSON.stringify({
-            session_id: sessionRef.current, leaving: !!leaving,
-            device_id: (typeof DeviceIdentity !== 'undefined' && DeviceIdentity.id) ? DeviceIdentity.id() : null,
-          }),
+          headers: dev ? { 'X-Device-Id': dev } : {},
+          body: JSON.stringify({ session_id: sessionRef.current, leaving: !!leaving }),
         });
         if (!stopped && r && Array.isArray(r.others)) setOthers(r.others);
       } catch (e) { /* a courtesy: never in the way */ }

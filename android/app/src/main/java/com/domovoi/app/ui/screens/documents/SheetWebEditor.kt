@@ -132,6 +132,9 @@ internal fun SheetWebEditor(app: AppContainer, relPath: String, onClose: () -> U
                         settings.setSupportMultipleWindows(false)
                         settings.javaScriptCanOpenWindowsAutomatically = false
                         settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                        // It only ever loads the household's own server; Safe
+                        // Browsing would send the addresses it loads to Google.
+                        settings.safeBrowsingEnabled = false
                         setBackgroundColor(android.graphics.Color.TRANSPARENT)
                         webViewClient = SheetWebClient(app, h.base)
                         addJavascriptInterface(
@@ -174,16 +177,19 @@ private class SheetWebClient(private val app: AppContainer, private val base: Ht
         WebResourceResponse("text/plain", "utf-8", 403, "Forbidden", emptyMap(), ByteArrayInputStream(ByteArray(0)))
 }
 
-/** What sheet.html reads before auth.js runs (window.DomovoiAppBridge). */
+/** What sheet.html reads before auth.js runs (window.DomovoiAppBridge).
+ *  The token is handed over ONCE: sheet.html takes it on load, and nothing
+ *  that runs later in the page (or a page it is navigated to) can ask again. */
 private class SheetBridge(
-    private val token: String,
+    token: String,
     private val deviceId: String?,
     private val dark: Boolean,
     private val onClose: () -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
+    private val pending = java.util.concurrent.atomic.AtomicReference<String?>(token)
 
-    @JavascriptInterface fun deviceToken(): String = token
+    @JavascriptInterface fun deviceToken(): String = pending.getAndSet(null).orEmpty()
     @JavascriptInterface fun deviceId(): String = deviceId.orEmpty()
     @JavascriptInterface fun darkTheme(): Boolean = dark
     @JavascriptInterface fun close() { main.post { onClose() } }

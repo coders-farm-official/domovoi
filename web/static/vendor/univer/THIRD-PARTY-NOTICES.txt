@@ -1,4 +1,4 @@
-Third-party code bundled into web/static/vendor/univer/ by scripts/vendor/univer/vendor_univer.py.
+Third-party code bundled into web/static/vendor/univer/ by scripts/vendor/univer/vendor_univer.py. Univer's hyphenation patterns (@univerjs/engine-render, from TeX hyph-utf8) are deliberately NOT included: scripts/vendor/univer/build.mjs empties their loader table.
 
 ========================================================================
 @flatten-js/interval-tree 1.1.3  (MIT)

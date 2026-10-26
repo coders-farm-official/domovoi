@@ -45,6 +45,12 @@ class SheetWebEditorTest {
     }
 
     @Test
+    fun `the token is handed over once and Safe Browsing is off`() {
+        assertTrue(src.contains("fun deviceToken(): String = pending.getAndSet(null).orEmpty()"))
+        assertTrue(src.contains("settings.safeBrowsingEnabled = false"))
+    }
+
+    @Test
     fun `only the server's documents open in the web editor`() {
         val files = moduleFile("src/main/java/com/domovoi/app/ui/screens/files/FilesScreen.kt").readText()
         assertTrue(files.contains("if (!source.onPhone && selectedId == DOCUMENTS_LIBRARY_ID) {"))

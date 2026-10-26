@@ -43,6 +43,21 @@ from fastapi import HTTPException
 WINDOW_ROWS = 5000
 WINDOW_COLS = 100
 
+# What one workbook may be, checked before openpyxl is asked to do anything
+# (security review round 1, 2026-10-26). openpyxl holds a cell in ~540
+# bytes while saving, and a merge makes an object for every cell it
+# covers, so these bound the one-thread "sheets" pool's time and memory:
+# about 250k cells is ~135 MB and a few seconds.
+MAX_SHEETS = 50
+MAX_SAVE_CELLS = 250_000      # cells a save may carry, all sheets together
+MAX_OPEN_CELLS = 200_000      # cells an editable open may send; past it: read-only
+MAX_MERGES = 5_000            # merged ranges per sheet (~1 ms of openpyxl each)
+MAX_MERGED_AREA = 100_000     # cells covered by merges, per sheet
+MAX_STYLES = 20_000
+MAX_TEXT = 32_767             # Excel's own limit for one cell
+MAX_COL_PX = 5_000
+MAX_ROW_PX = 2_000
+
 # Univer enums (core/lib/types/types/enum): BorderStyleTypes, HorizontalAlign,
 # VerticalAlign, WrapStrategy, CellValueType.
 _BORDER_TO_UNIVER = {
@@ -66,6 +81,218 @@ _RGB_RE = re.compile(r"^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)")
 
 class WorkbookRefused(HTTPException):
     """A save the editor must not do; ``status_code`` says why."""
+
+
+# ─── what a snapshot may be (checked before any openpyxl work) ──────
+# The characters an .xlsx can't hold (openpyxl refuses them mid-save).
+_ILLEGAL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _bad(detail: str, status: int = 400) -> WorkbookRefused:
+    return WorkbookRefused(status_code=status, detail=detail)
+
+
+def _check_text(value: Any, what: str, limit: int = MAX_TEXT) -> None:
+    if value is None:
+        return
+    if not isinstance(value, str):
+        raise _bad(f"{what} must be text")
+    if len(value) > limit:
+        raise _bad(f"{what} is longer than {limit} characters", 413)
+    if _ILLEGAL_CHARS.search(value):
+        raise _bad(f"{what} contains control characters a spreadsheet can't store")
+
+
+def _check_number(value: Any, what: str, low: float, high: float) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise _bad(f"{what} must be a number")
+    try:
+        f = float(value)
+    except OverflowError:
+        raise _bad(f"{what} is out of range") from None
+    if not math.isfinite(f) or f < low or f > high:
+        raise _bad(f"{what} is out of range")
+
+
+def _check_int(value: Any, what: str, low: int, high: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise _bad(f"{what} must be a whole number")
+    if value < low or value > high:
+        raise _bad(f"{what} is outside the sheet")
+    return value
+
+
+def _check_style(style: Any, what: str) -> None:
+    if style is None or isinstance(style, str):
+        if isinstance(style, str) and len(style) > 64:
+            raise _bad(f"{what}: style id too long")
+        return
+    if not isinstance(style, dict):
+        raise _bad(f"{what}: a style must be an object")
+    _check_text(style.get("ff"), f"{what}: font name", 255)
+    _check_number(style.get("fs"), f"{what}: font size", 0, 409)
+    n = style.get("n")
+    if n is not None:
+        if not isinstance(n, dict):
+            raise _bad(f"{what}: number format must be an object")
+        _check_text(n.get("pattern"), f"{what}: number format", 255)
+    tr = style.get("tr")
+    if tr is not None:
+        if not isinstance(tr, dict):
+            raise _bad(f"{what}: rotation must be an object")
+        _check_number(tr.get("a"), f"{what}: rotation", -360, 360)
+    for key in ("bd", "cl", "bg", "ul", "st"):
+        if style.get(key) is not None and not isinstance(style.get(key), dict):
+            raise _bad(f"{what}: {key} must be an object")
+
+
+def _check_cell(cell: Any, where: str, styles: dict) -> None:
+    if cell is None:
+        return
+    if not isinstance(cell, dict):
+        raise _bad(f"{where}: a cell must be an object")
+    v = cell.get("v")
+    if isinstance(v, str):
+        _check_text(v, where)
+    elif v is not None and not isinstance(v, bool):
+        if not isinstance(v, (int, float)):
+            raise _bad(f"{where}: a value must be text, a number or true/false")
+        try:
+            float(v)
+        except OverflowError:
+            raise _bad(f"{where}: the number is out of range") from None
+    _check_text(cell.get("f"), f"{where} formula", 8192)
+    p = cell.get("p")
+    if p is not None:
+        text = _rich_text(p)
+        if text is None:
+            raise _bad(f"{where}: unreadable rich text")
+        _check_text(text, where)
+    _check_style(cell.get("s"), where)
+
+
+def _check_merges(raw: Any, name: str) -> None:
+    """A list of non-overlapping ranges inside the window, at most
+    ``MAX_MERGES`` of them covering at most ``MAX_MERGED_AREA`` cells.
+    Overlaps are what made openpyxl rebuild huge merges over and over."""
+    if raw is None:
+        return
+    if not isinstance(raw, list):
+        raise _bad(f"{name}: merged cells must be a list")
+    if len(raw) > MAX_MERGES:
+        raise _bad(f"{name} has more than {MAX_MERGES} merged ranges", 413)
+    spans = []
+    area = 0
+    for m in raw:
+        if not isinstance(m, dict):
+            raise _bad(f"{name}: a merged range must be an object")
+        r0 = _check_int(m.get("startRow"), f"{name}: merge row", 0, WINDOW_ROWS - 1)
+        r1 = _check_int(m.get("endRow"), f"{name}: merge row", 0, WINDOW_ROWS - 1)
+        c0 = _check_int(m.get("startColumn"), f"{name}: merge column", 0, WINDOW_COLS - 1)
+        c1 = _check_int(m.get("endColumn"), f"{name}: merge column", 0, WINDOW_COLS - 1)
+        if r1 < r0 or c1 < c0:
+            raise _bad(f"{name}: a merged range ends before it starts")
+        area += (r1 - r0 + 1) * (c1 - c0 + 1)
+        if area > MAX_MERGED_AREA:
+            raise _bad(f"{name}: merged ranges cover more than {MAX_MERGED_AREA} cells", 413)
+        spans.append((r0, r1, c0, c1))
+    if len(spans) < 2:
+        return
+    # Overlap check in time proportional to the (bounded) merged area.
+    grid = bytearray(WINDOW_ROWS * WINDOW_COLS)
+    for r0, r1, c0, c1 in spans:
+        width = c1 - c0 + 1
+        for r in range(r0, r1 + 1):
+            at = r * WINDOW_COLS + c0
+            if any(grid[at:at + width]):
+                raise _bad(f"{name}: merged ranges overlap")
+            grid[at:at + width] = b"\x01" * width
+
+
+def _check_dims(raw: Any, key: str, limit: int, high: int, what: str) -> None:
+    if raw is None:
+        return
+    if not isinstance(raw, dict):
+        raise _bad(f"{what} must be an object")
+    if len(raw) > limit:
+        raise _bad(f"{what}: too many entries", 413)
+    for v in raw.values():
+        if v is None:
+            continue
+        if not isinstance(v, dict):
+            raise _bad(f"{what}: an entry must be an object")
+        _check_number(v.get(key), what, 0, high)
+
+
+def validate_snapshot(snapshot: Any) -> None:
+    """Refuse (400/413) a snapshot that isn't one the editor could have
+    sent, or that is bigger than this server will build: shapes, types,
+    control characters, numbers out of range, overlapping merges and the
+    size limits above. Runs before any openpyxl work."""
+    if not isinstance(snapshot, dict):
+        raise _bad("the workbook must be an object")
+    order = snapshot.get("sheetOrder")
+    sheets = snapshot.get("sheets")
+    if not isinstance(order, list) or not order or not isinstance(sheets, dict):
+        raise _bad("the workbook has no sheets")
+    if len(order) > MAX_SHEETS:
+        raise _bad(f"a workbook here can have at most {MAX_SHEETS} sheets", 413)
+    if len(set(map(str, order))) != len(order):
+        raise _bad("a sheet is listed twice")
+    styles = snapshot.get("styles")
+    if styles is not None:
+        if not isinstance(styles, dict):
+            raise _bad("styles must be an object")
+        if len(styles) > MAX_STYLES:
+            raise _bad("too many styles", 413)
+        for sid, st in styles.items():
+            if st is not None and not isinstance(st, dict):
+                raise _bad("a style must be an object")
+            _check_style(st, f"style {str(sid)[:20]}")
+    cells = 0
+    for sid in order:
+        if not isinstance(sid, str):
+            raise _bad("sheet ids must be text")
+        sheet = sheets.get(sid)
+        if not isinstance(sheet, dict):
+            raise _bad(f"sheet {sid[:20]!r} is missing")
+        name = sheet.get("name")
+        _check_text(name, "A sheet name", 200)
+        label = (name or sid)[:40]
+        cd = sheet.get("cellData")
+        if cd is not None:
+            if not isinstance(cd, dict):
+                raise _bad(f"{label}: cellData must be an object")
+            for row in cd.values():
+                if row is None:
+                    continue
+                if not isinstance(row, dict):
+                    raise _bad(f"{label}: a row must be an object")
+                cells += len(row)
+                if cells > MAX_SAVE_CELLS:
+                    raise _bad(
+                        f"The workbook has more than {MAX_SAVE_CELLS:,} cells, which is more "
+                        "than the editor saves. Nothing was changed.", 413)
+                for cell in row.values():
+                    _check_cell(cell, label, styles or {})
+        _check_merges(sheet.get("mergeData"), label)
+        _check_dims(sheet.get("columnData"), "w", WINDOW_COLS * 2, MAX_COL_PX, f"{label}: column widths")
+        _check_dims(sheet.get("rowData"), "h", WINDOW_ROWS * 2, MAX_ROW_PX, f"{label}: row heights")
+        freeze = sheet.get("freeze")
+        if freeze is not None:
+            if not isinstance(freeze, dict):
+                raise _bad(f"{label}: freeze must be an object")
+            for k in ("xSplit", "ySplit", "startRow", "startColumn"):
+                if freeze.get(k) is not None:
+                    _check_int(freeze.get(k), f"{label}: freeze", -1, WINDOW_ROWS)
+        tab = sheet.get("tabColor")
+        if tab is not None and (not isinstance(tab, str) or len(tab) > 32):
+            raise _bad(f"{label}: tab colour must be a colour")
+        origin = sheet.get("origin")
+        if origin is not None and (not isinstance(origin, str) or len(origin) > 16):
+            raise _bad(f"{label}: origin must be a sheet id")
 
 
 # ─── small conversions ──────────────────────────────────────────────
@@ -553,6 +780,8 @@ def _read_xlsx(target: Path, wb: Any) -> dict:
     sheets: dict[str, dict] = {}
     order: list[str] = []
     truncated: list[str] = []
+    budget = MAX_OPEN_CELLS
+    over = False
     for idx, ws in enumerate(wb.worksheets):
         sid = f"s{idx}"
         order.append(sid)
@@ -564,12 +793,16 @@ def _read_xlsx(target: Path, wb: Any) -> dict:
         for (r, c), cell in ws._cells.items():
             if r > n_rows or c > n_cols or isinstance(cell, MergedCell):
                 continue
+            if budget <= 0:
+                over = True
+                break
             out = _to_univer_cell(value_model(cell.value, wb.epoch))
             sref = styles.ref(style_model(cell, default_font)) if cell.has_style else None
             if sref:
                 out["s"] = sref
             if out:
                 cell_data.setdefault(r - 1, {})[c - 1] = out
+                budget -= 1
         tab = _openpyxl_hex(ws.sheet_properties.tabColor) if ws.sheet_properties.tabColor else None
         sheet: dict[str, Any] = {
             "id": sid,
@@ -598,7 +831,7 @@ def _read_xlsx(target: Path, wb: Any) -> dict:
     }
     if default_font is not None and default_font.name:
         workbook["defaultStyle"] = {"ff": default_font.name, "fs": float(default_font.sz or 11)}
-    return {"workbook": workbook, "truncated": truncated}
+    return {"workbook": workbook, "truncated": truncated, "over_budget": over}
 
 
 def _csv_cell(text: str) -> dict:
@@ -636,11 +869,17 @@ def read_csv(target: Path, max_rows: int, max_cols: int) -> dict:
     cell_data: dict[int, dict[int, dict]] = {}
     n_rows = n_cols = 0
     truncated = False
+    budget = MAX_OPEN_CELLS
+    over = False
     with target.open("r", encoding="utf-8-sig", errors="replace", newline="") as fh:
         for r, row in enumerate(csv.reader(fh)):
             if r >= max_rows:
                 truncated = True
                 break
+            if budget <= 0:
+                over = True
+                break
+            budget -= len(row)
             if len(row) > max_cols:
                 truncated = True
             for c, text in enumerate(row[:max_cols]):
@@ -667,15 +906,36 @@ def read_csv(target: Path, max_rows: int, max_cols: int) -> dict:
             "locale": "enUS", "styles": {}, "sheetOrder": ["s0"], "sheets": {"s0": sheet},
         },
         "truncated": [sheet["name"]] if truncated else [],
+        "over_budget": over,
     }
 
 
-def read_xlsx(target: Path) -> dict:
+# openpyxl's own word for "this part of the file is dropped when I save it"
+# (sparklines, x14 validation and conditional formatting, slicers, ...).
+_UNKEPT_WARNING = re.compile(r"will be removed|not supported", re.IGNORECASE)
+
+
+def load_xlsx(target: Path, **kwargs: Any) -> tuple[Any, list[str]]:
+    """``load_workbook`` plus what openpyxl said it could not keep. A
+    workbook that loses anything on a load-and-save must not be saved by
+    the editor; the caller opens it read-only (or refuses the save)."""
+    import warnings
+
     from openpyxl import load_workbook
 
-    wb = load_workbook(target, data_only=False, rich_text=False)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        wb = load_workbook(target, **kwargs)
+    lost = sorted({str(w.message) for w in caught if _UNKEPT_WARNING.search(str(w.message))})
+    return wb, lost
+
+
+def read_xlsx(target: Path) -> dict:
+    wb, lost = load_xlsx(target, data_only=False, rich_text=False)
     try:
-        return _read_xlsx(target, wb)
+        model = _read_xlsx(target, wb)
+        model["lost"] = lost
+        return model
     finally:
         wb.close()
 
@@ -690,13 +950,20 @@ def read_xlsx_values_only(target: Path) -> dict:
         sheets: dict[str, dict] = {}
         order: list[str] = []
         truncated: list[str] = []
+        # One budget for the whole workbook: the read stops when it is spent
+        # (the rest of the file is simply not shown), so neither the read nor
+        # the answer grows with the number of sheets.
+        budget = MAX_OPEN_CELLS
         for idx, ws in enumerate(wb.worksheets):
             sid = f"s{idx}"
             order.append(sid)
             cell_data: dict[int, dict[int, dict]] = {}
             n_rows = n_cols = 0
-            for r, row in enumerate(ws.iter_rows(max_row=WINDOW_ROWS + 1, max_col=WINDOW_COLS)):
-                if r >= WINDOW_ROWS:
+            rows = ws.iter_rows(max_row=WINDOW_ROWS + 1, max_col=WINDOW_COLS) if budget > 0 else ()
+            if budget <= 0:
+                truncated.append(ws.title)
+            for r, row in enumerate(rows):
+                if r >= WINDOW_ROWS or budget <= 0:
                     truncated.append(ws.title)
                     break
                 for c, cell in enumerate(row):
@@ -704,6 +971,7 @@ def read_xlsx_values_only(target: Path) -> dict:
                     if out:
                         cell_data.setdefault(r, {})[c] = out
                         n_rows, n_cols = max(n_rows, r + 1), max(n_cols, c + 1)
+                        budget -= 1
             sheets[sid] = {
                 "id": sid, "name": ws.title, "hidden": 0,
                 "rowCount": min(WINDOW_ROWS, max(1000, n_rows + 100)),
@@ -716,6 +984,7 @@ def read_xlsx_values_only(target: Path) -> dict:
                 "locale": "enUS", "styles": {}, "sheetOrder": order, "sheets": sheets,
             },
             "truncated": truncated,
+            "over_budget": budget <= 0,
         }
     finally:
         wb.close()
@@ -959,13 +1228,87 @@ def _valid_title(name: Any, fallback: str) -> str:
     return s.strip("'") or fallback
 
 
+def _mentions_sheet(text: str, title: str) -> bool:
+    """``text`` (a formula, a defined name) refers to the sheet ``title``:
+    ``Title!`` or ``'Ti''tle'!``, case-insensitively, as Excel reads it."""
+    low, name = text.lower(), title.lower()
+    if "'" + name.replace("'", "''") + "'!" in low:
+        return True
+    for m in re.finditer(re.escape(name) + "!", low):
+        i = m.start()
+        if i == 0 or not (low[i - 1].isalnum() or low[i - 1] in "_.'"):
+            return True
+    return False
+
+
+def _file_references(wb: Any, skip: Any = None) -> list[str]:
+    """Every formula-like text in the workbook that the editor doesn't show
+    and so can't rewrite: defined names (workbook and sheet scope), data
+    validation and conditional formatting formulas."""
+    out: list[str] = []
+    for dn in getattr(wb, "defined_names", {}).values():
+        out.append(dn.attr_text or "")
+    for ws in wb.worksheets:
+        for dn in getattr(ws, "defined_names", {}).values():
+            out.append(dn.attr_text or "")
+        if ws is skip:
+            continue
+        for dv in ws.data_validations.dataValidation:
+            out.extend(f for f in (dv.formula1, dv.formula2) if f)
+        for cf in ws.conditional_formatting:
+            for rule in cf.rules:
+                out.extend(f for f in (rule.formula or []) if f)
+    return out
+
+
+def _snapshot_formulas(snapshot: dict) -> list[str]:
+    out = []
+    for sheet in (snapshot.get("sheets") or {}).values():
+        for row in ((sheet or {}).get("cellData") or {}).values():
+            for cell in (row or {}).values():
+                f = (cell or {}).get("f") if isinstance(cell, dict) else None
+                if isinstance(f, str) and f:
+                    out.append(f)
+    return out
+
+
+def _refuse_breaking_renames(wb: Any, plan: list[tuple[Any, dict, bool]], gone: list[Any],
+                             snapshot: dict) -> None:
+    """Renaming or removing a sheet would leave named ranges, validation or
+    formatting rules (and any formula Univer didn't rewrite) pointing at a
+    sheet that isn't there. v1 refuses that save with a plain message
+    rather than rewrite references it can't see."""
+    renamed = [(ws, ws.title) for ws, sheet, fresh in plan
+               if not fresh and str(sheet.get("name") or "").strip().lower() != ws.title.lower()]
+    if not renamed and not gone:
+        return
+    texts = _file_references(wb)
+    formulas = _snapshot_formulas(snapshot)
+    for ws, old in renamed:
+        if any(_mentions_sheet(t, old) for t in texts) or any(_mentions_sheet(f, old) for f in formulas):
+            raise WorkbookRefused(
+                status_code=409,
+                detail=f"The sheet “{old}” is used by named ranges, rules or formulas in this "
+                "file, so it can't be renamed here. Give it back its name to save, or rename it "
+                "in a spreadsheet app.",
+            )
+    for ws in gone:
+        if any(_mentions_sheet(t, ws.title) for t in _file_references(wb, skip=ws)):
+            raise WorkbookRefused(
+                status_code=409,
+                detail=f"The sheet “{ws.title}” is used by named ranges or rules in this file, "
+                "so it can't be deleted here. Delete it in a spreadsheet app.",
+            )
+
+
 def write_xlsx(wb: Any, snapshot: dict) -> None:
     """Apply ``snapshot`` (``{sheetOrder, sheets, styles}`` plus each
-    sheet's ``origin``) to ``wb`` in place."""
+    sheet's ``origin``) to ``wb`` in place. The caller has run
+    :func:`validate_snapshot`; this runs it again, cheaply, for any other
+    caller."""
+    validate_snapshot(snapshot)
     order = snapshot.get("sheetOrder")
     sheets = snapshot.get("sheets")
-    if not isinstance(order, list) or not isinstance(sheets, dict) or not order:
-        raise WorkbookRefused(status_code=400, detail="the workbook has no sheets")
     styles = snapshot.get("styles") if isinstance(snapshot.get("styles"), dict) else {}
     origins = {f"s{i}": ws for i, ws in enumerate(wb.worksheets)}
     used: set[str] = set()
@@ -981,6 +1324,7 @@ def write_xlsx(wb: Any, snapshot: dict) -> None:
         if ws is not None:
             used.add(origin)
         plan.append((ws, sheet, ws is None))
+    _refuse_breaking_renames(wb, plan, [ws for o, ws in origins.items() if o not in used], snapshot)
     # Sheets that are gone, then new ones, then the order.
     for origin, ws in origins.items():
         if origin not in used:

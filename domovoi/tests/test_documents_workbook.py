@@ -496,17 +496,68 @@ def test_other_types_are_refused(docs_dir):
     assert (docs_dir / "notes.md").read_text(encoding="utf-8") == "# hi"
 
 
+def _ping(c, path, session, device=None, **extra):
+    headers = {"X-Device-Id": device} if device else {}
+    return c.post(f"/api/documents/presence/{path}", json={"session_id": session, **extra}, headers=headers)
+
+
 def test_presence_names_the_other_editors(docs_dir):
     _household(docs_dir / "h.xlsx")
     with _client() as c:
-        a = c.post("/api/documents/presence/h.xlsx", json={"session_id": "session-aaaa", "device_id": "dev-a"})
+        a = _ping(c, "h.xlsx", "session-aaaa", "dev-aaaa")
         assert a.status_code == 200, a.text
         assert a.json()["others"] == []
-        b = c.post("/api/documents/presence/h.xlsx", json={"session_id": "session-bbbb", "device_id": "dev-b"})
+        b = _ping(c, "h.xlsx", "session-bbbb", "dev-bbbb")
         assert b.json()["others"] == ["another device"]   # no devices row in the fake DB
-        c.post("/api/documents/presence/h.xlsx", json={"session_id": "session-bbbb", "leaving": True})
-        a2 = c.post("/api/documents/presence/h.xlsx", json={"session_id": "session-aaaa", "device_id": "dev-a"})
-        assert a2.json()["others"] == []
+        _ping(c, "h.xlsx", "session-bbbb", "dev-bbbb", leaving=True)
+        assert _ping(c, "h.xlsx", "session-aaaa", "dev-aaaa").json()["others"] == []
+
+
+def test_presence_is_only_for_sheets_that_exist(docs_dir):
+    """Review round 1: any path grew the table, for files that weren't there."""
+    (docs_dir / "notes.md").write_text("# hi", encoding="utf-8")
+    with _client() as c:
+        for i in range(30):
+            assert _ping(c, f"nothing/{i}.xlsx", f"session-{i:04d}").status_code == 404
+        assert _ping(c, "notes.md", "session-mdmd").status_code == 404
+    assert docs._presence == {}
+
+
+def test_presence_is_bounded(docs_dir, monkeypatch):
+    monkeypatch.setattr(docs, "_PRESENCE_MAX_PATHS", 2)
+    monkeypatch.setattr(docs, "_PRESENCE_MAX_SESSIONS", 2)
+    for n in ("a", "b", "c"):
+        _household(docs_dir / f"{n}.xlsx")
+    with _client() as c:
+        assert _ping(c, "a.xlsx", "session-a1").status_code == 200
+        assert _ping(c, "b.xlsx", "session-b1").status_code == 200
+        assert _ping(c, "c.xlsx", "session-c1").status_code == 429     # paths
+        assert _ping(c, "a.xlsx", "session-a2").status_code == 200
+        assert _ping(c, "a.xlsx", "session-a3").status_code == 429     # sessions
+        assert _ping(c, "a.xlsx", "session-a1").status_code == 200     # a known one still pings
+    assert len(docs._presence) == 2 and len(docs._presence["a.xlsx"]) == 2
+
+
+def test_presence_device_comes_from_the_request_not_the_body(docs_dir, monkeypatch):
+    """A body naming someone else's device is ignored; the name shown is
+    looked up only for devices actually on this sheet."""
+    _household(docs_dir / "h.xlsx")
+    asked = []
+
+    async def names(ids):
+        asked.append(list(ids))
+        return {"dev-kitchen": "Kitchen tablet"}
+
+    monkeypatch.setattr(docs, "_device_names", names)
+    with _client() as c:
+        _ping(c, "h.xlsx", "session-kkkk", "dev-kitchen")
+        _ping(c, "h.xlsx", "session-spoof", None, device_id="dev-someone-else")
+        r = _ping(c, "h.xlsx", "session-me00", "dev-me0000")
+    assert r.json()["others"] == ["Kitchen tablet", "another device"]
+    assert all("dev-someone-else" not in ids for ids in asked)
+    # The same device in another tab is not "someone else".
+    with _client() as c:
+        assert _ping(c, "h.xlsx", "session-kkk2", "dev-kitchen").json()["others"] == ["another device"]
 
 
 # ─── the server's other readers still read what the editor saved ────
@@ -521,3 +572,399 @@ def test_chat_extract_reads_a_workbook_the_editor_saved(tmp_path):
     fn = getattr(extract, "extract_xlsx", None) or getattr(extract, "extract")
     text = json.dumps(fn(path), default=str) if not isinstance(fn(path), str) else fn(path)
     assert "Rent" in text and "450" in text and "keep me" in text
+
+
+# ─── security review round 1 (2026-10-26): limits, shapes, lost parts ─
+def _put(c, name, snap, base=None, **extra):
+    return c.put(f"/api/documents/workbook/{name}",
+                 json={"workbook": snap, "base_version": base, **extra})
+
+
+def _one_sheet(cells=None, **extra):
+    sheet = {"id": "a", "name": "a", "cellData": cells or {}}
+    sheet.update(extra)
+    return {"sheetOrder": ["a"], "sheets": {"a": sheet}, "styles": {}}
+
+
+def test_overlapping_merges_are_refused_before_openpyxl(docs_dir, monkeypatch):
+    """Six nested full-window merges in 531 bytes took 27 s of the sheets
+    pool. Now: 400, at once, and openpyxl is never asked."""
+    import time
+
+    import openpyxl
+
+    def never(*a, **k):
+        raise AssertionError("openpyxl was asked")
+
+    merges = [{"startRow": 0, "endRow": 4999 - i, "startColumn": 0, "endColumn": 99} for i in range(6)]
+    monkeypatch.setattr(openpyxl, "Workbook", never)
+    monkeypatch.setattr(openpyxl, "load_workbook", never)
+    with _client() as c:
+        t0 = time.perf_counter()
+        r = _put(c, "m.xlsx", _one_sheet(mergeData=merges))
+        took = time.perf_counter() - t0
+    assert r.status_code in (400, 413), r.text
+    assert took < 2
+    assert not (docs_dir / "m.xlsx").exists()
+
+
+@pytest.mark.parametrize("merges, status", [
+    ([{"startRow": 0, "endRow": 1, "startColumn": 0, "endColumn": 1},
+      {"startRow": 1, "endRow": 2, "startColumn": 1, "endColumn": 2}], 400),        # overlap
+    ([{"startRow": r, "endRow": r, "startColumn": 0, "endColumn": 1}
+      for r in range(sw.MAX_MERGES + 1)], 413),                                    # too many
+    ([{"startRow": 0, "endRow": 2000, "startColumn": 0, "endColumn": 99}], 413),    # too much area
+    ([{"startRow": 0, "endRow": sw.WINDOW_ROWS, "startColumn": 0, "endColumn": 1}], 400),  # past the window
+    ([{"startRow": 3, "endRow": 1, "startColumn": 0, "endColumn": 1}], 400),        # backwards
+])
+def test_merge_limits(merges, status):
+    with pytest.raises(sw.WorkbookRefused) as err:
+        sw.validate_snapshot(_one_sheet(mergeData=merges))
+    assert err.value.status_code == status
+
+
+def test_too_many_cells_or_sheets_are_refused_before_openpyxl(docs_dir, monkeypatch):
+    cells = {str(r): {str(c): {"v": 1} for c in range(100)} for r in range(sw.MAX_SAVE_CELLS // 100 + 1)}
+    with pytest.raises(sw.WorkbookRefused) as err:
+        sw.validate_snapshot(_one_sheet(cells))
+    assert err.value.status_code == 413
+    many = {"sheetOrder": [f"s{i}" for i in range(sw.MAX_SHEETS + 1)],
+            "sheets": {f"s{i}": {"name": f"S{i}", "cellData": {}} for i in range(sw.MAX_SHEETS + 1)}}
+    with _client() as c:
+        r = _put(c, "many.xlsx", many)
+    assert r.status_code == 413
+    assert not (docs_dir / "many.xlsx").exists()
+
+
+def test_the_body_limit_matches_the_cell_limit():
+    from domovoi.transport_guard import body_limit_for
+
+    assert body_limit_for("/api/documents/workbook/x.xlsx") == 32 * 1024 * 1024
+
+
+@pytest.mark.parametrize("sheet_extra, cells", [
+    ({"freeze": []}, None),
+    ({"freeze": {"ySplit": "two"}}, None),
+    ({"mergeData": 5}, None),
+    ({"mergeData": [{"startRow": True, "endRow": 1, "startColumn": 0, "endColumn": 1}]}, None),
+    ({"rowData": {"0": {"h": 1e308}}}, None),
+    ({"columnData": {"0": {"w": float("inf")}}}, None),
+    ({"columnData": []}, None),
+    ({"name": "Bad\x01Name"}, None),
+    ({}, {"0": {"0": {"v": "x\x02y", "t": 1}}}),
+    ({}, {"0": {"0": {"f": "=A1\x07"}}}),
+    ({}, {"0": {"0": {"v": 10 ** 400}}}),
+    ({}, {"0": {"0": {"v": "x", "s": {"fs": float("inf")}}}}),
+    ({}, {"0": {"0": {"v": "x", "s": {"tr": {"a": float("nan")}}}}}),
+    ({}, {"0": "not a cell"}),
+    ({}, {"0": {"0": {"v": "x" * (sw.MAX_TEXT + 1)}}}),
+])
+def test_malformed_snapshots_are_400_not_500(sheet_extra, cells):
+    with pytest.raises(sw.WorkbookRefused) as err:
+        sw.validate_snapshot(_one_sheet(cells, **sheet_extra))
+    assert err.value.status_code in (400, 413)
+
+
+def test_malformed_bodies_over_http_are_400(docs_dir):
+    c = TestClient(app, headers={"X-Requested-With": "domovoi-tests", "Content-Type": "application/json"},
+                   raise_server_exceptions=False)
+    for body in (
+        '{"workbook":{"sheetOrder":["a"],"sheets":{"a":{"name":"a","cellData":{},'
+        '"columnData":{"0":{"w":Infinity}}}}}}',
+        '{"workbook":{"sheetOrder":["a"],"sheets":{"a":{"name":"a","mergeData":5}}}}',
+        '{"workbook":{"sheetOrder":["a"],"sheets":{"a":{"name":"a","cellData":{"0":{"0":{"v":"x\\u0002"}}}}}}}',
+        '{"workbook": 5}',
+        'not json',
+        '{"workbook":{"sheetOrder":["a"],"sheets":{"a":{"name":"a"}}},"force":"yes"}',
+    ):
+        r = c.put("/api/documents/workbook/m.xlsx", content=body)
+        assert r.status_code == 400, (body, r.status_code, r.text)
+    assert not (docs_dir / "m.xlsx").exists()
+
+
+def test_a_control_character_in_a_sheet_name_never_reaches_the_file(docs_dir):
+    p = docs_dir / "t.xlsx"
+    wb = Workbook()
+    wb.active["A1"] = "keep"
+    wb.save(p)
+    raw = p.read_bytes()
+    with _client() as c:
+        g = c.get("/api/documents/workbook/t.xlsx").json()
+        snap = g["workbook"]
+        snap["sheets"]["s0"]["origin"] = "s0"
+        snap["sheets"]["s0"]["name"] = "Bad\x01Name"
+        r = _put(c, "t.xlsx", snap, g["version"])
+    assert r.status_code == 400 and "control characters" in r.json()["detail"]
+    assert p.read_bytes() == raw
+
+
+def test_a_big_workbook_opens_read_only_within_a_cell_budget(docs_dir, monkeypatch):
+    """GET was unbounded across sheets (3 x 5000 x 100: 11.5 s, 33 MB, and
+    the JSON encoding on the event loop). Now one budget for the whole
+    workbook; past it the sheet opens read-only, saying why."""
+    monkeypatch.setattr(sw, "MAX_OPEN_CELLS", 50)
+    wb = Workbook()
+    ws = wb.active
+    for s in range(3):
+        if s:
+            ws = wb.create_sheet(f"S{s}")
+        for r in range(1, 11):
+            for col in range(1, 4):
+                ws.cell(row=r, column=col, value=r * col)
+    wb.save(docs_dir / "big.xlsx")
+    with _client() as c:
+        r = c.get("/api/documents/workbook/big.xlsx")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("application/json")
+    body = r.json()
+    assert body["editable"] is False and "too big to edit here" in body["why"]
+    total = sum(len(row) for sh in body["workbook"]["sheets"].values() for row in sh["cellData"].values())
+    assert total <= 50
+    assert "over_budget" not in body and "lost" not in body
+
+
+def test_the_values_only_read_shares_one_budget_across_sheets(tmp_path, monkeypatch):
+    monkeypatch.setattr(sw, "MAX_OPEN_CELLS", 40)
+    wb = Workbook(write_only=True)
+    for s in range(3):
+        ws = wb.create_sheet(f"S{s}")
+        for r in range(30):
+            ws.append([r] * 5)
+    wb.save(tmp_path / "w.xlsx")
+    model = sw.read_xlsx_values_only(tmp_path / "w.xlsx")
+    total = sum(len(row) for sh in model["workbook"]["sheets"].values() for row in sh["cellData"].values())
+    assert total <= 40 and model["over_budget"] is True
+    assert model["truncated"] == ["S0", "S1", "S2"]
+
+
+def test_a_big_csv_opens_read_only(docs_dir, monkeypatch):
+    monkeypatch.setattr(sw, "MAX_OPEN_CELLS", 20)
+    (docs_dir / "big.csv").write_text("\n".join("a,b,c,d" for _ in range(50)), encoding="utf-8")
+    with _client() as c:
+        body = c.get("/api/documents/workbook/big.csv").json()
+    assert body["editable"] is False and "too big" in body["why"]
+
+
+def test_the_read_is_serialised_in_the_pool(docs_dir):
+    _household(docs_dir / "h.xlsx")
+    raw = docs._read_workbook_json(docs_dir / "h.xlsx", "h.xlsx")
+    assert isinstance(raw, bytes)
+    assert json.loads(raw)["workbook"]["sheetOrder"] == ["s0", "s1", "s2"]
+
+
+_SPARKLINES = (
+    '<extLst><ext uri="{05C60535-1F16-4fd2-B633-F4F36F0B64E0}" '
+    'xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main">'
+    '<x14:sparklineGroups xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">'
+    '<x14:sparklineGroup displayEmptyCellsAs="gap"><x14:colorSeries rgb="FF376092"/>'
+    '<x14:sparklines><x14:sparkline><xm:f>Sheet!A1:C1</xm:f><xm:sqref>D1</xm:sqref></x14:sparkline>'
+    '</x14:sparklines></x14:sparklineGroup></x14:sparklineGroups></ext></extLst>'
+)
+
+
+def _splice(path, member, transform=None, extra=None):
+    import io
+    import zipfile
+
+    src = zipfile.ZipFile(path)
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for i in src.infolist():
+            data = src.read(i.filename)
+            if transform and i.filename == member:
+                data = transform(data)
+            z.writestr(i, data)
+        for name, data in (extra or {}).items():
+            z.writestr(name, data)
+    src.close()
+    path.write_bytes(out.getvalue())
+
+
+def test_sparklines_open_read_only_and_are_never_stripped(docs_dir):
+    """openpyxl drops x14 extensions (sparklines, x14 validation, data bars)
+    on a load-and-save and only WARNS. That warning now makes the file
+    read-only, and a save is refused (proven: sparklines were stripped)."""
+    p = docs_dir / "spark.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet"
+    ws.append([1, 2, 3])
+    wb.save(p)
+    _splice(p, "xl/worksheets/sheet1.xml", lambda d: d.replace(b"</worksheet>", _SPARKLINES.encode() + b"</worksheet>"))
+    raw = p.read_bytes()
+    _, lost = sw.load_xlsx(p)
+    assert lost and any("Sparkline" in m for m in lost)
+    with _client() as c:
+        g = c.get("/api/documents/workbook/spark.xlsx").json()
+        assert g["editable"] is False and "sparklines" in g["why"]
+        snap = g["workbook"]
+        for sid in snap["sheetOrder"]:
+            snap["sheets"][sid]["origin"] = sid
+        snap["sheets"]["s0"]["cellData"]["5"] = {"0": {"v": "edit", "t": 1}}
+        r = _put(c, "spark.xlsx", snap, g["version"])
+        assert r.status_code == 409, r.text
+        # The phone app's grid editor route is held to the same rule.
+        assert c.put("/api/documents/sheet/spark.xlsx", json={"rows": [[{"v": "x"}]]}).status_code == 409
+    assert p.read_bytes() == raw
+
+
+@pytest.mark.parametrize("part", [
+    "xl/threadedComments/threadedComment1.xml", "xl/slicers/slicer1.xml",
+    "xl/slicerCaches/slicerCache1.xml", "xl/timelines/timeline1.xml", "xl/ctrlProps/ctrlProp1.xml",
+    "xl/activeX/activeX1.xml", "xl/embeddings/oleObject1.bin", "xl/model/item.data",
+])
+def test_parts_openpyxl_drops_make_the_file_read_only(docs_dir, part):
+    p = docs_dir / "parts.xlsx"
+    wb = Workbook()
+    wb.active["A1"] = "x"
+    wb.save(p)
+    _splice(p, "", extra={part: b"<x/>"})
+    raw = p.read_bytes()
+    with _client() as c:
+        g = c.get("/api/documents/workbook/parts.xlsx").json()
+        assert g["editable"] is False
+        snap = g["workbook"]
+        snap["sheets"]["s0"]["origin"] = "s0"
+        assert _put(c, "parts.xlsx", snap, g["version"]).status_code == 409
+    assert p.read_bytes() == raw
+
+
+def _named_workbook(path):
+    from openpyxl.workbook.defined_name import DefinedName
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws["A1"] = 0.2
+    other = wb.create_sheet("Calc")
+    other["A1"] = "=Rate*100"
+    free = wb.create_sheet("Free")
+    free["A1"] = "nobody points here"
+    wb.defined_names["Rate"] = DefinedName("Rate", attr_text="Data!$A$1")
+    dv = DataValidation(type="list", formula1="'Calc'!$A$1:$A$3")
+    other.add_data_validation(dv)
+    dv.add("B1")
+    wb.save(path)
+
+
+def test_renaming_a_referenced_sheet_is_refused_plainly(docs_dir):
+    p = docs_dir / "dn.xlsx"
+    _named_workbook(p)
+    raw = p.read_bytes()
+    with _client() as c:
+        g = c.get("/api/documents/workbook/dn.xlsx").json()
+        snap = g["workbook"]
+        for sid in snap["sheetOrder"]:
+            snap["sheets"][sid]["origin"] = sid
+        renamed = copy.deepcopy(snap)
+        renamed["sheets"]["s0"]["name"] = "Rates"           # named range points here
+        r = _put(c, "dn.xlsx", renamed, g["version"])
+        assert r.status_code == 409 and "can't be renamed" in r.json()["detail"]
+        renamed = copy.deepcopy(snap)
+        renamed["sheets"]["s1"]["name"] = "Sums"            # validation points here
+        assert _put(c, "dn.xlsx", renamed, g["version"]).status_code == 409
+        gone = copy.deepcopy(snap)
+        gone["sheetOrder"] = ["s1", "s2"]                    # delete Data
+        r = _put(c, "dn.xlsx", gone, g["version"])
+        assert r.status_code == 409 and "can't be deleted" in r.json()["detail"]
+        assert p.read_bytes() == raw
+        fine = copy.deepcopy(snap)
+        fine["sheets"]["s2"]["name"] = "Notes"               # nothing points at Free
+        assert _put(c, "dn.xlsx", fine, g["version"]).status_code == 200
+    wb = load_workbook(p)
+    assert wb.sheetnames == ["Data", "Calc", "Notes"]
+    assert wb.defined_names["Rate"].attr_text == "Data!$A$1"
+
+
+def test_a_formula_univer_left_on_the_old_name_also_blocks_a_rename(tmp_path):
+    p = tmp_path / "f.xlsx"
+    wb = Workbook()
+    wb.active.title = "Data"
+    wb.active["A1"] = 1
+    wb.create_sheet("Calc")["A1"] = "=Data!A1*2"
+    wb.save(p)
+    snap = _snapshot(p)
+    snap["sheets"]["s0"]["name"] = "Figures"
+    with pytest.raises(sw.WorkbookRefused) as err:
+        _save(p, snap)
+    assert err.value.status_code == 409
+    snap["sheets"]["s1"]["cellData"]["0"]["0"]["f"] = "=Figures!A1*2"   # Univer rewrote it
+    _save(p, snap)
+    assert load_workbook(p)["Calc"]["A1"].value == "=Figures!A1*2"
+
+
+def test_mentions_sheet():
+    assert sw._mentions_sheet("=SUM(Data!A1:A3)", "Data")
+    assert sw._mentions_sheet("='My Data'!$A$1", "My Data")
+    assert sw._mentions_sheet("='Bob''s'!A1", "Bob's")
+    assert not sw._mentions_sheet("=OldData!A1", "Data")
+    assert not sw._mentions_sheet("=A1", "Data")
+
+
+def test_a_billion_laughs_workbook_is_not_expanded(docs_dir):
+    import time
+
+    p = docs_dir / "lol.xlsx"
+    wb = Workbook()
+    wb.active["A1"] = "x"
+    wb.save(p)
+    bomb = ('<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY lol "lol">'
+            + "".join(f'<!ENTITY lol{i} "{("&lol%s;" % (i - 1 if i > 1 else "")) * 10}">' for i in range(1, 10))
+            + ']><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1" '
+            'uniqueCount="1"><si><t>&lol9;</t></si></sst>')
+    _splice(p, "xl/sharedStrings.xml", lambda d: bomb.encode(), extra=None)
+    t0 = time.perf_counter()
+    with _client() as c:
+        r = c.get("/api/documents/workbook/lol.xlsx")
+    assert time.perf_counter() - t0 < 5
+    assert r.status_code in (200, 415)
+    assert len(r.content) < 1_000_000
+
+
+def test_image_urls_are_limited_to_this_server(tmp_path):
+    """=IMAGE("https://elsewhere/...") would have every browser that opens
+    the sheet fetch from a third party. The bundled override allows only
+    data: pictures and this server (scripts/vendor/univer/safe_image.js)."""
+    import shutil
+    import subprocess
+
+    from pathlib import Path
+
+    node = shutil.which("node")
+    assert node, "node is required"
+    module = Path(__file__).resolve().parents[2] / "scripts" / "vendor" / "univer" / "safe_image.js"
+    script = tmp_path / "check.mjs"
+    script.write_text(
+        "import { imageUrlAllowed, makeSafeImage } from " + json.dumps(module.as_uri()) + ";\n"
+        "const o = 'http://192.168.1.20:6369';\n"
+        "const cases = ['https://tracker.example/p.png', 'http://192.168.1.20:6369/api/x.png',\n"
+        "  '/api/documents/raw/a.png', 'a.png', 'data:image/png;base64,AAAA', 'data:text/html,hi',\n"
+        "  '//evil.example/x.png', 'javascript:alert(1)', 'HTTP://192.168.1.20:6369/x.png', '',\n"
+        "  'http://192.168.1.20:6370/x.png', 'file:///etc/passwd'];\n"
+        "class Base { _handleSingleObject(s) { return 'drawn:' + s.getValue(); } }\n"
+        "const Err = { create: (e) => e };\n"
+        "const Safe = makeSafeImage(Base, Err, () => o);\n"
+        "const str = (v) => ({ isString: () => true, getValue: () => v });\n"
+        "console.log(JSON.stringify({ allowed: cases.map((u) => imageUrlAllowed(u, o)),\n"
+        "  via: [new Safe()._handleSingleObject(str('https://tracker.example/p.png')),\n"
+        "        new Safe()._handleSingleObject(str('/x.png'))] }));\n",
+        encoding="utf-8",
+    )
+    out = json.loads(subprocess.run([node, str(script)], capture_output=True, text=True, check=True).stdout)
+    assert out["allowed"] == [False, True, True, True, True, False, False, False, True, False, False, False]
+    assert out["via"] == ["#VALUE!", "drawn:/x.png"]
+    bundle = Path(__file__).resolve().parents[2] / "web" / "static" / "vendor" / "univer" / "univer.js"
+    text = bundle.read_text(encoding="utf-8")
+    assert "formulaFunctions" in text and "data:image" in text
+    editor = (Path(__file__).resolve().parents[2] / "web" / "static" / "sheet_editor.jsx").read_text(encoding="utf-8")
+    assert "formula: { function: lib.formulaFunctions || [] }" in editor
+
+
+def test_the_bundle_carries_no_hyphenation_patterns():
+    from pathlib import Path
+
+    vendor = Path(__file__).resolve().parents[2] / "web" / "static" / "vendor" / "univer"
+    assert not (vendor / "chunks").exists() or not any((vendor / "chunks").iterdir())
+    text = (vendor / "univer.js").read_text(encoding="utf-8")
+    assert "EnUs" not in text            # the one pattern set Univer inlines
+    notices = (vendor / "THIRD-PARTY-NOTICES.txt").read_text(encoding="utf-8")
+    assert "hyphenation patterns" in notices and "NOT included" in notices

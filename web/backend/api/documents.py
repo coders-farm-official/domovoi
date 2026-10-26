@@ -929,8 +929,21 @@ def _read_sheet_grid(target: Path) -> list[list[dict[str, Any]]]:
 # Parts of an .xlsx that openpyxl does not read, so a load-and-save would
 # silently drop them: charts, pictures and shapes (DrawingML under
 # xl/drawings/, but not the vmlDrawing that carries cell comments, which it
-# keeps), embedded media, and pivot tables.
-_XLSX_UNKEPT_PREFIXES = ("xl/charts/", "xl/media/", "xl/pivotTables/", "xl/pivotCache/")
+# keeps), embedded media, pivot tables, threaded comments, slicers and
+# timelines, form controls, ActiveX, embedded objects and the data model.
+# What openpyxl drops from INSIDE a sheet (sparklines, x14 validation and
+# conditional formatting) it warns about on load:
+# sheet_workbook.load_xlsx turns that warning into the same refusal.
+_XLSX_UNKEPT_PREFIXES = (
+    "xl/charts/", "xl/media/", "xl/pivotTables/", "xl/pivotCache/",
+    "xl/threadedComments/", "xl/slicers/", "xl/slicerCaches/", "xl/timelines/",
+    "xl/timelineCaches/", "xl/ctrlProps/", "xl/activeX/", "xl/embeddings/", "xl/model/",
+    "xl/persons/",
+)
+_UNKEPT_SAVE = (
+    "{name} has charts, pictures or pivot tables (or other parts, such as sparklines) "
+    "the sheet editor can't keep, so it was not saved. Edit it in a spreadsheet app."
+)
 
 
 # What an .xlsx may hold once inflated before either sheet route opens it.
@@ -1091,7 +1104,7 @@ def _write_xlsx_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> Non
     first sheet, so formatting, column widths, merges, other sheets and
     everything past the window survive. (This used to build a brand-new
     workbook, which threw all of that away.) A new file starts blank."""
-    from openpyxl import Workbook, load_workbook
+    from openpyxl import Workbook
     from openpyxl.cell.cell import MergedCell
 
     wb = None
@@ -1099,13 +1112,9 @@ def _write_xlsx_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> Non
         _assert_xlsx_fits(target)
         _assert_sheet_save_fits(target)
         if _xlsx_unkept_parts(target):
-            raise HTTPException(
-                status_code=409,
-                detail=f"{target.name} has charts, pictures or pivot tables the sheet "
-                "editor can't keep, so it was not saved. Edit it in a spreadsheet app.",
-            )
+            raise HTTPException(status_code=409, detail=_UNKEPT_SAVE.format(name=target.name))
         try:
-            wb = load_workbook(target)
+            wb, lost = sheet_workbook.load_xlsx(target)
         except Exception as exc:  # noqa: BLE001 — whatever openpyxl could not read
             # Not a workbook this server can open (an .xls renamed, a damaged
             # file). The old save would have put a brand-new workbook in its
@@ -1116,6 +1125,8 @@ def _write_xlsx_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> Non
                 detail=f"{target.name} could not be read as a workbook, so it was not "
                 "saved. Open it in a spreadsheet app.",
             ) from exc
+        if lost:
+            raise HTTPException(status_code=409, detail=_UNKEPT_SAVE.format(name=target.name))
     if wb is None:
         wb = Workbook()  # a new name, or an empty file
     ws = wb.worksheets[0]
@@ -1211,17 +1222,6 @@ _WB_CSV_ROWS = sheet_workbook.WINDOW_ROWS
 _WB_CSV_COLS = sheet_workbook.WINDOW_COLS
 
 
-class WorkbookWriteRequest(BaseModel):
-    # Univer's IWorkbookData (sheetOrder, sheets, styles); each sheet may
-    # carry ``origin``, the id GET gave the sheet it started as.
-    workbook: dict[str, Any]
-    # The ``version`` GET (or the last save) returned. A sheet saved by
-    # someone else since is refused with 409 unless ``force``.
-    base_version: Optional[str] = Field(None, max_length=64)
-    force: bool = False
-    device_id: Optional[str] = Field(None, min_length=3, max_length=64)
-
-
 def _sheet_version(target: Path) -> Optional[str]:
     """What a save compares against to tell "nobody else saved": the
     file's modification time (ns) and size; None for no file."""
@@ -1244,6 +1244,12 @@ def _blank_workbook(name: str) -> dict[str, Any]:
     }
 
 
+_TOO_MANY_CELLS = (
+    "{name} is too big to edit here (more than {n:,} filled cells), so it opens "
+    "read-only and only part of it is shown. Edit it in a spreadsheet app."
+)
+
+
 def _read_workbook_model(target: Path) -> dict[str, Any]:
     """The editor's view of a sheet file, and whether it may save it."""
     ext = target.suffix.lower()
@@ -1254,6 +1260,9 @@ def _read_workbook_model(target: Path) -> dict[str, Any]:
             _assert_sheet_save_fits(target)
         except HTTPException as exc:
             model.update(editable=False, why=str(exc.detail))
+        if model.pop("over_budget", False) and model["editable"]:
+            model.update(editable=False, why=_TOO_MANY_CELLS.format(
+                name=target.name, n=sheet_workbook.MAX_OPEN_CELLS))
         return model
     if ext != ".xlsx":
         raise HTTPException(
@@ -1284,11 +1293,56 @@ def _read_workbook_model(target: Path) -> dict[str, Any]:
             "open it in a spreadsheet app.",
         ) from exc
     why = too_big
-    if why is None and _xlsx_unkept_parts(target):
-        why = (f"{target.name} has charts, pictures or pivot tables the sheet editor "
-               "can't keep, so it opens read-only here. Edit it in a spreadsheet app.")
+    if why is None and model.pop("over_budget", False):
+        why = _TOO_MANY_CELLS.format(name=target.name, n=sheet_workbook.MAX_OPEN_CELLS)
+    if why is None and (_xlsx_unkept_parts(target) or model.get("lost")):
+        why = (f"{target.name} has charts, pictures or pivot tables (or other parts, such as "
+               "sparklines) the sheet editor can't keep, so it opens read-only here. Edit it "
+               "in a spreadsheet app.")
+    model.pop("over_budget", None)
+    model.pop("lost", None)
     model.update(format="xlsx", editable=why is None, why=why)
     return model
+
+
+def _read_workbook_json(target: Path, rel: str) -> bytes:
+    """The whole GET answer, built AND serialised in the sheets pool, so a
+    big workbook never costs the event loop its JSON encoding."""
+    import json as _json
+
+    version = _sheet_version(target)
+    model = _read_workbook_model(target)
+    body = {
+        "rel_path": rel,
+        "version": version,
+        "window": {"rows": sheet_workbook.WINDOW_ROWS, "cols": sheet_workbook.WINDOW_COLS},
+        **model,
+    }
+    return _json.dumps(body, separators=(",", ":"), allow_nan=False).encode("utf-8")
+
+
+def _parse_workbook_put(raw: bytes) -> dict[str, Any]:
+    """The PUT body, parsed and checked in the sheets pool (a big body is
+    seconds of json work that must not run on the event loop)."""
+    import json as _json
+
+    try:
+        body = _json.loads(raw)
+    except (ValueError, RecursionError):
+        raise HTTPException(status_code=400, detail="the body is not valid JSON") from None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="the body must be an object")
+    base = body.get("base_version")
+    if base is not None and (not isinstance(base, str) or len(base) > 64):
+        raise HTTPException(status_code=400, detail="base_version must be text")
+    force = body.get("force", False)
+    if not isinstance(force, bool):
+        raise HTTPException(status_code=400, detail="force must be true or false")
+    device = body.get("device_id")
+    if device is not None and (not isinstance(device, str) or not 3 <= len(device) <= 64):
+        raise HTTPException(status_code=400, detail="device_id is not a device id")
+    sheet_workbook.validate_snapshot(body.get("workbook"))
+    return {"workbook": body["workbook"], "base_version": base, "force": force, "device_id": device}
 
 
 def _write_workbook_file(
@@ -1297,8 +1351,9 @@ def _write_workbook_file(
     """Save ``snapshot`` into ``target`` (in the one-thread sheets pool, so
     the version check and the write can't interleave with another save).
     Returns the new version."""
-    from openpyxl import Workbook, load_workbook
+    from openpyxl import Workbook
 
+    sheet_workbook.validate_snapshot(snapshot)  # before anything touches openpyxl
     if not force and _sheet_version(target) != base_version:
         raise HTTPException(
             status_code=409,
@@ -1321,19 +1376,17 @@ def _write_workbook_file(
         _assert_xlsx_fits(target)
         _assert_sheet_save_fits(target)
         if _xlsx_unkept_parts(target):
-            raise HTTPException(
-                status_code=409,
-                detail=f"{target.name} has charts, pictures or pivot tables the sheet "
-                "editor can't keep, so it was not saved. Edit it in a spreadsheet app.",
-            )
+            raise HTTPException(status_code=409, detail=_UNKEPT_SAVE.format(name=target.name))
         try:
-            wb = load_workbook(target)
+            wb, lost = sheet_workbook.load_xlsx(target)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
                 status_code=409,
                 detail=f"{target.name} could not be read as a workbook, so it was not "
                 "saved. Open it in a spreadsheet app.",
             ) from exc
+        if lost:
+            raise HTTPException(status_code=409, detail=_UNKEPT_SAVE.format(name=target.name))
     if wb is None:
         wb = Workbook()
     sheet_workbook.write_xlsx(wb, snapshot)
@@ -1342,43 +1395,41 @@ def _write_workbook_file(
 
 
 @router.get("/workbook/{rel_path:path}", dependencies=DAILY)
-async def read_workbook(rel_path: str) -> dict[str, Any]:
+async def read_workbook(rel_path: str) -> Response:
     """The whole workbook for the Univer sheet editor (every sheet, values,
     formulas, formatting, merges, sizes, frozen panes), its ``version`` for
     the save's stale check, and whether it may be saved here
-    (``editable``/``why``). 415 for types it can't open."""
+    (``editable``/``why``). At most ``MAX_OPEN_CELLS`` cells in all; a
+    bigger workbook opens read-only. 415 for types it can't open."""
     target = _readable_target(rel_path)
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail=f"{rel_path} not found")
     with _usable_path(rel_path):
-        version = _sheet_version(target)
-        model = await executors.run("sheets", _read_workbook_model, target)
-    return {
-        "rel_path": _rel_of(target),
-        "version": version,
-        "window": {"rows": sheet_workbook.WINDOW_ROWS, "cols": sheet_workbook.WINDOW_COLS},
-        **model,
-    }
+        body = await executors.run("sheets", _read_workbook_json, target, _rel_of(target))
+    return Response(content=body, media_type="application/json")
 
 
 @router.put("/workbook/{rel_path:path}", dependencies=DEVICE)
-async def write_workbook(
-    request: Request, rel_path: str, req: WorkbookWriteRequest
-) -> dict[str, Any]:
+async def write_workbook(request: Request, rel_path: str) -> dict[str, Any]:
     """Save the editor's workbook into the file in place: only what changed
     is written, so what the editor doesn't show survives (see
-    sheet_workbook). 409 ``{reason: "changed"}`` when someone else saved
-    since ``base_version`` (send ``force`` to overwrite), 409 for files
-    with parts openpyxl can't keep, 413 past the size limits or the
-    editor's window, 415 for non-sheet targets."""
-    await _assert_files_policy(request, req.device_id)
+    sheet_workbook). Body ``{workbook, base_version, force?, device_id?}``,
+    parsed and checked off the event loop before openpyxl sees it (400 for
+    a malformed snapshot, 413 past the size limits). 409 ``{reason:
+    "changed"}`` when someone else saved since ``base_version`` (send
+    ``force`` to overwrite), 409 for files with parts openpyxl can't keep
+    and for a rename that would break references, 415 for non-sheet
+    targets."""
     target = _safe_target(rel_path)
     _assert_saveable_name(target)
     _assert_sheet_editor_may_write(target)
+    raw = await request.body()
+    req = await executors.run("sheets", _parse_workbook_put, raw)
+    await _assert_files_policy(request, req["device_id"])
     with _usable_path(rel_path):
         _ensure_parent_dir(target)
         version = await executors.run(
-            "sheets", _write_workbook_file, target, req.workbook, req.base_version, req.force,
+            "sheets", _write_workbook_file, target, req["workbook"], req["base_version"], req["force"],
         )
         st = target.stat()
     _listing_changed()
@@ -1390,17 +1441,21 @@ async def write_workbook(
     }
 
 
-# Who else has a sheet open, so the editor can say "Kitchen tablet is also
-# editing this sheet" instead of letting two people overwrite each other
+# Who else has a sheet open, so the editor can say "Kitchen tablet has this
+# sheet open too" instead of letting two people overwrite each other
 # unawares. In memory, per web process: it is a courtesy, not a lock (the
-# save's version check is what actually stops a silent overwrite).
+# save's version check is what actually stops a silent overwrite). Only
+# files that exist are tracked, a bounded number of them, and the device is
+# the one the REQUEST identifies (X-Device-Id, the registration cookie;
+# files.caller_device_id), never a name the body asks for.
 _PRESENCE_TTL = 40.0
+_PRESENCE_MAX_PATHS = 500
+_PRESENCE_MAX_SESSIONS = 20
 _presence: dict[str, dict[str, tuple[Optional[str], float]]] = {}
 
 
 class PresenceRequest(BaseModel):
     session_id: str = Field(..., min_length=8, max_length=64)
-    device_id: Optional[str] = Field(None, max_length=64)
     leaving: bool = False
 
 
@@ -1424,12 +1479,18 @@ async def _device_names(device_ids: list[str]) -> dict[str, str]:
 
 
 @router.post("/presence/{rel_path:path}", dependencies=DEVICE)
-async def sheet_presence(rel_path: str, req: PresenceRequest) -> dict[str, Any]:
+async def sheet_presence(request: Request, rel_path: str, req: PresenceRequest) -> dict[str, Any]:
     """Heartbeat from an open sheet editor (every ~15 s; ``leaving`` on
-    close). Answers who ELSE has the same file open, by device name."""
+    close). Answers who ELSE has the same file open, by device name. 404
+    for a file that isn't there (or isn't readable here); 429 when too
+    many sheets or sessions are open to track."""
     import time
 
+    from web.backend.api.files import caller_device_id
+
     target = _readable_target(rel_path)
+    if not target.is_file() or target.suffix.lower() not in _SHEET_EXTS:
+        raise HTTPException(status_code=404, detail=f"{rel_path} not found")
     key = _rel_of(target)
     now = time.monotonic()
     for k in list(_presence):
@@ -1438,12 +1499,22 @@ async def sheet_presence(rel_path: str, req: PresenceRequest) -> dict[str, Any]:
             _presence[k] = live
         else:
             del _presence[k]
-    here = _presence.setdefault(key, {})
+    here = _presence.get(key)
     if req.leaving:
-        here.pop(req.session_id, None)
+        if here is not None:
+            here.pop(req.session_id, None)
     else:
-        here[req.session_id] = (req.device_id, now)
-    others = [dev for sid, (dev, _) in here.items() if sid != req.session_id]
+        if here is None:
+            if len(_presence) >= _PRESENCE_MAX_PATHS:
+                raise HTTPException(status_code=429, detail="too many sheets open to track")
+            here = _presence[key] = {}
+        if req.session_id not in here and len(here) >= _PRESENCE_MAX_SESSIONS:
+            raise HTTPException(status_code=429, detail="too many editors on this sheet")
+        here[req.session_id] = (caller_device_id(request, None), now)
+    if here is None:
+        return {"others": []}
+    me = caller_device_id(request, None)
+    others = [dev for sid, (dev, _) in here.items() if sid != req.session_id and (dev is None or dev != me)]
     names = await _device_names(sorted({d for d in others if d}))
     if not here:
         _presence.pop(key, None)
