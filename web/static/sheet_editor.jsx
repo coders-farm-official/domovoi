@@ -56,7 +56,7 @@ const sheetDomovoiTheme = (lib) => {
   return Object.assign({}, base, {
     primary: {
       50: '#FEF8EC', 100: '#FDEFD3', 200: '#FADDA6', 300: '#F4C675', 400: '#EEB257',
-      500: '#E8A33D', 600: '#A86A0E', 700: '#8F5A0B', 800: '#744B0E', 900: '#5C3C0E',
+      500: '#E8A33D', 600: '#98600C', 700: '#8F5A0B', 800: '#744B0E', 900: '#5C3C0E',
     },
   });
 };
@@ -562,8 +562,8 @@ const SheetEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null, inA
                       color: 'var(--fg)', fontSize: 12 }}>
           <Icon name="users" size={13}/>
           <span>
-            {others.length === 1 ? `${others[0]} is` : `${others.join(', ')} are`} also editing this
-            sheet. Changes aren’t shared live — whoever saves second will be asked which copy to keep.
+            {others.join(', ')} {others.length === 1 ? 'has' : 'have'} this sheet open too.
+            Edits aren’t shared live; if you both save, the second is asked which copy to keep.
           </span>
         </div>
       )}

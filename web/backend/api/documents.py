@@ -1447,7 +1447,8 @@ async def sheet_presence(rel_path: str, req: PresenceRequest) -> dict[str, Any]:
     names = await _device_names(sorted({d for d in others if d}))
     if not here:
         _presence.pop(key, None)
-    return {"others": sorted(names.get(d or "", "another device") for d in others)}
+    # One name per device: a page reloaded leaves its old session to time out.
+    return {"others": sorted({names.get(d or "", "another device") for d in others})}
 
 
 # ─── Exports (docx from markdown · csv/xlsx from sheets) ────────────

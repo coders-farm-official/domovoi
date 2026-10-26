@@ -73,6 +73,8 @@
           </React.Fragment>
         );
       };
+      // A different sheet named in the address: start again with it.
+      window.addEventListener('hashchange', () => window.location.reload());
       ReactDOM.createRoot(document.getElementById('root')).render(<SheetPage/>);
     })();
   </script>
