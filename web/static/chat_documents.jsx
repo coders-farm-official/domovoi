@@ -217,7 +217,8 @@ const ChatDocs = (() => {
   };
 
   // The kinds the server's chat reads (domovoi/doc_extract KIND_BY_EXT).
-  const READS = ['.pdf', '.docx', '.odt', '.xlsx', '.csv', '.tsv', '.txt', '.text', '.md', '.markdown'];
+  // (.html: the Documents editor's formatted documents, read as their text)
+  const READS = ['.pdf', '.docx', '.odt', '.xlsx', '.csv', '.tsv', '.txt', '.text', '.md', '.markdown', '.html', '.htm'];
   const alwaysOn = () => true;
 
   /* "Ask about this document" on a Documents-library row: a new chat about

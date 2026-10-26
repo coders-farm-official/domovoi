@@ -37,7 +37,9 @@ from pathlib import Path
 
 #: The kinds read aloud (spreadsheets are left out: a sheet read aloud is
 #: a list of numbers, nobody's idea of a document).
-READABLE_EXTS = frozenset({".pdf", ".docx", ".odt", ".txt", ".text", ".md", ".markdown"})
+READABLE_EXTS = frozenset({".pdf", ".docx", ".odt", ".txt", ".text", ".md", ".markdown",
+                           # the Documents editor's formatted documents
+                           ".html", ".htm"})
 #: Speaking rate used for the time said up front (Piper's voices run at
 #: roughly 150-170 words a minute).
 WORDS_PER_MINUTE = 160

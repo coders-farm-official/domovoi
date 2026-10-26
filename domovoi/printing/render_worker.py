@@ -38,12 +38,14 @@ MAX_THUMBS = 12
 MAX_TABLE_ROWS = 5000
 MAX_TABLE_COLS = 100
 MAX_TEXT_BYTES = 4 * 1024 * 1024
+# A formatted document carries its pictures inside it, so it is read further.
+MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
 
 KIND_BY_EXT = {
     ".pdf": "pdf",
     ".jpg": "image", ".jpeg": "image", ".png": "image", ".webp": "image", ".gif": "image",
     ".bmp": "image", ".tif": "image", ".tiff": "image",
-    ".txt": "text", ".md": "markdown",
+    ".txt": "text", ".md": "markdown", ".html": "document", ".htm": "document",
     ".csv": "table", ".xlsx": "table",
 }
 
@@ -115,6 +117,13 @@ def prepare(req: dict[str, Any], d: Path) -> dict[str, Any]:
     elif kind in ("text", "markdown"):
         templates.text_document(out, _read_text(src), title=req.get("title") or "", paper=paper,
                                 markdown=kind == "markdown")
+    elif kind == "document":
+        from domovoi.richdoc import html_to_markdown
+
+        markup = src.read_bytes()[:MAX_DOCUMENT_BYTES].decode("utf-8", "replace")
+        templates.text_document(out, html_to_markdown(markup), title=req.get("title") or "", paper=paper,
+                                markdown=True)
+        notes.append("Printed as its text, without pictures or fonts.")
     elif kind == "table":
         rows = _table_rows(src, str(req.get("ext") or ".csv").lower())
         if not rows:

@@ -404,3 +404,96 @@ def test_the_editor_routes_have_room_for_a_document_with_pictures():
 
     for path in ("/api/documents/doc/a.html", "/api/documents/doc-save-as", "/api/documents/convert/docx"):
         assert body_limit_for(path) >= 40 * 1024 * 1024 > default_body_limit()
+
+
+# ═══ Everything that reads documents reads these too ═════════════════
+
+LEASE = richdoc.document_file(
+    "<h1>Lease</h1><p>The flat at <strong>12 Elm Road</strong>.</p><h2>Deposit</h2>"
+    "<p>Two months' rent, returned within 30 days.</p>"
+    f'<figure><img src="{PNG_1PX}" alt="floor plan"><figcaption>Floor plan</figcaption></figure>'
+    "<script>steal()</script>", "Lease")
+
+
+def test_chat_reads_a_formatted_document_by_its_sections(tmp_path):
+    from domovoi import doc_extract
+
+    path = tmp_path / "Lease.html"
+    path.write_text(LEASE, encoding="utf-8")
+    assert doc_extract.kind_for("Lease.html") == "html" and doc_extract.kind_for("x.HTM") == "html"
+    assert doc_extract.sniff(path.read_bytes()[:8192], "html") is None
+    got = doc_extract.extract(path, "html")
+    text = " ".join(f"{p.get('head') or ''} {p.get('text') or ''}" for p in got["parts"])
+    labels = [p.get("label") for p in got["parts"]]
+    assert "Section: Deposit" in labels
+    assert "12 Elm Road" in text and "returned within 30 days" in text and "Floor plan" in text
+    assert "base64" not in text and "steal" not in text and "<" not in text
+
+
+def test_the_existing_markdown_reading_is_unchanged(tmp_path):
+    from domovoi import doc_extract
+
+    path = tmp_path / "notes.md"
+    path.write_bytes(b"# Notes\n\nMilk and eggs.\n")
+    got = doc_extract.extract(path, "md")
+    assert got["kind"] == "md" and "Milk and eggs." in got["parts"][0]["text"]
+
+
+def test_read_aloud_takes_formatted_documents():
+    from domovoi.voice_docs import reading
+
+    assert {".html", ".htm", ".md", ".pdf"} <= reading.READABLE_EXTS
+
+
+def test_a_formatted_document_prints_as_its_text(tmp_path):
+    from domovoi.printing import jobs, render_worker
+
+    assert jobs.kind_of("Lease.html") == "document"
+    assert ".html" in jobs.printable_info()["exts"]
+    (tmp_path / "input").write_text(LEASE, encoding="utf-8")
+    out = render_worker.prepare({"kind": "document", "paper": [612, 792], "title": "Lease"}, tmp_path)
+    pdf = (tmp_path / "doc.pdf").read_bytes()
+    assert pdf.startswith(b"%PDF-")
+    assert "without pictures" in " ".join(out.get("notes") or [])
+
+
+def test_ask_about_this_document_is_offered_for_formatted_documents():
+    from pathlib import Path
+
+    jsx = (Path(__file__).resolve().parents[2] / "web" / "static" / "chat_documents.jsx").read_text(encoding="utf-8")
+    reads = next(line for line in jsx.splitlines() if "const READS" in line)
+    assert "'.html'" in reads and "'.md'" in reads
+
+
+def test_print_and_pdf_use_the_same_page_style_as_the_saved_file():
+    """"Download → PDF" prints the page the editor builds in the browser
+    (doc_editor.jsx PRINT_CSS); a saved file carries fileformat.STYLE.
+    They are one look, so they are one text."""
+    import re
+    from pathlib import Path
+
+    from domovoi.richdoc.fileformat import STYLE
+
+    jsx = (Path(__file__).resolve().parents[2] / "web" / "static" / "doc_editor.jsx").read_text(encoding="utf-8")
+    m = re.search(r"const PRINT_CSS = `(.*?)`;", jsx, re.S)
+    assert m, "PRINT_CSS not found in doc_editor.jsx"
+    assert m.group(1).strip() == STYLE.strip()
+
+
+def test_every_editor_save_tells_co_editing(docs_dir, monkeypatch):
+    """wf/doc-collab: a save that doesn't call the hook looks like an outside
+    change, and the shared document is rebuilt from the file."""
+    from web.backend.api import documents as docs_api
+
+    told = []
+
+    async def _saved(request, target):
+        told.append(target.name)
+
+    monkeypatch.setattr(docs_api, "_collab_saved", _saved)
+    (docs_dir / "n.md").write_bytes(b"# n\n")
+    with _client() as c:
+        assert c.put("/api/documents/doc/a.html", json={"html": "<p>x</p>"}).status_code == 200
+        assert c.post("/api/documents/doc-save-as", json={
+            "from_path": "n.md", "format": "html", "html": "<p>n</p>"}).status_code == 200
+    assert told == ["a.html", "n.html"]

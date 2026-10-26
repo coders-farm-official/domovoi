@@ -540,6 +540,24 @@ async def _assert_files_policy(request: Request, device_id: Optional[str]) -> No
     await files_api.assert_documents_write_allowed(request, device_id)
 
 
+async def _collab_saved(request: Request, target: Path) -> None:
+    """Tell co-editing (web/backend/api/collab.py) that a save landed. A save
+    from a co-editing client carries ``X-Domovoi-Collab`` and is recorded as
+    the clean file of its revision; any other save means the file changed
+    under the shared state, which is then rebuilt from it. Never raises.
+    Every route that saves a co-edited type calls this (imported late:
+    collab imports this module).
+
+    The same seam as wf/doc-collab's; until that branch is merged there is
+    no co-editing module, and a save simply has nobody to tell."""
+    try:
+        from web.backend.api import collab
+    except ImportError:
+        return
+
+    await collab.note_file_saved(request, target)
+
+
 # ─── Schemas ────────────────────────────────────────────────────────
 class DocumentRow(BaseModel):
     rel_path: str
@@ -1542,6 +1560,7 @@ async def write_doc(request: Request, rel_path: str, req: DocWriteRequest) -> Do
         _replace_atomically(target, lambda p: p.write_bytes(data))
         row = _row(target)
     _listing_changed()
+    await _collab_saved(request, target)
     return row
 
 
@@ -1568,6 +1587,7 @@ async def save_doc_as(request: Request, req: DocSaveAsRequest) -> DocumentRow:
             raise HTTPException(status_code=409, detail=f"{target.name} already exists") from None
         row = _row(target)
     _listing_changed()
+    await _collab_saved(request, target)
     return row
 
 
