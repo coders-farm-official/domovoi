@@ -13,7 +13,7 @@ and `room_battery_warnings`. Without it nothing warns and the switches read
 on.
 
 A phone in room mode already sent its battery once a minute; it now also
-sends it when its charger goes on or off and when the level moves 5 %, and
+sends it when its charger goes on or off and when the level moves 5 % (1 % under 20 %), and
 says which charger (`battery.plugged`: `ac`, `usb`, `wireless`, `dock`).
 Update the app on the room phone for those; an older one still warns, a
 minute late at most. Off its charger, at 20 % and again at 10 %, once per

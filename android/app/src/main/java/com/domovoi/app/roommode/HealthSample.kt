@@ -16,7 +16,7 @@ import kotlinx.serialization.json.put
  * while the charger is plugged in (a battery held full counts, not
  * charging). Since 2026-10-25 also `plugged`, which charger, when on one.
  * Besides the minute's frame, a room sends one when the charger goes on or
- * off or the level moves 5 % ([BatteryReporter]), for the core's
+ * off or the level moves 5 % (1 % when low; [BatteryReporter]), for the core's
  * low-battery warnings (domovoi/room_battery.py).
  */
 object HealthSample {

@@ -499,7 +499,7 @@ battery and **mic blocked** when Android is handing the room silence.
 
 Keep the phone on its charger: rooms are always on. The phone sends its
 battery with its health sample once a minute, and again when the charger
-goes on or off or the level moves 5 %. Off its charger, at **20 %** and
+goes on or off or the level moves 5 % (1 % under 20 %, off its charger). Off its charger, at **20 %** and
 again at **10 %**, once per charge (`domovoi/room_battery.py`):
 
 - Home and Health → Rooms show "Pako's battery is low (15%) · plug it in",
