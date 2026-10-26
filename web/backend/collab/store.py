@@ -159,12 +159,14 @@ async def mark_seeded(
 async def record_save(
     doc_id: str, epoch: int, fingerprint: tuple[str, int, int], saved_rev: int
 ) -> None:
+    """The file now holds ``saved_rev`` (exactly: an older save landing
+    after a newer one moves it back, and the file is behind again)."""
     sha, size, mtime_ns = fingerprint
     async with session_scope() as s:
         await s.execute(
             text(
                 "UPDATE collab_docs SET file_sha256 = :sha, file_size = :sz, file_mtime_ns = :mt, "
-                "saved_rev = GREATEST(saved_rev, :rev), updated_at = now() "
+                "saved_rev = :rev, updated_at = now() "
                 "WHERE doc_id = :id AND epoch = :e"
             ),
             {"id": doc_id, "e": epoch, "sha": sha, "sz": size, "mt": mtime_ns, "rev": saved_rev},
@@ -272,6 +274,34 @@ def _snap(r: Any, with_state: bool) -> SnapshotRow:
     )
 
 
+async def keep_offline_copy(
+    doc_id: str, epoch: int, state: bytes, name: str, origin: str
+) -> int:
+    """A device's offline copy from an old epoch: ONE per device per epoch
+    (a phone reconnecting again replaces its copy rather than adding one),
+    at most MAX_OFFLINE_COPIES per document, then retention runs."""
+    async with session_scope() as s:
+        await s.execute(
+            text(
+                "DELETE FROM collab_snapshots WHERE doc_id = :id AND epoch = :e "
+                "AND kind = 'offline_copy' AND origin = :o"
+            ),
+            {"id": doc_id, "e": epoch, "o": origin},
+        )
+        r = (
+            await s.execute(
+                text(
+                    "INSERT INTO collab_snapshots (doc_id, epoch, kind, state, editors, size, origin) "
+                    "VALUES (:id, :e, 'offline_copy', :st, CAST(:ed AS jsonb), :sz, :o) RETURNING id"
+                ),
+                {"id": doc_id, "e": epoch, "st": state, "ed": json.dumps([name] if name else []),
+                 "sz": len(state), "o": origin},
+            )
+        ).first()
+    await thin_snapshots(doc_id)
+    return int(r.id)
+
+
 async def list_snapshots(doc_id: str, limit: int = 500) -> list[SnapshotRow]:
     async with session_scope() as s:
         rows = (
@@ -322,17 +352,21 @@ async def latest_snapshot_of_epoch(doc_id: str, epoch: int) -> Optional[Snapshot
 #   * older than that, one version per hour for a week, then one per day
 #     for 90 days, then one per week — the NEWEST in each window stays and
 #     takes the names of who edited in the ones it replaces;
-#   * an "offline copy" (a phone's offline edits that could not be merged
-#     because the file was changed outside the editor meanwhile) is never
-#     thinned in its first 30 days;
 #   * at most MAX_SNAPSHOTS versions and MAX_SNAPSHOT_BYTES per document:
-#     past that, the oldest go.
+#     past that, the oldest go;
+#   * "offline copies" (a device's offline edits that could not be merged
+#     because the file was changed outside the editor meanwhile) have their
+#     own, separate budget and never count against the versions above: one
+#     per device per epoch (store.keep_offline_copy), the newest
+#     MAX_OFFLINE_COPIES, MAX_OFFLINE_BYTES in all, each for 30 days.
 KEEP_ALL_FOR = timedelta(hours=2)
 HOURLY_FOR = timedelta(days=7)
 DAILY_FOR = timedelta(days=90)
 OFFLINE_COPY_KEEP = timedelta(days=30)
 MAX_SNAPSHOTS = 200
 MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024
+MAX_OFFLINE_COPIES = 10
+MAX_OFFLINE_BYTES = 64 * 1024 * 1024
 
 
 def _bucket(age: timedelta, at: datetime) -> Optional[tuple[str, int]]:
@@ -354,10 +388,16 @@ def plan_thinning(
     drop: set[int] = set()
     inherit: dict[int, set[str]] = {}
     keeper_of: dict[tuple[str, int], int] = {}
+    copies = [sn for sn in snaps if sn.kind == "offline_copy"]
+    snaps = [sn for sn in snaps if sn.kind != "offline_copy"]
+    copy_bytes = 0
+    for i, sn in enumerate(copies):
+        copy_bytes += sn.size
+        if (now - sn.created_at > OFFLINE_COPY_KEEP or i >= MAX_OFFLINE_COPIES
+                or copy_bytes > MAX_OFFLINE_BYTES):
+            drop.add(sn.id)
     for sn in snaps:
         age = now - sn.created_at
-        if sn.kind == "offline_copy" and age <= OFFLINE_COPY_KEEP:
-            continue
         b = _bucket(age, sn.created_at)
         if b is None:
             continue

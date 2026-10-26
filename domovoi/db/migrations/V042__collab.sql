@@ -65,6 +65,9 @@ CREATE TABLE IF NOT EXISTS collab_snapshots (
     state       BYTEA NOT NULL,
     editors     JSONB NOT NULL DEFAULT '[]'::jsonb,
     size        INTEGER NOT NULL,
+    -- offline_copy only: the device it came from (one copy per device per
+    -- epoch; a reconnect replaces it). NULL for every other kind.
+    origin      TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_collab_snapshots_doc ON collab_snapshots (doc_id, created_at DESC);

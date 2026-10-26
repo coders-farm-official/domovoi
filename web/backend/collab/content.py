@@ -71,18 +71,29 @@ def _plain(value: Any) -> Any:
     return value
 
 
+# Nothing here recurses without a bound: guard.py keeps every stored
+# document within MAX_TYPE_DEPTH, the XML walks below use explicit stacks,
+# and the map/array copy counts its depth and stops past the same limit.
+_MAX_DEPTH = 64
+
+
 def _copy_xml_children(src: XmlFragment | XmlElement, dst: XmlFragment | XmlElement) -> None:
-    for child in src.children:
-        if isinstance(child, XmlElement):
-            el = dst.children.append(XmlElement(child.tag or "paragraph"))
-            for key, value in child.attributes:
-                el.attributes[key] = value
-            _copy_xml_children(child, el)
-        elif isinstance(child, XmlText):
-            tx = dst.children.append(XmlText())
-            for key, value in child.attributes:
-                tx.attributes[key] = value
-            _copy_text_runs(child, tx)
+    stack = [(src, dst, 0)]
+    while stack:
+        s_node, d_node, depth = stack.pop()
+        if depth > _MAX_DEPTH:
+            raise ValueError("document nested too deep to copy")
+        for child in s_node.children:
+            if isinstance(child, XmlElement):
+                el = d_node.children.append(XmlElement(child.tag or "paragraph"))
+                for key, value in child.attributes:
+                    el.attributes[key] = value
+                stack.append((child, el, depth + 1))
+            elif isinstance(child, XmlText):
+                tx = d_node.children.append(XmlText())
+                for key, value in child.attributes:
+                    tx.attributes[key] = value
+                _copy_text_runs(child, tx)
 
 
 def _copy_map(src: Map, dst: Map) -> None:
@@ -95,12 +106,14 @@ def _copy_array(src: Array, dst: Array) -> None:
         dst.append(_prelim(value))
 
 
-def _prelim(value: Any) -> Any:
+def _prelim(value: Any, depth: int = 0) -> Any:
     """A fresh, not-yet-integrated copy of a nested shared value."""
+    if depth > _MAX_DEPTH:
+        raise ValueError("document nested too deep to copy")
     if isinstance(value, Map):
-        return Map({k: _prelim(v) for k, v in value.items()})
+        return Map({k: _prelim(v, depth + 1) for k, v in value.items()})
     if isinstance(value, Array):
-        return Array([_prelim(v) for v in value])
+        return Array([_prelim(v, depth + 1) for v in value])
     if isinstance(value, Text):
         return Text(str(value))
     return value
@@ -147,16 +160,27 @@ def restore_into(live: Doc, version: Doc) -> None:
 
 
 def _xml_text(node: Any, out: list[str]) -> None:
-    for child in node.children:
-        if isinstance(child, XmlText):
-            out.append("".join(c for c, _ in child.diff() if isinstance(c, str)))
-        elif isinstance(child, XmlElement):
-            before = len(out)
-            _xml_text(child, out)
-            # Block-ish elements end a line; marks inside a paragraph don't
-            # exist as elements in ProseMirror, so every element is a block.
-            if len(out) > before or child.tag in ("hardBreak", "horizontalRule"):
+    """Plain text of an XML tree, depth first, without recursion: every
+    element that holds text ends a line (ProseMirror keeps marks on text,
+    so elements are blocks), and so do hard breaks and rules."""
+    stack: list[tuple[str, Any, int]] = [("children", node, 0)]
+    while stack:
+        op, item, depth = stack.pop()
+        if op == "end":
+            began, is_break = item
+            if is_break or (len(out) > began and not out[-1].endswith("\n")):
                 out.append("\n")
+        elif op == "text":
+            out.append("".join(c for c, _ in item.diff() if isinstance(c, str)))
+        elif op == "elem":
+            stack.append(("end", (len(out), item.tag in ("hardBreak", "horizontalRule")), depth))
+            stack.append(("children", item, depth))
+        elif depth <= _MAX_DEPTH:
+            for child in reversed(list(item.children)):
+                if isinstance(child, XmlText):
+                    stack.append(("text", child, depth + 1))
+                elif isinstance(child, XmlElement):
+                    stack.append(("elem", child, depth + 1))
 
 
 def preview_text(doc: Doc, limit: int = 20000) -> str:

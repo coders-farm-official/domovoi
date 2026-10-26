@@ -236,12 +236,14 @@ async def test_a_stale_relay_cannot_bring_back_someone_who_left(collab_db, docs,
     await connect(room, a, pa)
     await connect(room, b, pb)
     await room.handle(pa, a.presence_frame({"user": {"name": "Ana"}}))
+    await room.handle(pb, b.presence_frame({"user": {"name": "Ben"}}))   # its own, first
     await pump(room, (pa, a), (pb, b))
     room.leave(pa)
     await room.handle(pb, awareness_message(encode_awareness_update(
         [AwarenessEntry(11, 1, '{"user":{"name":"Ana"}}')])))
     await pump(room, (pb, b))
     assert 11 not in room.awareness and 11 not in b.presence
+    assert not pb.closes            # relaying is what the stock client does: no penalty
 
 
 # ─── Persistence ─────────────────────────────────────────────────────

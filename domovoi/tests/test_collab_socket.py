@@ -426,3 +426,89 @@ def test_moving_a_document_keeps_its_id(client, docs):
     (docs / "plan.md").rename(docs / "sub" / "plan.md")
     asyncio.run(collab_api.note_moved("plan.md", "sub/plan.md"))
     assert doc_id(client, "sub/plan.md") == did
+
+
+# ─── Review round 1 (2026-10-26): the doors ───────────────────────────
+
+
+def test_a_rebound_public_name_is_refused_even_with_a_token(client):
+    """DNS rebinding: the LAN host middleware lets WebSocket upgrades
+    through, so the socket checks Host itself; Origin == Host is not enough
+    when the name is a public one."""
+    did = doc_id(client)
+    with client.websocket_connect(f"/api/collab/{did}", subprotocols=[sub(TOKEN)],
+                                  headers={"Host": "evil.example.com:6369"}) as ws:
+        assert close_code(ws) == rooms.CLOSE_FORBIDDEN
+    assert not collab_api.origin_ok(type("W", (), {"headers": {
+        "origin": "http://evil.example.com:6369", "host": "evil.example.com:6369"}})())
+
+
+def test_spreadsheets_are_not_co_edited_in_v1(client, docs):
+    (docs / "budget.xlsx").write_bytes(b"PK\x03\x04" + bytes(64))
+    r = client.get("/api/collab/doc", params={"path": "budget.xlsx"}, headers={HEADER: TOKEN})
+    assert r.status_code == 415
+
+
+def _seeded_room(client, did, sim):
+    ws_cm = client.websocket_connect(f"/api/collab/{did}", subprotocols=[sub(TOKEN)])
+    ws = ws_cm.__enter__()
+    hello(ws, sim)
+    for f in sim.hello_frames():
+        ws.send_bytes(f)
+    frames_until(ws, sim, lambda: sim.synced)
+    ws.send_bytes(sim.edit_text(0, "# Plan\n"))
+    ws.send_bytes(control({"t": "seeded"}))
+    frames_until(ws, sim, lambda: sim.last_control("ready") is not None)
+    return ws_cm, ws
+
+
+def test_stale_and_impossible_co_editing_saves_are_refused_before_writing(client, docs):
+    did = doc_id(client)
+    a = SimClient(1)
+    cm, wa = _seeded_room(client, did, a)
+    try:
+        wa.send_bytes(a.edit_text(7, "one\n"))
+        frames_until(wa, a, lambda: True)
+        room = rooms.MANAGER.rooms[did]
+        hdr = lambda rev, epoch=None: {HEADER: TOKEN, **RW,  # noqa: E731
+                                       "X-Domovoi-Collab": f"{did};{epoch or room.epoch};{rev}"}
+        newest = room.rev
+        r = client.put("/api/documents/text/plan.md", json={"text": "NEWEST"}, headers=hdr(newest))
+        assert r.status_code == 200
+        for headers in (hdr(newest - 1),            # older than what the file holds
+                        hdr(newest + 50),           # a revision that does not exist
+                        hdr(newest, epoch=room.epoch + 1)):   # another epoch
+            r = client.put("/api/documents/text/plan.md", json={"text": "STALE"}, headers=headers)
+            assert r.status_code == 409, r.text
+        assert (docs / "plan.md").read_text(encoding="utf-8") == "NEWEST"
+        assert room.saved_rev == newest
+    finally:
+        cm.__exit__(None, None, None)
+
+
+def test_a_move_tells_editors_and_their_old_path_saves_are_refused(client, docs):
+    did = doc_id(client)
+    a = SimClient(1)
+    cm, wa = _seeded_room(client, did, a)
+    try:
+        room = rooms.MANAGER.rooms[did]
+        epoch, rev = room.epoch, room.rev
+        (docs / "sub").mkdir()
+        (docs / "plan.md").rename(docs / "sub" / "plan.md")
+        client.portal.call(collab_api.note_moved, "plan.md", "sub/plan.md")
+        frames = []
+        for _ in range(10):
+            msg = recv(wa)
+            if msg["type"] == "websocket.close":
+                frames.append(msg["code"])
+                break
+            if msg.get("bytes"):
+                a.feed(msg["bytes"])
+        assert a.last_control("moved") == {"t": "moved", "path": "sub/plan.md"}
+        assert frames == [rooms.CLOSE_MOVED]
+        r = client.put("/api/documents/text/plan.md", json={"text": "old path"},
+                       headers={HEADER: TOKEN, **RW, "X-Domovoi-Collab": f"{did};{epoch};{rev}"})
+        assert r.status_code == 409
+        assert not (docs / "plan.md").exists()
+    finally:
+        cm.__exit__(None, None, None)

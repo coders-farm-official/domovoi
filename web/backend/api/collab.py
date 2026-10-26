@@ -41,8 +41,9 @@ import logging
 import os
 import re
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, AsyncIterator, Literal, Optional
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
@@ -50,6 +51,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from domovoi import admin_auth
+from domovoi.transport_guard import host_allowed
 from domovoi.admin_auth import require_device, require_device_read
 from web.backend.api import documents as documents_api
 from web.backend.collab import content, rooms, store
@@ -63,9 +65,11 @@ router = APIRouter(prefix="/api/collab", tags=["collab"])
 DAILY = [Depends(require_device_read)]
 DEVICE = [Depends(require_device)]
 
-# What co-editing opens: the formatted editor's documents (builder A) and
-# spreadsheets (builder D). Each still saves through its own Documents route.
-COLLAB_EXTS = frozenset({".html", ".md", ".markdown", ".docx", ".xlsx"})
+# What co-editing opens: the formatted editor's documents (builder A). Each
+# still saves through its own Documents route. Spreadsheets are not co-edited
+# in v1 (builder D); .xlsx comes back here, with its own Yjs root registered
+# in collab.content, when they are.
+COLLAB_EXTS = frozenset({".html", ".md", ".markdown", ".docx"})
 
 COLLAB_HEADER = "x-domovoi-collab"
 
@@ -171,18 +175,26 @@ def _web_port(ws: WebSocket) -> int:
 
 
 def origin_ok(ws: WebSocket) -> bool:
-    """For a session with only an ambient credential: the page must be this
-    dashboard (same origin) or another Domovoi dashboard on this port (the
-    server switcher), never another service on the machine."""
+    """For a session with only an ambient credential: the page must be a
+    Domovoi dashboard on this server's port and on a LAN name (this one, or
+    another one reached through the server switcher), never another service
+    on the machine. Origin == Host is NOT enough on its own: under DNS
+    rebinding a public name is "same origin" (review L4); the name itself
+    must be one this box answers to on the LAN."""
     origin = (ws.headers.get("origin") or "").strip()
     if not origin:
         return True     # not a browser: nothing ambient rode along
     if origin.lower() == "null":
         return False
-    host = (ws.headers.get("host") or "").lower()
-    if urlsplit(origin).netloc.lower() == host and host:
+    port = _web_port(ws)
+    if re.match(cors_origin_regex(port), origin, flags=re.IGNORECASE):
         return True
-    return bool(re.match(cors_origin_regex(_web_port(ws)), origin, flags=re.IGNORECASE))
+    parts = urlsplit(origin)
+    try:
+        origin_port = parts.port or (443 if parts.scheme == "https" else 80)
+    except ValueError:
+        return False
+    return parts.hostname is not None and host_allowed(parts.hostname) and origin_port == port
 
 
 async def socket_access(ws: WebSocket, token: Optional[str]) -> Access:
@@ -223,6 +235,12 @@ async def socket_access(ws: WebSocket, token: Optional[str]) -> Access:
     raise Refusal(rooms.CLOSE_UNAUTHORIZED, "household device token or admin session required")
 
 
+def _device_key(conn: Any) -> Optional[str]:
+    from web.backend.api import files as files_api
+
+    return files_api.caller_device_id(conn, None)
+
+
 def _source(ws: WebSocket) -> str:
     return admin_auth.request_source(ws)
 
@@ -236,8 +254,35 @@ async def collab_socket(ws: WebSocket, doc_id: str) -> None:
     # client reconnects forever after a refused handshake, and stops on 44xx.
     await ws.accept(subprotocol=offered)
     source = _source(ws)
-    counted = False
+    # Counted before the first await, so a burst of sockets from one device
+    # cannot all pass the check together.
+    if rooms.MANAGER.sockets_by_source.get(source, 0) >= rooms.MAX_SOCKETS_PER_SOURCE:
+        await _refuse(ws, rooms.CLOSE_BUSY, "too many documents open from this device")
+        return
+    rooms.MANAGER.sockets_by_source[source] = rooms.MANAGER.sockets_by_source.get(source, 0) + 1
     try:
+        await _serve_socket(ws, doc_id, token, source)
+    finally:
+        left = rooms.MANAGER.sockets_by_source.get(source, 1) - 1
+        if left > 0:
+            rooms.MANAGER.sockets_by_source[source] = left
+        else:
+            rooms.MANAGER.sockets_by_source.pop(source, None)
+
+
+async def _refuse(ws: WebSocket, code: int, reason: str) -> None:
+    try:
+        await ws.close(code=code, reason=reason)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _serve_socket(ws: WebSocket, doc_id: str, token: Optional[str], source: str) -> None:
+    try:
+        # The LAN host middleware passes WebSocket upgrades through, so a
+        # rebound public name is refused here (review L4).
+        if not host_allowed(ws.headers.get("host")):
+            raise Refusal(rooms.CLOSE_FORBIDDEN, "not a name this server answers to")
         access = await socket_access(ws, token)
         row = await store.get(doc_id) if len(doc_id) <= 64 else None
         if row is None:
@@ -251,20 +296,22 @@ async def collab_socket(ws: WebSocket, doc_id: str) -> None:
             ) from None
         if access == "write" and not await _may_write_path(ws, target):
             access = "read"
-        if rooms.MANAGER.sockets_by_source.get(source, 0) >= rooms.MAX_SOCKETS_PER_SOURCE:
-            raise Refusal(rooms.CLOSE_BUSY, "too many documents open from this device")
+        readonly = access != "write"
+        # Everything that awaits comes BEFORE the room is opened: open()
+        # hands back a room that is open now, and the join below happens
+        # before anything else can run (review M3).
+        user = await resolve_user(ws)
+        device = _device_key(ws) or user["name"]
         try:
-            room = await rooms.MANAGER.open(row, target)
+            room = await rooms.MANAGER.open(row, target, readonly=readonly)
         except rooms.RoomsFull:
             raise Refusal(rooms.CLOSE_BUSY, "too many documents are open right now") from None
-        if len(room.peers) >= rooms.MAX_PEERS_PER_DOC:
+        except rooms.RoomUnsafe:
+            raise Refusal(rooms.CLOSE_TOO_LARGE, "this document cannot be opened for editing together") from None
+        if not room.has_room_for(readonly):
             raise Refusal(rooms.CLOSE_BUSY, "too many people have this document open")
-        user = await resolve_user(ws)
     except Refusal as r:
-        try:
-            await ws.close(code=r.code, reason=r.reason)
-        except Exception:  # noqa: BLE001
-            pass
+        await _refuse(ws, r.code, r.reason)
         return
 
     try:
@@ -280,11 +327,9 @@ async def collab_socket(ws: WebSocket, doc_id: str) -> None:
 
     peer = rooms.Peer(
         send_bytes=send_bytes, close=close, name=user["name"], color=user["color"],
-        readonly=access != "write", source=source, epoch=client_epoch,
-        archive=client_epoch != room.epoch, session=uuid.uuid4().hex[:12],
+        readonly=readonly, source=source, epoch=client_epoch,
+        archive=client_epoch != room.epoch, session=uuid.uuid4().hex[:12], device=device,
     )
-    rooms.MANAGER.sockets_by_source[source] = rooms.MANAGER.sockets_by_source.get(source, 0) + 1
-    counted = True
     peer.writer = asyncio.get_running_loop().create_task(peer.run_writer())
     room.join(peer)
     try:
@@ -300,12 +345,6 @@ async def collab_socket(ws: WebSocket, doc_id: str) -> None:
         log.debug("collab %s: socket ended: %s", doc_id, e)
     finally:
         room.leave(peer)
-        if counted:
-            left = rooms.MANAGER.sockets_by_source.get(source, 1) - 1
-            if left > 0:
-                rooms.MANAGER.sockets_by_source[source] = left
-            else:
-                rooms.MANAGER.sockets_by_source.pop(source, None)
         # Shielded: this handler may be cancelled as the connection goes,
         # and the room must still be released (last edits to Postgres).
         await asyncio.shield(_finish(peer, room))
@@ -433,7 +472,9 @@ async def restore(request: Request, req: RestoreRequest) -> dict[str, Any]:
         room = await rooms.MANAGER.open(row, target)
     except rooms.RoomsFull:
         raise HTTPException(status_code=503, detail="too many documents are open right now") from None
-    room.holds += 1
+    except rooms.RoomUnsafe:
+        raise HTTPException(status_code=409, detail="this document cannot be restored here") from None
+    room.holds += 1         # before any await: the room stays open for us
     try:
         sid = await room.restore(sn.state, user["name"])
     except rooms.StillOpening:
@@ -462,16 +503,87 @@ def _parse_header(value: str) -> Optional[tuple[str, int, int]]:
         return None
 
 
+class SaveRefused(HTTPException):
+    def __init__(self, detail: str) -> None:
+        super().__init__(status_code=409, detail=detail)
+
+
+async def _check_save(conn: Any, target: Path, rel: str) -> None:
+    """Refuse (409) a co-editing save that must not be written: a revision
+    older than what the file already holds (two saves in flight, the older
+    one landing last), one that does not exist yet, one from before the
+    document was rebuilt, or one for a document that has moved since.
+    Called under the path lock, before the file is touched. A save without
+    the header is not co-editing's to refuse."""
+    raw = conn.headers.get(COLLAB_HEADER)
+    if raw is None:
+        return
+    parsed = _parse_header(raw)
+    if parsed is None:
+        raise SaveRefused("unreadable co-editing header")
+    doc_id, epoch, rev = parsed
+    row = await asyncio.wait_for(store.get(doc_id), _HOOK_TIMEOUT)
+    if row is None:
+        raise SaveRefused("this document is no longer being edited together; reopen it")
+    if row.rel_path != rel:
+        raise SaveRefused("this document was moved or renamed; reopen it")
+    if row.epoch != epoch:
+        raise SaveRefused("this document changed outside the editor; reopen it")
+    room = rooms.MANAGER.rooms.get(doc_id)
+    if room is not None and not room.closed:
+        why = room.save_refusal(rev)
+    elif rev > row.rev:
+        why = "that revision does not exist"
+    elif rev < row.saved_rev:
+        why = "a newer version was saved already"
+    else:
+        why = None
+    if why:
+        raise SaveRefused(why)
+
+
+@asynccontextmanager
+async def saving(conn: Any, target: Path) -> AsyncIterator[None]:
+    """Around a Documents save of a co-edited type: refuse a stale
+    co-editing save before anything is written, and hold the path's lock
+    across the write and the note of what was written, so the
+    outside-change check never sees our own save half done.
+
+        async with collab.saving(request, target):
+            target.write_text(...)
+    """
+    if target.suffix.lower() not in COLLAB_EXTS:
+        yield
+        return
+    rel = documents_api._rel_of(target)
+    async with rooms.path_lock(rel):
+        await _check_save(conn, target, rel)
+        yield
+        await _note_saved(conn, target, rel)
+
+
 async def note_file_saved(conn: Any, target: Path) -> None:
-    """A Documents save route wrote ``target``. With the co-editing header
-    (``<doc_id>;<epoch>;<rev>``) it is the clean file of that revision:
-    remember its fingerprint. Without it, the file changed under the shared
-    state: the live room (if any) checks at once and rebuilds from it.
-    Never raises: a save never fails over co-editing bookkeeping."""
+    """For a save route that does not wrap its write in :func:`saving`
+    (builder A's ``PUT /doc`` calls this after writing): the same note,
+    taken under the path lock. Never raises."""
     try:
         if target.suffix.lower() not in COLLAB_EXTS:
             return
         rel = documents_api._rel_of(target)
+        async with rooms.path_lock(rel):
+            await _note_saved(conn, target, rel)
+    except Exception as e:  # noqa: BLE001
+        log.warning("collab: could not note a save of %s: %s", target.name, e)
+
+
+async def _note_saved(conn: Any, target: Path, rel: str) -> None:
+    """A Documents save route wrote ``target``. With the co-editing header
+    (``<doc_id>;<epoch>;<rev>``) it is the clean file of that revision:
+    remember its fingerprint and that the file holds ``rev``. Without it,
+    the file changed under the shared state: the live room (if any) checks
+    at once and rebuilds from it. Never raises: a save never fails over
+    co-editing bookkeeping once it is written."""
+    try:
         room = rooms.MANAGER.by_path(rel)
         parsed = _parse_header(conn.headers.get(COLLAB_HEADER) or "")
         if parsed is None:
@@ -480,13 +592,15 @@ async def note_file_saved(conn: Any, target: Path) -> None:
             return
         doc_id, epoch, rev = parsed
         fp = rooms.file_fingerprint(target)
-        if room is not None and room.doc_id == doc_id and room.epoch == epoch:
+        if room is not None and room.doc_id == doc_id and room.epoch == epoch and rev <= room.rev:
             room.note_saved(rev, fp)
         elif room is not None:
+            # Not a revision this room has (a route that skipped the check):
+            # whatever was written, it is not ours to vouch for.
             room.rebuild_wanted = True
             return
         row = await asyncio.wait_for(store.get_by_path(rel), _HOOK_TIMEOUT)
-        if row is None or row.doc_id != doc_id or row.epoch != epoch:
+        if row is None or row.doc_id != doc_id or row.epoch != epoch or rev > row.rev:
             return
         await asyncio.wait_for(store.record_save(doc_id, epoch, fp, rev), _HOOK_TIMEOUT)
     except Exception as e:  # noqa: BLE001
@@ -520,5 +634,11 @@ async def note_moved(old_rel: str, new_rel: str) -> None:
                 continue
             room.rel_path = moved
             room.target = documents_api._safe_target(moved)
+            # Editors still hold the old name and would save to it (and so
+            # make the old file again): tell them, and close, so they reopen
+            # under the new one.
+            for p in list(room.peers):
+                p.send(rooms.control_message({"t": "moved", "path": moved}))
+                p.kill_after(rooms.CLOSE_MOVED, "the document was moved or renamed")
     except Exception as e:  # noqa: BLE001
         log.warning("collab: could not follow a move: %s", e)

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -44,7 +45,7 @@ from pycrdt import (
     merge_updates,
 )
 
-from web.backend.collab import content, store
+from web.backend.collab import content, guard, store
 from web.backend.collab.protocol import (
     EMPTY_UPDATE,
     MSG_AUTH,
@@ -76,8 +77,11 @@ MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 # The whole shared state of one document (the file limit the save routes
 # take is 64 MiB of request body).
 MAX_DOC_BYTES = 48 * 1024 * 1024
-MAX_PEERS_PER_DOC = 16
+MAX_PEERS_PER_DOC = 16          # people who can edit
+MAX_VIEWERS_PER_DOC = 8         # view-only sessions, counted apart: they never take an editor's place
 MAX_ROOMS = 64
+# Rooms a view-only session may not open: the last ones are kept for editors.
+ROOMS_KEPT_FOR_EDITORS = 16
 MAX_SOCKETS_PER_SOURCE = 24
 # Messages: a steady 60 a second with bursts to 300 (typing fast is ~15).
 RATE_PER_SEC = 60.0
@@ -86,7 +90,8 @@ RATE_BURST = 300.0
 BYTES_WINDOW_SEC = 10.0
 BYTES_PER_WINDOW = 24 * 1024 * 1024
 MAX_AWARENESS_STATE = 8 * 1024
-MAX_CLIENT_IDS_PER_PEER = 4
+# A Yjs client has one client id; a socket owns the first one it announces.
+MAX_CLIENT_IDS_PER_PEER = 1
 SEND_QUEUE_MAX = 512
 
 TICK_SEC = 1.0
@@ -103,6 +108,7 @@ CLOSE_UNAUTHORIZED = 4401
 CLOSE_FORBIDDEN = 4403
 CLOSE_NOT_FOUND = 4404
 CLOSE_RESET = 4409
+CLOSE_MOVED = 4410
 CLOSE_TOO_LARGE = 4413
 CLOSE_UNSUPPORTED = 4415
 CLOSE_BAD_MESSAGE = 4400
@@ -152,6 +158,7 @@ class Peer:
     epoch: int                       # the epoch the client says its local copy is from
     archive: bool = False            # stale epoch: collect its offline copy, then reset
     session: str = ""
+    device: str = ""                 # the device id (else name): one offline copy each
     client_ids: set[int] = field(default_factory=set)
     last_edit: float = 0.0
     can_save: bool = False
@@ -250,6 +257,8 @@ class Room:
         self.rows_since_compact = 0
         self.bytes_since_compact = 0
         self.rev = row.rev
+        # The revision the FILE holds now (the last co-editing save that
+        # landed, whichever order saves landed in). rev > saved_rev: behind.
         self.saved_rev = row.saved_rev
         self.seeded = row.seeded
         self.seed_peer: Optional[Peer] = None
@@ -269,20 +278,37 @@ class Room:
         self.approx_size = 0
         self.lock = asyncio.Lock()
         self.closed = False
+        # Set the moment the last one leaves (before any await), so open()
+        # never hands this room out again; ``done`` is set once shut() has
+        # written everything, and open() waits for it before loading anew.
+        self.closing = False
+        self.done = asyncio.Event()
         self.rebuild_wanted = False
+        # Where every struct of the document sits (web/backend/collab/guard).
+        self.index = guard.StructIndex()
 
     # ── loading ──
     def load(self, state: Optional[bytes], updates: list[bytes]) -> None:
-        if state:
-            self.ydoc.apply_update(state)
-        for u in updates:
-            self.ydoc.apply_update(u)
+        # Everything stored was read by guard.check_update on the way in.
+        # Applying never walks the structure (only printing and deleting a
+        # deep one do), so the whole is applied, then read once more as one
+        # clean encoding to rebuild the index; a document that breaks the
+        # limits is refused here, before anything else touches it.
+        for blob in ([state] if state else []) + list(updates):
+            guard.check_values(blob)      # deep values crash apply_update itself
+            self.ydoc.apply_update(blob)
+        self.index = guard.index_for(self.ydoc.get_update())
         self.approx_size = len(self.ydoc.get_update())
         self.rows_since_compact = len(updates)
 
     @property
     def writable_peers(self) -> list[Peer]:
         return [p for p in self.peers if not p.readonly and not p.archive and not p.closed]
+
+    def has_room_for(self, readonly: bool) -> bool:
+        if readonly:
+            return sum(1 for p in self.peers if p.readonly) < MAX_VIEWERS_PER_DOC
+        return sum(1 for p in self.peers if not p.readonly) < MAX_PEERS_PER_DOC
 
     def broadcast(self, data: bytes, *, skip: Optional[Peer] = None) -> None:
         for p in self.peers:
@@ -342,8 +368,13 @@ class Room:
             for e in gone:
                 e.clock += 1
                 e.state = "null"
-                self.awareness_clock[e.client_id] = e.clock
             self.broadcast(awareness_message(encode_awareness_update(gone)))
+        for cid in peer.client_ids:
+            # The id goes with its socket: the same client reconnecting starts
+            # its clock where it left off, and must be heard at once. Nobody
+            # else can take the id over: a socket owns only the id it
+            # announced first, which is its own.
+            self.awareness_clock.pop(cid, None)
         if self.seed_peer is peer:
             self.seed_peer = None
             if not self.seeded:
@@ -369,7 +400,8 @@ class Room:
             if kind == MSG_SYNC:
                 await self._sync(peer, data, pos)
             elif kind == MSG_AWARENESS:
-                self._awareness(peer, data, pos)
+                if not peer.archive:      # a stale copy being collected has no presence
+                    self._awareness(peer, data, pos)
             elif kind == MSG_QUERY_AWARENESS:
                 if self.awareness:
                     peer.send(awareness_message(
@@ -416,7 +448,11 @@ class Room:
         self.apply_and_relay(update, by=peer)
 
     def apply_and_relay(self, update: bytes, *, by: Optional[Peer], name: str | None = None) -> None:
+        # Read before pycrdt sees it: a few kilobytes of nesting crash yrs
+        # (guard.py). UpdateRejected is a ProtocolError: the socket closes.
+        fresh = guard.check_update(update, self.index)
         self.ydoc.apply_update(update)
+        guard.commit(self.index, fresh)
         self._record(update, by=by, name=name)
 
     def _record(self, update: bytes, *, by: Optional[Peer], name: str | None = None) -> None:
@@ -463,12 +499,16 @@ class Room:
                 if e.state == "null":
                     continue
                 if len(peer.client_ids) >= MAX_CLIENT_IDS_PER_PEER:
-                    raise ProtocolError("too many client ids")
+                    # Somebody else's presence, relayed after they left (the
+                    # stock provider re-sends what it hears): not this
+                    # socket's to bring back.
+                    continue
                 peer.client_ids.add(e.client_id)
             self.awareness_clock[e.client_id] = e.clock
             if e.state == "null":
                 self.awareness.pop(e.client_id, None)
             else:
+                e = AwarenessEntry(e.client_id, e.clock, self._stamp(peer, e.state))
                 self.awareness[e.client_id] = e
             accepted.append(e)
         if accepted:
@@ -476,6 +516,19 @@ class Room:
             # it has heard nothing for 30 s, and its own presence renewing
             # every 15 s is what it hears when it is alone in a document.
             self.broadcast(awareness_message(encode_awareness_update(accepted)))
+
+    @staticmethod
+    def _stamp(peer: Peer, state: str) -> str:
+        """The name and colour in a presence state are the server's, not the
+        client's: one tab cannot show up as another person."""
+        try:
+            doc = json.loads(state)
+        except (ValueError, RecursionError):
+            raise ProtocolError("presence is not JSON") from None
+        if not isinstance(doc, dict):
+            raise ProtocolError("presence is not an object")
+        doc["user"] = {"name": peer.name, "color": peer.color}
+        return json.dumps(doc, separators=(",", ":"), ensure_ascii=False)
 
     async def _control(self, peer: Peer, msg: dict[str, Any]) -> None:
         t = msg["t"]
@@ -495,13 +548,19 @@ class Room:
             # The client is leaving (closing the document, the tab going
             # away): if the file is behind, it saves now rather than after
             # the idle wait, since it will not be here for that.
-            if (not peer.readonly and peer.can_save and self.seeded
+            now = time.monotonic()
+            outstanding = self._outstanding(now)
+            if outstanding and self.save_asked_rev == self.rev:
+                # Someone is already saving exactly this: nothing to add.
+                peer.send(control_message({"t": "saved", "rev": self.saved_rev,
+                                           "behind": True, "pending": True,
+                                           "reply": "save-now"}))
+            elif (not peer.readonly and peer.can_save and self.seeded
                     and self.rev > self.saved_rev):
-                self.save_peer = peer
-                self.save_asked_at = time.monotonic()
-                self.save_asked_rev = self.rev
-                peer.send(control_message({"t": "save", "rev": self.rev, "epoch": self.epoch,
-                                           "doc": self.doc_id}))
+                # One request at a time: this one supersedes an older one
+                # still out (that save, if it lands later, is refused 409 as
+                # older than what the file then holds).
+                self._ask(peer, now)
             else:
                 peer.send(control_message({"t": "saved", "rev": self.saved_rev,
                                            "behind": self.rev > self.saved_rev,
@@ -526,6 +585,9 @@ class Room:
         self.last_snapshot_at = time.monotonic()
         self.control_all({"t": "ready"})
 
+    def stale_epoch_known(self, epoch: int) -> bool:
+        return 1 <= epoch < self.epoch
+
     async def archive_offline_copy(self, peer: Peer, payload: bytes) -> None:
         """A client came back with a copy from before the file was changed
         outside the editor. Its edits cannot be merged into the rebuilt
@@ -533,7 +595,7 @@ class Room:
         duplicate it), so they are kept as a version of their own, on top of
         the last version of their epoch, and the client starts over."""
         kept = False
-        if peer.readonly:
+        if peer.readonly or not self.stale_epoch_known(peer.epoch):
             # Only someone who may edit can add a version; a view-only
             # session with a stale copy just starts over.
             peer.send(control_message({"t": "reset", "epoch": self.epoch,
@@ -542,14 +604,19 @@ class Room:
             return
         try:
             base_snap = await store.latest_snapshot_of_epoch(self.doc_id, peer.epoch)
-            base = content.doc_from_update(base_snap.state if base_snap else None)
-            before = base.get_update()
-            base.apply_update(payload)
-            after = base.get_update()
-            if after != before and not content.is_empty(base):
-                await store.add_snapshot(self.doc_id, peer.epoch, "offline_copy", after,
-                                         [peer.name])
-                kept = True
+            if base_snap is not None:   # an epoch this document really had
+                base = content.doc_from_update(base_snap.state)
+                index = guard.index_for(base_snap.state)
+                guard.check_update(payload, index)   # read before pycrdt sees it
+                before = base.get_update()
+                base.apply_update(payload)
+                after = base.get_update()
+                if after != before and not content.is_empty(base):
+                    await store.keep_offline_copy(self.doc_id, peer.epoch, after,
+                                                  peer.name, peer.device or peer.name)
+                    kept = True
+        except guard.UpdateRejected as e:
+            log.info("collab %s: offline copy from %s refused: %s", self.doc_id, peer.source, e)
         except Exception as e:  # noqa: BLE001
             log.warning("collab %s: could not keep an offline copy: %s", self.doc_id, e)
         peer.send(control_message({"t": "reset", "epoch": self.epoch,
@@ -574,6 +641,7 @@ class Room:
     async def compact(self) -> None:
         state = self.ydoc.get_update()
         await store.compact(self.doc_id, self.epoch, state, self.rev)
+        self.index = guard.index_for(state)
         self.approx_size = len(state)
         self.rows_since_compact = 0
         self.bytes_since_compact = 0
@@ -607,7 +675,9 @@ class Room:
             if self.seeded and (self.rebuild_wanted or now >= self.next_file_check):
                 self.next_file_check = now + FILE_CHECK_SEC
                 self.rebuild_wanted = False
-                if self.file_changed_outside():
+                async with path_lock(self.rel_path):
+                    changed = self.file_changed_outside()
+                if changed:
                     await self.rebuild_live()
 
     def maybe_ask_for_save(self, now: float) -> None:
@@ -615,14 +685,8 @@ class Room:
             return
         if self.last_change_at and now - self.last_change_at < SAVE_IDLE_SEC:
             return
-        asked_recently = (
-            self.save_peer is not None and not self.save_peer.closed
-            and now - self.save_asked_at < SAVE_TIMEOUT_SEC
-        )
-        if asked_recently and self.save_asked_rev == self.rev:
-            return
-        if asked_recently and self.save_asked_rev != self.rev:
-            # Asked for an older rev and still waiting: let that one finish.
+        if self._outstanding(now):
+            # One request at a time: wait for it (or its timeout).
             return
         candidates = [p for p in self.writable_peers if p.can_save]
         if not candidates:
@@ -633,15 +697,34 @@ class Room:
         if self.save_peer in candidates and now - self.save_asked_at >= SAVE_TIMEOUT_SEC \
                 and len(candidates) > 1:
             candidates.remove(self.save_peer)
-        peer = candidates[0]
+        self._ask(candidates[0], now)
+
+    def _outstanding(self, now: float) -> bool:
+        return (self.save_peer is not None and not self.save_peer.closed
+                and now - self.save_asked_at < SAVE_TIMEOUT_SEC)
+
+    def _ask(self, peer: Peer, now: float) -> None:
         self.save_peer = peer
         self.save_asked_at = now
         self.save_asked_rev = self.rev
         peer.send(control_message({"t": "save", "rev": self.rev, "epoch": self.epoch,
                                    "doc": self.doc_id}))
 
+    def save_refusal(self, rev: int) -> Optional[str]:
+        """Why a co-editing save of ``rev`` must not be written, or None.
+        Checked under the path lock, before the file is touched."""
+        if rev > self.rev:
+            return "that revision does not exist"
+        if rev < self.saved_rev:
+            return "a newer version was saved already"
+        return None
+
     def note_saved(self, rev: int, fp: tuple[str, int, int]) -> None:
-        self.saved_rev = max(self.saved_rev, rev)
+        """A co-editing save of ``rev`` landed: the file holds ``rev`` now.
+        Not max(): if an older save got through after a newer one (an editor
+        that saved without asking first), the file really is older again, and
+        saying so is what gets it saved again."""
+        self.saved_rev = rev
         self.file_fp = fp
         if self.save_asked_rev <= rev:
             self.save_peer = None
@@ -695,10 +778,13 @@ class Room:
                 self.seeded = True
                 self.saved_rev = self.rev
                 self.control_all({"t": "ready"})
-            sv = self.ydoc.get_state()
-            content.restore_into(self.ydoc, content.doc_from_update(version_state))
-            update = self.ydoc.get_update(sv)
-            self._record(update, by=None, name=by_name)
+            # Worked out on a copy: if copying fails half way, the live
+            # document (and everyone in it) never sees a half-cleared state.
+            scratch = content.doc_from_update(self.ydoc.get_update())
+            sv = scratch.get_state()
+            content.restore_into(scratch, content.doc_from_update(version_state))
+            update = scratch.get_update(sv)
+            self.apply_and_relay(update, by=None, name=by_name)
             # Saving should not wait for "idle": nobody is typing a restore.
             self.last_change_at = 0.0
             await self.flush()
@@ -722,13 +808,17 @@ class Room:
                                     "reason": "changed_outside", "kept": False}))
             p.kill_after(CLOSE_RESET, "the document was changed outside the editor")
         self.closed = True
+        self.closing = True
         MANAGER.drop(self)
+        self.done.set()
 
     async def shut(self, *, reason: str = "leave") -> None:
         """Last one out (or the server stopping): flush, keep a version,
         compact, and go."""
+        self.closing = True
         async with self.lock:
             if self.closed:
+                self.done.set()
                 return
             self.closed = True
             try:
@@ -740,6 +830,7 @@ class Room:
                 log.warning("collab %s: final flush failed: %s", self.doc_id, e)
             finally:
                 MANAGER.drop(self)
+                self.done.set()
 
 
 class RoomManager:
@@ -748,6 +839,7 @@ class RoomManager:
         self._loading: dict[str, asyncio.Lock] = {}
         self._ticker: Optional[asyncio.Task] = None
         self.sockets_by_source: dict[str, int] = {}
+        self._opening = 0
 
     def by_path(self, rel_path: str) -> Optional[Room]:
         for room in self.rooms.values():
@@ -759,33 +851,57 @@ class RoomManager:
         if self.rooms.get(room.doc_id) is room:
             del self.rooms[room.doc_id]
 
-    async def open(self, row: store.DocRow, target: Path) -> Room:
+    async def open(self, row: store.DocRow, target: Path, *, readonly: bool = False) -> Room:
         """The live room for this document, loading it (and rebuilding it
         from the file first, when the file changed while nobody had it
-        open) when there is none."""
-        room = self.rooms.get(row.doc_id)
-        if room is not None and not room.closed:
-            return room
+        open) when there is none. A room still writing its last edits
+        (last one out) is waited for, then loaded again from Postgres: it is
+        never handed out half shut, and nothing it writes is read too early.
+
+        The returned room is open; a caller that joins it must do so before
+        its next ``await``."""
+        while True:
+            room = self.rooms.get(row.doc_id)
+            if room is not None and (room.closing or room.closed):
+                await room.done.wait()
+                continue
+            if room is not None:
+                return room
+            break
         lock = self._loading.setdefault(row.doc_id, asyncio.Lock())
         async with lock:
             room = self.rooms.get(row.doc_id)
-            if room is not None and not room.closed:
+            if room is not None and not (room.closing or room.closed):
                 return room
-            if len(self.rooms) >= MAX_ROOMS:
+            if room is not None:
+                await room.done.wait()
+            # Counted before the first await, so two documents opening at once
+            # cannot both take the last place.
+            limit = MAX_ROOMS - (ROOMS_KEPT_FOR_EDITORS if readonly else 0)
+            if len(self.rooms) + self._opening >= limit:
                 raise RoomsFull()
-            fresh = await store.get(row.doc_id) or row
-            room = Room(fresh, target)
-            room.load(fresh.state, await store.pending_updates(fresh.doc_id, fresh.epoch))
-            if fresh.seeded and room.file_changed_outside():
-                if not content.is_empty(room.ydoc):
-                    await store.add_snapshot(fresh.doc_id, fresh.epoch, "before_rebuild",
-                                             room.ydoc.get_update(), [])
-                await store.rebuild(fresh.doc_id)
-                fresh = await store.get(row.doc_id) or fresh
+            self._opening += 1
+            try:
+                fresh = await store.get(row.doc_id) or row
                 room = Room(fresh, target)
-            self.rooms[row.doc_id] = room
-            self._ensure_ticker()
-            return room
+                try:
+                    room.load(fresh.state, await store.pending_updates(fresh.doc_id, fresh.epoch))
+                except guard.UpdateRejected as e:
+                    raise RoomUnsafe(str(e)) from None
+                async with path_lock(fresh.rel_path):
+                    changed = fresh.seeded and room.file_changed_outside()
+                if changed:
+                    if not content.is_empty(room.ydoc):
+                        await store.add_snapshot(fresh.doc_id, fresh.epoch, "before_rebuild",
+                                                 room.ydoc.get_update(), [])
+                    await store.rebuild(fresh.doc_id)
+                    fresh = await store.get(row.doc_id) or fresh
+                    room = Room(fresh, target)
+                self.rooms[row.doc_id] = room
+                self._ensure_ticker()
+                return room
+            finally:
+                self._opening -= 1
 
     def _ensure_ticker(self) -> None:
         if self._ticker is None or self._ticker.done():
@@ -802,7 +918,8 @@ class RoomManager:
         self._ticker = None
 
     async def release(self, room: Room) -> None:
-        if not room.peers and room.holds <= 0:
+        if not room.peers and room.holds <= 0 and not room.closing:
+            room.closing = True           # before any await: open() stops handing it out
             # Shielded: the socket handler that calls this may itself be
             # cancelled as the connection goes, and the last edits must
             # still reach Postgres.
@@ -823,6 +940,8 @@ class RoomManager:
             if room is None:
                 continue
             room.closed = True
+            room.closing = True
+            room.done.set()
             for p in list(room.peers):
                 p.send(control_message({"t": "gone"}))
                 p.kill_after(CLOSE_NOT_FOUND, "the document was deleted")
@@ -834,6 +953,26 @@ class RoomsFull(Exception):
 
 class RoomGone(Exception):
     pass
+
+
+class RoomUnsafe(Exception):
+    """Stored state this server will not load (it breaks guard's limits)."""
+
+
+# One lock per Documents path, held across a co-editing save (the write and
+# the note of what was written) and by the outside-change check, so a save
+# in flight is never mistaken for someone else changing the file.
+_PATH_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def path_lock(rel_path: str) -> asyncio.Lock:
+    lock = _PATH_LOCKS.get(rel_path)
+    if lock is None:
+        if len(_PATH_LOCKS) > 4096:
+            for k in [k for k, v in _PATH_LOCKS.items() if not v.locked()]:
+                del _PATH_LOCKS[k]
+        lock = _PATH_LOCKS[rel_path] = asyncio.Lock()
+    return lock
 
 
 class StillOpening(Exception):

@@ -527,11 +527,25 @@ async def _collab_saved(request: Request, target: Path) -> None:
     from a co-editing client carries ``X-Domovoi-Collab`` and is recorded as
     the clean file of its revision; any other save means the file changed
     under the shared state, which is then rebuilt from it. Never raises.
-    Every route that saves a co-edited type calls this (imported late:
+    For a route that cannot wrap its write in :func:`_collab_saving`;
+    prefer that, which also refuses stale co-editing saves (imported late:
     collab imports this module)."""
     from web.backend.api import collab
 
     await collab.note_file_saved(request, target)
+
+
+def _collab_saving(request: Request, target: Path):
+    """``async with _collab_saving(request, target): <write the file>``.
+    Wrap the WRITE of every save route for a co-edited type in it: a
+    co-editing save that is older than what the file already holds, or from
+    before the document was rebuilt or moved, is refused 409 before anything
+    is written, and the path stays locked across the write and the note of
+    what was written (so the outside-change check never mistakes it for
+    someone else's). Imported late: collab imports this module."""
+    from web.backend.api import collab
+
+    return collab.saving(request, target)
 
 
 async def _collab_forget(rel_paths: list[str]) -> None:
@@ -842,10 +856,10 @@ async def write_text_file(
     with _usable_path(rel_path):
         _assert_text_editor_may_write(target)
         _ensure_parent_dir(target)
-        target.write_text(req.text, encoding="utf-8", newline="")
+        async with _collab_saving(request, target):
+            target.write_text(req.text, encoding="utf-8", newline="")
         st = target.stat()
     _listing_changed()
-    await _collab_saved(request, target)
     ext = target.suffix.lower()
     return DocumentRow(
         rel_path=target.name,
@@ -1203,10 +1217,10 @@ async def write_sheet(
         raise HTTPException(status_code=413, detail=f"more than {_SHEET_MAX_COLS} columns")
     with _usable_path(rel_path):
         _ensure_parent_dir(target)
-        await executors.run("sheets", _write_sheet_grid, target, req.rows)
+        async with _collab_saving(request, target):
+            await executors.run("sheets", _write_sheet_grid, target, req.rows)
         st = target.stat()
     _listing_changed()
-    await _collab_saved(request, target)
     ext = target.suffix.lower()
     return DocumentRow(
         rel_path=target.name, name=target.stem, ext=ext,

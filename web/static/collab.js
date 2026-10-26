@@ -110,6 +110,108 @@
     return 'domovoi-collab:' + serverKey() + ':' + docId + ':' + epoch;
   }
 
+  /* Which offline copies this browser holds, by name, for browsers without
+   * indexedDB.databases(): every copy opened is noted here and dropped when
+   * it is deleted. */
+  var DBS_KEY = 'domovoi-collab-dbs';
+  function knownDbs() {
+    try { return JSON.parse(localStorage.getItem(DBS_KEY) || '[]') || []; } catch (e) { return []; }
+  }
+  function noteDb(name, keep) {
+    try {
+      var all = knownDbs().filter(function (n) { return n !== name; });
+      if (keep) all.push(name);
+      localStorage.setItem(DBS_KEY, JSON.stringify(all.slice(-500)));
+    } catch (e) { /* private mode */ }
+  }
+
+  function socketOptions(epoch) {
+    var params = { epoch: String(epoch) };
+    try {
+      var DI = g('DeviceIdentity');
+      var id = DI && DI.id && DI.id();
+      if (id) params.device_id = id;
+    } catch (e) { /* no device id: named "Someone" */ }
+    var protocols = [];
+    try {
+      var tok = g('deviceToken') && g('deviceToken')();
+      var mk = g('wsDeviceSubprotocols');
+      protocols = (tok && mk && mk(tok)) || [];
+    } catch (e) { protocols = []; }
+    return { params: params, protocols: protocols };
+  }
+
+  var RESCUE_WAIT_MS = 8000;
+
+  /* A copy of this document from an OLDER epoch is still in this browser:
+   * the phone edited offline, the file was changed outside the editor
+   * meanwhile, and the tab was closed before it came back online. Before
+   * opening the current document, each such copy connects once with its
+   * own epoch; the server keeps its edits as an "offline copy" version
+   * (they cannot be merged into the rebuilt document) and answers "reset".
+   * Only then is the copy deleted. Without an answer (offline, a refusal)
+   * it stays for next time. */
+  function rescueOldCopies(meta) {
+    if (typeof indexedDB === 'undefined' || meta.offline) return Promise.resolve();
+    var prefix = 'domovoi-collab:' + serverKey() + ':' + meta.doc_id + ':';
+    var listed = (indexedDB.databases ? Promise.resolve(indexedDB.databases()).then(function (dbs) {
+      return (dbs || []).map(function (d) { return d && d.name; });
+    }) : Promise.resolve([])).catch(function () { return []; });
+    return listed.then(function (names) {
+      var seen = {};
+      var old = names.concat(knownDbs()).filter(function (n) {
+        if (!n || seen[n] || n.indexOf(prefix) !== 0) return false;
+        seen[n] = true;
+        var ep = parseInt(n.slice(prefix.length), 10);
+        return ep >= 1 && ep < meta.epoch;
+      });
+      return old.reduce(function (p, name) {
+        return p.then(function () {
+          return rescueOne(name, parseInt(name.slice(prefix.length), 10), meta)
+            .catch(function () { /* kept for next time */ });
+        });
+      }, Promise.resolve());
+    });
+  }
+
+  function rescueOne(name, epoch, meta) {
+    var Y = window.Y;
+    var YC = window.YKit;
+    var ydoc = new Y.Doc();
+    var idb = new YC.IndexeddbPersistence(name, ydoc);
+    var provider = null;
+    var finish = function () {
+      try { if (provider) provider.destroy(); } catch (e) {}
+      try { idb.destroy(); } catch (e) {}
+      try { ydoc.destroy(); } catch (e) {}
+    };
+    return idb.whenSynced.then(function () {
+      var empty = Y.encodeStateVector(ydoc).length <= 1;
+      if (empty) return true;
+      var o = socketOptions(epoch);
+      provider = new YC.WebsocketProvider(wsBase(), meta.doc_id, ydoc, {
+        params: o.params, protocols: o.protocols, disableBc: true, connect: false,
+      });
+      provider.awareness.setLocalState(null);   // nobody needs to see this one
+      return new Promise(function (resolve) {
+        var t = setTimeout(function () { resolve(false); }, RESCUE_WAIT_MS);
+        provider.messageHandlers[CONTROL] = function (_e, decoder) {
+          var msg;
+          try { msg = JSON.parse(YC.decoding.readVarString(decoder)); } catch (e) { return; }
+          if (msg && msg.t === 'reset') { clearTimeout(t); resolve(true); }
+        };
+        provider.on('closed', function () { clearTimeout(t); resolve(false); });
+        provider.connect();
+      });
+    }).then(function (answered) {
+      if (!answered) { finish(); return; }
+      return Promise.resolve(idb.clearData()).catch(function () {}).then(function () {
+        noteDb(name, false);
+        finish();
+      });
+    }, function (err) { finish(); throw err; });
+  }
+
   function fetchMeta(path) {
     var apiFetch = g('apiFetch');
     var url = '/api/collab/doc?path=' + encodeURIComponent(path);
@@ -159,6 +261,7 @@
     4404: 'This document is no longer there',
     4409: 'The document changed outside the editor',
     4413: 'This document is too large to edit together',
+    4410: 'This document was moved or renamed',
     4415: 'This kind of document can’t be edited together',
     4429: 'Too many wrong passwords from here: wait a few minutes',
   };
@@ -176,7 +279,11 @@
         if (c && !(err && err.status && err.status < 500)) return Object.assign({ offline: true }, c);
         throw err;
       });
-    }).then(function (meta) { return start(docPath, meta, opts); });
+    }).then(function (meta) {
+      return rescueOldCopies(meta).catch(function () {}).then(function () {
+        return start(docPath, meta, opts);
+      });
+    });
   }
 
   function start(docPath, meta, opts) {
@@ -191,24 +298,15 @@
     if (typeof indexedDB !== 'undefined') {
       try {
         idb = new YC.IndexeddbPersistence(dbName(meta.doc_id, meta.epoch), ydoc);
+        noteDb(dbName(meta.doc_id, meta.epoch), true);
         if (idb._db && idb._db.catch) idb._db.catch(function () {});
         if (idb.whenSynced && idb.whenSynced.catch) idb.whenSynced.catch(function () {});
       } catch (e) { idb = null; }
     }
 
-    var params = { epoch: String(meta.epoch) };
-    try {
-      var DI = g('DeviceIdentity');
-      var id = DI && DI.id && DI.id();
-      if (id) params.device_id = id;
-    } catch (e) { /* no device id: named "Someone" */ }
-
-    var protocols = [];
-    try {
-      var tok = g('deviceToken') && g('deviceToken')();
-      var mk = g('wsDeviceSubprotocols');
-      protocols = (tok && mk && mk(tok)) || [];
-    } catch (e) { protocols = []; }
+    var so = socketOptions(meta.epoch);
+    var params = so.params;
+    var protocols = so.protocols;
 
     var provider = new YC.WebsocketProvider(wsBase(), meta.doc_id, ydoc, {
       params: params,
@@ -340,7 +438,16 @@
           ev.emit('limit', msg); break;
         case 'gone':
           collab.closedReason = CLOSE_TEXT[4404]; ev.emit('gone', msg); break;
+        case 'moved':
+          // Renamed or moved in Documents: same document, new path. The
+          // server closes this socket; the editor reopens it by the new one.
+          collab.closedReason = CLOSE_TEXT[4410];
+          var was = cached(docPath);
+          if (was && typeof msg.path === 'string') writeCache(msg.path, was);
+          ev.emit('moved', { path: msg.path, from: docPath });
+          break;
         case 'reset':
+          noteDb(dbName(collab.docId, collab.epoch), false);
           // The shared document was rebuilt from the file. This browser's
           // copy belongs to the old one: the server kept any offline edits
           // as a version (msg.kept), so the copy can go.
