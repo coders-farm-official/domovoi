@@ -428,3 +428,117 @@ def test_the_phone_card_and_the_app_say_keep_it_on_its_charger() -> None:
     assert line in (REPO_ROOT / "web/static/satellites.jsx").read_text(encoding="utf-8")
     setup = (REPO_ROOT / "android/app/src/main/java/com/domovoi/app/roommode/RoomSetupActivity.kt")
     assert f'CHARGER_TIP = "{line}"' in setup.read_text(encoding="utf-8")
+
+
+# ─── quiet hours: every room's choice (domovoi/quiet_hours.py) ───────────
+
+
+def test_quiet_hours_read_is_household_and_write_is_device_tier() -> None:
+    assert _gates(_route("GET", "/api/satellites/{room_id}/quiet-hours")) & _GATES == {admin_auth.require_device_read}
+    assert _gates(_route("PUT", "/api/satellites/{room_id}/quiet-hours")) & _GATES == {admin_auth.require_device}
+
+
+@pytest.fixture
+def quiet_seam(monkeypatch):
+    from domovoi import quiet_hours as qh
+
+    rec: dict[str, Any] = {"known": {"pako", "kitchen"}, "choices": {}}
+
+    @asynccontextmanager
+    async def fake_scope():
+        yield object()
+
+    async def room_known(s, room_id):
+        return room_id in rec["known"]
+
+    async def room_choice(s, room_id):
+        return rec["choices"].get(room_id, qh.RoomChoice())
+
+    real_set = qh.set_room_choice
+
+    async def set_room_choice(s, room_id, choice):
+        class S:
+            async def execute(self, *a, **k):
+                return None
+        out = await real_set(S(), room_id, choice)   # its own validation, no database
+        rec["choices"][room_id] = out
+        return out
+
+    monkeypatch.setattr(sat_api, "session_scope", fake_scope)
+    monkeypatch.setattr(captures_api, "_room_known", room_known)
+    monkeypatch.setattr(qh, "room_choice", room_choice)
+    monkeypatch.setattr(qh, "set_room_choice", set_room_choice)
+    return rec
+
+
+@pytest.mark.asyncio
+async def test_a_rooms_quiet_hours_choice(claimed, quiet_seam) -> None:
+    path = "/api/satellites/kitchen/quiet-hours"
+    async with _client(BROWSER) as c:
+        assert (await c.get(path)).status_code == 401
+        assert (await c.put(path, json={"mode": "off"})).status_code == 401
+    async with _client({**BROWSER, HEADER: DEVICE_TOKEN}) as c:
+        assert (await c.get(path)).json() == {"room_id": "kitchen", "mode": "house", "start": None, "end": None}
+        r = await c.put(path, json={"mode": "custom", "start": "21:30", "end": "6:15"})
+        assert r.status_code == 200 and r.json() == {"room_id": "kitchen", "mode": "custom", "start": "21:30", "end": "06:15"}
+        assert (await c.get(path)).json()["mode"] == "custom"
+        assert (await c.put(path, json={"mode": "custom", "start": "21:30"})).status_code == 422
+        assert (await c.put(path, json={"mode": "custom", "start": "25:00", "end": "06:00"})).status_code == 422
+        assert (await c.put(path, json={"mode": "loud"})).status_code == 422
+        assert (await c.put(path, json={"mode": "off"})).json()["mode"] == "off"
+        assert (await c.put("/api/satellites/nowhere/quiet-hours", json={"mode": "off"})).status_code == 404
+
+
+QUIET_SCENARIOS = {
+    "quiet_custom": {"files": FILES, "component": "RoomQuietHoursSettings", "props": {"room": "kitchen"},
+                     "fnProps": ["fire"], "setup": SETUP.replace("{ room_id: 'pako', say: true, notify: true }", "{ room_id: 'kitchen' }"),
+                     "api": {"GET /api/satellites/kitchen/quiet-hours": {"room_id": "kitchen", "mode": "custom",
+                                                                         "start": "21:30", "end": "06:15"}},
+                     "script": r"""
+  h.render();
+  for (let i = 0; i < 4; i++) { await h.settle(); h.rerender(); }
+  const radios = () => h.findAll((e) => e.type === 'input' && e.props.type === 'radio');
+  const before = radios().map((r) => [r.props.value, !!r.props.checked]);
+  const times = h.findAll((e) => e.type === 'input' && e.props.type === 'time').map((e) => e.props.value);
+  await h.click({ type: 'button', text: 'Save' }); await h.settle(); h.rerender();
+  await h.change((e) => e.type === 'input' && e.props.type === 'radio' && e.props.value === 'off', true); await h.settle(); h.rerender();
+  return { text: h.text().join(' | '), before, times, writes: h.global('__writes').slice() };
+"""},
+    "drawer_pi": {"files": FILES, "component": "SatDrawer", "props": {"s": room("kitchen"), "sats": [room("kitchen")]},
+                  "fnProps": ["onClose", "fire", "refresh"], "setup": SETUP, "script": _DRAWER.replace(
+                      "switches: h.findAll((e) => cls(e).includes('sat-battery-settings')).length",
+                      "switches: h.findAll((e) => cls(e).includes('sat-battery-settings')).length, "
+                      "quiet: h.findAll((e) => cls(e).includes('sat-quiet-settings')).length")},
+}
+
+
+@pytest.fixture(scope="module")
+def quiet_driven(tmp_path_factory) -> dict:
+    node = shutil.which("node")
+    assert node, "node is required to drive web/static JSX"
+    spec = tmp_path_factory.mktemp("quiet-hours") / "scenarios.json"
+    spec.write_text(json.dumps(QUIET_SCENARIOS), encoding="utf-8")
+    proc = subprocess.run([node, str(HARNESS), str(REPO_ROOT), f"@{spec}"],
+                          capture_output=True, text=True, encoding="utf-8", timeout=180)
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout)
+    broken = {k: v["__harness_error"] for k, v in out.items() if isinstance(v, dict) and "__harness_error" in v}
+    assert not broken, broken
+    return out
+
+
+def test_the_quiet_hours_choice_in_a_rooms_settings(quiet_driven) -> None:
+    q = quiet_driven["quiet_custom"]
+    assert q["before"] == [["house", False], ["custom", True], ["off", False]]
+    assert q["times"] == ["21:30", "06:15"]
+    assert "Alarms, timers and reminders still ring." in q["text"]
+    assert [json.loads(w["body"]) for w in q["writes"]] == [
+        {"mode": "custom", "start": "21:30", "end": "06:15"}, {"mode": "off"}]
+    assert all(w["path"] == "/api/satellites/kitchen/quiet-hours" and w["method"] == "PUT" for w in q["writes"])
+
+
+def test_every_room_has_quiet_hours_only_a_phone_has_the_battery(quiet_driven, driven) -> None:
+    pi = quiet_driven["drawer_pi"]
+    assert pi["quiet"] == 1 and pi["switches"] == 0
+    assert "Same as the house" in driven["drawer_laptop"]["text"]
+    assert "Same as the house" in driven["drawer_phone"]["text"]

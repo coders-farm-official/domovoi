@@ -51,7 +51,7 @@ from domovoi.admin_auth import (
     require_device,
     require_device_read,
 )
-from domovoi import command_captures, room_battery
+from domovoi import command_captures, quiet_hours, room_battery
 from domovoi.db.repositories import notify_timers_changed
 from domovoi.satellite_abilities import BOARDS_WITHOUT_VOICE
 
@@ -85,6 +85,8 @@ from web.backend.schemas import (
     RoomBatteryAlertsUpdate,
     RoomBatteryWarning,
     RoomBatteryWarnings,
+    RoomQuietHours,
+    RoomQuietHoursUpdate,
     RoomLabelRequest,
     RoomVoiceRequest,
     Satellite,
@@ -1347,7 +1349,7 @@ async def set_timer_announcements(
     return TimerAnnouncements(room_id=room_id, own_only=body.own_only, since=since)
 
 
-_V040_MISSING = "phone room battery settings need the V040 migration (run Flyway)"
+_V040_MISSING = "these room settings need the V040 migration (run Flyway)"
 
 
 @router.get("/{room_id}/battery-alerts", response_model=RoomBatteryAlerts, dependencies=READ)
@@ -1399,6 +1401,58 @@ async def set_battery_alerts(room_id: str, body: RoomBatteryAlertsUpdate) -> Roo
         raise
     log.info("battery alerts: room %s say=%s notify=%s", room_id, sw.say, sw.notify)
     return RoomBatteryAlerts(room_id=room_id, say=sw.say, notify=sw.notify)
+
+
+@router.get("/{room_id}/quiet-hours", response_model=RoomQuietHours, dependencies=READ)
+async def get_quiet_hours(room_id: str) -> RoomQuietHours:
+    """The room's quiet-hours choice (domovoi/quiet_hours.py): ``house``
+    (the default), ``custom`` with its ``start``/``end``, or ``off``. Any
+    room. Household tier, like the room's row. 404 unknown room; ``house``
+    when V040 is missing."""
+    _check_room_id(room_id)
+    async with session_scope() as s:
+        if not await captures_api._room_known(s, room_id):
+            raise HTTPException(status_code=404, detail=f"unknown room {room_id!r}")
+    try:
+        async with session_scope() as s:
+            c = await quiet_hours.room_choice(s, room_id)
+    except Exception as e:  # noqa: BLE001 — V040 missing
+        log.debug("quiet hours unavailable: %s", e)
+        c = quiet_hours.RoomChoice()
+    return RoomQuietHours(room_id=room_id, mode=c.mode, start=c.start, end=c.end)
+
+
+@router.put(
+    "/{room_id}/quiet-hours",
+    response_model=RoomQuietHours,
+    responses={503: {"description": "V040 not applied"}},
+    # Device tier, like the battery switches and "Only reminders for this
+    # device": it only changes when a room keeps quiet. Alarms, timers and
+    # reminders ring whatever it says (domovoi/quiet_hours.py).
+    dependencies=[Depends(require_device)],
+)
+async def set_quiet_hours(room_id: str, body: RoomQuietHoursUpdate) -> RoomQuietHours:
+    """Set a room's quiet hours: ``{"mode": "house"}``, ``{"mode": "off"}``
+    or ``{"mode": "custom", "start": "21:30", "end": "06:30"}``. Stored on
+    the server; the core reads it at each announcement, so it counts at
+    once. Works for an offline room. 404 unknown room, 422 bad id, mode or
+    times, 503 when V040 is missing."""
+    _check_room_id(room_id)
+    async with session_scope() as s:
+        if not await captures_api._room_known(s, room_id):
+            raise HTTPException(status_code=404, detail=f"unknown room {room_id!r}")
+    try:
+        async with session_scope() as s:
+            c = await quiet_hours.set_room_choice(
+                s, room_id, quiet_hours.RoomChoice(body.mode, body.start, body.end))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        if "quiet_" in str(e).lower():
+            raise HTTPException(status_code=503, detail=_V040_MISSING) from e
+        raise
+    log.info("quiet hours: room %s %s %s-%s", room_id, c.mode, c.start, c.end)
+    return RoomQuietHours(room_id=room_id, mode=c.mode, start=c.start, end=c.end)
 
 
 # ─── Action endpoints (proxied to domovoi admin) ──────────────────────

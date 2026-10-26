@@ -466,6 +466,9 @@ HOUSEHOLD_STATE_READS: dict[tuple[str, str], str] = {
     ("web", "/api/satellites/{room_id}/battery-alerts"): (
         "a phone room's two low-battery switches, beside its household-tier row"
     ),
+    ("web", "/api/satellites/{room_id}/quiet-hours"): (
+        "a room's quiet-hours choice, beside its household-tier row"
+    ),
     # Voice history (2026-10-17): no words, but how many turns are kept and
     # since when is a measure of how much the house talks.
     ("web", "/api/voice-history"): (

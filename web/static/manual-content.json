@@ -3754,6 +3754,30 @@
     },
     {
      "type": "p",
+     "text": "**Quiet hours**"
+    },
+    {
+     "type": "p",
+     "text": "Quiet hours: Domovoi won't speak announcements in a room, like low battery or printer problems. Alarms, timers and reminders still ring, and it still answers when you ask it something."
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "The house's hours: [Settings → Advanced](route:settings/advanced) → **Voice & speech** → **Quiet hours** (on, 10 pm to 7 am), **Quiet hours start** and **Quiet hours end**. They use the server's clock."
+      },
+      {
+       "text": "One room: its **Settings** tab → **quiet hours**: **Same as the house**, **Custom hours** (pick the times, then **Save**), or **Off for this room**."
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "What isn't spoken then isn't said later. A low battery still shows on Home and on your phones."
+    },
+    {
+     "type": "p",
      "text": "[Settings → Rooms & devices → Rooms](route:settings/rooms) shows the same rooms.",
      "only": "app"
     },
@@ -4014,7 +4038,7 @@
        "text": "Home shows a notice, and the Domovoi app on your phones says \"Pako is at 15%. Plug it in.\""
       },
       {
-       "text": "The room itself says \"This is Pako. My battery is low. Please plug me in.\" It never says it between 10 pm and 7 am."
+       "text": "The room itself says \"This is Pako. My battery is low. Please plug me in.\" Not during the room's quiet hours."
       }
      ]
     },

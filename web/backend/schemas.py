@@ -675,6 +675,27 @@ class RoomBatteryAlertsUpdate(BaseModel):
     notify: bool | None = Field(None, strict=True)
 
 
+class RoomQuietHours(BaseModel):
+    """A room's quiet-hours choice (domovoi/quiet_hours.py): ``house``
+    (the house's hours, Settings → Voice & speech), ``custom`` (``start``
+    to ``end``, "HH:MM") or ``off``."""
+
+    room_id: str
+    mode: str = "house"
+    start: str | None = None
+    end: str | None = None
+
+
+class RoomQuietHoursUpdate(BaseModel):
+    """``PUT /api/satellites/{room_id}/quiet-hours`` body."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["house", "custom", "off"]
+    start: str | None = Field(None, max_length=5)
+    end: str | None = Field(None, max_length=5)
+
+
 # ─── Notes / Timers ───────────────────────────────────────────────────────
 
 

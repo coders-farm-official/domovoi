@@ -1830,7 +1830,7 @@ const SatelliteSettingNeedsUpgrade = ({ f }) => (
  * warning, no restart. Phone rooms only. */
 const SAT_BATTERY_SWITCHES = [
   { key: 'say', label: 'Say when the battery is low',
-    help: 'At 20% and again at 10%, when it is not on its charger, this room says so out loud. Never between 10 pm and 7 am.' },
+    help: 'At 20% and again at 10%, when it is not on its charger, this room says so out loud, except during its quiet hours.' },
   { key: 'notify', label: 'Notify when the battery is low',
     help: 'At the same times, Home shows a notice and the Domovoi app on your phones sends a notification.' },
 ];
@@ -1874,6 +1874,82 @@ const RoomBatterySettings = ({ room, fire }) => {
           <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 4 }}>{sw.help}</div>
         </div>
       ))}
+    </div>
+  );
+};
+
+/* ---- A room's quiet hours (V040, domovoi/quiet_hours.py) -------------
+ * Every room, Pi, laptop or phone: the house's hours (Settings → Voice &
+ * speech), its own, or none. Kept on the server (PUT …/quiet-hours,
+ * household tier) and read at each announcement, so it counts at once. */
+const SAT_QUIET_CHOICES = [
+  { mode: 'house', label: 'Same as the house' },
+  { mode: 'custom', label: 'Custom hours' },
+  { mode: 'off', label: 'Off for this room' },
+];
+const SAT_QUIET_HELP = 'Quiet hours: Domovoi won’t speak announcements in this room, like low battery or printer problems. Alarms, timers and reminders still ring.';
+const RoomQuietHoursSettings = ({ room, fire }) => {
+  const path = `/api/satellites/${encodeURIComponent(room)}/quiet-hours`;
+  const { data, error, refresh } = useApiObject(path, { quiet: true });
+  const [busy, setBusy] = React.useState(false);
+  const [mode, setMode] = React.useState(null);
+  const [start, setStart] = React.useState('');
+  const [end, setEnd] = React.useState('');
+  // `mode`: what was picked here (it stays what was saved); the stored
+  // times fill the boxes when they arrive.
+  React.useEffect(() => { setMode(null); }, [room]);
+  React.useEffect(() => {
+    setStart((data && data.start) || '22:00');
+    setEnd((data && data.end) || '07:00');
+  }, [room, data && data.start, data && data.end]);
+  const shown = mode || (data && data.mode) || 'house';
+
+  const save = async (next, s, e) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const body = next === 'custom' ? { mode: next, start: s, end: e } : { mode: next };
+      await apiFetch(path, { method: 'PUT', body: JSON.stringify(body) });
+      fire(next === 'off' ? `${room} has no quiet hours now`
+        : next === 'custom' ? `${room} keeps quiet ${s}–${e}`
+        : `${room} follows the house's quiet hours`);
+      refresh && refresh();
+    } catch (err) {
+      setMode(null);
+      reportMutationFailure(fire, 'change quiet hours', err);
+    } finally { setBusy(false); }
+  };
+  const pick = (next) => {
+    setMode(next);
+    if (next !== 'custom') save(next);
+  };
+  const timeStyle = { font: 'inherit', fontSize: 13, padding: '4px 6px', borderRadius: 'var(--r-sm)',
+                      border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg)' };
+
+  return (
+    <div className="sat-quiet-settings" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)' }}>
+      <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fg-muted)', fontWeight: 600, marginBottom: 6 }}>quiet hours</div>
+      {error && !data && <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginBottom: 6 }}>couldn’t read this setting: {error}</div>}
+      {SAT_QUIET_CHOICES.map((c) => (
+        <label key={c.mode} className="sat-timer-scope" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13,
+                                                                 cursor: busy ? 'default' : 'pointer', padding: '3px 0' }}>
+          <input type="radio" name={`quiet-${room}`} value={c.mode} checked={shown === c.mode}
+                 disabled={busy || (!data && !error)} onChange={() => pick(c.mode)}/>
+          {c.label}
+        </label>
+      ))}
+      {shown === 'custom' && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '6px 0 0 24px', fontSize: 13 }}>
+          <input type="time" aria-label="quiet hours start" value={start} style={timeStyle}
+                 onChange={(e) => setStart(e.target.value)}/>
+          <span>to</span>
+          <input type="time" aria-label="quiet hours end" value={end} style={timeStyle}
+                 onChange={(e) => setEnd(e.target.value)}/>
+          <Button variant="primary" onClick={() => save('custom', start, end)}
+                  disabled={busy || !start || !end}>{busy ? 'Saving…' : 'Save'}</Button>
+        </div>
+      )}
+      <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>{SAT_QUIET_HELP}</div>
     </div>
   );
 };
@@ -2131,6 +2207,7 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
           {tab === 'notes'         && <RoomNotesBody room={s.room_id}/>}
           {tab === 'timers'        && <RoomTimersBody room={s.room_id} fire={fire}/>}
           {tab === 'logs'          && <RoomLogsBody room={s.room_id} online={s.status === 'online'}/>}
+          {tab === 'settings'      && <RoomQuietHoursSettings room={s.room_id} fire={fire}/>}
           {tab === 'settings'      && s.board === 'android_room' && <RoomBatterySettings room={s.room_id} fire={fire}/>}
           {tab === 'settings'      && (satCan(s, 'config')
             ? <RoomSettingsBody room={s.room_id} fire={fire}/>
